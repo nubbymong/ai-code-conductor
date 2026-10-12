@@ -21,6 +21,13 @@ export interface ChangelogEntry {
 // a backtick in a comment opens a phantom string and the parse fails.
 export const changelog: ChangelogEntry[] = [
   {
+    version: '2.1.1-beta.3',
+    date: '2026-10-11',
+    changes: [
+      { type: 'improvement', description: 'The project has a new home on GitHub: nubbymong/ai-code-conductor. Links to the old address still redirect there, and the app moves its update checks to the new address by itself. If no update shows, restart the app once.' },
+    ],
+  },
+  {
     version: '2.1.1-beta.2',
     date: '2026-10-10',
     highlights: 'Codex becomes a full second assistant beside Claude Code. One Accounts page covers both: turn each on or off, see whether it is installed and up to date, and keep more than one Codex account, each with its own sign-in. A saved config picks the Codex account it runs under, a Codex session can restart into an earlier conversation, and each assistant can ask the other to review its work. A new install asks which assistants you use, an update asks once whether you use Codex, and the app can run with Codex alone. The Usage page, the usage strip and Tokenomics cover both assistants, with each account\'s allowance and spend shown apart. A Codex session now works as a Claude session does: it keeps its conversation through a restart, moves to another Codex account with Switch Account, shows in Logs, and has the attention dot, the Session Watchdog, Plan mode and Compact. Sentinel watches Codex too. The Agent Canvas, Vision and the in-app browser, Ask Conductor, Cloud Agents and the Memory page work for Codex too, and Codex is no longer marked Beta.',

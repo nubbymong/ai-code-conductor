@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="../../releases"><img src="https://img.shields.io/github/v/release/nubbymong/claude-command-center?include_prereleases&label=release&color=cba6f7&labelColor=313244" alt="Release"></a>
+  <a href="../../releases"><img src="https://img.shields.io/github/v/release/nubbymong/ai-code-conductor?include_prereleases&label=release&color=cba6f7&labelColor=313244" alt="Release"></a>
   <img src="https://img.shields.io/badge/Windows%20%7C%20macOS%20(arm64)%20%7C%20Linux%20(experimental)-89b4fa?labelColor=313244" alt="Windows, macOS, Linux">
   <a href="../../actions"><img src="https://img.shields.io/badge/tests-passing-a6e3a1?labelColor=313244" alt="Tests"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/MIT-fab387?labelColor=313244" alt="MIT"></a>
@@ -124,8 +124,8 @@ Electron 44 with a frameless, sandboxed renderer and zod-validated IPC; React 19
 Over six thousand unit tests plus a native suite that runs under Electron's own runtime — for better-sqlite3, node-pty, and anything whose behaviour differs between Electron and plain Node — green on Windows and macOS in CI on every labelled PR. Security-sensitive changes go through an adversarial review pass before merge: independent agents attack the change with distinct lenses, and the verdict is recorded on the pull request.
 
 ```bash
-git clone https://github.com/nubbymong/claude-command-center.git
-cd claude-command-center
+git clone https://github.com/nubbymong/ai-code-conductor.git
+cd ai-code-conductor
 npm install
 npm run typecheck && npx vitest run    # tsc, then the unit suite
 npm run dev                            # HMR dev

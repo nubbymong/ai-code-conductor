@@ -112,7 +112,7 @@ The temporary private fork is a real repository named
 `<repo>-ghsa-xxxx-xxxx-xxxx`. Work there, never on a branch of the public repo.
 
 ```sh
-FORK=https://github.com/nubbymong/claude-command-center-ghsa-xxxx-xxxx-xxxx.git
+FORK=https://github.com/nubbymong/ai-code-conductor-ghsa-xxxx-xxxx-xxxx.git
 git push "$FORK" my-local-fix-branch:fix/short-description
 ```
 
@@ -127,7 +127,7 @@ Two things will look wrong and are not:
   so `beta` is there and is normally identical to the public head:
 
 ```sh
-gh pr create --repo nubbymong/claude-command-center-ghsa-xxxx-xxxx-xxxx \
+gh pr create --repo nubbymong/ai-code-conductor-ghsa-xxxx-xxxx-xxxx \
   --base beta --head fix/short-description \
   -t "fix(scope): what it does" -F prbody.md
 ```
