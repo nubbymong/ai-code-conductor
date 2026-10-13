@@ -4,9 +4,10 @@ This file collects the release evidence the WP1 ledger and traceability items
 cite. Section 1 is the **documentation sweep** (WP1.35, WP1.36), written with
 the WP2 guidance commit (commit 7, on top of `accec3c2`,
 branch `session/beta/c4d568ce-wp2-codex`, 2026-09-25). Section 3 is the
-release-run record (WP1.37, WP1.73), which is **not recorded yet**: those items
-stay `planned` in `tests/wp1/traceability.json` until the qualification run
-fills it in. Section 4 maps the verification the 20 DONE parity rows still owe
+release-run record (WP1.37, WP1.73), written for 2.1.1 at its qualification
+commit, d1525759a7a42d941beeff601af3415fddd8afdd. The parts the owner has still
+to run are marked PENDING there, and those two items stay `planned` in
+`tests/wp1/traceability.json` until they are recorded. Section 4 maps the verification the 20 DONE parity rows still owe
 to the check that gives it and the file it is recorded in (PR 4, P4.10).
 
 Every statement below was checked against the code of this build before it was
@@ -113,20 +114,183 @@ on Windows included.
 
 ## 3. Release-run record (WP1.37, WP1.73)
 
-Not recorded yet. The qualification run records here the tested commit, the
-Claude Code and Codex CLI versions, the OS runners, the commands, the scope of
-the real-CLI smoke and the known limitations. Until then WP1.37 and WP1.73
-stay `planned`, and the e2e mode matrix lives in its own record
-(`docs/wp1/evidence/mode-matrix.md`, from the VM run).
+Written for 2.1.1 at its qualification commit. **Status: partly recorded.** The commit, the builds, the CI runs, the
+VM agent's runs and the known limitations so far are recorded here. The owner's rows (real sign-ins, the second
+consented identity, the disposable Claude account, the macOS install and the Linux run) have not run yet, and are
+marked PENDING here and in the files they belong to. WP1.37 and WP1.73 stay `planned` in
+`tests/wp1/traceability.json` until every PENDING block is recorded and the owner has confirmed
+`docs/wp1/owner-decisions-2026-10-13.md` (a draft until then).
 
-Before the run is planned (completion plan section 7, "The WP1 candidate at a
-stable release"): only a stable release that is not a dry run declares the
-WP1 candidate from the workflow, so the beta-channel cut runs at the
-manifest's phase; and since `package.json` and `changelog.ts` are not
-neutral paths, the final `2.1.1` version and changelog entry land before the
-signed cut whose build carries the WP1.63 smoke, the evidence is taken at that
-head, a manifest-only commit declares the candidate, and the same tree is
-promoted. A bump after the signed cut can never pass the binding.
+### 3.1 The tested commit
+
+- **d1525759a7a42d941beeff601af3415fddd8afdd**, tree `12310fe71f3706f624e3905f8b92f06f099cdc3f`: the squash merge of
+  PR #644 on beta (2026-10-13). Its only parent is `28ec75df2abdbd14afcf774c51c5ec7083928b21` (2.1.1-beta.3).
+  `release/v2.1.1` points at it. It is the binding's head (`boundHead`): every evidence record names it, and only
+  binding-neutral paths may change after it (`tests/wp1/binding.ts`).
+- The pull request's head, `0834df263e40a727e787fc58a799ea552df84196`, and GitHub's merge commit for its final CI run,
+  `72639eba01b52aebfde6a8fed05d67db0feadfb8`, have the same tree.
+- `package.json` reads 2.1.1. The release notes are the 2.1.1 entry of `src/renderer/changelog.ts` at this commit,
+  word for word.
+
+### 3.2 The builds
+
+The qualification build is release run 38409628911 (`release.yml`, `workflow_dispatch` on `release/v2.1.1`, channel
+beta, `skip_vt=false`, attempt 1, conclusion success). Its `headSha` is the commit above. It published the prerelease
+`v2.1.1-beta` (2026-10-13T14:24:49Z), a plain tag on that commit; the latest release stayed v2.1.0. A bare 2.1.1 on
+the beta channel is tagged `v<version>-beta`, so the build reads 2.1.1 throughout.
+
+| Asset | SHA-256 | Checks |
+|---|---|---|
+| `AI-Code-Conductor-2.1.1.exe` (194,103,848 bytes) | `da72adf4e5d9f175c9a3e8c1b58f8e4234f9be5f9acc2eeef7a4b64a0e6f5952` | Authenticode Valid, thumbprint `00EC0DEE208F91785D253C0731E28249C68053FD`, SSL.com timestamp, file and product version 2.1.1; the uninstaller it carries is Valid with the same thumbprint. VirusTotal 0 of 55 |
+| `AICodeConductor-2.1.1-macos13.dmg` | `262cc39c0aca5dff04d41539b004b8aa3222df6e5626f291d0090d18fa4a6c0a` | The app inside: Developer ID signed (the same team as 2.1.0), hardened runtime, notarized, ticket stapled, `spctl` accepted. The DMG itself is unsigned and unstapled by design (known limitation 6). VirusTotal 0 of 52 |
+| `AI-Code-Conductor-2.1.1-linux-x86_64.AppImage` | `7be0348a24a11fe58d90a75aa4594b9a31d6a24839f3e8714d68d5b64b5f952b` | Unsigned by convention. VirusTotal 0 of 50 |
+
+`CHECKSUMS.txt` lists 8 assets; every line equals GitHub's own asset digest and the downloaded bytes. Each
+`latest*.yml` reads 2.1.1 and names one file whose size and sha512 equal the downloaded bytes.
+
+### 3.3 CI at the commit
+
+| Run | What | Result |
+|---|---|---|
+| CI run 38400973974 (the pull request's final run, merge commit `72639eba`, the same tree) | `Test` on Windows, macOS and Linux; the minimum and pinned Codex legs on each OS; SSH smoke; Changelog in sync; Desktop test gate | All green, attempt 1 |
+| Release run 38409628911 (the commit itself) | `build-windows` and `build-linux` run the whole suite (`npx vitest run`) before building | Green; every file's result equals the pull request run's on the same OS |
+| CI run 38409643796 (`ci.yml` dispatch on `release/v2.1.1`, `codex_rc_version` 0.156.1) | The real-CLI conformance smoke: minimum, pinned and release candidate on each OS (WP1.71) | All 9 legs green |
+
+The suite: 1,462 files on each OS; Windows 23,013 tests (22,891 passed, 1 expected fail, 119 skipped, 2 todo), macOS
+22,970 (22,704 passed, 1 expected fail, 263 skipped, 2 todo), Linux 22,962 (22,683 passed, 1 expected fail, 276
+skipped, 2 todo). No test failed and none was retried.
+Every skip is explained in `skip-ledger.md`; per-OS detail is in `ci-matrix.md`. `release.yml` runs no test step on
+macOS, so macOS has no suite run at the commit's own SHA; its run is the pull request's, on the same tree. The release
+run's test steps ran with `WP1_PHASE` empty (a beta-channel run), so the traceability gate there ran at the manifest's
+phase, gate0. The candidate phase first runs in the promotion pull request and the stable run.
+
+### 3.4 CLI versions
+
+- **Codex.** The minimum 0.153.4 and the pinned 0.155.1 (`src/main/providers/codex/cli-contract.ts`), and the release
+  candidate 0.156.1, the newest version tested against the app (the owner confirms that choice at go). In CI each was
+  installed from the published `@openai/codex` package. On the Windows test VM: 0.153.4 and 0.155.1, each as the npm
+  `codex.cmd` shim and as the `codex.exe` its npm install ships. The packaged smokes use 0.155.1.
+- **Claude Code.** No real Claude Code runs in CI or in the agent's runs: they use a stand-in that answers
+  `--version` with `2.1.296 (Claude Code)` and records each start. The real Claude smoke with the disposable Claude
+  account is PENDING (`real-cli-matrix.md`, WP1.64). The authority list the app strips is derived from Claude Code
+  2.1.278 (known limitation 9).
+
+### 3.5 Runners and hosts
+
+- **CI:** `windows-2025` (image windows-2025-vs2026, 20260925.250.1), `macos-latest` (macos-26-arm64, 20260907.0351.1)
+  and `ubuntu-latest` (ubuntu-24.04, 20261004.327.1), Node 20.20.2.
+- **The Windows test VM:** Hyper-V, Windows 11 Enterprise Evaluation, x64. The dev build at the commit for the e2e
+  matrix and the real-CLI rows (Node 24.16.0, Electron 44.5.1, @playwright/test 1.63.0); the signed installer for the
+  packaged smoke, in a standard (non-administrator) account.
+- **The macOS test Mac:** macOS 27.0.1, arm64; a standard test user for the owner's run.
+- **The Linux test host:** Rocky Linux 10.2, x86_64; a fresh standard test user.
+
+### 3.6 Commands
+
+- CI: `gh workflow run release.yml --ref release/v2.1.1 -f channel=beta -f skip_vt=false`;
+  `gh workflow run ci.yml --ref release/v2.1.1 -f codex_rc_version=0.156.1`; each run read with `gh run view` and its
+  job logs (`ci-matrix.md`, `skip-ledger.md`).
+- The release: the shared release verifier (tag, version, assets, update metadata, `CHECKSUMS.txt`),
+  `Get-AuthenticodeSignature` on the installer and on the uninstaller it carries, `node scripts/gen-changelog.js
+  --notes 2.1.1` at the commit against the release body, and VirusTotal read per file.
+- The Windows test VM: `git checkout --detach d1525759a7a42d941beeff601af3415fddd8afdd`, `npm run build`, then
+  `npx playwright test --reporter=line,json` with the 27 tracked specs named (`mode-matrix.md`) and with a VM-local
+  spec for the real-CLI rows (`real-cli-matrix.md`); the signed installer by double-click and its wizard
+  (`packaged-smoke.md`).
+- The Mac: `spctl -a -t exec -vv`, `xcrun stapler validate`, `codesign --verify --deep --strict -vv` and the bundle's
+  `Info.plist`, on the DMG mounted read-only (`packaged-smoke.md`).
+
+### 3.7 The scope of the real smoke
+
+Recorded at the commit:
+- the e2e mode matrix on the Windows test VM, every cell green, with the real Codex 0.153.4 and 0.155.1 in the minimum
+  real launch (`mode-matrix.md`; WP1.1, WP1.60);
+- the real-CLI rows 2, 9, 25 and 33 and the no-item rows 1, 12, 23 and 48 on the Windows test VM: the real CLI on both
+  versions and both install routes, fake keys, the loopback fake model, no real sign-in (`real-cli-matrix.md`);
+- the non-secret conformance smoke on the minimum, pinned and release-candidate CLI on all three OSes
+  (`real-cli-matrix.md`, WP1.71);
+- the packaged smoke of the signed installer on Windows, and the macOS signature, notarization and Gatekeeper checks
+  (`packaged-smoke.md`).
+
+> **PENDING (the owner's rows).** On the Windows test VM: a console check of the app's browser query in an interactive
+> standard-user logon; real ChatGPT sign-ins into two managed accounts; a GPT-6 prompt; Sign in again three times; the
+> disposable Claude account signed in, used and signed out; `codex_review` asked from a Claude session; a link in a
+> session's output clicked; the second consented identity's two-account run with the keyring reads; the window buttons.
+> On the macOS test user: the install, first launch, Codex sign-in, a prompt, upgrade from 2.1.0 and rollback. On the
+> Linux test host: the packaged run, upgrade and rollback. Also owed by the agents: the keyring smoke with fake keys in
+> an interactive logon (`keyring-smoke.md`), and on Windows the packaged upgrade from 2.1.0, the install chain
+> (`rollback.md`) and the app's own Codex install (WP1.32).
+
+### 3.8 Known limitations
+
+Checks not taken are listed with the owner-decision section that says why. The sections cited are a draft until the
+owner confirms them.
+
+1. **Linux: the AppImage needs FUSE 2.** On a host with only FUSE 3 (Rocky Linux 10.2 ships `fuse-libs` and `fuse3`
+   but not `fuse`, so no `fusermount`), the AppImage cannot mount. 2.1.0's fails the same way. Install the `fuse`
+   package, or start the AppImage with `--appimage-extract-and-run`. `README.md` (Requirements) says so.
+2. **Release-plan checks not taken** (`docs/wp1/owner-decisions-2026-10-13.md#KL1`): the API-key sign-in, status and
+   sign-out on every OS; the ChatGPT sign-in, status and sign-out on Linux; launch, resume and the account picker on
+   Linux (section 4 rows 9, 23 and 33); a real install through the app on macOS and Linux (row 3).
+3. **No-item rows not reached** (`docs/wp1/owner-decisions-2026-10-13.md#KL2`): section 4 rows 13, 21, 27, 50, 64
+   and 74 on the Windows test VM. They could have been taken and were not run in the window.
+4. **Other checks not taken** (`docs/wp1/owner-decisions-2026-10-13.md#KL3`): the macOS and Linux columns of the
+   section 4 rows that nothing else covers; the four WP1.30 cases that need a non-elevated Windows process (the CI
+   runner is elevated, so they skip by design; every other WP1.30 case ran on each OS, `ci-matrix.md`); and the
+   rollback rehearsal of the published release (set to draft, gone from the in-app update list, published again),
+   refused by the agent's permission policy as a change to a public release, with its pre-checks passed.
+5. **Cases that run in no CI job.** `skip-ledger.md` ("Unexplained or to decide") lists them with where each would
+   run: the makensis cases, the opt-in real-Claude and live cases, the manual console check, the authority-list
+   re-derivation, cases that need Node 24, other shells, or helper-made folders on a VM, and the WP1.30 cases above.
+6. **The macOS DMG is unsigned and unstapled by design** (`build.dmg.sign: false`, unchanged since 2.1.0). The app
+   inside it is signed, notarized and stapled, and Gatekeeper accepts it.
+7. **The Vision browser outlives Quit when the app runs in a non-interactive (network) logon.** The app ends it with
+   `taskkill`, which such a logon is denied. In an administrator's logon the same build ended it at every quit; the
+   interactive standard-user case is PENDING (`packaged-smoke.md`). 2.1.0 leaves it running after every quit, so this
+   is not a regression.
+8. **Two findings, neither severe nor a regression against 2.1.0** (`real-cli-matrix.md`):
+   - a Codex tab started through the npm `codex.cmd` shim, whose configured project folder differs in letter case from
+     the folder on disk, opens the resume list after a relaunch instead of resuming directly. It lists only that
+     account's conversation, and nothing is lost; 2.1.0 has no exact Codex resume at all;
+   - Tokenomics prices a Codex `token_count` event that repeats the previous cumulative total. In 1 of 6 real
+     rollouts, 3 turns were priced twice (0.63% over that rollout's own total). 2.1.0 has the same rule.
+9. **WP1.38** (ADR-026, settled point 4): the authority list is derived from Claude Code 2.1.278, and a later Claude
+   Code is not re-derived in this release; the in-app project-gate refusal and worktree resume were last run on the
+   installed app at `c9c908a5` and `f2332e39`, not at the commit above.
+10. **WP1.71:** the release-candidate legs capture the help but do not compare it, since no fixture exists for 0.156.1.
+    The smoke is non-secret by design: it proves detection, the command lines' flags, the model list and the features
+    against each real CLI, not a signed-in turn.
+
+### 3.9 Unavailable items, as currently expected
+
+None reads `unavailable` yet: each is `planned` until its PENDING rows are recorded and the owner confirms its section.
+Expected, on the eight items ADR-026 allows:
+
+| Item | What is expected to be unavailable | Decision |
+|---|---|---|
+| WP1.2 | A real Codex-only session on Linux | `docs/wp1/owner-decisions-2026-10-13.md#UA1` |
+| WP1.10 | The two-account run on macOS and Linux | `docs/wp1/owner-decisions-2026-10-13.md#UA2` |
+| WP1.11 | The native keyring smoke with a second identity on macOS and Linux | `docs/wp1/owner-decisions-2026-10-13.md#UA3` |
+| WP1.20 | A disposable identity for the browser sign-in, and the Linux sign-in | `docs/wp1/owner-decisions-2026-10-13.md#UA4` |
+| WP1.32 | The real installer smoke through the app on macOS and Linux | `docs/wp1/owner-decisions-2026-10-13.md#UA5` |
+| WP1.64 | Disposable Codex identities, the API-key flow, the second-identity flows off Windows, every credential-bearing flow on Linux | `docs/wp1/owner-decisions-2026-10-13.md#UA6` |
+| WP1.72 | An ephemeral identity, and the macOS and Linux stores | `docs/wp1/owner-decisions-2026-10-13.md#UA7` |
+| WP1.63 | Nothing, unless a host part cannot be taken | none yet |
+
+The candidate run prints the items that read `unavailable` (`WP1 candidate: unavailable on a recorded owner decision:
+...`), and that list goes to go with this section.
+
+### 3.10 Owner answers still owed
+
+- Confirm, amend or refuse each section of `docs/wp1/owner-decisions-2026-10-13.md`: UA1 to UA7, AM1 (WP1.73's
+  text), AM2 (WP1.19: without it WP1.19 stays `planned` and the stable run refuses), KL1, and the proposals KL2 and
+  KL3.
+- The What's New heading: the build's heading names the release the user comes from ("What's new since 2.1.0"), where
+  the release plan's upgrade check reads "the heading names the running release". Changing the wording needs a new
+  binding head.
+- The release-candidate CLI version for WP1.71 (0.156.1, the tested ceiling).
+- At go: the merge of the promotion pull request with "Create a merge commit", so the commit above stays an ancestor of
+  main.
 
 ## 4. Verification owed by the 20 DONE rows (PR 4, P4.10)
 

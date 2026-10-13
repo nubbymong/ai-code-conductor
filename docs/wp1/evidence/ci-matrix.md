@@ -4,7 +4,7 @@ This file is evidence for WP1.30 (`docs/wp1/evidence/ci-matrix.md`), and the CI 
 
 WP1.30 says the Windows ACL and Unix mode tests must run on each OS runner, so its evidence is the CI matrix run, not a local run. The real-CLI conformance runs are also row 2's detection evidence per OS (P4.10).
 
-**Status: the first green run of the whole workflow, CI run 37134624406, is recorded below (the test matrix and the six conformance legs), with the help captures reviewed per OS, after which the help is asserted on every leg; the prove-red dispatch, CI run 37155296304, is recorded under "Shown red once".** The workflow below landed in PR 4 (P4.8). WP1.30 stays `planned` in the traceability manifest until a run at the binding's head is recorded here with its digest (the candidate declaration, made at release).
+**Status: retaken at the binding's head, d1525759a7a42d941beeff601af3415fddd8afdd (the 2.1.1 squash merge on beta; `release/v2.1.1` points at it).** Three runs are recorded under "Results at the binding's head": the 2.1.1 pull request's final CI run (CI run 38400973974, all three OSes, on a merge ref whose tree is the head's tree), the qualification release run (release run 38409628911, Windows and Linux, at the head itself), and the conformance dispatch with a release candidate (CI run 38409643796, at the head itself). The first green run of the whole workflow, CI run 37134624406, and the prove-red dispatch, CI run 37155296304, are kept below under "Earlier runs" as history; they are not the record.
 
 ## What runs
 
@@ -51,9 +51,79 @@ Workflow: `.github/workflows/ci.yml`. On a pull request both jobs need the `ci-r
   - help (each fixture with its last line dropped), asserted in that run.
 - Not shown red by that dispatch: the PATH check step, the flag-drift suite (`codex-cli-compat.test.ts`, which predates P4.8 and has no prove-red input), the runner's own home check (its comparison is shown red by `codex-own-home.test.ts` instead), and an rc leg's help (no fixture exists for a release candidate).
 
-## Results
+## Results at the binding's head
+
+The binding's head is d1525759a7a42d941beeff601af3415fddd8afdd, tree 12310fe71f3706f624e3905f8b92f06f099cdc3f. Its only parent is 28ec75df2abdbd14afcf774c51c5ec7083928b21 (2.1.1-beta.3).
+
+### The runs and the trees they tested
+
+| Run | Event and ref | Commit run | Tree | Same tree as the head? |
+|---|---|---|---|---|
+| CI run 38400973974, attempt 1, 2026-10-13 (the 2.1.1 pull request's final run; conclusion success) | `pull_request`, the pull request's merge ref | 72639eba01b52aebfde6a8fed05d67db0feadfb8, GitHub's merge of the pull request head 0834df263e40a727e787fc58a799ea552df84196 into 28ec75df2abdbd14afcf774c51c5ec7083928b21 (each Test job's checkout fetched exactly this commit) | 12310fe71f3706f624e3905f8b92f06f099cdc3f | Yes. The pull request head 0834df263e40a727e787fc58a799ea552df84196 also has tree 12310fe71f3706f624e3905f8b92f06f099cdc3f, and the squash merge kept it |
+| Release run 38409628911, attempt 1, 2026-10-13 (the qualification build, channel beta; conclusion success) | `workflow_dispatch` on `release/v2.1.1` | d1525759a7a42d941beeff601af3415fddd8afdd (the run's `headSha`; each job's checkout fetched exactly this commit). It tagged `v2.1.1-beta` on this commit, as a prerelease | 12310fe71f3706f624e3905f8b92f06f099cdc3f | It is the head |
+| CI run 38409643796, attempt 1, 2026-10-13 (the conformance dispatch, `codex_rc_version` = 0.156.1; conclusion success) | `workflow_dispatch` on `release/v2.1.1` | d1525759a7a42d941beeff601af3415fddd8afdd | 12310fe71f3706f624e3905f8b92f06f099cdc3f | It is the head |
+
+`release.yml` runs the suite on Windows and Linux only, so macOS has no test run at the exact commit; its evidence is the pull request run, whose tree is the head's tree. The release run's "Run tests" steps ran with `WP1_PHASE` empty (a beta-channel run), so the traceability gate ran at the manifest's own phase, `gate0`; the candidate-phase check is the stable run's, not this one's. A `workflow_dispatch` of `ci.yml` runs only the conformance and changelog jobs: in CI run 38409643796 the test matrix, the SSH multi-session smoke and the Desktop test gate were skipped by design, and Changelog in sync passed.
 
 ### Test matrix
+
+Runners: `windows-2025` (image windows-2025-vs2026, version 20260925.250.1), `macos-latest` (image macos-26-arm64, version 20260907.0351.1), `ubuntu-latest` (image ubuntu-24.04, version 20261004.327.1). Node 20.20.2 on every job. The same images ran both runs.
+
+| Run | Job | Windows | macOS | Linux |
+|---|---|---|---|---|
+| CI run 38400973974 | `Test (<os>)`: Windows job 115308203973, macOS job 115308204149, Linux job 115308204115 | Green. Typecheck; vitest 1,462 files (1,457 passed, 5 skipped), 23,013 tests (22,891 passed, 1 expected fail, 119 skipped, 2 todo); native 15 files, 226 tests passed; build | Green. Typecheck; vitest 1,462 files (1,449 passed, 13 skipped), 22,970 tests (22,704 passed, 1 expected fail, 263 skipped, 2 todo); native 15 files, 218 passed, 8 skipped; build | Green. Typecheck; vitest 1,462 files (1,449 passed, 13 skipped), 22,962 tests (22,683 passed, 1 expected fail, 276 skipped, 2 todo); native 15 files, 218 passed, 8 skipped; build |
+| Release run 38409628911 | `build-windows` job 115338403395, `build-linux` job 115338403757 ("Run tests": `npx vitest run`; no native step in `release.yml`) | Green. vitest 1,462 files (1,457 passed, 5 skipped), 23,013 tests (22,891 passed, 1 expected fail, 119 skipped, 2 todo); then the signed build | Not run by `release.yml` (`build-macos` job 115338403613 builds, signs and notarizes only) | Green. vitest 1,462 files (1,449 passed, 13 skipped), 22,962 tests (22,683 passed, 1 expected fail, 276 skipped, 2 todo); then the build |
+
+Every file's line in the release run's Windows and Linux logs (its test count, skipped count and todo count) is the same as in the pull request run's Windows and Linux logs: 1,462 files compared on each OS, no difference. No test failed in any of the five Test steps, and no `(retry xN)` marker appears in any log. Each skipped and todo case, and the expected fail, is explained in `docs/wp1/evidence/skip-ledger.md`, which records the same runs.
+
+Every other job of CI run 38400973974 passed: the six conformance legs (below), the SSH multi-session smoke (job 115308203849), Changelog in sync (job 115308203952) and the Desktop test gate (job 115308204001). Earlier CI runs on the same pull request were cancelled when a newer run started; none of them had a failed Test job or conformance leg (their Desktop test gate failed, as it does until the owner applies the label).
+
+### WP1.30's files on each OS
+
+WP1.30's tests are `tests/wp1/codex-realm-folders.test.ts` and `tests/wp1/codex-realm-isolation.test.ts`, and the three owner-only folder rule files its reason names: `tests/unit/providers/codex/realm-folders-owner-only-wiring.test.ts` (the app's own composition), `tests/unit/main/owner-only-folders-real.test.ts` (the real rights on the Windows runner, Constrained Language Mode included) and `tests/unit/main/owner-only-folders-native.test.ts` (that mode's route against an in-memory fake).
+
+| File | Windows: CI run 38400973974 / release run 38409628911 | macOS: CI run 38400973974 | Linux: CI run 38400973974 / release run 38409628911 |
+|---|---|---|---|
+| `tests/wp1/codex-realm-folders.test.ts` | 126 passed / 126 passed | 126 passed | 126 passed / 126 passed |
+| `tests/wp1/codex-realm-isolation.test.ts` (HOST QUARANTINE) | 8 passed, 1 skipped / the same | 7 passed, 2 skipped | 7 passed, 2 skipped / the same |
+| `tests/unit/providers/codex/realm-folders-owner-only-wiring.test.ts` | 3 passed / 3 passed | 3 passed | 3 passed / 3 passed |
+| `tests/unit/main/owner-only-folders-real.test.ts` (HOST QUARANTINE) | 32 passed, 3 skipped / the same | 35 skipped (Windows only) | 35 skipped (Windows only) / the same |
+| `tests/unit/main/owner-only-folders-native.test.ts` | 53 passed / 53 passed | 53 passed | 53 passed / 53 passed |
+
+The skips, from the source at the head:
+- `codex-realm-isolation.test.ts`: on Windows, the one case of "a resources folder that gives this user Modify alone (a second drive's root, O6)" (`describe.runIf(IS_WIN)`, line 263) skips itself on an elevated process (line 268: an elevated process has full control under a second drive's root). The CI Windows runner is elevated. On macOS and Linux that case and the Windows-only junction case (`it.runIf(IS_WIN)`, line 233) are skipped.
+- `owner-only-folders-real.test.ts`: every block is `describe.runIf(IS_WIN)` (lines 142, 235, 592, 705, 742, 751, 781), so the whole file is skipped on macOS and Linux. On Windows the three cases of "a folder made under a parent that gives this user Modify alone" (lines 706, 718, 730) skip themselves on an elevated process (`MODIFY_ONLY_SKIP`, line 668). The cases that need elevation to give a folder to another account (`NEEDS_ELEVATION`, line 120) all ran.
+
+So on every OS runner the POSIX mode cases and the Windows rights cases ran where they apply, with this limit: the four Windows cases that need a process that is not elevated (three in `owner-only-folders-real.test.ts`, one in `codex-realm-isolation.test.ts`) cannot run on the elevated CI runner, and no CI job runs them. Before 2.1.1-beta.2 the Windows half was deferred while the shared ACL primitive was investigated (private tracker #103); ADR-026, settled point 5.
+
+`tests/wp1/realm-paths.test.ts` (13 passed on each OS and run) is no longer a WP1.30 file: it has no ACL or mode case. The two files WP1.30 lists as current tests, `tests/unit/harden-dir-acl-windows.test.ts` and `tests/unit/credential-file-mode-hardening.test.ts`, ran too: `harden-dir-acl-windows.test.ts` 38 cases on each OS (4 skipped on Windows, 13 on macOS, 13 on Linux) and `credential-file-mode-hardening.test.ts` 12 passed on each OS; the skips are in the skip ledger.
+
+### Real-CLI conformance at the head
+
+Versions: the minimum 0.153.4 and the pinned 0.155.1 (from `src/main/providers/codex/cli-contract.ts` at the head), and the release candidate 0.156.1, given to the dispatch as `codex_rc_version`. Each leg installed its version from the published `@openai/codex` package (`npm install --global --prefix <its own folder> --ignore-scripts`) and ran with `CCC_CODEX_HELP_ASSERT` = 1 and no prove-red input.
+
+| Run | OS | Version class | Version | Job | Detection | Flags | Model list | Features | Help against the fixtures | Flag-drift suite | Own home untouched |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| CI run 38409643796 | Windows (win32-x64) | minimum | 0.153.4 | 115338273353 | Both cases found, version 0.153.4, supported; PATH resolution finds the install (`codex.cmd`) | Every flag defined, each in its subcommand's own help | 6 ids (gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.2), equal to the recorded list; covered by the registry | 135 listed; the 12 turned off all named | 15 of 15 the same (asserted) | 5 passed | Yes: absent before the install and after the last run |
+| CI run 38409643796 | Windows (win32-x64) | pinned | 0.155.1 | 115338273682 | Both cases found, version 0.155.1, supported; `codex.cmd` | Every flag defined | 5 ids (no gpt-5.2), equal to the recorded list; covered | 141 listed; the 12 all named | 15 of 15 the same (asserted) | 5 passed | Yes |
+| CI run 38409643796 | Windows (win32-x64) | rc | 0.156.1 | 115338273366 | Both cases found, version 0.156.1, supported; `codex.cmd` | Every flag defined | 7 ids (gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5); covered by the registry; no recorded list for 0.156.1 | 148 listed; the 12 all named | 15 captured; no fixture exists for 0.156.1, so none was compared (the suite's line reads "0 differ") | 5 passed | Yes |
+| CI run 38409643796 | macOS (darwin-arm64) | minimum | 0.153.4 | 115338273648 | Both cases found, version 0.153.4, supported; PATH resolution finds the install (`codex.js`, the npm bin link) | Every flag defined | 6 ids, equal to the recorded list; covered | 135 listed; the 12 all named | 15 of 15 the same, with the reviewed macOS differences applied (asserted) | 5 passed | Yes |
+| CI run 38409643796 | macOS (darwin-arm64) | pinned | 0.155.1 | 115338273913 | Both cases found, version 0.155.1, supported; `codex.js` | Every flag defined | 5 ids, equal to the recorded list; covered | 141 listed; the 12 all named | 15 of 15 the same, reviewed differences applied (asserted) | 5 passed | Yes |
+| CI run 38409643796 | macOS (darwin-arm64) | rc | 0.156.1 | 115338273271 | Both cases found, version 0.156.1, supported; `codex.js` | Every flag defined | 7 ids; covered; no recorded list for 0.156.1 | 148 listed; the 12 all named | 15 captured; no fixture for 0.156.1, none compared | 5 passed | Yes |
+| CI run 38409643796 | Linux (linux-x64) | minimum | 0.153.4 | 115338273156 | Both cases found, version 0.153.4, supported; `codex.js` | Every flag defined | 6 ids, equal to the recorded list; covered | 135 listed; the 12 all named | 15 of 15 the same, with the reviewed Linux differences applied (asserted) | 5 passed | Yes |
+| CI run 38409643796 | Linux (linux-x64) | pinned | 0.155.1 | 115338273110 | Both cases found, version 0.155.1, supported; `codex.js` | Every flag defined | 5 ids, equal to the recorded list; covered | 141 listed; the 12 all named | 15 of 15 the same, reviewed differences applied (asserted) | 5 passed | Yes |
+| CI run 38409643796 | Linux (linux-x64) | rc | 0.156.1 | 115338273142 | Both cases found, version 0.156.1, supported; `codex.js` | Every flag defined | 7 ids; covered; no recorded list for 0.156.1 | 148 listed; the 12 all named | 15 captured; no fixture for 0.156.1, none compared | 5 passed | Yes |
+| CI run 38400973974 | Windows | minimum / pinned | 0.153.4 / 0.155.1 | 115308204067 / 115308204138 | The same as the dispatch's minimum and pinned legs on this OS | The same | The same | The same | 15 of 15 the same (asserted) | 5 passed | Yes |
+| CI run 38400973974 | macOS | minimum / pinned | 0.153.4 / 0.155.1 | 115308204162 / 115308204098 | The same | The same | The same | The same | 15 of 15 the same, reviewed differences applied (asserted) | 5 passed | Yes |
+| CI run 38400973974 | Linux | minimum / pinned | 0.153.4 / 0.155.1 | 115308204111 / 115308204085 | The same | The same | The same | The same | 15 of 15 the same, reviewed differences applied (asserted) | 5 passed | Yes |
+
+Each leg ran its `codex --version` PATH check first (it printed exactly `codex-cli <version>`), then the suite (8 passed; the one skipped case is the placeholder for a run with no CLI given), then the flag-drift suite (5 passed, none skipped), then the check that the runner's own `~/.codex` is as it was before the CLI was installed (absent on every leg). On every leg each model the CLI lists is in the registry ("missing none"); the registry entries a version does not list (gpt-6-sol and gpt-6-luna on 0.153.4 and 0.155.1; gpt-5.2 on 0.155.1 and 0.156.1) are reported, as designed, and fail nothing. The help captures, the comparison and the run report are the dispatch's artifacts `codex-conformance-<os>-<version class>` (kept until 2026-11-12).
+
+## Earlier runs
+
+These runs predate the binding's head. They are kept as history and as the review of the help differences; they are not the record.
+
+### Test matrix, CI run 37134624406 (2026-10-03)
 
 | Run | Commit | Windows | macOS | Linux | WP1.30 files on each OS |
 |---|---|---|---|---|---|
@@ -61,7 +131,7 @@ Workflow: `.github/workflows/ci.yml`. On a pull request both jobs need the `ci-r
 
 How the run was read: `continue-on-error` on a job hides a red job behind a green run, so the Linux job was read step by step (`gh api .../actions/jobs/111236523243`): every step from the checkout to the build succeeded, and the vitest and native summaries above are from its log. The run's overall conclusion is `failure` only because of the Desktop test gate job, which waits for the owner's attestation (#309); every Test job, every conformance leg, Changelog in sync and the SSH multi-session smoke passed. The first run on the branch, at 956df1a3, was red on macOS and Linux in tests only (fixed in beee8507 and 7fd211ed).
 
-### Real-CLI conformance
+### Real-CLI conformance, CI run 37134624406
 
 | Run | Commit | OS | Version class | Version | Detection | Flags | Model list | Features | Help against the fixtures | Flag-drift suite | Own home untouched |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -83,6 +153,8 @@ Each leg ran its `codex --version` PATH check first (it printed exactly `codex-c
 ### Help captures reviewed
 
 For each OS, the help comparison is reviewed from the run's artifact (`codex-conformance-<os>-<version class>`: `help/*.txt`, `help-compare.md`, `report.md`) before it is asserted. The differences found, and whether each is an OS difference or a fixture to refresh, are recorded here.
+
+At the binding's head, every minimum and pinned leg compared the same with exactly these reviewed differences applied, and the comparison was asserted (above). No new difference appeared, and no fixture was refreshed.
 
 | OS | Run | Version | Captures that differ | Decision |
 |---|---|---|---|---|
