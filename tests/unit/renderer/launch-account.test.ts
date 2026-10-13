@@ -17,6 +17,7 @@ import {
   sessionAccountOptions, defaultAccountId, accountFieldState, resolveLaunchAccount, launchStep, describeLaunchFailure,
   providerTooOldText, restartPicksConversation, noticeText,
   NEEDS_ATTENTION, NEEDS_ATTENTION_TEXT, SIGNED_IN_ELSEWHERE, SIGNED_IN_ELSEWHERE_TEXT, NOT_CHECKED,
+  switchAccountOptions, switchTarget, configRepointPatch,
 } from '../../../src/renderer/utils/launchAccount'
 import { grantLaunchAcknowledgement, consumeLaunchAcknowledgement, useLaunchAckStore } from '../../../src/renderer/stores/launchAckStore'
 import { buildLaunchSession } from '../../../src/renderer/hooks/useLaunchConfig'
@@ -295,5 +296,48 @@ describe('the binding rides config -> session -> saved session; the acknowledgem
     await expect(first).resolves.toBe(false)
     useLaunchAckStore.getState().answer(qb.requestId, false)
     await expect(second).resolves.toBe(false)
+  })
+})
+
+// O5 (owner-agreed 2026-10-11): the confirm before a later launch on the
+// account 2.1.1-beta.2 registered for the sign-in already on this computer
+// offers another Codex account; the pure half of that.
+describe('another account instead of the sign-in already on this computer (O5)', () => {
+  it('offers the picker list less the account asked about and any external one', () => {
+    const s = snapshot()
+    expect(switchAccountOptions(s, 'codex', 'acc-local').map((o) => [o.id, o.disabled])).toEqual([['acc-work', false], ['acc-personal', false], ['acc-old', true]])
+    // A second external row (never two in practice) is never offered either.
+    const ext2 = { ...local, id: 'acc-local-2' }
+    expect(switchAccountOptions(snapshot({ accounts: [...s.accounts, ext2] }), 'codex', 'acc-local').map((o) => o.id)).not.toContain('acc-local-2')
+    expect(switchAccountOptions(null, 'codex', 'acc-local')).toEqual([])
+  })
+
+  it('moves only to an account of the provider a launch could use now, never the sign-in on this computer', () => {
+    const s = snapshot()
+    expect(switchTarget(s, 'codex', 'acc-work')?.id).toBe('acc-work')
+    expect(switchTarget(s, 'codex', 'acc-personal')?.id).toBe('acc-personal')
+    for (const id of ['acc-local', 'acc-old', 'acc-parked', 'acc-gone', 'acc-claude-main', 'acc-nope', '']) expect(switchTarget(s, 'codex', id), id).toBeUndefined()
+    expect(switchTarget(null, 'codex', 'acc-work')).toBeUndefined()
+  })
+
+  it('re-points a saved config that named the account asked about, or followed the default that was it; nothing else', () => {
+    // Named it: moves, whether the session named it too or resolved it from the default.
+    expect(configRepointPatch({ provider: 'codex', providerAccountId: 'acc-local' }, 'codex', 'acc-local', 'acc-work', 'acc-local')).toEqual({ providerAccountId: 'acc-work' })
+    expect(configRepointPatch({ provider: 'codex', providerAccountId: 'acc-local' }, 'codex', 'acc-local', 'acc-work', undefined)).toEqual({ providerAccountId: 'acc-work' })
+    // Named no account, and this launch resolved from the default (the session names none): it followed the default that was it.
+    expect(configRepointPatch({ provider: 'codex' }, 'codex', 'acc-local', 'acc-work', undefined)).toEqual({ providerAccountId: 'acc-work' })
+    expect(configRepointPatch({ provider: 'codex', providerAccountId: 'acc-personal' }, 'codex', 'acc-local', 'acc-work', 'acc-local')).toBeNull()
+    expect(configRepointPatch({ provider: 'codex', providerAccountId: 'acc-work' }, 'codex', 'acc-local', 'acc-work', 'acc-local')).toBeNull()
+    expect(configRepointPatch({ provider: 'claude' }, 'codex', 'acc-local', 'acc-work', undefined)).toBeNull()
+    expect(configRepointPatch({}, 'codex', 'acc-local', 'acc-work', undefined)).toBeNull()
+    expect(configRepointPatch(undefined, 'codex', 'acc-local', 'acc-work', undefined)).toBeNull()
+  })
+
+  // The session was bound to the account asked about
+  // (a Switch account onto it) while its config named none and followed
+  // another default. That config never used the account: nothing to move.
+  it('leaves a config that named no account when the session itself named the account asked about', () => {
+    expect(configRepointPatch({ provider: 'codex' }, 'codex', 'acc-local', 'acc-personal', 'acc-local')).toBeNull()
+    expect(configRepointPatch({ provider: 'codex', providerAccountId: undefined }, 'codex', 'acc-local', 'acc-work', 'acc-local')).toBeNull()
   })
 })

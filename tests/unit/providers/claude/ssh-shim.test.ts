@@ -788,7 +788,7 @@ describe('buildContainerKillCommand (#572 in-container orphan)', () => {
   it('rootless podman: engine exec + marker-scoped kill + sidecar removal, exit-0 tail', () => {
     const cmd = buildContainerKillCommand('lv20abc', rootless)
     expect(cmd).toBe(
-      "podman exec ccc-test sh -c 'rm -f ~/.claude/settings-lv20abc.json ~/.claude/mcp-lv20abc.json ~/.claude/ccc-status-lv20abc.url 2>/dev/null; exec pkill -f \"/settings-lv20abc\\.json\"' 2>/dev/null; true"
+      "podman exec ccc-test sh -c 'rm -f ~/.claude/settings-lv20abc.json ~/.claude/mcp-lv20abc.json ~/.claude/ccc-status-lv20abc.url ~/.claude/ccc-attn-lv20abc.key ~/.claude/ccc-attn-lv20abc.up 2>/dev/null; exec pkill -f \"/settings-lv20abc\\.json\"' 2>/dev/null; true"
     )
     // No sudo anywhere for a rootless container.
     expect(cmd).not.toContain('sudo')

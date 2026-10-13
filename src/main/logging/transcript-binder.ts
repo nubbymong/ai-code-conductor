@@ -127,7 +127,8 @@ export interface TranscriptBinder {
   notifyTranscriptPath(sessionId: string, rawPath: string): void
   /** pty-manager: a run started — arm the heuristic fallback timer. */
   registerRun(sessionId: string, cwd: string, startedAtMs: number): void
-  /** pty-manager: a run ended — cancel timers + clear per-session bind state. */
+  /** pty-manager: a run ended — cancel timers + clear per-session bind state
+   *  (the last exact bind is kept: getLastExactResumeTarget). */
   endRun(sessionId: string): void
   /** Latest canonical transcript path bound for the session, or null. (T8b) */
   getLatestTranscriptPath(sessionId: string): string | null
@@ -139,6 +140,22 @@ export interface TranscriptBinder {
    * null here means "start fresh", which is safer than resuming a stranger.
    */
   getExactResumeTarget(sessionId: string): string | null
+  /**
+   * aicc_planning#104: the canonical path of the session's latest committed
+   * EXACT bind this app run, or null when it has had none. Unlike
+   * getExactResumeTarget it is kept when the run ends (endRun: the CLI
+   * exited or crashed, the tab still open) and when a new run starts
+   * (registerRun: a Restart), so main's session save still knows which
+   * conversation the session was last on, including one it moved to with
+   * /clear or /resume that no save has seen yet.
+   */
+  getLastExactResumeTarget(sessionId: string): string | null
+  /**
+   * aicc_planning#104: drop the last exact bind of every session not in
+   * `open`, the sessions main's latest session save holds. A session no save
+   * holds any more was closed.
+   */
+  retainLastExact(open: ReadonlySet<string>): void
 }
 
 export function makeTranscriptBinder(deps: TranscriptBinderDeps): TranscriptBinder {
@@ -155,6 +172,11 @@ export function makeTranscriptBinder(deps: TranscriptBinderDeps): TranscriptBind
   const onExactBind = deps.onExactBind ?? (() => { /* no-op */ })
 
   const sessions = new Map<string, SessionState>()
+
+  // aicc_planning#104: each session's latest committed exact bind this app
+  // run. Not part of SessionState: endRun and registerRun leave it alone, and
+  // only retainLastExact (a session closed) removes an entry.
+  const lastExact = new Map<string, string>()
 
   // #480: reverse index conversation-uuid -> owning sessionId, for EXACT binds
   // only. Enforces "one conversation belongs to at most one live session": an
@@ -288,6 +310,11 @@ export function makeTranscriptBinder(deps: TranscriptBinderDeps): TranscriptBind
     // its retries) so it can't later re-bind on top of the exact path.
     cancelHeuristic(s)
 
+    // aicc_planning#104: recorded before the dedupe, so a repeat of the bound
+    // path (every hook and status line tick) puts back an entry a save
+    // dropped while the session was briefly missing from it.
+    lastExact.set(sessionId, canonical)
+
     // Dedupe: identical path already bound at the SAME confidence -> no churn.
     // (A heuristic-confidence prior bind to the same path is still upgraded to
     // exact below, so we only short-circuit when confidence also matches.)
@@ -374,6 +401,16 @@ export function makeTranscriptBinder(deps: TranscriptBinderDeps): TranscriptBind
     getExactResumeTarget(sessionId: string): string | null {
       const s = sessions.get(sessionId)
       return s && s.boundConfidence === 'exact' ? s.boundPath : null
+    },
+
+    getLastExactResumeTarget(sessionId: string): string | null {
+      return lastExact.get(sessionId) ?? null
+    },
+
+    retainLastExact(open: ReadonlySet<string>): void {
+      for (const id of [...lastExact.keys()]) {
+        if (!open.has(id)) lastExact.delete(id)
+      }
     },
   }
 }

@@ -455,7 +455,7 @@ describe('Remote Resumable — context menu', () => {
     expect(useDetachedRemotesStore.getState().entries).toHaveLength(0)
     expect(useSshEndNoticeStore.getState().notices.map((n) => n.command)).toEqual([
       `sudo podman exec ccc-test sh -c '` +
-      String.raw`rm -f ~/.claude/settings-det-1.json ~/.claude/mcp-det-1.json ~/.claude/ccc-status-det-1.url 2>/dev/null; exec pkill -f "/settings-det-1\.json"` +
+      String.raw`rm -f ~/.claude/settings-det-1.json ~/.claude/mcp-det-1.json ~/.claude/ccc-status-det-1.url ~/.claude/ccc-attn-det-1.key ~/.claude/ccc-attn-det-1.up 2>/dev/null; exec pkill -f "/settings-det-1\.json"` +
       `'`,
     ])
     useSshEndNoticeStore.setState({ notices: [] })

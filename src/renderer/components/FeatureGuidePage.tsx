@@ -529,7 +529,7 @@ function WalkCard({ dataUxId, title, desc, button, onClick, icon }: { dataUxId: 
 function WhatsNewSection() {
   return (
     <div data-ux-id="whatsnew-section">
-      <SectionHero eyebrow="What's New" title="Release history" blurb="Every version, newest first — the same notes you're shown after an update, here to browse any time." />
+      <SectionHero eyebrow="What's New" title="Release history" blurb="Every version's full notes, newest first. After an update you see a short summary of what is new; the full notes stay here, any time." />
       <div className="rounded-2xl p-6" style={{ background: 'var(--surface-raised)', border: '1px solid var(--border-subtle)' }}>
         <WhatsNewEntries entries={changelog} />
       </div>

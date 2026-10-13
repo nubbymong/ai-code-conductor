@@ -178,8 +178,29 @@ export function getResourcesDirectory(): string {
   return cachedResourcesDir
 }
 
+/** Why a folder chosen in first-run setup cannot be used, or null when it
+ *  can: it must be text that is not empty or blank, and a full (absolute)
+ *  path. An empty one would be saved as a value that reads back as absent,
+ *  and a relative one would be created and saved relative to the app's
+ *  working folder. A full path is judged by the running platform's rules
+ *  (path.win32 on Windows, path.posix elsewhere), which is what path itself
+ *  uses on each. */
+function folderUnusable(dir: unknown): string | null {
+  if (typeof dir !== 'string' || dir.trim() === '') return 'the path is empty'
+  const rules = process.platform === 'win32' ? path.win32 : path.posix
+  if (!rules.isAbsolute(dir)) return 'the path is not a full path'
+  return null
+}
+
 // Set data directory in registry and create folders
 export function setDataDirectory(dataDir: string): boolean {
+  // Checked before any folder is created or anything is saved; false, so the
+  // setup screen stays on the folder step and says it was not saved.
+  const unusable = folderUnusable(dataDir)
+  if (unusable) {
+    logInfo(`[setup] Data directory not set: ${unusable}`)
+    return false
+  }
   try {
     // Create directory structure
     fs.mkdirSync(path.join(dataDir, 'sessions'), { recursive: true })
@@ -187,7 +208,15 @@ export function setDataDirectory(dataDir: string): boolean {
     fs.mkdirSync(path.join(dataDir, 'debug'), { recursive: true })
     fs.mkdirSync(path.join(dataDir, 'config'), { recursive: true })
 
-    writeRegistry('DataDirectory', dataDir)
+    // The folder counts as set only once writeRegistry says it saved it. On
+    // Windows it answers false for a value it refused before reg.exe starts
+    // and for a reg.exe that failed; on macOS and Linux for a config file
+    // that could not be written. Nothing was saved, so the next start would
+    // not find this folder: the cache is left as it was and the caller told.
+    if (!writeRegistry('DataDirectory', dataDir)) {
+      logInfo('[setup] Data directory not set: the registry did not save it')
+      return false
+    }
 
     cachedDataDir = dataDir // Update cache
     dataDirFromRegistry = true
@@ -210,6 +239,12 @@ export function onResourcesDirectoryChanged(listener: (resourcesDir: string) => 
 
 // Set resources directory in registry and create folders
 export function setResourcesDirectory(resourcesDir: string): boolean {
+  // As setDataDirectory: an empty, blank or relative path is refused first.
+  const unusable = folderUnusable(resourcesDir)
+  if (unusable) {
+    logInfo(`[setup] Resources directory not set: ${unusable}`)
+    return false
+  }
   try {
     fs.mkdirSync(path.join(resourcesDir, 'insights'), { recursive: true })
     fs.mkdirSync(path.join(resourcesDir, 'screenshots'), { recursive: true })
@@ -217,7 +252,12 @@ export function setResourcesDirectory(resourcesDir: string): boolean {
     fs.mkdirSync(path.join(resourcesDir, 'scripts'), { recursive: true })
     fs.mkdirSync(path.join(resourcesDir, 'status'), { recursive: true })
 
-    writeRegistry('ResourcesDirectory', resourcesDir)
+    // As setDataDirectory: set only once writeRegistry says it saved it; the
+    // cache and the listeners are left as they were otherwise.
+    if (!writeRegistry('ResourcesDirectory', resourcesDir)) {
+      logInfo('[setup] Resources directory not set: the registry did not save it')
+      return false
+    }
 
     const changed = cachedResourcesDir !== resourcesDir
     cachedResourcesDir = resourcesDir // Update cache

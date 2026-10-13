@@ -1653,3 +1653,100 @@ describe('R1 review round 3: Skip and the after-entry watch', () => {
     expect(writes()).toEqual([])
   })
 })
+
+// 2.1.1-beta.3, the container twin of the host case in
+// pty-manager-ssh-tmux.test.ts: the setup line typed into the container's shell
+// can be echoed back for many seconds too (a zsh shell inside it), so the
+// container setup-ok deadline also counts 10 s from the last output, capped at
+// 60 s after the setup started (armed when the guard is answered, 300 ms
+// before the line is typed). Each case was red against the fixed-deadline code
+// except the labelled control. The failure reason in the log is pinned for
+// each case.
+// The unit setup (tests/unit/setup.ts) replaces the logger with vi.fn() mocks,
+// so the log lines are read from those.
+const { logInfo: logInfoMock, logError: logErrorMock } = await import('../../src/main/debug-logger')
+describe('the container setup-ok deadline follows the output', () => {
+  /** The log lines (logInfo / logError, mocked by the unit setup) this
+   *  session wrote that contain `text`. */
+  const lines = (log: typeof logInfoMock, id: string, text: string): string[] =>
+    vi.mocked(log).mock.calls.map((c) => String(c[0])).filter((s) => s.includes(`${id}:`) && s.includes(text))
+  const infoLog = logInfoMock
+  const errorLog = logErrorMock
+  /** Enter, prove, launch and answer the guard (which arms the deadline and,
+   *  300 ms later, types the setup); returns the typed setup line. */
+  function launchContainerSetup(id: string): string {
+    enterContainer(id)
+    feed(`${IN(id)}${INNER_PROMPT}`)
+    launchAndAnswerGuard(id)
+    const typed = writes().find((s) => s.includes('base64 -d | node'))
+    expect(typed, 'the container setup line was typed').toBeDefined()
+    writeMock.mockClear()
+    return typed!.replace(/\r$/, '')
+  }
+  /** The shell echoes `line` back slowly, one slice every 100 ms for `ms`. */
+  function echoSlowly(line: string, ms: number): void {
+    const size = 160
+    for (let t = 0, at = 0; t < ms; t += 100, at = (at + size) % line.length) {
+      feed(line.slice(at, at + size))
+      vi.advanceTimersByTime(100)
+    }
+  }
+
+  it('a container shell still echoing the setup line at 10 s is not failed, and its setup ok at 19.3 s moves on to the claude step', () => {
+    const id = 'deadline-container-slow-echo'
+    const typed = launchContainerSetup(id)
+    echoSlowly(typed, 10_500)
+    expect(getSshFlow(id)?.getState()).toEqual({ state: 'running-setup', info: 'container' })
+    echoSlowly(typed, 7_500)
+    vi.advanceTimersByTime(1_000)
+    feed(`setup ok ${_getSshNonceForTest(id)} tmux=none\r\n${INNER_PROMPT}`)
+    settle()
+    // The claude step's own re-proof goes out: the setup succeeded.
+    expect(writes()).toEqual([GUARD])
+    expect(getSshFlow(id)?.getState()).toEqual({ state: 'running-setup', info: SSH_ENTRY.VERIFYING })
+    expect(infos(id)).not.toContain('container setup timeout')
+    expect(lines(infoLog, id, 'setup ok not in yet')).toHaveLength(1)
+    expect(lines(errorLog, id, 'setup ok not received')).toEqual([])
+  })
+
+  it('a container shell that echoes and then goes quiet fails 10 s after its last output', () => {
+    const id = 'deadline-container-echo-then-quiet'
+    const typed = launchContainerSetup(id)
+    echoSlowly(typed, 15_000)
+    vi.advanceTimersByTime(9_800)
+    expect(getSshFlow(id)?.getState()).toEqual({ state: 'running-setup', info: 'container' })
+    vi.advanceTimersByTime(200)
+    expect(getSshFlow(id)?.getState()).toEqual({ state: 'failed', info: 'container setup timeout' })
+    expect(wrote('claude')).toBe(false)
+    expect(lines(errorLog, id, 'setup ok not received')).toEqual([
+      `[ssh] ${id}: container setup ok not received within 10000ms of the last output that came back`,
+    ])
+  })
+
+  it('a container shell that never stops sending fails at the 60 s cap', () => {
+    const id = 'deadline-container-never-quiet'
+    const typed = launchContainerSetup(id) // armed when the guard was answered, 301 ms ago
+    echoSlowly(typed, 59_400) // 59.7 s after the arm
+    expect(getSshFlow(id)?.getState()).toEqual({ state: 'running-setup', info: 'container' })
+    echoSlowly(typed, 600) // 60.3 s after the arm
+    expect(getSshFlow(id)?.getState()).toEqual({ state: 'failed', info: 'container setup timeout' })
+    expect(wrote('claude')).toBe(false)
+    expect(lines(errorLog, id, 'setup ok not received')).toEqual([
+      `[ssh] ${id}: container setup ok not received within 60000ms of the setup starting while output kept coming back`,
+    ])
+  })
+
+  it('control (green before the fix too, apart from the log wording): a container shell that sends nothing back still fails 10 s after the setup started, and no wait is logged', () => {
+    const id = 'deadline-container-silent'
+    launchContainerSetup(id) // armed 301 ms ago
+    vi.advanceTimersByTime(9_600) // 9.9 s after the arm
+    expect(getSshFlow(id)?.getState()).toEqual({ state: 'running-setup', info: 'container' })
+    vi.advanceTimersByTime(200) // 10.1 s after the arm
+    expect(getSshFlow(id)?.getState()).toEqual({ state: 'failed', info: 'container setup timeout' })
+    expect(wrote('claude')).toBe(false)
+    expect(lines(infoLog, id, 'setup ok not in yet')).toEqual([])
+    expect(lines(errorLog, id, 'setup ok not received')).toEqual([
+      `[ssh] ${id}: container setup ok not received within 10000ms of the setup starting (nothing came back)`,
+    ])
+  })
+})

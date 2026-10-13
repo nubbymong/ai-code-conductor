@@ -20,6 +20,20 @@ codex sign in anyway."
 | Closing the app before answering | Showing the page records nothing, so the next start asks again. |
 | With Claude Code off | No cannot be chosen: one provider always stays on. |
 
+**Superseded 2026-10-11 (O5, 2.1.1-beta.3): the "This computer's sign-in"
+row.** The owner removed the offer: `~/.codex` (or the folder `CODEX_HOME`
+named) is never checked or taken in, and a Codex account is always added in
+the app, as a Claude account is (the parity rule, P1: the app takes the
+computer's Claude login in as its own managed Primary, which Codex cannot
+copy without reading Codex's sign-in files, which U2 forbids). Main refuses
+`adoptExternalDefault` and `probeExternalDefault` with `unsupported`; the IPC
+channels keep their shape. An account 2.1.1-beta.2 adopted (the only release
+that offered it) keeps working: confirmed at each launch, never a reviewer.
+Its row and every confirmation of a launch on it say it is being retired, and
+nothing archives it on its own. Archiving that account is final: main refuses
+Restore with `unsupported` and Settings does not offer it, pending the
+owner's confirmation at the VM review.
+
 **Superseded in the design:** section 8.2 (upgrade adoption of the default
 Codex home), and the acceptance items that described it:
 

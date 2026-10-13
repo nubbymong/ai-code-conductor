@@ -29,10 +29,106 @@ const readNsh = () => readFileSync(join(__dirname, '../../../build/installer.nsh
  * in the customInstall cleanup calls and in the comments.
  */
 function nshMacro(name: string): string {
-  const m = readNsh().match(new RegExp(`^!macro ${name}\\b[\\s\\S]*?^!macroend`, 'm'))
+  return nshMacroIn(readNsh(), name)
+}
+
+/** The body of one NSIS macro in the given text (installer.nsh, or a test's
+ *  mutant of it). */
+function nshMacroIn(src: string, name: string): string {
+  const m = src.match(new RegExp(`^!macro ${name}\\b[\\s\\S]*?^!macroend`, 'm'))
   if (!m) throw new Error(`macro ${name} not found in build/installer.nsh`)
   return m[0]
 }
+
+/**
+ * A file-existence test in NSIS: `${FileExists} <target>` or
+ * `IfFileExists <target>`, the target in double quotes, single quotes,
+ * backticks or none, as NSIS takes all four.
+ */
+const FILE_TEST = /(?:\$\{FileExists\}|\bIfFileExists)\s+(?:"([^"]*)"|'([^']*)'|`([^`]*)`|(\S+))/gi
+
+/**
+ * Whether a file-existence target is the app's executable, in any spelling
+ * and in any folder: its last part ends in `.exe` (a name spelled out, any
+ * define such as `${PRODUCT_FILENAME}`, `${APP_FILENAME}` or `${PRODUCT_NAME}`
+ * with `.exe`, or a wildcard) or is `${APP_EXECUTABLE_FILENAME}`. The
+ * uninstaller (`Uninstall <name>.exe`) is not the app. Naming only some
+ * spellings, and only under `$INSTDIR`, let others back in unnoticed:
+ * `$R3\${APP_EXECUTABLE_FILENAME}`, an
+ * exe test on the recorded uninstaller's own folder, is the beta.5 bug. A
+ * test through a variable (`StrCpy $R0 ...`, then `${FileExists} "$R0"`) is
+ * past what a text guard can see.
+ */
+function isAppExe(target: string): boolean {
+  const last = target.split(/[\\/]/).pop() ?? ''
+  if (/^uninstall\b/i.test(last)) return false
+  return /\.exe$/i.test(last) || /^\$\{APP_EXECUTABLE_FILENAME\}$/i.test(last)
+}
+
+/** Every file-existence test in the code lines of an NSIS text (comments and
+ *  blank lines left out, a line continued with a trailing backslash joined to
+ *  the next), with the test as written, its target, the Function it sits in
+ *  (null outside one, a macro body included) and the two code lines before
+ *  it. */
+function fileExistenceTests(src: string): Array<{ test: string; target: string; code: string; fn: string | null; before: string[] }> {
+  const out: Array<{ test: string; target: string; code: string; fn: string | null; before: string[] }> = []
+  const code: string[] = []
+  let fn: string | null = null
+  const lines = src.replace(/\\[ \t]*\r?\n[ \t]*/g, ' ').split(/\r?\n/)
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (line === '' || line.startsWith(';') || line.startsWith('#')) continue
+    const opened = /^Function\s+(\S+)/i.exec(line)
+    if (opened) fn = opened[1]
+    for (const m of line.matchAll(FILE_TEST)) {
+      out.push({ test: m[0], target: m[1] ?? m[2] ?? m[3] ?? m[4] ?? '', code: line, fn, before: code.slice(-2) })
+    }
+    if (/^FunctionEnd\b/i.test(line)) fn = null
+    code.push(line)
+  }
+  return out
+}
+
+/** The tests among them of whether the app's executable exists. */
+function exeExistenceProbes(src: string): Array<{ code: string; fn: string | null; before: string[] }> {
+  return fileExistenceTests(src).filter((t) => isAppExe(t.target))
+}
+
+/** What ClassifyUninstallRecord may test with `${FileExists}` or
+ *  `IfFileExists`: the recorded uninstaller ($R1), and nothing else. An
+ *  allow-list, so a test of any other file, in any spelling, through those two
+ *  fails the guard. The other ways NSIS can tell whether a file is there are
+ *  banned in that macro outright (CLASSIFY_BANNED_PROBES), and so is any
+ *  naming of the app's executable (APP_EXE_NAMING). These three read the
+ *  macro's own lines only: a macro it inserts (CccGetInQuotes, and
+ *  FindLegacyRoot, whose folder-name comparison names APP_FILENAME) or a
+ *  function it calls is outside them. The file-wide exe test check
+ *  (exeExistenceProbes over the whole file) still reads those, for the two
+ *  FileExists spellings only. */
+const CLASSIFY_ALLOWED_TESTS = ['${FileExists} "$R1"']
+const classifyExistenceTests = (nsh: string): string[] => fileExistenceTests(nshMacroIn(nsh, 'ClassifyUninstallRecord')).map((t) => t.test)
+
+/** The code lines of one macro: comments and blank lines left out, a line
+ *  continued with a trailing backslash joined to the next. */
+function macroCodeLines(nsh: string, name: string): string[] {
+  return nshMacroIn(nsh, name).replace(/\\[ \t]*\r?\n[ \t]*/g, ' ').split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== '' && !l.startsWith(';') && !l.startsWith('#'))
+}
+
+/** Any naming of the app's executable: `.exe`, or a define its name is built
+ *  from. The classification reads the recorded uninstaller only, so it has no
+ *  reason to name the app's executable at all, by any test or none. */
+const APP_EXE_NAMING = /\.exe\b|\b(?:APP_EXECUTABLE_FILENAME|PRODUCT_FILENAME|PRODUCT_NAME|APP_FILENAME)\b/i
+/** The other ways NSIS can tell whether a file is there (instructions, and
+ *  FileFunc macros), each of which can stand in for `${FileExists}`: an
+ *  open or a time read that sets the error flag, an attribute or size read, a
+ *  search, a version read. */
+const CLASSIFY_BANNED_PROBES = /\b(?:GetFileTime(?:Local)?|FileOpen|GetFileAttributes|FindFirst|GetSize|GetDLLVersion(?:Local)?|SearchPath|Locate)\b/i
+/** The code lines of ClassifyUninstallRecord that name the app's executable. */
+const classifyExeNaming = (nsh: string): string[] => macroCodeLines(nsh, 'ClassifyUninstallRecord').filter((l) => APP_EXE_NAMING.test(l))
+/** The code lines of ClassifyUninstallRecord that probe a file another way. */
+const classifyOtherProbes = (nsh: string): string[] => macroCodeLines(nsh, 'ClassifyUninstallRecord').filter((l) => CLASSIFY_BANNED_PROBES.test(l))
 
 describe('brand identity guard', () => {
   it('display name is AI Code Conductor, set only under build', () => {
@@ -214,7 +310,124 @@ describe('brand identity guard', () => {
     const classify = nshMacro('ClassifyUninstallRecord')
     expect(classify).toMatch(/ReadRegStr \$R0 \$\{ROOT_KEY\} "\$\{UNINSTALL_REGISTRY_KEY\}" "UninstallString"/)
     expect(classify).toMatch(/\$\{ElseIfNot\} \$\{FileExists\} "\$R1"/)
-    expect(readNsh()).not.toMatch(/FileExists\} "\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}"/)
+    // An allow-list: the recorded uninstaller is the only file whose
+    // existence the classification tests. A
+    // deny-list of exe spellings under $INSTDIR stayed green under
+    // `${ElseIfNot} ${FileExists} "$INSTDIR\${PRODUCT_NAME}.exe"` and under an
+    // exe test on the uninstaller's own folder (`$R3`), the beta.5 bug; the
+    // mutants below are pinned in 'the guard fails on each way the exe test
+    // could come back'.
+    expect(classifyExistenceTests(readNsh())).toEqual(CLASSIFY_ALLOWED_TESTS)
+    // No other way to tell whether a file is there (GetFileTime, FileOpen,
+    // GetFileAttributes, FindFirst and the rest), and no naming of the app's
+    // executable in any spelling: the mutants below are pinned in 'the guard
+    // fails on each other way the exe could be probed'.
+    expect(classifyOtherProbes(readNsh())).toEqual([])
+    expect(classifyExeNaming(readNsh())).toEqual([])
+    // No exe-existence test in any spelling of the exe's name, in any folder,
+    // anywhere, but the splash probe: a cosmetic freshness hint in
+    // CccBrandGuiInit, under its two guards. Spelled with PRODUCT_FILENAME
+    // there because APP_EXECUTABLE_FILENAME is defined later, by
+    // electron-builder's common.nsh.
+    const probes = exeExistenceProbes(readNsh())
+    expect(probes.map((p) => p.code)).toEqual(['${AndIfNot} ${FileExists} "$INSTDIR\\${PRODUCT_FILENAME}.exe"'])
+    expect(probes[0].fn).toBe('CccBrandGuiInit')
+    expect(probes[0].before).toEqual(['${IfNot} $cccIsInnerInstance == 1', '${AndIfNot} $cccIsUpdated == 1'])
+  })
+
+  it('the exe-existence matcher knows every spelling, in any folder, and only code lines count', () => {
+    const lines = [
+      'Function F',
+      '  ${If} ${FileExists} "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"',
+      '  ${ElseIfNot} ${FileExists} "$INSTDIR\\${PRODUCT_FILENAME}.exe"',
+      '  IfFileExists "$INSTDIR\\${APP_FILENAME}.exe" 0 +2',
+      '  ${OrIfNot} ${FileExists} $INSTDIR\\${PRODUCT_FILENAME}.exe',
+      "  ${AndIf} ${FileExists} '$INSTDIR\\${APP_EXECUTABLE_FILENAME}'",
+      '  IfFileExists `$INSTDIR/${PRODUCT_FILENAME}.exe` +2 0',
+      '  ${ElseIfNot} ${FileExists} "$INSTDIR\\${PRODUCT_NAME}.exe"',
+      '  ${IfNot} ${FileExists} "$R3\\${APP_EXECUTABLE_FILENAME}"',
+      '  ${If} ${FileExists} "$INSTDIR\\AI Code Conductor.exe"',
+      '  ${If} ${FileExists} "$INSTDIR\\*.exe"',
+      '  ${If} ${FileExists} \\',
+      '      "$INSTDIR\\${PRODUCT_FILENAME}.exe"',
+      '  ; ${FileExists} "$INSTDIR\\${PRODUCT_FILENAME}.exe" in a comment',
+      '  ${If} ${FileExists} "$INSTDIR\\Uninstall x.exe"',
+      '  ${If} ${FileExists} "$R1"',
+      '  ${If} ${FileExists} "$0\\CONFIG\\*.*"',
+      'FunctionEnd',
+      '!macro M',
+      '  ${If} ${FileExists} "$INSTDIR\\${PRODUCT_FILENAME}.exe"',
+      '!macroend',
+    ].join('\r\n')
+    const found = exeExistenceProbes(lines)
+    expect(found.map((p) => [p.fn, p.code.split(' ')[0]])).toEqual([
+      ['F', '${If}'], ['F', '${ElseIfNot}'], ['F', 'IfFileExists'],
+      ['F', '${OrIfNot}'], ['F', '${AndIf}'], ['F', 'IfFileExists'],
+      ['F', '${ElseIfNot}'], ['F', '${IfNot}'], ['F', '${If}'], ['F', '${If}'], ['F', '${If}'],
+      [null, '${If}'],
+    ])
+    // Every file-existence test is seen, the uninstaller's and a folder's included.
+    expect(fileExistenceTests(lines).map((t) => t.target)).toContain('$R1')
+    expect(fileExistenceTests(lines).map((t) => t.target)).toContain('$INSTDIR\\Uninstall x.exe')
+  })
+
+  // Each way an exe test could come back into the classification, built from
+  // the real installer.nsh in memory, fails the guard (the allow-list and the
+  // whole-file probe list both). A deny-list guard stays green under the first
+  // two, and a narrower matcher misses the rest.
+  it.each([
+    ['the product name spelling', '    ${ElseIfNot} ${FileExists} "$INSTDIR\\${PRODUCT_NAME}.exe"\r\n      StrCpy $cccRecordVerdict "missing"\r\n'],
+    ['the exe on the uninstaller\'s own folder (the beta.5 bug)', '    ${ElseIfNot} ${FileExists} "$R3\\${APP_EXECUTABLE_FILENAME}"\r\n      StrCpy $cccRecordVerdict "missing"\r\n'],
+    ['the name spelled out', '    ${ElseIfNot} ${FileExists} "$INSTDIR\\AI Code Conductor.exe"\r\n      StrCpy $cccRecordVerdict "missing"\r\n'],
+    ['a wildcard', '    ${ElseIfNot} ${FileExists} "$INSTDIR\\*.exe"\r\n      StrCpy $cccRecordVerdict "missing"\r\n'],
+    ['a test split across two lines', '    ${ElseIfNot} ${FileExists} \\\r\n        "$INSTDIR\\${PRODUCT_FILENAME}.exe"\r\n      StrCpy $cccRecordVerdict "missing"\r\n'],
+    ['IfFileExists, unquoted', '    IfFileExists $INSTDIR\\${APP_FILENAME}.exe 0 +2\r\n'],
+  ])('the guard fails on each way the exe test could come back: %s', (_label, mutant) => {
+    const nsh = readNsh().replace(/\r?\n/g, '\r\n')
+    const anchor = '    ${Else}\r\n      ${GetParent} "$R1" $R3\r\n'
+    const at = nshMacroIn(nsh, 'ClassifyUninstallRecord').indexOf(anchor)
+    expect(at, 'the place in ClassifyUninstallRecord the mutant goes').toBeGreaterThan(-1)
+    const macroAt = nsh.indexOf('!macro ClassifyUninstallRecord')
+    const mutated = nsh.slice(0, macroAt + at) + mutant + nsh.slice(macroAt + at)
+    // The control: the real file passes both checks.
+    expect(classifyExistenceTests(nsh)).toEqual(CLASSIFY_ALLOWED_TESTS)
+    expect(exeExistenceProbes(nsh)).toHaveLength(1)
+    expect(classifyExeNaming(nsh)).toEqual([])
+    // The mutant fails all three.
+    expect(classifyExistenceTests(mutated)).not.toEqual(CLASSIFY_ALLOWED_TESTS)
+    expect(exeExistenceProbes(mutated)).toHaveLength(2)
+    expect(classifyExeNaming(mutated)).not.toEqual([])
+  })
+
+  // Each other way NSIS can tell whether the app's executable is there,
+  // placed after the uninstaller's folder is read into $R3, condemns a
+  // previous install whose folder lacks the renamed exe (the beta.5 bug
+  // class). The FileExists allow-list cannot see these; the ban on naming the
+  // exe and the ban on the other probes each catch them, and the last two
+  // rows pin each ban on its own (a probe that names no exe, a naming with no
+  // probe). Mutation to prove this can fail: empty either list.
+  it.each([
+    ['GetFileTime, read through the error flag', '      ClearErrors\r\n      GetFileTime "$R3\\${APP_EXECUTABLE_FILENAME}" $R4 $R4\r\n      ${If} ${Errors}\r\n        StrCpy $cccRecordVerdict "missing"\r\n      ${EndIf}\r\n', { naming: true, probe: true }],
+    ['FileOpen, then IfErrors', '      FileOpen $R4 "$R3\\${APP_EXECUTABLE_FILENAME}" r\r\n      IfErrors 0 +2\r\n        StrCpy $cccRecordVerdict "missing"\r\n      FileClose $R4\r\n', { naming: true, probe: true }],
+    ['GetFileAttributes on the exe', '      ${GetFileAttributes} "$R3\\${PRODUCT_FILENAME}.exe" "ALL" $R4\r\n      ${If} $R4 == ""\r\n        StrCpy $cccRecordVerdict "missing"\r\n      ${EndIf}\r\n', { naming: true, probe: true }],
+    ['FindFirst on the exe by its spelled-out name', '      FindFirst $R4 $R5 "$R3\\AI Code Conductor.exe"\r\n      ${If} $R5 == ""\r\n        StrCpy $cccRecordVerdict "missing"\r\n      ${EndIf}\r\n      FindClose $R4\r\n', { naming: true, probe: true }],
+    ['a probe that names no exe (FindFirst on a wildcard)', '      FindFirst $R4 $R5 "$R3\\*"\r\n      ${If} $R5 == ""\r\n        StrCpy $cccRecordVerdict "missing"\r\n      ${EndIf}\r\n      FindClose $R4\r\n', { naming: false, probe: true }],
+    ['a naming of the exe with no probe', '      StrCpy $R4 "$R3\\${PRODUCT_NAME}"\r\n', { naming: true, probe: false }],
+  ])('the guard fails on each other way the exe could be probed: %s', (_label, mutant, caught) => {
+    const nsh = readNsh().replace(/\r?\n/g, '\r\n')
+    const anchor = '      ${GetParent} "$R1" $R3\r\n'
+    const at = nshMacroIn(nsh, 'ClassifyUninstallRecord').indexOf(anchor)
+    expect(at, 'the place in ClassifyUninstallRecord the mutant goes').toBeGreaterThan(-1)
+    const macroAt = nsh.indexOf('!macro ClassifyUninstallRecord')
+    const mutated = nsh.slice(0, macroAt + at + anchor.length) + mutant + nsh.slice(macroAt + at + anchor.length)
+    // The control: the real file passes both bans.
+    expect(classifyExeNaming(nsh)).toEqual([])
+    expect(classifyOtherProbes(nsh)).toEqual([])
+    // The FileExists allow-list stays green under each of these.
+    expect(classifyExistenceTests(mutated)).toEqual(CLASSIFY_ALLOWED_TESTS)
+    // Each ban catches what it should.
+    expect(classifyExeNaming(mutated).length > 0).toBe(caught.naming)
+    expect(classifyOtherProbes(mutated).length > 0).toBe(caught.probe)
   })
 
   it('the elevated inner instance, which never reaches the commit point, is covered too', () => {

@@ -4,9 +4,10 @@
  * CODEX_HOME names) is NEVER taken in automatically, and nothing at start even
  * asks about it: the start-up work neither adopts it nor checks it
  * (probeExternalDefault), whatever the saved answer says, at app start or
- * when the resources directory is chosen later. Only an explicit
- * adoptExternalDefault takes it in (the user's "Use this sign-in"). The old
- * one-time start-up adoption is gone from the service altogether.
+ * when the resources directory is chosen later. The old one-time start-up
+ * adoption is gone from the service altogether, and since 2.1.1-beta.3 (owner
+ * decision 2026-10-11) so is 2.1.1-beta.2's explicit "Use this sign-in": the
+ * service refuses adoptExternalDefault and probeExternalDefault.
  *
  * The REAL provider-accounts runtime and the REAL accounts service; only the
  * settings file, the account registry and the package list are faked (a
@@ -90,6 +91,19 @@ describe('no adoption of the sign-in already on this computer at start', () => {
     expect(adopt).not.toHaveBeenCalled()
     expect(clear).toHaveBeenCalledTimes(1)
     expect(leftover).toHaveBeenCalledTimes(1)
+  })
+})
+
+// O5, owner decision 2026-10-11: no explicit adoption either. The service the
+// app itself builds refuses a new adoption, and the check before one, with
+// what to do instead (the 2.1.1-beta.2 test seam is never set here).
+describe('2.1.1-beta.3: the sign-in already on this computer is never taken in', () => {
+  it('the service the app builds refuses a new adoption and the check before one, saying to add a Codex account', async () => {
+    disk.settings = { codexEnabled: true, codexAnswered: true }
+    const service = initProviderAccounts()
+    const RETIRED = 'This app no longer uses the Codex sign-in already on this computer. Add a Codex account in Settings, Accounts instead.'
+    expect(await service.adoptExternalDefault({ providerId: 'codex' })).toEqual({ ok: false, code: 'unsupported', message: RETIRED })
+    expect(await service.probeExternalDefault({ providerId: 'codex' })).toEqual({ ok: false, code: 'unsupported', message: RETIRED })
   })
 })
 

@@ -19,7 +19,8 @@ import { helloCodexDue } from './hello-codex'
 import { TransparencyStep } from './TransparencyStep'
 import { FinishStep } from './FinishStep'
 import { settleOnboardingFinish, settleWhatsNewOnly } from './settle'
-import { seenVersion } from './whats-new-gate'
+import { seenVersion, whatsNewAnchorFrom } from './whats-new-gate'
+import { codexAnswered } from './codex-reconfirm-gate'
 import { usesClaude, usesCodex, claudeWasMissingAtSetup, codexWasChosenOnUpgrade } from './provider-choice'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useAppMetaStore } from '../stores/appMetaStore'
@@ -76,6 +77,23 @@ interface RunShape {
   isLast: boolean
   /** True when no page comes before this one: Back would go nowhere. */
   isFirst: boolean
+  /** Where What's New diffs from (whatsNewAnchorFor), fixed for the run.
+   *  Undefined on a fresh install. */
+  whatsNewAnchor?: string
+}
+
+/**
+ * The notes page's hint when nothing follows it in this run (O3). It used
+ * to say "Nothing to set up", and the very next screen after an update can be
+ * the one-time "Do you use Codex?" page (it follows the notes while Codex is
+ * unanswered: codex-reconfirm-gate) or the Multi Spawn startup page. So it
+ * says only what is true: the settings carried over, and the Codex question
+ * comes next when it does.
+ */
+export function notesRunEndHint(codexQuestionNext: boolean): string {
+  return codexQuestionNext
+    ? 'Your settings carried over. Next: one question about Codex.'
+    : 'Your settings carried over.'
 }
 
 /** #463: one predicate, used straight and negated, so the upgrade and
@@ -129,12 +147,13 @@ const PAGES: BuiltStep[] = [
     render: (nav, _ctx, _done, run) => (
       <WhatsNewV2Step
         onNext={nav.onNext}
+        anchor={run.whatsNewAnchor}
         // The page's own footer promised "the next pages set these up", which
         // is a lie on the common upgrade where nothing new needs setting up.
         ctaLabel={run.isLast ? 'Continue' : 'Set it up →'}
         hint={
           run.isLast
-            ? 'Nothing to set up — your settings carried over.'
+            ? notesRunEndHint(!codexAnswered(useSettingsStore.getState().settings))
             : run.whatsNewOnly
               ? "Next: the settings this release added, and nothing else."
               : 'The next pages set these up, one at a time.'
@@ -149,8 +168,8 @@ const PAGES: BuiltStep[] = [
     // First-runners (#463): the same showcase, right after Welcome — the
     // flagships ARE the app's introduction, so a fresh install meets them
     // here instead of never. The component swaps its heading off the
-    // "what's new" diff framing; sectionsFor already yields the full
-    // 2.0 + 2.1 story when there is no lastSeenVersion.
+    // "what's new" diff framing; with `fresh`, summarySections and
+    // summaryShowcases show every line and page that is not upgrade-only.
     when: () => !isUpgrader(),
     render: (nav, _ctx, _done, run) => (
       <WhatsNewV2Step
@@ -280,13 +299,27 @@ export function OnboardingHarness({
   onComplete,
   whatsNewOnly = false,
   codexSetupOnly = false,
+  bootSeenVersion,
   onAsideChange,
 }: {
   onComplete: (startTour: boolean, extra?: OnboardingCompleteExtra) => void
   whatsNewOnly?: boolean
   codexSetupOnly?: boolean
+  /** The version the user had seen the notes for, read by App from the
+   *  meta it loaded at boot, before it stamped lastRunVersion (O2). Absent
+   *  when the harness mounts before App has read it: the meta is then still
+   *  unstamped, and is read here instead. */
+  bootSeenVersion?: string
   onAsideChange?: (aside: boolean) => void
 }) {
+  // Where this run diffs from, fixed at mount like the page list below: the
+  // #369-clamped stamp from the boot snapshot, and the What's New anchor
+  // derived from it. Read once, so a stamp landing mid-run (the settle at the
+  // end of this very run) cannot reshape the pages under the user.
+  const [{ seen, whatsNewAnchor }] = useState(() => {
+    const s = bootSeenVersion ?? seenVersion()
+    return { seen: s, whatsNewAnchor: whatsNewAnchorFrom(s) }
+  })
   // The page list for THIS run, fixed at mount, and which of them carry the
   // "New" badge. Not recomputed per render: the pages write the very settings
   // their when() reads (the assistants choice decides the Claude Code and
@@ -299,8 +332,10 @@ export function OnboardingHarness({
     if (!whatsNewOnly) return { pages: PAGES, newIds: new Set() }
     // The stamp clamped to the last build that ran, not the raw stamp — the
     // same origin the launch decision used (#369), so a stamp written ahead of
-    // its build cannot hide a page that is new in this one.
-    const lastSeen = seenVersion()
+    // its build cannot hide a page that is new in this one. From the boot
+    // snapshot: by now App has stamped lastRunVersion, which makes the clamp
+    // a no-op when read live.
+    const lastSeen = seen
     const { codexEnabled, claudeEnabled } = useSettingsStore.getState().settings
     // In a notes run, every page after the notes is there BECAUSE it is new in
     // this build, and is badged so; the Codex setup hand-off (and the Codex
@@ -372,7 +407,7 @@ export function OnboardingHarness({
     version, setVersion, stepAside: () => setAside(true), returns,
     requestCodexSession: () => { codexSessionRequested.current = true },
   }
-  const run: RunShape = { whatsNewOnly, isLast, isFirst }
+  const run: RunShape = { whatsNewOnly, isLast, isFirst, whatsNewAnchor }
   return (
     <>
       <OnboardingShell phase={step.phase} isNew={newIds.has(step.id)} showPhases={!whatsNewOnly && !codexSetupOnly} hidden={aside}>

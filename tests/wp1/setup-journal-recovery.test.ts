@@ -7,9 +7,11 @@
 //
 // PURE: the real Codex package on a fake CLI, an in-memory folder tree and an
 // in-memory registry (./accounts-harness).
-import { describe, it, expect } from 'vitest'
-import { harness, addCodexAccount, managedHome, EXT_HOME, KEY, MemoryPort } from './accounts-harness'
+import { describe, it, expect, vi } from 'vitest'
+import { harness, addCodexAccount, managedHome, EXT_HOME, KEY, MemoryPort, RES } from './accounts-harness'
 import { findRealm } from '../../src/shared/providers'
+// The test setup replaces the app's log with recording fakes.
+import { logWarn } from '../../src/main/debug-logger'
 
 describe('adding a managed Codex account (WP1.47)', () => {
   it('reserves the ids and creates the folder first, signs in there, and commits only what status verifies', async () => {
@@ -179,6 +181,22 @@ describe('adding a managed Codex account (WP1.47)', () => {
     expect(r.ok).toBe(false)
     expect(h.doc().journals).toEqual([])
     expect(h.doc().realms).toEqual([])
+  })
+
+  it('a folder the owner-only rule refuses (2.1.1-beta.3, O6): the dialog keeps its general words, and the log says the code and the rule\'s reason in fixed words, never a path', async () => {
+    // As Windows refuses the owner write on a folder made under a parent that
+    // gives this user Modify alone (a second drive's root).
+    const unauthorized = 'Exception calling "SetAccessControl" with "2" argument(s): "Attempted to perform an unauthorized operation."'
+    const h = await harness({ secureFolders: async (dirs) => dirs.map((dir, i) => ({ dir, ok: false, detail: i === 0 ? unauthorized : 'its parent was refused' })) })
+    vi.mocked(logWarn).mockClear()
+    const r = await h.service.beginSetup({ providerId: 'codex', method: 'browser' })
+    expect(r).toEqual({ ok: false, code: 'permissions', message: 'The account folder could not be prepared.' })
+    expect(h.doc().journals).toEqual([])
+    expect(h.folders.exists(`${RES}\\codex-realms`)).toBe(false)
+    expect(h.logs).toContain('[accounts] a new codex account was not set up: its folder could not be prepared (permissions)')
+    const said = vi.mocked(logWarn).mock.calls.map((c) => c.map(String).join(' ')).filter((l) => l.startsWith('[codex] account folders'))
+    expect(said).toEqual(["[codex] account folders: not made private to this user, so not used (the folder of every Codex account: Windows refused the write (an unauthorized operation); the account's own folder: its parent was refused)"])
+    for (const line of [...said, ...h.logs.filter((l) => l.includes('could not be prepared'))]) expect(line).not.toMatch(/[A-Za-z]:\\|realm-|Exception|SetAccessControl/)
   })
 
   it('a setup is refused when the provider is off, the method is not enabled, or the provider keeps its own accounts', async () => {

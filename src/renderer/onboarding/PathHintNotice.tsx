@@ -10,8 +10,15 @@
 //     what that means and how to do it by hand; the surface's own ways on
 //     (Check again, Back and the rest) stay.
 //   - macOS and Linux, `shell-profile`: the shell file the login shell reads
-//     and the exact line to add, with Copy. The app never edits that file.
+//     and a command to run once that adds the folder to it, with Copy (a bare
+//     PATH line pasted into a terminal changed only that terminal). The app
+//     never edits that file. The words name no publisher: every tool's
+//     surface shares them.
 //   - `restart`: the only place the app advises quitting and starting again.
+//     `unresolved` (the tool was not seen, but a Windows PATH entry names a
+//     variable the app does not have) is a note, worded as a condition: it
+//     never claims the tool is there, and a surface shows it beside its own
+//     "not found" words rather than in their place (pathHintIsNote).
 //
 // The buttons follow BUTTON_RULE (InstallRecipeList.tsx): Not now, then Add
 // it to PATH for me, right-aligned, small, the commit the only primary.
@@ -28,10 +35,19 @@ export function pathHintText(hint: PathHintView, toolName: string): string {
     case 'add-to-path':
       return `${toolName} is installed in ${hint.folder}, but that folder is not on your PATH yet, so this app and your terminals cannot find it. Add it to PATH for me adds that one folder to the end of your PATH for your Windows account; nothing else in it changes.`
     case 'shell-profile':
-      return `${toolName} is installed in ${hint.folder}, but the PATH your login shell builds does not include that folder, so this app cannot find it. Add this line to ${hint.file}, then press Check again. The app does not change that file.`
+      return `${toolName} is installed in ${hint.folder}, but the PATH your login shell builds does not include that folder, so this app cannot find it. Run this once in a terminal. It adds the folder to ${hint.file}, which the app reads through your login shell; then press Check again. An installer may name ~/.zshrc or ~/.bashrc instead, which the app does not read.`
     case 'restart':
-      return `${toolName} is in a folder that your PATH in Windows names, but this app could not pick that folder up while it runs. Quit AI Code Conductor and start it again so it starts with that PATH.`
+      return hint.unresolved
+        ? `Your PATH in Windows also names a folder through a variable set after this app started (such as nvm-windows' NVM_SYMLINK), which the app cannot look in until it starts again. If you installed ${toolName} there, quit AI Code Conductor and start it again.`
+        : `${toolName} is in a folder that your PATH in Windows names, but this app could not pick that folder up while it runs. Quit AI Code Conductor and start it again so it starts with that PATH.`
   }
+}
+
+/** A hint that adds to what a surface says rather than replacing it: a
+ *  restart that may help, though the tool was not seen (aicc_planning#190).
+ *  The surface keeps its own "not found" words, and what a command it ran ended with, and shows this beside them. */
+export function pathHintIsNote(hint: PathHintView | undefined): boolean {
+  return hint?.kind === 'restart' && hint.unresolved === true
 }
 
 /** Where the footer's CLI help says the app looks for Claude Code, and what

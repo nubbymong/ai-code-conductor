@@ -206,7 +206,7 @@ const managed = (id: string, lifecycle: RealmRecord['lifecycle'] = 'pending'): R
 const external = (id: string): RealmRecord => ({ id, providerId: 'codex', kind: 'codex-home', ownership: 'external-default', pathRef: 'external-default', lifecycle: 'active' })
 
 type OwnerOnlyAnswer = ReadonlyArray<{ dir: string; ok: boolean; detail?: string }>
-interface WorldOpts { platform?: NodeJS.Platform; configured?: string; env?: Record<string, string>; secure?: (dirs: readonly string[]) => Promise<OwnerOnlyAnswer> }
+interface WorldOpts { platform?: NodeJS.Platform; configured?: string; env?: Record<string, string>; secure?: (dirs: readonly string[]) => Promise<OwnerOnlyAnswer>; log?: (message: string) => void }
 function world(o: WorldOpts = {}) {
   const platform = o.platform ?? 'win32'
   const win = platform === 'win32'
@@ -237,9 +237,11 @@ function world(o: WorldOpts = {}) {
     secured.push([...dirs])
     return o.secure ? o.secure(dirs) : dirs.map((dir) => ({ dir, ok: true, detail: 'owner-only' }))
   }
-  const folders = createCodexRealmFolders({ lookupRealm, fs, locks, secureFolders })
+  // What the folders say in the log (O6), recorded.
+  const said: string[] = []
+  const folders = createCodexRealmFolders({ lookupRealm, fs, locks, secureFolders, log: o.log ?? ((m) => { said.push(m) }) })
   const roots = () => resolveCodexRealmRoots({ resourcesDir: configured, env, homeDir: USER }, fs)
-  return { fs, api, RES, USER, ROOT, home, realms, folders, locks, roots, lookupRealm, lookups: () => lookups, win, secured, secureFolders }
+  return { fs, api, RES, USER, ROOT, home, realms, folders, locks, roots, lookupRealm, lookups: () => lookups, win, secured, secureFolders, said }
 }
 
 const A = { authRealmId: RA }
@@ -493,6 +495,91 @@ describe('creating a managed folder before sign-in', () => {
     const folders = createCodexRealmFolders({ lookupRealm: w.lookupRealm, fs: w.fs, locks: createCodexRealmLocks() })
     expect(await folders.prepare(A)).toMatchObject({ ok: false, code: 'permissions' })
     expect(w.fs.exists(w.home(RA))).toBe(false)
+  })
+
+  // 2.1.1-beta.3, O6: a refusal by the owner-only rule was never logged, and
+  // its message told the user to move the resources folder to "a disk that
+  // supports file permissions", which is wrong where the parent folder merely
+  // gives this user Modify (a second drive's root).
+  const UNAUTHORIZED = 'Exception calling "SetAccessControl" with "2" argument(s): "Attempted to perform an unauthorized operation."'
+  const NO_PATH = /[A-Za-z]:\\|realm-|codex-realms|Exception|SetAccessControl|S-1-5-21-/
+
+  it('Windows (O6): a refusal is said in the log once, in fixed words: which folder and why, never a path', async () => {
+    const w = world({ secure: async (d) => d.map((dir, i) => ({ dir, ok: false, detail: i === 0 ? UNAUTHORIZED : 'its parent was refused' })) })
+    const r = await w.folders.prepare(A)
+    expect(r).toMatchObject({ ok: false, code: 'permissions' })
+    expect(w.said).toEqual(["[codex] account folders: not made private to this user, so not used (the folder of every Codex account: Windows refused the write (an unauthorized operation); the account's own folder: its parent was refused)"])
+    for (const line of w.said) expect(line).not.toMatch(NO_PATH)
+    // The folders made for the attempt are still taken back.
+    expect(w.fs.exists(w.home(RA))).toBe(false)
+    expect(w.fs.exists(w.ROOT)).toBe(false)
+  })
+
+  it('the permissions message (O6): ownership first, another disk only for one without file permissions, and the same words on Windows and POSIX, with nothing only one of them makes true', async () => {
+    const win = world({ secure: async (d) => d.map((dir) => ({ dir, ok: false, detail: 'its owner is not this user' })) })
+    const posix = world({ platform: 'linux' })
+    posix.fs.chmodMode = 'eperm'
+    const messages: string[] = []
+    for (const [name, w] of [['Windows', win], ['POSIX', posix]] as const) {
+      const r = await w.folders.prepare(A)
+      expect(r, name).toMatchObject({ ok: false, code: 'permissions' })
+      messages.push((r as { message: string }).message)
+    }
+    expect(messages[1]).toBe(messages[0])
+    const message = messages[0]
+    expect(message).toMatch(/^[\x20-\x7e]+$/)
+    // beta.2 told every refused user to move the resources folder to another disk.
+    expect(message).not.toContain('to a disk that supports file permissions')
+    expect(message).toMatch(/^The Codex account folder could not be made private to you, so the app did not use it\. /)
+    expect(message).toContain("Check that your user account owns AI Code Conductor's resources folder (the folder chosen for its data when it was set up) and may change its permissions, then try again.")
+    // Moving is advised only for a disk without file permissions.
+    expect(message.split(/(?<=\.)\s+/).filter((s) => /\bmove\b/i.test(s))).toEqual(['If that folder is on a disk without file permissions, move it to one that has them.'])
+    // No Windows-only term, and no word of the log (POSIX writes none here).
+    expect(message).not.toMatch(/full control|\blog\b/i)
+  })
+
+  it('Windows (O6): the rule\'s own fixed words are logged as they are; anything else only by its kind, never echoed', async () => {
+    const cases: Array<[string, unknown, string]> = [
+      ['a verdict in fixed words', "this user lacks full control over it and what is inside", "this user lacks full control over it and what is inside"],
+      ['a fixed word with an apostrophe', "a sign-in file inside it is another account's", "a sign-in file inside it is another account's"],
+      ['a built-in group by its id', 'an entry for S-1-5-11', 'an entry for S-1-5-11'],
+      ["a person's own account", 'an entry for S-1-5-21-1111111111-2222222222-3333333333-1001', 'an entry for another account'],
+      ['a refusal naming a path', "Access to the path 'C:\\data\\res\\codex-realms' is denied.", 'Windows denied access'],
+      ['a call that gave no answer', 'the rights could not be set or read (Command failed: C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo)', 'the rights could not be set or read (the check gave no answer)'],
+      ['any other message', 'Some or all identity references could not be translated.', 'the rights could not be written or read back'],
+      ['no reason at all', undefined, 'no reason given'],
+    ]
+    for (const [name, detail, words] of cases) {
+      const w = world({ secure: async (d) => d.map((dir, i) => (i === 0 ? { dir, ok: true, detail: 'owner-only' } : { dir, ok: false, detail: detail as string })) })
+      expect(await w.folders.prepare(A), name).toMatchObject({ ok: false, code: 'permissions' })
+      expect(w.said, name).toEqual([`[codex] account folders: not made private to this user, so not used (the account's own folder: ${words})`])
+      for (const line of w.said) expect(line, name).not.toMatch(NO_PATH)
+    }
+  })
+
+  it('Windows (O6): no rule, a rule that throws, a short answer or one for another folder are each said; a pass, and POSIX, say nothing; a log that throws changes nothing', async () => {
+    const said = (secure: WorldOpts['secure']) => { const w = world({ secure }); return w.folders.prepare(A).then((r) => ({ r, said: w.said })) }
+    const thrown = await said(async () => { throw new Error('C:\\Windows\\System32 failed') })
+    expect(thrown.r).toMatchObject({ ok: false, code: 'permissions' })
+    expect(thrown.said).toEqual(['[codex] account folders: not made private to this user, so not used (the owner-only folder rule failed)'])
+    const short = await said(async (d) => [{ dir: d[0], ok: true }])
+    expect(short.said).toEqual(['[codex] account folders: not made private to this user, so not used (the owner-only folder rule did not answer for each folder)'])
+    const swapped = await said(async (d) => [...d].reverse().map((dir) => ({ dir, ok: true })))
+    expect(swapped.said).toEqual(["[codex] account folders: not made private to this user, so not used (the folder of every Codex account: the answer was not for this folder; the account's own folder: the answer was not for this folder)"])
+    const none: string[] = []
+    const w = world({ log: (m) => { none.push(m) } })
+    const ruleless = createCodexRealmFolders({ lookupRealm: w.lookupRealm, fs: w.fs, locks: createCodexRealmLocks(), log: (m) => { none.push(m) } })
+    expect(await ruleless.prepare(A)).toMatchObject({ ok: false, code: 'permissions' })
+    expect(none).toEqual(['[codex] account folders: not made private to this user, so not used (no owner-only folder rule)'])
+    const passed = await said(undefined)
+    expect(passed.r).toEqual({ ok: true, created: true })
+    expect(passed.said).toEqual([])
+    const posix = world({ platform: 'linux', secure: async () => { throw new Error('never on POSIX') } })
+    expect(await posix.folders.prepare(A)).toEqual({ ok: true, created: true })
+    expect(posix.said).toEqual([])
+    const loud = world({ secure: async (d) => d.map((dir) => ({ dir, ok: false, detail: 'its owner is not this user' })), log: () => { throw new Error('the log is gone') } })
+    expect(await loud.folders.prepare(A)).toMatchObject({ ok: false, code: 'permissions' })
+    expect(loud.fs.exists(loud.home(RA))).toBe(false)
   })
 
   it('POSIX: the owner-only rule is never asked (the folders are made 0700)', async () => {

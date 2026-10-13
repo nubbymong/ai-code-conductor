@@ -16,6 +16,7 @@
  */
 import * as fs from 'fs'
 import * as path from 'path'
+import { deployScriptFile, prepareScriptFolder } from '../../script-deploy'
 
 /**
  * @param resourcesDir Destination resources directory.
@@ -27,12 +28,16 @@ import * as path from 'path'
 export async function deployCodexResumePickerScript(resourcesDir: string, sourceRoot?: string): Promise<void> {
   const resourcesScriptsDir = path.join(resourcesDir, 'scripts')
   if (!fs.existsSync(resourcesScriptsDir)) {
-    fs.mkdirSync(resourcesScriptsDir, { recursive: true })
+    fs.mkdirSync(resourcesScriptsDir, { recursive: true, mode: 0o700 })
   }
+  // The lib is written only into a real scripts/lib folder: prepareScriptFolder
+  // keeps a real folder there, replaces anything else it may remove (a link
+  // as a link, never what it names; an empty directory) with a real folder,
+  // and throws otherwise. A launch takes the picker only when that folder is
+  // a real folder by the same rule (isRealScriptFolder, in
+  // getCodexResumePickerPath).
   const resourcesLibDir = path.join(resourcesScriptsDir, 'lib')
-  if (!fs.existsSync(resourcesLibDir)) {
-    fs.mkdirSync(resourcesLibDir, { recursive: true })
-  }
+  prepareScriptFolder(resourcesLibDir)
 
   const pickerSrc = sourceRoot
     ? path.join(sourceRoot, 'scripts/codex-resume-picker.js')
@@ -41,10 +46,8 @@ export async function deployCodexResumePickerScript(resourcesDir: string, source
     ? path.join(sourceRoot, 'scripts/lib/codex-resume-picker-lib.js')
     : path.join(__dirname, '../../scripts/lib/codex-resume-picker-lib.js')
 
-  if (fs.existsSync(pickerSrc)) {
-    fs.copyFileSync(pickerSrc, path.join(resourcesScriptsDir, 'codex-resume-picker.js'))
-  }
-  if (fs.existsSync(libSrc)) {
-    fs.copyFileSync(libSrc, path.join(resourcesLibDir, 'codex-resume-picker-lib.js'))
-  }
+  // F14: read and compared, written only when changed; never copyFileSync,
+  // which leaves a temporary file behind for a source inside app.asar.
+  deployScriptFile(pickerSrc, path.join(resourcesScriptsDir, 'codex-resume-picker.js'))
+  deployScriptFile(libSrc, path.join(resourcesLibDir, 'codex-resume-picker-lib.js'))
 }

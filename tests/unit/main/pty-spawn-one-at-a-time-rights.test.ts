@@ -93,6 +93,7 @@ vi.mock('../../../src/main/provider-accounts', () => ({
 const { registerPtyHandlers } = await import('../../../src/main/ipc/pty-handlers')
 const { createAppSessionDurability } = await import('../../../src/main/app-session-durability')
 const { _resetConfigLaunchClaimsForTest, _claimedSessionCountForTest } = await import('../../../src/main/launch-one-at-a-time')
+const { partnerSshOf } = await import('../../../src/shared/multi-spawn-rule')
 registerPtyHandlers(() => ({} as never))
 const spawn = handlers.get('pty:spawn')!
 const kill = handlers.get('pty:kill')!
@@ -112,6 +113,8 @@ const sshReq = { cwd: 'C:/w', configId: 'cfgssh', ssh: { ...SSH } }
 const shellReq = { cwd: 'C:/w', configId: 'cfgshell', shellOnly: true, terminalOptions: { command: 'deploy', args: '--prod', hasSecretArg: true } }
 const disk = (...c: unknown[]) => { configsOnDisk = c }
 const isRefused = (r: unknown) => !!r && typeof r === 'object' && (r as { refused?: { code?: string } }).refused?.code === 'already-running'
+/** #86: an SSH partner shell main cannot place beside a session it accepted is refused with its own code. */
+const isPartnerRefused = (r: unknown) => !!r && typeof r === 'object' && (r as { refused?: { code?: string } }).refused?.code === 'partner-needs-session'
 /** The saved session state the app loads at start (what main reads from disk). */
 const load = (sessions: Array<Record<string, unknown>>, detachedRemotes: Array<Record<string, unknown>> = []) => {
   state.loaded = { sessions, activeSessionId: null, savedAt: 1, detachedRemotes }
@@ -286,11 +289,11 @@ describe('M3: an exemption never carries a config\'s credentials', () => {
     expect(live.has(B)).toBe(false)
   })
 
-  it('a partner-shaped name on an SSH spawn buys nothing: it carries an ssh block, so it is a copy and is refused', async () => {
+  it('a partner-shaped name on an SSH spawn buys nothing: no accepted session of it, so it is refused (#86: never a copy)', async () => {
     disk(savedSsh())
     await spawn({}, A, sshReq)
     loadCredential.mockClear()
-    expect(isRefused(await spawn({}, 'deadbeef-partner', { ...sshReq, shellOnly: true }))).toBe(true)
+    expect(isPartnerRefused(await spawn({}, 'deadbeef-partner', { ...sshReq, shellOnly: true }))).toBe(true)
     expect(loadCredential).not.toHaveBeenCalled()
   })
 
@@ -341,13 +344,13 @@ describe('M3: an exemption never carries a config\'s credentials', () => {
     expect(isRefused(await spawn({}, `${A}-partner`, { cwd: 'C:/w', shellOnly: true, configId: 'cfgclaude' }))).toBe(false)
   })
 
-  it('a partner exempt shell is exact: an extra terminal-options block, an ssh block, or elevation makes it a copy', async () => {
+  it('a partner exempt shell is exact: an extra terminal-options block or elevation makes it a copy; an ssh block on a local session\'s shell is refused', async () => {
     disk(savedClaude())
     await spawn({}, A, claudeReq)
     const p = `${A}-partner`
     const base = { cwd: 'C:/w', shellOnly: true, configId: 'cfgclaude' }
     expect(isRefused(await spawn({}, p, { ...base, terminalOptions: { command: 'x' } }))).toBe(true)
-    expect(isRefused(await spawn({}, p, { ...base, ssh: { ...SSH } }))).toBe(true)
+    expect(isPartnerRefused(await spawn({}, p, { ...base, ssh: { ...SSH } }))).toBe(true)
     expect(isRefused(await spawn({}, p, { ...base, elevated: true }))).toBe(true)
     expect(isRefused(await spawn({}, p, { ...base, shellOnly: false }))).toBe(true)
   })
@@ -443,6 +446,82 @@ describe('R1: the exact partner shell never counts, so it can never block its co
       expect(o.ssh).toBeUndefined()
       expect(o.terminalSecret).toBeUndefined()
     }
+  })
+})
+
+/**
+ * #86: the partner shell of an SSH session is a PLAIN shell on the session's own
+ * host, through the real handler: not a copy of the config (main's own record of
+ * the session decides), bound to the saved host like the session, with no
+ * post-connect command, no container runtime, persistence off, and no sudo
+ * secret read for it.
+ */
+describe('M6 (#86): the partner shell of an SSH session', () => {
+  const SSH_PC = { ...SSH, postCommand: 'sudo docker exec -it app bash', runtime: { type: 'container', container: 'app', sudo: true }, detachable: true, hasPassword: true, hasSudoPassword: true }
+  const savedSshPc = (over: Record<string, unknown> = {}) => savedSsh({ allowMultiSpawn: false, sshConfig: { ...SSH_PC }, ...over })
+  /** The session's spawn, as TerminalView sends it. */
+  const sessionReq = { cwd: 'C:/w', configId: 'cfgssh', ssh: { ...SSH_PC, reconnect: false } }
+  /** The partner's spawn, as its TerminalView sends it. */
+  const partnerReq = (over: Record<string, unknown> = {}) => ({ configId: 'cfgssh', shellOnly: true, ssh: { ...partnerSshOf(SSH_PC), reconnect: false, ...over } })
+
+  it('starts beside its running session, as a plain connection to the saved host, with the password and no sudo secret', async () => {
+    disk(savedSshPc())
+    expect(isRefused(await spawn({}, A, sessionReq))).toBe(false)
+    loadCredential.mockClear()
+    expect(isRefused(await spawn({}, `${A}-partner`, partnerReq()))).toBe(false)
+    const o = spawned.find((s) => s.sid === `${A}-partner`)!.o
+    expect(o.shellOnly).toBe(true)
+    expect(o.ssh).toEqual({ host: 'build-box', port: 22, username: 'nick', remotePath: '~/proj', detachable: false, password: 'secret-for-cfgssh', sudoPassword: undefined })
+    expect(loadCredential.mock.calls.map((c) => String(c[0]))).toEqual(['cfgssh'])
+    // and it never counts: with the session gone, a new tab of the config starts
+    kill({}, A)
+    expect(isRefused(await spawn({}, B, sessionReq))).toBe(false)
+  })
+
+  it('a block that is not the partner block of main\'s record is refused (never a copy), and no credential is read', async () => {
+    disk(savedSshPc())
+    await spawn({}, A, sessionReq)
+    loadCredential.mockClear()
+    expect(isPartnerRefused(await spawn({}, `${A}-partner`, partnerReq({ host: 'other-box' })))).toBe(true)
+    expect(isPartnerRefused(await spawn({}, `${A}-partner`, partnerReq({ postCommand: SSH_PC.postCommand })))).toBe(true)
+    expect(isPartnerRefused(await spawn({}, `${A}-partner`, { configId: 'cfgssh', shellOnly: true, ssh: { ...SSH_PC } }))).toBe(true)
+    expect(isPartnerRefused(await spawn({}, `${B}-partner`, partnerReq()))).toBe(true) // B was never accepted
+    expect(loadCredential).not.toHaveBeenCalled()
+    expect(spawned.some((s) => s.sid.endsWith('-partner'))).toBe(false)
+  })
+
+  it('Multi Spawn or not, a partner shell main cannot place is refused at the gate, before any credential is read', async () => {
+    disk(savedSshPc({ allowMultiSpawn: true })) // Multi Spawn: a copy would pass; the shell is no copy
+    await spawn({}, A, sessionReq)
+    loadCredential.mockClear()
+    expect(isPartnerRefused(await spawn({}, `${A}-partner`, partnerReq({ postCommand: SSH_PC.postCommand })))).toBe(true)
+    expect(loadCredential).not.toHaveBeenCalled()
+    expect(live.has(`${A}-partner`)).toBe(false)
+  })
+
+  // Admitted as a copy, the shell of a tab that started nothing would refuse
+  // the tab its own start. Mutation to
+  // prove this can fail: drop the partner-needs-session refusal in
+  // claimConfigLaunch.
+  it('the shell of a tab that started nothing never refuses the tab its own start', async () => {
+    disk(savedSshPc())
+    await spawn({}, `${A}-partner`, partnerReq()) // whatever the gate answers: if it lets the shell start, it runs
+    expect(isRefused(await spawn({}, A, sessionReq))).toBe(false)
+    expect(live.has(A)).toBe(true)
+    expect(isRefused(await spawn({}, `${A}-partner`, partnerReq()))).toBe(false) // now beside its tab
+  })
+
+  it('that shell is refused, and nothing of it starts', async () => {
+    disk(savedSshPc())
+    expect(isPartnerRefused(await spawn({}, `${A}-partner`, partnerReq()))).toBe(true)
+    expect(live.has(`${A}-partner`)).toBe(false)
+  })
+
+  it('the session itself is bound as before: its post-connect command, runtime and persistence ride along', async () => {
+    disk(savedSshPc())
+    await spawn({}, A, sessionReq)
+    const o = spawned.find((s) => s.sid === A)!.o
+    expect(o.ssh).toMatchObject({ postCommand: SSH_PC.postCommand, runtime: SSH_PC.runtime, detachable: true, sudoPassword: 'secret-for-cfgssh_sudo' })
   })
 })
 

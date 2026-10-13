@@ -1268,6 +1268,18 @@ describe('the login-shell PATH (macOS/Linux)', () => {
 // isolated `codex exec` per review, from a launch the accounts service
 // prepared; the request on stdin, never argv; the reply read from the pinned
 // CLI's JSONL (rust-v0.155.1 exec_events.rs).
+// The reviewer's exact argv. Since the review was given the change in its
+// request (the reviewer could run no command on Windows: Codex's exec policy
+// refuses every command of a read-only run with no Windows sandbox set), it
+// runs no tool: the analysis run's --disable features and web search off,
+// with --disable hooks (D3), the two ignore flags and the model kept.
+const REVIEW_ARGV = [
+  'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--disable', 'hooks', '--sandbox', 'read-only',
+  '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'apps', '--disable', 'plugins', '--disable', 'browser_use',
+  '--disable', 'computer_use', '--disable', 'image_generation', '--disable', 'view_image', '--disable', 'multi_agent',
+  '--disable', 'code_mode', '--disable', 'code_mode_host',
+  '-c', 'web_search=disabled', '-m', 'gpt-5.5', '-',
+]
 describe('the Codex reviewer (WP2 5a)', () => {
   const jsonl = (...events: unknown[]) => events.map((e) => JSON.stringify(e)).join('\n') + '\n'
   const turn = (input: number, cached: number, output: number) => ({ type: 'turn.completed', usage: { input_tokens: input, cached_input_tokens: cached, cache_write_input_tokens: 0, output_tokens: output, reasoning_output_tokens: 0 } })
@@ -1296,7 +1308,7 @@ describe('the Codex reviewer (WP2 5a)', () => {
     const p = createCodexReviewOperations({ platform: 'win32', runDeps: () => deps }).run(input())
     const s = spawned[0]
     expect(s.file).toBe('C:\\Tools\\codex.exe')
-    expect(s.args).toEqual(['exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--sandbox', 'read-only', '-m', 'gpt-5.5', '-'])
+    expect(s.args).toEqual(REVIEW_ARGV)
     expect(s.opts).toMatchObject({ cwd: 'D:\\proj', shell: false, windowsVerbatimArguments: false })
     expect(s.child.stdin!.end).toHaveBeenCalledWith(input().prompt)
     expect(s.args.join(' ')).not.toContain('OPENAI_API_KEY')
@@ -1324,7 +1336,7 @@ describe('the Codex reviewer (WP2 5a)', () => {
     void createCodexReviewOperations({ platform: 'win32', runDeps: () => deps }).run(input({ executable: 'C:\\npm\\codex.cmd' }))
     const s = spawned[0]
     expect(s.file).toBe('C:\\Windows\\System32\\cmd.exe')
-    expect(s.args).toEqual(['/d', '/v:off', '/s', '/c', '""C:\\npm\\codex.cmd" exec --json --ephemeral --skip-git-repo-check --ignore-user-config --ignore-rules --sandbox read-only -m gpt-5.5 -"'])
+    expect(s.args).toEqual(['/d', '/v:off', '/s', '/c', '""C:\\npm\\codex.cmd" ' + REVIEW_ARGV.join(' ') + '"'])
     expect(s.opts).toMatchObject({ cwd: 'D:\\proj', windowsVerbatimArguments: true })
     expect(s.child.stdin!.end).toHaveBeenCalledWith(input().prompt)
   })
@@ -2118,7 +2130,7 @@ describe('the text-only analysis run (P3.9 round 1)', () => {
     '--disable', 'code_mode', '--disable', 'code_mode_host',
     '-c', 'web_search=disabled', '-c', 'project_doc_max_bytes=0', '-c', 'project_root_markers=[]', '-',
   ]
-  const REVIEW = ['exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--sandbox', 'read-only', '-m', 'gpt-5.5', '-']
+  const REVIEW = REVIEW_ARGV
   const input = (over: Record<string, unknown> = {}) => ({
     executable: 'C:\\Tools\\codex.exe', cwd: 'D:\\runs\\ccc-sentinel-codex-x', prompt: 'Analyse these notes.', timeoutMs: 1000,
     env: { PATH: 'C:\\Windows', SystemRoot: 'C:\\Windows', CODEX_HOME: 'C:\\res\\codex-realms\\r1' },
@@ -2134,6 +2146,21 @@ describe('the text-only analysis run (P3.9 round 1)', () => {
     expect(spawned.map((s) => s.args)).toEqual([ANALYSIS, REVIEW, REVIEW])
     expect(spawned[0].opts).toMatchObject({ cwd: 'D:\\runs\\ccc-sentinel-codex-x', shell: false })
     expect(spawned[0].child.stdin!.end).toHaveBeenCalledWith('Analyse these notes.')
+  })
+
+  it('a review runs no tool: every feature the analysis turns off is off, and web search; --disable hooks (D3), the ignore flags, the read-only sandbox and the model stay', () => {
+    const review = codexCommandLine('/usr/bin/codex', 'review', 'linux', {})
+    const args = 'refused' in review ? [] : review.args
+    const disabled = (a: readonly string[]) => a.flatMap((x, i) => (a[i - 1] === '--disable' ? [x] : []))
+    const overrides = (a: readonly string[]) => a.flatMap((x, i) => (a[i - 1] === '-c' ? [x] : []))
+    expect([...disabled(args)].sort()).toEqual([...disabled(ANALYSIS)].sort())
+    expect(disabled(args)).toEqual(expect.arrayContaining(['shell_tool', 'unified_exec', 'hooks']))
+    expect(overrides(args)).toEqual(['web_search=disabled'])
+    for (const kept of ['--ignore-user-config', '--ignore-rules', '--ephemeral', '--json']) expect(args, kept).toContain(kept)
+    expect(args.slice(args.indexOf('--sandbox'), args.indexOf('--sandbox') + 2)).toEqual(['--sandbox', 'read-only'])
+    expect(args.slice(-3)).toEqual(['-m', 'gpt-5.5', '-'])
+    // The project's own instructions are review context: left at Codex's defaults.
+    expect(args.join(' ')).not.toMatch(/project_doc_max_bytes|project_root_markers/)
   })
 
   it('through a Windows shim the same constant line is written verbatim, the empty list included', () => {

@@ -13,6 +13,7 @@ import { deriveOnboarding } from '../onboarding/gate'
 import { useHelloCodexStore } from '../onboarding/hello-codex-open'
 import { PARTNER_PTY_SUFFIX } from '../../shared/multi-spawn-rule'
 import { hasSpawned } from '../ptyTracker'
+import { sessionCapabilities } from '../lib/session-capabilities'
 import type { ViewType } from '../types/views'
 
 /**
@@ -128,8 +129,9 @@ export function useKeyboardShortcuts(
       // the reverse tunnel. A Codex session: its line through the Codex typing
       // rule. A plain terminal: only the quoted path, with no Enter; over SSH
       // nothing, with a hint saying where the image is. The partner shell in
-      // the partner view (a shell on this computer for every tab, an SSH tab's
-      // too): only the quoted path, with no Enter. A plain terminal or a partner
+      // the partner view of a local tab: only the quoted path, with no Enter;
+      // of an SSH tab (#86: a shell on the host) nothing, with the same hint as
+      // a plain terminal over SSH. A plain terminal or a partner
       // shell that is not running gets nothing, with a hint saying so and where
       // the image is. Off Windows (PR-level ADR-009 round 1, A1) the path is
       // typed only into a shell of the sh family, and only with no control
@@ -152,18 +154,22 @@ export function useKeyboardShortcuts(
             if (showingPartner) {
               // P3.16a (N9): in the partner view the partner shell is on screen
               // and the session's terminal is hidden, so the image goes to the
-              // partner shell and the assistant behind it gets nothing. The
-              // partner is a plain shell on this computer for every tab (an SSH
-              // tab's too: it opens at home here), so it gets what a plain
-              // terminal on this computer gets: the image's path, quoted for its
-              // shell, with no sentence and no Enter. Round 2 (Q7): a partner
+              // partner shell and the assistant behind it gets nothing. A local
+              // tab's partner is a plain shell on this computer, so it gets what
+              // a plain terminal on this computer gets: the image's path, quoted
+              // for its shell, with no sentence and no Enter. A partner
               // shell that is not running (no spawn of it is current: its
               // process ended, or a Restart's next one has not started) has no
               // shell to type into: nothing is typed, and the hint says so, as
               // for a plain terminal that is not running.
+              // #86: an SSH tab's partner is a shell on the HOST now, which
+              // cannot read a file on this computer: nothing is typed, and the
+              // hint says where the image is, as for a plain terminal over SSH.
               const partnerId = sessionId + PARTNER_PTY_SUFFIX
               if (!hasSpawned(partnerId)) {
                 usePasteHintStore.getState().show(sessionId, `This terminal is not running, so nothing was typed; the image was saved on this computer at ${res.path}.`)
+              } else if (sessionCapabilities(session).runsOn('partner') === 'remote') {
+                usePasteHintStore.getState().show(sessionId, `The image was saved on this computer at ${res.path}; the remote shell cannot read it, so nothing was typed.`)
               } else if (!typeImagePathIntoShell(partnerId, res.path, window.electronPlatform === 'win32', res.posixShell)) {
                 // PR-level ADR-009 round 1 (A1): off Windows, not typed (as below).
                 usePasteHintStore.getState().show(sessionId, notTypedHint(res.path))

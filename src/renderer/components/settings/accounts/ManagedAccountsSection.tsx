@@ -1,21 +1,24 @@
 // WP2 commit 6 (F4, Codex card): a provider whose accounts this app manages
 // itself. One row per account, the reviewer line, setups an interruption
-// left behind, what the app found about the provider's own sign-in on this
-// computer, and Add account. While the provider is off, the accounts are
-// listed but not managed. P3.2: each row is the shared AccountRow (the chip
+// left behind, and Add account. The provider's own sign-in on this computer
+// is never offered (O5, owner decision 2026-10-11): an account 2.1.1-beta.2
+// registered for it keeps its row, which says it is being retired. While the
+// provider is off, the accounts are listed but not managed. P3.2: each row
+// is the shared AccountRow (the chip
 // opens the identity editor; "N running"; a refused inactivate or archive
 // names the sessions holding the account, with Go to), and archived accounts
-// are listed under "Archived (N)" with Restore (design 5.3).
+// are listed under "Archived (N)" with Restore (design 5.3), all but the
+// one for this computer's own sign-in, which is retired.
 import React, { useEffect, useRef, useState } from 'react'
 import type { AccountView, AccountsResult, AccountsSnapshot, KnownAuthState, PendingSetupView, ProviderId, ProviderInstallationView, SignInMethod } from '../../../../shared/providers'
 import type { IdentityColorKey } from '../../../../shared/identity-colors'
 import { resolveIdentityColor } from '../../../../shared/identity-colors'
 import {
   useProviderAccountsStore, providerAccountActions, providerView, selectProviderAccounts, accountDisplayName, canOfferMakeReviewer,
-  showsReviewerBadge, accountFailureText, accountState, signInMethodLabel, externalHomeLabel, externalHomeFolder, canOfferSignInAgain,
+  showsReviewerBadge, accountFailureText, accountState, signInMethodLabel, externalHomeFolder, canOfferSignInAgain,
   externalHomeLabelInSentence, accountNameInSentence,
-  canOfferMakeInactive, canOfferMakeActive, canOfferArchive, externalAdoption, canOfferCheckSignIn, signInCheckText, externalSignInHint,
-  selectArchivedAccounts, canOfferRestore, linkedAccounts, linkedAccountLabel, blockerSessions, sessionTitle, unnamedHolders, oldSignInText,
+  canOfferMakeInactive, canOfferMakeActive, canOfferArchive, canOfferCheckSignIn, signInCheckText, externalSignInHint, externalSignInRetiring,
+  externalSignInRetired, selectArchivedAccounts, canOfferRestore, linkedAccounts, linkedAccountLabel, blockerSessions, sessionTitle, unnamedHolders, oldSignInText,
   confirmEachLaunchWhy,
 } from '../../../stores/providerAccountsStore'
 import { useSessionStore } from '../../../stores/sessionStore'
@@ -23,7 +26,7 @@ import { useResolvedTheme } from '../../../hooks/useThemeController'
 import { ProviderMark } from '../../sidebar/Badges'
 import { Section } from '../../SettingsPage'
 import { DialogHeader, DialogBody, DialogFooter, DialogButton, useDialogEscape } from '../../ui/Dialog'
-import { Pill, StatusText, MutedLine, ErrorLine, RowButton, ReviewerLineBlock, AccountsModal, RunningPill } from './accounts-ui'
+import { Pill, StatusText, MutedLine, ErrorLine, RowButton, ReviewerLineBlock, AccountsModal, RunningPill, noBreakHyphens } from './accounts-ui'
 import { AccountRow, AccountChip, LinkedLine, BlockerLine } from './AccountRow'
 import { IdentityEditor } from './IdentityEditor'
 import { RowMenu, type MenuItem } from '../../ui/RowMenu'
@@ -31,10 +34,13 @@ import { AddProviderAccountDialog, SignInAgainDialog } from './AddProviderAccoun
 import { useCodexWebStore } from '../../../stores/codexWebStore'
 import { isWebSessionAccountId } from '../../../../shared/account-web-session'
 
-type ExternalAck = 'logout' | 'archive' | 'sign-in-again'
+type ExternalAck = 'logout' | 'archive'
 
-/** Signing out of, archiving, or signing in again the provider's own shared
- *  home reaches beyond this app: the user says yes to that first. */
+/** Signing out of, or archiving, the provider's own shared home reaches
+ *  beyond this app: the user says yes to that first. Archiving it is final
+ *  (O5): the app no longer uses that sign-in, so its archived row has no
+ *  Restore and main refuses one; the confirmation says so. Sign in again is
+ *  not offered on it any more (O5, #196). */
 function ExternalAckDialog({ kind, provider, onConfirm, onCancel }: {
   kind: ExternalAck
   provider: ProviderInstallationView
@@ -44,7 +50,7 @@ function ExternalAckDialog({ kind, provider, onConfirm, onCancel }: {
   useDialogEscape(onCancel)
   const folder = useProviderAccountsStore((s) => externalHomeFolder(s.snapshot, provider.providerId))
   const home = externalHomeLabelInSentence(provider, folder)
-  const title = kind === 'logout' ? `Sign out of ${home}?` : kind === 'archive' ? `Archive ${home}?` : `Sign in to ${home} again?`
+  const title = kind === 'logout' ? `Sign out of ${home}?` : `Archive ${home}?`
   return (
     <AccountsModal labelledBy="external-ack-title" role="alertdialog" testId="external-ack-dialog" overlayTestId="external-ack-overlay">
       <DialogHeader title={title} titleId="external-ack-title" onClose={onCancel} />
@@ -52,15 +58,13 @@ function ExternalAckDialog({ kind, provider, onConfirm, onCancel }: {
         <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--text-secondary)' }} data-testid="external-ack-text">
           {kind === 'logout'
             ? `This sign-in is shared with other apps on this computer, including the ${provider.displayName} CLI itself. Signing out here signs them out too.`
-            : kind === 'archive'
-              ? `Archiving only forgets this sign-in in this app. It is shared with other apps on this computer, and it stays signed in for them.`
-              : `This sign-in is shared with other apps on this computer, including the ${provider.displayName} CLI itself. Signing in again signs them out first, and if the new sign-in does not finish, it stays signed out.`}
+            : `Archiving is final: this account cannot be restored, because this app no longer uses the ${provider.displayName} sign-in already on this computer. Archiving only forgets that sign-in in this app: it is shared with other apps on this computer, including the ${provider.displayName} CLI, and it stays signed in for them.`}
         </p>
       </DialogBody>
       <DialogFooter>
         <DialogButton variant="ghost" onClick={onCancel} testId="external-ack-cancel" data-autofocus="">Cancel</DialogButton>
         <DialogButton variant={kind === 'archive' ? 'primary' : 'danger'} onClick={onConfirm} testId="external-ack-confirm">
-          {kind === 'logout' ? 'Sign out' : kind === 'archive' ? 'Archive' : 'Continue'}
+          {kind === 'logout' ? 'Sign out' : 'Archive'}
         </DialogButton>
       </DialogFooter>
     </AccountsModal>
@@ -181,21 +185,24 @@ function ManagedAccountRow({ account, provider, snapshot, onAddAccount }: {
       items.push({ key: 'make-reviewer', label: 'Make reviewer', onSelect: () => { void run(() => providerAccountActions.setReviewerDefault({ providerId: account.providerId, accountId: id })) } })
     }
     // Signed in too: main then signs in to a new folder and moves the
-    // account there only once that sign-in is verified (design 9.2). This
-    // computer's own sign-in in place, after its warning (design 9.2).
+    // account there only once that sign-in is verified (design 9.2). Never
+    // on this computer's own sign-in (retired, O5; canOfferSignInAgain).
     if (canOfferSignInAgain(account)) {
-      items.push({ key: 'sign-in-again', label: 'Sign in again', onSelect: () => { setError(null); setChecked(null); if (account.external) setAck('sign-in-again'); else setSigningInAgain(true) } })
+      items.push({ key: 'sign-in-again', label: 'Sign in again', onSelect: () => { setError(null); setChecked(null); setSigningInAgain(true) } })
     }
     if (canOfferCheckSignIn(account, provider)) {
       items.push({ key: 'check-sign-in', label: 'Check sign-in', onSelect: () => { void checkSignIn() } })
     }
-    if (account.lastKnownAuthState !== 'signed-out' && provider.logout.enabled) {
-      items.push({
-        key: 'sign-out',
-        label: 'Sign out',
-        onSelect: () => { if (account.external) setAck('logout'); else void run(() => providerAccountActions.logout({ accountId: id })) },
-      })
-    }
+    // Sign out. On this computer's own sign-in it signs the provider's CLI
+    // out machine-wide, so there it is named for that and comes last, after
+    // the app-only actions (Make inactive, then Archive), behind its warning
+    // (#196: it used to be the first removal-like action on that row).
+    const signOut: MenuItem | null = account.lastKnownAuthState !== 'signed-out' && provider.logout.enabled
+      ? account.external
+        ? { key: 'sign-out', label: `Sign ${provider.displayName} out on this computer...`, onSelect: () => { setAck('logout') } }
+        : { key: 'sign-out', label: 'Sign out', onSelect: () => { void run(() => providerAccountActions.logout({ accountId: id })) } }
+      : null
+    if (signOut && !account.external) items.push(signOut)
     // P4.6: the account's chatgpt.com web session (the sign-in window).
     if (webApplies) {
       const webItems: MenuItem[] = []
@@ -230,6 +237,7 @@ function ManagedAccountRow({ account, provider, snapshot, onAddAccount }: {
     }
     if (lifecycle.length && items.length) lifecycle[0] = { ...lifecycle[0], separated: true }
     items.push(...lifecycle)
+    if (signOut && account.external) items.push({ ...signOut, separated: items.length > 0 })
   }
 
   const confirmAck = () => {
@@ -237,7 +245,6 @@ function ManagedAccountRow({ account, provider, snapshot, onAddAccount }: {
     setAck(null)
     if (kind === 'logout') void run(() => providerAccountActions.logout({ accountId: id, acknowledgeExternal: true }))
     else if (kind === 'archive') void run(() => providerAccountActions.setLifecycle({ accountId: id, lifecycle: 'archived', acknowledgeExternal: true }), 'archived')
-    else if (kind === 'sign-in-again') setSigningInAgain(true)
   }
 
   const links = linkedAccounts(snapshot, account)
@@ -273,15 +280,23 @@ function ManagedAccountRow({ account, provider, snapshot, onAddAccount }: {
       planCell={account.planLabel || method ? (
         <div className="flex flex-col items-start gap-0.5 min-w-0" data-testid={`account-plan-cell-${id}`}>
           {account.planLabel && <span className="truncate max-w-full" style={{ color: 'var(--text-primary)' }} data-testid={`account-plan-${id}`}>{account.planLabel}</span>}
-          {method && <MutedLine testId={`account-method-${id}`}>{method}</MutedLine>}
+          {method && <MutedLine testId={`account-method-${id}`}>{noBreakHyphens(method)}</MutedLine>}
         </div>
       ) : null}
       badges={(
         <>
           {account.isProviderDefault && <Pill tone="default" testId={`account-badge-default-${id}`}>Default</Pill>}
           {showsReviewerBadge(account) && <Pill tone="reviewer" testId={`account-badge-reviewer-${id}`}>Reviewer</Pill>}
-          {cannotReview && <Pill tone="warn" testId={`account-badge-confirm-${id}`} title={`Cannot run reviews: ${confirmEachLaunchWhy(account)}.`}>Confirm each launch</Pill>}
+          {cannotReview && <Pill tone="warn" testId={`account-badge-confirm-${id}`} title={`Cannot run reviews: ${confirmEachLaunchWhy(account)}.`} describedBy={`account-confirm-why-${id}`}>Confirm each launch</Pill>}
           {cannotReview && <MutedLine testId={`account-no-reviews-${id}`}>Cannot run reviews</MutedLine>}
+          {/* The pill's reason for screen reader users too: a pill takes no
+              focus, so its title reaches only a mouse (#181). What reaches a
+              reader in browse mode is this sr-only sentence, read after the
+              visible Cannot run reviews line as its reason (the pill's
+              aria-describedby names it as well, though a reader rarely
+              announces a description on an element that takes no focus). A
+              sighted keyboard user sees that visible line, not the reason. */}
+          {cannotReview && <span id={`account-confirm-why-${id}`} className="sr-only" data-testid={`account-confirm-why-${id}`}>{`${confirmEachLaunchWhy(account).replace(/^./, (c) => c.toUpperCase())}.`}</span>}
           {account.lifecycle === 'inactive' && <Pill tone="muted" testId={`account-badge-inactive-${id}`}>Inactive</Pill>}
         </>
       )}
@@ -308,6 +323,15 @@ function ManagedAccountRow({ account, provider, snapshot, onAddAccount }: {
             <MutedLine testId={`account-web-${id}`}>chatgpt.com: the sign-in has expired. Sign in again.</MutedLine>
           )}
           {externalHint && <MutedLine testId={`account-external-hint-${id}`}>{externalHint}</MutedLine>}
+          {/* O5: the account 2.1.1-beta.2 registered for this computer's own
+              sign-in keeps working, and says how to move off it: Add
+              account opens the section's own add-account dialog. */}
+          {account.external && manageable && (
+            <MutedLine testId={`account-external-retiring-${id}`}>
+              {externalSignInRetiring(provider, account)}{' '}
+              <RowButton onClick={() => onAddAccount({})} testId={`account-external-retiring-add-${id}`}>Add {provider.displayName} account</RowButton>
+            </MutedLine>
+          )}
           {account.oldSignInLeft && !blocked && manageable && <MutedLine testId={`account-old-sign-in-${id}`}>{oldSignInText(account.oldSignInLeft, provider.displayName)}</MutedLine>}
           <RunningPill count={account.runningSessions} testId={`account-running-${id}`} />
           {blocked && manageable && (
@@ -356,7 +380,8 @@ export function archivedOn(at: number): string {
 
 /** One archived account under "Archived (N)": its name, how it signed in,
  *  when it was archived, and Restore (it comes back inactive; Make active
- *  then checks it). */
+ *  then checks it). The account 2.1.1-beta.2 registered for this computer's
+ *  own sign-in has no Restore (O5): its row says why instead. */
 function ArchivedAccountRow({ account, provider, snapshot }: { account: AccountView; provider: ProviderInstallationView; snapshot: AccountsSnapshot }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -378,12 +403,13 @@ function ArchivedAccountRow({ account, provider, snapshot }: { account: AccountV
     <div className="pl-[38px] pt-2" data-testid={`archived-account-${account.id}`}>
       <div className="flex items-center gap-3 text-[12.5px]" style={{ color: 'var(--text-muted)' }}>
         <span className="truncate" title={name}>{name}</span>
-        {method && <span className="truncate">{method}</span>}
+        {method && <span className="truncate">{noBreakHyphens(method)}</span>}
         {account.archivedAt !== undefined && <span className="truncate" data-testid={`archived-when-${account.id}`}>archived {archivedOn(account.archivedAt)}</span>}
         {provider.enabled && canOfferRestore(account) && (
           <span className="ml-auto"><RowButton onClick={() => { void restore() }} disabled={busy} testId={`archived-restore-${account.id}`}>Restore</RowButton></span>
         )}
       </div>
+      {account.external && <MutedLine testId={`archived-retired-${account.id}`}>{externalSignInRetired(provider)}</MutedLine>}
       {error && <ErrorLine testId={`archived-error-${account.id}`}>{error}</ErrorLine>}
     </div>
   )
@@ -445,69 +471,6 @@ function PendingSetupRow({ setup, manageable, onResume, replacesName }: { setup:
   )
 }
 
-/** An explicit "Use this computer's ... sign-in" that could not finish (no
- *  answer from the provider, as opposed to one that answered "signed out" or
- *  "cannot be used here"): the button becomes Check again, which is the same
- *  explicit adoption, asked again. */
-export const ADOPTION_UNFINISHED: ReadonlySet<string> = new Set([
-  'timed-out', 'not-started', 'busy', 'cli-unavailable', 'status-unrecognised', 'internal', 'persist-failed', 'registry-unavailable',
-])
-
-function ExternalAdoptionBlock({ providerId, provider }: { providerId: ProviderId; provider: ProviderInstallationView }) {
-  const snapshot = useProviderAccountsStore((s) => s.snapshot)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [unfinished, setUnfinished] = useState(false)
-  const view = externalAdoption(snapshot, providerId)
-  if (view.kind === 'none') return null
-  // The ONLY way this computer's sign-in is taken in: the user's click. Main
-  // asks its status first and registers it only when it is signed in.
-  const adopt = async () => {
-    setBusy(true)
-    setError(null)
-    const r = await providerAccountActions.adoptExternal(providerId)
-    setBusy(false)
-    setUnfinished(!r.ok && ADOPTION_UNFINISHED.has(r.code))
-    if (!r.ok) setError(r.message)
-  }
-  // The user's yes, and only that: it records the answer (the provider on).
-  // It does not look at this computer's sign-in; the offer to use it follows
-  // with the next snapshot, for the user to choose (owner decision 2026-09-26).
-  const confirmUse = async () => {
-    setBusy(true)
-    setError(null)
-    const on = await providerAccountActions.switchProvider(providerId, true)
-    setBusy(false)
-    if (!on.ok) setError(on.message)
-  }
-  return (
-    <div className="rounded-[10px] border px-3.5 py-2.5 flex items-center gap-3" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-panel)' }} data-testid={`external-adoption-${providerId}`}>
-      <div className="flex-1 min-w-0">
-        <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{externalHomeLabel(provider, externalHomeFolder(snapshot, providerId))}</div>
-        {view.kind === 'note' || view.kind === 'confirm' ? (
-          <MutedLine testId={`external-adoption-text-${providerId}`}>{view.text}</MutedLine>
-        ) : (
-          <>
-            {view.text && <MutedLine testId={`external-adoption-text-${providerId}`}>{view.text}</MutedLine>}
-            <MutedLine>If you use it, you confirm it at each launch, and it cannot run code reviews.</MutedLine>
-          </>
-        )}
-        {error && <ErrorLine>{error}</ErrorLine>}
-      </div>
-      {view.kind === 'confirm' && (
-        <RowButton onClick={() => { void confirmUse() }} disabled={busy} testId={`confirm-uses-${providerId}`}>
-          Yes, I use {provider.displayName}
-        </RowButton>
-      )}
-      {view.kind === 'offer' && (
-        <RowButton onClick={() => { void adopt() }} disabled={busy} testId={`adopt-external-${providerId}`}>
-          {view.action === 'check-again' || unfinished ? 'Check again' : `Use this computer's ${provider.displayName} sign-in`}
-        </RowButton>
-      )}
-    </div>
-  )
-}
-
 export function ManagedAccountsSection({ providerId }: { providerId: ProviderId }) {
   const snapshot = useProviderAccountsStore((s) => s.snapshot)
   const [dialog, setDialog] = useState<AddAccountDialogState | null>(null)
@@ -550,7 +513,6 @@ export function ManagedAccountsSection({ providerId }: { providerId: ProviderId 
           })}
         </div>
       )}
-      {manageable && <ExternalAdoptionBlock providerId={providerId} provider={provider} />}
       {manageable && (
         <div className="pt-1">
           <DialogButton variant="secondary" onClick={() => setDialog({})} testId={`add-provider-account-${providerId}`}>

@@ -123,4 +123,84 @@ describe('useSessionAutosave', () => {
     const state = save.mock.calls.at(-1)![0]
     expect(state.sessions.map((s: { id: string }) => s.id)).toEqual(['a', 'b'])
   })
+
+  // The in-session /login "Add" (App's NewAccountPrompt) pins the new
+  // account with a bare updateSession, which changes no session id. It used to
+  // live only in memory until some later add/remove, so a crash resumed the
+  // session on its OLD account. An account pin is now saved at once.
+  it('saves at once, and once, when a session is pinned to another account (profileId)', () => {
+    useSessionStore.getState().addSession(makeSession('a'))
+    vi.advanceTimersByTime(1000)
+    save.mockClear()
+
+    useSessionStore.getState().updateSession('a', { profileId: 'profile-new' })
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls.at(-1)![0].sessions[0].profileId).toBe('profile-new')
+    vi.advanceTimersByTime(1000)
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  // buildSessionState writes the registry account id for a Codex session only,
+  // so the case is a Codex tab: the pin has to reach the written state.
+  it('saves at once when a Codex session is pinned to another registry account (providerAccountId)', () => {
+    useSessionStore.getState().addSession({ ...makeSession('r'), provider: 'codex', providerAccountId: 'acc-1' } as Session)
+    vi.advanceTimersByTime(1000)
+    save.mockClear()
+
+    useSessionStore.getState().updateSession('r', { providerAccountId: 'acc-2' })
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls.at(-1)![0].sessions[0].providerAccountId).toBe('acc-2')
+    vi.advanceTimersByTime(1000)
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  // The pin save runs inside the store's listener, during the caller's
+  // updateSession. A throw there would escape the listener loop (skipping the
+  // listeners after it) and reach the caller (App's /login Add would then skip
+  // clearing its prompt); a rejected save would go unhandled.
+  it('an account pin save that throws or rejects never reaches the caller', async () => {
+    useSessionStore.getState().addSession(makeSession('a'))
+    vi.advanceTimersByTime(1000)
+    save.mockClear()
+    save.mockImplementationOnce(() => { throw new Error('preload gone') })
+    expect(() => useSessionStore.getState().updateSession('a', { profileId: 'profile-x' })).not.toThrow()
+    expect(useSessionStore.getState().sessions[0].profileId).toBe('profile-x')
+    // Real timers from here: an unhandled rejection is reported after a macrotask.
+    vi.useRealTimers()
+    const unhandled = vi.fn()
+    // Node's process, typed here only as far as the case uses it (the web tsconfig has no Node types).
+    const proc = (globalThis as unknown as { process: { on(e: string, f: () => void): void; off(e: string, f: () => void): void } }).process
+    proc.on('unhandledRejection', unhandled)
+    try {
+      save.mockRejectedValueOnce(new Error('ipc closed'))
+      expect(() => useSessionStore.getState().updateSession('a', { profileId: 'profile-y' })).not.toThrow()
+      expect(save).toHaveBeenCalledTimes(2)
+      await new Promise((r) => setTimeout(r, 20))
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      proc.off('unhandledRejection', unhandled)
+    }
+  })
+
+  it('an account pin while an add is still waiting saves now, and the waiting save does not run again', () => {
+    useSessionStore.getState().addSession(makeSession('a'))
+    useSessionStore.getState().updateSession('a', { profileId: 'profile-new' })
+    expect(save).toHaveBeenCalledTimes(1)
+    const state = save.mock.calls.at(-1)![0]
+    expect(state.sessions.map((s: { id: string; profileId?: string }) => [s.id, s.profileId])).toEqual([['a', 'profile-new']])
+    vi.advanceTimersByTime(1000)
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  it('telemetry after an account pin does not save again', () => {
+    useSessionStore.getState().addSession(makeSession('a'))
+    vi.advanceTimersByTime(1000)
+    useSessionStore.getState().updateSession('a', { profileId: 'profile-new' })
+    save.mockClear()
+
+    useSessionStore.getState().updateSession('a', { contextPercent: 12 })
+    useSessionStore.getState().updateSession('a', { accountEmail: 'someone@example.com' })
+    vi.advanceTimersByTime(1000)
+    expect(save).not.toHaveBeenCalled()
+  })
 })

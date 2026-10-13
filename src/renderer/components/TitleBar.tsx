@@ -6,6 +6,7 @@ import { BrandMark } from './BrandMark'
 import ConductorHealthPill from './ConductorHealthPill'
 import ConductorServicesPanel from './ConductorServicesPanel'
 import SentinelDot from './sentinel/SentinelDot'
+import { WindowControls } from './WindowControls'
 import { usesClaude, usesCodex } from '../onboarding/provider-choice'
 
 interface Props {
@@ -155,7 +156,6 @@ function StatusPill({ label, status, highlight }: StatusPillProps) {
 
 export default function TitleBar({ sidebarOpen, onToggleSidebar }: Props) {
   const isDev = useIsDev()
-  const [maximized, setMaximized] = useState(false)
   const [serviceStatus, setServiceStatus] = useState<ServiceStatusPayload | null>(null)
   // panelOpen drives the open/closed visual state; panelMounted keeps the panel in
   // the DOM through its ~200ms closing transition before unmount (so close is animated).
@@ -172,12 +172,6 @@ export default function TitleBar({ sidebarOpen, onToggleSidebar }: Props) {
     setPanelOpen(false)
     panelCloseTimer.current = setTimeout(() => { setPanelMounted(false); panelCloseTimer.current = null }, 200)
   }
-
-  useEffect(() => {
-    window.electronAPI.window.isMaximized().then(setMaximized)
-    const unsub = window.electronAPI.window.onMaximizedChanged(setMaximized)
-    return unsub
-  }, [])
 
   useEffect(() => {
     let active = true
@@ -216,7 +210,7 @@ export default function TitleBar({ sidebarOpen, onToggleSidebar }: Props) {
 
   // macOS keeps its native traffic lights (main window uses
   // titleBarStyle:'hiddenInset'): left-pad the bar so our controls clear them,
-  // and drop the custom minimize/maximize/close cluster (Windows-only chrome).
+  // and WindowControls draws no minimize/maximize/close cluster there.
   const isMac = window.electronPlatform === 'darwin'
 
   return (
@@ -324,33 +318,9 @@ export default function TitleBar({ sidebarOpen, onToggleSidebar }: Props) {
         )}
         <SentinelDot />
         <ThemeToggle />
-        {/* Custom window controls are Windows chrome; macOS has native traffic lights. */}
-        {!isMac && (
-          <>
-            <button
-              onClick={() => window.electronAPI.window.minimize()}
-              className="p-2 hover:bg-surface0 rounded transition-colors text-overlay1 hover:text-text focus-ring"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12"><line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" strokeWidth="1.2"/></svg>
-            </button>
-            <button
-              onClick={() => window.electronAPI.window.maximize()}
-              className="p-2 hover:bg-surface0 rounded transition-colors text-overlay1 hover:text-text focus-ring"
-            >
-              {maximized ? (
-                <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="3.5" width="7" height="7" rx="0.5" stroke="currentColor" strokeWidth="1.2" fill="none"/><path d="M3.5 3.5V2.5C3.5 2.22 3.72 2 4 2H9.5C9.78 2 10 2.22 10 2.5V8C10 8.28 9.78 8.5 9.5 8.5H9" stroke="currentColor" strokeWidth="1.2" fill="none"/></svg>
-              ) : (
-                <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="0.5" stroke="currentColor" strokeWidth="1.2" fill="none"/></svg>
-              )}
-            </button>
-            <button
-              onClick={() => window.electronAPI.window.close()}
-              className="p-2 hover:bg-red rounded transition-colors text-overlay1 hover:text-text focus-ring"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" strokeWidth="1.2"/><line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" strokeWidth="1.2"/></svg>
-            </button>
-          </>
-        )}
+        {/* The window's own minimize, maximize and close (none on macOS, which
+            keeps its native traffic lights). */}
+        <WindowControls />
       </div>
     </div>
   )

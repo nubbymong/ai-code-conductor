@@ -92,9 +92,9 @@ export interface WhereOption {
 /**
  * "Where it runs", machine-explicit on every kind (ADR-018 D12). Where only
  * one answer exists the other chip is still drawn, disabled, with the reason:
- * on an SSH agent session a shell line cannot run on the host because there is
- * no remote shell pane -- the partner shell is on THIS PC -- and the dialog
- * says so instead of letting "the partner shell" imply the host.
+ * on an agent session the main pane reads prompts, not shell lines. The
+ * partner shell runs where the session runs (#86): on an SSH session it is a
+ * shell on the host, and its chip names the host.
  */
 export function whereOptions(kind: CommandKind, caps: SessionCapabilities): WhereOption[] {
   const mainPlace = caps.mainRunsOn === 'remote' ? `On ${caps.remoteHost ?? 'the host'}` : 'On this PC'
@@ -102,10 +102,9 @@ export function whereOptions(kind: CommandKind, caps: SessionCapabilities): Wher
   if (kind === 'prompt') return [{ id: 'main', place: mainPlace, detail: `${caps.agentName || 'the agent'} terminal`, enabled: true }]
   const main: WhereOption = caps.mainPaneIsShell
     ? { id: 'main', place: mainPlace, detail: 'this shell', enabled: true }
-    : caps.mainRunsOn === 'remote'
-      ? { id: 'main', place: mainPlace, detail: 'no remote shell in this session', enabled: false, reason: 'This session has no remote shell pane. A remote shell line belongs in the SSH config\'s "After connecting, run".' }
-      : { id: 'main', place: mainPlace, detail: `${caps.agentName} terminal — not a shell`, enabled: false, reason: `The main pane is ${caps.agentName}; it reads prompts, not shell lines.` }
-  const partner: WhereOption = { id: 'partner', place: 'On this PC', detail: 'partner shell', enabled: true }
+    : { id: 'main', place: mainPlace, detail: `${caps.agentName} terminal — not a shell`, enabled: false, reason: `The main pane is ${caps.agentName}; it reads prompts, not shell lines.` }
+  const partnerPlace = caps.partnerRunsOn === 'remote' ? `On ${caps.remoteHost ?? 'the host'}` : 'On this PC'
+  const partner: WhereOption = { id: 'partner', place: partnerPlace, detail: 'partner shell', enabled: true }
   return [main, partner]
 }
 

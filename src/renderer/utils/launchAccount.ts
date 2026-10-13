@@ -109,6 +109,50 @@ export function sessionAccountOptions(snapshot: AccountsSnapshot | null, provide
   ]
 }
 
+/**
+ * O5 (owner decision 2026-10-11): the accounts the confirm before a launch on
+ * the sign-in already on this computer offers instead, as the picker lists
+ * them (sessionAccountOptions), less that account itself and any other
+ * account of the provider's own sign-in on this computer.
+ */
+export function switchAccountOptions(snapshot: AccountsSnapshot | null, providerId: ProviderId, currentId: string | undefined): AccountOption[] {
+  const external = new Set((snapshot?.accounts ?? []).filter((a) => a.external).map((a) => a.id))
+  return sessionAccountOptions(snapshot, providerId).filter((o) => o.id !== currentId && !external.has(o.id))
+}
+
+/** The account a launch may move to when the confirm is answered with it:
+ *  one of the provider's own accounts that a launch could use now (active,
+ *  not blocked) and not the provider's own sign-in on this computer.
+ *  Undefined for anything else (main checks the launch again). */
+export function switchTarget(snapshot: AccountsSnapshot | null, providerId: ProviderId, accountId: string): AccountView | undefined {
+  return snapshot?.accounts.find((a) => a.id === accountId && a.providerId === providerId && a.lifecycle === 'active' && a.operationalState !== 'blocked' && !a.external)
+}
+
+/** What moving a launch from `fromId` to `toId` writes into the saved config
+ *  it came from: the new account, when the config is that provider's and
+ *  used `fromId`. It used it when it named it, or when it names no account
+ *  and this launch resolved from the default (`sessionBoundId`, the account
+ *  the session named when the launch was planned, is undefined), so the
+ *  default it follows was `fromId`. A config that names no account while the
+ *  session named `fromId` itself (a Switch account onto it) followed some
+ *  other default and never used it. Null when there is nothing to move: the
+ *  config names another account, never used `fromId`, or is another
+ *  provider's. */
+export function configRepointPatch(
+  config: { provider?: ProviderId; providerAccountId?: string } | undefined,
+  providerId: ProviderId,
+  fromId: string | undefined,
+  toId: string,
+  sessionBoundId: string | undefined,
+): { providerAccountId: string } | null {
+  if (!config || !fromId || (config.provider ?? 'claude') !== providerId) return null
+  const named = config.providerAccountId === fromId
+  const followedIt = config.providerAccountId === undefined && sessionBoundId === undefined
+  if (!named && !followedIt) return null
+  if (config.providerAccountId === toId) return null
+  return { providerAccountId: toId }
+}
+
 /** The account a picker preselects: the provider default, when there is one. */
 export function defaultAccountId(snapshot: AccountsSnapshot | null, providerId: ProviderId): string | undefined {
   return sessionAccountOptions(snapshot, providerId).find((o) => o.isDefault)?.id

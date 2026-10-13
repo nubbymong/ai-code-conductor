@@ -261,7 +261,6 @@ export const trainingSteps: TrainingStep[] = [
     highlights: [
       'In this release, Codex sessions and Codex reviews run on this computer only, not over SSH -- the SSH options are off for Codex, and the dialog says why',
       'Each Codex account has its **own sign-in folder**. New sessions use the default account. Code reviews use the reviewer default, or the default if none is set',
-      'The Codex sign-in already on this computer can be used too, but it must be confirmed at each launch, and cannot run reviews',
       'Sign in with ChatGPT or an API key -- the key goes to Codex, and this app never stores it',
       'The session header has a **Restart** menu: Restart carries on with the same conversation, or **Restart and pick a conversation** to resume a recent one; a session open when the app closed reopens in its conversation',
       'The model dropdown lists the models the supported Codex versions offer in their own picker, each with only the effort levels it runs; permission presets (Plan mode among them), model and reasoning effort are set on the Codex config',
@@ -305,7 +304,7 @@ export const trainingSteps: TrainingStep[] = [
       'From a Claude session, ask for a **Codex review**; from a Codex session, ask for a **Claude review**',
       'Reviews use the **reviewer default**, or the default account when none is set -- choose it with **Make reviewer** in Settings, Accounts',
       'Each direction has **its own switch** in Settings, General, Built-in Tools, naming the account reviews will use and, when a review cannot run, why',
-      'A sign-in that must be confirmed at each launch cannot review, so the Codex sign-in already on this computer never does: add a Codex account for that',
+      'Codex reviews run on a Codex account added in this app; a sign-in that must be confirmed at each launch cannot review',
       'Offered only while a review could run, in local sessions only, and skipped when the working directory is missing or is your home folder',
       'On macOS, Claude reviews use your normal Claude sign-in',
     ],
@@ -572,7 +571,7 @@ export const trainingSteps: TrainingStep[] = [
       'Run the assistant and a regular shell side-by-side in the same session. Useful when you want to watch logs, run quick git commands, or babysit a long-running build without spawning a second session.',
     highlights: [
       'Every session has a partner terminal — no setup, any config type',
-      'Opens in the working directory locally, at home over SSH',
+      'Opens in the working directory locally; on an SSH session it runs on the host, in the config\'s remote folder once it recognises the host\'s shell prompt, if you have not typed in it first',
       'Quick command buttons can target the assistant or the partner explicitly',
       'Resize the split bar to favour whichever pane is active',
     ],
@@ -825,7 +824,7 @@ export const trainingSteps: TrainingStep[] = [
     highlights: [
       'Ctrl+Tab / Ctrl+Shift+Tab -- cycle between sessions',
       'Ctrl+1–9 -- jump directly to session N',
-      'Alt+V -- paste a clipboard image: in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and types its path (over SSH, it asks Claude to fetch it); a plain terminal, or the partner shell in a partner view, gets only the quoted path, with no Enter (on macOS and Linux, only an sh, bash, zsh, dash or ksh shell)',
+      'Alt+V -- paste a clipboard image: in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and types its path (over SSH, it asks Claude to fetch it); a plain terminal, or a local session\'s partner shell in a partner view, gets only the quoted path (an SSH session\'s partner gets nothing; the hint says where the image was saved), with no Enter (on macOS and Linux, only an sh, bash, zsh, dash or ksh shell)',
       'Esc -- close browser pane / dismiss tour / cancel context menu',
       'Status bar -- live tokens, cost, rate limits',
     ],
@@ -833,7 +832,7 @@ export const trainingSteps: TrainingStep[] = [
       highlights: [
         'Ctrl+Tab / Ctrl+Shift+Tab -- cycle between sessions',
         'Ctrl+1-9 -- jump directly to session N',
-        'Alt+V -- paste a clipboard image: in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and types its path; a plain terminal, or the partner shell in a partner view, gets only the quoted path, with no Enter (on macOS and Linux, only an sh, bash, zsh, dash or ksh shell)',
+        'Alt+V -- paste a clipboard image: in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and types its path; a plain terminal, or a local session\'s partner shell in a partner view, gets only the quoted path (an SSH session\'s partner gets nothing; the hint says where the image was saved), with no Enter (on macOS and Linux, only an sh, bash, zsh, dash or ksh shell)',
         'Esc -- close browser pane / dismiss tour / cancel context menu',
         'Status bar -- live tokens, cost, rate limits',
       ],

@@ -38,6 +38,8 @@ import type {
   SubmitTextResult,
   AskConductorNotice,
   CanvasMarkerUndelivered,
+  ClaudeMarkerAsk,
+  ClaudeMarkerAnswer,
   CanvasSessionGuidance,
   AccountLogFolders,
   AccountLogFolderKind,
@@ -572,8 +574,14 @@ export interface ElectronAPI {
     versionVerdict: (args: { sessionId: string; versionId?: string; state: 'approved' | 'rejected' | 'dismissed'; note?: string }) => Promise<CanvasState | { error: string }>
     agentMarker: (args: { sessionId: string; canvasId: string; line: string }) => Promise<{ delivery: 'sent' | 'queued' | 'unwired' | 'refused'; reason?: string }>
     /** WP2 PR 4 (P4.1): a queued marker the submit primitive could not deliver,
-     *  for the review it belongs to. */
+     *  or a Claude Code marker main dropped untyped, for the review it belongs
+     *  to. */
     onAgentMarkerUndelivered: (cb: (e: CanvasMarkerUndelivered) => void) => () => void
+    /** Main asks to read (probe) or type a canvas marker at a Claude Code
+     *  session's prompt; typed only at its ready, empty prompt. */
+    onClaudeMarkerAsk: (cb: (e: ClaudeMarkerAsk) => void) => () => void
+    /** The reply to one onClaudeMarkerAsk request. */
+    answerClaudeMarker: (answer: ClaudeMarkerAnswer) => void
     /** WP2 PR 4 (P4.1): whether this session's launch carried the canvas and
      *  vision skills' guidance with the tools, for the canvas page's one line. */
     sessionGuidance: (args: { sessionId: string }) => Promise<CanvasSessionGuidance | null>
@@ -989,9 +997,13 @@ export interface ElectronAPI {
     deleteGroup: (groupId: string) => Promise<ProviderAccountsResult>
     linkIdentity: (accountId: string, identityId: string) => Promise<ProviderAccountsResult>
     unlinkIdentity: (accountId: string) => Promise<ProviderAccountsResult<{ identityId: string }>>
+    /** Retired in 2.1.1-beta.3 (owner decision 2026-10-11): this computer's own
+     *  sign-in of a provider is never taken in. Kept for its shape; main always
+     *  answers 'unsupported', and no surface calls it. */
     adoptExternal: (providerId: ProviderAccountsProviderId) => Promise<ProviderAccountsResult<{ accountId: string }>>
-    /** Whether this computer's own sign-in of the provider is signed in,
-     *  asked without taking it in (nothing is kept). */
+    /** Retired in 2.1.1-beta.3 (owner decision 2026-10-11): this computer's own
+     *  sign-in of a provider is never taken in. Kept for its shape; main always
+     *  answers 'unsupported', and no surface calls it. */
     probeExternal: (providerId: ProviderAccountsProviderId) => Promise<ProviderAccountsResult<{ state: KnownAuthState }>>
     /** "This is still my account": clears a blocked account after a fresh check. */
     reconcileSignIn: (accountId: string) => Promise<ProviderAccountsResult<{ state: KnownAuthState }>>

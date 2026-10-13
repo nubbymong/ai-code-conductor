@@ -53,7 +53,11 @@ function noReviewMessage(snapshot: AccountsSnapshot, id: ProviderId, review: Rev
   if (snapshot.registry.mode !== 'ready') return 'The account list is not available right now.'
   const account = review.accountId ? snapshot.accounts.find((a) => a.id === review.accountId) : undefined
   if (!account) {
-    return isCodex ? `No Codex account can run reviews. Add a Codex account (a sign-in from ${home} cannot review).` : 'No Claude account can run reviews right now.'
+    // No account at all: add one. The sign-in already on this computer is
+    // no longer offered (O5), so it is named only in the external-only and
+    // external-another cases below, where an account 2.1.1-beta.2
+    // registered for it is the one reviews would use.
+    return isCodex ? 'No Codex account can run reviews. Add a Codex account.' : 'No Claude account can run reviews right now.'
   }
   // Why, as the Accounts card also tells it (reviewerBlockKind). Only point at
   // making another account the reviewer when a row offers Make reviewer;

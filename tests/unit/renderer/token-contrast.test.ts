@@ -572,17 +572,9 @@ describe('contrast: the strong keyboard focus ring (switches, Settings selects)'
   })
 })
 
-describe('contrast: Set up Codex, the link and the caution badge', () => {
-  it('the .cx-link colour is a token that clears 4.5:1 on the page (--surface-base), both themes', () => {
-    // "Check this computer's sign-in again" (12px): --ob measured 4.32:1 in light.
-    const colour = varOf(ruleOf(OB_CSS_TEXT, '.ob-root .cx-link'), 'color')
-    expect(colour, '.cx-link colour is a var(--token)').toBeTruthy()
-    for (const [name, mode] of BOTH) {
-      const r = contrast(token(colour!, mode), token('surface-base', mode))
-      expect(r, `${name}: --${colour} on --surface-base = ${r.toFixed(2)}:1`).toBeGreaterThanOrEqual(MIN)
-    }
-  })
-
+// O5 (2.1.1-beta.3): the .cx-link it also measured ("Check this computer's
+// sign-in again") went with the Set up Codex page's offer of that sign-in.
+describe('contrast: Set up Codex, the caution badge', () => {
   it('the caution badge (.badge.warn) is --status-warning over its own wash, 4.5:1 on its row (--surface-raised), both themes', () => {
     // The "!" of a CLI newer than tested (13px bold): amber, as Settings,
     // Accounts shows the same state. The blue it had measured 4.29:1.
@@ -640,7 +632,6 @@ describe('contrast: every onboarding badge and badge-like pill, both themes', ()
     '.ob-root .hc-badge': [panel],
     '.ob-root .hc-badge.def': [panel],
     '.ob-root .hc-badge.rev': [panel],
-    '.ob-root .hc-badge.warn': [panel],
   }
   /** Rules that set a colour or background here but are not drawn as a badge
    *  (none today): selector -> why. */
@@ -663,7 +654,8 @@ describe('contrast: every onboarding badge and badge-like pill, both themes', ()
   }
 
   it('every rule naming a badge or pill class that paints is measured or exempt, and every measured selector exists', () => {
-    expect(named.length).toBeGreaterThanOrEqual(17)
+    // 16 since O5 (2.1.1-beta.3) dropped .hc-badge.warn with the Hello Codex row it drew.
+    expect(named.length).toBeGreaterThanOrEqual(16)
     const unmeasured = named.filter((r) => paints(r.decls) && !(r.selector in MEASURE) && !(r.selector in EXEMPT))
       .map((r) => `${r.at ? `${r.at} ` : ''}${r.selector} { ${r.decls.trim()} }`)
     expect(unmeasured, `rules that paint a badge or pill but are not measured:\n${unmeasured.join('\n')}`).toEqual([])

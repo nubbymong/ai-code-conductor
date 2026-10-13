@@ -41,12 +41,19 @@
  *     policy's finishOnClose; Claude's window does not do this): the FIRST
  *     close request, while the run polls and never once the app's quit is
  *     under way (a held close would cancel the quit), is held and the window
- *     hidden; the SAME poll then keeps checking, with the same conditions, for
- *     at most FINISH_ON_CLOSE_MS, and a run that has not completed by then
- *     ends as closed (the caller wipes the partition). Cancel, sign-out and
- *     archive still win (they destroy the window, which asks nothing). A
- *     window that closes with no close request (the page's own script, the
- *     system) ends the run at once, as before.
+ *     hidden; the SAME poll then looks at the jar at once (a close while the
+ *     first page still loads ends the wait for that load). The hold goes on
+ *     only while the session cookie is in the jar: the first cookie read after
+ *     the close that does not find it (or gets no answer) ends the run as
+ *     closed, so a window closed before the sign-in landed is cleared at once.
+ *     With the cookie there, the same conditions decide, for at most
+ *     FINISH_ON_CLOSE_MS: a hard stop every wait inside the poll races, and a
+ *     run that has not completed by then ends as closed (the caller wipes the
+ *     partition). Cancel, sign-out and archive still win (they destroy the
+ *     window, which asks nothing). A window that closes with no close request
+ *     (the page's own script, the system) ends the run at once, as before.
+ *   - A page cannot keep the window from unloading (its beforeunload), so a
+ *     close or a quit is never held up by it.
  *   - Navigation. Claude's window is an AUTH flow that allows any top-level https
  *     navigation (claude.ai may hop to an identity provider and back); non-https
  *     is blocked. A Codex window allows the main frame ONLY chatgpt.com and the
@@ -69,8 +76,9 @@
  *     (every other name counted, not shown; from a separate origin-gated read,
  *     looked at as the run goes, at once when the session cookie first appears,
  *     until one shows where an email sits, and once more before a timed-out or
- *     cancelled window closes), the cookie NAMES on chatgpt.com and the
- *     off-site hosts the window saw. Never a value and never a query string.
+ *     cancelled window closes when no close was held), the cookie NAMES on
+ *     chatgpt.com and the off-site hosts the window saw. Never a value and
+ *     never a query string.
  *
  * No default export (project convention).
  */
@@ -92,9 +100,13 @@ import { readAccountEmail, readServiceAccountEmail, readServiceIdentityShape, ty
 const IO_CALL_TIMEOUT_MS = 10_000
 
 /** After the user's close request on a window whose policy finishes on close,
- *  the run keeps checking (hidden) at most this long before it ends as closed.
+ *  with the session cookie in the jar, the run keeps checking (hidden) at most
+ *  this long before it ends as closed: a hard stop for the hidden window.
  *  Long enough for one identity read that runs into its bound and a retry. */
 const FINISH_ON_CLOSE_MS = 12_000
+
+/** What a wait inside the poll answers when the finish after a held close ran out. */
+const FINISH_RAN_OUT: unique symbol = Symbol('finish ran out')
 
 /** Set once the app's quit is under way (index.ts's quit teardown, which runs
  *  only for a quit the app lets proceed). From then on no sign-in window's
@@ -267,8 +279,10 @@ interface WindowPolicy {
   onSessionRead?: (hasSessionCookie: boolean, win: BrowserWindow) => void
   /** Told after each identity read (diagnostic). Never throws. */
   onEmailRead?: (email: string | null, win: BrowserWindow) => Promise<void>
-  /** A run that timed out, was cancelled or was closed by the user, while its
-   *  window is still up (diagnostic): the window goes once this settles. */
+  /** A run that timed out or was cancelled with no held close, while its
+   *  window is still up (diagnostic): the window goes once this settles. Never
+   *  called once a close was held: that window is hidden and the poll has just
+   *  looked, so nothing keeps it past the finish. */
   beforeIncompleteClose?: (win: BrowserWindow) => Promise<void>
   /** A run that did not complete (names-only diagnostic). Never throws. */
   onIncomplete?: (ses: PartitionSession, end: IncompleteRunEnd) => Promise<void>
@@ -276,7 +290,9 @@ interface WindowPolicy {
 
 /** How a run that did not complete ended. */
 type SignInEnding =
-  /** The user asked the window to close (held once, then the finish ran out, or a second request closed it). */
+  /** The user asked the window to close: held once, then a cookie read after
+   *  it found no session cookie or got no answer, the finish ran out, or a
+   *  second request closed it. */
   | 'user-close'
   /** The window closed with no close request: the page's own script, or the system. */
   | 'closed'
@@ -310,7 +326,8 @@ type DriveResult =
 /** Where the poll loop stopped. */
 type PollOutcome =
   | { kind: 'done'; email: string | null; expiresAt: number | null }
-  | { kind: 'cancelled' | 'closed' | 'deadline' }
+  /** 'released': after a held close, a cookie read did not find the session cookie. */
+  | { kind: 'cancelled' | 'closed' | 'deadline' | 'released' }
 
 /**
  * Drive one sign-in window to completion. Never throws - resolves with a result
@@ -324,7 +341,13 @@ async function driveSignInWindow(policy: WindowPolicy, a: DriveArgs): Promise<Dr
 
   /** When the last cookie read answered (diagnostic). */
   let lastCookieReadAt = 0
-  const incomplete = async (ses: PartitionSession | null, r: DriveResult, ending: SignInEnding, endedAt: number): Promise<DriveResult> => {
+  // The window is gone before this runs. The run (and the one-at-a-time
+  // latch with it) still ends only after this diagnostic's names-only jar
+  // read, and the caller's partition wipe after that: each is bounded, but
+  // neither is cut to the finish after a held close, so with a storage that
+  // stops answering the latch can clear after FINISH_ON_CLOSE_MS. That is on
+  // purpose: a new run must not start on a partition still being wiped.
+  const incomplete =async (ses: PartitionSession | null, r: DriveResult, ending: SignInEnding, endedAt: number): Promise<DriveResult> => {
     if (ses && policy.onIncomplete) {
       const end: IncompleteRunEnd = { ending, lastCookieReadAgoMs: lastCookieReadAt ? Math.max(0, endedAt - lastCookieReadAt) : null }
       try { await policy.onIncomplete(ses, end) } catch { /* a diagnostic never changes the outcome */ }
@@ -339,6 +362,16 @@ async function driveSignInWindow(policy: WindowPolicy, a: DriveArgs): Promise<Dr
   let ses: PartitionSession | null = null
   /** This run's window, destroyed in the `finally` below on every path. */
   let runWindow: BrowserWindow | null = null
+  /** The finish's hard stop, once a close is held (cleared on every path). */
+  let finishTimer: ReturnType<typeof setTimeout> | undefined
+  /** Destroy the run's window now (idempotent): destroy() asks the page
+   *  nothing and emits no 'close', so nothing can hold it. */
+  const dropWindow = (): void => {
+    if (handle.window === runWindow) handle.window = null
+    try {
+      if (runWindow && !runWindow.isDestroyed()) runWindow.destroy()
+    } catch { /* already gone */ }
+  }
   try {
     const s = electronSession.fromPartition(partition)
     ses = s
@@ -361,6 +394,10 @@ async function driveSignInWindow(policy: WindowPolicy, a: DriveArgs): Promise<Dr
     handle.window = win
 
     policy.guard(win)
+    // A page's beforeunload never keeps this window up: a close, a quit or a
+    // held close's end is not left waiting on the page (as the account view
+    // and the browser pane do).
+    win.webContents.on('will-prevent-unload', (e: { preventDefault: () => void }) => { e.preventDefault() })
     // A page has no business reaching a camera/mic/clipboard on its own say-so.
     win.webContents.session.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
     // Nor any download: this window holds an emerging session.
@@ -389,14 +426,26 @@ async function driveSignInWindow(policy: WindowPolicy, a: DriveArgs): Promise<Dr
 
     // FINISH ON CLOSE (the policy's, off for Claude). The user's FIRST close
     // request while the run polls, never once the app's quit is under way, is
-    // held: the window hides and the run's own deadline comes in to
-    // FINISH_ON_CLOSE_MS from now. Nothing else changes: the same loop, with
-    // the same four conditions, decides whether the run completes. A second
-    // request, a close during a quit, and a close with no request ('closed'
-    // only: the page's script, the system) all go through, and end the run.
+    // held: the window hides, the poll looks at the jar at once, and the run's
+    // own deadline comes in to FINISH_ON_CLOSE_MS from now, a hard stop (the
+    // timer below ends every wait inside the poll). The hold goes on only while
+    // the session cookie is in the jar: the first cookie read begun after the
+    // close that does not find it ends the run (released). Otherwise the same
+    // loop, with the same four conditions, decides whether the run completes.
+    // A second request, a close during a quit, and a close with no request
+    // ('closed' only: the page's script, the system) all go through, and end
+    // the run. A close held while the first page still loads ends the wait
+    // for that load (below), so the poll's look comes at once then too.
     let polling = true
     let closeRequestedAt = 0
     let finishBy = Number.POSITIVE_INFINITY
+    let finishRanOut: () => void = () => {}
+    const finishStop = new Promise<typeof FINISH_RAN_OUT>((resolve) => { finishRanOut = () => resolve(FINISH_RAN_OUT) })
+    /** One wait inside the poll, cut short when the finish after a held close runs out. */
+    const untilFinish = <T>(p: Promise<T>): Promise<T | typeof FINISH_RAN_OUT> => Promise.race([p, finishStop])
+    let closeHeld: () => void = () => {}
+    /** Settles when a close is held: the wait for the first page load ends then. */
+    const closeHeldStop = new Promise<void>((resolve) => { closeHeld = resolve })
     if (policy.finishOnClose) {
       win.on('close', (e: { preventDefault: () => void }) => {
         if (!polling || closeRequestedAt || appQuitting) return
@@ -404,12 +453,17 @@ async function driveSignInWindow(policy: WindowPolicy, a: DriveArgs): Promise<Dr
         e.preventDefault()
         try { win.hide() } catch { /* hidden or not, the run finishes and destroys it */ }
         finishBy = closeRequestedAt + finishOnCloseMs
+        finishTimer = setTimeout(() => { finishRanOut(); if (wakePoll) wakePoll() }, finishOnCloseMs)
+        if (typeof (finishTimer as { unref?: () => void }).unref === 'function') (finishTimer as { unref: () => void }).unref()
         if (wakePoll) wakePoll()
         else skipNextSleep = true
+        closeHeld()
       })
     }
 
-    /** One last look while the window is still up (a cancel, a timeout, a held close), then it goes. */
+    /** One last look while the window is still up (a cancel or a timeout with
+     *  no held close), then it goes. Never after a held close: the window is
+     *  hidden and the poll has just looked. */
     const lastLook = async (): Promise<void> => {
       if (!policy.beforeIncompleteClose || windowClosed || win.isDestroyed()) return
       try { await policy.beforeIncompleteClose(win) } catch { /* a diagnostic never changes the outcome */ }
@@ -418,8 +472,12 @@ async function driveSignInWindow(policy: WindowPolicy, a: DriveArgs): Promise<Dr
     // loadURL can reject when the login page immediately 3xx-redirects (normal),
     // and it must not HANG: a captive portal that accepts the connection then
     // says nothing would otherwise park the poll — and single-flight with it — so
-    // it is bounded like every other IO here (adversarial review).
-    try { await bounded(Promise.resolve(win.loadURL(policy.signInUrl)), 'loadURL') } catch { /* redirect or slow load */ }
+    // it is bounded like every other IO here (adversarial review). A close held
+    // meanwhile ends this wait: the load goes on in the hidden window, and the
+    // poll looks at the jar at once (no session cookie there: the run ends).
+    try {
+      await Promise.race([bounded(Promise.resolve(win.loadURL(policy.signInUrl)), 'loadURL'), closeHeldStop])
+    } catch { /* redirect or slow load */ }
 
     logInfo(`[account-web] in-app sign-in window opened for ${ownerId}`)
 
@@ -434,24 +492,40 @@ async function driveSignInWindow(policy: WindowPolicy, a: DriveArgs): Promise<Dr
       while (Date.now() < Math.min(deadline, finishBy)) {
         if (a.shouldCancel()) return { kind: 'cancelled' }
         if (windowClosed) return { kind: 'closed' }
-        await pollSleep()
+        if (await untilFinish(pollSleep()) === FINISH_RAN_OUT) return { kind: 'deadline' }
         if (a.shouldCancel()) return { kind: 'cancelled' }
         if (windowClosed) return { kind: 'closed' }
 
+        // A read begun after a held close decides whether the hold goes on:
+        // only with the session cookie in the jar (a read with no answer does
+        // not show it there, so it ends the hold too: fail closed).
+        const heldAtRead = closeRequestedAt > 0
         let state: { hasSessionCookie: boolean; expiresAt: number | null }
         try {
-          state = await policy.readSession(s)
-        } catch { continue }
+          const read = await untilFinish(policy.readSession(s))
+          if (read === FINISH_RAN_OUT) return { kind: 'deadline' }
+          state = read
+        } catch {
+          if (heldAtRead) return { kind: 'released' }
+          continue
+        }
         lastCookieReadAt = Date.now()
         if (policy.onSessionRead) {
           try { policy.onSessionRead(state.hasSessionCookie, win) } catch { /* a diagnostic never changes the outcome */ }
         }
-        if (!state.hasSessionCookie) { sessionSeenAt = 0; continue }
+        if (!state.hasSessionCookie) {
+          if (heldAtRead) return { kind: 'released' }
+          sessionSeenAt = 0
+          continue
+        }
         if (!sessionSeenAt) sessionSeenAt = Date.now()
 
-        const email = await policy.readEmail(win)
+        const email = await untilFinish(policy.readEmail(win))
+        if (email === FINISH_RAN_OUT) return { kind: 'deadline' }
         if (policy.onEmailRead) {
-          try { await policy.onEmailRead(email, win) } catch { /* a diagnostic never changes the outcome */ }
+          try {
+            if (await untilFinish(policy.onEmailRead(email, win)) === FINISH_RAN_OUT) return { kind: 'deadline' }
+          } catch { /* a diagnostic never changes the outcome */ }
         }
         if (email === null) {
           // FAIL CLOSED where the email is required (Codex): a session cookie
@@ -464,9 +538,18 @@ async function driveSignInWindow(policy: WindowPolicy, a: DriveArgs): Promise<Dr
         // partition during the email read, and reporting done then would save a
         // record over an empty partition (every request under it would 401).
         if (a.shouldCancel()) return { kind: 'cancelled' }
+        const heldAtRecheck = closeRequestedAt > 0
         let still = false
-        try { still = await policy.recheckSession(s) } catch { still = false }
-        if (!still) { sessionSeenAt = 0; continue }
+        try {
+          const recheck = await untilFinish(policy.recheckSession(s))
+          if (recheck === FINISH_RAN_OUT) return { kind: 'deadline' }
+          still = recheck
+        } catch { still = false }
+        if (!still) {
+          if (heldAtRecheck) return { kind: 'released' }
+          sessionSeenAt = 0
+          continue
+        }
 
         // AND re-check cancel AFTER the recheck read. The clear sets the cancel
         // flag SYNCHRONOUSLY and only THEN awaits the partition wipe, so a
@@ -483,6 +566,7 @@ async function driveSignInWindow(policy: WindowPolicy, a: DriveArgs): Promise<Dr
 
     const outcome = await poll()
     polling = false
+    if (finishTimer !== undefined) clearTimeout(finishTimer)
     if (outcome.kind === 'done') return { ok: true, email: outcome.email, expiresAt: outcome.expiresAt }
     const userClosed = closeRequestedAt > 0
     if (outcome.kind === 'closed') {
@@ -490,27 +574,31 @@ async function driveSignInWindow(policy: WindowPolicy, a: DriveArgs): Promise<Dr
       return incomplete(s, closedResult(), userClosed ? 'user-close' : 'closed', closedAt || Date.now())
     }
     const endedAt = Date.now()
-    await lastLook()
+    // After a held close the window is hidden and the poll has just looked:
+    // no last look, so nothing keeps the hidden window past the finish.
+    if (!userClosed) await lastLook()
+    // The window goes before the names-only diagnostic below, which reads
+    // only the partition's jar.
+    dropWindow()
     if (outcome.kind === 'cancelled') {
       return incomplete(s, { ok: false, cancelled: true, error: 'Sign-in cancelled.' }, 'cancelled', endedAt)
     }
-    // The deadline: the finish after a held close ran out (closed, not a
-    // timeout: the user closed it), or the run's own time did.
+    // A held close released (no session cookie in the jar after it), or the
+    // finish after it ran out: closed, not a timeout (the user closed it).
+    // Otherwise the run's own time ran out.
     if (userClosed) return incomplete(s, closedResult(), 'user-close', endedAt)
     logError(`[account-web] in-app sign-in for ${ownerId} timed out`)
     return incomplete(s, { ok: false, error: 'Timed out waiting for sign-in to complete.' }, 'timed-out', endedAt)
   } catch (err) {
     logError(`[account-web] in-app sign-in for ${ownerId} failed: ${(err as Error)?.message ?? err}`)
+    dropWindow()
     return incomplete(ses, { ok: false, error: (err as Error)?.message ?? 'in-app sign-in failed' }, 'failed', Date.now())
   } finally {
     // EVERY path ends here, so the run's window (hidden or not, holding a
-    // session or not) never outlives the run: destroy() asks the page nothing
-    // and emits no 'close', so nothing can hold it. This runs before the
-    // caller sees the result, so before any wipe of the partition.
-    if (handle.window === runWindow) handle.window = null
-    try {
-      if (runWindow && !runWindow.isDestroyed()) runWindow.destroy()
-    } catch { /* already gone */ }
+    // session or not) never outlives the run. This runs before the caller
+    // sees the result, so before any wipe of the partition.
+    if (finishTimer !== undefined) clearTimeout(finishTimer)
+    dropWindow()
   }
 }
 
@@ -854,9 +942,11 @@ function serviceWindowPolicy(desc: WebServiceDescriptor, ownerId: string): Windo
       diag.identityReads++
     },
     beforeIncompleteClose: async (win) => {
-      // A timeout, a cancel or a held close: one more look before the window
-      // goes, so a run that never got an answer (or only a signed-out one)
-      // still tries. A look already under way is that look (bounded).
+      // A timeout or a cancel with no held close: one more look before the
+      // window goes, so a run that never got an answer (or only a signed-out
+      // one) still tries. A look already under way is that look (bounded).
+      // Never after a held close: the window is hidden and the poll has just
+      // looked.
       await lookAt(win, 'now')
     },
     onIncomplete: async (ses, end) => {

@@ -36,6 +36,7 @@
 // checks there read the login shell's PATH each time.
 import { readRegistryPaths, registryPathFolders, windowsFolderKey, PATH_VALUE_KINDS, type RegistryPaths } from './windows-registry-path'
 import { windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
+import { noteWindowsPathRefresh } from './windows-programs'
 import { logInfo } from './debug-logger'
 
 export { expandWindowsVariables } from './windows-registry-path'
@@ -123,8 +124,12 @@ let inFlight: Promise<string[]> | null = null
 
 /** This process's PATH brought up to date with the registry's (Windows only;
  *  never throws). Callers that ask while a refresh runs share it. One log
- *  line when folders were added, and one when the registry could not be read. */
+ *  line when folders were added, and one when the registry could not be read.
+ *  Every call is a check the user asked for, and is counted
+ *  (noteWindowsPathRefresh), so a lookup that keeps its answer for the run
+ *  (claude-cli-probe.ts, the PowerShell profile's) asks again after it. */
 export function refreshWindowsPath(): Promise<string[]> {
+  noteWindowsPathRefresh()
   if (process.platform !== 'win32') return Promise.resolve([])
   if (inFlight) return inFlight
   const run = refreshWindowsPathWith(refreshWindowsPathDeps())

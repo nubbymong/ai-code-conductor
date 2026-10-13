@@ -155,8 +155,10 @@ export const PS_LEGACY_ARGUMENT_PASSING = "$PSNativeCommandArgumentPassing = 'Le
 
 /** Whether Windows starts `program` itself, as an `.exe` file (a trailing dot
  *  or space aside, which Windows drops), rather than through cmd.exe or by a
- *  name PowerShell looks up. */
-function startsAsExe(program: string): boolean {
+ *  name PowerShell looks up. A launch line that starts Claude Code by
+ *  anything else has its arguments checked for cmd.exe
+ *  (buildClaudeLaunchCommand). */
+export function startsAsExe(program: string): boolean {
   return /\.exe[. ]*$/i.test(program)
 }
 
@@ -196,9 +198,10 @@ export function windowsCommandLineLimit(program: string): number {
  *    every parser in use (the C runtime's, CommandLineToArgvW). Claude Code gets
  *    the JSON and a trailing space, which JSON.parse ignores.
  *  - any other program (a `.cmd` or `.bat` file, which Windows hands to
- *    cmd.exe, or `node`, which PowerShell finds by name and may find as a batch
- *    file): the JSON in one pair of quotes, every `"` inside it doubled. Its
- *    whitespace is all at an odd quote count, so PowerShell never wraps it
+ *    cmd.exe, or `node`, the resume picker's node.exe, which the line starts
+ *    by the full path the app found and which may hand the arguments on to
+ *    a batch launcher): the JSON in one pair of quotes, every `"` inside it
+ *    doubled. Its whitespace is all at an odd quote count, so PowerShell never wraps it
  *    again; cmd.exe's quote state turns twice at every pair, so every other
  *    character stays inside quotes, where `& | < > ^ ( )` are text; and node
  *    (the C runtime rule) reads a doubled quote inside quotes as one quote.

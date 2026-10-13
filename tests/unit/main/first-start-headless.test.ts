@@ -2,16 +2,21 @@
 // Insights runs, onboarding's Find Claude) starts a claude.exe found in PATH's
 // folders directly on Windows, on the main thread. Before that start it awaits
 // the first-start warm-up of that same program, with Claude's --version
-// environment; a run aborted during the wait starts nothing; an npm
-// claude.cmd (started through cmd.exe) is not warmed. The lookup, the warm-up
-// and child_process are faked and the platform is forced: nothing is started.
+// environment; a run aborted during the wait answers at once, without
+// waiting for the warm-up, and starts nothing; one waiting on it when the app
+// quits never starts; an npm claude.cmd (started through cmd.exe) is not
+// warmed. The lookup, the warm-up and child_process are faked and the
+// platform is forced: nothing is started.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { FirstStartEnvSource, FirstStartRun } from '../../../src/main/first-start-warmup'
 
 const h = vi.hoisted(() => ({
   bin: 'C:\\Users\\A\\.local\\bin\\claude.exe' as string | null,
   order: [] as string[],
   warm: [] as Array<{ program: string; env: () => unknown }>,
   gate: null as null | Promise<void>,
+  /** A case's own warm-up in place of the fake below. */
+  warmImpl: null as null | ((program: string, env: () => unknown) => Promise<unknown>),
 }))
 vi.mock('child_process', () => ({
   spawn: (file: string) => {
@@ -41,12 +46,15 @@ vi.mock('../../../src/main/first-start-warmup', () => ({
   warmFirstStart: async (program: string, env: () => unknown) => {
     h.warm.push({ program, env })
     h.order.push(`warm ${program}`)
+    if (h.warmImpl) return h.warmImpl(program, env)
     if (h.gate) await h.gate
     return { outcome: 'ran', exitCode: 0, timedOut: false }
   },
 }))
 
 const { spawnClaudeHeadless } = await import('../../../src/main/claude-headless')
+// The quit hold is the real one (quit-hold.ts).
+const { beginQuitHold, _resetQuitHoldForTest } = await import('../../../src/main/quit-hold')
 
 const hostPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
 const savedRoot = process.env.SystemRoot
@@ -55,6 +63,7 @@ beforeEach(() => {
   h.order.length = 0
   h.warm.length = 0
   h.gate = null
+  h.warmImpl = null
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
   process.env.SystemRoot = 'C:\\Windows'
 })
@@ -100,10 +109,106 @@ describe('a headless Claude Code run on Windows (ADR-025)', () => {
     expect(h.order).toEqual(['warm C:\\Users\\A\\.local\\bin\\claude.exe'])
   })
 
+  it('a run aborted during the warm-up answers at once, without waiting for the warm-up to return', async () => {
+    h.gate = new Promise<void>(() => { /* a warm-up that has not returned */ })
+    const ac = new AbortController()
+    const run = spawnClaudeHeadless(['-p'], 10_000, 'prompt', null, ac.signal)
+    await vi.waitFor(() => expect(h.warm).toHaveLength(1))
+    ac.abort()
+    // Every promise step the abort sets off runs before the next timer.
+    const res = await Promise.race([run, new Promise((r) => setTimeout(() => r('still waiting'), 0))])
+    expect(res).toEqual({ code: 1, stdout: '', stderr: '\nAborted' })
+    expect(h.order).toEqual(['warm C:\\Users\\A\\.local\\bin\\claude.exe'])
+  })
+
+  it('a run waiting on the warm-up when the app quits never starts claude', async () => {
+    // The real warm-up, with a fake worker and fake file reads.
+    const { createFirstStartWarmup } = await vi.importActual<typeof import('../../../src/main/first-start-warmup')>('../../../src/main/first-start-warmup')
+    const answers: Array<(r: FirstStartRun) => void> = []
+    const w = createFirstStartWarmup({
+      platform: () => 'win32',
+      realpath: async (p) => p,
+      stat: async () => ({ size: 1, mtimeMs: 1, dev: '1', ino: '1', isFile: true }),
+      startWorker: () => {
+        let answer!: (r: FirstStartRun) => void
+        const result = new Promise<FirstStartRun>((r) => { answer = r })
+        answers.push(answer)
+        // What the real worker answers once the quit ended its program.
+        return { result, stop: () => answer({ exitCode: null, timedOut: false, spawnError: 'worker-ended' }) }
+      },
+      log: () => {},
+      now: () => Date.now(),
+    })
+    h.warmImpl = (program, env) => w.warm(program, env as FirstStartEnvSource)
+    // No abort signal: Sentinel's version checks and the Insights runs pass none.
+    const run = spawnClaudeHeadless(['-p'], 10_000, 'prompt')
+    let settled = false
+    void run.then(() => { settled = true }, () => { settled = true })
+    await vi.waitFor(() => expect(answers).toHaveLength(1))
+    // The quit (index.ts: the warm-ups are flushed with the other provider CLI kills).
+    w.stopAll()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(h.order).toEqual(['warm C:\\Users\\A\\.local\\bin\\claude.exe'])
+    expect(settled).toBe(false)
+  })
+
+  it('a run aborted before its start asks for no warm-up', async () => {
+    const ac = new AbortController()
+    ac.abort()
+    const res = await spawnClaudeHeadless(['-p'], 10_000, 'prompt', null, ac.signal)
+    expect(res).toEqual({ code: 1, stdout: '', stderr: '\nAborted' })
+    expect(h.warm).toEqual([])
+    expect(h.order).toEqual([])
+  })
+
   it('an npm claude.cmd, which cmd.exe starts, is not warmed', async () => {
     h.bin = 'C:\\Npm\\claude.cmd'
     await spawnClaudeHeadless(['--version'], 10_000)
     expect(h.warm).toEqual([])
     expect(h.order).toEqual(['spawn C:\\Windows\\System32\\cmd.exe'])
+  })
+})
+
+// A run asks for a warm-up only for a direct claude.exe on Windows, so on
+// macOS and Linux, and for an npm claude.cmd, the warm-up's latch alone would
+// not hold it after the quit teardown. The quit hold,
+// which the teardown sets with that latch, holds every run, whatever the
+// platform or the program; an abort still answers at once.
+describe('a headless run asked for after the quit teardown', () => {
+  /** 'pending' when `p` has not settled once every step it could take has run. */
+  const stateOf = (p: Promise<unknown>) => Promise.race([p.then(() => 'settled', () => 'settled'), new Promise((r) => setTimeout(() => r('pending'), 20))])
+  beforeEach(() => { _resetQuitHoldForTest() })
+  afterEach(() => { _resetQuitHoldForTest() })
+
+  it.each([
+    ['an npm claude.cmd on Windows', 'win32', 'C:\\Npm\\claude.cmd'],
+    ['a direct claude.exe on Windows', 'win32', 'C:\\Users\\A\\.local\\bin\\claude.exe'],
+    ['macOS', 'darwin', null],
+    ['Linux', 'linux', null],
+  ] as Array<[string, NodeJS.Platform, string | null]>)('%s: starts nothing and is never answered', async (_label, platform, bin) => {
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+    if (bin) h.bin = bin
+    beginQuitHold()
+    const run = spawnClaudeHeadless(['-p'], 10_000, 'prompt')
+    expect(await stateOf(run)).toBe('pending') // the candidate: a spawn on macOS, Linux and for claude.cmd
+    expect(h.order.filter((o) => o.startsWith('spawn '))).toEqual([])
+  })
+
+  it('a held run still answers an abort at once, and starts nothing', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    beginQuitHold()
+    const ac = new AbortController()
+    const run = spawnClaudeHeadless(['-p'], 10_000, 'prompt', null, ac.signal)
+    expect(await stateOf(run)).toBe('pending')
+    ac.abort()
+    const res = await Promise.race([run, new Promise((r) => setTimeout(() => r('still waiting'), 0))])
+    expect(res).toEqual({ code: 1, stdout: '', stderr: '\nAborted' })
+    expect(h.order).toEqual([])
+  })
+
+  it('before the teardown, the same run on Linux starts (the control)', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    expect((await spawnClaudeHeadless(['-p'], 10_000, 'prompt')).code).toBe(0)
+    expect(h.order).toEqual(['spawn claude'])
   })
 })

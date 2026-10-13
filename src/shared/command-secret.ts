@@ -91,12 +91,15 @@ interface ScannedWord {
   tokens: QuoteState[]
 }
 
-/** `\` is bash's escape, `` ` `` is PowerShell's. ANY escape on the line poisons
- *  the whole line: escapes are what fooled the quote scanner in every earlier
- *  round (an escaped quote read as a real quote region), and they are rare in a
- *  command/arguments field, so the safe-and-simple rule is to refuse to place a
- *  secret on a line that carries one. Over-refusing costs a literal token the
- *  user rewrites; under-refusing costs a credential. */
+/** `\` is bash's escape, `` ` `` is PowerShell's. ANY escape ANYWHERE in the
+ *  text rules out ALL of it: every line of a multi-line command, not only
+ *  the line it sits on (aicc_planning#82). Escapes are what fool a quote
+ *  scanner (an escaped quote read as a real quote region), and they are rare
+ *  in a command/arguments field, so the safe-and-simple rule is to refuse to
+ *  place a secret in any text that carries one. Moving the secret to another line of the same command does not help;
+ *  removing every escape does. Over-refusing costs a literal token the user
+ *  rewrites; under-refusing costs a credential. (The `lineHasEscape` name below
+ *  predates multi-line commands: it means the whole text.) */
 const ESCAPE_CHARS = new Set(['\\', '`'])
 
 /** These end a command, so the NEXT word is a command name — a secret there
@@ -115,8 +118,9 @@ const SEPARATORS = new Set([';', '|', '&'])
  * separators `;` `|` `&` and newline, so a token after a separator is seen as a
  * command name in EVERY field; (2) quote state is LOCAL to a word — it is reset
  * at each word boundary — so an unbalanced quote in one word can never shift the
- * classification of a later one; (3) if the line carries any escape char, the
- * whole line is flagged (`lineHasEscape`) and every token on it is refused.
+ * classification of a later one; (3) if the text carries any escape char on any
+ * line, the whole text is flagged (`lineHasEscape`) and every token in it, on
+ * every line, is refused.
  */
 function scanShellWords(text: string): { words: ScannedWord[]; lineHasEscape: boolean } {
   const words: ScannedWord[] = []
@@ -191,11 +195,11 @@ type Placement =
 
 function placementFor(w: ScannedWord, isCommandLine: boolean, lineHasEscape: boolean): Placement {
   if (w.tokens.length === 0) return 'none'
-  // Any escape ANYWHERE on the line makes the quote reading untrustworthy —
-  // refuse the whole line, not just the escaped word (an escaped quote in a
-  // neighbour shifts nothing here because state is per-word, but the reading is
-  // still not one to bet a credential on). Checked before command position so
-  // the message names the actual problem.
+  // Any escape ANYWHERE in the text (any line) makes the quote reading
+  // untrustworthy: refuse all of it, not just the escaped word (an escaped
+  // quote in a neighbour shifts nothing here because state is per-word, but the
+  // reading is still not one to bet a credential on). Checked before command
+  // position so the message names the actual problem.
   if (lineHasEscape) return 'unsafe-escaped-quote'
   // Unbalanced quotes: we cannot tell where the value would land. Refuse.
   if (w.unbalanced) return 'unsafe-unbalanced'
@@ -271,6 +275,12 @@ export function substituteSecretToken(
   return out + text.slice(cursor)
 }
 
+/** aicc_planning#82: the escape rule is whole-text (see ESCAPE_CHARS), so the
+ *  message says so. It used to say the secret was "on a line" with an escape
+ *  and offered "move the secret to a line without one", which cannot work in a
+ *  multi-line command: an escape on ANY line still blocks it. */
+const ESCAPE_PROBLEM = `${COMMAND_SECRET_TOKEN} cannot be filled in: this command has a backslash (\\) or backtick (\`) in it. Any backslash or backtick anywhere in the command, on any line, blocks the secret. Remove every one (use forward slashes in paths).`
+
 /**
  * Why a `{secret}` in this text cannot be substituted, or null when every
  * occurrence is in a position with a safe reference form.
@@ -281,13 +291,11 @@ export function substituteSecretToken(
 export function secretPlacementProblem(text: string, opts: { isCommandLine?: boolean } = {}): string | null {
   if (typeof text !== 'string' || !text.includes(COMMAND_SECRET_TOKEN)) return null
   const { words, lineHasEscape } = scanShellWords(text)
-  // A line with any escape carrying a token is refused as a whole — report it
+  // Text with any escape carrying a token is refused as a whole: report it
   // directly, even when the escape SWALLOWED the token's brace (`\{secret}`) so
   // no word was left to classify. Without this the token is left literal with no
   // warning, which looks like the feature silently doing nothing.
-  if (lineHasEscape) {
-    return `${COMMAND_SECRET_TOKEN} is on a line with a backslash (\\) or backtick (\`). A secret cannot be placed safely there — remove the escape (use forward slashes in paths) or move the secret to a line without one.`
-  }
+  if (lineHasEscape) return ESCAPE_PROBLEM
   for (const w of words) {
     switch (placementFor(w, opts.isCommandLine === true, lineHasEscape)) {
       case 'unsafe-command-word':
@@ -297,7 +305,7 @@ export function secretPlacementProblem(text: string, opts: { isCommandLine?: boo
       case 'unsafe-mixed-quotes':
         return `${COMMAND_SECRET_TOKEN} sits just outside a quoted section, where the value would become a separate argument. Put it inside the quotes: "… ${COMMAND_SECRET_TOKEN}".`
       case 'unsafe-escaped-quote':
-        return `${COMMAND_SECRET_TOKEN} is on a line with a backslash (\\) or backtick (\`). A secret cannot be placed safely there — remove the escape (use forward slashes in paths) or move the secret to a line without one.`
+        return ESCAPE_PROBLEM
       case 'unsafe-unbalanced':
         return `${COMMAND_SECRET_TOKEN} is in a word with an unclosed quote. Balance the quotes: "… ${COMMAND_SECRET_TOKEN}".`
       default:

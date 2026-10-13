@@ -33,7 +33,9 @@
 //     read as an option (`--output=<file>` writes a file).
 //   - The output is bounded and REFUSED past the bound, never cut: a review of
 //     half a change reads as a review of the change.
-// Mode `paths` needs no diff: the reviewer reads the named files itself.
+// Mode `paths` needs no diff. A reviewer with file tools reads the named
+// files itself; for one that can read no file, produceReviewFiles (below)
+// reads them here, under the same bound, and only files inside the project.
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -335,5 +337,291 @@ export function defaultReviewDiffDeps(): ReviewDiffDeps {
       copy: (from, to) => fs.copyFileSync(from, to),
       remove: (dir) => { try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* a temp folder left behind is harmless */ } },
     },
+  }
+}
+
+/** One named file, as a reviewer that reads no file is sent it: its path as
+ *  the request named it (relative to the project, `/` separated), and its
+ *  text, or only that it is binary (as git diff says of binary content). */
+export type ReviewFile = { path: string; text: string } | { path: string; binary: true }
+
+export type ReviewFilesResult = { ok: true; files: ReviewFile[] } | { ok: false; message: string }
+
+/** An open file: its identity as the system reports it for the open handle,
+ *  and its first bytes. */
+export interface ReviewFileHandle {
+  stat(): Promise<{ isFile: boolean; isDirectory: boolean; size: number; nlink: number; dev: bigint; ino: bigint }>
+  /** Up to `max` bytes from the start of the file. */
+  read(max: number): Promise<Buffer>
+  /** The real path of the open file itself, as the system has it for the
+   *  handle rather than for a name, where the system gives one (Linux:
+   *  /proc/self/fd). */
+  realpath?(): Promise<string>
+  close(): Promise<void>
+}
+
+/** A name as it is, never followed: a link or a junction says it is one,
+ *  not what it leads to. */
+export interface ReviewNameStat { isFile: boolean; isDirectory: boolean; isSymbolicLink: boolean; dev: bigint; ino: bigint; nlink: number }
+
+export interface ReviewFilesDeps {
+  /** The real path (every link and junction resolved), as the system gives it. */
+  realpath(p: string): Promise<string>
+  /** Opened for reading only; never waits on a pipe or a device. */
+  open(p: string): Promise<ReviewFileHandle>
+  /** The name at a path now, not followed if it is itself a link or a
+   *  junction (lstat, never stat): what it is, its identity, and how many
+   *  names its file has. */
+  lstat(p: string): Promise<ReviewNameStat>
+  platform: NodeJS.Platform
+  /** File calls of earlier requests still running after their request
+   *  stopped. The app's own reader shares one for all its requests
+   *  (defaultReviewFilesDeps); without one, a request counts only its own. */
+  backlog?: ReviewFilesBacklog
+}
+
+/** The app's file calls left running by stopped requests (a read on a
+ *  network folder that stopped answering, for one). Each one holds, until it
+ *  returns, one of the few threads the main process does all its file work
+ *  on, so no new request is started while any is left. */
+export interface ReviewFilesBacklog { count: number }
+
+/** The app's own count, shared by every request its reader makes. */
+const APP_REVIEW_FILES_BACKLOG: ReviewFilesBacklog = { count: 0 }
+
+/** A request refused because an earlier one's file call has not returned. */
+export const REVIEW_FILES_BACKLOG_MESSAGE = 'a read of files for an earlier review has still not returned; try again later'
+
+/** The first bytes looked at to tell binary content (a NUL), as git does. */
+const BINARY_PROBE = 8000
+
+/** What each file adds to the request besides its name and its text, at
+ *  least: the FILE line's marker and nonce, and the note on binary content
+ *  (checked against the real request by the review tool's own tests). */
+export const REVIEW_FILE_LINE_BYTES = 64
+
+/** The time one request's files may take to read in all: the same budget as
+ *  one git run of a diff. */
+export const REVIEW_FILES_TIMEOUT_MS = REVIEW_DIFF_TIMEOUT_MS
+
+/** Why a request's files stopped being read: its time ran out, or the review
+ *  was cancelled. */
+class StopReading extends Error {}
+
+/** The named files of mode `paths`, read by the app for a reviewer that
+ *  cannot read them itself (the request names them; runReview has already
+ *  refused a path that is outside the project as written). The project
+ *  folder is untrusted here too: a name in it can be a link, a junction or a
+ *  second name (a hard link) of a file elsewhere, and can be changed while it
+ *  is read.
+ *  - Before anything is opened, every folder on the way from the project and
+ *    then the name itself are checked with lstat. A link or a junction
+ *    anywhere on the way, a folder, a device, a pipe or a file with more than
+ *    one name is refused there, unopened (a link to a network share, for
+ *    one, would connect to that host if it were opened).
+ *  - Then the file is opened, never through a link at the name itself where
+ *    the system can refuse one, and checked again: it is a plain file with
+ *    one name, its real path is inside the project's real path, and the name
+ *    at that real path, not followed, is the file that was opened.
+ *  Anything that fails a check is refused, never read. The same bound as a
+ *  diff applies to all of it together (each name as the request gave it,
+ *  each FILE line and each file's text), and past it the request is refused,
+ *  never cut. Every step also races the review's cancel and one time bound
+ *  for the whole request, so a read that never returns (a network folder
+ *  gone stale, a cloud file that never downloads) cannot hold the review;
+ *  while such a call is still running, no new request is started. */
+export async function produceReviewFiles(
+  input: { cwd: string; paths: readonly string[]; signal?: AbortSignal },
+  deps: ReviewFilesDeps = defaultReviewFilesDeps(),
+): Promise<ReviewFilesResult> {
+  // The request's scope line names every path as it was given.
+  const total = input.paths.reduce((n, p) => n + Buffer.byteLength(p) + 2, 0)
+  if (total > REVIEW_DIFF_MAX_BYTES) return tooLargeFiles()
+  if (input.signal?.aborted) return { ok: false, message: 'the review was cancelled' }
+  // A file call an earlier request left running holds a thread the app needs
+  // for all its file work, and a new request on the same folder would very
+  // likely hold one more.
+  const backlog = deps.backlog ?? { count: 0 }
+  if (backlog.count > 0) return { ok: false, message: REVIEW_FILES_BACKLOG_MESSAGE }
+  // Each step settles with its own result, or fails at once when the request
+  // is stopped. A step left behind (a read that never returns) holds nothing
+  // of the request but is counted until it returns, and a settled step leaves
+  // nothing waiting.
+  let stoppedBy: StopReading | null = null
+  const waiting = new Set<(e: StopReading) => void>()
+  const stop = (e: StopReading) => {
+    if (stoppedBy) return
+    stoppedBy = e
+    for (const fail of waiting) fail(e)
+    waiting.clear()
+  }
+  const onAbort = () => stop(new StopReading('the review was cancelled'))
+  const timer = setTimeout(() => stop(new StopReading(`the files could not be read within ${REVIEW_FILES_TIMEOUT_MS / 1000} seconds`)), REVIEW_FILES_TIMEOUT_MS)
+  input.signal?.addEventListener('abort', onAbort, { once: true })
+  const step = <T>(p: Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
+    let left = false
+    const fail = (e: StopReading) => { left = true; backlog.count++; reject(e) }
+    if (stoppedBy) fail(stoppedBy)
+    else waiting.add(fail)
+    const settled = () => { waiting.delete(fail); if (left) backlog.count-- }
+    void p.then((v) => { settled(); resolve(v) }, (e: unknown) => { settled(); reject(e) })
+  })
+  try {
+    return await readReviewFiles(input, deps, total, step)
+  } catch (e) {
+    if (e instanceof StopReading) return { ok: false, message: e.message }
+    return { ok: false, message: 'the files could not be read' }
+  } finally {
+    clearTimeout(timer)
+    input.signal?.removeEventListener('abort', onAbort)
+  }
+}
+
+function tooLargeFiles(): ReviewFilesResult {
+  return { ok: false, message: `the files are larger than ${REVIEW_DIFF_MAX_BYTES / 1024} KB together; name fewer or smaller files` }
+}
+
+async function readReviewFiles(
+  input: { cwd: string; paths: readonly string[]; signal?: AbortSignal },
+  deps: ReviewFilesDeps,
+  scopeBytes: number,
+  step: <T>(p: Promise<T>) => Promise<T>,
+): Promise<ReviewFilesResult> {
+  const api = deps.platform === 'win32' ? path.win32 : path.posix
+  let total = scopeBytes
+  let root: string
+  try { root = await step(deps.realpath(input.cwd)) } catch (e) {
+    if (e instanceof StopReading) throw e
+    return { ok: false, message: 'the project folder could not be read' }
+  }
+  const files: ReviewFile[] = []
+  const seen = new Set<string>()
+  for (const named of input.paths) {
+    if (input.signal?.aborted) return { ok: false, message: 'the review was cancelled' }
+    const abs = api.resolve(input.cwd, named)
+    const relName = api.relative(input.cwd, abs)
+    const shown = relName.split(api.sep).join('/')
+    const label = JSON.stringify(shown)
+    if (!relName) return { ok: false, message: `${label} is a folder; name files` }
+    if (relName === '..' || relName.startsWith(`..${api.sep}`) || api.isAbsolute(relName)) return { ok: false, message: `${label} is outside the project` }
+    let h: ReviewFileHandle | null = null
+    try {
+      // Before anything is opened: each folder on the way from the project,
+      // then the name itself (lstat).
+      const parts = relName.split(api.sep)
+      for (let i = 1; i <= parts.length; i++) {
+        let n: ReviewNameStat
+        try { n = await step(deps.lstat(api.join(input.cwd, ...parts.slice(0, i)))) } catch (e) {
+          if (e instanceof StopReading) throw e
+          const code = (e as NodeJS.ErrnoException)?.code
+          if (code === 'ENOENT' || code === 'ENOTDIR') return { ok: false, message: `${label} was not found` }
+          return { ok: false, message: `${label} could not be read` }
+        }
+        if (i < parts.length) {
+          if (n.isSymbolicLink) return { ok: false, message: `${label} is reached through a link or a junction (${JSON.stringify(parts.slice(0, i).join('/'))}), so it is not sent` }
+          if (!n.isDirectory) return { ok: false, message: `${label} was not found` }
+          continue
+        }
+        if (n.isSymbolicLink) return { ok: false, message: `${label} is a link (a symbolic link or a junction), so it is not sent` }
+        if (n.isDirectory) return { ok: false, message: `${label} is a folder; name files` }
+        if (!n.isFile) return { ok: false, message: `${label} is not a file; name files` }
+        if (n.nlink !== 1) return { ok: false, message: `${label} has more than one name (a hard link), so it is not sent` }
+      }
+      let opening: Promise<ReviewFileHandle> | null = null
+      try {
+        opening = deps.open(abs)
+        h = await step(opening)
+      } catch (e) {
+        if (e instanceof StopReading) {
+          // An open that returns after this: its file is closed then.
+          void opening?.then((late) => late.close().catch(() => {}), () => {})
+          throw e
+        }
+        const code = (e as NodeJS.ErrnoException)?.code
+        if (code === 'ENOENT' || code === 'ENOTDIR') return { ok: false, message: `${label} was not found` }
+        if (code === 'EISDIR') return { ok: false, message: `${label} is a folder; name files` }
+        // A plain file when it was checked, a link when it was opened: the
+        // open refused to follow it.
+        if (code === 'ELOOP') return { ok: false, message: `${label} changed while it was being read` }
+        return { ok: false, message: `${label} could not be read` }
+      }
+      const s = await step(h.stat())
+      if (s.isDirectory) return { ok: false, message: `${label} is a folder; name files` }
+      if (!s.isFile) return { ok: false, message: `${label} is not a file; name files` }
+      if (s.nlink !== 1) return { ok: false, message: `${label} has more than one name (a hard link), so it is not sent` }
+      const real = await step(h.realpath ? h.realpath() : deps.realpath(abs))
+      const rel = api.relative(root, real)
+      if (!rel || rel === '..' || rel.startsWith(`..${api.sep}`) || api.isAbsolute(rel)) return { ok: false, message: `${label} is outside the project` }
+      const now = await step(deps.lstat(real))
+      if (now.dev !== s.dev || now.ino !== s.ino || now.nlink !== 1) return { ok: false, message: `${label} changed while it was being read` }
+      const id = `${s.dev}:${s.ino}`
+      if (seen.has(id)) continue
+      seen.add(id)
+      total += Buffer.byteLength(label) + REVIEW_FILE_LINE_BYTES
+      if (total > REVIEW_DIFF_MAX_BYTES) return tooLargeFiles()
+      const head = await step(h.read(BINARY_PROBE))
+      if (head.includes(0)) { files.push({ path: shown, binary: true }); continue }
+      if (total + s.size > REVIEW_DIFF_MAX_BYTES) return tooLargeFiles()
+      // A buffer of the file's own size, and one byte more to see that it
+      // grew since its size was read; a file that did is refused, never cut.
+      const body = await step(h.read(Math.min(s.size + 1, REVIEW_DIFF_MAX_BYTES - total + 1)))
+      if (body.length > s.size) return { ok: false, message: `${label} changed while it was being read` }
+      total += body.length
+      if (total > REVIEW_DIFF_MAX_BYTES) return tooLargeFiles()
+      files.push({ path: shown, text: body.toString('utf8') })
+    } catch (e) {
+      if (e instanceof StopReading) throw e
+      return { ok: false, message: `${label} could not be read` }
+    } finally {
+      // Not waited on past the time bound: a close waits for a read still
+      // under way, and the file is closed when that read ends.
+      if (h) { try { await step(h.close()) } catch { /* a close that fails changes nothing read */ } }
+    }
+  }
+  return { ok: true, files }
+}
+
+/** How the app opens a named file: for reading only, never waiting on a pipe
+ *  and never following a link at the name itself, where the system has the
+ *  flags (POSIX; Windows has none of them). */
+export function reviewOpenFlags(c: Partial<Record<'O_RDONLY' | 'O_NONBLOCK' | 'O_NOCTTY' | 'O_NOFOLLOW', number>> = fs.constants): number {
+  return (c.O_RDONLY ?? 0) | (c.O_NONBLOCK ?? 0) | (c.O_NOCTTY ?? 0) | (c.O_NOFOLLOW ?? 0)
+}
+
+export function defaultReviewFilesDeps(platform: NodeJS.Platform = process.platform): ReviewFilesDeps {
+  const flags = reviewOpenFlags()
+  return {
+    realpath: (p) => fs.promises.realpath(p),
+    open: async (p) => {
+      const fh = await fs.promises.open(p, flags)
+      return {
+        stat: async () => {
+          const s = await fh.stat({ bigint: true })
+          return { isFile: s.isFile(), isDirectory: s.isDirectory(), size: Number(s.size), nlink: Number(s.nlink), dev: s.dev, ino: s.ino }
+        },
+        read: async (max) => {
+          // Only the bytes read are returned, so the buffer needs no zeroing.
+          const buf = Buffer.allocUnsafe(Math.max(0, max))
+          let got = 0
+          while (got < buf.length) {
+            const { bytesRead } = await fh.read(buf, got, buf.length - got, got)
+            if (bytesRead === 0) break
+            got += bytesRead
+          }
+          return buf.subarray(0, got)
+        },
+        // The kernel's path for the open file, not for the name it was opened by.
+        ...(platform === 'linux' ? { realpath: () => fs.promises.realpath(`/proc/self/fd/${fh.fd}`) } : {}),
+        close: () => fh.close(),
+      }
+    },
+    // lstat, never stat: the checks rely on a link or a junction being seen
+    // as one (tests/unit/main/review-files.test.ts pins it).
+    lstat: async (p) => {
+      const s = await fs.promises.lstat(p, { bigint: true })
+      return { isFile: s.isFile(), isDirectory: s.isDirectory(), isSymbolicLink: s.isSymbolicLink(), dev: s.dev, ino: s.ino, nlink: Number(s.nlink) }
+    },
+    platform,
+    backlog: APP_REVIEW_FILES_BACKLOG,
   }
 }

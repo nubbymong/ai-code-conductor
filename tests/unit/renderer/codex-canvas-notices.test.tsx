@@ -7,10 +7,11 @@
 //    record; nothing while every skill is in place;
 //  - no turn events yet (its hooks not trusted), so a filed review reaches
 //    Codex when its prompt is ready, read from the hook stream;
-//  - a filed review or verdict Codex did not get, with the line and why, on
-//    the canvas it was filed on, kept while the page is closed (review A-1:
-//    src/renderer/stores/codexMarkerNoticeStore.ts) until dismissed.
-// Nothing for a Claude session.
+//  - a filed review or verdict the agent did not get, with the line and why,
+//    on the canvas it was filed on, kept while the page is closed (review
+//    A-1: src/renderer/stores/codexMarkerNoticeStore.ts) until dismissed.
+// For a Claude session only the last of these, in the same words, which name
+// no provider (main reports a Claude marker it dropped untyped the same way).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -116,7 +117,7 @@ describe('a Codex session\'s canvas notices', () => {
     buffer = [{ sessionId: SID, event: 'Stop', payload: {}, ts: 1 }]
     await mount()
     await push({ sessionId: SID, canvasId: 'c', line: 'Approved v2 on the canvas', reason: 'not-drawn' })
-    expect(text('codex-canvas-undelivered')).toBe('Codex did not get "Approved v2 on the canvas": the app could not confirm it in Codex\'s prompt. If it is still there, send it or clear it in the session.')
+    expect(text('codex-canvas-undelivered')).toBe('The agent did not get "Approved v2 on the canvas": the app could not confirm it in the agent\'s prompt. If it is still there, send it or clear it in the session.')
     expect(text('codex-canvas-undelivered')).not.toMatch(/taken back/)
   })
 
@@ -196,11 +197,39 @@ describe('a Codex session\'s canvas notices', () => {
     expect(useCodexMarkerNoticeStore.getState().byCanvasId).toEqual({})
   })
 
-  it('nothing at all for a Claude session', async () => {
+  it('a Claude session: no skills line and no turn-event line, whatever main or the hook stream says', async () => {
     setProvider('claude')
     guidance = { guidance: 'tools-only', reason: 'own-skill', skills: ['agent-canvas'] }
     await mount()
     expect(host.innerHTML).toBe('')
+  })
+
+  it('[host] a Claude session: a line it did not get is shown on its canvas, in the same words, until dismissed', async () => {
+    setProvider('claude')
+    guidance = { guidance: 'tools-only', reason: 'own-skill', skills: ['agent-canvas'] }
+    await mount('c')
+    await push({ sessionId: SID, canvasId: 'c', line: 'Approved v2 on the canvas', reason: 'busy-timeout' })
+    expect(text('codex-canvas-undelivered')).toBe('The agent did not get "Approved v2 on the canvas": it stayed busy, or its prompt was not ready, for two minutes. You can type it into the session yourself.')
+    expect(text('codex-canvas-guidance')).toBeNull()
+    expect(text('codex-canvas-no-turn-events')).toBeNull()
+    await act(async () => { (host.querySelector('[data-testid="codex-canvas-undelivered-dismiss"]') as HTMLButtonElement).click() })
+    expect(host.innerHTML).toBe('')
+    await push({ sessionId: SID, canvasId: 'c', line: 'Review #3 filed', reason: 'session-gone' })
+    expect(text('codex-canvas-undelivered')).toBe('The agent did not get "Review #3 filed": the session ended or restarted first, or the line could not be typed into it. You can type it into the session yourself.')
+  })
+
+  it('[host] the not-sent words name no provider, for every reason', async () => {
+    setProvider('claude')
+    await mount('c')
+    const reasons = ['busy-timeout', 'prompt-on-screen', 'too-tall', 'not-drawn', 'refused-text', 'session-gone'] as const
+    for (const reason of reasons) {
+      await push({ sessionId: SID, canvasId: 'c', line: `line for ${reason}`, reason })
+      const shown = Array.from(host.querySelectorAll('[data-testid="codex-canvas-undelivered"]'))
+        .map((el) => el.textContent ?? '')
+        .find((t) => t.includes(`"line for ${reason}"`))
+      expect(shown, reason).toMatch(/^The agent did not get "/)
+      expect(shown, reason).not.toMatch(/codex|claude/i)
+    }
   })
 })
 

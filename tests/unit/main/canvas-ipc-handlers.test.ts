@@ -101,7 +101,7 @@ describe('snapshot capture (main -> renderer request)', () => {
     const { requestId } = pushed!.payload as { requestId: string }
     expect(requestId).toMatch(/^[0-9a-f]{24}$/)
 
-    listeners.get(IPC.CANVAS_SNAPSHOT_RESULT)!({} as never, {
+    listeners.get(IPC.CANVAS_SNAPSHOT_RESULT)!({ sender: appContents, senderFrame: APP_FRAME } as never, {
       requestId,
       ok: true,
       result: { viewport: { width: 800, height: 600, dpr: 1 }, root: { ref: 'e0', role: 'document', name: 'ok', box: {}, children: [] } },

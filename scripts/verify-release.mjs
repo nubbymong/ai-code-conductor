@@ -34,7 +34,7 @@
 //  - EMPTY buckets are a HOST AUTH-STATE condition (that host's stored token is
 //    empty/expired/missing), NOT a code failure — verified: 185 (empty token)
 //    and Mac (no credentials file) legitimately show no buckets while the SAME
-//    live.co.uk account shows Fable:93% on Pi/WINDOWS_2/Rocky. So empty buckets
+//    account shows Fable:93% on Pi/WINDOWS_2/Rocky. So empty buckets
 //    are WARN, never FAIL.
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync } from 'node:fs'

@@ -348,4 +348,30 @@ describe('Providers card: a CLI in its publisher\'s folder, off PATH', () => {
     await click('provider-check-again-codex')
     expect(byTest('provider-codex-path-restart')!.textContent).toContain('Quit AI Code Conductor and start it again')
   })
+
+  // A restart that only MAY help (the CLI was not seen; pathHintIsNote) is a
+  // note: the row keeps its own still-not-found line and shows the note after
+  // it, as the setup screen does. A hint that says
+  // what helps (the plain restart above, add-to-path) still replaces it.
+  it('a restart note keeps the row\'s still-not-found line and follows it; a plain restart still replaces it', async () => {
+    pa.discover.mockResolvedValue({ ok: true, installation: {}, pathHint: { kind: 'restart', unresolved: true } })
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    await click('provider-check-again-codex')
+    const line = byTest('provider-after-install-codex')
+    expect(line, 'the still-not-found line stays').not.toBeNull()
+    expect(line!.textContent).toBe(
+      'Codex was still not found. If you installed it another way, check that its folder is on your PATH, then press Check again.',
+    )
+    const note = byTest('provider-codex-path-restart')
+    expect(note, 'the note shows too').not.toBeNull()
+    expect(note!.textContent).toContain('If you installed Codex there, quit AI Code Conductor and start it again.')
+    expect(line!.compareDocumentPosition(note!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the note comes after the line').toBeTruthy()
+    act(() => { root.unmount() })
+    root = createRoot(container)
+    pa.discover.mockResolvedValue({ ok: true, installation: {}, pathHint: { kind: 'restart' } })
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    await click('provider-check-again-codex')
+    expect(byTest('provider-codex-path-restart')).not.toBeNull()
+    expect(byTest('provider-after-install-codex')).toBeNull()
+  })
 })

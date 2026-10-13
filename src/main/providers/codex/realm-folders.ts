@@ -28,6 +28,10 @@
 //   and SYSTEM, passed to what is inside; nothing inherited from above) and
 //   read back, by the app's owner-only folder rule (secureFolders); a folder
 //   that does not read back so is refused, and a home just made is taken back.
+//   A sign in again links its history files in from the account's folder in
+//   use only when that folder reads back owner-only now (readOwnerOnly, a
+//   read that writes nothing); otherwise each file is copied, and the copy
+//   takes the new home's rights (2.1.1-beta.3).
 // - Contained removal. Only the home of a setup still `pending` is removed,
 //   never an external home. Before anything is deleted the target is proved to
 //   be a real directory whose canonical path is `<canonical root>/<realmId>`
@@ -355,6 +359,18 @@ export interface CodexRealmFolderDeps {
    *  one answer per folder. Absent on Windows: no home is prepared
    *  (permissions). Not used on POSIX, where the folders are made 0700. */
   secureFolders?: (dirs: readonly string[]) => Promise<ReadonlyArray<{ dir: string; ok: boolean; detail?: string }>>
+  /** Windows: whether folders are owner-only as they stand, read only
+   *  (owner-only-folders.ts readOwnerOnlyFoldersWindows: nothing written), one
+   *  answer per folder. A sign in again links its history files in only from
+   *  an account folder that reads back so; from any other, or with no answer
+   *  (absent, a throw, a refusal, an answer not for that folder), each file is
+   *  copied, and a copy takes the new folder's rights (2.1.1-beta.3). Not used
+   *  on POSIX. */
+  readOwnerOnly?: (dirs: readonly string[]) => Promise<ReadonlyArray<{ dir: string; ok: boolean; detail?: string }>>
+  /** Where a refusal by that rule is said (2.1.1-beta.3, O6), in fixed words:
+   *  which of the two folders, and the rule's reason where it is fixed words
+   *  (otherwise only the kind of failure; never a path). Absent: not said. */
+  log?: (message: string) => void
 }
 
 /** Bounds on a tree the removal will walk: an abandoned setup's home holds a
@@ -384,7 +400,13 @@ const MSG: Readonly<Record<RealmFolderFailureCode, string>> = {
   'resources-unavailable': "The app's data folder is not available.",
   'overlaps-external': "Your own Codex folder setting (CODEX_HOME, else ~/.codex) overlaps the app's Codex account folders, or cannot be checked. Set CODEX_HOME to a full path outside the app's data folder, or unset it, then try again.",
   'unsafe-path': 'The Codex account folder is a link or not where the app put it, so the app did not use it.',
-  'permissions': "The Codex account folder could not be made private to you. Move AI Code Conductor's resources folder (the folder chosen for its data when it was set up) to a disk that supports file permissions.",
+  // The same words on Windows (secureOnWindows) and POSIX (makePrivate's
+  // 0700), so nothing only one of them makes true: no Windows-only term, and
+  // no word of the log, which POSIX does not write here. Another disk is
+  // advised only for one without file permissions (2.1.1-beta.3, O6: beta.2
+  // advised it for every refusal). No surface shows this text today: the
+  // add-account and sign-in-again callers give their own general words.
+  'permissions': "The Codex account folder could not be made private to you, so the app did not use it. Check that your user account owns AI Code Conductor's resources folder (the folder chosen for its data when it was set up) and may change its permissions, then try again. If that folder is on a disk without file permissions, move it to one that has them.",
   'busy': 'A sign-in or sign-out is running for this Codex account.',
   'credentials-present': 'The Codex account folder still holds a sign-in. Sign out of it first.',
   'not-empty': 'The Codex account folder is not empty, so it was kept.',
@@ -399,6 +421,26 @@ const MSG: Readonly<Record<RealmFolderFailureCode, string>> = {
 
 type Failure = { ok: false; code: RealmFolderFailureCode; message: string }
 const fail = (code: RealmFolderFailureCode): Failure => ({ ok: false, code, message: MSG[code] })
+
+/** The owner-only rule's reason for refusing a folder, for the log (O6): as
+ *  given when it is fixed words (letters, spaces, apostrophes, commas and
+ *  hyphens only, so never a path or a message from Windows that names one),
+ *  or an entry for a built-in account; otherwise only the kind of failure. */
+function refusalWords(detail: unknown): string {
+  if (typeof detail !== 'string' || !detail.trim()) return 'no reason given'
+  const d = detail.trim()
+  if (d.length <= 120 && /^[A-Za-z][A-Za-z ',-]*$/.test(d)) return d
+  const entry = /^an entry for (S-1-[0-9-]+)$/.exec(d)
+  // A built-in account or group (S-1-5-11, S-1-5-32-545); a person's own
+  // account (S-1-5-21-...) is not named.
+  if (entry) return entry[1].startsWith('S-1-5-21-') || entry[1].length > 16 ? 'an entry for another account' : d
+  // The rule's own words for a call that gave no answer; what follows them
+  // is the failure's text (a command line), never echoed.
+  if (d.startsWith('the rights could not be set or read')) return 'the rights could not be set or read (the check gave no answer)'
+  if (/unauthori[sz]ed operation/i.test(d)) return 'Windows refused the write (an unauthorized operation)'
+  if (/denied/i.test(d)) return 'Windows denied access'
+  return 'the rights could not be written or read back'
+}
 const isFailure = (x: unknown): x is Failure => !!x && typeof x === 'object' && (x as { ok?: unknown }).ok === false
 const devKnown = (e: CodexFsEntry) => typeof e.dev === 'string' && e.dev !== ''
 /** Two entries the file system places on different volumes. */
@@ -504,20 +546,48 @@ export function createCodexRealmFolders(deps: CodexRealmFolderDeps): ProviderRea
   /** Windows: the folders, in order, made this user's and owner-only and
    *  read back by the owner-only folder rule. Every folder must come back
    *  ok, under its own name, in its place; anything else -- no rule, a
-   *  throw, a missing or extra answer -- is permissions. POSIX: nothing
-   *  (makePrivate's 0700). */
-  async function secureOnWindows(dirs: readonly string[]): Promise<Failure | null> {
+   *  throw, a missing or extra answer -- is permissions, and is said in the
+   *  log (O6) in fixed words: which folder (`names`, in the same order) and
+   *  why (refusalWords). POSIX: nothing (makePrivate's 0700). */
+  async function secureOnWindows(dirs: readonly string[], names: readonly string[]): Promise<Failure | null> {
     if (isPosix(platform)) return null
-    const rule = deps.secureFolders
-    if (typeof rule !== 'function') return fail('permissions')
-    let out: unknown
-    try { out = await rule(dirs) } catch { return fail('permissions') }
-    if (!Array.isArray(out) || out.length !== dirs.length) return fail('permissions')
-    for (let i = 0; i < dirs.length; i++) {
-      const r = out[i] as { dir?: unknown; ok?: unknown } | null
-      if (!r || typeof r !== 'object' || r.ok !== true || r.dir !== dirs[i]) return fail('permissions')
+    const refused = (why: string): Failure => {
+      try { deps.log?.(`[codex] account folders: not made private to this user, so not used (${why})`) } catch { /* a log line never changes the answer */ }
+      return fail('permissions')
     }
-    return null
+    const rule = deps.secureFolders
+    if (typeof rule !== 'function') return refused('no owner-only folder rule')
+    let out: unknown
+    try { out = await rule(dirs) } catch { return refused('the owner-only folder rule failed') }
+    if (!Array.isArray(out) || out.length !== dirs.length) return refused('the owner-only folder rule did not answer for each folder')
+    const why: string[] = []
+    for (let i = 0; i < dirs.length; i++) {
+      const r = out[i] as { dir?: unknown; ok?: unknown; detail?: unknown } | null
+      const name = names[i] ?? 'a folder'
+      if (!r || typeof r !== 'object' || r.dir !== dirs[i]) why.push(`${name}: the answer was not for this folder`)
+      else if (r.ok !== true) why.push(`${name}: ${refusalWords(r.detail)}`)
+    }
+    return why.length ? refused(why.join('; ')) : null
+  }
+
+  /** Whether a sign in again may link files in from the account folder
+   *  `home` (2.1.1-beta.3): on POSIX always (a second name is reached only
+   *  through the destination's 0700 folders); on Windows only when the
+   *  folder reads back owner-only now (readOwnerOnly), answered for that
+   *  folder and nothing else. No reader, a throw or any other answer: no,
+   *  and each file is copied, taking the destination's rights. */
+  async function sourceLinkable(home: string): Promise<boolean> {
+    if (isPosix(platform)) return true
+    const read = deps.readOwnerOnly
+    if (typeof read !== 'function') return false
+    try {
+      const out: unknown = await read([home])
+      if (!Array.isArray(out) || out.length !== 1) return false
+      const r = out[0] as { dir?: unknown; ok?: unknown } | null
+      return !!r && typeof r === 'object' && r.dir === home && r.ok === true
+    } catch {
+      return false
+    }
   }
 
   /** Absent is not a failure; anything else odd is. */
@@ -594,7 +664,7 @@ export function createCodexRealmFolders(deps: CodexRealmFolderDeps): ProviderRea
       }
       // Windows: the root first (a refused root refuses the home below it),
       // then the home, made owner-only and read back before it is used.
-      const secured = await secureOnWindows([at.root, at.home])
+      const secured = await secureOnWindows([at.root, at.home], ['the folder of every Codex account', "the account's own folder"])
       if (secured) return takeBack(secured)
       // The external home once more, now the folders exist: an alias of a
       // folder that did not exist a moment ago shows only by identity once it
@@ -826,9 +896,12 @@ export function createCodexRealmFolders(deps: CodexRealmFolderDeps): ProviderRea
    *  through its new name), else a byte copy; never over
    *  anything already there, and only when every name it already has is one
    *  the app gave it (`earlier`: the account's earlier realms, compared
-   *  only); any other is skipped and counted. Folders are made owner-only in
-   *  the destination. `signal`: once aborted, the copy stops at the next
-   *  batch (cancelled). */
+   *  only); any other is skipped and counted. On Windows files are linked
+   *  only from a source folder that reads back owner-only now
+   *  (readOwnerOnly); from any other each is a byte copy, which takes the
+   *  destination's rights (2.1.1-beta.3).
+   *  Folders are made owner-only in the destination. `signal`: once aborted,
+   *  the copy stops at the next batch (cancelled). */
   function copyHistory(from: RealmRef, to: RealmRef, opts?: { earlier?: readonly RealmRef[]; signal?: AbortSignal }): Promise<RealmFolderResult & { copied?: number; linked?: number; skipped?: number }> {
     return guard(async () => {
       if (!fs.promises) return fail('io-failed')
@@ -856,8 +929,9 @@ export function createCodexRealmFolders(deps: CodexRealmFolderDeps): ProviderRea
       if (!releaseDst) { releaseSrc(); return fail('busy') }
       try {
         // The history carried into the replacement keeps its carry marks (ADR-023):
-        // the copies in it are linked, not re-made, so nothing else would mark
-        // them. Adopted before any file is linked. A marks file that cannot be
+        // the files in it are carried over (linked or copied), not re-made by
+        // the conversation carry, so nothing else would mark them. Adopted
+        // before any file is carried over. A marks file that cannot be
         // read or written never stops a Sign in again: the adoption is held in
         // memory and the marks follow once it can be read.
         try { deps.marks?.adopt(from.authRealmId, to.authRealmId, pathApi.join(dst.home, HISTORY_DIR)) } catch { /* the marks are never a reason to refuse */ }
@@ -884,6 +958,14 @@ export function createCodexRealmFolders(deps: CodexRealmFolderDeps): ProviderRea
         // everything below it, so the reverse lists it before.
         planned.reverse()
         if (stopped()) return fail('cancelled')
+        // Windows: the source folder must read back owner-only now for its
+        // files to be linked; otherwise (a folder that reads back otherwise,
+        // or one that cannot be read) every file is copied.
+        const linkable = await sourceLinkable(src.home)
+        if (!linkable && planned.some((e) => e.e.kind === 'file')) {
+          try { deps.log?.('[codex] sign in again: the earlier account folder did not read back as private to this user, so its conversation files are copied into the new folder, not linked') } catch { /* a log line never changes the answer */ }
+        }
+        if (stopped()) return fail('cancelled')
         const pace = pacer()
         let linked = 0
         let byteCopies = 0
@@ -906,13 +988,22 @@ export function createCodexRealmFolders(deps: CodexRealmFolderDeps): ProviderRea
           } else if (!(await onlyOurNames(rel, cur, earlier))) {
             skipped++
           } else {
-            let how: 'link' | 'copy' = 'link'
-            try { await afs.link(entry.p, target) } catch (err) {
-              if (errCode(err) === 'EEXIST') return fail('not-empty')
-              // Linking refused (a file system without hard links, a file
-              // the user may not link): a byte copy instead.
-              how = 'copy'
-              try { await afs.copyFile(entry.p, target) } catch (err2) { return fail(errCode(err2) === 'EEXIST' ? 'not-empty' : 'io-failed') }
+            let how: 'link' | 'copy' = linkable ? 'link' : 'copy'
+            const copyNow = async (): Promise<Failure | null> => {
+              try { await afs.copyFile(entry.p, target); return null } catch (err2) { return fail(errCode(err2) === 'EEXIST' ? 'not-empty' : 'io-failed') }
+            }
+            if (how === 'copy') {
+              const refused = await copyNow()
+              if (refused) return refused
+            } else {
+              try { await afs.link(entry.p, target) } catch (err) {
+                if (errCode(err) === 'EEXIST') return fail('not-empty')
+                // Linking refused (a file system without hard links, a file
+                // the user may not link): a byte copy instead.
+                how = 'copy'
+                const refused = await copyNow()
+                if (refused) return refused
+              }
             }
             let made: CodexFsEntry | null
             try { made = await afs.lstat(target) } catch { made = null }

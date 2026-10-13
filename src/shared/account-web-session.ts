@@ -155,7 +155,10 @@ export interface AccountWebSession {
   accountEmail: string | null
   /** Epoch ms when the cookies were harvested. */
   acquiredAt: number
-  /** Earliest expiry across the harvested cookies, epoch ms; null when unknown. */
+  /** When the session cookie (sessionKey) expires, epoch ms; null for a
+   *  session cookie with no expiry of its own. Saved at sign-in, then brought
+   *  up to the live cookie's whenever the status is read
+   *  (main/account-web/web-session-expiry.ts). */
   expiresAt: number | null
   origin: WebSessionOrigin
 }

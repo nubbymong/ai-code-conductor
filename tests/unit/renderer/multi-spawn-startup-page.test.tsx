@@ -4,11 +4,13 @@
  *
  * Three things are pinned here, and the third is the one that bites:
  *
- *  1. WHEN IT SHOWS. Once per upgrade, never on a fresh install, never twice on
- *     one build, and silently stamped away when there is nothing to list. The
- *     marker is a version stamp, mirroring What's New — see
- *     onboarding/multi-spawn-intro-gate.ts. (The ORDERING against the release
- *     notes lives with the chain that decides it, in boot-gates.test.ts.)
+ *  1. WHEN IT SHOWS. Once ever, on the upgrade into Multi Spawn: never on a
+ *     fresh install, never again once any build has stamped the marker (not
+ *     even after a later upgrade, 2.1.1-beta.1 to beta.2 or 2.1.0 to 2.1.1),
+ *     and silently stamped away when there is nothing to list. The marker's
+ *     PRESENCE is what counts. See onboarding/multi-spawn-intro-gate.ts. (The
+ *     ORDERING against the release notes lives with the chain that decides it,
+ *     in boot-gates.test.ts.)
  *  2. WHERE EACH TOGGLE STARTS. The EFFECTIVE value, not the stored one: a
  *     config the migration is about to enable must not render OFF for the frame
  *     before it is written. This is the helper the whole page is a rendering of,
@@ -94,7 +96,7 @@ const remote = (sessionId: string, configId: string, over: Record<string, unknow
 
 // ── 1. the gate ─────────────────────────────────────────────────────────────
 
-describe('decideMultiSpawnIntro — once per upgrade', () => {
+describe('decideMultiSpawnIntro: once ever, on the upgrade into Multi Spawn', () => {
   const base = { currentVersion: '2.1.0', configCount: 3 }
 
   it('shows on an upgrade from an earlier build', () => {
@@ -109,14 +111,15 @@ describe('decideMultiSpawnIntro — once per upgrade', () => {
     expect(d).toEqual({ show: false, markSeen: false, reason: 'already-seen' })
   })
 
-  it('treats a differently-formatted stamp as the same release', () => {
-    // `v2.1.0` and `2.1.0` are one build; a formatting difference must not
-    // re-fire a once-per-upgrade page on every launch.
-    const d = decideMultiSpawnIntro({
-      ...base, lastSeenVersion: '2.0.9', lastRunVersion: '2.0.9', multiSpawnIntroVersion: 'v2.1.0',
-    })
-    expect(d.show).toBe(false)
-    expect(d.reason).toBe('already-seen')
+  it('any stamp counts as seen, whatever its format and whichever build wrote it', () => {
+    // Presence, not comparison: a stamp is read only for whether it exists, so
+    // neither `v2.1.0` nor a stamp from another build can re-fire the page.
+    for (const stamp of ['v2.1.0', '2.1.0-rc.12', '2.0.9', '2.2.0']) {
+      const d = decideMultiSpawnIntro({
+        ...base, lastSeenVersion: '2.0.9', lastRunVersion: '2.0.9', multiSpawnIntroVersion: stamp,
+      })
+      expect(d, stamp).toEqual({ show: false, markSeen: false, reason: 'already-seen' })
+    }
   })
 
   it('NEVER shows on a fresh install — and stamps, so it does not ambush them later on this build', () => {
@@ -133,12 +136,42 @@ describe('decideMultiSpawnIntro — once per upgrade', () => {
     expect(d).toEqual({ show: false, markSeen: true, reason: 'no-configs' })
   })
 
-  it('shows again after a LATER upgrade — the marker is per-build, not once-ever', () => {
+  // The three below are the regression for the page coming back on every
+  // update: under the old per-build rule (stamp must EQUAL the running
+  // version) each of them returned { show: true, reason: 'due' }.
+  it('never shows again after a later upgrade: the marker is once-ever, not per-build', () => {
     const d = decideMultiSpawnIntro({
       currentVersion: '2.2.0', configCount: 2, lastSeenVersion: '2.1.0', lastRunVersion: '2.1.0',
       multiSpawnIntroVersion: '2.1.0',
     })
-    expect(d.show).toBe(true)
+    expect(d).toEqual({ show: false, markSeen: false, reason: 'already-seen' })
+  })
+
+  it('the owner case: answered on 2.1.1-beta.1, upgraded to 2.1.1-beta.2, does NOT see it again', () => {
+    const d = decideMultiSpawnIntro({
+      currentVersion: '2.1.1-beta.2', configCount: 5, channel: 'beta',
+      lastSeenVersion: '2.1.1-beta.1', lastRunVersion: '2.1.1-beta.1',
+      multiSpawnIntroVersion: '2.1.1-beta.1',
+    })
+    expect(d).toEqual({ show: false, markSeen: false, reason: 'already-seen' })
+  })
+
+  it('the stable path: offered on 2.1.0, upgraded to 2.1.1, does NOT see it again', () => {
+    const d = decideMultiSpawnIntro({
+      currentVersion: '2.1.1', configCount: 3, channel: 'stable',
+      lastSeenVersion: '2.1.0', lastRunVersion: '2.1.0',
+      multiSpawnIntroVersion: '2.1.0',
+    })
+    expect(d).toEqual({ show: false, markSeen: false, reason: 'already-seen' })
+  })
+
+  it('no stamp yet on this build (the app closed while the page was up): shows again', () => {
+    // Skip and Continue are the only ways out, and both stamp. An app closed
+    // with the page still open has no stamp, so the next start offers it again.
+    const d = decideMultiSpawnIntro({
+      currentVersion: '2.1.1', configCount: 3, lastSeenVersion: '2.1.1', lastRunVersion: '2.1.1',
+    })
+    expect(d).toEqual({ show: true, markSeen: false, reason: 'due' })
   })
 
   it('a build with no version define shows nothing and stamps nothing', () => {
@@ -312,6 +345,17 @@ describe('MultiSpawnStartupPage — the real page', () => {
     expect(Array.from(container.querySelectorAll('[data-testid="multi-spawn-startup-group"]'))
       .map((g) => g.getAttribute('data-group-name'))).toEqual(['Servers', 'Ungrouped'])
     expect(q('[data-testid="multi-spawn-startup-note"]')!.textContent).toContain('Skipping is safe.')
+  })
+
+  it('the subtitle says what Multi Spawn does without claiming it is new in this update', () => {
+    // The page can come up on a build that did not bring Multi Spawn in (an
+    // app closed with the page open, then updated), so the copy must hold on
+    // whichever build shows it.
+    CONFIG.configs = [cfg('a')]
+    render()
+    const subtitle = q('h1')!.nextElementSibling as HTMLElement
+    expect(subtitle.textContent).toContain('Launch several copies of a saved config at once.')
+    expect(container.textContent).not.toMatch(/new in this update/i)
   })
 
   it('no resuming sessions: NO strip, and no counts derived from them', () => {

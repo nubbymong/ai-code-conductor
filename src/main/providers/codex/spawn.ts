@@ -15,7 +15,10 @@ import { codexShellEnv, CMD_UNSAFE_PATH_RE } from './cli-runner'
 import { CODEX_CONVERSATION_ID_RE, codexFolderIdentity, resolveCodexResume } from './rollout-lookup'
 import { codexHookCommand, codexHookConfigArgs, codexPlainWrapperDir, codexLocalAppData, verifyPlainCodexHookWrapper, CODEX_HOOK_FILE_ENV, CODEX_HOOK_SCRIPT, CODEX_HOOK_WRAPPER } from './hooks'
 import { codexExtraArgsProblem, codexExtraArgWords } from '../../../shared/extra-args'
-import { logWarn } from '../../debug-logger'
+import { logInfo, logWarn } from '../../debug-logger'
+import { isPlainScriptFile, isRealScriptFolder, deployFailedThisRun } from '../../script-deploy'
+import { checkDeployedScript, scriptFolderRefusal } from '../../script-folders'
+import { findOnPosixPath } from '../../login-shell'
 
 /** The two forms a Codex install puts on PATH on Windows: `listed`, the ones
  *  PATHEXT lists, in its order (Windows' own default when it is unset), as a
@@ -169,8 +172,8 @@ export interface NodeExeLookup {
  * no process started; a folder that does not answer is asked nothing more in
  * that lookup (as resolveCodexBinary). Kept for later lookups under the same
  * PATH. None found: null, never the bare name, which would be looked up
- * outside the folders PATH names in full; the launch refuses with
- * PICKER_NODE_NOT_ON_PATH.
+ * outside the folders PATH names in full; the launch then skips the resume
+ * list (pickerNodeFor).
  *
  * macOS and Linux: bare 'node' works under a PTY (execvp looks PATH up), but
  * an app started from Finder or the Dock has launchd's minimal PATH, so the
@@ -216,9 +219,23 @@ export function resolveNodeExe(lookup: NodeExeLookup = {}): string | null {
   return null
 }
 
-/** What a launch through the resume list says on Windows when no node.exe is
- *  in a folder PATH names in full: it starts nothing. */
-export const PICKER_NODE_NOT_ON_PATH = 'The resume list needs node, which was not found in a folder PATH names (node.exe)'
+/**
+ * The node a launch's resume list can run on, with `env` (the launch's own
+ * environment), or null when there is none, and the session starts Codex
+ * directly. resolveNodeExe's answer, except off Windows when the login shell
+ * named no node: the PTY then starts the bare name, which execvp looks up in
+ * `env`'s PATH only, so a PATH with no node in its absolute folders
+ * (findOnPosixPath) gives none.
+ */
+export function pickerNodeFor(env: Readonly<Record<string, string | undefined>>, platform: NodeJS.Platform = process.platform): string | null {
+  const exe = resolveNodeExe({ env, platform })
+  if (exe !== 'node' || platform === 'win32') return exe
+  return findOnPosixPath('node', env.PATH ?? '') ? exe : null
+}
+
+/** What the log says when a launch through the resume list starts Codex
+ *  directly because no node was found to run the list. */
+export const CODEX_RESUME_LIST_SKIPPED_NO_NODE = 'Node.js was not found, so the resume list was skipped and Codex starts directly'
 
 /** Test-only: reset the node.exe resolution cache. */
 export function __resetNodeExeCache(): void {
@@ -228,10 +245,26 @@ export function __resetNodeExeCache(): void {
 
 /**
  * Resolve the deployed `codex-resume-picker.js` path. Returns null when the
- * script is not deployed yet (first-boot race). Mirrors `getResumePickerPath`
- * in `src/main/pty-manager.ts`. Uses static import for `getResourcesDirectory`
- * matching the existing project convention (see `claude/statusline.ts`); unit
- * tests intercept via `vi.mock('../../ipc/setup-handlers', ...)`.
+ * script is not deployed yet (first-boot race). Also null, with a warning in
+ * the log, when what sits there, or at the helper lib the picker loads
+ * (`scripts/lib/codex-resume-picker-lib.js`), is not a plain file with one
+ * name that only this user can change (isPlainScriptFile: a directory, a
+ * link or a hard link, whatever left it there, a deploy that failed
+ * included; on macOS and Linux also a file that is not this user's or that
+ * group or others may write to), or when the folder that lib
+ * is loaded from (`scripts/lib`) is there but is not a real folder
+ * (isRealScriptFolder: a directory that is not a link and resolves to its own
+ * place), or when the picker, or its helper lib, is not in a scripts folder
+ * made this user's alone in this run (script-folders.ts checkDeployedScript),
+ * or when the lib folder is there but was not made this user's alone in this
+ * run, with or without the helper lib in it (scriptFolderRefusal), or when
+ * that folder is there with no helper lib in it because this run's deploy of
+ * the lib failed (deployFailedThisRun: the picker, which always loads it,
+ * would stop before Codex starts): the launch then starts Codex directly, as
+ * when the picker is not deployed, and never runs that object.
+ * Uses static import for `getResourcesDirectory` matching the existing project
+ * convention (see `claude/statusline.ts`); unit tests intercept via
+ * `vi.mock('../../ipc/setup-handlers', ...)`.
  */
 export function getCodexResumePickerPath(): string | null {
   let resDir: string
@@ -241,7 +274,43 @@ export function getCodexResumePickerPath(): string | null {
   if (!resDir) return null
   try {
     const scriptPath = path.join(resDir, 'scripts', 'codex-resume-picker.js')
-    if (fs.existsSync(scriptPath)) return scriptPath
+    const libDir = path.join(resDir, 'scripts', 'lib')
+    const libPath = path.join(libDir, 'codex-resume-picker-lib.js')
+    const present = (p: string): boolean => {
+      try { fs.lstatSync(p); return true } catch { return false }
+    }
+    const refused = [scriptPath, libDir, libPath].find((p) => present(p) && !(p === libDir ? isRealScriptFolder(p) : isPlainScriptFile(p)))
+    if (refused) {
+      const what = refused === libDir ? 'the scripts/lib folder in the resources folder is not a real folder' : `${path.basename(refused)} in the resources folder is not a plain file with one name that only this user can change`
+      logWarn(`[codex-spawn] ${what}; the resume list is skipped and Codex starts directly`)
+      return null
+    }
+    if (!present(scriptPath)) return null
+    // What runs: the picker, and the helper lib it loads when there is one;
+    // each only from a scripts folder made this user's alone in this run.
+    // The picker always loads its helper lib, so a lib folder with no helper
+    // lib in it because this run's deploy of the lib failed would stop the
+    // launch: Codex then starts directly instead.
+    const libThere = present(libDir)
+    for (const p of [scriptPath, ...(libThere ? [libPath] : [])]) {
+      const check = checkDeployedScript(p)
+      if (check.ok) continue
+      let why: string
+      if (!check.absent) why = check.why
+      else if (p === libPath && deployFailedThisRun(p)) why = `${path.basename(p)} in the resources folder could not be brought up to date this run`
+      else continue
+      logWarn(`[codex-spawn] ${why}; the resume list is skipped and Codex starts directly`)
+      return null
+    }
+    // The picker loads its helper from the lib folder whatever that folder
+    // holds, so a lib folder that is there must have passed this run's check
+    // even when no helper lib is in it.
+    const libFolder = libThere ? scriptFolderRefusal(libDir) : null
+    if (libFolder) {
+      logWarn(`[codex-spawn] the lib folder in the resources folder ${libFolder}; the resume list is skipped and Codex starts directly`)
+      return null
+    }
+    return scriptPath
   } catch { /* ignore */ }
   return null
 }
@@ -693,8 +762,42 @@ function buildCodexSpawnCommand(opts: SpawnOptions): ProviderSpawnCommand {
         target = path.join(plainDir, CODEX_HOOK_WRAPPER)
       }
     }
+    // What a hook event runs: the target, and on Windows also the forwarder
+    // the wrapper starts from its own folder. Each must be a plain file with
+    // one name that only this user can change (isPlainScriptFile). Anything
+    // else there (a directory, a link
+    // or a hard link, whatever left it there, a deploy that failed included)
+    // is refused with a warning naming the file, and the launch starts
+    // without hooks, as when the forwarder is not deployed; nothing there at
+    // all is that not-deployed case, said by the launch's hooks-off log line.
     let deployed = false
-    try { deployed = !!target && fs.statSync(target).isFile() } catch { deployed = false }
+    if (target) {
+      const runs = win32 ? [target, path.join(path.dirname(target), CODEX_HOOK_SCRIPT)] : [target]
+      const present = (p: string): boolean => {
+        try { fs.lstatSync(p); return true } catch { return false }
+      }
+      const refused = runs.find((p) => present(p) && !isPlainScriptFile(p))
+      if (refused) logWarn(`[codex-spawn] ${path.basename(refused)} for the app's hooks is not a plain file with one name that only this user can change; this launch starts without hooks`)
+      deployed = !refused && runs.every((p) => isPlainScriptFile(p))
+      // And only from the scripts folder made this user's alone in this run:
+      // the forwarder and its wrapper run from there, or (the npm shim route)
+      // their plain-path copies, which are judged against its bytes.
+      const folder = deployed && command && scriptsDir ? scriptFolderRefusal(scriptsDir) : null
+      if (folder) {
+        logWarn(`[codex-spawn] the scripts folder in the resources folder ${folder}; this launch starts without hooks`)
+        deployed = false
+      }
+      // Nor when this run's deploy of the forwarder, or on Windows of its
+      // wrapper, failed (deployFailedThisRun): what is in the scripts folder
+      // then is not known to be the app's copy.
+      const stale = deployed && command && scriptsDir
+        ? (win32 ? [CODEX_HOOK_WRAPPER, CODEX_HOOK_SCRIPT] : [CODEX_HOOK_SCRIPT]).find((n) => deployFailedThisRun(path.join(scriptsDir, n)))
+        : undefined
+      if (stale) {
+        logWarn(`[codex-spawn] ${stale} for the app's hooks could not be brought up to date this run; this launch starts without hooks`)
+        deployed = false
+      }
+    }
     if (command && deployed) {
       flags.push(...codexHookConfigArgs(command))
       setOwned(env, CODEX_HOOK_FILE_ENV, hookFile, win32)
@@ -777,7 +880,15 @@ function buildCodexSpawnCommand(opts: SpawnOptions): ProviderSpawnCommand {
   // session still launches. Mirrors Claude's pty-manager.ts:890-895 fallback.
   if (opts.useResumePicker) {
     const pickerScript = getCodexResumePickerPath()
-    if (pickerScript) {
+    // Bare 'node' fails under node-pty/ConPTY on Windows (no PATH lookup):
+    // the full node.exe path, from the folders this session's own PATH
+    // names (resolveNodeExe), looked up for the platform this launch is
+    // built for. No node to run the list (pickerNodeFor): Codex starts
+    // directly, below, as when the picker is not deployed, no pick folder is
+    // made, and the log says why.
+    const nodeExe = pickerScript ? pickerNodeFor(env, process.platform) : null
+    if (pickerScript && !nodeExe) logInfo(`[codex-spawn] ${opts.sessionId}: ${CODEX_RESUME_LIST_SKIPPED_NO_NODE}`)
+    if (pickerScript && nodeExe) {
       // The picker starts the same proven executable (never its own lookup),
       // through cmd.exe under the same rules; refuse here what it would. Its
       // line may resume a conversation (`resume <id>` before the flags). The
@@ -785,12 +896,6 @@ function buildCodexSpawnCommand(opts: SpawnOptions): ProviderSpawnCommand {
       // npm launcher in a network folder, it refuses that with the reason.
       const pickerFlags = fitCmdLine(['resume', '00000000-0000-0000-0000-000000000000'])
       if (viaCmdExe) codexCmdExeTarget(executable, pickerFlags, env)
-      // Bare 'node' fails under node-pty/ConPTY on Windows (no PATH lookup):
-      // the full node.exe path, from the folders this session's own PATH
-      // names (resolveNodeExe), looked up for the platform this launch is
-      // built for. None there: nothing starts, and its pick folder is not made.
-      const nodeExe = resolveNodeExe({ env, platform: process.platform })
-      if (!nodeExe) throw new Error(PICKER_NODE_NOT_ON_PATH)
       const pickerEnv = { ...env }
       setOwned(pickerEnv, 'CCC_CODEX_EXECUTABLE', executable, win32)
       // P3.5 (rows 32, 38): where the picker records each decision it makes,
@@ -828,7 +933,7 @@ function buildCodexSpawnCommand(opts: SpawnOptions): ProviderSpawnCommand {
       if (openElsewhere.length > 0) setOwned(pickerEnv, CODEX_OPEN_ELSEWHERE_ENV, openElsewhere.join(','), win32)
       return { cmd: nodeExe, args: [pickerScript, ...pickerFlags], env: pickerEnv, ...(pickFile && pickFolder ? { pickFile, pickFolder } : {}), hooksInstalled }
     }
-    // Fallthrough: picker missing, spawn codex directly.
+    // Fallthrough: picker missing, or no node to run it: spawn codex directly.
   }
 
   if (viaCmdExe) {

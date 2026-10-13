@@ -356,7 +356,7 @@ describe('the Allow Multi Spawn grandfathering counts the restore-time tally, ne
 })
 
 describe('main/index.ts wires window-all-closed', () => {
-  it('delegates to onAllWindowsClosed with the platform, app.quit and killAllPty', async () => {
+  it('delegates to onAllWindowsClosed with the platform, app.quit, and a sweep of killAllPty and the setup terminal', async () => {
     const marker = "app.on('window-all-closed', "
     const start = INDEX.indexOf(marker)
     expect(start, marker).toBeGreaterThan(-1)
@@ -364,13 +364,19 @@ describe('main/index.ts wires window-all-closed', () => {
     const cb = block(INDEX, start + marker.length).text
     const onAllWindowsClosed = vi.fn()
     const killAllPty = vi.fn()
+    // The first-run Claude Code setup terminal is main's own, outside
+    // pty-manager (setup-terminal-quit-teardown.test.ts runs the real kill).
+    const killCliSetupPty = vi.fn()
     const quit = vi.fn()
-    const fn = run<() => void>(cb, { onAllWindowsClosed, killAllPty, process: { platform: 'darwin' }, app: { quit } })
+    const fn = run<() => void>(cb, { onAllWindowsClosed, killAllPty, killCliSetupPty, process: { platform: 'darwin' }, app: { quit } })
     fn()
     expect(onAllWindowsClosed).toHaveBeenCalledTimes(1)
     const deps = onAllWindowsClosed.mock.calls[0][0] as { platform: string; quit: () => void; endStragglerPtys: () => void }
     expect(deps.platform).toBe('darwin')
-    expect(deps.endStragglerPtys).toBe(killAllPty)
+    expect(killAllPty).not.toHaveBeenCalled()
+    deps.endStragglerPtys()
+    expect(killAllPty).toHaveBeenCalledTimes(1)
+    expect(killCliSetupPty).toHaveBeenCalledTimes(1)
     deps.quit(); expect(quit).toHaveBeenCalledTimes(1)
     await flush()
   })

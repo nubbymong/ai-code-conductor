@@ -30,6 +30,8 @@ const CLAUDE_ONLY = [
   'tip.effort-level', 'tip.ssh-config', 'tip.ssh-account-tools', 'tip.artifacts-button',
   'tip.transparency.statusline-injection', 'tip.dynamic-workflows', 'tip.ssh-persistence', 'tip.remote-resumable',
   'tip.container-runtime', 'tip.multi-account', 'tip.config-edit-guard',
+  // 2.1.1-beta.3: Claude Code found through the PowerShell profile; SSH (Claude only) attention.
+  'tip.claude-powershell-profile', 'tip.remote-attention',
 ]
 const CODEX_ONLY = [
   'tip.codex-sessions', 'tip.codex-accounts-reviewer', 'tip.codex-restart-pick', 'tip.codex-check-sign-in', 'tip.codex-chatgpt-sign-in',

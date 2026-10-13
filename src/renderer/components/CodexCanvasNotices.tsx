@@ -5,8 +5,11 @@ import { DismissButton } from './ui/DismissButton'
 import type { CanvasSessionGuidance, SubmitNotDeliveredReason } from '../../shared/types'
 
 /**
- * The Agent Canvas page's one-line notices for a Codex session (WP2 PR 4,
- * P4.1, row 51). Nothing for any other session.
+ * The Agent Canvas page's one-line notices (WP2 PR 4, P4.1, row 51). The
+ * first two are a Codex session's only; the third, a filed review or verdict
+ * that did not reach the agent, is shown for every session (a Claude Code
+ * session's marker dropped untyped is reported the same way, by main's
+ * canvas/claude-marker-typing.ts), in words that name no provider.
  *
  *  - A canvas skill that could not be put in the account's own skills folder
  *    (section 10 question 5, answered C), which and why, from main's own
@@ -18,9 +21,9 @@ import type { CanvasSessionGuidance, SubmitNotDeliveredReason } from '../../shar
  *    Codex once its prompt reads ready on screen, not at the turn's end. Read
  *    from the hook stream (no event seen for this session), never from
  *    Codex's own trust record.
- *  - A filed review or verdict Codex did not get (the submit primitive's
- *    "not delivered"), with the line it was and why, shown with the canvas it
- *    was filed on, until dismissed. Kept in codexMarkerNoticeStore for the
+ *  - A filed review or verdict the agent did not get (main's "not
+ *    delivered"), with the line it was and why, shown with the canvas it was
+ *    filed on, until dismissed. Kept in codexMarkerNoticeStore for the
  *    renderer's life, so one that fails while this page is closed is shown
  *    when the canvas is open again (review A-1).
  */
@@ -51,14 +54,17 @@ function missingSkillsLine(g: MissingSkills): string {
   return `This Codex session has the canvas tools without ${which}: ${why}.`
 }
 
+/** After "The agent did not get <line>:". The same words for every session:
+ *  a Claude Code session's dropped marker uses busy-timeout, session-gone and
+ *  refused-text. */
 const UNDELIVERED_WORDS: Record<SubmitNotDeliveredReason, string> = {
-  'busy-timeout': 'Codex stayed busy, or its prompt was not ready, for two minutes',
-  'prompt-on-screen': 'Codex was showing a question or a prompt',
-  'too-tall': 'the line is taller than the Codex prompt at this pane size',
+  'busy-timeout': 'it stayed busy, or its prompt was not ready, for two minutes',
+  'prompt-on-screen': 'it was showing a question or a prompt',
+  'too-tall': 'the line is taller than its prompt at this pane size',
   // Not confirmed on screen: most often taken back, but with no reading of
   // the screen nothing was taken back, so the line may still be in the prompt.
-  'not-drawn': 'the app could not confirm it in Codex\'s prompt. If it is still there, send it or clear it in the session',
-  'refused-text': 'the line holds characters the Codex prompt cannot take',
+  'not-drawn': 'the app could not confirm it in the agent\'s prompt. If it is still there, send it or clear it in the session',
+  'refused-text': 'the line holds characters its prompt cannot take',
   'session-gone': 'the session ended or restarted first, or the line could not be typed into it',
 }
 
@@ -132,9 +138,10 @@ export default function CodexCanvasNotices({ sessionId, canvasId }: { sessionId:
   // page never depends on that order.
   useEffect(() => { setupCodexMarkerNoticeListener() }, [])
 
-  if (!isCodex) return null
-  const missing = guidance && guidance.guidance === 'tools-only' ? guidance : null
-  const noTurnEvents = turnEvents === false
+  // The skills and turn-event lines are a Codex session's only; a line that
+  // did not reach the agent shows for any session.
+  const missing = isCodex && guidance && guidance.guidance === 'tools-only' ? guidance : null
+  const noTurnEvents = isCodex && turnEvents === false
   if (!missing && !noTurnEvents && undelivered.length === 0) return null
 
   return (
@@ -152,7 +159,7 @@ export default function CodexCanvasNotices({ sessionId, canvasId }: { sessionId:
       {undelivered.map((u) => (
         <div key={u.line} data-testid="codex-canvas-undelivered" className="flex items-center gap-2 px-3.5 py-1.5 text-[12px]" style={strip}>
           <span className="min-w-0 truncate" style={{ color: 'var(--text-primary)' }}>
-            {`Codex did not get "${u.line}": ${UNDELIVERED_WORDS[u.reason] ?? 'it was not sent'}.${undeliveredTail(u.reason)}`}
+            {`The agent did not get "${u.line}": ${UNDELIVERED_WORDS[u.reason] ?? 'it was not sent'}.${undeliveredTail(u.reason)}`}
           </span>
           <DismissButton
             className="ml-auto"

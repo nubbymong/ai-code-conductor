@@ -35,6 +35,7 @@ vi.mock('../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logError: vi.f
 vi.mock('../../src/main/data-paths', () => ({ getDataDirectory: () => 'C:/fake/data' }))
 vi.mock('../../src/main/account-web/sign-in', () => ({
   cancelSignIn: vi.fn(), clearWebSession: vi.fn(), getSignInState: vi.fn(), runSignIn: vi.fn(), discardSignInRun: vi.fn(),
+  isClaudeWebClearing: vi.fn(() => false),
 }))
 vi.mock('../../src/main/account-web/artifacts', () => ({ closeArtifacts: vi.fn(), openArtifacts: vi.fn() }))
 vi.mock('../../src/main/account-web/claude-cli-auth', () => ({
@@ -54,6 +55,8 @@ vi.mock('../../src/main/account-web/session-store', () => ({
   setAuthBrowser: vi.fn(),
   setAuthMethod: vi.fn(),
   viewFor: vi.fn((profileId: string) => ({ profileId, status: 'active', expiresAt: 4102444800000 })),
+  getWebSession: vi.fn(() => undefined),
+  refreshWebSessionExpiry: vi.fn(() => false),
   claudeWebStoreIsNewer: () => false, NEWER_WEB_STORE_REASON: 'written by a newer version of the app',
 }))
 

@@ -29,7 +29,7 @@ here** — opus is for `StartLoop` execution, not planning.
 Resolve the set first and print it, so the scope is visible before any agent runs:
 
 ```
-gh issue list --repo nubbymong/claude-command-center --state open --limit 200 \
+gh issue list --repo nubbymong/ai-code-conductor --state open --limit 200 \
   --json number,title,labels
 ```
 Filter to the scope in code, exclude anything already carrying `loop-in-progress`
@@ -72,7 +72,7 @@ Each agent returns this record (enforce it with a schema):
 
 The per-agent prompt (adapt, keep the spine):
 
-> You are doing a PREMISE REVIEW of GitHub issue #N in nubbymong/claude-command-center,
+> You are doing a PREMISE REVIEW of GitHub issue #N in nubbymong/ai-code-conductor,
 > to prepare it for possible autonomous execution. Read it
 > (`gh issue view N --repo … --json title,body,labels,comments`), then GROUND it in
 > the code with Grep/Glob/Read on the files and symbols it names — confirm the

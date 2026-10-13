@@ -65,24 +65,32 @@ export const SENTINEL_SEPARATOR = ' \u00b7 '
 
 /** Each assistant in use and the version the panel names for it: the one
  *  installed at its last completed check (an update not analysed to the end
- *  yet is not named; a downgrade is, with no analysis; fixer 11). */
+ *  yet is not named; a downgrade is, with no analysis; fixer 11). One with
+ *  no completed check yet says so ("Codex not checked yet"). */
 export function sentinelVersionParts(snap: SentinelStateSnapshot | null, scope: SentinelScope = CLAUDE_ONLY_SCOPE): string[] {
   const s = shown(scope)
   const out: string[] = []
-  if (s.claudeOn) out.push(`CC ${snap?.lastSeenCcVersion ?? 'unknown'}`)
-  if (s.codexOn) out.push(`Codex ${snap?.lastSeenCodexVersion ?? 'unknown'}`)
+  if (s.claudeOn) out.push(snap?.lastSeenCcVersion ? `CC ${snap.lastSeenCcVersion}` : 'Claude Code not checked yet')
+  if (s.codexOn) out.push(snap?.lastSeenCodexVersion ? `Codex ${snap.lastSeenCodexVersion}` : 'Codex not checked yet')
   return out
 }
 
 /** What the all-clear says is compatible: "Claude Code 2.1.0", "Codex
- *  0.155.1", or both joined; and whether that reads as plural. */
+ *  0.155.1", or both joined; and whether that reads as plural. Only an
+ *  assistant with a completed check is named: one not checked yet is never
+ *  called compatible, and with none checked the text is empty (the panel
+ *  and the report then say SENTINEL_NOTHING_CHECKED instead). */
 export function sentinelCompatibleSubject(snap: SentinelStateSnapshot | null, scope: SentinelScope = CLAUDE_ONLY_SCOPE): { text: string; plural: boolean } {
   const s = shown(scope)
   const names: string[] = []
-  if (s.claudeOn) names.push(`Claude Code ${snap?.lastSeenCcVersion ?? 'unknown'}`)
-  if (s.codexOn) names.push(`Codex ${snap?.lastSeenCodexVersion ?? 'unknown'}`)
+  if (s.claudeOn && snap?.lastSeenCcVersion) names.push(`Claude Code ${snap.lastSeenCcVersion}`)
+  if (s.codexOn && snap?.lastSeenCodexVersion) names.push(`Codex ${snap.lastSeenCodexVersion}`)
   return { text: names.join(' and '), plural: names.length > 1 }
 }
+
+/** Said in place of the all-clear when no assistant in use has a completed
+ *  check: no verdict, and how to get one. */
+export const SENTINEL_NOTHING_CHECKED = 'No check has completed yet, so there is no verdict. Sentinel checks at startup, or use Re-run.'
 
 /** The line shown while an analysis runs: whose update it is. */
 export function sentinelAnalyzingText(snap: SentinelStateSnapshot | null): string {
@@ -153,14 +161,18 @@ export function formatFindingText(finding: SentinelFinding): string {
 }
 
 /** The whole report as copyable plain text: header + each breaking change, or a
- *  clean all-clear line. `scope` (P3.9): the assistants in use. */
+ *  clean all-clear line. `scope` (P3.9): the assistants in use. O8: the header
+ *  reads the severity, as the panel's count line and each item's prefix do: a
+ *  report of compatibility notices only is not headed "Breaking Changes". */
 export function formatSentinelReportText(snap: SentinelStateSnapshot | null, scope: SentinelScope = CLAUDE_ONLY_SCOPE): string {
   const breaking = selectBreakingFindings(snap)
   const when = snap?.lastAnalysisAt ? new Date(snap.lastAnalysisAt).toISOString() : 'no analysis yet'
-  const out: string[] = ['Sentinel: Breaking Changes', [...sentinelVersionParts(snap, scope), when].join(SENTINEL_SEPARATOR), '']
+  const noticesOnly = breaking.length > 0 && !breaking.some((f) => f.severity === 'high')
+  const heading = noticesOnly ? 'Sentinel: Compatibility Notices' : 'Sentinel: Breaking Changes'
+  const out: string[] = [heading, [...sentinelVersionParts(snap, scope), when].join(SENTINEL_SEPARATOR), '']
   if (breaking.length === 0) {
     const subject = sentinelCompatibleSubject(snap, scope)
-    out.push(`No breaking changes. ${subject.text} ${subject.plural ? 'are' : 'is'} compatible.`)
+    out.push(subject.text ? `No breaking changes. ${subject.text} ${subject.plural ? 'are' : 'is'} compatible.` : SENTINEL_NOTHING_CHECKED)
   } else {
     for (const f of breaking) out.push(formatFindingText(f), '')
   }

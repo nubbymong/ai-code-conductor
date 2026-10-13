@@ -41,6 +41,7 @@ import { buildClaudeLaunchCommand, claudeAgentsObject, claudeLaunchProgram, reso
 import { ensureCompanionDir, nodeFsCompanionDeps } from './logging/companion-dir'
 import { forgetSessionName } from './logging/session-name-sidecar'
 import { logInfo, logDebug, logError, logWarn } from './debug-logger'
+import { checkDeployedScript } from './script-folders'
 import { bundledConptyChoice, bundledConptyFailed, SYSTEM_CONPTY_OPTIONS, BUNDLED_EARLY_EXIT_MS, type ConptySpawnOptions } from './bundled-conpty'
 import { guardPtyIo, type PtyIoSide } from './pty-input-guard'
 import { writeCliSetupPty, getResourcesDirectory } from './ipc/setup-handlers'
@@ -50,14 +51,14 @@ import { getConductorMcpPort, issueMcpSessionToken } from './conductor-mcp-serve
 import { conductorToolsMasterOn } from './conductor-tools-switch'
 import { buildSshArgs, buildSshExecArgs } from './ssh-args'
 import { getRemoteMcpPort } from './ssh-remote-port'
+import { partnerFolderLine, partnerPromptTail, isPartnerShellPrompt, partnerRecentOutput, partnerRecentText, PARTNER_BARE_PROMPT_RE, isPartnerUserInput } from './ssh-partner-folder'
 import { resolveHostColorScheme, colorFgBgEnvToken } from './providers/host-color-scheme'
-import { legacyCliPin } from './legacy-version-manager'
 import { getProvider } from './providers'
 import { isSshCapable } from './providers/types'
 import type { TelemetrySource, SessionRunScreen, SpawnOptions, SshCapableProvider } from './providers/types'
 import { resolveCwd, isHomeOrAncestor } from './path-utils'
 import { AGENTS_ENV, agentsEnvValue, agentsRef, buildTerminalLaunchLine } from './terminal-launch-line'
-import { findOnWindowsPathAsync } from './windows-programs'
+import { findOnWindowsPath, findOnWindowsPathAsync } from './windows-programs'
 import { windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
 import { isShFamilyShell, localSessionShell } from './login-shell'
 import { dispatchSSHStatuslineUpdate, cleanupStatusFile } from './statusline-watcher'
@@ -79,13 +80,14 @@ import { designatedWorktreeDir } from './canvas/canvas-worktree'
 import { forgetSessionForCanvas, setCanvasCodexConversationLookup } from './canvas/canvas-session-link'
 import { forgetCanvasMarkers } from './canvas/canvas-marker-delivery'
 import { MARKER_FALLBACK_FLUSH_MS } from './canvas/canvas-marker-queue'
+import { queueClaudeMarkerLine } from './canvas/claude-marker-typing'
 import { prepareCodexCanvasLaunch } from './canvas/codex-canvas-launch'
 import { registerCodexCanvasRoots } from './canvas/codex-canvas-roots'
 import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from './canvas/codex-guidance'
 import { disposeSession as disposeCodexReviewUsage } from './codex-review-usage'
 import { getProfileConfigDir, setupProfileLinks, getPrimaryProfileId, isValidProfileId, backupProfileHomeToCanonical, syncPrimaryCredentialsWithGlobal, withProfileHome, checkProfileCredentialFolders, MANAGED_LAUNCH_REFUSAL } from './account-profiles'
 export { withProfileHome } from './account-profiles'
-import { gateManagedLaunchDirs, recordManagedLaunchPreflight, displayPath } from './managed-launch-diagnostics'
+import { gateManagedLaunchDirs, gatePickerSiblingDirs, recordManagedLaunchPreflight, displayPath } from './managed-launch-diagnostics'
 import { stripSpoofableText } from '../shared/safe-text'
 import type { ProjectGateResult } from '../shared/providers'
 import { captureClaudeAccount, clearClaudeAccount, getAccountIdentity, pushAccountIdentity, startWatchingAccountIdentity, stopWatchingAccountIdentity, getWatchedProfileId } from './claude-account-identity'
@@ -95,6 +97,8 @@ import { readConfig, getConfigDir } from './config-manager'
 import { getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
 import { getWatchdogManager, clampAnsiChunk } from './watchdog/watchdog-manager'
 import { clearCodexIdleAttention } from './codex-idle-attention'
+import { SSH_ATTENTION_OSC_PREFIX, SSH_ATTENTION_MAX_PAYLOAD, parseSshAttentionPayload, deliverRemoteAttention } from './ssh-attention'
+import type { HookEvent } from '../shared/hook-types'
 import { createColorQueryResponder, terminalReplyColors } from './terminal-query-responder'
 
 import * as path from 'path'
@@ -249,6 +253,12 @@ export interface SshFlowController {
    *  'connection' reason so the overlay can offer Retry rather than sitting on
    *  a dead "connecting…". A no-op once claude-running/shell-only/skipped. */
   handlePtyExit: () => void
+  /** #86: called by writePty with every write into the session. The user's
+   *  input into an SSH session's partner (isPartnerUserInput: not the
+   *  terminal's own replies to the remote) gives its folder line up for this
+   *  connection, so the line never lands on a line the user is typing. Nothing
+   *  else in the flow reads it. */
+  noteUserInput: (data: string) => void
   /** Returns the latest emitted state, used by the renderer overlay
    * on mount to catch up if it missed earlier emits. */
   getState: () => { state: SshFlowState; info?: string }
@@ -1498,6 +1508,24 @@ function claudeSshSurface(): SshCapableProvider {
   return provider
 }
 
+/** What an SSH start says on Windows when no ssh.exe is in a folder PATH
+ *  names in full. */
+export const SSH_NOT_ON_PATH = 'ssh was not found in a folder PATH names (ssh.exe). Add the folder that holds ssh.exe to your PATH as a full path, then restart the app.'
+
+/** The ssh every SSH start runs (a session, its End exec, the liveness
+ *  probe), asked for at the start itself. On Windows: the full path of the
+ *  first ssh.exe in the folders PATH names in full (findOnWindowsPath, the
+ *  rule the app's other programs follow there), never a bare name; with none
+ *  there it THROWS SSH_NOT_ON_PATH and nothing starts. Elsewhere `ssh` by
+ *  name from PATH, as before. The walk reads PATH's folders in order on this
+ *  thread, as the system's own search for a bare name did at the start. */
+export function sshProgram(platform: NodeJS.Platform = os.platform(), env: NodeJS.ProcessEnv = process.env): string {
+  if (platform !== 'win32') return 'ssh'
+  const found = findOnWindowsPath(['ssh.exe'], env)
+  if (!found) throw new Error(SSH_NOT_ON_PATH)
+  return found
+}
+
 export function endSshRemote(sessionId: string, fallbackTarget?: SshEndTarget): Promise<SshEndRemoteOutcome> {
   return endSshRemoteDetailed(sessionId, fallbackTarget).then((r) => r.outcome)
 }
@@ -1535,7 +1563,6 @@ export function endSshRemoteDetailed(sessionId: string, fallbackTarget?: SshEndT
   if (windowsHost && !filesOnly && isContainerRuntime(target.runtime)) {
     logWarn(`[ssh] ${sessionId}: end-remote on a Windows host takes no container step; only the session's files are removed`)
   }
-  const bin = os.platform() === 'win32' ? 'ssh.exe' : 'ssh'
   const hasSudoPassword = Boolean(target.sudoPassword)
   // A rootful container with no saved sudo password: the kill segment probes
   // sudo and prints this End's sentinel when it cannot elevate (see above).
@@ -1612,7 +1639,7 @@ export function endSshRemoteDetailed(sessionId: string, fallbackTarget?: SshEndT
         // here must resolve 'failed' like every other failure, never reject
         // the End promise the IPC handler returns and the live lanes await.
         const args = buildSshExecArgs(target, remoteCommand, os.platform(), { batchMode: false })
-        child = pty.spawn(bin, args, { name: 'xterm-256color', cols: 120, rows: 30, cwd: os.homedir(), env: process.env as Record<string, string> })
+        child = pty.spawn(sshProgram(), args, { name: 'xterm-256color', cols: 120, rows: 30, cwd: os.homedir(), env: process.env as Record<string, string> })
         // P3.15 rounds 3 and 4 (K1, P4): an error on its input or output never quits the app.
         guardPtyIo(child, logHelperPtyIo(`[ssh] ${sessionId}: end-remote (password)`))
       } catch (err) {
@@ -1668,11 +1695,29 @@ export function endSshRemoteDetailed(sessionId: string, fallbackTarget?: SshEndT
     try {
       const args = buildSshExecArgs(target, remoteCommand, os.platform())
       logInfo(`[ssh] ${sessionId}: ${what} over a separate exec`)
-      const child = execFile(bin, args, { timeout: END_REMOTE_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
+      const child = execFile(sshProgram(), args, { timeout: END_REMOTE_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
         if (err) logInfo(`[ssh] ${sessionId}: end-remote exec exited non-zero (host was already gone, or refused key auth): ${err.message}`)
         else logInfo(`[ssh] ${sessionId}: end-remote exec completed`)
         resolve(settle(err ? 'failed' : 'completed', typeof stdout === 'string' ? stdout : String(stdout ?? '')))
       })
+      // F-QP-1: end the exec's input at once. The remote command never reads
+      // any, and execFile leaves the child's stdin an open pipe. On one Windows
+      // 11 client and host pair the exec did not finish while that pipe stayed
+      // open (the remote PowerShell, or the ssh/sshd pair carrying it, waited
+      // for the input to end; which one is not settled), so End ran to
+      // END_REMOTE_TIMEOUT_MS, said failed and could leave the session's files
+      // there. Closing it gives ssh, and so the remote, end-of-input.
+      // An error on that stream (the child already gone) is logged, never
+      // thrown: an unhandled stream error would take main down.
+      try {
+        const input = child.stdin
+        if (input) {
+          input.on('error', (e: Error) => logInfo(`[ssh] ${sessionId}: end-remote exec input closed with an error: ${e?.message ?? e}`))
+          input.end()
+        }
+      } catch (err) {
+        logInfo(`[ssh] ${sessionId}: end-remote exec input could not be closed: ${(err as Error)?.message ?? err}`)
+      }
       // Never let a stuck child keep a handle alive; execFile's own timeout also
       // covers this, but unref so it can't hold the process open.
       try { child.unref() } catch { /* noop */ }
@@ -1709,7 +1754,6 @@ export function probeTmuxLive(
   target: { username: string; host: string; port: number; password?: string },
   sessionIds: string[],
 ): Promise<DetachedRemoteLiveness> {
-  const bin = os.platform() === 'win32' ? 'ssh.exe' : 'ssh'
   const remoteCommand = buildTmuxListCommand()
   const unverified: DetachedRemoteLiveness = { outcome: 'unverified', liveSessionIds: [] }
   // Turn captured output into a result. `connected` is the sentinel test done by
@@ -1754,7 +1798,7 @@ export function probeTmuxLive(
         // Argv build INSIDE the try (adversarial posture, as in endSshRemote): a
         // sync throw here must resolve 'unverified', never escape the promise.
         const args = buildSshExecArgs(target, remoteCommand, os.platform(), { batchMode: false })
-        child = pty.spawn(bin, args, { name: 'xterm-256color', cols: 120, rows: 30, cwd: os.homedir(), env: process.env as Record<string, string> })
+        child = pty.spawn(sshProgram(), args, { name: 'xterm-256color', cols: 120, rows: 30, cwd: os.homedir(), env: process.env as Record<string, string> })
         // P3.15 rounds 3 and 4 (K1, P4): an error on its input or output never quits the app.
         guardPtyIo(child, logHelperPtyIo('[ssh] liveness probe (password)'))
       } catch (err) {
@@ -1787,7 +1831,7 @@ export function probeTmuxLive(
   return new Promise((resolve) => {
     try {
       const args = buildSshExecArgs(target, remoteCommand, os.platform())
-      execFile(bin, args, { timeout: LIVENESS_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
+      execFile(sshProgram(), args, { timeout: LIVENESS_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
         const raw = (stdout ?? '').toString()
         // A non-zero exit is NOT a failure here: `tmux ls` exits non-zero when no
         // server is running, yet the echo'd END sentinel still prints, so a
@@ -1829,58 +1873,169 @@ export function _getSshTargetForTest(sessionId: string): { username: string; hos
 //
 // We extract sentinels from each chunk before forwarding the cleaned data to
 // xterm, then dispatch the parsed JSON via statusline-watcher's existing pipeline.
+//
+// aicc_planning#93: the same stream carries the remote session's ATTENTION
+// events (ssh-attention.ts), written by the command hook the remote setup gives
+// Claude. They are taken out of what the terminal shows exactly like the
+// status sentinel, whatever they carry, and handed to the attention source only
+// when they carry this spawn's nonce and name this session.
 const SSH_OSC_PREFIX = '\x1b]9999;CMSTATUS='
 const SSH_OSC_TERMINATOR = '\x07'
-const MAX_OSC_BUFFER = 32 * 1024  // cap to prevent runaway memory on malformed streams
+/** The longest status payload taken as a sentinel. The remote shim writes
+ *  JSON.stringify of a status object of about twenty short fields and a few
+ *  usage buckets (ssh-shim.ts SSH_STATUSLINE_SHIM), about 1 to 2 KiB, so this
+ *  leaves ample room. It also bounds what is held for the next read. */
+const SSH_STATUS_MAX_PAYLOAD = 16 * 1024
 const sshOscBuffers = new Map<string, string>()
+
+/** The first status or attention sentinel at or after `from`, with the prefix
+ *  it opens with; null when there is none. */
+function nextSshSentinel(s: string, from: number): { start: number; prefix: string } | null {
+  const status = s.indexOf(SSH_OSC_PREFIX, from)
+  const attention = s.indexOf(SSH_ATTENTION_OSC_PREFIX, from)
+  if (status === -1 && attention === -1) return null
+  if (attention === -1 || (status !== -1 && status < attention)) return { start: status, prefix: SSH_OSC_PREFIX }
+  return { start: attention, prefix: SSH_ATTENTION_OSC_PREFIX }
+}
+
+/**
+ * Where a status or attention sentinel's payload, which starts at `from` and
+ * is at most `max` characters long, ends:
+ *  - `{ end }`: the BEL that ends a payload of at most `max` characters with
+ *    no control character in it;
+ *  - `{ resume }`: it is no sentinel, and the bytes from `resume` on are
+ *    terminal output again: a control character other than BEL came first
+ *    (from that character on), or no BEL came within the longest valid
+ *    payload (from the first character past it);
+ *  - null: the read ends before either is known.
+ * Both payloads are JSON.stringify output, which holds no control character:
+ * the remote hook's compact JSON of four short fields for attention
+ * (ssh-shim.ts SSH_ATTENTION_HOOK, at most SSH_ATTENTION_MAX_PAYLOAD), the
+ * shim's status object for status (at most SSH_STATUS_MAX_PAYLOAD). So neither
+ * case can cut a real sentinel short, and an escape that comes first starts
+ * the next sequence, a following sentinel included. So an opening with no BEL
+ * never holds back everything up to the next BEL anywhere in the stream (up
+ * to 32 KiB), a question, a menu or a real attention sentinel included.
+ */
+function sentinelPayloadEnd(s: string, from: number, max: number): { end: number } | { resume: number } | null {
+  const last = from + max // the furthest a payload's BEL can sit
+  const stop = Math.min(s.length, last + 1)
+  for (let j = from; j < stop; j++) {
+    const c = s.charCodeAt(j)
+    if (c === 0x07) return { end: j }
+    if (c < 0x20) return { resume: j }
+  }
+  return stop > last ? { resume: last } : null
+}
+
+/** The longest opening either sentinel can be cut short at by the end of a
+ *  read: one byte less than the longer of the two. */
+const SSH_PARTIAL_OPENING_MAX = Math.max(SSH_OSC_PREFIX.length, SSH_ATTENTION_OSC_PREFIX.length) - 1
+
+/**
+ * How many characters at the end of `s`, none before `from`, are the start of
+ * a status or attention sentinel's opening that the read cut short; 0 when
+ * they are not. Both openings begin with ESC and hold no other, so only the
+ * text from the last ESC can be one. A sentinel cut inside its opening (bytes
+ * 1 to 13 of the attention one) is recognised this way, so its event is not
+ * lost and no part of the sentinel, nonce included, reaches the terminal.
+ * Holding these bytes for the next read changes nothing
+ * the terminal shows: each is an escape sequence that has not ended yet, and
+ * a terminal shows nothing of one before more bytes arrive.
+ */
+function partialOpeningLength(s: string, from: number): number {
+  const windowStart = Math.max(from, s.length - SSH_PARTIAL_OPENING_MAX)
+  const at = s.lastIndexOf('\x1b')
+  if (at < windowStart) return 0
+  const tail = s.slice(at)
+  return SSH_OSC_PREFIX.startsWith(tail) || SSH_ATTENTION_OSC_PREFIX.startsWith(tail) ? tail.length : 0
+}
+
+/**
+ * Whether a checked remote attention event is passed on to the attention
+ * source. A raise (the only raising event is a Notification) is taken only
+ * while the HTTP Hooks Gateway switch is on, read as each raise arrives: the
+ * remote hook was installed when the session connected, so a session set up
+ * while the switch was on keeps sending after it is turned off, and this is
+ * what makes the switch reach it at once, as it reaches a local session
+ * (aicc_planning#93). A clear is always taken, so an indicator raised
+ * before the switch went off still clears. The setting is "on unless turned
+ * off", so a missing or unreadable settings file leaves raises on.
+ */
+function remoteAttentionTaken(event: HookEvent): boolean {
+  if (event.event !== 'Notification') return true
+  return readConfig<{ hooksEnabled?: boolean }>('settings')?.hooksEnabled !== false
+}
 
 /**
  * Strip SSH OSC sentinels from a PTY data chunk.
- * Returns the cleaned chunk (sentinels removed). Parsed sentinel payloads
- * are dispatched to statusline-watcher synchronously.
+ * Returns the cleaned chunk (sentinels removed). Parsed status payloads
+ * are dispatched to statusline-watcher synchronously, attention payloads to
+ * the attention source (deliverRemoteAttention).
  *
- * Handles partial sentinels split across chunks via per-session buffering.
+ * Handles partial sentinels split across chunks via per-session buffering,
+ * a sentinel cut inside its opening included (partialOpeningLength). An
+ * opening whose payload is not a sentinel's (sentinelPayloadEnd) hides at
+ * most its opening and its longest valid payload; the bytes after are shown.
  */
 function extractSshOscSentinels(sessionId: string, chunk: string): string {
   const combined = (sshOscBuffers.get(sessionId) || '') + chunk
   let cleaned = ''
   let i = 0
   while (i < combined.length) {
-    const start = combined.indexOf(SSH_OSC_PREFIX, i)
-    if (start === -1) {
-      cleaned += combined.slice(i)
-      sshOscBuffers.delete(sessionId)
+    const next = nextSshSentinel(combined, i)
+    if (next === null) {
+      // The read may end inside a sentinel's opening: hold those bytes for
+      // the next read, which tells whether they open one.
+      const held = partialOpeningLength(combined, i)
+      cleaned += combined.slice(i, combined.length - held)
+      if (held > 0) sshOscBuffers.set(sessionId, combined.slice(combined.length - held))
+      else sshOscBuffers.delete(sessionId)
       return cleaned
     }
+    const { start, prefix } = next
     cleaned += combined.slice(i, start)
-    const end = combined.indexOf(SSH_OSC_TERMINATOR, start + SSH_OSC_PREFIX.length)
-    if (end === -1) {
-      // Partial sentinel — buffer the leftover for the next chunk
-      const leftover = combined.slice(start)
-      if (leftover.length > MAX_OSC_BUFFER) {
-        // Likely a false start or junk — drop the buffer
-        sshOscBuffers.delete(sessionId)
-      } else {
-        sshOscBuffers.set(sessionId, leftover)
-      }
+    const bodyStart = start + prefix.length
+    const attention = prefix === SSH_ATTENTION_OSC_PREFIX
+    const found = sentinelPayloadEnd(combined, bodyStart, attention ? SSH_ATTENTION_MAX_PAYLOAD : SSH_STATUS_MAX_PAYLOAD)
+    if (found === null) {
+      // Partial sentinel: hold it for the next chunk (at most its opening
+      // and the longest valid payload).
+      sshOscBuffers.set(sessionId, combined.slice(start))
       return cleaned
     }
-    const json = combined.slice(start + SSH_OSC_PREFIX.length, end)
-    // Taken only for this session: a payload naming another one is not.
-    try { dispatchSSHStatuslineUpdate(json, sessionId) } catch { /* ignore */ }
-    i = end + SSH_OSC_TERMINATOR.length
+    if ('resume' in found) {
+      // No sentinel: its opening and the payload read so far stay out of
+      // the terminal (shown, the opening would start an escape sequence
+      // there that swallows what follows); every byte after is output, and
+      // a sentinel among them is read on its own.
+      i = found.resume
+      continue
+    }
+    const payload = combined.slice(bodyStart, found.end)
+    if (attention) {
+      // Taken only with this spawn's nonce and this session's id (see
+      // parseSshAttentionPayload); anything else is dropped, still unseen.
+      const event = parseSshAttentionPayload(payload, sessionId, sshNonceBySession.get(sessionId))
+      if (event && remoteAttentionTaken(event)) deliverRemoteAttention(event)
+    } else {
+      // Taken only for this session: a payload naming another one is not.
+      try { dispatchSSHStatuslineUpdate(payload, sessionId) } catch { /* ignore */ }
+    }
+    i = found.end + SSH_OSC_TERMINATOR.length
   }
   sshOscBuffers.delete(sessionId)
   return cleaned
 }
 
 /**
- * Resolve the claude command for PTY usage.
- * If legacyVersion is provided and enabled, uses the managed install binary.
- * Otherwise, on Windows, the full path found in PATH's folders (claude.exe,
- * then claude.cmd, then claude.bat); elsewhere, for a login shell outside the
- * sh family that reports the PATH it builds, the full path found in that PATH,
- * else `claude`.
+ * Resolve the claude command for PTY usage: the installed Claude Code. On
+ * Windows, the full path found in PATH's folders (claude.exe, then
+ * claude.cmd, then claude.bat); elsewhere, for a login shell outside the sh
+ * family that reports the PATH it builds, the full path found in that PATH,
+ * else `claude`. A Claude Code version pinned in an older release
+ * (`legacyVersion`) is not used (2.1.1-beta.3; resolveClaudeBinary says so in
+ * the log); it is passed on only for that log line.
  */
 export function resolveClaudeForPty(legacyVersion?: { enabled: boolean; version: string }): { cmd: string; args: string[] } {
   // Through the registered provider (WP2 PR 4), whose resolveBinary is
@@ -1892,13 +2047,23 @@ export function resolveClaudeForPty(legacyVersion?: { enabled: boolean; version:
 }
 
 /**
- * Resolve path to the resume-picker.js script.
- * Deployed to ResourcesDirectory/scripts/ by deployStatuslineScript().
+ * Resolve path to the resume-picker.js script, deployed to
+ * ResourcesDirectory/scripts/ by deployClaudeResumePickerScript(). Taken only
+ * when a launch may run it (script-folders.ts checkDeployedScript): a plain
+ * file with one name (isPlainScriptFile), in a scripts folder made this
+ * user's alone in this run. Anything else there (a directory, a link or a
+ * hard link, whatever left it there, a deploy that failed included; or a
+ * folder that is not this user's alone) is refused, and Claude Code starts
+ * directly, as when the picker is not deployed, never running that object.
+ * Asked on every local launch; the refusal is said, in one warning, only for
+ * a launch that asked for the resume list (`forResumeList`).
  */
-function getResumePickerPath(): string | null {
+function getResumePickerPath(forResumeList: boolean): string | null {
   try {
     const scriptPath = path.join(getResourcesDirectory(), 'scripts', 'resume-picker.js')
-    if (fs.existsSync(scriptPath)) return scriptPath
+    const check = checkDeployedScript(scriptPath)
+    if (check.ok) return scriptPath
+    if (forResumeList && !check.absent) logWarn(`[pty-manager] ${check.why}; the resume list is skipped and Claude Code starts directly`)
   } catch { /* resources dir may not be configured yet */ }
   return null
 }
@@ -2017,9 +2182,17 @@ function managedPickerLaunch(options: SpawnPtyOptions | undefined): boolean {
  * managed picker launch gated only the configured directory while the CLI
  * could run in any sibling worktree, reading that worktree's own settings
  * files (adversarial final pass, MAJOR). Every candidate is gated up front,
- * and the gated set travels to the picker in CCC_GATED_DIRS, which refuses a
- * retarget outside it -- so a worktree that appears between the two
- * enumerations is refused rather than run unchecked. Fail-safe like the
+ * each on its own (gatePickerSiblingDirs), and the set of
+ * CLEAN ones with a folder there when they are gated travels to the picker in
+ * CCC_GATED_DIRS with the launch's own folders: the configured folder, and the
+ * resume target's only when a folder is there once the gate has answered (a
+ * path with no folder is clean to the gate, which reads nothing there). The
+ * picker refuses a retarget into a folder it does not find to be one of them
+ * (isGatedDir: one real path on disk, or one spelling where it does not take
+ * the disk's answer), so a worktree that refused, could not be checked, had no
+ * folder when it was gated or appeared between the two enumerations is refused
+ * rather than run unchecked, unless it is a folder of the set under another
+ * spelling or through a link, which runs as that folder. Fail-safe like the
  * picker's own enumeration: no git, no repository, or a timeout yields no
  * extra directories, and the picker then degrades to its single-candidate
  * behaviour in the configured directory, which is gated.
@@ -2303,8 +2476,8 @@ function deferSpawnUntil<T>(
 }
 
 /** A spawn pty:spawn is still preparing in main -- awaiting a Codex account
- *  launch (a CLI status check, discovery) or a legacy CLI install -- before
- *  spawnPty can run. See beginSpawnPreparation. */
+ *  launch (a CLI status check, discovery) or one of the other holds
+ *  pty:spawn names -- before spawnPty can run. See beginSpawnPreparation. */
 export interface SpawnPreparation {
   /** Still this session's newest spawn: not cancelled (a close, a sweep),
    *  not superseded (a newer spawn), and its window still there. */
@@ -2609,6 +2782,13 @@ function spawnPtyResolved(
 
     // SSH session: spawn ssh command, then chain claude after cd
     const ssh = options.ssh
+    // The ssh this start runs, asked for first: with no ssh.exe in a folder
+    // PATH names, sshProgram throws SSH_NOT_ON_PATH here, before this launch's
+    // MCP credential is recorded below (issueMcpSessionToken), so a refused
+    // start leaves no live record behind (were it asked for inside the
+    // pty.spawn call, after the record is made, the record would stay until
+    // the tab was closed or started again).
+    const sshBin = sshProgram()
     // SSH tmux enhancement (item 1): the "Detachable" toggle. DEFAULT ON --
     // only an explicit `false` opts out of the #242 tmux-persistence ladder.
     // When off: no tier-3/4 staging (proceedAfterSetup skips it, so nothing is
@@ -2687,40 +2867,41 @@ function spawnPtyResolved(
     // per-run form for every other (conductor-mcp-server.ts).
     if (localMcpPort > 0) issueMcpSessionToken(sessionId, 'claude', { persistent: persistenceEnabled && ssh.remoteOs !== 'windows' })
 
-    // HTTP Hooks Gateway: when enabled, tunnel the gateway's loopback port so
-    // Claude Code inside the SSH session can reach it via http://localhost:<port>.
-    // Register the session secret up-front so the generated setup script can
-    // bake the URL + X-CCC-Hook-Token header into the remote settings file.
-    // HOOKS INJECTION DISABLED — the Live Activity feed UI was cut in
-    // commit c957e5d, leaving the gateway running with no consumer. We
-    // were still injecting `hooks` blocks into per-session settings,
-    // which made every Pre/PostToolUse call from Claude Code fire at
-    // http://localhost:<port>/hook/<sid> — fine on local sessions, but
-    // on SSH the `-R port:localhost:port` reverse tunnel often can't be
-    // established (sshd's AllowTcpForwarding etc.) and every tool call
-    // logs a ECONNREFUSED. Re-enable when a consumer feature ships
-    // (live activity v2, hook-driven analytics, etc.) and revisit the
-    // SSH tunnel-failure UX.
-    const gw = getGateway()
-    const gwStatus = gw?.status()
-    void gw; void gwStatus
+    // The HTTP Hooks gateway is NOT given to an SSH session: its hooks block
+    // would point the remote Claude at http://localhost:<port>/hook/<sid>, which
+    // needs a `-R` reverse tunnel for the gateway port, and a host that refuses
+    // the forward (sshd's AllowTcpForwarding and the like; CCC sets no
+    // ExitOnForwardFailure, see ssh-remote-port.ts) would log ECONNREFUSED on
+    // every tool call. The one consumer that needs a remote session's hook
+    // events, the attention indicator (aicc_planning#93), gets them over the
+    // session's own terminal instead: the remote setup writes a command hook
+    // that prints a nonce-carrying sentinel there (setupOpts.includeAttention
+    // below; ssh-attention.ts), stripped and checked in extractSshOscSentinels.
+    // No forward, nothing listening on the remote host, and a host where the
+    // hook cannot reach the terminal shows no indicator rather than an error.
     const hooksConfig: { port: number; secret: string } | null = null
-
-    const sshBinary = os.platform() === 'win32' ? 'ssh.exe' : 'ssh'
 
     // SSH sessions never designate a canvas worktree (their cwd is remote); pass
     // a clone with any inherited CCC_SESSION_WORKTREE removed, never process.env
     // by reference (which we must not mutate).
     const sshEnv = { ...(process.env as Record<string, string>) }
     delete sshEnv.CCC_SESSION_WORKTREE
-    ptyProcess = pty.spawn(sshBinary, sshArgs, {
-      name: 'xterm-256color',
-      cols,
-      rows,
-      cwd: os.homedir(),
-      env: sshEnv,
-      useConpty: true
-    })
+    try {
+      ptyProcess = pty.spawn(sshBin, sshArgs, {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd: os.homedir(),
+        env: sshEnv,
+        useConpty: true
+      })
+    } catch (err) {
+      // node-pty refused the start: no PTY was registered, so its exit path
+      // (cleanupSessionResources) never runs for this launch. Release the
+      // MCP record issued above here, then pass the refusal on.
+      releaseMcpSessionProvider(sessionId)
+      throw err
+    }
 
     // SSH manual flow state machine. The renderer shows an in-pane
     // overlay with explicit "Run post-connect command" / "Launch Claude"
@@ -3006,8 +3187,72 @@ function spawnPtyResolved(
     let inInnerShell = false
     let currentFlowState: SshFlowState = 'connecting'
     let currentFlowInfo: string | undefined = undefined
+    // #86: the line an SSH session's partner shell gets at its first prompt
+    // (null for any other session, and for a partner with nothing to type),
+    // whether it was considered yet (once, on reaching its shell, or at the
+    // user's first key into the partner, noteUserInput), and the partner's
+    // recent raw output for its sign-in check (partnerRecentOutput), kept only
+    // while that decision is still to come.
+    const partnerFolderCd = partnerFolderLine(sessionId, options, ssh)
+    let partnerFolderSent = false
+    let partnerRecent = ''
     const SETUP_TIMEOUT_MS = 10000
     let setupTimeoutHandle: ReturnType<typeof setTimeout> | null = null
+    // The setup-ok deadline counts from the LAST output that came back, not
+    // from the start of the setup, and never runs past SETUP_HARD_CAP_MS after
+    // the setup started (the deadline is armed when the setup starts, 200 ms
+    // before the host line is typed and 300 ms before the container one). The
+    // setup is one long line typed into the login shell, and a zsh login shell
+    // (the macOS default) echoes that line back for many seconds before it
+    // runs it: measured on a real Mac, a 34 KB line took 18 s of unbroken echo
+    // (the longest pause between chunks was 67 ms) and `setup ok` came at
+    // 19.3 s. A fixed 10 s failed that session while the host was still
+    // visibly taking the line. A shell that sends nothing back still fails
+    // SETUP_TIMEOUT_MS after the setup started, exactly as before; one that
+    // goes quiet fails SETUP_TIMEOUT_MS after its last byte, and one that never
+    // stops sending fails at the cap. setupLastOutputAt is null until output
+    // comes back, then stamped by the data handler while a setup deadline is
+    // armed (see armSetupDeadline). Times come from the monotonic clock, so a
+    // wall-clock change cannot stretch the wait.
+    const SETUP_HARD_CAP_MS = 60000
+    let setupLastOutputAt: number | null = null
+    /** Arm the setup-ok deadline (host or container setup; only one is ever
+     *  in flight). Keeps the single `setupTimeoutHandle`, so every place that
+     *  clears it still cancels the whole wait. `onExpire` gets a short reason
+     *  for the log. */
+    const armSetupDeadline = (onExpire: (why: string) => void): void => {
+      const armedAt = performance.now()
+      setupLastOutputAt = null
+      let extendedLogged = false
+      const check = (): void => {
+        setupTimeoutHandle = null
+        const lastOutputAt = setupLastOutputAt
+        // Nothing came back: fail now, without re-checking the clock. A timer
+        // can fire a fraction of a millisecond before performance.now() shows
+        // the full delay (timers run on a whole-millisecond loop clock), and
+        // re-arming for that sliver would log a wait for output that never
+        // came.
+        if (lastOutputAt === null) {
+          onExpire(`within ${SETUP_TIMEOUT_MS}ms of the setup starting (nothing came back)`)
+          return
+        }
+        const quietDue = lastOutputAt + SETUP_TIMEOUT_MS
+        const capDue = armedAt + SETUP_HARD_CAP_MS
+        const left = Math.min(quietDue, capDue) - performance.now()
+        if (left > 0) {
+          if (!extendedLogged) {
+            extendedLogged = true
+            logInfo(`[ssh] ${sessionId}: setup ok not in yet, but output has come back since the setup started -- waiting until ${SETUP_TIMEOUT_MS}ms after the last output (at most ${SETUP_HARD_CAP_MS}ms after the setup started)`)
+          }
+          setupTimeoutHandle = setTimeout(check, left)
+          return
+        }
+        onExpire(quietDue <= capDue
+          ? `within ${SETUP_TIMEOUT_MS}ms of the last output that came back`
+          : `within ${SETUP_HARD_CAP_MS}ms of the setup starting while output kept coming back`)
+      }
+      setupTimeoutHandle = setTimeout(check, SETUP_TIMEOUT_MS)
+    }
     // #242 tier 3: generous vs. SETUP_TIMEOUT_MS -- staging downloads a
     // ~1MB archive over the SSH connection itself before it can even start
     // verifying/installing, so a slow link needs materially more room than
@@ -3087,6 +3332,13 @@ function spawnPtyResolved(
       currentFlowInfo = info
       logInfo(`[ssh] ${sessionId}: flow → ${s}${info ? ` (${info})` : ''}`)
       emitSshFlowState(win, sessionId, s, info)
+      // #86: an SSH session's partner shell opens in the config's remote
+      // folder (ssh-partner-folder.ts). Its line is considered once, on
+      // reaching this state by any path, and typed only by the first-prompt
+      // step of the data handler, never here: see partnerPromptNow there. So
+      // the idle fallback reaching this state types nothing, and the line is
+      // never typed later, after something the user already ran.
+      if (s === 'shell-only') partnerFolderSent = true
     }
 
     // Idle-data fallback. Every onData re-arms a 1.5 s timer; when it
@@ -3533,13 +3785,12 @@ function spawnPtyResolved(
       setupSent = true
       setFlowState('running-setup', 'host')
       logInfo(`[ssh] ${sessionId}: writing host setupCmd`)
-      setupTimeoutHandle = setTimeout(() => {
-        setupTimeoutHandle = null
+      armSetupDeadline((why) => {
         if (!setupDone) {
-          logError(`[ssh] ${sessionId}: setup ok not received within ${SETUP_TIMEOUT_MS}ms`)
+          logError(`[ssh] ${sessionId}: setup ok not received ${why}`)
           setFlowState('failed', 'host setup timeout')
         }
-      }, SETUP_TIMEOUT_MS)
+      })
       setTimeout(() => {
         // configureRemoteSettings → assertSafeRemotePath throws on a bad path.
         // Catch it HERE: an uncaught throw in a setTimeout is re-thrown by the
@@ -3548,13 +3799,18 @@ function spawnPtyResolved(
         // is defence-in-depth for any path that reaches here.
         if (destroyed) return
         try {
-          const s = readConfig<{ statusLineEnabled?: boolean }>('settings')
+          const s = readConfig<{ statusLineEnabled?: boolean; hooksEnabled?: boolean }>('settings')
           const setupOpts = {
             includeStatusLine: s?.statusLineEnabled !== false,
             // The built-in tools switch, through the one checked read: off
             // while the settings cannot be read (conductor-tools-switch.ts).
             includeConductorMcp: conductorToolsMasterOn(),
             remoteMcpPort, // #24: bake the remote MCP URL with the per-session port
+            // aicc_planning#93: the remote attention hook, under the same
+            // switch that gives a local session its hooks (Settings, Hooks:
+            // HTTP Hooks Gateway; on unless turned off). POSIX remotes only:
+            // the Windows setup has no such hook and ignores it.
+            includeAttention: s?.hooksEnabled !== false,
           }
           // item 3: Windows uses the PowerShell-delivered setup (no POSIX
           // base64/stty, no tmux); auto/unix keep the POSIX path unchanged.
@@ -3725,17 +3981,16 @@ function spawnPtyResolved(
       containerSetupSent = true
       setFlowState('running-setup', 'container')
       logInfo(`[ssh] ${sessionId}: re-running setup inside container`)
-      setupTimeoutHandle = setTimeout(() => {
-        setupTimeoutHandle = null
+      armSetupDeadline((why) => {
         if (!containerSetupDone) {
-          logError(`[ssh] ${sessionId}: container setup ok not received within ${SETUP_TIMEOUT_MS}ms`)
+          logError(`[ssh] ${sessionId}: container setup ok not received ${why}`)
           // Release the latch so the overlay's Retry Launch can run the setup
           // again (through the launch guard for a proven entry); before, the
           // retry no-op'd and the failure sat there inert (quality review).
           containerSetupSent = false
           setFlowState('failed', 'container setup timeout')
         }
-      }, SETUP_TIMEOUT_MS)
+      })
       // ADR-009 round 3 (Codex finding 1): the after-entry watch fails the entry
       // if the host prompt returns in this window, so the blob below bails --
       // and (R1 re-attack MINOR) failEntry cancels the timer itself.
@@ -3748,13 +4003,18 @@ function spawnPtyResolved(
         // must not land on the host prompt behind it.
         if (destroyed || runtimeEntryFailed || !containerSetupSent) return
         try {
-          const s = readConfig<{ statusLineEnabled?: boolean }>('settings')
+          const s = readConfig<{ statusLineEnabled?: boolean; hooksEnabled?: boolean }>('settings')
           const setupOpts = {
             includeStatusLine: s?.statusLineEnabled !== false,
             // The built-in tools switch, through the one checked read: off
             // while the settings cannot be read (conductor-tools-switch.ts).
             includeConductorMcp: conductorToolsMasterOn(),
             remoteMcpPort, // #24: bake the remote MCP URL with the per-session port
+            // aicc_planning#93: the remote attention hook, under the same
+            // switch that gives a local session its hooks (Settings, Hooks:
+            // HTTP Hooks Gateway; on unless turned off). POSIX remotes only:
+            // the Windows setup has no such hook and ignores it.
+            includeAttention: s?.hooksEnabled !== false,
           }
           // item 3: Windows uses the PowerShell-delivered setup (no POSIX
           // base64/stty, no tmux); auto/unix keep the POSIX path unchanged.
@@ -4403,6 +4663,19 @@ function spawnPtyResolved(
      */
     const flowController: SshFlowController = {
       getState: () => ({ state: currentFlowState, info: currentFlowInfo }),
+      noteUserInput: (data: string) => {
+        // #86: the folder line is typed into the partner's input, so once the
+        // user has typed anything there (a key, an arrow, a paste, a password
+        // typed by hand) it could only land on their line or follow keys they
+        // typed ahead: given up for this connection, and the partner stays
+        // where the user is. The echo of a key can read as a prompt, so this
+        // is decided here, at the input, not from the output. The terminal's
+        // own replies to the remote are not the user's input.
+        if (partnerFolderCd === null || partnerFolderSent || !isPartnerUserInput(data)) return
+        partnerFolderSent = true
+        partnerRecent = ''
+        logInfo(`[ssh] ${sessionId}: input typed into the partner before its folder line; the line is not typed for this connection`)
+      },
       runPostCommand: () => {
         // postCommand flows (e.g. asustor `sudo docker exec -it ctr bash`)
         // SKIP host setup entirely. Reasoning:
@@ -4690,6 +4963,12 @@ function spawnPtyResolved(
       // promise-driven call sites that never pass through here.
       if (destroyed) return
 
+      // A setup line still arriving back from the host (a zsh login shell
+      // echoes a long one for many seconds) is progress: the setup-ok deadline
+      // counts from the last output that came back (armSetupDeadline). Any byte counts,
+      // sentinels included; the hard cap bounds a host that never goes quiet.
+      if (setupTimeoutHandle && rawData.length > 0) setupLastOutputAt = performance.now()
+
       // Follow-up adversarial pass (fail-posture MAJOR): watch a tmux-wrapped
       // launch for a remote refusal and fall back to the bare launch. No-op
       // unless a wrapped command was just written -- see its doc comment.
@@ -4951,6 +5230,34 @@ function spawnPtyResolved(
       // screen through those.
       const promptLineNow = claudeProvider.lastPromptLine(data)
       if (promptLineNow !== '') lastPromptLineSeen = promptLineNow
+      // #86: the partner's own prompt match, for its folder line only (the
+      // first-prompt step below). Only for a partner with a line to type, and
+      // only until it reaches its shell or the user types into it
+      // (noteUserInput: the echo of a key can end in $ # > ~ and read as a
+      // prompt, so after the user's first key no read is one). True when this
+      // read ends in a shell prompt (partnerPromptTail: zsh's repainted line
+      // read as the prompt it ends in; PARTNER_PROMPT_RE, which also knows
+      // zsh's `%` as zsh draws it, alone or after a space, so a percentage
+      // such as "45%" is no prompt) and neither that prompt nor the partner's
+      // recent output names a sign-in word (partnerRecentText: the prompt's
+      // line read across reads, and the line above it; isPartnerShellPrompt).
+      // So a sign-in prompt a read boundary split ("Enter pass" then
+      // "word> ") or with its words on the line above a bare prompt is
+      // refused. From a password this flow typed itself (passwordSent) until
+      // the partner reaches its shell, whose prompt is not in the recent
+      // output (see the auto-type step below), a bare prompt
+      // (PARTNER_BARE_PROMPT_RE: "> ", "$ ", "# ") is no match either: it may
+      // be a second sign-in step that named its words only above the password
+      // prompt. Only a password the flow typed counts: a saved password on a
+      // host that signs in by key leaves a bare prompt a match. A read that
+      // ends in no text is no match.
+      let partnerPromptNow = false
+      if (partnerFolderCd !== null && !partnerFolderSent) {
+        partnerRecent = partnerRecentOutput(partnerRecent, data)
+        const tail = partnerPromptTail(data)
+        partnerPromptNow = tail !== '' && isPartnerShellPrompt(tail, partnerRecentText(partnerRecent))
+          && !(passwordSent && PARTNER_BARE_PROMPT_RE.test(tail))
+      }
       // rc.14 review F1 round 2: remember the HOST shell's prompt while we are
       // still on the host, so the entry watch below can recognise it coming
       // back. Frozen once the post-command has been written (nothing after that
@@ -5152,6 +5459,27 @@ function spawnPtyResolved(
       // typed by hand.
       if (!passwordSent && password && currentFlowState === 'connecting' && PASSWORD_PROMPT_RE.test(promptLineNow)) {
         passwordSent = true
+        // #86: the partner's sign-in check starts again after the password
+        // prompt this flow answers itself, so that prompt's words, on the line
+        // above the shell prompt of a host that prints nothing in between, do
+        // not keep the partner at home. In their place, the partner's prompt
+        // match above needs more than a bare sigil from here on, so a second
+        // sign-in step that waits at a bare "> " gets nothing. Accepted: a
+        // host whose real shell prompt is a bare sigil (sh's "$ ", a root
+        // "# ", zsh's "% ", or a two-line prompt whose last line is only
+        // "$ ") opens its partner at home after a saved password. That prompt
+        // never brings the line. Where the session's own prompt pattern
+        // reads it ("$ ", "# "), the partner reaches its shell at once with
+        // nothing typed. Where it does not (zsh's "% ", a "$ " drawn after an
+        // escape that reading stops at, a line of 200 characters or more),
+        // the partner stays in connecting until the idle fallback carries it
+        // there with nothing typed: 1.5 s, or up to about 13.5 s while this
+        // password prompt is still the last line the session read. A key the
+        // user types before then gives the line up (noteUserInput). Also
+        // accepted: a second sign-in step whose prompt is more than a sigil
+        // and names no sign-in word ("Response> ") is a prompt match, the
+        // word-list gap recorded at PARTNER_SIGN_IN_RE.
+        partnerRecent = ''
         setTimeout(() => {
           ptyProcess.write(password + '\r')
         }, 100)
@@ -5209,16 +5537,64 @@ function spawnPtyResolved(
 
       // First shell prompt after login → emit awaiting-postcommand /
       // awaiting-claude / shell-only and wait for user click.
+      // #86: for an SSH session's partner with a folder line to type (and no
+      // post-connect command), its own prompt match (partnerPromptNow) counts
+      // as that first prompt too: the session's pattern has no zsh `%` and
+      // drops zsh's repainted line on a wide window, and before, the idle
+      // fallback carried such a partner to its shell 1.5 s later. Only from
+      // connecting: once the user takes the partner over with Skip, only the
+      // session's own pattern moves it on, so output of a command they run
+      // that reads as the partner's prompt ("Copying files 100 %") never
+      // brings the line.
       if (
         !setupSent
         && !postCommandSent
-        && sawShellPrompt
+        && (sawShellPrompt || (partnerPromptNow && !postCommand && currentFlowState === 'connecting'))
         && (currentFlowState === 'connecting' || currentFlowState === 'skipped')
       ) {
         if (postCommand) {
           setFlowState('awaiting-postcommand')
         } else if (options?.shellOnly) {
           setFlowState('shell-only')
+          // #86: the partner's folder line, typed only here: the partner
+          // reached its shell by a prompt match, on a read that ends in a
+          // shell prompt with no sign-in word in it or in the partner's recent
+          // output. Never when the idle fallback reaches this state (a slow
+          // host, a prompt the partner does not recognise, a sign-in prompt
+          // left waiting): that partner opens at home, and setFlowState has
+          // already marked the line considered. Never into a waiting password
+          // prompt, verification-code or key-passphrase prompt that names a
+          // sign-in word, whatever character it ends in. Never after the user
+          // has typed into the partner (noteUserInput): not onto a line they
+          // are typing, whose keys' echoes can read as a prompt, and not after
+          // keys they typed ahead of this prompt. A password typed by hand is
+          // input too, so that partner opens at home. Accepted: the sign-in
+          // check is a word list (PARTNER_SIGN_IN_RE), so a prompt that ends
+          // in $ # > ~ % and names none of its words, such as a host menu
+          // ("Select target host [1-3]> "), a REPL, or a code prompt in other
+          // words ("Enter the 6-digit code> "), is a prompt match and gets
+          // this line. The command bar types nothing into an SSH partner
+          // until this state (CommandBar.tsx), so a button's line follows
+          // this one. This state is not proof of a shell prompt: the idle
+          // fallback also reaches it over a sign-in prompt PASSWORD_PROMPT_RE
+          // does not match (a verification code, a key passphrase) after
+          // 1.5 s, or over a password prompt once the auth hold ends. This
+          // line is withheld there, but a button pressed then types into that
+          // prompt. Accepted: the bar's note asks the user to sign in first
+          // and press again at the shell prompt. Also accepted: a read that
+          // ends in $ # > ~ (or in a % after a space) reads as a prompt
+          // whatever printed it. So a sign-in banner read that ends in one (a
+          // row of "#") brings the partner here from connecting before its
+          // password prompt: the saved password is then not typed, and this
+          // line goes in ahead of that password prompt. An ssh client that
+          // discards input typed ahead of its password prompt (OpenSSH on
+          // Unix does) drops it and waits at the prompt. One that keeps it
+          // reads this line as the password: one failed attempt, then a fresh
+          // password prompt the user answers by hand. And in skipped, output
+          // that ends in $ # > ~ before the user types anything (a login
+          // script's) brings it here too, and this line follows that output;
+          // a command the user typed has already given the line up.
+          if (partnerPromptNow && partnerFolderCd !== null) ptyProcess.write(partnerFolderCd)
         } else {
           setFlowState('awaiting-claude', 'host')
         }
@@ -5778,15 +6154,35 @@ function spawnPtyResolved(
       const gateDirs = managedLaunchGateDirs(sessionId, resolvedCwd, options)
       const gateProfileId = resolvedProfileId
       // The picker's candidates join the set (see pickerCandidateDirs); the
-      // verdict and the FULL set it was formed for travel together.
+      // verdict and the FULL set the picker may relaunch in travel together.
+      // The launch's own folders decide the launch; each OTHER worktree is
+      // gated on its own, and only a clean one joins the set: a sibling that
+      // refuses (another agent's worktree, say) is left out of the set and
+      // does not refuse the launch (gatePickerSiblingDirs, which logs each
+      // folder left out).
       const pickerEnv = askCeiling ? askGitEnvironment(process.env, askCeiling, os.platform()) : process.env
       const pending = (managedPickerLaunch(options) ? pickerCandidateDirs(resolvedCwd, pickerEnv) : Promise.resolve<string[]>([]))
         .then(async (candidates) => {
-          const dirs = [...new Set([...gateDirs, ...candidates])]
           // Windows: the account's sign-in folders are checked owner-only (once a
           // run, asynchronously) while the launch is held here, so the launch
           // below reads their verdict instead of finding none (account-profiles).
-          const [verdict] = await Promise.all([gateManagedLaunchDirs(dirs), checkProfileCredentialFolders(gateProfileId)])
+          // The project scans run alongside that check, as they did before the
+          // siblings were split out: the launch's own folders first, then each
+          // sibling, one scan slot throughout. A refused launch starts nothing,
+          // so its siblings are not worth a scan. The launch's own folders go
+          // into the set as gatePickerSiblingDirs hands them back (`launch`):
+          // the configured folder always, the resume target's only when a
+          // folder is there once the gate has answered, so a folder made at an
+          // absent target later is outside the set and a launch into it is
+          // refused (assertGatedDirectory).
+          const [{ verdict, handed }] = await Promise.all([
+            gateManagedLaunchDirs(gateDirs).then(async (v) => ({
+              verdict: v,
+              handed: v.status === 'refused' ? { launch: gateDirs, clean: [] as string[] } : await gatePickerSiblingDirs(gateDirs, candidates),
+            })),
+            checkProfileCredentialFolders(gateProfileId),
+          ])
+          const dirs = [...new Set([...handed.launch, ...handed.clean])]
           return { verdict, dirs }
         })
       deferSpawnUntil(win, sessionId, resolvedProfileId, inheritedTeardown, pending,
@@ -5818,17 +6214,14 @@ function spawnPtyResolved(
     // the other four (adversarial review, MAJOR 9). `cwd` is passed so the
     // report can name project-owned settings the host control is suppressing;
     // the files themselves are never read for anything else and never modified.
-    // A session pinned to a legacy CLI runs THAT binary when it is installed
-    // (resolveClaudeForPty below; otherwise the installed CLI), so the
-    // preflight checks the floor against the pin. A shell-only pane runs no
-    // Claude of its own: a `claude` typed into it is the installed one.
-    const pin = !options?.shellOnly && options?.legacyVersion?.enabled ? legacyCliPin(options.legacyVersion) : undefined
-    const pinnedCli = pin?.installed ? pin : undefined
+    // Every session runs the installed Claude Code (resolveClaudeForPty below):
+    // a version pinned in an older release is not used (2.1.1-beta.3), so the
+    // preflight checks the floor against the installed CLI, as for any launch.
     const recordUnverifiedDirectory = (directory: string): void => {
-      if (home && resolvedProfileId) recordManagedLaunchPreflight(sessionId, resolvedProfileId, home, spawnEnv, options?.projectGate ?? null, 'launch', { launchDirectoryUnverified: directory, ...(pinnedCli ? { pinnedCli } : {}) })
+      if (home && resolvedProfileId) recordManagedLaunchPreflight(sessionId, resolvedProfileId, home, spawnEnv, options?.projectGate ?? null, 'launch', { launchDirectoryUnverified: directory })
     }
     assertGatedDirectory(options, resolvedCwd, 'working directory', recordUnverifiedDirectory)
-    const finalSpawnEnv = withProfileHome(spawnEnv, home, { launchId: sessionId, cwd: resolvedCwd, probe: false, projectGate: options?.projectGate ?? null, ...(pinnedCli ? { pinnedCli } : {}) })
+    const finalSpawnEnv = withProfileHome(spawnEnv, home, { launchId: sessionId, cwd: resolvedCwd, probe: false, projectGate: options?.projectGate ?? null })
     // Give the resume-picker (run inside this PTY) the CONFIG dir so it can read
     // session-state.json and label conversations with their CCC work name
     // (customName). Read-only, best-effort — never block the spawn (#130).
@@ -5843,8 +6236,12 @@ function spawnPtyResolved(
     // The directories this launch's verdict covers, for the resume picker: it
     // relaunches the CLI in the chosen conversation's worktree and must not
     // step outside the gated set (see pickerCandidateDirs). Only a managed
-    // launch carries one; an unmanaged picker is not gated and gets nothing.
+    // launch carries one; an unmanaged picker is not gated and gets nothing --
+    // not even a value inherited from CCC's own environment (a dev CCC started
+    // inside a managed tile), which would make its picker refuse retargets for
+    // a gate that never ran (the same rule as CCC_SESSION_WORKTREE below).
     if (options?.projectGateDirs) finalSpawnEnv.CCC_GATED_DIRS = JSON.stringify(options.projectGateDirs)
+    else delete finalSpawnEnv.CCC_GATED_DIRS
     // Session isolation + Agent Canvas (ADR-016): CCC DESIGNATES where this
     // session's guard worktree lives — `<worktree base>/<ccc-session-short>`,
     // derived from the CONFIGURED project directory and CCC's own session id,
@@ -6081,7 +6478,7 @@ function spawnPtyResolved(
 
       // Asked once: the launch line below starts the picker exactly when this
       // spawn's agent templates were written for it.
-      const pickerScript = getResumePickerPath()
+      const pickerScript = getResumePickerPath(!!options?.useResumePicker)
       // This session's agent templates, as the one object keyed by name that
       // Claude Code's --agents takes; a set it would not take is refused here,
       // before anything starts (claudeAgentsObject). Windows: they ride the
@@ -6327,9 +6724,10 @@ function spawnPtyResolved(
       // Agent Canvas workflow plugin (P6 seed): the skill that drives the
       // render->review loop so the user never has to know a tool name.
       // Session-scoped via --plugin-dir (nothing written to ~/.claude).
-      // Skipped for pinned legacy CLI versions — they may predate the flag,
-      // and an unknown flag fails the whole launch.
-      if (conductorOn && !options?.legacyVersion?.enabled) {
+      // Every session runs the installed Claude Code (a version pinned in an
+      // older release is not used, 2.1.1-beta.3), so a config that still
+      // carries a pin gets the flag too, as any other does.
+      if (conductorOn) {
         try {
           // existsSync for the same reason --settings and --mcp-config check:
           // a flag pointing at a missing path is at best ignored and at worst
@@ -6414,6 +6812,8 @@ function spawnPtyResolved(
         // variable expands to one EMPTY argument, not to none. That is
         // `claude -- ""`, the blank opening prompt the env route exists to avoid.
         askPrompt: finalSpawnEnv.CCC_ASK_PROMPT !== undefined,
+        // Named in the one log line a skipped resume list writes.
+        sessionId,
       })
       launchWriteScheduled = true
       launchPendingSessions.add(sessionId)
@@ -6854,16 +7254,34 @@ function isSubmittedPayload(data: string): boolean {
  * (waiting, within the marker queue's own fallback bound, while a turn runs
  * or a prompt is up), submits it once it is confirmed on screen, and answers
  * whether it was delivered: Codex never submits one write of a line and its
- * Enter (PB3). Claude's keep writeSubmittedLine.
+ * Enter (PB3).
+ *
+ * Every other session's (Claude Code's) is held, in the order handed in, and
+ * typed only when the session's own screen reads Claude Code's ready, empty
+ * prompt, by the same reading the status strip's controls type through
+ * (canvas/claude-marker-typing.ts). Only into the run it was handed for, the
+ * session's terminal process (a restart is a new run; a Claude Code started
+ * again by hand in the same terminal is not); a session with no run takes
+ * nothing and answers not delivered (the session gone), as the branch above
+ * does for a session with no pane, so its canvas is told. Otherwise it answers
+ * nothing: a marker the chain drops untyped (held past its bound, its run
+ * ended) is told to its canvas by the chain itself. `canvasId`, the canvas
+ * the marker was filed on when the caller named one, goes with the line, so
+ * the same words filed on two canvases stay two markers.
  */
-export function writeCanvasMarkerLine(sessionId: string, line: string): void | Promise<SubmitTextResult> {
+export function writeCanvasMarkerLine(sessionId: string, line: string, canvasId?: string): void | Promise<SubmitTextResult> {
   if (isCodexPtySession(sessionId)) {
     // The primitive answers a session with no pane itself (review A-8).
     const screen = codexRunScreen()
     if (!screen) return Promise.resolve({ delivered: false, reason: 'session-gone' })
     return screen.submit(sessionId, line, { readyWaitMs: MARKER_FALLBACK_FLUSH_MS })
   }
-  writeSubmittedLine(sessionId, line)
+  const run = ptySessions.get(sessionId)?.ptyProcess
+  if (!run) {
+    logInfo(`[canvas-marker] ${sessionId}: no running session, so a marker was not typed`)
+    return Promise.resolve({ delivered: false, reason: 'session-gone' })
+  }
+  queueClaudeMarkerLine(sessionId, line, () => ptySessions.get(sessionId)?.ptyProcess === run, canvasId)
 }
 
 /** WP2 PR 4, P4.3: how long an Ask question waits for Codex's ready, empty
@@ -6949,6 +7367,11 @@ export function writePty(sessionId: string, data: string): void {
   if (data === '\x1b[I' || data === '\x1b[O') {
     getWatchdogManager()?.noteRedrawTrigger(sessionId)
   }
+  // #86: an SSH session's partner gives its folder line up at the user's
+  // first input into it (SshFlowController.noteUserInput). Told before the
+  // write and before any check below may drop it, so the echo of this input
+  // can never bring the line. It does nothing for any other session.
+  sshFlows.get(sessionId)?.noteUserInput(data)
   // Dedupe guard: suppress identical repeats of submitted payloads within a short window.
   // This protects against double-sends from double-clicks, React effect races, event
   // listeners firing twice, etc. Only applies to "submitted" writes (ending in \r or \n)

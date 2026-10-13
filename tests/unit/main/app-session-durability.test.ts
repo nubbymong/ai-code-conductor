@@ -19,6 +19,13 @@ const h = vi.hoisted(() => ({
   times: [] as Array<{ id: string; ms: number; until: number }>,
   timesReadBack: [] as unknown[],
   uncertainReadBackThrows: false,
+  /** aicc_planning#104: the transcript binder, null when logging was off at start. */
+  binder: null as null | {
+    getExactResumeTarget: (id: string) => string | null
+    getLatestTranscriptPath: (id: string) => string | null
+    getLastExactResumeTarget: (id: string) => string | null
+    retainLastExact: (open: ReadonlySet<string>) => void
+  },
 }))
 
 vi.mock('../../../src/main/session-state', () => ({
@@ -35,7 +42,7 @@ vi.mock('../../../src/main/conversation-running-time', () => ({
   rememberConversationRunningTimesFrom: (state: unknown) => { h.timesReadBack.push(state) },
 }))
 vi.mock('../../../src/main/hooks', () => ({ isExactBindSourceActive: () => true }))
-vi.mock('../../../src/main/logging/logging-service', () => ({ getTranscriptBinder: () => null }))
+vi.mock('../../../src/main/logging/logging-service', () => ({ getTranscriptBinder: () => h.binder }))
 vi.mock('../../../src/main/logging/transcript-discovery', () => ({ resolveResumeTargetFromTranscript: () => null }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: () => {} }))
 
@@ -54,6 +61,7 @@ beforeEach(() => {
   h.times = []
   h.timesReadBack = []
   h.uncertainReadBackThrows = false
+  h.binder = null
 })
 
 describe('the app\'s session durability core, as main composes it', () => {
@@ -155,5 +163,54 @@ describe('the app\'s session durability core, as main composes it', () => {
     const { live, deps } = gate()
     expect(ask('other', deps)).toBeNull(); live.add('other')
     expect(ask('r1', deps)).toBeNull()
+  })
+})
+
+// aicc_planning#104: a session saved with no target after its spawn took the
+// restored one carries the target it was last saved with only while a binder
+// runs (logging on at start), so that a move to another conversation would
+// reach main as a new bind. With none, it is saved with none, as before.
+describe("the app core carries a session's conversation only while a binder runs (aicc_planning#104)", () => {
+  const T1 = { uuid: '97f30254-1111-4111-8111-111111111111', cwd: 'F:/platform_v9' }
+  const restored = { sessions: [{ id: 'rune', provider: 'claude', resumeUuid: T1.uuid, resumeCwd: T1.cwd }], activeSessionId: 'rune', savedAt: 1 }
+  const spawned = () => ({ sessions: [{ id: 'rune', provider: 'claude' }], activeSessionId: 'rune', savedAt: 2 }) as unknown as SessionState
+  const lastTarget = () => {
+    const s = (h.saved.at(-1) as SessionState).sessions[0]
+    return { uuid: s.resumeUuid, cwd: s.resumeCwd }
+  }
+
+  it('a binder running, the session not bound yet: the restored target is kept', () => {
+    h.binder = { getExactResumeTarget: () => null, getLatestTranscriptPath: () => null, getLastExactResumeTarget: () => null, retainLastExact: () => {} }
+    const d = createAppSessionDurability()
+    d.saveEnriched(structuredClone(restored) as unknown as SessionState)
+    d.saveEnriched(spawned())
+    expect(lastTarget()).toEqual(T1)
+  })
+
+  it('no binder (logging off at start): none is carried', () => {
+    const d = createAppSessionDurability()
+    d.saveEnriched(structuredClone(restored) as unknown as SessionState)
+    d.saveEnriched(spawned())
+    expect(lastTarget()).toEqual({ uuid: undefined, cwd: undefined })
+  })
+
+  // The binder's last exact bind (kept after the CLI exits) decides
+  // when there is no live bind, and each save tells the binder the open set.
+  it("no live bind: the binder's last exact bind decides, and the open sessions are retained", () => {
+    const T2 = '8923cf93-2222-4222-8222-222222222222'
+    const retained: string[][] = []
+    h.binder = {
+      getExactResumeTarget: () => null,
+      getLatestTranscriptPath: () => null,
+      getLastExactResumeTarget: (id) => (id === 'rune' ? `C:/Users/u/.claude/projects/F--platform-v9/${T2}.jsonl` : null),
+      retainLastExact: (open) => { retained.push([...open]) },
+    }
+    const d = createAppSessionDurability()
+    d.saveEnriched(structuredClone(restored) as unknown as SessionState)
+    d.saveEnriched(spawned())
+    // T2's head cannot be read here (resolveResumeTargetFromTranscript is null
+    // in this file) and it is not T1: none, never the older T1.
+    expect(lastTarget()).toEqual({ uuid: undefined, cwd: undefined })
+    expect(retained).toEqual([['rune'], ['rune']])
   })
 })

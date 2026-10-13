@@ -202,11 +202,11 @@ describe('sessionStore', () => {
       // (which self-subscribes) showed the account. Each identity field must flip
       // the gate on the resolve tick.
       const a = [makeSession({ id: 'a' })]
-      expect(structuralSessionsEqual(a, [{ ...a[0], accountEmail: 'nicholas@live.co.uk' }])).toBe(false)
-      expect(structuralSessionsEqual(a, [{ ...a[0], sshRemoteAccount: 'nicholas@live.co.uk' }])).toBe(false)
+      expect(structuralSessionsEqual(a, [{ ...a[0], accountEmail: 'user1@example.com' }])).toBe(false)
+      expect(structuralSessionsEqual(a, [{ ...a[0], sshRemoteAccount: 'user1@example.com' }])).toBe(false)
       expect(structuralSessionsEqual(a, [{ ...a[0], accountColour: 'orchid' }])).toBe(false)
       // ...but a telemetry-only tick (unchanged identity) stays "no change".
-      const withAcct = [makeSession({ id: 'a', accountEmail: 'nicholas@live.co.uk' })]
+      const withAcct = [makeSession({ id: 'a', accountEmail: 'user1@example.com' })]
       expect(structuralSessionsEqual(withAcct, [{ ...withAcct[0], contextPercent: 42 }])).toBe(true)
     })
 

@@ -5,6 +5,7 @@ import { SHIM_GATHER_JS, SHIM_STATUS_URL_JS } from './statusline-gather'
 import { CONTAINER_NAME_RE, ENTRY_NONCE_RE, readContainerName, containerSessionStopScript } from '../../../shared/container-command'
 import { quoteArgForShell } from '../../../shared/shell-quote'
 import { stripAnsiForSentinel } from '../../ansi-strip'
+import { REMOTE_ATTENTION_NOTIFICATIONS, REMOTE_ATTENTION_CLEAR_EVENTS, REMOTE_ATTENTION_HOOK_EVENTS, remoteAttentionKey } from '../../ssh-attention'
 import type { SshRuntime } from '../../../shared/types'
 
 /**
@@ -210,6 +211,109 @@ if(statusUrl&&!usageDone){deliver(true);}
 `
 
 /**
+ * aicc_planning#93: the remote ATTENTION hook -- a Node.js script written to
+ * the remote host at ~/.claude/conductor-ssh-attention.js during SSH setup
+ * (includeAttention), and run by the remote Claude as a command hook on
+ * Notification, UserPromptSubmit, PreToolUse and PostToolUse.
+ *
+ * The event it runs for is its second argument (`<sid> <event>`, written into
+ * each hook entry by the setup), so a clearing event's stdin -- a tool call's
+ * input or output, which can be far larger than the 64 KiB this script keeps --
+ * is drained but never parsed; only a Notification's (small) JSON is parsed,
+ * for its type. With no event argument it falls back to the JSON's
+ * hook_event_name. For a raising notification
+ * (REMOTE_ATTENTION_NOTIFICATIONS) or a clearing event, it writes ONE OSC
+ * sentinel, `ESC ]9999;CMATTN=<json> BEL` (ssh-attention.ts), to the session's
+ * terminal, down a ladder like the statusline fallback's above -- the tmux
+ * client's tty under tmux (a pane pty swallows an unknown OSC), else
+ * /dev/tty, else the /dev/pts/N an ancestor (claude) holds. One difference:
+ * under tmux it asks ~/.claude/bin/tmux and then the tmux on its PATH, not
+ * the tmux path the setup probed (the statusline's CCC_TMUX_BIN), so a tmux
+ * the hook's PATH lacks falls through to /dev/tty, which is the pane; that
+ * write is traced as via=tty-in-tmux, since tmux most likely did not pass it
+ * on. pty-manager takes
+ * it out of the stream before xterm shows it and routes it to the attention
+ * source. The payload carries the session id and this connection's attention
+ * key (remoteAttentionKey, ssh-attention.ts: derived from the spawn's nonce
+ * with a secret that stays in the app, never the nonce the setup prints), read
+ * from ~/.claude/ccc-attn-<sid>.key (0600, rewritten by every setup, so a
+ * Claude left running in tmux picks up the new connection's key), never from
+ * argv.
+ *
+ * Cost and noise: the clearing events fire on every tool call, so the setup
+ * runs their hook only while ~/.claude/ccc-attn-<sid>.up exists (a shell
+ * `[ -e ]`, no Node start) -- this script creates it before it sends a raise
+ * and removes it once a clear is delivered, or when the raise itself could not
+ * be delivered (nothing was raised, so there is nothing to clear, and a host
+ * whose terminal the hook cannot reach starts no Node per tool call). A marker
+ * it cannot create means no raise is sent (an indicator that could never clear
+ * is worse than none). The
+ * script always exits 0 and prints nothing, so a hook that cannot deliver costs
+ * the session nothing; failures are traced to conductor-shim.log.
+ */
+export const SSH_ATTENTION_HOOK = `#!/usr/bin/env node
+const fs=require('fs'),os=require('os'),path=require('path');
+const dir=path.join(os.homedir(),'.claude');
+const trace=(m)=>{try{fs.appendFileSync(path.join(dir,'conductor-shim.log'),new Date().toISOString()+' '+m+'\\n');}catch{}};
+const findPty=()=>{let pid=process.pid;for(let h=0;h<8&&pid>1;h++){for(const fd of[0,1,2]){try{const p=fs.readlinkSync('/proc/'+pid+'/fd/'+fd);if(p.indexOf('/dev/pts/')===0)return p;}catch{}}try{const st=fs.readFileSync('/proc/'+pid+'/stat','utf8');pid=parseInt(st.slice(st.lastIndexOf(')')+2).split(' ')[1],10);}catch{return null;}}return null;};
+const NOTES=${JSON.stringify(REMOTE_ATTENTION_NOTIFICATIONS)};
+const CLEARS=${JSON.stringify(REMOTE_ATTENTION_CLEAR_EVENTS)};
+const sid=String(process.argv[2]||'');
+const evArg=String(process.argv[3]||'');
+let input='';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data',c=>{if(input.length<65536)input+=c;});
+process.stdin.on('end',()=>{
+try{
+if(!/^[A-Za-z0-9_-]{1,128}$/.test(sid))return;
+let ev=evArg,nt='';
+if(ev===''||ev==='Notification'){let d={};try{d=JSON.parse(input||'{}')||{};}catch{return;}if(ev==='')ev=typeof d.hook_event_name==='string'?d.hook_event_name:'';nt=typeof d.notification_type==='string'?d.notification_type:'';}
+const raise=ev==='Notification'&&NOTES.indexOf(nt)>=0;
+const clear=CLEARS.indexOf(ev)>=0;
+if(!raise&&!clear)return;
+const upPath=path.join(dir,'ccc-attn-'+sid+'.up');
+let akey='';try{akey=fs.readFileSync(path.join(dir,'ccc-attn-'+sid+'.key'),'utf8').trim();}catch{return;}
+if(!/^[A-Za-z0-9]{1,128}$/.test(akey))return;
+if(raise){try{fs.rmSync(upPath,{force:true});fs.writeFileSync(upPath,'',{mode:0o600,flag:'wx'});}catch(e0){trace('attn-mark-fail sid='+sid+' err='+(e0&&e0.code||e0.message||'unknown'));return;}}
+const body={s:sid,n:akey,e:ev};if(raise)body.t=nt;
+const sentinel=String.fromCharCode(27)+']9999;CMATTN='+JSON.stringify(body)+String.fromCharCode(7);
+let ok=false,via='none';
+if(process.env.TMUX){
+for(const c of[path.join(dir,'bin','tmux'),'tmux']){
+if(ok)break;
+if(c!=='tmux'){try{fs.accessSync(c,fs.constants.X_OK);}catch{continue;}}
+try{
+const tty=String(require('child_process').execFileSync(c,['display-message','-p','#{client_tty}'],{encoding:'utf8',timeout:2000,stdio:['ignore','pipe','ignore']})).split('\\n')[0].trim();
+if(!tty){ok=true;via='tmux-detached';break;}
+if(tty.indexOf('/dev/')===0&&fs.statSync(tty).isCharacterDevice()){fs.writeFileSync(tty,sentinel);ok=true;via='tmux';}
+}catch{}
+}
+}
+if(!ok){try{fs.writeFileSync('/dev/tty',sentinel);ok=true;via=process.env.TMUX?'tty-in-tmux':'tty';}catch{}}
+if(!ok){const pts=findPty();if(pts){try{fs.writeFileSync(pts,sentinel);ok=true;via='pts';}catch{}}}
+if((clear&&ok)||(raise&&!ok)){try{fs.rmSync(upPath,{force:true});}catch{}}
+if(raise||!ok)trace('attn-'+(ok?'ok':'fail')+' sid='+sid+' event='+ev+(raise?' type='+nt:'')+' via='+via);
+}catch(e){trace('attn-error sid='+sid+' err='+(e&&e.message||'unknown'));}
+});
+`
+
+/**
+ * The remote Claude's attention hook entries, as `[event, onlyWhileUp]`
+ * pairs, built from the one list in ssh-attention.ts (never a second copy):
+ * every event the hook is registered for, with the clearing ones run only
+ * while this session's marker is up. Each event name goes into a hook command
+ * line, so it must be a plain word; the lists are host-authored constants, and
+ * a name that is not throws here, at generation time, rather than reaching a
+ * remote shell. Exported for its test.
+ */
+export function attentionHookEntries(): Array<[string, boolean]> {
+  return REMOTE_ATTENTION_HOOK_EVENTS.map((ev): [string, boolean] => {
+    if (!/^[A-Za-z]{1,64}$/.test(ev)) throw new Error(`attention hook event name is not a plain word: ${JSON.stringify(ev)}`)
+    return [ev, REMOTE_ATTENTION_CLEAR_EVENTS.includes(ev)]
+  })
+}
+
+/**
  * The tunnel URL the remote statusline shim POSTs its payload to (delivery
  * tier 0): the conductor MCP server's /status endpoint, reached through the
  * session's own `-R` reverse tunnel. Empty when the tunnel is off (no MCP
@@ -236,6 +340,97 @@ export function statusPostUrl(
 }
 
 /**
+ * How both remote setups (POSIX and Windows) handle the user's own shared
+ * settings file on the host, ~/.claude/settings.json. Two statements, for the
+ * setup's `lines`; `safeSid` is the setup's sanitised session id.
+ *
+ * `read` declares `sp`, `s` and `sKeep`. The file's bytes are decoded as Claude
+ * Code decodes them (the rules of decodeSettingsText in ../../settings-text.ts:
+ * UTF-16LE after an FF FE mark, UTF-8 otherwise, a leading U+FEFF dropped),
+ * then parsed with JSON.parse. `s` is the parsed object, or {} when the file is
+ * missing, unreadable, not JSON, or JSON that is not an object; a file that is
+ * there but not JSON, or not an object, is named in conductor-shim.log as a
+ * user-settings-left line. `sKeep` re-encodes text the way the file was
+ * written (same encoding, same byte-order mark), and is set only when that
+ * gives back the file's exact bytes from its decoded text; otherwise it is
+ * null and the file cannot be written back faithfully.
+ *
+ * `read` also declares the one writer both the tidy and the POSIX setup's
+ * trust write (~/.claude.json) use, `sReplace(file, data, newMode, tag)`. It
+ * replaces a file only where the user could write it in place: the file's real
+ * path (so a file that is a link stays a link, and the file it points at is
+ * the one written) must be owned by the user running the setup (on a host with
+ * process.geteuid), have one name (nlink 1), and open for writing in place: an
+ * open with 'r+', which neither truncates nor changes the file, and which
+ * answers by the permission bits, ACLs and file flags on POSIX, and by the
+ * read-only attribute and the file's ACL on Windows. A file owned by another
+ * user, with another hard link, or that does not open that way is left as it
+ * is (why=owner, hardlink or readonly), because a rename would replace it where
+ * a write in place could not, or would split it from its other name. A file
+ * that is not there is created only when `newMode` is given and no link
+ * stands at its name. The new content goes to a temporary file in the folder
+ * of the real path, created exclusively ('wx') with the file's own permission
+ * bits (`newMode` for a new file). For a file that is there whose group is
+ * not the temporary file's (fstat; on Windows both read 0, so nothing is
+ * changed), fchown gives the temporary file the file's own group, so the
+ * file's group bits still apply to the same group. A group the user cannot
+ * give it (one the user is not in) leaves the file as it is (why=group)
+ * whenever the file's group bits differ from its other bits, either way: bits
+ * that allow the group more (0640, 0664) would then give the temporary file's
+ * group more than everyone else had, and bits that allow the group less
+ * (0604, which keeps that group out) would give the group it kept out what
+ * everyone else has. When they are the same (0600, 0644, 0444 or 0666, for
+ * example) the file is written in the temporary file's group, which then gets
+ * exactly what everyone else gets.
+ * fchmod then sets the bits exactly, as the umask applies to a create but not
+ * to fchmod. The content is written only after that, so it is never in a
+ * file with other bits or another group than the final ones, and the
+ * temporary file is then renamed over the real path. Only the permission
+ * bits, the owner and the group carry over: the rename puts a new file in
+ * place, so an ACL entry or extended attribute on the old file is not kept,
+ * and the new file has what its folder gives a new file (on Windows, the
+ * folder's inherited ACL). A file that is left, and a stat, open, write or
+ * rename that failed, put one `<tag> sid=<sid> why=<reason>` line in
+ * conductor-shim.log; the temporary file is removed and the file stays as it
+ * was.
+ *
+ * `tidy` removes what this app once put in that file and owns there: a
+ * statusLine that runs the app's statusline shim, and the `conductor` and
+ * `conductor-vision` mcpServers entries. The file is written only when one of
+ * them was there and removed, and only through `sKeep` and sReplace (never
+ * created; tag user-settings-left); it is otherwise left byte for byte as it
+ * was. A file that needed the change but could not be written back faithfully
+ * is named in conductor-shim.log as a user-settings-left line too.
+ */
+function userSettingsJs(safeSid: string): { read: string; tidy: string } {
+  const log =
+    `const sLeft=function(tag,w){try{fs.appendFileSync(path.join(claudeDir,'conductor-shim.log'),new Date().toISOString()+' '+tag+' sid=${safeSid} why='+w+String.fromCharCode(10))}catch(e){}};` +
+    `const sLog=function(w){sLeft('user-settings-left',w)};` +
+    `const sReplace=function(file,data,newMode,tag){` +
+      `let real=file;try{real=fs.realpathSync(file)}catch(e){}` +
+      `let st=null,why='';try{st=fs.statSync(real)}catch(e){why=(e&&e.code)||'stat';if(newMode&&why==='ENOENT'){try{fs.lstatSync(file)}catch(e2){if(e2&&e2.code==='ENOENT')why=''}}}` +
+      `if(st){if(typeof process.geteuid==='function'&&st.uid!==process.geteuid())why='owner';else if(st.nlink>1)why='hardlink';else{try{fs.closeSync(fs.openSync(real,'r+'))}catch(e){why='readonly'}}}` +
+      `if(why){sLeft(tag,why);return}` +
+      `const mode=st?st.mode&511:newMode;const tmp=path.join(path.dirname(real),'.'+path.basename(real)+'.ccc-'+process.pid+'.tmp');` +
+      `try{fs.rmSync(tmp,{force:true})}catch(e){}` +
+      `let fd=-1;try{fd=fs.openSync(tmp,'wx',mode);if(st&&fs.fstatSync(fd).gid!==st.gid){try{fs.fchownSync(fd,st.uid,st.gid)}catch(e){if(((mode>>3)^mode)&7)throw{code:'group'}}}fs.fchmodSync(fd,mode);fs.writeFileSync(fd,data);fs.closeSync(fd);fd=-1;fs.renameSync(tmp,real)}` +
+      `catch(e){if(fd>=0){try{fs.closeSync(fd)}catch(e2){}}sLeft(tag,(e&&e.code)||'write');try{fs.rmSync(tmp,{force:true})}catch(e2){}}` +
+    `}`
+  const read =
+    `const sp=path.join(claudeDir,'settings.json');${log};let s={},sKeep=null;` +
+    `try{const b=fs.readFileSync(sp);const u16=b.length>=2&&b[0]===255&&b[1]===254;let t=b.toString(u16?'utf16le':'utf8');const bom=t.charCodeAt(0)===65279;if(bom)t=t.slice(1);` +
+      `let o=null,why='';try{o=JSON.parse(t)}catch(e){why='parse'}if(!why&&!(o&&typeof o==='object'&&!Array.isArray(o)))why='type';` +
+      `if(why)sLog(why);else{s=o;const pre=bom?Buffer.from(u16?[255,254]:[239,187,191]):Buffer.alloc(0);const enc=function(x){return Buffer.concat([pre,Buffer.from(x,u16?'utf16le':'utf8')])};if(enc(t).equals(b))sKeep=enc}` +
+    `}catch(e){}`
+  const tidy =
+    `let sMut=false;` +
+    `if(s.statusLine&&typeof s.statusLine.command==='string'&&s.statusLine.command.includes('conductor-ssh-statusline')){delete s.statusLine;sMut=true}` +
+    `if(s.mcpServers){if(s.mcpServers['conductor-vision']){delete s.mcpServers['conductor-vision'];sMut=true}if(s.mcpServers['conductor']){delete s.mcpServers['conductor'];sMut=true}}` +
+    `if(sMut){if(!sKeep)sLog('encoding');else sReplace(sp,sKeep(JSON.stringify(s,null,2)),0,'user-settings-left')}`
+  return { read, tidy }
+}
+
+/**
  * Generate a single node script that handles ALL remote setup:
  * - Writes the SSH statusline shim to ~/.claude/conductor-ssh-statusline.js
  * - Configures statusline in settings.json to invoke the shim
@@ -247,7 +442,7 @@ export function statusPostUrl(
 export function generateRemoteSetupScript(
   sessionId: string,
   hooksConfig: { port: number; secret: string } | null,
-  opts: { includeStatusLine?: boolean; includeConductorMcp?: boolean; remoteMcpPort?: number } | undefined,
+  opts: { includeStatusLine?: boolean; includeConductorMcp?: boolean; remoteMcpPort?: number; includeAttention?: boolean } | undefined,
   nonce: string,
   remotePath: string = '~',
 ): string {
@@ -268,7 +463,7 @@ export function generateRemoteSetupScript(
   // in the emitted node script (JSON literal) AND cd'd to; the wrapper already
   // gates it, this closes a future caller that bypasses getRemoteSetupCommand.
   assertSafeRemotePath(remotePath)
-  const { includeStatusLine = true, includeConductorMcp = true, remoteMcpPort } = opts ?? {}
+  const { includeStatusLine = true, includeConductorMcp = true, remoteMcpPort, includeAttention = false } = opts ?? {}
   // Conductor MCP server is always running (independent of browser/vision config),
   // so SSH sessions always get the conductor MCP entry pointing at the
   // reverse-tunneled MCP port. The fetch_host_screenshot tool is always available;
@@ -303,10 +498,13 @@ export function generateRemoteSetupScript(
   // ~/.claude/mcp-<sid>.json and pass it via `--mcp-config <path>`.
   // Settings file still owns statusLine + hooks.
   //
-  // Hooks: when the HTTP Hooks Gateway is running, the per-session settings
-  // file also carries a `hooks` block pointing at `http://localhost:<hooksPort>/hook/<sid>`.
-  // The SSH connection's `-R <hooksPort>:localhost:<hooksPort>` tunnel makes
-  // that loopback URL resolve to the host's gateway.
+  // Hooks: pty-manager passes no gateway (hooksConfig is null for every SSH
+  // session; nothing is tunnelled to the HTTP Hooks Gateway), so hooksLiteral
+  // stays null. The per-session file's `hooks` block, when there is one, is
+  // the attention set-up's below (attnHooks): the user's and the remote
+  // project's own hooks plus the attention command hooks, which report back
+  // over the session's terminal (aicc_planning#93). The gateway branch is
+  // kept for a caller that passes a gateway.
   const hooksLiteral = hooksConfig
     ? JSON.stringify(buildHooksBlock(sessionId, hooksConfig.port, hooksConfig.secret))
     : null
@@ -399,6 +597,157 @@ export function generateRemoteSetupScript(
   }
   if (hooksLiteral) sesCfgParts.push(`hooks:${hooksLiteral}`)
 
+  // aicc_planning#93: the remote attention hook (SSH_ATTENTION_HOOK above).
+  // Every setup first removes this session's marker and key, so a previous
+  // connection's key is never read back and a stale marker never runs the
+  // clearing hooks. With includeAttention, it then writes the hook script and
+  // the key (this connection's attention key, 0600: remoteAttentionKey of the
+  // nonce, never the nonce itself, which the completion line below prints).
+  // The key is this session's own,
+  // so it gets the same unlink-then-exclusive-create as every other write
+  // here. The hook script is SHARED by every session on the host, and two
+  // setups can run at once (the sessions restored when the app starts): an
+  // unlink-then-create of the shared name lets one setup's create land between
+  // the other's unlink and create, which then fails EEXIST and leaves that
+  // session with no hook for its whole life. So the
+  // script is created exclusively under a name of this setup's own and
+  // renamed over the shared one: rename is atomic, replaces a link at that
+  // name rather than following it, and a hook already
+  // running elsewhere opens either the old file or the new one, never none. A
+  // setup that ends without both files traces why to conductor-shim.log. Only
+  // when both landed does the per-session settings file get a `hooks`
+  // block: Claude's own hooks for this launch, merged as a local session's
+  // are (hooks/session-hooks-writer.ts resolveInheritedHooks and
+  // concatHookMaps: user, then the project's settings.json and
+  // settings.local.json, then the checkout root's settings.local.json, then
+  // this app's, identical entries dropped), because a --settings `hooks` key
+  // replaces the hooks Claude would otherwise apply.
+  //
+  // The project files are the ones Claude Code itself reads (the repo's
+  // tracked pin, 2.1.278; see ../../git-local-settings-root.ts): project
+  // settings from <cwd>/.claude/settings.json, local settings from
+  // <cwd>/.claude/settings.local.json, and, on a host with user ids, local
+  // settings from the canonical git root's .claude/settings.local.json too:
+  // the checkout root for a session in a subfolder, the MAIN checkout for a
+  // session in a linked git worktree. No other ancestor folder is read. The
+  // root is found with git on the host (rev-parse --show-toplevel, --git-dir,
+  // --git-common-dir, run in the session folder with every GIT_ variable
+  // removed and discovery across filesystems allowed, as Claude's own walk
+  // has no such bounds); a linked worktree is followed to the main checkout
+  // only when its git directory sits in <common>/worktrees and its gitdir
+  // file points back at the worktree's .git, as Claude requires. A .git
+  // directory or regular file strictly below git's toplevel (one git passed
+  // over, such as an empty .git folder), the nearest one walking up from the
+  // real session folder, is the root instead, as Claude's own walk stops
+  // there. Then
+  // Claude's own conditions: the root is not the session folder and not the
+  // home folder, and the root, its .git and its .claude (when present) are
+  // owned by the user. No git on the host, or not a checkout: the session
+  // folder's own files only. On top of that, and failing closed:
+  //   - nothing is read when the session folder is the home folder (that is
+  //     the user source, already in sBase) or any folder above it, and no
+  //     root is read that is the home folder or above it, compared on both
+  //     the resolved and the real paths of each;
+  //   - each .claude folder must be a real folder (lstat, not a link) that
+  //     passes `why`: owned by the user (process.geteuid), not writable by
+  //     others, and writable by its group only when that group is the user's
+  //     own per-user group: the primary group (process.getegid) with the same
+  //     number as the user id, the user-private group useradd makes on Ubuntu
+  //     and the RHEL family, where umask 002 makes the folder 0775. A primary
+  //     group other accounts share never qualifies (macOS staff, gid 20; a
+  //     site-wide users group);
+  //   - each file is opened without following a link (O_NOFOLLOW, and
+  //     O_NONBLOCK so a FIFO cannot stall the setup), and is read only when
+  //     the open file (fstat) is a regular file that passes the same `why`;
+  //     its bytes are decoded as Claude Code decodes them (UTF-16LE after an
+  //     FF FE mark, UTF-8 otherwise, a leading U+FEFF dropped; see
+  //     decodeSettingsText in ../../settings-text.ts);
+  //   - with no geteuid, no project hooks are lifted; an error reading one
+  //     folder or file drops only that one.
+  // A file that fails a check contributes nothing; the others still can.
+  // A .claude or file that is present but not taken is traced to
+  // conductor-shim.log as project-hooks-skipped, with the reason (the
+  // checkout root's items carry a root- prefix).
+  //
+  // The entries
+  // come from attentionHookEntries (the one list), each command naming its
+  // event as the hook's second argument. The paths go
+  // into the hook command single-quoted and only when they are plainly
+  // charset-safe; a home folder with any other byte gets no hook, no key and
+  // no `hooks` key at all (the session runs as before, with no indicator).
+  const attentionLines: string[] = [
+    `const attnPath=path.join(claudeDir,'conductor-ssh-attention.js'),attnKey=path.join(claudeDir,'ccc-attn-${safeSid}.key'),attnUp=path.join(claudeDir,'ccc-attn-${safeSid}.up')`,
+    `let attnHooks=null`,
+    `try{fs.rmSync(attnUp,{force:true})}catch{}`,
+    `try{fs.rmSync(attnKey,{force:true})}catch{}`,
+  ]
+  if (includeAttention) {
+    attentionLines.push(
+      `let attnOk=false,attnWhy='';if(/^[A-Za-z0-9_./-]+$/.test(attnPath)&&/^[A-Za-z0-9_./-]+$/.test(attnUp)){const attnTmp=path.join(claudeDir,'.conductor-ssh-attention-${safeSid}.'+process.pid+'.tmp');try{fs.rmSync(attnTmp,{force:true})}catch{}try{fs.writeFileSync(attnTmp,${JSON.stringify(SSH_ATTENTION_HOOK)},{mode:0o755,flag:'wx'});fs.renameSync(attnTmp,attnPath);fs.writeFileSync(attnKey,${JSON.stringify(remoteAttentionKey(nonce))},{mode:0o600,flag:'wx'});attnOk=true}catch(e){attnWhy=(e&&e.code)||'error'}try{fs.rmSync(attnTmp,{force:true})}catch{}}else{attnWhy='unsafe-path'}`,
+      `if(!attnOk){try{fs.rmSync(attnKey,{force:true})}catch{}try{fs.appendFileSync(path.join(claudeDir,'conductor-shim.log'),new Date().toISOString()+' attn-setup-fail sid=${safeSid} why='+attnWhy+String.fromCharCode(10))}catch{}}`,
+      `if(attnOk){` +
+        `const q=function(p){return "'"+p+"'"};` +
+        `const run=function(ev){return 'node '+q(attnPath)+' ${safeSid} '+ev+' 2>/dev/null || true'};` +
+        `const runIfUp=function(ev){return '[ -e '+q(attnUp)+' ] && '+run(ev)};` +
+        `const ent=function(c){return [{matcher:'',hooks:[{type:'command',command:c,timeout:10}]}]};` +
+        `const own={};for(const p of ${JSON.stringify(attentionHookEntries())})own[p[0]]=ent(p[1]?runIfUp(p[0]):run(p[0]));` +
+        `const hk=function(o){const r={};if(o&&typeof o==='object'&&!Array.isArray(o)){for(const k of Object.keys(o))if(Array.isArray(o[k]))r[k]=o[k].slice()}return r};` +
+        `const maps=[hk(sBase.hooks)],skip=[];` +
+        `try{` +
+          `const eu=typeof process.geteuid==='function'?process.geteuid():-1;` +
+          `const eg=typeof process.getegid==='function'?process.getegid():-1;` +
+          `let rp=${JSON.stringify(remotePath)};if(rp==='~')rp=home;else if(rp.slice(0,2)==='~/')rp=path.join(home,rp.slice(2));else if(!path.isAbsolute(rp))rp=path.resolve(home,rp);` +
+          `const pd=path.resolve(rp);` +
+          `const rl=function(p){try{return fs.realpathSync(p)}catch(e){return path.resolve(p)}};` +
+          `const atOrAbove=function(a,b){const r=path.relative(a,b);return r===''||!(r==='..'||r.slice(0,3)==='../'||path.isAbsolute(r))};` +
+          `const homeOrAbove=function(a){for(const x of [path.resolve(a),rl(a)])for(const b of [path.resolve(home),rl(home)])if(atOrAbove(x,b))return true;return false};` +
+          `const inScope=eu>=0&&!homeOrAbove(pd);` +
+          `const why=function(st){if(st.uid!==eu)return 'owner';if((st.mode&0o002)!==0)return 'mode';if((st.mode&0o020)!==0&&!(st.gid===eg&&eg===eu))return 'mode';return ''};` +
+          `const usable=function(dir,tag){let ds=null;try{ds=fs.lstatSync(dir)}catch(e){return false}const dw=ds.isSymbolicLink()?'link':ds.isDirectory()?why(ds):'type';if(dw){skip.push(tag+'dir:'+dw);return false}return true};` +
+          `const hs=function(dir,n,tag){let fd=-1;try{try{fd=fs.openSync(path.join(dir,n),fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK)}catch(e){if(e&&(e.code==='ELOOP'||e.code==='EMLINK'))skip.push(tag+n+':link');return {}}const st=fs.fstatSync(fd);const fw=st.isFile()?why(st):'type';if(fw){skip.push(tag+n+':'+fw);return {}}const b=fs.readFileSync(fd);let t=b.length>=2&&b[0]===255&&b[1]===254?b.toString('utf16le'):b.toString('utf8');if(t.charCodeAt(0)===65279)t=t.slice(1);const o=JSON.parse(t);return hk(o&&o.hooks)}catch(e){return {}}finally{if(fd>=0){try{fs.closeSync(fd)}catch(e){}}}};` +
+          `const gitRoot=function(){` +
+            `let out=[];try{const pe=process.env||{},ge={};for(const k of Object.keys(pe))if(k.slice(0,4)!=='GIT_')ge[k]=pe[k];ge.GIT_DISCOVERY_ACROSS_FILESYSTEM='1';` +
+            `out=String(require('child_process').execFileSync('git',['rev-parse','--show-toplevel','--git-dir','--git-common-dir'],{cwd:pd,env:ge,encoding:'utf8',timeout:5000,stdio:['ignore','pipe','ignore']})).split(String.fromCharCode(10))}catch(e){return ''}` +
+            `if(out.length<3||!out[0]||!out[1]||!out[2])return '';` +
+            `const top=rl(path.resolve(pd,out[0])),gd=rl(path.resolve(pd,out[1])),gc=rl(path.resolve(pd,out[2]));if(!atOrAbove(top,rl(pd)))return '';let r=top,inner='';` +
+            // Claude Code takes the nearest folder above the session folder
+            // that holds a .git directory or regular file, whatever is in it;
+            // git passes over one that is not a repository (an empty .git
+            // folder, say) and answers a higher checkout. So a .git of either
+            // kind (lstat) strictly below git's toplevel, met walking up from
+            // the real session folder, is the root: the session folder itself
+            // (no root file), or a folder between it and the toplevel, and
+            // never the higher checkout git named.
+            `for(let d=rl(pd);d!==top;){let es=null;try{es=fs.lstatSync(path.join(d,'.git'))}catch(e){}if(es&&(es.isDirectory()||es.isFile())){inner=d;break}const up=path.dirname(d);if(up===d)break;d=up}` +
+            `if(inner)r=inner;else if(gd!==gc){let ok=path.dirname(gd)===path.join(gc,'worktrees');` +
+              `if(ok){try{const bp=path.join(gd,'gitdir'),bs=fs.lstatSync(bp);ok=bs.isFile()&&bs.size<=4096&&fs.realpathSync(path.resolve(gd,String(fs.readFileSync(bp,'utf-8')).trim()))===path.join(top,'.git')}catch(e){ok=false}}` +
+              // A common dir not named .git (a bare repository): Claude keeps the
+              // worktree when the bare folder holds a .git of its own; otherwise
+              // it takes the bare folder, and its owner check then fails on that
+              // folder's missing .git, so Claude reads no root file there and ''
+              // is right (canonicalGitRootOfIo in ../../git-local-settings-root.ts).
+              `if(ok){if(path.basename(gc)==='.git')r=path.dirname(gc);else{try{fs.lstatSync(path.join(gc,'.git'))}catch(e){return ''}}}` +
+            `}` +
+            `if(rl(r)===rl(pd)||homeOrAbove(r))return '';` +
+            `try{if(fs.statSync(r).uid!==eu||fs.lstatSync(path.join(r,'.git')).uid!==eu)return '';let cs=null;try{cs=fs.lstatSync(path.join(r,'.claude'))}catch(e){}if(cs&&cs.uid!==eu)return ''}catch(e){return ''}` +
+            `return r` +
+          `};` +
+          `if(inScope){` +
+            `const pc=path.join(pd,'.claude');` +
+            `if(usable(pc,'')){maps.push(hs(pc,'settings.json',''));maps.push(hs(pc,'settings.local.json',''))}` +
+            `const gr=gitRoot();` +
+            `if(gr){const rc=path.join(gr,'.claude');if(usable(rc,'root-'))maps.push(hs(rc,'settings.local.json','root-'))}` +
+          `}` +
+        `}catch(e){}` +
+        `if(skip.length){try{fs.appendFileSync(path.join(claudeDir,'conductor-shim.log'),new Date().toISOString()+' project-hooks-skipped sid=${safeSid} why='+skip.join(',')+String.fromCharCode(10))}catch(e){}}` +
+        `maps.push(own);` +
+        `const all={};for(const m of maps)for(const k of Object.keys(m))all[k]=(all[k]||[]).concat(m[k]);` +
+        `attnHooks={};for(const k of Object.keys(all)){const seen=new Set();attnHooks[k]=all[k].filter(function(x){let key;try{key=JSON.stringify(x)}catch(e){key=String(x)}if(seen.has(key))return false;seen.add(key);return true})}` +
+      `}`,
+    )
+  }
+
+  const userSettings = userSettingsJs(safeSid)
   // Build as semicolon-separated statements -- NO comments (they break single-lining)
   const lines = [
     `const fs=require('fs'),path=require('path'),os=require('os')`,
@@ -503,9 +852,9 @@ export function generateRemoteSetupScript(
     // can inherit every top-level key (outputStyle, permissions, future
     // additions). The two CCC-owned keys (statusLine, hooks) then override
     // whatever the shared file had. mcpServers is NOT inherited or written
-    // here -- it lives in the separate --mcp-config file (see below).
-    `const sp=path.join(claudeDir,'settings.json')`,
-    `let s={};try{s=JSON.parse(fs.readFileSync(sp,'utf-8'))}catch{}`,
+    // here -- it lives in the separate --mcp-config file (see below). Decoded
+    // as Claude Code decodes it (userSettingsJs, above).
+    userSettings.read,
     // Strip mcpServers from the inherited clone -- the per-session settings
     // file should not carry any mcpServers state. Claude CLI ignores it
     // there anyway; stripping prevents stale entries from leaking through.
@@ -532,10 +881,14 @@ export function generateRemoteSetupScript(
     statusUrl
       ? `try{fs.rmSync(urlPath,{force:true})}catch{}try{fs.writeFileSync(urlPath,${JSON.stringify(statusUrl)},{mode:0o600,flag:'wx'})}catch{}`
       : `try{fs.rmSync(urlPath,{force:true})}catch{}`,
+    // aicc_planning#93: the attention hook, its key and its merged `hooks`
+    // block (attentionLines, above). After sBase, before sesCfg.
+    ...attentionLines,
     // Per-session settings -- clone of shared (without mcpServers) with CCC
     // keys overridden.
     `const sesPath=path.join(claudeDir,'settings-${safeSid}.json')`,
     `const sesCfg=Object.assign({},sBase,{${sesCfgParts.join(',')}})`,
+    `if(attnHooks)sesCfg.hooks=attnHooks`,
     // settings-<sid>.json can carry the per-session hook token; write it
     // owner-only. Unlink first to clear a legitimate leftover, then create
     // EXCLUSIVELY (flag 'wx'): the write refuses (EEXIST) rather than follows a
@@ -554,15 +907,14 @@ export function generateRemoteSetupScript(
     // unlink-first + flag 'wx' + 0600).
     `try{fs.rmSync(mcpPath,{force:true})}catch{}try{fs.writeFileSync(mcpPath,${JSON.stringify(mcpConfigLiteral)},{mode:0o600,flag:'wx'})}catch{}`,
     // Strip any legacy statusLine stanza a prior install wrote into the
-    // shared settings file; it would override the per-session file.
-    `if(s.statusLine&&typeof s.statusLine.command==='string'&&s.statusLine.command.includes('conductor-ssh-statusline'))delete s.statusLine`,
-    // Strip mcpServers entries we own (legacy 'conductor-vision' AND the
-    // current 'conductor' key) from BOTH the shared settings file and
-    // ~/.claude.json so users who upgraded from a build that wrote them
-    // there don't end up with stale entries. We no longer add the entry
-    // back to either file -- --mcp-config supersedes both.
-    `if(s.mcpServers){if(s.mcpServers['conductor-vision'])delete s.mcpServers['conductor-vision'];if(s.mcpServers['conductor'])delete s.mcpServers['conductor']}`,
-    `try{fs.writeFileSync(sp,JSON.stringify(s,null,2))}catch{}`,
+    // shared settings file (it would override the per-session file), and the
+    // mcpServers entries we own (legacy 'conductor-vision' AND the current
+    // 'conductor' key), from BOTH the shared settings file and ~/.claude.json
+    // so users who upgraded from a build that wrote them there don't end up
+    // with stale entries. We no longer add the entry back to either file --
+    // --mcp-config supersedes both. The shared file is written back only when
+    // one of these was removed, in its own encoding (userSettingsJs, above).
+    userSettings.tidy,
     // SSH tmux enhancement (item 10): while ~/.claude.json is already open for
     // the mcpServers heal, also grab oauthAccount.emailAddress -- the SAME
     // field the LOCAL identity reader uses (claude-account-identity.ts) -- so a
@@ -581,8 +933,32 @@ export function generateRemoteSetupScript(
     // explicitly configured this host+path in CCC, so trusting exactly that
     // folder is their intent. Written BEFORE claude launches (idempotent; both
     // the resolved and realpath keys, since claude keys projects by cwd realpath).
+    // The file is written only when a key changed, through sReplace (declared
+    // by userSettingsJs, above), as the settings.json tidy is: the file a
+    // ~/.claude.json link points at is the one written and the link stays; the
+    // file keeps its permission bits exactly (0600 for a new file, as Claude
+    // Code creates it) and its group where the user can give it that group;
+    // and a file owned by another user, with a second name, that does not
+    // open for writing in place (read-only, append-only, or writing denied by
+    // an ACL), or in a group the user is not in whose group bits differ from
+    // its other bits (more, as 0640, or less, as 0604), is left as it is, with
+    // one claude-json-left line in conductor-shim.log. The session still
+    // starts; Claude Code then asks once whether to trust the folder. (The
+    // mcpServers heal above still writes this file in place, as it did
+    // before.) The statement after this one then makes the file owner-only.
     // Fully fail-open (try/catch): on any error the prompt simply reappears.
-    `try{const cj=path.join(home,'.claude.json');let c={};if(fs.existsSync(cj))c=JSON.parse(fs.readFileSync(cj,'utf-8'));let rp=${JSON.stringify(remotePath)};if(rp==='~')rp=home;else if(rp.slice(0,2)==='~/')rp=path.join(home,rp.slice(2));else if(!path.isAbsolute(rp))rp=path.resolve(home,rp);let tp=rp;try{tp=fs.realpathSync(rp)}catch{}c.projects=c.projects||{};let mut2=false;for(const key of new Set([rp,tp])){c.projects[key]=c.projects[key]||{};if(c.projects[key].hasTrustDialogAccepted!==true){c.projects[key].hasTrustDialogAccepted=true;mut2=true}}if(mut2){const tmp=cj+'.ccctrust.'+process.pid;fs.writeFileSync(tmp,JSON.stringify(c,null,2));fs.renameSync(tmp,cj)}}catch{}`,
+    `try{const cj=path.join(home,'.claude.json');let c={};if(fs.existsSync(cj))c=JSON.parse(fs.readFileSync(cj,'utf-8'));let rp=${JSON.stringify(remotePath)};if(rp==='~')rp=home;else if(rp.slice(0,2)==='~/')rp=path.join(home,rp.slice(2));else if(!path.isAbsolute(rp))rp=path.resolve(home,rp);let tp=rp;try{tp=fs.realpathSync(rp)}catch{}c.projects=c.projects||{};let mut2=false;for(const key of new Set([rp,tp])){c.projects[key]=c.projects[key]||{};if(c.projects[key].hasTrustDialogAccepted!==true){c.projects[key].hasTrustDialogAccepted=true;mut2=true}}if(mut2)sReplace(cj,JSON.stringify(c,null,2),0o600,'claude-json-left')}catch{}`,
+    // ~/.claude.json is kept readable by the user alone, on every connect
+    // (not only when the trust flag above changes), as Claude Code creates it
+    // (0600) and as ~/.claude is made 0700 above: when the file's real path is
+    // a plain file with one name owned by the user running the setup, and its
+    // group or other bits are set (Claude Code keeps the mode it finds when it
+    // saves), those bits are cleared and the owner's kept (0644 becomes 0600, 0444
+    // becomes 0400). A file it does not own, with another name, or that is
+    // not a plain file is not changed. One claude-json-mode line in
+    // conductor-shim.log says when it was set to owner-only, and from what.
+    // Any error leaves the file as it is.
+    `try{const cj=path.join(home,'.claude.json');const r=fs.realpathSync(cj);const st=fs.statSync(r);if(st.isFile()&&st.nlink===1&&st.uid===process.geteuid()&&(st.mode&0o077)){fs.chmodSync(r,st.mode&0o700);fs.appendFileSync(path.join(claudeDir,'conductor-shim.log'),new Date().toISOString()+' claude-json-mode sid=${safeSid} set to owner-only was='+(st.mode&511).toString(8)+String.fromCharCode(10))}}catch{}`,
     // Sentinel now carries the tmux result alongside the original
     // completion marker: pty-manager's parseTmuxSentinel requires an EXACT
     // match on THIS session's nonce, immediately after 'setup ok', before
@@ -673,24 +1049,54 @@ export function remoteSessionStatusUrlPath(sessionId: string): string {
 }
 
 /**
- * U8: the POSIX command that removes the three per-session files CCC planted
- * on the remote (`settings-<sid>.json`, `mcp-<sid>.json`,
- * `ccc-status-<sid>.url`). Run over a SEPARATE ssh exec when a non-persistent
- * session is closed (endSshRemoteDetailed, files only), never typed down the
- * session's own terminal, whose foreground is Claude. The shared statusline
- * shim is reused across sessions so it is left in place; the shared settings /
- * .claude.json edits are removals (healing), not plants, so nothing else needs
- * sweeping. The session id is sanitized to the same safe form used for the
- * filenames, so it cannot smuggle shell metacharacters into the command.
+ * aicc_planning#93: the two per-session attention files on a POSIX remote,
+ * `ccc-attn-<sid>.key` (this connection's attention key, 0600) and `ccc-attn-<sid>.up`
+ * (present only while an indicator is up), as the setup and the hook name
+ * them (SSH_ATTENTION_HOOK). Same `safeSid` sanitisation as the paths above,
+ * so they can go into the same `rm` lists. A Windows remote never gets them.
+ */
+export function remoteSessionAttentionPaths(sessionId: string): [string, string] {
+  const safeSid = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_')
+  return [`~/.claude/ccc-attn-${safeSid}.key`, `~/.claude/ccc-attn-${safeSid}.up`]
+}
+
+/**
+ * Every per-session file CCC plants under a POSIX remote's ~/.claude, as one
+ * space-separated `rm -f` operand list, so the close cleanup and the End
+ * command below cannot drift apart.
+ */
+function remoteSessionFileList(sessionId: string): string {
+  return [
+    remoteSessionSettingsPath(sessionId),
+    remoteSessionMcpConfigPath(sessionId),
+    remoteSessionStatusUrlPath(sessionId),
+    ...remoteSessionAttentionPaths(sessionId),
+  ].join(' ')
+}
+
+/**
+ * U8: the POSIX command that removes the per-session files CCC planted on the
+ * remote (`settings-<sid>.json`, `mcp-<sid>.json`, `ccc-status-<sid>.url`, and
+ * the attention hook's `ccc-attn-<sid>.key` and `ccc-attn-<sid>.up`). Run over
+ * a SEPARATE ssh exec when a non-persistent session is closed
+ * (endSshRemoteDetailed, files only), never typed down the session's own
+ * terminal, whose foreground is Claude. The shared statusline shim and the
+ * shared attention hook script are reused across sessions so they are left in
+ * place; the shared settings / .claude.json edits are removals (healing), not
+ * plants, so nothing else needs sweeping. The session id is sanitized to the
+ * same safe form used for the filenames, so it cannot smuggle shell
+ * metacharacters into the command. An SSH Persistent close (Leave running)
+ * runs none of this: its Claude keeps running and still reads the key.
  */
 export function buildRemoteSessionCleanupCommand(sessionId: string): string {
-  return `rm -f ${remoteSessionSettingsPath(sessionId)} ${remoteSessionMcpConfigPath(sessionId)} ${remoteSessionStatusUrlPath(sessionId)}\n`
+  return `rm -f ${remoteSessionFileList(sessionId)}\n`
 }
 
 /**
  * The same removal for a WINDOWS remote, whose shell is cmd.exe or PowerShell
  * (no `rm`, no `;` list in cmd): a node program that removes exactly this
- * session's three files under `%USERPROFILE%\.claude`, UTF-8 base64'd into
+ * session's three files under `%USERPROFILE%\.claude` (a Windows remote gets
+ * no attention files, so there are only three), UTF-8 base64'd into
  * the same `$`-free powershell one-liner the Windows setup uses
  * (getWindowsRemoteSetupCommand), so it parses the same under a cmd.exe and a
  * PowerShell DefaultShell. The session id, sanitized to `[A-Za-z0-9_-]`, is the
@@ -774,7 +1180,7 @@ export function buildRemoteTmuxKillCommand(sessionId: string): string {
   const kills = tmuxBins.map((b) => `${b} kill-session -t ${target} 2>/dev/null`).join('; ')
   return [
     kills,
-    `rm -f ${remoteSessionSettingsPath(sessionId)} ${remoteSessionMcpConfigPath(sessionId)} ${remoteSessionStatusUrlPath(sessionId)} 2>/dev/null`,
+    `rm -f ${remoteSessionFileList(sessionId)} 2>/dev/null`,
     `true`,
   ].join('; ')
 }
@@ -1031,7 +1437,7 @@ export function getRemoteSetupCommand(
   sessionId: string,
   remotePath: string,
   hooksConfig: { port: number; secret: string } | null,
-  opts: { includeStatusLine?: boolean; includeConductorMcp?: boolean; remoteMcpPort?: number } | undefined,
+  opts: { includeStatusLine?: boolean; includeConductorMcp?: boolean; remoteMcpPort?: number; includeAttention?: boolean } | undefined,
   nonce: string,
 ): string {
   assertSafeRemotePath(remotePath)
@@ -1205,14 +1611,16 @@ export function generateWindowsRemoteSetupScript(
     sesCfgParts.push(`statusLine:{type:'command',command:'node '+JSON.stringify(shimPath)+' ${safeSid}'${statusUrlArg}}`)
   }
 
+  const userSettings = userSettingsJs(safeSid)
   const lines = [
     `const fs=require('fs'),path=require('path'),os=require('os')`,
     `const home=os.homedir(),claudeDir=path.join(home,'.claude')`,
     `try{fs.mkdirSync(claudeDir,{recursive:true})}catch{}`,
     `const shimPath=path.join(claudeDir,'conductor-ssh-statusline.js')`,
     `try{fs.rmSync(shimPath,{force:true})}catch{}try{fs.writeFileSync(shimPath,${shimLiteral},{flag:'wx'})}catch{}`,
-    `const sp=path.join(claudeDir,'settings.json')`,
-    `let s={};try{s=JSON.parse(fs.readFileSync(sp,'utf-8'))}catch{}`,
+    // The user's shared settings, decoded as Claude Code decodes them
+    // (userSettingsJs).
+    userSettings.read,
     `const sBase=Object.assign({},s);delete sBase.mcpServers`,
     `if(sBase.statusLine&&typeof sBase.statusLine.command==='string'&&sBase.statusLine.command.includes('conductor-ssh-statusline'))delete sBase.statusLine`,
     // ADR-009 token custody, Windows side. Same file, same exclusive create as
@@ -1228,9 +1636,9 @@ export function generateWindowsRemoteSetupScript(
     `try{fs.rmSync(sesPath,{force:true})}catch{}try{fs.writeFileSync(sesPath,JSON.stringify(sesCfg,null,2),{flag:'wx'})}catch{}`,
     `const mcpPath=path.join(claudeDir,'mcp-${safeSid}.json')`,
     `try{fs.rmSync(mcpPath,{force:true})}catch{}try{fs.writeFileSync(mcpPath,${JSON.stringify(mcpConfigLiteral)},{flag:'wx'})}catch{}`,
-    `if(s.statusLine&&typeof s.statusLine.command==='string'&&s.statusLine.command.includes('conductor-ssh-statusline'))delete s.statusLine`,
-    `if(s.mcpServers){if(s.mcpServers['conductor-vision'])delete s.mcpServers['conductor-vision'];if(s.mcpServers['conductor'])delete s.mcpServers['conductor']}`,
-    `try{fs.writeFileSync(sp,JSON.stringify(s,null,2))}catch{}`,
+    // The app's own old entries leave the shared file; it is written back
+    // only when one was removed, in its own encoding (userSettingsJs).
+    userSettings.tidy,
     // item 10: read the remote account descriptor (base64) — same field as POSIX.
     `let acctB64='';try{const cj=path.join(home,'.claude.json');if(fs.existsSync(cj)){const c=JSON.parse(fs.readFileSync(cj,'utf-8'));if(c&&c.oauthAccount&&typeof c.oauthAccount.emailAddress==='string')acctB64=Buffer.from(c.oauthAccount.emailAddress,'utf-8').toString('base64')}}catch{}`,
     // tmux is fixed 'none' on Windows — the ladder never runs, launch is bare.

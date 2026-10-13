@@ -124,18 +124,14 @@ The Tokenomics cost index is separate and is not affected by that switch.
   writes it to disk or to a log, and drops it as soon as Codex has it, or after
   two minutes if the sign-in never starts.
 - **Your own Codex folder (`~/.codex`, or the folder `CODEX_HOME` named when
-  the app started) is checked on the Set up Codex page, and used only when
-  you confirm it.** Once you have said you use Codex, the Set up Codex page
-  asks Codex on its own whether that folder is signed in, so the page can say
-  so; the app takes only Codex's answer, and keeps nothing of it. Asking
-  writes nothing there from the app; the Codex command-line tool keeps its
-  own scratch files in that folder (under `tmp/`) whenever it runs, this
-  check included. The app uses the folder only when you choose to: Use this
-  sign-in on the Set up Codex page, or Use this computer's Codex sign-in in
-  Settings, Accounts. A
-  session runs in it only after you confirm that launch, it is never used for
-  a code review or Sentinel's analysis, and the app never signs in to it;
-  signing out of it asks you first. Two things are read regardless: the conversation files in
+  the app started) is not used for sign-in.** Since 2.1.1-beta.3 the app never
+  checks or takes in the sign-in there: a Codex account is always one you add
+  in the app. Only 2.1.1-beta.2 offered to use it (Use this sign-in). If you
+  chose that, that account keeps working until you archive it (archiving it
+  is final: it has no Restore): a session
+  runs in it only after you confirm that launch, it is never used for a code
+  review or Sentinel's analysis, and the app never signs in to it; signing
+  out of it asks you first. Two things are read regardless: the conversation files in
   `~/.codex/sessions` (for the local Tokenomics index, like the ones in each
   Codex account's folder), and, when the app's built-in tool server starts or
   stops, Codex's `config.toml` in your own Codex folder, from which the app
@@ -180,8 +176,9 @@ The Tokenomics cost index is separate and is not affected by that switch.
   app writes its three instruction files (the canvas review loop, canvas plans
   and the Conductor browser) into that account's own folder, under `skills/`,
   while the built-in tools are on, whichever of them are on, and removes them at
-  that account's next launch with the built-in tools off. For the sign-in
-  already on this computer, it writes the same three into your own Codex
+  that account's next launch with the built-in tools off. For an account
+  2.1.1-beta.2 registered for the sign-in already on this computer, it writes
+  the same three into your own Codex
   folder, under `skills/`, before a session there while the built-in tools are
   on, and removes them when you turn Codex or the built-in tools off; while both
   are on it keeps the copies already there up to date. Codex lists them for
@@ -283,4 +280,4 @@ repository, so its history is visible.
 ## Contact
 
 Questions about this policy: open an issue at
-<https://github.com/nubbymong/claude-command-center/issues>.
+<https://github.com/nubbymong/ai-code-conductor/issues>.

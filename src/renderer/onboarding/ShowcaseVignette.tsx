@@ -1,5 +1,7 @@
+import type { ReactNode } from 'react'
 import type { ShowcaseArtKind } from './showcase-pages'
 import askMarkUrl from '../assets/aicc-code-conductor.svg'
+import { CodexAccountsArt, HelloArt, LaunchArt, ReviewArt } from './codex-art'
 
 /**
  * The drawn illustrations for the What's New showcase pages — pure CSS
@@ -239,7 +241,54 @@ function AskConductorVignette() {
   )
 }
 
-export function ShowcaseVignette({ kind }: { kind: ShowcaseArtKind }) {
+/** The 2.1.1 usage page: a section per assistant, each account apart. With
+ *  Claude Code off (P3.4) it draws the Codex section alone: nothing about
+ *  Claude Code shows to a Codex-only user. */
+function UsageVignette({ claudeOn }: { claudeOn: boolean }) {
+  return (
+    <div className="sv-mini" aria-hidden data-ux-id="showcase-art-usage">
+      <div className="sv-tb"><span className="sv-tl" /><span className="sv-tl" /><span className="sv-tl" /></div>
+      <div className="sv-panel-body">
+        {claudeOn && (
+          <>
+            <div className="sv-pn-h sv-pn-neutral">Claude Code</div>
+            <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--ob)' }} />work<span className="sv-meter"><i style={{ width: '62%' }} /></span>62%</div>
+          </>
+        )}
+        <div className="sv-pn-h sv-pn-neutral">Codex</div>
+        <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--status-success)' }} />work@example, 5-hour<span className="sv-meter"><i style={{ width: '40%' }} /></span>40%</div>
+        <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--status-success)' }} />work@example, weekly<span className="sv-meter"><i style={{ width: '22%' }} /></span>22%</div>
+        <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--status-warning)' }} />review-bot key<span className="sv-meter" />per token</div>
+        <div className="sv-wd-chip"><span className="sv-wd-dot" /> Each account apart, never merged</div>
+      </div>
+    </div>
+  )
+}
+
+/** A drawing shared with Hello Codex, under the showcase's own ux id so a
+ *  page's art can be found by its kind. */
+function Shared({ kind, children }: { kind: ShowcaseArtKind; children: ReactNode }) {
+  return (
+    <div aria-hidden data-ux-id={`showcase-art-${kind}`} style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
+      {children}
+    </div>
+  )
+}
+
+export function ShowcaseVignette({ kind, claudeOn = true }: {
+  kind: ShowcaseArtKind
+  /** Claude Code is on: the Codex drawing then shows Claude tabs beside the
+   *  Codex one, as Hello Codex's does, and the usage drawing a Claude Code
+   *  section. Off, neither draws anything of Claude Code's. */
+  claudeOn?: boolean
+}) {
+  // 2.1.1 (O3): the Hello Codex drawings. The review page shows only with
+  // Claude Code on and tells both directions, so its drawing does too.
+  if (kind === 'codexHello') return <Shared kind={kind}><HelloArt claudeOn={claudeOn} /></Shared>
+  if (kind === 'codexAccounts') return <Shared kind={kind}><CodexAccountsArt /></Shared>
+  if (kind === 'codexLaunch') return <Shared kind={kind}><LaunchArt /></Shared>
+  if (kind === 'codexReview') return <Shared kind={kind}><ReviewArt claudeReview /></Shared>
+  if (kind === 'usage') return <UsageVignette claudeOn={claudeOn} />
   if (kind === 'canvas') return <CanvasVignette />
   if (kind === 'watchdog') return <WatchdogVignette />
   if (kind === 'panel') return <PanelVignette />

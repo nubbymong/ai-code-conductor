@@ -7,9 +7,11 @@
  * Verifies:
  *   - the onboarding shell keeps Tab inside it: round from the last control
  *     to the first, Shift+Tab round from the first to the last, and a Tab
- *     with focus outside (the page body) comes back in; tabindex -1 and
- *     disabled controls are not stops; nothing is trapped while the shell is
- *     stepped aside (hidden) for a terminal;
+ *     with focus outside (the page body) comes back in. On Windows (this
+ *     file's platform) the first three stops are the window's own minimize,
+ *     maximize and close in the shell's top bar (aicc_planning #211);
+ *     tabindex -1 and disabled controls are not stops; nothing is trapped
+ *     while the shell is stepped aside (hidden) for a terminal;
  *   - it gives way to a dialog open above it (its keys are that dialog's);
  *   - the Hello Codex takeover and a replay keep Tab in, and the close dialog
  *     above the takeover keeps its own Tab, Escape and arrows (6f A1);
@@ -91,7 +93,9 @@ afterEach(() => {
 })
 
 const byTest = (id: string) => document.querySelector(`[data-testid="${id}"]`) as HTMLElement | null
-const active = () => (document.activeElement as HTMLElement | null)?.getAttribute('data-testid') ?? document.activeElement?.tagName ?? null
+const active = () => (document.activeElement as HTMLElement | null)?.getAttribute('data-testid') ?? document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName ?? null
+/** The shell's first stop on Windows: the window's minimize (aicc_planning #211). */
+const FIRST = 'Minimize window'
 
 /** Press Tab (or Shift+Tab) where focus is, as the browser delivers it: a
  *  keydown on the focused element that bubbles to window. jsdom moves no
@@ -131,12 +135,12 @@ describe('the onboarding shell keeps Tab on its pages', () => {
     await render(h(Page))
     byTest('p-next')!.focus()
     expect(await tab()).toBe(true)
-    expect(active()).toBe('p-back')
+    expect(active()).toBe(FIRST)
   })
 
   it('Shift+Tab from the first control goes round to the last', async () => {
     await render(h(Page))
-    byTest('p-back')!.focus()
+    ;(document.querySelector(`[aria-label="${FIRST}"]`) as HTMLElement).focus()
     expect(await tab(true)).toBe(true)
     expect(active()).toBe('p-next')
   })
@@ -152,7 +156,7 @@ describe('the onboarding shell keeps Tab on its pages', () => {
     ;(document.activeElement as HTMLElement | null)?.blur()
     expect(document.activeElement).toBe(document.body)
     expect(await tab()).toBe(true)
-    expect(active()).toBe('p-back')
+    expect(active()).toBe(FIRST)
     ;(document.activeElement as HTMLElement | null)?.blur()
     expect(await tab(true)).toBe(true)
     expect(active()).toBe('p-next')
@@ -162,13 +166,14 @@ describe('the onboarding shell keeps Tab on its pages', () => {
     await render(h(Page))
     byTest('titlebar-btn')!.focus()
     expect(await tab()).toBe(true)
-    expect(active()).toBe('p-back')
+    expect(active()).toBe(FIRST)
   })
 
   it('tabindex -1 and disabled controls are not stops', async () => {
     await render(h(Page))
     const shell = document.querySelector('.ob-root')!
-    expect(tabStops(shell).map((el) => el.getAttribute('data-testid'))).toEqual(['p-back', 'p-next'])
+    expect(tabStops(shell).map((el) => el.getAttribute('data-testid') ?? el.getAttribute('aria-label')))
+      .toEqual(['Minimize window', 'Maximize window', 'Close window', 'p-back', 'p-next'])
   })
 
   it('stepped aside (hidden) for a terminal, nothing is trapped', async () => {
@@ -199,11 +204,11 @@ describe('the onboarding shell keeps Tab on its pages', () => {
 })
 
 describe('Hello Codex, the takeover and a replay, keep Tab in', () => {
-  it('replay: Tab from the primary button (the last control) goes to the first page dot, not the title bar', async () => {
+  it('replay: Tab from the primary button (the last control) goes round to the first stop (the window minimize), not the title bar', async () => {
     await render(h(Around, null, h(HelloCodexTakeover, { replay: true, onClose: vi.fn(), onStartSession: vi.fn() })))
     expect(active()).toBe('hc-primary')
     expect(await tab()).toBe(true)
-    expect(active()).toBe('hc-dot-1')
+    expect(active()).toBe(FIRST)
     expect(await tab(true)).toBe(true)
     expect(active()).toBe('hc-primary')
   })
@@ -218,7 +223,7 @@ describe('Hello Codex, the takeover and a replay, keep Tab in', () => {
     }
     byTest('hc-primary')!.focus()
     expect(await tab()).toBe(true)
-    expect(active()).toBe('hc-dot-1')
+    expect(active()).toBe(FIRST)
   })
 
   it('6f A1: with the close dialog open above the takeover, Tab, Escape and the arrows stay the dialog\'s', async () => {
@@ -275,8 +280,8 @@ describe('the app behind is inert while a covering surface shows', () => {
   describe('App wiring (source: App is too large to render here)', () => {
     const APP = readFileSync(resolve(__dirname, '../../../src/renderer/App.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
-    it('appCovered is the onboarding pages (unless aside), the one-time Codex question, or Hello Codex on screen', () => {
-      expect(APP).toContain("const appCovered = (bootGate === 'onboarding' && !onboardingAside) || bootGate === 'codexReconfirm' || helloCodexShowing(helloCodexOpen, boot.helloCodexTurn)")
+    it('appCovered is the onboarding pages (unless aside), the one-time Codex question, the Multi Spawn page, the one-time replace page (O5), or Hello Codex on screen', () => {
+      expect(APP).toContain("const appCovered = (bootGate === 'onboarding' && !onboardingAside) || bootGate === 'codexReconfirm' || bootGate === 'multiSpawnIntro' || bootGate === 'codexReplace' || helloCodexShowing(helloCodexOpen, boot.helloCodexTurn)")
       expect(APP).toContain('onAsideChange={setOnboardingAside}')
       expect(APP).toContain('const helloCodexOpen = useHelloCodexStore((s) => s.open)')
     })
@@ -293,7 +298,7 @@ describe('the app behind is inert while a covering surface shows', () => {
       // The wrapper closes right after the bottom bar's own wrapper.
       const after = APP.slice(bottom).split('\n').slice(1, 4).map((l) => l.trim())
       expect(after).toEqual(['</div>', '</div>', "{bootGate === 'training' && ("])
-      for (const dialog of ['<SshCloseDialog />', '<CloseDialog', '<HelloCodexHost', '<OnboardingHarness', '<CodexReconfirmPage']) {
+      for (const dialog of ['<SshCloseDialog />', '<CloseDialog', '<HelloCodexHost', '<OnboardingHarness', '<CodexReconfirmPage', '<MultiSpawnStartupPage', '<CodexReplacePage']) {
         expect(APP.indexOf(dialog), `${dialog} is outside the inert part`).toBeLessThan(open)
       }
       expect(APP.match(/inert=\{/g)!.length, 'one inert site').toBe(1)

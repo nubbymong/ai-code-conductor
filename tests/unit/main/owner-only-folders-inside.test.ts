@@ -288,6 +288,28 @@ describe('the script: the owner and the rights written separately, then what is 
     expect(OWNER_ONLY_SCRIPT).not.toMatch(/\$s\.SetOwner/)
   })
 
+  it('writes the owner only when this user does not already own the folder (O6); the rights write, which needs only what an owner always has, is made either way', () => {
+    // Writing an owner needs a right a folder made under a parent that gives
+    // this user Modify alone does not have, even for its own owner.
+    const gate = at('    if ($was -ne $user.Value) {')
+    // After the owner is read and another account's folder refused.
+    expect(at("    $was = [IO.Directory]::GetAccessControl($d")).toBeLessThan(gate)
+    expect(at("{ throw 'its owner is not this user' }")).toBeLessThan(gate)
+    // The whole owner write inside it, and nowhere else.
+    const close = lines.findIndex((l, i) => i > gate && l === '    }')
+    expect(close).toBeGreaterThan(gate)
+    const body = lines.slice(gate + 1, close)
+    expect(body.map((l) => l.trim())).toEqual(['$o = New-Object Security.AccessControl.DirectorySecurity', '$o.SetOwner($user)', '[IO.Directory]::SetAccessControl($d, $o)'])
+    expect(OWNER_ONLY_SCRIPT.split('$o.SetOwner($user)').length - 1).toBe(1)
+    expect(OWNER_ONLY_SCRIPT.split('[IO.Directory]::SetAccessControl($d, $o)').length - 1).toBe(1)
+    // The rights write after it, outside it; then the read the verdict judges,
+    // which still requires this user as the owner.
+    const rightsWrite = at('[IO.Directory]::SetAccessControl($d, $s)')
+    expect(rightsWrite).toBeGreaterThan(close)
+    expect(at('$s.SetAccessRuleProtection($true, $false)')).toBeGreaterThan(close)
+    expect(at('$r.owner = $a.GetOwner(')).toBeGreaterThan(rightsWrite)
+  })
+
   it('reads what is inside only when the call asks for it, and only once the folder itself was read back', () => {
     expect(OWNER_ONLY_SCRIPT).toContain(`$walk = $env:${OWNER_ONLY_INSIDE_ENV} -eq '1'`)
     const gate = at('    if ($walk) {')

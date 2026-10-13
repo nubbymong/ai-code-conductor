@@ -148,6 +148,18 @@ describe('each comparison fails on a deliberately wrong fixture (verify the veri
     }
   })
 
+  it("features: the reviewer turns off hooks (D3) and every tool the analysis turns off, each in both supported versions' lists", () => {
+    // The reviewer is sent the change in its request and runs no tool.
+    const disabled = disabledFeatures(argvOf('review'))
+    expect(disabled[0]).toBe('hooks')
+    expect([...disabled].sort()).toEqual([...disabledFeatures(argvOf('analysis'))].sort())
+    expect(disabled).toEqual(expect.arrayContaining(['shell_tool', 'unified_exec']))
+    for (const version of [CODEX_MIN_SUPPORTED_VERSION, CODEX_PINNED_CLI_VERSION]) {
+      const list = parseFeaturesList(parseCapture(fixture(version, 'features-list'))!.stdout)
+      expect(disabled.filter((f) => !list.has(f)), version).toEqual([])
+    }
+  })
+
   it('prove-red: the help fixture with its last non-empty stdout line dropped, everything else kept', () => {
     const text = fixture(v, 'version')
     expect(parseCapture(withoutLastStdoutLine(text))).toEqual({ exit: 0, stdout: '', stderr: '' })

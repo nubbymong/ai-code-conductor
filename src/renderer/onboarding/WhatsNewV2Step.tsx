@@ -1,28 +1,39 @@
 import { useState } from 'react'
 import { releaseLine } from '../utils/versionLabel'
-import { compareVersions, isPrerelease } from '../../shared/version-order'
-import { useAppMetaStore } from '../stores/appMetaStore'
+import { compareVersions, finalRelease } from '../../shared/version-order'
 import { useSettingsStore } from '../stores/settingsStore'
+import { changelog, type ChangelogEntry } from '../changelog'
+import { entriesSince, newSince } from './upgrade-flow'
 import { showcasesFor, ShowcasePage } from './showcase-pages'
 import { ShowcaseVignette } from './ShowcaseVignette'
 import { RenamePageView } from './RenamePage'
 import { usesClaude, usesCodex, claudeWasMissingAtSetup } from './provider-choice'
-
-declare const __APP_VERSION__: string
-
-// The release line this build belongs to ("2.1"), not a hard-coded number: the
-// heading used to say "What's new in 2.0" on every 2.1 beta.
-const LINE_SOURCE = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : ''
-const LINE = releaseLine(LINE_SOURCE)
+import { runningVersion } from './whats-new-gate'
+import { codexAnswered } from './codex-reconfirm-gate'
 
 export interface WhatsNewItem {
   /** Three or four words, ending in a full stop — it runs inline with `desc`. */
   title: string
   /** ONE line. If it needs two sentences, it belongs in the Feature Guide. */
   desc: string
+  /** The first build that shipped what this line tells, prerelease included
+   *  (`2.1.1-beta.2`, not `2.1.1`). The page shows a line only when it is
+   *  newer than where the user comes from (the anchor: whatsNewAnchorFor).
+   *  The frozen table in whatsnew-showcase.test.tsx pins every tag, so a new
+   *  line cannot silently inherit a neighbour's. */
+  since: string
   /** #463: a line that only makes sense against a BEFORE (“the app was
    *  renamed”) — hidden from the fresh-install cohort, who have no before. */
   upgradeOnly?: boolean
+  /** The mirror of upgradeOnly: a line for the fresh-install cohort only,
+   *  because upgraders are told the same thing in more detail elsewhere in
+   *  their own set. */
+  freshOnly?: boolean
+  /** The line tells of the one-time Codex question that follows the run
+   *  (CodexReconfirmPage), so it is hidden once that question is answered:
+   *  every 2.1.1 prerelease anchors at 2.1.0, and a tester who answered on
+   *  beta.2 is not asked again on beta.3 (decideCodexReconfirm). */
+  untilCodexAnswered?: boolean
   /** Id of a showcase page (showcase-pages.ts). Grows a "See it →" chip that
    *  jumps to that page; an id with no matching page renders no chip. */
   seeIt?: string
@@ -50,10 +61,25 @@ export interface WhatsNewSection {
   items: WhatsNewItem[]
 }
 
-// Upgrade-cohort opener (registry step 0, when(): lastSeenVersion exists).
+/**
+ * The rename/roadmap prelude (#525): one page ahead of the summary. Upgraders
+ * arriving from a build that predates the rename open on it — they knew the
+ * app as Claude Command Center and are owed the why. `RENAME_SHIPPED_IN` is
+ * the release whose changelog entry announced the rename; an upgrader whose
+ * anchor is that or later has lived under the new name for their whole
+ * tenure, and re-showing the page on every update would wear it out.
+ * Fresh installs see the same page under a "Welcome to" lead-in (owner call,
+ * canvas R1: the roadmap is the app's own introduction) — their gate is the
+ * `fresh` flag, not this function.
+ *
+ * Declared ahead of the sections: the "New name." line is tagged with it.
+ */
+export const RENAME_SHIPPED_IN = '2.1.0-beta.6'
+
+// The upgrade summary (registry step 0, when(): lastSeenVersion exists).
 // Curated highlights only — the flow's own pages do the actual setup, and the
-// full history stays in the Feature Guide. Fresh installs skip this page
-// entirely (nothing is "new" to them).
+// full history stays in the Feature Guide. Fresh installs meet the same page
+// after Welcome, under an introduction heading.
 //
 // SHAPE (user call 2026-08-21, replacing seven equal paragraph cards): named
 // sections, one line per item. The card grid was rejected as "a horrible wall
@@ -61,47 +87,53 @@ export interface WhatsNewSection {
 // grouped so the eye can pick the part it cares about. If a line needs a second
 // sentence to make sense, the line is wrong — link the Feature Guide instead.
 //
-// WHICH set a user sees depends on where they came from; see sectionsFor.
+// WHICH lines a user sees is decided per line by its `since` tag against the
+// anchor (O1/O2, 2026-10-11): everything newer than where they come from, and
+// nothing they have already been told. Sets are listed oldest first, the order
+// the app changed in. A new release adds its own set below; the drift guard in
+// whatsnew-showcase.test.tsx fails until the newest changelog release has one.
 const SECTIONS_20: WhatsNewSection[] = [
   {
     heading: 'Setup & privacy',
     items: [
-      { title: 'Guided setup.', desc: 'Every feature asks before it turns on, and stays yours to change in Settings.' },
-      { title: 'A privacy pass.', desc: 'The status line and built-in tools are delivered per session; your global Claude config is never written.' },
+      { since: '2.0.0', title: 'Guided setup.', desc: 'Every feature asks before it turns on, and stays yours to change in Settings.' },
+      { since: '2.0.0', title: 'A privacy pass.', desc: 'The status line and built-in tools are delivered per session; your global Claude config is never written.' },
     ],
   },
   {
     heading: 'Tools',
     items: [
-      { title: 'Built-in Tools, your call.', desc: 'Vision, code review, host screenshots and the Agent Canvas each get a real switch.' },
-      { title: 'Codex support.', desc: "Run OpenAI's Codex CLI beside Claude, with a switch of its own." },
+      { since: '2.0.0', title: 'Built-in Tools, your call.', desc: 'Vision, code review, host screenshots and the Agent Canvas each get a real switch.' },
+      { since: '2.0.0', title: 'Codex support.', desc: "Run OpenAI's Codex CLI beside Claude, with a switch of its own." },
     ],
   },
   {
     heading: 'Help',
     items: [
-      { title: 'A guide that answers back.', desc: 'The ? button opens a searchable guide, and a session that has read the docs.' },
+      { since: '2.0.0', title: 'A guide that answers back.', desc: 'The ? button opens a searchable guide, and a session that has read the docs.' },
     ],
   },
   {
     heading: 'Under the hood',
     items: [
-      { title: 'A modern engine.', desc: 'Electron 44, React 19 and xterm.js 6 — fast, on a current security baseline.' },
+      { since: '2.0.0', title: 'A modern engine.', desc: 'Electron 44, React 19 and xterm.js 6 — fast, on a current security baseline.' },
     ],
   },
 ]
 
+// Tags: the first tag whose summary carried the line (git show v<tag>:...),
+// as O2's table does for the showcase pages.
 const SECTIONS_21: WhatsNewSection[] = [
   {
     heading: 'Sessions',
     items: [
-      { title: 'SSH Persistent.', desc: 'A connection kind of its own — the remote session survives a dropped VPN.', needsClaude: true },
-      { title: 'Partner terminal.', desc: 'A plain shell beside your session, labelled so you always know which is which.' },
-      { title: 'One row.', desc: 'The tools and your command buttons sit in a single row under the terminal.', seeIt: 'oneRow' },
-      { title: 'Two-mode panel.', desc: 'Saved configs and Running sessions each get a tab, with Quick Start pins — and the panel resizes.', seeIt: 'panel' },
-      { title: 'Multi Spawn.', desc: 'Mark a config to run several copies at once; everything else is safe from a stray double launch.', seeIt: 'multiSpawn' },
-      { title: 'Remote Resumable.', desc: 'A persistent SSH session you left running waits at the foot of Running, one click from where you were.', seeIt: 'remoteResume', needsClaude: true },
-      { title: 'Marks you can read.', desc: 'Plain SSH, persistent and container sessions each wear their own mark, everywhere they appear.', seeIt: 'sidebarMarks' },
+      { since: '2.1.0-rc.12', title: 'SSH Persistent.', desc: 'A connection kind of its own — the remote session survives a dropped VPN.', needsClaude: true },
+      { since: '2.1.0-beta.16', title: 'Partner terminal.', desc: 'A plain shell beside your session, labelled so you always know which is which.' },
+      { since: '2.1.0-rc.1', title: 'One row.', desc: 'The tools and your command buttons sit in a single row under the terminal.', seeIt: 'oneRow' },
+      { since: '2.1.0-rc.3', title: 'Two-mode panel.', desc: 'Saved configs and Running sessions each get a tab, with Quick Start pins — and the panel resizes.', seeIt: 'panel' },
+      { since: '2.1.0-rc.12', title: 'Multi Spawn.', desc: 'Mark a config to run several copies at once; everything else is safe from a stray double launch.', seeIt: 'multiSpawn' },
+      { since: '2.1.0-rc.12', title: 'Remote Resumable.', desc: 'A persistent SSH session you left running waits at the foot of Running, one click from where you were.', seeIt: 'remoteResume', needsClaude: true },
+      { since: '2.1.0-rc.12', title: 'Marks you can read.', desc: 'SSH, SSH Persistent and container sessions each wear their own mark, everywhere they appear.', seeIt: 'sidebarMarks' },
     ],
   },
   {
@@ -110,84 +142,248 @@ const SECTIONS_21: WhatsNewSection[] = [
     headingWithCodex: 'Working with Claude and Codex',
     items: [
       // WP2 PR 4, P4.1 (row 51): the canvas works in Codex sessions too.
-      { title: 'Agent Canvas.', desc: "Your agent draws a mockup in the app. Mark up what's wrong; it picks the notes up.", seeIt: 'canvas' },
-      { title: 'Session Watchdog.', desc: 'Waits out a rate limit and types the retry itself. Off by default.', seeIt: 'watchdog' },
-      { title: 'Ask Conductor.', desc: 'A session that has read the docs — and can install a helper skill for the rest.', seeIt: 'askConductor' },
+      { since: '2.1.0-beta.16', title: 'Agent Canvas.', desc: "Your agent draws a mockup in the app. Mark up what's wrong; it picks the notes up.", seeIt: 'canvas' },
+      { since: '2.1.0-rc.1', title: 'Session Watchdog.', desc: 'Waits out a rate limit and types the retry itself. Off by default.', seeIt: 'watchdog' },
+      { since: '2.1.0-beta.16', title: 'Ask Conductor.', desc: 'A session that has read the docs — and can install a helper skill for the rest.', seeIt: 'askConductor' },
     ],
   },
   {
     heading: 'Accounts & usage',
     items: [
       // 2.1.1: Codex runs as a second assistant, with accounts of its own.
-      { title: 'Codex accounts.', desc: 'Codex runs beside Claude Code or alone, each account with its own sign-in.' },
+      // Fresh installs only: an upgrader is told this, in more detail, by
+      // the 2.1.1 set below (O3: two "Codex accounts." lines otherwise).
+      { since: '2.1.1-beta.2', title: 'Codex accounts.', desc: 'Codex runs beside Claude Code or alone, each account with its own sign-in.', freshOnly: true },
       // P3.6 (row 22): a Codex account switches mid-session too, keeping the
       // conversation; the claude.ai sign-in the line also named stays Claude's.
-      { title: 'Switch mid-session.', desc: 'Change a running session\'s account without losing the conversation.', seeIt: 'accounts' },
-      { title: 'claude.ai in the app.', desc: 'Sign in to claude.ai in-app, for each account.', needsClaude: true },
-      { title: 'Insights.', desc: 'Usage reports across every account at once, not one at a time.' },
+      { since: '2.1.0-beta.16', title: 'Switch mid-session.', desc: 'Change a running session\'s account without losing the conversation.', seeIt: 'accounts' },
+      // Split out of the Switch mid-session line, which named it from beta.16.
+      { since: '2.1.0-beta.16', title: 'claude.ai in the app.', desc: 'Sign in to claude.ai in-app, for each account.', needsClaude: true },
+      { since: '2.1.0-beta.16', title: 'Insights.', desc: 'Usage reports across every account at once, not one at a time.' },
     ],
   },
   {
     heading: 'The app itself',
     items: [
-      { title: 'New name.', desc: 'Claude Command Center is now AI Code Conductor — nothing else changes.', upgradeOnly: true },
-      { title: 'Signed and notarised.', desc: 'Windows signed, macOS notarised, every update SHA-256 checked.' },
+      // O3 C12 follow-up: "nothing else changes" went with the rename bullet's
+      // "Nothing changes": the earlier Codex setting does not carry over.
+      { since: RENAME_SHIPPED_IN, title: 'New name.', desc: 'Claude Command Center is now AI Code Conductor; same install, same path.', upgradeOnly: true },
+      { since: '2.1.0-beta.16', title: 'Signed and notarised.', desc: 'Windows signed, macOS notarised, every update SHA-256 checked.' },
     ],
   },
 ]
 
-/**
- * Which highlights to show, based on the line the user is arriving FROM.
- *
- * Someone moving 2.0 → 2.1 wants the 2.1 story; they already lived through 2.0.
- * Someone arriving from 1.x — or from a version we cannot read — has missed
- * both, and gets both, oldest first, because that is the order the app changed
- * in. Fresh installs never reach this page at all.
- */
-export function sectionsFor(lastSeenVersion: string | undefined, currentVersion: string): WhatsNewSection[] {
-  const line = releaseLine(currentVersion)
-  // A line with no set of its own — 2.2 before anyone writes one — falls back to
-  // the NEWEST set, not the oldest: greeting a 2.2 user with 2.0 content under a
-  // "What's new in 2.2" heading is the exact bug this page already had once.
-  // When a 2.2 set is written, add it here.
-  if (line === '2.0') return SECTIONS_20
-  const from = releaseLine(lastSeenVersion ?? '')
-  return from === '2.0' || from === '2.1' ? SECTIONS_21 : [...SECTIONS_20, ...SECTIONS_21]
-}
-
-/**
- * The rename/roadmap prelude (#525): one page ahead of the summary. Upgraders
- * arriving from a build that predates the rename open on it — they knew the
- * app as Claude Command Center and are owed the why. `RENAME_SHIPPED_IN` is
- * the release whose changelog entry announced the rename; an upgrader whose
- * last-seen version is that or later has lived under the new name for their
- * whole tenure, and re-showing the page on every update would wear it out.
- * Fresh installs see the same page under a "Welcome to" lead-in (owner call,
- * canvas R1: the roadmap is the app's own introduction) — their gate is the
- * `fresh` flag, not this function.
- */
-export const RENAME_SHIPPED_IN = '2.1.0-beta.6'
-
-export function showRenamePageFor(
-  lastSeenVersion: string | undefined,
-  currentVersion: string,
-  opts?: {
-    /** The update channel in force ('beta' | 'stable'). See the tester arm below. */
-    channel?: string
+// The 2.1.1 story (O3 A1-A13, as its verdict corrected them), told against
+// 2.1.0: Codex was already there as a Beta, so no line announces Codex as
+// such, only what changed. Upgrade only, like its showcase pages: a fresh
+// install keeps the 2.1 story and meets Codex on its own setup pages. Nothing
+// here offers the computer's own Codex sign-in, which is removed (owner rule,
+// 2026-10-11). "Accounts & usage" shares the 2.1 heading on purpose: a 2.0
+// upgrader sees both sets, merged under one heading (summarySections).
+const SECTIONS_211: WhatsNewSection[] = [
+  {
+    heading: 'Codex, a full assistant',
+    items: [
+      { since: '2.1.1-beta.2', upgradeOnly: true, title: 'Codex, no longer Beta.', desc: 'One Providers card turns each assistant on or off and installs Codex for you; Codex can run alone.', seeIt: 'codexAssistant' },
+      { since: '2.1.1-beta.2', upgradeOnly: true, title: 'Codex accounts.', desc: 'Several Codex accounts, each signed in inside its own folder, with a default and a reviewer.', seeIt: 'codexAccounts' },
+      { since: '2.1.1-beta.2', upgradeOnly: true, title: 'Sessions that carry on.', desc: 'A Codex session reopens in its conversation, restarts into an earlier one, and switches account.', seeIt: 'codexSessions' },
+      { since: '2.1.1-beta.2', upgradeOnly: true, title: 'Claude reviews Codex too.', desc: 'A Codex session can now ask Claude for a review; each direction uses its own reviewer account.', seeIt: 'codeReview', needsClaude: true },
+      { since: '2.1.1-beta.2', upgradeOnly: true, title: 'The tools you know.', desc: 'The Agent Canvas, Vision, the Session Watchdog, Plan mode, Compact and Logs work for Codex too.' },
+    ],
   },
-): boolean {
-  if (!lastSeenVersion) return false // fresh installs are gated by `fresh`, not by version
-  if (releaseLine(currentVersion) === '2.0') return false // the 2.0 line predates the rename
-  // Tester arm (owner call, canvas R2 2026-08-27): on the beta channel every
-  // PRERELEASE build shows the full What's New content, cohort pages included —
-  // "until we hit stable I should be seeing everything". Scoped to prerelease
-  // builds on purpose: the moment a final release is running, testers rejoin
-  // the ordinary cohort gate below and the page stops re-showing.
-  if (opts?.channel === 'beta' && isPrerelease(currentVersion)) return true
-  return compareVersions(lastSeenVersion, RENAME_SHIPPED_IN) < 0
+  {
+    heading: 'Accounts & usage',
+    items: [
+      { since: '2.1.1-beta.2', upgradeOnly: true, title: 'Usage for Codex.', desc: 'The Usage page and the usage strip cover Codex accounts, each shown on its own, never merged.', seeIt: 'usageBoth' },
+      { since: '2.1.1-beta.2', upgradeOnly: true, title: 'Tokenomics by account.', desc: 'Filter spend by provider and by account.' },
+      { since: '2.1.1-beta.2', upgradeOnly: true, title: 'chatgpt.com in the app.', desc: 'Each Codex account can sign in to chatgpt.com, kept apart from every other account.' },
+    ],
+  },
+  {
+    heading: 'Across the app',
+    items: [
+      { since: '2.1.1-beta.2', upgradeOnly: true, title: 'Ask Conductor on Codex.', desc: 'It runs on Codex too; with both assistants on, pick which in Settings, General.' },
+      { since: '2.1.1-beta.2', upgradeOnly: true, title: 'Three more for Codex.', desc: 'Sentinel, Insights and Cloud Agents cover Codex sessions and accounts too.' },
+      { since: '2.1.1-beta.2', upgradeOnly: true, title: 'Claude 5.5 models.', desc: 'Opus 5.5, Sonnet 5.5 and Haiku 5.5 are in the model picker.', needsClaude: true },
+      { since: '2.1.1-beta.1', upgradeOnly: true, title: 'Remote scrolling.', desc: "The mouse wheel scrolls an SSH Persistent session's history, as it does a local one.", needsClaude: true },
+    ],
+  },
+  {
+    heading: 'Before you start',
+    items: [
+      // The O3 verdict's A13: the line that tells an upgrader what to do next.
+      // Every Codex account is one the app adds (owner rule, 2026-10-11).
+      // Worded so it never names the retired tab the way a pointer to it
+      // would (settings-codex-tab-retired.test.tsx sweeps the source).
+      { since: '2.1.1-beta.2', upgradeOnly: true, untilCodexAnswered: true, title: 'Codex asks once.', desc: 'Codex no longer has its own Settings tab or single sign-in: answer once, then add a Codex account.' },
+    ],
+  },
+]
+
+/** Every curated set, oldest first. */
+export const WHATS_NEW_SECTIONS: readonly WhatsNewSection[] = [...SECTIONS_20, ...SECTIONS_21, ...SECTIONS_211]
+
+/**
+ * The curated lines that are new to someone whose anchor is `anchor`
+ * (whatsNewAnchorFor), in the order the app changed; a section left with no
+ * line goes. No anchor (a fresh install) means every line. Cohort and
+ * provider filters are the page's (summarySections). `sets` is for tests
+ * that need a curated history of their own; the page uses the real one.
+ */
+export function sectionsFor(anchor: string | undefined, sets: readonly WhatsNewSection[] = WHATS_NEW_SECTIONS): WhatsNewSection[] {
+  return sets
+    .map((s) => ({ ...s, items: s.items.filter((it) => newSince(it.since, anchor)) }))
+    .filter((s) => s.items.length > 0)
 }
 
-function ShowcasePageView({ page, index, ofShowcases }: { page: ShowcasePage; index: number; ofShowcases: number }) {
+/** What a page view depends on beyond the anchor. */
+export interface SummaryView {
+  /** Where the user comes from (whatsNewAnchorFor); ignored when fresh. */
+  anchor?: string
+  /** The first-run cohort: nothing is "new" to them. */
+  fresh: boolean
+  /** Claude Code is in use (P3.4). */
+  withClaude: boolean
+  /** Codex is in use (P4.11 headings). */
+  withCodex: boolean
+  /** The one-time Codex question is answered (codexAnswered): the lines
+   *  marked untilCodexAnswered go. Absent counts as not answered. */
+  codexAnswered?: boolean
+}
+
+/** The `data-ux-id` of a section, from the heading it shows. */
+export function sectionUxId(heading: string): string {
+  return `section-${heading.toLowerCase().replace(/[^a-z]+/g, '-')}`
+}
+
+/**
+ * The summary's sections as the page shows them: the lines new since the
+ * anchor, for this cohort (upgradeOnly / freshOnly), these providers
+ * (needsClaude) and the Codex answer (untilCodexAnswered), under the heading
+ * each section shows for them.
+ *
+ * Sections that SHOW the same heading are merged, first one's place, lines in
+ * order. Two sets can share a heading ("Accounts & usage"), and a provider
+ * variant can land on another section's heading, while the heading is the
+ * React key and the section's data-ux-id: a duplicate would collide on both.
+ */
+export function summarySections(v: SummaryView, sets: readonly WhatsNewSection[] = WHATS_NEW_SECTIONS): WhatsNewSection[] {
+  const headingFor = (s: WhatsNewSection): string =>
+    !v.withClaude ? s.headingWithoutClaude ?? s.heading : v.withCodex ? s.headingWithCodex ?? s.heading : s.heading
+  const merged: WhatsNewSection[] = []
+  for (const s of sectionsFor(v.fresh ? undefined : v.anchor, sets)) {
+    const items = s.items.filter((it) =>
+      !(v.fresh ? it.upgradeOnly : it.freshOnly) && (v.withClaude || !it.needsClaude) && !(v.codexAnswered && it.untilCodexAnswered))
+    if (items.length === 0) continue
+    const heading = headingFor(s)
+    const same = merged.find((m) => sectionUxId(m.heading) === sectionUxId(heading))
+    if (same) same.items = [...same.items, ...items]
+    else merged.push({ heading, items })
+  }
+  return merged
+}
+
+/** The showcase pages the page shows, for this anchor, cohort and providers.
+ *  P3.6: a page that shows with Claude Code off leaves out its points that
+ *  need it. */
+export function summaryShowcases(v: Omit<SummaryView, 'withCodex'>): ShowcasePage[] {
+  return showcasesFor(v.fresh ? undefined : v.anchor, { fresh: v.fresh })
+    .filter((p) => v.withClaude || !p.needsClaude)
+    .map((p) => (v.withClaude ? p : { ...p, points: p.points.filter((pt) => !pt.needsClaude) }))
+}
+
+/**
+ * An update with nothing curated since the anchor (O1/O2: a fixes-only
+ * build) gets ONE line, made from the changelog entries since the anchor, and
+ * never an older curated set as though it were new. With no entry since (a
+ * downgrade, or a build whose changelog head is behind it) it reads the
+ * running build's own entry; with none of that either, it says only that.
+ */
+export function fixesAndPolish(entries: readonly ChangelogEntry[], currentVersion: string): WhatsNewSection {
+  // Each change type counted under its own name, so a feature is never
+  // passed off as an "improvement".
+  const counts = { fix: 0, improvement: 0, feature: 0 }
+  for (const e of entries) for (const c of e.changes) if (c.type in counts) counts[c.type]++
+  const named = (n: number, one: string, many: string) => (n > 0 ? `${n} ${n === 1 ? one : many}` : '')
+  const parts = [
+    named(counts.fix, 'fix', 'fixes'),
+    named(counts.improvement, 'improvement', 'improvements'),
+    named(counts.feature, 'new feature', 'new features'),
+  ].filter(Boolean)
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0]
+  const desc = list ? `${list} in this update.` : 'Small fixes in this update.'
+  return { heading: 'This update', items: [{ since: currentVersion, title: 'Fixes and polish.', desc }] }
+}
+
+/** The changelog entries the fixes-only line counts (see fixesAndPolish). */
+export function fixesEntries(entries: readonly ChangelogEntry[], anchor: string | undefined, currentVersion: string): ChangelogEntry[] {
+  const since = entriesSince(entries, anchor, currentVersion)
+  return since.length > 0 ? since : entries.filter((e) => compareVersions(e.version, currentVersion) === 0)
+}
+
+/** What the summary page shows: its sections, the showcase pages behind it,
+ *  and whether this is the fixes-only page. */
+export interface SummaryContent {
+  sections: WhatsNewSection[]
+  showcases: ShowcasePage[]
+  fixesOnly: boolean
+}
+
+/**
+ * The summary page's content for a view (WhatsNewV2Step renders exactly this).
+ *
+ * The empty delta is judged AFTER the cohort and provider filters (O2): a
+ * Codex-only user whose only new lines need Claude Code has nothing new, and
+ * neither has an upgrader whose only new line is the Codex question they have
+ * already answered. Judged on the unfiltered lines instead, the page would
+ * show no lines at all under a "things worth knowing" sub-line. A fixes-only
+ * page has ONE line (fixesAndPolish over `entries` since the anchor) and no
+ * showcase pages. `sets` is for tests; the page uses the real curated sets.
+ */
+export function summaryContent(
+  view: SummaryView,
+  entries: readonly ChangelogEntry[],
+  currentVersion: string,
+  sets: readonly WhatsNewSection[] = WHATS_NEW_SECTIONS,
+): SummaryContent {
+  const curated = summarySections(view, sets)
+  const fixesOnly = !view.fresh && curated.length === 0
+  const sections = fixesOnly ? [fixesAndPolish(fixesEntries(entries, view.anchor, currentVersion), currentVersion)] : curated
+  const showcases = fixesOnly ? [] : summaryShowcases(view)
+  return { sections, showcases, fixesOnly }
+}
+
+/** The summary heading: where the user comes from, when that reads as a real
+ *  version older than this build (O1: "What's new in 2.1" named only the
+ *  line, on a 2.1.1 build). A downgrade or an unreadable stamp gets the plain
+ *  heading rather than a false "since". */
+export function whatsNewHeading(anchor: string | undefined, currentVersion: string): string {
+  return anchor && finalRelease(anchor) !== null && compareVersions(anchor, currentVersion) < 0
+    ? `What's new since ${anchor}`
+    : "What's new"
+}
+
+/** The line under the heading: singular for one line (O2: "1 things"). */
+export function whatsNewSubLine(count: number, pages: number, fixesOnly: boolean): string {
+  if (fixesOnly) return 'This update is fixes and polish.'
+  const lines = `${count} ${count === 1 ? 'thing' : 'things'} worth knowing, in one line ${count === 1 ? '' : 'each'}`.trimEnd()
+  if (pages === 0) return `${lines}.`
+  return pages === 1
+    ? `${lines}, and 1 of them has a page of its own, just behind this one.`
+    : `${lines}, and ${pages} of them have a page of their own, just behind this one.`
+}
+
+export function showRenamePageFor(anchor: string | undefined, currentVersion: string): boolean {
+  if (!anchor) return false // fresh installs are gated by `fresh`, not by version
+  if (releaseLine(currentVersion) === '2.0') return false // the 2.0 line predates the rename
+  // The beta-channel tester arm (owner call, canvas R2 2026-08-27) is gone: it
+  // was scoped to "until we hit stable", and 2.1 is stable. A tester's anchor
+  // already drops to the last final release (whatsNewAnchorFor), which keeps
+  // them on the whole story of the release they test, never on the rename.
+  return compareVersions(anchor, RENAME_SHIPPED_IN) < 0
+}
+
+function ShowcasePageView({ page, index, ofShowcases, claudeOn }: { page: ShowcasePage; index: number; ofShowcases: number; claudeOn: boolean }) {
   return (
     <div className="p2">
       <div className="p2-inner sc-page" style={{ width: 'min(1000px, 95vw)' }} data-ux-id={`showcase-page-${page.id}`}>
@@ -218,7 +414,7 @@ function ShowcasePageView({ page, index, ofShowcases }: { page: ShowcasePage; in
           </p>
         </div>
         <div className="sc-art" data-ux-id="showcase-art">
-          <ShowcaseVignette kind={page.art} />
+          <ShowcaseVignette kind={page.art} claudeOn={claudeOn} />
         </div>
       </div>
     </div>
@@ -230,6 +426,7 @@ export function WhatsNewV2Step({
   ctaLabel = 'Set it up →',
   hint = 'The next pages set these up, one at a time.',
   fresh = false,
+  anchor,
 }: {
   onNext: () => void
   /** Footer CTA. The harness passes "Continue" when this page ends the run —
@@ -237,42 +434,36 @@ export function WhatsNewV2Step({
   ctaLabel?: string
   hint?: string
   /** #463: first-run cohort — nothing is "new" to them, so the heading
-   *  introduces the app instead of diffing it. sectionsFor already returns
-   *  the full 2.0+2.1 story when there is no lastSeenVersion. */
+   *  introduces the app instead of diffing it, and every line and page that
+   *  is not upgrade-only shows. */
   fresh?: boolean
+  /** Where this user comes from (whatsNewAnchorFor), fixed by the harness
+   *  for the run from the boot snapshot. Never read from the live stamp: a
+   *  stamp landing mid-run would reshape the pages under the user. */
+  anchor?: string
 }) {
-  // Subscribed, not getState() (quality note): a stamp landing while the
-  // step is mounted must re-derive the prelude instead of stranding pageIx.
-  const lastSeen = useAppMetaStore((s) => s.meta.lastSeenVersion)
-  const channel = useSettingsStore((s) => s.settings.updateChannel)
+  const current = runningVersion()
   // P3.4 (row 14): with Claude Code off (or setup found no Claude Code and
   // the run goes on with Codex only, as the Welcome page reads it) a line or
   // page about something that needs Claude Code is not shown.
   const withClaude = useSettingsStore((s) => usesClaude(s.settings)) && !claudeWasMissingAtSetup()
   const withCodex = useSettingsStore((s) => usesCodex(s.settings))
-  const headingFor = (s: WhatsNewSection): string =>
-    !withClaude ? s.headingWithoutClaude ?? s.heading : withCodex ? s.headingWithCodex ?? s.heading : s.heading
-  const sections = sectionsFor(lastSeen, LINE_SOURCE)
-    .map((s) => ({ ...s, heading: headingFor(s), items: s.items.filter((it) => !(fresh && it.upgradeOnly) && (withClaude || !it.needsClaude)) }))
-    .filter((s) => s.items.length > 0)
-  const count = sections.reduce((n, s) => n + s.items.length, 0)
+  // Read as the run's last hint reads it (OnboardingHarness, notesRunEndHint):
+  // answered means the one-time Codex question does not follow this run.
+  const answered = useSettingsStore((s) => codexAnswered(s.settings))
+  const view: SummaryView = { anchor, fresh, withClaude, withCodex, codexAnswered: answered }
+  // The empty delta is judged AFTER the cohort and provider filters (O2;
+  // summaryContent, where the tests pin it).
   // The showcase (owner design 2026-08-24): the summary is page 0; each
-  // flagship feature of the line gets a full page behind it. With no pages
-  // authored for a line this collapses to exactly the old single-page step —
-  // no dots, no skip, the harness CTA — so nothing regresses.
-  // P3.6: a page that shows with Claude Code off leaves out its points that
-  // need it. No point needs it in this release: P4.7 lifted the last one,
-  // the accounts page's Insights point, as Insights runs for Codex too.
-  const showcases = showcasesFor(LINE_SOURCE)
-    .filter((p) => withClaude || !p.needsClaude)
-    .map((p) => (withClaude ? p : { ...p, points: p.points.filter((pt) => !pt.needsClaude) }))
+  // flagship feature new since the anchor gets a full page behind it. With
+  // no page for this user it collapses to exactly the old single-page step:
+  // no dots, no skip, the harness CTA; and a fixes-only update has none.
+  const { sections, showcases, fixesOnly } = summaryContent(view, changelog, current)
+  const count = sections.reduce((n, s) => n + s.items.length, 0)
   // #525: pre-rename upgraders AND fresh installs (owner call, canvas R1)
-  // open on the rename/roadmap page — and beta-channel testers on any
-  // prerelease build (owner call, canvas R2). Post-rename STABLE upgraders'
-  // paging is untouched (prelude 0 keeps every index exactly what it was).
-  // The 2.0 line predates both the rename and the roadmap, so it never shows it.
-  const prelude =
-    releaseLine(LINE_SOURCE) !== '2.0' && (fresh || showRenamePageFor(lastSeen, LINE_SOURCE, { channel })) ? 1 : 0
+  // open on the rename/roadmap page. The 2.0 line predates both the rename
+  // and the roadmap, so it never shows it.
+  const prelude = releaseLine(current) !== '2.0' && (fresh || showRenamePageFor(anchor, current)) ? 1 : 0
   const summaryIx = prelude
   const [pageIx, setPageIx] = useState(0)
   const total = prelude + 1 + showcases.length
@@ -288,14 +479,12 @@ export function WhatsNewV2Step({
       ) : pageIx === summaryIx ? (
         <div className="p2">
           <div className="p2-inner" style={{ width: 'min(920px, 95vw)' }}>
-            <h2 className="h2" data-ux-id="whatsnew-heading">{fresh ? <>What you&apos;re getting</> : <>What&apos;s new in {LINE}</>}</h2>
-            <p className="p2-sub" data-ux-id="whatsnew-sub">
-              {count} things worth knowing, in one line each{showcases.length > 0 ? ` — and ${showcases.length} of them have a page of their own, just behind this one` : ''}.
-            </p>
+            <h2 className="h2" data-ux-id="whatsnew-heading">{fresh ? <>What you&apos;re getting</> : whatsNewHeading(anchor, current)}</h2>
+            <p className="p2-sub" data-ux-id="whatsnew-sub">{whatsNewSubLine(count, showcases.length, fixesOnly)}</p>
 
             <div className="wn-sections" data-ux-id="whatsnew-sections">
               {sections.map((s) => (
-                <section key={s.heading} data-ux-id={`section-${s.heading.toLowerCase().replace(/[^a-z]+/g, '-')}`}>
+                <section key={s.heading} data-ux-id={sectionUxId(s.heading)}>
                   <h3 className="wn-sec-h">{s.heading}</h3>
                   {s.items.map((it) => (
                     <div className="wn-item" key={it.title}>
@@ -326,7 +515,7 @@ export function WhatsNewV2Step({
           </div>
         </div>
       ) : (
-        <ShowcasePageView page={showcases[pageIx - summaryIx - 1]} index={pageIx - summaryIx} ofShowcases={showcases.length} />
+        <ShowcasePageView page={showcases[pageIx - summaryIx - 1]} index={pageIx - summaryIx} ofShowcases={showcases.length} claudeOn={withClaude} />
       )}
       <div className="foot">
         <span className="hint" data-ux-id="whatsnew-hint">

@@ -12,6 +12,7 @@ import { useSettingsStore } from '../../../src/renderer/stores/settingsStore'
 import {
   formatSentinelReportText,
   formatFindingText,
+  SENTINEL_NOTHING_CHECKED,
 } from '../../../src/renderer/components/sentinel/sentinel-report-text'
 import type { SentinelFinding, SentinelStateSnapshot } from '../../../src/shared/sentinel-types'
 
@@ -126,6 +127,31 @@ describe('SentinelPanel for Codex (P3.9)', () => {
     const { container, unmount } = render(<SentinelPanel />)
     expect(container.textContent).toContain('Claude Code 2.1.177 is compatible with AI Code Conductor.')
     expect(container.textContent).not.toContain('Codex')
+    unmount()
+  })
+
+  // Owner findings 2026-10-11: the panel said "Codex unknown" and called an
+  // unchecked Codex compatible.
+  it('both on, Codex not checked yet: the subtitle says so, and only Claude Code is called compatible', () => {
+    setProviders(true, true)
+    act(() => useSentinelStore.setState({ snap: { ...snap, findings: [] }, panelOpen: true } as never))
+    const { container, unmount } = render(<SentinelPanel />)
+    expect(container.textContent).toContain('CC 2.1.177 · Codex not checked yet · ')
+    expect(container.textContent).toContain('Claude Code 2.1.177 is compatible with AI Code Conductor.')
+    expect(container.textContent).not.toContain('and Codex')
+    expect(container.textContent).not.toContain('unknown')
+    unmount()
+  })
+
+  it('nothing checked yet: no green verdict and nothing called compatible, only that there is no verdict yet', () => {
+    setProviders(true, true)
+    act(() => useSentinelStore.setState({ snap: { ...snap, findings: [], lastSeenCcVersion: null }, panelOpen: true } as never))
+    const { container, unmount } = render(<SentinelPanel />)
+    expect(container.textContent).toContain('Claude Code not checked yet · Codex not checked yet')
+    expect(container.textContent).toContain(SENTINEL_NOTHING_CHECKED)
+    expect(container.querySelector('[data-testid="sentinel-nothing-checked"]')).not.toBeNull()
+    expect(container.textContent).not.toContain('compatible')
+    expect(container.textContent).not.toContain('No breaking changes')
     unmount()
   })
 

@@ -2,9 +2,11 @@
 // as Claude's does, and each Codex model offers its own effort levels.
 //
 // The Codex rows are the list-visible models of the supported Codex CLI's own
-// catalogue (the models catalogue bundled in the 0.153.4 binary, read as bytes;
-// resources/codex-model-catalogue.json), with each model's supported reasoning
-// levels. Claude's pickers never show a Codex row, and Codex's never a Claude one.
+// catalogue (the models catalogue bundled in the 0.153.4 binary, read as bytes,
+// and in 0.155.1 and 0.156.1; resources/codex-model-catalogue.json), with each
+// model's supported reasoning levels. gpt-6-sol and gpt-6-luna come from 0.156.1,
+// the newest Codex the app calls supported (CODEX_MAX_TESTED_VERSION). Claude's
+// pickers never show a Codex row, and Codex's never a Claude one.
 import { describe, it, expect } from 'vitest'
 import {
   buildModelPickerRows,
@@ -19,13 +21,14 @@ import {
   type ExpectedModelSet,
   type OverlayModelEntry,
 } from '../../src/shared/model-registry'
+import { CODEX_MIN_SUPPORTED_VERSION, CODEX_MAX_TESTED_VERSION } from '../../src/main/providers/codex/cli-contract'
 import baselineJson from '../../resources/model-registry.json'
 import catalogueJson from '../../resources/codex-model-catalogue.json'
 
 const reg = baselineJson as unknown as ModelRegistry
 const catalogue = catalogueJson as unknown as ExpectedModelSet
 
-const CODEX_IDS = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2']
+const CODEX_IDS = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2']
 
 describe('Codex model catalogue from the registry (row 39)', () => {
   it('offers the list-visible models of the Codex CLI catalogue, in its order, under one Codex group', () => {
@@ -102,6 +105,20 @@ describe('Codex model catalogue from the registry (row 39)', () => {
     expect(r.extra).toEqual([])
     expect(catalogue.models.map((m) => m.id)).toEqual(CODEX_IDS)
   })
+
+  // S18 (2026-10-12): CODEX_MAX_TESTED_VERSION reached 0.156.1 while this list
+  // still stopped at 0.155.1, so the picker lacked two models a supported Codex
+  // lists. The list must be read from the oldest and the newest supported CLI.
+  it('is read from the oldest and the newest Codex the app supports, and names the two 0.156.1 models', () => {
+    const cat = catalogueJson as unknown as { cliVersions: string[]; models: Array<{ id: string; label: string; cliVersions?: string[] }> }
+    expect(cat.cliVersions).toContain(CODEX_MIN_SUPPORTED_VERSION)
+    expect(cat.cliVersions).toContain(CODEX_MAX_TESTED_VERSION)
+    for (const m of cat.models) for (const v of m.cliVersions ?? []) expect(cat.cliVersions, m.id).toContain(v)
+    expect(cat.models.filter((m) => m.cliVersions?.includes('0.156.1')).map((m) => [m.id, m.label])).toEqual([['gpt-6-sol', 'GPT-6-Sol'], ['gpt-6-luna', 'GPT-6-Luna']])
+    const rows = buildModelPickerRows(reg, 'codex')
+    expect(rows.find((r) => r.value === 'gpt-6-sol')!.label).toBe('GPT-6-Sol')
+    expect(rows.find((r) => r.value === 'gpt-6-luna')!.label).toBe('GPT-6-Luna')
+  })
 })
 
 describe('Codex effort levels per model (row 40)', () => {
@@ -119,6 +136,8 @@ describe('Codex effort levels per model (row 40)', () => {
   it('marks the levels a model does not support, as the Codex CLI catalogue lists them', () => {
     const supported = (id: string) => buildEffortRows(reg, id, 'codex').filter((r) => r.supported).map((r) => r.value)
     expect(supported('gpt-6-astra')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+    expect(supported('gpt-6-sol')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+    expect(supported('gpt-6-luna')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
     expect(supported('gpt-5.6-sol')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     expect(supported('gpt-5.6-terra')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     expect(supported('gpt-5.6-luna')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])

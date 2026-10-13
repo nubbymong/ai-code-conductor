@@ -161,7 +161,11 @@ export function composedProviderIds(): readonly string[] {
 /** At app quit: the headless CLI runs of both providers go through one
  *  runner, and its kills still reading a process table kill what they know
  *  at once rather than leave a CLI running once the app is gone. A
- *  first-start warm-up still running (ADR-025) is ended too. */
+ *  first-start warm-up still running (ADR-025) is ended too, and its callers
+ *  are held from then on, as are the four starts that ask for a warm-up only
+ *  on some paths (the quit hold; see first-start-warmup.ts and
+ *  quit-hold.ts). Called from the before-quit teardown only (index.ts): the
+ *  exit that installs an update and SIGTERM do not run it. */
 export function flushPendingProviderCliKills(): void {
   try { flushFirstStartWarmups() } catch { /* best effort at quit */ }
   flushPendingCodexKills()

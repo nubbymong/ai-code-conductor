@@ -12,6 +12,7 @@
 // `catch -> null`): offline is not an error, it just means the caller falls
 // back to the frozen snapshot and says so.
 import { logInfo } from '../debug-logger'
+import { MIN_PLAUSIBLE_IDS } from './sentinel-models'
 
 export const MODEL_ARTICLE_URL =
   'https://support.claude.com/en/articles/11940350-claude-code-model-configuration'
@@ -42,9 +43,11 @@ const SUPPORTED_HEADING_RE = /<h([1-6])[^>]*>\s*supported\s+models\s*<\/h\1>/i
 /**
  * A parse this thin can go wrong quietly if the page is restyled, so a result
  * carrying fewer ids than this is treated as "could not read" rather than as
- * evidence that Anthropic dropped everything.
+ * evidence that Anthropic dropped everything. Defined beside the model check
+ * (O8: it also decides when a live read may close a notice), and re-exported
+ * here, where the parse uses it.
  */
-export const MIN_PLAUSIBLE_IDS = 3
+export { MIN_PLAUSIBLE_IDS }
 
 /**
  * Visible TEXT of an HTML fragment: `<script>`/`<style>` bodies dropped whole,

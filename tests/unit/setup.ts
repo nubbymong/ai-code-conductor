@@ -84,6 +84,17 @@ vi.mock('../../src/main/first-start-warmup', async (importOriginal) => ({
 
 // Mock window.electronAPI for renderer store tests
 const mockElectronAPI = {
+  // The window controls (WindowControls) read the maximized state on mount,
+  // and the onboarding shell renders them, so every onboarding page needs
+  // these. Plain functions, not vi.fn, so a mock reset cannot blank them; a
+  // suite that checks the calls installs its own.
+  window: {
+    isMaximized: () => Promise.resolve(false),
+    onMaximizedChanged: () => () => {},
+    minimize: () => {},
+    maximize: () => {},
+    close: () => {},
+  },
   registry: {
     get: vi.fn(() => Promise.resolve({ models: [], families: {}, effortLevels: [], dropdown: [] })),
     onUpdate: vi.fn(() => () => {}),

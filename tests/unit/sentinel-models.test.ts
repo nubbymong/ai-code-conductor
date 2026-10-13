@@ -7,9 +7,12 @@ import {
   fixtureAgeDays,
   FIXTURE_STALE_DAYS,
   EXPECTED_MODEL_SET,
+  registryCoveredModelFindingIds,
+  staleModelFindingIds,
 } from '../../src/main/sentinel/sentinel-models'
 import { parseArticleModelIds, MIN_PLAUSIBLE_IDS } from '../../src/main/sentinel/sentinel-model-article'
 import type { ModelRegistry, ExpectedModelSet } from '../../src/shared/model-registry'
+import type { FindingStatus } from '../../src/shared/sentinel-types'
 import baselineJson from '../../resources/model-registry.json'
 
 const reg = baselineJson as unknown as ModelRegistry
@@ -106,7 +109,10 @@ describe('Sentinel model-coverage check (#385)', () => {
     )
     expect(f).toHaveLength(1)
     expect(f[0].id).toBe('models:missing:claude-opus-6')
-    expect(f[0].evidence).toContain('just now')      // says the claim is first-hand
+    expect(f[0].evidence).toContain('read online from')  // says the claim is first-hand
+    // ...and says what was read and from where, never when: a kept notice
+    // must not say "just now" days later (owner findings 2026-10-11).
+    expect(f[0].evidence).not.toContain('just now')
   })
 
   it('a snapshot-mode finding never claims to be current', () => {
@@ -114,6 +120,7 @@ describe('Sentinel model-coverage check (#385)', () => {
     expect(f[0].id).toBe('models:missing:claude-opus-5')
     expect(f[0].evidence).toContain('shipped with this build')
     expect(f[0].evidence).not.toContain('just now')
+    expect(f[0].evidence).not.toContain('read online')
   })
 
   it('a successful live read suppresses the staleness note — it just answered first-hand', () => {
@@ -315,5 +322,112 @@ describe('fixtureAgeDays', () => {
   it('the shipped snapshot is not already stale', () => {
     const age = fixtureAgeDays(EXPECTED_MODEL_SET.fetchedAt, Date.now())
     if (age !== null) expect(age).toBeLessThanOrEqual(FIXTURE_STALE_DAYS)
+  })
+})
+
+// O8: model findings are kept by id, so nothing closed one whose cause went
+// away. v2.1.0 and 2.1.1-beta.1 raised "not in the model picker" for Opus,
+// Sonnet and Haiku 5.5 from the live article (their registry lacked all three);
+// beta.2 added them, and the notices stayed open at every launch. These pin
+// which open findings the check no longer stands behind.
+describe('closing model findings the check no longer stands behind (O8)', () => {
+  const REAL_LIVE = parseArticleModelIds(readFileSync(
+    join(__dirname, '..', 'fixtures', 'model-article', 'claude-code-model-configuration.trimmed.html'),
+    'utf8',
+  ))
+  const FIVE_FIVE = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']
+  const NOTICES = FIVE_FIVE.map((id) => `models:missing:${id}`).sort()
+  // The registry of v2.1.0 and 2.1.1-beta.1: none of the three 5.5 models.
+  const beta1: ModelRegistry = { ...reg, models: reg.models.filter((m) => !FIVE_FIVE.includes(m.id)) }
+  const raisedByBeta1 = modelCoverageFindings(beta1, EXPECTED_MODEL_SET, NOW, REAL_LIVE)
+  const open = (id: string, status: FindingStatus = 'open') => ({ id, status })
+
+  it('an install without the 5.5 models raised the three notices the owner saw, from the live article', () => {
+    expect(raisedByBeta1.map((f) => f.id).sort()).toEqual(NOTICES)
+  })
+
+  it("the owner's case: all three close against the shipped registry, before the article is read and after a check, live or offline", () => {
+    expect(registryCoveredModelFindingIds(raisedByBeta1, reg).sort()).toEqual(NOTICES)
+    for (const live of [REAL_LIVE, null]) {
+      const current = modelCoverageFindings(reg, EXPECTED_MODEL_SET, NOW, live)
+      expect(current).toEqual([])
+      expect(staleModelFindingIds(raisedByBeta1, reg, current, EXPECTED_MODEL_SET, live).sort(), String(live)).toEqual(NOTICES)
+    }
+  })
+
+  it('against a registry without them, none of the three closes (the notices are true there)', () => {
+    expect(registryCoveredModelFindingIds(raisedByBeta1, beta1)).toEqual([])
+    expect(staleModelFindingIds(raisedByBeta1, beta1, raisedByBeta1, EXPECTED_MODEL_SET, REAL_LIVE)).toEqual([])
+    const offline = modelCoverageFindings(beta1, EXPECTED_MODEL_SET, NOW, null)
+    expect(staleModelFindingIds(raisedByBeta1, beta1, offline, EXPECTED_MODEL_SET, null)).toEqual([])
+  })
+
+  it('a model the registry does not cover stays open, offline or while the article lists it; a muted one is never named', () => {
+    const findings = [open('models:missing:claude-opus-6'), open('models:missing:claude-opus-5-5', 'muted'), open('models:missing:claude-sonnet-5-5', 'dismissed')]
+    expect(registryCoveredModelFindingIds(findings, reg)).toEqual([])
+    expect(staleModelFindingIds(findings, reg, [], EXPECTED_MODEL_SET, null)).toEqual([])
+    const live = [...REAL_LIVE, 'claude-opus-6']
+    const current = modelCoverageFindings(reg, EXPECTED_MODEL_SET, NOW, live)
+    expect(current.map((f) => f.id)).toEqual(['models:missing:claude-opus-6'])
+    expect(staleModelFindingIds(findings, reg, current, EXPECTED_MODEL_SET, live)).toEqual([])
+  })
+
+  it('live mode only: a notice for a model the article has since dropped closes, though the app never added it', () => {
+    const findings = [open('models:missing:claude-opus-6')]
+    expect(staleModelFindingIds(findings, reg, [], EXPECTED_MODEL_SET, REAL_LIVE)).toEqual(['models:missing:claude-opus-6'])
+    // Never offline (a still-true notice would flap with the network), never
+    // from a read too thin to count as read.
+    expect(staleModelFindingIds(findings, reg, [], EXPECTED_MODEL_SET, null)).toEqual([])
+    expect(staleModelFindingIds(findings, reg, [], EXPECTED_MODEL_SET, REAL_LIVE.slice(0, MIN_PLAUSIBLE_IDS - 1))).toEqual([])
+    // A model the article still lists is never closed by the live read, even
+    // when the caller passes no findings for the run.
+    expect(staleModelFindingIds(findings, reg, [], EXPECTED_MODEL_SET, [...REAL_LIVE, 'claude-opus-6'])).toEqual([])
+  })
+
+  it('live mode: a model the shipped snapshot still lists is not closed by the live read alone', () => {
+    const findings = [open('models:missing:claude-opus-6')]
+    const live = ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-5']
+    const one = registryOf(['claude-opus-5'])
+    expect(staleModelFindingIds(findings, one, [], expectedOf(['claude-opus-5', 'claude-opus-6']), live)).toEqual([])
+    expect(staleModelFindingIds(findings, one, [], expectedOf(['claude-opus-5']), live)).toEqual(['models:missing:claude-opus-6'])
+  })
+
+  it('retired: closes when a check that compared no longer raises it; never after a run that found the snapshot unreadable', () => {
+    const findings = [open('models:retired:claude-opus-3')]
+    expect(staleModelFindingIds(findings, reg, [], EXPECTED_MODEL_SET, null)).toEqual(['models:retired:claude-opus-3'])
+    const empty: ExpectedModelSet = { models: [] }
+    const unreadable = modelCoverageFindings(reg, empty, NOW, REAL_LIVE)
+    expect(unreadable.map((f) => f.id)).toEqual(['models:fixture-unreadable'])
+    expect(staleModelFindingIds(findings, reg, unreadable, empty, REAL_LIVE)).toEqual([])
+    // Raised again by this run: stays.
+    const withOld = registryOf(['claude-opus-5', 'claude-opus-3'])
+    const current = modelCoverageFindings(withOld, expectedOf(['claude-opus-5']), NOW)
+    expect(current.map((f) => f.id)).toEqual(['models:retired:claude-opus-3'])
+    expect(staleModelFindingIds(findings, withOld, current, expectedOf(['claude-opus-5']), null)).toEqual([])
+  })
+
+  it('a run that found the snapshot unreadable closes no notice by its live read either', () => {
+    const empty: ExpectedModelSet = { models: [] }
+    const unreadable = modelCoverageFindings(reg, empty, NOW, REAL_LIVE)
+    expect(staleModelFindingIds([open('models:missing:claude-opus-6')], reg, unreadable, empty, REAL_LIVE)).toEqual([])
+  })
+
+  it('fixture-unreadable and check-failed close once a check completes without them', () => {
+    const findings = [open('models:fixture-unreadable'), open('models:check-failed')]
+    expect(staleModelFindingIds(findings, reg, [], EXPECTED_MODEL_SET, null).sort()).toEqual(['models:check-failed', 'models:fixture-unreadable'])
+    const empty: ExpectedModelSet = { models: [] }
+    expect(staleModelFindingIds(findings, reg, modelCoverageFindings(reg, empty, NOW), empty, null)).toEqual(['models:check-failed'])
+  })
+
+  it('fixture-stale closes once the shipped snapshot has another date, and not before', () => {
+    const old = open('models:fixture-stale:2026-05-01')
+    const same = open(`models:fixture-stale:${EXPECTED_MODEL_SET.fetchedAt}`)
+    expect(staleModelFindingIds([old, same], reg, [], EXPECTED_MODEL_SET, null)).toEqual([old.id])
+  })
+
+  it('names Claude model findings only: Codex model findings and other findings are not its business', () => {
+    const findings = [open('models:codex-missing:gpt-5.5'), open('models:codex-check-failed'), open('models:codex-list-unreadable'), open('codex-version:too-new:0.157.1'), open('cc:2.1.300:1')]
+    expect(registryCoveredModelFindingIds(findings, reg)).toEqual([])
+    expect(staleModelFindingIds(findings, reg, [], EXPECTED_MODEL_SET, REAL_LIVE)).toEqual([])
   })
 })

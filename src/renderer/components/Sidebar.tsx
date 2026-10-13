@@ -160,9 +160,12 @@ export default function Sidebar({ currentView, onViewChange, collapsed, onShowAc
    * The full `refresh` cannot answer this without first awaiting the
    * `claude auth status` subprocess, so on an account whose status was not
    * already cached "Open artifacts" rendered disabled and a click did nothing at
-   * all — no window, no error, no log line. This is a local read, so the answer
-   * lands before the menu is even painted. The heavy refresh still runs
-   * alongside for the CLI half.
+   * all: no window, no error, no log line. This is a local read, so for an
+   * active account the answer lands before the menu is even painted. A record
+   * that reads expired first checks the live claude.ai session cookie (a
+   * bounded partition cookie read, up to 1.5 s), so a session claude.ai renewed
+   * turns the item live. The heavy refresh still runs alongside for the CLI
+   * half.
    */
   const refreshWebOnly = React.useCallback((profileId?: string) => {
     if (!profileId) return

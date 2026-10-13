@@ -21,7 +21,7 @@
  * version history without depending on the real one.
  */
 
-import { compareVersions, crossedReleaseLine } from '../../shared/version-order'
+import { compareVersions, crossedReleaseLine, finalRelease, isPrerelease } from '../../shared/version-order'
 
 export interface VersionedEntry {
   version: string
@@ -183,4 +183,84 @@ export function entriesSince<T extends VersionedEntry>(
         compareVersions(e.version, lastSeenVersion) > 0 && compareVersions(e.version, currentVersion) <= 0,
     )
     .sort((a, b) => compareVersions(b.version, a.version))
+}
+
+/**
+ * The newest FINAL release in `releases` that is older than `version`, or
+ * undefined when there is none. Prereleases and unreadable entries are
+ * skipped: `lastFinalBefore('2.1.1', changelog)` is `2.1.0`, never
+ * `2.1.0-rc.17` and never `2.1.1-beta.2`.
+ */
+export function lastFinalBefore(version: string, releases: readonly VersionedEntry[]): string | undefined {
+  let best: string | undefined
+  for (const { version: v } of releases) {
+    if (isPrerelease(v) || finalRelease(v) === null) continue
+    if (compareVersions(v, version) >= 0) continue
+    if (best === undefined || compareVersions(v, best) > 0) best = v
+  }
+  return best
+}
+
+/**
+ * Where the What's New summary and showcase diff FROM: the "anchor".
+ *
+ * `seenVersion` is the #369-clamped stamp (`seenVersionFor`), read from the
+ * boot snapshot BEFORE this launch stamps `lastRunVersion` (App.tsx), so a
+ * stamp written ahead of its build still diffs from what actually ran.
+ *
+ * Content is keyed to the FINAL release (owner rule, 2026-10-11):
+ *   - a prerelease of an OLDER release counts as that final release: someone
+ *     who last ran 2.1.0-rc.17 has seen 2.1.0, and is not shown it again;
+ *   - a prerelease never counts as having seen its OWN release: 2.1.1-beta.1,
+ *     beta.2, beta.3 and 2.1.1 itself all show everything 2.1.1 brought, so
+ *     the anchor drops to the last final release before it (2.1.0);
+ *   - on a prerelease build the anchor is at most the last final release
+ *     before the running one, so a tester always sees the whole story of the
+ *     release they are testing (this also covers a downgrade onto a
+ *     prerelease).
+ *
+ * `releases` is the changelog: the list the last final release is read from.
+ * The seen version itself counts as a final release that shipped when it is
+ * one, so a changelog missing that entry cannot drag the anchor lower.
+ *
+ * No seen version (a fresh install) returns undefined: nothing is "new" to
+ * them, and every item applies (`newSince`). An unreadable one is returned as
+ * is; `compareVersions` ranks it oldest, so everything shows.
+ */
+export function whatsNewAnchorFor(input: {
+  seenVersion: string | undefined
+  currentVersion: string
+  releases: readonly VersionedEntry[]
+}): string | undefined {
+  const { seenVersion: seen, currentVersion } = input
+  if (!seen) return undefined
+  const releases = [...input.releases, { version: seen }]
+  const current = finalRelease(currentVersion)
+  let anchor = seen
+  if (isPrerelease(seen)) {
+    const seenFinal = finalRelease(seen) as string // a prerelease always parses
+    anchor = current !== null && compareVersions(seenFinal, current) < 0
+      ? seenFinal
+      : lastFinalBefore(seenFinal, releases) ?? seen
+  }
+  if (current !== null && isPrerelease(currentVersion)) {
+    const floor = lastFinalBefore(current, releases)
+    if (floor !== undefined && compareVersions(floor, anchor) < 0) anchor = floor
+  }
+  return anchor
+}
+
+/**
+ * Is an item tagged `since` (the first build that shipped it) new to someone
+ * whose What's New anchor is `anchor`? With no anchor (a fresh install)
+ * everything is.
+ *
+ * Deliberately NO upper bound at the running version, unlike `entriesSince`:
+ * the items are compiled into the build, so none can be newer than it, and a
+ * bound would silently hide an item tagged with its final version (`2.1.1`)
+ * on every prerelease of that release. Tags carry the first prerelease that
+ * shipped the item (`2.1.1-beta.2`); tests pin that each one parses.
+ */
+export function newSince(since: string, anchor: string | undefined): boolean {
+  return !anchor || compareVersions(since, anchor) > 0
 }

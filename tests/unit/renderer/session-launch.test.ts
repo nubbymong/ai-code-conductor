@@ -1,6 +1,6 @@
 // tests/unit/renderer/session-launch.test.ts
 import { describe, it, expect } from 'vitest'
-import { shouldGateAccountChoice, canSwitchAccountForSession, sshMappedProfileId, formatSpawnError, resolveResumeAccountMode, shouldPredetermineRestoredAccount, sessionAgentName } from '../../../src/renderer/utils/sessionLaunch'
+import { shouldGateAccountChoice, canSwitchAccountForSession, sshMappedProfileId, formatSpawnError, resolveResumeAccountMode, shouldPredetermineRestoredAccount, sessionAgentName, resumedSessionOwnAccount } from '../../../src/renderer/utils/sessionLaunch'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -10,34 +10,27 @@ describe('the partner strip names the tab\'s own assistant (walk fix N4)', () =>
     expect(sessionAgentName('claude')).toBe('Claude')
     expect(sessionAgentName(undefined)).toBe('Claude')
   })
-  it('App\'s partner strip says it for the tab it sits in, in its note, its button and its title', () => {
+  it('App\'s partner pane says it for the tab it sits in, in its note, its button and its title', () => {
     const app = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/App.tsx'), 'utf8').replace(/\r\n/g, '\n')
     expect(app).toContain('const agentName = sessionAgentName(session.provider)')
-    expect(app).toContain('Partner terminal &mdash; a plain shell, not {agentName}</span>')
-    expect(app).toContain('title={`Back to the ${agentName} terminal`}')
-    expect(app).toMatch(/\n\s*Back to \{agentName\}\n\s*<\/button>/)
-    expect(app).not.toContain('not Claude</span>')
-    expect(app).not.toMatch(/\n\s*Back to Claude\n/)
+    const pane = app.slice(app.indexOf('<PartnerTerminalPane'), app.indexOf('/>', app.indexOf('<PartnerTerminalPane')))
+    expect(pane).toContain('agentName={agentName}')
+    expect(pane).toContain('ptyId={partnerPtyId}')
+    const strip = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/components/PartnerTerminalPane.tsx'), 'utf8').replace(/\r\n/g, '\n')
+    expect(strip).toContain('Partner terminal: a plain shell on {partner.where}, not {agentName}</span>')
+    expect(strip).toContain('title={`Back to the ${agentName} terminal`}')
+    expect(strip).toMatch(/\n\s*Back to \{agentName\}\n\s*<\/button>/)
+    expect(strip).not.toContain('not Claude</span>')
+    expect(strip).not.toMatch(/\n\s*Back to Claude\n/)
   })
 
-  // P3.7, the C item "narrow-window overlap" (row 64): the GitHub button
-  // floats over the pane's top-right corner (GitHubPanel's gh-fab: absolute
-  // top-2 right-2, 32px from 8px in; its geometry is pinned in
-  // terminalview-account-launch.test.tsx), and the strip's way back sat in
-  // that corner. The strip keeps it clear as the switch note does (pr-12,
-  // 48px); the note wraps rather than pushing the button, which never shrinks.
-  // jsdom cannot hit-test, so the rule is pinned in the markup.
-  it('keeps the floating GitHub button\'s corner clear at any width: the note wraps, the way back never shrinks under the button', () => {
+  // The strip's markup (P3.7's corner rule, #86's machine) is rendered and
+  // pinned in partner-terminal-pane.test.tsx. App keeps no strip of its own.
+  it('App renders the partner through PartnerTerminalPane only: no second strip, no second partner view', () => {
     const app = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/App.tsx'), 'utf8').replace(/\r\n/g, '\n')
-    const at = app.indexOf('data-ux-id="partner-identity-strip"')
-    expect(at).toBeGreaterThan(0)
-    const open = app.slice(app.lastIndexOf('<div', at), at)
-    const stripClasses = (/className="([^"]*)"/.exec(open)?.[1] ?? '').split(/\s+/)
-    expect(stripClasses.filter((c) => /^(px|pl|pr)-/.test(c))).toEqual(['pl-3', 'pr-12'])
-    const body = app.slice(at, app.indexOf('</div>', at))
-    expect((/<span className="([^"]*)">Partner terminal/.exec(body)?.[1] ?? '').split(/\s+/)).toContain('min-w-0')
-    const button = (/<button[\s\S]*?className="([^"]*)"/.exec(body)?.[1] ?? '').split(/\s+/)
-    expect(button).toEqual(expect.arrayContaining(['ml-auto', 'shrink-0', 'whitespace-nowrap']))
+    expect(app).not.toContain('data-ux-id="partner-identity-strip"')
+    expect(app).not.toContain('sessionId={partnerPtyId}')
+    expect(app.split('<PartnerTerminalPane').length - 1).toBe(1)
   })
 })
 
@@ -84,6 +77,40 @@ describe('shouldPredetermineRestoredAccount (#446)', () => {
   })
   it("does NOT predetermine under 'ask' (the gate opens per restored session)", () => {
     expect(shouldPredetermineRestoredAccount('ask')).toBe(false)
+  })
+})
+
+describe('resumedSessionOwnAccount (O9): the account a resumed session last ran on', () => {
+  const profiles = [{ id: 'primary', isPrimary: true }, { id: 'p2' }, { id: 'p3', isPrimary: false }]
+  it('its saved account while that account is still set up here', () => {
+    expect(resumedSessionOwnAccount('p2', profiles)).toEqual({ id: 'p2', gone: false })
+  })
+  it('the primary when no account was saved with it (main runs a pinless session there)', () => {
+    expect(resumedSessionOwnAccount(undefined, profiles)).toEqual({ id: 'primary', gone: false })
+    expect(resumedSessionOwnAccount('', profiles)).toEqual({ id: 'primary', gone: false })
+  })
+  it('none, and gone, when its saved account was removed (never the primary in its place)', () => {
+    expect(resumedSessionOwnAccount('deleted', profiles)).toEqual({ id: undefined, gone: true })
+  })
+  it('none, not gone, with no saved account and no primary', () => {
+    expect(resumedSessionOwnAccount(undefined, [{ id: 'p2' }])).toEqual({ id: undefined, gone: false })
+  })
+})
+
+describe('Settings, Resuming sessions wording (O9)', () => {
+  const src = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/components/SettingsPage.tsx'), 'utf8').replace(/\r\n/g, '\n')
+  const start = src.indexOf('<Section title="Resuming sessions"')
+  const section = src.slice(start, src.indexOf('</Section>', start)).replace(/\s+/g, ' ')
+  it('names whose account each option uses, in plain words', () => {
+    expect(start).toBeGreaterThan(-1)
+    expect(section).toContain('>Use the account each session last ran on (default)</option>')
+    expect(section).toContain('>Ask each time, with that account already chosen</option>')
+    expect(section).not.toContain('Auto-resume last')
+  })
+  it('says which sessions it does not touch, and nothing about a Codex sign-in on this computer', () => {
+    expect(section).toContain("Only matters with two or more Claude accounts. Applies when the app restarts and reopens your sessions. Codex sessions keep their own Codex account, and SSH sessions use the remote machine's sign-in.")
+    expect(section).not.toMatch(/this computer/i)
+    expect(section).not.toContain(String.fromCodePoint(0x2014))
   })
 })
 

@@ -128,7 +128,9 @@ describe('b. an SSH Claude session says which machine', () => {
     expect(byTest('command-kind-prompt')!.textContent).toContain('to Claude on build-box')
   })
 
-  it('for a shell line the host chip is drawn, disabled, with the reason; the partner chip is this PC and chosen', () => {
+  // #86: the partner shell of an SSH session runs on the host, so a shell
+  // line for the host goes to the partner, and its chip says the host.
+  it('for a shell line the agent chip is drawn, disabled, with the reason; the partner chip is the host and chosen', () => {
     const { onConfirm } = render({ capabilities: sshClaude, configId: 'cfg' })
     pick('shell')
     expect(q('[role="radiogroup"][data-testid="command-runs-in"]')).not.toBeNull()
@@ -136,13 +138,14 @@ describe('b. an SSH Claude session says which machine', () => {
     const partner = byTest<HTMLButtonElement>('command-where-partner')!
     expect(main.disabled).toBe(true)
     expect(main.textContent).toContain('On build-box')
-    expect(main.textContent).toContain('no remote shell in this session')
-    expect(main.getAttribute('title')).toContain('no remote shell pane')
+    expect(main.textContent).toContain('Claude terminal')
+    expect(main.getAttribute('title')).toContain('reads prompts, not shell lines')
     expect(partner.disabled).toBe(false)
     expect(partner.getAttribute('aria-checked')).toBe('true')
-    expect(partner.textContent).toContain('On this PC')
+    expect(partner.textContent).toContain('On build-box')
+    expect(partner.textContent).not.toContain('this PC')
     expect(partner.textContent).toContain('partner shell')
-    expect(byTest('command-field-runs')!.textContent).toContain('After connecting, run')
+    expect(byTest('command-field-runs')!.textContent).not.toContain('runs on this computer')
     fill('Deploy', './deploy.ps1')
     submit()
     expect(onConfirm.mock.calls[0][0].target).toBe('partner')
@@ -151,15 +154,16 @@ describe('b. an SSH Claude session says which machine', () => {
 })
 
 describe('c. the secret toggle is offered only where the value can arrive', () => {
-  it('SSH terminal-only, main shell selected: no toggle, the one-line reason instead; pick the partner and it appears', () => {
+  it('SSH terminal-only: no toggle for either shell (#86: the partner is on the host too), the one-line reason instead', () => {
     render({ capabilities: sshShell, configId: 'cfg' })
     pick('shell')
     expect(byTest('command-where-main')!.getAttribute('aria-checked')).toBe('true')
     expect(byTest('command-secret-toggle')).toBeNull()
     expect(byTest('command-secret-unavailable')!.textContent).toContain('Secret values reach shells on this PC only')
     click('command-where-partner')
-    expect(byTest('command-secret-toggle')).not.toBeNull()
-    expect(byTest('command-secret-unavailable')).toBeNull()
+    expect(byTest('command-where-partner')!.getAttribute('aria-checked')).toBe('true')
+    expect(byTest('command-secret-toggle')).toBeNull()
+    expect(byTest('command-secret-unavailable')!.textContent).toContain('Secret values reach shells on this PC only')
   })
 
   it('a local Claude session offers it for a shell line (partner shell, this PC)', () => {

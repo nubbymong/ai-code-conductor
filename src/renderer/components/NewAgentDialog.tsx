@@ -3,7 +3,7 @@ import { useConfigStore } from '../stores/configStore'
 import { useCloudAgentStore, agentLaunchBlockedReason, CODEX_AUTO_LABEL, CODEX_AGENT_WINDOWS_NOTE, CONFIRM_SIGN_IN } from '../stores/cloudAgentStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import { useProviderAccountsStore } from '../stores/providerAccountsStore'
+import { useProviderAccountsStore, externalSignInRetiring } from '../stores/providerAccountsStore'
 import { resolveAccountName } from '../../shared/account-chip-color'
 import { useLaunchGateSettings } from '../hooks/useLaunchConfig'
 import { codexPreference, usesClaude } from '../onboarding/provider-choice'
@@ -316,6 +316,9 @@ export default function NewAgentDialog({ onClose, initialName, initialDescriptio
                       : 'Run this agent with this account although its sign-in is not verified'}
                   </span>
                 </label>
+              )}
+              {askRealmAck && codexAccount.selected?.external && (
+                <div className="mt-1 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }} data-testid="new-agent-codex-ack-retiring">{externalSignInRetiring({ displayName: 'Codex' })}</div>
               )}
             </div>
           )}

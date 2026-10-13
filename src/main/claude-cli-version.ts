@@ -15,7 +15,8 @@
 // finding on every managed launch for a user whose CLI is perfectly up to date.
 // On macOS and Linux it resolves through `probeClaudeCli()`; on Windows, where
 // a GUI app gets the user's full PATH, it walks that PATH in-process (see
-// findClaudeOnWindowsPath for why not `where`).
+// findClaudeOnWindowsPath for why not `where`), and when that finds none it
+// takes the Claude Code the user's PowerShell profile finds (resolveForVersionProbe).
 //
 // Deliberately NOT on the spawn path. A managed launch must not wait on a
 // subprocess, and must not fail because one was slow: the preflight reports
@@ -26,7 +27,7 @@ import { execFile, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { logInfo, logWarn } from './debug-logger'
-import { probeClaudeCli, type ClaudeCliProbe } from './claude-cli-probe'
+import { CLAUDE_PROFILE_PROBE, claudeFromPowerShellProfile, probeClaudeCli, setClaudeProfileLookupAllowed, type ClaudeCliProbe } from './claude-cli-probe'
 import { windowsFolderAsRun, windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
 import { claudeVersionRunEnv } from './providers/review-support'
 import { warmFirstStart } from './first-start-warmup'
@@ -49,11 +50,14 @@ let lastFailureAt = 0
  *  launch preflight). Set at start from main's launch rule
  *  (provider-launch-gate.ts, providerProbeRefusal); injected rather than
  *  imported because that rule's accounts graph imports this module's
- *  importers. Until it is set, probes run as they always have. */
+ *  importers. Until it is set, probes run as they always have. The same rule
+ *  decides when Windows PowerShell may be asked, with the user's profile,
+ *  where Claude Code is (claude-cli-probe.ts claudeFromPowerShellProfile). */
 let probeAllowed: () => boolean = () => true
 
 export function setClaudeCliProbeAllowed(allowed: () => boolean): void {
   probeAllowed = allowed
+  setClaudeProfileLookupAllowed(allowed)
 }
 
 /** Whether a probe may run the Claude CLI now (setClaudeCliProbeAllowed). An
@@ -234,11 +238,17 @@ function abandonProbe(child: ChildProcess | undefined, exited: boolean, viaCmd: 
   } catch { /* best-effort */ }
 }
 
+/** On Windows: the walk of PATH above, and when it finds none, the Claude
+ *  Code the user's PowerShell profile finds (claude-cli-probe.ts
+ *  claudeFromPowerShellProfile, the answer every other check and start
+ *  shares), so the version is known for the Claude Code a session runs. */
 async function resolveForVersionProbe(): Promise<ClaudeCliProbe> {
   if (process.platform !== 'win32') return probeClaudeCli()
   const found = await findClaudeOnWindowsPath(process.env.PATH, statRegularFile)
   const probe = 'PATH walk (claude.exe, claude.cmd, claude.bat)'
-  return found ? { installed: true, path: found, probe } : { installed: false, probe }
+  if (found) return { installed: true, path: found, probe }
+  const viaProfile = await claudeFromPowerShellProfile()
+  return viaProfile ? { installed: true, path: viaProfile, probe: CLAUDE_PROFILE_PROBE } : { installed: false, probe }
 }
 
 /** The executable this probe runs, or null: the Claude reviewer's discovery

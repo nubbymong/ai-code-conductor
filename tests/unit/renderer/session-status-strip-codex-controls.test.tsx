@@ -10,14 +10,15 @@
  * exactly /compact; otherwise it types nothing and the strip says why for a
  * moment. App renders ONE strip, re-pointed at whichever tab is shown: a
  * press's Enter belongs to the session it was pressed on, and is dropped when
- * the strip is re-pointed or goes away. Claude's Compact is unchanged (one
- * write, `/compact\n`).
+ * the strip is re-pointed or goes away. Claude's Compact keeps its one
+ * write, `/compact\n`, typed only at Claude Code's ready prompt.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import * as S from './codex-composer-screens'
+import { READY as CLAUDE_READY } from '../shared/claude-screens'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -209,12 +210,16 @@ describe("Compact on a Codex tab runs Codex's own /compact, only at its ready pr
   })
 })
 
-describe("Claude's Compact is unchanged", () => {
-  it('one write, /compact and a newline', () => {
+describe("Claude's Compact keeps its one write", () => {
+  // Typed only at Claude Code's own ready prompt (src/shared/claude-screen.ts;
+  // its screens are covered in session-status-strip-claude-compact.test.tsx).
+  it("one write, /compact and a newline, at Claude Code's ready prompt", () => {
     sessionState.sessions = [{ id: 's1', provider: 'claude', createdAt: 1000, contextPercent: 10 }]
+    screens.set('s1', CLAUDE_READY)
     render()
     act(() => { button('Compact the conversation')!.click() })
     act(() => { vi.advanceTimersByTime(CODEX_SUBMIT_DELAY_MS * 2) })
     expect(writes()).toEqual([['s1', '/compact\n']])
+    act(() => { vi.advanceTimersByTime(60_000) })
   })
 })

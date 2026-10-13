@@ -684,10 +684,10 @@ for (let attempt = 0; attempt < 10; attempt++) {
 
 if (!runId) {
   warn(`Could not detect dispatched run ID${lastPollError ? ` (${lastPollError})` : ''}`)
-  ok(`Check the Actions tab manually: https://github.com/nubbymong/claude-command-center/actions/workflows/release.yml`)
+  ok(`Check the Actions tab manually: https://github.com/nubbymong/ai-code-conductor/actions/workflows/release.yml`)
 } else {
   ok(`Run ID: ${runId}`)
-  ok(`Run URL: https://github.com/nubbymong/claude-command-center/actions/runs/${runId}`)
+  ok(`Run URL: https://github.com/nubbymong/ai-code-conductor/actions/runs/${runId}`)
 }
 
 // --- Step 8: Watch the workflow to completion ---

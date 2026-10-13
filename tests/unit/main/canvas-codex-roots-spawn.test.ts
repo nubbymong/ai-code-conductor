@@ -206,8 +206,8 @@ describe('a Codex session\'s canvas markers go through the submit primitive', ()
     expect(await answer).toEqual({ delivered: false, reason: 'session-gone' })
   })
 
-  it('any other session keeps the synchronous submit line', () => {
-    expect(writeCanvasMarkerLine('nopty0000000nopty0000000', 'Approved v7 on the canvas')).toBeUndefined()
+  it('any other session with no run takes nothing and answers not delivered, the session gone, so its canvas is told', async () => {
+    expect(await writeCanvasMarkerLine('nopty0000000nopty0000000', 'Approved v7 on the canvas')).toEqual({ delivered: false, reason: 'session-gone' })
   })
 })
 

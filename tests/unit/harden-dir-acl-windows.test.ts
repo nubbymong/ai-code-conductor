@@ -469,6 +469,24 @@ describe.runIf(IS_WINDOWS)('hardenCredentialDir on Windows applies a real DACL',
     expect(fs.readFileSync(file, 'utf8')).toBe('{"secret":"x"}')
   })
 
+  it('takes a deny entry of the user\'s own off, alone, and the user keeps full control (aicc_planning#103)', () => {
+    // A deny entry of a principal the step grants goes with `/remove:d`, in
+    // the same invocation as the other removals and the grants (its allow
+    // entry is replaced by `/grant:r`). This is that option on a real list.
+    const { dir, broadPrincipal } = dirWithBroadGrant('explicit')
+    expect(icacls([dir, '/deny', `${USER}:(W)`]), 'fixture deny entry').toBe(true)
+    expect(aces(dir).some((a) => a.includes('(DENY)')), 'fixture: a deny entry is on the list').toBe(true)
+
+    expect(hardenCredentialDir(dir)).toBe(true)
+
+    const after = aces(dir)
+    expect(after.some((a) => a.includes('(DENY)'))).toBe(false)
+    expect(after.map(principalOf)).not.toContain(broadPrincipal)
+    const file = path.join(dir, 'after-deny.txt')
+    fs.writeFileSync(file, 'x')
+    expect(fs.readFileSync(file, 'utf8')).toBe('x')
+  })
+
   it('narrows what a file created underneath it inherits', () => {
     // The files are the point: `.credentials.json`, `conductor-secret.json` and
     // the plugin's SKILL.md all get their permissions from the directory,
@@ -574,6 +592,180 @@ describe.runIf(IS_WINDOWS)('hardenCredentialDir on Windows applies a real DACL',
     expect(() => hardenDirAclWindows(missing)).not.toThrow()
     expect(hardenDirAclWindows(missing)).toBe(false)
     expect(windowsAclEntries(missing)).toEqual([])
+  })
+})
+
+/** The folder's DACL as SDDL (icacls /save): SIDs and SDDL abbreviations
+ *  (SY for SYSTEM), never localized names. */
+function sddlOf(target: string): string {
+  const out = path.join(testRoot, `acl-${Math.random().toString(16).slice(2)}.txt`)
+  execFileSync(ICACLS, [target, '/save', out], { stdio: 'ignore', windowsHide: true })
+  const text = fs.readFileSync(out).toString('utf16le')
+  fs.unlinkSync(out)
+  return text.split(/\r?\n/)[1] ?? ''
+}
+
+/**
+ * aicc_planning#103 (2.1.1-beta.3), the real-ACL case: whoever owns the folder, the step
+ * keeps the user's full control and never writes an empty list. The folder
+ * here is the Administrators group's (as a folder an elevated process made),
+ * all of its entries inherited, one of them for a logon session's SID, whose
+ * printed name icacls cannot resolve back -- so the single replace fails
+ * (1332) and the one-at-a-time fallback runs.
+ *
+ * A process that is not elevated cannot make such a folder, so an elevated
+ * helper makes it first, once per run, and names it here
+ * (CCC_ACL_FOREIGN_OWNED_DIR); without it the case is skipped, and it says so.
+ * Then run this file NOT elevated. Helper, in an elevated PowerShell (the
+ * user the test runs as in place of <user>; the parent is the folder the
+ * entries are inherited from):
+ *
+ *   $p = 'C:\acl-103'; New-Item -ItemType Directory $p | Out-Null
+ *   icacls $p /inheritance:r /grant:r "<user>:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-5-0-411756:(OI)(CI)RX"
+ *   New-Item -ItemType Directory "$p\f" | Out-Null   # owned by the Administrators group (elevated)
+ *   icacls "$p\f" /setowner "*S-1-5-32-544"
+ *   $env:CCC_ACL_FOREIGN_OWNED_DIR = "$p\f"
+ *
+ * Afterwards remove C:\acl-103 from the elevated PowerShell (icacls /reset /t,
+ * then delete).
+ */
+describe.runIf(IS_WINDOWS)('hardenDirAclWindows on a folder this user does not own (aicc_planning#103, VM)', () => {
+  it('leaves the user and SYSTEM full control and never an empty list, on the first call and the next', (ctx) => {
+    const dir = process.env.CCC_ACL_FOREIGN_OWNED_DIR
+    if (!dir) return ctx.skip('needs CCC_ACL_FOREIGN_OWNED_DIR, a folder an elevated helper made (see the comment above)')
+    const before = aces(dir)
+    expect(before.length, 'fixture: the folder lists entries').toBeGreaterThan(0)
+    expect(before.every((a) => a.includes('(I)')), 'fixture: every entry inherited').toBe(true)
+
+    for (const round of ['first', 'next']) {
+      expect(hardenDirAclWindows(dir), `${round} call`).toBe(true)
+
+      // Still readable and writable by the user who ran it, and SYSTEM keeps
+      // its full control (SY in SDDL, whatever the display language).
+      const after = aces(dir)
+      expect(after.length, `${round} call: the folder has an empty access list`).toBeGreaterThan(0)
+      expect(after.filter((a) => a.includes('(I)')), `${round} call: nothing inherited`).toEqual([])
+      expect(sddlOf(dir), `${round} call: SYSTEM's full control`).toMatch(/\(A;OICI;FA;;;SY\)/)
+      const file = path.join(dir, 'still-mine.txt')
+      fs.writeFileSync(file, 'x')
+      expect(fs.readFileSync(file, 'utf8')).toBe('x')
+      expect(fs.readdirSync(dir)).toContain('still-mine.txt')
+      fs.rmSync(file)
+    }
+  })
+
+  it('the same with no domain to spell the user by: the bare spelling\'s read-back is recognised', (ctx) => {
+    const dir = process.env.CCC_ACL_FOREIGN_OWNED_DIR
+    if (!dir) return ctx.skip('needs CCC_ACL_FOREIGN_OWNED_DIR, a folder an elevated helper made (see the comment above)')
+    // The case above left the folder the user's and SYSTEM's alone; through
+    // the user's full control it can be put back on its parent's entries
+    // (the owner stays the Administrators group).
+    expect(icacls([dir, '/reset']), 'fixture: back on the parent\'s entries').toBe(true)
+    expect(aces(dir).every((a) => a.includes('(I)')), 'fixture: every entry inherited again').toBe(true)
+    delete process.env.USERDOMAIN
+    _resetAclStateForTest()
+
+    expect(hardenDirAclWindows(dir)).toBe(true)
+
+    const after = aces(dir)
+    expect(after.length, 'the folder has an empty access list').toBeGreaterThan(0)
+    expect(after.filter((a) => a.includes('(I)')), 'nothing inherited').toEqual([])
+    expect(sddlOf(dir), 'SYSTEM\'s full control').toMatch(/\(A;OICI;FA;;;SY\)/)
+    const file = path.join(dir, 'still-mine.txt')
+    fs.writeFileSync(file, 'x')
+    expect(fs.readFileSync(file, 'utf8')).toBe('x')
+    fs.rmSync(file)
+  })
+})
+
+/** Whether this process runs elevated (a High or System mandatory label,
+ *  printed as a fixed SID whatever the display language). */
+function runsElevated(): boolean {
+  const whoami = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe')
+  const groups = execFileSync(whoami, ['/groups'], { encoding: 'utf8', windowsHide: true })
+  return /S-1-16-(12288|16384)\b/.test(groups)
+}
+
+/** The SID of the user this process runs as. */
+function userSid(): string {
+  const whoami = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe')
+  const sid = /S-1-5-21-[\d-]+/.exec(execFileSync(whoami, ['/user'], { encoding: 'utf8', windowsHide: true }))?.[0]
+  if (!sid) throw new Error('whoami /user printed no S-1-5-21 SID')
+  return sid
+}
+
+/** The folder owner's SID (read only; Get-Acl through an environment
+ *  variable, so the path is never parsed as part of the command). */
+function ownerSid(target: string): string {
+  const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  return execFileSync(ps, ['-NoProfile', '-NonInteractive', '-Command',
+    '(Get-Acl -LiteralPath $env:CCC_ACL_OWNER_OF).GetOwner([System.Security.Principal.SecurityIdentifier]).Value'],
+  { encoding: 'utf8', windowsHide: true, env: { ...process.env, CCC_ACL_OWNER_OF: target } }).trim()
+}
+
+/**
+ * The same, where the user's only right to
+ * change the folder's entries comes from an EXPLICIT folder-only `<user>:(F)`
+ * entry, not from ownership or an inherited one. That entry is not in the
+ * grant's form, so both writes name the user with `/remove:g` ahead of the
+ * grant that writes it again. If icacls applied those options as separate
+ * writes, the user would lose the right to change the entries after the first
+ * one and be left with no entry at all. The aicc_planning#103 case above
+ * cannot measure this: its entries are all inherited, which are never named
+ * with `/remove:g`.
+ *
+ * Written in 2.1.1-beta.3 and never run on the owner's machine: it needs a
+ * folder an elevated helper makes, and a run NOT elevated, ideally as a
+ * standard account (an elevated run has the Administrators group's owner
+ * rights and measures nothing, so the case fails rather than skip). Red
+ * proof owed on the VM: under a mutant whose grants leave the user out, the
+ * case must fail.
+ *
+ * Helper, in an elevated PowerShell (<user> is the account the test runs as):
+ *
+ *   $p = 'C:\acl-103e'; New-Item -ItemType Directory $p | Out-Null
+ *   icacls $p /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
+ *   New-Item -ItemType Directory "$p\f" | Out-Null
+ *   icacls "$p\f" /inheritance:r /grant:r "<user>:F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-5-0-411756:(OI)(CI)RX" "*S-1-5-11:(OI)(CI)RX"
+ *   icacls "$p\f" /setowner "*S-1-5-32-544"
+ *   $env:CCC_ACL_FOREIGN_OWNED_EXPLICIT_DIR = "$p\f"
+ *
+ * Then run this file from a PowerShell that is NOT elevated, with that
+ * variable set. Afterwards remove C:\acl-103e from the elevated PowerShell
+ * (icacls /reset /t, then delete).
+ */
+describe.runIf(IS_WINDOWS)('hardenDirAclWindows where the user\'s only write right is an explicit folder-only entry (VM, not elevated)', () => {
+  it('keeps the user\'s and SYSTEM\'s full control and removes the rest, on the first call and the next', (ctx) => {
+    const dir = process.env.CCC_ACL_FOREIGN_OWNED_EXPLICIT_DIR
+    if (!dir) return ctx.skip('needs CCC_ACL_FOREIGN_OWNED_EXPLICIT_DIR, a folder an elevated helper made (see the comment above)')
+    expect(runsElevated(), 'run this case NOT elevated: an elevated run has owner rights and measures nothing').toBe(false)
+    const sid = userSid()
+
+    // The fixture is what the comment says, or the case measures nothing.
+    expect(ownerSid(dir), 'fixture: owned by the Administrators group').toBe('S-1-5-32-544')
+    const before = aces(dir)
+    expect(before, 'fixture: four entries').toHaveLength(4)
+    expect(before.filter((a) => a.includes('(I)')), 'fixture: none inherited').toEqual([])
+    const sddlBefore = sddlOf(dir)
+    expect(sddlBefore, 'fixture: the user\'s folder-only full control').toContain(`(A;;FA;;;${sid})`)
+    expect(sddlBefore, 'fixture: an Authenticated Users entry to remove').toMatch(/;;;AU\)/)
+
+    _resetAclStateForTest()
+    for (const round of ['first', 'next']) {
+      expect(hardenDirAclWindows(dir), `${round} call`).toBe(true)
+
+      const after = aces(dir)
+      expect(after.length, `${round} call: the folder has an empty access list`).toBeGreaterThan(0)
+      expect(after.filter((a) => a.includes('(I)')), `${round} call: nothing inherited`).toEqual([])
+      const sddl = sddlOf(dir)
+      expect(sddl, `${round} call: the user's full control`).toContain(`(A;OICI;FA;;;${sid})`)
+      expect(sddl, `${round} call: SYSTEM's full control`).toMatch(/\(A;OICI;FA;;;SY\)/)
+      expect(sddl, `${round} call: Authenticated Users removed`).not.toMatch(/;;;AU\)/)
+      const file = path.join(dir, 'still-mine.txt')
+      fs.writeFileSync(file, 'x')
+      expect(fs.readFileSync(file, 'utf8')).toBe('x')
+      fs.rmSync(file)
+    }
   })
 })
 

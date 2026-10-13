@@ -3,7 +3,7 @@ import { IPC, ptyDataChannel, ptyExitChannel } from '../shared/ipc-channels'
 import { randomId } from '../shared/id'
 import { isIpcStreamEnd, IPC_STREAM_END_WAIT_MS } from '../shared/ipc-stream'
 import type { HookEvent, HooksGatewayStatus } from '../shared/hook-types'
-import type { StatuslineData, SubmitTextResult, AskConductorNotice, CanvasMarkerUndelivered, CanvasSessionGuidance, AccountLogFolders, AccountLogFolderKind, AccountLogFolderOpenResult } from '../shared/types'
+import type { StatuslineData, SubmitTextResult, AskConductorNotice, CanvasMarkerUndelivered, ClaudeMarkerAsk, ClaudeMarkerAnswer, CanvasSessionGuidance, AccountLogFolders, AccountLogFolderKind, AccountLogFolderOpenResult } from '../shared/types'
 import type { WebviewNavState } from '../shared/browser-url'
 import type { AccountPaneStateView, CodexWebSessionView, CodexWebSignInState } from '../shared/account-web-session'
 import type { ModelRegistry } from '../shared/model-registry'
@@ -510,8 +510,14 @@ export interface ElectronAPI {
     /** #580: the chat line that tells the agent a verdict/review was filed. Queued while the agent's turn is open. */
     agentMarker: (args: { sessionId: string; canvasId: string; line: string }) => Promise<{ delivery: 'sent' | 'queued' | 'unwired' | 'refused'; reason?: string }>
     /** WP2 PR 4 (P4.1): a queued marker the submit primitive could not deliver,
-     *  for the review it belongs to. */
+     *  or a Claude Code marker main dropped untyped, for the review it belongs
+     *  to. */
     onAgentMarkerUndelivered: (cb: (e: CanvasMarkerUndelivered) => void) => () => void
+    /** Main asks to read (probe) or type a canvas marker at a Claude Code
+     *  session's prompt; typed only at its ready, empty prompt. */
+    onClaudeMarkerAsk: (cb: (e: ClaudeMarkerAsk) => void) => () => void
+    /** The reply to one onClaudeMarkerAsk request. */
+    answerClaudeMarker: (answer: ClaudeMarkerAnswer) => void
     /** WP2 PR 4 (P4.1): whether this session's launch carried the canvas and
      *  vision skills' guidance with the tools, for the canvas page's one line. */
     sessionGuidance: (args: { sessionId: string }) => Promise<CanvasSessionGuidance | null>
@@ -691,9 +697,13 @@ export interface ElectronAPI {
     deleteGroup: (groupId: string) => Promise<AccountsResult>
     linkIdentity: (accountId: string, identityId: string) => Promise<AccountsResult>
     unlinkIdentity: (accountId: string) => Promise<AccountsResult<{ identityId: string }>>
+    /** Retired in 2.1.1-beta.3 (owner decision 2026-10-11): this computer's own
+     *  sign-in of a provider is never taken in. Kept for its shape; main always
+     *  answers 'unsupported', and no surface calls it. */
     adoptExternal: (providerId: ProviderId) => Promise<AccountsResult<{ accountId: string }>>
-    /** Whether this computer's own sign-in of the provider is signed in,
-     *  asked without taking it in (nothing is kept). */
+    /** Retired in 2.1.1-beta.3 (owner decision 2026-10-11): this computer's own
+     *  sign-in of a provider is never taken in. Kept for its shape; main always
+     *  answers 'unsupported', and no surface calls it. */
     probeExternal: (providerId: ProviderId) => Promise<AccountsResult<{ state: KnownAuthState }>>
     /** "This is still my account": clears a blocked account after a fresh check. */
     reconcileSignIn: (accountId: string) => Promise<AccountsResult<{ state: KnownAuthState }>>
@@ -1198,6 +1208,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(IPC.CANVAS_VERSION_VERDICT, args),
     agentMarker: (args: { sessionId: string; canvasId: string; line: string }) => ipcRenderer.invoke(IPC.CANVAS_AGENT_MARKER, args),
     onAgentMarkerUndelivered: (cb: (e: CanvasMarkerUndelivered) => void) => onChannel(IPC.CANVAS_AGENT_MARKER_UNDELIVERED, cb),
+    onClaudeMarkerAsk: (cb: (e: ClaudeMarkerAsk) => void) => onChannel(IPC.CANVAS_CLAUDE_MARKER_ASK, cb),
+    answerClaudeMarker: (answer: ClaudeMarkerAnswer) => ipcRenderer.send(IPC.CANVAS_CLAUDE_MARKER_ANSWER, answer),
     sessionGuidance: (args: { sessionId: string }) => ipcRenderer.invoke(IPC.CANVAS_SESSION_GUIDANCE, args),
     versionReopen: (args: { sessionId: string; versionId: string }) =>
       ipcRenderer.invoke(IPC.CANVAS_VERSION_REOPEN, args),

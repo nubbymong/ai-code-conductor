@@ -109,8 +109,9 @@ vi.mock('../../../src/main/providers', () => ({
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }), // WP2 PR 4: the local launch resolves Claude through the provider
     // Stand in for the real providers, which spread process.env: hand back a
     // STALE inherited CCC_SESSION_WORKTREE so every 'not designated' assertion
-    // below verifies it is SCRUBBED, not merely absent.
-    buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: { CCC_SESSION_WORKTREE: STALE_WT } }),
+    // below verifies it is SCRUBBED, not merely absent. The same for a stale
+    // CCC_GATED_DIRS.
+    buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: { CCC_SESSION_WORKTREE: STALE_WT, CCC_GATED_DIRS: STALE_GATED } }),
     ingestSessionTelemetry: () => ({ stop: () => {} }),
   }),
 }))
@@ -225,6 +226,7 @@ function makePrimaryProject(prefix: string): { parent: string; project: string; 
 }
 const SHORT = SID.slice(0, 12)
 const STALE_WT = path.join('F:', 'stale-outer', 'ccc-wt', 'deadbeefdead')
+const STALE_GATED = JSON.stringify([path.join('F:', 'stale-outer', 'repo')])
 
 afterAll(() => {
   try {
@@ -316,6 +318,22 @@ describe('CCC designates the session worktree and serves it once it exists', () 
     const { project } = makePrimaryProject('ccc-wt-spawn-scrub2-')
     const why2 = spawn({ cwd: project, shellOnly: true })
     expect(h.spawnEnvs[0].CCC_SESSION_WORKTREE, why2).toBeUndefined()  // shell-only never designates
+    killPty(SID)
+  })
+
+  // Mutation to prove this can fail: drop the
+  // `else delete finalSpawnEnv.CCC_GATED_DIRS` -- the stale set reaches the child.
+  it('SCRUBS an inherited CCC_GATED_DIRS from a launch that is not managed (its picker gates nothing)', () => {
+    // A dev CCC started inside a managed tile inherits that tile's gated set;
+    // its own unmanaged picker would then refuse retargets with a message about
+    // a gate that never ran.
+    const { project } = makePrimaryProject('ccc-wt-spawn-gated-')
+    const why = spawn({ cwd: project })
+    expect(h.spawnEnvs[0].CCC_GATED_DIRS, why).toBeUndefined()
+    killPty(SID)
+    h.spawnEnvs = []
+    const why2 = spawn({ cwd: project, shellOnly: true })
+    expect(h.spawnEnvs[0].CCC_GATED_DIRS, why2).toBeUndefined()
     killPty(SID)
   })
 

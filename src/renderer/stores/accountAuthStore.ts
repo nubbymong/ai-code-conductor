@@ -57,8 +57,11 @@ interface AccountAuthState {
    * handler resolves both together. Anything that needs just the web answer --
    * the sidebar context menu deciding whether "Open artifacts" is live -- was
    * therefore waiting seconds on a question that is a local JSON read, and
-   * rendering a disabled item in the meantime. Never gated by the TTL: it costs
-   * a file read, and the whole point is that it lands before the user clicks.
+   * rendering a disabled item in the meantime. Never gated by the TTL: for an
+   * active account it costs a file read, and the whole point is that it lands
+   * before the user clicks. A record that reads expired also checks the live
+   * claude.ai session cookie first (a bounded partition cookie read, up to
+   * 1.5 s), so a session claude.ai renewed answers active.
    */
   refreshWeb: (profileId: string) => Promise<void>
   /** Drop a profile's cached status (e.g. account deleted). */

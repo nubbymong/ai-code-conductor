@@ -15,8 +15,22 @@
 // line lets through npm's launcher arrive whole. No Claude Code, no app, no
 // network; every process gets a fresh environment (isolatedProbeEnv). Windows
 // only. Pure models of the same readers: agents-env-launch.test.ts.
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
+
+// The picker route starts only when node.exe is found where the session's
+// PowerShell looks (pickerNodeFound). Answered here with the node that runs
+// this test, the one every run's Path names, so the route never depends on
+// the runner's own PATH. Every other lookup is the real one.
+vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/windows-programs')>()
+  const nodeOnly = (names: readonly string[]): boolean => names.length === 1 && names[0] === 'node.exe'
+  return {
+    ...actual,
+    findOnWindowsPath: ((names, ...rest) => (nodeOnly(names) ? process.execPath : actual.findOnWindowsPath(names, ...rest))) as typeof actual.findOnWindowsPath,
+    findOnWindowsPathAsync: (async (names, ...rest) => (nodeOnly(names) ? process.execPath : actual.findOnWindowsPathAsync(names, ...rest))) as typeof actual.findOnWindowsPathAsync,
+  }
+})
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -215,10 +229,14 @@ describe.runIf(onWindows)('Windows: a Claude session hands Claude Code its agent
   }
 
   it('control: Windows PowerShell 5.1 hands claude.cmd JSON written on the line itself without its double quotes', async () => {
-    // The harness above tells the two apart: JSON as text on the line, one template.
-    const res = await run(POWERSHELL, 'claude.cmd', 'direct', (o) => ({
-      line: buildClaudeLaunchCommand({ ...o, agentsFlag: ` --agents ${quoteArgForShell(JSON.stringify([TEMPLATES[0]]), true)}` }), env: {},
-    }))
+    // The harness above tells the two apart: JSON as text on the line, one
+    // template. The builder refuses such a line now (a double quote on a line
+    // cmd.exe reads), so the control writes the line it used to build.
+    const res = await run(POWERSHELL, 'claude.cmd', 'direct', (o) => {
+      const agentsFlag = ` --agents ${quoteArgForShell(JSON.stringify([TEMPLATES[0]]), true)}`
+      expect(() => buildClaudeLaunchCommand({ ...o, agentsFlag })).toThrow(/the value of --agents holds a character cmd\.exe would read as more than text/)
+      return { line: `Set-Location ${quoteArgForShell(o.cwd, true)}; & ${quoteArgForShell(o.claudeBin, true)}${agentsFlag}${o.extraFlags} ${quoteArgForShell('--verbose', true)}; exit`, env: {} }
+    })
     expect(res.mark).not.toBeNull()
     expect(res.mark!.argv[1]).toBe('[{name:reviewer,description:checks (a) & (b) | c > d < e ^ f,prompt:review it, then say done}]')
   }, 180_000)

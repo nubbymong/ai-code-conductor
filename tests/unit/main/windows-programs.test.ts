@@ -1,7 +1,29 @@
 // windows-programs.ts: helper tools start from the system folder, and programs
-// are found only in PATH's absolute folders, by their full path. Pure: every
-// file test is injected; no process is started and no real file is read.
-import { describe, it, expect } from 'vitest'
+// are found only in PATH's absolute folders, by their full path. Every file
+// test is injected and child_process is mocked: no process is started and no
+// real file is read.
+import { EventEmitter } from 'node:events'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+/** Every start the PowerShell profile lookup makes, with its child under the test's control. */
+const cp = vi.hoisted(() => ({
+  spawn: [] as Array<{ file: string; args: string[]; opts: Record<string, unknown>; child: unknown }>,
+  execFile: [] as Array<{ file: string; args: string[]; opts: Record<string, unknown>; cb: () => void }>,
+  spawnThrows: null as Error | null,
+}))
+vi.mock('node:child_process', () => ({
+  spawn: (file: string, args: string[], opts: Record<string, unknown>) => {
+    if (cp.spawnThrows) throw cp.spawnThrows
+    const child = fakeChild()
+    cp.spawn.push({ file, args, opts, child })
+    return child
+  },
+  execFile: (file: string, args: string[], opts: Record<string, unknown>, cb: () => void) => {
+    cp.execFile.push({ file, args, opts, cb })
+    return {}
+  },
+}))
+
 import {
   systemTool,
   findOnWindowsPath,
@@ -12,6 +34,11 @@ import {
   windowsStartCommand,
   withoutCurrentFolderLookup,
   withFullyQualifiedProgramLookup,
+  findWithPowerShellProfile,
+  powerShellProfileAnswer,
+  powerShellProfileLookupCommand,
+  POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS,
+  POWERSHELL_PROFILE_EXIT_DRAIN_MS,
 } from '../../../src/main/windows-programs'
 import { windowsPathFolderIsFullyQualified } from '../../../src/main/providers/windows-path-names'
 
@@ -252,5 +279,282 @@ describe('a child that starts Claude Code finds programs only in fully qualified
       if (dir.length >= 2 && dir.startsWith('"') && dir.endsWith('"')) dir = dir.slice(1, -1).trim()
       expect(withFullyQualifiedProgramLookup({ Path: entry }).Path, JSON.stringify(entry)).toBe(windowsPathFolderIsFullyQualified(dir) ? dir : undefined)
     }
+  })
+})
+
+// -- 2.1.1-beta.3 (F26): a program only the user's PowerShell profile puts on PATH --
+
+type FakeChild = EventEmitter & {
+  stdout: EventEmitter & { destroy: ReturnType<typeof vi.fn> }
+  pid: number
+  exitCode: number | null
+  signalCode: string | null
+  kill: ReturnType<typeof vi.fn>
+}
+
+/** A PowerShell that answers only when the test says so. */
+function fakeChild(): FakeChild {
+  const child = new EventEmitter() as FakeChild
+  child.stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() })
+  child.pid = 4242
+  child.exitCode = null
+  child.signalCode = null
+  child.kill = vi.fn()
+  return child
+}
+
+/** PowerShell prints `text` and exits. */
+function finishWith(child: FakeChild, ...chunks: string[]): void {
+  for (const c of chunks) child.stdout.emit('data', Buffer.from(c, 'utf8'))
+  child.exitCode = 0
+  child.emit('exit', 0)
+  child.emit('close', 0)
+}
+
+const BEGIN = '__CCC_PROGRAM_BEGIN__'
+const END = '__CCC_PROGRAM_END__'
+const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
+/** What the fixed command prints for `answer`, after a profile's own output. */
+const printed = (answer: string): string => `Loading personal and system profiles took 912ms.\r\n${BEGIN}${b64(answer)}${END}`
+
+/** The PATH filter the fixed command applies after the profile, before Get-Command. */
+const PATH_FILTER = "$env:PATH = (@($env:PATH -split ';') | Where-Object { $_.Trim() -match '^\\x22?[A-Za-z]:[\\\\/]' -and $_ -notmatch '%' }) -join ';'"
+
+/** The fixed command, exactly: nothing in it comes from outside the app. */
+const EXPECTED_COMMAND = "$ErrorActionPreference = 'SilentlyContinue'; "
+  + `${PATH_FILTER}; `
+  + "$found = ''; "
+  + "foreach ($name in @('claude.exe','claude.cmd','claude.bat')) { $c = Get-Command -Name $name -CommandType Application | Select-Object -First 1; if ($c) { $found = [string]$c.Source; break } }; "
+  + "[Console]::Out.Write('__CCC_PROGRAM_BEGIN__' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($found)) + '__CCC_PROGRAM_END__')"
+
+describe('a program only the PowerShell profile puts on PATH (findWithPowerShellProfile)', () => {
+  const NAMES = ['claude.exe', 'claude.cmd', 'claude.bat']
+  const HOME = 'C:\\Users\\me'
+  const ENV = { SystemRoot: 'C:\\Windows', PATH: '.;rel\\bin;C:\\Tools;%APPDATA%\\npm', USERPROFILE: HOME }
+  const FNM = 'C:\\Users\\me\\AppData\\Local\\fnm_multishells\\1234_1700000000\\claude.cmd'
+  const FOUND = { outcome: 'found', path: FNM }
+  const NONE = { outcome: 'none' }
+  const FAILED = { outcome: 'failed' }
+  const isFile = async (): Promise<boolean> => true
+  const child = (i = 0): FakeChild => cp.spawn[i].child as FakeChild
+
+  beforeEach(() => {
+    cp.spawn.length = 0
+    cp.execFile.length = 0
+    cp.spawnThrows = null
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  // Mutation to prove this can fail: add '-NoProfile' to the arguments, or
+  // start 'powershell.exe' by name.
+  it('asks the system Windows PowerShell WITH the profile, with the fixed command, in the home folder, and no shell', async () => {
+    const asked = findWithPowerShellProfile(NAMES, { env: ENV, cwd: HOME, stat: isFile })
+    expect(cp.spawn).toHaveLength(1)
+    const s = cp.spawn[0]
+    expect(s.file).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+    expect(s.args).toEqual(['-NoLogo', '-NonInteractive', '-Command', EXPECTED_COMMAND])
+    expect(s.args).not.toContain('-NoProfile')
+    expect(s.opts).toMatchObject({ cwd: HOME, windowsHide: true, windowsVerbatimArguments: false })
+    expect(s.opts).not.toHaveProperty('shell')
+    expect((s.opts.stdio as unknown[])[0]).toBe('ignore')
+    // PATH kept to its fully qualified folders; no program from the working folder.
+    expect(s.opts.env).toMatchObject({ PATH: 'C:\\Tools', NoDefaultCurrentDirectoryInExePath: '1' })
+    finishWith(child(), printed(FNM))
+    expect(await asked).toEqual(FOUND)
+  })
+
+  it('the command is fixed: only a plain program file name is ever put in it', async () => {
+    expect(powerShellProfileLookupCommand(NAMES)).toBe(EXPECTED_COMMAND)
+    for (const bad of ["claude'.exe", 'claude.ps1', 'claude', '', '.exe', 'a b.exe', 'claude.exe;calc.exe', '$(calc).exe', '..\\claude.exe', 'C:\\claude.exe', 'claude.exe\n']) {
+      expect(() => powerShellProfileLookupCommand([bad]), JSON.stringify(bad)).toThrow(/plain program file name/)
+    }
+    expect(() => powerShellProfileLookupCommand([])).toThrow(/no program names/)
+    await expect(findWithPowerShellProfile(["claude'.exe"], { env: ENV, cwd: HOME })).rejects.toThrow(/plain program file name/)
+    expect(cp.spawn).toEqual([])
+  })
+
+  // Profile-added relative PATH entries. Mutation to
+  // prove this can fail: drop the PATH filter from the command, or put it
+  // after the Get-Command loop.
+  it('after the profile, Get-Command searches only the PATH folders named from a drive letter: never a relative entry the profile added', () => {
+    const command = powerShellProfileLookupCommand(NAMES)
+    const filterAt = command.indexOf(PATH_FILTER)
+    expect(filterAt).toBeGreaterThan(0)
+    expect(filterAt).toBeLessThan(command.indexOf('Get-Command'))
+    // No double quote: Windows PowerShell's command line cannot split the command.
+    expect(command).not.toContain('"')
+    // The filter's pattern, read the way .NET reads it (the same syntax in a
+    // JavaScript regular expression for these constructs; -match ignores case).
+    const pattern = /-match '([^']+)'/.exec(PATH_FILTER)![1]
+    const kept = (entry: string): boolean => new RegExp(pattern, 'i').test(entry.trim()) && !entry.includes('%')
+    for (const entry of ['C:\\Tools', 'd:/node', '"C:\\Program Files\\nodejs"', ' C:\\Users\\me\\AppData\\Local\\fnm_multishells\\1_2 ']) {
+      expect(kept(entry), entry).toBe(true)
+    }
+    for (const entry of ['.', '..', 'bin', '.\\node_modules\\.bin', 'node_modules\\.bin', 'C:rel', '\\Tools', '\\\\server\\share\\bin', '//server/share', '%APPDATA%\\npm', 'C:\\%X%\\bin', '']) {
+      expect(kept(entry), entry).toBe(false)
+    }
+  })
+
+  // Mutation to prove this can fail: accept a share (drop the drive-letter
+  // rule), or drop the working-folder comparison.
+  it('takes one plain drive-absolute path to an allowed file name, never a share, a relative name or the folder it ran in', () => {
+    const take = (answer: string): string | null => powerShellProfileAnswer(printed(answer), NAMES, HOME)
+    expect(take(FNM)).toBe(FNM)
+    expect(take('D:/tools/node/claude.exe')).toBe('D:\\tools\\node\\claude.exe')
+    expect(take('C:\\Users\\Jos\u00e9\\AppData\\Roaming\\npm\\claude.cmd')).toBe('C:\\Users\\Jos\u00e9\\AppData\\Roaming\\npm\\claude.cmd')
+    expect(take('C:\\Tools\\CLAUDE.BAT')).toBe('C:\\Tools\\CLAUDE.BAT')
+    expect(take(`  ${FNM}  `)).toBe(FNM)
+    for (const refused of [
+      '', 'claude.exe', '.\\claude.exe', 'bin\\claude.exe', 'C:claude.exe', '\\claude.exe',
+      '\\\\server\\share\\claude.exe', '//server/share/claude.exe', '\\\\?\\C:\\Tools\\claude.exe', '\\\\.\\C:\\Tools\\claude.exe',
+      'C:\\Tools\\..\\claude.exe', 'C:\\Tools\\.\\claude.exe', 'C:\\%APPDATA%\\npm\\claude.cmd', 'C:\\Tools.\\claude.exe', 'C:\\Too"ls\\claude.exe',
+      'C:\\Tools\\claude.ps1', 'C:\\Tools\\notclaude.exe', 'C:\\Tools\\claude.exe.lnk', 'C:\\Tools\\node.exe',
+      'C:\\Tools\\claude.exe\r\nC:\\Other\\claude.exe', 'C:\\Tools\\claude.exe\u0000',
+      'C:\\Users\\me\\claude.exe', 'c:\\USERS\\me\\Claude.exe', 'C:/Users/me/claude.cmd',
+    ]) {
+      expect(take(refused), JSON.stringify(refused)).toBeNull()
+    }
+  })
+
+  it('reads only the text between the last opening marker and the closing one after it, as Base64 of whole UTF-8', () => {
+    const answer = (out: string): string | null => powerShellProfileAnswer(out, NAMES, HOME)
+    // A profile printing an earlier pair: the last one is the command's.
+    expect(answer(`${BEGIN}${b64('C:\\Elsewhere\\claude.exe')}${END}\r\n${printed(FNM)}`)).toBe(FNM)
+    expect(answer(`${printed(FNM)}\r\nprofile output after it`)).toBe(FNM)
+    expect(answer('')).toBeNull()
+    expect(answer('C:\\Tools\\claude.exe')).toBeNull()
+    expect(answer(`${BEGIN}${b64(FNM)}`)).toBeNull()
+    expect(answer(`${BEGIN}${FNM}${END}`)).toBeNull()
+    expect(answer(`${BEGIN}${END}`)).toBeNull()
+    expect(answer(`${BEGIN}${Buffer.from([0x43, 0x3a, 0x5c, 0xff, 0xfe]).toString('base64')}${END}`)).toBeNull()
+  })
+
+  // A question with no answer to go by is told
+  // apart from "PowerShell named none". Mutation to prove this can fail:
+  // report `none` for output with no answer in it.
+  it('tells "named none" (an answer, kept) apart from "no answer to go by" (failed, asked once more later)', async () => {
+    const outcome = async (...chunks: string[]): Promise<unknown> => {
+      const asked = findWithPowerShellProfile(NAMES, { env: ENV, cwd: HOME, stat: isFile })
+      finishWith(child(cp.spawn.length - 1), ...chunks)
+      return asked
+    }
+    // The command ran and found none of the names: an empty answer.
+    expect(await outcome(`profile banner\r\n${BEGIN}${END}`)).toEqual(NONE)
+    // It named one the app does not take.
+    expect(await outcome(printed('\\\\server\\share\\claude.exe'))).toEqual(NONE)
+    expect(await outcome(printed('C:\\Users\\me\\claude.exe'))).toEqual(NONE)
+    // It never printed its answer (the profile ended the session first, say).
+    expect(await outcome('profile banner only\r\n')).toEqual(FAILED)
+    expect(await outcome()).toEqual(FAILED)
+    expect(await outcome(`${BEGIN}${b64(FNM)}`)).toEqual(FAILED)
+  })
+
+  it('an answer that is not a regular file is not taken; one that cannot be checked is no answer to go by', async () => {
+    const notThere = findWithPowerShellProfile(NAMES, { env: ENV, cwd: HOME, stat: async () => false })
+    finishWith(child(), printed(FNM))
+    expect(await notThere).toEqual(NONE)
+    const unreadable = findWithPowerShellProfile(NAMES, { env: ENV, cwd: HOME, stat: async () => { throw new Error('EACCES') } })
+    finishWith(child(1), printed(FNM))
+    expect(await unreadable).toEqual(FAILED)
+  })
+
+  it('with no plain system folder or working folder, nothing is started', async () => {
+    for (const env of [{}, { SystemRoot: '\\\\server\\Windows' }, { SystemRoot: 'Windows' }]) {
+      expect(await findWithPowerShellProfile(NAMES, { env, cwd: HOME, stat: isFile }), JSON.stringify(env)).toEqual(FAILED)
+    }
+    for (const cwd of ['\\\\server\\home\\me', 'rel', '', 'C:\\Users\\..\\me']) {
+      expect(await findWithPowerShellProfile(NAMES, { env: ENV, cwd, stat: isFile }), cwd).toEqual(FAILED)
+    }
+    expect(cp.spawn).toEqual([])
+  })
+
+  it('a start that fails is no answer to go by', async () => {
+    cp.spawnThrows = new Error('spawn EPERM')
+    expect(await findWithPowerShellProfile(NAMES, { env: ENV, cwd: HOME, stat: isFile })).toEqual(FAILED)
+    cp.spawnThrows = null
+    const failed = findWithPowerShellProfile(NAMES, { env: ENV, cwd: HOME, stat: isFile })
+    child().emit('error', new Error('spawn ENOENT'))
+    expect(await failed).toEqual(FAILED)
+  })
+
+  // Mutation to prove this can fail: drop the timer, or start taskkill by name.
+  it('a profile that never answers is stopped after the timeout, with what it started, by taskkill from the system folder', async () => {
+    vi.useFakeTimers()
+    let settled = false
+    const asked = findWithPowerShellProfile(NAMES, { env: ENV, cwd: HOME, stat: isFile })
+    void asked.then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS - 1)
+    expect(settled).toBe(false)
+    expect(cp.execFile).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await asked).toEqual(FAILED)
+    expect(cp.execFile).toHaveLength(1)
+    expect(cp.execFile[0].file).toBe('C:\\Windows\\System32\\taskkill.exe')
+    expect(cp.execFile[0].args).toEqual(['/PID', '4242', '/T', '/F'])
+    expect(cp.execFile[0].opts).not.toHaveProperty('shell')
+    expect(child().stdout.destroy).toHaveBeenCalled()
+    expect(child().kill).not.toHaveBeenCalled()
+    cp.execFile[0].cb()
+    expect(child().kill).toHaveBeenCalledTimes(1)
+    // An answer after the timeout changes nothing.
+    finishWith(child(), printed(FNM))
+    expect(await asked).toEqual(FAILED)
+  })
+
+  // Mutation to prove this can fail: drop the
+  // 'exit' handler (read only on 'close'): the question then waits out the
+  // whole timeout and reports no answer.
+  it('PowerShell printed its answer and exited, but something the profile started holds the output open: the answer is read shortly after the exit', async () => {
+    vi.useFakeTimers()
+    let settled = false
+    const asked = findWithPowerShellProfile(NAMES, { env: ENV, cwd: HOME, stat: isFile })
+    void asked.then(() => { settled = true })
+    child().stdout.emit('data', Buffer.from(printed(FNM), 'utf8'))
+    child().exitCode = 0
+    child().emit('exit', 0)
+    // No 'close': gpg-agent (say) still holds the pipe.
+    await vi.advanceTimersByTimeAsync(POWERSHELL_PROFILE_EXIT_DRAIN_MS - 1)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await asked).toEqual(FOUND)
+    expect(POWERSHELL_PROFILE_EXIT_DRAIN_MS).toBeLessThan(POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS / 10)
+    // Nothing is killed: PowerShell has exited, its process id is Windows's to reuse.
+    await vi.advanceTimersByTimeAsync(POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS)
+    expect(cp.execFile).toEqual([])
+    expect(child().kill).not.toHaveBeenCalled()
+    expect(child().stdout.destroy).toHaveBeenCalled()
+  })
+
+  it('exited without printing an answer and the output never closes: no answer to go by, without waiting out the timeout, and nothing is killed', async () => {
+    vi.useFakeTimers()
+    const asked = findWithPowerShellProfile(NAMES, { env: ENV, cwd: HOME, stat: isFile })
+    child().stdout.emit('data', Buffer.from('profile banner\r\n', 'utf8'))
+    child().exitCode = 0
+    child().emit('exit', 0)
+    await vi.advanceTimersByTimeAsync(POWERSHELL_PROFILE_EXIT_DRAIN_MS)
+    expect(await asked).toEqual(FAILED)
+    await vi.advanceTimersByTimeAsync(POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS)
+    expect(cp.execFile).toEqual([])
+    expect(child().kill).not.toHaveBeenCalled()
+  })
+
+  it('after the timeout nothing is killed once PowerShell has exited (its process id is Windows\'s to reuse)', async () => {
+    vi.useFakeTimers()
+    const asked = findWithPowerShellProfile(NAMES, { env: ENV, cwd: HOME, stat: isFile, timeoutMs: POWERSHELL_PROFILE_EXIT_DRAIN_MS - 100 })
+    // Exited just before the timeout, with what it started holding the output open.
+    child().exitCode = 0
+    child().emit('exit', 0)
+    await vi.advanceTimersByTimeAsync(POWERSHELL_PROFILE_EXIT_DRAIN_MS)
+    expect(await asked).toEqual(FAILED)
+    expect(cp.execFile).toEqual([])
+    expect(child().kill).not.toHaveBeenCalled()
+    expect(child().stdout.destroy).toHaveBeenCalled()
+  })
+
+  it('keeps the end of a long output, where the answer is', async () => {
+    const asked = findWithPowerShellProfile(NAMES, { env: ENV, cwd: HOME, stat: isFile })
+    const noise = 'x'.repeat(64 * 1024)
+    finishWith(child(), noise, noise, noise, noise, noise, printed(FNM))
+    expect(await asked).toEqual(FOUND)
   })
 })

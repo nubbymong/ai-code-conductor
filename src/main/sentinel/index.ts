@@ -21,7 +21,10 @@ import { fetchChangelog, sliceChangelog } from './sentinel-changelog'
 import { fetchCodexReleaseNotes } from './sentinel-codex-changelog'
 import { runAnalysis, CLAUDE_ANALYSIS_ENV, createClaudeRetryWatch, claudeAnalysisOutcome, claudeSettingsTransportEnv, type HeadlessRunner } from './sentinel-analysis'
 import { validateProposal } from './sentinel-apply'
-import { modelCoverageFindings, modelCheckFailedFinding, EXPECTED_MODEL_SET, codexModelCoverageFindings, CODEX_EXPECTED_MODEL_SET, type CodexLiveModelList } from './sentinel-models'
+import {
+  modelCoverageFindings, modelCheckFailedFinding, EXPECTED_MODEL_SET, codexModelCoverageFindings, CODEX_EXPECTED_MODEL_SET, type CodexLiveModelList,
+  registryCoveredModelFindingIds, staleModelFindingIds, staleCodexModelFindingIds, CODEX_MODEL_CHECK_FAILED_ID,
+} from './sentinel-models'
 import { codexVersionFindings, type SupportedVersions } from './sentinel-codex'
 import { fetchArticleModelIds } from './sentinel-model-article'
 import { getRegistry, getBaseline, applyOverlayEntry, removeOverlayEntry, loadOverlay, setOverlay } from '../model-registry-service'
@@ -199,10 +202,17 @@ async function analysisHome(): Promise<{ home: string | null; accountLabel: stri
 async function runModelCoverageCheck(): Promise<void> {
   if (!state) return
   try {
+    // O8: a notice for a model this build's registry now covers is closed
+    // before the article is read (up to 10 s), from the registry alone, so a
+    // start or a Re-run never shows it while the read is pending.
+    state.retireOpen(registryCoveredModelFindingIds(state.snapshot().findings, getRegistry()))
     const liveIds = await fetchArticleModelIds()
-    for (const f of modelCoverageFindings(getRegistry(), EXPECTED_MODEL_SET, Date.now(), liveIds)) {
-      state.upsertFinding(f)
-    }
+    const registry = getRegistry()
+    const current = modelCoverageFindings(registry, EXPECTED_MODEL_SET, Date.now(), liveIds)
+    for (const f of current) state.upsertFinding(f)
+    // The check completed: every other model finding it no longer stands
+    // behind is closed too (never on the failure path below).
+    state.retireOpen(staleModelFindingIds(state.snapshot().findings, registry, current, EXPECTED_MODEL_SET, liveIds))
   } catch (err) {
     const msg = (err as Error).message
     logInfo(`[sentinel] model coverage check failed: ${msg}`)
@@ -219,14 +229,17 @@ async function runModelCoverageCheck(): Promise<void> {
 function runCodexModelCoverageCheck(live: CodexLiveModelList | null): void {
   if (!state) return
   try {
-    for (const f of codexModelCoverageFindings(getRegistry(), CODEX_EXPECTED_MODEL_SET, Date.now(), live)) {
-      state.upsertFinding(f)
-    }
+    const registry = getRegistry()
+    const current = codexModelCoverageFindings(registry, CODEX_EXPECTED_MODEL_SET, Date.now(), live)
+    for (const f of current) state.upsertFinding(f)
+    // O8: the check completed, so the Codex model findings it no longer
+    // stands behind are closed (never on the failure path below).
+    state.retireOpen(staleCodexModelFindingIds(state.snapshot().findings, registry, current, CODEX_EXPECTED_MODEL_SET, live))
   } catch (err) {
     const msg = (err as Error).message
     logInfo(`[sentinel] Codex model coverage check failed: ${msg}`)
     state.upsertFinding({
-      id: 'models:codex-check-failed',
+      id: CODEX_MODEL_CHECK_FAILED_ID,
       kind: 'compat',
       severity: 'warn',
       title: 'The Codex model list could not be verified',
@@ -381,6 +394,13 @@ function codexAccountLabel(svc: NonNullable<Awaited<ReturnType<typeof accountsSe
 }
 
 let sentinelLaunchSeq = 0
+
+/** Said when the Codex account an analysis would run on needs a
+ *  confirmation at each launch (prepareLaunch answers
+ *  acknowledgement-required). Names the real Settings labels: the Sentinel
+ *  section's Analysis account (General tab), and Add Codex account in
+ *  Settings, Accounts. */
+export const CODEX_ANALYSIS_NEEDS_ACCOUNT = "Sentinel's analysis could not run on Codex: the Codex account it would use must be confirmed at each launch, and a background analysis has nobody to confirm it. Choose another Analysis account in Settings, General, Sentinel, or add a Codex account in Settings, Accounts with Add Codex account, then choose it as the Analysis account."
 
 /** The folder a Codex analysis runs in: made fresh for the run, with this
  *  prefix, in Sentinel's own runs folder, and removed after it. */
@@ -547,7 +567,14 @@ async function codexAnalysisRunner(signal: AbortSignal): Promise<AnalysisRunner 
       fellBack = true
       prepared = await prepare(null)
     }
-    if (!prepared.ok) return { refused: `Sentinel's analysis could not run on Codex: ${prepared.message}` }
+    // An account that must be confirmed at each launch (one 2.1.1-beta.2
+    // registered for the Codex sign-in already on this computer, or an
+    // unverified one) is never confirmed here: an analysis has nobody there
+    // to confirm it, so the panel names the way forward instead of the
+    // confirm text. The acknowledgement rule itself is unchanged.
+    if (!prepared.ok) {
+      return { refused: prepared.code === 'acknowledgement-required' ? CODEX_ANALYSIS_NEEDS_ACCOUNT : `Sentinel's analysis could not run on Codex: ${prepared.message}` }
+    }
     const launch = prepared
     const parent = analysisParent()
     let cwd: string
@@ -918,9 +945,16 @@ async function claudeUpdateAtStart(): Promise<{ update: Update | null; run: { en
  * one that is off is skipped without a word (a provider that is off shows
  * nothing). Only when neither may run does the panel say why, in Claude
  * Code's words as before.
+ *
+ * O8: the model-registry check runs again too, as it does at start, so a
+ * Re-run pressed at a model notice whose cause is gone closes it (the Codex
+ * half already ran again, in runCodexChecks). It runs beside the rest, so an
+ * article read that hangs does not hold up the analysis; its registry-only
+ * close happens at once, and the Re-run ends when it has finished.
  */
 export async function sentinelRerun(): Promise<void> {
   if (!state) return
+  const models = runModelCoverageCheck()
   let run: { end: () => void } | null = null
   try {
     const claudeOn = !(await refusalOf('claude', true))
@@ -960,6 +994,7 @@ export async function sentinelRerun(): Promise<void> {
     state?.setAnalyzing(false, String((err as Error)?.message ?? err), null, null, true)   // a failed check (E-S8, E-Q15)
   } finally {
     run?.end()
+    await models                                     // never rejects: a throw is a finding of its own
   }
 }
 

@@ -37,6 +37,16 @@ vi.mock('electron', () => ({
   nativeTheme: { shouldUseDarkColors: false, on: () => {} },
   app: { getPath: () => '/tmp' },
 }))
+// The win32 cases start ssh.exe by the full path found in the folders PATH
+// names (tests/unit/main/ssh-program-lookup.test.ts); the lookup answers one
+// here, so they run the same on every runner.
+vi.mock('../../src/main/windows-programs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/main/windows-programs')>()
+  return {
+    ...real,
+    findOnWindowsPath: (...a: Parameters<typeof real.findOnWindowsPath>) => (a[0][0] === 'ssh.exe' ? 'C:\\Windows\\System32\\OpenSSH\\ssh.exe' : real.findOnWindowsPath(...a)),
+  }
+})
 
 const { spawnPty } = await import('../../src/main/pty-manager')
 const { registerProvider } = await import('../../src/main/providers')

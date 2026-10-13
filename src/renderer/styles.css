@@ -321,6 +321,21 @@ body {
 .titlebar-no-drag {
   -webkit-app-region: no-drag;
 }
+/* While a page covers the whole window (the onboarding pages, the one-time
+   pages and introduction drawn in the same shell, and the Multi Spawn page),
+   App makes the app behind it inert, and then that app declares no drag or
+   no-drag region at all (aicc_planning #211). Those pages come BEFORE it in
+   the DOM. If Electron folds the regions in DOM order (a drag region is
+   added, a no-drag region is cut out, the later one wins), the hidden title
+   bar would otherwise mark the top 40px as drag again after the page's own
+   window buttons, through their middle, and the hidden panels would cut the
+   lower half out of the page's drag bar. With no region behind the page, the
+   result is the same in any order. initial is the no-region value, and as a
+   CSS-wide keyword it always parses. */
+[inert] .titlebar-drag,
+[inert] .titlebar-no-drag {
+  -webkit-app-region: initial;
+}
 
 /* Selection */
 ::selection {

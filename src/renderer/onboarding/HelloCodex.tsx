@@ -4,6 +4,7 @@ import './onboarding.css'
 import { OnboardingShell } from './OnboardingShell'
 import { otherDialogOpen } from './contain-focus'
 import { ProviderMark } from '../components/sidebar/Badges'
+import { HelloArt, LaunchArt, ReviewArt } from './codex-art'
 import { DialogOverlay, useDialogEscape } from '../components/ui/Dialog'
 import { useProviderAccountsStore } from '../stores/providerAccountsStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -67,36 +68,8 @@ function useCopyInputs(claudeReview: boolean): HelloCodexCopyInputs {
 }
 
 // -- Vignettes: pictures OF the features, decorative (aria-hidden) -----------
-
-function Tab({ provider, name, on = false }: { provider: 'claude' | 'codex'; name: string; on?: boolean }) {
-  return (
-    <div className={`hc-tab${on ? ' on' : ''}`}>
-      <ProviderMark providerId={provider} size={14} />
-      {name}
-    </div>
-  )
-}
-
-function HelloArt({ claudeOn }: { claudeOn: boolean }) {
-  return (
-    <div className="hc-vig" aria-hidden data-testid="hc-art-hello" data-ux-id="hc-art-hello">
-      <div className="hc-tabs">
-        {claudeOn
-          ? <><Tab provider="claude" name="api-server" /><Tab provider="codex" name="api-server (Codex)" on /><Tab provider="claude" name="docs" /></>
-          : <><Tab provider="codex" name="api-server (Codex)" on /><Tab provider="codex" name="docs (Codex)" /></>}
-      </div>
-      <div className="hc-term">
-        <div className="dim">&gt;_ OpenAI Codex  model gpt-5.5  account work@example</div>
-        <div className="dim">workspace ~/projects/api-server</div>
-        <div className="hc-gap" />
-        <div><span className="p">&gt;</span> <span className="hl">add a retry to the upload client and a test for it</span></div>
-        <div className="dim">  reading src/upload/client.ts</div>
-        <div className="dim">  editing src/upload/client.ts</div>
-        <div className="ok">  tests passed (12)</div>
-      </div>
-    </div>
-  )
-}
+// Hello, Launch and Review live in codex-art.tsx, shared with the What's New
+// showcase (O3); the two below are Hello Codex's own.
 
 function AccountsArt() {
   return (
@@ -119,81 +92,6 @@ function AccountsArt() {
         <span className="hc-spacer" />
         <span className="hc-badge rev">Reviewer</span>
       </div>
-      <div className="hc-row">
-        <span className="hc-avatar">~</span>
-        <div><div>This computer&apos;s Codex (~/.codex)</div><div className="hc-muted">Existing sign-in</div></div>
-        <span className="hc-spacer" />
-        <span className="hc-badge warn">Confirm each launch</span>
-      </div>
-    </div>
-  )
-}
-
-function LaunchArt() {
-  return (
-    <div className="hc-stack" aria-hidden data-testid="hc-art-launch" data-ux-id="hc-art-launch">
-      <div className="hc-vig">
-        <div className="hc-row hc-head"><b>New saved config</b></div>
-        <div className="hc-cards">
-          <div className="hc-card"><ProviderMark providerId="claude" size={18} /><div>Claude Code<div className="hc-muted">Anthropic</div></div></div>
-          <div className="hc-card on"><ProviderMark providerId="codex" size={18} /><div>Codex<div className="hc-muted">OpenAI</div></div></div>
-        </div>
-        <div className="hc-field"><span>Account</span><span>work@example</span></div>
-        <div className="hc-field"><span>Permissions</span><span>Standard</span></div>
-        <div className="hc-field off"><span>SSH</span><span>Not available for Codex in this release</span></div>
-      </div>
-      <div className="hc-vig">
-        <div className="hc-tui">
-          <div className="hc-tbox">
-            <span className="hc-tt">Resume Codex Conversation</span>
-            <div className="hc-trow"><span className="n">1</span><span className="hl">retry for the upload client</span><span className="dim">2h ago</span></div>
-            <div className="hc-trow"><span className="n">2</span><span>pagination bug in /orders</span><span className="dim">Yesterday</span></div>
-            <div className="hc-trow"><span className="n">3</span><span>update the README examples</span><span className="dim">3d ago</span></div>
-            <div className="hc-trow"><span className="new">n</span><span>New conversation</span><span /></div>
-          </div>
-          <div className="hc-prompt">&gt; 1</div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ReviewFlow({ from, to, ask, findings }: { from: 'claude' | 'codex'; to: 'Claude' | 'Codex'; ask: string; findings: number }) {
-  const who = from === 'claude' ? 'Claude' : 'Codex'
-  return (
-    <div data-testid={`hc-flow-${from}`} data-ux-id={`hc-flow-${from}`}>
-      <div className="hc-flow-lbl">From a {who} session</div>
-      <div className="hc-flow">
-        <div className="hc-vig hc-vig-mini">
-          <div className="hc-tabs">
-            {from === 'claude'
-              ? <><Tab provider="claude" name="api-server" on /><Tab provider="claude" name="docs" /></>
-              : <><Tab provider="codex" name="api-server (Codex)" on /><Tab provider="claude" name="api-server" /></>}
-          </div>
-          <div className="hc-term hc-term-mini"><span className="p">&gt;</span> <span className="hl">{ask}</span></div>
-        </div>
-        <span className="hc-arrow" />
-        <div className="hc-revbox">separate {to} reviewer - read-only</div>
-        <span className="hc-arrow" />
-        <div className="hc-finds">
-          <div className="hc-fh">{findings} findings</div>
-          {Array.from({ length: findings }, (_, i) => (
-            <div className="hc-fi" key={i}>{i + 1}. <span className="hc-sk" style={{ flex: 1 - i * 0.2 }} /></div>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/** The review drawing is an illustration of the feature as the build ships
- *  it: with Claude Code off it still shows both directions, and the points
- *  say what review needs. */
-function ReviewArt({ claudeReview }: { claudeReview: boolean }) {
-  return (
-    <div className="hc-flows" aria-hidden data-testid="hc-art-review" data-ux-id="hc-art-review">
-      <ReviewFlow from="claude" to="Codex" ask="ask for a Codex review" findings={3} />
-      {claudeReview && <ReviewFlow from="codex" to="Claude" ask="ask for a Claude review" findings={2} />}
     </div>
   )
 }

@@ -2,9 +2,10 @@ import { create } from 'zustand'
 import type { CanvasMarkerUndelivered, SubmitNotDeliveredReason } from '../../shared/types'
 
 /**
- * Filed Agent Canvas reviews and verdicts a Codex session did not get (WP2 PR
- * 4, P4.1, row 51; review A-1): main's submit primitive answered "not
- * delivered" for the marker line, and main pushes it once
+ * Filed Agent Canvas reviews and verdicts a session did not get (WP2 PR 4,
+ * P4.1, row 51; review A-1): main's submit primitive answered "not delivered"
+ * for a Codex session's marker line, or main dropped a Claude Code session's
+ * untyped (canvas/claude-marker-typing.ts), and main pushes it once
  * (canvas:agentMarkerUndelivered) with the canvas it was filed on.
  *
  * Held here, for the renderer's life, not in the canvas page: the page is

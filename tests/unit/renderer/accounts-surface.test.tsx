@@ -441,7 +441,9 @@ describe('Codex rows', () => {
     for (const a of [work, personal, local, old, parked]) expect(q(`provider-account-row-${a.id}`), a.id).toBeTruthy()
     expect(q('provider-account-row-acc-gone')).toBeNull()
     expect(q('account-plan-acc-work')?.textContent).toBe('ChatGPT Plus')
-    expect(q('account-method-acc-work')?.textContent).toBe('ChatGPT sign-in')
+    // #181 item 2: a non-breaking hyphen, so it never breaks after "sign-".
+    expect(q('account-method-acc-work')?.textContent).toBe('ChatGPT sign' + String.fromCodePoint(0x2011) + 'in')
+    expect(q('account-method-acc-work')?.textContent).not.toContain('-')
     expect(q('account-method-acc-personal')?.textContent).toBe('API key')
     expect(q('account-state-acc-work')?.textContent).toBe('Signed in')
     expect(q('account-state-acc-old')?.textContent).toBe('Needs attention: signed in a different way than before')
@@ -503,6 +505,30 @@ describe('Codex rows', () => {
     // Blocked: "This is still my account" is its check (it vouches); no plain check.
     expect(await menuKeys('acc-old')).toEqual(['sign-out', 'make-inactive'])
     expect(await menuKeys('acc-parked')).toEqual(['sign-in-again', 'check-sign-in', 'sign-out', 'make-active', 'archive'])
+  })
+
+  // #196 (F10, F11): on this computer's own sign-in, the app-only actions
+  // (Make inactive, then Archive) come before Sign out, which signs the
+  // Codex CLI out on this computer and is named for that; Sign in again is
+  // not offered (retired, O5).
+  it("this computer's own sign-in: Make inactive and Archive before Sign out, which is named for what it does; no Sign in again", async () => {
+    render(snapshot())
+    expect(await menuKeys('acc-local')).toEqual(['make-default', 'check-sign-in', 'make-inactive', 'sign-out'])
+    unmountNow()
+    render(snapshot({ accounts: [work, { ...local, lifecycle: 'inactive' }] }))
+    expect(await menuKeys('acc-local')).toEqual(['check-sign-in', 'make-active', 'archive', 'sign-out'])
+    await click('account-menu-btn-acc-local')
+    expect(q('account-menu-sign-out-acc-local')?.textContent).toBe('Sign Codex out on this computer...')
+    // Set apart from the app-only actions above it: a separator sits right
+    // before it, and Archive is the item before that.
+    const sep = q('account-menu-sign-out-acc-local')!.previousElementSibling
+    expect(sep?.getAttribute('role')).toBe('separator')
+    expect(sep?.previousElementSibling).toBe(q('account-menu-archive-acc-local'))
+    await click('account-menu-btn-acc-local')
+    // A managed account keeps the plain Sign out, where it was.
+    await click('account-menu-btn-acc-work')
+    expect(q('account-menu-sign-out-acc-work')?.textContent).toBe('Sign out')
+    await click('account-menu-btn-acc-work')
   })
 
   // WP2 commit 6g: the retired Codex settings tab's "Test connection", per
@@ -637,7 +663,9 @@ describe('Codex rows', () => {
       expect(q('account-external-hint-acc-local')).toBeNull()
     })
 
-    it('while the app signs it in again in place, it says so, as any row with a sign-in running, never the terminal hint (P3.3 VM round, V3)', async () => {
+    // The app never signs this computer's own sign-in in again now (O5);
+    // a row that reports a sign-in running still says so, never the hint.
+    it('with a sign-in running on it, it says so, as any row with a sign-in running, never the terminal hint (P3.3 VM round, V3)', async () => {
       render(snapshot({ accounts: [{ ...work, signingIn: true }, { ...local, lastKnownAuthState: 'signed-out', operationalState: 'attention', signingIn: true }] }))
       expect(q('account-signing-in-acc-local')?.textContent).toBe('Signing in now')
       expect(q('account-external-hint-acc-local')).toBeNull()
@@ -816,12 +844,17 @@ describe('external sign-in acknowledgement', () => {
     expect(pa.logout).toHaveBeenCalledWith({ accountId: 'acc-work' })
   })
 
-  it('asks before archiving the shared home, then passes acknowledgeExternal', async () => {
+  it('asks before archiving the shared home, saying plainly that it is final, then passes acknowledgeExternal', async () => {
     const localInactive = { ...local, lifecycle: 'inactive' as const }
     render(snapshot({ accounts: [work, localInactive] }))
     await click('account-menu-btn-acc-local')
     await click('account-menu-archive-acc-local')
     expect(pa.setLifecycle).not.toHaveBeenCalled()
+    // O5: the archived row has no Restore and main refuses one, so the
+    // confirmation says archiving is final before anything changes.
+    expect(document.getElementById('external-ack-title')?.textContent).toBe("Archive this computer's Codex (~/.codex)?")
+    expect(q('external-ack-text')?.textContent).toBe('Archiving is final: this account cannot be restored, because this app no longer uses the Codex sign-in already on this computer. Archiving only forgets that sign-in in this app: it is shared with other apps on this computer, including the Codex CLI, and it stays signed in for them.')
+    expect(q('external-ack-confirm')?.textContent).toBe('Archive')
     await click('external-ack-confirm')
     expect(pa.setLifecycle).toHaveBeenCalledWith({ accountId: 'acc-local', lifecycle: 'archived', acknowledgeExternal: true })
   })
@@ -986,6 +1019,27 @@ describe('reviewer line: why reviews cannot run, and what to do', () => {
     expect(q('account-badge-confirm-acc-local')?.getAttribute('title')).toBe("Cannot run reviews: you confirm each launch on this computer's own sign-in, and a review has no one to confirm it.")
     expect(q('account-badge-confirm-acc-unv')?.getAttribute('title')).toBe('Cannot run reviews: you confirm each launch on an unverified sign-in, and a review has no one to confirm it.')
   })
+
+  it('#181: the Confirm each launch reason reaches screen reader users too, not only a mouse', () => {
+    render(snapshot())
+    for (const [id, why] of [
+      ['acc-local', "You confirm each launch on this computer's own sign-in, and a review has no one to confirm it."],
+      ['acc-unv', 'You confirm each launch on an unverified sign-in, and a review has no one to confirm it.'],
+    ] as const) {
+      const pill = q(`account-badge-confirm-${id}`)!
+      const ref = pill.getAttribute('aria-describedby')
+      expect(ref, id).toBe(`account-confirm-why-${id}`)
+      const desc = document.getElementById(ref!)!
+      expect(desc.textContent, id).toBe(why)
+      expect(desc.classList.contains('sr-only'), id).toBe(true)
+      // Read in browse mode it follows the visible
+      // Cannot run reviews line as the reason, never repeating that line.
+      const line = q(`account-no-reviews-${id}`)!
+      expect(line.compareDocumentPosition(desc) & Node.DOCUMENT_POSITION_FOLLOWING, id).toBeTruthy()
+      expect(desc.textContent, id).not.toContain('Cannot run reviews')
+    }
+    expect(q('account-confirm-why-acc-work')).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1136,13 +1190,15 @@ describe('Sign in again', () => {
     if (confirmSame) await click('sign-in-again-confirm')
   }
 
-  it('is offered on an unblocked, non-archived account, signed in or not, this computer\'s own included (P3.3)', async () => {
+  it('is offered on an unblocked, non-archived account, signed in or not (P3.3), never on this computer\'s own sign-in (O5, #196)', async () => {
     render(snapshot({ accounts: [work, expired, signedOut, errored, unknown, externalOut, blockedOut] }))
-    for (const id of ['acc-work', 'acc-exp', 'acc-out', 'acc-err', 'acc-unk', 'acc-local']) expect(await menuKeys(id), id).toContain('sign-in-again')
-    for (const id of ['acc-old']) expect(await menuKeys(id), id).not.toContain('sign-in-again')
+    for (const id of ['acc-work', 'acc-exp', 'acc-out', 'acc-err', 'acc-unk']) expect(await menuKeys(id), id).toContain('sign-in-again')
+    for (const id of ['acc-old', 'acc-local']) expect(await menuKeys(id), id).not.toContain('sign-in-again')
     expect(canOfferSignInAgain(work)).toBe(true)
     expect(canOfferSignInAgain(signedOut)).toBe(true)
     expect(canOfferSignInAgain({ ...signedOut, lifecycle: 'archived' })).toBe(false)
+    // This computer's own sign-in, signed in, signed out or expired: never.
+    for (const st of ['signed-in', 'signed-out', 'expired'] as const) expect(canOfferSignInAgain({ ...local, lastKnownAuthState: st }), st).toBe(false)
   })
 
   it('ticked, it signs the same account in again and takes the key; not ticked, it adds a new account instead (P3.3)', async () => {
@@ -1256,34 +1312,15 @@ describe('Sign in again', () => {
     }
   })
 
-  it('this computer\'s own sign-in: its warning first; Cancel runs nothing; Continue signs it in again in place (review round 1, S2)', async () => {
-    pa.signInAgain.mockResolvedValue({ ok: true, state: 'signed-in' })
+  it('this computer\'s own sign-in has no Sign in again: nothing on its row signs every app using it out to sign in again (O5, #196)', async () => {
     render(snapshot({ accounts: [work, local] }))
-    await click('account-menu-btn-acc-local')
-    await click('account-menu-sign-in-again-acc-local')
-    expect(q('sign-in-again-dialog')).toBeNull()
-    expect(q('external-ack-dialog')).toBeTruthy()
-    expect(q('external-ack-text')?.textContent).toContain('Signing in again signs them out first, and if the new sign-in does not finish, it stays signed out.')
-    // This computer's own sign-in, inside a sentence, in lower case (P3.3 VM round, V2).
-    expect(document.getElementById('external-ack-title')?.textContent).toBe("Sign in to this computer's Codex (~/.codex) again?")
-    await click('external-ack-cancel')
-    expect(q('external-ack-dialog')).toBeNull()
-    expect(q('sign-in-again-dialog')).toBeNull()
-    await click('account-menu-btn-acc-local')
-    await click('account-menu-sign-in-again-acc-local')
-    await click('external-ack-confirm')
-    expect(q('sign-in-again-dialog')).toBeTruthy()
-    expect(document.getElementById('sign-in-again-title')?.textContent).toBe("Sign in to this computer's Codex (~/.codex) again")
-    // The account card under the title is a heading of its own: the name as
-    // its row shows it, capitalised (gate 3, S1 F1).
-    expect(q('sign-in-again-who')?.firstElementChild?.textContent).toBe("This computer's Codex (~/.codex)")
-    expect(q('sign-in-again-who')?.textContent).toContain("This computer's Codex (~/.codex)")
-    // Its row's actions name it the same way; a managed account keeps its own name.
+    expect(await menuKeys('acc-local')).not.toContain('sign-in-again')
+    expect(q('account-menu-sign-in-again-acc-local')).toBeNull()
+    expect(pa.signInAgain).not.toHaveBeenCalled()
+    expect(pa.logout).not.toHaveBeenCalled()
+    // Its row's actions name it as the row does; a managed account keeps its own name.
     expect(q('account-menu-btn-acc-local')?.getAttribute('aria-label')).toBe("Actions for this computer's Codex (~/.codex)")
     expect(q('account-menu-btn-acc-work')?.getAttribute('aria-label')).toBe('Actions for Work')
-    await click('sign-in-again-confirm')
-    await click('sign-in-again-continue')
-    expect(pa.signInAgain).toHaveBeenCalledWith({ accountId: 'acc-local', method: 'browser', sameAccount: true, acknowledgeExternal: true })
   })
 
   it('a managed account never sends the acknowledgement meant for this computer\'s own sign-in (review round 1, S2)', async () => {
@@ -1475,96 +1512,69 @@ describe('registry, conflicts, adoption and pending setups', () => {
     expect(q('identity-conflict-id-me-friendlyName-keep-legacy')?.textContent).toBe("Use Claude Code's")
   })
 
-  it('says why the start-up check was skipped, and offers Check again where it got no answer', async () => {
-    render(snapshot({ accounts: [work], externalDefaults: [{ providerId: 'codex', marker: { outcome: 'skipped', reason: 'unavailable', at: 1 } }] }))
-    expect(q('external-adoption-text-codex')?.textContent).toContain('could not check')
-    expect(q('adopt-external-codex')?.textContent).toBe('Check again')
-    await click('adopt-external-codex')
-    expect(pa.adoptExternal).toHaveBeenCalledWith('codex')
-    unmountNow()
-    render(snapshot({ accounts: [work], externalDefaults: [{ providerId: 'codex', marker: { outcome: 'skipped', reason: 'no-answer', at: 1 } }] }))
-    expect(q('adopt-external-codex')?.textContent).toBe('Check again')
-  })
-
-  it("offers to use this computer's sign-in after a signed-out or otherwise skipped check, and explains an overlap without an offer", () => {
-    render(snapshot({ accounts: [work], externalDefaults: [{ providerId: 'codex', marker: { outcome: 'none', at: 1 } }] }))
-    expect(q('external-adoption-text-codex')?.textContent).toContain('signed out')
-    expect(q('adopt-external-codex')?.textContent).toBe("Use this computer's Codex sign-in")
-    unmountNow()
-    render(snapshot({ accounts: [work], externalDefaults: [{ providerId: 'codex', marker: { outcome: 'skipped', reason: 'no-cli', at: 1 } }] }))
-    expect(q('external-adoption-text-codex')?.textContent).toContain('CLI was not found')
-    expect(q('adopt-external-codex')?.textContent).toBe("Use this computer's Codex sign-in")
-    unmountNow()
-    render(snapshot({ accounts: [work], externalDefaults: [{ providerId: 'codex', marker: { outcome: 'skipped', reason: 'overlap', at: 1 } }] }))
-    expect(q('external-adoption-text-codex')?.textContent).toContain('overlaps')
-    expect(q('adopt-external-codex')).toBeNull()
-  })
-
-  it('asks whether the user uses Codex, and the yes only records the answer: nothing is checked or adopted', async () => {
-    const unanswered = snapshot({ accounts: [work], externalDefaults: [{ providerId: 'codex' }] })
-    unanswered.providers[1] = { ...unanswered.providers[1], preference: 'undecided' }
-    render(unanswered)
-    expect(q('adopt-external-codex')).toBeNull()
-    expect(q('external-adoption-text-codex')?.textContent).toBe("Codex is not set up yet. Once you say you use Codex, you can use this computer's Codex sign-in here.")
-    expect(q('confirm-uses-codex')?.textContent).toBe('Yes, I use Codex')
-    await click('confirm-uses-codex')
-    expect(pa.setEnabled).toHaveBeenCalledWith('codex', true)
-    expect(updateSettings).toHaveBeenCalledWith({ codexEnabled: true, codexAnswered: true })
-    // The sign-in already on this computer is neither checked nor taken in.
+  // O5 (owner decision 2026-10-11): Settings, Accounts never offers this
+  // computer's own Codex sign-in, whatever main names or recorded about it,
+  // answered or not. Add Codex account is the way in.
+  it("never offers this computer's Codex sign-in, whatever main recorded, answered or not; Add Codex account stays the way in", () => {
+    const markers = [undefined, { outcome: 'registered', at: 1 }, { outcome: 'none', at: 1 }, { outcome: 'skipped', reason: 'unavailable', at: 1 }, { outcome: 'skipped', reason: 'no-answer', at: 1 }, { outcome: 'skipped', reason: 'no-cli', at: 1 }, { outcome: 'skipped', reason: 'overlap', at: 1 }]
+    for (const marker of markers) {
+      for (const preference of ['on', 'undecided'] as const) {
+        const s = snapshot({ accounts: [work], externalDefaults: [{ providerId: 'codex', home: '~/.codex', ...(marker ? { marker } : {}) } as never] })
+        s.providers[1] = { ...s.providers[1], preference }
+        render(s)
+        const what = `${JSON.stringify(marker ?? null)} ${preference}`
+        for (const id of ['external-adoption-codex', 'external-adoption-text-codex', 'adopt-external-codex', 'confirm-uses-codex']) expect(q(id), `${what} ${id}`).toBeNull()
+        const text = q('provider-accounts-codex')!.textContent!
+        for (const said of ["Use this computer's Codex sign-in", 'Yes, I use Codex', 'Check again', '~/.codex']) expect(text, `${what} ${said}`).not.toContain(said)
+        expect(q('add-provider-account-codex')?.textContent, what).toBe('Add Codex account')
+        unmountNow()
+      }
+    }
+    expect(pa.adoptExternal).not.toHaveBeenCalled()
     expect(pa.probeExternal).not.toHaveBeenCalled()
-    expect(pa.adoptExternal).not.toHaveBeenCalled()
-    // With Codex on, the next snapshot offers it, for the user to choose.
-    act(() => { useProviderAccountsStore.setState({ snapshot: snapshot({ accounts: [work], externalDefaults: [{ providerId: 'codex' }] }) }) })
-    expect(q('confirm-uses-codex')).toBeNull()
-    expect(q('adopt-external-codex')?.textContent).toBe("Use this computer's Codex sign-in")
   })
 
-  it('says what went wrong when turning the provider on is refused, and checks nothing', async () => {
-    pa.setEnabled.mockResolvedValue({ ok: false, code: 'persist-failed', message: 'The change could not be saved.' } as never)
-    const unanswered = snapshot({ accounts: [work], externalDefaults: [{ providerId: 'codex' }] })
-    unanswered.providers[1] = { ...unanswered.providers[1], preference: 'undecided' }
-    render(unanswered)
-    await click('confirm-uses-codex')
-    expect(pa.probeExternal).not.toHaveBeenCalled()
-    expect(pa.adoptExternal).not.toHaveBeenCalled()
-    expect(q('external-adoption-codex')?.textContent).toContain('The change could not be saved.')
-  })
-
-  it("with Codex on and nothing recorded, offers this computer's sign-in with honest text; only the click takes it in, and one that could not finish becomes Check again", async () => {
-    render(snapshot({ accounts: [work], externalDefaults: [{ providerId: 'codex' }] }))
-    // True whether or not the Set up Codex page checked it: only using it waits for the user.
-    expect(q('external-adoption-text-codex')?.textContent).toBe("This app uses this computer's Codex sign-in only when you choose to use it. Choosing it asks Codex first whether it is signed in.")
-    expect(q('adopt-external-codex')?.textContent).toBe("Use this computer's Codex sign-in")
-    expect(pa.adoptExternal).not.toHaveBeenCalled()
-    pa.adoptExternal.mockResolvedValueOnce({ ok: false, code: 'timed-out', message: 'Codex did not answer in time.' } as never)
-    await click('adopt-external-codex')
-    expect(pa.adoptExternal).toHaveBeenCalledWith('codex')
-    expect(q('external-adoption-codex')?.textContent).toContain('Codex did not answer in time.')
-    expect(q('adopt-external-codex')?.textContent).toBe('Check again')
-    // Signed out is an answer, not an attempt that could not finish.
-    pa.adoptExternal.mockResolvedValueOnce({ ok: false, code: 'not-signed-in', message: 'Your existing sign-in is signed out; sign in to add an account.' } as never)
-    await click('adopt-external-codex')
-    expect(q('adopt-external-codex')?.textContent).toBe("Use this computer's Codex sign-in")
-  })
-
-  it('names this computer\'s sign-in by the folder main reports (CODEX_HOME, when set): the offer, and the account row', () => {
-    const elsewhere = [{ providerId: 'codex' as const, home: '~\\codex-alt' }]
-    render(snapshot({ accounts: [work], externalDefaults: elsewhere }))
-    expect(q('external-adoption-codex')!.textContent).toContain("This computer's Codex (~\\codex-alt)")
-    unmountNow()
-    render(snapshot({ accounts: [work, local], externalDefaults: elsewhere }))
+  it('an account 2.1.1-beta.2 registered for it keeps its row, named by the folder main reports, and says it is being retired; its Add Codex account opens the add-account dialog', async () => {
+    render(snapshot({ accounts: [work, local], externalDefaults: [{ providerId: 'codex', home: '~\\codex-alt' }] }))
     expect(document.body.textContent).toContain("This computer's Codex (~\\codex-alt)")
     expect(document.body.textContent).not.toContain('~/.codex')
-  })
-
-  it('offers nothing while that home is being set up, or once an account stands for it', () => {
-    const skipped = { providerId: 'codex' as const, marker: { outcome: 'skipped' as const, reason: 'unavailable' as const, at: 1 } }
-    const pendingExternal = { accountId: 'acc-ext-pending', providerId: 'codex' as const, method: 'external' as const, state: 'pending' as const, external: true, createdAt: 1, signingIn: false }
-    render(snapshot({ accounts: [work], externalDefaults: [skipped], pendingSetups: [pendingExternal] }))
-    expect(q('external-adoption-codex')).toBeNull()
+    expect(q('account-badge-confirm-acc-local')?.textContent).toBe('Confirm each launch')
+    // Here Work is the default already, so the row asks for no new default.
+    expect(q('account-external-retiring-acc-local')!.textContent).toBe(
+      'This sign-in is being retired: add a Codex account if you have not yet, then make this one inactive and archive it. Add Codex account',
+    )
+    // That row only.
+    expect(q('account-external-retiring-acc-work')).toBeNull()
+    await click('account-external-retiring-add-acc-local')
+    expect(q('add-account-dialog')).toBeTruthy()
+    expect(q('add-account-step-method')).toBeTruthy()
+    expect(pa.adoptExternal).not.toHaveBeenCalled()
+    // With Codex off the row is still listed, and says nothing it cannot act on.
     unmountNow()
-    render(snapshot({ accounts: [work, local], externalDefaults: [skipped] }))
-    expect(q('external-adoption-codex')).toBeNull()
+    const off = snapshot({ accounts: [work, local], externalDefaults: [{ providerId: 'codex', home: '~/.codex' }] })
+    off.providers[1] = { ...off.providers[1], enabled: false, preference: 'off' }
+    render(off)
+    expect(q('provider-account-row-acc-local')).toBeTruthy()
+    expect(q('account-external-retiring-acc-local')).toBeNull()
+    // Active but no longer the default: no new default to choose, only Make
+    // inactive and Archive.
+    unmountNow()
+    render(snapshot({ accounts: [{ ...work, isProviderDefault: true }, { ...local, isProviderDefault: false }] }))
+    expect(q('account-external-retiring-acc-local')!.textContent).toBe(
+      'This sign-in is being retired: add a Codex account if you have not yet, then make this one inactive and archive it. Add Codex account',
+    )
+    // Still the default: the full steps.
+    unmountNow()
+    render(snapshot({ accounts: [{ ...work, isProviderDefault: false }, { ...local, isProviderDefault: true }] }))
+    expect(q('account-external-retiring-acc-local')!.textContent).toBe(
+      'This sign-in is being retired: add a Codex account, make it the default, then make this one inactive and archive it. Add Codex account',
+    )
+    // Once it is inactive (no longer the default), only Archive is left.
+    unmountNow()
+    render(snapshot({ accounts: [{ ...work, isProviderDefault: true }, { ...local, lifecycle: 'inactive', isProviderDefault: false }] }))
+    expect(q('account-external-retiring-acc-local')!.textContent).toBe(
+      'This sign-in is being retired: add a Codex account if you have not yet, then archive this one. Add Codex account',
+    )
   })
 
   it('lists an unfinished setup with Discard, and Resume continues it at the naming step', async () => {

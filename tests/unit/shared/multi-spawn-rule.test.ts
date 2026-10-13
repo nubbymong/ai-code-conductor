@@ -13,6 +13,10 @@ import {
   alreadyRunningRefusalMessage,
   PARTNER_PTY_SUFFIX,
   isPartnerPtyId,
+  parentOfPartnerPtyId,
+  partnerSshOf,
+  isPartnerSshOf,
+  PARTNER_NEEDS_SESSION_MESSAGE,
 } from '../../../src/shared/multi-spawn-rule'
 import { refusedTabText, launchRefusalOf, spawnRefusalOf, PROVIDER_LAUNCH_REFUSAL_CODES, SPAWN_REFUSAL_CODES } from '../../../src/shared/providers'
 
@@ -80,6 +84,78 @@ describe('the partner terminal id', () => {
   })
 })
 
+/**
+ * #86: the partner shell of an SSH session is a plain shell on the session's
+ * own host. ONE definition of its ssh block: the renderer starts the partner
+ * with partnerSshOf(session's block), and main recognises it with
+ * isPartnerSshOf(its record of the session's spawn, the partner's request).
+ */
+describe('the partner of an SSH session (#86)', () => {
+  const session = {
+    host: 'build-box', port: 2222, username: 'nick', remotePath: '~/proj',
+    postCommand: 'sudo docker exec -it app bash', runtime: { type: 'container', engine: 'docker', container: 'app' },
+    dockerContainer: 'app', detachable: true, remoteOs: 'unix', hasPassword: true, hasSudoPassword: true,
+  } as const
+
+  it('the parent id is the partner id without the suffix, and nothing for any other id', () => {
+    expect(parentOfPartnerPtyId('a1b2c3-partner')).toBe('a1b2c3')
+    expect(parentOfPartnerPtyId('a1b2c3')).toBeNull()
+    expect(parentOfPartnerPtyId('-partner')).toBeNull()
+    expect(parentOfPartnerPtyId('a1-partnerx')).toBeNull()
+  })
+
+  it('is the session\'s own host, port, user and folder as a plain connection: no post-connect command, no container, persistence off', () => {
+    expect(partnerSshOf(session)).toEqual({
+      host: 'build-box', port: 2222, username: 'nick', remotePath: '~/proj',
+      remoteOs: 'unix', hasPassword: true, hasSudoPassword: true, detachable: false,
+    })
+    // persistence off whatever the session says, and nothing reconnects
+    expect(partnerSshOf({ host: 'h', port: 22, username: 'u', remotePath: '~', reconnect: true } as never)).toEqual({ host: 'h', port: 22, username: 'u', remotePath: '~', detachable: false })
+    expect(partnerSshOf({ host: 'h', port: 22, username: 'u', remotePath: '~', detachable: false })).toEqual({ host: 'h', port: 22, username: 'u', remotePath: '~', detachable: false })
+  })
+
+  it('main recognises exactly the partner block of its record, the spawn\'s own reconnect flag aside', () => {
+    const recorded = { ...session, reconnect: true } // what main recorded of the session's spawn
+    const asked = { ...partnerSshOf(session), reconnect: false } // what the partner's spawn sends (TerminalView adds reconnect)
+    expect(isPartnerSshOf(recorded, asked)).toBe(true)
+    expect(isPartnerSshOf(session, partnerSshOf(session))).toBe(true)
+  })
+
+  it('anything else is not the partner: another host, port, user or folder, a post-connect command, a container, persistence, a reconnect, an extra field, a missing one', () => {
+    const p = partnerSshOf(session) as Record<string, unknown>
+    const not = (over: Record<string, unknown>, label: string) => expect(isPartnerSshOf(session, { ...p, ...over }), label).toBe(false)
+    not({ host: 'other-box' }, 'host')
+    not({ port: 22 }, 'port')
+    not({ port: '2222' }, 'port as text')
+    not({ username: 'root' }, 'user')
+    not({ remotePath: '/' }, 'folder')
+    not({ remoteOs: 'windows' }, 'remote os')
+    not({ postCommand: 'sudo docker exec -it app bash' }, 'post-connect command')
+    not({ runtime: session.runtime }, 'container')
+    not({ dockerContainer: 'app' }, 'legacy container')
+    not({ detachable: true }, 'persistence')
+    not({ detachable: undefined }, 'persistence unsaid')
+    not({ reconnect: true }, 'reconnect')
+    not({ identityFile: '~/.ssh/other' }, 'an extra field')
+    const missing = { ...p }; delete missing.hasPassword
+    expect(isPartnerSshOf(session, missing), 'a missing field').toBe(false)
+  })
+
+  it('a key holding undefined is no key, on either side', () => {
+    expect(isPartnerSshOf({ ...session, postCommand: undefined, identityFile: undefined }, { ...partnerSshOf(session), identityFile: undefined, reconnect: undefined })).toBe(true)
+  })
+
+  it('never matches what is not an ssh block', () => {
+    const p = partnerSshOf(session)
+    for (const bad of [undefined, null, 'x', 3, [], [p]]) {
+      expect(isPartnerSshOf(bad, p), JSON.stringify(bad)).toBe(false)
+      expect(isPartnerSshOf(session, bad), JSON.stringify(bad)).toBe(false)
+    }
+    expect(isPartnerSshOf({ host: 'h' }, { host: 'h', detachable: false })).toBe(false) // a record with no port, user or folder
+    expect(isPartnerSshOf(session, { ...p, nested: [1] })).toBe(false)
+  })
+})
+
 describe('the refusal pty:spawn answers (N3: its own type, not the provider gate type)', () => {
   const answer = (code: string) => ({ started: false, refused: { code, providerId: 'claude', message: 'Why.' } })
 
@@ -88,6 +164,13 @@ describe('the refusal pty:spawn answers (N3: its own type, not the provider gate
     expect(launchRefusalOf(answer('already-running'))).toBeNull()
     expect(PROVIDER_LAUNCH_REFUSAL_CODES).not.toContain('already-running')
     expect(SPAWN_REFUSAL_CODES).toContain('already-running')
+  })
+
+  it('#86: partner-needs-session is a pty:spawn refusal too, and its tab says what to do', () => {
+    expect(spawnRefusalOf(answer('partner-needs-session'))?.code).toBe('partner-needs-session')
+    expect(launchRefusalOf(answer('partner-needs-session'))).toBeNull()
+    expect(PROVIDER_LAUNCH_REFUSAL_CODES).not.toContain('partner-needs-session')
+    expect(refusedTabText({ message: PARTNER_NEEDS_SESSION_MESSAGE })).toBe('Not started. The partner shell opens on the host once its session is running. Start or restart the session, then Restart this tab.')
   })
 
   it('every provider-gate refusal is still a pty:spawn refusal (main refuses the provider first)', () => {

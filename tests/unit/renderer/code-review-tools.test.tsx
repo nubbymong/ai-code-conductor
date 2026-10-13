@@ -174,7 +174,7 @@ describe('Code review switches: live', () => {
     expect(sw('codexReview').getAttribute('aria-label')).toBe('Codex review')
     expect(sw('claudeReview').getAttribute('aria-label')).toBe('Claude review')
     const described = (key: string) => (sw(key).getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id)?.textContent)
-    expect(described('codexReview')).toContain('No Codex account can run reviews. Add a Codex account (a sign-in from ~/.codex cannot review).')
+    expect(described('codexReview')).toContain('No Codex account can run reviews. Add a Codex account.')
     expect(described('claudeReview')).toContain('Reviews use: me@example.com (default). Change in Accounts.')
   })
 
@@ -284,7 +284,9 @@ describe('Code review switches: off and cannot run', () => {
     setup({ snap: snapshot({}, { codex: { review: { ready: false } } }) })
     renderTools()
     expect(sw('codexReview').disabled).toBe(true)
-    expect(message('codexReview')).toBe('No Codex account can run reviews. Add a Codex account (a sign-in from ~/.codex cannot review).')
+    // O5: with no account at all, nothing names the sign-in already on this
+    // computer, which is no longer offered.
+    expect(message('codexReview')).toBe('No Codex account can run reviews. Add a Codex account.')
     expect(q('review-tool-codexReview-message')!.getAttribute('data-tone')).toBe('warn')
     expect(q('review-tool-codexReview-message')!.style.color).toBe('var(--status-warning)')
   })

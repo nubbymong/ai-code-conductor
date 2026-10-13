@@ -14,7 +14,7 @@ import { secretValueProblem, secretPlacementProblem } from '../../shared/command
 import { claudeExtraArgsProblem, codexExtraArgsProblem } from '../../shared/extra-args'
 import { parseDockerPostCommand } from '../../shared/container-command'
 import { DialogOverlay, DialogPanel, DialogHeader, DialogFooter, DialogButton, ON_BRAND } from './ui/Dialog'
-import { useProviderAccountsStore } from '../stores/providerAccountsStore'
+import { useProviderAccountsStore, externalSignInRetiring } from '../stores/providerAccountsStore'
 import { accountFieldState, defaultAccountId, providerTooOldText, accountEmail } from '../utils/launchAccount'
 import { ClaudeGlyph, CodexGlyph } from './sidebar/Badges'
 import { CLAUDE_OFF_LAUNCH_REASON, CODEX_OFF_LAUNCH_REASON, CODEX_NOT_SET_UP_LAUNCH_REASON } from '../hooks/useLaunchConfig'
@@ -870,7 +870,7 @@ export default function SessionDialog({ onConfirm, onCancel, initial, liveSessio
             <>
               <div className="flex gap-2 mt-2" role="radiogroup" aria-label="Connection">
                 {connectionCard('local', 'Local', 'Runs on this PC', false)}
-                {connectionCard('ssh', 'SSH', 'Another machine, plain session', uiProvider === 'codex')}
+                {connectionCard('ssh', 'SSH', 'Another machine, ends on disconnect', uiProvider === 'codex')}
                 {connectionCard('ssh-persistent', 'SSH Persistent', 'Survives disconnects, reattaches', uiProvider === 'codex' || terminalPersistentOff)}
               </div>
               {uiProvider === 'codex' && (
@@ -1396,6 +1396,7 @@ export default function SessionDialog({ onConfirm, onCancel, initial, liveSessio
                         ackLabel: codexAccount.selected?.external
                           ? `Launch with the Codex sign-in already on this computer${accountEmail(codexAccount.selected) ? ` (${accountEmail(codexAccount.selected)})` : ''}`
                           : 'Launch with this account although its sign-in is not verified',
+                        ...(codexAccount.selected?.external ? { ackNote: externalSignInRetiring({ displayName: 'Codex' }) } : {}),
                         ackChecked: realmAck,
                         onChange: (id) => setCodexAccountPick(id),
                         // Bound to the account it was ticked for (see realmAckFor).

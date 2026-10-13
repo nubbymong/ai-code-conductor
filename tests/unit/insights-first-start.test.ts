@@ -6,7 +6,8 @@
 // PTY, the KPI extraction and the profile roots are faked, and so is the
 // warm-up; nothing is started.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
-vi.mock('../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal: () => null, providerProbeRefusal: () => null }))
+// Claude Code on unless a case switches it off (h.refusal).
+vi.mock('../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal: () => h.refusal, providerProbeRefusal: () => h.refusal }))
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -20,6 +21,7 @@ const h = vi.hoisted(() => ({
   order: [] as string[],
   warm: [] as Array<{ program: string; env: () => unknown }>,
   gate: null as null | Promise<void>,
+  refusal: null as null | { code: string; providerId: string; message: string },
 }))
 
 vi.mock('../../src/main/ipc/setup-handlers', () => ({
@@ -62,7 +64,7 @@ vi.mock('../../src/main/first-start-warmup', () => ({
   },
 }))
 
-import { runInsights } from '../../src/main/insights-runner'
+import { runInsights, getCatalogue } from '../../src/main/insights-runner'
 import { composeProviders } from '../../src/main/providers/compose'
 import { _resetProfileConsumersForTest } from '../../src/main/profile-consumers'
 import { _resetProjectScanStateForTest } from '../../src/main/managed-launch-diagnostics'
@@ -80,6 +82,7 @@ beforeEach(() => {
   h.order.length = 0
   h.warm.length = 0
   h.gate = null
+  h.refusal = null
   _resetProfileConsumersForTest()
   _resetProjectScanStateForTest()
   const dir = join(tmpRoot, 'profiles', 'a')
@@ -108,5 +111,23 @@ describe('the /insights terminal (ADR-025)', () => {
     await vi.waitFor(() => expect(h.order).toEqual([`warm ${RESOLVED}`, `pty ${RESOLVED}`]))
     const env = (await (h.warm[0].env as () => Promise<{ env: Record<string, string> }> | { env: Record<string, string> })()).env
     expect(Object.keys(env).some((k) => k.toUpperCase().startsWith('CCC_'))).toBe(false)
+  })
+
+  // #209 point 3: the warm-up can hold for seconds on a first start. Claude
+  // Code switched off while it holds starts nothing; the run says why, as one
+  // switched off before the step does.
+  it('Claude Code switched off while the warm-up holds: no terminal starts, and the run fails with the reason', async () => {
+    let release!: () => void
+    h.gate = new Promise<void>((r) => { release = r })
+    const run = runInsights(() => null, { profileId: 'a' })
+    await vi.waitFor(() => expect(h.warm).toHaveLength(1))
+    h.refusal = { code: 'provider-off', providerId: 'claude', message: 'Claude Code is off. Turn it on in Settings, Accounts.' }
+    release()
+    const id = await run as string
+    await new Promise((r) => setTimeout(r, 20))
+    expect(h.order).toEqual([`warm ${RESOLVED}`])
+    const saved = getCatalogue().runs.find((r) => r.id === id)!
+    expect(saved.status).toBe('failed')
+    expect(saved.error).toBe('Claude Code is off. Turn it on in Settings, Accounts.')
   })
 })

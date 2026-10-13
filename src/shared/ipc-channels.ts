@@ -373,9 +373,11 @@ export const IPC = {
   // Per-account claude.ai web session (#216): sign in via the system browser,
   // hold the cookies in a per-account partition, open artifacts as that account.
   ACCOUNT_WEB_STATUS: 'accountWeb:status',
-  /** Web-session status ONLY. A local JSON read, so it answers in microseconds —
-   *  unlike ACCOUNT_WEB_STATUS, which awaits the `claude auth status` subprocess
-   *  before it can report anything at all. */
+  /** Web-session status ONLY. A local JSON read, so an active account answers
+   *  at once. A record that reads expired first checks the account's live
+   *  claude.ai session cookie (a bounded partition cookie read, up to 1.5 s:
+   *  main/account-web/web-session-expiry.ts). Unlike ACCOUNT_WEB_STATUS, it
+   *  never awaits the `claude auth status` subprocess. */
   ACCOUNT_WEB_WEB_STATUS: 'accountWeb:webStatus',
   ACCOUNT_WEB_SIGN_IN: 'accountWeb:signIn',
   ACCOUNT_WEB_SIGN_IN_STATE: 'accountWeb:signInState',
@@ -515,7 +517,9 @@ export const IPC = {
   CANVAS_REVIEW_SUBMIT: 'canvas:reviewSubmit',         // renderer -> main: freeze the draft (+ sketch PNG exports); carries the decision (approve/reject) — required
   CANVAS_VERSION_VERDICT: 'canvas:versionVerdict',     // renderer -> main: zero-note verdict on a version { sessionId, versionId?, state, note? }; approve/reject also settles that artefact's earlier rounds, approve auto-completes
   CANVAS_AGENT_MARKER: 'canvas:agentMarker',           // renderer -> main (#580): { sessionId, canvasId, line } -> the one chat line that TELLS the agent a verdict/review was filed; owner-only against the named canvas, control-stripped, queued while the agent's turn is open and flushed at the boundary, never written blind into a streaming TUI
-  CANVAS_AGENT_MARKER_UNDELIVERED: 'canvas:agentMarkerUndelivered', // push: main -> renderer (WP2 PR 4, P4.1): CanvasMarkerUndelivered -> a queued marker the submit primitive could not deliver (no ready prompt within the queue's bound, a prompt on screen, a write never drawn); the canvas shows it on the review it belongs to
+  CANVAS_AGENT_MARKER_UNDELIVERED: 'canvas:agentMarkerUndelivered', // push: main -> renderer (WP2 PR 4, P4.1): CanvasMarkerUndelivered -> a queued marker the submit primitive could not deliver (no ready prompt within the queue's bound, a prompt on screen, a write never drawn), or a Claude Code marker dropped untyped (claude-marker-typing.ts: held past the same bound, its run ended); the canvas shows it on the review it belongs to
+  CANVAS_CLAUDE_MARKER_ASK: 'canvas:claudeMarkerAsk',  // push: main -> renderer: ClaudeMarkerAsk -> read (probe) or type a canvas marker at a Claude Code session's prompt, typed only when the session's own screen reads the ready, empty prompt (src/renderer/lib/claudePrompt.ts); id-correlated
+  CANVAS_CLAUDE_MARKER_ANSWER: 'canvas:claudeMarkerAnswer', // renderer -> main: ClaudeMarkerAnswer, the reply to one claudeMarkerAsk; the app window's main frame only
   CANVAS_SESSION_GUIDANCE: 'canvas:sessionGuidance',  // renderer -> main (WP2 PR 4, P4.1): { sessionId } -> CanvasSessionGuidance | null; whether that session's launch carried the canvas and vision skills' guidance with the tools, for the canvas page's one line. A pure read of the launch record
   CANVAS_VERSION_REOPEN: 'canvas:versionReopen',       // renderer -> main: C1 reopen a version for review (later ready versions -> withdrawn); wakes no round
   CANVAS_ANNOTATION_REOPEN: 'canvas:annotationReopen', // renderer -> main: the USER puts a closed note back in play

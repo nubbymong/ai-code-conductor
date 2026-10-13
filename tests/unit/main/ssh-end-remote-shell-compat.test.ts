@@ -115,11 +115,12 @@ function fakeBin(name: string, sudo: 'refuses-n' | 'runs'): string {
 const BIN_REFUSES = POSIX ? fakeBin('bin-refuses', 'refuses-n') : ''
 const BIN_RUNS = POSIX ? fakeBin('bin-runs', 'runs') : ''
 
-/** A scratch HOME holding this session's three host sidecars. */
+/** A scratch HOME holding this session's host sidecars, the attention hook's
+ *  key and marker (aicc_planning#93) included. */
 function freshHome(name: string): string {
   const home = path.join(tmp, name)
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
-  for (const f of [`settings-${SID}.json`, `mcp-${SID}.json`, `ccc-status-${SID}.url`]) {
+  for (const f of [`settings-${SID}.json`, `mcp-${SID}.json`, `ccc-status-${SID}.url`, `ccc-attn-${SID}.key`, `ccc-attn-${SID}.up`]) {
     fs.writeFileSync(path.join(home, '.claude', f), '{}')
   }
   return home

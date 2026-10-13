@@ -14,9 +14,11 @@
 // stack. Nothing the page RENDERS is changed; page globals are.
 //
 // The one request that is not a question is `hoverReporting` (x-ray Off, #367),
-// and it only ever makes this script quieter: with it false the bridge does no
-// per-mousemove work and emits no pointer/click events. There is no value of it
-// that makes the bridge report more, draw, or touch the document.
+// and it only ever makes this script quieter: with `enabled` false the bridge
+// does no per-mousemove work and emits no pointer events, and with `clicks`
+// false it emits no click events (a plan keeps clicks while its pointer stream
+// is off, aicc_planning#107). There is no value of either that makes the bridge
+// report more than it does by default, draw, or touch the document.
 //
 // Trust model: requests are accepted ONLY from the direct parent window
 // (event.source === window.parent). The parent's origin cannot be pinned —
@@ -69,14 +71,15 @@ const NS = CANVAS_BRIDGE_NS
 const MAX_BOXMAP_NODES = 2000
 
 /**
- * Whether the unsolicited hover surface is live — x-ray Off (#367).
+ * Whether the unsolicited pointer stream is live: off under x-ray Off (#367)
+ * and on every plan (aicc_planning#107).
  *
  * The host flips this with a `hoverReporting` request. While it is false the
- * bridge emits no `pointer` and no `contentClick`, so a page under review does
- * ZERO per-mousemove work: no hit test, no measurement, no structured clone
- * across postMessage. That is what "view it as a normal browser tab" costs to
- * mean, and it cannot be had host-side — the host can drop what it hears, but
- * only the content can decline to do the work.
+ * bridge emits no `pointer`, so a page under review does ZERO per-mousemove
+ * work: no hit test, no measurement, no structured clone across postMessage.
+ * That is what "view it as a normal browser tab" costs to mean, and it cannot
+ * be had host-side: the host can drop what it hears, but only the content can
+ * decline to do the work.
  *
  * True by default: a frame that loads before the host has said anything behaves
  * exactly as it always did, and the host tells it otherwise on `ready`.
@@ -84,6 +87,23 @@ const MAX_BOXMAP_NODES = 2000
  * know where the page is scrolled to in every mode.
  */
 let hoverReporting = true
+
+/**
+ * Whether a click inside the page is reported (`contentClick`): off only under
+ * x-ray Off (aicc_planning#107).
+ *
+ * Split from `hoverReporting` because a PLAN needs one without the other: it
+ * resolves no hover (live hover flashed and corrupted the pane), so its frame
+ * drops the pointer stream, but a click is how a plan section is chosen for a
+ * note. With the two on one switch, a plan click never reached the host and the
+ * toolbar's "click a section to point a note at it" did nothing.
+ *
+ * Set by the same `hoverReporting` request, from its `clicks` field. A request
+ * that names no click setting keeps the meaning the request had before the
+ * split (clicks follow `enabled`), so the old shape still means what it said.
+ * True by default, like the pointer stream.
+ */
+let clickReporting = true
 
 // Real browsers always have rAF; the setTimeout fallback keeps the script
 // inert-safe in DOM-less harnesses.
@@ -230,6 +250,7 @@ interface IncomingRequest {
   analysis?: unknown
   anchors?: unknown
   enabled?: unknown
+  clicks?: unknown
 }
 
 function handle(msg: IncomingRequest): Promise<unknown> {
@@ -248,7 +269,11 @@ function handle(msg: IncomingRequest): Promise<unknown> {
     // Anything that is not an explicit `false` leaves the hover surface live:
     // a malformed request must not be able to silently blind the pane.
     hoverReporting = msg.enabled !== false
-    return Promise.resolve({ enabled: hoverReporting })
+    // Clicks are their own switch (aicc_planning#107), under the same rule:
+    // only an explicit `false` silences them. Absent, they follow `enabled`,
+    // which is what this request meant before the split.
+    clickReporting = msg.clicks === undefined ? hoverReporting : msg.clicks !== false
+    return Promise.resolve({ enabled: hoverReporting, clicks: clickReporting })
   }
   return Promise.reject(new Error('unknown request: ' + String(msg.type)))
 }
@@ -345,10 +370,14 @@ function install(): void {
   // there is nothing for the host to be told about. The listener stays attached
   // — it never prevented or retargeted anything, and re-adding it on a mode
   // change would move it later in the capture order than the page's own.
+  //
+  // Gated on `clickReporting`, NOT on `hoverReporting` (aicc_planning#107):
+  // a plan turns the pointer stream off and still needs its clicks, which
+  // select the section a note points at.
   document.addEventListener(
     'click',
     (event: MouseEvent) => {
-      if (!hoverReporting) return
+      if (!clickReporting) return
       send({ ns: NS, type: 'contentClick', pageX: event.pageX, pageY: event.pageY, hit: hitAt(event.pageX, event.pageY) })
     },
     { capture: true, passive: true },

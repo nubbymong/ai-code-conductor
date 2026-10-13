@@ -3,8 +3,8 @@
  * 2026-09-26): "No matter who upgrades we need to either not set up codex or
  * set it up - they reconfirm either way." Codex now has accounts of its own
  * in this app, so nothing carries over from the earlier Codex setting, and
- * the Codex sign-in already on the computer is taken in only by the user's
- * explicit "Use this sign-in".
+ * the Codex sign-in already on the computer is never taken in (O5, owner
+ * decision 2026-10-11): a Codex account is always added in the app.
  *
  * The page (CodexReconfirmPage) is a boot gate, like the Allow Multi Spawn
  * startup page (multi-spawn-intro-gate.ts), and it follows the same split:
@@ -14,8 +14,8 @@
  * The marker is the answer itself, `settings.codexAnswered`, written with
  * `codexEnabled` by every way of answering (saveProviderSwitch): this page,
  * the fresh-install assistants page, "Use Codex only" on a setup screen, the
- * Providers switch and "Yes, I use Codex" in Settings, Accounts, and adding a
- * Codex account. It is NOT a "seen" stamp: showing the page stamps nothing,
+ * Providers switch in Settings, Accounts, and adding a Codex account. It is
+ * NOT a "seen" stamp: showing the page stamps nothing,
  * so an app closed before an answer asks again at the next start. And it is
  * not a version stamp: once answered, no later update asks again.
  *

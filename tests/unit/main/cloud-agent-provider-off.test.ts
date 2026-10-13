@@ -2,7 +2,7 @@
  * WP2: a cloud agent is a Claude Code run (`claude -p`), so main refuses one
  * while Claude Code is off -- in the service layer every way in goes through
  * (dispatchAgent; retryAgent calls it), BEFORE the project is scanned, a
- * record is made, a legacy CLI is installed or anything is spawned -- and
+ * record is made or anything is spawned -- and
  * asks again right before the agent's process starts, failing the agent with
  * the reason if the answer changed while it waited. The refusal is an answer
  * the Cloud Agents page shows, never a throw.
@@ -177,21 +177,25 @@ describe('a cloud agent while Claude Code is off', () => {
   })
 })
 
-describe('switched off while a dispatch waits: the agent is failed with the reason, and nothing runs', () => {
-  it('during its legacy CLI install', async () => {
+describe('a Claude Code version pinned in an older release', () => {
+  // 2.1.1-beta.3: the pin is no longer used, so a pinned agent no longer
+  // waits on an install (the case that stood under the "switched off while a
+  // dispatch waits" cases): it starts the installed CLI, and installs nothing.
+  it('a pinned agent waits on no install and runs', async () => {
     const install = deferred()
     h.install = install.promise
     const pending = dispatchAgent(PARAMS)
-    await tick()
-    expect(installVersion).toHaveBeenCalledTimes(1)
-    acct.claude = 'off'
+    // Whichever comes first, a spawn or an install; it must be the spawn.
+    await vi.waitFor(() => expect(mockSpawn.mock.calls.length + installVersion.mock.calls.length).toBeGreaterThan(0))
+    expect(installVersion).not.toHaveBeenCalled()
     install.resolve()
-    const agent = await pending as { status: string; error?: string }
-    expect(agent).toMatchObject({ status: 'failed', error: OFF_TEXT })
-    expect(mockSpawn).not.toHaveBeenCalled()
-    expect(countClaudeAgentsInUse()).toBe(0)
+    const agent = await pending as { status: string }
+    expect(agent.status).toBe('running')
+    expect(mockSpawn).toHaveBeenCalledTimes(1)
   })
+})
 
+describe('switched off while a dispatch waits: the agent is failed with the reason, and nothing runs', () => {
   it("during its account's refresh wait", async () => {
     const refresh = deferred()
     h.refresh = refresh.promise
@@ -221,14 +225,18 @@ describe('an agent is Claude Code in use from its launch check to its end', () =
     await pending
   })
 
-  it('while pending on its install, while running, and not once it has ended', async () => {
+  it('while dispatching, while pending on a wait after its record exists, while running, and not once it has ended', async () => {
     expect(countClaudeAgentsInUse()).toBe(0)
-    const install = deferred()
-    h.install = install.promise
-    const pending = dispatchAgent(PARAMS)
-    await tick()
+    // Parked on its account's refresh, a wait after the record is made.
+    const refresh = deferred()
+    h.refresh = refresh.promise
+    const pending = dispatchAgent({ ...PARAMS, profileId: 'prof-a' })
     expect(countClaudeAgentsInUse()).toBe(1)
-    install.resolve()
+    await vi.waitFor(() => expect(waitForProfileRefresh).toHaveBeenCalledTimes(1))
+    expect(listAgents()).toHaveLength(2)
+    expect(mockSpawn).not.toHaveBeenCalled()
+    expect(countClaudeAgentsInUse()).toBe(1)
+    refresh.resolve()
     await pending
     expect(countClaudeAgentsInUse()).toBe(1)
     // The agent's process ends.
@@ -264,10 +272,10 @@ describe('a throw between the record and the spawn fails the agent (no phantom r
     expect(countClaudeAgentsInUse()).toBe(0)
   })
 
-  it('a legacy CLI install that rejects falls back to the installed CLI, as a failed install does', async () => {
-    installVersion.mockImplementationOnce(async () => { throw new Error('npm exploded') })
+  it('a pinned agent installs nothing and starts the installed CLI', async () => {
     const agent = await dispatchAgent(PARAMS) as { status: string }
     expect(agent.status).toBe('running')
+    expect(installVersion).not.toHaveBeenCalled()
     expect(mockSpawn).toHaveBeenCalledTimes(1)
   })
 })

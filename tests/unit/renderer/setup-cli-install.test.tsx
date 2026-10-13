@@ -16,6 +16,13 @@
  * screen says so and offers Add it to PATH for me (main computes the folder;
  * this sends only the provider id) and Not now; every Setup screen has Exit;
  * and the screens' buttons follow one rule (BUTTON_RULE).
+ *
+ * The 2.1.1 closeout (F4): a Check again that finds Claude Code
+ * while the install still runs leaves it running and says it is finishing
+ * (macOS and Linux also offer Stop it and continue); only the latest of two
+ * overlapping checks may change the screen; the Windows words never say to
+ * press Back at a prompt; and with a PATH hint showing, Check again says it
+ * checked again.
  */
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
@@ -55,7 +62,9 @@ const providerAccounts = {
   installRecipes: vi.fn(async () => RECIPES),
   addToPath: vi.fn(async (_id: string) => ({ ok: true, added: 'added', installation: {} }) as Record<string, unknown>),
 }
-const windowApi = { close: vi.fn() }
+// The whole window API: every setup screen draws the window's own buttons
+// (WindowDragStrip), which read the maximized state on mount.
+const windowApi = { close: vi.fn(), minimize: vi.fn(), maximize: vi.fn(), isMaximized: vi.fn(async () => false), onMaximizedChanged: vi.fn(() => () => {}) }
 ;(globalThis as any).window.electronAPI = { ...(globalThis as any).window.electronAPI, setup, pty, providerAccounts, window: windowApi }
 const writeText = vi.fn(async () => undefined)
 Object.defineProperty(globalThis.navigator, 'clipboard', { value: { writeText }, configurable: true })
@@ -99,6 +108,16 @@ afterEach(() => {
 })
 
 const byTest = (id: string) => container.querySelector(`[data-testid="${id}"]`) as HTMLElement | null
+/** A probe answer the test releases when it chooses. */
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((r) => { resolve = r })
+  return { promise, resolve }
+}
+/** Windows (F4): the line ends its terminal when the command ends, also
+ *  on Ctrl+C, and setup then checks again by itself; Back stops the install. */
+const WIN_SUBTITLE = 'The command runs in the terminal below; it may show nothing for a minute while it downloads. Answer any question it asks there. Setup checks again by itself when it ends. If the terminal says the install finished or failed and setup has not moved on, press Check again. Back stops the install.'
+const WIN_NOT_YET = 'Claude Code was not found yet. The install may still be running: setup checks again by itself when it ends. If the terminal says the install finished or failed and setup has not moved on, press Check again. Back stops the install.'
 async function settle() {
   for (let i = 0; i < 8; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 }
@@ -211,9 +230,11 @@ describe('first-run setup: installing Claude Code from the setup screen', () => 
 
   // ux MAJOR 2 (2026-10-10): a command whose shell never ends (an error
   // that abandons the typed line, Ctrl+C) must not leave the screen without a
-  // way on. Check again works while it runs: it checks without stopping it,
-  // and when Claude Code is found it stops it and setup goes on.
-  it('Check again works while the command runs: it checks and leaves it running; found, it stops it and goes on', async () => {
+  // way on. Check again works while it runs: it checks without stopping it.
+  // F4 (aicc_planning#194): when that check finds Claude Code, the
+  // install is NOT stopped (Anthropic's installer can still be finishing);
+  // the page says so and setup goes on when the terminal ends.
+  it('Check again works while the command runs: it checks and leaves it running; found, it still leaves it running and says the install is finishing', async () => {
     await renderMissing()
     const id = await startInstall(NATIVE)
     const retry = byTest('setup-cli-install-retry') as HTMLButtonElement
@@ -224,22 +245,132 @@ describe('first-run setup: installing Claude Code from the setup screen', () => 
     expect(setup.probeCli.mock.calls.length).toBe(probes + 1)
     expect(pty.kill).not.toHaveBeenCalled()
     expect(byTest('setup-cli-install')).not.toBeNull()
-    expect(byTest('setup-cli-install-not-yet')!.textContent).toBe(
-      'Claude Code was not found yet. If the terminal above is back at a prompt, the command has ended: press Back to try another command.',
-    )
+    expect(byTest('setup-cli-install-not-yet')!.textContent).toBe(WIN_NOT_YET)
     setup.probeCli.mockResolvedValue({ installed: true, path: 'C:\\Users\\u\\.local\\bin\\claude.exe', probe: 'PATH walk' })
     await click('setup-cli-install-retry')
-    expect(pty.kill).toHaveBeenCalledWith(id)
+    expect(pty.kill).not.toHaveBeenCalled()
+    expect(byTest('setup-cli-install')).not.toBeNull()
+    expect(byTest('setup-cli-install-found')!.textContent).toBe(
+      'Claude Code was found. The install is still finishing in the terminal above; setup goes on by itself when it ends. Back stops the install.',
+    )
+    expect(byTest('setup-cli-install-not-yet')).toBeNull()
+    // Continue waits for the terminal; Windows offers no way to stop it and go on.
+    const go = byTest('setup-cli-install-continue') as HTMLButtonElement
+    expect(go.textContent).toBe('Continue')
+    expect(go.disabled).toBe(true)
+    expect(byTest('setup-cli-install-retry')).toBeNull()
+    expect(byTest('setup-cli-install-stop')).toBeNull()
+    expect(setup.spawnCliSetup).not.toHaveBeenCalled()
+    // The install ends: setup checks again by itself and goes on, nothing stopped.
+    await act(async () => { exits.get(id)!(0) })
+    await settle()
     expect(byTest('setup-cli-install')).toBeNull()
     expect(setup.spawnCliSetup).toHaveBeenCalledTimes(1)
+    expect(pty.kill).not.toHaveBeenCalled()
   })
 
-  it('the screen says the installer can be quiet for a while, and what to do if it stops at a prompt', async () => {
+  it('Windows: the screen says the installer can be quiet, that setup checks again by itself when it ends, when to press Check again, and that Back stops the install; never "press Back" at a prompt', async () => {
+    await renderMissing()
+    await startInstall(NATIVE)
+    const text = byTest('setup-cli-install')!.textContent!
+    expect(text).toContain(WIN_SUBTITLE)
+    expect(text).not.toMatch(/at a prompt/)
+    await click('setup-cli-install-retry')
+    const notYet = byTest('setup-cli-install-not-yet')!.textContent!
+    expect(notYet).not.toMatch(/back at a prompt/)
+    expect(notYet).not.toMatch(/press Back/)
+    expect(notYet).toContain('Back stops the install.')
+  })
+
+  it('macOS and Linux: the screen keeps the prompt wording, since a shell left at a prompt never ends by itself', async () => {
+    ;(window as unknown as { electronPlatform?: string }).electronPlatform = 'darwin'
     await renderMissing()
     await startInstall(NATIVE)
     expect(byTest('setup-cli-install')!.textContent).toContain(
       'The command runs in the terminal below; it may show nothing for a minute while it downloads. Answer any question it asks there. Setup checks again when it ends; if it stops at a prompt, press Check again.',
     )
+    await click('setup-cli-install-retry')
+    expect(byTest('setup-cli-install-not-yet')!.textContent).toBe(
+      'Claude Code was not found yet. If the terminal above is back at a prompt, the command has ended: press Back to try another command.',
+    )
+  })
+
+  it('macOS and Linux: found while the command runs offers Stop it and continue, which stops the terminal and goes on', async () => {
+    ;(window as unknown as { electronPlatform?: string }).electronPlatform = 'linux'
+    await renderMissing()
+    const id = await startInstall(NATIVE)
+    setup.probeCli.mockResolvedValue({ installed: true, path: '/home/u/.local/bin/claude', probe: "/bin/bash -lc 'command -v claude'" })
+    await click('setup-cli-install-retry')
+    expect(pty.kill).not.toHaveBeenCalled()
+    expect(byTest('setup-cli-install-found')!.textContent).toBe(
+      'Claude Code was found. The install is still finishing in the terminal above; setup goes on by itself when it ends. If the terminal is back at a prompt, the command has ended: press Stop it and continue.',
+    )
+    // Exit, then the alternative, then the commit last (BUTTON_RULE).
+    const stop = byTest('setup-cli-install-stop') as HTMLButtonElement
+    expect(stop.textContent).toBe('Stop it and continue')
+    expect(stop.getAttribute('style')).toContain('var(--surface-overlay)')
+    const right = [...stop.parentElement!.children].map((b) => b.getAttribute('data-testid')).filter(Boolean)
+    expect(right.slice(-3)).toEqual(['setup-exit', 'setup-cli-install-stop', 'setup-cli-install-continue'])
+    await click('setup-cli-install-stop')
+    expect(pty.kill).toHaveBeenCalledWith(id)
+    expect(byTest('setup-cli-install')).toBeNull()
+    expect(setup.spawnCliSetup).toHaveBeenCalledTimes(1)
+  })
+
+  // F4 (aicc_planning#198 n3): two checks can overlap (a Check again still
+  // out when the command ends and setup checks by itself; Back during a
+  // check). Only the latest may change the button or the found state. This
+  // test pins the install screen's side (the check the command's end started
+  // decides, and the button stays Checking); the sequence guard in probeCli
+  // itself is pinned by the Back-during-a-check test below, the one place an
+  // older answer could otherwise repaint the screen.
+  it('a Check again still out when the command ends leaves the button to the check the end started: it cannot re-enable it or show its own answer', async () => {
+    await renderMissing()
+    const id = await startInstall(NPM)
+    const first = deferred<{ installed: boolean; probe: string }>()
+    setup.probeCli.mockImplementationOnce(() => first.promise)
+    await click('setup-cli-install-retry')
+    expect((byTest('setup-cli-install-retry') as HTMLButtonElement).disabled).toBe(true)
+    const second = deferred<{ installed: boolean; probe: string }>()
+    setup.probeCli.mockImplementationOnce(() => second.promise)
+    await act(async () => { exits.get(id)!(1) })
+    await settle()
+    // The older check answers first: it changes nothing.
+    await act(async () => { first.resolve({ installed: false, probe: 'PATH walk' }) })
+    await settle()
+    const button = byTest('setup-cli-install-retry') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.textContent).toBe('Checking…')
+    expect(byTest('setup-cli-install-not-yet')).toBeNull()
+    expect(byTest('setup-cli-install-ended')).toBeNull()
+    // The newer one decides.
+    await act(async () => { second.resolve({ installed: false, probe: 'PATH walk' }) })
+    await settle()
+    expect((byTest('setup-cli-install-retry') as HTMLButtonElement).disabled).toBe(false)
+    expect(byTest('setup-cli-install-ended')!.textContent).toContain('The command ended with exit code 1')
+  })
+
+  it('Back during a check: the check that was out cannot repaint the not-installed screen after the newer one started', async () => {
+    await renderMissing()
+    const id = await startInstall(NPM)
+    const old = deferred<{ installed: boolean; probe: string; pathHint?: unknown }>()
+    setup.probeCli.mockImplementationOnce(() => old.promise)
+    await click('setup-cli-install-retry')
+    const fresh = deferred<{ installed: boolean; probe: string }>()
+    setup.probeCli.mockImplementationOnce(() => fresh.promise)
+    await click('setup-cli-install-back')
+    expect(pty.kill).toHaveBeenCalledWith(id)
+    expect((byTest('setup-cli-retry') as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => { old.resolve({ installed: false, probe: 'old check', pathHint: { kind: 'restart' } }) })
+    await settle()
+    expect(byTest('setup-path-restart')).toBeNull()
+    expect((byTest('setup-cli-retry') as HTMLButtonElement).disabled).toBe(true)
+    expect(byTest('setup-cli-probe-detail')!.textContent).not.toContain('old check')
+    await act(async () => { fresh.resolve({ installed: false, probe: 'fresh check' }) })
+    await settle()
+    expect((byTest('setup-cli-retry') as HTMLButtonElement).disabled).toBe(false)
+    expect(byTest('setup-cli-probe-detail')!.textContent).toContain('fresh check')
+    expect(byTest('setup-path-restart')).toBeNull()
   })
 
   it('Back stops a running command and checks again', async () => {
@@ -342,6 +473,20 @@ describe("first-run setup: Claude Code installed in Anthropic's folder, off PATH
     expect(setup.spawnCliSetup).not.toHaveBeenCalled()
   })
 
+  // F4 (aicc_planning#194): with a PATH hint showing, a Check again that still
+  // finds nothing used to change nothing on screen.
+  it('with a PATH hint showing, Check again says it checked again just now', async () => {
+    setup.probeCli.mockResolvedValue({ installed: false, probe: 'PATH walk', pathHint: ADD_HINT })
+    await renderMissing()
+    expect(byTest('setup-cli-checked-again')).toBeNull()
+    const probes = setup.probeCli.mock.calls.length
+    await click('setup-cli-retry')
+    expect(setup.probeCli.mock.calls.length).toBe(probes + 1)
+    expect(byTest('setup-path-hint-text')!.textContent).toBe(ADD_TEXT)
+    expect(byTest('setup-cli-checked-again')!.textContent).toBe('Checked again just now: Claude Code was still not found.')
+    expect(byTest('setup-cli-still-missing')).toBeNull()
+  })
+
   it('a restart is advised only when main says it would help', async () => {
     setup.probeCli.mockResolvedValue({ installed: false, probe: 'PATH walk', pathHint: { kind: 'restart' } })
     await renderMissing()
@@ -351,12 +496,52 @@ describe("first-run setup: Claude Code installed in Anthropic's folder, off PATH
     expect(byTest('setup-path-add')).toBeNull()
   })
 
-  it('macOS and Linux: the shell file and the exact line, with Copy; nothing is added for the user', async () => {
-    const line = 'export PATH="$HOME/.local/bin:$PATH"'
+  // aicc_planning#190: a restart main
+  // says MAY help, though it did not see Claude Code (a Windows PATH entry
+  // added since the app started names a variable it does not have), is a
+  // note. It used to replace the not-installed title and words, and after a
+  // failed install the exit-code callout, so a user whose PATH named such a
+  // variable lost the real news.
+  const NOTE_HINT = { kind: 'restart', unresolved: true }
+  const NOTE_TEXT = "Your PATH in Windows also names a folder through a variable set after this app started (such as nvm-windows' NVM_SYMLINK), which the app cannot look in until it starts again. If you installed Claude Code there, quit AI Code Conductor and start it again."
+  it('a restart that may help, Claude Code not seen: the not-installed title and words stay, the note shows beside them, and Check again still says what to check', async () => {
+    setup.probeCli.mockResolvedValue({ installed: false, probe: 'PATH walk', pathHint: NOTE_HINT })
+    await renderMissing()
+    expect(container.textContent).toContain('Claude Code is not installed')
+    expect(container.textContent).not.toContain('cannot be found yet')
+    expect(byTest('setup-cli-missing')).not.toBeNull()
+    expect(byTest('setup-path-restart')!.textContent).toBe(NOTE_TEXT)
+    await click('setup-cli-retry')
+    expect(byTest('setup-cli-still-missing')!.textContent).toBe(
+      'Claude Code was still not found. If you installed it another way, check that its folder is on your PATH, then press Check again.',
+    )
+    expect(byTest('setup-cli-checked-again')).toBeNull()
+    expect(byTest('setup-cli-missing')).not.toBeNull()
+    expect(byTest('setup-path-restart')!.textContent).toBe(NOTE_TEXT)
+  })
+
+  it('after a failed install, that note keeps the exit-code callout and shows after it', async () => {
+    await renderMissing()
+    const id = await startInstall(NPM)
+    setup.probeCli.mockResolvedValue({ installed: false, probe: 'PATH walk', pathHint: NOTE_HINT })
+    await act(async () => { exits.get(id)!(1) })
+    await settle()
+    const ended = byTest('setup-cli-install-ended')!
+    expect(ended.textContent).toBe(
+      'The command ended with exit code 1, but Claude Code was still not found. The terminal shows what happened: fix what it reports and run it again, or try another command. Back lists the other install commands.',
+    )
+    const note = byTest('setup-path-restart')!
+    expect(note.textContent).toBe(NOTE_TEXT)
+    expect(ended.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect((byTest('setup-cli-install-retry') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('macOS and Linux: the shell file and the command to run once, with Copy; nothing is added for the user', async () => {
+    const line = "printf '" + BSL + 'nexport PATH="$HOME/.local/bin:$PATH"' + BSL + "n' >> \"" + '$' + '{ZDOTDIR:-$HOME}/.zprofile"'
     setup.probeCli.mockResolvedValue({ installed: false, probe: 'command -v claude', pathHint: { kind: 'shell-profile', folder: '~/.local/bin', file: '~/.zprofile', line } })
     await renderMissing()
     expect(byTest('setup-path-hint-text')!.textContent).toBe(
-      'Claude Code is installed in ~/.local/bin, but the PATH your login shell builds does not include that folder, so this app cannot find it. Add this line to ~/.zprofile, then press Check again. The app does not change that file.',
+      'Claude Code is installed in ~/.local/bin, but the PATH your login shell builds does not include that folder, so this app cannot find it. Run this once in a terminal. It adds the folder to ~/.zprofile, which the app reads through your login shell; then press Check again. An installer may name ~/.zshrc or ~/.bashrc instead, which the app does not read.',
     )
     expect(byTest('setup-path-line')!.textContent).toBe(line)
     await click('setup-path-copy')

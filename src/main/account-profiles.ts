@@ -137,7 +137,22 @@ export function hardenCredentialFile(file: string): void {
 //     afterwards, alongside the two ACEs we had just added. That is the whole
 //     ACE this change exists to remove, so the DACL is now REPLACED, not added
 //     to: every principal currently on it is `/remove`d in the same invocation,
-//     ahead of the grants.
+//     ahead of the grants -- except the two being granted wherever their
+//     printed names are known: `/grant:r` replaces their entries that carry
+//     the grant's own flags, so those are not removed; a deny entry of theirs
+//     is (`/remove:d`), and so are their allow entries when one of them
+//     carries other flags, which `/grant:r` leaves in place (`/remove:g`,
+//     only in a write that grants them, ahead of the grants; aicc_planning#103,
+//     2.1.1-beta.3; see `hardenDirAclWindows`).
+//   * `/grant:r` replaces only the principal's entries with the same
+//     inheritance flags as the grant. Measured on a Windows 11 VM
+//     (2026-10-11): a folder made under a parent that hands nothing down
+//     takes the creator's default list, whose `NT AUTHORITY\SYSTEM:(F)`
+//     applies to the folder alone, and that entry stayed through
+//     `/grant:r *S-1-5-18:(OI)(CI)F`, beside the `(OI)(CI)(F)` entry the grant
+//     wrote. Such an entry grants nothing the grant does not, but a folder
+//     carrying it never reads back as the two entries the skip below
+//     recognises.
 //   * Option order inside one invocation is honoured, and it is load-bearing:
 //     remove-then-grant leaves exactly the two intended ACEs, while the same
 //     options as grant-then-remove leave an EMPTY DACL. Both measured.
@@ -323,8 +338,25 @@ const ACL_MAX_REMOVALS = 32
  * entries there are. A bare SID (an ACE whose account no longer resolves, which
  * icacls prints unadorned) is handed back with the `*` prefix that makes icacls
  * read it as a SID instead of a name.
+ *
+ * `granted` names the principals the same call grants (upper-cased, in the
+ * spelling icacls prints; aclPrincipalKey): those are not removed outright
+ * (aicc_planning#103, 2.1.1-beta.3). `/grant:r` replaces their entries that
+ * carry the grant's flags, so all a removal of those could add is a moment
+ * with no entry of theirs. A deny entry of theirs is still taken off, alone
+ * (`/remove:d`). With `takeLeftInPlace`, an allow entry of theirs that
+ * `/grant:r` leaves in place (entryGrantLeaves) is taken too, with
+ * `/remove:g`: the single replace asks for that, and writes it in the same
+ * invocation as the grants, so the write that takes it grants them again.
+ * The one-at-a-time fallback does not ask: it never names a granted
+ * principal's allow entries.
  */
-export function windowsAclRemovalArgs(entries: string[], ignorable?: ReadonlySet<string>): string[] {
+export function windowsAclRemovalArgs(
+  entries: string[],
+  ignorable?: ReadonlySet<string>,
+  granted?: ReadonlySet<string>,
+  takeLeftInPlace = false,
+): string[] {
   if (entries.length > ACL_MAX_REMOVALS) return []
   const args: string[] = []
   const seen = new Set<string>()
@@ -338,9 +370,50 @@ export function windowsAclRemovalArgs(entries: string[], ignorable?: ReadonlySet
     const principal = /^S-1-[\d-]+$/.test(raw) ? `*${raw}` : raw
     if (seen.has(principal) || ignorable?.has(raw)) continue
     seen.add(principal)
+    const key = aclPrincipalKey(raw)
+    if (granted?.has(key)) {
+      const theirs = entries.filter((e) => aclPrincipalKey(aclEntryPrincipal(e)) === key)
+      if (theirs.some((e) => e.includes('(DENY)'))) args.push('/remove:d', principal)
+      if (takeLeftInPlace && theirs.some(entryGrantLeaves)) args.push('/remove:g', principal)
+      continue
+    }
     args.push('/remove', principal)
   }
   return args
+}
+
+/** A principal as icacls prints it, compared as Windows compares account
+ *  names: in any letter case. */
+function aclPrincipalKey(printed: string): string {
+  return printed.toUpperCase()
+}
+
+/** The account half of a principal (after its last `\`), compared as
+ *  aclPrincipalKey compares: what a bare account-name spelling can match. */
+function aclAccountKey(printed: string): string {
+  return aclPrincipalKey(printed.slice(printed.lastIndexOf('\\') + 1))
+}
+
+/** An entry icacls prints as explicit Full Control passed to what is inside,
+ *  allow, not inherited: exactly what `/grant:r <who>:(OI)(CI)F` writes. */
+function isExplicitFullControl(entry: string): boolean {
+  return entry === `${aclEntryPrincipal(entry)}:(OI)(CI)(F)`
+}
+
+/**
+ * Whether `entry`, of a principal the step grants, is one that
+ * `/grant:r <who>:(OI)(CI)F` leaves in place beside the entry it writes: an
+ * explicit allow entry other than exactly that one. `/grant:r` replaces only
+ * the entries with the grant's own inheritance flags (measured; see the notes
+ * above), so one that applies to the folder alone, as the creator's default
+ * list gives, stays. Inherited entries are not counted (`/inheritance:r`
+ * takes them), nor deny entries (`/remove:d` does). An entry with the
+ * grant's flags and narrower rights is counted too: taking it costs nothing,
+ * since the same write grants full control.
+ */
+function entryGrantLeaves(entry: string): boolean {
+  const flags = entry.slice(aclEntryPrincipal(entry).length)
+  return !flags.includes('(I)') && !flags.includes('(DENY)') && !isExplicitFullControl(entry)
 }
 
 /**
@@ -425,15 +498,6 @@ function icacls(args: string[]): boolean {
  */
 const ERROR_NONE_MAPPED = 1332
 
-/**
- * REPLACE `dir`'s Windows DACL with the current user + SYSTEM: drop every
- * inherited ACE, remove every explicit one, grant those two. Returns whether it
- * was applied.
- *
- * Never throws. Every caller sits on a session-spawn or config-write path where
- * a permissions failure must not be fatal -- including the case where a mocked
- * or absent `child_process` makes `execFileSync` unusable.
- */
 /**
  * Principals this machine's DACLs NAME but icacls cannot resolve back, learned
  * by trying. Per-process and never invalidated, which is safe because it is a
@@ -605,8 +669,142 @@ export function _resetAclStateForTest(): void {
   hardenedPrincipals = null
   unremovableAclPrincipals.clear()
   learnAttemptsLeft = LEARN_ATTEMPT_MAX
+  fallbackUnprovenLogged.clear()
 }
 
+/**
+ * What `hardenDirAclWindows` logs when its fallback stops before removing
+ * anything (aicc_planning#103, 2.1.1-beta.3): fixed words, never a path. Once
+ * per folder per process (logFallbackUnproven): the step runs on every config
+ * write, and a folder that answers so once answers so every time.
+ */
+export const ACL_FALLBACK_UNPROVEN_LOG =
+  "[acl] a folder was not narrowed to you alone: after granting you full control the app could not read that grant back as yours, so it removed no other entry and left the folder usable"
+
+/** The folders ACL_FALLBACK_UNPROVEN_LOG was written for in this process, by
+ *  their resolved path in lower case (only ever compared, never logged). */
+const fallbackUnprovenLogged = new Set<string>()
+const FALLBACK_LOG_MEMO_MAX = 64
+
+/** ACL_FALLBACK_UNPROVEN_LOG, at most once per folder per process, and for at
+ *  most FALLBACK_LOG_MEMO_MAX folders: past that the log already says it. */
+function logFallbackUnproven(dir: string): void {
+  let key: string
+  try { key = path.resolve(dir).toLowerCase() } catch { key = dir.toLowerCase() }
+  if (fallbackUnprovenLogged.has(key) || fallbackUnprovenLogged.size >= FALLBACK_LOG_MEMO_MAX) return
+  fallbackUnprovenLogged.add(key)
+  logWarn(ACL_FALLBACK_UNPROVEN_LOG)
+}
+
+/**
+ * The principal, as icacls prints it, of the user's own explicit full-control
+ * entry in `now` -- a read-back taken just after a strip-and-grant that granted
+ * `spelling` -- or null when it cannot be told apart. `before` is the read
+ * taken ahead of that write.
+ *
+ * A `DOMAIN\user` spelling is matched in full, in any letter case. A bare
+ * account name is matched against the account half (after the last `\`) of
+ * each entry, because icacls prints a user with the domain it resolved, never
+ * bare: of the entries that match, the one the grant just made (in `now`, not
+ * in `before`), else the only one there is. Two candidates are no answer, and
+ * neither is an inherited, deny or narrower entry.
+ *
+ * Exported so the matching runs on every leg of the CI matrix.
+ */
+export function grantedUserEntryPrincipal(now: readonly string[], before: readonly string[], spelling: string): string | null {
+  const full = now.filter(isExplicitFullControl)
+  const key = aclPrincipalKey(spelling)
+  if (spelling.includes('\\')) {
+    const hit = full.find((e) => aclPrincipalKey(aclEntryPrincipal(e)) === key)
+    return hit ? aclEntryPrincipal(hit) : null
+  }
+  const matching = full.filter((e) => aclAccountKey(aclEntryPrincipal(e)) === key)
+  const made = matching.filter((e) => !before.includes(e))
+  const pick = new Set((made.length > 0 ? made : matching).map(aclEntryPrincipal))
+  return pick.size === 1 ? [...pick][0] : null
+}
+
+/**
+ * What the strip-and-grant that grants `spelling` writes ahead of its grants,
+ * read from the first read (`entries`): `/remove:g` of each granted principal
+ * that may hold an allow entry the grants leave in place (entryGrantLeaves),
+ * so that write leaves each of them with the grant's entry alone.
+ *
+ * Each is named as the grants name it -- the user by `spelling`, SYSTEM by
+ * its SID -- so each resolves exactly when its grant does, and none adds a
+ * way for that write to fail. The user's is written when such an entry's
+ * account half is the spelling's; SYSTEM's, whose printed name is localized
+ * and may not be learned yet, when any other principal has one. Either may be
+ * written where it takes nothing (a same-named account of another domain, an
+ * entry of a third principal), which costs nothing: it takes only the named
+ * principal's entries, in the write that grants that principal again.
+ */
+function stripAndGrantRemovals(entries: readonly string[], spelling: string): string[] {
+  const user = aclAccountKey(spelling)
+  const left = entries.filter(entryGrantLeaves)
+  const out: string[] = []
+  if (left.some((e) => aclAccountKey(aclEntryPrincipal(e)) === user)) out.push('/remove:g', spelling)
+  if (left.some((e) => aclAccountKey(aclEntryPrincipal(e)) !== user)) out.push('/remove:g', SYSTEM_SID)
+  return out
+}
+
+/**
+ * Principals this call will leave on the DACL that the skip check will NOT
+ * discount, and so proof that reading the result back cannot recognise
+ * anything. `windowsAclRemovalArgs` refuses to hand back a principal it cannot
+ * spell safely and drops the ones over its cap, and those stay exactly where
+ * they are. A principal the call grants (`granted`) is one only through an
+ * entry `/grant:r` leaves in place (entryGrantLeaves) that no removal of its
+ * allow entries names: `/grant:r` replaces the rest. Counted BEFORE any
+ * write, so a read-back that is already known to be pointless is never paid
+ * for -- which is the other half of the cost bug: the un-nameable machine ran
+ * `learnHardenedPrincipals` on every single call and it could not have
+ * succeeded on any of them.
+ */
+function strandedPrincipals(entries: string[], removals: string[], granted: ReadonlySet<string>): number {
+  const namedBack = new Set<string>()
+  const allowNamedBack = new Set<string>()
+  for (let i = 1; i < removals.length; i += 2) {
+    const printed = removals[i].startsWith('*') ? removals[i].slice(1) : removals[i]
+    namedBack.add(printed)
+    if (removals[i - 1] !== '/remove:d') allowNamedBack.add(printed)
+  }
+  return new Set(entries
+    .filter((e) => {
+      const p = aclEntryPrincipal(e)
+      if (unremovableAclPrincipals.has(p)) return false
+      if (granted.has(aclPrincipalKey(p))) return entryGrantLeaves(e) && !allowNamedBack.has(p)
+      return !namedBack.has(p)
+    })
+    .map(aclEntryPrincipal)).size
+}
+
+/**
+ * REPLACE `dir`'s Windows DACL with the current user + SYSTEM: drop every
+ * inherited ACE, remove every explicit one, grant those two. Returns whether it
+ * was applied.
+ *
+ * Never an empty DACL, and never one without the user's own full control
+ * (aicc_planning#103, 2.1.1-beta.3). Every removal is written in the same
+ * invocation as the grants (remove, then grant). A principal the call grants
+ * is not removed outright where its printed name is known: the user as
+ * spelled or as learned, and SYSTEM once learned. A deny entry of its is
+ * removed alone (`/remove:d`). Its allow entries are taken (`/remove:g`) only
+ * by the two writes that grant it -- the single replace and the
+ * strip-and-grant -- and only when one of them is an entry `/grant:r` leaves
+ * in place (entryGrantLeaves); the one-at-a-time fallback never names a
+ * granted principal's allow entries. The one-at-a-time fallback starts only
+ * once a read-back shows the user's own explicit full-control entry
+ * (grantedUserEntryPrincipal), and none of its calls removes that entry:
+ * through it the process keeps WRITE_DAC for every later call, whoever owns
+ * the folder. Without that read-back the fallback removes nothing, logs
+ * ACL_FALLBACK_UNPROVEN_LOG (once per folder) and answers false; the folder
+ * keeps the grants just written, and stays usable.
+ *
+ * Never throws. Every caller sits on a session-spawn or config-write path where
+ * a permissions failure must not be fatal -- including the case where a mocked
+ * or absent `child_process` makes `execFileSync` unusable.
+ */
 export function hardenDirAclWindows(dir: string): boolean {
   if (!IS_WINDOWS) return false
   const spellings = windowsAclPrincipals()
@@ -615,29 +813,19 @@ export function hardenDirAclWindows(dir: string): boolean {
   const entries = windowsAclEntries(dir)
   if (windowsAclIsOwnerOnly(entries, hardenedPrincipals, unremovableAclPrincipals)) return true
 
-  const removals = windowsAclRemovalArgs(entries, unremovableAclPrincipals)
-
-  // Principals this call will leave on the DACL that the skip check will NOT
-  // discount, and so proof that reading the result back cannot recognise
-  // anything. `windowsAclRemovalArgs` refuses to hand back a principal it cannot
-  // spell safely and drops the ones over its cap, and those stay exactly where
-  // they are. Counted BEFORE any write, so a read-back that is already known to
-  // be pointless is never paid for -- which is the other half of the cost bug:
-  // the un-nameable machine ran `learnHardenedPrincipals` on every single call
-  // and it could not have succeeded on any of them.
-  const namedBack = new Set<string>()
-  for (let i = 1; i < removals.length; i += 2) {
-    namedBack.add(removals[i].startsWith('*') ? removals[i].slice(1) : removals[i])
-  }
-  const strandedAtStart = entries
-    .map(aclEntryPrincipal)
-    .filter((p) => !namedBack.has(p) && !unremovableAclPrincipals.has(p)).length
-
   for (const principal of spellings) {
     const grants = ['/inheritance:r', '/grant:r', `${principal}:(OI)(CI)F`, `${SYSTEM_SID}:(OI)(CI)F`]
+    // The principals this call grants, in the spelling icacls prints: the user
+    // as spelled here, and the pair a write already read back (SYSTEM's
+    // printed name is localized, so it is known only once learned).
+    const granted = new Set<string>([aclPrincipalKey(principal), ...[...(hardenedPrincipals ?? [])].map(aclPrincipalKey)])
+    const removals = windowsAclRemovalArgs(entries, unremovableAclPrincipals, granted, true)
+    const strandedAtStart = strandedPrincipals(entries, removals, granted)
 
     // The replace, in one invocation: nothing is stripped unless every name in
-    // it resolved, so there is no window in which the app has no access.
+    // it resolved, so there is no window in which the app has no access. A
+    // granted principal's allow entry that `/grant:r` leaves in place is taken
+    // here too (`/remove:g`), ahead of the grant that writes its entry again.
     if (removals.length > 0 && icacls([dir, ...removals, ...grants])) {
       if (strandedAtStart === 0) learnHardenedPrincipals(dir)
       return true
@@ -647,22 +835,62 @@ export function hardenDirAclWindows(dir: string): boolean {
     // one is tried below -- or one of the removals does not, and the exit code
     // does not say which. Establish the app's own access FIRST, with the
     // strip-and-grant that shipped: if this fails it is the spelling, nothing
-    // has been removed, and the next spelling gets its turn.
-    if (!icacls([dir, ...grants])) continue
+    // has been removed, and the next spelling gets its turn. An allow entry of
+    // the user's or SYSTEM's that `/grant:r` leaves in place goes in this same
+    // write (`/remove:g`, then the grants; stripAndGrantRemovals), so the
+    // fallback below never has to name either. Those removals name the two as
+    // the grants do, so they add no way for this write to fail.
+    if (!icacls([dir, ...stripAndGrantRemovals(entries, principal), ...grants])) continue
     if (removals.length === 0) {
       if (strandedAtStart === 0) learnHardenedPrincipals(dir)
       return true
     }
 
-    // Access is granted and the grants are now PROVEN to resolve. Remove the
-    // rest one at a time -- each is independent, and a failure names the
-    // principal that caused it. Doing this rather than giving up on the
-    // removals is the difference between an explicit `Authenticated Users`
-    // being removed on such a machine and surviving.
-    let stranded = strandedAtStart
-    for (let i = 1; i < removals.length; i += 2) {
-      const target = removals[i]
-      const status = icaclsStatus([dir, '/remove', target])
+    // Before anything is removed one at a time (aicc_planning#103): the user's
+    // own explicit full-control entry, read back, in the spelling icacls
+    // prints (which for a bare spelling carries a domain). None of the calls
+    // below removes it, so through it the process keeps the right to write
+    // this DACL (WRITE_DAC) for every one of them, whoever owns the folder.
+    // Without that read-back nothing more is removed.
+    const now = windowsAclEntries(dir)
+    const own = grantedUserEntryPrincipal(now, entries, principal)
+    if (!own) {
+      logFallbackUnproven(dir)
+      return false
+    }
+    granted.add(aclPrincipalKey(own))
+    // The other principal granted is SYSTEM, whose printed name is localized.
+    // An explicit full-control entry the write above just made (in the
+    // read-back, not in the first read), other than the user's, is taken as
+    // SYSTEM's -- but only when there is exactly one; with more than one,
+    // none is, and the grants every removal carries put SYSTEM back in the
+    // same write that names it.
+    const madeOthers = new Set(now
+      .filter((e) => isExplicitFullControl(e) && !entries.includes(e))
+      .map((e) => aclPrincipalKey(aclEntryPrincipal(e)))
+      .filter((k) => !granted.has(k)))
+    if (madeOthers.size === 1) granted.add([...madeOthers][0])
+
+    // Remove the rest one at a time -- each is independent, and a failure
+    // names the principal that caused it. Doing this rather than giving up on
+    // the removals is the difference between an explicit `Authenticated
+    // Users` being removed on such a machine and surviving. Each removal
+    // carries the grants in the same invocation (remove, then grant), so no
+    // write leaves the folder without them: a granted principal whose printed
+    // name is not known is put back in the same write that removed it. A
+    // granted principal's allow entries are never named here, only a deny
+    // entry of its; one that `/grant:r` leaves in place and that turned up
+    // after the strip-and-grant stays, counted as stranded, for the next
+    // call's single replace. The list is the read-back's, so what is removed
+    // and what counts as left is what the folder holds now (the inherited
+    // entries are already gone, and an entry that turned up since the first
+    // read is not passed over).
+    const oneByOne = windowsAclRemovalArgs(now, unremovableAclPrincipals, granted)
+    let stranded = strandedPrincipals(now, oneByOne, granted)
+    for (let i = 1; i < oneByOne.length; i += 2) {
+      const option = oneByOne[i - 1]
+      const target = oneByOne[i]
+      const status = icaclsStatus([dir, option, target, ...grants])
       if (status === 0) continue
       // Memoised in the spelling icacls PRINTS, which is what both the removal
       // builder and the skip check compare against -- a bare SID is handed to
@@ -670,16 +898,15 @@ export function hardenDirAclWindows(dir: string): boolean {
       // matched neither, so the memo silently did nothing and the directory
       // could never settle. `noteUnremovableAclPrincipal` refuses everything
       // that is not a proven name-resolution failure, and everything too broad
-      // to give up on whatever the exit code says.
+      // to give up on whatever the exit code says. A granted principal's deny
+      // entry that stays is never memoised: it is no name the app cannot say.
       const printed = target.startsWith('*') ? target.slice(1) : target
-      if (!noteUnremovableAclPrincipal(printed, status)) stranded++
+      if (option !== '/remove' || !noteUnremovableAclPrincipal(printed, status)) stranded++
     }
-    // The pass above removes the app's own entries too, so re-grant. The same
-    // argv succeeded moments ago, which is why it is safe to have removed them:
-    // the only window where this directory has no DACL of ours is between those
-    // two calls, and it closes with a command already known to work. Its result
-    // is the answer -- reporting success after a re-grant that did not land
-    // would report a directory the app has just locked itself out of as hardened.
+    // The grants once more. Every call above carried them, so this repairs
+    // nothing it did; its result is the answer -- reporting success after a
+    // grant that did not land would report a folder the app cannot use as
+    // hardened.
     const regranted = icacls([dir, ...grants])
     // A principal still on the DACL that the memo does not discount makes the
     // read-back unable to match, so it is not paid for.
@@ -861,11 +1088,14 @@ function writeProfileHomeIdentity(home: string, data: string | Uint8Array): void
 // startProfileStepsPending). POSIX keeps its 0700 folders and the rule is off
 // there.
 
-/** What a launch or a write is told when step 3 refused a folder. */
+/** What a launch or a write is told when step 3 refused a folder. The remedy
+ *  is the known issue's (app-knowledge.ts): the owner of the resources folder
+ *  AND of everything in it (2.1.1-beta.3, F7: owning the top folder alone
+ *  leaves the folders inside it as they were). */
 export const CREDENTIAL_FOLDER_REFUSAL =
   "Windows did not let AI Code Conductor make this account's sign-in folders readable by you alone, so nothing was written there " +
-  "and the account cannot be used until they are. Make your Windows user the owner of AI Code Conductor's resources folder (the folder chosen for its data when it was set up), " +
-  'or move that folder to an NTFS disk, then restart AI Code Conductor.'
+  "and the account cannot be used until they are. Make your Windows user the owner of AI Code Conductor's resources folder (the folder chosen for its data when it was set up) " +
+  'and of everything in it, or move that folder to an NTFS disk, then restart AI Code Conductor.'
 /** What a launch or a write is told while its folders have no verdict yet. */
 export const CREDENTIAL_FOLDER_PENDING =
   "AI Code Conductor is still checking that this account's sign-in folders are readable by you alone. Try again in a moment."

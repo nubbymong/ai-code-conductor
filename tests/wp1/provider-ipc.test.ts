@@ -817,3 +817,23 @@ describe('the usage stream over IPC (usage track MP3)', () => {
     expect(await w.call(IPC.PROVIDER_ACCOUNTS_USAGE_STREAM, { providerId: 'claude', channel: USAGE_CH })).toMatchObject({ ok: false, code: 'unsupported' })
   })
 })
+
+// O5 (2.1.1-beta.3, owner decision 2026-10-11): the two channels keep their
+// shape, and the shipped service answers both with a refusal. Nothing is
+// reserved, written or run, and nothing of the folder crosses back.
+describe('the sign-in already on this computer, retired (O5)', () => {
+  it('adopt and the check before it are refused through IPC, with what to do instead', async () => {
+    const h = await harness({ retiredAdoption: true })
+    h.signedIn.set(EXT_HOME.toLowerCase(), 'chatgpt')
+    const w = wire(h.service)
+    const doc = JSON.stringify(h.doc())
+    const cliRuns = h.runs.length
+    const RETIRED = 'This app no longer uses the Codex sign-in already on this computer. Add a Codex account in Settings, Accounts instead.'
+    for (const c of [IPC.PROVIDER_ACCOUNTS_ADOPT_EXTERNAL, IPC.PROVIDER_ACCOUNTS_PROBE_EXTERNAL]) {
+      expect(await w.call(c, { providerId: 'codex' }), c).toEqual({ ok: false, code: 'unsupported', message: RETIRED })
+    }
+    expect(h.runs.length).toBe(cliRuns)
+    expect(JSON.stringify(h.doc())).toBe(doc)
+    expect(w.wc.sent.some(([c]) => c === IPC.PROVIDER_ACCOUNTS_CHANGED)).toBe(false)
+  })
+})

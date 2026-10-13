@@ -82,15 +82,16 @@ const TITLE = 'Feature X'
 
 /** Every `canvas:changed` / `canvas:reviewChanged` push, in order. */
 const pushed: Array<{ channel: string; payload: unknown }> = []
-registerCanvasHandlers(
-  () =>
-    ({
-      isDestroyed: () => false,
-      webContents: { send: (channel: string, payload: unknown) => pushed.push({ channel, payload }) },
-    }) as never,
-)
+/** The app window and its main frame: the only sender these handlers answer. */
+const APP_FRAME = {}
+const APP_WIN = {
+  isDestroyed: () => false,
+  webContents: { mainFrame: APP_FRAME, send: (channel: string, payload: unknown) => pushed.push({ channel, payload }) },
+}
+const APP_EVENT = { sender: APP_WIN.webContents, senderFrame: APP_FRAME }
+registerCanvasHandlers(() => APP_WIN as never)
 
-const invoke = async (channel: string, args: unknown): Promise<unknown> => handlers.get(channel)!({} as never, args)
+const invoke = async (channel: string, args: unknown): Promise<unknown> => handlers.get(channel)!(APP_EVENT as never, args)
 
 function render(n: number, opts: { ready?: boolean; mode?: 'design' | 'plan'; title?: string } = {}) {
   return store.renderVersion(SID, {

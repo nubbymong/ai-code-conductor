@@ -12,8 +12,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { createReadFailureLatch, loadConfigLatched, saveConfigLatched, mergeById } from './persist-latch'
 import { logInfo, logWarn, logError } from './debug-logger'
-import { resolveVersionBinary, isVersionInstalled, installVersion, legacyCliPin } from './legacy-version-manager'
-import { isValidLegacyVersion } from '../shared/legacy-version'
+import { LEGACY_PIN_NOT_USED } from '../shared/legacy-version'
 import { getProfileConfigDir, getPrimaryProfileId, setupProfileLinks, listProfiles, isValidProfileId, startProfileStepsPending, startProfileStepsSettled, profileCredentialFoldersChecked, checkProfileCredentialFolders } from './account-profiles'
 import { withProfileHome } from './pty-manager'
 import { gateManagedLaunch } from './managed-launch-diagnostics'
@@ -29,7 +28,9 @@ import { randomId } from '../shared/id'
 import { systemTool, windowsStartCommand } from './windows-programs'
 import { CLAUDE_NOT_ON_PATH, findClaudeOnWindowsAsync, recentClaudeOnWindows } from './claude-cli-probe'
 import { warmFirstStart } from './first-start-warmup'
-import { claudeVersionRunEnv } from './providers/review-support'
+import { quitHold } from './quit-hold'
+import { claudeVersionRunEnv, redactFailure, redactHead } from './providers/review-support'
+import { createLineRedactor } from './log-line-redact'
 
 export interface CloudAgentData {
   id: string
@@ -78,7 +79,7 @@ export interface CloudAgentData {
  * have their owner-only verdict in this run, so withProfileHome reads a
  * verdict instead of refusing for want of one. Each wait only when pending.
  */
-async function resolveAgentEnv(profileId: string | undefined, projectPath: string, projectGate: ProjectGateResult, pinnedCli?: { version: string; installed: boolean }): Promise<{
+async function resolveAgentEnv(profileId: string | undefined, projectPath: string, projectGate: ProjectGateResult): Promise<{
   env: Record<string, string>
   resolvedProfileId: string | null
   accountEmail?: string
@@ -107,7 +108,7 @@ async function resolveAgentEnv(profileId: string | undefined, projectPath: strin
   try { setupProfileLinks(resolvedProfileId) } catch (e) { logWarn(`[cloud-agent] home refresh failed for ${resolvedProfileId}: ${e}`) }
   const home = getProfileConfigDir(resolvedProfileId)
   const accountEmail = listProfiles().find(p => p.id === resolvedProfileId)?.accountEmail || undefined
-  return { env: withProfileHome(baseEnv, home, { launchId: 'cloud-agent', cwd: projectPath, probe: false, projectGate, ...(pinnedCli ? { pinnedCli } : {}) }), resolvedProfileId, accountEmail }
+  return { env: withProfileHome(baseEnv, home, { launchId: 'cloud-agent', cwd: projectPath, probe: false, projectGate }), resolvedProfileId, accountEmail }
 }
 
 const MAX_OUTPUT_BYTES = 512 * 1024 // 500KB cap per agent
@@ -154,8 +155,8 @@ function beginDispatch(providerId: ProviderId): () => void {
 
 /** WP2: cloud agents that are Claude Code in use, for the switch-off rule
  *  (provider-in-use.ts): every dispatch past the launch gate, from before its
- *  record exists, and every agent running or pending -- one waiting on its
- *  legacy CLI install or an account refresh included. A switch-off is
+ *  record exists, and every agent running or pending -- one waiting on an
+ *  account refresh included. A switch-off is
  *  refused while any is counted, as it is while a session runs. Agents of
  *  another provider are that provider's, never Claude Code's. */
 export function countClaudeAgentsInUse(): number {
@@ -278,8 +279,8 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
   // P4.5: an agent of another provider runs through that provider's package.
   if (agentProvider(params) !== 'claude') return dispatchBackgroundAgent(agentProvider(params), params)
   // WP2: a cloud agent is a Claude Code run, so none starts while Claude Code
-  // is off -- refused here, before the project is scanned, a record is made,
-  // a legacy CLI is installed or anything is spawned (provider-launch-gate.ts).
+  // is off -- refused here, before the project is scanned, a record is made
+  // or anything is spawned (provider-launch-gate.ts).
   // Every way in comes through here (dispatch, and retry below). Answered,
   // never thrown: the Cloud Agents page says why.
   const refused = providerLaunchRefusal('claude')
@@ -302,13 +303,9 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
     // is stamped with the account it actually ran under (drives the card label,
     // the account filter, and a consistent retry).
     //
-    // A valid legacy pin is what the agent runs (below), so the preflight is told
-    // about it -- installed or not: it is recorded BEFORE the pin's auto-install,
-    // and the provider decides which version to check (a not-yet-installed pin
-    // counts only when it is below the floor, so a failed install that falls
-    // back to the installed CLI can only err loud, never a false "supported").
-    const pinnedCli = params.legacyVersion?.enabled ? legacyCliPin(params.legacyVersion) : undefined
-    ;({ env: spawnEnvVars, resolvedProfileId, accountEmail } = await resolveAgentEnv(params.profileId, params.projectPath, projectGate, pinnedCli))
+    // The agent runs the installed Claude Code (below), so the preflight
+    // checks the floor against that one.
+    ;({ env: spawnEnvVars, resolvedProfileId, accountEmail } = await resolveAgentEnv(params.profileId, params.projectPath, projectGate))
 
     agent = {
       id: generateId(),
@@ -334,8 +331,8 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
   broadcastStatus(agent)
 
   // rc.15 review R5 (aicc_planning#49): a Cancel (or a Remove) can land while
-  // dispatch is parked on an await below -- the legacy install, the account
-  // refresh. cancelAgent finds no process then and marks the record cancelled;
+  // dispatch is parked on an await below -- the account refresh, the program
+  // lookup. cancelAgent finds no process then and marks the record cancelled;
   // the resumed dispatch must see that and spawn nothing, or the work runs
   // labelled cancelled with no control left to stop it. Checked after EVERY
   // pre-spawn await; `agent` is the very object in `agents`, so a cancel is
@@ -359,30 +356,11 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
     return agent
   }
 
-  // Resolve Claude binary (use legacy version if configured; null: the
-  // installed CLI, found below)
-  let claudeBin: string | null = null
-  if (params.legacyVersion?.enabled && params.legacyVersion.version) {
-    if (!isValidLegacyVersion(params.legacyVersion.version)) {
-      // P0.3: never feed a non-semver version into install/spawn — fall back.
-      logWarn(`[cloud-agent] Ignoring invalid legacy version ${JSON.stringify(params.legacyVersion.version)}; using system claude`)
-    } else {
-      // Auto-install if needed
-      if (!isVersionInstalled(params.legacyVersion.version)) {
-        logInfo(`[cloud-agent] Auto-installing legacy v${params.legacyVersion.version} for agent ${agent.id}`)
-        const result = await installVersion(params.legacyVersion.version).catch((e: unknown) => ({ ok: false, error: (e as Error)?.message ?? String(e) }))
-        if (!result.ok) {
-          logInfo(`[cloud-agent] Legacy install failed, using system claude: ${result.error}`)
-        }
-        if (abandoned()) return abandon('the legacy CLI install')
-      }
-      const legacyBin = resolveVersionBinary(params.legacyVersion.version)
-      if (legacyBin) {
-        claudeBin = legacyBin
-        logInfo(`[cloud-agent] Using legacy Claude CLI v${params.legacyVersion.version}: ${legacyBin}`)
-      }
-    }
-  }
+  // A Claude Code version pinned in an older release is not used
+  // (2.1.1-beta.3): the agent runs the installed Claude Code (below), exactly
+  // as one with no pin, nothing is installed for the pin, and the log says so
+  // once, naming no path. The pin stays on the record, as it came.
+  if (params.legacyVersion?.enabled && params.legacyVersion.version) logInfo(`[cloud-agent] Agent ${agent.id}: ${LEGACY_PIN_NOT_USED}`)
 
   // The prompt is written to a temp file and, once the agent has started, read
   // back in-process and written to its stdin; `-p` puts Claude Code in print
@@ -397,8 +375,8 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
   const claudeArgs = ['-p', ...(skipPerms ? ['--dangerously-skip-permissions'] : [])]
 
   // How the agent starts: Claude Code by its full path, never through a shell,
-  // whatever the project folder holds. Windows: a valid legacy pin's binary,
-  // else the installed CLI found in PATH's folders (claude-cli-probe.ts
+  // whatever the project folder holds. Windows: the installed CLI found in
+  // PATH's folders (claude-cli-probe.ts
   // CLAUDE_WINDOWS_NAMES, in that order: a recent answer of that walk, else the
   // walk one stat at a time off the event loop); an npm claude.cmd through the
   // system cmd.exe; and the
@@ -406,26 +384,24 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
   // only in PATH's folders. Not found, or not startable that way: the agent
   // fails before anything starts. macOS/Linux: an argument list, no `sh -c`.
   let start: { file: string; args: string[]; windowsVerbatimArguments: boolean }
+  // ADR-025: a claude.exe started directly (not an npm claude.cmd, which
+  // cmd.exe starts) may be a new file this run has not started yet, whose
+  // first start holds the start call while the OS checks it. That first start
+  // runs off the main thread first: the program found below (the one in
+  // PATH's folders), with Claude's --version environment.
+  // A pre-start, never a gate. It is awaited inside the account hold below.
+  let warmProgram: string | null = null
   if (process.platform === 'win32') {
-    const bin = claudeBin ?? recentClaudeOnWindows(spawnEnvVars) ?? await findClaudeOnWindowsAsync(spawnEnvVars)
+    const bin = recentClaudeOnWindows(spawnEnvVars) ?? await findClaudeOnWindowsAsync(spawnEnvVars)
     if (abandoned()) return abandon('the program lookup')
     if (!bin) return failBeforeSpawn(CLAUDE_NOT_ON_PATH)
     const how = windowsStartCommand(bin, claudeArgs, spawnEnvVars)
     if ('refused' in how) return failBeforeSpawn(`Claude Code could not be started: ${how.refused}`)
     start = how
     spawnEnvVars = how.env
-    // ADR-025: a claude.exe started directly (not an npm claude.cmd, which
-    // cmd.exe starts) may be a new file this run has not started yet, whose
-    // first start holds the start call while the OS checks it. That first
-    // start runs off the main thread first: the program found above (a valid
-    // legacy pin's, or the one in PATH's folders), with Claude's --version
-    // environment. A pre-start, never a gate. A cancel during it is caught by
-    // the check after the account refresh wait below, before anything starts.
-    if (how.file === bin) {
-      await warmFirstStart(bin, () => ({ env: claudeVersionRunEnv(process.env, 'win32') }))
-    }
+    if (how.file === bin) warmProgram = bin
   } else {
-    start = { file: claudeBin ?? 'claude', args: claudeArgs, windowsVerbatimArguments: false }
+    start = { file: 'claude', args: claudeArgs, windowsVerbatimArguments: false }
   }
 
   let releaseProfile: () => void = () => { /* default home, or not held yet: nothing held */ }
@@ -435,7 +411,6 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
   // spawn) must not leave the record "running" with no process -- it would
   // read as Claude Code in use and refuse a switch-off forever.
   try {
-    fs.writeFileSync(tmpFile, params.description, 'utf8')
     // #48: the agent runs in the profile's credential home for as long as its
     // process lives, so the profile reads as in-use for exactly that long (the
     // usage refresh and the account delete defer to it). ACQUIRED FIRST: the hold
@@ -447,6 +422,14 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
     // spawned child -- so the ref needs no leak clock; an agent that runs for an
     // hour is in use for an hour.
     if (resolvedProfileId) releaseProfile = acquireProfileConsumer(resolvedProfileId, { maxAgeMs: Infinity })
+    // The first-start warm-up (above), inside the hold: while it runs the
+    // account reads as in use, so a sign-out of it is refused, and the cancel
+    // check and the launch rule below are asked after it, before anything
+    // starts.
+    if (warmProgram) await warmFirstStart(warmProgram, () => ({ env: claudeVersionRunEnv(process.env, 'win32') }))
+    // The prompt file once the warm-up is over: a dispatch that never gets
+    // past it (the app quit meanwhile) leaves no prompt behind.
+    fs.writeFileSync(tmpFile, params.description, 'utf8')
     // #49: if the usage page is rotating this profile's token right now, let
     // the new lineage land before the agent's claude reads the credential file.
     // The hold above means no OTHER rotation can begin while we wait.
@@ -466,6 +449,17 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
       releaseProfile()
       cleanupTmpFileFor(tmpFile)
       return failBeforeSpawn(refusedNow.message)
+    }
+    // Once the before-quit teardown has run, no agent starts, on any platform
+    // and for any program (quit-hold.ts): the account hold and the prompt
+    // file are let go, and the dispatch is never answered. A direct
+    // claude.exe on Windows is held by its warm-up too; macOS, Linux and an
+    // npm claude.cmd were not.
+    const held = quitHold<CloudAgentData>('a cloud agent')
+    if (held) {
+      releaseProfile()
+      cleanupTmpFileFor(tmpFile)
+      return held
     }
     child = spawn(start.file, start.args, {
       cwd: params.projectPath,
@@ -501,9 +495,16 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
     }
   })
 
+  // The error output goes to the log on whole lines, with credentials hidden
+  // as in every other failure text: an unfinished last line of a read is
+  // held and redacted joined to the next read, so a credential split across
+  // two reads is still hidden (log-line-redact.ts). Redacted before the cut
+  // to 200 characters, so that cut never splits one either.
+  const stderrLines = createLineRedactor((text) => redactHead(text, redactFailure))
   child.stderr?.on('data', (data: Buffer) => {
     const chunk = data.toString()
-    logInfo(`[cloud-agent] ${agent.id} stderr: ${chunk.length} bytes — ${chunk.slice(0, 200)}`)
+    const shown = stderrLines.push(chunk)
+    logInfo(`[cloud-agent] ${agent.id} stderr: ${chunk.length} bytes${shown ? `: ${shown.slice(0, 200)}` : ' (an unfinished line, logged with the next read)'}`)
     const agentRef = agents.find(a => a.id === agent.id)
     if (agentRef) {
       if (agentRef.output.length < MAX_OUTPUT_BYTES) {
@@ -514,6 +515,8 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
   })
 
   child.on('close', (code) => {
+    const lastLine = stderrLines.flush()
+    if (lastLine) logInfo(`[cloud-agent] ${agent.id} stderr (its last line): ${lastLine.slice(0, 200)}`)
     releaseProfile()
     cleanupTmpFile()
     activeProcesses.delete(agent.id)

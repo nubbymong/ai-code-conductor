@@ -120,6 +120,17 @@ export interface AccountsServiceDeps {
    *  provider, which main computes itself, to the user PATH and to this
    *  process's PATH (Windows). Absent: the provider offers no such change. */
   addToPath?: (providerId: ProviderId) => Promise<{ outcome: 'added' | 'already' } | { outcome: 'refused' | 'failed'; message: string }>
+  /** TEST SEAM ONLY. Since 2.1.1-beta.3 (owner decision 2026-10-11) the app
+   *  never takes in a provider's own default sign-in (Codex's own folder):
+   *  adoptExternalDefault and probeExternalDefault refuse ('unsupported')
+   *  before anything is reserved, written or run. 2.1.1-beta.2 could register
+   *  one, and those records keep working. True lets a test write such a
+   *  record through the code beta.2 wrote it with. The composition root
+   *  (src/main/provider-accounts.ts) never sets it, and
+   *  provider-startup-no-adoption.test.ts proves its service refuses. It
+   *  re-enables nothing else: Restore of such an archived account is
+   *  refused with it on or off (changeLifecycle). */
+  beta2ExternalAdoptionForTests?: boolean
 }
 
 /** Usage track MP8 (ADR-022, bound 7): the least time between two fresh
@@ -269,6 +280,13 @@ function failure(code: AccountsFailureCode, message?: string, extra: { consumers
   return { ok: false, code, message: message ?? FAIL_MESSAGES[code] ?? 'That did not work.', ...extra }
 }
 
+/** A realm folder's failure code as the log says it (O6): a code is a short
+ *  lower-case word or words joined by hyphens; anything else is not echoed. */
+function folderFailureCode(code: unknown): string {
+  if (code === undefined) return 'io-failed'
+  return typeof code === 'string' && /^[a-z][a-z-]{0,39}$/.test(code) ? code : 'an unknown code'
+}
+
 /** Each launch kind in a refusal's words (WP2 PR 4, P4.5: a background run,
  *  a Cloud Agent, is named as one, never as a review). */
 const LAUNCH_KIND_WORDS: Readonly<Record<LaunchLeaseKind, string>> = Object.freeze({
@@ -334,9 +352,6 @@ function signOutLeft(out: AuthOperationResult): KnownAuthState | null {
 
 /** A sign in again cancelled before its switch. */
 const REAUTH_CANCELLED = 'The sign-in was cancelled. This account keeps its earlier sign-in.'
-
-/** Why this computer's own sign-in is not signed in again without a yes. */
-const EXTERNAL_REAUTH_ACK = 'Signing in again here signs this computer\'s sign-in out first, for every app that uses it; if the new sign-in does not finish, it stays signed out. Confirm to continue.'
 
 /** Why an old sign-in is still there (AccountView.oldSignInLeft). */
 type OldSignInRule = 'removable' | 'kept' | 'unavailable'
@@ -1081,6 +1096,9 @@ export class AccountsService {
     if (bad) return bad
     const prepared = await p.realmFolders!.prepare({ authRealmId: realmId }).catch(() => ({ ok: false as const, code: 'io-failed' as const }))
     if (!prepared.ok) {
+      // Said in the log (O6): the dialog keeps its general words, and the
+      // folder rule logs its own reason.
+      this.log(`a new ${p.id} account was not set up: its folder could not be prepared (${folderFailureCode(prepared.code)})`)
       // Only an empty folder goes; anything else keeps the journal so the
       // surface can show it and the user can retry or remove it.
       const removed = await p.realmFolders!.remove({ authRealmId: realmId }, { contents: 'empty-only' }).catch(() => ({ ok: false }))
@@ -1262,10 +1280,15 @@ export class AccountsService {
    *  recorded exactly as a status check records it, so a different kind of
    *  sign-in blocks the account (design 5.5).
    *
-   *  Either way refused while anything uses the account, on an external
-   *  home (sign in there with the provider's own tools), and on a blocked
+   *  Either way refused while anything uses the account, and on a blocked
    *  account (the user reconciles it first). An earlier staged sign-in of
-   *  the account that did not finish is discarded first. */
+   *  the account that did not finish is discarded first.
+   *
+   *  Never on the provider's own sign-in on this computer (an account
+   *  2.1.1-beta.2 registered for it): that sign-in is retired (O5, owner
+   *  decision 2026-10-11), so this refuses it first, before anything is
+   *  checked or run, acknowledgement or not. Until 2.1.1-beta.3 it was
+   *  signed in again in place, which signed every app using it out first. */
   async signInAgain(
     input: { accountId: string; method: SignInMethod; secretHandle?: string; sameAccount?: boolean; acknowledgeExternal?: boolean },
     senderId: number,
@@ -1284,15 +1307,14 @@ export class AccountsService {
     const ctx = this.accountContext(input.accountId)
     if ('ok' in ctx) return refuse(ctx)
     const a = findAccount(ctx.doc, input.accountId)!
-    const notRunnable = this.runnable(ctx, a, ctx.external ? ['auth.status', 'auth.logout'] : ['auth.status'])
+    // O5: the retired sign-in on this computer, refused before any check,
+    // sign-out or login can run (the home is left exactly as it is).
+    if (ctx.external) return refuse(this.externalSignInRetired(a.providerId, 'sign-in-again'))
+    const notRunnable = this.runnable(ctx, a, ['auth.status'])
     if (notRunnable) return refuse(notRunnable)
     const p = ctx.p!
     if (!this.managesAccounts(p)) return refuse(failure('unsupported'))
-    if (ctx.external) {
-      // This computer's own sign-in (design 9.2, last paragraph): in place,
-      // only with the user's yes that it reaches every app using it.
-      if (input.acknowledgeExternal !== true) return refuse(failure('acknowledgement-required', EXTERNAL_REAUTH_ACK))
-    } else if (findRealm(ctx.doc, a.authRealmId)?.ownership !== 'conductor-managed') return refuse(failure('unsupported'))
+    if (findRealm(ctx.doc, a.authRealmId)?.ownership !== 'conductor-managed') return refuse(failure('unsupported'))
     if (a.operationalState === 'blocked') return refuse(failure('sign-in-changed'))
     const refusedMethod = this.methodAllowed(p, input.method)
     if (refusedMethod) return refuse(refusedMethod)
@@ -1315,7 +1337,6 @@ export class AccountsService {
     let recorded: StoreResult | null = null
     let observedClass: CredentialClass | undefined
     let staged: AccountsResult<SignInAgainResult> | null = null
-    let inPlaceExternal: AccountsResult<{ state: KnownAuthState }> | null = null
     try {
       // A staged sign-in of this account an earlier run left (the app
       // closed during it): it is stale now, and is signed out and removed
@@ -1343,9 +1364,7 @@ export class AccountsService {
       else {
         lease = leased.added.lease
         if (run.controller.signal.aborted) result = { ok: false, code: 'cancelled' }
-        else if (ctx.external) {
-          inPlaceExternal = await this.externalSignInAgain(ctx.store, p, a.id, a.authRealmId, input.method, handle, run, onOutput)
-        } else if (findAccount(ctx.store.current() ?? ctx.doc, a.id)?.lastKnownAuthState === 'signed-in') {
+        else if (findAccount(ctx.store.current() ?? ctx.doc, a.id)?.lastKnownAuthState === 'signed-in') {
           // Signed in now: staged, so a sign-in that fails or is someone
           // else never costs the account the one it has.
           staged = await this.stagedSignInAgain(ctx.store, p, a.id, input.method, handle, run, onOutput, onPhase)
@@ -1391,7 +1410,6 @@ export class AccountsService {
     }
     if (refusal) return refusal
     if (staged) return staged
-    if (inPlaceExternal) return inPlaceExternal
     if (recorded) {
       const bad = this.fromStore(recorded)
       if (bad) {
@@ -1450,6 +1468,7 @@ export class AccountsService {
       const prepared = await p.realmFolders.prepare({ authRealmId: realmId }).catch(() => ({ ok: false as const, code: 'io-failed' as const, created: undefined }))
       if (prepared.ok && prepared.created === true) made = true
       if (!prepared.ok) {
+        this.log(`a sign in again for a ${p.id} account stopped: the new sign-in's folder could not be prepared (${folderFailureCode(prepared.code)})`)
         await drop()
         return failure((prepared.code ?? 'io-failed') as AccountsFailureCode, 'The account folder could not be prepared.')
       }
@@ -1695,69 +1714,6 @@ export class AccountsService {
     }
   }
 
-  /** This computer's own sign-in, signed in again in place (design 9.2, last
-   *  paragraph; WP1.52). The caller holds the account's sign-in lease
-   *  (nothing uses it, nothing starts on it) and the user has acknowledged
-   *  that it reaches every app using that sign-in. The home is checked first
-   *  (design 5.5: a sign-in that changed there blocks it); a signed-in home
-   *  is signed out first (the provider's login never runs over one); then
-   *  the login runs there. From the sign-out on, the record says what the
-   *  home now holds: a login that does not finish leaves it signed out,
-   *  needing attention. Never staged: this home is not the app's to replace. */
-  private async externalSignInAgain(
-    store: AccountRegistryStore, p: ProviderPackage, accountId: string, realmId: string, method: SignInMethod,
-    secretHandle: string | undefined, run: SignInRun, onOutput?: (text: string) => void,
-  ): Promise<AccountsResult<{ state: KnownAuthState }>> {
-    if (!p.auth) return failure('unsupported')
-    const changed = await this.externalStillMatches(store, p, accountId, realmId, { unansweredBlocks: true })
-    if (changed) return changed
-    const record = async (check: { state: KnownAuthState; observedCredential?: CredentialClass; providerSubject?: string; providerAuthorityId?: string }) => {
-      const r = await store.mutate((d, t) => recordAuthCheck(d, accountId, check, t))
-      if (!r.ok) this.log(`a sign-in state of this computer's own sign-in was not saved (${r.code})`)
-      return r
-    }
-    if (store.current() && findAccount(store.current()!, accountId)?.lastKnownAuthState !== 'signed-out') {
-      const out = await p.auth.logout({ authRealmId: realmId }, { acknowledgeExternalRealm: true }).catch((): AuthOperationResult => ({ ok: false, code: 'not-started' }))
-      // A sign-out whose result was not read back proves nothing: the home
-      // needs a check before it is trusted again (review round 2, L2-1).
-      const left = signOutLeft(out)
-      if (left) await record({ state: left })
-      // Still signed in: nothing was lost, and nothing more runs.
-      if (!out.ok) return this.fromAuth(out)
-    }
-    const ran = await this.loginUnderCliRule(p, { authRealmId: realmId }, method, {
-      ...(secretHandle !== undefined ? { secretHandle } : {}),
-      onOutput: (text) => { try { onOutput?.(text) } catch { /* display only */ } },
-      signal: run.controller.signal,
-      acknowledgeExternalRealm: true,
-    })
-    // Refused before the login ran: the home is as the sign-out above left
-    // it, signed out, and the record says so already.
-    if ('refused' in ran) return ran.refused
-    const result = ran.result
-    if (result.state === 'signed-in') {
-      let observed: AuthOperationResult & { state: KnownAuthState } = { ...result, state: 'signed-in' }
-      if (observed.credential !== 'account' && observed.credential !== 'api-key') {
-        const again = await p.auth.status({ authRealmId: realmId }).catch(() => null)
-        if (again?.ok && again.state === 'signed-in') observed = again
-      }
-      if (observed.credential !== 'account' && observed.credential !== 'api-key') observed = { ...observed, credential: method === 'apiKey' ? 'api-key' : 'account' }
-      const check = this.checkInput(observed)
-      const recorded = await record(check)
-      if (!recorded.ok) {
-        this.unrecordedSignIns.set(accountId, check.observedCredential)
-        this.changed()
-        return this.fromStore(recorded)!
-      }
-      this.unrecordedSignIns.delete(accountId)
-      if (findAccount(recorded.doc, accountId)?.operationalState === 'blocked') return failure('sign-in-changed', undefined, { state: 'signed-in' })
-      return { ok: true, state: 'signed-in' }
-    }
-    // Not signed in: the home is as the sign-out above left it, and the
-    // record says signed out (needing attention) already.
-    return result.ok ? failure('not-signed-in', undefined, { state: 'signed-out' }) : this.fromAuth({ ...result, state: 'signed-out' })
-  }
-
   /** Cancel a sign-in this renderer started; nothing else. */
   cancelSignIn(input: { accountId: string }, senderId: number): AccountsResult {
     const run = this.signIns.get(input.accountId)
@@ -1775,9 +1731,9 @@ export class AccountsService {
     const p = this.pkg(j.providerId)
     if (!p?.auth) return failure('unsupported')
     // Only a setup of an account this app manages is finished here. The
-    // provider's own default home is taken in by adoptExternalDefault alone
-    // (the user's "Use this sign-in"): its reservation, a check's or an
-    // adoption's, running now or left by an earlier run, is never committed.
+    // provider's own default home was taken in by adoptExternalDefault alone
+    // (2.1.1-beta.2's "Use this sign-in", refused since): its reservation, a
+    // check's or an adoption's, left by an earlier run, is never committed.
     if (findRealm(ready.doc, j.realmId)?.ownership !== 'conductor-managed' || this.externalReservations.has(j.accountId)) return failure('unsupported')
     // A staged sign in again of an existing account is not a new account:
     // it ends in its switch, or is discarded (a separate account is released
@@ -2128,6 +2084,12 @@ export class AccountsService {
     const a = findAccount(ctx.doc, input.accountId)!
     const next = input.lifecycle
     if (a.lifecycle === 'archived' && next === 'inactive') {
+      // O5 (2.1.1-beta.3, owner decision 2026-10-11): an archived account
+      // for the provider's own sign-in on this computer (one 2.1.1-beta.2
+      // registered) never comes back: archiving it is how a user moves off
+      // that retired sign-in, so Restore would take it in again. Refused
+      // first, whatever else holds, and nothing changes.
+      if (ctx.external) return this.externalSignInRetired(a.providerId, 'restore')
       // Restore (design 5.3): back to inactive, its realm live again, and
       // nothing about its sign-in trusted until making it active checks it.
       // Only while the provider is on: an account of a provider that is off
@@ -2202,7 +2164,9 @@ export class AccountsService {
       if (ctx.legacyRecord) return apply()
       if (ctx.external) {
         // Credentials stay under the other client's control: say so first.
-        if (input.acknowledgeExternal !== true) return failure('acknowledgement-required', 'Archiving only forgets this sign-in here; it stays signed in for other apps. Confirm to continue.')
+        // And it is final (O5): an archived external home is never restored
+        // (the archived -> inactive refusal above), so the message says that.
+        if (input.acknowledgeExternal !== true) return failure('acknowledgement-required', 'Archiving is final: this account cannot be restored, because this app no longer uses this sign-in. Archiving only forgets it here; it stays signed in for other apps. Confirm to continue.')
         if (a.lifecycle !== 'inactive') return apply() // the registry names the rule
         if (!ctx.p?.auth) return this.withArchiveCleared(a, () => apply({ archiveCleared: true }))
         const release = await this.exclusiveHold(ctx.store, a.id, a.providerId)
@@ -2549,7 +2513,7 @@ export class AccountsService {
     const spec = p?.externalDefaultRealm
     if (!p || !spec || !p.auth || !p.setup) return failure('unsupported')
     const notNow = this.cliRefusal(p.id)
-    if (notNow) return notNow.code === 'provider-not-set-up' ? failure('provider-not-set-up', `${p.displayName} is not set up yet. Say you use ${p.displayName} first, then use this computer's sign-in.`) : notNow
+    if (notNow) return notNow.code === 'provider-not-set-up' ? failure('provider-not-set-up', `${p.displayName} is not set up yet. Say you use ${p.displayName} first.`) : notNow
     if (!this.capability(p, 'auth.status').enabled) return failure('capability-disabled')
     const ready = this.ready()
     if ('ok' in ready) return ready
@@ -2626,25 +2590,56 @@ export class AccountsService {
     return { p, spec, store: ready.store, accountId, identityId, status, drop }
   }
 
+  /** Retired in 2.1.1-beta.3 (owner decision 2026-10-11): the app no longer
+   *  offers the provider's own default sign-in, so neither the check below
+   *  nor the adoption runs. Refused first, before anything is reserved,
+   *  written or run, with a message that says what to do instead. The IPC
+   *  channels stay (their shape is unchanged) and answer this refusal. */
+  private externalAdoptionRetired(providerId: ProviderId): AccountsFailure | null {
+    if (this.deps.beta2ExternalAdoptionForTests === true) return null
+    return this.externalSignInRetired(providerId, 'adopt')
+  }
+
+  /** The refusal for the retired sign-in, adopted, restored or signed in
+   *  again. Named only
+   *  for a provider that has such a sign-in (Codex): any other provider
+   *  (Claude never offered one) gets a bare 'unsupported', so no message
+   *  claims a sign-in it never had. */
+  private externalSignInRetired(providerId: ProviderId, what: 'adopt' | 'restore' | 'sign-in-again'): AccountsFailure {
+    const p = this.pkg(providerId)
+    if (!p?.externalDefaultRealm) return failure('unsupported')
+    const name = p.displayName
+    const why = what === 'restore' ? ', so this account cannot be restored'
+      : what === 'sign-in-again' ? ', so it is not signed in again here'
+        : ''
+    return failure('unsupported', `This app no longer uses the ${name} sign-in already on this computer${why}. Add a ${name} account in Settings, Accounts instead.`)
+  }
+
   /** Whether the provider's own default home is signed in, asked without
-   *  taking it in: the Set up Codex page asks before it offers "Use this
-   *  sign-in" as signed in. The same status run as the adoption below, and
-   *  nothing is kept: the reservation is always dropped, and no account,
+   *  taking it in. 2.1.1-beta.2's Set up Codex page asked it before it
+   *  offered "Use this sign-in". Retired: always refused now
+   *  (externalAdoptionRetired). The same status run as the adoption below,
+   *  and nothing is kept: the reservation is always dropped, and no account,
    *  identity or marker is written. */
   async probeExternalDefault(input: { providerId: ProviderId }): Promise<AccountsResult<{ state: KnownAuthState }>> {
+    const retired = this.externalAdoptionRetired(input.providerId)
+    if (retired) return retired
     const r = await this.externalDefaultStatus(input.providerId, { readOnly: true })
     if ('ok' in r) return r
     await r.drop()
     return { ok: true, state: r.status.state }
   }
 
-  /** The explicit "use my existing sign-in" (and "check again"): status in
-   *  the provider's own default home, then a realm-only account when it is
-   *  signed in. Unverified until the user re-authenticates into a managed
-   *  account; never linked. The ONLY way the home is taken in (owner
-   *  decision 2026-09-26: nothing adopts it at start or on its own), and only
-   *  once the user has said they use the provider (externalDefaultStatus). */
+  /** 2.1.1-beta.2's explicit "use my existing sign-in" (and "check again"):
+   *  status in the provider's own default home, then a realm-only account
+   *  when it is signed in. Unverified until the user re-authenticates into a
+   *  managed account; never linked. Retired in 2.1.1-beta.3 (owner decision
+   *  2026-10-11): a new adoption is always refused (externalAdoptionRetired),
+   *  so the home is never taken in. An account beta.2 registered this way
+   *  keeps working: confirmed at each launch, never a reviewer. */
   async adoptExternalDefault(input: { providerId: ProviderId }): Promise<AccountsResult<{ accountId: string }>> {
+    const retired = this.externalAdoptionRetired(input.providerId)
+    if (retired) return retired
     const r = await this.externalDefaultStatus(input.providerId, { readOnly: false })
     if ('ok' in r) return r
     const { p, spec, store, accountId, identityId, status, drop } = r
@@ -2675,13 +2670,13 @@ export class AccountsService {
 
   /** At start, and when the resources directory changes: drop every
    *  reservation of a provider's own default home that an earlier run left
-   *  (the app closed while the read-only check or an adoption ran). Nothing
-   *  resumes one (the Accounts surface offers no Resume for it), and while
-   *  it stands the home reads as in use: the Set up Codex page offers
-   *  nothing for it, Settings hides the offer to use it, and the check and
-   *  the adoption are refused as a conflict. Only the record goes: the home
-   *  is the provider's, and nothing of it was written. Never one this
-   *  service holds now. */
+   *  (a 2.1.1-beta.2 app closed while its read-only check or an adoption
+   *  ran). Since O5 (2.1.1-beta.3) nothing reserves the home any more, as
+   *  the check and the adoption are refused as retired, so only a leftover
+   *  from beta.2 can be found. Nothing resumes one (the Accounts surface
+   *  offers no Resume for it). Only the record goes: the home is the
+   *  provider's, and nothing of it was written. Never one this service
+   *  holds now. */
   async dropLeftoverExternalReservations(): Promise<void> {
     const ready = this.ready()
     if ('ok' in ready) return

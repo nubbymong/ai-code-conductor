@@ -34,6 +34,7 @@ import {
   viewFor,
   NEWER_WEB_STORE_REASON,
 } from '../account-web/session-store'
+import { refreshClaudeWebExpiry } from '../account-web/web-session-expiry'
 import { readClaudeCliAuth, claudeAuthCommand } from '../account-web/claude-cli-auth'
 import type { ClaudeCliAuthStatus } from '../account-web/claude-cli-auth'
 import { providerProbeRefusal } from '../provider-launch-gate'
@@ -97,10 +98,19 @@ export function registerAccountWebHandlers(getWindow: () => BrowserWindow | null
   // until the answer arrives, so on an account whose status was not already
   // cached the item was dead at the moment the user clicked it, with no window
   // and no log line. Split so the cheap question gets a cheap answer.
+  //
+  // Both status reads first bring the saved expiry up to the partition's live
+  // session cookie (web-session-expiry.ts: metadata only, bounded, never
+  // throws): the record is written once at sign-in and claude.ai renews the
+  // cookie, so the saved date alone read "expired" over a working session.
+  // Only a record that reads expired waits for that check (a partition cookie
+  // read, up to LIVE_EXPIRY_READ_BOUND_MS); any other answers from the local
+  // JSON read alone, and its check runs on behind the answer.
   ipcMain.handle(IPC.ACCOUNT_WEB_WEB_STATUS, async (e, profileId: unknown) => {
     if (!trusted(e)) return refused('webStatus')
     try {
       const id = profileIdSchema.parse(profileId)
+      await refreshClaudeWebExpiry(id)
       return { ok: true, web: viewFor(id) }
     } catch (err) {
       return fail('webStatus', err)
@@ -111,12 +121,16 @@ export function registerAccountWebHandlers(getWindow: () => BrowserWindow | null
     if (!trusted(e)) return refused('status')
     try {
       const id = profileIdSchema.parse(profileId)
+      // Started first and awaited after the CLI probe, so any wait on it (a
+      // record that reads expired) overlaps the probe when the probe runs.
+      const expiry = refreshClaudeWebExpiry(id)
       // WP2: `claude auth status` runs the Claude CLI (and can rotate the
       // account's refresh token), so it does not run while Claude Code is
       // switched off: the answer says why instead, and the panel shows it.
       const off = providerProbeRefusal('claude')
       const cli: ClaudeCliAuthStatus = off ? { authenticated: false, notChecked: off.message } : await readClaudeCliAuth(id)
       const authMethod = getAuthMethod(id)
+      await expiry
       return {
         ok: true,
         web: viewFor(id),

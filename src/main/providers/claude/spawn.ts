@@ -2,8 +2,8 @@ import * as os from 'os'
 import { commandSecretEnvName } from '../../../shared/command-secret'
 import { AGENTS_ENV, askPromptEnvValue } from '../../terminal-launch-line'
 import { findOnWindowsPath, windowsEnvValue, withFullyQualifiedProgramLookup } from '../../windows-programs'
-import { CLAUDE_NOT_ON_PATH, CLAUDE_WINDOWS_NAMES, claudeInLoginShellPathForLaunch, recentClaudeInLoginShellPath, recentClaudeOnWindows, recordClaudeOnWindows } from '../../claude-cli-probe'
-import { resolveVersionBinary } from '../../legacy-version-manager'
+import { CLAUDE_NOT_ON_PATH, CLAUDE_WINDOWS_NAMES, claudeFromPowerShellProfileForLaunch, claudeInLoginShellPathForLaunch, recentClaudeInLoginShellPath, recentClaudeOnWindows, recordClaudeOnWindows } from '../../claude-cli-probe'
+import { LEGACY_PIN_NOT_USED } from '../../../shared/legacy-version'
 import { logInfo } from '../../debug-logger'
 import { localSessionShell, shFamilyLoginShell } from '../../login-shell'
 import type { LegacyVersion } from '../../../shared/types'
@@ -21,36 +21,41 @@ export { CLAUDE_NOT_ON_PATH }
 /** Claude Code on Windows, found IN-PROCESS in the folders PATH names
  *  (`env`), in the order every check and start asks (claude-cli-probe.ts
  *  CLAUDE_WINDOWS_NAMES: `claude.exe` in any of them, then `claude.cmd`, then
- *  `claude.bat`). Null when none is there: never a bare name. The launch
- *  cannot wait, so a recent answer of the same walk (the CLI check asks every
- *  30 s, off the event loop) is used as is; only without one does this walk
- *  PATH here, and its answer is kept for the next launch. */
+ *  `claude.bat`). The launch cannot wait, so a recent answer of the same walk
+ *  (the CLI check asks every 30 s, off the event loop) is used as is; only
+ *  without one does this walk PATH here, and its answer is kept for the next
+ *  launch. When none is there, the Claude Code the user's PowerShell profile
+ *  last named (claude-cli-probe.ts claudeFromPowerShellProfileForLaunch: the
+ *  answer kept from asking Windows PowerShell with that profile, which a
+ *  session's PowerShell also runs, also while a check the user asked for has
+ *  made it stale); without a current answer that question starts in the
+ *  background for the next launch, and with none kept at all this one gets
+ *  null. Null is never a bare name. */
 export function findClaudeOnWindows(env: NodeJS.ProcessEnv = process.env, stat?: (p: string) => boolean): string | null {
   const recent = recentClaudeOnWindows(env)
   if (recent) return recent
   const found = findOnWindowsPath(CLAUDE_WINDOWS_NAMES, env, stat, 'name')
   recordClaudeOnWindows(windowsEnvValue(env, 'PATH') ?? '', found, Date.now())
-  return found
+  if (found) return found
+  return claudeFromPowerShellProfileForLaunch()
 }
 
-/** The Claude Code a launch runs: a valid legacy pin's binary when it is
- *  installed; otherwise, on Windows, the full path findClaudeOnWindows finds
- *  in `env`, and when Claude Code is in none of PATH's folders this THROWS
- *  (CLAUDE_NOT_ON_PATH) so the launch starts nothing. Elsewhere: for a user
+/** The Claude Code a launch runs: on Windows, the full path
+ *  findClaudeOnWindows finds in `env` (or that the PowerShell profile gave),
+ *  and when there is none this THROWS (CLAUDE_NOT_ON_PATH) so the launch starts nothing. Elsewhere: for a user
  *  whose login shell is not of the sh family, the Claude Code found in the
  *  PATH that shell builds, by its full path, once the launch has that answer
  *  (claude-cli-probe.ts recentClaudeInLoginShellPath; buildClaudeLocalSpawn
  *  asks first); otherwise `claude`, which the session's login shell resolves
- *  from its own PATH. */
+ *  from its own PATH.
+ *
+ *  A Claude Code version pinned in an older release (`legacyVersion`, still
+ *  in some saved configs) is not used (2.1.1-beta.3): the launch runs the
+ *  installed Claude Code, exactly as with no pin, and the log says so once,
+ *  naming no path. Never a fall back to the pin, not even when no Claude Code
+ *  is installed. */
 export function resolveClaudeBinary(legacyVersion?: LegacyVersion, env: NodeJS.ProcessEnv = process.env): { cmd: string; args: string[] } {
-  if (legacyVersion?.enabled && legacyVersion.version) {
-    const legacyBin = resolveVersionBinary(legacyVersion.version)
-    if (legacyBin) {
-      logInfo(`[claude-provider] Using legacy Claude CLI v${legacyVersion.version}: ${legacyBin}`)
-      return { cmd: legacyBin, args: [] }
-    }
-    logInfo(`[claude-provider] Legacy v${legacyVersion.version} binary not found, falling back to system claude`)
-  }
+  if (legacyVersion?.enabled && legacyVersion.version) logInfo(`[claude-provider] ${LEGACY_PIN_NOT_USED}`)
 
   if (os.platform() !== 'win32') return { cmd: recentClaudeInLoginShellPath(env, os.platform())?.claude ?? 'claude', args: [] }
 

@@ -99,6 +99,9 @@ const select = () => container.querySelector('[data-testid="codex-account-select
 const submitBtn = () => container.querySelector('[data-testid="session-dialog-submit"]') as HTMLButtonElement
 const ackBox = () => container.querySelector('[data-testid="codex-account-ack-checkbox"]') as HTMLInputElement | null
 const submit = () => act(() => { container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+// O5 (owner decision 2026-10-11): the line every confirmation of a launch on
+// the sign-in already on this computer says, as its Accounts row does.
+const RETIRING = 'This sign-in is being retired: in Settings, Accounts, add a Codex account, make it the default, then make this one inactive and archive it.'
 
 describe('the Codex account picker', () => {
   it('preselects the default and lists the accounts a new session may use', () => {
@@ -207,6 +210,18 @@ describe("this computer's own sign-in: the per-launch checkbox", () => {
     expect(submitBtn().disabled).toBe(true)
     submit()
     expect(onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('O5: says under the checkbox that this sign-in is being retired; an account added in the app says nothing of it', () => {
+    newCodexConfig()
+    expect(container.querySelector('[data-testid="codex-account-ack-retiring"]')).toBeNull()
+    choose(select()!, 'acc-local')
+    expect(container.querySelector('[data-testid="codex-account-ack-retiring"]')!.textContent).toBe(RETIRING)
+    // It still launches once ticked: the note holds nothing back.
+    act(() => { ackBox()!.click() })
+    expect(submitBtn().disabled).toBe(false)
+    choose(select()!, 'acc-work')
+    expect(container.querySelector('[data-testid="codex-account-ack-retiring"]')).toBeNull()
   })
 
   it('an edit asks for no tick and shows no checkbox: nothing launches on an edit', () => {
@@ -462,5 +477,219 @@ describe('the per-launch confirm asked before a later launch', () => {
     act(() => { root.render(React.createElement(LaunchAckConfirm)) })
     act(() => { void ask('api-server', { unknown: true, external: false, email: undefined, accountName: 'this Codex account' }) })
     expect(document.getElementById('launch-ack-question')!.textContent).toBe('Launch api-server on its saved Codex account?')
+    expect(document.querySelector('[data-testid="launch-ack-retiring"]')).toBeNull()
+  })
+
+  it('O5: on the sign-in already on this computer it says the sign-in is being retired; Open Accounts instead answers No (once armed) and opens Settings, Accounts', async () => {
+    const opened = vi.fn()
+    window.addEventListener('app:openSettings', opened)
+    try {
+      act(() => { root.render(React.createElement(LaunchAckConfirm)) })
+      let answer!: Promise<boolean>
+      act(() => { answer = ask('s-1') })
+      expect(document.querySelector('[data-testid="launch-ack-retiring"]')!.textContent).toBe(`${RETIRING} Open Accounts instead`)
+      // Focus still starts on Cancel.
+      expect(document.activeElement).toBe(document.querySelector('[data-testid="launch-ack-cancel"]'))
+      // Too early: nothing is answered, nothing opens.
+      click('launch-ack-open-accounts')
+      expect(useLaunchAckStore.getState().isPending('s-1')).toBe(true)
+      expect(opened).not.toHaveBeenCalled()
+      wait()
+      click('launch-ack-open-accounts')
+      await expect(answer).resolves.toBe(false)
+      expect(opened).toHaveBeenCalledTimes(1)
+      expect((opened.mock.calls[0][0] as CustomEvent).detail).toEqual({ tab: 'accounts' })
+      // It still launches with a yes.
+      let again!: Promise<boolean>
+      act(() => { again = ask('s-2') })
+      wait()
+      click('launch-ack-launch')
+      await expect(again).resolves.toBe(true)
+      // An unverified account added in the app is not said to be retired.
+      act(() => { void ask('s-3', { external: false, accountName: 'Work' }) })
+      expect(document.getElementById('launch-ack-question')).not.toBeNull()
+      expect(document.querySelector('[data-testid="launch-ack-retiring"]')).toBeNull()
+      useLaunchAckStore.getState().withdraw('s-3')
+    } finally {
+      window.removeEventListener('app:openSettings', opened)
+    }
+  })
+
+  it('O5: Open Accounts instead answers only the question on screen; every other queued launch, even on that sign-in, is still asked as before', async () => {
+    const opened = vi.fn()
+    window.addEventListener('app:openSettings', opened)
+    try {
+      act(() => { root.render(React.createElement(LaunchAckConfirm)) })
+      // A restart that restored several tabs on that sign-in queues one each.
+      let a!: Promise<boolean>, b!: Promise<boolean>, agentRetry!: Promise<boolean>
+      act(() => {
+        a = ask('tab-1')
+        b = ask('tab-2')
+        void ask('tab-work', { external: false, accountName: 'Work' })
+        agentRetry = ask('agent-1', { retryAgent: true })
+      })
+      wait()
+      click('launch-ack-open-accounts')
+      await expect(a).resolves.toBe(false)
+      expect(opened).toHaveBeenCalledTimes(1)
+      // Nothing else was answered: the next launch on that sign-in is the
+      // question on screen now, and it arms afresh.
+      expect(useLaunchAckStore.getState().queue.map((p) => p.sessionId)).toEqual(['tab-2', 'tab-work', 'agent-1'])
+      expect(document.getElementById('launch-ack-question')!.textContent)
+        .toBe('Launch with the Codex sign-in already on this computer (alex@example.com)?')
+      click('launch-ack-open-accounts')
+      expect(useLaunchAckStore.getState().isPending('tab-2')).toBe(true)
+      expect(opened).toHaveBeenCalledTimes(1)
+      // It can still be launched, as before.
+      wait()
+      click('launch-ack-launch')
+      await expect(b).resolves.toBe(true)
+      wait()
+      click('launch-ack-cancel')
+      // A Cloud Agent Retry on that sign-in is asked as a retry, and Open
+      // Accounts instead answers it alone.
+      expect(useLaunchAckStore.getState().queue.map((p) => p.sessionId)).toEqual(['agent-1'])
+      wait()
+      click('launch-ack-open-accounts')
+      await expect(agentRetry).resolves.toBe(false)
+      expect(opened).toHaveBeenCalledTimes(2)
+      expect(useLaunchAckStore.getState().queue).toEqual([])
+    } finally {
+      window.removeEventListener('app:openSettings', opened)
+    }
+  })
+})
+
+// O5 (owner-agreed 2026-10-11): a later launch of a session on the account
+// 2.1.1-beta.2 registered for the sign-in already on this computer offers the
+// other Codex accounts too, by the New session dialog's picker rule.
+describe('the per-launch confirm: another Codex account instead (O5)', () => {
+  const choice = (sessionId: string, over: Record<string, unknown> = {}) =>
+    useLaunchAckStore.getState().requestChoice({ sessionId, sessionLabel: sessionId, accountName: "This computer's Codex (~/.codex)", email: 'alex@example.com', external: true, unknown: false, accountId: 'acc-local', offerSwitch: true, ...over } as never)
+  const click = (testId: string) => act(() => { (document.querySelector(`[data-testid="${testId}"]`) as HTMLButtonElement).click() })
+  const picker = () => document.querySelector('[data-testid="launch-ack-account-select"]') as HTMLSelectElement | null
+  let mono = 5_000
+  beforeEach(() => {
+    useLaunchAckStore.setState({ queue: [] })
+    mono = 5_000
+    vi.spyOn(performance, 'now').mockImplementation(() => mono)
+  })
+  afterEach(() => { vi.restoreAllMocks() })
+  const wait = () => { mono += LAUNCH_ACK_ARM_MS + 1 }
+
+  it('lists the other accounts a new session may use, default first, never the sign-in asked about; blocked ones shown but not offered', () => {
+    act(() => { root.render(React.createElement(LaunchAckConfirm)) })
+    act(() => { void choice('s-1') })
+    const sel = picker()!
+    const opts = Array.from(sel.options).map((o) => [o.value, o.textContent, o.disabled])
+    expect(opts).toEqual([['acc-work', 'Work (Default)', false], ['acc-personal', 'Personal', false], ['acc-old', 'Old (Needs attention)', true]])
+    expect(sel.value).toBe('acc-work')
+    expect(document.querySelector('label[for="launch-ack-account"]')!.textContent).toBe('Or start it on another Codex account')
+    // What moves, as it is: a saved config only when it used this sign-in.
+    expect(document.querySelector('[data-testid="launch-ack-switch-note"]')!.textContent).toBe('The session starts on that account. A saved config that used this sign-in moves to it too.')
+    expect((document.querySelector('[data-testid="launch-ack-use-other"]') as HTMLElement).title).toBe('Start this session on the account picked; a saved config that used this sign-in moves to it too')
+    // Not a launch that resumes a conversation: nothing about one.
+    expect(document.querySelector('[data-testid="launch-ack-switch-conversation"]')).toBeNull()
+    // Focus still starts on Cancel, never on a way to launch.
+    expect(document.activeElement).toBe(document.querySelector('[data-testid="launch-ack-cancel"]'))
+  })
+
+  // O5: a restored tab moved from here starts
+  // without its conversation (an exact resume looks only in the picked
+  // account's own; a launch carries none over). The confirm says so before
+  // the pick, and names the way that keeps it (Launch, then Switch account).
+  it('a launch that resumes a conversation says the move does not bring it, and how to keep it', () => {
+    act(() => { root.render(React.createElement(LaunchAckConfirm)) })
+    act(() => { void choice('s-1', { resumesConversation: true }) })
+    expect(picker()).not.toBeNull()
+    expect(document.querySelector('[data-testid="launch-ack-switch-conversation"]')!.textContent).toBe("This tab's conversation does not come along: it stays with this computer's sign-in. To keep it, choose Launch, then use Switch account on the running session, which carries the conversation over.")
+    useLaunchAckStore.getState().withdraw('s-1')
+    // With no other account to offer, there is no move to warn about.
+    act(() => { useProviderAccountsStore.setState({ snapshot: snapshot({ accounts: [local, old] }) }) })
+    act(() => { void choice('s-2', { resumesConversation: true }) })
+    expect(document.querySelector('[data-testid="launch-ack-switch-conversation"]')).toBeNull()
+    useLaunchAckStore.getState().withdraw('s-2')
+  })
+
+  // A keyboard and screen reader user tabbing from the
+  // picker to Use this account hears what moves, and, for a restored tab,
+  // that its conversation does not come along, before the pick.
+  it('Use this account is described by what moves, and by the conversation note when there is one', () => {
+    const useOther = () => document.querySelector('[data-testid="launch-ack-use-other"]') as HTMLElement
+    const described = () => (useOther().getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean).map((ref) => document.getElementById(ref)?.textContent)
+    act(() => { root.render(React.createElement(LaunchAckConfirm)) })
+    act(() => { void choice('s-1') })
+    expect(described()).toEqual(['The session starts on that account. A saved config that used this sign-in moves to it too.'])
+    useLaunchAckStore.getState().withdraw('s-1')
+    act(() => { void choice('s-2', { resumesConversation: true }) })
+    expect(described()).toEqual([
+      'The session starts on that account. A saved config that used this sign-in moves to it too.',
+      "This tab's conversation does not come along: it stays with this computer's sign-in. To keep it, choose Launch, then use Switch account on the running session, which carries the conversation over.",
+    ])
+    useLaunchAckStore.getState().withdraw('s-2')
+  })
+
+  it('answers with the account picked, once armed; too early answers nothing', async () => {
+    act(() => { root.render(React.createElement(LaunchAckConfirm)) })
+    let answer!: Promise<unknown>
+    act(() => { answer = choice('s-1') })
+    choose(picker()!, 'acc-personal')
+    click('launch-ack-use-other')
+    expect(useLaunchAckStore.getState().isPending('s-1')).toBe(true)
+    wait()
+    click('launch-ack-use-other')
+    await expect(answer).resolves.toEqual({ switchTo: 'acc-personal' })
+    expect(document.querySelector('[data-testid="launch-ack-confirm"]')).toBeNull()
+  })
+
+  it('Launch and Cancel still answer yes and no', async () => {
+    act(() => { root.render(React.createElement(LaunchAckConfirm)) })
+    let a!: Promise<unknown>, b!: Promise<unknown>
+    act(() => { a = choice('s-1'); b = choice('s-2') })
+    wait()
+    click('launch-ack-launch')
+    await expect(a).resolves.toBe(true)
+    wait()
+    click('launch-ack-cancel')
+    await expect(b).resolves.toBe(false)
+  })
+
+  it('is not offered where the launch did not ask for it (an agent retry, a plain request), nor on an account added in the app, nor with no other account to use', () => {
+    act(() => { root.render(React.createElement(LaunchAckConfirm)) })
+    act(() => { void useLaunchAckStore.getState().request({ sessionId: 'agent-1', sessionLabel: 'agent-1', accountName: 'x', external: true, unknown: false, retryAgent: true }) })
+    expect(document.querySelector('[data-testid="launch-ack-retiring"]')).not.toBeNull()
+    expect(picker()).toBeNull()
+    useLaunchAckStore.getState().withdraw('agent-1')
+    act(() => { void choice('s-unv', { external: false, accountName: 'Work', accountId: 'acc-unv' }) })
+    expect(picker()).toBeNull()
+    useLaunchAckStore.getState().withdraw('s-unv')
+    act(() => { useProviderAccountsStore.setState({ snapshot: snapshot({ accounts: [local, old] }) }) })
+    act(() => { void choice('s-alone') })
+    expect(document.querySelector('[data-testid="launch-ack-retiring"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="launch-ack-switch"]')).toBeNull()
+    useLaunchAckStore.getState().withdraw('s-alone')
+  })
+
+  it('the store: a plain request never resolves as a switch, and a switch to nothing or to the same account is ignored', async () => {
+    let plain!: Promise<boolean>
+    act(() => { plain = useLaunchAckStore.getState().request({ sessionId: 'p-1', sessionLabel: 'p', accountName: 'x', external: true, unknown: false, accountId: 'acc-local' }) })
+    const id = useLaunchAckStore.getState().queue[0].requestId
+    useLaunchAckStore.getState().switchAccount(id, 'acc-work')
+    expect(useLaunchAckStore.getState().isPending('p-1')).toBe(true)
+    useLaunchAckStore.getState().answer(id, true)
+    await expect(plain).resolves.toBe(true)
+    let offered!: Promise<unknown>
+    act(() => { offered = choice('o-1') })
+    const oid = useLaunchAckStore.getState().queue[0].requestId
+    useLaunchAckStore.getState().switchAccount(oid, '')
+    useLaunchAckStore.getState().switchAccount(oid, 'acc-local')
+    expect(useLaunchAckStore.getState().isPending('o-1')).toBe(true)
+    useLaunchAckStore.getState().switchAccount(oid, 'acc-work')
+    await expect(offered).resolves.toEqual({ switchTo: 'acc-work' })
+    // Withdrawn is a no, as before.
+    let gone!: Promise<unknown>
+    act(() => { gone = choice('w-1') })
+    useLaunchAckStore.getState().withdraw('w-1')
+    await expect(gone).resolves.toBe(false)
   })
 })

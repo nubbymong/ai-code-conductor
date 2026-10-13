@@ -61,7 +61,10 @@ aicc_planning. TDD, Opus 5.5.
 Existing users: the default `~/.codex` sign-in (if any) is registered once as an
 `external-default`, realm-only account ("External Codex sign-in — account
 unverified"). It launches only with a per-launch acknowledgement; adding a
-managed account is the recommended path.
+managed account is the recommended path. Superseded twice: by owner decision
+U1 (2026-09-26: never automatic, only an explicit "Use this sign-in"), and by
+O5 (2026-10-11, 2.1.1-beta.3: never taken in at all; adding a managed account
+is the only path, and an account 2.1.1-beta.2 adopted keeps working).
 
 ## Architecture decisions (made here, recorded for review)
 
@@ -356,7 +359,8 @@ obligations fall on later slices:
   Superseded by `docs/wp1/owner-decisions-2026-09-26.md` (U1, U2): there is
   no start-up run. Every upgrader answers "Do you use Codex?"; `~/.codex` is
   taken in only by "Use this sign-in" or the Settings, Accounts action, after
-  a read-only check that keeps nothing.
+  a read-only check that keeps nothing. Superseded again by O5 (2026-10-11,
+  2.1.1-beta.3): `~/.codex` is never checked or taken in.
 - **Pinned-CLI evidence (from slice 3e's pass):** check whether 0.155.1
   `codex login status` counts a key kept in `CODEX_HOME/.env` as signed in.
   If it does, an adopted external home is signed in by the user's own dotenv

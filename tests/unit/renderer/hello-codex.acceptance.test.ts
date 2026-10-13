@@ -557,6 +557,16 @@ describe('Hello Codex: the pages', () => {
     expect(src('src/renderer/components/SessionDialog.tsx')).toContain('Codex runs on this computer only in this release.')
   })
 
+  it('O5 (owner decision 2026-10-11): the Accounts page neither offers nor draws the Codex sign-in already on this computer', async () => {
+    await render(h(HelloCodex, { onFinish: vi.fn() }))
+    await click('hc-dot-2')
+    expect(heading()).toBe('Accounts')
+    for (const s of ['An existing sign-in', 'A sign-in this app did not create']) expect(pageText(), s).not.toContain(s)
+    const art = byTest('hc-art-accounts')!
+    expect(art.textContent).toContain('Add account')
+    for (const s of ["This computer's Codex", 'Existing sign-in', 'Confirm each launch']) expect(art.textContent, s).not.toContain(s)
+  })
+
   it('AC9: the review page shows the Claude-review line only when claude_review ships in the build', async () => {
     // This build ships it: the flag is read from the build's own tool list.
     expect(CLAUDE_REVIEW_SHIPS).toBe(true)
@@ -744,23 +754,28 @@ describe('Hello Codex: presentation and copy', () => {
     expect(src('src/renderer/onboarding/onboarding.css')).toMatch(/@media \(prefers-reduced-motion: reduce\) \{ \.ob-root \.hc-page \{ animation: none !important; \} \}/)
   })
 
-  // AC14 is commit 7's (the guidance slice). The three statements are taken as
-  // the pages word them, so a rewrite of either side shows up here: the pages
+  // AC14 is commit 7's (the guidance slice). The statements are taken as the
+  // pages word them, so a rewrite of either side shows up here: the pages
   // must still say each one, and so must the app-knowledge Codex entry (the
   // Feature Guide reference and what Ask Conductor reads) and the Feature
-  // Guide's Codex card as it renders.
-  it('AC14: the Feature Guide and app-knowledge entries say what the pages say: local only, the reviewer default, confirming an existing sign-in each launch', async () => {
+  // Guide's Codex card as it renders. A third, "an existing sign-in must be
+  // confirmed at each launch", went with O5 (owner decision 2026-10-11): the
+  // Codex sign-in already on this computer is no longer offered, so neither
+  // the pages nor the card offer it now.
+  it('AC14: the Feature Guide and app-knowledge entries say what the pages say: local only, the reviewer default; neither the pages nor the card offer an existing sign-in (O5)', async () => {
     const STATEMENTS: Array<[string, string]> = [
       ['local only', 'Codex sessions and Codex reviews run on this computer only'],
       ['the reviewer default', 'Code reviews use the reviewer default, or the default if none is set'],
-      ['confirming an existing sign-in each launch', 'must be confirmed at each launch, and cannot run reviews'],
     ]
+    // What offered the sign-in already on this computer, on the pages and the card.
+    const RETIRED = ['An existing sign-in.', 'A sign-in this app did not create', 'already on this computer can be used']
     const flat = (s: string) => s.replace(/`/g, '').replace(/\s+/g, ' ')
 
     // The pages say each one (Claude Code on or off, whatever the build ships).
     for (const claudeOn of [true, false]) {
       const pageCopy = flat(helloCodexPages({ claudeReview: CLAUDE_REVIEW_SHIPS, claudeOn }).flatMap((p) => p.points.map((pt) => `${pt.lead} ${pt.rest}`)).join(' '))
       for (const [what, s] of STATEMENTS) expect(pageCopy, `the pages (Claude Code ${claudeOn ? 'on' : 'off'}): ${what}`).toContain(s)
+      for (const s of RETIRED) expect(pageCopy, `the pages (Claude Code ${claudeOn ? 'on' : 'off'}) no longer say: ${s}`).not.toContain(s)
     }
 
     // app-knowledge: the Codex entry says each one.
@@ -773,11 +788,12 @@ describe('Hello Codex: presentation and copy', () => {
     await act(async () => { (container.querySelector('[data-ux-id="rail-integrations"]') as HTMLElement).click() })
     const card = flat(container.querySelector('[data-ux-id="card-codex-provider"]')?.textContent ?? '')
     for (const [what, s] of STATEMENTS) expect(card, `the Feature Guide Codex card: ${what}`).toContain(s)
+    for (const s of RETIRED) expect(card, `the Feature Guide Codex card no longer says: ${s}`).not.toContain(s)
 
     // And the guide's search finds the app-knowledge entry by what it says.
     const search = container.querySelector('[data-ux-id="search"]') as HTMLInputElement
     const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
-    await act(async () => { setValue.call(search, 'confirmed at each launch'); search.dispatchEvent(new Event('input', { bubbles: true })) })
+    await act(async () => { setValue.call(search, 'Codex reviews run on this computer only'); search.dispatchEvent(new Event('input', { bubbles: true })) })
     expect(container.textContent).toContain(codex!.title)
   })
 })

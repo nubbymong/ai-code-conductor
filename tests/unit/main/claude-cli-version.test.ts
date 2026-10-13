@@ -18,6 +18,10 @@ vi.mock('node:child_process', () => ({
 }))
 vi.mock('../../../src/main/claude-cli-probe', () => ({
   probeClaudeCli: () => probeImpl(),
+  // Windows: the PowerShell profile lookup after a PATH walk that finds none
+  // (its own suite, claude-cli-version-profile.test.ts); it finds none here.
+  claudeFromPowerShellProfile: async () => null,
+  setClaudeProfileLookupAllowed: () => {},
 }))
 
 const {

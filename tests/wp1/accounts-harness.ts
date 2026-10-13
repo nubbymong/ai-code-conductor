@@ -148,6 +148,13 @@ export interface HarnessOpts {
   folders?: ReturnType<typeof memoryFs>
   /** Smaller bounds on the Codex folder walks. Absent: the shipped ones. */
   realmLimits?: Partial<CodexRealmFolderLimits>
+  /** The owner-only folder rule the managed folders get (O6: a refusal a
+   *  test makes). Absent: the package's test rule, which passes every folder. */
+  secureFolders?: (dirs: readonly string[]) => Promise<ReadonlyArray<{ dir: string; ok: boolean; detail?: string }>>
+  /** The read-only owner-only check a sign in again asks of the account's
+   *  folder before it links history in (2.1.1-beta.3). Absent: the package's
+   *  test rule, which reads every folder as owner-only. */
+  readOwnerOnly?: (dirs: readonly string[]) => Promise<ReadonlyArray<{ dir: string; ok: boolean; detail?: string }>>
   /** Running sessions that hold no account lease, per provider (Claude's). */
   unleasedSessions?: (providerId: ProviderId) => number
   /** The Claude reviewer's ports (WP2 5b): absent, Claude has no launch. */
@@ -184,6 +191,23 @@ export interface HarnessOpts {
   /** The model catalogue read's ports (P3.9). Absent: a stub whose run
    *  fails, so no test starts a process or makes a folder through it. */
   catalogueDeps?: () => Omit<CodexCatalogueDeps, 'proven'>
+  /** The shipped refusal of a NEW adoption of this computer's own Codex
+   *  sign-in (2.1.1-beta.3, owner decision 2026-10-11). Absent: the harness
+   *  keeps 2.1.1-beta.2's adoption (the service's test seam), so a test can
+   *  write the record a beta.2 user who chose "Use this sign-in" has, through
+   *  the code that wrote it.
+   *
+   *  THE DEFAULT IS NOT THE SHIPPED BEHAVIOUR. A harness without
+   *  `retiredAdoption: true` can adopt and probe this computer's sign-in,
+   *  which the app since 2.1.1-beta.3 never does (the composition root never
+   *  sets the seam). Use the default only to seed the record a beta.2
+   *  adopter has; a test of what ships today passes `retiredAdoption: true`
+   *  (or uses the real composition root, as
+   *  provider-startup-no-adoption.test.ts does). The seam re-enables nothing
+   *  else: an archived such account is never restored either way. Whether to
+   *  invert this default, or seed the record by writing the registry and
+   *  delete the seam, is left to the release's ADR-009 security review. */
+  retiredAdoption?: boolean
 }
 
 /** A usage filesystem with nothing in it. */
@@ -265,6 +289,8 @@ export async function harness(o: HarnessOpts = {}) {
     auth: { takeSecret: (h) => secrets.take(h) },
     realmFs: folders.fs,
     ...(o.realmLimits ? { realmLimits: o.realmLimits } : {}),
+    ...(o.secureFolders ? { secureFolders: o.secureFolders } : {}),
+    ...(o.readOwnerOnly ? { readOwnerOnly: o.readOwnerOnly } : {}),
     usageFs: o.usageFs ?? EMPTY_USAGE_FS,
     ...(o.liveUsage ? { liveUsage: o.liveUsage } : {}),
     conversationCarry: o.conversationCarry ?? (async () => ({ ok: false, code: 'io-failed' })),
@@ -347,6 +373,7 @@ export async function harness(o: HarnessOpts = {}) {
     ...(o.unleasedSessions ? { unleasedSessions: o.unleasedSessions } : {}),
     ...(o.usageReads ? { usageReads: o.usageReads } : {}),
     ...(o.registrySettled ? { registrySettled: o.registrySettled } : {}),
+    ...(o.retiredAdoption ? {} : { beta2ExternalAdoptionForTests: true }),
     log: (m) => logs.push(m),
   })
   return {

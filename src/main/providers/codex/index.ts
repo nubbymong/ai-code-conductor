@@ -45,7 +45,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { sweepStaleFolders } from '../../stale-folder-sweep'
-import { secureOwnerOnlyFolders } from '../../owner-only-folders'
+import { secureOwnerOnlyFolders, readOwnerOnlyFoldersWindows } from '../../owner-only-folders'
 import { logWarn } from '../../debug-logger'
 
 // WP2 Codex adapter: the CLI contract, install recipes, the allowlisted
@@ -231,11 +231,24 @@ export class CodexProvider implements SessionProvider {
   }
 
   async deployResumePickerScript(resourcesDir: string): Promise<void> {
-    await deployCodexResumePickerScript(resourcesDir)
+    // Two steps, each tried whatever the other did (a failed picker deploy
+    // never skips the hook scripts); the first failure is passed on once both
+    // were tried.
+    let failure: { err: unknown } | null = null
+    try {
+      await deployCodexResumePickerScript(resourcesDir)
+    } catch (err) {
+      failure = { err }
+    }
     // P3.10: the hook forwarder (and its Windows wrapper) beside the picker.
     // Round 4 (P1): copies only; the hook folders are prepared apart
     // (prepareHookFolders), asynchronously and only while Codex is on.
-    await deployCodexHookScripts(resourcesDir)
+    try {
+      await deployCodexHookScripts(resourcesDir)
+    } catch (err) {
+      failure ??= { err }
+    }
+    if (failure) throw failure.err
   }
 
   /** P3.10 round 4 (P1, P2): prepare this run's hook folders, asynchronously
@@ -429,6 +442,11 @@ export interface CodexPackageDeps {
    *  rule, and a test filesystem is not this disk, so without one its
    *  folders are taken as already made owner-only. */
   secureFolders?: CodexRealmFolderDeps['secureFolders']
+  /** The read-only owner-only check for a test's folder filesystem (realmFs),
+   *  as secureFolders: read only with realmFs; the real filesystem always gets
+   *  the app's own read, and without one a test filesystem's folders read as
+   *  owner-only. */
+  readOwnerOnly?: CodexRealmFolderDeps['readOwnerOnly']
   /** Smaller bounds on the folder walks, for a test. */
   realmLimits?: Partial<CodexRealmFolderLimits>
   /** Replaces the inherited CODEX_HOME and the home directory, for a test. */
@@ -541,8 +559,10 @@ export function createCodexPackage(deps: CodexPackageDeps = {}): ProviderPackage
       // P3.6: a switched session's conversation is carried with the real
       // file system (conversation-carry.ts), under these same realm locks.
       // The managed folders on this disk get the app's owner-only folder
-      // rule; a test's folder filesystem brings its own.
-      realmFolders: createCodexRealmFolders({ lookupRealm, fs: realmFs, locks, secureFolders: deps.realmFs ? (deps.secureFolders ?? testFolderRule) : secureOwnerOnlyFolders, carry: deps.conversationCarry ?? carryCodexRollout, marks: carryMarks, newestStamp: deps.newestCopiedStamp ?? ((dir, id) => newestCarriedStamp(dir, id, deps.now ? deps.now() : Date.now())), ...(deps.now ? { now: deps.now } : {}), ...(deps.realmLimits ? { limits: deps.realmLimits } : {}) }),
+      // rule; a test's folder filesystem brings its own. A refusal is said in
+      // the app's log, in fixed words (O6). A sign in again links history in
+      // only from a folder the read-only check finds owner-only (2.1.1-beta.3).
+      realmFolders: createCodexRealmFolders({ lookupRealm, fs: realmFs, locks, secureFolders: deps.realmFs ? (deps.secureFolders ?? testFolderRule) : secureOwnerOnlyFolders, readOwnerOnly: deps.realmFs ? (deps.readOwnerOnly ?? testFolderRule) : readOwnerOnlyFoldersWindows, log: (message) => logWarn(message), carry: deps.conversationCarry ?? carryCodexRollout, marks: carryMarks, newestStamp: deps.newestCopiedStamp ?? ((dir, id) => newestCarriedStamp(dir, id, deps.now ? deps.now() : Date.now())), ...(deps.now ? { now: deps.now } : {}), ...(deps.realmLimits ? { limits: deps.realmLimits } : {}) }),
       // The user's own ~/.codex (or inherited CODEX_HOME), adopted only when
       // the user chooses to use it and it is signed in (owner decision
       // 2026-09-26): realm-only, never vouched for (design 6.3).
@@ -594,7 +614,8 @@ export function codexExecutableKey(p: CodexDiscovery | null): { key: string; ver
 }
 
 /** A test folder filesystem's folders, which are not on this disk: each
- *  answered as made owner-only (no process runs, nothing on disk changes). */
+ *  answered as made (or read back) owner-only (no process runs, nothing on
+ *  disk changes). */
 const testFolderRule: NonNullable<CodexRealmFolderDeps['secureFolders']> = async (dirs) => dirs.map((dir) => ({ dir, ok: true, detail: 'owner-only' }))
 
 /** The real filesystem behind the managed folders. */

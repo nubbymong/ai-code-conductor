@@ -78,6 +78,20 @@ describe('a Codex marker the primitive did not deliver is shown on its canvas', 
     expect(undelivered).toEqual([])
   })
 
+  it('a marker the queue still holds when its session ends is told once, the session gone, and never submitted', async () => {
+    const results: Array<(r: SubmitTextResult) => void> = []
+    answer = () => new Promise((resolve) => { results.push(resolve) })
+    emit(SID, 'UserPromptSubmit')
+    expect(marker.deliverCanvasMarker(SID, LINE, CID)).toBe('queued')
+    marker.forgetCanvasMarkers(SID)
+    marker.forgetCanvasMarkers(SID)
+    emit(SID, 'SessionStart')
+    emit(SID, 'Stop')
+    await flush()
+    expect(results).toHaveLength(0)
+    expect(undelivered).toEqual([{ sessionId: SID, canvasId: CID, line: LINE, reason: 'session-gone' }])
+  })
+
   it('a Claude session\'s synchronous write raises nothing', async () => {
     const written: string[] = []
     answer = (_s, line) => { written.push(line) }

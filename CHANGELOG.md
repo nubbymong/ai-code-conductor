@@ -9,6 +9,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.1-beta.3] - 2026-10-11
+
+> Fixes from testing 2.1.1-beta.2. Codex accounts are now always added in the app, and anyone who chose the Codex sign-in already on this computer in 2.1.1-beta.2 gets one page, once, to replace it. What's New shows what is new since the release you came from, and every prerelease of 2.1.1 shows the whole 2.1.1 story. An SSH session's partner terminal now opens on the host, remote SSH sessions raise the attention indicator, new sessions start on a computer without Node.js, and the Windows installer looks like the app.
+
+### Added
+- The update showcase has five pages for 2.1.1, for anyone updating from 2.1.0 or earlier: Codex is now a full assistant, Codex accounts of their own, a Codex session keeps its place, code review both ways, and usage and spend for Codex. The summary above them lists what 2.1.1 brought, and the Feature Guide, What's New still has the full notes.
+- Remote SSH sessions now raise the attention indicator when Claude is waiting on you (a permission prompt, an idle prompt, or an agent asking for a decision) and clear it on the same events a local session does. The signal comes back over the session's own terminal, so no extra port forward is needed. It covers SSH, SSH Persistent and SSH container sessions on Linux and macOS hosts. It follows the HTTP Hooks Gateway switch in Settings, Hooks: turning the switch off stops remote sessions raising it at once (one already raised still clears as usual), and a session that connected while the switch was off gets it from its next connection. Windows remote hosts are not covered yet.
+
+### Changed
+- If you chose Use this sign-in in 2.1.1-beta.2, that account keeps working as before, confirmed at each launch. Its row in Settings, Accounts and every launch confirmation on it now say it is being retired: add a Codex account, make it the default, then make This computer's Codex inactive and archive it. Open sessions can move with Switch account, which keeps the conversation. Archiving it is final (it has no Restore), and only forgets it in the app: the Codex CLI stays signed in.
+- If you chose Use this sign-in for the Codex sign-in already on this computer in 2.1.1-beta.2, the app now shows one page, once: Replace this sign-in with a Codex account. Add a Codex account opens the usual add-account dialog; Not now leaves everything as it is. Nothing is signed out.
+- When a session or saved config that used that sign-in starts again, its confirmation also lists your other Codex accounts. Pick one and choose Use this account: the session starts on it, and a saved config that used that sign-in moves to it too. A restored tab moved this way starts without its earlier conversation, and the confirmation says so: to keep the conversation, choose Launch, then use Switch account on the running session.
+- Windows: the installer and uninstaller now look like the app. A new Welcome page opens the installer. The Welcome, Finish and folder pages use the splash's dark theme and artwork, and every other page gets a dark header band with the app's mark. The installer's Welcome and folder pages play a short ring-sweep animation, and the Data and Resources folder pages have proper titles. A fresh install opens with a brief fade-in of the splash; updates go straight to the wizard.
+- While the HTTP Hooks Gateway switch is on, an SSH session to a Linux or macOS host now also gets the remote project's own Claude Code hooks added to its settings file, alongside your user hooks, as local sessions do. They come from the files Claude Code itself reads on the host: the .claude/settings.json and settings.local.json in the session's folder and, for a session in a subfolder of a git checkout or in a linked git worktree, the checkout's own .claude/settings.local.json (for a worktree, the main checkout's), which the app finds with git on the host. A file is added only when it and its .claude folder belong to you, are not links, and are not writable by other users; writable by your own per-user group (the one Ubuntu and the RHEL family give each account) is fine, but not by a group other accounts share, as on macOS. Claude Code still reads the project's own settings files itself.
+- GPT-6-Sol and GPT-6-Luna are in the Codex model picker. Codex lists both from version 0.156.1, the newest Codex this release is tested with. OpenAI names them as the replacements for GPT-5.5, which retires from Codex with ChatGPT sign-in on October 14, 2026 (see Known issues in the Feature Guide).
+- The project now lives at github.com/nubbymong/ai-code-conductor, and old links to it redirect there. The app finds updates there on its own; if no update shows, restart the app once.
+
+### Fixed
+- Codex accounts are now always added in the app. The Set up Codex page and Settings, Accounts no longer offer to use the Codex sign-in already on this computer (~/.codex): the app can never tell whose sign-in that is, so it had to be confirmed at every launch and could never run code reviews. Add a Codex account instead, as you would a Claude account.
+- Archiving the Codex sign-in already on this computer now says plainly, before you confirm, that it is final: the account cannot be restored. The Codex CLI stays signed in.
+- On the Codex sign-in already on this computer, Make inactive and Archive, which only take it out of the app, now come before Sign out, which is renamed Sign Codex out on this computer... because it signs the Codex CLI out everywhere on this computer. Sign in again is no longer offered there, so nothing on that row signs other apps out to sign in again.
+- In Settings, Accounts on a narrow window, a row button such as This is still my account wraps inside its column instead of running past it, ChatGPT sign-in no longer breaks after the hyphen, and the reason behind Confirm each launch reaches screen reader users, not only a mouse pointer.
+- What's New after an update now shows what is new since the version you came from, and its heading names that version (for example What's new since 2.1.0). An update within 2.1 no longer replays the whole 2.1 story and its nine pages. Every prerelease of a release shows that release's whole story, so 2.1.1-beta.1, beta.2, beta.3 and 2.1.1 itself all show what 2.1.1 brought, and an update with nothing new to tell shows one line about its fixes.
+- The rename and roadmap page no longer opens every prerelease update for beta testers. It shows on a fresh install and to anyone updating from a build before the rename.
+- The update pages no longer promise more than is true: the last one no longer says there is nothing to set up when the one-time Codex question follows it, the rename page and its summary line no longer say every account carries over or that nothing else changes (the earlier Codex setting does not carry over), and the Agent Canvas page no longer calls itself new.
+- Hello Codex says where each Codex account's usage is: a ChatGPT-signed-in account shows its 5-hour and weekly allowance, or its credits, on the Usage page, and an API-key account is billed per token. Its launch page also names the one-time prompt to trust the app's hooks (Trust all and continue), which the attention dot needs.
+- The Enable Multi Spawn page no longer comes back after every update. It appears once, on the update that brings Multi Spawn in, and if you already answered it on an earlier version you will not see it again. Its opening line also no longer calls Multi Spawn new in this update.
+- On Windows, a data or resources folder whose path holds a percent sign (%), an exclamation mark (!) or a backtick is now saved exactly as you chose it. Before, the app left those characters out when it saved the folder, so after a restart it could look in a different folder.
+- First-run setup no longer moves on as if a folder were set when it was not saved. If a folder is empty, is not a full path, or cannot be created or saved, the folder step stays open and says which folder, so you can choose another one.
+- The pages that cover the whole window now have the window's own minimize, maximize and close buttons at the top right on Windows and Linux, and the bar along their top moves the window: the brief loading screen when the app starts, the first setup screens (choosing the app's folders, installing and setting up Claude Code), the onboarding pages, the release notes page, and the one-time pages shown after an upgrade (such as the Do you use Codex? question, the Multi Spawn page and the Codex introduction, including its replay). Before, these pages covered the window's own buttons, and the first setup screens had only Exit, which stays.
+- Closing the app while Claude Code setup is running (Alt+F4, the taskbar, Cmd+Q, or the red button on a Mac) now stops the setup terminal. Before, only the setup screen's own buttons stopped it, and on a Mac it kept running after the window closed until you quit the app.
+- First-run setup no longer stops a Claude Code install that is still finishing when Check again finds Claude Code. It says the install is finishing and carries on by itself when the install ends. On a Mac or Linux, Stop it and continue is there for a terminal left at a prompt.
+- On Windows, the install screen no longer tells you to press Back at a prompt, which stopped the install. It says setup checks again by itself when the install ends, and when to press Check again.
+- When the setup screen shows a PATH hint, Check again now says it checked again instead of changing nothing on screen.
+- On a Mac or Linux, when Claude Code or Codex is in ~/.local/bin but your login shell's PATH does not include it, Copy now gives a command to run once that adds the folder to the shell file your login shell reads. Before, it gave a line that only changed the terminal you pasted it into.
+- On Windows, when your PATH names a folder through a variable set after the app started (such as nvm-windows' NVM_SYMLINK), the app now notes, beside its not-found message, that it cannot look in that folder until you restart it.
+- On Windows, Claude Code that only your PowerShell profile puts on PATH (for example fnm with an npm install of Claude Code) is found again. Setup, the status checks and every session use it, where 2.1.1-beta.2 said Claude Code was not installed and refused every session.
+- New sessions now start on a computer without Node.js. A new session opens the resume list, which runs on Node.js; without Node.js, a Claude Code session now starts Claude Code directly and a Codex session starts Codex directly, instead of failing to start. On macOS and Linux a Claude Code session asks your own shell for node, so one set up by nvm or Homebrew in your shell files, a lazy nvm loader included, still opens the list; a node that is only a shell alias does not count.
+- On Windows, a new session's resume list now always starts the Node.js the app found, or skips the list and says why in the app's log, and a session that uses the npm-installed Claude Code looks for Node.js only in the folders PATH names by their full path, even after your PowerShell profile has changed PATH.
+- A Claude Code version pinned in an older release is no longer used; sessions and cloud agents start your installed Claude Code.
+- On Windows, a session that starts an npm-installed Claude Code (claude.cmd) directly hands it every launch option exactly as written; a launch that cannot be handed over that way is refused with the reason instead of starting.
+- On Windows, Claude Code now starts in a project folder whose name holds [ or ] (for example app[v2]). When Claude Code itself is installed in a folder whose path holds [ or ], a session that starts it directly stops and says why; install Claude Code in a folder without them.
+- Managed sessions that open the resume picker: each other worktree of the same repository is now checked on its own, so one whose project settings would redirect the account no longer blocks every launch in that repository. The picker still lists the conversations of a worktree that would redirect the account or could not be checked, but will not open one there (it says so if you pick one), and the app log names the folder and why.
+- Managed accounts: the resume picker resumes a worktree's conversation in the folder that was checked when the session started, also when the worktree is reached through a link, and does not resume one in a worktree whose folder was missing when the session started (see Known issues in the Feature Guide).
+- A copy of the app started from inside a managed session checks its own sessions' folders for itself.
+- The SSH card in the session dialog now reads "Another machine, ends on disconnect" instead of "Another machine, plain session", which read as if the session ran no AI. What an SSH session runs is still set by the provider row, as before (Claude Code, or a plain shell with Terminal only); what sets SSH apart from SSH Persistent is what happens when the connection drops. The guided tour and the help text now describe the two kinds the same way.
+- On Windows, SSH sessions now find ssh.exe in the folders your PATH names, the same way the app finds its other programs. If ssh.exe is in none of them, the session says so and how to fix it instead of starting.
+- On some Windows SSH hosts that sign you in with a key, closing or ending a session could leave the session's files on the host, because their removal ran until it timed out. The removal now finishes and the files are removed.
+- The partner terminal of an SSH session now opens on the session's host, over a connection of its own, instead of a shell on this computer. It opens in the config's remote folder once it recognises the host's first shell prompt, such as bash's, as long as you have not typed anything in the partner before then (a password typed by hand counts), and in your home folder there otherwise (see Known issues in the Feature Guide, which also covers a Mac host whose shell is zsh). The strip above it says where the shell runs: on this PC for a local session, or user@host for an SSH session. On a config that runs in a container, the partner is on the host itself, not in the container.
+- On an SSH session, command buttons aimed at the partner shell now run on the host, and the command bar and the command dialog say so (they used to say "this PC"). A button pressed while that partner is still connecting to the host types nothing: it opens the partner and asks you to sign in there if the host asks, then press the button again once the shell prompt shows. If you made partner buttons on an SSH config for commands on this computer, check them.
+- On an SSH session, a command button for a shell there (the session's own terminal, or its partner shell) is always typed on the host. It is no longer checked against, or started as, a program on this computer.
+- An SSH session's partner shell is not offered secret arguments (a secret value never leaves this computer), and Alt+V in its partner view saves the image on this computer and types nothing, as for a plain terminal over SSH.
+- An SSH session's status line no longer misses an update that arrives split across two reads.
+- On an SSH session, terminal output that follows an incomplete status line marker is now shown at once instead of being held back and dropped.
+- While the HTTP Hooks Gateway switch is on, a session now adds to its settings file the project's Claude Code hooks from the same files Claude Code reads for it: the .claude/settings.json and settings.local.json in the folder it starts in (a folder reached through a link counts as the folder it leads to) and, on Linux and macOS, for a session in a subfolder of a git checkout or in a linked git worktree, the checkout's own .claude/settings.local.json (for a worktree, the main checkout's). No other file in a parent folder's .claude is added, as Claude Code does not read those either; put hooks meant for every session in the session folder's .claude or in ~/.claude/settings.json. Project hooks are never taken from your home folder or a folder above it. On Linux and macOS a file is added only when it and its .claude folder belong to you, are not links, and are not writable by other users; writable by your own per-user group is fine, but not by a group other accounts share, such as macOS's staff group. The app log names a project folder or file it did not add, with the reason, and Claude Code still reads the project's own settings files itself.
+- While the HTTP Hooks Gateway switch is on, Claude Code hooks in a settings file saved with a UTF-8 byte-order mark, or as UTF-16LE, now run in sessions the app starts, as Claude Code itself reads such files: your user settings and the project's settings for a session on this computer, and the remote project's settings for an SSH session to a Linux or macOS host.
+- An SSH session now reads your ~/.claude/settings.json on a Linux, macOS or Windows host as Claude Code does, a file saved with a UTF-8 byte-order mark or as UTF-16LE included, so the session gets all of its settings. The app changes that file only to remove entries it once put there itself (an old statusline line and its own MCP server entries) and otherwise leaves it exactly as it is. A changed file keeps its encoding and byte-order mark; on a Linux or macOS host it also keeps its permission bits and owner, and on a Windows host it takes the permissions of its folder (~/.claude). A file it cannot read as JSON, or could not change in place (for example one that is read-only, has a second name (a hard link), or on a Linux or macOS host belongs to another user), is left as it is and noted in conductor-shim.log in the host's Claude folder (~/.claude; inside the container for a container session).
+- On a Linux or macOS SSH host, the session's setup now keeps your ~/.claude.json's owner and links when it marks the session folder as trusted: the file keeps its owner (a new one is created 0600, as Claude Code creates it), and a ~/.claude.json that is a link stays a link, with the file it points at updated. A ~/.claude.json it could not change in place (for example one that is read-only, has a second name (a hard link), or belongs to another user) is left as it is and noted in conductor-shim.log in the host's Claude folder (~/.claude; inside the container for a container session), and Claude Code then asks once whether you trust the folder (see Known issues in the Feature Guide).
+- An SSH session's setup now keeps ~/.claude.json on a Linux or macOS host readable only by you, and sets it back to that if its permissions were widened. On every connect, permissions on that file for its group or for other users are removed and yours are kept (0644 becomes 0600), with a line in conductor-shim.log in the host's Claude folder (~/.claude; inside the container for a container session). A ~/.claude.json with a second name (a hard link), or that belongs to another user, is left as it is.
+- Right-clicking a link in a terminal no longer also opens it in your browser; it only shows the menu with Copy link address. A link now opens on a plain left click only, so a middle-click, or Ctrl + click on macOS, no longer opens it either.
+- When a {secret} cannot be filled in because the command holds a backslash or a backtick, the message now says what the rule is: any backslash or backtick anywhere in the command, on any line, blocks the secret. It used to suggest moving the secret to another line, which did not help.
+- Compact, model and effort on the status line now type into Claude Code only at its ready prompt, as they already do for Codex. On any other screen nothing is typed, and the status line says why for a moment.
+- Agent Canvas: clicking a step or section of a plan points a note at it again. The click was being dropped since plans stopped tracking the mouse.
+- Agent Canvas: a verdict you file while the agent is still working is no longer typed into the session part way through a long turn. In a Claude Code session, the line that tells the agent about it is typed only once Claude Code waits at its ready, empty prompt, as Compact and the model pill are, and verdicts filed one after another arrive in the order you filed them. A verdict waiting at that prompt when a turn begins, for example when you send text you had typed there, now waits for that turn to end. If the line cannot be typed within the two minutes it then waits for the prompt, the canvas now says on that review that it was not sent, with the same notice Codex sessions show. A Claude Code verdict still waiting when its session ends or restarts gets that notice too, and so does a Codex verdict still waiting for a turn to end. In a Codex session the app holds it until the turn ends, and sends it early only if two minutes pass with no tool starting or finishing.
+- A session no longer forgets which conversation it is on when the app saves at a moment it cannot read that conversation's history (for example a projects folder it briefly cannot read), before it has picked the conversation up, or after its Claude Code process has exited or crashed while the tab stays open. The next launch reopens that conversation instead of coming back to the resume picker or a fresh conversation. A session that moved on with /clear or /resume comes back on the newer conversation, or to the resume picker if the app cannot read it, never on the older one. This works with session-log indexing and the hooks gateway on, which they are by default.
+- When you run /login inside a session and choose Add to save that account, the session's new account is saved straight away. A crash or forced close right afterwards no longer brings the session back on its old account.
+- Resuming several sessions on different accounts is clearer. With Settings, Accounts, Resuming sessions set to Ask each time, each session's account picker now marks the account that session itself last ran on as This session's account, and names the session by its work name. It used to show a Last used line naming the account picked most recently for any session, so while several sessions resumed in turn it pointed at the previous session's account. A new session's picker now calls that line Most recent. The Resuming sessions options now say whose account each one uses.
+- The claude.ai chip in a session's header no longer says "expired" while the account is still signed in to claude.ai. It now follows the account's live claude.ai sign-in, so "Open artifacts" in the session's right-click menu and "Open my artifacts" in Settings are available again whenever the account is signed in.
+- Closing the chatgpt.com sign-in window before you sign in now ends that sign-in at once, so you can start another sign-in (chatgpt.com or claude.ai) straight away. Closing it right after you sign in still keeps the sign-in.
+- Starting the app again while it is still closing no longer causes an error.
+- In the account views, a link now opens even when you hold the mouse button down for more than a second before letting go.
+- The Accounts panel's sign-in check for an account no longer runs if Claude Code was switched off while the check was getting ready.
+- Adding a Codex account on Windows no longer fails with "The account folder could not be prepared." when AI Code Conductor's resources folder is in a place where Windows gives your user Modify rather than Full Control, as is common on a second drive or directly under a drive root. The same fix lets the app keep a checked folder ready for your next new Claude account there.
+- When adding a Codex account on Windows fails because its folder cannot be made private to you, the app's log now says which folder and why.
+- On Windows, when the app cannot make an account's sign-in folders readable by you alone, the message now asks you to make your Windows user the owner of the resources folder and of everything in it, as the Feature Guide does.
+- Sentinel now closes a model notice once its cause is gone. After updating, you no longer see Opus 5.5, Sonnet 5.5 or Haiku 5.5 reported as missing from the model picker. Notices close at startup and when you press Re-run, and a notice you muted stays muted.
+- The same goes for Codex model notices: one closes once the model picker offers that model, or once the installed Codex lists that model again.
+- A copied Sentinel report that holds only compatibility notices is now headed Compatibility Notices, not Breaking Changes.
+- A Sentinel model notice that stays open no longer says its model list was read "just now" days later. It says where the list came from, and each check that raises the notice again refreshes that text, so notices kept from 2.1.1-beta.2 lose the old wording at the next check.
+- With Codex on and no Codex check completed yet, the Sentinel panel and the copied report now say "Codex not checked yet" instead of "Codex unknown", and the all-clear names only the assistants that were checked. Until any check completes, the panel gives no verdict.
+- When Sentinel's analysis on Codex could only use a Codex account that must be confirmed at each launch, the panel showed a request to confirm that no one could answer. It now says what to do instead: choose another Analysis account in Settings, General, Sentinel, or add a Codex account in Settings, Accounts and choose it as the Analysis account.
+- On Windows, the checks and runs that wait for the background first run of a newly installed or updated Claude Code now handle that wait properly. An account's sign-in check keeps that account marked in use until it is done, a cloud agent's account counts as in use while the agent waits for that first run, and a cancelled Sentinel analysis stops at once. When you quit the app, a check or run that is waiting on that first run, or asks for one then, no longer goes on to start. Once the app has started quitting, the Claude Code setup terminal, background Claude Code runs, cloud agents and the account sign-in check no longer start, on macOS and Linux and for npm installs of Claude Code on Windows too.
+- Codex code reviews now receive the change itself and run no commands, so they work on Windows too, where a Codex review could not look at the change and asked for it instead. Uncommitted changes to tracked files and a range arrive as the git diff, as they do for a Claude review, and files you name arrive with their content. A change larger than 512 KB is refused, never cut.
+- Failure text from a review, an Insights run or a Sentinel run hides credentials written inside URLs and session values.
+- The app's log hides credentials written inside URLs and session values in a Claude Code cloud agent's error output and in an Insights run's terminal output, as other failure text does, also when one arrives split across two reads.
+- The GitHub sidebar and the Agent Canvas answer only the app's own window.
+- The app no longer leaves five copies of its helper scripts (about 114 KB) in your temp folder every time it starts. Files older builds left there are not removed by the app; your system's own temp-folder cleanup clears them.
+- At start, each of the app's helper scripts in the resources folder is brought up to date on its own, so one that cannot be put in place no longer holds the others back. A changed script is put in place as a new file; on Windows, when another program, such as a sync, backup or antivirus tool, has the old copy open, the app writes the new contents into that copy instead, so it is still brought up to date. On macOS and Linux a copy whose permissions were loosened is replaced with one only you can read.
+- The app's status line, the resume list and Codex's hooks now start only from the app's own copy of their scripts. If something else sits in the scripts folder in a script's place, or in place of the lib folder the Codex resume list loads its helper from, the session starts directly, without the app's status line, or without hooks, and the app log names the file or folder.
+- At each start the app now makes the folder its session scripts run from private to your account. The scripts are the status line, the resume lists and the Codex hooks. If it cannot, sessions start without those extras and the app log says why (see Known issues in the Feature Guide).
+- Update checks that fall back to the GitHub command-line tool (gh) now find new releases.
+
 ## [2.1.1-beta.2] - 2026-10-10
 
 > Codex becomes a full second assistant beside Claude Code. One Accounts page covers both: turn each on or off, see whether it is installed and up to date, and keep more than one Codex account, each with its own sign-in. A saved config picks the Codex account it runs under, a Codex session can restart into an earlier conversation, and each assistant can ask the other to review its work. A new install asks which assistants you use, an update asks once whether you use Codex, and the app can run with Codex alone. The Usage page, the usage strip and Tokenomics cover both assistants, with each account's allowance and spend shown apart. A Codex session now works as a Claude session does: it keeps its conversation through a restart, moves to another Codex account with Switch Account, shows in Logs, and has the attention dot, the Session Watchdog, Plan mode and Compact. Sentinel watches Codex too. The Agent Canvas, Vision and the in-app browser, Ask Conductor, Cloud Agents and the Memory page work for Codex too, and Codex is no longer marked Beta.
@@ -1716,109 +1808,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
-[2.1.1-beta.2]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.1-beta.2
-[2.1.1-beta.1]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.1-beta.1
-[2.1.0]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0
-[2.1.0-rc.17]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.17
-[2.1.0-rc.16]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.16
-[2.1.0-rc.15]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.15
-[2.1.0-rc.14]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.14
-[2.1.0-rc.13]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.13
-[2.1.0-rc.12]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.12
-[2.1.0-rc.11]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.11
-[2.1.0-rc.10]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.10
-[2.1.0-rc.9]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.9
-[2.1.0-rc.8]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.8
-[2.1.0-rc.7]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.7
-[2.1.0-rc.6]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.6
-[2.1.0-rc.5]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.5
-[2.1.0-rc.4]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.4
-[2.1.0-rc.3]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.3
-[2.1.0-rc.2]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.2
-[2.1.0-rc.1]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-rc.1
-[2.1.0-beta.17]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.17
-[2.1.0-beta.16]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.16
-[2.1.0-beta.15]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.15
-[2.1.0-beta.14]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.14
-[2.1.0-beta.13]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.13
-[2.1.0-beta.12]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.12
-[2.1.0-beta.11]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.11
-[2.1.0-beta.10]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.10
-[2.1.0-beta.9]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.9
-[2.1.0-beta.8]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.8
-[2.1.0-beta.7]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.7
-[2.1.0-beta.6]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.6
-[2.1.0-beta.5]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.5
-[2.1.0-beta.4]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.4
-[2.1.0-beta.3]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.3
-[2.1.0-beta.2]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.2
-[2.1.0-beta.1]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.1.0-beta.1
-[2.0.0-rc.2]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.0.0-rc.2
-[2.0.0-rc.1]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.0.0-rc.1
-[2.0.0-beta.6]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.0.0-beta.6
-[2.0.0-beta.5]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.0.0-beta.5
-[2.0.0]: https://github.com/nubbymong/claude-command-center/releases/tag/v2.0.0
-[1.5.45]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.45
-[1.5.44]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.44
-[1.5.43]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.43
-[1.5.42]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.42
-[1.5.41]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.41
-[1.5.40]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.40
-[1.5.39]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.39
-[1.5.38]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.38
-[1.5.37]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.37
-[1.5.36]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.36
-[1.5.34]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.34
-[1.5.33]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.33
-[1.5.32]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.32
-[1.5.31]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.31
-[1.5.30]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.30
-[1.5.29]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.29
-[1.5.28]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.28
-[1.5.27]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.27
-[1.5.26]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.26
-[1.5.25]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.25
-[1.5.23]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.23
-[1.5.19]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.19
-[1.5.18]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.18
-[1.5.17]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.17
-[1.5.16]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.16
-[1.5.15]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.15
-[1.5.14]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.14
-[1.5.13]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.13
-[1.5.11]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.11
-[1.5.10]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.10
-[1.5.9]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.9
-[1.5.8]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.8
-[1.5.7]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.7
-[1.5.6]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.6
-[1.5.5]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.5
-[1.5.4]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.4
-[1.5.3]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.3
-[1.5.2]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.2
-[1.5.1]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.5.1
-[1.4.3]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.4.3
-[1.4.2]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.4.2
-[1.4.0]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.4.0
-[1.3.1]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.3.1
-[1.2.166]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.166
-[1.2.165]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.165
-[1.2.164]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.164
-[1.2.163]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.163
-[1.2.162]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.162
-[1.2.161]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.161
-[1.2.160]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.160
-[1.2.159]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.159
-[1.2.158]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.158
-[1.2.68]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.68
-[1.2.67]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.67
-[1.2.36]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.36
-[1.2.24]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.24
-[1.2.20]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.20
-[1.2.5]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.5
-[1.2.3]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.3
-[1.2.2]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.2
-[1.2.1]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.1
-[1.2.0]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.2.0
-[1.1.0]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.1.0
-[1.0.0]: https://github.com/nubbymong/claude-command-center/releases/tag/v1.0.0
+[2.1.1-beta.3]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.1-beta.3
+[2.1.1-beta.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.1-beta.2
+[2.1.1-beta.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.1-beta.1
+[2.1.0]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0
+[2.1.0-rc.17]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.17
+[2.1.0-rc.16]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.16
+[2.1.0-rc.15]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.15
+[2.1.0-rc.14]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.14
+[2.1.0-rc.13]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.13
+[2.1.0-rc.12]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.12
+[2.1.0-rc.11]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.11
+[2.1.0-rc.10]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.10
+[2.1.0-rc.9]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.9
+[2.1.0-rc.8]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.8
+[2.1.0-rc.7]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.7
+[2.1.0-rc.6]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.6
+[2.1.0-rc.5]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.5
+[2.1.0-rc.4]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.4
+[2.1.0-rc.3]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.3
+[2.1.0-rc.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.2
+[2.1.0-rc.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-rc.1
+[2.1.0-beta.17]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.17
+[2.1.0-beta.16]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.16
+[2.1.0-beta.15]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.15
+[2.1.0-beta.14]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.14
+[2.1.0-beta.13]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.13
+[2.1.0-beta.12]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.12
+[2.1.0-beta.11]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.11
+[2.1.0-beta.10]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.10
+[2.1.0-beta.9]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.9
+[2.1.0-beta.8]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.8
+[2.1.0-beta.7]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.7
+[2.1.0-beta.6]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.6
+[2.1.0-beta.5]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.5
+[2.1.0-beta.4]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.4
+[2.1.0-beta.3]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.3
+[2.1.0-beta.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.2
+[2.1.0-beta.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.0-beta.1
+[2.0.0-rc.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.0.0-rc.2
+[2.0.0-rc.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.0.0-rc.1
+[2.0.0-beta.6]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.0.0-beta.6
+[2.0.0-beta.5]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.0.0-beta.5
+[2.0.0]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.0.0
+[1.5.45]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.45
+[1.5.44]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.44
+[1.5.43]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.43
+[1.5.42]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.42
+[1.5.41]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.41
+[1.5.40]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.40
+[1.5.39]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.39
+[1.5.38]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.38
+[1.5.37]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.37
+[1.5.36]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.36
+[1.5.34]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.34
+[1.5.33]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.33
+[1.5.32]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.32
+[1.5.31]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.31
+[1.5.30]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.30
+[1.5.29]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.29
+[1.5.28]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.28
+[1.5.27]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.27
+[1.5.26]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.26
+[1.5.25]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.25
+[1.5.23]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.23
+[1.5.19]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.19
+[1.5.18]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.18
+[1.5.17]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.17
+[1.5.16]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.16
+[1.5.15]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.15
+[1.5.14]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.14
+[1.5.13]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.13
+[1.5.11]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.11
+[1.5.10]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.10
+[1.5.9]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.9
+[1.5.8]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.8
+[1.5.7]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.7
+[1.5.6]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.6
+[1.5.5]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.5
+[1.5.4]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.4
+[1.5.3]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.3
+[1.5.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.2
+[1.5.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.5.1
+[1.4.3]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.4.3
+[1.4.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.4.2
+[1.4.0]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.4.0
+[1.3.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.3.1
+[1.2.166]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.166
+[1.2.165]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.165
+[1.2.164]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.164
+[1.2.163]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.163
+[1.2.162]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.162
+[1.2.161]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.161
+[1.2.160]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.160
+[1.2.159]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.159
+[1.2.158]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.158
+[1.2.68]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.68
+[1.2.67]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.67
+[1.2.36]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.36
+[1.2.24]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.24
+[1.2.20]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.20
+[1.2.5]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.5
+[1.2.3]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.3
+[1.2.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.2
+[1.2.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.1
+[1.2.0]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.2.0
+[1.1.0]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.1.0
+[1.0.0]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v1.0.0

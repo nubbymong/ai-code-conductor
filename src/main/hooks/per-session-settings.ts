@@ -63,9 +63,11 @@ export interface WriteSessionSettingsOptions {
    *  at `<resourcesDir>/scripts/claude-multi-statusline.js`) instead of writing
    *  it into the user's global ~/.claude/settings.json. Overrides any statusLine
    *  inherited from the shared-settings clone. When the command cannot be set
-   *  up (a path the shell would read as more than a path), the app's status
-   *  line is not set up and the clone's own statusLine stays, exactly as when
-   *  no resourcesDir is given (the app's status line switched off). */
+   *  up (a path the shell would read as more than a path, or a deployed
+   *  script a launch may not run, which the provider says in the log), the
+   *  app's status line is not set up and the clone's own statusLine stays,
+   *  exactly as when no resourcesDir is given (the app's status line switched
+   *  off). */
   resourcesDir?: string
   /** 2026-08-14 (SEC-BATCH FLAG): union CCC's own Agent Canvas tools into
    *  permissions.allow so the render->review loop doesn't stall in approval

@@ -10,13 +10,18 @@ import type { SessionState, SavedSession, DetachedRemote } from '../../../src/sh
 import { IDENTITY_COLOR_KEYS } from '../../../src/shared/identity-colors'
 
 const save = vi.fn(async () => true)
+// aicc_planning#104: the save-time resume-target lookup, set per case (null:
+// the lookup finds nothing).
+type Target = { uuid: string; cwd: string } | null
+let lookup: (id: string) => Promise<Target> = async () => null
 ;(globalThis as any).window = (globalThis as any).window ?? {}
 ;(globalThis as any).window.electronAPI = {
   ...((globalThis as any).window?.electronAPI ?? {}),
   session: { save, clear: vi.fn(async () => true), load: vi.fn(), hasSaved: vi.fn() },
+  logsdb: { getResumeTarget: (id: string) => lookup(id) },
 }
 
-const { restoreSavedSessions } = await import('../../../src/renderer/session-persistence')
+const { restoreSavedSessions, buildSessionState, buildSessionStateWithResumeTargets } = await import('../../../src/renderer/session-persistence')
 const { useSessionStore } = await import('../../../src/renderer/stores/sessionStore')
 const { useAccountGateStore } = await import('../../../src/renderer/stores/accountGateStore')
 const { useSettingsStore, DEFAULT_SETTINGS } = await import('../../../src/renderer/stores/settingsStore')
@@ -66,6 +71,7 @@ const reconcile = vi.fn()
 beforeEach(() => {
   save.mockClear()
   save.mockResolvedValue(true)
+  lookup = async () => null
   updateSettings.mockClear()
   reconcile.mockClear()
   // Both store methods a case may replace are reset here, so a failed
@@ -313,5 +319,52 @@ describe('restoreSavedSessions -- the indexing opt-out (P3.12, row 31)', () => {
     expect(by('cx').loggingEnabled).toBe(false)
     expect(by('cx-default').loggingEnabled).toBeUndefined()
     expect(by('cl').loggingEnabled).toBe(false)
+  })
+})
+
+// aicc_planning#104: main's session:save carries a session's conversation
+// forward when a save-time lookup fails (session-resume-enrich.ts, pinned in
+// tests/unit/main/). What it needs from the renderer: the restore's immediate
+// save hands it each restored target before the spawn takes it, and from then
+// on the renderer sends only the record's own target. A renderer copy of the
+// target would go stale after /clear or /resume inside the tab and beat
+// main's newer one; these pin that there is none.
+describe('restoreSavedSessions -- the conversation target main carries (aicc_planning#104)', () => {
+  const T1 = { uuid: '97f30254-1111-4111-8111-111111111111', cwd: 'F:/platform_v9' }
+  const T2 = { uuid: '8923cf93-2222-4222-8222-222222222222', cwd: 'F:/platform_v9' }
+  const withTarget = (id: string, t: { uuid: string; cwd: string }, o: Partial<SavedSession> = {}): SavedSession =>
+    saved({ id, resumeUuid: t.uuid, resumeCwd: t.cwd, ...o })
+  /** What TerminalView does at a restored session's first spawn. */
+  const consume = (id: string) => useSessionStore.getState().updateSession(id, { resumeUuid: undefined, resumeCwd: undefined })
+  const targetOf = (s: SessionState, id: string) => {
+    const r = s.sessions.find((x) => x.id === id)
+    return r ? { uuid: r.resumeUuid, cwd: r.resumeCwd } : undefined
+  }
+  const none = { uuid: undefined, cwd: undefined }
+
+  it("the restore's immediate save carries each restored session's own target", async () => {
+    await restoreSavedSessions(state([withTarget('a', T1), withTarget('b', T2)]), ref(), deps())
+    expect(save).toHaveBeenCalledTimes(1)
+    const first = (save.mock.calls[0] as unknown as [SessionState])[0]
+    expect(targetOf(first, 'a')).toEqual(T1)
+    expect(targetOf(first, 'b')).toEqual(T2)
+  })
+
+  it('once the spawn has taken it, the renderer sends none of its own, even when its lookup fails', async () => {
+    await restoreSavedSessions(state([withTarget('rune', T1)]), ref(), deps())
+    consume('rune')
+    expect(targetOf(buildSessionState(), 'rune')).toEqual(none)
+    lookup = async () => null
+    expect(targetOf(await buildSessionStateWithResumeTargets(), 'rune')).toEqual(none)
+    lookup = async () => { throw new Error('projects folder unreadable') }
+    expect(targetOf(await buildSessionStateWithResumeTargets(), 'rune')).toEqual(none)
+  })
+
+  it('a successful Save and close lookup is sent, and is not kept for a later save', async () => {
+    await restoreSavedSessions(state([withTarget('rune', T1)]), ref(), deps())
+    consume('rune')
+    lookup = async () => T2
+    expect(targetOf(await buildSessionStateWithResumeTargets(), 'rune')).toEqual(T2)
+    expect(targetOf(buildSessionState(), 'rune')).toEqual(none)
   })
 })

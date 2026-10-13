@@ -1,4 +1,4 @@
-// HOST QUARANTINE: changes ACLs on temp folders (through the app's own folder hardening); starts real processes (asks an installed Claude Code CLI for its version). [CI] [VM] only -- never run on the owner's machine.
+// HOST QUARANTINE: changes ACLs on temp folders (through the app's own folder hardening; the Claude Code version probe a managed launch starts is faked below). [CI] [VM] only -- never run on the owner's machine.
 // ADR-009 round 3 (Codex PR600 finding 3): a FRESH deferred spawn (no
 // predecessor to tear down) that fails after the refresh wait settled must
 // notify the renderer, not leave a blank terminal treated as spawned. Desired-
@@ -31,6 +31,20 @@ vi.mock('node-pty', () => ({ spawn: () => {
     onData: () => ({ dispose() {} }), onExit: () => ({ dispose() {} }),
     write() {}, resize() {}, kill() {}, pause() {}, resume() {}, clear() {} }
 } }))
+
+// The Claude Code version probe is not what this file tests, and it must not
+// depend on what is installed. A managed launch records its preflight
+// (recordManagedLaunchPreflight), and that starts a version probe, fire and
+// forget, while no probe has answered yet: on a machine with a real claude on
+// PATH that was the real `claude --version` (the home guard refused it on the
+// VM run of 2026-10-11, failing whichever case reached it first). Faked here:
+// no version is known, and nothing is started to find one.
+vi.mock('../../src/main/claude-cli-version', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/claude-cli-version')>()),
+  ensureClaudeCliVersion: () => {},
+  probeClaudeCliVersion: async () => null,
+  resolveClaudeExecutable: async () => null,
+}))
 
 // The gate module is real except for ONE seam: a flag that makes the
 // multi-directory gate REJECT, which nothing in production does today, so the

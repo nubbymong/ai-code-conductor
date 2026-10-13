@@ -36,9 +36,7 @@ const pa = {
   onChanged: vi.fn(() => () => {}),
   discover: vi.fn(),
   installRecipes: vi.fn(async () => RECIPES),
-  probeExternal: vi.fn(async () => ({ ok: true, state: 'signed-out' })),
   setEnabled: vi.fn(ok),
-  adoptExternal: vi.fn(async () => ({ ok: true, accountId: 'acc-ext' })),
 }
 const setup = {
   getDefaultDataDir: vi.fn(async () => 'C:\\data'),
@@ -232,10 +230,8 @@ describe('Set up Codex: focus follows the page\'s primary control', () => {
       ...over,
     })
   }
-  // Codex on and nothing standing for this computer's own sign-in, as main has
-  // it after the assistants choice (the fixtures onboarding-codex-setup.test.tsx
-  // uses): the page's own check (probeExternal) finds it signed out unless a
-  // test says otherwise.
+  // Codex on, as main has it after the assistants choice (the fixtures
+  // onboarding-codex-setup.test.tsx uses).
   const notFoundHere = { externalDefaults: [{ providerId: 'codex' as const }] }
   const setupPage = () => <CodexSetupStep onNext={vi.fn()} onBack={vi.fn()} stepAside={vi.fn()} returns={0} />
 
@@ -266,11 +262,10 @@ describe('Set up Codex: focus follows the page\'s primary control', () => {
     expect(focused()).toBe(first)
   })
 
-  it('this computer\'s sign-in found: the Recommended new account', async () => {
-    pa.probeExternal.mockResolvedValueOnce({ ok: true, state: 'signed-in' })
-    await show(snap({}, notFoundHere))
-    expect(byTest('codex-setup-adopt')).not.toBeNull()
-    expect(focused()).toBe('codex-setup-add-new')
+  it('with this computer\'s own Codex sign-in named by main: still the first sign-in method (it is never offered: O5)', async () => {
+    await show(snap({}, { externalDefaults: [{ providerId: 'codex' as const, home: '~/codex-alt' }] }))
+    expect(byTest('codex-setup-sign-in')).not.toBeNull()
+    expect(focused()).toBe('codex-setup-method-browser')
   })
 
   it('signed in: Next', async () => {

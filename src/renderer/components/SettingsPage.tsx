@@ -659,12 +659,12 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
                     className="bg-crust/60 border border-surface0/80 rounded-lg px-3 py-2 text-sm text-text w-full focus-ring-strong focus:border-blue/50 transition-colors"
                     data-ux-id="settings-resume-account-mode"
                   >
-                    <option value="auto-last">Auto-resume last — the account it ran under (default)</option>
-                    <option value="ask">Ask each time — pick the account when a session resumes</option>
+                    <option value="auto-last">Use the account each session last ran on (default)</option>
+                    <option value="ask">Ask each time, with that account already chosen</option>
                   </select>
                 </Field>
                 <p className="text-[11px] text-[var(--text-muted)] mt-1">
-                  Only matters when you have two or more accounts. Applies when the app restarts and restores your sessions.
+                  Only matters with two or more Claude accounts. Applies when the app restarts and reopens your sessions. Codex sessions keep their own Codex account, and SSH sessions use the remote machine's sign-in.
                 </p>
               </Section>
             </AccountsSurface>

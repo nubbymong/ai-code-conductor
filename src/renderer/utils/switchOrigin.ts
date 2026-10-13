@@ -3,8 +3,9 @@
 // P3.6 (row 22; VM finding V3): the account a session was switched away from
 // by Switch account, and the account it was switched to, kept only until the
 // switched launch starts or is declined. A launch on that account that asks
-// first (the sign-in already on this computer is confirmed at each launch)
-// and is declined takes the tab back, so a Cancel never leaves it half-moved.
+// first (an unverified sign-in, or an account 2.1.1-beta.2 registered for the
+// sign-in already on this computer, which is no longer offered: O5) and is
+// declined takes the tab back, so a Cancel never leaves it half-moved.
 // A Claude switch never asks (its restart is predetermined past the account
 // gate), so it has no such case. Forgotten when the session's record goes
 // (a close, or any restart: sessionStore.removeSession), when a switch's

@@ -54,15 +54,18 @@ vi.mock('../../../../src/main/providers/codex/rollout-lookup', async (importOrig
 }))
 
 import { CodexProvider } from '../../../../src/main/providers/codex'
+import { __markScriptFoldersCheckedForTests } from '../../../../src/main/script-folders'
 
 const TEST_PREFIX = 'p311-extra-args-'
 const made: string[] = []
 function resources(files: string[]): string {
   const d = realpathSync.native(mkdtempSync(join(tmpdir(), TEST_PREFIX)))
   made.push(d)
-  mkdirSync(join(d, 'scripts'), { recursive: true })
-  for (const f of files) writeFileSync(join(d, 'scripts', f), '// test copy')
+  mkdirSync(join(d, 'scripts'), { recursive: true, mode: 0o700 })
+  for (const f of files) writeFileSync(join(d, 'scripts', f), '// test copy', { mode: 0o600 })
   ;(globalThis as any).__mockResourcesDir = d
+  // As the start does before a launch: the scripts folder made the user's alone.
+  __markScriptFoldersCheckedForTests(d)
   return d
 }
 afterEach(() => {

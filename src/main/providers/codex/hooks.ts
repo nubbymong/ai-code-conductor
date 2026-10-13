@@ -37,6 +37,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { createHash } from 'crypto'
 import { atomicWriteFileSync } from '../../atomic-write'
+import { deployScriptFile } from '../../script-deploy'
 import { codexFolderIdentity } from './rollout-lookup'
 import { CMD_UNSAFE_PATH_RE } from './cli-runner'
 import type { PickFolderIdentity } from '../types'
@@ -477,15 +478,19 @@ export function sweepStaleCodexHookFolders(root: string, now: number = Date.now(
   return removed
 }
 
-/** Copy the forwarder and its Windows wrapper into `<resourcesDir>/scripts/`
+/** Put the forwarder and its Windows wrapper in `<resourcesDir>/scripts/`
  *  (packaged beside the resume picker; see resume-picker.ts for the source
- *  root). */
+ *  root). F14: each is read and compared, and written only when its bytes
+ *  changed (deployScriptFile), never with copyFileSync, which leaves a
+ *  temporary file behind for a source inside app.asar. The plain copies are
+ *  still checked against these bytes before each use
+ *  (verifyPlainCodexHookWrapper). */
 export async function deployCodexHookScripts(resourcesDir: string, sourceRoot?: string): Promise<void> {
   const scriptsDir = path.join(resourcesDir, 'scripts')
-  if (!fs.existsSync(scriptsDir)) fs.mkdirSync(scriptsDir, { recursive: true })
+  if (!fs.existsSync(scriptsDir)) fs.mkdirSync(scriptsDir, { recursive: true, mode: 0o700 })
   for (const name of [CODEX_HOOK_SCRIPT, CODEX_HOOK_WRAPPER]) {
     const src = sourceRoot ? path.join(sourceRoot, 'scripts', name) : path.join(__dirname, '../../scripts', name)
-    if (fs.existsSync(src)) fs.copyFileSync(src, path.join(scriptsDir, name))
+    deployScriptFile(src, path.join(scriptsDir, name))
   }
 }
 

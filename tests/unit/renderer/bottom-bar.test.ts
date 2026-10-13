@@ -362,6 +362,43 @@ describe('BottomBar: Claude Code installed in Anthropic\'s folder, off PATH', ()
     }
   })
 
+  // A restart that only MAY help (Claude Code was not seen; pathHintIsNote)
+  // is a note: the help keeps its own still-not-found line and shows the note
+  // after it, as the setup screen does. A hint that
+  // says what helps (add-to-path above, a plain restart) still replaces it.
+  it('a restart note keeps the help\'s still-not-found line and follows it; a plain restart still replaces it', async () => {
+    const api = (globalThis as any).window.electronAPI
+    const before = { cli: api.cli, pa: api.providerAccounts }
+    try {
+      let hint: Record<string, unknown> = { kind: 'restart', unresolved: true }
+      api.cli = { check: vi.fn(() => Promise.resolve(false)) }
+      api.providerAccounts = { installRecipes: vi.fn(async () => RECIPES), discover: vi.fn(async () => ({ ok: true, installation: {}, pathHint: hint })), addToPath: vi.fn() }
+      useSessionStore.setState({ sessions: [], activeSessionId: null })
+      await render()
+      await act(async () => { (container.querySelector('[data-testid="bottom-bar-cli"]') as HTMLElement).click() })
+      await flush()
+      await act(async () => { byTest('bottombar-cli-recheck')!.click() })
+      await flush()
+      const line = byTest('bottombar-cli-after-install')
+      expect(line, 'the still-not-found line stays').not.toBeNull()
+      expect(line!.textContent).toBe(
+        'Claude Code was still not found. If you installed it another way, check that its folder is on your PATH, then press Check again.',
+      )
+      const note = byTest('bottombar-path-restart')
+      expect(note, 'the note shows too').not.toBeNull()
+      expect(note!.textContent).toContain('If you installed Claude Code there, quit AI Code Conductor and start it again.')
+      expect(line!.compareDocumentPosition(note!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the note comes after the line').toBeTruthy()
+      hint = { kind: 'restart' }
+      await act(async () => { byTest('bottombar-cli-recheck')!.click() })
+      await flush()
+      expect(byTest('bottombar-path-restart')!.textContent).toContain('Quit AI Code Conductor and start it again')
+      expect(byTest('bottombar-cli-after-install')).toBeNull()
+    } finally {
+      api.cli = before.cli
+      api.providerAccounts = before.pa
+    }
+  })
+
   it('the help says where the app looks, on each platform: the PATH and Anthropic\'s folder', async () => {
     const { cliHelpLooksText } = await import('../../../src/renderer/onboarding/PathHintNotice')
     expect(cliHelpLooksText('win32')).toContain('%USERPROFILE%' + String.fromCharCode(92) + '.local' + String.fromCharCode(92) + 'bin')

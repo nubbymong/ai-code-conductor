@@ -64,6 +64,7 @@ vi.mock('../../../../src/main/providers/codex/telemetry', async (importOriginal)
 
 import { CodexProvider } from '../../../../src/main/providers/codex'
 import { __resetNodeExeCache } from '../../../../src/main/providers/codex/spawn'
+import { __markScriptFoldersCheckedForTests } from '../../../../src/main/script-folders'
 import { watchAndClaimRollout } from '../../../../src/main/providers/codex/telemetry'
 import { codexFolderIdentity } from '../../../../src/main/providers/codex/rollout-lookup'
 
@@ -94,6 +95,8 @@ function deployPicker(): string {
   mkdirSync(join(res, 'scripts'), { recursive: true })
   writeFileSync(join(res, 'scripts', 'codex-resume-picker.js'), '// stub')
   ;(globalThis as any).__p35ResourcesDir = res
+  // As the start does before a launch: the scripts folder made the user's alone.
+  __markScriptFoldersCheckedForTests(res)
   return res
 }
 

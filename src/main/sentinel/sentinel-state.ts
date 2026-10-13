@@ -73,7 +73,19 @@ export class SentinelState {
 
   upsertFinding(f: SentinelFinding): void {
     const existing = this.state.findings.find((x) => x.id === f.id)
-    if (existing) return                       // dedup; never resurrect dismissed/applied
+    if (existing) {
+      // Dedup; never resurrect dismissed/applied/muted. A check's own finding
+      // (not an analysis finding, which keeps the quote it was matched by)
+      // that is still open and raised again takes the evidence of the check
+      // in hand, so what it says it read is never older than the last check
+      // that raised it. Everything else of it is kept; written only when the
+      // evidence changed.
+      if (existing.status === 'open' && analysisFindingKey(existing) === null && typeof f.evidence === 'string' && f.evidence !== existing.evidence) {
+        this.state = { ...this.state, findings: this.state.findings.map((x) => (x === existing ? { ...x, evidence: f.evidence } : x)) }
+        this.persist()
+      }
+      return
+    }
     // P3.9 round 2: an analysis finding of the same version with the same
     // quote is the same finding, whatever its id (one kept under an older id,
     // or one worded differently): it keeps that one's status.
@@ -84,6 +96,19 @@ export class SentinelState {
   }
   setStatus(id: string, status: FindingStatus): void {
     this.state = { ...this.state, findings: this.state.findings.map((f) => f.id === id ? { ...f, status } : f) }
+    this.persist()
+  }
+  /** O8: closes the OPEN findings among `ids`, whose cause a later check
+   *  found gone (sentinel-models.ts, staleModelFindingIds and its Codex
+   *  twin). They are dropped, so the same cause arising again is raised
+   *  afresh. A muted, dismissed or applied one is kept, so the user's choice
+   *  holds. Written only when something was dropped. */
+  retireOpen(ids: readonly string[]): void {
+    if (ids.length === 0) return
+    const drop = new Set(ids)
+    const kept = this.state.findings.filter((f) => !(f.status === 'open' && drop.has(f.id)))
+    if (kept.length === this.state.findings.length) return
+    this.state = { ...this.state, findings: kept }
     this.persist()
   }
   /** A completed check of Claude Code `v`: the panel names it, and (fixer

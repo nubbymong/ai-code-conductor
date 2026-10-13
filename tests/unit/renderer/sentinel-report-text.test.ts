@@ -8,6 +8,9 @@ import {
   sentinelSettingsText,
   sentinelTransparencyText,
   sentinelWatchedNames,
+  sentinelVersionParts,
+  sentinelCompatibleSubject,
+  SENTINEL_NOTHING_CHECKED,
 } from '../../../src/renderer/components/sentinel/sentinel-report-text'
 import type { SentinelFinding, SentinelStateSnapshot } from '../../../src/shared/sentinel-types'
 
@@ -115,6 +118,33 @@ describe('formatSentinelReportText', () => {
     expect(() => formatSentinelReportText(null)).not.toThrow()
     expect(formatSentinelReportText(null)).toContain('Sentinel: Breaking Changes')
   })
+
+  // O8: the header reads the severity, as the panel's count line and each
+  // item's prefix do. The owner's copied report of three model notices was
+  // headed "Breaking Changes".
+  it('a report of compatibility notices only is headed Compatibility Notices', () => {
+    const findings: SentinelFinding[] = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'].map((id) =>
+      finding({ id: `models:missing:${id}`, severity: 'warn', title: `Claude Code offers ${id}, but it is not in the model picker` }))
+    const lines = formatSentinelReportText(snap({ findings })).split('\n')
+    expect(lines[0]).toBe('Sentinel: Compatibility Notices')
+    expect(lines.join('\n')).not.toContain('Breaking Changes')
+    expect(lines.filter((l) => l.startsWith('[NOTICE] '))).toHaveLength(3)
+  })
+
+  it('a report that holds a breaking change among notices keeps the Breaking Changes header', () => {
+    const findings: SentinelFinding[] = [
+      finding({ id: 'models:missing:claude-opus-6', severity: 'warn', title: 'Claude Code offers claude-opus-6, but it is not in the model picker' }),
+      finding({ id: 'cc:2.1.177:1', severity: 'high', title: 'Hooks contract changed' }),
+    ]
+    expect(formatSentinelReportText(snap({ findings })).split('\n')[0]).toBe('Sentinel: Breaking Changes')
+  })
+
+  it('a muted notice beside an open breaking change does not change the header, nor does a muted breaking change beside a notice', () => {
+    const notice = finding({ id: 'n', severity: 'warn', title: 'A notice' })
+    const severe = finding({ id: 'b', severity: 'high', title: 'A break' })
+    expect(formatSentinelReportText(snap({ findings: [{ ...notice, status: 'muted' }, severe] })).split('\n')[0]).toBe('Sentinel: Breaking Changes')
+    expect(formatSentinelReportText(snap({ findings: [notice, { ...severe, status: 'muted' }] })).split('\n')[0]).toBe('Sentinel: Compatibility Notices')
+  })
 })
 
 // P3.9 (row 42): Sentinel watches each assistant in use. The version line,
@@ -149,9 +179,35 @@ describe('Sentinel for Codex: the lines that name the assistants (P3.9)', () => 
     expect(formatSentinelReportText(withCodex, claudeOnly)).toBe(formatSentinelReportText(withCodex))
     expect(formatSentinelReportText(withCodex, both).split('\n').slice(1, 4)).toEqual([`CC 2.1.177 \u00b7 Codex 0.155.1 \u00b7 ${at}`, '', 'No breaking changes. Claude Code 2.1.177 and Codex 0.155.1 are compatible.'])
     expect(formatSentinelReportText(withCodex, codexOnly).split('\n').slice(1, 4)).toEqual([`Codex 0.155.1 \u00b7 ${at}`, '', 'No breaking changes. Codex 0.155.1 is compatible.'])
-    expect(formatSentinelReportText(s, codexOnly)).toContain('Codex unknown')
+    expect(formatSentinelReportText(s, codexOnly)).toContain('Codex not checked yet')
     // Neither in use (a state setup never leaves) reads as Claude Code alone.
     expect(formatSentinelReportText(withCodex, { claudeOn: false, codexOn: false })).toBe(formatSentinelReportText(withCodex))
+  })
+
+  // Owner findings 2026-10-11: with Codex on and no Codex check completed,
+  // the panel and the report said "Codex unknown" and called it compatible.
+  it('an assistant with no completed check is "not checked yet", and the all-clear names only the ones checked', () => {
+    const at = new Date(1700000000000).toISOString()
+    expect(sentinelVersionParts(s, both)).toEqual(['CC 2.1.177', 'Codex not checked yet'])
+    expect(sentinelCompatibleSubject(s, both)).toEqual({ text: 'Claude Code 2.1.177', plural: false })
+    expect(formatSentinelReportText(s, both).split('\n').slice(1, 4)).toEqual([`CC 2.1.177 · Codex not checked yet · ${at}`, '', 'No breaking changes. Claude Code 2.1.177 is compatible.'])
+    const noClaude: SentinelStateSnapshot = { ...withCodex, lastSeenCcVersion: null }
+    expect(sentinelVersionParts(noClaude, both)).toEqual(['Claude Code not checked yet', 'Codex 0.155.1'])
+    expect(formatSentinelReportText(noClaude, both)).toContain('No breaking changes. Codex 0.155.1 is compatible.')
+    for (const text of [formatSentinelReportText(s, both), formatSentinelReportText(noClaude, both)]) expect(text).not.toContain('unknown')
+  })
+
+  it('nothing checked: no assistant is called compatible, and the report says there is no verdict yet', () => {
+    const none: SentinelStateSnapshot = { ...s, lastSeenCcVersion: null, lastSeenCodexVersion: null }
+    for (const scope of [both, codexOnly, claudeOnly]) {
+      expect(sentinelCompatibleSubject(none, scope).text).toBe('')
+      const text = formatSentinelReportText(none, scope)
+      expect(text).not.toContain('compatible')
+      expect(text).not.toContain('unknown')
+      expect(text).toContain(SENTINEL_NOTHING_CHECKED)
+    }
+    expect(sentinelVersionParts(none, both)).toEqual(['Claude Code not checked yet', 'Codex not checked yet'])
+    expect(SENTINEL_NOTHING_CHECKED).toBe('No check has completed yet, so there is no verdict. Sentinel checks at startup, or use Re-run.')
   })
 
   it('while an analysis runs, the line says whose update it is', () => {

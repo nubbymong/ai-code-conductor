@@ -16,6 +16,7 @@ const {
   _claimedSessionCountForTest, _heldSessionIdsForTest, _resetConfigLaunchClaimsForTest,
 } = await import('../../../src/main/launch-one-at-a-time')
 type Ticket = Parameters<typeof settleConfigLaunch>[0]
+const { partnerSshOf } = await import('../../../src/shared/multi-spawn-rule')
 
 const live = new Set<string>()
 let configs: unknown
@@ -476,7 +477,9 @@ describe('the partner terminal', () => {
     start('s1')
     expect(askPartner('s1', { shellOnly: false })?.code).toBe('already-running')
     expect(askPartner('s1', { shellOnly: undefined })?.code).toBe('already-running')
-    expect(askPartner('s1', { ssh: { host: 'h' } })?.code).toBe('already-running')
+    // #86: with an ssh block it is an SSH session's partner, which s1 (a local
+    // session) has none of: refused, never a copy
+    expect(askPartner('s1', { ssh: { host: 'h' } })?.code).toBe('partner-needs-session')
     expect(askPartner('s1', { terminalOptions: { command: 'x', hasSecretArg: true } })?.code).toBe('already-running')
     expect(askPartner('s1', { elevated: true })?.code).toBe('already-running')
     expect(ask('s1-partnerx', { configId: 'c1', shellOnly: true })?.code).toBe('already-running')
@@ -487,6 +490,162 @@ describe('the partner terminal', () => {
     startPartner('s1')
     expect(start('s1')).toBeNull() // the tab the shell belongs to
     expect(ask('s2')?.code).toBe('already-running') // the tab runs; the shell alone never did
+  })
+})
+
+/**
+ * #86: the partner shell of an SSH session connects to the session's own
+ * host as a plain shell. It is not a copy of the config, and main decides that
+ * from its OWN record: the session must hold this config's right in this run,
+ * and the partner's block must be, field for field, the partner block
+ * (partnerSshOf) of the ssh block main recorded when it accepted the session.
+ */
+describe('the partner terminal of an SSH session (#86)', () => {
+  const sshBlock = { host: 'build-box', port: 2222, username: 'nick', remotePath: '~/proj', postCommand: 'docker exec -it app bash', detachable: true, hasPassword: true, remoteOs: 'unix' }
+  /** The session's own spawn, as TerminalView sends it (the reconnect flag added). */
+  const sessionReq = (over: Record<string, unknown> = {}, ssh: Record<string, unknown> = sshBlock) => ({ configId: 'c1', ssh: { ...ssh, reconnect: false }, ...over })
+  /** The partner's block, as the partner's TerminalView sends it. */
+  const partnerSsh = (over: Record<string, unknown> = {}, ssh: Record<string, unknown> = sshBlock) => ({ ...partnerSshOf(ssh as typeof sshBlock), reconnect: false, ...over })
+
+  it('is never a copy when its session was accepted for the config in this run and its block is the partner block of main\'s record', () => {
+    off()
+    expect(start('s1', sessionReq())).toBeNull()
+    reads.mockClear()
+    expect(startPartner('s1', { ssh: partnerSsh() })).toBeNull()
+    expect(reads).not.toHaveBeenCalled() // decided from main's record, not the saved configs
+    expect(_heldSessionIdsForTest()).toEqual(['s1']) // the shell holds no right
+    live.delete('s1')
+    expect(ask('s2', sessionReq())).toBeNull() // only the shell is left: the config is not running
+  })
+
+  it('the record is the reconnecting spawn\'s too: a session respawned with reconnect keeps its partner', () => {
+    off()
+    start('s1', { configId: 'c1', ssh: { ...sshBlock, reconnect: true } })
+    expect(askPartner('s1', { ssh: partnerSsh() })).toBeNull()
+  })
+
+  it('with any other block it is refused (never a copy); with terminal options, elevation or no shell-only flag it is a copy like any other', () => {
+    off()
+    start('s1', sessionReq())
+    const unplaced = (over: Record<string, unknown>, label: string) => expect(askPartner('s1', over)?.code, label).toBe('partner-needs-session')
+    unplaced({ ssh: partnerSsh({ host: 'other-box' }) }, 'another host')
+    unplaced({ ssh: partnerSsh({ port: 22 }) }, 'another port')
+    unplaced({ ssh: partnerSsh({ username: 'root' }) }, 'another user')
+    unplaced({ ssh: partnerSsh({ postCommand: sshBlock.postCommand }) }, 'a post-connect command')
+    unplaced({ ssh: partnerSsh({ runtime: { type: 'container', container: 'app' } }) }, 'a container')
+    unplaced({ ssh: partnerSsh({ detachable: true }) }, 'persistence')
+    unplaced({ ssh: partnerSsh({ reconnect: true }) }, 'a reconnect')
+    unplaced({ ssh: partnerSsh({ extra: 'x' }) }, 'an extra field')
+    unplaced({ ssh: { ...sshBlock } }, 'the session\'s own block')
+    const copy = (over: Record<string, unknown>, label: string) => expect(askPartner('s1', over)?.code, label).toBe('already-running')
+    copy({ ssh: partnerSsh(), terminalOptions: { command: 'x' } }, 'terminal options')
+    copy({ ssh: partnerSsh(), elevated: true }, 'elevation')
+    copy({ ssh: partnerSsh(), shellOnly: false }, 'not shell-only')
+    expect(ask('s1-partnerx', { configId: 'c1', shellOnly: true, ssh: partnerSsh() })?.code, 'another suffix').toBe('already-running')
+    expect(_heldSessionIdsForTest()).toEqual(['s1']) // nothing refused was recorded
+  })
+
+  it('the refusal says what to do, in the words a tab shows', () => {
+    off()
+    expect(askPartner('s1', { ssh: partnerSsh() })).toEqual({
+      code: 'partner-needs-session',
+      providerId: 'claude',
+      message: 'The partner shell opens on the host once its session is running. Start or restart the session.',
+    })
+  })
+
+  it('a session accepted with no ssh block has no SSH partner: an ssh block on its shell is refused', () => {
+    off()
+    start('s1') // a local session of c1
+    expect(askPartner('s1', { ssh: partnerSsh() })?.code).toBe('partner-needs-session')
+    expect(askPartner('s1')).toBeNull() // its own local partner, as always
+  })
+
+  it('a session that was never accepted has no partner: a forged id is refused', () => {
+    off()
+    start('s1', sessionReq())
+    expect(askPartner('ghost', { ssh: partnerSsh() })?.code).toBe('partner-needs-session')
+  })
+
+  // Admitted as a copy, the shell of a session that did not start (Claude Code
+  // off, or refused beside another tab) would be held for the config, and the
+  // session's own start then refused as "already running" by its own partner.
+  // Mutation to prove this can fail: drop the partner-needs-session refusal
+  // in claimConfigLaunch (the shell is admitted as a copy again).
+  it('the shell of a session that has not started can never refuse its own session', () => {
+    off()
+    startPartner('s1', { ssh: partnerSsh() }) // whatever the gate answers: if it lets the shell start, it runs
+    expect(start('s1', sessionReq())).toBeNull() // the session itself starts
+    expect(askPartner('s1', { ssh: partnerSsh() })).toBeNull() // and now its partner opens beside it
+  })
+
+  it('that shell is refused and held nowhere', () => {
+    off()
+    expect(askPartner('s1', { ssh: partnerSsh() })?.code).toBe('partner-needs-session')
+    expect(_heldSessionIdsForTest()).toEqual([])
+  })
+
+  it('Multi Spawn or not: a partner shell main cannot place is refused, never a copy', () => {
+    start('s1', sessionReq({ configId: 'c2' })) // c2 is Multi Spawn
+    expect(startPartner('s1', { configId: 'c2', ssh: partnerSsh() })).toBeNull() // its own partner
+    expect(askPartner('s9', { configId: 'c2', ssh: partnerSsh() })?.code).toBe('partner-needs-session')
+    expect(_heldSessionIdsForTest()).toEqual(['s1'])
+  })
+
+  it('the session must hold THIS config\'s right: a partner naming another config is refused', () => {
+    start('s1', sessionReq({ configId: 'c2' }))
+    expect(askPartner('s1', { configId: 'c1', ssh: partnerSsh() })?.code).toBe('partner-needs-session')
+    expect(_heldSessionIdsForTest()).toEqual(['s1'])
+  })
+
+  it('a session only restored at this start gets no SSH partner until its first accepted spawn this run', () => {
+    off()
+    seedRestoredSessions({ sessions: [{ id: 'r1', configId: 'c1' }, { id: 'r2', configId: 'c1' }] })
+    start('r2', sessionReq())
+    expect(askPartner('r1', { ssh: partnerSsh() })?.code).toBe('partner-needs-session') // r1 is restored, not accepted
+    expect(start('r1', sessionReq())).toBeNull() // the restored right
+    expect(askPartner('r1', { ssh: partnerSsh() })).toBeNull()
+  })
+
+  it('the record is main\'s own: changing the request object afterwards changes nothing', () => {
+    off()
+    const req = sessionReq()
+    start('s1', req)
+    ;(req.ssh as Record<string, unknown>).host = 'other-box'
+    expect(askPartner('s1', { ssh: partnerSsh() })).toBeNull()
+    expect(askPartner('s1', { ssh: partnerSsh({ host: 'other-box' }) })?.code).toBe('partner-needs-session')
+  })
+
+  it('the record follows the session\'s latest accepted spawn', () => {
+    off()
+    start('s1', sessionReq())
+    const moved = { ...sshBlock, host: 'new-box' }
+    start('s1', sessionReq({}, moved)) // a Restart after the config moved host
+    expect(askPartner('s1', { ssh: partnerSsh() })?.code).toBe('partner-needs-session')
+    expect(askPartner('s1', { ssh: partnerSsh({}, moved) })).toBeNull()
+    start('s1') // started again with no ssh block
+    expect(askPartner('s1', { ssh: partnerSsh({}, moved) })?.code).toBe('partner-needs-session')
+  })
+
+  it('a spawn that was refused or never settled records nothing', () => {
+    off()
+    start('s1', sessionReq())
+    // a second copy with another host is refused: s1's record is untouched
+    expect(ask('s2', sessionReq({}, { ...sshBlock, host: 'other-box' }))?.code).toBe('already-running')
+    expect(askPartner('s2', { ssh: partnerSsh({ host: 'other-box' }) })?.code).toBe('partner-needs-session')
+    // a pending (unsettled) respawn of s1 with another host does not replace the record
+    expect(ask('s1', sessionReq({}, { ...sshBlock, host: 'other-box' }))).toBeNull()
+    expect(askPartner('s1', { ssh: partnerSsh() })).toBeNull()
+    expect(askPartner('s1', { ssh: partnerSsh({ host: 'other-box' }) })?.code).toBe('partner-needs-session')
+  })
+
+  it('the record goes with the session\'s right when the bound evicts it', () => {
+    start('s1', sessionReq({ configId: 'c2' }))
+    live.delete('s1') // ended: the first to go
+    for (let i = 0; i < HELD_MAX; i++) start(`x${i}`, { configId: 'c2' })
+    expect(_heldSessionIdsForTest()).not.toContain('s1')
+    expect(askPartner('s1', { configId: 'c2', ssh: partnerSsh() })?.code).toBe('partner-needs-session')
+    expect(_heldSessionIdsForTest()).not.toContain('s1-partner')
   })
 })
 

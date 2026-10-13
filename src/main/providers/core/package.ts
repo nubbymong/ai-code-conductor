@@ -655,10 +655,12 @@ export interface ProviderPackage {
    *  only the registry store calls it. */
   readonly legacyAccounts?: LegacyAccountsPort
   /** Present when the provider has a default sign-in location of its own that
-   *  other local clients share (Codex's ~/.codex), which the user's explicit
-   *  choice registers, when it is signed in, as a realm-only external account
-   *  (design 6.3; never automatically: owner decision 2026-09-26). Absent:
-   *  nothing to adopt (Claude's accounts come from its legacy store). */
+   *  other local clients share (Codex's ~/.codex). 2.1.1-beta.2 registered
+   *  it, on the user's explicit choice, as a realm-only external account
+   *  (design 6.3). Since O5 (2.1.1-beta.3, owner decision 2026-10-11) it is
+   *  never registered: the spec stays so an account beta.2 registered keeps
+   *  working. Absent: no such sign-in (Claude's accounts come from its
+   *  legacy store). */
   readonly externalDefaultRealm?: ExternalDefaultRealmSpec
   /** Where the user's on/off for this provider is saved, and what no saved
    *  value means (A4): data, so no provider-name condition decides it. */

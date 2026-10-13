@@ -56,7 +56,7 @@ describe('Codex not answered yet: not set up', () => {
     h.signedIn.set(EXT_HOME.toLowerCase(), 'chatgpt')
     const runs = h.runs.length
     expect(await h.service.adoptExternalDefault({ providerId: 'codex' })).toMatchObject({
-      ok: false, code: 'provider-not-set-up', message: "Codex is not set up yet. Say you use Codex first, then use this computer's sign-in.",
+      ok: false, code: 'provider-not-set-up', message: 'Codex is not set up yet. Say you use Codex first.',
     })
     expect(h.runs.length).toBe(runs)
     expect(h.doc().accounts.some((x) => x.providerId === 'codex')).toBe(false)

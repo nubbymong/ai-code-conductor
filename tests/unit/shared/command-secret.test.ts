@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  COMMAND_SECRET_TOKEN, commandSecretEnvName, commandSecretKey, commandSecretRef, buildCommandLine,
+  COMMAND_SECRET_TOKEN, commandSecretEnvName, commandSecretKey, commandSecretRef, buildCommandLine, secretPlacementProblem,
 } from '../../../src/shared/command-secret'
 
 describe('the env variable name', () => {
@@ -95,5 +95,51 @@ describe('buildCommandLine — the ONE rule for what gets typed', () => {
     // harmless -- rather than silently typing nothing where a value was meant.
     expect(buildCommandLine('x', ['-t {secret}'])).toBe('x -t {secret}')
     expect(buildCommandLine('x', ['-t {secret}'], null)).toBe('x -t {secret}')
+  })
+})
+
+/**
+ * aicc_planning#82: the escape rule is WHOLE-TEXT. A backslash or backtick
+ * anywhere in the command (on any line of a multi-line command) leaves every
+ * {secret} in it literal. The message used to say the secret was "on a line"
+ * with an escape and offered "move the secret to a line without one", a remedy
+ * that cannot work: moving it to another line of the same command changes
+ * nothing. The rule stays; the message now says what the rule is.
+ */
+describe('the escape message matches the whole-text rule (aicc_planning#82)', () => {
+  const TWO_LINES_BACKSLASH = 'cd C:\\proj\ncurl -H "Bearer {secret}"'
+  const TWO_LINES_BACKTICK = 'Write-Host `"hi`"\ncurl -H "Bearer {secret}"'
+  const SAME_LINE = '--out C:\\logs\\{secret}.json'
+
+  it.each([
+    ['a backslash on another line', TWO_LINES_BACKSLASH],
+    ['a backtick on another line', TWO_LINES_BACKTICK],
+    ['a backslash on the same line', SAME_LINE],
+  ])('%s: says anywhere in the command blocks it, and offers no per-line remedy', (_label, text) => {
+    const msg = secretPlacementProblem(text, { isCommandLine: true })
+    expect(msg).not.toBeNull()
+    expect(msg).toMatch(/anywhere in the command/i)
+    expect(msg).toMatch(/backslash/)
+    expect(msg).toMatch(/backtick/)
+    expect(msg).not.toMatch(/line without|move the secret|another line/i)
+    // Plain ASCII copy (no em dash), like the rest of the dialog text.
+    expect(msg).toMatch(/^[\x20-\x7e]*$/)
+  })
+
+  it('the arguments field gets the same message', () => {
+    expect(secretPlacementProblem('-H "Bearer {secret}"\n--cacert C:\\certs\\ca.pem'))
+      .toBe(secretPlacementProblem(TWO_LINES_BACKSLASH, { isCommandLine: true }))
+  })
+
+  it('the rule itself is unchanged: an escape on another line still leaves the token literal', () => {
+    const ref = commandSecretRef('abc', true)!
+    for (const text of [TWO_LINES_BACKSLASH, TWO_LINES_BACKTICK]) {
+      const line = buildCommandLine(text, [], ref)
+      expect(line).toContain(COMMAND_SECRET_TOKEN)
+      expect(line).not.toContain('CCC_CMD_SECRET_abc')
+    }
+    // ...and without any escape the same second line IS filled in.
+    expect(buildCommandLine('cd C:/proj\ncurl -H "Bearer {secret}"', [], ref))
+      .toContain('${env:CCC_CMD_SECRET_abc}')
   })
 })

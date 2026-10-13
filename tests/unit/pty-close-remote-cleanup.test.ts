@@ -74,7 +74,7 @@ const fakeWin = { webContents: { send: () => {} }, isDestroyed: () => false } as
 const SSH = { username: 'dev', host: 'box.example.com', port: 2222, remotePath: '~' }
 let seq = 0
 let SID = ''
-const posixRemoval = (sid: string): string => `rm -f ~/.claude/settings-${sid}.json ~/.claude/mcp-${sid}.json ~/.claude/ccc-status-${sid}.url`
+const posixRemoval = (sid: string): string => `rm -f ~/.claude/settings-${sid}.json ~/.claude/mcp-${sid}.json ~/.claude/ccc-status-${sid}.url ~/.claude/ccc-attn-${sid}.key ~/.claude/ccc-attn-${sid}.up`
 /** ssh's last argument: the remote command. */
 const last = (args: string[]): string => args[args.length - 1]
 /** What was typed into the session's own terminal. */

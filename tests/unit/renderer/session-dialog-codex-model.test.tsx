@@ -98,7 +98,7 @@ describe("the Codex model list is the registry's catalogue (row 39)", () => {
   // first model of the list (Claude's is its newest Opus) at Default effort.
   it('offers Default and the Codex CLI catalogue; a new config starts on the first model at Default effort, as a new Claude config does', () => {
     const onConfirm = newCodexConfig()
-    expect(options(modelSel()).map((o) => o.value)).toEqual(['', 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2'])
+    expect(options(modelSel()).map((o) => o.value)).toEqual(['', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2'])
     expect(options(modelSel())[0].text).toBe('Default: follows Codex')
     expect(modelSel().value).toBe('gpt-6-astra')
     expect(effortSel().value).toBe('')

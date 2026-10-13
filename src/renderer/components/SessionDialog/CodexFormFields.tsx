@@ -24,6 +24,9 @@ export interface CodexAccountFieldProps {
   askAck: boolean
   /** The confirmation's wording (names the email when known). */
   ackLabel: string
+  /** Said under the confirmation: the sign-in already on this computer is
+   *  being retired (O5), and how to move off it. Absent: nothing. */
+  ackNote?: string
   ackChecked: boolean
   onChange: (accountId: string) => void
   onAckChange: (checked: boolean) => void
@@ -147,6 +150,9 @@ export function CodexFormFields({ value, onChange, onOpenAccounts, account, tooO
               />
               <span>{account.ackLabel}</span>
             </label>
+          )}
+          {account.askAck && account.ackNote && (
+            <div className="mt-1.5 text-[11.5px] leading-snug" style={{ color: 'var(--text-muted)' }} data-testid="codex-account-ack-retiring">{account.ackNote}</div>
           )}
         </div>
       )}

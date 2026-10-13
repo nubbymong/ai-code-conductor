@@ -221,7 +221,7 @@ describe('one row for both providers (rows 8, 24)', () => {
     expect(spans('account-name-acc-local')).toBe(true)
     expect(cellCount('account-name-acc-local')).toBe(5)
     // A sign-in method alone keeps the plan cell.
-    expect(q('account-method-acc-work')?.textContent).toBe('ChatGPT sign-in')
+    expect(q('account-method-acc-work')?.textContent).toBe('ChatGPT sign' + String.fromCodePoint(0x2011) + 'in')
     expect(spans('account-name-acc-work')).toBe(false)
     expect(cellCount('account-name-acc-work')).toBe(6)
     // Claude: the primary account's "Primary" is its plan cell; another account has none.
@@ -509,6 +509,20 @@ describe('Archived (N) with Restore (row 10, design 5.3)', () => {
     render(snapshot())
     await click('archived-restore-acc-old')
     expect(q('archived-error-acc-old')?.textContent).toBe('another account now uses this sign-in location')
+  })
+
+  // O5 (2.1.1-beta.3): the account 2.1.1-beta.2 registered for this
+  // computer's own Codex sign-in is moved off by archiving it, so Restore
+  // would take that retired sign-in in again: none, and the row says why.
+  it("offers no Restore on an archived account for this computer's own sign-in, and says why; a managed one keeps Restore", () => {
+    const archivedHome = { ...codexHome, lifecycle: 'archived' as const, isProviderDefault: false, archivedAt: new Date(2026, 9, 11, 9, 0).getTime() }
+    render(snapshot({ accounts: [codexWork, archivedHome, codexOld, claudeMain] }))
+    expect(q('archived-accounts-codex')!.textContent).toContain('Archived (2)')
+    expect(q('archived-account-acc-local')).not.toBeNull()
+    expect(q('archived-restore-acc-local')).toBeNull()
+    expect(q('archived-retired-acc-local')?.textContent).toBe('This app no longer uses the Codex sign-in already on this computer, so this account cannot be restored.')
+    expect(q('archived-restore-acc-old')).not.toBeNull()
+    expect(q('archived-retired-acc-old')).toBeNull()
   })
 
   it('offers no Restore while the provider is off, and no section with nothing archived', () => {

@@ -233,8 +233,10 @@ export interface SessionProvider {
    *  settings file, running the bundled bridge script with the session id and
    *  the path of its status-URL file; null when a path the command would
    *  carry is one the shell would read as more than a path (the app sets up
-   *  no status line). */
-  statuslineSetting?(resourcesDir: string, sessionId?: string, statusUrlFile?: string): { type: 'command'; command: string } | null
+   *  no status line); undefined when the deployed script is not one a launch
+   *  may run (the provider says why in the log; the app sets up no status
+   *  line). */
+  statuslineSetting?(resourcesDir: string, sessionId?: string, statusUrlFile?: string): { type: 'command'; command: string } | null | undefined
   /** Optional -- Claude only: the session's statusline POST URL on the
    *  conductor MCP server ('' while the server is not bound or the MCP is off;
    *  throws rather than build a URL that fails its charset guard). */
@@ -322,7 +324,10 @@ export interface SshCapableProvider extends SessionProvider {
   /** Returns shell command to write settings + statusline shim on remote.
    *  opts mirror the renderer master switches (absent = on):
    *  includeStatusLine=false omits the statusLine stanza; includeConductorMcp=false
-   *  writes an empty remote mcpServers (no built-in tools).
+   *  writes an empty remote mcpServers (no built-in tools). includeAttention
+   *  (absent = OFF, unlike the two above) gives the remote Claude the command
+   *  hook that carries its attention events back over the terminal
+   *  (ssh-attention.ts).
    *  `nonce` (#242 finding F1 (b)): host-generated per-session random token
    *  (randomId(), src/shared/id.ts) baked into the `setup ok` sentinel this
    *  command's script emits -- required, not optional, so a caller cannot
@@ -331,7 +336,7 @@ export interface SshCapableProvider extends SessionProvider {
     sessionId: string,
     remotePath: string,
     hooksConfig: { port: number; secret: string } | null,
-    opts: { includeStatusLine?: boolean; includeConductorMcp?: boolean; remoteMcpPort?: number } | undefined,
+    opts: { includeStatusLine?: boolean; includeConductorMcp?: boolean; remoteMcpPort?: number; includeAttention?: boolean } | undefined,
     nonce: string,
   ): string
   /** configureRemoteSettings for a Windows remote (cmd.exe), same contract. */

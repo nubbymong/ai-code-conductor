@@ -12,6 +12,7 @@ import type { ProjectGateResult } from '../shared/providers'
 import { acquireProfileConsumer, pendingProfileRefresh } from './profile-consumers'
 import { profileIdFromHome } from './profile-id'
 import { warmFirstStart } from './first-start-warmup'
+import { quitHold } from './quit-hold'
 import { claudeVersionRunEnv } from './providers/review-support'
 
 /** Grace added to a run's kill timeout for its consumer ref's leak bound: the
@@ -257,9 +258,10 @@ function spawnNow(
       // first start holds the start call while the OS checks it. That first
       // start runs off the main thread first: the program found above in
       // PATH's folders, with Claude's --version environment. A pre-start,
-      // never a gate; a run cancelled meanwhile starts nothing.
+      // never a gate; a run cancelled meanwhile answers at once and starts
+      // nothing.
       if (how.file !== bin) return run()
-      return warmFirstStart(bin, () => ({ env: claudeVersionRunEnv(process.env, 'win32') })).then(() => {
+      return warmUnlessAborted(bin, signal).then(() => {
         if (signal?.aborted) {
           logInfo('[claude-headless] Aborted before it started')
           return { code: 1, stdout: '', stderr: '\nAborted' }
@@ -282,6 +284,38 @@ function spawnNow(
 
 type HeadlessResult = { code: number; stdout: string; stderr: string }
 
+/** The first-start warm-up of `bin` (ADR-025), or the run's abort, whichever
+ *  comes first: an abort during the warm-up answers at once, as it does once
+ *  the run has started, rather than when the warm-up returns. The warm-up
+ *  itself goes on (it runs only `--version`, with Claude's --version
+ *  environment); a run aborted before it starts asks for none. */
+function warmUnlessAborted(bin: string, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted) return Promise.resolve()
+  const warm = warmFirstStart(bin, () => ({ env: claudeVersionRunEnv(process.env, 'win32') }))
+  if (!signal) return warm.then(() => undefined, () => undefined)
+  return new Promise<void>((resolve) => {
+    const done = (): void => {
+      signal.removeEventListener('abort', done)
+      resolve()
+    }
+    signal.addEventListener('abort', done, { once: true })
+    warm.then(done, done)
+  })
+}
+
+/** The answer a run aborted before it started gives, once `signal` aborts
+ *  (at once when it has). */
+function answerOnAbort(signal: AbortSignal): Promise<HeadlessResult> {
+  return new Promise((resolve) => {
+    const done = (): void => {
+      logInfo('[claude-headless] Aborted before it started')
+      resolve({ code: 1, stdout: '', stderr: '\nAborted' })
+    }
+    if (signal.aborted) done()
+    else signal.addEventListener('abort', done, { once: true })
+  })
+}
+
 /** Start the run as `start` says and settle on its exit, its timeout or an
  *  abort (the process tree ended either way). */
 function runHeadless(
@@ -293,6 +327,12 @@ function runHeadless(
   signal: AbortSignal | undefined,
   onStdout?: (chunk: string) => void,
 ): Promise<HeadlessResult> {
+  // Once the before-quit teardown has run, no run starts, on any platform and
+  // for any program (quit-hold.ts): it is never answered, unless it is
+  // aborted, which still answers at once. A direct claude.exe on Windows is
+  // held by its warm-up too; macOS, Linux and an npm claude.cmd were not.
+  const held = quitHold<HeadlessResult>('a headless Claude Code run')
+  if (held) return signal ? Promise.race([held, answerOnAbort(signal)]) : held
   return new Promise((resolve) => {
     logInfo(`[claude-headless] Spawning: claude ${args.join(' ')}${stdinData ? ' (with stdin)' : ''}${home ? ' (account home)' : ''}`)
 

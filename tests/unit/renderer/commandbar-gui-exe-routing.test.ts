@@ -10,6 +10,8 @@
  *   shell + GUI, policy capture-> run console-less, show the log
  *   shell + GUI, policy termin.-> type it, and arm the repaint sweep (fix E)
  *   probe unavailable/throws   -> type it (the warning is never a precondition)
+ *   shell on another machine   -> type it, never probe (#86: an SSH tab's partner
+ *                                 runs on the host; the probe looks at this PC)
  */
 import React from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -20,10 +22,12 @@ import { act } from 'react'
 
 const updateCommand = vi.fn()
 let COMMANDS: any[] = []
+/** The session the bar belongs to: local unless a case says SSH. */
+let SESSION: Record<string, unknown> = {}
 
 vi.mock('../../../src/renderer/stores/sessionStore', () => ({
   useSessionStore: (sel: any) =>
-    sel({ sessions: [{ id: 's-1', label: 't', workingDirectory: 'C:\\work', color: '#89b4fa', sessionType: 'local', provider: 'claude', model: 'sonnet' }],
+    sel({ sessions: [{ id: 's-1', label: 't', workingDirectory: 'C:\\work', color: '#89b4fa', sessionType: 'local', provider: 'claude', model: 'sonnet', ...SESSION }],
       activeSessionId: 's-1', updateSession: vi.fn() }),
 }))
 vi.mock('../../../src/renderer/stores/commandStore', () => ({
@@ -64,6 +68,8 @@ const exeApi = { probe, runCaptured, releaseRun, cancelRun, onRunData: () => () 
   pty: { write: ptyWrite },
   credentials: { save: vi.fn(), delete: vi.fn() },
   exe: exeApi,
+  // #86: an SSH partner is typed into only once main reports it at its shell.
+  ssh: { onFlowState: () => () => {}, getState: async () => ({ state: 'shell-only' }) },
 }
 ;(globalThis as any).window.electronPlatform = 'win32'
 
@@ -101,6 +107,7 @@ beforeEach(() => {
   ptyWrite.mockClear(); probe.mockReset(); runCaptured.mockReset()
   releaseRun.mockClear(); cancelRun.mockClear()
   updateCommand.mockClear(); scheduleBleedRepaints.mockClear()
+  SESSION = {}
   __clearProbeCache()
   // The cache would otherwise carry a previous test's answer into this one and
   // make the decision synchronously — a false green for the async cases.
@@ -324,6 +331,33 @@ describe('when the probe is not available at all', () => {
     } finally {
       ;(globalThis as any).window.electronAPI.exe = saved
     }
+  })
+})
+
+describe('a shell on another machine (#86)', () => {
+  // An SSH tab's partner shell runs on the host. The probe (and a captured run)
+  // look at, and start, programs on THIS PC, so neither applies: the line is
+  // typed into the partner, as the button always did, whatever this PC has.
+  it('a partner button on an SSH tab is typed and never probed, even for a program that is a GUI exe here', async () => {
+    SESSION = { sessionType: 'ssh', sshConfig: { host: 'box', port: 22, username: 'u', remotePath: '~' } }
+    probe.mockResolvedValue({ status: 'gui', token: 'bambu-studio', exePath: 'C:\\tools\\bambu-studio.exe' })
+    mount([shellCmd({ guiExePolicy: 'capture' })])
+    await settle() // the partner's flow state, caught up from main
+    click('Slice')
+    await settle()
+    expect(probe).not.toHaveBeenCalled()
+    expect(runCaptured).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-ux-id="gui-exe-dialog"]')).toBeNull()
+    expect(ptyWrite).toHaveBeenCalledTimes(1)
+    expect(ptyWrite.mock.calls[0][0]).toBe('s-1-partner')
+  })
+
+  it('the same button on a local tab is still probed', async () => {
+    probe.mockResolvedValue({ status: 'console', token: 'git', exePath: 'C:\\bin\\git.exe' })
+    mount([shellCmd({ prompt: 'git' })])
+    click('Slice')
+    await settle()
+    expect(probe).toHaveBeenCalledTimes(1)
   })
 })
 

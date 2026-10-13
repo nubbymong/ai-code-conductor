@@ -143,10 +143,12 @@ export function useRestartSession(
       clearSpawned(partnerPtyId)
       // Force re-mount by bumping createdAt. Merge the live store record +
       // overrides so a pre-restart store mutation (e.g. profileId) survives.
+      // The status is the live record's too: an SSH partner pane's Retry
+      // passes a snapshot of its session that can be minutes old (#86).
       const store = useSessionStore.getState()
       const live = store.getSession(session.id)
       store.removeSession(session.id)
-      store.addSession({ ...session, ...live, ...overrides, id: session.id, status: session.status, createdAt: Date.now() })
+      store.addSession({ ...session, ...live, ...overrides, id: session.id, status: live?.status ?? session.status, createdAt: Date.now() })
       return true
     }
     if (refuseRestart(session.id)) return false

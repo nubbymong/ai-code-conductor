@@ -59,8 +59,28 @@ const ARGS: Readonly<Record<CodexCliOperation, readonly string[]>> = {
   // stdout, nothing persisted, read-only sandbox; the prompt arrives on stdin
   // (`-`), never here. The caller runs it in the project folder. As the
   // analysis run does, it leaves out the settings file and the rules files
-  // of the account it runs on (--ignore-user-config, --ignore-rules).
-  'review': ['exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--sandbox', 'read-only', '-m', 'gpt-5.5', '-'],
+  // of the account it runs on (--ignore-user-config, --ignore-rules), and it
+  // runs with the hooks feature off (--disable hooks), the flag the analysis
+  // and insights runs below already pass to both supported CLIs (D3).
+  // The change itself arrives in the prompt (the review tool produces the
+  // diff, or reads the named files, in main), so the reviewer needs no tool:
+  // the same features the analysis run turns off are off here, and web search
+  // with them. On Windows, Codex's exec policy refuses every command of a
+  // read-only run with no Windows sandbox set, so a reviewer that had to read
+  // the project itself could read nothing there. Every name is the analysis
+  // run's own (both supported CLIs list them; an unknown one fails the run,
+  // which fails closed). Unlike the analysis, which runs in a folder the app
+  // made, a review runs in the project under review: that project's own
+  // instructions (AGENTS.md) are context for reviewing it, from the same
+  // source as the change, so project_doc_max_bytes and project_root_markers
+  // are left at Codex's defaults.
+  'review': [
+    'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--disable', 'hooks', '--sandbox', 'read-only',
+    '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'apps', '--disable', 'plugins', '--disable', 'browser_use',
+    '--disable', 'computer_use', '--disable', 'image_generation', '--disable', 'view_image', '--disable', 'multi_agent',
+    '--disable', 'code_mode', '--disable', 'code_mode_host',
+    '-c', 'web_search=disabled', '-m', 'gpt-5.5', '-',
+  ],
   // Usage track MP7 (ADR-022; the owner's scoped WP1.41 exception): the
   // protocol helper for one usage read, on its default stdio transport only:
   // never `daemon`, `proxy` or `--listen`, and no `--enable`, `--disable`

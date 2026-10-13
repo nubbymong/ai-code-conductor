@@ -15,6 +15,7 @@ import type { PathHintView } from '../../shared/providers'
 import { defaultLoginShell } from '../login-shell'
 import { withFullyQualifiedProgramLookup } from '../windows-programs'
 import { warmFirstStart } from '../first-start-warmup'
+import { quitHold } from '../quit-hold'
 import { timedStart } from '../main-thread-ops'
 import { claudeVersionRunEnv } from '../providers/review-support'
 import {
@@ -97,6 +98,24 @@ export function countCliSetupInUse(): number {
 
 export function writeCliSetupPty(data: string): void {
   cliSetupPty?.write(data)
+}
+
+/** Ends the Claude Code setup terminal, and cancels a start still waiting on
+ *  its first-start warm-up (it then starts nothing). The setup screen's own
+ *  ways out (Skip for now, Finish, Exit, and its Close, which runs Exit) reach
+ *  this through setup:killCliSetup. The app's quit teardown and the macOS
+ *  last-window sweep (index.ts) call it directly, so a window closed any
+ *  other way (Alt+F4, the taskbar, Cmd+Q, the red button) ends it too: before
+ *  that, those routes left the terminal to process exit. Safe with nothing
+ *  running, and safe twice: a running terminal is killed once, never again. */
+export function killCliSetupPty(): void {
+  cliSetupStart++
+  if (!cliSetupPty) return
+  try {
+    cliSetupPty.kill()
+  } catch { /* already gone */ }
+  cliSetupPty = null
+  logInfo('[setup] CLI setup PTY killed')
 }
 
 export function registerSetupHandlers(): void {
@@ -203,6 +222,12 @@ export function registerSetupHandlers(): void {
 
     const { cmd } = resolveClaudeForPty()
 
+    // Once the before-quit teardown has run, no setup terminal starts, on any
+    // platform (quit-hold.ts): the start is never answered. On Windows the
+    // warm-up below holds it too; on macOS and Linux nothing else would.
+    const held = quitHold<null>('the Claude Code setup terminal')
+    if (held) return held
+
     // The log line names what this terminal runs on each platform.
     if (process.platform === 'win32') {
       // ADR-025: straight after an install this is often the first start of
@@ -254,6 +279,12 @@ export function registerSetupHandlers(): void {
       }, 500)
     }
 
+    // This start's own terminal. Its exit drops it from the slot only while
+    // the slot still holds it: an earlier terminal's exit, which node-pty
+    // reports after the kill, must not drop a newer one, or the quit teardown
+    // (killCliSetupPty) could not reach the newer one.
+    const term = cliSetupPty
+
     // P3.15 round 4 (P2): an error on this terminal's input (the user types
     // into it) or output never quits the app; it ends on its own exit.
     guardPtyIo(cliSetupPty, (side, err) => logInfo(`[setup] CLI setup PTY ${side} failed (${stripSpoofableText(String(err?.code ?? err?.message ?? err), 120)})`))
@@ -271,7 +302,7 @@ export function registerSetupHandlers(): void {
       if (win && !win.isDestroyed()) {
         win.webContents.send(`pty:exit:${sessionId}`, exitCode)
       }
-      cliSetupPty = null
+      if (cliSetupPty === term) cliSetupPty = null
     })
 
     return sessionId
@@ -279,14 +310,7 @@ export function registerSetupHandlers(): void {
 
   ipcMain.handle('setup:killCliSetup', async () => {
     // Also a start still waiting on its warm-up: it then starts nothing.
-    cliSetupStart++
-    if (cliSetupPty) {
-      try {
-        cliSetupPty.kill()
-      } catch { /* ignore */ }
-      cliSetupPty = null
-      logInfo('[setup] CLI setup PTY killed')
-    }
+    killCliSetupPty()
     return true
   })
 }

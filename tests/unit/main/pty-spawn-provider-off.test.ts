@@ -24,7 +24,7 @@ vi.mock('electron', () => ({
 }))
 const spawnPty = vi.fn()
 const beginSpawnPreparation = vi.fn((win: unknown, sid: string) => ({ current: true, spawn: (o: unknown) => spawnPty(win, sid, o), abandon: vi.fn() }))
-const flow = { launchClaude: vi.fn() }
+const flow = { launchClaude: vi.fn(), runPostCommand: vi.fn() }
 // Session ids with a live PTY (what pty-manager's isSessionWritable answers).
 const live = new Set<string>()
 vi.mock('../../../src/main/pty-manager', () => ({
@@ -43,7 +43,8 @@ vi.mock('../../../src/main/pty-manager', () => ({
 vi.mock('../../../src/main/debug-capture', () => ({ logUserInput: vi.fn(), isDebugModeEnabled: () => false }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 const installVersion = vi.fn(async () => ({ ok: true }))
-vi.mock('../../../src/main/legacy-version-manager', () => ({ isVersionInstalled: () => false, installVersion }))
+const isVersionInstalled = vi.fn((_v: string) => false)
+vi.mock('../../../src/main/legacy-version-manager', () => ({ isVersionInstalled: (v: string) => isVersionInstalled(v), installVersion }))
 vi.mock('../../../src/main/services/pty-integrity-monitor', () => ({ getPtyIntegrityMonitor: () => ({ record: vi.fn(), report: vi.fn() }) }))
 vi.mock('../../../src/main/canvas/canvas-session-link', () => ({ noteSessionSpawnForCanvas: vi.fn() }))
 // WP2 PR 4, P4.3: every Ask spawn rebuilds the help folder in main first (and
@@ -87,6 +88,7 @@ const { startCodexHookFolders, stopCodexHookFolders } = await import('../../../s
 registerPtyHandlers(() => ({} as never))
 const spawn = handlers.get('pty:spawn')!
 const launchClaude = handlers.get('ssh:flow:launchClaude')!
+const runPostCommand = handlers.get('ssh:flow:runPostCommand')!
 const SID = 'a1b2c3d4e5f6a1b2c3d4e5f6'
 const CLAUDE_OFF = { started: false, refused: { code: 'provider-off', providerId: 'claude', message: 'Claude Code is off. Turn it on in Settings, Accounts.' } }
 const SSH = { host: 'build-box', port: 22, username: 'nick', remotePath: '~/proj' }
@@ -98,8 +100,10 @@ beforeEach(() => {
   spawnPty.mockClear()
   beginSpawnPreparation.mockClear()
   installVersion.mockClear()
+  isVersionInstalled.mockClear()
   loadCredential.mockClear()
   flow.launchClaude.mockClear()
+  flow.runPostCommand.mockClear()
   lease.release.mockClear()
   acct.present = true
   set('on')
@@ -233,6 +237,36 @@ describe('the SSH flow\'s "Launch Claude" is a Claude launch', () => {
   })
 })
 
+// #86: the partner shell of an SSH session is
+// let past the one-at-a-time rule because it is a PLAIN shell. Main keeps it
+// one: the flow never types the config's post-connect command into it and
+// never starts Claude in it, whatever the renderer asks.
+describe('the partner shell of an SSH session stays a plain shell', () => {
+  const P = SID + '-partner'
+  // Mutation to prove this can fail: drop the isPartnerPtyId guard in SSH_FLOW_LAUNCH_CLAUDE.
+  it('Launch Claude does nothing: the flow writes nothing, and no Claude use is counted', async () => {
+    await spawn({}, P, { cwd: 'C:/w', shellOnly: true, configId: 'cfgssh', ssh: { ...SSH, detachable: false } })
+    live.add(P)
+    await expect(launchClaude({}, P)).resolves.toBeUndefined()
+    expect(flow.launchClaude).not.toHaveBeenCalled()
+    expect(countSshClaudeLaunches()).toBe(0)
+    live.delete(P)
+  })
+
+  // Mutation to prove this can fail: drop the isPartnerPtyId guard in SSH_FLOW_RUN_POSTCOMMAND.
+  it('the post-connect command is never run in it', async () => {
+    await runPostCommand({}, P)
+    expect(flow.runPostCommand).not.toHaveBeenCalled()
+  })
+
+  it('the session itself keeps both (the control)', async () => {
+    await runPostCommand({}, SID)
+    expect(flow.runPostCommand).toHaveBeenCalledTimes(1)
+    await launchClaude({}, SID)
+    expect(flow.launchClaude).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('a shell-only SSH session\'s accepted "Launch Claude" is Claude Code in use', () => {
   const OTHER = 'b1b2c3d4e5f6a1b2c3d4e5f6'
   const shellSsh = { cwd: 'C:/w', shellOnly: true, configId: 'cfgssh', ssh: { ...SSH } }
@@ -280,7 +314,10 @@ describe('a shell-only SSH session\'s accepted "Launch Claude" is Claude Code in
   })
 })
 
-describe('the legacy Claude Code CLI install is for a Claude launch only', () => {
+// 2.1.1-beta.3: a Claude Code version pinned in an older release is no longer
+// used, so no launch installs one or asks whether one is installed. The pin is
+// left on the options as the renderer sent it; pty-manager does not use it.
+describe('a Claude Code version pinned in an older release starts no install, on any launch', () => {
   const pinned = { legacyVersion: { enabled: true, version: '2.0.1' } }
   it('not for a terminal-only session', async () => {
     set('off', 'off')
@@ -295,9 +332,13 @@ describe('the legacy Claude Code CLI install is for a Claude launch only', () =>
     expect(spawnPty).toHaveBeenCalledTimes(1)
   })
 
-  it('for a Claude session while Claude Code is on (the control)', async () => {
+  it('not for a Claude session either: it starts at once, with no wait and no question about the pin', async () => {
     await spawn({}, SID, { cwd: 'C:/w', ...pinned })
-    expect(installVersion).toHaveBeenCalledTimes(1)
+    expect(installVersion).not.toHaveBeenCalled()
+    expect(isVersionInstalled).not.toHaveBeenCalled()
+    expect(beginSpawnPreparation).not.toHaveBeenCalled()
+    expect(spawnPty).toHaveBeenCalledTimes(1)
+    expect(spawnPty.mock.calls[0][2]).toMatchObject(pinned)
   })
 })
 

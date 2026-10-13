@@ -11,12 +11,12 @@ import { awaitCodexHookFolders } from '../codex-hook-folders'
 import { getGateway } from '../hooks'
 import { providerLaunchRefusal } from '../provider-launch-gate'
 import { claimConfigLaunch, settleConfigLaunch, discardConfigLaunch, noteConfigLaunchPreparation, type ConfigLaunchTicket } from '../launch-one-at-a-time'
+import { isPartnerPtyId } from '../../shared/multi-spawn-rule'
 import type { AccountLease, AccountsService } from '../providers/core'
 import type { ConversationCarryNotice } from '../../shared/providers'
 import { forgetCanvasMarkers } from '../canvas/canvas-marker-delivery'
 import { logUserInput, isDebugModeEnabled } from '../debug-capture'
 import { logInfo } from '../debug-logger'
-import { isVersionInstalled, installVersion } from '../legacy-version-manager'
 import { isValidLegacyVersion } from '../../shared/legacy-version'
 import { loadCredential } from '../credential-store'
 import { readConfig } from '../config-manager'
@@ -48,6 +48,7 @@ import {
   CODEX_PRESETS,
 } from '../sanitize-restored-spawn-options'
 import { startProfileStepsPending, startProfileStepsSettled } from '../account-profiles'
+import { scriptFoldersPending, awaitScriptFolders } from '../script-folders'
 
 /** SSH options as received from the renderer (no passwords — only configId) */
 interface RendererSSHOptions {
@@ -335,9 +336,11 @@ export const spawnOptionsSchema = z.object({
     enabled: z.boolean(),
     version: z.string(),
   }).refine((lv) => !lv.enabled || isValidLegacyVersion(lv.version), {
-    // P0.3: only a legacy-ENABLED session uses the version as a path/spawn
-    // coordinate, so only then must it be strict semver. Disabled configs may
-    // carry a stale/empty version that is never used — leave those alone.
+    // P0.3. Since 2.1.1-beta.3 no launch uses the version: a Claude Code
+    // version pinned in an older release is not used, and the launch starts
+    // the installed Claude Code. An enabled pin must still be strict semver,
+    // so a malformed one is refused here rather than carried on. Disabled
+    // configs may carry a stale or empty version; leave those alone.
     path: ['version'],
     message: 'legacyVersion.version must be valid semver when enabled',
   }).optional(),
@@ -856,13 +859,13 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
       if (refused) throw new Error(`Codex session refused: ${refused.message}`)
     }
 
-    // A spawn that awaits work in main first -- a Codex account launch, a
-    // legacy CLI install -- is registered with pty-manager for the wait, so a
+    // A spawn that awaits work in main first -- a Codex account launch, the
+    // holds below -- is registered with pty-manager for the wait, so a
     // close, a sweep or a newer spawn of this session supersedes it (see
     // beginSpawnPreparation). A spawn that awaits nothing goes straight on.
-    // The legacy pin is a Claude Code CLI: installed only for a Claude launch
-    // the gate above let through, never for a shell or a Codex session.
-    const legacyInstall = launchProvider === 'claude' && !!(options?.legacyVersion?.enabled && options.legacyVersion.version && !isVersionInstalled(options.legacyVersion.version))
+    // A Claude Code version pinned in an older release is not used
+    // (2.1.1-beta.3): every launch runs the installed Claude Code, so nothing
+    // is installed or checked for the pin, and a launch never waits for it.
     // ADR-009 round 1 (PR 4): an Ask spawn waits too, for the runs in the help
     // folder to end before it is rebuilt (below); while it waits, the end of
     // the tab's own previous run is this spawn's to supersede, as a prepared
@@ -874,22 +877,19 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     // them as a prepared spawn (a close or a newer spawn of the tab
     // supersedes it meanwhile), so it starts on that account.
     const holdForStartSteps = launchProvider === 'claude' && !options?.ssh && !options?.profileId && startProfileStepsPending()
-    const preparation = codexSession || legacyInstall || askSpawn || holdForStartSteps ? beginSpawnPreparation(win, sessionId, options?.shellOnly ? null : (options?.provider ?? 'claude')) : null
+    // A local Claude Code or Codex launch while the start's check of the
+    // resources folder's scripts folders, and the deploys into them, still
+    // run (script-folders.ts) waits for them, bounded, as a prepared spawn,
+    // so a tab restored at start gets its status line, resume list and hooks;
+    // past the bound it starts without them.
+    const holdForScripts = launchProvider !== null && !options?.ssh && scriptFoldersPending()
+    const preparation = codexSession || askSpawn || holdForStartSteps || holdForScripts ? beginSpawnPreparation(win, sessionId, options?.shellOnly ? null : (options?.provider ?? 'claude')) : null
     // PR-level ADR-009 round 1 (B1): once that preparation is cancelled or
     // superseded, this spawn's ticket stops counting as one under way.
     if (preparation) noteConfigLaunchPreparation(configClaim.ticket, () => preparation.current)
     let codexLease: AccountLease | undefined
     let carry: RespawnCarry | undefined
     try {
-      // Auto-install legacy version before spawn if needed
-      if (legacyInstall && options?.legacyVersion) {
-        logInfo(`[pty] Auto-installing legacy Claude CLI v${options.legacyVersion.version} before spawn`)
-        const result = await installVersion(options.legacyVersion.version)
-        if (!result.ok) {
-          logInfo(`[pty] Legacy install failed, falling back to system claude: ${result.error}`)
-        }
-      }
-
       // Resolve SSH credentials in the main process (never transit through renderer).
       // terminalSecret is stripped up front: this object is forwarded to spawnPty
       // verbatim (the zod parse result is intentionally discarded), so a field the
@@ -923,7 +923,14 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
       // resolved block is built FROM the saved config, so nothing the renderer
       // added rides along; credentials are injected only for a bound spawn.
       if (options?.ssh && options.configId) {
-        const bound = bindSshToSavedConfig(options.ssh, options.configId, readConfig('configs'))
+        // #86: the partner terminal of an SSH session is a PLAIN shell on the
+        // config's own host: bound to the same saved host, port and user, with
+        // no post-connect command, no container runtime and no persistence
+        // (bindSshToSavedConfig's plainShell). The sudo secret exists only for
+        // a post-connect command, which a plain shell never runs, so it is not
+        // read for one.
+        const plainShell = options.shellOnly === true && isPartnerPtyId(sessionId)
+        const bound = bindSshToSavedConfig(options.ssh, options.configId, readConfig('configs'), { plainShell })
         if (!bound.ok) {
           logWarn(`[pty] SSH spawn refused: ${bound.reason}`)
           throw new Error(`SSH spawn refused: does not match a saved config (${bound.reason})`)
@@ -934,7 +941,7 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
         // renderer rewrites the host/username/port. So a redirected credential is
         // already gone before it could be loaded here — no extra guard at this read.
         const password = loadCredential(options.configId) ?? undefined
-        const sudoPassword = loadCredential(options.configId + '_sudo') ?? undefined
+        const sudoPassword = plainShell ? undefined : loadCredential(options.configId + '_sudo') ?? undefined
         const sshWithCreds: SSHOptions = { ...bound.ssh, password, sudoPassword }
         resolvedOptions = { ...resolvedOptions, ssh: sshWithCreds }
       } else if (options?.ssh) {
@@ -979,6 +986,12 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
         const secrets = collectCommandSecrets(readConfig('commands'), options.configId, loadCredential)
         if (Object.keys(secrets).length > 0) resolvedOptions = { ...resolvedOptions, commandSecrets: secrets }
       }
+
+      // The scripts folders (holdForScripts above). Waited for before a Codex
+      // launch's own wait for its hook folders below: the start wires those
+      // only after the scripts folders' check and the deploys (index.ts), so
+      // each wait's bound then covers its own work alone.
+      if (holdForScripts) await awaitScriptFolders()
 
       // WP2 (plan A10): a Codex session runs in its account's realm -- the
       // account the request names, else the provider default -- validated,
@@ -1027,8 +1040,9 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
         if (!options?.ssh && getGateway()?.status()?.listening === true) await awaitCodexHookFolders()
       }
 
-      // The start's profile steps (holdForStartSteps above), waited for before
-      // the check below, so nothing starts for a tab closed meanwhile.
+      // The start's profile steps (holdForStartSteps above), and the scripts
+      // folders before them, waited for before the check below, so nothing
+      // starts for a tab closed meanwhile.
       if (holdForStartSteps) await startProfileStepsSettled()
 
       // Closed, swept or superseded while it was prepared: start nothing, and
@@ -1214,8 +1228,19 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
   })
 
   // SSH manual-flow controller — renderer drives stage transitions.
+  //
+  // #86: the partner shell of an SSH session is a PLAIN shell on the host,
+  // and that is why the one-at-a-time rule does not count it. It never runs
+  // the config's post-connect command and never becomes Claude: main refuses
+  // both here, whatever the renderer asks, so the shell the rule let through
+  // stays a shell. Typed by the user in that shell, anything
+  // is theirs to run, as in any terminal.
   ipcMain.handle(IPC.SSH_FLOW_RUN_POSTCOMMAND, async (_event, sessionId: string) => {
     sessionIdSchema.parse(sessionId)
+    if (isPartnerPtyId(sessionId)) {
+      logWarn(`[ssh] ${sessionId}: post-connect command refused: a partner shell runs none`)
+      return
+    }
     getSshFlow(sessionId)?.runPostCommand()
   })
 
@@ -1228,6 +1253,13 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
   // flow types `claude`. A Claude session is counted by pty-manager already.
   ipcMain.handle(IPC.SSH_FLOW_LAUNCH_CLAUDE, async (_event, sessionId: string) => {
     sessionIdSchema.parse(sessionId)
+    // #86: a partner shell never becomes Claude (above): nothing is written
+    // and nothing is counted. No screen offers it; the overlay is gone once
+    // the partner reaches its shell.
+    if (isPartnerPtyId(sessionId)) {
+      logWarn(`[ssh] ${sessionId}: Launch Claude refused: a partner shell stays a plain shell`)
+      return
+    }
     const refused = providerLaunchRefusal('claude')
     if (refused) return { refused }
     if (sshShellSessions.has(sessionId)) sshClaudeLaunches.add(sessionId)

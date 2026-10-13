@@ -2,7 +2,9 @@
 // One isolated, non-interactive `codex exec` per review, run from a launch
 // the accounts service prepared (kind `review`): the executable setup proved,
 // the realm's environment (ambient credentials removed, CODEX_HOME set), in
-// the reviewed project, read-only sandbox, nothing persisted. The prompt goes
+// the reviewed project, read-only sandbox, no tool that runs a command or
+// reads a file (the change itself is in the prompt; cli-runner.ts, `review`),
+// nothing persisted. The prompt goes
 // on stdin -- never argv, never a shell -- so no text in it is re-read by
 // cmd.exe. The run goes through the CLI runner: no shell, the whole chain
 // killed on a deadline or a cancel.

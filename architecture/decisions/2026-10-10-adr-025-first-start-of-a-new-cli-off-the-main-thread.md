@@ -100,6 +100,32 @@ done. Containment:
    `--version` leaves that child running. This is a known difference, kept for
    now: a tree kill is a second program (`taskkill`) the worker would start,
    and only a launcher whose real program hangs on `--version` is affected.
+   From the quit on (2.1.1-beta.3), no caller is answered: one waiting on a
+   warm-up, or asking for one, waits for good, so none starts its own program
+   into the teardown after the agents and terminals were ended, and a warm-up
+   still reading its file or building its environment starts no worker. The
+   first caller held this way logs one line, so a wait left by a quit that was
+   cancelled after the teardown can be traced.
+   What that hold covers, and what it does not: the warm-up reads its latch
+   before it looks at the platform or the program, so it holds every start
+   that awaits the warm-up first. Four callers ask for one only on some
+   paths: the setup terminal on Windows only (for any program, an npm
+   `claude.cmd` included), and headless runs, cloud agents and `claude auth
+   status` only for a direct `claude.exe` on Windows. For their other paths
+   (macOS and Linux for all four, an npm `claude.cmd` on Windows for the
+   last three) the same flush sets a second latch, the quit hold
+   (`quit-hold.ts`), which each of the four reads in the
+   same step as its own start, through both routes of `claude auth status`
+   (the status read inside a sign-out is part of the sign-out, and is not
+   held); a held start starts nothing and is never answered, except that a
+   headless run still answers an abort at once. No other start reads it, so
+   a start that neither awaits the warm-up nor is one of those four (an SSH
+   launch, a Claude Code session terminal, the Claude sign-out through the
+   CLI runner, with the status read inside it) is not held. And only the
+   before-quit teardown (`flushPendingProviderCliKills`, `index.ts`) sets
+   either latch: the exit that installs an update (`ipc/update-handlers.ts`)
+   and SIGTERM end the app without it. It is not a guarantee that no CLI
+   starts after the teardown.
 
 The callers routed through it:
 
@@ -113,10 +139,15 @@ The callers routed through it:
   start, cancels it: the terminal is then not started at all;
 - the /insights terminal (`insights-runner.ts`, before node-pty);
 - headless Claude Code runs (`claude-headless.ts`, a direct `claude.exe`
-  only; a run aborted during the wait starts nothing), cloud agents
+  only; a run aborted during the wait starts nothing and, from 2.1.1-beta.3,
+  answers at once rather than when the warm-up returns), cloud agents
   (`cloud-agent-manager.ts`, a direct `claude.exe` only; an agent cancelled
-  during the wait starts nothing) and the Accounts panel's `claude auth
-  status` (`account-web/claude-cli-auth.ts`, a direct `claude.exe` only);
+  during the wait starts nothing; from 2.1.1-beta.3 the wait runs inside the
+  agent's account hold, so the account reads as in use during it) and the
+  Accounts panel's `claude auth status` (`account-web/claude-cli-auth.ts`, a
+  direct `claude.exe` only; from 2.1.1-beta.3 the account is held for the
+  warm-up plus the status run, and the switch-off rule is asked again right
+  before the run, so Claude Code switched off meanwhile starts nothing);
 - every local launch the accounts service prepares (`accounts-service.ts`):
   Codex sessions, reviews and background runs, and Claude reviews.
 

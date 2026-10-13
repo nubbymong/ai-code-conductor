@@ -5,8 +5,15 @@
 // word exactly as written. Elsewhere a POSIX shell reads the words as they
 // are. Pure; nothing is started (the PowerShell run of the same lines is
 // spawn-claude-user-args-powershell.test.ts, CI and VM only).
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { buildClaudeLaunchCommand, claudeUserArgsOnLine } from '../../../src/main/spawn-claude-command'
+
+// The Windows picker route assumes node.exe is found (pickerNodeFound,
+// 2.1.1-beta.3): answered here, never by this runner's PATH.
+vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/windows-programs')>()
+  return { ...actual, findOnWindowsPath: (...a: Parameters<typeof actual.findOnWindowsPath>) => (a[0].length === 1 && a[0][0] === 'node.exe' ? 'C:\\nodejs\\node.exe' : actual.findOnWindowsPath(...a)) }
+})
 
 const UUID = '11111111-2222-3333-4444-555555555555'
 const APP = " --settings 'C:\\res\\s.json' --mcp-config 'C:\\res\\m.json'"
@@ -56,6 +63,9 @@ describe('the launch line places the user\'s words after the app\'s options, quo
     it(`posix, ${name}`, () => {
       const line = buildClaudeLaunchCommand({ ...base, ...extra, platform: 'posix', userArgs: '--add-dir=/srv -d' })
       expect(line.endsWith(`${APP} --add-dir=/srv -d; exit`), line).toBe(true)
+      // Once: the picker line (2.1.1-beta.3, S10) picks the program in the
+      // shell and carries the options and the words a single time.
+      expect(line.split(`${APP} --add-dir=/srv -d`), line).toHaveLength(2)
     })
   }
   it('without user words the line is the app\'s alone', () => {

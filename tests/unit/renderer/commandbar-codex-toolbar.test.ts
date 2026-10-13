@@ -162,7 +162,7 @@ describe('CommandBar Codex toolbar (P5.5)', () => {
       root.render(React.createElement(CommandBar, { sessionId: 's-1', parentSessionId: 's-1' }))
     })
     const sel = modelSelect()!
-    expect(Array.from(sel.options).map((o) => o.value)).toEqual(['', 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2'])
+    expect(Array.from(sel.options).map((o) => o.value)).toEqual(['', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2'])
     expect(sel.value).toBe('gpt-5.5')
     expect(Array.from(sel.options).map((o) => o.value)).not.toContain('gpt-5.3-codex')
   })

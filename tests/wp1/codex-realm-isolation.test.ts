@@ -8,9 +8,16 @@
 // a link resolves to its canonical path; and an external home that overlaps
 // the managed tree blocks every managed operation.
 //
+// 2.1.1-beta.3 (O6): on Windows the managed folders get the app's real
+// owner-only rule, and one case gives its temp resources folder a second
+// drive's root rights (this user Modify alone) first: the account folder is
+// prepared there and left owner-only.
+//
 // HOST QUARANTINE: this suite writes a temp directory, creates junctions or
 // symlinks, and starts processes. It runs in CI and on the VM, never on the
-// owner's workstation. It touches no ACL, no real home and no real Codex.
+// owner's workstation. On Windows it changes the rights of its own temp
+// folders (the owner-only rule, and icacls in the O6 case); it touches no
+// real home and no real Codex.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -19,6 +26,7 @@ import { execFileSync } from 'node:child_process'
 import { createCodexPackage, runCodexCli, CODEX_REALMS_DIRNAME } from '../../src/main/providers/codex'
 import type { CodexDiscoveryDeps, CodexFolderLookup } from '../../src/main/providers/codex'
 import { mkdirSecure, _setRootsForTest } from '../../src/main/account-profiles'
+import { runWindowsPowerShell } from '../../src/main/owner-only-folders'
 
 const IS_WIN = process.platform === 'win32'
 const hex = (c: string) => c.repeat(16)
@@ -242,4 +250,47 @@ describe('managed Codex folders on a real filesystem', () => {
       fs.rmdirSync(at)
     }
   })
+})
+
+// 2.1.1-beta.3, O6: a resources folder whose rights give this user Modify
+// alone, as a folder made at a second drive's root inherits them
+// (Administrators and SYSTEM full control, Authenticated Users Modify, Users
+// read and run, no CREATOR OWNER). beta.2's owner-only rule wrote the owner of
+// the new codex-realms folder, which needs a right only full control gives,
+// so every managed account folder there was refused and taken back. Not
+// elevated only, as the app runs: an elevated process has the Administrators
+// group's full control there.
+describe.runIf(IS_WIN)('a resources folder that gives this user Modify alone (a second drive\'s root, O6)', () => {
+  const ps = (script: string, dir = '') => runWindowsPowerShell(script, { CCC_T_DIR: dir }).then((o) => o.trim())
+
+  it('a managed account folder is prepared with the real owner-only rule: the root and the home are left owner-only, owned by the user (red on beta.2)', async (ctx) => {
+    if ((await ps('([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)')) === 'True') {
+      return ctx.skip('an elevated process has full control under a second drive\'s root; the case runs where the app does, not elevated')
+    }
+    const icacls = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe')
+    execFileSync(icacls, [res, '/inheritance:r', '/grant:r', '*S-1-5-32-544:(OI)(CI)F', '*S-1-5-18:(OI)(CI)F', '*S-1-5-11:(OI)(CI)M', '*S-1-5-32-545:(OI)(CI)RX'], { stdio: 'ignore', windowsHide: true, timeout: 30_000 })
+    const user = await ps('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
+    expect(user).toMatch(/^S-1-/)
+    /** Owner, inheritance off or not, and each entry as `SID|rights|flags|inherited`, read by SID. */
+    const rightsOf = async (dir: string) => JSON.parse(await ps([
+      "$a = [IO.Directory]::GetAccessControl($env:CCC_T_DIR, [Security.AccessControl.AccessControlSections]'Owner, Access')",
+      "$r = @(foreach ($x in $a.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) { '{0}|{1}|{2}|{3}' -f $x.IdentityReference.Value, [int]$x.FileSystemRights, [int]$x.InheritanceFlags, $x.IsInherited })",
+      '[pscustomobject]@{ owner = $a.GetOwner([Security.Principal.SecurityIdentifier]).Value; protected = $a.AreAccessRulesProtected; rules = $r } | ConvertTo-Json -Compress',
+    ].join('\n'), dir)) as { owner: string; protected: boolean; rules: string[] | string }
+    // Control: the resources folder has that shape, with no entry for this user.
+    const shaped = await rightsOf(res)
+    expect(shaped.protected).toBe(true)
+    const shapedRules = Array.isArray(shaped.rules) ? shaped.rules : [shaped.rules]
+    expect(shapedRules.map((r) => r.split('|')[0]).sort()).toEqual(['S-1-5-11', 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-545'])
+
+    const pkg = pkgFor(new Map([[RA, managed(RA)]]))
+    expect(await pkg.realmFolders!.prepare({ authRealmId: RA })).toEqual({ ok: true, created: true })
+    for (const dir of [path.join(res, CODEX_REALMS_DIRNAME), homeOf(RA)]) {
+      const got = await rightsOf(dir)
+      expect(got.owner, dir).toBe(user)
+      expect(got.protected, dir).toBe(true)
+      const rules = Array.isArray(got.rules) ? got.rules : [got.rules]
+      expect(rules.sort(), dir).toEqual([`${user}|2032127|3|False`, 'S-1-5-18|2032127|3|False'].sort())
+    }
+  }, 60_000)
 })
