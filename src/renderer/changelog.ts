@@ -22,7 +22,7 @@ export interface ChangelogEntry {
 export const changelog: ChangelogEntry[] = [
   {
     version: '2.1.1-beta.3',
-    date: '2026-10-11',
+    date: '2026-10-13',
     highlights: 'Fixes from testing 2.1.1-beta.2. Codex accounts are now always added in the app, and anyone who chose the Codex sign-in already on this computer in 2.1.1-beta.2 gets one page, once, to replace it. What\'s New shows what is new since the release you came from, and every prerelease of 2.1.1 shows the whole 2.1.1 story. An SSH session\'s partner terminal now opens on the host, remote SSH sessions raise the attention indicator, new sessions start on a computer without Node.js, and the Windows installer looks like the app.',
     changes: [
       { type: 'fix', description: 'Codex accounts are now always added in the app. The Set up Codex page and Settings, Accounts no longer offer to use the Codex sign-in already on this computer (~/.codex): the app can never tell whose sign-in that is, so it had to be confirmed at every launch and could never run code reviews. Add a Codex account instead, as you would a Claude account.' },
