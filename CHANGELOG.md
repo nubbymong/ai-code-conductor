@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
-## [2.1.1-beta.3] - 2026-10-11
+## [2.1.1-beta.3] - 2026-10-13
 
 > Fixes from testing 2.1.1-beta.2. Codex accounts are now always added in the app, and anyone who chose the Codex sign-in already on this computer in 2.1.1-beta.2 gets one page, once, to replace it. What's New shows what is new since the release you came from, and every prerelease of 2.1.1 shows the whole 2.1.1 story. An SSH session's partner terminal now opens on the host, remote SSH sessions raise the attention indicator, new sessions start on a computer without Node.js, and the Windows installer looks like the app.
 
