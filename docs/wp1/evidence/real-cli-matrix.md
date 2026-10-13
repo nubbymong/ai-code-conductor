@@ -19,7 +19,7 @@ Until they are recorded, every item this file serves except WP1.71 stays `planne
 | WP1.2 | Rows 2, 9, 25 and 33 on the Windows test VM: the real Codex 0.153.4 and 0.155.1 on both install routes, fake keys, the loopback fake model. The mode-matrix cells are in `mode-matrix.md` | A real signed-in Codex session with a consented identity on Windows, and with the owner's sign-in on the macOS test user. Rows 9, 25 and 33 on macOS and Linux with fake keys, as on Windows, unless the owner rules otherwise: they are open (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`) | A real Codex-only session on Linux, with rows 9, 25 and 33 there in a signed-in session: `docs/wp1/owner-decisions-2026-10-13.md#UA1` |
 | WP1.10 | Nothing yet | The two-account run on Windows with two consented identities | The two-account run on macOS and Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA2` |
 | WP1.20 | Nothing yet | The browser sign-in into the selected managed account on Windows and on macOS | A disposable identity, and the Linux sign-in: `docs/wp1/owner-decisions-2026-10-13.md#UA4` |
-| WP1.32 | The CI conformance job's installs on each OS (WP1.71 below; npm, not through the app) | The app's own install ("Run it for me") and sign-in on the Windows test VM | The real installer smoke through the app on macOS and Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA5` |
+| WP1.32 | The CI conformance job's installs on each OS (WP1.71 below; npm, not through the app). One run of the app's own npm install on the Windows test VM, which installed Codex, but the app did not then find it (below) | The app's own install ("Run it for me") reaching a version class, and sign-in, on the Windows test VM | The real installer smoke through the app on macOS and Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA5` |
 | WP1.64 | Nothing yet (every agent row uses fake keys) | The real Claude smoke with the disposable Claude account; the real Codex sign-in, status and sign-out; one real prompt to a working model; `codex_review`; the macOS sign-in | Disposable Codex identities, the API-key flow, the second-identity flows off Windows, every credential-bearing flow on Linux, and `codex_review` (row 49) on macOS and Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA6` |
 | WP1.71 | All 9 legs: the minimum, pinned and release-candidate CLI on Windows, macOS and Linux | Nothing (the owner confirms the release-candidate version at go) | None: WP1.71 may never read `unavailable` (ADR-026) |
 
@@ -234,8 +234,27 @@ non-secret: it names which kind of identity was used, never an address or an acc
 
 > **PENDING: WP1.32, the opt-in real installer smoke through the app.** On the Windows test VM: Codex's "Run it for
 > me" in the qualification build, its outcome and the version class found after it, then what it installed removed.
-> Being run by the packaged-build lane; not recorded yet. The CI installs per OS are recorded under WP1.71 above.
-> Expected unavailable: the same through the app on macOS and Linux, `docs/wp1/owner-decisions-2026-10-13.md#UA5`.
+> The CI installs per OS are recorded under WP1.71 above. Expected unavailable: the same through the app on macOS and
+> Linux, `docs/wp1/owner-decisions-2026-10-13.md#UA5`.
+>
+> **One run on the Windows test VM (VM agent, 2026-10-13): the install worked, but the app did not then find Codex.**
+> - The account: a standard account with no Codex. A fresh install of the qualification build was walked through its
+>   first run to Set up Codex.
+> - The page read "Codex CLI not found". It offered two recipes, each with "Run it for me" enabled: OpenAI's own
+>   installer, and `npm.cmd install -g @openai/codex`.
+> - The npm recipe was run, because its removal is exact. After the confirmation it ran in a new terminal tab. npm
+>   installed Codex 0.162.1 (npm's latest, above the tested range) into the account's npm global folder.
+> - After "Back to setup" the page read "Codex CLI not found" and "The command ended, but Codex was still not found."
+>   The app shows that second line only once the command it ran has ended (`afterInstallMessage`,
+>   `src/renderer/onboarding/InstallRecipeList.tsx`). So the command had ended and the app had checked again, and that
+>   check still did not find Codex. No version class was reached.
+> - The likely cause: in this account that folder is on neither the user's nor the machine's PATH, because Node.js was
+>   installed by another user. This was not tested: no run put the folder on the PATH and checked again.
+> - OpenAI's installer route was not tried. Codex was then uninstalled with npm, and the account was restored.
+> - Neither severe nor a regression: 2.1.0 has no "Run it for me".
+>
+> Still owed: a run that reaches the version class, or the owner's decision on this Windows part, which is the plan's
+> fallback. That decision includes whether this account shape is in scope. No decision on it is recorded yet.
 
 > **PENDING: WP1.64, real Claude and Codex smoke and the credential-bearing flows.** On the Windows test VM: the
 > disposable Claude account signed in, used, signed out, and still signed out after a relaunch; the real Codex sign-in,

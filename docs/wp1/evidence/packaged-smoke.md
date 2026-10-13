@@ -4,10 +4,11 @@ This file is the evidence for WP1.63: a clean install of the signed release buil
 found and classed, a session on a managed account's own `CODEX_HOME`, and a clean Quit. It covers Windows, macOS and
 Linux.
 
-**Status: partly recorded.** The Windows smoke and the macOS signature checks are recorded below. The rest is in
-PENDING blocks: the Windows checks in an interactive logon and the packaged upgrade, the macOS install and first launch
-by the owner on the macOS test user, and the Linux run. WP1.63 stays `planned` until every part is recorded. No part
-of it is expected to be unavailable: it would be only if a host part could not be taken, on an owner decision.
+**Status: partly recorded.** Recorded below: the Windows smoke, the Windows upgrade from 2.1.0, and the macOS signature
+checks. In the upgrade, Vision did not start, and only the console check can say whether that happens outside the
+agent's logon. The rest is in PENDING blocks: the Windows checks in an interactive logon, the macOS install and first
+launch by the owner on the macOS test user, and the Linux run. WP1.63 stays `planned` until every part is recorded. No
+part of it is expected to be unavailable: it would be only if a host part could not be taken, on an owner decision.
 
 boundHead: d1525759a7a42d941beeff601af3415fddd8afdd (PR #644's squash merge on `beta`; `release/v2.1.1` points at it).
 
@@ -77,6 +78,44 @@ step. Its model was the loopback fake model, named in that account folder's `con
     on 9222, 19333 or 19334 was left.
   - In an interactive standard-user console logon (the user's real case): PENDING, below.
 
+### Upgrade from 2.1.0 (agent, 2026-10-13)
+
+**Where and how it ran.** The same Windows test VM, the same standard account, the same job runner and wizard driver.
+Before this part, the clean-install copy above was removed with its own uninstaller (`/currentuser /S`, Valid,
+exit 0). The account was then restored to its state before the lane, with a matching state report.
+
+**Setup.**
+- Signed 2.1.0 was installed with `/S`. Its wizard's own data-folder values were written to the registry first,
+  because a silent install skips those pages.
+- Fixture data was seeded by file (fictional, never a real sign-in):
+  - three configs: a local Claude config on the primary account, a local Claude config bound to a second profile,
+    and an SSH config to a documentation address;
+  - stand-in credentials for the primary Claude account and for Codex;
+  - a saved Claude Code transcript;
+  - settings as a 2.1.0 user has them (Codex off, no answer to the Codex question).
+- The second Claude profile was created by 2.1.0 itself, through its own IPC. Its stand-in credentials were written by
+  file after 2.1.0 quit.
+  - So 2.1.0 never read that profile's identity. In 2.1.1 the account list shows no address for it and labels it
+    "setup incomplete".
+  - Its credential state still reads signed in, and its session card names its account.
+  - This comes from the fixture, not from the app.
+- 2.1.0 was run once and quit. Every data and credential file was then hashed.
+- The qualification installer was started the double-click way, and its wizard was walked with the forward buttons
+  only.
+
+| Check | Result |
+|---|---|
+| Wizard over 2.1.0 | **PASS.** The pages: Welcome ("If an earlier version is installed, Setup updates it and keeps your data and resources folders"); Data folder and Resources folder, with the existing values preselected; "Only for me" preselected, with "There is already a per-user installation ... Will reinstall/upgrade"; the install location unchanged; Install; Finish with "Run AI Code Conductor" checked. 66 s. |
+| One uninstall entry (HKCU and HKLM, both views) | **PASS.** 1, in HKCU (`0210f08e-15d0-5073-901d-684e27f31b7d`, DisplayVersion 2.1.1); none in HKLM. |
+| Uninstaller | **PASS.** `Uninstall AI Code Conductor.exe` is version 2.1.1 and Authenticode Valid, with the same signer thumbprint. The app exe is 2.1.1.0 and Valid. Its `app.asar` has the same SHA-256 as the clean install's. |
+| Data and credentials kept | **PASS.** All 17 user-data and credential files have equal SHA-256 before and after: the three stand-in credential files in the account's home, the transcript, `configs.json`, `profiles.json`, `window-state.json` and its backup, `command-bar-ui.json`, both profiles' credential and identity files, and the first-run Claude config backup. No file was removed. These changed, as the migration and use write them: `settings.json`, `app-meta.json`, `usage-tracking.json` and `github-config.json`; the help docs (`app-knowledge.md`, `ask-conductor-skill.md` and `ask-conductor-skill-portable.md`); the picker scripts ("Scripts rewritten", below); and the two app databases' journal files (`-shm` and `-wal`; `tokenomics.db` and `transcripts.db` themselves are equal). |
+| Profiles start | **PASS.** Each local Claude config was started from the Saved tab. The account dialog preselected the primary account for the first config and the bound profile for the second, and each was started with Launch. Each session card names its own profile's account. The stand-in Claude Code recorded both starts in the project folder. Both profiles read signed in: each has its address, expiry and refresh token, and no "credentials missing". |
+| The one-time Codex question | **PASS.** "Do you use Codex?" was shown once, after What's New and the GitHub notice. Its text: "Codex now has accounts of its own in this app. Choose again: your earlier Codex setting does not carry over." It was answered with "No, I don't use Codex". It was not asked again at a later start, nor after the install chain (`rollback.md`). |
+| What's New heading | **Shown. The exact words:** the heading is **"What's new since 2.1.0"**. Under it: "13 things worth knowing, in one line each, and 5 of them have a page of their own, just behind this one." The first section is "CODEX, A FULL ASSISTANT". It was dismissed with "Skip the showcase". The heading names the release the user came from. The release plan's upgrade check reads "the heading names the running release". Which wording is the check's criterion is a ruling owed at go (`release-qualification.md` section 3.10). Changing the wording needs a new binding head. |
+| Scripts rewritten | **PASS.** At the first start of the qualification build, the shipped scripts were rewritten to its bytes: `resume-picker.js` (32841 to 71063 B), `codex-resume-picker.js` (6673 to 9173 B) and `lib/codex-resume-picker-lib.js` (8335 to 38551 B). `ccc-codex-hook.js` (7525 B) and `ccc-codex-hook.cmd` (400 B) were added. `claude-multi-statusline.js` (8003 B) is byte-equal, so it was not rewritten, by design. |
+| Vision | **NOT STARTED in this logon. Open: the console check below decides the user's case, and it has not run.** 2.1.0's Vision Chrome (started at its run, on port 9222) survived its quit, as 2.1.0 always does. At each start of the qualification build, the log has `The check of the browsers on port 9222 did not answer; nothing is ended`, then `[ERROR] [vision] Vision was not started at boot: the vision browser's debug port 9222 is in use`. The check is a CIM process query, and this SSH logon's NETWORK token is denied it. Whether the app ends or adopts the old browser in an interactive standard-user logon is the console check's question; it needs the owner at the VM console. Until it runs, this is neither shown to be a regression against 2.1.0 nor shown not to be one. The old Chrome was then ended by its verified pid (name, start time within 5 ms, the only listener on 9222), and all 9 of its processes ended. |
+| Quit | **PASS for the app.** "Close sessions" left no app process. |
+
 ### Windows: still owed
 
 > **PENDING: the console check in an interactive standard-user logon.** The owner signs in to the standard test account
@@ -84,15 +123,10 @@ step. Its model was the loopback fake model, named in that account folder's `con
 > browser query (`WINDOWS_BROWSERS_SCRIPT` at the head; `src/main/vision-browser-owner.ts` is unchanged from
 > 2.1.1-beta.3), and records the logon's token, the query's exit code and whether the browser is listed, and the exit
 > code of the same `taskkill` call the app makes at Quit. It passes on an interactive token, a query that exits 0 and
-> the browser listed. Not run yet.
+> the browser listed. It also decides the Vision row of the upgrade from 2.1.0 above. Not run yet.
 
 > **PENDING: the window buttons.** On the setup page and on the Allow Multi Spawn page of the packaged build, each of
 > minimise, maximise and restore, and close, clicked by the owner. Not run yet.
-
-> **PENDING: the packaged upgrade from 2.1.0 on Windows.** 2.1.0 installed and run once, then the qualification
-> installer run over it by double-click: one uninstall entry, a valid uninstaller, equal hashes of the seeded files,
-> profiles start, the Codex question, the What's New heading, the app's scripts rewritten, and Vision. Being run by the
-> packaged-build lane; not recorded yet.
 
 ## macOS
 

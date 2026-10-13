@@ -210,17 +210,25 @@ Recorded at the commit:
 - the non-secret conformance smoke on the minimum, pinned and release-candidate CLI on all three OSes
   (`real-cli-matrix.md`, WP1.71);
 - the packaged smoke of the signed installer on Windows, and the macOS signature, notarization and Gatekeeper checks
-  (`packaged-smoke.md`).
+  (`packaged-smoke.md`);
+- the packaged upgrade from 2.1.0 on Windows (`packaged-smoke.md`, "Upgrade from 2.1.0"). Every check passed except
+  two: Vision, which did not start in the agent's logon and waits on the console check; and the What's New heading,
+  which names the release the user comes from, and whose criterion is a ruling owed at go (section 3.10);
+- the install chain on Windows: 2.1.1-beta.2, the qualification build, 2.1.1-beta.1, 2.1.0 and the qualification build
+  again. Every step passed, except that the profile starts at the 2.1.1-beta.2 and 2.1.1-beta.1 steps were not
+  confirmed (`rollback.md`, note 1).
 
 > **PENDING (the owner's rows).** On the Windows test VM: a console check of the app's browser query in an interactive
-> standard-user logon; real ChatGPT sign-ins into two managed accounts; a GPT-6 prompt, with the session-strip meters
+> standard-user logon (it also decides whether Vision starts after the upgrade from 2.1.0); real ChatGPT sign-ins into
+> two managed accounts; a GPT-6 prompt, with the session-strip meters
 > on its tab and its rollout as a fixture (section 4 row 18); Sign in again three times; the
 > disposable Claude account signed in, used and signed out; `codex_review` asked from a Claude session; a link in a
 > session's output clicked; the second consented identity's two-account run with the keyring reads; the window buttons.
 > On the macOS test user: the install, first launch, Codex sign-in, a prompt, upgrade from 2.1.0 and rollback. On the
 > Linux test host: the packaged run, upgrade and rollback. Also owed by the agents: the keyring smoke with fake keys in
-> an interactive logon (`keyring-smoke.md`), and on Windows the packaged upgrade from 2.1.0, the install chain
-> (`rollback.md`) and the app's own Codex install (WP1.32).
+> an interactive logon (`keyring-smoke.md`); on Windows, the profile starts at the 2.1.1-beta.2 and 2.1.1-beta.1 steps
+> of the install chain (`rollback.md`); and the app's own Codex install (WP1.32) reaching a version class. Its one
+> run installed Codex, but the app did not then find it (`real-cli-matrix.md`; section 3.10).
 
 ### 3.8 Known limitations
 
@@ -302,9 +310,17 @@ The candidate run prints the items that read `unavailable` (`WP1 candidate: unav
 - Rule on OQ1 (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`): the macOS and Linux columns of section 4 rows 9, 25 and
   33 (WP1.2's rows) with fake keys are either taken before go and recorded in `real-cli-matrix.md`, or ruled on by the
   owner in the owner-decisions file. Until then WP1.2 stays `planned` and the stable run refuses.
-- The What's New heading: the build's heading names the release the user comes from ("What's new since 2.1.0"), where
-  the release plan's upgrade check reads "the heading names the running release". Changing the wording needs a new
-  binding head.
+- The What's New heading: the build's heading names the release the user comes from ("What's new since 2.1.0", seen in
+  the packaged upgrade, `packaged-smoke.md`), where the release plan's upgrade check reads "the heading names the
+  running release". Which wording is the check's criterion is not ruled yet. Changing the wording needs a new binding
+  head.
+- WP1.32's Windows part (`real-cli-matrix.md`).
+  - The one run of the app's own Codex install ("Run it for me", the npm recipe) installed Codex. The command ended
+    and the app checked again, but it still did not find Codex. That is likely because that account's npm folder is
+    on no PATH. The cause was not tested: no run put the folder on the PATH and checked again.
+  - Either a run reaches the version class before go, or the owner decides on that part (the plan's fallback). The
+    decision includes whether this account shape is in scope, and it rests on that untested cause.
+  - Until then WP1.32 stays `planned` and the stable run refuses.
 - The release-candidate CLI version for WP1.71 (0.156.1, the tested ceiling).
 - At go: the merge of the promotion pull request with "Create a merge commit", so the commit above stays an ancestor of
   main.
