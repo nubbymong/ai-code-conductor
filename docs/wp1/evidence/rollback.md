@@ -9,11 +9,14 @@ Every check here is taken at d1525759a7a42d941beeff601af3415fddd8afdd, the squas
 (release run 38409628911), installed from its signed installer, never through the in-app updater (the updater ranks
 this build below 2.1.1-beta.3, so it never offers it to a beta-channel install).
 
-**Status: recorded on Windows, except two profile starts.** The install chain below ran on the Windows test VM.
+**Status: recorded on Windows.** The install chain below ran on the Windows test VM.
 - The rollback to 2.1.0 (a release with no WP1 change) and the re-upgrade from it passed every check.
-- At the 2.1.1-beta.2 and 2.1.1-beta.1 steps every other check passed, but the profile starts were not confirmed
-  (note 1).
-- WP1.31 stays `planned` until those two starts are confirmed.
+- At the 2.1.1-beta.2 and 2.1.1-beta.1 steps every other check passed in the first run, but the profile starts were
+  not confirmed. A second run from the same starting point repeated those two steps as the chain makes them (each
+  installed over the qualification build). It confirmed both profile starts at each of them, and every other check
+  passed again (note 1).
+- So every step of the chain has passed every check, and this file's Windows record of WP1.31 is complete. The
+  manifest records an item's status only when the candidate is declared (`release-qualification.md` section 3).
 
 The rollback rehearsal of a release on GitHub is a different check; it is a known limitation in
 `release-qualification.md` section 3.
@@ -39,14 +42,16 @@ has a NETWORK token (see "Vision" below).
 **The starting point.** The chain started from the upgrade from 2.1.0 (`packaged-smoke.md`, "Upgrade from 2.1.0"):
 - 2.1.0 was installed with `/S`. Its wizard's own data-folder values were written first, because a silent install
   skips those pages.
-- Fixture data was seeded, and 2.1.0 was run once.
+- Fixture data was seeded by file, and 2.1.0 was run once. At that run 2.1.0 created the second Claude profile through
+  its own IPC, and was then quit.
+- The second profile's stand-in credentials and the config bound to it were then written by file.
 - The qualification installer was then run over it with its wizard.
 
 The chain ran on that same data.
 
 **Fixture data (fictional, never a real sign-in).**
-- Three configs: a local Claude config on the primary account, a local Claude config bound to a second account
-  profile, and an SSH config to a documentation address.
+- Three configs: a local Claude config on the primary account and an SSH config to a documentation address, seeded
+  before 2.1.0 ran, and a local Claude config bound to the second account profile, written after 2.1.0 quit.
 - Two Claude account profiles. The primary one is the computer's own Claude sign-in. The second was created by 2.1.0
   itself, through its own IPC. Both carry stand-in credential files, with fictional token strings and
   `example.invalid` addresses.
@@ -76,14 +81,17 @@ The chain ran on that same data.
 | Step | Installed over | Launches, version shown | One uninstall entry (HKCU + HKLM) | Uninstaller | Both profiles read signed in | Both profiles start | User data and credentials |
 |---|---|---|---|---|---|---|---|
 | 0. The qualification build | 2.1.0 | yes, `v2.1.1` | 1, HKCU, DisplayVersion 2.1.1 | 2.1.1, Valid | yes | **yes** | 17 of 17 equal |
-| 1. 2.1.1-beta.2 | the qualification build | yes, `v2.1.1-beta.2` | 1, HKCU, 2.1.1-beta.2 | 2.1.1-beta.2, Valid | yes | not confirmed (note 1) | 17 of 17 equal |
+| 1. 2.1.1-beta.2 | the qualification build | yes, `v2.1.1-beta.2` | 1, HKCU, 2.1.1-beta.2 | 2.1.1-beta.2, Valid | yes | not confirmed here; **yes** in the second run (note 1) | 17 of 17 equal |
 | 2. The qualification build | 2.1.1-beta.2 | yes, `v2.1.1` | 1, HKCU, 2.1.1 | 2.1.1, Valid | yes | **yes** | 17 of 17 equal |
-| 3. 2.1.1-beta.1 | the qualification build | yes, `v2.1.1-beta.1` | 1, HKCU, 2.1.1-beta.1 | 2.1.1-beta.1, Valid | yes | not confirmed (note 1) | 17 of 17 equal |
+| 3. 2.1.1-beta.1 | the qualification build | yes, `v2.1.1-beta.1` | 1, HKCU, 2.1.1-beta.1 | 2.1.1-beta.1, Valid | yes | not confirmed here; **yes** in the second run (note 1) | 17 of 17 equal |
 | 4. 2.1.0 | 2.1.1-beta.1 | yes, `v2.1.0` | 1, HKCU, 2.1.0 | 2.1.0, Valid | yes | **yes** | 17 of 17 equal |
 | 5. The qualification build | 2.1.0 | yes, `v2.1.1` | 1, HKCU, 2.1.1 | 2.1.1, Valid | yes | **yes** (second launch, note 2) | 17 of 17 equal |
 
-- **"Read signed in"** means that each profile's credential state, as the app reads it, has its account address, an
-  expiry and a refresh token, and no "credentials missing". The primary profile also has no identity mismatch.
+- **"Read signed in"** means that each profile's credential state, as the app reads it, has its account address and
+  an expiry, and no "credentials missing". The primary profile also has no identity mismatch. The agent's reader
+  drops every token field, so this record says nothing about a refresh token. For the second profile, the account
+  address the app keeps for the profile (`accountEmail`) is empty at every step, as in the upgrade from 2.1.0 (a
+  fixture effect, `packaged-smoke.md`); the address in its credential state (`oauthEmail`) is there.
 - **"Start"** means that the session card names the profile's account, and that the stand-in Claude Code recorded one
   start for each config in the project folder.
 - **"User data and credentials"** covers 17 files, each with an equal SHA-256 at every step. No file was removed at
@@ -107,11 +115,13 @@ each build's migration and use write them:
   (`tokenomics.db` and `transcripts.db`) stayed equal.
 - The shipped picker scripts are rewritten to each build's own bytes. For example, `resume-picker.js` is 32841 B under
   2.1.0 and 71063 B under the qualification build. `claude-multi-statusline.js` is byte-equal across all of them.
-- The qualification build adds `ccc-codex-hook.js` and `.cmd`, `providers/registry.json`,
-  `openai-model-pricing.json`, `conductor-secret.json`, the `canvas-plugin` skills and `help/AGENTS.md`. 2.1.0 leaves
-  them in place and ignores them.
+- The qualification build adds, among others, `ccc-codex-hook.js` and `.cmd`, `providers/registry.json`,
+  `openai-model-pricing.json`, `conductor-secret.json`, the `canvas-plugin` folder (its manifest and skills), and
+  `help/AGENTS.md` and `help/.git` in the resources folder. 2.1.0 leaves them in place and ignores them.
 - When a profile first starts, 2.1.1 adds an `identity` copy of its sign-in files inside that profile's folder, as
   2.1.0 already does for the primary profile.
+- Each profile's folder also gains PowerShell's history file (`PSReadLine\ConsoleHost_history.txt` under its
+  `AppData\Roaming`). It comes from the session's partner shell, which runs with that profile's folder as its home.
 
 **What each start showed.**
 - **Step 1 (2.1.1-beta.2):** its own "What's new in 2.1" showcase.
@@ -124,12 +134,44 @@ each build's migration and use write them:
   - The one-time Codex question was **not asked again**. The answer given at step 0 survived 2.1.1-beta.1 and 2.1.0
     writing the settings file.
 
-**Note 1. 2.1.1-beta.2 and 2.1.1-beta.1: the profile starts were not observed.**
-- The config cards appeared, but the stand-in recorded no Claude start within about 12 s.
-- At both steps the page had not settled when the agent's start-page walk ran. At 2.1.1-beta.2 its What's New was
-  still up, and the walk did not recognise it.
-- These two steps were not run again: the lane's time ran out. They are past prereleases, not the build under test.
-  Both builds read both profiles as signed in, and no data changed.
+**Note 1. 2.1.1-beta.2 and 2.1.1-beta.1: the profile starts, not observed in the first run, confirmed in a second.**
+
+*The first run.* The config cards appeared, but the stand-in recorded no Claude start within about 12 s. The cause was
+the agent's harness, not the app:
+- At 2.1.1-beta.2 the agent's DevTools driver attached to the splash window instead of the main window. So its
+  start-page walk never saw that build's "What's new in 2.1" showcase, which was still up over the Launch clicks.
+- At 2.1.1-beta.1 the walk did not know the "Enable Multi Spawn" page, which stayed up over the Launch clicks.
+
+*The second run (the same day, the same account and the same signed installers).*
+- **The starting point** was rebuilt as before: 2.1.0 installed with `/S`, the same fixture data seeded, 2.1.0 run
+  once (creating the second profile through its own IPC) and quit, then the second profile's stand-in credentials and
+  bound config written by file. The same 17 files were hashed as the baseline.
+- **The chain:** the qualification build over 2.1.0, then 2.1.1-beta.2 over it, the qualification build again,
+  2.1.1-beta.1 over it, and the qualification build again. So 2.1.1-beta.2 and 2.1.1-beta.1 were each installed over
+  the qualification build, as in the first run, and the last step adds the roll-forward from 2.1.1-beta.1.
+- **The harness changes:** the driver attached only to the main window; the walk waited until the page had settled
+  (the same headings and dialogs, and no "LOADING", for 3 s) before each step, skipped every What's New showcase,
+  and answered "Enable Multi Spawn" with "Skip for now"; the two configs were started one at a time.
+- Each step ran as in "How each step ran" above.
+
+| Step (second run) | Installed over | Launches, version shown | One uninstall entry (HKCU + HKLM) | Uninstaller | Both profiles read signed in | Both profiles start | User data and credentials |
+|---|---|---|---|---|---|---|---|
+| The qualification build | 2.1.0 | yes, `v2.1.1` | 1, HKCU, 2.1.1 | 2.1.1, Valid | yes | **yes** | 17 of 17 equal |
+| 2.1.1-beta.2 | the qualification build | yes, `v2.1.1-beta.2` | 1, HKCU, 2.1.1-beta.2 | 2.1.1-beta.2, Valid | yes | **yes** | 17 of 17 equal |
+| The qualification build | 2.1.1-beta.2 | yes, `v2.1.1` | 1, HKCU, 2.1.1 | 2.1.1, Valid | yes | **yes** | 17 of 17 equal |
+| 2.1.1-beta.1 | the qualification build | yes, `v2.1.1-beta.1` | 1, HKCU, 2.1.1-beta.1 | 2.1.1-beta.1, Valid | yes | **yes** | 17 of 17 equal |
+| The qualification build | 2.1.1-beta.1 | yes, `v2.1.1` | 1, HKCU, 2.1.1 | 2.1.1, Valid | yes | **yes** | 17 of 17 equal |
+
+- **Both start**, at every step: each config was started from the Saved tab with the profile the account dialog
+  preselected, each session card named its profile's account, and the stand-in recorded exactly two starts in the
+  project folder, the first with the primary profile's folder as its home and the second with the second profile's.
+- No file of the baseline was removed at any step.
+- **What each start showed:** at the first step, "What's new since 2.1.0", the GitHub notice, then the one-time Codex
+  question (answered "No"); at each 2.1.1-beta.2 and 2.1.1-beta.1 step, "What's new in 2.1", the GitHub notice, then
+  "Enable Multi Spawn"; at the later qualification-build steps, "What's new since 2.1.0" again, then the GitHub notice.
+  The Codex question was not asked again after 2.1.1-beta.2 and 2.1.1-beta.1 had run on the same data. Whether the
+  qualification build shows its What's New again follows from which showcases were dismissed: here each prerelease's
+  own showcase was, while in the first run 2.1.1-beta.2's never was (step 2 above). This is cosmetic.
 
 **Note 2. Step 5's first launch did not start the sessions, for the same reason.**
 - The walk ran while the page still read "LOADING".
@@ -152,9 +194,13 @@ is in use`: the qualification build, at every start of steps 0, 2 and 5, and 2.1
 - **The interactive standard-user case** is the console check in `packaged-smoke.md`. It has not run: it needs the
   owner at the VM console.
 - Each leftover Chrome was ended by its verified pid (name, start time, and the only listener on 9222).
+- **In the second run (note 1)** each build's own Vision browser also outlived its quit in this logon. Each was ended
+  by its verified pid (name, owner, command line and start time) before the next step, so every build started with
+  port 9222 free. The app log was not recorded in that run.
 
-**State left.** After the chain, the app's own uninstaller ran (`/currentuser /S`, Valid, exit 0). The account was
-then restored to its state before the lane, and the state report matched the pre-lane report line for line.
+**State left.** After each run of the chain, the app's own uninstaller ran (`/currentuser /S`, Valid, exit 0). The
+account was then restored to its state before the run, and the state report matched the one taken before the run,
+its header and the stand-in's count of calls aside.
 
 > **PENDING: the rollback legs on macOS and Linux (support, not WP1.31's record).** On the macOS test user and on the
 > Linux test host: 2.1.0, then the qualification build over it, then 2.1.0 again, with the setup still there and the

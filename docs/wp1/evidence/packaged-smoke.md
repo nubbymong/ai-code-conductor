@@ -60,16 +60,16 @@ step. Its model was the loopback fake model, named in that account folder's `con
 | A Claude session starts (stand-in) | **PASS.** A Claude config started the stand-in in the project folder, with `--model opus --settings <app settings file> --mcp-config <app MCP file> --plugin-dir <resources>\canvas-plugin`, and `CCC_CLAUDE_BIN` and `CCC_CONFIG_DIR` set. |
 | Settings opens | **PASS.** The Settings page opened as a tab; Accounts shows the Codex and Claude Code provider rows and "Add Codex account". |
 | Quit leaves no process | **PASS for the app, Codex and the stand-in.** Close with the two sessions open showed "Close the app" ("You have 2 active sessions..."); "Close sessions" was chosen. 15 s later there were 0 `AI Code Conductor` processes, 0 `codex.exe` and 0 stand-in processes, and ports 19333 and 19334 were free. The app log has one `[WARN] [pty] input to session ... failed (EAGAIN); it takes no more input` at that close. |
-| Quit leaves no Vision Chrome | **NOT MET in the agent's logon; the cause is proven to be that logon.** See the note below. 2.1.0 leaves its Vision Chrome after every quit (2.1.0 behaviour, recorded in the 2.1.0-to-beta.3 upgrade check), so this is not a regression against 2.1.0. |
+| Quit leaves no Vision Chrome | **NOT MET in the agent's logon; the cause is proven to be that logon.** See the note below. 2.1.0 leaves its Vision Chrome after every quit (the Vision row of "Upgrade from 2.1.0" below), so this is not a regression against 2.1.0. |
 
 **Note on the Vision Chrome at Quit.**
 - **What happened.** At both quits in this account, the Vision browser 2.1.1 had started on port 9222 kept running.
   The log shows `[vision] Stopped VisionManager`, then a 5 s main-loop stall, and no `[vision] Ended the app-started
   browser` line.
 - **Why.** 2.1.1 ends its own browser with `taskkill /PID <pid> /T /F` (`vision-browser-owner.ts`
-  `taskkillOwnChild`). `taskkill` is WMI-based, and this account's agent logon is an SSH logon with a NETWORK token,
-  which WMI denies. Run by hand in the same logon, on the same verified pid, `taskkill` answered `ERROR: Access
-  denied` after 5124 ms, which matches the stall.
+  `taskkillOwnChild`). `taskkill` is WMI-based, and WMI denies it to this non-administrator NETWORK-token logon (the
+  agent's SSH logon into this account). Run by hand in the same logon, on the same verified pid, `taskkill` answered
+  `ERROR: Access denied` after 5124 ms, which matches the stall.
 - **How the browser was ended.** It was ended by its verified pid (name, start time, the only listener on 9222) with
   `Stop-Process`.
 - **The same build in other logons.**
@@ -84,24 +84,24 @@ step. Its model was the loopback fake model, named in that account folder's `con
 Before this part, the clean-install copy above was removed with its own uninstaller (`/currentuser /S`, Valid,
 exit 0). The account was then restored to its state before the lane, with a matching state report.
 
-**Setup.**
-- Signed 2.1.0 was installed with `/S`. Its wizard's own data-folder values were written to the registry first,
-  because a silent install skips those pages.
-- Fixture data was seeded by file (fictional, never a real sign-in):
-  - three configs: a local Claude config on the primary account, a local Claude config bound to a second profile,
-    and an SSH config to a documentation address;
-  - stand-in credentials for the primary Claude account and for Codex;
-  - a saved Claude Code transcript;
-  - settings as a 2.1.0 user has them (Codex off, no answer to the Codex question).
-- The second Claude profile was created by 2.1.0 itself, through its own IPC. Its stand-in credentials were written by
-  file after 2.1.0 quit.
-  - So 2.1.0 never read that profile's identity. In 2.1.1 the account list shows no address for it and labels it
-    "setup incomplete".
-  - Its credential state still reads signed in, and its session card names its account.
-  - This comes from the fixture, not from the app.
-- 2.1.0 was run once and quit. Every data and credential file was then hashed.
-- The qualification installer was started the double-click way, and its wizard was walked with the forward buttons
-  only.
+**Setup.** In this order:
+1. Signed 2.1.0 was installed with `/S`. Its wizard's own data-folder values were written to the registry first,
+   because a silent install skips those pages.
+2. Fixture data was seeded by file before 2.1.0 ran (fictional, never a real sign-in):
+   - two configs: a local Claude config on the primary account, and an SSH config to a documentation address;
+   - stand-in credentials for the primary Claude account and for Codex;
+   - a saved Claude Code transcript;
+   - settings as a 2.1.0 user has them (Codex off, no answer to the Codex question).
+3. 2.1.0 was run once. At that run it created the second Claude profile itself, through its own IPC. It was then quit.
+4. After 2.1.0 quit, the second profile's stand-in credentials and a third config, a local Claude config bound to that
+   profile, were written by file.
+   - So 2.1.0 never read that profile's identity. In 2.1.1 the account list shows no address for it and labels it
+     "setup incomplete".
+   - Its credential state still reads signed in, and its session card names its account.
+   - This comes from the fixture, not from the app.
+5. Every data and credential file was then hashed.
+6. The qualification installer was started the double-click way, and its wizard was walked with the forward buttons
+   only.
 
 | Check | Result |
 |---|---|
@@ -109,11 +109,11 @@ exit 0). The account was then restored to its state before the lane, with a matc
 | One uninstall entry (HKCU and HKLM, both views) | **PASS.** 1, in HKCU (`0210f08e-15d0-5073-901d-684e27f31b7d`, DisplayVersion 2.1.1); none in HKLM. |
 | Uninstaller | **PASS.** `Uninstall AI Code Conductor.exe` is version 2.1.1 and Authenticode Valid, with the same signer thumbprint. The app exe is 2.1.1.0 and Valid. Its `app.asar` has the same SHA-256 as the clean install's. |
 | Data and credentials kept | **PASS.** All 17 user-data and credential files have equal SHA-256 before and after: the three stand-in credential files in the account's home, the transcript, `configs.json`, `profiles.json`, `window-state.json` and its backup, `command-bar-ui.json`, both profiles' credential and identity files, and the first-run Claude config backup. No file was removed. These changed, as the migration and use write them: `settings.json`, `app-meta.json`, `usage-tracking.json` and `github-config.json`; the help docs (`app-knowledge.md`, `ask-conductor-skill.md` and `ask-conductor-skill-portable.md`); the picker scripts ("Scripts rewritten", below); and the two app databases' journal files (`-shm` and `-wal`; `tokenomics.db` and `transcripts.db` themselves are equal). |
-| Profiles start | **PASS.** Each local Claude config was started from the Saved tab. The account dialog preselected the primary account for the first config and the bound profile for the second, and each was started with Launch. Each session card names its own profile's account. The stand-in Claude Code recorded both starts in the project folder. Both profiles read signed in: each has its address, expiry and refresh token, and no "credentials missing". |
+| Profiles start | **PASS.** Each local Claude config was started from the Saved tab. The account dialog preselected the primary account for the first config and the bound profile for the second, and each was started with Launch. Each session card names its own profile's account. The stand-in Claude Code recorded both starts in the project folder. Both profiles read signed in: each one's credential state, as the app reads it, has its address and an expiry, and no "credentials missing". The agent's reader drops every token field, so this says nothing about a refresh token. For the second profile, the account address the app keeps for the profile (`accountEmail`) is empty, as step 4 of the setup explains; the address in its credential state (`oauthEmail`) is there. |
 | The one-time Codex question | **PASS.** "Do you use Codex?" was shown once, after What's New and the GitHub notice. Its text: "Codex now has accounts of its own in this app. Choose again: your earlier Codex setting does not carry over." It was answered with "No, I don't use Codex". It was not asked again at a later start, nor after the install chain (`rollback.md`). |
 | What's New heading | **Shown. The exact words:** the heading is **"What's new since 2.1.0"**. Under it: "13 things worth knowing, in one line each, and 5 of them have a page of their own, just behind this one." The first section is "CODEX, A FULL ASSISTANT". It was dismissed with "Skip the showcase". The heading names the release the user came from. The release plan's upgrade check reads "the heading names the running release". Which wording is the check's criterion is a ruling owed at go (`release-qualification.md` section 3.10). Changing the wording needs a new binding head. |
 | Scripts rewritten | **PASS.** At the first start of the qualification build, the shipped scripts were rewritten to its bytes: `resume-picker.js` (32841 to 71063 B), `codex-resume-picker.js` (6673 to 9173 B) and `lib/codex-resume-picker-lib.js` (8335 to 38551 B). `ccc-codex-hook.js` (7525 B) and `ccc-codex-hook.cmd` (400 B) were added. `claude-multi-statusline.js` (8003 B) is byte-equal, so it was not rewritten, by design. |
-| Vision | **NOT STARTED in this logon. Open: the console check below decides the user's case, and it has not run.** 2.1.0's Vision Chrome (started at its run, on port 9222) survived its quit, as 2.1.0 always does. At each start of the qualification build, the log has `The check of the browsers on port 9222 did not answer; nothing is ended`, then `[ERROR] [vision] Vision was not started at boot: the vision browser's debug port 9222 is in use`. The check is a CIM process query, and this SSH logon's NETWORK token is denied it. Whether the app ends or adopts the old browser in an interactive standard-user logon is the console check's question; it needs the owner at the VM console. Until it runs, this is neither shown to be a regression against 2.1.0 nor shown not to be one. The old Chrome was then ended by its verified pid (name, start time within 5 ms, the only listener on 9222), and all 9 of its processes ended. |
+| Vision | **NOT STARTED in this logon. Open: the console check below decides the user's case, and it has not run.** 2.1.0's Vision Chrome (started at its run, on port 9222) survived its quit, as 2.1.0 always does. At each start of the qualification build, the log has `The check of the browsers on port 9222 did not answer; nothing is ended`, then `[ERROR] [vision] Vision was not started at boot: the vision browser's debug port 9222 is in use`. The check is a CIM process query, which this non-administrator NETWORK-token logon (the agent's SSH logon) is denied. Whether the app ends or adopts the old browser in an interactive standard-user logon is the console check's question; it needs the owner at the VM console. Until it runs, this is neither shown to be a regression against 2.1.0 for a user nor shown not to be one. In this logon type it does differ from 2.1.0, which attaches to its leftover browser and starts Vision (`rollback.md`, "Vision"). `release-qualification.md` section 3 lists it as known limitation 11. The old Chrome was then ended by its verified pid (name, start time within 5 ms, the only listener on 9222), and all 9 of its processes ended. |
 | Quit | **PASS for the app.** "Close sessions" left no app process. |
 
 ### Windows: still owed

@@ -6,9 +6,10 @@ no item cites a section of it as its `unavailable` decision: every item that
 would (WP1.2, WP1.10, WP1.11, WP1.20, WP1.32, WP1.64 and WP1.72) reads
 `planned`, and so do WP1.19 (AM2) and WP1.73 (AM1). Sections KL2 and KL3
 were added when the 2.1.1 evidence was assembled, from what the qualification
-runs did and did not take; they are proposals in the same way. OQ1 was added
-then too: it is a question for the owner, not a decision. This line is
-removed when the owner confirms the file.
+runs did and did not take; they are proposals in the same way. OQ1 and OQ2
+were added then too: they are questions for the owner, not decisions (OQ2
+states a default the owner can confirm). This line is removed when the owner
+confirms the file.
 
 This record supplements `owner-decisions-2026-09-20.md`,
 `owner-decisions-2026-09-26.md` and `owner-decisions-2026-09-27.md`. It
@@ -37,8 +38,9 @@ Sections UA1 to UA7 each name one item, say what is unavailable and why, and
 say what is still taken. Everything that could be taken is recorded at the
 qualified build, as ADR-026 requires. A part not named as unavailable here
 is owed in full. Sections AM1, AM2, KL1, KL2 and KL3 change acceptance text or record
-known limitations; none of them is an item's `unavailable` decision. OQ1 is a
-question still open for the owner's ruling, and decides nothing.
+known limitations; none of them is an item's `unavailable` decision. OQ1 and
+OQ2 are questions still open for the owner's ruling, and decide nothing until
+the owner rules; OQ2 states the default it proposes.
 
 ## UA1. WP1.2: a real Codex-only session on Linux is unavailable
 
@@ -79,7 +81,7 @@ question still open for the owner's ruling, and decides nothing.
 | --- | --- |
 | Unavailable | The opt-in real-CLI installer and sign-in smoke run through the app on macOS and on Linux. |
 | Why | Running the vendor installer is not among the consents for those hosts. No Linux sign-in is taken for the 2.1.1 qualification: no Linux identity is consented (Q3), and Linux sign-in is moved to after stable (Linux is experimental). |
-| Still taken | The install and sign-in recipes against fakes (automated), the app's own install and sign-in on the Windows test VM, and the CI conformance job, which installs the CLI on each OS runner (not through the app). |
+| Still taken | The install and sign-in recipes against fakes (automated); on the Windows test VM, the app's own install, taken through OpenAI's installer route, which reached a version class (the npm route there is OQ2), and the sign-in after it, the owner's, not yet run; and the CI conformance job, which installs the CLI on each OS runner (not through the app). |
 
 ## UA6. WP1.64: disposable Codex identities, the API-key flow, and the second-identity flows and codex_review off Windows are unavailable
 
@@ -203,3 +205,16 @@ above.
 | The checks | The macOS and Linux columns of `docs/wp1/evidence/release-qualification.md` section 4 rows 9 (launch and resume in the exact account), 25 (Tokenomics reads the managed realms and `~/.codex`) and 33 (resume in the exact realm), run as on Windows: the real CLI, managed accounts signed in with fake keys, and the loopback fake model (`docs/wp1/evidence/real-cli-matrix.md`). |
 | Why it is open | They are parts of WP1.2, which cites `real-cli-matrix.md`, so no known-limitation section can cover them (ADR-026, settled point 2). They need no identity, so they could be taken, and ADR-026's third status never covers a part that could have been taken. They were not among the 2.1.1 qualification runs on macOS and Linux. KL1 lists the Linux columns of rows 9 and 33 for WP1.38 and WP1.42, which do not cite that file; for WP1.2, which does, they belong here. |
 | What the owner decides | Either they are taken before go, on the qualification build, and recorded in `real-cli-matrix.md`; or the owner records a ruling on them in this file. Until one of the two, WP1.2 stays `planned`. |
+
+## OQ2. Open for the owner's ruling: WP1.32's Windows part, the app's own Codex install
+
+This is a question, with a default the owner can confirm. It is listed at go
+with the sections above. Until the owner rules, it decides nothing.
+
+| What | Open question |
+| --- | --- |
+| The check | WP1.32's Windows part: the opt-in real smoke through the app, Codex's "Run it for me" on Set up Codex in the qualification build, reaching a version class, then a real sign-in (`docs/wp1/evidence/real-cli-matrix.md`, WP1.32). |
+| What was taken | In a standard account with no Codex, on a computer where another user installed Node.js. OpenAI's installer route reached a version class: "Codex 0.162.1 found" and "Newer than the versions this app was tested with; it will still be used". The npm route, in two runs, installed Codex 0.162.1 into the account's npm global folder, but the app read "Codex CLI not found" and "The command ended, but Codex was still not found". The cause is proven: that folder is on neither the user's nor the computer's PATH, and with only that folder added to the account's user PATH, and the app started again, the app found Codex and read the same version class. No real sign-in was made. |
+| Why it is open | The plan's fallback for this part is an owner decision. Two things need the owner: whether OpenAI's installer route counts as the Windows install smoke, and whether the npm route in an account whose npm global folder is on no PATH is in scope for 2.1.1 or a known limitation of it. Neither is a part that could not be taken, so neither can be recorded `unavailable`. |
+| Default | OpenAI's installer route is WP1.32's Windows install smoke. The npm route in that account shape is a known limitation of 2.1.1 (`docs/wp1/evidence/release-qualification.md` section 3.8, item 12), with its workaround: use OpenAI's installer on the same page, or add npm's global folder to the user's PATH and run it again. Neither severe nor a regression: 2.1.0 has no "Run it for me". |
+| Still owed whatever the ruling | The real sign-in after the install on the Windows test VM, the owner's (UA5, "Still taken"). Until it is recorded and this question is ruled, WP1.32 stays `planned`. |

@@ -195,8 +195,9 @@ phase, gate0. The candidate phase first runs in the promotion pull request and t
   --notes 2.1.1` at the commit against the release body, and VirusTotal read per file.
 - The Windows test VM: `git checkout --detach d1525759a7a42d941beeff601af3415fddd8afdd`, `npm run build`, then
   `npx playwright test --reporter=line,json` with the 27 tracked specs named (`mode-matrix.md`) and with a VM-local
-  spec for the real-CLI rows (`real-cli-matrix.md`); the signed installer by double-click and its wizard
-  (`packaged-smoke.md`).
+  spec for the real-CLI rows (`real-cli-matrix.md`); the signed installers by double-click and their wizards
+  (`packaged-smoke.md`, `rollback.md`); the app's own Codex install, driven over a loopback DevTools port in a fresh
+  install of the qualification build (`real-cli-matrix.md`, WP1.32).
 - The Mac: `spctl -a -t exec -vv`, `xcrun stapler validate`, `codesign --verify --deep --strict -vv` and the bundle's
   `Info.plist`, on the DMG mounted read-only (`packaged-smoke.md`).
 
@@ -215,31 +216,34 @@ Recorded at the commit:
   two: Vision, which did not start in the agent's logon and waits on the console check; and the What's New heading,
   which names the release the user comes from, and whose criterion is a ruling owed at go (section 3.10);
 - the install chain on Windows: 2.1.1-beta.2, the qualification build, 2.1.1-beta.1, 2.1.0 and the qualification build
-  again. Every step passed, except that the profile starts at the 2.1.1-beta.2 and 2.1.1-beta.1 steps were not
-  confirmed (`rollback.md`, note 1).
+  again, then a second run that repeated the 2.1.1-beta.2 and 2.1.1-beta.1 steps, each installed over the qualification
+  build. Every step passed (Vision and the heading aside, as above). The profile starts at those two steps, not
+  confirmed in the first run, were confirmed in the second (`rollback.md`, note 1);
+- the app's own Codex install on Windows ("Run it for me", WP1.32): OpenAI's installer route reached a version class.
+  The npm route installed Codex, but the app found it only once npm's global folder was on the user's PATH, which
+  proves why it did not before (`real-cli-matrix.md`; known limitation 12). The sign-in after it is the owner's.
 
 > **PENDING (the owner's rows).** On the Windows test VM: a console check of the app's browser query in an interactive
 > standard-user logon (it also decides whether Vision starts after the upgrade from 2.1.0); real ChatGPT sign-ins into
-> two managed accounts; a GPT-6 prompt, with the session-strip meters
-> on its tab and its rollout as a fixture (section 4 row 18); Sign in again three times; the
+> two managed accounts (one of them also WP1.32's sign-in through the app); a GPT-6 prompt, with the session-strip
+> meters on its tab and its rollout as a fixture (section 4 row 18); Sign in again three times; the
 > disposable Claude account signed in, used and signed out; `codex_review` asked from a Claude session; a link in a
 > session's output clicked; the second consented identity's two-account run with the keyring reads; the window buttons.
 > On the macOS test user: the install, first launch, Codex sign-in, a prompt, upgrade from 2.1.0 and rollback. On the
 > Linux test host: the packaged run, upgrade and rollback. Also owed by the agents: the keyring smoke with fake keys in
-> an interactive logon (`keyring-smoke.md`); on Windows, the profile starts at the 2.1.1-beta.2 and 2.1.1-beta.1 steps
-> of the install chain (`rollback.md`); and the app's own Codex install (WP1.32) reaching a version class. Its one
-> run installed Codex, but the app did not then find it (`real-cli-matrix.md`; section 3.10).
+> an interactive logon (`keyring-smoke.md`).
 
 ### 3.8 Known limitations
 
 Items 2 to 4 are checks not taken, each citing the owner-decision section that says why. The others are limits of this
-release or of what was taken, each with the file that records it where there is one; they cite no owner decision. The
-sections cited are a draft until the owner confirms them.
+release or of what was taken, each with the file that records it where there is one. They cite no owner decision,
+except that item 12 names the open question (OQ2) that asks the owner to accept it. The sections cited are a draft
+until the owner confirms them.
 
 1. **Linux: the AppImage needs FUSE 2.** Start the AppImage with `--appimage-extract-and-run` where FUSE 2's
-   `fusermount` is missing, because the AppImage cannot mount there. A default Rocky Linux 10 install lacks
-   `fusermount`: the test host (Rocky Linux 10.2) had FUSE 2's library and FUSE 3, but no `fusermount`
-   (`packaged-smoke.md`). 2.1.0's AppImage fails the same way. `README.md` (Requirements) says so.
+   `fusermount` is missing, because the AppImage cannot mount there. This was seen on the Rocky Linux 10.2 test host,
+   which had FUSE 2's library and FUSE 3, but no `fusermount` (`packaged-smoke.md`). 2.1.0's AppImage fails the same
+   way. `README.md` (Requirements) says so.
 2. **Release-plan checks not taken** (`docs/wp1/owner-decisions-2026-10-13.md#KL1`): the API-key sign-in, status and
    sign-out on every OS; the ChatGPT sign-in, status and sign-out on Linux; launch, resume and the account picker on
    Linux (section 4 rows 9, 23 and 33); a real install through the app on macOS and Linux (row 3).
@@ -279,6 +283,26 @@ sections cited are a draft until the owner confirms them.
 10. **WP1.71:** the release-candidate legs capture the help but do not compare it, since no fixture exists for 0.156.1.
     The smoke is non-secret by design: it proves detection, the command lines' flags, the model list and the features
     against each real CLI, not a signed-in turn.
+11. **Windows: Vision may not start after an upgrade from 2.1.0, in a logon where the app cannot list running
+    programs.** 2.1.0's Vision browser outlives 2.1.0's quit and keeps port 9222. At each start the qualification build
+    first asks Windows (CIM) which program holds that port, and ends the browser only if it is the app's own. The
+    agent's non-administrator NETWORK-token logon is denied that query, so there the build ended nothing and did not
+    start Vision, and logged that port 9222 is in use (`packaged-smoke.md`, "Upgrade from 2.1.0"). In the same logon
+    2.1.0 and 2.1.1-beta.1 attach to the leftover browser and start Vision (`rollback.md`, "Vision"), so in that logon
+    type this differs from 2.1.0. Whether it happens in an interactive standard-user logon is the console check, still
+    PENDING (`packaged-smoke.md`). The app's help carries a known issue for it after an in-app update from 2.1.0, with
+    the workaround: sign out of Windows and back in, or restart the computer; Vision then starts.
+12. **Windows: "Run it for me" with npm does not find Codex where npm's global folder is not on the user's PATH.** On a
+    computer where another user installed Node.js, npm installs Codex into the account's own npm folder
+    (`%APPDATA%\npm`), which is then on neither the user's nor the computer's PATH. The app looks for Codex only on the
+    PATH (re-read from the registry after an install), so Set up Codex reads "The command ended, but Codex was still
+    not found". With that folder on the user's PATH the same build found that Codex (`real-cli-matrix.md`, WP1.32).
+    Workaround: use OpenAI's installer, the other recipe on the same page, which found Codex in the same account; or
+    add that folder to the PATH and run it again.
+    Not a regression: 2.1.0 has no "Run it for me". The app's help does not carry this yet: its known issues live in
+    `src/shared/app-knowledge.ts`, which is not a binding-neutral path, so the entry, and a check that also looks in
+    npm's global folder or a message that names the PATH cause, are follow-ups for the next release.
+    `docs/wp1/owner-decisions-2026-10-13.md#OQ2` asks the owner to accept this as a known limitation (its default).
 
 ### 3.9 Unavailable items, as currently expected
 
@@ -314,13 +338,27 @@ The candidate run prints the items that read `unavailable` (`WP1 candidate: unav
   the packaged upgrade, `packaged-smoke.md`), where the release plan's upgrade check reads "the heading names the
   running release". Which wording is the check's criterion is not ruled yet. Changing the wording needs a new binding
   head.
-- WP1.32's Windows part (`real-cli-matrix.md`).
-  - The one run of the app's own Codex install ("Run it for me", the npm recipe) installed Codex. The command ended
-    and the app checked again, but it still did not find Codex. That is likely because that account's npm folder is
-    on no PATH. The cause was not tested: no run put the folder on the PATH and checked again.
-  - Either a run reaches the version class before go, or the owner decides on that part (the plan's fallback). The
-    decision includes whether this account shape is in scope, and it rests on that untested cause.
-  - Until then WP1.32 stays `planned` and the stable run refuses.
+- Rule on OQ2 (`docs/wp1/owner-decisions-2026-10-13.md#OQ2`), WP1.32's Windows part (`real-cli-matrix.md`).
+  - The app's own Codex install ("Run it for me") reached a version class through OpenAI's installer route: "Codex
+    0.162.1 found" and "Newer than the versions this app was tested with; it will still be used".
+  - The npm route installed Codex, in two runs, but the app did not find it in that account. The cause is proven: npm's
+    global folder is on no PATH there (another user installed Node.js). With only that folder added to the account's
+    user PATH, and the app started again, it found Codex and read the same version class.
+  - The sign-in after the install has not run: it is the owner's.
+  - OQ2's default: OpenAI's installer route is WP1.32's Windows install smoke, and the npm route in that account shape
+    is known limitation 12. Until the sign-in is recorded and OQ2 is ruled (or its default confirmed), WP1.32 stays
+    `planned` and the stable run refuses.
+- WP1.2 and section 4 row 25 (finding F-L1-2, known limitation 8). Row 25 is one of WP1.2's rows, and its record fails
+  the row's "each turn priced once" in 1 of 6 real rollouts (3 turns priced twice). No owner section accepts that
+  failure, and UA1 does not cover it: a failed part is not a part that could not be taken. So WP1.2 can read neither
+  `evidenced` nor `unavailable` with it. It needs an owner amendment of WP1.2's 2.1.1 scope that accepts F-L1-2 (as U1
+  in `docs/wp1/owner-decisions-2026-09-26.md` amends WP1.5), or a fix, which changes a path outside the binding-neutral
+  ones and so needs a new binding head. Until then WP1.2 stays `planned` and the stable run refuses.
+- WP1.30's four non-elevated Windows cases (known limitation 4). KL3 proposes them as a known limitation, but ADR-026
+  settled point 2 says there is no "evidenced with limits", and settled point 5 says WP1.30 needs no owner decision
+  and no known limitation for its Windows half. As recorded, WP1.30 would read `evidenced`. If the owner confirms KL3's
+  WP1.30 row, the owner does so knowingly, against those two points. Otherwise the non-elevated VM run is taken before
+  go, or WP1.30 goes back to `planned` and the stable run refuses.
 - The release-candidate CLI version for WP1.71 (0.156.1, the tested ceiling).
 - At go: the merge of the promotion pull request with "Create a merge commit", so the commit above stays an ancestor of
   main.
