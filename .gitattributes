@@ -24,3 +24,13 @@ scripts/**/*.mjs text eol=lf
 # The installer artwork (scripts/gen-installer-art.mjs). NSIS reads these byte for
 # byte; a line-ending conversion would corrupt every one of them.
 build/**/*.bmp binary
+
+# WP1 evidence (tests/wp1/traceability.json). Each record pins a file under
+# docs/wp1/evidence/ by the sha256 of its bytes. Checked out CRLF on the Windows
+# runner and LF on Linux and macOS, one file would have two digests, and one leg
+# of every run that checks them would go red. LF everywhere gives one digest;
+# a record is hashed over the LF form. tests/wp1/traceability.test.ts holds the
+# rule by attribute, including for a file not written yet. Text only: this rule
+# would rewrite the line endings inside a binary file (a PNG header holds \r\n),
+# so screenshots and other binary evidence go under docs/screenshots, never here.
+docs/wp1/evidence/** text eol=lf

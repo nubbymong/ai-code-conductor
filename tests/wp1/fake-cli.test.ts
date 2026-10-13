@@ -11,6 +11,10 @@
 // HOST QUARANTINE: this suite writes a temp directory and starts processes. It
 // runs in CI and on the VM, never on the owner's workstation. It touches no
 // ACL, no junction, no real home and no real Codex.
+//
+// WP1.32 (the fakes half): the sign-in, status and sign-out recipes run against a
+// fake CLI through real processes ('the auth operations against the fake ... CLI');
+// the opt-in real smoke per OS is docs/wp1/evidence/real-cli-matrix.md.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'

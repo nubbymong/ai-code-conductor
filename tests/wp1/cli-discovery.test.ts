@@ -3,6 +3,10 @@
 // against the tested range; the CLI runner and discovery work through
 // injected ports. PURE: no process is started and no file is read here --
 // the real-process fake-CLI integration is tests/wp1/fake-cli.test.ts (VM/CI).
+//
+// WP1.62 (the injected-port half): version proof, a stdin value written once to
+// a pipe, exit codes, errors, deadlines and an unanchored executable path, with no
+// real CLI and no credential.
 import { describe, it, expect, vi } from 'vitest'
 import {
   parseCodexVersion, classifyCodexVersion,

@@ -4,6 +4,12 @@
 // builder takes profile records and the colour-override map as values; the
 // reconcile takes and returns documents. No profiles.json is read here -- the
 // file-backed adapter is exercised on the VM/CI only (host quarantine).
+//
+// WP1.48: an older build's edit to profiles.json is imported; both sides edited
+// differently keep the registry value and record a conflict, never choosing
+// silently; a registry that lost its links reattaches by deterministic id; and a
+// record that comes back restores its account ('write-through and import',
+// 'existence follows the legacy store').
 import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
 import {

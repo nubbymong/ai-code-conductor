@@ -1,5 +1,15 @@
 # Claude settings-source isolation -- executable probe record
 
+> **Status, 2026-10-13.** This is the record the WP1.38 design was built on.
+> Most of it probes Claude Code 2.1.278 on one host, run with harness scripts
+> that were never committed. Its last section also records app checks on the
+> installed 2.1.1-beta.1 app: the VM gates at c9c908a5 (the project gate's
+> refusal, worktree resume and the picker) and a managed launch at f2332e39.
+> These are not re-run at the qualified build. It is kept as the reason the
+> design is what it is. It is no longer cited as WP1.38's release evidence:
+> WP1.38 is an automated item, evidenced by its nine `tests/wp1` files at the
+> qualified build (ADR-026, settled point 4).
+
 Owner ruling of 2026-09-20 (item 6): environment stripping alone is insufficient
 for Claude, because the CLI can reapply env entries from settings after launch and
 the app copies shared `settings.json` into every managed profile. This record

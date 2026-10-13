@@ -11,6 +11,10 @@
 // assertion is scheduled to be inverted by WP1 (marked below): the setup PTY
 // inherits the raw parent environment, which the design's allowlist rule for
 // install/login processes replaces (design 12, decision D3).
+//
+// WP1.4: these characterizations are the ordinary Claude operation an existing
+// Claude-only install keeps across the upgrade (C1 profile isolation, C5 the
+// account handlers, C6 the onboarding stamps).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'

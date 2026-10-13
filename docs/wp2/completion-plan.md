@@ -408,7 +408,10 @@ released from it until section 7 holds.
    WP1.63: packaged smoke on all three), with the Codex CLI at the minimum
    0.153.4, the pinned 0.155.1 and the release-candidate version, the last
    tested separately (D7, WP1.71). WP1.73: real-CLI qualification is not
-   deferred.
+   deferred, except a part an owner decision recorded in this repository says
+   cannot be taken, which is recorded `unavailable` on an item ADR-026 lists,
+   or otherwise as a known limitation in `release-qualification.md` section 3,
+   and listed at go (ADR-026, settled points 2 and 3).
 3. **Owner-run gates done** (row 15; OD20 D8), on the owner's hosts and
    disposable test identities.
 4. **Security alerts:** every open code-scanning or Dependabot alert fixed, or
