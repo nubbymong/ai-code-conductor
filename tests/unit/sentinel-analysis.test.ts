@@ -180,9 +180,95 @@ describe('envelopeError', () => {
   })
 })
 
+const failureEnvelope = (result: string, extra: Record<string, unknown> = {}) => JSON.stringify({ is_error: true, result, ...extra })
+
+// Failure text hides credentials, and the checks that classify a failure read
+// it as the CLI gave it.
+describe('failure text hides credentials inside a url', () => {
+  const SECRET = 'hunter2Secret'
+  const PROXY = `http://alice:${SECRET}@proxy.corp.example:8080`
+  const envelope = failureEnvelope
+
+  it('the rest of the text is kept', () => {
+    const e = envelopeError(envelope(`Request failed via proxy ${PROXY}`, { api_error_status: 500 }))!
+    expect(e.reason).not.toContain(SECRET)
+    expect(e.reason).not.toContain('alice:')
+    expect(e.reason).toContain('Request failed via proxy http://')
+    expect(e.reason).toContain('proxy.corp.example:8080')
+    expect(e.rateLimited).toBe(false)
+  })
+
+  // The reason is redacted before it is cut to its
+  // 160 characters, so a cut inside a url password never leaves part of it.
+  // The text holds no whitespace, so the cut falls where it falls instead of
+  // at a word. Mutation to prove this can fail: cut first, then redact
+  // (redactHead(plainErrorReason(text), redactFailure) in envelopeError).
+  it('a password that the 160-character cut falls inside is hidden whole', () => {
+    const PASSWORD = 'qwertyuiopQWERTYUIOPasdfghjklASDFGHJKL12'
+    const text = `${'x'.repeat(129)}=http://alice:${PASSWORD}@proxy.example.com/path`
+    expect(text.indexOf(PASSWORD)).toBeLessThan(160)
+    expect(text.indexOf('@')).toBeGreaterThan(160)
+    const e = envelopeError(envelope(text, { api_error_status: 500 }))!
+    expect(e.reason).toMatch(/ \(cut short\)$/)
+    expect(e.reason).toContain('=http://[REDACTED]@proxy.')
+    expect(e.reason).not.toContain('alice')
+    expect(e.reason).not.toContain(PASSWORD.slice(0, 6))
+  })
+
+  it('inside a JSON error body', () => {
+    const e = envelopeError(envelope(`API Error: 407 {"error":{"message":"Proxy auth failed for ${PROXY}"}}`))!
+    expect(e.reason).toContain('API Error: 407: Proxy auth failed for http://')
+    expect(e.reason).not.toContain(SECRET)
+  })
+
+  it('a usage limit is still named as one', async () => {
+    const env = envelope(`You've hit your weekly limit (proxy ${PROXY})`)
+    expect(envelopeError(env)!.rateLimited).toBe(true)
+    const r = await runAnalysis({ runner: async () => ({ code: 1, stdout: env, stderr: '' }), changelog: 'x', from: '1', to: '2', accountLabel: 'Work' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error).toMatch(/usage limit/)
+      expect(r.error).toContain('weekly limit')
+      expect(r.error).not.toContain(SECRET)
+    }
+  })
+
+  it('a service that cannot be reached is still named as one', async () => {
+    const env = envelope(`connect ECONNREFUSED 10.0.0.5:8080 (proxy ${PROXY})`)
+    expect(envelopeError(env)!.unreachable).toBe(true)
+    const r = await runAnalysis({ runner: async () => ({ code: 1, stdout: env, stderr: '' }), changelog: 'x', from: '1', to: '2' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error).toMatch(/could not reach its service/)
+      expect(r.error).not.toContain(SECRET)
+    }
+  })
+
+  it('the checks read the text as the CLI gave it (a guard on which text they read)', () => {
+    // A guard, not a wanted result: the only "limit" here is the user name,
+    // which the shown text hides, and the check still reads it, as it did
+    // before. It pins which text the checks read; nobody wants a user named
+    // "limit" to read as a usage limit.
+    const e = envelopeError(envelope(`Request failed via http://limit:${SECRET}@proxy.corp.example:8080`))!
+    expect(e.rateLimited).toBe(true)
+    expect(e.reason).not.toContain(SECRET)
+  })
+})
+
+describe('failure text hides a session value', () => {
+  it('the rest of the text is kept', () => {
+    const SESSION = 'sEss10nValue42abc'
+    const e = envelopeError(failureEnvelope(`Request rejected: session=${SESSION} for this request`, { api_error_status: 500 }))!
+    expect(e.reason).toContain('Request rejected: session=')
+    expect(e.reason).toContain('for this request')
+    expect(e.reason).not.toContain(SESSION)
+  })
+})
+
 // P3.9 (row 42): a Codex update is analysed the same way, against the four
 // surfaces the app relies on in Codex (its launch flags and its session files
 // among them), and its findings are Codex's.
+
 describe('the analysis of a Codex update (P3.9)', () => {
   it("the prompt names Codex's release notes and its four surfaces, flags and session files included, and stays lean", () => {
     const p = buildAnalysisPrompt('## 0.156.1\n- a change', 'codex')!

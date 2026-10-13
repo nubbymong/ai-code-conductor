@@ -18,6 +18,8 @@ vi.mock('../../../../src/main/owner-only-folders', async (importOriginal) => ({
 
 import { createCodexPackage } from '../../../../src/main/providers/codex'
 import type { CodexRealmFsPort } from '../../../../src/main/providers/codex'
+// The test setup replaces the app's log with recording fakes.
+import { logWarn } from '../../../../src/main/debug-logger'
 
 const REALM = `realm-${'c'.repeat(16)}`
 
@@ -40,15 +42,21 @@ describe('the managed folders on this disk get the owner-only folder rule', () =
 
   it('Windows: the root, then the home, are given to the rule, and a refusal refuses the folder (POSIX: 0700, the rule never asked)', async () => {
     const pkg = createCodexPackage({ realms: source(), hostHome: { env: {}, homeDir: path.join(tmp, 'home') } })
+    vi.mocked(logWarn).mockClear()
     const r = await pkg.realmFolders!.prepare({ authRealmId: REALM })
     const root = path.join(tmp, 'codex-realms')
+    const said = vi.mocked(logWarn).mock.calls.map((c) => c.map(String).join(' ')).filter((l) => l.startsWith('[codex] account folders'))
     if (process.platform === 'win32') {
       expect(r).toMatchObject({ ok: false, code: 'permissions' })
       expect(calls).toEqual([[root, path.join(root, REALM)]])
       expect(fs.existsSync(path.join(root, REALM))).toBe(false)
+      // O6: the refusal reaches the app's log, in fixed words, without the folders' paths.
+      expect(said).toEqual(["[codex] account folders: not made private to this user, so not used (the folder of every Codex account: its owner is not this user; the account's own folder: its owner is not this user)"])
+      expect(said.join('\n')).not.toContain(tmp)
     } else {
       expect(r).toMatchObject({ ok: true, created: true })
       expect(calls).toEqual([])
+      expect(said).toEqual([])
     }
   })
 

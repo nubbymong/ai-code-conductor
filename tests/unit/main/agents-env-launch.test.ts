@@ -14,10 +14,18 @@
 // checks the templates come out exactly, and that a line without templates, or
 // off Windows, is the plain line. Pure: nothing here starts a process. The
 // same line through real shells: spawn-claude-agents-powershell.test.ts.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { AGENTS_ENV, PS_LEGACY_ARGUMENT_PASSING, agentsEnvValue, agentsRef, windowsCommandLineLimit } from '../../../src/main/terminal-launch-line'
-import { AGENTS_LAUNCHER_ROOM, buildClaudeLaunchCommand, claudeAgentsObject, claudeLaunchProgram, launchStartsPicker, quoteArgForShell, type ClaudeAgentTemplate } from '../../../src/main/spawn-claude-command'
+import { AGENTS_LAUNCHER_ROOM, LAUNCHER_PROGRAM_LOOKUP, buildClaudeLaunchCommand, claudeAgentsObject, claudeLaunchProgram, launchStartsPicker, quoteArgForShell, type ClaudeAgentTemplate } from '../../../src/main/spawn-claude-command'
 import { buildClaudeLocalSpawn } from '../../../src/main/providers/claude/spawn'
+
+// The Windows picker cases assume node.exe is found (pickerNodeFound,
+// 2.1.1-beta.3): answered here, never by this runner's PATH. Every other
+// program is looked up as before.
+vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/windows-programs')>()
+  return { ...actual, findOnWindowsPath: (...a: Parameters<typeof actual.findOnWindowsPath>) => (a[0].length === 1 && a[0][0] === 'node.exe' ? 'C:\\nodejs\\node.exe' : actual.findOnWindowsPath(...a)) }
+})
 
 type Target = { file: string; argv: string[]; verbatim: boolean }
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -29,6 +37,9 @@ const BS = String.fromCharCode(92)
 const EXE = `C:${BS}Users${BS}Jo Smith${BS}.local${BS}bin${BS}claude.exe`
 const CMD = `C:${BS}Users${BS}Jo Smith (x)${BS}AppData${BS}Roaming${BS}npm${BS}claude.cmd`
 const BAT = `C:${BS}tools${BS}claude.bat`
+/** How a Windows line starts the picker: the node.exe the lookup returned
+ *  (mocked above), by its full path. */
+const NODE_RUN = `& 'C:${BS}nodejs${BS}node.exe'`
 const SETTINGS = `C:${BS}Users${BS}Jo Smith${BS}AppData${BS}Local${BS}AI Code Conductor${BS}s (1).json`
 const UUID = '0f8fad5b-d9cb-469f-a165-70867728950e'
 const PICKER = `C:${BS}res${BS}scripts${BS}resume-picker.js`
@@ -265,15 +276,15 @@ describe('the Windows launch line names the variable, never the templates', () =
   it('on every route: direct, resume picker, picker fallback, exact resume, Ask', () => {
     const s = ` --settings '${SETTINGS}'`
     expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: true }))
-      .toBe(`${LEAD}Set-Location 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s}; exit`)
+      .toBe(`${LEAD}Set-Location -LiteralPath 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s}; exit`)
     expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: true, useResumePicker: true, pickerScript: PICKER, userArgs: '--verbose' }))
-      .toBe(`${LEAD}Set-Location 'C:/work'; node '${PICKER}' --agents \${env:CCC_AGENTS}${s} '--verbose'; exit`)
+      .toBe(`${LEAD}Set-Location -LiteralPath 'C:/work'; $env:CCC_CLAUDE_BIN = '${EXE}'; ${NODE_RUN} '${PICKER}' --agents \${env:CCC_AGENTS}${s} '--verbose'; exit`)
     expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: true, useResumePicker: true, pickerScript: null }))
-      .toBe(`${LEAD}Set-Location 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s}; exit`)
+      .toBe(`${LEAD}Set-Location -LiteralPath 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s}; exit`)
     expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: true, useResumePicker: true, pickerScript: PICKER, resumeUuid: UUID }))
-      .toBe(`${LEAD}Set-Location 'C:/work'; & '${EXE}' --resume ${UUID} --agents \${env:CCC_AGENTS}${s}; exit`)
+      .toBe(`${LEAD}Set-Location -LiteralPath 'C:/work'; & '${EXE}' --resume ${UUID} --agents \${env:CCC_AGENTS}${s}; exit`)
     expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: true, askPrompt: true }))
-      .toBe(`${LEAD}Set-Location 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s} -- $env:CCC_ASK_PROMPT; exit`)
+      .toBe(`${LEAD}Set-Location -LiteralPath 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s} -- $env:CCC_ASK_PROMPT; exit`)
   })
 
   it('carries no template text even when a caller hands the flag text over', () => {
@@ -282,8 +293,8 @@ describe('the Windows launch line names the variable, never the templates', () =
   })
 
   it('a Windows line without templates is byte-identical to before', () => {
-    expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32' })).toBe(`Set-Location 'C:/work'; & '${EXE}' --settings '${SETTINGS}'; exit`)
-    expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: false })).toBe(`Set-Location 'C:/work'; & '${EXE}' --settings '${SETTINGS}'; exit`)
+    expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32' })).toBe(`Set-Location -LiteralPath 'C:/work'; & '${EXE}' --settings '${SETTINGS}'; exit`)
+    expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: false })).toBe(`Set-Location -LiteralPath 'C:/work'; & '${EXE}' --settings '${SETTINGS}'; exit`)
   })
 
   it('off Windows the templates stay on the line, single-quoted, byte-identical to before', () => {
@@ -293,8 +304,11 @@ describe('the Windows launch line names the variable, never the templates', () =
     expect(buildClaudeLaunchCommand(posix)).toBe(`cd 'C:/work' && 'claude'${flag} --settings '/s.json'; exit`)
     // The Windows-only switch changes nothing there.
     expect(buildClaudeLaunchCommand({ ...posix, agentsFromEnv: true })).toBe(buildClaudeLaunchCommand(posix))
+    // The picker line asks the session's shell for node as a program
+    // (2.1.1-beta.3, S10) and picks the program with it; the templates follow
+    // once, the same single-quoted word, whichever program it picked.
     expect(buildClaudeLaunchCommand({ ...posix, useResumePicker: true, pickerScript: '/r/resume-picker.js' }))
-      .toBe(`cd 'C:/work' && node '/r/resume-picker.js'${flag} --settings '/s.json'; exit`)
+      .toBe(`cd 'C:/work' && export CCC_CLAUDE_BIN='claude' && if { unalias node; command -v node; } >/dev/null 2>&1; then set -- node '/r/resume-picker.js'; else printf '%s\\n' 'Node.js was not found, so the resume list was skipped.'; set -- "$CCC_CLAUDE_BIN"; fi && "$@"${flag} --settings '/s.json'; exit`)
   })
 })
 
@@ -310,7 +324,7 @@ describe('the value is written for the program the line starts', () => {
       const opts = { ...BASE, claudeBin: CMD, platform: 'win32', agentsFromEnv: true, ...r }
       expect(claudeLaunchProgram(opts)).toBe(r.program)
       const line = buildClaudeLaunchCommand(opts)
-      expect(launchStartsPicker(opts)).toBe(line.includes(`; node '${PICKER}'`))
+      expect(launchStartsPicker(opts)).toBe(line.includes(`; ${NODE_RUN} '${PICKER}'`))
       expect(line.includes(`& '${CMD}'`)).toBe(r.program === CMD)
     }
   })
@@ -407,8 +421,14 @@ describe('a Windows line whose program would be handed too long a command line i
   const opts = (claudeBin: string, picker: boolean, agentsValueLength?: number) => ({
     ...BASE, platform: 'win32' as const, claudeBin, agentsFromEnv: true, agentsValueLength, useResumePicker: picker, pickerScript: picker ? PICKER : null,
   })
-  /** The program and its arguments on the line, as the builder measures them. */
-  const runOf = (line: string): string => line.slice(`${LEAD}Set-Location 'C:/work'; `.length, -'; exit'.length)
+  /** The program and its arguments on the line, as the builder measures them:
+   *  not the statement that names Claude Code for the picker, which the
+   *  program is not handed (the picker's own launch line counts Claude Code's
+   *  path once, in the measure), and node's own path counted as the file
+   *  name node.exe, as before: it is in no command line the picker hands on.
+   *  Nor the statements that set the session's lookup again before a
+   *  launcher (LAUNCHER_PROGRAM_LOOKUP), which are for PowerShell alone. */
+  const runOf = (line: string): string => line.slice(`${LEAD}Set-Location -LiteralPath 'C:/work'; `.length, -'; exit'.length).replace(/^\$env:CCC_CLAUDE_BIN = '[^']*'; /, '').replace(LAUNCHER_PROGRAM_LOOKUP, '').replace(`${NODE_RUN} `, 'node.exe ')
 
   it('the limit is that of the program the line starts: 32766 for an .exe, 8191 (cmd.exe) for the rest', () => {
     expect(windowsCommandLineLimit(EXE)).toBe(32_766)

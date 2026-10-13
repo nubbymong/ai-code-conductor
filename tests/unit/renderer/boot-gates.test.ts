@@ -89,12 +89,12 @@ describe('pickBootGate — the tour and the first-config dialog own turns (#609)
     // input that can produce an unknown value fails here.
     const known = new Set([
       'logsWipe', 'onboarding', 'training', 'guidedTour', 'guidedConfig',
-      'githubOnboarding', 'codexReconfirm', 'loggingConsent', 'resume', 'multiSpawnIntro', 'helloCodex',
+      'githubOnboarding', 'codexReconfirm', 'loggingConsent', 'resume', 'multiSpawnIntro', 'codexReplace', 'helloCodex',
     ])
     const flags = [
       'onboardingDue', 'showTraining', 'showTrainingAll', 'tourActive', 'showGuidedConfig',
       'showGitHubOnboarding', 'codexReconfirmDue', 'loggingConsentSeen', 'resumePending',
-      'multiSpawnIntroDue', 'helloCodexOpen', 'whatsNewDue', 'githubOnboardingDue',
+      'multiSpawnIntroDue', 'codexReplaceDue', 'helloCodexOpen', 'whatsNewDue', 'githubOnboardingDue',
     ] as const
     for (let mask = 0; mask < (1 << flags.length); mask++) {
       const over: Record<string, boolean> = {}
@@ -270,6 +270,7 @@ describe('pickBootGate: the Codex introduction takeover', () => {
     for (const over of [
       { onboardingDue: true }, { showTraining: true }, { tourActive: true }, { showGuidedConfig: true },
       { showGitHubOnboarding: true }, { codexReconfirmDue: true }, { loggingConsentSeen: false }, { resumePending: true }, { multiSpawnIntroDue: true },
+      { codexReplaceDue: true },
     ] as Partial<BootGateState>[]) {
       const gate = pickBootGate(makeState({ helloCodexOpen: true, ...over }))
       expect(gate, JSON.stringify(over)).not.toBe('helloCodex')
@@ -285,5 +286,43 @@ describe('pickBootGate: the Codex introduction takeover', () => {
 
   it('is absent === false, like the other optional gates', () => {
     expect(pickBootGate(makeState())).toBeNull()
+  })
+})
+
+/**
+ * O5 (owner-agreed 2026-10-11): "Replace this sign-in with a Codex account",
+ * shown once to a 2.1.1-beta.2 user who chose the Codex sign-in already on
+ * this computer. Armed from the first accounts snapshot of a start, which can
+ * land after a page below the notes is already showing, so it sits after
+ * every surface it could otherwise take the screen from, and before the
+ * Codex introduction (which then follows it).
+ */
+describe('pickBootGate: the one-time replace page for the retired Codex sign-in', () => {
+  it('takes its turn when nothing else is up', () => {
+    expect(pickBootGate(makeState({ codexReplaceDue: true }))).toBe('codexReplace')
+  })
+
+  it('waits for every gate above it, the resume prompt and the Multi Spawn page included', () => {
+    for (const over of [
+      { onboardingDue: true }, { showTraining: true }, { tourActive: true }, { showGuidedConfig: true },
+      { showGitHubOnboarding: true }, { codexReconfirmDue: true }, { loggingConsentSeen: false }, { resumePending: true }, { multiSpawnIntroDue: true },
+    ] as Partial<BootGateState>[]) {
+      const gate = pickBootGate(makeState({ codexReplaceDue: true, ...over }))
+      expect(gate, JSON.stringify(over)).not.toBe('codexReplace')
+      expect(gate, JSON.stringify(over)).not.toBeNull()
+    }
+    for (const over of [{ whatsNewDue: true }, { githubOnboardingDue: true }] as Partial<BootGateState>[]) {
+      expect(pickBootGate(makeState({ codexReplaceDue: true, ...over })), JSON.stringify(over)).toBeNull()
+    }
+  })
+
+  it('comes before the Codex introduction, which follows once it is left', () => {
+    expect(pickBootGate(makeState({ codexReplaceDue: true, helloCodexOpen: true }))).toBe('codexReplace')
+    expect(pickBootGate(makeState({ codexReplaceDue: false, helloCodexOpen: true }))).toBe('helloCodex')
+  })
+
+  it('holds the launch confirmations back while it is up, like every gate but the resume offer', async () => {
+    const { launchDialogsSuppressed } = await import('../../../src/renderer/utils/bootGates')
+    expect(launchDialogsSuppressed('codexReplace')).toBe(true)
   })
 })

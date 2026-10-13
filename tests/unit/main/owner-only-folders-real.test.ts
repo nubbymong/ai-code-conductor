@@ -18,6 +18,15 @@
 // administrator's elevated process can give a folder away, so those cases
 // skip without one) is refused and left exactly as it was, while one the
 // Administrators group owns (what an elevated process makes) is taken in place.
+// 2.1.1-beta.3 (O6): under a parent whose rights give this user Modify alone
+// (a second drive's root), a folder made there and one the rule makes both
+// pass, by either route, and are left exactly the user and SYSTEM, owned by
+// the user (a process that is not elevated only, as the app runs).
+// 2.1.1-beta.3: the read-only owner-only check (readOwnerOnlyFoldersWindows)
+// reads a folder the rule made as owner-only, by either route, and a folder
+// that inherits from above or has another account's entry of its own as not,
+// writing nothing; a file copied into a folder the rule made has only that
+// folder's rights.
 //
 // HOST QUARANTINE: this suite writes a temp directory, changes rights on it
 // and starts processes (Windows PowerShell and icacls). It runs in CI and on
@@ -29,7 +38,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
   secureFoldersWindows, secureSignInFoldersWindows, secureOwnerOnlyFolders, runWindowsPowerShell, nativeOwnerOnlyTools,
-  OWNER_ONLY_INSIDE_SCRIPT, OWNER_ONLY_DIRS_ENV, OWNER_ONLY_SKIP_ENV, OWNER_ONLY_SHARED_ENV, ownerFromSddl,
+  readOwnerOnlyFoldersWindows, OWNER_ONLY_INSIDE_SCRIPT, OWNER_ONLY_DIRS_ENV, OWNER_ONLY_SKIP_ENV, OWNER_ONLY_SHARED_ENV, ownerFromSddl,
 } from '../../../src/main/owner-only-folders'
 import type { PowerShellRunner } from '../../../src/main/owner-only-folders'
 
@@ -631,6 +640,105 @@ describe.runIf(IS_WIN)('secureFoldersWindows: what is already directly inside a 
   })
 })
 
+// 2.1.1-beta.3, O6: a folder made under a parent whose rights give this user
+// Modify alone -- a second drive's root as Windows sets it up (Administrators
+// and SYSTEM full control, Authenticated Users Modify, Users read and run, no
+// CREATOR OWNER entry), where a resources folder made there inherits just
+// that -- is this user's own, but its owner cannot be written: that needs a
+// right only full control gives. beta.2's rule wrote the owner of every
+// folder first, so each such folder was refused ("Attempted to perform an
+// unauthorized operation.") and every folder below it with it; the rule now
+// writes the owner only to a folder this user does not already own. The case
+// needs a process that is not elevated, as the app runs: an elevated one has
+// the Administrators group's full control there (and on Windows Server the
+// folders it makes are that group's), so it skips.
+/** Whether this process runs elevated (the Administrators group enabled in its token). */
+async function elevated(): Promise<boolean> {
+  return (await runWindowsPowerShell('([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)', {})).trim() === 'True'
+}
+/** Whether this process may write the owner of `dir` (to itself), by the call the rule makes; the folder's owner is left as it was. */
+async function ownerWritable(dir: string): Promise<boolean> {
+  return (await runWindowsPowerShell([
+    "$ErrorActionPreference = 'Stop'",
+    '$o = New-Object Security.AccessControl.DirectorySecurity',
+    '$o.SetOwner([Security.Principal.WindowsIdentity]::GetCurrent().User)',
+    "try { [IO.Directory]::SetAccessControl($env:CCC_T_DIR, $o); 'written' } catch { 'refused' }",
+  ].join('\n'), { CCC_T_DIR: dir })).trim() === 'written'
+}
+const MODIFY_ONLY_SKIP = 'an elevated process has full control under a second drive\'s root, so the parent cannot give it Modify alone; the case runs where the app does, not elevated'
+
+/** A temp folder with exactly a second drive's root rights (inheritance off; Administrators and SYSTEM full control,
+ *  Authenticated Users Modify, Users read and run, each passed to what is inside; no entry for this user and no
+ *  CREATOR OWNER), read back to prove that shape; a scratch folder beside it with ordinary rights for the reads; and
+ *  the control: this process may not write the owner of a folder it makes there. */
+async function modifyOnlyParent(): Promise<{ top: string; scratch: string; user: string }> {
+  const top = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), PREFIX)))
+  made.push(top)
+  const scratch = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), PREFIX)))
+  made.push(scratch)
+  const user = (await runWindowsPowerShell('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value', {})).trim()
+  expect(user).toMatch(/^S-1-/)
+  grant(top, '/inheritance:r', '/grant:r', `*${ADMINISTRATORS_SID}:(OI)(CI)F`, `*${SYSTEM_SID}:(OI)(CI)F`, '*S-1-5-11:(OI)(CI)M', '*S-1-5-32-545:(OI)(CI)RX')
+  const s = sddl(top, scratch)
+  expect(s.startsWith('D:P'), s).toBe(true)
+  const aces = await acesBySid(s)
+  expect(aces.map((a) => a.split('|')[3]).sort(), s).toEqual([ADMINISTRATORS_SID, SYSTEM_SID, 'S-1-5-11', 'S-1-5-32-545'].sort())
+  expect(aces.some((a) => a.endsWith(`|${user}`) || a.endsWith('|S-1-3-0')), s).toBe(false)
+  // Control: a folder made here is this user's, and its owner cannot be written (what refused beta.2's rule).
+  const probe = path.join(top, 'probe')
+  fs.mkdirSync(probe)
+  expect(await ownerOf(probe)).toBe(user)
+  expect(await ownerWritable(probe)).toBe(false)
+  return { top, scratch, user }
+}
+
+/** Each folder exactly the user and SYSTEM, full control passed to what is inside, inheritance off, owned by the user. */
+async function exactlyUserAndSystem(dirs: readonly string[], scratch: string, user: string): Promise<void> {
+  for (const d of dirs) {
+    const s = sddl(d, scratch)
+    expect(s.startsWith('D:P'), `${d}: ${s}`).toBe(true)
+    expect(await acesBySid(s), `${d}: ${s}`).toEqual([fullFor(user), fullFor(SYSTEM_SID)].sort())
+    expect(await ownerOf(d), d).toBe(user)
+  }
+}
+
+describe.runIf(IS_WIN)('a folder made under a parent that gives this user Modify alone (a second drive\'s root, O6)', () => {
+  it('the folders\' own rights: a root and a folder in it, made beforehand as the app makes them, both pass and are left exactly the user and SYSTEM, owned by the user (red on beta.2)', async (ctx) => {
+    if (await elevated()) return ctx.skip(MODIFY_ONLY_SKIP)
+    const f = await modifyOnlyParent()
+    const root = path.join(f.top, 'accounts-root')
+    const home = path.join(root, 'account-a')
+    fs.mkdirSync(root)
+    fs.mkdirSync(home)
+    const out = await secureOwnerOnlyFolders([root, home])
+    expect(out.map((r) => [r.ok, r.detail])).toEqual([[true, 'owner-only'], [true, 'owner-only']])
+    await exactlyUserAndSystem([root, home], f.scratch, f.user)
+  })
+
+  it('the account sign-in folders: a ready home and its two folders, made by the rule itself, pass and are left exactly the user and SYSTEM, owned by the user (red on beta.2)', async (ctx) => {
+    if (await elevated()) return ctx.skip(MODIFY_ONLY_SKIP)
+    const f = await modifyOnlyParent()
+    const profiles = path.join(f.top, 'account-profiles')
+    fs.mkdirSync(profiles)
+    const ready = path.join(profiles, '.owner-only-ready')
+    const dirs = [ready, path.join(ready, '.claude'), path.join(ready, 'identity')]
+    const out = await secureSignInFoldersWindows(dirs)
+    expect(out.map((r) => [r.ok, r.detail])).toEqual(dirs.map(() => [true, 'owner-only']))
+    await exactlyUserAndSystem(dirs, f.scratch, f.user)
+  })
+
+  it('the same under Constrained Language Mode, with Windows\' own programs (which wrote the rights first on beta.2 too)', async (ctx) => {
+    if (await elevated()) return ctx.skip(MODIFY_ONLY_SKIP)
+    const f = await modifyOnlyParent()
+    const root = path.join(f.top, 'accounts-root')
+    const home = path.join(root, 'account-a')
+    fs.mkdirSync(root)
+    const out = await secureFoldersWindows([root, home], constrained, nativeOwnerOnlyTools)
+    expect(out.map((r) => [r.ok, r.detail])).toEqual([[true, 'owner-only'], [true, 'owner-only']])
+    await exactlyUserAndSystem([root, home], f.scratch, f.user)
+  })
+})
+
 describe.runIf(IS_WIN)('secureOwnerOnlyFolders: every caller but the account sign-in folders gets the folders\' own rights only', () => {
   it('a folder inside the root that an earlier call secured keeps every entry of its own, at any depth; both folders pass', async () => {
     await leavesWhatIsInsideAlone((dirs) => secureOwnerOnlyFolders(dirs))
@@ -658,5 +766,75 @@ describe.runIf(IS_WIN)('the read of what is inside under Constrained Language Mo
     expect([user, ADMINISTRATORS_SID]).toContain(linkOwner)
     const junction = entries.find((e) => String.fromCharCode(...(Array.isArray(e.name) ? e.name : [e.name])) === 'link')!
     expect(ownerFromSddl(String(junction.sddl), user)).toBe(linkOwner)
+  })
+})
+
+// 2.1.1-beta.3: the read-only owner-only check (readOwnerOnlyFoldersWindows)
+// that a sign in again asks of the account's folder in use before it links
+// history in, on real rights: a folder the owner-only rule made reads back
+// owner-only, by either route; a folder that inherits rights from above, or
+// one that has an entry of its own for another account, does not. Then the
+// copy itself (fs.promises.copyFile, with COPYFILE_EXCL, as the real folder
+// filesystem does it): a copy made into a folder the rule made owner-only has
+// only the rights it takes from there, none from where it was copied, while
+// the source keeps its own (the control).
+describe.runIf(IS_WIN)('the read-only owner-only check and the history copy, on real rights', () => {
+  /** A temp folder that lets Everyone in, inherited by what is made inside it. */
+  function everyoneParent(): { top: string; scratch: string } {
+    const top = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), PREFIX)))
+    made.push(top)
+    const scratch = path.join(top, 'scratch')
+    fs.mkdirSync(scratch)
+    execFileSync(ICACLS, [top, '/grant', '*S-1-1-0:(OI)(CI)F'], { stdio: 'ignore', windowsHide: true, timeout: 30_000 })
+    return { top, scratch }
+  }
+  const viaScript = (dirs: readonly string[]) => readOwnerOnlyFoldersWindows(dirs)
+  const viaConstrained = (dirs: readonly string[]) => readOwnerOnlyFoldersWindows(dirs, nativeOwnerOnlyTools, constrained)
+
+  it.each([['the script', viaScript], ['Constrained Language Mode', viaConstrained]] as const)(
+    'by %s: a folder the rule made owner-only reads back owner-only; one that inherits from above, or has another account\'s entry of its own, does not; nothing is written',
+    async (_route, read) => {
+      const f = everyoneParent()
+      const secured = path.join(f.top, 'secured')
+      const widened = path.join(f.top, 'widened')
+      const inheriting = path.join(f.top, 'inheriting')
+      for (const d of [secured, widened, inheriting]) fs.mkdirSync(d)
+      expect((await secureOwnerOnlyFolders([secured, widened])).map((r) => [r.ok, r.detail])).toEqual([[true, 'owner-only'], [true, 'owner-only']])
+      // An entry of its own for Users, added after the rule ran.
+      execFileSync(ICACLS, [widened, '/grant', '*S-1-5-32-545:(OI)(CI)RX'], { stdio: 'ignore', windowsHide: true, timeout: 30_000 })
+      const before = [secured, widened, inheriting].map((d) => sddl(d, f.scratch))
+
+      const out = await read([secured, widened, inheriting])
+
+      expect(out.map((r) => [r.dir, r.ok])).toEqual([[secured, true], [widened, false], [inheriting, false]])
+      expect(out.every((r) => r.unread === undefined), JSON.stringify(out)).toBe(true)
+      // Read only: every folder's rights exactly as they were.
+      expect([secured, widened, inheriting].map((d) => sddl(d, f.scratch))).toEqual(before)
+    },
+  )
+
+  it('a copy into a folder the rule made owner-only takes only that folder\'s rights, none from the folder it came from', async () => {
+    const f = everyoneParent()
+    const user = (await runWindowsPowerShell('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value', {})).trim()
+    // The source: a folder that inherits Everyone, with a conversation file in it.
+    const from = path.join(f.top, 'from')
+    fs.mkdirSync(from)
+    const file = path.join(from, 'rollout-1.jsonl')
+    fs.writeFileSync(file, '{}\n')
+    expect((await readOwnerOnlyFoldersWindows([from])).map((r) => r.ok), 'the source does not read back owner-only').toEqual([false])
+    expect(await acesBySid(sddl(file, f.scratch)), 'fixture: the source file lets Everyone in').toContain('0|16|2032127|S-1-1-0')
+    // The destination: a folder the rule made owner-only.
+    const to = path.join(f.top, 'to')
+    fs.mkdirSync(to)
+    expect((await secureOwnerOnlyFolders([to])).map((r) => r.ok)).toEqual([true])
+
+    const copy = path.join(to, 'rollout-1.jsonl')
+    await fs.promises.copyFile(file, copy, fs.constants.COPYFILE_EXCL)
+    expect(fs.readFileSync(copy, 'utf8')).toBe('{}\n')
+    // Inherited (16) full control for the user and SYSTEM, and nothing else.
+    expect(await acesBySid(sddl(copy, f.scratch))).toEqual([`0|16|2032127|${user}`, `0|16|2032127|${SYSTEM_SID}`].sort())
+    // Control: the source still lets Everyone in, so there was an entry the
+    // copy could have carried, and the copy left the source as it was.
+    expect(await acesBySid(sddl(file, f.scratch)), 'control: the source file').toContain('0|16|2032127|S-1-1-0')
   })
 })

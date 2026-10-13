@@ -140,11 +140,10 @@ export function getAccountsService(): AccountsService | null {
 
 /** The start-up work after the registry load and the legacy reconcile,
  *  outside the registry lock. It does NOT adopt a provider's own default
- *  sign-in (Codex's own home folder): that is only
- *  ever taken in by the user's explicit choice, "Use this sign-in" on the
- *  Set up Codex page or "Use this computer's Codex sign-in" in Settings,
- *  Accounts (owner decision 2026-09-26). The one-time start-up adoption that
- *  ran here is gone. */
+ *  sign-in (Codex's own home folder), and nothing else does either: the
+ *  one-time start-up adoption that ran here is gone (owner decision
+ *  2026-09-26), and since 2.1.1-beta.3 so is 2.1.1-beta.2's explicit "Use
+ *  this sign-in" (O5, owner decision 2026-10-11: the service refuses it). */
 export async function runStartupProviderMigrations(): Promise<void> {
   const s = service
   if (!s) return

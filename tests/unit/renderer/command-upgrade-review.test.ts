@@ -203,7 +203,7 @@ describe('reviewCommandsForUpgrade -- tagged, never changed', () => {
     expect(reviewCommandsForUpgrade(before, { configs, dissolvedCommandIds: none })[0].needsReview).toEqual(['prompt-inert-on-shell-configs'])
     expect(reviewCommandsForUpgrade(before, { configs: [configs[0]], dissolvedCommandIds: none })).toBe(before)
   })
-  it('tags a shell button scoped to an SSH config (its partner shell is on this PC)', () => {
+  it('tags a shell button scoped to an SSH config (written when its partner shell was on this PC)', () => {
     const before = [cmd({ id: 's', scope: 'config', configId: 'sshCfg', target: 'partner' })]
     expect(reviewCommandsForUpgrade(before, { configs, dissolvedCommandIds: none })[0].needsReview).toEqual(['ssh-partner-is-local'])
   })
@@ -220,6 +220,13 @@ describe('reviewCommandsForUpgrade -- tagged, never changed', () => {
     const once = reviewCommandsForUpgrade(before, { configs, dissolvedCommandIds: none })
     expect(once[0].needsReview).toEqual(['secret-like-arg', 'prompt-inert-on-shell-configs'])
     expect(reviewCommandsForUpgrade(once, { configs, dissolvedCommandIds: none })).toBe(once)
+  })
+  // #86 (2.1.1): the partner shell of an SSH session runs on the host now. The
+  // reason is stored by its id, so the id stays; its words must say what is true.
+  it('the SSH-partner reason says the partner now runs on the host, not on this PC', () => {
+    const words = describeReviewReason('ssh-partner-is-local')
+    expect(words).toContain('runs on the host')
+    expect(words).not.toMatch(/runs on this PC, not on the host/)
   })
   it('every reason has words for the user', () => {
     for (const r of ['secret-like-arg', 'prompt-inert-on-shell-configs', 'section-dissolved', 'ssh-partner-is-local'] as const)

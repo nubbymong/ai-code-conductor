@@ -36,13 +36,38 @@ vi.mock('os', () => ({ platform: () => platform.value }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {} }))
 // Windows: the in-process PATH walk (windows-programs.ts), answered by the test.
 const walk = vi.hoisted(() => ({ calls: [] as unknown[][], answer: null as string | null }))
-vi.mock('../../../src/main/windows-programs', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../src/main/windows-programs')>()),
-  findOnWindowsPathAsync: async (...a: unknown[]) => { walk.calls.push(a); return walk.answer },
+// Windows: the question put to Windows PowerShell with the user's profile
+// (windows-programs.ts findWithPowerShellProfile, its own suite), answered by
+// the test: `answer` (a path, or null for "named none"), or `fail` for no
+// answer to go by; `hold` keeps it running until the test settles it (with
+// the answer set at that moment).
+const profile = vi.hoisted(() => ({
+  calls: [] as unknown[][],
+  answer: null as string | null,
+  fail: false,
+  hold: false,
+  release: [] as Array<() => void>,
 }))
+vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
+  type Lookup = import('../../../src/main/windows-programs').PowerShellProfileLookup
+  const outcome = (): Lookup => (profile.fail ? { outcome: 'failed' } : profile.answer ? { outcome: 'found', path: profile.answer } : { outcome: 'none' })
+  return {
+    ...(await importOriginal<typeof import('../../../src/main/windows-programs')>()),
+    findOnWindowsPathAsync: async (...a: unknown[]) => { walk.calls.push(a); return walk.answer },
+    findWithPowerShellProfile: (...a: unknown[]) => {
+      profile.calls.push(a)
+      if (!profile.hold) return Promise.resolve(outcome())
+      return new Promise<Lookup>((resolve) => { profile.release.push(() => resolve(outcome())) })
+    },
+  }
+})
 
-const { probeClaudeCli, _resetClaudeCliProbeForTest, findClaudeOnWindowsAsync, recentClaudeOnWindows, _resetClaudeWindowsLookupForTest, CLAUDE_LOOKUP_REUSE_MS } =
-  await import('../../../src/main/claude-cli-probe')
+const {
+  probeClaudeCli, _resetClaudeCliProbeForTest, findClaudeOnWindowsAsync, recentClaudeOnWindows, _resetClaudeWindowsLookupForTest, CLAUDE_LOOKUP_REUSE_MS,
+  CLAUDE_WINDOWS_NAMES, CLAUDE_PROFILE_PROBE, setClaudeProfileLookupAllowed, keptClaudeFromPowerShellProfile, startClaudeProfileLookup, claudeFromPowerShellProfile,
+  claudeFromPowerShellProfileForLaunch, PROFILE_RETRY_AFTER_FAILURE_MS,
+} = await import('../../../src/main/claude-cli-probe')
+const { noteWindowsPathRefresh } = await import('../../../src/main/windows-programs')
 
 const calls = (): Call[] => exec.calls as Call[]
 
@@ -63,6 +88,11 @@ beforeEach(() => {
   exec.calls.length = 0
   walk.calls.length = 0
   walk.answer = null
+  profile.calls.length = 0
+  profile.answer = null
+  profile.fail = false
+  profile.hold = false
+  profile.release.length = 0
   _resetClaudeCliProbeForTest()
   _resetClaudeWindowsLookupForTest()
 })
@@ -136,6 +166,225 @@ describe('a found Claude Code is reused for the same PATH, briefly', () => {
     walk.answer = null
     await findClaudeOnWindowsAsync(env, undefined, () => 3_000)
     expect(recentClaudeOnWindows(env, () => 3_000)).toBeNull()
+  })
+})
+
+// 2.1.1-beta.3 (F26): Claude Code on PATH only through the user's PowerShell
+// profile (fnm plus an npm-installed claude.cmd). beta.2 walked only the
+// app's own PATH, so every check said "not found" and every start refused.
+describe('Windows: Claude Code that only the PowerShell profile puts on PATH', () => {
+  const FNM = 'C:\\Users\\me\\AppData\\Local\\fnm_multishells\\1234_1700000000\\claude.cmd'
+  const FNM2 = 'C:\\Users\\me\\AppData\\Local\\fnm_multishells\\5678_1700000999\\claude.cmd'
+  const env = { PATH: 'C:\\Windows\\System32;C:\\Tools' }
+  const exists = (present: boolean) => async (): Promise<boolean> => present
+  /** Settle the oldest question still held, with the answer set now. */
+  const releaseOne = (): void => { const r = profile.release.shift(); expect(r, 'no question is held').toBeDefined(); r!() }
+  beforeEach(() => {
+    platform.value = 'win32'
+    setClaudeProfileLookupAllowed(() => true)
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  // Mutation to prove this can fail: drop the profile fallback from
+  // findClaudeOnWindowsWithSource (beta.2's behaviour).
+  it('the walk finds none and the profile finds it: the setup probe reports it installed, by its full path', async () => {
+    profile.answer = FNM
+    const result = await probeClaudeCli()
+    expect(result).toEqual({ installed: true, path: FNM, probe: CLAUDE_PROFILE_PROBE })
+    expect(walk.calls).toHaveLength(1)
+    expect(profile.calls).toHaveLength(1)
+    expect(profile.calls[0][0]).toEqual(CLAUDE_WINDOWS_NAMES)
+    expect(calls(), 'no process of this module (the question is windows-programs.ts\'s)').toHaveLength(0)
+  })
+
+  it('the walk finds it: the profile is never asked', async () => {
+    walk.answer = 'C:\\Tools\\claude.exe'
+    expect(await probeClaudeCli()).toMatchObject({ installed: true, path: 'C:\\Tools\\claude.exe' })
+    expect(await findClaudeOnWindowsAsync(env)).toBe('C:\\Tools\\claude.exe')
+    expect(profile.calls).toEqual([])
+  })
+
+  // Mutation to prove this can fail: forget a miss (keep only found answers).
+  it('a miss in the profile too is kept for the run: the CLI check, a start and a background run do not ask again', async () => {
+    expect(await findClaudeOnWindowsAsync(env)).toBeNull()
+    expect(profile.calls).toHaveLength(1)
+    expect(keptClaudeFromPowerShellProfile()).toBeNull()
+    for (let i = 0; i < 5; i++) expect(await findClaudeOnWindowsAsync(env)).toBeNull()
+    startClaudeProfileLookup()
+    expect(claudeFromPowerShellProfileForLaunch()).toBeNull()
+    expect(await claudeFromPowerShellProfile()).toBeNull()
+    expect(profile.calls).toHaveLength(1)
+  })
+
+  // Mutation to prove this can fail: ignore windowsPathRefreshCount.
+  it('it is asked again only after a check the user asked for, which brings PATH up to date first', async () => {
+    expect(await findClaudeOnWindowsAsync(env)).toBeNull()
+    expect(profile.calls).toHaveLength(1)
+    noteWindowsPathRefresh()
+    expect(keptClaudeFromPowerShellProfile()).toBeUndefined()
+    profile.answer = FNM
+    expect(await probeClaudeCli()).toMatchObject({ installed: true, path: FNM })
+    expect(profile.calls).toHaveLength(2)
+    // and that answer is kept in turn
+    expect(await findClaudeOnWindowsAsync(env, exists(true))).toBe(FNM)
+    expect(profile.calls).toHaveLength(2)
+  })
+
+  // Mutation to prove this can fail: drop the in-flight join.
+  it('one question at a time: overlapping checks and starts share it', async () => {
+    profile.hold = true
+    profile.answer = FNM
+    const checks = Array.from({ length: 5 }, () => findClaudeOnWindowsAsync(env))
+    for (let i = 0; i < 3; i++) startClaudeProfileLookup()
+    await settle()
+    expect(profile.calls).toHaveLength(1)
+    for (const r of profile.release) r()
+    expect(await Promise.all(checks)).toEqual(Array(5).fill(FNM))
+    expect(profile.calls).toHaveLength(1)
+  })
+
+  // Second trigger. Mutation to prove this can fail: join the question
+  // running whatever the count of checks.
+  it('a check the user asks for while a question started before it is still running waits for it, then asks once more, and keeps that answer', async () => {
+    profile.hold = true
+    profile.answer = null
+    const boot = findClaudeOnWindowsAsync(env)
+    await settle()
+    expect(profile.calls).toHaveLength(1)
+    // The user edits the profile, then presses Check again: PATH is brought up to date first.
+    noteWindowsPathRefresh()
+    const check = findClaudeOnWindowsAsync(env)
+    const overlapping = findClaudeOnWindowsAsync(env)
+    startClaudeProfileLookup()
+    await settle()
+    expect(profile.calls, 'still one question at a time').toHaveLength(1)
+    releaseOne()
+    expect(await boot).toBeNull()
+    await settle()
+    expect(profile.calls, 'asked once more, for the check').toHaveLength(2)
+    profile.answer = FNM
+    releaseOne()
+    expect(await check).toBe(FNM)
+    expect(await overlapping).toBe(FNM)
+    expect(keptClaudeFromPowerShellProfile()).toBe(FNM)
+    expect(profile.calls).toHaveLength(2)
+  })
+
+  // First trigger. Mutation to prove this can fail: read only the current
+  // answer on the start path.
+  it('a check about another provider makes the kept answer stale, not wrong: a start still names it, and one new question runs in the background', async () => {
+    profile.answer = FNM
+    expect(await findClaudeOnWindowsAsync(env, undefined, () => 1_000)).toBe(FNM)
+    expect(profile.calls).toHaveLength(1)
+    // Another provider's Check again (or its setup page) brings PATH up to date: the count moves.
+    noteWindowsPathRefresh()
+    profile.hold = true
+    expect(recentClaudeOnWindows(env, () => 1_000)).toBe(FNM)
+    expect(claudeFromPowerShellProfileForLaunch()).toBe(FNM)
+    expect(profile.calls).toHaveLength(2)
+    expect(recentClaudeOnWindows(env, () => 1_000)).toBe(FNM)
+    expect(profile.calls).toHaveLength(2)
+    profile.answer = FNM2
+    releaseOne()
+    await settle()
+    expect(recentClaudeOnWindows(env, () => 1_000)).toBe(FNM2)
+    expect(keptClaudeFromPowerShellProfile()).toBe(FNM2)
+    expect(profile.calls).toHaveLength(2)
+  })
+
+  it('a kept path is used while it is still a file, and asked again once it is gone', async () => {
+    profile.answer = FNM
+    expect(await findClaudeOnWindowsAsync(env)).toBe(FNM)
+    expect(await findClaudeOnWindowsAsync(env, exists(true))).toBe(FNM)
+    expect(profile.calls).toHaveLength(1)
+    profile.answer = null
+    expect(await findClaudeOnWindowsAsync(env, exists(false))).toBeNull()
+    expect(profile.calls).toHaveLength(2)
+    expect(keptClaudeFromPowerShellProfile()).toBeNull()
+  })
+
+  it('a recent answer is the profile\'s only after a recent walk of the same PATH found none: another PATH is walked first', async () => {
+    profile.answer = FNM
+    await findClaudeOnWindowsAsync(env, undefined, () => 1_000)
+    expect(recentClaudeOnWindows(env, () => 1_000)).toBe(FNM)
+    expect(recentClaudeOnWindows({ PATH: 'C:\\profiles\\p1\\.local\\bin;C:\\Tools' }, () => 1_000)).toBeNull()
+    expect(recentClaudeOnWindows(env, () => 1_000 + CLAUDE_LOOKUP_REUSE_MS)).toBeNull()
+  })
+
+  // Mutation to prove this can fail: keep a question with no answer for the
+  // run, like a miss.
+  it('a question with no answer to go by (timed out at sign-in, say) is not kept like a miss: asked once more after a few minutes, never on every 30 s check', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_000_000)
+    profile.fail = true
+    expect(await findClaudeOnWindowsAsync(env)).toBeNull()
+    expect(profile.calls).toHaveLength(1)
+    expect(keptClaudeFromPowerShellProfile()).toBeNull()
+    vi.setSystemTime(1_000_000 + PROFILE_RETRY_AFTER_FAILURE_MS - 1)
+    for (let i = 0; i < 3; i++) expect(await findClaudeOnWindowsAsync(env)).toBeNull()
+    startClaudeProfileLookup()
+    expect(claudeFromPowerShellProfileForLaunch()).toBeNull()
+    expect(profile.calls, 'not within the floor').toHaveLength(1)
+    vi.setSystemTime(1_000_000 + PROFILE_RETRY_AFTER_FAILURE_MS)
+    profile.fail = false
+    profile.answer = FNM
+    expect(await findClaudeOnWindowsAsync(env)).toBe(FNM)
+    expect(profile.calls).toHaveLength(2)
+    expect(PROFILE_RETRY_AFTER_FAILURE_MS).toBeGreaterThanOrEqual(2 * 60_000)
+  })
+
+  it('a second question with no answer for the same count is kept like a miss, until a check the user asks for', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_000_000)
+    profile.fail = true
+    await findClaudeOnWindowsAsync(env)
+    vi.setSystemTime(1_000_000 + PROFILE_RETRY_AFTER_FAILURE_MS)
+    expect(await findClaudeOnWindowsAsync(env)).toBeNull()
+    expect(profile.calls).toHaveLength(2)
+    vi.setSystemTime(1_000_000 + 20 * PROFILE_RETRY_AFTER_FAILURE_MS)
+    expect(await findClaudeOnWindowsAsync(env)).toBeNull()
+    startClaudeProfileLookup()
+    expect(profile.calls).toHaveLength(2)
+    noteWindowsPathRefresh()
+    profile.fail = false
+    profile.answer = FNM
+    expect(await findClaudeOnWindowsAsync(env)).toBe(FNM)
+    expect(profile.calls).toHaveLength(3)
+  })
+
+  it('a question with no answer after one that named a path keeps that path: a start is not refused for it', async () => {
+    profile.answer = FNM
+    expect(await findClaudeOnWindowsAsync(env, exists(true))).toBe(FNM)
+    noteWindowsPathRefresh()
+    profile.fail = true
+    expect(await findClaudeOnWindowsAsync(env, exists(true))).toBe(FNM)
+    expect(profile.calls).toHaveLength(2)
+    expect(keptClaudeFromPowerShellProfile()).toBe(FNM)
+    expect(claudeFromPowerShellProfileForLaunch()).toBe(FNM)
+  })
+
+  // Mutation to prove this can fail: drop profileLookupMayRun from
+  // claudeFromPowerShellProfile.
+  it('never while Claude Code is switched off, nor before main has set its rule; nothing is kept then', async () => {
+    _resetClaudeWindowsLookupForTest()
+    profile.answer = FNM
+    expect(await findClaudeOnWindowsAsync(env)).toBeNull()
+    startClaudeProfileLookup()
+    expect(claudeFromPowerShellProfileForLaunch()).toBeNull()
+    setClaudeProfileLookupAllowed(() => false)
+    expect(await probeClaudeCli()).toMatchObject({ installed: false })
+    startClaudeProfileLookup()
+    expect(claudeFromPowerShellProfileForLaunch()).toBeNull()
+    setClaudeProfileLookupAllowed(() => { throw new Error('cannot read') })
+    expect(await findClaudeOnWindowsAsync(env)).toBeNull()
+    expect(profile.calls).toEqual([])
+    expect(keptClaudeFromPowerShellProfile()).toBeUndefined()
+    setClaudeProfileLookupAllowed(() => true)
+    expect(await findClaudeOnWindowsAsync(env)).toBe(FNM)
+    expect(profile.calls).toHaveLength(1)
+    // and a path kept while it was on is not named for a start once it is off
+    setClaudeProfileLookupAllowed(() => false)
+    expect(claudeFromPowerShellProfileForLaunch()).toBeNull()
   })
 })
 

@@ -52,7 +52,17 @@
  *                          copy counts are read from the sessions this start
  *                          brought back; shown first it would count zero and
  *                          claim nothing was resumable.
- *  11. helloCodex       — the one-time Codex introduction (WP2 commit 6f),
+ *  11. codexReplace     - "Replace this sign-in with a Codex account", shown
+ *                          once to someone who chose the Codex sign-in already
+ *                          on this computer in 2.1.1-beta.2 (O5; see
+ *                          onboarding/codex-replace-gate.ts). App arms it from
+ *                          the first accounts snapshot of a start, which can
+ *                          land after the resume prompt is up: below it, so
+ *                          it never takes the screen from a page already
+ *                          showing. Its launch confirmations (held back while
+ *                          it is up, launchDialogsSuppressed) come after it,
+ *                          so an account added on it is there to pick.
+ *  12. helloCodex       — the one-time Codex introduction (WP2 commit 6f),
  *                          outside onboarding. After everything above,
  *                          including the `*Due` short-circuit: it must never
  *                          cover a running setup. bootChain below asks this
@@ -92,6 +102,7 @@ export type BootGate =
   | 'loggingConsent'
   | 'resume'
   | 'multiSpawnIntro'
+  | 'codexReplace'
   | 'helloCodex'
 
 export interface BootGateState {
@@ -118,6 +129,10 @@ export interface BootGateState {
    *  boot (decideMultiSpawnIntro) from meta read before anything stamped.
    *  Optional: absent === false. */
   multiSpawnIntroDue?: boolean
+  /** The one-time "Replace this sign-in with a Codex account" page is armed
+   *  this start and not yet left (codex-replace-gate.ts). Optional: absent
+   *  === false. */
+  codexReplaceDue?: boolean
   /** The Codex introduction's one-time takeover is open (latched by App once
    *  it was due and nothing was in its way). Optional: absent === false. */
   helloCodexOpen?: boolean
@@ -149,6 +164,7 @@ export function pickBootGate(s: BootGateState): BootGate | null {
   if (!s.loggingConsentSeen) return 'loggingConsent'
   if (s.resumePending) return 'resume'
   if (s.multiSpawnIntroDue) return 'multiSpawnIntro'
+  if (s.codexReplaceDue) return 'codexReplace'
   if (s.helloCodexOpen) return 'helloCodex'
   return null
 }

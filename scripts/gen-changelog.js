@@ -24,7 +24,7 @@ const path = require('path')
 const PROJECT_ROOT = path.resolve(__dirname, '..')
 const SOURCE = path.join(PROJECT_ROOT, 'src', 'renderer', 'changelog.ts')
 const OUTPUT = path.join(PROJECT_ROOT, 'CHANGELOG.md')
-const REPO_URL = 'https://github.com/nubbymong/claude-command-center'
+const REPO_URL = 'https://github.com/nubbymong/ai-code-conductor'
 
 // changelog.ts change-type -> Keep a Changelog section. Order here is the order
 // sections render within a version block.

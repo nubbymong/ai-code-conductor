@@ -354,9 +354,11 @@ export interface AppSettings {
   /** v1.5.19: friendly names for accounts WITHOUT a profile (the default/single
    *  account), keyed by canonical email. Profiles carry their own `name`. */
   accountAliases?: Record<string, string>
-  /** The profile id of the account the user most recently launched a session
-   *  under (global, across sessions). Surfaced as a "Last used" line in the
-   *  account-launch gate so a new session can adopt it in one click. */
+  /** The profile id of the account the user most recently chose for a session
+   *  (global, across sessions). Surfaced as the "Most recent" line in the
+   *  account-launch gate, for NEW sessions only, so one can adopt it in one
+   *  click. A resumed session's picker shows that session's own account
+   *  instead (O9), and confirming it does not change this value. */
   lastUsedAccountId?: string
   /** v1.5.12: when true, CCC writes `disableWorkflows: true` into every
    *  per-session Claude settings file so Claude Code's dynamic-workflow

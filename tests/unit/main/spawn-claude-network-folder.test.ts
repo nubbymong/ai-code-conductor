@@ -7,10 +7,18 @@
 // native claude.exe starts there as before, so does every drive folder, and
 // the picker itself (node takes a network folder; the picker refuses its own
 // launch there, resume-picker-network-folder). Pure: nothing is started.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { buildClaudeLaunchCommand, CLAUDE_NETWORK_FOLDER_REFUSAL } from '../../../src/main/spawn-claude-command'
+import { buildClaudeLaunchCommand, CLAUDE_NETWORK_FOLDER_REFUSAL, LAUNCHER_PROGRAM_LOOKUP } from '../../../src/main/spawn-claude-command'
+
+// The picker cases assume node.exe is found (pickerNodeFound, 2.1.1-beta.3):
+// answered here, never by this runner's PATH (spawn-claude-no-node covers
+// the launch with none).
+vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/windows-programs')>()
+  return { ...actual, findOnWindowsPath: (...a: Parameters<typeof actual.findOnWindowsPath>) => (a[0].length === 1 && a[0][0] === 'node.exe' ? 'C:\\nodejs\\node.exe' : actual.findOnWindowsPath(...a)) }
+})
 
 const SENTENCE = 'Cannot start Claude Code in a network folder through its npm launcher: open the folder from a mapped drive letter, or install the native Claude Code.'
 const NETWORK = ['\\\\srv\\share\\project', '//srv/share/project', '\\/srv\\share', '\\\\?\\C:\\project', '\\\\?\\UNC\\srv\\share\\project', '\\\\.\\C:\\project']
@@ -50,19 +58,19 @@ describe('a network folder on the npm launcher route is refused with the reason'
 
 describe('everything else starts as before', () => {
   it('the npm launcher in a drive folder', () => {
-    expect(build('C:\\proj', SHIM, ROUTES[0])).toBe("Set-Location 'C:\\proj'; & 'C:\\npm\\claude.cmd' --model opus; exit")
-    expect(build('z:/proj', SHIM, ROUTES[2])).toBe(`Set-Location 'z:/proj'; & 'C:\\npm\\claude.cmd' --resume ${UUID} --model opus; exit`)
+    expect(build('C:\\proj', SHIM, ROUTES[0])).toBe(`Set-Location -LiteralPath 'C:\\proj'; ${LAUNCHER_PROGRAM_LOOKUP}& 'C:\\npm\\claude.cmd' --model opus; exit`)
+    expect(build('z:/proj', SHIM, ROUTES[2])).toBe(`Set-Location -LiteralPath 'z:/proj'; ${LAUNCHER_PROGRAM_LOOKUP}& 'C:\\npm\\claude.cmd' --resume ${UUID} --model opus; exit`)
   })
 
   it('the native claude.exe in a network folder', () => {
     for (const r of ROUTES) {
-      for (const cwd of NETWORK) expect(build(cwd, EXE, r), `${r.name} ${cwd}`).toContain(`Set-Location '${cwd}'; & '${EXE}'`)
+      for (const cwd of NETWORK) expect(build(cwd, EXE, r), `${r.name} ${cwd}`).toContain(`Set-Location -LiteralPath '${cwd}'; & '${EXE}'`)
     }
   })
 
   it('the picker line in a network folder: node starts there, and the picker decides', () => {
     for (const cwd of NETWORK) {
-      expect(build(cwd, SHIM, { name: 'picker', useResumePicker: true, pickerScript: PICKER })).toBe(`Set-Location '${cwd}'; node '${PICKER}' --model opus; exit`)
+      expect(build(cwd, SHIM, { name: 'picker', useResumePicker: true, pickerScript: PICKER })).toBe(`Set-Location -LiteralPath '${cwd}'; $env:CCC_CLAUDE_BIN = '${SHIM}'; & 'C:\\nodejs\\node.exe' '${PICKER}' --model opus; exit`)
     }
   })
 

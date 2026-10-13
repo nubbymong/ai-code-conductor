@@ -160,6 +160,8 @@ describe('New run on a Codex account', () => {
     expect(api.insights.run).not.toHaveBeenCalled()
     const confirm = byTest('insights-codex-confirm')!
     expect(confirm.textContent).toContain('Run this report with the Codex sign-in already on this computer (me@example.com)')
+    // O5 (owner decision 2026-10-11): that sign-in is being retired, and the confirmation says so.
+    expect(byTest('insights-codex-ack-retiring')!.textContent).toBe('This sign-in is being retired: in Settings, Accounts, add a Codex account, make it the default, then make this one inactive and archive it.')
     const runBtn = byTest('insights-codex-confirm-run') as HTMLButtonElement
     expect(runBtn.disabled).toBe(true)
     await act(async () => { byTest('insights-codex-confirm-cancel')!.click() })

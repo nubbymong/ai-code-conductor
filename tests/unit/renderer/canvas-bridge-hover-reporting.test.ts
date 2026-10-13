@@ -101,7 +101,10 @@ describe('switched off, the page does no hover work at all', () => {
   it('acknowledges the request with what it is now doing', async () => {
     const reply = await setHoverReporting(false)
     expect(reply.ok).toBe(true)
-    expect(reply.result).toEqual({ enabled: false })
+    // Clicks follow hover when the request names no click setting of its own:
+    // the request shape from before aicc_planning#107 keeps exactly its old
+    // meaning.
+    expect(reply.result).toEqual({ enabled: false, clicks: false })
   })
 
   it('emits no pointer events however much the mouse moves', async () => {
@@ -171,8 +174,79 @@ describe('the switch is reversible and fails live', () => {
   it('takes only a literal false for an answer — a malformed request cannot blind the pane', async () => {
     for (const value of [undefined, null, 0, '', 'false', 'off'] as unknown[]) {
       const reply = await setHoverReporting(value)
-      expect(reply.result, String(value)).toEqual({ enabled: true })
+      expect(reply.result, String(value)).toEqual({ enabled: true, clicks: true })
     }
     await expectStillReports()
+  })
+})
+
+// -- Clicks are their own switch (aicc_planning#107) ------------------------
+//
+// A PLAN resolves no hover (it flashed and corrupted the pane on every mouse
+// move), so the host asks its frame to stop the pointer stream. In beta.2 that
+// one switch silenced contentClick as well, so clicking a plan section did
+// nothing at all although the toolbar says "click a section to point a note at
+// it". The pointer stream and the click report are now separate: a plan keeps
+// clicks and drops the stream; x-ray Off drops both.
+//
+// Mutation to prove these can fail: gate the click listener on `hoverReporting`
+// again (canvas/bridge/index.ts), or stop reading `clicks` from the request.
+describe('clicks are their own switch (aicc_planning#107)', () => {
+  async function setReporting(enabled: unknown, clicks: unknown): Promise<{ ok: boolean; result?: unknown }> {
+    return bridgeRequest('hoverReporting', { enabled, clicks })
+  }
+
+  function click(times = 1): void {
+    for (let i = 0; i < times; i++) document.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  }
+
+  it('a PLAN (pointer stream off, clicks on) reports a click and no pointer move', async () => {
+    const reply = await setReporting(false, true)
+
+    const pointer = watchEvents('pointer', { ms: SILENCE_WINDOW_MS })
+    moveMouse(25)
+    expect(await pointer, 'no per-mousemove work on a plan').toEqual([])
+
+    const clicks = watchEvents('contentClick', { min: 1, ms: ARRIVAL_TIMEOUT_MS })
+    click()
+    const seen = await clicks
+    expect(seen.length, 'a click on a plan section reaches the host').toBeGreaterThanOrEqual(1)
+    // The same message, with the same hit, that stealth has always sent.
+    expect(seen[0]).toMatchObject({ type: 'contentClick', hit: { role: 'button', name: 'Save draft' } })
+    // ...and the bridge says so in its answer.
+    expect(reply.result).toEqual({ enabled: false, clicks: true })
+  })
+
+  it('x-ray Off (both off) reports neither a click nor a pointer move', async () => {
+    const reply = await setReporting(false, false)
+    expect(reply.result).toEqual({ enabled: false, clicks: false })
+    const pointer = watchEvents('pointer', { ms: SILENCE_WINDOW_MS })
+    const clicks = watchEvents('contentClick', { ms: SILENCE_WINDOW_MS })
+    moveMouse(25)
+    click(5)
+    expect(await pointer).toEqual([])
+    expect(await clicks).toEqual([])
+
+    // The control: the silence was the switch, not a dead bridge.
+    await setReporting(true, true)
+    const loud = watchEvents('contentClick', { min: 1, ms: ARRIVAL_TIMEOUT_MS })
+    click()
+    expect((await loud).length).toBeGreaterThanOrEqual(1)
+    await expectStillReports()
+  })
+
+  it('moving from a plan to x-ray Off silences the clicks it had kept', async () => {
+    await setReporting(false, true)
+    await setReporting(false, false)
+    const clicks = watchEvents('contentClick', { ms: SILENCE_WINDOW_MS })
+    click(3)
+    expect(await clicks).toEqual([])
+  })
+
+  it('the click switch takes only a literal false too: a malformed value cannot blind a plan', async () => {
+    for (const value of [null, 0, '', 'false', 'off'] as unknown[]) {
+      const reply = await setReporting(false, value)
+      expect(reply.result, String(value)).toEqual({ enabled: false, clicks: true })
+    }
   })
 })

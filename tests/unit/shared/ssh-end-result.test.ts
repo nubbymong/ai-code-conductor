@@ -17,7 +17,7 @@ import { manualContainerStopCommand, containerSessionKillPattern, containerSessi
 
 const NEEDS = { outcome: 'container-needs-sudo', container: { engine: 'podman', name: 'ccc-test', host: 'rocky.lan' } }
 const script = (sid: string): string =>
-  String.raw`rm -f ~/.claude/settings-${sid}.json ~/.claude/mcp-${sid}.json ~/.claude/ccc-status-${sid}.url 2>/dev/null; exec pkill -f "/settings-${sid}\.json"`
+  String.raw`rm -f ~/.claude/settings-${sid}.json ~/.claude/mcp-${sid}.json ~/.claude/ccc-status-${sid}.url ~/.claude/ccc-attn-${sid}.key ~/.claude/ccc-attn-${sid}.up 2>/dev/null; exec pkill -f "/settings-${sid}\.json"`
 const ch = (...codes: number[]): string => String.fromCharCode(...codes)
 
 describe('readSshEndRemoteResult', () => {

@@ -15,7 +15,7 @@ vi.unmock('../../../src/main/first-start-warmup')
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import {
-  createFirstStartWarmup, firstStartIdentityKey, FIRST_START_ARGS, FIRST_START_CALLER_BOUND_MS, FIRST_START_TIMEOUT_MS,
+  createFirstStartWarmup, firstStartIdentityKey, flushFirstStartWarmups, warmFirstStart, FIRST_START_ARGS, FIRST_START_CALLER_BOUND_MS, FIRST_START_TIMEOUT_MS,
 } from '../../../src/main/first-start-warmup'
 import type { FirstStartRequest, FirstStartRun, FirstStartWarmupDeps } from '../../../src/main/first-start-warmup'
 
@@ -248,6 +248,106 @@ describe('the first-start warm-up (ADR-025)', () => {
   })
 })
 
+// At quit the agents and terminals are ended right after the warm-ups
+// (index.ts teardown). A caller answered after that would start its own
+// program into the teardown, so from stopAll on no caller is answered and no
+// worker is made: the process is ending, and nothing at quit waits on them.
+describe('the first-start warm-up after the quit began', () => {
+  /** Lets every pending promise step and timer turn run (real timers). */
+  const later = () => new Promise((r) => setTimeout(r, 20))
+  const watch = (p: Promise<unknown>) => {
+    const seen = { settled: false }
+    void p.then(() => { seen.settled = true }, () => { seen.settled = true })
+    return seen
+  }
+
+  it('a caller waiting on a warm-up when the quit stops it is never answered, though the worker answers', async () => {
+    const f = fakeDeps()
+    const w = createFirstStartWarmup(f.deps)
+    const seen = watch(w.warm(EXE, ENV))
+    await vi.waitFor(() => expect(f.requests).toHaveLength(1))
+    w.stopAll()
+    expect(f.stops).toEqual([0])
+    // What the real worker answers once its program was ended.
+    f.answers[0].resolve({ exitCode: null, timedOut: false, spawnError: 'worker-ended' })
+    await later()
+    expect(seen.settled).toBe(false)
+  })
+
+  it('a caller waiting at the quit is not answered when its bound runs out either', async () => {
+    vi.useFakeTimers()
+    const turns = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
+    const f = fakeDeps()
+    const w = createFirstStartWarmup(f.deps)
+    const seen = watch(w.warm(EXE, ENV))
+    await turns()
+    expect(f.requests).toHaveLength(1)
+    w.stopAll()
+    await vi.advanceTimersByTimeAsync(FIRST_START_CALLER_BOUND_MS + 1)
+    await turns()
+    expect(seen.settled).toBe(false)
+  })
+
+  it('a warm-up asked for after the quit starts nothing, reads nothing and is never answered, a skip included', async () => {
+    const realpath = vi.fn(async (p: string) => p)
+    const f = fakeDeps({ realpath })
+    const w = createFirstStartWarmup(f.deps)
+    w.stopAll()
+    const env = vi.fn(ENV)
+    const asked = [watch(w.warm(EXE, env)), watch(w.warm('C:\\npm\\claude.cmd', env))]
+    await later()
+    expect(asked.map((a) => a.settled)).toEqual([false, false])
+    expect(realpath).not.toHaveBeenCalled()
+    expect(env).not.toHaveBeenCalled()
+    expect(f.requests).toHaveLength(0)
+  })
+
+  it('the first caller held after the quit is logged once, by no program path', async () => {
+    const f = fakeDeps()
+    const w = createFirstStartWarmup(f.deps)
+    const waiting = watch(w.warm(EXE, ENV))
+    await vi.waitFor(() => expect(f.requests).toHaveLength(1))
+    w.stopAll()
+    f.answers[0].resolve({ exitCode: null, timedOut: false, spawnError: 'worker-ended' })
+    const after = [watch(w.warm(EXE, ENV)), watch(w.warm('C:\\npm\\claude.cmd', ENV))]
+    await later()
+    expect([waiting, ...after].map((a) => a.settled)).toEqual([false, false, false])
+    const held = f.logs.filter((l) => l.includes('the app is quitting'))
+    expect(held).toEqual(['[first-start] the app is quitting: a caller of the first-start warm-up is held and starts nothing'])
+  })
+
+  it('a warm-up still reading its file at the quit makes no worker and builds no environment', async () => {
+    let finishRead!: (p: string) => void
+    const f = fakeDeps({ realpath: () => new Promise<string>((r) => { finishRead = r }) })
+    const w = createFirstStartWarmup(f.deps)
+    const env = vi.fn(ENV)
+    const seen = watch(w.warm(EXE, env))
+    await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'))
+    w.stopAll()
+    finishRead(REAL)
+    await later()
+    expect(f.requests).toHaveLength(0)
+    expect(env).not.toHaveBeenCalled()
+    expect(seen.settled).toBe(false)
+  })
+
+  it('a warm-up still building its environment at the quit makes no worker, and the environment is disposed', async () => {
+    const f = fakeDeps()
+    const w = createFirstStartWarmup(f.deps)
+    const dispose = vi.fn()
+    let finishEnv!: () => void
+    const env = () => new Promise<ReturnType<typeof ENV> & { dispose: () => void }>((r) => { finishEnv = () => r({ ...ENV(), dispose }) })
+    const seen = watch(w.warm(EXE, env))
+    await vi.waitFor(() => expect(finishEnv).toBeTypeOf('function'))
+    w.stopAll()
+    finishEnv()
+    await later()
+    expect(f.requests).toHaveLength(0)
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(seen.settled).toBe(false)
+  })
+})
+
 // No renderer input reaches the warm-up: it is a main-process module, started
 // only from the reviewed main-side callers below with a program their own
 // discovery or resolution found. No preload or renderer file, and no IPC
@@ -307,5 +407,18 @@ describe('who can start a first-start warm-up', () => {
     for (const f of walk(join(ROOT, 'src')).filter((x) => /^src\/(preload|renderer|shared)\//.test(x))) {
       expect(readFileSync(join(ROOT, f), 'utf8'), f).not.toMatch(/first-?start|warmFirstStart/i)
     }
+  })
+})
+
+// LAST in this file: the quit's flush latches the module's one shared warm-up
+// for the rest of the process.
+describe('the quit flush', () => {
+  it('also holds when no warm-up was asked for before it: one asked for afterwards is never answered', async () => {
+    flushFirstStartWarmups()
+    let settled = false
+    // A path every platform answers at once, before any file is read.
+    void warmFirstStart('/usr/local/bin/claude', ENV).then(() => { settled = true })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(settled).toBe(false)
   })
 })

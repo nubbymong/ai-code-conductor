@@ -8,7 +8,7 @@
  * Three ways to talk to GitHub (cascading):
  *   1. Public GitHub API (anonymous) — works for public repos
  *   2. Authenticated API (gh auth token) — works for private repos if gh CLI is authed
- *   3. gh CLI (`gh release list`) — last resort fallback
+ *   3. gh CLI (`gh release list`, then `gh release view` for downloads) -- last resort fallback
  *
  * Once the repo is public, step 1 succeeds and steps 2-3 are never called.
  *
@@ -73,20 +73,12 @@ const INSTALLER_EXT = installerExtForPlatform(process.platform)
 const DEFAULT_REPO = 'nubbymong/claude-command-center'
 
 /**
- * Validate a GitHub `owner/repo` slug against a strict pattern.
- * Prevents shell/argument injection if the value comes from the registry.
- * Allowed: alphanumerics, dashes, underscores, dots; one slash separator.
+ * A syntax check on the GitHub `owner/repo` slug repoIsLive builds into its
+ * probe URL: alphanumerics, dashes, underscores, dots; one slash separator.
+ * The GitHubRepo setting is not checked here: it is matched exactly against
+ * ALLOWED_REPOS (allowedRepoSetting).
  */
 const REPO_PATTERN = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/
-
-function getRepo(): string {
-  const fromRegistry = readRegistry('GitHubRepo')
-  if (fromRegistry && REPO_PATTERN.test(fromRegistry)) return fromRegistry
-  if (fromRegistry) {
-    logError(`[github-update] Ignoring invalid GitHubRepo registry value: ${JSON.stringify(fromRegistry)}`)
-  }
-  return DEFAULT_REPO
-}
 
 /**
  * The repo the app will be RENAMED to after 2.1 ships
@@ -96,10 +88,32 @@ function getRepo(): string {
  */
 export const RENAMED_REPO = 'nubbymong/ai-code-conductor'
 
-// The repo the updater currently talks to. Resolved lazily from the registry
-// override (else DEFAULT_REPO) and cached; the startup probe may switch it to
-// the renamed repo and persist that. Every fetch/download reads this, so a
-// switch takes effect the same session, not only after a restart.
+/**
+ * The repositories the updater reads releases from: this project's own, under
+ * its current name and the name it is moving to. The GitHubRepo setting (the
+ * registry on Windows, platform-config.json elsewhere) chooses between these
+ * two, compared exactly, and nothing else.
+ */
+const ALLOWED_REPOS: ReadonlySet<string> = new Set([DEFAULT_REPO, RENAMED_REPO])
+
+/** `value` when it names one of ALLOWED_REPOS, else null. Any other non-empty
+ *  value is logged and then treated as if the setting were absent. */
+function allowedRepoSetting(value: string | null | undefined): string | null {
+  if (!value) return null
+  if (ALLOWED_REPOS.has(value)) return value
+  logError(`[github-update] Ignoring GitHubRepo setting ${JSON.stringify(value)}: the updater reads releases only from ${[...ALLOWED_REPOS].join(' or ')}`)
+  return null
+}
+
+function getRepo(): string {
+  return allowedRepoSetting(readRegistry('GitHubRepo')) ?? DEFAULT_REPO
+}
+
+// The repo the updater currently talks to. Resolved lazily from the GitHubRepo
+// setting when it names one of ALLOWED_REPOS (else DEFAULT_REPO) and cached;
+// the startup probe may switch it to the renamed repo and persist that. Every
+// fetch/download reads this, so a switch takes effect the same session, not
+// only after a restart.
 let activeRepoCache: string | null = null
 
 /** The GitHub `owner/repo` the updater currently uses. */
@@ -113,14 +127,25 @@ export function _resetActiveRepoForTest(): void {
   activeRepoCache = null
 }
 
-/** True iff the GitHub repo `slug` is reachable right now — a definite 2xx. A
- *  404 (not renamed yet) or ANY error/timeout returns false: never adopt on
- *  uncertainty. */
+/** How many of a repository's newest releases the renamed-repo probe reads.
+ *  More than one, so a newest release whose tag the updater does not offer
+ *  (a `-dev` build, for example) does not hide the releases behind it. */
+const PROBE_RELEASES_PAGE = 30
+
+/** True iff the GitHub repo `slug` is serving releases right now: a definite
+ *  2xx whose list of its newest PROBE_RELEASES_PAGE releases holds at least one
+ *  with a tag this updater understands (parseTag). No releases, none with a tag
+ *  it understands among them, a 404 (not renamed yet) or ANY error/timeout
+ *  returns false: never adopt on uncertainty. */
 async function repoIsLive(slug: string): Promise<boolean> {
   if (!REPO_PATTERN.test(slug)) return false
   try {
-    const { status, body } = await httpGetJson<unknown[]>(`https://api.github.com/repos/${slug}/releases?per_page=1`)
-    return status >= 200 && status < 300 && Array.isArray(body)
+    const { status, body } = await httpGetJson<unknown[]>(`https://api.github.com/repos/${slug}/releases?per_page=${PROBE_RELEASES_PAGE}`)
+    if (status < 200 || status >= 300 || !Array.isArray(body)) return false
+    return body.some((r) => {
+      const tag = (r as { tag_name?: unknown } | null)?.tag_name
+      return typeof tag === 'string' && parseTag(tag) !== null
+    })
   } catch {
     return false
   }
@@ -131,7 +156,8 @@ export interface AdoptRenamedDeps {
   readOverride: () => string | null
   /** Persist a GitHubRepo override; returns whether it stuck. */
   writeOverride: (slug: string) => boolean
-  /** Is this repo slug reachable right now? */
+  /** Is this repo slug serving releases the updater understands right now?
+   *  (repoIsLive in production.) */
   probe: (slug: string) => Promise<boolean>
 }
 
@@ -144,32 +170,41 @@ const nodeAdoptRenamedDeps: AdoptRenamedDeps = {
 /**
  * Pre-emptive repo-rename handling (built before the rename so a shipped build
  * follows it with no user action). Run once at startup:
- *   - a valid GitHubRepo override already set (a manual choice, or a prior
- *     adopt) WINS — we never second-guess an explicit selection;
+ *   - a GitHubRepo setting naming one of ALLOWED_REPOS (a prior adopt, or a
+ *     manual choice between the two) WINS and nothing is probed; any other
+ *     value is ignored (allowedRepoSetting logs it) and the steps below run as
+ *     if no setting existed;
  *   - otherwise probe RENAMED_REPO. GitHub 404s it until the rename happens; the
- *     moment it is live, persist the override and use it from now on;
+ *     moment it serves releases (repoIsLive), use it from now on and persist
+ *     the setting. A failed or throwing write keeps it for this session only;
  *   - any probe error/timeout leaves the app on DEFAULT_REPO (fail-safe).
- * This changes only WHICH same-owner repo releases come from — never how they
- * are verified (checksums/signature are enforced regardless), and the target is
- * a hardcoded slug, not anything a caller supplies (ADR-009: updater path).
+ * This changes only WHICH of the project's own repos releases come from, never
+ * how they are verified (checksums/signature are enforced regardless), and the
+ * target is a hardcoded slug, not anything a caller supplies (ADR-009: updater
+ * path).
  */
 export async function adoptRenamedRepoIfLive(deps: AdoptRenamedDeps = nodeAdoptRenamedDeps): Promise<string> {
-  const override = deps.readOverride()
-  if (override && REPO_PATTERN.test(override)) {
-    activeRepoCache = override
-    return override
+  const setting = allowedRepoSetting(deps.readOverride())
+  if (setting) {
+    activeRepoCache = setting
+    return setting
   }
+  let live = false
   try {
-    if (await deps.probe(RENAMED_REPO)) {
-      const persisted = deps.writeOverride(RENAMED_REPO)
-      activeRepoCache = RENAMED_REPO
-      logInfo(`[github-update] renamed repo ${RENAMED_REPO} is live -> adopting it for updates${persisted ? ' (persisted)' : ' (persist failed; this session only)'}`)
-      return RENAMED_REPO
-    }
+    live = (await deps.probe(RENAMED_REPO)) === true
   } catch (e) {
     logInfo(`[github-update] renamed-repo probe failed, staying on ${DEFAULT_REPO}: ${(e as Error)?.message ?? e}`)
   }
-  activeRepoCache = getRepo()
+  if (live) {
+    activeRepoCache = RENAMED_REPO
+    let persisted = false
+    try { persisted = deps.writeOverride(RENAMED_REPO) === true } catch { persisted = false }
+    logInfo(`[github-update] renamed repo ${RENAMED_REPO} is live -> adopting it for updates${persisted ? ' (persisted)' : ' (persist failed; this session only)'}`)
+    return RENAMED_REPO
+  }
+  // No usable setting (read above) and the renamed repo is not serving
+  // releases: the default, without reading the setting a second time.
+  activeRepoCache = DEFAULT_REPO
   return activeRepoCache
 }
 
@@ -317,6 +352,17 @@ function compareTags(aTag: string, bTag: string): number {
 function compareTagToCurrentVersion(tag: string, currentVersion: string): number {
   // Build a synthetic "final release" tag from the current version for comparison
   return compareTags(tag, `v${currentVersion}`)
+}
+
+/** Could the update check offer the release tagged `tag`? Its tag is on the
+ *  user's channel, in a format parseTag understands, and strictly newer than
+ *  the running version. checkGitHubRelease and the gh fallback both ask this. */
+function isOfferableTag(tag: string, wanted: { channel: UpdateChannel; currentVersion: string }): boolean {
+  if (!tagMatchesChannel(tag, wanted.channel)) return false
+  // Filter out tags whose format we don't understand
+  if (!parseTag(tag)) return false
+  // Strictly newer than the currently running app
+  return compareTagToCurrentVersion(tag, wanted.currentVersion) > 0
 }
 
 // The authoritative running version. Baked from package.json at build time
@@ -594,25 +640,87 @@ async function fetchReleasesAuthenticated(limit = RELEASE_FETCH_LIMIT): Promise<
 
 // ── gh CLI fallback (for private repos during dev) ───────────────────────
 
-async function fetchReleasesGhCli(limit = RELEASE_FETCH_LIMIT): Promise<GitHubRelease[] | null> {
+/** The fields asked of `gh release list --json`. That command has no
+ *  `assets` field (its fields: createdAt, isDraft, isImmutable, isLatest,
+ *  isPrerelease, name, publishedAt, tagName), so the downloads come from
+ *  `gh release view`, which has one. */
+const GH_LIST_FIELDS = 'tagName,isPrerelease,isDraft'
+const GH_VIEW_FIELDS = 'tagName,isPrerelease,isDraft,assets'
+/** How many of the newest releases the check could offer the gh fallback
+ *  reads downloads for on macOS, where a release the Mac is too old for is
+ *  passed over for the next. Off macOS the check always picks the newest one,
+ *  so the fallback reads that release only (ghViewLimit). */
+const GH_VIEW_LIMIT_MAC = 3
+
+function ghViewLimit(platform: NodeJS.Platform): number {
+  return platform === 'darwin' ? GH_VIEW_LIMIT_MAC : 1
+}
+
+/** What the update check is looking for: releases on `channel` newer than
+ *  `currentVersion`. */
+interface ReleaseWanted {
+  channel: UpdateChannel
+  currentVersion: string
+}
+
+/**
+ * The gh fallback. Lists tags with `gh release list`, keeps the releases
+ * checkGitHubRelease could offer (isOfferableTag; drafts left out), newest
+ * first, and reads the downloads of the newest (on macOS up to
+ * GH_VIEW_LIMIT_MAC) with `gh release view <tag>`. Nothing to offer returns
+ * an empty list without a view. Every call names activeRepo(). FAILS CLOSED: a
+ * gh error, output that does not parse, or a view that answers for a different
+ * tag returns null, so no update is offered from this leg.
+ *
+ * The tag is passed as gh's positional argument only after isOfferableTag has
+ * accepted it (parseTag: an optional leading v, digits, dots and a beta/rc
+ * suffix), so it can never read as a flag.
+ */
+async function fetchReleasesGhCli(wanted: ReleaseWanted, limit = RELEASE_FETCH_LIMIT): Promise<GitHubRelease[] | null> {
   try {
+    const repo = activeRepo()
     const { stdout } = await runGh(
-      ['release', 'list', '--repo', activeRepo(), '--limit', String(limit), '--json', 'tagName,isPrerelease,isDraft,assets'],
+      ['release', 'list', '--repo', repo, '--limit', String(limit), '--json', GH_LIST_FIELDS],
       15000,
     )
-    const releases = JSON.parse(stdout) as Array<{
-      tagName: string
-      isPrerelease: boolean
-      isDraft: boolean
-      assets: Array<{ name: string; url: string; size: number }>
-    }>
-    return releases.map((r) => ({
-      tag_name: r.tagName,
-      tagName: r.tagName,
-      prerelease: r.isPrerelease,
-      draft: r.isDraft,
-      assets: r.assets.map((a) => ({ name: a.name, url: a.url, size: a.size })),
-    }))
+    const listed: unknown = JSON.parse(stdout)
+    if (!Array.isArray(listed)) throw new Error('gh release list did not print a list')
+    const tags = listed
+      .filter((r): r is { tagName: string; isDraft?: unknown } => typeof r?.tagName === 'string')
+      .filter((r) => r.isDraft !== true && isOfferableTag(r.tagName, wanted))
+      .map((r) => r.tagName)
+      .sort((a, b) => compareTags(b, a))
+      .slice(0, ghViewLimit(process.platform))
+    if (tags.length === 0) {
+      logInfo(`[github-update] gh fallback: no release newer than v${wanted.currentVersion} on the ${wanted.channel} channel`)
+      return []
+    }
+
+    const releases: GitHubRelease[] = []
+    for (const tag of tags) {
+      const { stdout: viewOut } = await runGh(
+        ['release', 'view', tag, '--repo', repo, '--json', GH_VIEW_FIELDS],
+        15000,
+      )
+      const r = JSON.parse(viewOut) as { tagName?: unknown; isPrerelease?: unknown; isDraft?: unknown; assets?: unknown } | null
+      if (!r || r.tagName !== tag || !Array.isArray(r.assets)) {
+        throw new Error(`gh release view ${tag} did not describe that release`)
+      }
+      releases.push({
+        tag_name: tag,
+        tagName: tag,
+        prerelease: r.isPrerelease === true,
+        draft: r.isDraft === true,
+        assets: (r.assets as Array<{ name?: unknown; url?: unknown; size?: unknown } | null>)
+          .filter((a): a is { name: string; url?: unknown; size?: unknown } => typeof a?.name === 'string')
+          .map((a) => ({
+            name: a.name,
+            url: typeof a.url === 'string' ? a.url : undefined,
+            size: typeof a.size === 'number' ? a.size : undefined,
+          })),
+      })
+    }
+    return releases
   } catch (err) {
     logInfo(`[github-update] gh CLI error: ${(err as Error).message}`)
     return null
@@ -623,11 +731,12 @@ async function fetchReleasesGhCli(limit = RELEASE_FETCH_LIMIT): Promise<GitHubRe
  * Cascading release fetch:
  *   1. Public API (anonymous) — works for public repos
  *   2. Authenticated API (gh auth token) — works for private repos if user has gh CLI auth
- *   3. gh CLI (`gh release list`) — last resort, may fail if gh isn't on PATH
+ *   3. gh CLI (`gh release list`, then `gh release view` for the downloads) --
+ *      last resort, may fail if gh isn't on PATH
  *
  * Rate-limited → give up (no fallback will help, user should wait)
  */
-async function fetchReleases(): Promise<GitHubRelease[] | null> {
+async function fetchReleases(wanted: ReleaseWanted): Promise<GitHubRelease[] | null> {
   const publicResult = await fetchReleasesPublic()
 
   if (publicResult.kind === 'ok') return publicResult.releases
@@ -639,7 +748,7 @@ async function fetchReleases(): Promise<GitHubRelease[] | null> {
   if (authed) return authed
 
   logInfo('[github-update] Falling back to gh CLI')
-  return fetchReleasesGhCli()
+  return fetchReleasesGhCli(wanted)
 }
 
 // ── Main API ─────────────────────────────────────────────────────────────
@@ -653,7 +762,8 @@ export async function checkGitHubRelease(): Promise<ReleaseInfo | null> {
   const channel = getUpdateChannel()
   logInfo(`[github-update] Checking for updates (current: v${currentVersion}, channel: ${channel})`)
 
-  const releases = await fetchReleases()
+  const wanted: ReleaseWanted = { channel, currentVersion }
+  const releases = await fetchReleases(wanted)
   if (!releases || releases.length === 0) {
     logInfo('[github-update] No releases fetched')
     return null
@@ -675,13 +785,9 @@ export async function checkGitHubRelease(): Promise<ReleaseInfo | null> {
     if (rel.draft) continue
     const tag = rel.tag_name || rel.tagName
     if (!tag) continue
-    if (!tagMatchesChannel(tag, channel)) continue
-
-    // Filter out tags whose format we don't understand
-    if (!parseTag(tag)) continue
-
-    // Strictly newer than the currently running app
-    if (compareTagToCurrentVersion(tag, currentVersion) <= 0) continue
+    // On the channel, a tag format we understand, and strictly newer than the
+    // running app.
+    if (!isOfferableTag(tag, wanted)) continue
 
     // Never a release this Mac's macOS is too old to open: its tag's floor
     // (MACOS_RELEASE_FLOORS) or the floor its Mac download's name declares
@@ -890,9 +996,11 @@ function httpsDownload(url: string, destPath: string, timeoutMs = 300000, maxByt
 // by the release workflow -- the client simply never read it.
 //
 // THREAT MODEL, stated narrowly so nobody over-trusts it. The manifest is
-// fetched from the SAME host and the SAME release as the installer, so this
-// does NOT defend against a tampered CDN edge, nor against anyone holding
-// GitHub release-write credentials -- either of those rewrites both files
+// fetched from the SAME host and the SAME release as the installer, and that
+// release is always in one of the project's own repositories (ALLOWED_REPOS;
+// the GitHubRepo setting chooses only between them). So this does NOT defend
+// against a tampered CDN edge, nor against anyone holding GitHub release-write
+// credentials on those repositories -- either of those rewrites both files
 // together. What it DOES defend against is corruption, truncation, an
 // interrupted or resumed download, and a partial compromise that replaces only
 // the installer asset. Closing the rest requires SIGNING the manifest
@@ -1049,8 +1157,8 @@ function readManifest(filePath: string): string | null {
  * becomes `...App.exe#/x/CHECKSUMS.txt`, and since `https.get` drops the
  * fragment, that FETCHES THE INSTALLER as the manifest. GitHub always supplies
  * a clean path today, so this is not reachable in production -- but the
- * function is exported, the active repo is registry-overridable, and the guarantee is
- * stated unconditionally, so parse properly instead of pattern-matching.
+ * guarantee is stated unconditionally, so parse properly instead of
+ * pattern-matching.
  */
 function deriveManifestUrl(directUrl?: string | null): string | null {
   if (!directUrl) return null

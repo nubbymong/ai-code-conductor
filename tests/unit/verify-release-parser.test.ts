@@ -10,13 +10,13 @@ import {
   summarizeGate,
 } from '../../scripts/verify-release.mjs'
 
-// A realistic slice of the pack's stdout: a full PASS (Fable present, live.co.uk),
+// A realistic slice of the pack's stdout: a full PASS (Fable present, account set),
 // a WARN (statusline+account but no buckets — a host whose token is empty), and a
 // FAIL (no statusline update, no account). ANSI codes included to exercise strip.
 const SAMPLE = [
-  '\x1b[22m\x1b[39mT7 windows payload: account=nicholas@live.co.uk buckets=5h:0%,Weekly:100%,Fable:93% 5h=0 wk=100',
+  '\x1b[22m\x1b[39mT7 windows payload: account=user1@example.com buckets=5h:0%,Weekly:100%,Fable:93% 5h=0 wk=100',
   'T7 windows: updates=1 sids=["lv7abc"] wrapped=false states=["claude-running"] paneLen=30057',
-  'T1 key+tmux fresh payload: account=nicholas.moger@icloud.com buckets=- 5h=- wk=-',
+  'T1 key+tmux fresh payload: account=user2@example.com buckets=- 5h=- wk=-',
   'T1 key+tmux fresh: updates=1 sids=["lv1abc"] wrapped=true states=["claude-running"] paneLen=21000',
   'T99 dead payload: account=- buckets=- 5h=- wk=-',
   'T99 dead: updates=0 sids=[] wrapped=false states=[] paneLen=0',
@@ -45,12 +45,12 @@ describe('parseLiveMatrixOutput', () => {
     const { combos, summary } = parseLiveMatrixOutput(SAMPLE)
     expect(combos).toHaveLength(3)
     const win = combos.find((c) => c.combo === 'T7 windows')!
-    expect(win.account).toBe('nicholas@live.co.uk')
+    expect(win.account).toBe('user1@example.com')
     expect(win.updates).toBe(1)
     expect(win.wrapped).toBe(false)
     expect(win.buckets.map((b) => b.label)).toContain('Fable')
     const t1 = combos.find((c) => c.combo === 'T1 key+tmux fresh')!
-    expect(t1.account).toBe('nicholas.moger@icloud.com')
+    expect(t1.account).toBe('user2@example.com')
     expect(t1.buckets).toEqual([])
     const dead = combos.find((c) => c.combo === 'T99 dead')!
     expect(dead.account).toBe('') // '-' normalised to empty
@@ -91,11 +91,11 @@ describe('summarizeGate', () => {
 
   it('passes the gate when all rows are PASS/WARN and vitest is green', () => {
     const clean = [
-      'T7 windows payload: account=nicholas@live.co.uk buckets=Fable:93% 5h=0 wk=100',
+      'T7 windows payload: account=user1@example.com buckets=Fable:93% 5h=0 wk=100',
       'T7 windows: updates=1 sids=["x"] wrapped=false states=[] paneLen=1',
-      'T4 pi payload: account=nicholas@live.co.uk buckets=5h:0%,Weekly:50% 5h=0 wk=50',
+      'T4 pi payload: account=user1@example.com buckets=5h:0%,Weekly:50% 5h=0 wk=50',
       'T4 pi: updates=2 sids=["y"] wrapped=true states=[] paneLen=1',
-      'T6 mac payload: account=nicholas@live.co.uk buckets=- 5h=- wk=-',
+      'T6 mac payload: account=user1@example.com buckets=- 5h=- wk=-',
       'T6 mac: updates=1 sids=["z"] wrapped=false states=[] paneLen=1',
       'Tests  3 passed (3)',
     ].join('\n')

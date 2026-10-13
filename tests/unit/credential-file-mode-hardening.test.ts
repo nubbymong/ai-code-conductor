@@ -114,6 +114,34 @@ describe('(C) ssh-shim remote setup script', () => {
     expect(s).toContain('rmSync(sesPath,{force:true})')
     expect(s).toContain("writeFileSync(sesPath,JSON.stringify(sesCfg,null,2),{mode:0o600,flag:'wx'})")
   })
+
+  // The trust flag in the remote ~/.claude.json: written through the shared
+  // writer, which keeps an existing file's mode exactly (fchmod, which the
+  // umask does not touch) and creates a missing one 0600, as Claude Code does.
+  // Behaviour is covered in providers/claude/ssh-shim-user-settings.test.ts.
+  it('marks the remote session folder trusted in ~/.claude.json through the shared writer: own mode kept, a new file 0600, an exclusive temporary file', () => {
+    const s = script()
+    expect(s).toContain("sReplace(cj,JSON.stringify(c,null,2),0o600,'claude-json-left')")
+    expect(s).toContain('const mode=st?st.mode&511:newMode;')
+    expect(s).toContain("fd=fs.openSync(tmp,'wx',mode);")
+    expect(s).toContain('fs.fchmodSync(fd,mode);fs.writeFileSync(fd,data);')
+    // A group the user cannot give the temporary file leaves the file
+    // whenever the file's group bits differ from its other bits, either way.
+    expect(s).toContain("if(((mode>>3)^mode)&7)throw{code:'group'}")
+    // The earlier shape: a temporary file written with no mode and renamed
+    // over the named path.
+    expect(s).not.toContain('.ccctrust.')
+  })
+
+  // On every connect, not only when the trust flag is written, the remote
+  // ~/.claude.json is made owner-only when its real path is a plain file with
+  // one name the user owns: its group and other bits are cleared, its owner's
+  // kept. Behaviour is covered in providers/claude/ssh-shim-user-settings.test.ts.
+  it('makes the remote ~/.claude.json owner-only on every connect', () => {
+    const s = script()
+    expect(s).toContain("const r=fs.realpathSync(cj);const st=fs.statSync(r);if(st.isFile()&&st.nlink===1&&st.uid===process.geteuid()&&(st.mode&0o077)){fs.chmodSync(r,st.mode&0o700);")
+    expect(s).toContain(' claude-json-mode sid=')
+  })
 })
 
 describe('(D) insights kpis.json', () => {

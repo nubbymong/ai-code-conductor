@@ -22,7 +22,13 @@ vi.mock('node:child_process', () => ({
     return { exitCode: 0, signalCode: null }
   },
 }))
-vi.mock('../../../src/main/claude-cli-probe', () => ({ probeClaudeCli: async () => { throw new Error('not on Windows') } }))
+vi.mock('../../../src/main/claude-cli-probe', () => ({
+  probeClaudeCli: async () => { throw new Error('not on Windows') },
+  // The Windows PowerShell profile lookup: its rule is handed over, and it
+  // finds nothing (the walk above finds the claude.exe).
+  setClaudeProfileLookupAllowed: () => {},
+  claudeFromPowerShellProfile: async () => null,
+}))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('../../../src/main/first-start-warmup', () => ({
   warmFirstStart: async (program: string, env: () => unknown) => {

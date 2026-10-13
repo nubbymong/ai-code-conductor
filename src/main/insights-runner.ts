@@ -38,7 +38,6 @@ import { getResourcesDirectory } from './ipc/setup-handlers'
 import type { AccountProfile } from '../shared/account-types'
 import { isAuthFailure, type ClaudeFailureFacts } from '../shared/claude-auth-errors'
 import { readProfileAuthInfo } from './account-auth-info'
-import { redactSecrets } from './hooks/hook-payload-redactor'
 import { atomicWriteFileSync } from './atomic-write'
 import type { InsightsCatalogue, InsightsData, InsightsRun, InsightsRunMember } from '../shared/types'
 import { getAccountsService } from './provider-accounts'
@@ -46,7 +45,8 @@ import { ownerOnlyThroughHandle, sweepStaleFolders } from './stale-folder-sweep'
 import { withFullyQualifiedProgramLookup } from './windows-programs'
 import { warmFirstStart } from './first-start-warmup'
 import { timedStart } from './main-thread-ops'
-import { claudeVersionRunEnv } from './providers/review-support'
+import { claudeVersionRunEnv, redactFailure, redactHead, redactTail } from './providers/review-support'
+import { createLineRedactor } from './log-line-redact'
 import { isOpaqueId } from '../shared/providers'
 import type { AccountsSnapshot, ProviderId } from '../shared/providers'
 import { tryGetProviderPackage } from './providers/core'
@@ -497,6 +497,11 @@ async function spawnClaudeInsights(home: string | null, timeoutMs = 600000): Pro
   // program. That first start runs off the main thread first (a direct
   // claude.exe only), with Claude's --version environment. Never a gate.
   await warmFirstStart(cmd, () => ({ env: claudeVersionRunEnv(process.env, process.platform) }))
+  // The warm-up (and the project gate) can hold for seconds: Claude Code
+  // switched off meanwhile starts nothing. The run fails with the reason,
+  // as one switched off before this step does.
+  const offNow = providerLaunchRefusal('claude')
+  if (offNow) throw new Error(offNow.message)
   return new Promise((resolve) => {
     const reportPath = claudeReportPath(home)
     logInfo(`[insights] Spawning Claude PTY for /insights: ${cmd} in ${cwd} (home=${home ?? 'default'})`)
@@ -568,7 +573,7 @@ async function spawnClaudeInsights(home: string | null, timeoutMs = 600000): Pro
         cleanup()
         const reason = describeInsightsTimeout(commandSent, timeoutMs / 1000)
         logError(`[insights] PTY timed out: ${reason}`)
-        logError(`[insights] Last output: ${stripAnsiCodes(output).slice(-500)}`)
+        logError(`[insights] Last output: ${redactTail(stripAnsiCodes(output), redactFailure).slice(-500)}`)
         try { proc.kill() } catch { /* ignore */ }
         resolve({ code: 1, output: output + '\n' + reason })
       }
@@ -618,18 +623,25 @@ async function spawnClaudeInsights(home: string | null, timeoutMs = 600000): Pro
 
     // Accumulate full output for better prompt/trust detection
     let fullClean = ''
+    // The diagnostic log below gets whole lines, redacted: an unfinished last
+    // line of a chunk is held and redacted joined to the next chunk, so a
+    // credential split across two chunks is still hidden (log-line-redact.ts).
+    // Every chunk goes through it, logged or not, so a held line is never
+    // logged unredacted later. Its runs of space collapse before the
+    // redaction, as before.
+    const chunkLines = createLineRedactor((text) => shownClaudeFailure(text.replace(/\s+/g, ' ').trim()))
 
     proc.onData((data) => {
       output += data
       dataChunks++
       const clean = stripAnsiCodes(data)
       fullClean += clean
+      const shown = chunkLines.push(clean)
 
-      // Log first 20 chunks and then every 50th for diagnostics
+      // Log first 20 chunks and then every 50th for diagnostics.
       if (dataChunks <= 20 || dataChunks % 50 === 0) {
-        const readable = clean.replace(/\s+/g, ' ').trim()
-        if (readable.length > 0) {
-          logInfo(`[insights] PTY chunk #${dataChunks}: "${readable.slice(0, 200)}"`)
+        if (shown.length > 0) {
+          logInfo(`[insights] PTY chunk #${dataChunks}: "${shown.slice(0, 200)}"`)
         }
       }
 
@@ -891,7 +903,14 @@ export function readClaudeFailureFacts(stdout: string, reason: string | null): C
   }
 }
 
-export function describeClaudeError(stdout: string): string | null {
+/**
+ * The reason a failed Claude Code run gives, from its error envelope, or null
+ * when stdout is not one. `clean` runs on each text the envelope carries
+ * before anything cuts it: shownClaudeFailure for a reason that is shown,
+ * kept or logged. The auth classifier reads the uncleaned reason
+ * (readClaudeFailureFacts), so redaction never changes a verdict.
+ */
+export function describeClaudeError(stdout: string, clean: (text: string) => string = (text) => text): string | null {
   let envelope: any
   try {
     envelope = JSON.parse(stdout.trim())
@@ -902,16 +921,23 @@ export function describeClaudeError(stdout: string): string | null {
   if (envelope.is_error !== true && envelope.isError !== true) return null
 
   const parts: string[] = []
-  if (typeof envelope.subtype === 'string' && envelope.subtype.trim()) parts.push(envelope.subtype.trim())
+  if (typeof envelope.subtype === 'string' && envelope.subtype.trim()) parts.push(clean(envelope.subtype.trim()))
   const message =
     (typeof envelope.result === 'string' && envelope.result.trim()) ||
     (typeof envelope.error === 'string' && envelope.error.trim()) ||
     (typeof envelope.error?.message === 'string' && envelope.error.message.trim())
-  if (message) parts.push(String(message).slice(0, 400))
+  if (message) parts.push(clean(String(message)).slice(0, 400))
   const apiMs = envelope.duration_api_ms ?? envelope.durationApiMs
   if (apiMs === 0) parts.push('the API was never reached (duration_api_ms=0)')
-  if (typeof envelope.stop_reason === 'string') parts.push(`stop_reason=${envelope.stop_reason}`)
+  if (typeof envelope.stop_reason === 'string') parts.push(`stop_reason=${clean(envelope.stop_reason)}`)
   return parts.length > 0 ? parts.join('; ') : 'claude reported is_error with no message'
+}
+
+/** Claude Code's failure text as it may be shown, kept, saved or logged:
+ *  through the shared failure redactor, read in a bounded window, before
+ *  anything cuts it. */
+export function shownClaudeFailure(text: string): string {
+  return redactHead(text, redactFailure)
 }
 
 /**
@@ -1074,9 +1100,11 @@ async function extractKpis(
   if (result.code !== 0) {
     // The hard-failure envelope carries the real reason in `result`; the previous
     // 500-char slice of the raw envelope showed only the zeroed usage block.
-    const reason = describeClaudeError(result.stdout)
+    // Shown, kept and logged redacted; the auth gate below reads the reason
+    // as the CLI gave it.
+    const reason = describeClaudeError(result.stdout, shownClaudeFailure)
     logError(
-      `[insights] KPI extraction failed (code ${result.code}): ${reason ?? (result.stderr.slice(0, 400) || 'no reason reported')}`
+      `[insights] KPI extraction failed (code ${result.code}): ${reason ?? (shownClaudeFailure(result.stderr).slice(0, 400) || 'no reason reported')}`
     )
     saveExtractionFailure(archiveDir, spawnArgs, result, reason)
     return {
@@ -1087,7 +1115,7 @@ async function extractKpis(
       // one. stderr is excluded too — it carries proxy, DNS and TLS noise from the
       // whole network path, and this flag drives a UI action that opens a login
       // shell.
-      authFailed: isAuthFailure(readClaudeFailureFacts(result.stdout, reason))
+      authFailed: isAuthFailure(readClaudeFailureFacts(result.stdout, describeClaudeError(result.stdout)))
     }
   }
 
@@ -1136,12 +1164,14 @@ async function extractKpis(
 const FAILURE_CAPTURE_LIMIT = 20000
 
 /** Truncate AND redact. Redaction first, so a secret straddling the cut is still
- *  matched as a whole before anything is dropped. */
+ *  matched as a whole before anything is dropped. The failure redactor, read
+ *  in a bounded window. */
 function capture(text: string): string {
-  const clean = redactSecrets(text ?? '')
+  const raw = text ?? ''
+  const clean = shownClaudeFailure(raw)
   return clean.length <= FAILURE_CAPTURE_LIMIT
     ? clean
-    : clean.slice(0, FAILURE_CAPTURE_LIMIT) + `\n…[truncated, ${clean.length} chars total]`
+    : clean.slice(0, FAILURE_CAPTURE_LIMIT) + `\n…[truncated, ${raw.length} chars total]`
 }
 
 function saveExtractionFailure(
@@ -1251,7 +1281,7 @@ export async function runInsights(getWindow: () => BrowserWindow | null, opts?: 
 
     if (result.code !== 0) {
       run.status = 'failed'
-      run.error = 'claude /insights failed: ' + stripAnsiCodes(result.output).slice(-200)
+      run.error = 'claude /insights failed: ' + redactTail(stripAnsiCodes(result.output), redactFailure).slice(-200)
       upsertRun(run)
       notifyRenderer(getWindow, run)
       return id
@@ -2034,15 +2064,17 @@ export async function runCrossAccountInsights(
       // Record WHY there is no written analysis. Degrading silently to
       // numbers-only left a real run looking like the model had nothing to say,
       // when in fact the synthesis account's sign-in had expired.
-      const described = describeClaudeError(result.stdout)
-      const authFailed = isAuthFailure(readClaudeFailureFacts(result.stdout, described))
+      // The auth gate reads the reason as the CLI gave it; what is kept or
+      // logged is redacted first.
+      const authFailed = isAuthFailure(readClaudeFailureFacts(result.stdout, describeClaudeError(result.stdout)))
+      const described = describeClaudeError(result.stdout, shownClaudeFailure)
       // Plain prose before it is kept or logged, as the Codex synthesis's is.
       const synthesisReason = described === null ? null : stripSpoofableText(described, 500)
       logError(
         `[insights] Cross-account synthesis unusable (code ${result.code}): ` +
         `${synthesisReason ?? 'no reason reported'}; falling back to a numbers-only roll-up`
       )
-      logError('[insights] Raw synthesis output:', stripSpoofableText(result.stdout.slice(0, 500), 500))
+      logError('[insights] Raw synthesis output:', stripSpoofableText(shownClaudeFailure(result.stdout).slice(0, 500), 500))
       run.error = authFailed
         ? `No written analysis: ${synthesisMember.label} needs to sign in again (${synthesisReason ?? 'authentication failed'})`
         : `No written analysis: ${synthesisReason ?? 'the synthesis pass did not return usable output'}`

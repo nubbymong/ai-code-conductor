@@ -215,6 +215,24 @@ describe('useRestartSession (P4 Task A)', () => {
     expect(markSessionForResumePickerMock).not.toHaveBeenCalled()
   })
 
+  // #86: an SSH partner pane's Retry hands the hook a snapshot of its session
+  // taken at the pane's last render, which can be minutes old (the pane does
+  // not re-render per statusline tick). Mutation to prove this can fail: the
+  // partner branch takes its status from the snapshot (the code before this
+  // change).
+  it('restart(isShowingPartner=true) keeps the session\'s live status, not the status of a stale snapshot', () => {
+    const snapshot = makeSession({ status: 'idle' })
+    useSessionStore.getState().addSession(snapshot)
+    useSessionStore.getState().updateSession(snapshot.id, { status: 'working' })
+
+    renderHarness(snapshot, true)
+    act(() => { capturedActions!.restart() })
+
+    const stored = useSessionStore.getState().sessions.find((s) => s.id === snapshot.id)!
+    expect(stored.status).toBe('working')
+    expect(stored.createdAt).toBeGreaterThan(1_000_000) // still remounted
+  })
+
   // 2b. T8b: persisted resumeUuid/resumeCwd survive the forceRemount merge -----
 
   it('restart() preserves a persisted resumeUuid/resumeCwd through the remount merge', () => {

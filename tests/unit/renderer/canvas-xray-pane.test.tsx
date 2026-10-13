@@ -35,9 +35,11 @@ vi.mock('../../../src/renderer/utils/config-saver', () => ({ saveConfigNow: vi.f
 // A frame that answers a hoverReporting request (as a real bridge does) and
 // never answers anything else — an inspect left in flight is what the
 // one-inspect-at-a-time rule is about, and is not this file's subject.
-const answerAsARealFrameWould = (_target: unknown, _canvasId: unknown, payload: { type?: string; enabled?: boolean }) =>
+// It echoes both switches the way the bridge does: `clicks` follows `enabled`
+// when a request names no click setting (aicc_planning#107).
+const answerAsARealFrameWould = (_target: unknown, _canvasId: unknown, payload: { type?: string; enabled?: boolean; clicks?: boolean }) =>
   payload?.type === 'hoverReporting'
-    ? Promise.resolve({ enabled: payload.enabled })
+    ? Promise.resolve({ enabled: payload.enabled, clicks: payload.clicks === undefined ? payload.enabled : payload.clicks })
     : new Promise(() => {})
 const askFrame = vi.fn(answerAsARealFrameWould)
 /** How many requests the RPC layer already has outstanding to this frame. The
@@ -155,6 +157,14 @@ function hoverReportingCalls(): boolean[] {
     .map((c) => (c as unknown as unknown[])[2] as { type?: string; enabled?: boolean })
     .filter((p) => p?.type === 'hoverReporting')
     .map((p) => p.enabled as boolean)
+}
+
+/** The same requests with BOTH switches the pane asked for (aicc_planning#107). */
+function reportingRequests(): Array<{ enabled: unknown; clicks: unknown }> {
+  return askFrame.mock.calls
+    .map((c) => (c as unknown as unknown[])[2] as { type?: string; enabled?: unknown; clicks?: unknown })
+    .filter((p) => p?.type === 'hoverReporting')
+    .map((p) => ({ enabled: p.enabled, clicks: p.clicks }))
 }
 
 async function renderPane(mode?: CanvasXrayMode): Promise<void> {
@@ -348,6 +358,14 @@ describe('x-ray OFF — the page behaves like a normal browser tab', () => {
     await renderPane('off')
     await act(async () => handlers().onReady())
     expect(hoverReportingCalls()).toEqual([false])
+  })
+
+  it('asks the frame to stop reporting clicks as well as moves (aicc_planning#107)', async () => {
+    // Clicks are a switch of their own now (a plan keeps them while its pointer
+    // stream is off), so Off has to name both rather than lean on one.
+    await renderPane('off')
+    await act(async () => handlers().onReady())
+    expect(reportingRequests()).toEqual([{ enabled: false, clicks: false }])
   })
 
   it('tells a newly navigated document to stop reporting too', async () => {
@@ -764,6 +782,47 @@ describe('the redesigned chrome (item C)', () => {
     await act(async () => handlers().onReady())
     // The frame is told hover reporting is OFF for a plan (false), not on.
     expect(hoverReportingCalls().every((v) => v === false)).toBe(true)
+  })
+
+  // aicc_planning#107: in beta.2 the request above was the frame's ONLY
+  // switch, and the bridge silenced contentClick with it, so a click on a plan
+  // section never reached onContentClick and nothing was selected, although the
+  // toolbar says "click a section to point a note at it". The host half (the
+  // test two above) was always right; the frame was never told to keep
+  // clicking.
+  async function renderPlan(mode: CanvasXrayMode): Promise<void> {
+    const planState = {
+      ...STATE,
+      versions: [{ id: 'v1', mode: 'plan', createdAt: '2026-08-14T10:00:00Z', source: { mode: 'design', entry: 'index.html' } }],
+    } as CanvasState
+    ;(window as any).electronAPI.canvas.getState.mockResolvedValueOnce(planState)
+    await renderPane(mode)
+  }
+
+  it('a PLAN keeps the frame reporting CLICKS while its pointer stream is off (aicc_planning#107)', async () => {
+    await renderPlan('on')
+    await act(async () => handlers().onReady())
+    expect(reportingRequests()).toEqual([{ enabled: false, clicks: true }])
+  })
+
+  it('a PLAN keeps clicks even when the user has set x-ray to Off: a plan is always stealth', async () => {
+    await renderPlan('off')
+    await act(async () => handlers().onReady())
+    expect(reportingRequests()).toEqual([{ enabled: false, clicks: true }])
+  })
+
+  it('a PLAN whose frame says clicks are off is asked again, not believed to agree', async () => {
+    askFrame.mockImplementation((_t: unknown, _c: unknown, payload: { type?: string }) =>
+      payload?.type === 'hoverReporting' ? Promise.resolve({ enabled: false, clicks: false }) : new Promise(() => {}),
+    )
+    await renderPlan('on')
+    await act(async () => handlers().onReady())
+    // Three attempts on the one intent, then the budget stops it, as for hover.
+    expect(reportingRequests()).toEqual([
+      { enabled: false, clicks: true },
+      { enabled: false, clicks: true },
+      { enabled: false, clicks: true },
+    ])
   })
 
   it('carries the X-ray setting inside the Inspect group', async () => {

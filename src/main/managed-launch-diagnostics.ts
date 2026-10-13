@@ -28,6 +28,7 @@ import { logInfo, logWarn } from './debug-logger'
 import { managedLaunchPreflightFor, authoritySettingsKeysFor } from './providers'
 import { peekClaudeCliVersion, ensureClaudeCliVersion, claudeCliProbeAllowed } from './claude-cli-version'
 import { decodeSettingsText } from './settings-text'
+import { GitPointerChangedError, readFully, isGitRootEntry, canonicalGitRootOf, posixCanonicalLocalSettingsRoot } from './git-local-settings-root'
 // From the shared state module, NOT from account-profiles: the choke point in
 // account-profiles calls this recorder, so importing back would make the launch
 // path and its own diagnostics a cycle (see ./managed-launch-state.ts).
@@ -230,344 +231,15 @@ async function authorityKeysOfSettingsFile(file: string): Promise<SettingsFileSc
   }
 }
 
-/** The most a `.git` pointer file or a `commondir` / `gitdir` file inside a
- *  linked worktree's git directory is read: they hold one path each. */
-const MAX_GIT_POINTER_BYTES = 4096
-
-/**
- * Read `handle` from offset 0 into `buf` until end of file or until `buf` is
- * full, and return how many bytes arrived.
- *
- * ONE `FileHandle.read` IS A PREFIX, NOT THE FILE. A read may legally return
- * fewer bytes than asked for -- routinely on network and FUSE filesystems, and
- * on any file a signal or a concurrent writer interrupts -- and the gate used to
- * take the first answer as the whole file: a valid prefix was parsed (or failed
- * to parse, and so reported nothing) while the unread bytes carried the
- * authority setting (exact-head review, BLOCKER). The loop keeps the fixed
- * allocation: the buffer is still the bound, so a file that grows mid-read
- * stops at `buf.length`, and the caller sizes it at cap + 1 to see the growth.
- * Every iteration advances by at least one byte or ends the loop, so a
- * filesystem that returns one byte per read costs up to cap + 1 reads: bounded,
- * and the launch never waits on it past the gate's deadline, but the scan holds
- * its thread-ceiling slot until it settles (code-quality review, noted).
- */
-async function readFully(handle: fs.promises.FileHandle, buf: Buffer): Promise<number> {
-  let total = 0
-  while (total < buf.length) {
-    const { bytesRead } = await handle.read(buf, total, buf.length - total, total)
-    if (bytesRead <= 0) break
-    total += bytesRead
-  }
-  return total
-}
-
-/** A git pointer file that changed while it was being read. Not a miss: a miss
- *  leaves the root at the worktree, and the root the CLI reads may be the main
- *  checkout, so a scan that meets this reports `unreadable` instead of reading
- *  one root and calling the other clean. */
-class GitPointerChangedError extends Error {}
-
-/** The text of a small pointer file, or null when it is absent, a symlink,
- *  not a regular file, or larger than a pointer file can be. Bounded as the
- *  settings read is: a fixed buffer, read to end of file (a short read would
- *  hand the worktree rule a truncated path, and the root the CLI uses would go
- *  unread), and a byte count that differs from the measured size -- the file
- *  changed mid-read, grown past the cap or not -- throws
- *  `GitPointerChangedError` rather than returning a spliced path or a miss
- *  (independent review of the exact-head fix: this read had the loop but not
- *  the settings read's size check). */
-async function readGitPointer(file: string, followSymlink = false): Promise<string | null> {
-  let handle: fs.promises.FileHandle | null = null
-  try {
-    if (!followSymlink && (await fs.promises.lstat(file)).isSymbolicLink()) return null
-    handle = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0))
-    const stat = await handle.stat()
-    if (!stat.isFile() || stat.size > MAX_GIT_POINTER_BYTES) return null
-    const buf = Buffer.allocUnsafe(MAX_GIT_POINTER_BYTES + 1)
-    const bytesRead = await readFully(handle, buf)
-    if (bytesRead !== stat.size) throw new GitPointerChangedError(`${describePath(file)} changed while it was being read`)
-    return buf.toString('utf8', 0, bytesRead)
-  } catch (err) {
-    if (err instanceof GitPointerChangedError) throw err
-    return null
-  } finally {
-    await handle?.close().catch(() => {})
-  }
-}
-
-/**
- * The CLI's root-entry predicate (`Ce` in the pinned 2.1.278; its walk `Kt`
- * asks it of `<dir>/.git` at every level): a directory or a regular file by
- * `lstat`; a SYMLINK only when its text is NUL-free valid UTF-8 (`lCt`), names
- * nothing on another host or a network mount (`Li`), every component of the
- * target -- and of every link met on the way, forty deep -- is a plain entry
- * (`Q` -> `re`), and the target is a directory or a regular file. A link the
- * CLI refuses is NOT a root, and the CLI walks past it to a higher one; the
- * first port of this followed every link with a bare `stat`, so it stopped at
- * a link the CLI skipped and never read the root the CLI used (adversarial
- * confirmation pass, MAJOR). Each helper below is named for the function it
- * transcribes; the two the win32/linux builds stub to false (`so`, `jt`, the
- * darwin volume rule) are left out and recorded as a macOS residual.
- */
-async function isGitRootEntry(entry: string, dir: string): Promise<boolean> {
-  try {
-    const st = await fs.promises.lstat(entry)
-    if (st.isSymbolicLink()) {
-      const target = await readLinkText(entry)
-      if (target === null) return false
-      if (linkTargetIsElsewhere(target, dir)) return false
-      if (!(await linkPathIsPlain(target, dir))) return false
-      const real = await fs.promises.stat(entry)
-      return real.isDirectory() || real.isFile()
-    }
-    return st.isDirectory() || st.isFile()
-  } catch {
-    return false
-  }
-}
-
-/** `lCt`: the link text, or null when it holds a NUL or is not valid UTF-8. */
-async function readLinkText(link: string): Promise<string | null> {
-  try {
-    const raw = await fs.promises.readlink(link, { encoding: 'buffer' })
-    const text = raw.toString('utf8')
-    if (text.includes(String.fromCharCode(0)) || !Buffer.from(text, 'utf8').equals(raw)) return null
-    return text
-  } catch {
-    return null
-  }
-}
-
-const DEVICE_PREFIX_RE = /^[\\/]\?\?[\\/]/
-const UNC_DEVICE_RE = /^[\\/]{2}[?.][\\/]/
-const DOT_SEGMENT_RE = /(^|[\\/])\.{1,2}[. ]*([\\/]|$)/
-const ABSOLUTE_RE = /^(?:[/\\]|[A-Za-z]:[/\\])/
-const ROOT_PREFIX_RE = /^(?:[/\\]{2}[^/\\]+[/\\][^/\\]+[/\\]?|[A-Za-z]:[/\\]|[/\\])/
-const SEPARATORS_RE = /[/\\]+/
-const TRAILING_SEPARATOR_RE = /[\\/]$/
-
-/** `$5`: an NT object path (`\??\`), before or after win32 normalisation. */
-function isNtObjectPath(t: string): boolean {
-  return DEVICE_PREFIX_RE.test(t) || (t.includes('??') && DEVICE_PREFIX_RE.test(path.win32.normalize(t)))
-}
-/** `Nn`: two leading separators, or an NT object path. */
-function isUncLike(t: string): boolean {
-  return /^[\\/]{2}/.test(t) || isNtObjectPath(t)
-}
-/** `e$`: the UNC host, lower-cased; null for a device path that is not `UNC\`. */
-function uncHostOf(t: string): string | null {
-  if (/^[\\/]{2}[?.][\\/](?!unc[\\/])/i.test(t)) return null
-  const m = t.match(/^[\\/]{2}(?:[?.][\\/]unc[\\/])?([^\\/]+)/i)
-  return m?.[1]?.replace(/[A-Z]/g, (c) => c.toLowerCase()) ?? null
-}
-/** `_Se`: a UNC-like path that is a device path, has a dot segment, or names a host other than `base`'s. */
-function isForeignUnc(t: string, base: string): boolean {
-  if (!isUncLike(t)) return false
-  if (UNC_DEVICE_RE.test(t) || isNtObjectPath(t)) return true
-  if (DOT_SEGMENT_RE.test(t)) return true
-  const host = uncHostOf(t)
-  return host === null || host !== uncHostOf(base)
-}
-/** The segments of an absolute POSIX path with `.` and `..` folded, or null when it is not absolute. */
-function foldedPosixSegments(t: string): string[] | null {
-  if (!t.startsWith('/')) return null
-  const out: string[] = []
-  for (const seg of t.split('/')) {
-    if (seg === '' || seg === '.') continue
-    if (seg === '..') { out.pop(); continue }
-    out.push(seg)
-  }
-  return out
-}
-/** `FV`: under `/network` (case-insensitive) by its first folded segment. */
-function isNetworkMount(t: string): boolean {
-  if (!t.startsWith('/')) return false
-  const out: string[] = []
-  for (const seg of t.split('/')) {
-    if (seg === '' || seg === '.') continue
-    if (seg === '..') { out.pop(); continue }
-    out.push(seg)
-    if (out.length === 1 && out[0].toLowerCase() === 'network') return true
-  }
-  return false
-}
-/** `QS`: exactly `/net`, the automounter root. */
-function isNetRoot(t: string): boolean {
-  const segs = foldedPosixSegments(t)
-  return segs !== null && segs.length === 1 && segs[0].toLowerCase() === 'net'
-}
-/** `Li`: the link text, as written and as resolved against `dir`, is on another host or a network mount. */
-function linkTargetIsElsewhere(text: string, dir: string): boolean {
-  const resolved = path.resolve(dir, text)
-  if (isForeignUnc(text, dir) || isForeignUnc(resolved, dir)) return true
-  for (const o of [text, resolved]) if (isNetworkMount(o) || isNetRoot(o)) return true
-  return false
-}
-/** `en`: the kind of an entry by `lstat`; any error but a missing path is `other`. */
-async function entryKind(p: string): Promise<'symlink' | 'file' | 'dir' | 'other' | 'absent'> {
-  try {
-    const st = await fs.promises.lstat(p)
-    if (st.isSymbolicLink()) return 'symlink'
-    return st.isFile() ? 'file' : st.isDirectory() ? 'dir' : 'other'
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code
-    return code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'other'
-  }
-}
-/** `Q`: the target -- as written under `dir`, and as resolved -- walks clean. */
-async function linkPathIsPlain(text: string, dir: string): Promise<boolean> {
-  if (!(await pathWalksPlain(ABSOLUTE_RE.test(text) ? text : dir + path.sep + text, 40))) return false
-  return pathWalksPlain(path.resolve(dir, text), 40)
-}
-/** `re`: every component of `p` is a plain entry; a link met on the way is validated and followed, `depth` deep. */
-async function pathWalksPlain(p: string, depth: number): Promise<boolean> {
-  if (depth <= 0) return false
-  const m = ROOT_PREFIX_RE.exec(p)
-  let prefix = m ? m[0] : ''
-  const segs = p.slice(prefix.length).split(SEPARATORS_RE)
-  for (let u = 0; u < segs.length; u += 1) {
-    const seg = segs[u]
-    if (seg === '' || seg === '.') continue
-    if (seg === '..') { prefix = path.dirname(prefix); continue }
-    prefix = path.join(prefix, seg)
-    if (isNetworkMount(prefix)) return false
-    const kind = await entryKind(prefix)
-    if (kind === 'other') return false
-    if (kind === 'symlink') {
-      const text = await readLinkText(prefix)
-      if (text === null) return false
-      if (linkTargetIsElsewhere(text, path.dirname(prefix))) return false
-      const head = ABSOLUTE_RE.test(text) ? text : path.dirname(prefix) + path.sep + text
-      const rest = segs.slice(u + 1).join(path.sep)
-      const next = rest ? (TRAILING_SEPARATOR_RE.test(head) ? head + rest : head + path.sep + rest) : head
-      return pathWalksPlain(next, depth - 1)
-    }
-  }
-  return true
-}
+// The canonical git root rule (where the CLI reads `settings.local.json` on
+// POSIX) lives in ./git-local-settings-root.ts, shared with the session hooks
+// writer so both read the files the CLI reads. These seams keep its tests here.
 
 /** TEST SEAM for the root-entry predicate. */
 export const _isGitRootEntryForTest = isGitRootEntry
 
-/**
- * The directory the CLI treats as the CANONICAL root of a checkout whose
- * `.git` entry is at `root` -- which is `root` itself for an ordinary clone,
- * and the MAIN checkout for a LINKED WORKTREE.
- *
- * Mirrored from the pinned 2.1.278 (`Bt`, the `canonicalRootByRoot` resolver):
- * a `.git` FILE reading `gitdir: <dir>` names the worktree's private git
- * directory under `<main>/.git/worktrees/<name>`; `<dir>/commondir` names the
- * shared git directory (`<main>/.git`); `<dir>/gitdir` must point back at this
- * worktree's own `.git`; and the parent of `<dir>` must be `<common>/worktrees`.
- * When all of that holds the canonical root is `dirname(<common>)`, the main
- * checkout -- and on POSIX that is where the CLI reads `settings.local.json`
- * from for a launch inside the worktree. The first version of this walked up
- * to the worktree and stopped, so a helper declared in the MAIN checkout's
- * local settings applied to every managed session in every linked worktree of
- * the repository with a clean verdict -- and this repo's own session model
- * puts every session in a linked worktree (adversarial re-attack, BLOCKER).
- * Any pointer that does not validate leaves the root as it was, exactly as
- * the CLI does; neither pointer file may be a symlink. A pointer that changed
- * while it was read is neither valid nor invalid: `GitPointerChangedError`
- * propagates, and the scan reports it as uncertainty.
- */
-async function canonicalGitRootOf(root: string): Promise<string> {
-  const entry = path.join(root, '.git')
-  try {
-    // `stat`, following a symlink: the CLI reads a symlinked `.git` FILE
-    // through it (`ve` -> readFileSync). The pointer files INSIDE the git
-    // directory stay symlink-refused (`tA`).
-    if (!(await fs.promises.stat(entry)).isFile()) return root
-  } catch {
-    return root
-  }
-  const text = (await readGitPointer(entry, true))?.trim()
-  if (!text || !text.startsWith('gitdir:')) return root
-  const gitdir = path.resolve(root, text.slice(7).trim())
-  const commonText = (await readGitPointer(path.join(gitdir, 'commondir')))?.trim()
-  if (!commonText) return root
-  const common = path.resolve(gitdir, commonText)
-  if (path.dirname(gitdir) !== path.join(common, 'worktrees')) return root
-  const backText = (await readGitPointer(path.join(gitdir, 'gitdir')))?.trim()
-  if (!backText) return root
-  try {
-    const back = await fs.promises.realpath(path.resolve(gitdir, backText))
-    if (back !== path.join(await fs.promises.realpath(root), '.git')) return root
-  } catch {
-    return root
-  }
-  if (path.basename(common) !== '.git') {
-    // A shared directory not named `.git` (a bare repository): the CLI treats
-    // it as the root itself unless it holds a `.git` of its own, asked with
-    // the SAME predicate as the walk (`Bt`: `Ce(R(a,".git"),a)`) -- a bare
-    // `stat` here took a link the CLI refuses as that `.git`, stayed at the
-    // worktree, and never read the bare directory's local settings the CLI
-    // applied (adversarial confirmation pass, round 6, MAJOR).
-    return (await isGitRootEntry(path.join(common, '.git'), common)) ? root : common
-  }
-  return path.dirname(common)
-}
-
 /** TEST SEAM for the worktree pointer rule. */
 export const _canonicalGitRootOfForTest = canonicalGitRootOf
-
-/**
- * Where the CLI reads `settings.local.json` from on POSIX, when that is NOT
- * the working directory -- or `null` when it is.
- *
- * Measured on the pinned 2.1.278: `localSettings` resolves to the CANONICAL
- * GIT ROOT of the working directory when (a) the platform has uid semantics
- * (`process.geteuid`), so never on win32; (b) the root differs from the
- * working directory and from the real home directory; and (c) the root, its
- * `.git` entry and its `.claude` entry (when present) are all owned by the
- * current user. The working directory's own `settings.local.json` is then
- * ALSO read, as the legacy location. `settings.json` stays at the working
- * directory in every case. A gate that read only the working directory
- * therefore missed the file the CLI reads from the repository root for every
- * launch in a subdirectory of an owned checkout (adversarial review, MAJOR,
- * POSIX only).
- *
- * The root is found the way the CLI finds it: walk up for a `.git` entry the
- * CLI's `Ce` accepts (`isGitRootEntry`: a directory or a regular file, or a
- * symlink that passes the CLI's own text, host and path checks and lands on
- * one -- the first version walked past every symlinked `.git`, the second
- * followed every one, and each missed a root the CLI used: adversarial final
- * pass MINOR, confirmation pass MAJOR) -- with no depth bound other than the filesystem root
- * -- the CLI's walk has none, and a bound the CLI does not share is a layout
- * in which the CLI finds a root this gate does not; then a linked worktree's
- * pointer is followed to the main checkout (`canonicalGitRootOf`).
- */
-async function posixCanonicalLocalSettingsRoot(cwd: string): Promise<string | null> {
-  if (typeof process.geteuid !== 'function') return null
-  const resolved = path.resolve(cwd)
-  let dir = resolved
-  let root: string | null = null
-  for (;;) {
-    if (await isGitRootEntry(path.join(dir, '.git'), dir)) { root = dir; break }
-    const parent = path.dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  if (root === null) return null
-  root = await canonicalGitRootOf(root)
-  if (root === resolved) return null
-  try {
-    if (root === await fs.promises.realpath(os.homedir())) return null
-  } catch {
-    return null
-  }
-  try {
-    const uid = process.geteuid()
-    const rootUid = (await fs.promises.stat(root)).uid
-    const gitUid = (await fs.promises.lstat(path.join(root, '.git'))).uid
-    let claudeUid: number | null = null
-    try { claudeUid = (await fs.promises.lstat(path.join(root, '.claude'))).uid } catch { /* absent: not a veto */ }
-    if (rootUid !== uid || gitUid !== uid || (claudeUid !== null && claudeUid !== uid)) return null
-  } catch {
-    return null
-  }
-  return root
-}
 
 /** TEST SEAM for the POSIX git-root rule, so a test can drive it on a
  *  fixture checkout without a launch. */
@@ -708,6 +380,14 @@ const recentVerdicts = new Map<string, { verdict: ProjectGateResult; at: number 
 /** How long a verdict may be reused by a caller that cannot await. Well inside
  *  the "settings edited after launch" boundary this app already records. */
 const GATE_VERDICT_REUSE_MS = 5000
+/** The verdict the gate last ANSWERED per directory, `not-scanned` included,
+ *  for `lastGateAnswer`: the latest answer for that folder to any caller in
+ *  this process, not one launch's own. Unlike `recentVerdicts`, which keeps
+ *  what a scan found even when every launch waiting for it had given up, this
+ *  is what the caller was told: a scan that answered after its deadline is
+ *  `timed-out` here. An entry older than the reuse window is dropped when the
+ *  next answer is written. */
+const lastGateAnswers = new Map<string, { verdict: ProjectGateResult; at: number }>()
 
 /** Test seam: the counters are process-wide, so a suite that strands a scan on
  *  purpose has to be able to put them back. */
@@ -715,6 +395,7 @@ export function _resetProjectScanStateForTest(): void {
   outstandingProjectScans = 0
   inFlightScans.clear()
   recentVerdicts.clear()
+  lastGateAnswers.clear()
   projectScanCeilingLogged = false
 }
 /** Test seam: the counters as they stand, so a test can assert on the ceiling
@@ -897,8 +578,32 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * Owner decision 2026-09-22: a detectable repository override fails visibly
  * BEFORE launch. What is not detectable is a recorded boundary, not a claim.
  * The files are never modified.
+ *
+ * Each answer is also kept for `lastGateAnswer`.
  */
 export async function gateManagedLaunch(cwd: string): Promise<ProjectGateResult> {
+  const verdict = await gateManagedLaunchOnce(cwd)
+  const now = Date.now()
+  for (const [key, hit] of lastGateAnswers) if (now - hit.at > GATE_VERDICT_REUSE_MS) lastGateAnswers.delete(key)
+  lastGateAnswers.set(scanKeyFor(cwd), { verdict, at: now })
+  return verdict
+}
+
+/** The verdict `gateManagedLaunch` last answered for `cwd`, `not-scanned`
+ *  included, or undefined when it has answered none within the reuse window.
+ *  It is the latest answer for that folder to any caller in this process, so
+ *  it is a launch's own answer only when read straight after that launch's own
+ *  gate of `cwd` has answered, with no `await` in between (see
+ *  `gatePickerSiblingDirs`). A scan that settled after its launch's deadline
+ *  does not turn that launch's `timed-out` into its own verdict here (it does
+ *  in `peekGateVerdict`). */
+function lastGateAnswer(cwd: string): ProjectGateResult | undefined {
+  const hit = lastGateAnswers.get(scanKeyFor(cwd))
+  if (!hit || Date.now() - hit.at > GATE_VERDICT_REUSE_MS) return undefined
+  return hit.verdict
+}
+
+async function gateManagedLaunchOnce(cwd: string): Promise<ProjectGateResult> {
   if (isUncPath(cwd)) {
     logInfo(`[managed-launch] project settings in ${describePath(cwd)} not checked -- the working directory is a network path`)
     return { status: 'not-scanned', reason: 'network-path' }
@@ -1007,6 +712,11 @@ export async function gateManagedLaunch(cwd: string): Promise<ProjectGateResult>
  * out to be gone, so the spawn falls back to the configured one) is gated too:
  * an absent directory is clean, and a present one with an authority key is
  * one the user asked to resume in. Over-refusal is the fail-closed side.
+ *
+ * The OTHER worktrees the resume picker could open are not merged in here:
+ * each is gated on its own by `gatePickerSiblingDirs`, and
+ * a refused or unchecked one is kept out of the picker's set rather than
+ * refusing the launch.
  */
 export async function gateManagedLaunchDirs(cwds: readonly string[]): Promise<ProjectGateResult> {
   const unique = [...new Set(cwds.filter((c) => typeof c === 'string' && c.length > 0))]
@@ -1023,11 +733,10 @@ export async function gateManagedLaunchDirs(cwds: readonly string[]): Promise<Pr
 
 /** One verdict for several directories (see `gateManagedLaunchDirs`). Pure,
  *  and exported for its test. Keys are already bounded per directory; the
- *  directory set is the configured directory, the resume target's and every
- *  worktree the resume picker can offer (`pickerCandidateDirs`), so the merged
- *  list grows with the repository's worktrees -- each directory's keys are
- *  prefixed by its own path and bounded by its own scan, and no "and N more"
- *  is re-counted across them. */
+ *  directory set is the configured directory and the resume target's (the
+ *  picker's other worktrees are gated apart, `gatePickerSiblingDirs`) -- each
+ *  directory's keys are prefixed by its own path and bounded by its own scan,
+ *  and no "and N more" is re-counted across them. */
 export function mergeProjectGateResults(
   results: ReadonlyArray<{ cwd: string; result: ProjectGateResult }>,
 ): ProjectGateResult {
@@ -1046,6 +755,162 @@ export function mergeProjectGateResults(
   if (refusedKeys.length > 0) return { status: 'refused', keys: refusedKeys }
   if (skipped !== undefined) return { status: 'not-scanned', reason: skipped }
   return { status: 'clean' }
+}
+
+/**
+ * The resume picker's OTHER worktrees, each gated on its own.
+ *
+ * The launch's own folders (the configured one and the resume target's)
+ * decide the launch, through `gateManagedLaunchDirs`. Each other worktree the
+ * picker lists is gated here, one at a time (the same one-slot discipline),
+ * and only a CLEAN one goes into the set the picker is handed with the
+ * launch's own folders (CCC_GATED_DIRS). A refused or unchecked one never
+ * decides the launch: it is left out of that set, and the log names each
+ * folder left out and why.
+ *
+ * A candidate that is one of `launchDirs` is skipped (already gated as the
+ * launch's own), and candidates are de-duplicated, by `sameFolder`: the same
+ * path, or on Windows a path that differs only in case and that the disk
+ * resolves to the same real path. Names are compared case-blind on Windows
+ * because the configured folder arrives in whatever case the user typed and
+ * git lists it in the case on disk; the real path is asked as well because a
+ * folder made case-sensitive (fsutil, or one WSL created) can hold two
+ * worktrees whose names differ only in case, and each of those is gated on
+ * its own. A path whose real path cannot be read is gated. The real paths are
+ * asked within the gate's own deadline, and never for a network path, which
+ * is compared by its spelling alone; no answer in time counts as not the same
+ * folder, so that candidate is gated on its own as well. On Windows a clean
+ * sibling whose name differs only in case from one the gate did not find
+ * clean (`leftOut`) is not handed to the picker either, and the log says why.
+ * A sibling left out only because it has no folder (below) does not keep out
+ * such a twin: the picker takes a name in another case for a folder of its set
+ * only when the disk resolves both to one real path.
+ *
+ * A sibling with no folder at its path when it is gated (git keeps a worktree
+ * whose folder was deleted, as a prunable record) is clean to the gate, which
+ * reads nothing there, and is left out all the same: no CLI can be resumed
+ * there when the session starts, and a folder made there later was never
+ * checked. The log names it with the same line. The folder is asked for only
+ * once the gate has answered clean, so only a path the gate has just read in
+ * time is asked of the disk again, and an answer that does not come within the
+ * gate's own deadline counts as no folder.
+ *
+ * `launch` is the launch's own folders to hand to the picker with the clean
+ * siblings (`clean`). The first of `launchDirs` is the configured folder, where
+ * the session itself starts, and is always handed over. For each other one
+ * (the resume target's folder) the disk is asked whether a folder is there
+ * only when the gate's latest answer for that folder, within the reuse window,
+ * is clean, and never for a network path, as for a sibling. That answer
+ * (`launchVerdict`) is read for every launch folder when this is called,
+ * before anything here awaits. The caller gates `launchDirs` and calls this
+ * straight after that gate has answered, with no `await` in between, so the
+ * answer read is its own launch's; a caller that cannot do that passes its
+ * own per-folder answers as `launchVerdict`. An absent resume target is
+ * clean to that gate too, the launch then starts in the configured folder
+ * instead, and the target is left out and logged like a sibling with no
+ * folder. For any other answer (refused, not checked or timed out, or none on
+ * record) the disk is not asked and the folder is handed over as before: the
+ * gate has already decided the launch on it, and the folder check would be one
+ * more read of a path the gate chose not to read or could not read in time.
+ *
+ * The picker takes a folder for one in its set only when isGatedDir
+ * (scripts/resume-picker.js) finds the two to be one folder: one real path on
+ * disk, or, where it does not take the disk's answer, one spelling as it
+ * settles them. So it refuses a folder left out here unless that folder is a
+ * folder of the set under another spelling or through a link, and it matches
+ * a path whose folder names differ only in case from one in the set only when
+ * the disk resolves both to one real path. `gate`, `platform`, `realpath`,
+ * `isFolder` and `launchVerdict` are for tests.
+ */
+export async function gatePickerSiblingDirs(
+  launchDirs: readonly string[],
+  candidates: readonly string[],
+  gate: (cwd: string) => Promise<ProjectGateResult> = gateManagedLaunch,
+  platform: NodeJS.Platform = process.platform,
+  realpath: (p: string) => Promise<string | null> = realFolderPath,
+  isFolder: (p: string) => Promise<boolean> = isFolderOnDisk,
+  launchVerdict: (cwd: string) => ProjectGateResult | undefined = lastGateAnswer,
+): Promise<{ launch: string[]; clean: string[]; leftOut: Array<{ dir: string; result: ProjectGateResult }> }> {
+  // The fold decides only whether the real paths are worth asking for: two
+  // paths that differ in more than case are never the same folder here.
+  const fold = (s: string): string => (platform === 'win32' ? s.toLowerCase() : s)
+  // Which launch folders the disk may be asked about, decided before anything
+  // below awaits, so the answers read are the ones the caller's own gate left.
+  const seen: string[] = launchDirs.filter((d) => typeof d === 'string')
+  const askFolder = seen.map((dir, i) => i > 0 && !isUncPath(dir) && launchVerdict(dir)?.status === 'clean')
+  const sameFolder = async (a: string, b: string): Promise<boolean> => {
+    if (a === b) return true
+    if (fold(a) !== fold(b)) return false
+    // A network path is not read here either: compared by its spelling alone.
+    if (isUncPath(a) || isUncPath(b)) return false
+    const real = await Promise.race([
+      Promise.all([realpath(a), realpath(b)]),
+      sleep(PROJECT_GATE_DEADLINE_MS).then(() => null),
+    ])
+    return real !== null && real[0] !== null && real[0] === real[1]
+  }
+  // Whether a folder is there, as the disk answers within the gate's own
+  // deadline: a mount that stops answering holds the launch no longer than a
+  // scan of it would. No answer in time, or a failure, is no folder.
+  const folderInTime = (dir: string): Promise<boolean> =>
+    Promise.race([isFolder(dir).catch(() => false), sleep(PROJECT_GATE_DEADLINE_MS).then(() => false)])
+  const noFolder = 'there was no folder there when the session started'
+  const launch: string[] = []
+  const clean: string[] = []
+  const leftOut: Array<{ dir: string; result: ProjectGateResult }> = []
+  const reasons: Array<{ dir: string; why: string }> = []
+  for (const [i, dir] of seen.entries()) {
+    if (!askFolder[i] || await folderInTime(dir)) launch.push(dir)
+    else reasons.push({ dir, why: noFolder })
+  }
+  for (const dir of candidates) {
+    if (typeof dir !== 'string' || dir.length === 0) continue
+    let known = false
+    for (const s of seen) if (await sameFolder(s, dir)) { known = true; break }
+    if (known) continue
+    seen.push(dir)
+    const result = await gate(dir)
+    if (result.status === 'clean') {
+      if (await folderInTime(dir)) clean.push(dir)
+      else reasons.push({ dir, why: noFolder })
+      continue
+    }
+    leftOut.push({ dir, result })
+    // The scan already bounded the keys (its own "and N more" included);
+    // bounding them again would re-count that element as one more key.
+    reasons.push({
+      dir,
+      why: result.status === 'refused'
+        ? `its project settings refuse a managed launch (${result.keys.join(', ')})`
+        : `its project settings were not checked (${result.reason})`,
+    })
+  }
+  // Decided once every sibling is known, because a clean sibling found later
+  // can differ only in case from one left out earlier. On Windows such a
+  // clean sibling is not handed to the picker either.
+  const twinLeftOut = (d: string): string | undefined =>
+    platform === 'win32' ? leftOut.find((l) => fold(l.dir) === fold(d))?.dir : undefined
+  const offered = clean.filter((d) => twinLeftOut(d) === undefined)
+  for (const { dir, why } of reasons) {
+    logWarn(`[managed-launch] the resume picker will not open conversations in ${describePath(dir)} for this launch: ${why}`)
+  }
+  for (const dir of clean) {
+    const twin = twinLeftOut(dir)
+    if (twin !== undefined) logWarn(`[managed-launch] the resume picker will not open conversations in ${describePath(dir)} for this launch: ${describePath(twin)}, whose name differs from it only in case, was left out`)
+  }
+  return { launch, clean: offered, leftOut }
+}
+
+/** A folder's real path as the disk reports it (on Windows the case on disk,
+ *  links resolved), or null when it cannot be read. Off the main thread. */
+async function realFolderPath(p: string): Promise<string | null> {
+  try { return await fs.promises.realpath(p) } catch { return null }
+}
+
+/** Whether a folder is at `p` (a link to one counts), off the main thread. Any
+ *  failure to tell is no folder. */
+async function isFolderOnDisk(p: string): Promise<boolean> {
+  try { return (await fs.promises.stat(p)).isDirectory() } catch { return false }
 }
 
 /**

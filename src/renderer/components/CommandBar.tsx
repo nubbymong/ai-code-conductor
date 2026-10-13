@@ -42,6 +42,8 @@ import NotesTool, { type NotesToolHandle } from './command-bar/NotesTool'
 import { CommandIcon } from './command-icons'
 import { DEFAULT_COMMAND_COLOR } from '../lib/command-swatches'
 import { writeSessionInput } from './terminal/tmuxWheelScroll'
+import { usePasteHintStore } from '../stores/pasteHintStore'
+import { stripSpoofableText } from '../../shared/safe-text'
 
 // User-picked section colours are Mocha pastels tuned for dark surfaces;
 // rendered as bare text on the light theme they wash out. Darken them toward
@@ -66,6 +68,19 @@ type CodexPreset = typeof CODEX_PRESETS[number]
 
 /** How long a pill says why a Codex command was not sent. */
 const CODEX_PILL_NOTE_MS = 6000
+
+/** How long the bar says why a partner button typed nothing into an SSH
+ *  partner (#86). Longer than a paste hint: the note asks the user to sign in
+ *  first, and it is read before the next press. */
+const PARTNER_NOTE_MS = 6000
+
+/** #86: the SSH partner connections that have reported their shell, as the
+ *  partner's PTY id -> its session's createdAt (a Restart or Retry bumps it,
+ *  and that is a new connection). Kept outside the component because App
+ *  remounts the bar on every tab switch, and main's state cannot say whether
+ *  a 'claude-running' partner reached its shell first. One small entry per
+ *  partner id, overwritten by its next connection. */
+const partnersAtShell = new Map<string, string>()
 
 /**
  * P3.8 round 1 (L1, row 41; the default pending the owner's decision): on a
@@ -353,8 +368,60 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [webviewKey, webviewUrlsKey])
 
+  // #86: an SSH session's partner is its own connection to the host, and a
+  // partner button pressed with the partner closed is what opens it. A line
+  // typed while it connects goes into an ssh process that may be asking for a
+  // password, so typeIntoPty types nothing until main reports the partner's
+  // flow as 'shell-only'. That state is not proof of a shell prompt: main's
+  // idle fallback also reports it over a sign-in prompt it does not recognise
+  // (a verification code, a key passphrase) after 1.5 s, and over a password
+  // prompt once its auth hold ends (about 13.5 s). A press then types into
+  // that prompt. Accepted: the note below asks the user to sign in first and
+  // to press again only at the shell prompt. Read from main's flow state for
+  // the partner's PTY: pushed, and caught up once on mount.
+  //
+  // Main does not stay on 'shell-only': its claude UI latch is not gated on a
+  // shell-only PTY, so anything the partner prints with a rounded box rule
+  // (an assistant CLI run there, a lazygit or btop border, a pnpm update box)
+  // moves it to 'claude-running' for good. So the gate is "this connection
+  // has reported its shell" (partnersAtShell), not the state now. From
+  // 'shell-only' main moves a partner to nothing unsafe: its exit handler
+  // keeps 'shell-only', and the launch and post-command paths refuse partner
+  // ids. Any push other than the shell or that latch drops it (fail closed).
+  // A partner that reports 'claude-running' before its shell (a banner, MOTD
+  // or rc output with a rounded box) is never typed into: the note says to
+  // type the command in the partner view. The connection is the session record's
+  // createdAt: a Restart or Retry gives the partner a new connection, and main
+  // does not announce its 'connecting'. A ref for the state: it is read only
+  // at a press, for the note.
+  const partnerRemote = caps.partnerRunsOn === 'remote'
+  const partnerFlowState = useRef<string>('connecting')
+  const sessionCreatedAt = session?.createdAt
+  const partnerConnection = String(sessionCreatedAt ?? '')
+  useEffect(() => {
+    partnerFlowState.current = 'connecting'
+    const ssh = window.electronAPI?.ssh
+    if (!partnerRemote || !partnerSessionId || typeof ssh?.onFlowState !== 'function') return
+    if (partnersAtShell.get(partnerSessionId) !== partnerConnection) partnersAtShell.delete(partnerSessionId)
+    const note = (state: string) => {
+      partnerFlowState.current = state
+      if (state === 'shell-only') partnersAtShell.set(partnerSessionId, partnerConnection)
+      else if (state !== 'claude-running') partnersAtShell.delete(partnerSessionId)
+    }
+    let cancelled = false
+    let pushed = false
+    const off = ssh.onFlowState(partnerSessionId, (msg) => { pushed = true; note(msg.state) })
+    if (typeof ssh.getState === 'function') {
+      ssh.getState(partnerSessionId)
+        .then((cur) => { if (!cancelled && !pushed && cur?.state) note(cur.state) })
+        .catch(() => { /* not known: stays not at its shell */ })
+    }
+    return () => { cancelled = true; off() }
+  }, [partnerRemote, partnerSessionId, partnerConnection])
+
   /**
-   * Type a command into the appropriate PTY. The original behaviour, unchanged.
+   * Type a command into the appropriate PTY. The original behaviour, unchanged,
+   * except for an SSH partner that is not at its shell yet (above).
    *
    * `expectBleed` is set when we know the line starts a Windows GUI-subsystem
    * program (#379): it will `AttachConsole` to this pty's console and write its
@@ -377,6 +444,27 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
       // command a second time. TerminalView owns the xterm instance; it
       // listens for this and focuses the helper textarea.
       window.dispatchEvent(new CustomEvent('ccc:focus-terminal', { detail: { sessionId: ptyId } }))
+    }
+    if (target === 'partner' && partnerRemote && partnerSessionId && partnersAtShell.get(partnerSessionId) !== partnerConnection) {
+      // Show it (the press often starts its connection), type nothing, and say
+      // so. No queueing: the user signs in if asked and presses again at the
+      // shell prompt. The note follows the state now. A connection that
+      // failed never reaches 'shell-only': only a Restart opens it again.
+      // 'skipped' is not expected for a partner (the overlay offers Skip only
+      // in states a plain-shell partner never enters); if it happens, main
+      // moves it to 'shell-only' at its next prompt, and a Restart also works.
+      if (!isPartnerActive && onTogglePartner) onTogglePartner()
+      const host = stripSpoofableText(caps.remoteHost ?? 'the host', 200)
+      const state = partnerFlowState.current
+      usePasteHintStore.getState().show(sessionId, state === 'failed'
+        ? `The partner shell could not reach ${host}, so nothing was typed. Press Restart in the partner view to try again.`
+        : state === 'skipped'
+          ? `The partner shell on ${host} skipped its setup, so nothing was typed. Press Restart in the partner view to open it again.`
+          : state === 'claude-running'
+            ? `The partner shell on ${host} has not reported its shell prompt, so nothing was typed. Type the command in the partner view, or press Restart there and try again.`
+            : `The partner shell is connecting to ${host}. Sign in there if it asks, then press the button again once its shell prompt shows.`,
+      PARTNER_NOTE_MS)
+      return
     }
     if (target === 'partner' && !isPartnerActive && onTogglePartner && partnerSessionId) {
       onTogglePartner()
@@ -440,6 +528,10 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
    */
   const syncDecision = (cmd: CustomCommand, fullCommand: string): (() => void) | null => {
     if (effectiveKind(cmd, caps) !== 'shell') return () => typeIntoPty(cmd, fullCommand)
+    // #86: a line for a shell on another machine (an SSH tab's partner, or its
+    // own terminal) runs THERE. The probe and a captured run look at, and
+    // start, programs on this PC, so neither applies: it is typed, as always.
+    if (caps.runsOn(cmd.target || 'claude') === 'remote') return () => typeIntoPty(cmd, fullCommand)
     if (cmd.guiExePolicy === 'terminal') return () => typeIntoPty(cmd, fullCommand, true)
     // No probe available (an older preload, or a test harness that does not stub
     // it): type it, exactly as the button always did. The warning is an

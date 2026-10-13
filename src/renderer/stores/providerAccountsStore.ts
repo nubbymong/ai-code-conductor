@@ -189,17 +189,6 @@ export const providerAccountActions = {
   logout: (req: LogoutRequest) => call<{ state: KnownAuthState }>(() => api().logout(req)),
   setLifecycle: (req: SetLifecycleRequest) => call(() => api().setLifecycle(req)),
   setDefault: (accountId: string) => call(() => api().setDefault(accountId)),
-  /** The ONLY way this computer's own sign-in of a provider is taken in
-   *  (Codex's ~/.codex): the user's explicit "Use this sign-in". Main asks
-   *  the provider's status there first and registers it only when it is
-   *  signed in. Nothing adopts it automatically (owner decision 2026-09-26),
-   *  so this store has no action for the old start-up check. */
-  adoptExternal: (providerId: ProviderId) => call<{ accountId: string }>(() => api().adoptExternal(providerId)),
-  /** Whether this computer's own sign-in of a provider is signed in, asked
-   *  WITHOUT taking it in: main runs the same status check as adoptExternal
-   *  and keeps nothing. The Set up Codex page asks it before it offers "Use
-   *  this sign-in" as signed in. */
-  probeExternal: (providerId: ProviderId) => call<{ state: KnownAuthState }>(() => api().probeExternal(providerId)),
   reconcileSignIn: (accountId: string) => call<{ state: KnownAuthState }>(() => api().reconcileSignIn(accountId)),
   /** "Check sign-in": asks the provider, in the account's own realm, whether
    *  it is signed in now (for Codex, `codex login status`), and records the
@@ -248,9 +237,12 @@ export function selectArchivedAccounts(snapshot: AccountsSnapshot | null, provid
 }
 
 /** "Restore": an archived account that is not mirrored from the provider's
- *  own list (that one comes back where it was removed). */
+ *  own list (that one comes back where it was removed), and not the
+ *  provider's own sign-in on this computer: that sign-in is retired (O5), so
+ *  archiving the account 2.1.1-beta.2 registered for it is final, and main
+ *  refuses its restore too. */
 export function canOfferRestore(account: AccountView): boolean {
-  return account.lifecycle === 'archived' && !account.legacyLinked
+  return account.lifecycle === 'archived' && !account.legacyLinked && !account.external
 }
 
 export function identityOf(snapshot: AccountsSnapshot | null, account: Pick<AccountView, 'identityId'>): IdentityView | undefined {
@@ -442,10 +434,13 @@ export function sentinelCodexAccountChoices(snapshot: AccountsSnapshot | null): 
 /** Whether an account may be offered "Sign in again": not archived and not
  *  blocked (it is reconciled first). Signed in too (P3.3, design 9.2): main
  *  then signs in to a new folder and moves the account there only once that
- *  sign-in is verified, so the one it has is never lost on the way. This
- *  computer's own sign-in too, in place, after its warning is confirmed
- *  (design 9.2, last paragraph). */
+ *  sign-in is verified, so the one it has is never lost on the way. Never
+ *  the provider's own sign-in on this computer: that sign-in is retired (O5,
+ *  2.1.1-beta.3), and main refuses it before anything runs. Until then it
+ *  was signed in again in place, which signed every app using it out
+ *  first (#196). */
 export function canOfferSignInAgain(account: AccountView): boolean {
+  if (account.external) return false
   if (account.lifecycle === 'archived') return false
   return account.operationalState !== 'blocked'
 }
@@ -490,59 +485,6 @@ export function canOfferMakeActive(account: AccountView): boolean {
  *  provider's own list (it is removed where it was created). */
 export function canOfferArchive(account: AccountView): boolean {
   return account.lifecycle === 'inactive' && !account.legacyLinked
-}
-
-/** What the Accounts surface says about using the provider's own sign-in on
- *  this computer (Codex's ~/.codex). The app never takes it in on its own
- *  (owner decision 2026-09-26): it is looked at only when the user chooses
- *  "Use this computer's ... sign-in" (the explicit adoption). Nothing while a
- *  setup of that home is pending, or once an account stands for it. While
- *  the user has not said they use the provider, the block asks only that
- *  (the yes records the answer; it adopts nothing). With the provider on and
- *  nothing recorded, the offer. A recorded answer says what it found:
- *  `registered` is the user's own adoption (its account archived since);
- *  `none` and `skipped` only a development build's start-up check could
- *  record, before owner decision 2026-09-26, and they are read here so such
- *  a registry still says something true ("Check again" is the adoption,
- *  asked again, where that check could not get an answer). */
-export type ExternalAdoptionView =
-  | { kind: 'none' }
-  | { kind: 'note'; text: string }
-  /** The user has not said they use the provider: ask that first. */
-  | { kind: 'confirm'; text: string }
-  | { kind: 'offer'; text: string | null; action: 'check-again' | 'use' }
-
-export function externalAdoption(snapshot: AccountsSnapshot | null, providerId: ProviderId): ExternalAdoptionView {
-  const none: ExternalAdoptionView = { kind: 'none' }
-  const p = providerView(snapshot, providerId)
-  const ext = snapshot?.externalDefaults.find((e) => e.providerId === providerId)
-  if (!snapshot || !p || !ext || !p.enabled) return none
-  if (snapshot.pendingSetups.some((s) => s.providerId === providerId && s.external)) return none
-  if (snapshot.accounts.some((a) => a.providerId === providerId && a.external && a.lifecycle !== 'archived')) return none
-  const name = p.displayName
-  const home = externalHomeFolder(snapshot, providerId)
-  const folder = home ? ` sign-in folder (${home})` : ' sign-in folder'
-  if (providerNotSetUp(p)) {
-    return { kind: 'confirm', text: `${name} is not set up yet. Once you say you use ${name}, you can use this computer's ${name} sign-in here.` }
-  }
-  const m = ext.marker
-  // True whether or not the Set up Codex page has checked it (read-only, and
-  // keeping nothing): what waits for the user is using it.
-  if (!m) {
-    return { kind: 'offer', text: `This app uses this computer's ${name} sign-in only when you choose to use it. Choosing it asks ${name} first whether it is signed in.`, action: 'use' }
-  }
-  if (m.outcome === 'registered') return { kind: 'offer', text: null, action: 'use' }
-  if (m.outcome === 'none') return { kind: 'offer', text: `When the app first checked, this computer's ${name} was signed out.`, action: 'use' }
-  switch (m.reason) {
-    case 'unavailable': return { kind: 'offer', text: `The app could not check this computer's ${name} sign-in when it first tried: it timed out, did not start, or ${name} was busy.`, action: 'check-again' }
-    case 'no-answer': return { kind: 'offer', text: `${name} did not say whether this computer's sign-in is signed in when the app first checked.`, action: 'check-again' }
-    case 'off': return { kind: 'offer', text: `${name} was off when the app first checked, so this computer's sign-in was not looked at.`, action: 'use' }
-    case 'no-cli': return { kind: 'offer', text: `The ${name} CLI was not found when the app first checked.`, action: 'use' }
-    case 'cli-unsupported': return { kind: 'offer', text: `The ${name} CLI on this computer was a version this app does not support when it first checked.`, action: 'use' }
-    case 'home-missing': return { kind: 'offer', text: `There was no ${name}${folder} on this computer when the app first checked.`, action: 'use' }
-    case 'overlap': return { kind: 'note', text: `This computer's ${name} folder overlaps this app's own account folders, so it cannot be used here.` }
-    default: return { kind: 'offer', text: `The app did not check this computer's ${name} sign-in.`, action: 'use' }
-  }
 }
 
 /** A failed sign-in-again as its dialog says it. */
@@ -698,6 +640,32 @@ export function signInCheckText(state: KnownAuthState): string {
   }
 }
 
+/** O5 (2.1.1-beta.3, owner decision 2026-10-11): this app no longer takes in
+ *  a provider's own sign-in on this computer; an account is always added in
+ *  the app. Only 2.1.1-beta.2 offered it, and the account it registered keeps
+ *  working (confirmed at each launch). Its row and every confirmation of a
+ *  launch on it say this, once. Archive needs an inactive account, and the
+ *  default cannot be made inactive while another account is active, hence
+ *  the order. A confirmation says where (Settings, Accounts); the row is
+ *  already there, so it does not. An inactive row is no default and needs
+ *  only Archive; an active row that is no longer the default needs no new
+ *  default, only Make inactive and Archive. */
+export function externalSignInRetiring(
+  p: Pick<ProviderInstallationView, 'displayName'>,
+  row?: Pick<AccountView, 'lifecycle' | 'isProviderDefault'>,
+): string {
+  if (row?.lifecycle === 'inactive') return `This sign-in is being retired: add a ${p.displayName} account if you have not yet, then archive this one.`
+  if (row && !row.isProviderDefault) return `This sign-in is being retired: add a ${p.displayName} account if you have not yet, then make this one inactive and archive it.`
+  const where = row ? '' : 'in Settings, Accounts, '
+  return `This sign-in is being retired: ${where}add a ${p.displayName} account, make it the default, then make this one inactive and archive it.`
+}
+
+/** O5: an archived account for the provider's own sign-in on this computer
+ *  has no Restore (canOfferRestore); its archived row says why instead. */
+export function externalSignInRetired(p: Pick<ProviderInstallationView, 'displayName'>): string {
+  return `This app no longer uses the ${p.displayName} sign-in already on this computer, so this account cannot be restored.`
+}
+
 /** The command that signs in to a provider's own home on this computer, where
  *  the provider has one; the app never signs in there itself (external
  *  realms refuse sign-in). */
@@ -706,7 +674,8 @@ const EXTERNAL_SIGN_IN_COMMAND: Readonly<Partial<Record<ProviderId, string>>> = 
 /** What a signed-out or expired row for the provider's own home on this
  *  computer says to do, or null when there is nothing to say. */
 export function externalSignInHint(account: Pick<AccountView, 'external' | 'lastKnownAuthState' | 'operationalState' | 'signingIn'>, provider: Pick<ProviderInstallationView, 'providerId'>): string | null {
-  // While the app signs it in again (in place), there is nothing to run.
+  // A sign-in running on it is said by the row instead. The app never starts
+  // one on this computer's own sign-in now (retired, O5): kept as a guard.
   if (!account.external || account.operationalState === 'blocked' || account.signingIn) return null
   if (account.lastKnownAuthState !== 'signed-out' && account.lastKnownAuthState !== 'expired') return null
   const command = EXTERNAL_SIGN_IN_COMMAND[provider.providerId]

@@ -45,7 +45,11 @@ export function recipeSourceLine(r: Pick<InstallRecipeView, 'publisher' | 'sourc
  *  ran ended (with its exit code when it is known and not 0), or after the
  *  user's own Check again. Never "restart the app": the PATH was brought up
  *  to date before the check, and when a restart is what would help, main
- *  says so itself (a `restart` path hint, PathHintNotice). */
+ *  says so itself (a `restart` path hint, PathHintNotice): the tool is in a
+ *  folder Windows' PATH names that the app could not take in, or an entry of
+ *  that PATH added since it started names a %VARIABLE% the app does not have,
+ *  whose folder it cannot look in until it starts again (a note shown beside
+ *  this message, never in its place: pathHintIsNote). */
 export function afterInstallMessage(tool: string, how: { ended: boolean; exitCode?: number }): string {
   if (!how.ended) return `${tool} was still not found. If you installed it another way, check that its folder is on your PATH, then press Check again.`
   const code = typeof how.exitCode === 'number' && how.exitCode !== 0 ? ` with exit code ${how.exitCode}` : ''

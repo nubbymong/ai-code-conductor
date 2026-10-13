@@ -361,7 +361,7 @@ describe('the End command (a separate ssh exec, parsed by the remote account`s s
       `/usr/local/bin/tmux kill-session -t ${t} 2>/dev/null; ` +
       `/usr/bin/tmux kill-session -t ${t} 2>/dev/null; ` +
       `"$HOME/.claude/bin/tmux" kill-session -t ${t} 2>/dev/null; ` +
-      'rm -f ~/.claude/settings-sess-1.json ~/.claude/mcp-sess-1.json ~/.claude/ccc-status-sess-1.url 2>/dev/null; ' +
+      'rm -f ~/.claude/settings-sess-1.json ~/.claude/mcp-sess-1.json ~/.claude/ccc-status-sess-1.url ~/.claude/ccc-attn-sess-1.key ~/.claude/ccc-attn-sess-1.up 2>/dev/null; ' +
       'true',
     )
   })

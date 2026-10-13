@@ -54,6 +54,7 @@ const { buildCodexSpawn, ASK_PROJECT_DOC_MAX_BYTES_CEILING, nodePtyWindowsComman
 // node-pty's own Windows quoting (pure JS; nothing native is loaded by it).
 const { argsToCommandLine } = createRequire(path.join(process.cwd(), 'package.json'))('node-pty/lib/windowsPtyAgent.js') as { argsToCommandLine: (file: string, args: string[]) => string }
 const { askConductorProjectDocMaxBytes } = await import('../../../../src/main/help-workspace')
+const { __markScriptFoldersCheckedForTests } = await import('../../../../src/main/script-folders')
 
 const linuxLaunch = { executable: '/mock/path/codex', env: { PATH: '/usr/bin', CODEX_HOME: '/home/u/.codex' }, sessionsDir: '/home/u/.codex/sessions' }
 const winEnv = { SystemRoot: 'C:\\Windows', CODEX_HOME: 'C:\\Users\\u\\.codex' }
@@ -211,9 +212,11 @@ describe('where the question never rides argv', () => {
     const res = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-ask-picker-')))
     let pickDir: string | null = null
     try {
-      fs.mkdirSync(path.join(res, 'scripts'))
+      fs.mkdirSync(path.join(res, 'scripts'), { mode: 0o700 })
       const script = path.join(res, 'scripts', 'codex-resume-picker.js')
-      fs.writeFileSync(script, '// staged for the test\n')
+      fs.writeFileSync(script, '// staged for the test\n', { mode: 0o600 })
+      // As the start does before a launch: the scripts folder made the user's alone.
+      __markScriptFoldersCheckedForTests(res)
       ;(globalThis as any).__askResDir = res
       const q = 'how do I add an account?'
       const pickerLaunch = { ...linuxLaunch, env: { ...linuxLaunch.env, PATH: process.platform === 'win32' ? 'C:\\ccc-test-only\\nodejs' : '/usr/bin' } }

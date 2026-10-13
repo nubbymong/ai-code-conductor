@@ -94,6 +94,8 @@ function evalInPage(code: string): unknown {
 
 const created: FakeWin[] = []
 let throwOnPermission = false
+/** When set, a window's first page load never settles (a slow or silent page). */
+let hangLoad = false
 class FakeWin {
   opts: Record<string, any>
   destroyed = false
@@ -122,7 +124,7 @@ class FakeWin {
     }
     created.push(this)
   }
-  loadURL = vi.fn(async () => {})
+  loadURL = vi.fn((_url?: string): Promise<void> => (hangLoad ? new Promise<void>(() => {}) : Promise.resolve()))
   isDestroyed() { return this.destroyed }
   hidden = false
   hide() { this.hidden = true }
@@ -212,6 +214,7 @@ beforeEach(() => {
   events.length = 0
   clearGate = null
   throwOnPermission = false
+  hangLoad = false
   for (const k of Object.keys(sessionEvents)) delete sessionEvents[k]
   fromPartition.mockClear()
   claudeBusy = false
@@ -433,6 +436,21 @@ const RUN = (over: Record<string, unknown> = {}) => ({
 })
 
 describe('[host] the sign-in window', () => {
+  it("lets the window unload whatever the page's beforeunload says, for both services", async () => {
+    jars[PART] = SIGNED_OUT_JAR
+    jars['persist:claude-web-profile-web1'] = []
+    const codex = runServiceSignIn(RUN({ timeoutMs: 60, pollMs: 10 }))
+    const claude = runInAppSignIn({ profileId: 'profile-web1', partition: 'persist:claude-web-profile-web1', timeoutMs: 60, pollMs: 10, shouldCancel: () => false })
+    expect(created).toHaveLength(2)
+    for (const w of created) {
+      const e = { preventDefault: vi.fn() }
+      expect(typeof w.handlers['will-prevent-unload']).toBe('function')
+      w.handlers['will-prevent-unload'](e)
+      expect(e.preventDefault).toHaveBeenCalledTimes(1)
+    }
+    await Promise.all([codex, claude])
+  })
+
   it('opens on that account partition, hardened, presenting a Chrome UA, on the sign-in page', async () => {
     jars[PART] = SIGNED_IN_JAR
     page.identity = IDENTITY
@@ -1350,11 +1368,14 @@ describe('[host] every Codex web wipe clears storage, the HTTP cache and the cod
 //
 // The user's close request (the close button, Alt+F4) on the chatgpt.com
 // window is held ONCE, never during a quit: the window hides and the same
-// poll keeps checking, with the same four conditions (the session cookie by
+// poll looks at the jar at once. Only while the session cookie is in the jar
+// does it keep checking, with the same four conditions (the session cookie by
 // its exact name, a valid email from the origin-gated read, the recheck, the
-// cancel check), for a bounded time; then the window is destroyed and the run
-// fails closed (the partition is wiped). A close with no close request (the
-// page's own window.close(), the system) ends the run at once, as before.
+// cancel check), and for at most 12 s, a hard stop; then the window is
+// destroyed and the run fails closed (the partition is wiped). A close with
+// no session cookie in the jar ends the run at once. A close with no close
+// request (the page's own window.close(), the system) ends the run at once,
+// as before.
 
 /** NextAuth splits a large session token into numbered chunks; ".0" is the session cookie. */
 const CHUNKED_JAR: FakeCookie[] = [
@@ -1412,7 +1433,7 @@ describe('[host] a sign-in window the user closes after signing in still finishe
     expect(JSON.stringify(st)).not.toContain('SECRET')
   })
 
-  it('a close with no session fails closed after the bounded finish (12 s): hidden meanwhile, then destroyed, then the partition wiped', async () => {
+  it('a close with no session cookie in the jar ends the run at once: destroyed and wiped within one poll, and the next sign-in of either service is accepted', async () => {
     vi.useFakeTimers()
     try {
       jars[PART] = SIGNED_OUT_JAR
@@ -1422,18 +1443,170 @@ describe('[host] a sign-in window the user closes after signing in still finishe
       let settled: { phase: string; error?: string } | null = null
       void runCodexWebSignIn({ accountId: ACCT, timeoutMs: 5 * 60_000, pollMs: 1500 }).then((s) => { settled = s })
       await vi.advanceTimersByTimeAsync(3000)
+      expect(signInInFlightElsewhere('claude'), "the latch Claude's sign-in shares is held while it runs").toBe(true)
+      // The close comes while the poll sleeps: it looks at the jar at once.
       expect(created[0].requestClose()).toBe(false)
-      await vi.advanceTimersByTimeAsync(10_000)
-      // Still finishing, out of sight.
-      expect(settled).toBeNull()
       expect(created[0].hidden).toBe(true)
-      expect(created[0].destroyed).toBe(false)
-      await vi.advanceTimersByTimeAsync(4_000)
+      await vi.advanceTimersByTimeAsync(100)
       expect(settled).toMatchObject({ phase: 'failed', error: expect.stringMatching(/closed before sign-in completed/) })
       expect(created[0].destroyed).toBe(true)
       expect(events.indexOf('window destroyed')).toBeLessThan(events.indexOf('clear storage'))
       expect(clears).toContainEqual({ partition: PART, what: 'storage' })
       expect(cleared).toHaveBeenCalledWith(ACCT)
+      expect(diagLine()).toContain('Ended: the user closed the window. Session cookie at the end: no.')
+      // The latch is free: a Claude in-app sign-in would start, and so does a new chatgpt.com one.
+      expect(signInInFlightElsewhere('claude')).toBe(false)
+      let again: { phase: string } | null = null
+      void runCodexWebSignIn({ accountId: ACCT, timeoutMs: 5 * 60_000, pollMs: 1500 }).then((s) => { again = s })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(created).toHaveLength(2)
+      expect(getCodexWebSignInState().phase).toBe('awaiting-user')
+      cancelCodexWebSignIn(ACCT)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(again).toMatchObject({ phase: 'failed', error: 'Sign-in cancelled.' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a close that finds no session cookie ends the run even while the page is still loading (a sign-in still on its way is not kept)', async () => {
+    vi.useFakeTimers()
+    try {
+      jars[PART] = SIGNED_OUT_JAR
+      page.identity = SIGNED_OUT_ANSWER
+      let settled: { phase: string; error?: string } | null = null
+      void runCodexWebSignIn({ accountId: ACCT, timeoutMs: 5 * 60_000, pollMs: 1500 }).then((s) => { settled = s })
+      await vi.advanceTimersByTimeAsync(3000)
+      page.loading = true
+      expect(created[0].requestClose()).toBe(false)
+      await vi.advanceTimersByTimeAsync(100)
+      // A redirect that would land the session after the close finds no window to land in.
+      jars[PART] = CHUNKED_JAR
+      page.identity = IDENTITY
+      page.loading = false
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(settled).toMatchObject({ phase: 'failed', error: expect.stringMatching(/closed before sign-in completed/) })
+      expect(created[0].destroyed).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the finish is a hard stop: with the identity read and the look at its shape both hanging, the hidden window goes at 12 s and the next sign-in is accepted', async () => {
+    vi.useFakeTimers()
+    try {
+      jars[PART] = SIGNED_IN_JAR
+      page.identity = IDENTITY
+      page.hangEmail = true
+      page.hangShape = true
+      let settled: { phase: string; error?: string } | null = null
+      void runCodexWebSignIn({ accountId: ACCT, timeoutMs: 5 * 60_000, pollMs: 1500 }).then((s) => { settled = s })
+      // The 1.5 s poll found the session cookie; its identity read hangs.
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(page.hung).toBeGreaterThanOrEqual(1)
+      expect(created[0].requestClose()).toBe(false)
+      await vi.advanceTimersByTimeAsync(12_000 - 50)
+      expect(settled).toBeNull()
+      expect(created[0].destroyed).toBe(false)
+      await vi.advanceTimersByTimeAsync(100)
+      // Not after one more bounded read, nor after a last look at the page.
+      expect(created[0].destroyed, 'the hidden window goes at the finish').toBe(true)
+      expect(settled).toMatchObject({ phase: 'failed', error: expect.stringMatching(/closed before sign-in completed/) })
+      expect(clears).toContainEqual({ partition: PART, what: 'storage' })
+      expect(signInInFlightElsewhere('claude')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a close while a cookie read is under way looks at the jar again as soon as that read ends, not a poll later', async () => {
+    vi.useFakeTimers()
+    try {
+      jars[PART] = SIGNED_IN_JAR
+      page.identity = { user: {} }
+      const p = runServiceSignIn(RUN({ timeoutMs: 60_000, pollMs: 1500 }))
+      // The first poll's read (at 1.5 s) is done; the next one comes at 3 s.
+      await vi.advanceTimersByTimeAsync(1600)
+      const base = jarReads()
+      let held: boolean | null = null
+      onCookiesGet = (n, partition) => { if (partition === PART && n === base + 1) held = created[0].requestClose() }
+      await vi.advanceTimersByTimeAsync(1400)
+      expect(held, 'the close came during that read, and was held').toBe(false)
+      expect(jarReads(), 'the read the close came in').toBeGreaterThanOrEqual(base + 1)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(jarReads(), 'the next read follows at once').toBeGreaterThanOrEqual(base + 2)
+      onCookiesGet = null
+      await vi.advanceTimersByTimeAsync(13_000)
+      expect((await p).ok).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a cookie read after the close that gets no answer ends the hold too (it cannot show the session is there)', async () => {
+    vi.useFakeTimers()
+    try {
+      jars[PART] = SIGNED_IN_JAR
+      page.identity = { user: {} }
+      let settled: { ok: boolean; error?: string } | null = null
+      void runServiceSignIn(RUN({ timeoutMs: 60_000, pollMs: 1500 })).then((r) => { settled = r })
+      await vi.advanceTimersByTimeAsync(2000)
+      onCookiesGet = (_n, partition) => { if (partition === PART) throw new Error('simulated cookie store failure') }
+      expect(created[0].requestClose()).toBe(false)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(settled).toMatchObject({ ok: false, error: expect.stringMatching(/closed before sign-in completed/) })
+      expect(created[0].destroyed).toBe(true)
+    } finally {
+      onCookiesGet = null
+      vi.useRealTimers()
+    }
+  })
+
+  it('a close while the first page is still loading is not held for that load: with no session cookie the run ends within one poll and the next sign-in is accepted', async () => {
+    vi.useFakeTimers()
+    try {
+      hangLoad = true
+      page.loading = true
+      jars[PART] = SIGNED_OUT_JAR
+      page.identity = SIGNED_OUT_ANSWER
+      const cleared = vi.fn()
+      onCodexWebSessionCleared(cleared)
+      let settled: { phase: string; error?: string } | null = null
+      void runCodexWebSignIn({ accountId: ACCT, timeoutMs: 5 * 60_000, pollMs: 1500 }).then((s) => { settled = s })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(created).toHaveLength(1)
+      expect(signInInFlightElsewhere('claude')).toBe(true)
+      expect(clears).toEqual([])
+      // The page never finishes loading, and the user closes the window meanwhile.
+      expect(created[0].requestClose()).toBe(false)
+      expect(created[0].hidden).toBe(true)
+      await vi.advanceTimersByTimeAsync(1500)
+      expect(settled, 'ended within one poll, not after the 10 s load bound').toMatchObject({ phase: 'failed', error: expect.stringMatching(/closed before sign-in completed/) })
+      expect(created[0].destroyed).toBe(true)
+      expect(events.indexOf('window destroyed')).toBeLessThan(events.indexOf('clear storage'))
+      expect(clears).toContainEqual({ partition: PART, what: 'storage' })
+      expect(cleared).toHaveBeenCalledWith(ACCT)
+      expect(signInInFlightElsewhere('claude')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a close while the first page load has not settled still finishes a sign-in already in the jar, without waiting for that load', async () => {
+    vi.useFakeTimers()
+    try {
+      // The main frame is done, but the load's own answer never comes (a page
+      // that keeps a request open).
+      hangLoad = true
+      jars[PART] = SIGNED_IN_JAR
+      page.identity = IDENTITY
+      let settled: { ok: boolean; email?: string } | null = null
+      void runServiceSignIn(RUN({ timeoutMs: 60_000, pollMs: 1500 })).then((r) => { settled = r })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(created[0].requestClose()).toBe(false)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(settled).toMatchObject({ ok: true, email: 'me@example.com' })
+      expect(created[0].destroyed).toBe(true)
     } finally {
       vi.useRealTimers()
     }
@@ -1459,7 +1632,7 @@ describe('[host] a sign-in window the user closes after signing in still finishe
     }
   })
 
-  it('the finish is bounded when the identity read hangs: destroyed and wiped within the finish plus one bounded read', async () => {
+  it('with only the identity read hanging, the finish is a hard stop too: the hidden window goes at 12 s, not after one more bounded read', async () => {
     vi.useFakeTimers()
     try {
       jars[PART] = SIGNED_IN_JAR
@@ -1469,8 +1642,10 @@ describe('[host] a sign-in window the user closes after signing in still finishe
       void runCodexWebSignIn({ accountId: ACCT, timeoutMs: 5 * 60_000, pollMs: 1500 }).then((s) => { settled = s })
       await vi.advanceTimersByTimeAsync(2000)
       expect(created[0].requestClose()).toBe(false)
-      // 12 s of finishing, one identity read bounded at 10 s, one poll.
-      await vi.advanceTimersByTimeAsync(12_000 + 10_000 + 1_500 + 500)
+      await vi.advanceTimersByTimeAsync(12_000 - 50)
+      expect(settled).toBeNull()
+      expect(created[0].destroyed).toBe(false)
+      await vi.advanceTimersByTimeAsync(100)
       expect(settled).toMatchObject({ phase: 'failed', error: expect.stringMatching(/closed before sign-in completed/) })
       expect(created[0].destroyed).toBe(true)
       expect(clears).toContainEqual({ partition: PART, what: 'storage' })

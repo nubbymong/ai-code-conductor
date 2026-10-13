@@ -4,6 +4,7 @@
 // detection is now discrete hook events, so leaving/returning to a session does
 // nothing on its own.
 import { getGateway } from './hooks/index'
+import { setRemoteAttentionSink, REMOTE_ATTENTION_NOTIFICATIONS, REMOTE_ATTENTION_CLEAR_EVENTS } from './ssh-attention'
 import { pushAttention } from './ipc/channel-handlers'
 import { emitInternal } from './internal-events'
 import { codexIdleMarks, codexPendingApprovals, codexOpenCalls, clearCodexIdleAttention, _clearAllCodexIdleAttentionForTest } from './codex-idle-attention'
@@ -14,28 +15,15 @@ import type { HookEvent } from '../shared/hook-types'
 // its resources (an exit, a Restart, a Switch).
 export { clearCodexIdleAttention }
 
-// Notification types that mean "Claude is blocked waiting on the USER" — each
-// should raise the sidebar attention pulse (#274). The original set was just the
-// idle + permission prompts, but Claude Code has since added more user-blocking
-// notifications, and a session sitting on ANY of them is the same user-facing
-// state: it waits, silently, until the user acts.
-//   - permission_prompt      a tool use is awaiting the user's Yes/No
-//   - idle_prompt            Claude finished ~60s ago; awaiting the next prompt
-//   - agent_needs_input      a (sub)agent escalated a decision to the user — the
-//                            case #274 calls out, where a subagent can't self-
-//                            approve a command and hands it up
-//   - elicitation_dialog     an MCP tool is asking the user a structured question
-//   - elicitation_url_dialog ...via a URL / OAuth-style prompt
-// Informational notifications (auth_success, agent_completed, elicitation_complete,
-// elicitation_response) are NOT here: they don't block the user, so they neither
-// raise nor clear — an unknown type is ignored rather than spuriously pulsing.
-const ATTENTION_NOTIFICATIONS: ReadonlySet<string> = new Set([
-  'permission_prompt',
-  'idle_prompt',
-  'agent_needs_input',
-  'elicitation_dialog',
-  'elicitation_url_dialog',
-])
+// Notification types that mean "Claude is blocked waiting on the USER" -- each
+// raises the sidebar attention pulse (#274) -- and the events that clear it.
+// Both are built from the ONE list in ssh-attention.ts (what each type means is
+// written there), which the remote SSH hook is built from too, so a local and a
+// remote session act on exactly the same types and events (aicc_planning#93).
+// Add a new type THERE, not here. An unknown type is ignored rather than
+// spuriously pulsing. Exported for the test that pins the two together.
+export const ATTENTION_NOTIFICATIONS: ReadonlySet<string> = new Set(REMOTE_ATTENTION_NOTIFICATIONS)
+export const ATTENTION_CLEAR_EVENTS: ReadonlySet<string> = new Set(REMOTE_ATTENTION_CLEAR_EVENTS)
 
 // true = raise the flasher, false = clear it, null = ignore this event.
 export function attentionForEvent(e: HookEvent): boolean | null {
@@ -43,7 +31,7 @@ export function attentionForEvent(e: HookEvent): boolean | null {
     const t = (e.payload as { notification_type?: string }).notification_type
     return typeof t === 'string' && ATTENTION_NOTIFICATIONS.has(t) ? true : null
   }
-  if (e.event === 'UserPromptSubmit' || e.event === 'PreToolUse' || e.event === 'PostToolUse') return false
+  if (ATTENTION_CLEAR_EVENTS.has(e.event)) return false
   return null
 }
 
@@ -234,6 +222,7 @@ export function routeAttentionEvent(e: HookEvent, opts: AttentionSourceOptions =
 /** Test seam: drop every pending idle mark and approval, and allow a fresh start. */
 export function _resetAttentionSourceForTest(): void {
   _clearAllCodexIdleAttentionForTest()
+  setRemoteAttentionSink(null)
   started = false
 }
 
@@ -241,6 +230,10 @@ let started = false
 export function startAttentionSource(opts: AttentionSourceOptions = {}): void {
   if (started) return
   started = true
+  // aicc_planning#93: an SSH session's attention events come over its own
+  // terminal, not through the gateway (ssh-attention.ts), and are routed
+  // exactly as the gateway's are. Registered whether or not a gateway exists.
+  setRemoteAttentionSink((e) => routeAttentionEvent(e, opts))
   const gw = getGateway()
   if (!gw) return
   gw.subscribe((e) => routeAttentionEvent(e, opts))

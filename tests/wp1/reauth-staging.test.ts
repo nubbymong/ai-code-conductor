@@ -438,6 +438,21 @@ describe('signing in again while signed in, through the service (WP1.52)', () =>
     expect(h.doc().journals).toEqual([])
   })
 
+  it('a replacement folder the owner-only rule refuses (2.1.1-beta.3, O6): nothing changes, the dialog keeps its general words, and the log says the code', async () => {
+    let refuse = false
+    const h = await harness({ secureFolders: async (dirs) => dirs.map((dir) => ({ dir, ok: !refuse, detail: refuse ? 'its owner is not this user' : 'owner-only' })) })
+    const a = await addCodexAccount(h, 'A')
+    const before = realmIdOf(h, a)
+    const runs = h.runs.length
+    refuse = true
+    expect(await h.service.signInAgain({ sameAccount: true, accountId: a, method: 'browser' }, 1)).toMatchObject({ ok: false, code: 'permissions', message: 'The account folder could not be prepared.' })
+    expect(realmIdOf(h, a)).toBe(before)
+    expect(h.doc().journals).toEqual([])
+    expect(h.runs.slice(runs).filter((r) => r.args.startsWith('login') && r.args !== 'login status')).toEqual([])
+    const mine = h.logs.filter((l) => l.includes('could not be prepared'))
+    expect(mine).toEqual(["[accounts] a sign in again for a codex account stopped: the new sign-in's folder could not be prepared (permissions)"])
+  })
+
   it('runs in a new realm and switches the same account to it; the old sign-in is kept, visible, while removing it is not proven safe (S1)', async () => {
     const h = await harness()
     const a = await addCodexAccount(h, 'A')
@@ -1119,7 +1134,7 @@ describe('signing in again while signed in, through the service (WP1.52)', () =>
     expect(k.service.snapshot().pendingSetups).toEqual([])
   })
 
-  it('an account being signed in again says so in its row\'s view while it runs: staged, and this computer\'s in place (P3.3 VM round, V3)', async () => {
+  it('an account being signed in again says so in its row\'s view while it runs; this computer\'s own is never signed in again (P3.3 VM round, V3; O5)', async () => {
     const seen: Array<{ id: string; signingIn: unknown }> = []
     const h = await harness({ script: { login: (r) => {
       for (const x of h.service.snapshot().accounts) seen.push({ id: x.id, signingIn: x.signingIn })
@@ -1132,8 +1147,8 @@ describe('signing in again while signed in, through the service (WP1.52)', () =>
     expect(await h.service.signInAgain({ sameAccount: true, accountId: a, method: 'browser' }, 1)).toEqual({ ok: true, state: 'signed-in' })
     expect(seen).toEqual(expect.arrayContaining([{ id: a, signingIn: true }, { id: ext, signingIn: undefined }]))
     seen.length = 0
-    expect(await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).toEqual({ ok: true, state: 'signed-in' })
-    expect(seen).toEqual(expect.arrayContaining([{ id: ext, signingIn: true }, { id: a, signingIn: undefined }]))
+    expect(await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).toMatchObject({ ok: false, code: 'unsupported' })
+    expect(seen).toEqual([])
     // Ended: nothing says it any more.
     expect(h.service.snapshot().accounts.filter((x) => x.signingIn !== undefined)).toEqual([])
   })
@@ -1194,7 +1209,7 @@ describe('signing in again while signed in, through the service (WP1.52)', () =>
     expect(findAccount(k.doc(), b)).toMatchObject({ lastKnownAuthState: 'signed-in', operationalState: 'ready' })
   })
 
-  it('a sign-out that ran, whose read-back then could not start or found the CLI changed, leaves the account needing a check: a sign-out, this computer\'s sign in again, an archive (review round 3, C3)', async () => {
+  it('a sign-out that ran, whose read-back then could not start or found the CLI changed, leaves the account needing a check: a sign-out, an archive; this computer\'s sign in again is refused before anything runs (O5)', async () => {
     for (const how of ['read-back not started', 'CLI replaced'] as const) {
       const mk = async () => {
         let after = false
@@ -1219,9 +1234,11 @@ describe('signing in again while signed in, through the service (WP1.52)', () =>
       expect(findAccount(h.doc(), a), how).toMatchObject({ lastKnownAuthState: 'unknown', operationalState: 'attention' })
       const k = await mk()
       const ext = await withExternalHome(k)
-      expect((await k.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).ok, how).toBe(false)
-      expect(k.signedIn.has(EXT_HOME.toLowerCase()), how).toBe(false)
-      expect(findAccount(k.doc(), ext), how).toMatchObject({ lastKnownAuthState: 'unknown', operationalState: 'attention' })
+      const kRuns = k.runs.length
+      expect(await k.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1), how).toMatchObject({ ok: false, code: 'unsupported' })
+      expect(k.runs.length, how).toBe(kRuns)
+      expect(k.signedIn.has(EXT_HOME.toLowerCase()), how).toBe(true)
+      expect(findAccount(k.doc(), ext), how).toMatchObject({ lastKnownAuthState: 'signed-in', operationalState: 'ready' })
       const m = await mk()
       const b = await addCodexAccount(m, 'B')
       expect(await m.service.setLifecycle({ accountId: b, lifecycle: 'inactive' }), how).toEqual({ ok: true })
@@ -1419,67 +1436,67 @@ describe('signing in again while signed in, through the service (WP1.52)', () =>
   })
 })
 
-describe('this computer\'s own sign-in, signed in again in place (design 9.2, last paragraph; review round 1, S2)', () => {
-  it('only with the user\'s acknowledgement, and never while anything uses it', async () => {
+// O5 (2.1.1-beta.3, owner decision 2026-10-11; #196): this computer's own
+// sign-in is retired, so it is never signed in again here. Until beta.3 it
+// was signed in again in place after an acknowledgement, which ran the
+// provider's logout in that home first, for every app using it, and could
+// leave it signed out when the login then did not start (#196 point 3).
+describe('this computer\'s own sign-in is never signed in again (O5, #196)', () => {
+  const RETIRED_AGAIN = 'This app no longer uses the Codex sign-in already on this computer, so it is not signed in again here. Add a Codex account in Settings, Accounts instead.'
+
+  it('is refused first, with or without the acknowledgement, and nothing runs: no check, no sign-out, no login', async () => {
     const h = await harness()
     const ext = await withExternalHome(h)
+    const doc = JSON.stringify(h.doc())
     const runs = h.runs.length
-    expect(await h.service.signInAgain({ sameAccount: true, accountId: ext, method: 'browser' }, 1)).toMatchObject({ ok: false, code: 'acknowledgement-required' })
-    expect((await h.service.acquireLaunchLease({ kind: 'session', providerId: 'codex', providerAccountId: ext, ownerId: 's1', acknowledgeRealmOnly: true })).ok).toBe(true)
-    expect(await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).toMatchObject({ ok: false, code: 'consumers', consumers: 1 })
+    for (const ack of [undefined, true, false] as const) {
+      for (const method of ['browser', 'device'] as const) {
+        expect(await h.service.signInAgain({ sameAccount: true, accountId: ext, method, ...(ack === undefined ? {} : { acknowledgeExternal: ack }) }, 1), `${method} ${ack}`)
+          .toEqual({ ok: false, code: 'unsupported', message: RETIRED_AGAIN })
+      }
+    }
     expect(h.runs.length).toBe(runs)
+    expect(h.runs.slice(runs).map((r) => r.args)).not.toContain('logout')
     expect(h.signedIn.get(EXT_HOME.toLowerCase())).toBe('chatgpt')
-  })
-
-  it('checks the home, signs it out, signs in again there, and keeps it this computer\'s own (unverified)', async () => {
-    const h = await harness()
-    const ext = await withExternalHome(h)
-    const runs = h.runs.length
-    expect(await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).toEqual({ ok: true, state: 'signed-in' })
-    const here = h.runs.slice(runs).filter((r) => r.home.toLowerCase() === EXT_HOME.toLowerCase()).map((r) => r.args)
-    expect(here[0]).toBe('login status')
-    expect(here.indexOf('logout')).toBeLessThan(here.indexOf('login'))
-    expect(h.signedIn.get(EXT_HOME.toLowerCase())).toBe('chatgpt')
-    expect(findAccount(h.doc(), ext)).toMatchObject({ identityAssurance: 'realm-only', lastKnownAuthState: 'signed-in', operationalState: 'ready', authRealmId: realmIdOf(h, ext) })
-    // Never staged: no new realm, no journal.
+    expect(JSON.stringify(h.doc())).toBe(doc)
     expect(h.doc().journals).toEqual([])
-    expect(h.doc().realms.filter((r) => r.ownerProviderAccountId === ext)).toHaveLength(1)
   })
 
-  it('a sign-in that fails or is cancelled leaves it signed out, needing attention', async () => {
-    const h = await harness({ script: { login: (r) => (r.home.toLowerCase() === EXT_HOME.toLowerCase() ? { exitCode: 1, stderr: 'Login failed' + NL } : (h.signedIn.set(r.home.toLowerCase(), 'chatgpt'), { exitCode: 0, stdout: 'Successfully logged in' + NL })) } })
-    const ext = await withExternalHome(h)
-    expect((await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).ok).toBe(false)
-    expect(h.signedIn.has(EXT_HOME.toLowerCase())).toBe(false)
-    expect(findAccount(h.doc(), ext)).toMatchObject({ lastKnownAuthState: 'signed-out', operationalState: 'attention' })
-  })
-
-  it('a home that now holds another kind of sign-in is not touched: blocked until reconciled', async () => {
+  it('is refused the same while anything uses it, signed out, expired or blocked: never a logout in that home', async () => {
     const h = await harness()
     const ext = await withExternalHome(h)
-    h.signedIn.set(EXT_HOME.toLowerCase(), 'api-key')
+    expect((await h.service.acquireLaunchLease({ kind: 'session', providerId: 'codex', providerAccountId: ext, ownerId: 's1', acknowledgeRealmOnly: true })).ok).toBe(true)
     const runs = h.runs.length
-    expect(await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).toMatchObject({ ok: false, code: 'sign-in-changed' })
-    expect(h.runs.slice(runs).map((r) => r.args)).toEqual(['login status'])
+    expect(await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).toEqual({ ok: false, code: 'unsupported', message: RETIRED_AGAIN })
+    h.signedIn.delete(EXT_HOME.toLowerCase())
+    expect(await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).toEqual({ ok: false, code: 'unsupported', message: RETIRED_AGAIN })
+    h.signedIn.set(EXT_HOME.toLowerCase(), 'api-key')
+    expect(await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).toEqual({ ok: false, code: 'unsupported', message: RETIRED_AGAIN })
+    expect(h.runs.slice(runs).map((r) => r.args)).toEqual([])
     expect(h.signedIn.get(EXT_HOME.toLowerCase())).toBe('api-key')
   })
 
-  it('a sign-out there whose result could not be read back leaves it needing a check, never "signed in, ready" (review round 2, L2-1)', async () => {
-    let odd = false
-    const h = await harness({ script: {
-      'logout': (r) => { h.signedIn.delete(r.home.toLowerCase()); if (r.home.toLowerCase() === EXT_HOME.toLowerCase()) odd = true; return { exitCode: 0, stdout: 'Successfully logged out' + NL } },
-      'login status': (r) => {
-        if (odd && r.home.toLowerCase() === EXT_HOME.toLowerCase()) return { exitCode: 2, stderr: 'error: something odd' + NL }
-        return h.signedIn.has(r.home.toLowerCase()) ? { exitCode: 0, stderr: 'Logged in using ChatGPT' + NL } : { exitCode: 1, stderr: 'Not logged in' + NL }
-      },
-    } })
+  it('a key handle sent with it is burned, never used', async () => {
+    const h = await harness()
     const ext = await withExternalHome(h)
-    expect((await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).ok).toBe(false)
-    expect(h.signedIn.has(EXT_HOME.toLowerCase())).toBe(false)
-    expect(findAccount(h.doc(), ext)).toMatchObject({ lastKnownAuthState: 'unknown', operationalState: 'attention' })
+    // No handle can be issued for it in the first place.
+    expect(h.service.issueSecretHandle({ accountId: ext }, 1)).toMatchObject({ ok: false, code: 'unsupported' })
+    // A real handle, with a key deposited (issued for a managed account),
+    // sent with a sign in again of this computer's own sign-in: refused, and
+    // the handle is discarded with the refusal, so it cannot sign in even
+    // the account it was issued for afterwards.
+    const a = await addCodexAccount(h, 'A', 'apiKey')
+    const issued = h.service.issueSecretHandle({ accountId: a }, 1)
+    if (!issued.ok) throw new Error(issued.code)
+    h.service.depositSecret(issued.handle, 1, KEY)
+    const runs = h.runs.length
+    expect(await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'apiKey', secretHandle: issued.handle }, 1)).toEqual({ ok: false, code: 'unsupported', message: RETIRED_AGAIN })
+    expect(h.runs.length).toBe(runs)
+    expect(await h.service.signInAgain({ sameAccount: true, accountId: a, method: 'apiKey', secretHandle: issued.handle }, 1)).toMatchObject({ ok: false, code: 'secret-unavailable' })
+    expect(h.runs.slice(runs).map((r) => r.args)).not.toContain('login --with-api-key')
   })
 
-  it('the login port refuses this computer\'s own home without the acknowledgement', async () => {
+  it('the login port still refuses this computer\'s own home without the acknowledgement', async () => {
     const h = await harness()
     const ext = await withExternalHome(h)
     h.signedIn.delete(EXT_HOME.toLowerCase())

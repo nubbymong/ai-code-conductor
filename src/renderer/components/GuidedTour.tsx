@@ -22,8 +22,10 @@ function assistantsInUse(only: OnlyAssistant): string {
 }
 
 /** Where a saved config's sessions run. Codex runs on this computer only in
- *  this release, and SSH (plain or persistent) is for Claude. */
-const SSH_KINDS = 'over SSH — plain, or persistent so a dropped link does not kill it'
+ *  this release, and SSH (either kind) is for Claude. It names the two kinds
+ *  by what a dropped link does, as the session dialog's cards do: "plain" read
+ *  as "no AI", the word Terminal only uses (aicc_planning#88). */
+const SSH_KINDS = 'over SSH, where a session ends if the link drops unless you choose SSH Persistent'
 function whereSessionsRun(only: OnlyAssistant): string {
   if (only === 'codex') return 'Codex, on this computer'
   if (only === 'claude') return `Claude, here or on another machine ${SSH_KINDS}`

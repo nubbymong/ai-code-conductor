@@ -24,12 +24,20 @@ vi.mock('../../../../src/main/config-manager', () => ({
   getConfigDir: () => '/cfg',
 }))
 vi.mock('../../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
+// The picker's node: the login shell names none here (execSync throws), so
+// the launch's own synthetic PATH (/usr/bin) must hold it (pickerNodeFor,
+// 2.1.1-beta.3): answered here, never by this machine's disk.
+vi.mock('../../../../src/main/login-shell', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/login-shell')>()
+  return { ...actual, findOnPosixPath: (name: string, pathValue: string) => (name === 'node' && pathValue.split(':').includes('/usr/bin') ? '/usr/bin/node' : null) }
+})
 vi.mock('../../../../src/main/providers/codex/rollout-lookup', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../../src/main/providers/codex/rollout-lookup')>()
   return { ...actual, resolveCodexResume: () => (globalThis as any).__ceilResume ?? null }
 })
 
 const { buildCodexSpawn } = await import('../../../../src/main/providers/codex/spawn')
+const { __markScriptFoldersCheckedForTests } = await import('../../../../src/main/script-folders')
 
 const ID = '019dd000-0001-7000-8000-0000000000c1'
 const STANDARD = { model: 'gpt-5.5', permissionsPreset: 'standard' as const }
@@ -56,8 +64,10 @@ async function withPicker<T>(fn: () => T): Promise<T> {
   const os = await vi.importActual<typeof import('os')>('os')
   const res = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-ask-ceiling-'))
   try {
-    fs.mkdirSync(path.join(res, 'scripts'), { recursive: true })
-    fs.writeFileSync(path.join(res, 'scripts', 'codex-resume-picker.js'), '// stub')
+    fs.mkdirSync(path.join(res, 'scripts'), { recursive: true, mode: 0o700 })
+    fs.writeFileSync(path.join(res, 'scripts', 'codex-resume-picker.js'), '// stub', { mode: 0o600 })
+    // As the start does before a launch: the scripts folder made the user's alone.
+    __markScriptFoldersCheckedForTests(res)
     ;(globalThis as any).__ceilResDir = res
     const out = fn() as { pickFile?: string }
     const pickDir = out.pickFile ? path.dirname(out.pickFile) : null

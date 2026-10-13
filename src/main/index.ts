@@ -38,7 +38,8 @@ import { disableDebugMode } from './debug-capture'
 import { registerUpdateHandlers } from './ipc/update-handlers'
 import { adoptRenamedRepoIfLive } from './github-update'
 import { installClientCertificatePolicy } from './client-certificate'
-import { registerSetupHandlers, getResourcesDirectory, getDataDirectory } from './ipc/setup-handlers'
+import { focusExistingWindow } from './second-instance'
+import { registerSetupHandlers, getResourcesDirectory, getDataDirectory, killCliSetupPty } from './ipc/setup-handlers'
 // Direct from data-paths, not the handlers barrel: this runs at module scope
 // before app-ready, so it must not pull the IPC registration side of that module
 // in ahead of time.
@@ -60,7 +61,8 @@ import { registerVisionHandlers } from './ipc/vision-handlers'
 import { registerConfigHandlers } from './ipc/config-handlers'
 import { registerAccountProfilesHandlers } from './ipc/account-profiles-handlers'
 import { migrateProfilesToHomeLayout, cleanupSessionHomes, syncPrimaryCredentialsWithGlobal, repairSharedProjectJunctions, startOwnerOnlyCredentialFolders, getProfilesRoot, getProfileConfigDir, isValidProfileId } from './account-profiles'
-import { secureOwnerOnlyFolders } from './owner-only-folders'
+import { secureOwnerOnlyFolders, secureScriptFoldersRule } from './owner-only-folders'
+import { secureScriptFolders, scriptFoldersDeployed } from './script-folders'
 import { startCodexHookFolders, codexHookFoldersSettingsChanged } from './codex-hook-folders'
 import { startCodexUserSkills, codexUserSkillsSettingsChanged } from './canvas/codex-user-skills'
 import { runFirstRunCapture } from './first-run-accounts'
@@ -422,10 +424,9 @@ if (!gotTheLock) {
 } else {
   if (!isDev) {
     app.on('second-instance', () => {
-      if (mainWindow) {
-        if (mainWindow.isMinimized()) mainWindow.restore()
-        mainWindow.focus()
-      }
+      // The window may be gone already (closed, the app still finishing):
+      // focusExistingWindow then does nothing rather than throw.
+      focusExistingWindow(mainWindow)
     })
   }
 
@@ -554,13 +555,24 @@ if (!gotTheLock) {
     // outside CCC gets its native line back. Best-effort, never blocks boot.
     try { healGlobalStatusline() } catch (err) { console.warn('[main] healGlobalStatusline failed:', err) }
 
-    // Deploy the statusline script to the resources dir (per-session command +
-    // SSH mounts). Fire-and-forget; no downstream consumers here.
+    // Make the resources folder's scripts folders this user's alone (the
+    // owner-only rule, asynchronously: script-folders.ts), then deploy into
+    // them the statusline script (per-session command), both resume pickers
+    // and the Codex hook forwarder; a launch takes a script from them only
+    // once all of that ran, and only from a folder the rule passed. Each step
+    // has its own catch, so one that fails cannot skip the steps after it (a
+    // failing Claude picker deploy never leaves the Codex scripts missing or
+    // stale).
     Promise.resolve()
+      .then(() => secureScriptFolders(getResourcesDirectory(), secureScriptFoldersRule))
+      .catch((err) => console.warn('[main] Failed to check the scripts folders:', err))
       .then(() => getProvider('claude').deployStatuslineScript?.(getResourcesDirectory()))
+      .catch((err) => console.warn('[main] Failed to deploy the statusline script:', err))
       .then(() => getProvider('claude').deployResumePickerScript?.(getResourcesDirectory()))
+      .catch((err) => console.warn('[main] Failed to deploy the Claude resume picker:', err))
       .then(() => getProvider('codex').deployResumePickerScript?.(getResourcesDirectory()))
-      .catch((err) => console.warn('[main] Failed to deploy provider scripts:', err))
+      .catch((err) => console.warn('[main] Failed to deploy the Codex resume picker and hook scripts:', err))
+      .then(() => scriptFoldersDeployed())
       // P3.10 round 4 (P1): the folders the Codex hooks use, made this user's
       // alone by the owner-only rule (one asynchronous call), only while Codex
       // is on: after first paint, again when it is switched on, and before a
@@ -950,14 +962,16 @@ if (!gotTheLock) {
     // Both ends are injected here so the canvas IPC module needs no static
     // import of pty-manager or the gateway (see canvas-marker-delivery.ts).
     startCanvasMarkerQueue({
-      // A Claude session's marker: the same submit shape every other
-      // programmatic line into the Claude TUI uses (the watchdog retry, the
-      // command buttons, the launch line). WP2 PR 4, P4.1: a Codex session's
-      // goes through the submit primitive (writeCanvasMarkerLine), which
-      // answers later whether it was delivered.
-      write: (sessionId, line) => writeCanvasMarkerLine(sessionId, line),
-      // P4.1: a Codex marker the primitive did not deliver is shown on the
-      // canvas, on the review it belongs to.
+      // A Claude session's marker is held and typed only at Claude Code's
+      // ready, empty prompt, read from the session's own screen
+      // (writeCanvasMarkerLine). WP2 PR 4, P4.1: a Codex session's
+      // goes through the submit primitive, which answers later whether it was
+      // delivered.
+      write: (sessionId, line, canvasId) => writeCanvasMarkerLine(sessionId, line, canvasId),
+      // P4.1: a Codex marker the primitive did not deliver, a Claude marker
+      // dropped untyped (held past its bound, its run ended, or refused), or
+      // a marker the queue held when its session ended or restarted, is
+      // shown on the canvas, on the review it belongs to.
       onUndelivered: (u) => {
         const w = getWindow()
         if (w && !w.isDestroyed()) w.webContents.send(IPC.CANVAS_AGENT_MARKER_UNDELIVERED, u)
@@ -1165,6 +1179,12 @@ try { getWatchdogManager()?.disposeAll() } catch { /* never init */ }
     killSpawnedBrowser()
     stopConductorMcpServer()
     killAllAgents()
+    // The first-run Claude Code setup terminal is main's own, outside
+    // pty-manager, so killAllPty does not reach it. Only the setup screen's
+    // own ways out used to stop it; Alt+F4, the taskbar and Cmd+Q now do too.
+    // Safe when none runs, and after the screen already stopped it. It cannot
+    // throw, and runs before killAllPty so a throw there cannot skip it.
+    killCliSetupPty()
     killAllPty()
     closeAllWebviews()
     closeAllAccountPanes()
@@ -1182,8 +1202,14 @@ try { getWatchdogManager()?.disposeAll() } catch { /* never init */ }
   app.on('window-all-closed', () => {
     // On macOS, apps conventionally stay running when all windows are closed
     // (the user quits via Cmd+Q or the app menu) -- but not their PTYs: rc.15
-    // review R6, see onAllWindowsClosed.
-    onAllWindowsClosed({ platform: process.platform, quit: () => app.quit(), endStragglerPtys: killAllPty })
+    // review R6, see onAllWindowsClosed. The setup terminal is one of them
+    // (a setup screen closed with the red button), ended first so a throw in
+    // killAllPty cannot skip it.
+    onAllWindowsClosed({
+      platform: process.platform,
+      quit: () => app.quit(),
+      endStragglerPtys: () => { killCliSetupPty(); killAllPty() },
+    })
   })
 
   // On macOS, re-create the window when the dock icon is clicked and no windows exist

@@ -199,12 +199,15 @@ describe('New agent: a Codex agent', () => {
     expect(byTest('new-agent-codex-blocked')!.textContent).toBe(CONFIRM_SIGN_IN)
     const ack = byTest<HTMLInputElement>('new-agent-codex-ack')!
     expect(ack.closest('label')!.textContent).toBe('Run this agent with the Codex sign-in already on this computer (alex@example.com)')
+    // O5 (owner decision 2026-10-11): that sign-in is being retired, and the confirmation says so.
+    expect(byTest('new-agent-codex-ack-retiring')!.textContent).toBe('This sign-in is being retired: in Settings, Accounts, add a Codex account, make it the default, then make this one inactive and archive it.')
     act(() => { ack.click() })
     expect(byTest('new-agent-dispatch')!.disabled).toBe(false)
     // The tick belongs to the account it was given for: another account
     // neither needs nor carries it.
     setValue(q<HTMLSelectElement>('#new-agent-codex-account-select')!, 'acc-personal')
     expect(byTest('new-agent-codex-ack')).toBeNull()
+    expect(byTest('new-agent-codex-ack-retiring')).toBeNull()
     expect(byTest('new-agent-dispatch')!.disabled).toBe(false)
     setValue(q<HTMLSelectElement>('#new-agent-codex-account-select')!, local.id)
     expect(byTest<HTMLInputElement>('new-agent-codex-ack')!.checked).toBe(true)

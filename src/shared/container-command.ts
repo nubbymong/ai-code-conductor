@@ -259,9 +259,10 @@ export function parseDockerPostCommand(postCommand: string): SshRuntime | null {
 /**
  * The session id as every per-session remote file name carries it: each
  * character outside [A-Za-z0-9_-] becomes `_` (the rule ssh-shim.ts applies
- * when it writes `settings-<id>.json`, `mcp-<id>.json` and
- * `ccc-status-<id>.url`). The one copy of that rule the in-container stop
- * script below uses, so the kill pattern and the file names cannot disagree.
+ * when it writes `settings-<id>.json`, `mcp-<id>.json`, `ccc-status-<id>.url`
+ * and the attention files `ccc-attn-<id>.key` and `ccc-attn-<id>.up`). The
+ * one copy of that rule the in-container stop script below uses, so the kill
+ * pattern and the file names cannot disagree.
  */
 function containerSafeSessionId(sessionId: string): string {
   return sessionId.replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -281,7 +282,8 @@ export function containerSessionKillPattern(sessionId: string): string {
 
 /**
  * The script that stops ONE session inside its container, run there under
- * `sh -c`: remove the session's three files, then `exec pkill` the anchored
+ * `sh -c`: remove the session's files (its settings, MCP config and status
+ * URL, and the attention hook's key and marker), then `exec pkill` the anchored
  * pattern above. The ONE builder for it: the End path's in-container kill
  * (buildContainerKillCommand, ssh-shim.ts) and the command the End notice
  * shows (manualContainerStopCommand) both embed this, so the two cannot
@@ -295,7 +297,7 @@ export function containerSessionKillPattern(sessionId: string): string {
  */
 export function containerSessionStopScript(sessionId: string): string {
   const sid = containerSafeSessionId(sessionId)
-  return `rm -f ~/.claude/settings-${sid}.json ~/.claude/mcp-${sid}.json ~/.claude/ccc-status-${sid}.url 2>/dev/null; exec pkill -f "${containerSessionKillPattern(sessionId)}"`
+  return `rm -f ~/.claude/settings-${sid}.json ~/.claude/mcp-${sid}.json ~/.claude/ccc-status-${sid}.url ~/.claude/ccc-attn-${sid}.key ~/.claude/ccc-attn-${sid}.up 2>/dev/null; exec pkill -f "${containerSessionKillPattern(sessionId)}"`
 }
 
 /**

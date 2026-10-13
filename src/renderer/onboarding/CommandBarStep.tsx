@@ -24,7 +24,7 @@ const ROWS: { heading: string; items: Item[] }[] = [
   {
     heading: 'What it now tells you',
     items: [
-      { title: 'Where a button runs.', desc: 'A small mark before each cluster: the agent, the partner shell, the browser — and "this PC" on an SSH session.' },
+      { title: 'Where a button runs.', desc: 'A small mark before each cluster: the agent, the partner shell, the browser. Hover a mark to see where it runs.' },
       { title: 'Which agent.', desc: 'A Codex session says Codex; a terminal-only session hides what it cannot do and dims Logs with the reason.' },
       { title: 'What does not fit.', desc: 'Folds into "N more" per band — Global first, Session last, pinned never. Or pick two rows in Settings.' },
     ],

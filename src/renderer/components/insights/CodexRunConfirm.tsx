@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import type { InsightsAccountChoice } from './insightsAccounts'
+import { externalSignInRetiring } from '../../stores/providerAccountsStore'
 
 export interface CodexRunConfirmProps {
   /** The account the run is for: its wording depends on whether it is this
@@ -63,6 +64,9 @@ export default function CodexRunConfirm({ choice, onRun, onCancel, trigger }: Co
             : 'Run this report with this account although its sign-in is not verified'}
         </span>
       </label>
+      {choice.external && (
+        <p className="mt-1.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }} data-testid="insights-codex-ack-retiring">{externalSignInRetiring({ displayName: 'Codex' })}</p>
+      )}
       <div className="flex justify-end gap-1.5 mt-2.5">
         <button
           onClick={onRun}

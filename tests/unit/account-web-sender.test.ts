@@ -70,6 +70,7 @@ const acted = vi.hoisted(() => ({
 vi.mock('../../src/main/account-web/sign-in', () => ({
   runSignIn: acted.runSignIn, cancelSignIn: acted.cancelSignIn, clearWebSession: acted.clearWebSession,
   getSignInState: acted.getSignInState, detectAuthBrowsers: acted.detectAuthBrowsers, discardSignInRun: vi.fn(),
+  isClaudeWebClearing: vi.fn(() => false),
 }))
 vi.mock('../../src/main/account-web/artifacts', () => ({ openArtifacts: acted.openArtifacts, closeArtifacts: acted.closeArtifacts }))
 vi.mock('../../src/main/account-web/claude-cli-auth', () => ({ readClaudeCliAuth: acted.readClaudeCliAuth, claudeAuthCommand: acted.claudeAuthCommand }))
@@ -77,6 +78,7 @@ vi.mock('../../src/main/account-web/session-store', () => ({
   viewFor: acted.viewFor, saveWebSession: acted.saveWebSession, removeWebSession: acted.removeWebSession,
   setAuthMethod: acted.setAuthMethod, setAuthBrowser: acted.setAuthBrowser, setWebSignInMode: acted.setWebSignInMode,
   getAuthMethod: acted.getAuthMethod, getAuthBrowser: acted.getAuthBrowser, getWebSignInMode: acted.getWebSignInMode,
+  getWebSession: vi.fn(() => undefined), refreshWebSessionExpiry: vi.fn(() => false),
   claudeWebStoreIsNewer: () => false, NEWER_WEB_STORE_REASON: 'written by a newer version of the app',
 }))
 vi.mock('../../src/main/account-web/account-pane', () => ({

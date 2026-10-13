@@ -14,6 +14,11 @@ type Choice = 'yes' | 'no'
 /** Why No cannot be chosen when Claude Code is off: said once, on the card. */
 export const NO_NEEDS_CLAUDE = 'Claude Code is off, and one assistant always stays on.'
 
+/** What moving to accounts in the app costs a 2.1.0 Codex user, said plainly
+ *  on the page every one of them answers (O5): their Codex sign-in was the
+ *  Codex CLI's own, which this app no longer uses. */
+export const EARLIER_CODEX_NOTE = "Used Codex here before? You sign in once more, in this app. The Codex CLI's own sign-in is left as it is, and your earlier Codex conversations stay with the Codex CLI: this app does not resume them."
+
 /**
  * "Do you use Codex?" (owner decisions 2026-09-26, approved mockup
  * .ccc-canvas/upgrade-codex-confirm.html, screen 1): the one-time page every
@@ -22,8 +27,8 @@ export const NO_NEEDS_CLAUDE = 'Claude Code is off, and one assistant always sta
  *
  *   - Yes: Codex is recorded on (and answered), then App hands the user to
  *     the Set up Codex page (the harness's CodexSetupStep, screen 2), then
- *     the app. The sign-in already on this computer is used only if they
- *     choose "Use this sign-in" there.
+ *     the app. There they sign in to a Codex account in this app: the sign-in
+ *     already on this computer is never used (O5, owner decision 2026-10-11).
  *   - No: Codex is recorded off (and answered). Codex configs are then
  *     refused with the usual "Codex is off" sentence.
  *
@@ -150,9 +155,10 @@ export function CodexReconfirmPage({ onShown, onAnswered }: {
             <h2 className="h2">Do you use Codex?</h2>
             <p className="p2-sub">Codex now has accounts of its own in this app. Choose again: your earlier Codex setting does not carry over.</p>
             <div className="as-cards as-cards-2" role="radiogroup" aria-label="Do you use Codex?" data-testid="codex-reconfirm-cards" onKeyDown={onGroupKey}>
-              {card('yes', 'Yes, set up Codex', 'Use the Codex sign-in on this computer, or add a Codex account', <ProviderMark providerId="codex" size={26} />)}
+              {card('yes', 'Yes, set up Codex', 'Sign in to a Codex account in this app', <ProviderMark providerId="codex" size={26} />)}
               {card('no', "No, I don't use Codex", 'Codex stays off. You can set it up later in Settings, Accounts.', <span className="as-mark-none" />)}
             </div>
+            <p className="as-note" style={{ marginBottom: 6 }} data-testid="codex-reconfirm-earlier-note">{EARLIER_CODEX_NOTE}</p>
             <p className="as-note" data-testid="codex-reconfirm-local-note">Codex sessions run on this computer only in this release.</p>
             {error && <div className="gh-err" role="alert" data-testid="codex-reconfirm-error">{error}</div>}
           </div>

@@ -23,8 +23,35 @@ vi.mock('fs', async (importOriginal) => {
       if (p === (globalThis as any).__mockNodeExe) return { isFile: () => true } as import('fs').Stats
       return (actual.statSync as (a: unknown, b?: unknown) => import('fs').Stats)(p, o)
     }),
+    // What a path reads as without following a link, where a test stands one
+    // in (a hard link or a link, which this machine is never asked to make).
+    lstatSync: vi.fn((p: unknown, o?: unknown) => {
+      const stub = (globalThis as any).__mockLstat?.(p)
+      if (stub) return stub
+      return (actual.lstatSync as (a: unknown, b?: unknown) => import('fs').Stats)(p, o)
+    }),
+    // A path's resolved path, where a test stands one in (a folder that
+    // resolves to another folder, or one that cannot be resolved).
+    realpathSync: Object.assign(
+      (p: unknown, o?: unknown) => (actual.realpathSync as (a: unknown, b?: unknown) => string)(p, o),
+      {
+        native: (p: unknown, o?: unknown) => {
+          const stub = (globalThis as any).__mockRealpath?.(p)
+          if (stub instanceof Error) throw stub
+          if (stub) return stub
+          return (actual.realpathSync.native as (a: unknown, b?: unknown) => string)(p, o)
+        },
+      },
+    ),
   }
 })
+
+// The warnings the code under test logs, for the cases that check them.
+const warnedLines = vi.hoisted(() => [] as string[])
+vi.mock('../../../../src/main/debug-logger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/debug-logger')>()),
+  logWarn: (...a: unknown[]) => { warnedLines.push(a.map(String).join(' ')) },
+}))
 
 // Mock setup-handlers so getResourcesDirectory returns a per-test value via the
 // _mockResourcesDir state declared inside the useResumePicker describe below.
@@ -56,7 +83,9 @@ import * as osMod from 'os'
 import { execSync } from 'child_process'
 import { watchAndClaimRollout } from '../../../../src/main/providers/codex/telemetry'
 import { CodexProvider, createCodexLiveUsage } from '../../../../src/main/providers/codex'
-import { resolveCodexBinary, resolveNodeExe, __resetNodeExeCache, codexCmdExeTarget } from '../../../../src/main/providers/codex/spawn'
+import { resolveCodexBinary, resolveNodeExe, __resetNodeExeCache, codexCmdExeTarget, getCodexResumePickerPath } from '../../../../src/main/providers/codex/spawn'
+import { __markScriptFoldersCheckedForTests, __resetScriptFoldersForTests, secureScriptFolders, scriptFoldersDeployed } from '../../../../src/main/script-folders'
+import { deployScriptFile, _resetScriptDeployWarningForTest } from '../../../../src/main/script-deploy'
 
 // WP2 (plan A10): a Codex spawn runs only from its prepared realm launch -- the
 // executable setup proved and the realm's environment. Main builds it; these
@@ -325,9 +354,11 @@ describe('CodexProvider', () => {
     const { tmpdir } = require('os') as typeof import('os')
     const { join } = require('path') as typeof import('path')
     const dir = mkdtempSync(join(tmpdir(), 'ccc-spawn-owned-'))
-    mkdirSync(join(dir, 'scripts'), { recursive: true })
-    writeFileSync(join(dir, 'scripts', 'codex-resume-picker.js'), '// stub')
+    mkdirSync(join(dir, 'scripts'), { recursive: true, mode: 0o700 })
+    writeFileSync(join(dir, 'scripts', 'codex-resume-picker.js'), '// stub', { mode: 0o600 })
     ;(globalThis as any).__mockResourcesDir = dir
+    // As the start does before a launch: the scripts folder made the user's alone.
+    __markScriptFoldersCheckedForTests(dir)
     __resetNodeExeCache()
     vi.mocked(osMod.platform).mockReturnValue('win32' as NodeJS.Platform)
     vi.mocked(execSync).mockImplementation(() => 'C:\\nodejs\\node.exe\n' as any)
@@ -398,9 +429,12 @@ describe('CodexProvider', () => {
 
   describe('useResumePicker', () => {
     // The vi.mock at the top of this file points getResourcesDirectory at
-    // globalThis.__mockResourcesDir. Toggle it per test via the helper below.
+    // globalThis.__mockResourcesDir. Toggle it per test via the helper below,
+    // which also stands for the start's check of the scripts folders (made
+    // the user's alone, script-folders.ts), as the app does before a launch.
     function setMockResourcesDir(dir: string | null): void {
       ;(globalThis as any).__mockResourcesDir = dir ?? ''
+      if (dir) __markScriptFoldersCheckedForTests(dir)
     }
 
     beforeEach(() => {
@@ -421,8 +455,8 @@ describe('CodexProvider', () => {
       const { tmpdir } = require('os') as typeof import('os')
       const { join } = require('path') as typeof import('path')
       const dir = mkdtempSync(join(tmpdir(), 'ccc-spawn-test-'))
-      mkdirSync(join(dir, 'scripts'), { recursive: true })
-      writeFileSync(join(dir, 'scripts', 'codex-resume-picker.js'), '// stub')
+      mkdirSync(join(dir, 'scripts'), { recursive: true, mode: 0o700 })
+      writeFileSync(join(dir, 'scripts', 'codex-resume-picker.js'), '// stub', { mode: 0o600 })
       setMockResourcesDir(dir)
 
       // POSIX now resolves node via a login shell (a Finder/Dock-launched app
@@ -501,8 +535,8 @@ describe('CodexProvider', () => {
       const { tmpdir } = require('os') as typeof import('os')
       const { join } = require('path') as typeof import('path')
       const dir = mkdtempSync(join(tmpdir(), 'ccc-spawn-win32-picker-'))
-      mkdirSync(join(dir, 'scripts'), { recursive: true })
-      writeFileSync(join(dir, 'scripts', 'codex-resume-picker.js'), '// noop')
+      mkdirSync(join(dir, 'scripts'), { recursive: true, mode: 0o700 })
+      writeFileSync(join(dir, 'scripts', 'codex-resume-picker.js'), '// noop', { mode: 0o600 })
       setMockResourcesDir(dir)
 
       vi.mocked(osMod.platform).mockReturnValue('win32' as NodeJS.Platform)
@@ -528,8 +562,8 @@ describe('CodexProvider', () => {
       const { tmpdir } = require('os') as typeof import('os')
       const { join } = require('path') as typeof import('path')
       const dir = mkdtempSync(join(tmpdir(), 'ccc-spawn-win32-picker-bad-'))
-      mkdirSync(join(dir, 'scripts'), { recursive: true })
-      writeFileSync(join(dir, 'scripts', 'codex-resume-picker.js'), '// noop')
+      mkdirSync(join(dir, 'scripts'), { recursive: true, mode: 0o700 })
+      writeFileSync(join(dir, 'scripts', 'codex-resume-picker.js'), '// noop', { mode: 0o600 })
       setMockResourcesDir(dir)
       expect(() => withWin32(() => new CodexProvider().buildSpawnCommand({
         sessionId: 'sid-bad', realmLaunch: { ...launch, executable: 'C:\\a%b\\codex.cmd', env: winEnv },
@@ -559,6 +593,269 @@ describe('CodexProvider', () => {
       vi.mocked(osMod.platform).mockReturnValue('linux' as NodeJS.Platform)
       vi.mocked(execSync).mockImplementation(() => { throw new Error('not found') })
       expect(resolveNodeExe()).toBe('node')
+    })
+
+    // What sits at the picker's path, or at the helper lib the picker loads,
+    // is run only when it is a plain file with one name. Anything else (a
+    // directory, a link, a hard link, whatever left it there, a deploy that
+    // failed included) is refused with a warning, and Codex starts
+    // directly, as when the picker is not deployed. Mutation to prove this can
+    // fail: return the picker's path whenever something exists there
+    // (fs.existsSync).
+    describe('what sits at the picker path runs only when it is a plain file with one name', () => {
+      const { mkdtempSync, mkdirSync, writeFileSync, rmSync, rmdirSync } = require('fs') as typeof import('fs')
+      const { tmpdir } = require('os') as typeof import('os')
+      const { join } = require('path') as typeof import('path')
+      let dir = ''
+      const picker = (): string => join(dir, 'scripts', 'codex-resume-picker.js')
+      const lib = (): string => join(dir, 'scripts', 'lib', 'codex-resume-picker-lib.js')
+      const libDir = (): string => join(dir, 'scripts', 'lib')
+      /** How a stand-in reads, without following a link. */
+      const standIn = (isFile: boolean, nlink: number) => ({ isFile: () => isFile, isSymbolicLink: () => !isFile, isDirectory: () => false, nlink, mode: isFile ? 0o100600 : 0o120777 })
+      const spawnWithPicker = () => new CodexProvider().buildSpawnCommand({
+        sessionId: 'sid-plain-picker', realmLaunch: launch,
+        useResumePicker: true,
+        codexOptions: { model: 'gpt-5.5', permissionsPreset: 'standard' },
+      })
+
+      beforeEach(() => {
+        dir = mkdtempSync(join(tmpdir(), 'ccc-spawn-plain-picker-'))
+        mkdirSync(join(dir, 'scripts', 'lib'), { recursive: true, mode: 0o700 })
+        setMockResourcesDir(dir)
+        warnedLines.length = 0
+      })
+
+      afterEach(() => {
+        delete (globalThis as any).__mockLstat
+        delete (globalThis as any).__mockRealpath
+        if (dir.startsWith(join(tmpdir(), 'ccc-spawn-plain-picker-'))) rmSync(dir, { recursive: true, force: true })
+      })
+
+      it('a plain picker and lib: the picker is run', () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        writeFileSync(lib(), '// stub lib', { mode: 0o600 })
+        expect(getCodexResumePickerPath()).toBe(picker())
+        expect(warnedLines).toEqual([])
+      })
+
+      it('a plain picker and no lib yet: the picker is run, as before', () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        expect(getCodexResumePickerPath()).toBe(picker())
+        expect(warnedLines).toEqual([])
+      })
+
+      it('nothing there: no picker, and nothing logged (not deployed yet)', () => {
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toEqual([])
+      })
+
+      it('a directory at the picker path: refused with a warning, and Codex starts directly', () => {
+        mkdirSync(picker())
+        writeFileSync(join(picker(), 'index.js'), '// not the app\'s')
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+        expect(warnedLines[0]).toContain('codex-resume-picker.js in the resources folder is not a plain file with one name that only this user can change;')
+        expect(warnedLines[0]).not.toContain(dir)
+        const out = spawnWithPicker()
+        expect(out.cmd).toBe('/mock/path/codex')
+        expect(out.args).not.toContain(picker())
+      })
+
+      it('a directory at the helper lib path: refused too', () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        mkdirSync(lib())
+        writeFileSync(join(lib(), 'index.js'), '// not the app\'s')
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+        expect(warnedLines[0]).toContain('codex-resume-picker-lib.js')
+        expect(spawnWithPicker().cmd).toBe('/mock/path/codex')
+      })
+
+      it('a picker with another name (a hard link): refused', () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        ;(globalThis as any).__mockLstat = (p: unknown) => (p === picker() ? standIn(true, 2) : null)
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+      })
+
+      it('a picker that is a link: refused', () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        ;(globalThis as any).__mockLstat = (p: unknown) => (p === picker() ? standIn(false, 1) : null)
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+      })
+
+      it('a helper lib with another name (a hard link): refused', () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        writeFileSync(lib(), '// stub lib', { mode: 0o600 })
+        ;(globalThis as any).__mockLstat = (p: unknown) => (p === lib() ? standIn(true, 2) : null)
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+      })
+
+      // The folder the lib is loaded from is taken only when it is a real
+      // folder: a directory that is not a link and resolves to its own place.
+      // These read the folder as a link, or its resolved path as another
+      // folder, through a stub; the real-link cases are in
+      // resume-picker-lib-links.test.ts (CI and the VM only).
+      it.each([
+        ['a link (a junction, or a directory link)', { isFile: () => false, isSymbolicLink: () => true, isDirectory: () => false, nlink: 1, mode: 0o120777 }],
+        ['read as a link and a directory at once', { isFile: () => false, isSymbolicLink: () => true, isDirectory: () => true, nlink: 1, mode: 0o120777 }],
+      ])('the helper lib folder is %s: refused with one warning, and Codex starts directly', (_label, folderStat) => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        writeFileSync(lib(), '// stub lib', { mode: 0o600 })
+        ;(globalThis as any).__mockLstat = (p: unknown) => (p === libDir() ? folderStat : null)
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+        expect(warnedLines[0]).toContain('the scripts/lib folder in the resources folder is not a real folder')
+        expect(warnedLines[0]).not.toContain(dir)
+        const out = spawnWithPicker()
+        expect(out.cmd).toBe('/mock/path/codex')
+        expect(out.args).not.toContain(picker())
+      })
+
+      // Mutation to prove this can fail: check the folder with lstat alone.
+      it('the helper lib folder reads as a plain directory but resolves to another folder: refused with one warning, and Codex starts directly', () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        writeFileSync(lib(), '// stub lib', { mode: 0o600 })
+        ;(globalThis as any).__mockRealpath = (p: unknown) => (p === libDir() ? join(dir, 'elsewhere') : null)
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+        expect(warnedLines[0]).toContain('the scripts/lib folder in the resources folder is not a real folder')
+        expect(warnedLines[0]).not.toContain(dir)
+        const out = spawnWithPicker()
+        expect(out.cmd).toBe('/mock/path/codex')
+        expect(out.args).not.toContain(picker())
+      })
+
+      it('the resolved path of the helper lib folder cannot be read: refused with one warning', () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        writeFileSync(lib(), '// stub lib', { mode: 0o600 })
+        ;(globalThis as any).__mockRealpath = (p: unknown) => (p === libDir() ? Object.assign(new Error('EPERM'), { code: 'EPERM' }) : null)
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+        expect(warnedLines[0]).toContain('the scripts/lib folder in the resources folder is not a real folder')
+      })
+
+      it('a file where the helper lib folder goes: refused too', () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        rmdirSync(libDir())
+        writeFileSync(libDir(), '// not a folder')
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+        expect(warnedLines[0]).toContain('the scripts/lib folder in the resources folder is not a real folder')
+      })
+
+      it('no helper lib folder at all: the picker is run, as with no lib yet', () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        rmdirSync(libDir())
+        expect(getCodexResumePickerPath()).toBe(picker())
+        expect(warnedLines).toEqual([])
+      })
+
+      // The picker and its lib run only from scripts folders the start made
+      // the user's alone in this run (script-folders.ts). Mutation to prove
+      // this can fail: drop the checkDeployedScript loop in
+      // getCodexResumePickerPath.
+      it('the start never checked the scripts folders: a plain picker and lib are not run, and one warning names the folder, never its path', () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        writeFileSync(lib(), '// stub lib', { mode: 0o600 })
+        __resetScriptFoldersForTests()
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+        expect(warnedLines[0]).toContain("the scripts folder in the resources folder was not made this user's alone in this run")
+        expect(warnedLines[0]).not.toContain(dir)
+        expect(spawnWithPicker().cmd).toBe('/mock/path/codex')
+      })
+
+      it('a lib folder the start did not make the user\'s alone (made since): the picker is not run, and one warning names the lib folder', () => {
+        rmdirSync(libDir())
+        setMockResourcesDir(dir)
+        mkdirSync(libDir(), { mode: 0o700 })
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        writeFileSync(lib(), '// stub lib', { mode: 0o600 })
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+        expect(warnedLines[0]).toContain("the lib folder in the resources folder was not made this user's alone in this run")
+      })
+
+      // The picker loads its helper from the lib folder whatever that folder
+      // holds, so a lib folder that is there must have passed this run's
+      // check even when no helper lib is in it (its deploy failed, or none
+      // ships). Mutation to prove this can fail: check the lib folder only
+      // through the helper lib file.
+      it('the start passed the scripts folder and refused the lib folder, which holds no helper lib: the picker is not run, and one warning names the lib folder, never its path', async () => {
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        await secureScriptFolders(dir, async (dirs) => dirs.map((d) => ({ dir: d, ok: d !== libDir(), detail: 'refused' })))
+        scriptFoldersDeployed()
+        warnedLines.length = 0
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+        expect(warnedLines[0]).toContain("the lib folder in the resources folder was not made this user's alone in this run")
+        expect(warnedLines[0]).not.toContain(dir)
+        expect(spawnWithPicker().cmd).toBe('/mock/path/codex')
+      })
+
+      it('a lib folder made since the start\'s check, with no helper lib in it: the picker is not run, and one warning names the lib folder', () => {
+        rmdirSync(libDir())
+        setMockResourcesDir(dir)
+        mkdirSync(libDir(), { mode: 0o700 })
+        writeFileSync(picker(), '// stub', { mode: 0o600 })
+        expect(getCodexResumePickerPath()).toBeNull()
+        expect(warnedLines).toHaveLength(1)
+        expect(warnedLines[0]).toContain("the lib folder in the resources folder was not made this user's alone in this run")
+      })
+
+      // This run's deploy of the helper lib failed: its source could not be
+      // read (here, a folder stands at the source's path), so it is recorded
+      // as failed for the run (deployFailedThisRun).
+      const failLibDeploy = (): void => {
+        const src = join(dir, 'unreadable-lib-source')
+        mkdirSync(src)
+        expect(() => deployScriptFile(src, lib())).toThrow()
+      }
+
+      // A plain helper lib left from an earlier run, in a lib folder that
+      // passed, whose deploy failed this run: not known to be the app's copy,
+      // so the picker that would load it is not run. Mutation to prove this
+      // can fail: check only the picker itself, not the helper lib.
+      it('a plain helper lib left from an earlier run whose deploy failed this run: the picker is not run, and one warning says it could not be brought up to date', () => {
+        try {
+          writeFileSync(picker(), '// stub', { mode: 0o600 })
+          writeFileSync(lib(), '// an older lib', { mode: 0o600 })
+          failLibDeploy()
+          warnedLines.length = 0
+          expect(getCodexResumePickerPath()).toBeNull()
+          expect(warnedLines).toHaveLength(1)
+          expect(warnedLines[0]).toContain('codex-resume-picker-lib.js in the resources folder could not be brought up to date this run; the resume list is skipped and Codex starts directly')
+          expect(warnedLines[0]).not.toContain(dir)
+          expect(spawnWithPicker().cmd).toBe('/mock/path/codex')
+        } finally {
+          _resetScriptDeployWarningForTest()
+        }
+      })
+
+      // The picker always loads its helper lib, so with none there it stops
+      // before Codex starts. When the lib folder passed but the helper lib is
+      // not there because this run's deploy of it failed, Codex starts
+      // directly instead, with one warning. Mutation to prove this can fail:
+      // pass over a helper lib that is not there whatever its deploy did.
+      it('no helper lib in a lib folder that passed, because its deploy failed this run: the picker is not run, Codex starts directly, and one warning says why', () => {
+        try {
+          writeFileSync(picker(), '// stub', { mode: 0o600 })
+          failLibDeploy()
+          warnedLines.length = 0
+          expect(getCodexResumePickerPath()).toBeNull()
+          expect(warnedLines).toHaveLength(1)
+          expect(warnedLines[0]).toContain('codex-resume-picker-lib.js in the resources folder could not be brought up to date this run; the resume list is skipped and Codex starts directly')
+          expect(warnedLines[0]).not.toContain(dir)
+          const out = spawnWithPicker()
+          expect(out.cmd).toBe('/mock/path/codex')
+          expect(out.args).not.toContain(picker())
+        } finally {
+          _resetScriptDeployWarningForTest()
+        }
+      })
     })
   })
 })

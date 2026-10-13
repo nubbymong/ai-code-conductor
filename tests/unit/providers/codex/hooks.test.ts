@@ -14,6 +14,8 @@
 // call of the owner-only rule, before anything is written in them.
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
+import nodeFs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import * as os from 'os'
 import * as path from 'path'
 import {
@@ -37,6 +39,19 @@ import {
   CODEX_HOOK_PLAIN_BASE,
   CODEX_HOOK_FOLDERS_RETRY_MS,
 } from '../../../../src/main/providers/codex/hooks'
+
+/** A spy on one fs function that the code under test sees: it imports fs as a
+ *  module namespace, whose bindings follow the fs object only once synced. */
+function spyOnFs(name: 'copyFileSync' | 'writeFileSync') {
+  const spy = vi.spyOn(nodeFs, name)
+  syncBuiltinESMExports()
+  return spy
+}
+/** Undo the spies, and sync the bindings back to the real functions. */
+function restoreFs(): void {
+  vi.restoreAllMocks()
+  syncBuiltinESMExports()
+}
 
 const TOKEN = '0f8b6a2c-1d3e-4f50-9a61-7b2c3d4e5f60'
 const TEST_PREFIX = 'p310-hooks-test-'
@@ -266,6 +281,95 @@ describe('deployCodexHookScripts', () => {
     await deployCodexHookScripts(res, path.resolve(__dirname, '../../../..'))
     expect(fs.existsSync(path.join(res, 'scripts', 'ccc-codex-hook.js'))).toBe(true)
     expect(fs.existsSync(path.join(res, 'scripts', 'ccc-codex-hook.cmd'))).toBe(true)
+  })
+
+  // F14: in a packaged build both files ship inside app.asar, and Electron
+  // serves fs.copyFileSync from there by copying each out to a temporary file
+  // it does not remove before the process ends. The deploy reads the bytes
+  // instead, compares them with the deployed copy, and writes only when they
+  // differ; the plain copies are still checked against the deployed bytes.
+  const NAMES = ['ccc-codex-hook.js', 'ccc-codex-hook.cmd'] as const
+  function hookSource(js: string, cmd: string): string {
+    const root = tmp()
+    fs.mkdirSync(path.join(root, 'scripts'))
+    fs.writeFileSync(path.join(root, 'scripts', 'ccc-codex-hook.js'), js)
+    fs.writeFileSync(path.join(root, 'scripts', 'ccc-codex-hook.cmd'), cmd)
+    return root
+  }
+
+  it('F14: the deployed copies are the shipped bytes exactly (the wrapper keeps its line endings)', async () => {
+    const repo = path.resolve(__dirname, '../../../..')
+    const res = tmp()
+    await deployCodexHookScripts(res, repo)
+    for (const name of NAMES) {
+      expect(fs.readFileSync(path.join(res, 'scripts', name)).equals(fs.readFileSync(path.join(repo, 'scripts', name))), name).toBe(true)
+    }
+  })
+
+  it('F14: never calls copyFileSync on the deploy path', async () => {
+    const src = hookSource('// forwarder v1', 'rem wrapper v1\r\n')
+    const res = tmp()
+    const copy = spyOnFs('copyFileSync')
+    try {
+      await deployCodexHookScripts(res, src)
+      expect(copy).not.toHaveBeenCalled()
+    } finally {
+      restoreFs()
+    }
+    expect(fs.readFileSync(path.join(res, 'scripts', 'ccc-codex-hook.cmd'), 'utf8')).toBe('rem wrapper v1\r\n')
+  })
+
+  it('F14: identical bytes: neither copy is written again (the .cmd wrapper included)', async () => {
+    const src = hookSource('// forwarder v1', 'rem wrapper v1\r\n')
+    const res = tmp()
+    await deployCodexHookScripts(res, src)
+    const old = new Date('2001-02-03T04:05:06Z')
+    for (const name of NAMES) fs.utimesSync(path.join(res, 'scripts', name), old, old)
+    const copy = spyOnFs('copyFileSync')
+    const write = spyOnFs('writeFileSync')
+    try {
+      await deployCodexHookScripts(res, src)
+      expect(copy).not.toHaveBeenCalled()
+      const written = write.mock.calls.map((c) => String(c[0]))
+      for (const name of NAMES) expect(written).not.toContain(path.join(res, 'scripts', name))
+    } finally {
+      restoreFs()
+    }
+    for (const name of NAMES) expect(fs.statSync(path.join(res, 'scripts', name)).mtimeMs, name).toBe(old.getTime())
+  })
+
+  it('F14: changed bytes: only the changed copy is rewritten, with the source bytes', async () => {
+    const src = hookSource('// forwarder v1', 'rem wrapper v1\r\n')
+    const res = tmp()
+    await deployCodexHookScripts(res, src)
+    const old = new Date('2001-02-03T04:05:06Z')
+    fs.utimesSync(path.join(res, 'scripts', 'ccc-codex-hook.js'), old, old)
+    fs.writeFileSync(path.join(res, 'scripts', 'ccc-codex-hook.cmd'), 'rem a changed wrapper\r\n')
+    await deployCodexHookScripts(res, src)
+    expect(fs.readFileSync(path.join(res, 'scripts', 'ccc-codex-hook.cmd'), 'utf8')).toBe('rem wrapper v1\r\n')
+    expect(fs.statSync(path.join(res, 'scripts', 'ccc-codex-hook.js')).mtimeMs).toBe(old.getTime())
+  })
+
+  it('F14: the plain-copy byte check still runs after a write: an update makes the staged copy stale until prepared again', async () => {
+    const src = hookSource('// forwarder v1', 'rem wrapper v1\r\n')
+    const res = tmp()
+    const scriptsDir = path.join(res, 'scripts')
+    await deployCodexHookScripts(res, src)
+    const plain = path.join(tmp(), CODEX_HOOK_PLAIN_BASE, 'codex-hooks-abcdef012345')
+    const plan = { dataDir: tmp(), scriptsDir, plainDir: plain }
+    const r = rule()
+    expect((await prepareCodexHookFolders(plan, r.secure)).plain).toBe(true)
+    expect(verifyPlainCodexHookWrapper(scriptsDir, plain)).toBe(true)
+    // The next version ships a new wrapper: the deploy rewrites the resources copy...
+    fs.writeFileSync(path.join(src, 'scripts', 'ccc-codex-hook.cmd'), 'rem wrapper v2\r\n')
+    await deployCodexHookScripts(res, src)
+    expect(fs.readFileSync(path.join(scriptsDir, 'ccc-codex-hook.cmd'), 'utf8')).toBe('rem wrapper v2\r\n')
+    // ...so the copy staged from the old bytes no longer verifies,
+    expect(verifyPlainCodexHookWrapper(scriptsDir, plain)).toBe(false)
+    // and a preparation stages the new bytes, which do.
+    expect((await prepareCodexHookFolders(plan, r.secure)).plain).toBe(true)
+    expect(fs.readFileSync(path.join(plain, 'ccc-codex-hook.cmd'), 'utf8')).toBe('rem wrapper v2\r\n')
+    expect(verifyPlainCodexHookWrapper(scriptsDir, plain)).toBe(true)
   })
 })
 

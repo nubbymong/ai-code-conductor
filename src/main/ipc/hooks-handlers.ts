@@ -23,9 +23,12 @@ export function registerHooksHandlers(gateway: HooksGatewayLike): void {
       // Master-toggle off: strip hook entries from every active session's
       // per-session settings file before stopping the gateway, so live
       // Claude processes stop POSTing to a dying endpoint on their next
-      // /reload. SSH remote files are left stale — the remote session's
-      // next hook POST 503s (gateway disabled) and the file gets cleaned
-      // up next launch by boot-cleanup.
+      // /reload. SSH sessions never POST here: their remote files carry
+      // the attention command hooks, which report over the session's own
+      // terminal, and are rewritten on the next connect (without the
+      // attention hooks while this is off). Until then pty-manager drops
+      // their raises while the setting reads off (remoteAttentionTaken)
+      // and still lets their clears through.
       for (const sid of getActivePtySessionIds()) {
         try {
           removeHooks({ settingsPath: getLocalSessionSettingsPath(sid) })

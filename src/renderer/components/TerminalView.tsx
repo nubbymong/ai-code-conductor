@@ -30,11 +30,11 @@ import { sessionProviderAccount } from '../utils/accountChip'
 import { switchOrigin, forgetSwitchOrigin } from '../utils/switchOrigin'
 import SshFlowOverlay from './SshFlowOverlay'
 import { shouldUseResumePicker } from '../utils/resumePicker'
-import { shouldGateAccountChoice } from '../utils/sessionLaunch'
-import { resolveLaunchAccount, launchStep, accountsSnapshotWhenLoaded, describeLaunchFailure, providerOffForLaunch, type LaunchAccountFields, type LaunchAccountPlan, type LaunchFailureContext, type LaunchStep } from '../utils/launchAccount'
+import { shouldGateAccountChoice, resumedSessionOwnAccount } from '../utils/sessionLaunch'
+import { resolveLaunchAccount, launchStep, accountsSnapshotWhenLoaded, describeLaunchFailure, providerOffForLaunch, switchTarget, configRepointPatch, type LaunchAccountFields, type LaunchAccountPlan, type LaunchFailureContext, type LaunchStep } from '../utils/launchAccount'
 import { createSpawnExitHold, processExitLine, type SpawnExitHold, type SpawnOutcome } from '../utils/spawnExitHold'
 import { useProviderAccountsStore, providerView, accountDisplayName } from '../stores/providerAccountsStore'
-import { useLaunchAckStore, consumeLaunchAcknowledgement } from '../stores/launchAckStore'
+import { useLaunchAckStore, consumeLaunchAcknowledgement, type LaunchAckAnswer } from '../stores/launchAckStore'
 import { stripCursorSequences } from '../utils/terminalFormatting'
 import { isControlReportOnly, resolveContextMenuIntent, blindPasteNeedsMenu, sanitizeClipboardForPaste, sanitizePasteIntoTerminal, isMouseTracking, isOrdinaryEditable } from '../utils/terminalInput'
 import TerminalContextMenu from './TerminalContextMenu'
@@ -60,6 +60,7 @@ import { useCursorLayerVisibility } from '../hooks/useCursorLayerVisibility'
 import { noteActivityGrace } from '../stores/activeStore'
 import type { ProviderId, CodexOptions, TerminalOptions } from '../../shared/types'
 import { spawnRefusalOf, refusedTabText } from '../../shared/providers'
+import { parentOfPartnerPtyId } from '../../shared/multi-spawn-rule'
 import { reconcileRefusedMultiSpawn } from '../utils/refusedMultiSpawn'
 import { isConfigLaunchBlocked, useLaunchGateSettings, restartLaunchRefusal } from '../hooks/useLaunchConfig'
 import { useConfigStore } from '../stores/configStore'
@@ -236,7 +237,17 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
   const session = useSessionStore((s) => s.sessions.find((sess) => sess.id === sessionId))
   // item 5 (resume cascade): the overlay's "no host" Retry re-spawns the whole
   // session (a dead PTY can't be recovered by re-writing the claude command).
-  const { restart: sshRestart } = useRestartSession(session)
+  // #86: the partner shell of an SSH session connects to the host too, and has
+  // no session record of its own: its Retry restarts the partner (and only the
+  // partner) of the session it belongs to, as the command bar's Restart does in
+  // the partner view. Only an SSH partner has that overlay, so only it looks;
+  // and it subscribes to whether its session is there, not to the session's
+  // record, which is replaced on every statusline tick (the restart merges
+  // the live record itself), so a partner pane never re-renders per tick.
+  const partnerOf = ssh ? parentOfPartnerPtyId(sessionId) : null
+  const hasPartnerParent = useSessionStore((s) => partnerOf !== null && s.sessions.some((sess) => sess.id === partnerOf))
+  const partnerParent = hasPartnerParent ? useSessionStore.getState().sessions.find((sess) => sess.id === partnerOf) : undefined
+  const { restart: sshRestart } = useRestartSession(session ?? partnerParent, !session && !!partnerParent)
 
   // Extracted hooks
   useStatuslineSubscription(sessionId)
@@ -1016,9 +1027,19 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
                   useLaunchAckStore.getState().withdraw(sessionId)
                 })
               : () => {}
-            let yes: boolean
+            // O5 (owner-agreed 2026-10-11): a launch on the account
+            // 2.1.1-beta.2 registered for the Codex sign-in already on this
+            // computer lets the confirm offer another Codex account instead.
+            const offerSwitch = step.question.external && !step.question.unknown
+            // A restored tab resumes its exact conversation (startSpawn's
+            // `resume`). Moved from here it starts without it, as the
+            // confirm then says: the exact resume looks only in the picked
+            // account's conversations, and a launch carries none over (a
+            // running session's Switch account does).
+            const resumesConversation = !shellOnly && !!session?.resumeUuid && !!session?.resumeCwd
+            let reply: LaunchAckAnswer
             try {
-              yes = await acks.request({ sessionId, sessionLabel: configLabel, ...step.question })
+              reply = await acks.requestChoice({ sessionId, sessionLabel: configLabel, ...step.question, ...(offerSwitch ? { accountId: plan.accountId, offerSwitch: true, ...(resumesConversation ? { resumesConversation: true } : {}) } : {}) })
             } finally {
               unsubAccounts()
             }
@@ -1027,6 +1048,36 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             if (replaced) { await runLaunchStep(resolvedProfileId, replaced.plan, replaced.step); return }
             const origin = switchOrigin(sessionId)
             forgetSwitchOrigin(sessionId)
+            if (typeof reply === 'object') {
+              // Another account picked: only one this launch could use now
+              // (main checks the launch again). The session, and the saved
+              // config it came from, move to it (the config only when it
+              // named the account asked about, or named none while this
+              // launch resolved from the default, so the default it follows
+              // was that account: configRepointPatch gets the account the
+              // session named when the launch was planned), then the launch
+              // starts there, asking first only if that account needs it. A restored tab's exact resume still
+              // rides along: it finds the conversation only if that account
+              // already has it, else falls back to the picker or a new
+              // conversation (main), as the confirm said before the pick.
+              const snap = useProviderAccountsStore.getState().snapshot
+              const target = offerSwitch ? switchTarget(snap, 'codex', reply.switchTo) : undefined
+              if (!target) {
+                settleOwnStart('nothing-started', 'Not started: the account picked can no longer be used. Restart the session to choose again.')
+                return
+              }
+              await persistSessionProviderAccount(sessionId, target.id)
+              if (disposed) return
+              if (configId) {
+                const configs = useConfigStore.getState().configs
+                const patch = configRepointPatch(configs.find((c) => c.id === configId), 'codex', plan.accountId, target.id, session?.providerAccountId)
+                if (patch) useConfigStore.getState().updateConfig(configId, patch)
+              }
+              const next = resolveLaunchAccount(snap, 'codex', target.id)
+              await runLaunchStep(resolvedProfileId, next, launchStep(snap, next, false))
+              return
+            }
+            const yes = reply === true
             if (!yes && origin && origin.to === plan.accountId) {
               // P3.6 (VM finding V3; the owner's call pending, a Claude switch
               // never asks): the Switch account whose launch this is, not
@@ -1190,7 +1241,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           // Pre-spawn account gate: on a session's first spawn this run, ask which
           // account to launch under (multi-account on + >=1 profile), unless a
           // restart/switch already predetermined it. FAIL-OPEN: any error spawns
-          // with the session's last-used account so a session never gets stuck.
+          // with the session's saved account so a session never gets stuck.
           const profilesCount = useAccountProfilesStore.getState().profiles.length
           // Only provider sessions that actually authenticate are eligible. Skip
           // shell-only panes -- the partner terminal (its sessionId has no store
@@ -1210,8 +1261,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           if (!needGate) {
             doSpawn(session?.profileId)
           } else {
+            // O9: the picker names the session by its work name when it has
+            // one (the same rule as configLabel above), so the sessions of one
+            // config can be told apart when several resume together.
             gate
-              .requestChoice(sessionId, session?.label || '', session?.profileId)
+              .requestChoice(sessionId, session?.customName?.trim() || session?.label || '', session?.profileId)
               .then((chosen) => {
                 if (chosen === GATE_CANCELLED) {
                   // Cancel means different things for a NEW tab vs a RESUME
@@ -1240,7 +1294,14 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
                 }
                 // Persist the chosen account eagerly so a crash can't lose it
                 // (the gate pre-selects session.profileId on the next launch).
-                void persistLastUsedAccount(sessionId, chosen)
+                // O9: a RESUMED session confirmed on its own account (its pin,
+                // or the primary it ran on with no pin) is not a new choice:
+                // pin the session only and leave the global "Most recent"
+                // account alone, or after a multi-session resume it would
+                // just name the last session answered.
+                const confirmedOwn = gate.wasRestored(sessionId) && !!chosen
+                  && chosen === resumedSessionOwnAccount(session?.profileId, useAccountProfilesStore.getState().profiles).id
+                void persistLastUsedAccount(sessionId, chosen, { recordMostRecent: !confirmedOwn })
                 if (!disposed) {
                   doSpawn(chosen)
                 } else {

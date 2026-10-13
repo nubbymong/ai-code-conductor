@@ -31,6 +31,11 @@ export interface DurabilityDeps {
    *  restored session respawns. Handed null when nothing was saved. A throw
    *  never fails the load. */
   readBack?: (state: SessionState | null) => void
+  /** aicc_planning#104: told the ids of the sessions each save holds, so the
+   *  last exact bind main keeps for a session no save holds any more (it was
+   *  closed) is dropped (the transcript binder's retainLastExact). A throw
+   *  never fails the save. */
+  retainSessions?: (open: ReadonlySet<string>) => void
   log?: (msg: string) => void
 }
 
@@ -92,14 +97,33 @@ export function createSessionDurability(deps: DurabilityDeps): SessionDurability
 
   function persist(state: SessionState, why: string): boolean {
     cleared = false
-    const enriched = enrichSessionStateWithResumeTargets(state, deps.enrichDeps)
+    // aicc_planning#104: a session whose lookup gives no target carries the one
+    // it had in the state saved before (never after a clear: `last` is null
+    // then), and only while it names the conversation the session's live or
+    // last exact bind does (session-resume-enrich.ts).
+    const enriched = enrichSessionStateWithResumeTargets(state, deps.enrichDeps, last)
     last = enriched
+    retainOpenSessions(enriched)
     const ok = deps.save(enriched)
     // A saved state replaces the discarded set: no clear is owed any more. A
     // save that failed left the file as it was, the set still in it.
     if (ok) bakLeft = false
     else if (bakLeft) retryClear(why)
     return ok
+  }
+
+  /** aicc_planning#104: every renderer save holds the whole open set (less
+   *  transient tabs, which are never saved), so a session it leaves out was
+   *  closed and its kept last exact bind goes. Never throws. */
+  function retainOpenSessions(state: SessionState): void {
+    if (!deps.retainSessions) return
+    try {
+      const open = new Set<string>()
+      for (const s of state.sessions) if (s && typeof s.id === 'string') open.add(s.id)
+      deps.retainSessions(open)
+    } catch (err) {
+      log(`[session-state] the closed sessions' last binds could not be dropped: ${(err as Error)?.message ?? err}`)
+    }
   }
 
   // Re-enriches from the (still-live) binder and persists on EVERY exit path. It is

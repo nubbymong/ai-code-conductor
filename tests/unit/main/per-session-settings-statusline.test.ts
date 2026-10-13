@@ -35,6 +35,7 @@ vi.mock('../../../src/main/debug-logger', async (importOriginal) => ({
 }))
 
 import { writeLocalSessionSettings } from '../../../src/main/hooks/per-session-settings'
+import { __markScriptFoldersCheckedForTests, __resetScriptFoldersForTests } from '../../../src/main/script-folders'
 import { registerProvider } from '../../../src/main/providers'
 import { ClaudeProvider } from '../../../src/main/providers/claude'
 
@@ -46,14 +47,22 @@ describe('writeLocalSessionSettings -- per-session statusLine', () => {
   let fakeHome = ''
   let claudeDir = ''
   const resourcesDir = () => path.join(fakeHome, 'res')
+  /** The status line script deployed in `dir`'s scripts folder, which the start made the user's alone. */
+  const deployedIn = (dir: string): void => {
+    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'scripts', 'claude-multi-statusline.js'), '// the app\'s\n')
+    __markScriptFoldersCheckedForTests(dir)
+  }
   beforeEach(() => {
     fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'per-session-sl-'))
     claudeDir = path.join(fakeHome, '.claude')
     fs.mkdirSync(claudeDir, { recursive: true })
     vi.spyOn(os, 'homedir').mockReturnValue(fakeHome)
     h.port = 19333
+    deployedIn(resourcesDir())
   })
   afterEach(() => {
+    __resetScriptFoldersForTests()
     fs.rmSync(fakeHome, { recursive: true, force: true })
     vi.restoreAllMocks()
   })
@@ -156,8 +165,24 @@ describe('writeLocalSessionSettings -- per-session statusLine', () => {
   })
 
   it('an ordinary resources folder path with spaces still gets the status line', () => {
+    deployedIn(path.join(fakeHome, 'My Resources'))
     const p = writeLocalSessionSettings('sid-5', { resourcesDir: path.join(fakeHome, 'My Resources') })
     const cfg = JSON.parse(fs.readFileSync(p, 'utf-8'))
     expect(String(cfg.statusLine?.command)).toContain('My Resources')
+  })
+
+  // A launch names the deployed script only while it may run it
+  // (script-folders.ts): a directory holding index.js at its path gives no
+  // status line of the app's, and the user's own stays.
+  it('a directory holding index.js at the script path: no status line of the app\'s, the user\'s own stays, and one warning', () => {
+    fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({ statusLine: { type: 'command', command: 'my-own-line.sh' } }))
+    const script = path.join(resourcesDir(), 'scripts', 'claude-multi-statusline.js')
+    fs.rmSync(script)
+    fs.mkdirSync(script)
+    fs.writeFileSync(path.join(script, 'index.js'), '// not the app\'s\n')
+    logged.warn.length = 0
+    const cfg = JSON.parse(fs.readFileSync(writeLocalSessionSettings('sid-7', { resourcesDir: resourcesDir() }), 'utf-8'))
+    expect(cfg.statusLine).toEqual({ type: 'command', command: 'my-own-line.sh' })
+    expect(logged.warn.filter((l) => l.includes('claude-multi-statusline.js in the resources folder is not a plain file with one name'))).toHaveLength(1)
   })
 })

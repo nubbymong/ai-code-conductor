@@ -18,10 +18,13 @@ import { useResolvedTheme } from '../hooks/useThemeController'
 import { SessionTypeBadge, SshReattachBadge, TransportBadge } from './sidebar/Badges'
 import { configIsPersistent, containerNameOf, resolveTransportBadge } from './sidebar/transportBadge'
 import { DialogOverlay, DialogPanel, DialogBody, DialogFooter, DialogButton, DialogCallout } from './ui/Dialog'
+import { WindowDragStrip, WINDOW_DRAG_STRIP_CLEARANCE } from './WindowControls'
 
 /**
  * The Allow Multi Spawn post-install page (phase 5) — a full-screen takeover
- * shown ONCE per upgrade, immediately after the release notes.
+ * shown once, on the first upgrade into Multi Spawn, immediately after the
+ * release notes. It never comes back on a later upgrade (see
+ * onboarding/multi-spawn-intro-gate.ts).
  *
  * Why a page and not a changelog line: phase 4 gave every saved config a limit
  * it never had (one copy at a time), and phase 4.1 gave the user a way to say
@@ -55,8 +58,9 @@ import { DialogOverlay, DialogPanel, DialogBody, DialogFooter, DialogButton, Dia
 
 /** The first-run takeover replaces the whole app, so the backdrop is the opaque
  *  app base rather than a scrim — there is nothing behind it to dim.
- *  (SetupDialog's OPAQUE_BACKDROP, same reasoning.) */
-const OPAQUE_BACKDROP: React.CSSProperties = { background: 'var(--surface-base)' }
+ *  (SetupDialog's OPAQUE_BACKDROP, same reasoning.) It covers the title bar
+ *  too, so it draws its own (WindowDragStrip) and keeps the page below it. */
+const OPAQUE_BACKDROP: React.CSSProperties = { background: 'var(--surface-base)', paddingTop: WINDOW_DRAG_STRIP_CLEARANCE }
 
 export interface StartupConfigGroup {
   /** The group's id, or null for the trailing "Ungrouped" bucket. */
@@ -255,6 +259,11 @@ export function MultiSpawnStartupPage({ autoEnabledIds = [], tally, onDone }: Mu
 
   return (
     <DialogOverlay style={OPAQUE_BACKDROP} testId="multi-spawn-startup">
+      {/* The page covers the title bar, and App makes the app behind it inert
+          (appCovered), so its drag regions are gone too: this bar drags the
+          window and carries its minimize, maximize and close on Windows and
+          Linux (aicc_planning #211, follow-up). */}
+      <WindowDragStrip />
       <div className="w-[560px] max-w-[94vw] max-h-full flex flex-col">
         {/* Hero — SetupDialog's first-run pattern: the `>_` brand mark, a real
             <h1> (this page IS the app at this moment, so it owns the h1) and a
@@ -265,7 +274,7 @@ export function MultiSpawnStartupPage({ autoEnabledIds = [], tally, onDone }: Mu
             Enable Multi Spawn
           </h1>
           <p className="text-[13px] max-w-[440px] mx-auto" style={{ color: 'var(--text-muted)' }}>
-            New in this update: launch several copies of a saved config at once. It&apos;s{' '}
+            Launch several copies of a saved config at once. It&apos;s{' '}
             <b className="font-semibold" style={{ color: 'var(--text-secondary)' }}>off by default</b>{' '}
             so a stray double-launch can&apos;t happen — turn it on only where you want it. You can change this any
             time in a config&apos;s settings.

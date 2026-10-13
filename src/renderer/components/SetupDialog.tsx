@@ -20,9 +20,10 @@ import type { InstallRecipeView, PathHintView } from '../../shared/providers'
 import { claudeCodeInstallCommand } from '../utils/claudeInstallCommand'
 import { providerAccountActions } from '../stores/providerAccountsStore'
 import { InstallRecipeList, afterInstallMessage, type RunnableRecipe } from '../onboarding/InstallRecipeList'
-import { PathHintNotice } from '../onboarding/PathHintNotice'
+import { PathHintNotice, pathHintIsNote } from '../onboarding/PathHintNotice'
 import { installTerminalOptions } from '../utils/commandTerminal'
 import { generateId } from '../utils/id'
+import { WindowDragStrip, WINDOW_DRAG_STRIP_CLEARANCE } from './WindowControls'
 
 interface Props {
   /** `{ codexOnly: true }` when the user continued without Claude Code
@@ -32,8 +33,12 @@ interface Props {
 }
 
 /** The first-run screen replaces the whole app, so its backdrop is the opaque
- *  app base rather than the usual scrim — there is nothing behind it to dim. */
-const OPAQUE_BACKDROP: React.CSSProperties = { background: 'var(--surface-base)' }
+ *  app base rather than the usual scrim — there is nothing behind it to dim.
+ *  App draws no title bar while setup shows, so every screen draws its own
+ *  (WindowDragStrip: a drag bar with the window's minimize, maximize and
+ *  close on Windows and Linux; aicc_planning #211, follow-up) and keeps its
+ *  content below it. */
+const OPAQUE_BACKDROP: React.CSSProperties = { background: 'var(--surface-base)', paddingTop: WINDOW_DRAG_STRIP_CLEARANCE }
 
 /** What main's check said. `pathHint` when it found nothing: what helps
  *  (Anthropic's installer put claude in a folder PATH does not name, or a
@@ -44,11 +49,38 @@ type CliProbe = { installed: boolean; path?: string; probe: string; pathHint?: P
  *  2026-10-10; ADR-024): main's line for one recipe, in a terminal on this
  *  screen. `ended` once its shell exited (the line ends it), with the code;
  *  `checking` while setup checks again; `checkedWhileRunning` once the
- *  user's Check again found nothing while the command still ran. */
-type SetupInstall = { id: string; recipe: RunnableRecipe; ended: boolean; exitCode?: number; checking: boolean; checkedWhileRunning?: boolean }
+ *  user's Check again found nothing while the command still ran;
+ *  `foundWhileRunning` once it found Claude Code while the command still
+ *  ran, which is then left to finish. */
+type SetupInstall = { id: string; recipe: RunnableRecipe; ended: boolean; exitCode?: number; checking: boolean; checkedWhileRunning?: boolean; foundWhileRunning?: boolean }
+
+/** What the folder step says when main did not save one of its folders. */
+function folderNotSaved(which: 'data' | 'resources'): string {
+  return `The ${which} directory could not be saved. The folder could not be created, or its path cannot be stored as written. Choose another folder and press Continue again.`
+}
 
 /** Where the confirmation says the line runs. */
 const SETUP_CONFIRM_WHERE = 'Run this in a terminal on this screen? It types the line below, and setup checks again when the command ends.'
+
+/** What the install screen says, per platform (F4;
+ *  aicc_planning#194). The line ends its shell when the command
+ *  ends, and setup then checks again by itself. On Windows that is also true after a failure or Ctrl+C,
+ *  and what looks like a prompt can show while the installer is still
+ *  working, so the words never say to press Back at a prompt (Back stops the
+ *  install). On macOS and Linux Ctrl+C can leave the shell at a prompt that
+ *  never ends by itself, so the prompt wording stays there. */
+const INSTALL_TEXT = {
+  windows: {
+    subtitle: 'The command runs in the terminal below; it may show nothing for a minute while it downloads. Answer any question it asks there. Setup checks again by itself when it ends. If the terminal says the install finished or failed and setup has not moved on, press Check again. Back stops the install.',
+    notYet: 'Claude Code was not found yet. The install may still be running: setup checks again by itself when it ends. If the terminal says the install finished or failed and setup has not moved on, press Check again. Back stops the install.',
+    found: 'Claude Code was found. The install is still finishing in the terminal above; setup goes on by itself when it ends. Back stops the install.',
+  },
+  posix: {
+    subtitle: 'The command runs in the terminal below; it may show nothing for a minute while it downloads. Answer any question it asks there. Setup checks again when it ends; if it stops at a prompt, press Check again.',
+    notYet: 'Claude Code was not found yet. If the terminal above is back at a prompt, the command has ended: press Back to try another command.',
+    found: 'Claude Code was found. The install is still finishing in the terminal above; setup goes on by itself when it ends. If the terminal is back at a prompt, the command has ended: press Stop it and continue.',
+  },
+} as const
 
 /** What a pty.spawn answer that started nothing says, or null when it started. */
 function notStarted(r: unknown): string | null {
@@ -158,6 +190,12 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
   const [step, setStep] = useState(initialStep || 1)
   const [dataDir, setDataDir] = useState('')
   const [resourcesDir, setResourcesDir] = useState('')
+  // The folder step's message when main did not save a folder (handleContinue).
+  const [folderError, setFolderError] = useState<string | null>(null)
+  // A press of Continue whose saves are still out (handleContinue): the ref
+  // turns away a second press at once, the state disables the step's controls.
+  const savingFoldersRef = useRef(false)
+  const [savingFolders, setSavingFolders] = useState(false)
   const [loading, setLoading] = useState(true)
   const [ptyExited, setPtyExited] = useState(false)
   const [ptySpawned, setPtySpawned] = useState(false)
@@ -169,6 +207,10 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
   // When main cannot give its install commands: the npm one, for this
   // computer's terminal (npm.cmd on Windows), to copy.
   const installCommand = claudeCodeInstallCommand(window.electronPlatform)
+  // macOS and Linux get the prompt wording and Stop it and continue; any
+  // other platform (Windows, or one not reported) the words that never
+  // suggest stopping a running install.
+  const posix = window.electronPlatform === 'darwin' || window.electronPlatform === 'linux'
   const termContainerRef = useRef<HTMLDivElement>(null)
   // Main's install commands for Claude Code (undefined: not read yet; null:
   // main could not give them), read whenever the not-installed screen may show.
@@ -209,8 +251,16 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
    * Fail-closed by design -- an errored probe reports `installed: false` from
    * main, and Retry re-asks -- so a user who installs the CLI in another window
    * is one click from unblocked.
+   *
+   * Only the latest check lands (F4; aicc_planning#198 n3): checks
+   * can overlap (a Check again still out when the install ends and setup
+   * checks by itself; Back during a check), and an older answer arriving
+   * later must not re-enable a button or repaint what was found. A check a
+   * newer one overtook changes nothing and answers null.
    */
-  const probeCli = useCallback(async (): Promise<CliProbe> => {
+  const probeSeq = useRef(0)
+  const probeCli = useCallback(async (): Promise<CliProbe | null> => {
+    const mine = ++probeSeq.current
     setProbing(true)
     let result: CliProbe
     try {
@@ -220,6 +270,7 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
     } catch (err) {
       result = { installed: false, probe: err instanceof Error ? err.message : String(err) }
     }
+    if (mine !== probeSeq.current) return null
     setProbing(false)
     setCliProbe(result)
     return result
@@ -277,9 +328,11 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
     await readRecipes()
     const now = installRef.current
     if (!mountedRef.current || !now || now.id !== id) return
+    // A newer check owns the screen: it alone decides.
+    if (!result) return
     // Found: the step-2 terminal opens for Claude Code's own setup.
     if (result.installed) { setInstall(null); return }
-    setInstall({ ...now, checking: false })
+    setInstall({ ...now, checking: false, foundWhileRunning: false })
   }
   const installEnded = (id: string, exitCode: number | undefined) => {
     const cur = installRef.current
@@ -334,8 +387,13 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
   }
   // Check again on the install screen. After the command ended: the check
   // it already made, again. While it still runs (its shell may be sitting at
-  // a prompt): a check that leaves it running; when Claude Code is found, the
-  // command's terminal is stopped and setup goes on.
+  // a prompt): a check that leaves it running. When that check finds Claude
+  // Code, the command is still left to run (F4; aicc_planning#194
+  // and aicc_planning#190): the installer can find
+  // claude before it has finished, and stopping it then can leave the
+  // install half done. The screen says so, and setup goes on when the
+  // terminal ends (its own check); on macOS and Linux, Stop it and continue
+  // is there for a shell left at a prompt, which never ends.
   const checkInstallNow = async () => {
     const cur = installRef.current
     if (!cur || cur.checking) return
@@ -344,18 +402,31 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
     const result = await probeCli()
     const now = installRef.current
     if (!mountedRef.current || !now || now.id !== cur.id) return
+    // The command ended while this check was out: the check its end
+    // started decides.
+    if (now.ended) return
+    if (!result) return
     if (result.installed) {
-      if (!now.ended) window.electronAPI.pty.kill(now.id)
-      setInstall(null)
+      setInstall({ ...now, checking: false, foundWhileRunning: true })
       return
     }
     setInstall({ ...now, checking: false, checkedWhileRunning: true })
+  }
+  // macOS and Linux only, once Claude Code was found while the command still
+  // runs: stop its terminal and go on to Claude Code's own setup.
+  const stopAndContinue = () => {
+    const cur = installRef.current
+    if (!cur || !cur.foundWhileRunning || cur.checking) return
+    if (!cur.ended) window.electronAPI.pty.kill(cur.id)
+    setInstall(null)
   }
 
   // Exit, on every Setup screen: the window closes as its own close button
   // closes it (the app's title bar is not drawn while setup shows), which
   // quits the app on Windows and Linux. A command still running on this
-  // screen, and the Claude Code setup terminal, are stopped first.
+  // screen, and the Claude Code setup terminal, are stopped first. The
+  // window's own Close in each screen's top bar (WindowDragStrip) runs this
+  // too, so the two ways out do the same thing.
   const handleExit = () => {
     const cur = installRef.current
     if (cur && !cur.ended) window.electronAPI.pty.kill(cur.id)
@@ -386,24 +457,68 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
     missingPanelRef.current?.querySelector<HTMLButtonElement>('[data-testid="setup-cli-retry"]')?.focus()
   }, [probing])
 
+  // The folder step's Continue is disabled while the folders are being saved
+  // (handleContinue), so the focus it had falls to the page body. When a save
+  // fails and the step stays, Continue has the focus again (the message is
+  // announced, role=alert). A control the user moved to keeps it.
+  useEffect(() => {
+    if (savingFolders || !folderError) return
+    const at = document.activeElement
+    if (at && at !== document.body) return
+    document.querySelector<HTMLButtonElement>('[data-testid="setup-continue"]')?.focus()
+  }, [savingFolders, folderError])
+
+  // The folder picker is not tied to the window, so it can be left open while
+  // Continue is pressed. A folder picked while the folders are being saved is
+  // dropped: the field keeps showing the folder that is being saved.
   const handleBrowseData = async () => {
     const result = await window.electronAPI.setup.selectDataDir()
-    if (result) setDataDir(result)
+    if (result && !savingFoldersRef.current) setDataDir(result)
   }
 
   const handleBrowseResources = async () => {
     const result = await window.electronAPI.setup.selectResourcesDir()
-    if (result) setResourcesDir(result)
+    if (result && !savingFoldersRef.current) setResourcesDir(result)
   }
 
+  // Continue goes on only once main has saved both folders. A folder it could
+  // not create, one that is not a full path, or one the registry (on macOS
+  // and Linux, the config file) did not save, answers false (a call that
+  // fails outright counts the same); the folder step then stays and says
+  // which folder, and nothing after it is tried. The message is cleared at
+  // each press, so it is never left from an earlier one.
+  //
+  // While a press's saves are out, the step is held: a second press does
+  // nothing, and Continue, both folder fields and both Browse buttons are
+  // disabled. So only one press at a time sets the message or goes on, and
+  // the folders saved are the ones the fields showed when it was pressed
+  // (a save can take a while, on a slow network share).
   const handleContinue = async () => {
-    await window.electronAPI.setup.setDataDir(dataDir)
-    await window.electronAPI.setup.setResourcesDir(resourcesDir)
-    // Re-arm the CLI gate: coming back to step 2 always re-probes, so a user who
-    // went Back to install the CLI is not shown a stale verdict.
-    setCliProbe(null)
-    setTried(false)
-    setStep(2)
+    if (savingFoldersRef.current) return
+    savingFoldersRef.current = true
+    setSavingFolders(true)
+    try {
+      setFolderError(null)
+      const saved = async (save: () => Promise<boolean>) => {
+        try { return (await save()) === true } catch { return false }
+      }
+      if (!(await saved(() => window.electronAPI.setup.setDataDir(dataDir)))) {
+        if (mountedRef.current) setFolderError(folderNotSaved('data'))
+        return
+      }
+      if (!(await saved(() => window.electronAPI.setup.setResourcesDir(resourcesDir)))) {
+        if (mountedRef.current) setFolderError(folderNotSaved('resources'))
+        return
+      }
+      // Re-arm the CLI gate: coming back to step 2 always re-probes, so a user who
+      // went Back to install the CLI is not shown a stale verdict.
+      setCliProbe(null)
+      setTried(false)
+      setStep(2)
+    } finally {
+      savingFoldersRef.current = false
+      if (mountedRef.current) setSavingFolders(false)
+    }
   }
 
   const handleFinish = async () => {
@@ -436,6 +551,7 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
   if (loading) {
     return (
       <div className="fixed inset-0 flex items-center justify-center z-50" style={OPAQUE_BACKDROP}>
+        <WindowDragStrip onClose={handleExit} />
         <div style={{ color: 'var(--text-muted)' }}>Loading...</div>
       </div>
     )
@@ -462,11 +578,25 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
   // becoming step 1's Continue after Back) and autoFocus would not run again.
   // Step 2, installing: the command runs in the terminal below; setup checks
   // again when it ends. Back stops it (if it still runs) and checks again;
-  // Check again works while it runs too.
+  // Check again works while it runs too. Found while it runs, the primary
+  // reads Continue and waits for the terminal to end (setup then checks once
+  // more and goes on by itself); on macOS and Linux Stop it and continue sits
+  // before it.
+  //
+  // A path hint that is only a note (a restart that may help, though
+  // Claude Code was not seen; pathHintIsNote) never takes the place of what
+  // the screen says: the not-installed words, what the command ended with,
+  // and Check again's own answer stay, and the note shows beside them
+  // (aicc_planning#190).
   if (step === 2 && install) {
-    const hint = install.ended && !install.checking ? cliProbe?.pathHint : undefined
+    const shownHint = install.ended && !install.checking ? cliProbe?.pathHint : undefined
+    const note = pathHintIsNote(shownHint) ? shownHint : undefined
+    const hint = note ? undefined : shownHint
+    const words = posix ? INSTALL_TEXT.posix : INSTALL_TEXT.windows
+    const foundRunning = !!install.foundWhileRunning
     return (
       <DialogOverlay key="setup-cli-install" style={OPAQUE_BACKDROP}>
+        <WindowDragStrip onClose={handleExit} />
         <DialogPanel width="w-[672px]" labelledBy="setup-cli-install-title">
           <DialogBody className="space-y-3">
             <div data-testid="setup-cli-install">
@@ -474,7 +604,7 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
                 titleId="setup-cli-install-title"
                 mark=">_"
                 title="Installing Claude Code"
-                subtitle="The command runs in the terminal below; it may show nothing for a minute while it downloads. Answer any question it asks there. Setup checks again when it ends; if it stops at a prompt, press Check again."
+                subtitle={words.subtitle}
               />
             </div>
             <div
@@ -488,9 +618,14 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
                 Checking for Claude Code…
               </p>
             )}
-            {!install.ended && !install.checking && install.checkedWhileRunning && (
+            {!install.ended && !install.checking && foundRunning && (
+              <DialogCallout tone="success" role="status" testId="setup-cli-install-found">
+                {words.found}
+              </DialogCallout>
+            )}
+            {!install.ended && !install.checking && !foundRunning && install.checkedWhileRunning && (
               <DialogCallout tone="warning" role="status" testId="setup-cli-install-not-yet">
-                Claude Code was not found yet. If the terminal above is back at a prompt, the command has ended: press Back to try another command.
+                {words.notYet}
               </DialogCallout>
             )}
             {hint && (
@@ -502,6 +637,9 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
                 Back lists the other install commands.
               </DialogCallout>
             )}
+            {note && (
+              <PathHintNotice hint={note} toolName="Claude Code" providerId="claude" testIdPrefix="setup" />
+            )}
           </DialogBody>
           <DialogFooter
             left={
@@ -511,14 +649,30 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
             }
           >
             {exitButton}
-            <DialogButton
-              variant="primary"
-              onClick={() => { void checkInstallNow() }}
-              disabled={install.checking}
-              testId="setup-cli-install-retry"
-            >
-              {install.checking ? 'Checking…' : 'Check again'}
-            </DialogButton>
+            {posix && foundRunning && !install.ended && !install.checking && (
+              <DialogButton variant="secondary" onClick={stopAndContinue} testId="setup-cli-install-stop">
+                Stop it and continue
+              </DialogButton>
+            )}
+            {foundRunning ? (
+              <DialogButton
+                variant="primary"
+                onClick={() => { void checkInstallNow() }}
+                disabled={install.checking || !install.ended}
+                testId="setup-cli-install-continue"
+              >
+                {install.checking ? 'Checking…' : 'Continue'}
+              </DialogButton>
+            ) : (
+              <DialogButton
+                variant="primary"
+                onClick={() => { void checkInstallNow() }}
+                disabled={install.checking}
+                testId="setup-cli-install-retry"
+              >
+                {install.checking ? 'Checking…' : 'Check again'}
+              </DialogButton>
+            )}
           </DialogFooter>
         </DialogPanel>
       </DialogOverlay>
@@ -527,9 +681,11 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
 
   if (step === 2 && cliProbe && !cliProbe.installed) {
     const listed = Array.isArray(recipes) && recipes.some((r) => r.purpose === 'install')
-    const hint = cliProbe.pathHint
+    const note = pathHintIsNote(cliProbe.pathHint) ? cliProbe.pathHint : undefined
+    const hint = note ? undefined : cliProbe.pathHint
     return (
       <DialogOverlay key="setup-cli-missing" style={OPAQUE_BACKDROP}>
+        <WindowDragStrip onClose={handleExit} />
         <DialogPanel width="w-[672px]" labelledBy="setup-cli-missing-title" panelRef={missingPanelRef}>
           <DialogBody className="space-y-4">
             <SetupHero
@@ -555,6 +711,7 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
               </p>
             </DialogCallout>
             )}
+            {note && <PathHintNotice hint={note} toolName="Claude Code" providerId="claude" testIdPrefix="setup" />}
 
             {recipes === undefined ? null : listed ? (
               <div className="install-recipes">
@@ -609,6 +766,14 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
                 {afterInstallMessage('Claude Code', { ended: false })}
               </DialogCallout>
             )}
+            {/* With a PATH hint showing, a Check again that still finds
+                nothing would otherwise change nothing on screen (F4;
+                aicc_planning#194). */}
+            {tried && !probing && hint && (
+              <p className="text-[11px]" role="status" style={{ color: 'var(--text-muted)' }} data-testid="setup-cli-checked-again">
+                Checked again just now: Claude Code was still not found.
+              </p>
+            )}
 
             <p className="text-[11px]" style={{ color: 'var(--text-muted)' }} data-testid="setup-cli-probe-detail">
               Checked with <code>{cliProbe.probe}</code>.
@@ -655,6 +820,7 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
   if (step === 2) {
     return (
       <DialogOverlay key="setup-cli" style={OPAQUE_BACKDROP}>
+        <WindowDragStrip onClose={handleExit} />
         <DialogPanel width="w-[672px]" labelledBy="setup-cli-title">
           <DialogBody>
             <SetupHero
@@ -711,6 +877,7 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
   // Step 1: Directory selection
   return (
     <DialogOverlay key="setup-dirs" style={OPAQUE_BACKDROP}>
+      <WindowDragStrip onClose={handleExit} />
       <DialogPanel width="w-[576px]" labelledBy="setup-welcome-title">
         <DialogBody className="space-y-5">
           <SetupHero
@@ -733,10 +900,11 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
                 type="text"
                 value={dataDir}
                 onChange={(e) => setDataDir(e.target.value)}
+                disabled={savingFolders}
                 className={DIALOG_INPUT_CLASS.replace('w-full', 'flex-1')}
                 style={DIALOG_INPUT_STYLE}
               />
-              <DialogButton variant="secondary" onClick={handleBrowseData} className="shrink-0" style={{ height: 'auto', alignSelf: 'stretch' }}>
+              <DialogButton variant="secondary" onClick={handleBrowseData} disabled={savingFolders} className="shrink-0" style={{ height: 'auto', alignSelf: 'stretch' }}>
                 Browse
               </DialogButton>
             </div>
@@ -755,10 +923,11 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
                 type="text"
                 value={resourcesDir}
                 onChange={(e) => setResourcesDir(e.target.value)}
+                disabled={savingFolders}
                 className={DIALOG_INPUT_CLASS.replace('w-full', 'flex-1')}
                 style={DIALOG_INPUT_STYLE}
               />
-              <DialogButton variant="secondary" onClick={handleBrowseResources} className="shrink-0" style={{ height: 'auto', alignSelf: 'stretch' }}>
+              <DialogButton variant="secondary" onClick={handleBrowseResources} disabled={savingFolders} className="shrink-0" style={{ height: 'auto', alignSelf: 'stretch' }}>
                 Browse
               </DialogButton>
             </div>
@@ -790,13 +959,19 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
               </div>
             </div>
           </div>
+
+          {folderError && (
+            <DialogCallout tone="danger" role="alert" testId="setup-folder-error">
+              <p>{folderError}</p>
+            </DialogCallout>
+          )}
         </DialogBody>
 
         <DialogFooter>
           {exitButton}
           {/* Was a purple fill with the same font-size-not-a-colour trap as
               step 2's Finish button. */}
-          <DialogButton variant="primary" onClick={handleContinue} autoFocus testId="setup-continue">
+          <DialogButton variant="primary" onClick={handleContinue} disabled={savingFolders} autoFocus testId="setup-continue">
             Continue
           </DialogButton>
         </DialogFooter>

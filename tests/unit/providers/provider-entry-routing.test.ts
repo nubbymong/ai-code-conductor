@@ -52,8 +52,12 @@ const watcher = await import('../../../src/main/statusline-watcher')
 const { writeLocalSessionSettings, getLocalSessionSettingsPath } = await import('../../../src/main/hooks/per-session-settings')
 const { getAllPricing, registryFallbackPricing } = await import('../../../src/main/tokenomics/tk-pricing')
 const { randomId } = await import('../../../src/shared/id')
+const { __markScriptFoldersCheckedForTests, __resetScriptFoldersForTests } = await import('../../../src/main/script-folders')
 
-afterEach(() => { _resetProviderRegistryForTest() })
+afterEach(() => {
+  _resetProviderRegistryForTest()
+  __resetScriptFoldersForTests()
+})
 
 describe('the provider operations are the package helpers they replaced [host]', () => {
   it('Claude: the SSH surface, the screen readers and the statusline helpers delegate unchanged', () => {
@@ -85,7 +89,18 @@ describe('the provider operations are the package helpers they replaced [host]',
       for (const sent of [true, false]) expect(p.detectUiRunning(chunk, sent)).toBe(ui.detectClaudeUi(chunk, sent))
       expect(p.detectUiRunning(chunk)).toBe(ui.detectClaudeUi(chunk, true))
     }
-    expect(p.statuslineSetting('/res', sid, '/res/url-file')).toEqual(buildStatuslineSetting('/res', sid, '/res/url-file'))
+    // The status line command is buildStatuslineSetting's, given only while
+    // the deployed script passes the launch check (statusline.ts
+    // launchStatuslineSetting): none while the scripts folder was not checked
+    // this run, then that same command once a plain script is in a checked one.
+    const res = path.join(h.tmp, 'res-statusline')
+    fs.mkdirSync(path.join(res, 'scripts'), { recursive: true })
+    fs.writeFileSync(path.join(res, 'scripts', 'claude-multi-statusline.js'), '// the app\'s\n')
+    const urlFile = path.join(res, 'url-file')
+    expect(buildStatuslineSetting(res, sid, urlFile)).not.toBeNull()
+    expect(p.statuslineSetting(res, sid, urlFile)).toBeUndefined()
+    __markScriptFoldersCheckedForTests(res)
+    expect(p.statuslineSetting(res, sid, urlFile)).toEqual(buildStatuslineSetting(res, sid, urlFile))
     expect(p.statusPostUrl(sid, undefined, h.port, true)).toBe(shim.statusPostUrl(sid, undefined, h.port, true))
     expect(p.statusPostUrl(sid, 40123, h.port, true)).toBe(shim.statusPostUrl(sid, 40123, h.port, true))
     expect(p.statusPostUrl(sid, undefined, 0, true)).toBe('')

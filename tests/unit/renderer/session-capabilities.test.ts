@@ -1,8 +1,8 @@
 /**
  * One function says what a session can do. The bar, the dialog, the Logs button
  * and the Settings page read it and nothing else -- so a Codex session is never
- * called "Claude" again, and an SSH session's partner shell is never described
- * as if it ran on the host.
+ * called "Claude" again, and an SSH session's partner shell is described where
+ * it runs: since #86 (2.1.1) on the host, as the session is.
  */
 import { describe, it, expect } from 'vitest'
 import { sessionCapabilities, describeTarget } from '../../../src/renderer/lib/session-capabilities'
@@ -45,17 +45,37 @@ describe('sessionCapabilities', () => {
     expect(describeTarget(c, 'claude')).toBe('this shell')
   })
 
-  it('SSH Claude: the main pane is remote, the partner is this PC, the two panes differ, logs live on the host', () => {
+  // #86: the partner of an SSH session is a plain shell on the session's own
+  // host (PartnerTerminalPane). It was a shell on this PC, and every label that
+  // said so becomes false; they all read this function.
+  it('SSH Claude: the main pane and the partner are both on the host, logs live on the host', () => {
     const c = sessionCapabilities(ssh())
     expect(c.mainRunsOn).toBe('remote')
-    expect(c.partnerRunsOn).toBe('local')
+    expect(c.partnerRunsOn).toBe('remote')
     expect(c.remoteHost).toBe('build-box')
-    expect(c.panesOnDifferentMachines).toBe(true)
+    expect(c.panesOnDifferentMachines).toBe(false)
     expect(c.logsEmptyReason).toBe('ssh')
     expect(c.runsOn('claude')).toBe('remote')
-    expect(c.runsOn('partner')).toBe('local')
+    expect(c.runsOn('partner')).toBe('remote')
     expect(describeTarget(c, 'claude')).toBe('Claude on build-box')
+    expect(describeTarget(c, 'partner')).toBe('the partner shell on build-box')
+  })
+
+  it('an SSH tab with no ssh block: its partner is a shell on this PC (PartnerTerminalPane has nothing to connect with), and the labels say so', () => {
+    const c = sessionCapabilities(ssh({ sshConfig: undefined }))
+    expect(c.mainRunsOn).toBe('remote')
+    expect(c.partnerRunsOn).toBe('local')
+    expect(c.panesOnDifferentMachines).toBe(true)
+    expect(c.runsOn('partner')).toBe('local')
     expect(describeTarget(c, 'partner')).toBe('the partner shell (this PC)')
+    expect(c.canDeliverSecret('partner')).toBe(true)
+  })
+
+  it('a local session\'s partner is on this PC, as before, and its label names no machine', () => {
+    const c = sessionCapabilities(local())
+    expect(c.partnerRunsOn).toBe('local')
+    expect(c.runsOn('partner')).toBe('local')
+    expect(describeTarget(c, 'partner')).toBe('the partner shell')
   })
 
   it('shell-only takes precedence over ssh and codex for the logs reason, as LogsPane does', () => {
@@ -74,11 +94,11 @@ describe('sessionCapabilities', () => {
       expect(c.canDeliverSecret('claude')).toBe(true)
       expect(c.canDeliverSecret('partner')).toBe(true)
     })
-    it('SSH: the remote main pane never, the local partner yes', () => {
+    it('SSH: never -- the main pane and (#86) the partner both run on the host, where main sets no env var', () => {
       expect(sessionCapabilities(ssh()).canDeliverSecret('claude')).toBe(false)
-      expect(sessionCapabilities(ssh()).canDeliverSecret('partner')).toBe(true)
+      expect(sessionCapabilities(ssh()).canDeliverSecret('partner')).toBe(false)
       expect(sessionCapabilities(ssh({ shellOnly: true })).canDeliverSecret('claude')).toBe(false)
-      expect(sessionCapabilities(ssh({ shellOnly: true })).canDeliverSecret('partner')).toBe(true)
+      expect(sessionCapabilities(ssh({ shellOnly: true })).canDeliverSecret('partner')).toBe(false)
     })
   })
 

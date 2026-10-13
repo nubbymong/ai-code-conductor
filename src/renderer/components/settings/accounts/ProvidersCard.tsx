@@ -21,7 +21,7 @@ import { Pill, StatusText, ErrorLine, MutedLine, RowButton } from './accounts-ui
 import { showHelloCodexReplay, codexSetUp } from '../../../onboarding/hello-codex'
 import { tryGetRendererProvider } from '../../../providers/core'
 import { InstallRecipeRow, afterInstallMessage, type RunnableRecipe } from '../../../onboarding/InstallRecipeList'
-import { PathHintNotice } from '../../../onboarding/PathHintNotice'
+import { PathHintNotice, pathHintIsNote } from '../../../onboarding/PathHintNotice'
 import { openInstallTab, installTabRunning, useInstallTabRunning, type InstallTab } from '../../../utils/installTab'
 import { useSessionStore } from '../../../stores/sessionStore'
 
@@ -191,9 +191,10 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
   // Still not found after its install ended, or after the user's own Check
   // again. (A CLI found but too old says so in its status line.) When main
   // said what helps (its install folder is off PATH, or a restart), that is
-  // shown instead.
+  // shown instead. A restart that only may help (pathHintIsNote) is a note:
+  // this line stays, and the note follows it.
   const shownHint = purpose === 'install' && !checking ? hint : undefined
-  const after = purpose !== 'install' || checking || shownHint ? null
+  const after = purpose !== 'install' || checking || (shownHint && !pathHintIsNote(shownHint)) ? null
     : endedInstalls.has(p.providerId) && !running ? afterInstallMessage(p.displayName, { ended: true })
     : checked ? afterInstallMessage(p.displayName, { ended: false }) : null
 

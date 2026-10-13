@@ -71,6 +71,11 @@ export function buildSessionState(): SessionState {
     // T8b (bug #5): persist the exact conversation so app-relaunch resumes it.
     // Sync pass-through of whatever is on the store record; enrichWithResumeTargets
     // (the async caller) refreshes these from the live binder before save.
+    // aicc_planning#104: once the spawn has taken a restored target the record
+    // carries none, and main's session:save keeps the session's conversation
+    // when a lookup fails, while session-log indexing is on
+    // (session-resume-enrich.ts has the rules). The renderer keeps no copy
+    // of its own: one would be stale after /clear or /resume inside the tab.
     resumeUuid: s.resumeUuid,
     resumeCwd: s.resumeCwd,
     claudeOptions: (s.provider ?? 'claude') === 'claude' ? {
@@ -196,9 +201,12 @@ export function refreshRestoreOffer(
  * buildSessionState() is sync (used by several call sites); this async wrapper is
  * the choke point for the save-and-quit / autosave paths where we can afford one
  * IPC round-trip per session. Fully fail-safe: any session whose target can't be
- * resolved keeps whatever was already on the record (typically undefined), so the
- * fallback is exactly today's behaviour. Non-Claude / shell-only sessions are
- * skipped (the binder only tracks Claude transcripts).
+ * resolved keeps whatever was already on the record (typically undefined). Main's
+ * session:save then gives it the conversation of its last exact bind this run,
+ * else, while session-log indexing and the hooks are on, the conversation it was
+ * last saved with (aicc_planning#104; session-resume-enrich.ts has the rules).
+ * Non-Claude / shell-only sessions are skipped (the binder only tracks Claude
+ * transcripts).
  */
 export async function buildSessionStateWithResumeTargets(): Promise<SessionState> {
   const state = buildSessionState()
@@ -263,12 +271,20 @@ export function markRestoredSessionsPredetermined(sessionIds: string[]): void {
   for (const id of sessionIds) gate.markPredetermined(id)
 }
 
-export async function persistLastUsedAccount(sessionId: string, profileId: string | undefined): Promise<void> {
+export async function persistLastUsedAccount(
+  sessionId: string,
+  profileId: string | undefined,
+  opts: { recordMostRecent?: boolean } = {},
+): Promise<void> {
   useSessionStore.getState().updateSession(sessionId, { profileId })
   // Record it as the GLOBAL last-used account so the launch gate can offer it as
-  // a one-click default for the next new session. Only a real choice updates it
-  // (never clear it back to undefined). Best-effort persist.
-  if (profileId) {
+  // a one-click "Most recent" default for the next new session. Only a real
+  // choice updates it (never clear it back to undefined). Best-effort persist.
+  // O9: `recordMostRecent: false` pins the session only. The caller passes it
+  // when a resumed session is confirmed on its OWN account: that is not a new
+  // choice, and in a multi-session resume it would make "Most recent" just
+  // whichever session happened to be answered last.
+  if (profileId && opts.recordMostRecent !== false) {
     // updateSettings returns a Promise: attach .catch (a bare try/catch would
     // not see an async rejection and it would surface as unhandled).
     try {

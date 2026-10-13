@@ -65,7 +65,9 @@ const H = vi.hoisted(() => {
   const cleared: string[] = []
   /** persistSessionProviderAccount calls: [sessionId, providerAccountId]. */
   const persisted: unknown[][] = []
-  return { MockTerminal, sessionState, updates, spawned, tokens, counter, cleared, persisted }
+  /** persistLastUsedAccount calls: [sessionId, profileId, options?]. */
+  const lastUsed: unknown[][] = []
+  return { MockTerminal, sessionState, updates, spawned, tokens, counter, cleared, persisted, lastUsed }
 })
 
 vi.mock('@xterm/xterm/css/xterm.css', () => ({ default: {} }))
@@ -103,7 +105,7 @@ vi.mock('../../../src/renderer/stores/sessionStore', () => ({
 }))
 vi.mock('../../../src/renderer/hooks/useRestartSession', () => ({ useRestartSession: () => ({ restart: () => {} }) }))
 vi.mock('../../../src/renderer/session-persistence', () => ({
-  persistLastUsedAccount: () => {},
+  persistLastUsedAccount: (...a: unknown[]) => { H.lastUsed.push(a) },
   persistSessionProviderAccount: (...a: unknown[]) => { H.persisted.push(a); return Promise.resolve() },
 }))
 vi.mock('../../../src/renderer/stores/accountProfilesStore', () => {
@@ -259,6 +261,7 @@ beforeEach(() => {
   forgetSpawnEnd('s-1')
   H.cleared.length = 0
   H.persisted.length = 0
+  H.lastUsed.length = 0
   forgetSwitchOrigin('s-1')
   H.MockTerminal.last = null
   useProviderAccountsStore.setState({ snapshot: snapshot(), loaded: true })
@@ -1228,5 +1231,221 @@ describe('main refuses a launch because its provider is off', () => {
     await act(async () => { settles[0].resolve({ started: false }) })
     expect(termLines()).toContain('[The launch was cancelled before the session started]')
     expect(termLines()).not.toContain('Not started.')
+  })
+})
+
+// O9: a Claude session with two or more accounts asks which account to start
+// on. The picker names the session by its work name (customName) when it has
+// one, by the same rule as its log label, so the sessions of one config can be
+// told apart when several resume together. And confirming a RESUMED session's
+// own account pins that session only: the global "Most recent" account is left
+// alone, so after a multi-session resume it is not just the last one answered.
+describe('the account picker for a Claude session (O9)', () => {
+  let profilesState: { profiles: unknown[] }
+  const claudeSession = (over: Record<string, unknown> = {}) => codexSession({ provider: 'claude', codexOptions: undefined, ...over })
+  beforeEach(async () => {
+    const { useAccountProfilesStore } = await import('../../../src/renderer/stores/accountProfilesStore')
+    profilesState = (useAccountProfilesStore as any).getState()
+    profilesState.profiles = [
+      { id: 'p1', name: 'Work', accountEmail: 'work@example.com', isPrimary: true, active: true },
+      { id: 'p2', name: 'Home', accountEmail: 'home@example.com', isPrimary: false, active: true },
+    ]
+  })
+  afterEach(() => { profilesState.profiles = [] })
+  const head = () => useAccountGateStore.getState().queue[0]
+  const answerGate = async (profileId: string) => {
+    await act(async () => { useAccountGateStore.getState().resolveChoice(profileId) })
+    await settle()
+  }
+
+  it('(i) queues the picker under the session\'s work name when it has one', async () => {
+    mount(claudeSession({ label: 'api-server', customName: 'Billing fix' }))
+    await settle()
+    expect(spawn).not.toHaveBeenCalled()
+    expect(head().sessionLabel).toBe('Billing fix')
+  })
+
+  it('(i) falls back to the config label when the work name is blank', async () => {
+    mount(claudeSession({ label: 'api-server', customName: '   ' }))
+    await settle()
+    expect(head().sessionLabel).toBe('api-server')
+  })
+
+  it('a resumed session confirmed on its own pinned account: pinned, and the global most-recent account is not written', async () => {
+    useAccountGateStore.setState({ restored: ['s-1'] })
+    mount(claudeSession({ profileId: 'p2' }))
+    await settle()
+    expect(head().currentProfileId).toBe('p2')
+    await answerGate('p2')
+    expect(H.lastUsed).toEqual([['s-1', 'p2', { recordMostRecent: false }]])
+    expect(spawn).toHaveBeenCalledTimes(1)
+  })
+
+  it('a resumed session with no saved account, confirmed on the primary (the account it ran on): not written either', async () => {
+    useAccountGateStore.setState({ restored: ['s-1'] })
+    mount(claudeSession())
+    await settle()
+    await answerGate('p1')
+    expect(H.lastUsed).toEqual([['s-1', 'p1', { recordMostRecent: false }]])
+  })
+
+  it('a resumed session moved to ANOTHER account: a real choice, recorded as most recent', async () => {
+    useAccountGateStore.setState({ restored: ['s-1'] })
+    mount(claudeSession({ profileId: 'p2' }))
+    await settle()
+    await answerGate('p1')
+    expect(H.lastUsed).toEqual([['s-1', 'p1', { recordMostRecent: true }]])
+  })
+
+  it('a new session (not resumed) is always recorded as most recent, even on the account it carries', async () => {
+    mount(claudeSession({ profileId: 'p2' }))
+    await settle()
+    await answerGate('p2')
+    expect(H.lastUsed).toEqual([['s-1', 'p2', { recordMostRecent: true }]])
+  })
+})
+
+// O5 (owner-agreed 2026-10-11): the confirm before a later launch on the
+// account 2.1.1-beta.2 registered for the Codex sign-in already on this
+// computer offers another Codex account; picked, the session and the saved
+// config it came from move to it, and the launch starts there.
+describe("a later launch on this computer's own sign-in: another account instead (O5)", () => {
+  const cfgBase = { id: 'cfg-1', label: 'api-server', workingDirectory: 'C:/proj', color: '', sessionType: 'local', provider: 'codex' }
+  const mountWithConfig = (session: Record<string, unknown>, key = 'a') => {
+    H.sessionState.sessions = [session]
+    act(() => {
+      root.render(React.createElement(TerminalView as any, { key, sessionId: 's-1', configId: 'cfg-1', cwd: 'C:/proj', isActive: true, provider: 'codex', codexOptions: session.codexOptions }))
+    })
+  }
+  const pick = async (accountId: string) => {
+    const q = useLaunchAckStore.getState().queue
+    await act(async () => { useLaunchAckStore.getState().switchAccount(q[0].requestId, accountId) })
+  }
+  const savedConfig = () => (useConfigStore as any).getState().configs[0]
+  beforeEach(() => { (window as any).electronAPI.config = { save: vi.fn(async () => true) } })
+  afterEach(() => { (useConfigStore as any).setState({ configs: [] }); delete (window as any).electronAPI.config })
+
+  it('the question offers it, naming the account asked about', async () => {
+    mount(codexSession({ providerAccountId: 'acc-local' }))
+    await settle()
+    expect(useLaunchAckStore.getState().queue[0]).toMatchObject({ sessionId: 's-1', external: true, accountId: 'acc-local', offerSwitch: true })
+    // A launch with no exact conversation to resume: nothing to warn about.
+    expect(useLaunchAckStore.getState().queue[0].resumesConversation).toBeUndefined()
+  })
+
+  // O5: a restored tab carries the exact
+  // conversation it resumes. Moved from the confirm, its launch still sends
+  // that target, which main looks for only in the picked account's
+  // conversations (none was carried), so the tab starts without it. The
+  // question says so up front (resumesConversation, which the confirm words).
+  const RESUME_UUID = '0f8fad5b-d9cb-469f-a165-70867728950e'
+  it('a restored tab: the question says it resumes a conversation, and a move still sends that exact target to the picked account', async () => {
+    ;(useConfigStore as any).setState({ configs: [{ ...cfgBase, providerAccountId: 'acc-local' }] })
+    mountWithConfig(codexSession({ providerAccountId: 'acc-local', configId: 'cfg-1', resumeUuid: RESUME_UUID, resumeCwd: 'C:/proj' }))
+    await settle()
+    expect(useLaunchAckStore.getState().queue[0]).toMatchObject({ external: true, accountId: 'acc-local', offerSwitch: true, resumesConversation: true })
+    await pick('acc-work')
+    await settle()
+    expect(H.persisted).toEqual([['s-1', 'acc-work']])
+    expect(savedConfig().providerAccountId).toBe('acc-work')
+    expect(spawn).toHaveBeenCalledTimes(1)
+    expect(spawn.mock.calls[0][1]).toMatchObject({ providerAccountId: 'acc-work', resume: { uuid: RESUME_UUID, cwd: 'C:/proj' } })
+  })
+
+  it("a restored tab launched as it is (Launch) resumes its conversation on this computer's sign-in", async () => {
+    mount(codexSession({ providerAccountId: 'acc-local', resumeUuid: RESUME_UUID, resumeCwd: 'C:/proj' }))
+    await settle()
+    expect(useLaunchAckStore.getState().queue[0]).toMatchObject({ resumesConversation: true })
+    await answer(true)
+    await settle()
+    expect(spawn.mock.calls[0][1]).toMatchObject({ providerAccountId: 'acc-local', acknowledgeRealmOnly: true, resume: { uuid: RESUME_UUID, cwd: 'C:/proj' } })
+  })
+
+  it('a bound session and its config move to the account picked, and it starts there with no acknowledgement', async () => {
+    ;(useConfigStore as any).setState({ configs: [{ ...cfgBase, providerAccountId: 'acc-local' }] })
+    mountWithConfig(codexSession({ providerAccountId: 'acc-local', configId: 'cfg-1' }))
+    await settle()
+    expect(spawn).not.toHaveBeenCalled()
+    await pick('acc-work')
+    await settle()
+    expect(H.persisted).toEqual([['s-1', 'acc-work']])
+    expect(savedConfig().providerAccountId).toBe('acc-work')
+    expect(spawn).toHaveBeenCalledTimes(1)
+    expect(spawn.mock.calls[0][1]).toMatchObject({ providerAccountId: 'acc-work' })
+    expect(spawn.mock.calls[0][1].acknowledgeRealmOnly).toBeUndefined()
+    expect(useLaunchAckStore.getState().queue).toEqual([])
+  })
+
+  it('an unbound config that followed that sign-in as the default is bound to the account picked', async () => {
+    const localDefault = { ...snapshot().accounts.find((a) => a.id === 'acc-local')!, isProviderDefault: true }
+    const workPlain = { ...snapshot().accounts.find((a) => a.id === 'acc-work')!, isProviderDefault: false }
+    useProviderAccountsStore.setState({ snapshot: snapshot({ accounts: [localDefault, workPlain] }), loaded: true })
+    ;(useConfigStore as any).setState({ configs: [{ ...cfgBase }] })
+    mountWithConfig(codexSession({ configId: 'cfg-1' }))
+    await settle()
+    expect(useLaunchAckStore.getState().queue[0]).toMatchObject({ accountId: 'acc-local', offerSwitch: true })
+    await pick('acc-work')
+    await settle()
+    expect(H.persisted).toEqual([['s-1', 'acc-work']])
+    expect(savedConfig().providerAccountId).toBe('acc-work')
+    expect(spawn.mock.calls[0][1]).toMatchObject({ providerAccountId: 'acc-work' })
+  })
+
+  // A config that names no account used the sign-in
+  // only when this launch resolved from the default. A tab bound to it by a
+  // runtime Switch account while its config followed another default never
+  // used it: moving the tab must not pin that config.
+  it('an unbound config whose tab was switched onto that sign-in (it followed another default) stays unbound; the session still moves', async () => {
+    ;(useConfigStore as any).setState({ configs: [{ ...cfgBase }] })
+    mountWithConfig(codexSession({ providerAccountId: 'acc-local', configId: 'cfg-1' }))
+    await settle()
+    expect(useLaunchAckStore.getState().queue[0]).toMatchObject({ accountId: 'acc-local', offerSwitch: true })
+    await pick('acc-personal')
+    await settle()
+    expect(H.persisted).toEqual([['s-1', 'acc-personal']])
+    expect(savedConfig().providerAccountId).toBeUndefined()
+    expect(spawn).toHaveBeenCalledTimes(1)
+    expect(spawn.mock.calls[0][1]).toMatchObject({ providerAccountId: 'acc-personal' })
+  })
+
+  it('a config that names another account is left as it is; the session still moves', async () => {
+    ;(useConfigStore as any).setState({ configs: [{ ...cfgBase, providerAccountId: 'acc-personal' }] })
+    mountWithConfig(codexSession({ providerAccountId: 'acc-local', configId: 'cfg-1' }))
+    await settle()
+    await pick('acc-work')
+    await settle()
+    expect(H.persisted).toEqual([['s-1', 'acc-work']])
+    expect(savedConfig().providerAccountId).toBe('acc-personal')
+    expect(spawn.mock.calls[0][1]).toMatchObject({ providerAccountId: 'acc-work' })
+  })
+
+  it('an account that can no longer be used by the time it is picked: nothing moves, nothing starts, and the tab says so', async () => {
+    ;(useConfigStore as any).setState({ configs: [{ ...cfgBase, providerAccountId: 'acc-local' }] })
+    mountWithConfig(codexSession({ providerAccountId: 'acc-local', configId: 'cfg-1' }))
+    await settle()
+    // Blocked meanwhile (or inactive, archived, removed, or that sign-in itself).
+    const blockedWork = { ...snapshot().accounts.find((a) => a.id === 'acc-work')!, operationalState: 'blocked' as const }
+    await act(async () => { useProviderAccountsStore.setState({ snapshot: snapshot({ accounts: [snapshot().accounts.find((a) => a.id === 'acc-local')!, blockedWork] }), loaded: true }) })
+    await pick('acc-work')
+    await settle()
+    expect(spawn).not.toHaveBeenCalled()
+    expect(H.persisted).toEqual([])
+    expect(savedConfig().providerAccountId).toBe('acc-local')
+    expect(termLines()).toContain('Not started: the account picked can no longer be used. Restart the session to choose again.')
+  })
+
+  it('an account picked that asks itself (an unverified sign-in) is asked about in its own words, then starts with its acknowledgement', async () => {
+    const unv = { ...snapshot().accounts.find((a) => a.id === 'acc-personal')!, unverified: true, identityAssurance: 'realm-only' as const }
+    useProviderAccountsStore.setState({ snapshot: snapshot({ accounts: [snapshot().accounts.find((a) => a.id === 'acc-local')!, unv, snapshot().accounts.find((a) => a.id === 'acc-work')!] }), loaded: true })
+    mount(codexSession({ providerAccountId: 'acc-local' }))
+    await settle()
+    await pick('acc-personal')
+    await settle()
+    expect(spawn).not.toHaveBeenCalled()
+    expect(useLaunchAckStore.getState().queue[0]).toMatchObject({ external: false, accountName: 'Personal' })
+    expect(useLaunchAckStore.getState().queue[0].offerSwitch).toBeUndefined()
+    await answer(true)
+    await settle()
+    expect(spawn.mock.calls[0][1]).toMatchObject({ providerAccountId: 'acc-personal', acknowledgeRealmOnly: true })
   })
 })

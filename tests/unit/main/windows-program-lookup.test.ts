@@ -97,6 +97,7 @@ const { defaultGhRun } = await import('../../../src/main/github/auth/gh-cli-dele
 const { npmCommand, fetchAvailableVersions } = await import('../../../src/main/legacy-version-manager')
 const { probeClaudeCli, _resetClaudeCliProbeForTest, _resetClaudeWindowsLookupForTest } = await import('../../../src/main/claude-cli-probe')
 const { IPC } = await import('../../../src/shared/ipc-channels')
+const spawnClaudeCommand = await import('../../../src/main/spawn-claude-command')
 
 /** Relative entries first, then the real folders. */
 const PATH = '.;rel\\bin;%APPDATA%\\npm;C:\\Npm;C:\\Tools'
@@ -330,5 +331,26 @@ describe('only the launch walks PATH on the event loop, and not while the CLI ch
     have('C:\\Npm\\claude.exe')
     expect(resolveClaudeBinary(undefined, { ...ENV, PATH: 'C:\\Npm' })).toEqual({ cmd: 'C:\\Npm\\claude.exe', args: [] })
     expect(h.syncWalks).toHaveLength(1)
+  })
+
+  // 2.1.1-beta.3 (S10). Mutation to prove this can fail: drop the node.exe
+  // look from the CLI check.
+  it('the CLI check also looks for node.exe, so a fresh launch right after starts the resume list, or Claude Code directly, with no PATH walk', async () => {
+    ;(spawnClaudeCommand as any)._resetPickerNodeFoundForTest?.()
+    const fresh = { platform: 'win32', cwd: 'C:\\work', claudeBin: 'C:\\Tools\\claude.exe', extraFlags: '', agentsFlag: '', useResumePicker: true, pickerScript: 'C:\\res\\scripts\\resume-picker.js' }
+    // node.exe in the relative entries too, never to be counted.
+    const relativeNode = ['.\\node.exe', 'rel\\bin\\node.exe', 'node.exe']
+    have('C:\\Tools\\claude.exe', 'C:\\Tools\\node.exe', ...relativeNode)
+    registerCliHandlers()
+    const check = h.handlers.get(IPC.CLI_CHECK)!
+    expect(await check()).toBe(true)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(spawnClaudeCommand.buildClaudeLaunchCommand(fresh)).toBe("Set-Location -LiteralPath 'C:\\work'; $env:CCC_CLAUDE_BIN = 'C:\\Tools\\claude.exe'; & 'C:\\Tools\\node.exe' 'C:\\res\\scripts\\resume-picker.js'; exit")
+    have('C:\\Tools\\claude.exe', ...relativeNode)
+    expect(await check()).toBe(true)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(spawnClaudeCommand.buildClaudeLaunchCommand(fresh)).toBe("Set-Location -LiteralPath 'C:\\work'; & 'C:\\Tools\\claude.exe'; exit")
+    expect(h.syncWalks).toEqual([])
+    onlyAbsoluteAsked()
   })
 })

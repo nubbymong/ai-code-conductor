@@ -29,8 +29,8 @@ import {
 import { resolvePickedModelId } from '../../shared/model-registry'
 import { useRegistryStore } from '../stores/registryStore'
 import AiUsageChip from './github/AiUsageChip'
-import { writeSessionInput } from './terminal/tmuxWheelScroll'
 import { typeIntoCodexComposer, type CodexTyping } from '../lib/codexComposer'
+import { typeAtClaudePrompt } from '../lib/claudePrompt'
 
 interface SessionStatusStripProps {
   /** The PTY/session id for THIS terminal. Telemetry is read for this
@@ -58,8 +58,9 @@ const CONTROL_PILL =
 // [] each render (which would trip the re-render cascade guard).
 const EMPTY_HIDDEN: string[] = []
 
-/** How long the strip's note says why a Codex command was not sent (P3.8
- *  round 1, C1). */
+/** How long the strip's note says why a command was not sent, Codex's (P3.8
+ *  round 1, C1) or Claude Code's. This name and the note's test id
+ *  (codex-command-note) predate the Claude notes; both now serve both CLIs. */
 export const CODEX_NOTE_MS = 6000
 
 // SessionStatusStrip (v2 shell, UAT R2): the per-session telemetry + controls
@@ -151,9 +152,6 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
   // boundary, never on a hardcoded index.
   const modelGroups = useMemo(() => modelGroupsFromRegistry(registry), [registry])
 
-  const write = (cmd: string) => {
-    writeSessionInput(sessionId, cmd)
-  }
   // P3.8 round 1 (row 61; C1, C2, C3): Compact on a Codex session types
   // Codex's own /compact only into its ready, empty composer, and presses
   // Enter only in the same run once the composer holds exactly /compact
@@ -162,25 +160,34 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
   // is shown: a press's pending Enter belongs to the session it was pressed
   // on, and is dropped when the strip is re-pointed or goes away.
   const pendingCodexCommand = useRef<CodexTyping | null>(null)
-  const [codexNote, setCodexNote] = useState<string | null>(null)
+  const [commandNote, setCommandNote] = useState<string | null>(null)
   useEffect(() => () => {
     pendingCodexCommand.current?.cancel()
     pendingCodexCommand.current = null
-    setCodexNote(null)
+    setCommandNote(null)
   }, [sessionId])
   useEffect(() => {
-    if (!codexNote) return
-    const t = setTimeout(() => setCodexNote(null), CODEX_NOTE_MS)
+    if (!commandNote) return
+    const t = setTimeout(() => setCommandNote(null), CODEX_NOTE_MS)
     return () => clearTimeout(t)
-  }, [codexNote])
+  }, [commandNote])
+  // On a Claude session, Compact, a model and an effort type their line into
+  // Claude Code only at its ready, empty prompt (lib/claudePrompt.ts, reading
+  // the live screen); otherwise nothing is typed and the strip says why, as
+  // for Codex. True when the line was typed.
+  const typeForClaude = (line: string): boolean => {
+    const typing = typeAtClaudePrompt(sessionId, line)
+    setCommandNote(typing.typed ? null : (typing.reason ?? null))
+    return typing.typed
+  }
   const onCompact = () => {
-    if (isClaude) { write('/compact\n'); return }
+    if (isClaude) { typeForClaude('/compact\n'); return }
     const typing = typeIntoCodexComposer(sessionId, '/compact')
     if (typing.typed) {
       pendingCodexCommand.current = typing
-      setCodexNote(null)
+      setCommandNote(null)
     } else {
-      setCodexNote(typing.reason ?? null)
+      setCommandNote(typing.reason ?? null)
     }
   }
   const onModel = (si: number, v: string) => {
@@ -196,15 +203,14 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
       return
     }
     if (si < modelGroups.length) {
-      write(`/model ${v}\n`)
-    } else {
+      typeForClaude(`/model ${v}\n`)
+    } else if (typeForClaude(`/effort ${v}\n`)) {
       setLastEffort(v)
       // Persist the chosen effort on the session so it shows (and stays) in the
       // status strip next to the model name. Without this, /effort was written to
       // the PTY but session.effortLevel never updated, so the strip showed nothing
-      // after a mid-session effort change.
+      // after a mid-session effort change. Only an effort actually typed is kept.
       updateSession(sessionId, { effortLevel: v as Session['effortLevel'] })
-      write(`/effort ${v}\n`)
     }
     setOpenPicker(null)
   }
@@ -590,11 +596,13 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
               />
             )}
           </div>)}
-          {/* Why a Codex command was not sent (not at its prompt, busy, or text
-              already typed there): said here for a moment, never typed. */}
-          {codexNote && (
-            <span role="status" className="text-xs truncate max-w-[22rem]" style={{ color: 'var(--text-muted)' }} data-testid="codex-command-note">
-              {codexNote}
+          {/* Why a command was not sent, Codex's or Claude Code's (not at its
+              prompt, busy, or text already typed there): said here for a
+              moment, never typed. Cut short when long, so the whole note is
+              its hover title too. */}
+          {commandNote && (
+            <span role="status" className="text-xs truncate max-w-[22rem]" style={{ color: 'var(--text-muted)' }} data-testid="codex-command-note" title={commandNote}>
+              {commandNote}
             </span>
           )}
           <button

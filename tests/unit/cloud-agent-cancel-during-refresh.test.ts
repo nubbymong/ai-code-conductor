@@ -3,8 +3,8 @@
 // the desired behaviour, credit Codex rc.15 stability review; RED against
 // 7ef62a2e before this change.
 //
-// Dispatch publishes its running record, then parks on an await (the legacy
-// CLI install, the account refresh). A Cancel that lands there finds no process,
+// Dispatch publishes its running record, then parks on an await (the account
+// refresh; before 2.1.1-beta.3 also a legacy CLI install). A Cancel that lands there finds no process,
 // marks the record cancelled and returns true -- and the resumed dispatch used
 // to spawn anyway: work running while labelled cancelled, with a second Cancel
 // refused and Remove hiding the row. Dispatch now re-reads the record after
@@ -148,19 +148,6 @@ describe('cancel while dispatch is waiting (Codex R5, flipped)', () => {
     expect(listAgents()).toHaveLength(0)
   })
 
-  it('cancelling during the legacy CLI install (the older await of the same shape) -> nothing spawns', async () => {
-    const dispatch = dispatchAgent({ ...params, projectPath: state.home, legacyVersion: { enabled: true, version: '1.0.0' } })
-    await until(() => legacy.install !== null, 'the dispatch to reach the legacy CLI install')
-    expect(legacy.install).not.toBeNull()
-    const waiting = listAgents()[0]
-    expect(cancelAgent(waiting.id)).toBe(true)
-    legacy.install!()
-    const agent = await dispatch
-    expect(agent.status).toBe('cancelled')
-    expect(mockSpawn).not.toHaveBeenCalled()
-    expect(hasTransientProfileConsumer('profile-review')).toBe(false)
-  })
-
   it('positive control: an uncancelled dispatch spawns exactly once after the refresh settles and keeps its hold while the child lives', async () => {
     let settle!: () => void
     noteProfileRefreshInFlight('profile-review', new Promise<void>((resolve) => { settle = resolve }))
@@ -174,5 +161,19 @@ describe('cancel while dispatch is waiting (Codex R5, flipped)', () => {
     expect(hasTransientProfileConsumer('profile-review')).toBe(true)
     handlers.close?.(0)
     expect(hasTransientProfileConsumer('profile-review')).toBe(false)
+  })
+})
+
+describe('a Claude Code version pinned in an older release', () => {
+  // 2.1.1-beta.3: the pin is no longer used, so a pinned agent no longer
+  // parks on an install (an older await of the same shape as the cancel
+  // cases above): it goes straight on and starts once.
+  it('a pinned agent waits on no install and runs', async () => {
+    const dispatch = dispatchAgent({ ...params, projectPath: state.home, legacyVersion: { enabled: true, version: '1.0.0' } })
+    await until(() => mockSpawn.mock.calls.length > 0 || legacy.install !== null, 'the dispatch to spawn (or to park on an install)')
+    expect(legacy.install).toBeNull()
+    const agent = await dispatch
+    expect(agent.status).toBe('running')
+    expect(mockSpawn).toHaveBeenCalledTimes(1)
   })
 })

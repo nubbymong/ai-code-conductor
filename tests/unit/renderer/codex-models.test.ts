@@ -11,7 +11,7 @@ const reg = baselineJson as unknown as ModelRegistry
 describe('codexModelOptions', () => {
   it("offers Default, then the registry's Codex models in the Codex CLI's order", () => {
     expect(codexModelOptions(reg).map((o) => o.value)).toEqual([
-      CODEX_DEFAULT, 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2',
+      CODEX_DEFAULT, 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2',
     ])
     expect(codexModelOptions(reg)[0].label).toBe('Default: follows Codex')
     expect(codexModelOptions(reg).find((o) => o.value === 'gpt-6-astra')!.label).toBe('GPT-6-Astra')

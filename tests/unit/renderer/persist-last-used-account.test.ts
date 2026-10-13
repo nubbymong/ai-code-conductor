@@ -65,6 +65,20 @@ describe('persistLastUsedAccount', () => {
     }
   })
 
+  it('O9: confirming a resumed session\'s own account pins the session but leaves the global "most recent" alone', async () => {
+    // A multi-session resume answers one gate per session in turn; if each
+    // confirmation of a session's OWN account rewrote the global value, the
+    // next new session's "Most recent" would just be the last one in the queue.
+    useSettingsStore.setState((s) => ({ settings: { ...s.settings, lastUsedAccountId: 'profile-earlier' } }))
+    await persistLastUsedAccount('s1', 'profile-own', { recordMostRecent: false })
+    expect(useSessionStore.getState().sessions[0].profileId).toBe('profile-own')
+    expect(saved[0].sessions[0].profileId).toBe('profile-own')
+    expect(useSettingsStore.getState().settings.lastUsedAccountId).toBe('profile-earlier')
+    // The default (a real choice) still records it.
+    await persistLastUsedAccount('s1', 'profile-chosen')
+    expect(useSettingsStore.getState().settings.lastUsedAccountId).toBe('profile-chosen')
+  })
+
   it('does NOT clear the global last-used when a session switches to the default (undefined) account', async () => {
     await persistLastUsedAccount('s1', 'profile-keep')
     await persistLastUsedAccount('s1', undefined)

@@ -2874,3 +2874,147 @@ describe('spawnPty SSH branch -- a shell prompt with UI glyphs before the launch
     killPty(sessionId)
   })
 })
+
+// 2.1.1-beta.3: the host setup is one long line typed into the login
+// shell, and a zsh login shell (the macOS default) echoes it back for many
+// seconds before it runs it. On a real Mac a 34 KB line took 18 s of unbroken
+// echo (no pause over 67 ms) and `setup ok` came at 19.3 s, past the old fixed
+// 10 s deadline from the write, so the session failed with "host setup
+// timeout" while the host was still visibly taking the line. The deadline now
+// counts 10 s from the host's LAST output, capped at 60 s after the setup
+// started (the deadline is armed 200 ms before the line is typed). Each case
+// below was red against the fixed-deadline code except the controls, which
+// are labelled. The failure reason in the log is pinned for each case, and a
+// host that sends NOTHING back is never shown as one that is still sending,
+// even when the timer fires a fraction of a millisecond before
+// performance.now() shows 10 s. [host]
+// The unit setup (tests/unit/setup.ts) replaces the logger with vi.fn() mocks,
+// so the log lines are read from those.
+const { logInfo: logInfoMock, logError: logErrorMock } = await import('../../src/main/debug-logger')
+describe('spawnPty SSH branch -- the setup-ok deadline follows the host output (zsh echo)', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+  /** The log lines (logInfo / logError, mocked by the unit setup) this
+   *  session wrote that contain `text`. */
+  const lines = (log: typeof logInfoMock, sid: string, text: string): string[] =>
+    vi.mocked(log).mock.calls.map((c) => String(c[0])).filter((s) => s.includes(`${sid}:`) && s.includes(text))
+  const infoLog = logInfoMock
+  const errorLog = logErrorMock
+  const WAITING = 'setup ok not in yet'
+
+  /** Launch, let the 200 ms deferred setup write go out (t = 300 ms after the
+   *  deadline was armed), and return the line typed into the login shell. */
+  function launchHostSetup(sessionId: string): string {
+    onDataListeners.length = 0
+    spawnPty(fakeWin, sessionId, { ssh: SSH } as never)
+    writeMock.mockClear()
+    getSshFlow(sessionId)!.launchClaude()
+    vi.advanceTimersByTime(300)
+    const typed = writeMock.mock.calls.map((c) => String(c[0])).find((s) => s.includes('base64 -d | node'))
+    expect(typed, 'the host setup line was typed').toBeDefined()
+    return typed!.replace(/\r$/, '')
+  }
+  /** The host echoes `line` back slowly, one slice every 100 ms for `ms`
+   *  (cycling through the line, as a line editor's redraws do). */
+  function echoSlowly(line: string, ms: number): void {
+    const size = 160
+    for (let t = 0, at = 0; t < ms; t += 100, at = (at + size) % line.length) {
+      feedPtyData(line.slice(at, at + size))
+      vi.advanceTimersByTime(100)
+    }
+  }
+  const claudeWritten = (): boolean => writeMock.mock.calls.some((c) => typeof c[0] === 'string' && c[0].includes('claude '))
+
+  it('a host still echoing the setup line at 10 s is not failed, and its setup ok at 19.3 s launches claude', () => {
+    const sid = 's-deadline-slow-echo'
+    const typed = launchHostSetup(sid)
+    echoSlowly(typed, 10_500) // t = 10.8 s: past the old fixed deadline
+    expect(getSshFlow(sid)!.getState().state).toBe('running-setup')
+    echoSlowly(typed, 7_500) // t = 18.3 s: the echo ends
+    vi.advanceTimersByTime(1_000) // the setup itself runs, quietly
+    feedPtyData(nonceSentinel(sid, 'setup ok {NONCE} tmux=path\r\n'))
+    vi.advanceTimersByTime(1500) // idle fallback: setupDone -> proceedAfterSetup
+    vi.advanceTimersByTime(300) // writeClaudeCmd's own 200 ms write delay
+    expect(claudeWritten()).toBe(true)
+    expect(getSshFlow(sid)!.getState().state).toBe('running-claude')
+    // The wait was logged once, and it says the deadline runs from the start
+    // of the setup, which is when it was armed.
+    expect(lines(infoLog, sid, WAITING)).toEqual([
+      `[ssh] ${sid}: setup ok not in yet, but output has come back since the setup started -- waiting until 10000ms after the last output (at most 60000ms after the setup started)`,
+    ])
+    expect(lines(errorLog, sid, 'setup ok not received')).toEqual([])
+    killPty(sid)
+  })
+
+  it('a host that echoes and then goes quiet fails 10 s after its last output, and nothing is launched', () => {
+    const sid = 's-deadline-echo-then-quiet'
+    const typed = launchHostSetup(sid)
+    echoSlowly(typed, 15_000) // last output at t = 15.2 s
+    vi.advanceTimersByTime(9_800) // t = 25.1 s: 9.9 s after the last output
+    expect(getSshFlow(sid)!.getState().state).toBe('running-setup')
+    vi.advanceTimersByTime(200) // t = 25.3 s
+    expect(getSshFlow(sid)!.getState()).toEqual({ state: 'failed', info: 'host setup timeout' })
+    expect(claudeWritten()).toBe(false)
+    expect(lines(infoLog, sid, WAITING)).toHaveLength(1)
+    expect(lines(errorLog, sid, 'setup ok not received')).toEqual([
+      `[ssh] ${sid}: setup ok not received within 10000ms of the last output that came back`,
+    ])
+    killPty(sid)
+  })
+
+  it('a host that never stops sending fails at the 60 s cap, and a late setup ok does not revive it', () => {
+    const sid = 's-deadline-never-quiet'
+    const typed = launchHostSetup(sid)
+    echoSlowly(typed, 59_500) // t = 59.8 s, output every 100 ms throughout
+    expect(getSshFlow(sid)!.getState().state).toBe('running-setup')
+    echoSlowly(typed, 500) // t = 60.3 s: the cap (60 s after the setup started) has passed
+    expect(getSshFlow(sid)!.getState()).toEqual({ state: 'failed', info: 'host setup timeout' })
+    expect(lines(errorLog, sid, 'setup ok not received')).toEqual([
+      `[ssh] ${sid}: setup ok not received within 60000ms of the setup starting while output kept coming back`,
+    ])
+    feedPtyData(nonceSentinel(sid, 'setup ok {NONCE} tmux=path\r\n'))
+    vi.advanceTimersByTime(2_000)
+    expect(claudeWritten()).toBe(false)
+    expect(getSshFlow(sid)!.getState().state).toBe('failed')
+    killPty(sid)
+  })
+
+  it('control (green before the fix too): a host that sends nothing back still fails 10 s after the setup started, and no wait is logged', () => {
+    const sid = 's-deadline-silent'
+    launchHostSetup(sid)
+    vi.advanceTimersByTime(9_600) // t = 9.9 s
+    expect(getSshFlow(sid)!.getState().state).toBe('running-setup')
+    vi.advanceTimersByTime(200) // t = 10.1 s
+    expect(getSshFlow(sid)!.getState()).toEqual({ state: 'failed', info: 'host setup timeout' })
+    expect(lines(infoLog, sid, WAITING)).toEqual([])
+    expect(lines(errorLog, sid, 'setup ok not received')).toEqual([
+      `[ssh] ${sid}: setup ok not received within 10000ms of the setup starting (nothing came back)`,
+    ])
+    killPty(sid)
+  })
+
+  // A real timer can fire a fraction of a millisecond before performance.now()
+  // shows its full delay (the timer runs on a whole-millisecond loop clock).
+  // A check that only compared times would then log a host that sent NOTHING
+  // as "the host sent output since the write -- waiting", re-arm for the
+  // sliver, and fail with a reason about "the host's last output". The clock
+  // below runs 0.5 ms behind the timers from just after the arm, which is
+  // that early firing. Red against the time-only check.
+  it('a host that sends nothing back fails at its first check even when that timer fires just before the clock shows 10 s, with no wait logged', () => {
+    const sid = 's-deadline-silent-early-timer'
+    launchHostSetup(sid) // t = 300 ms after the arm
+    const timersNow = performance.now.bind(performance)
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => timersNow() - 0.5)
+    try {
+      vi.advanceTimersByTime(9_700) // t = 10 s by the timers, 9999.5 ms by the clock
+      expect(lines(infoLog, sid, WAITING)).toEqual([])
+      expect(getSshFlow(sid)!.getState()).toEqual({ state: 'failed', info: 'host setup timeout' })
+      expect(lines(errorLog, sid, 'setup ok not received')).toEqual([
+        `[ssh] ${sid}: setup ok not received within 10000ms of the setup starting (nothing came back)`,
+      ])
+    } finally {
+      nowSpy.mockRestore()
+      killPty(sid)
+    }
+  })
+})

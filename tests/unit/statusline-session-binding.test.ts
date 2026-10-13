@@ -212,9 +212,12 @@ describe('the per-session status file', () => {
       transcriptPath: '/transcripts/shared.jsonl',
       // An extra-usage block missing the numbers the status bar reads.
       rateLimitExtra: { enabled: true },
-      // A label far past any real one, an account that is not an address,
-      // and a nested object no reader takes.
-      label: 'L'.repeat(100_000),
+      // A label far past any real one (the sanitiser keeps at most 256
+      // characters), an account that is not an address, and a nested object
+      // no reader takes. The whole payload stays inside the terminal's 16 KiB
+      // status payload limit: a longer one is no sentinel at all
+      // (ssh-sentinel-chunking.test.ts), so it would never reach the filter.
+      label: 'L'.repeat(1_000),
       accountEmail: `someone${ch(0x202e)}@example.com${ch(7)}`,
       nested: { deep: { x: 1 } },
     })

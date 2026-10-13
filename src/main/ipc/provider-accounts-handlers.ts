@@ -190,6 +190,8 @@ export function registerProviderAccountsHandlers(getWindow: () => BrowserWindow 
   handle(IPC.PROVIDER_ACCOUNTS_DELETE_GROUP, S.group, (i, svc) => svc.deleteGroup(i))
   handle(IPC.PROVIDER_ACCOUNTS_LINK_IDENTITY, S.link, (i, svc) => svc.linkIdentity(i))
   handle(IPC.PROVIDER_ACCOUNTS_UNLINK_IDENTITY, S.account, (i, svc) => svc.unlinkIdentity(i))
+  // Retired in 2.1.1-beta.3 (O5): kept for their shape, and the service
+  // refuses both ('unsupported') before anything is reserved or run.
   handle(IPC.PROVIDER_ACCOUNTS_ADOPT_EXTERNAL, S.provider, (i, svc) => svc.adoptExternalDefault(i))
   handle(IPC.PROVIDER_ACCOUNTS_PROBE_EXTERNAL, S.provider, (i, svc) => svc.probeExternalDefault(i))
   handle(IPC.PROVIDER_ACCOUNTS_RECONCILE_SIGN_IN, S.account, (i, svc) => svc.reconcileSignIn(i))

@@ -57,7 +57,26 @@
 //     counts: whether or not main holds the session it belongs to, it cannot
 //     block its config. It carries no SSH credential and no secret argument (the
 //     spawn handler reads those only for an ssh block or terminal options, which
-//     this shape has none of); anything with more on it is a copy like any other.
+//     this shape has none of); with terminal options or elevation it is a copy
+//     like any other (an ssh block: below);
+//   - the partner terminal of an SSH session (#86), which connects to the
+//     session's own host as a plain shell: the same shape, plus the ssh block
+//     partnerSshOf makes of the session's (shared/multi-spawn-rule.ts). Decided
+//     from main's OWN record, never from what the request says: the session it
+//     belongs to must hold this config's right in THIS RUN (accepted here, so a
+//     session only restored at this start does not count until its first
+//     accepted spawn), and the request's block must be, field for field, the
+//     partner block of the ssh block main recorded when it accepted that
+//     session's spawn. What it may connect with is the spawn handler's to
+//     decide, as for the session itself (the saved config binds host, port and
+//     user before any credential is read); this only decides that it is not a
+//     second copy of the config.
+//   A shell in that shape (shell-only, the partner id, an ssh block, no terminal
+//   options, no elevation) that main cannot place so is REFUSED
+//   (`partner-needs-session`), never admitted as a copy: admitted, it would be
+//   held as a copy of the config, and the session it belongs to, starting
+//   after it, would be refused as "already running" by its own partner. An
+//   SSH partner exists beside its session or not at all.
 //
 // A spawn is recorded as a copy only once it is ACCEPTED: claimConfigLaunch hands
 // back a TICKET and pty:spawn settles that ticket straight after pty-manager took
@@ -84,7 +103,7 @@
 // renderer being the only place the rule lived: a launch surface that forgot to
 // ask, a stale render, a second path.
 import { findSavedConfig } from './spawn-credential-binding'
-import { isOneAtATimeBlocked, alreadyRunningRefusalMessage, isPartnerPtyId } from '../shared/multi-spawn-rule'
+import { isOneAtATimeBlocked, alreadyRunningRefusalMessage, isPartnerPtyId, parentOfPartnerPtyId, isPartnerSshOf, PARTNER_NEEDS_SESSION_MESSAGE } from '../shared/multi-spawn-rule'
 import { stripSpoofableText } from '../shared/safe-text'
 import type { ProviderId, SpawnRefusal } from '../shared/providers'
 import { logWarn } from './debug-logger'
@@ -95,8 +114,11 @@ export interface ConfigLaunchRequest {
   shellOnly?: boolean
   provider?: ProviderId
   elevated?: boolean
-  /** Only whether these are present is read (the partner shell carries neither). */
+  /** For a copy, recorded as the session asked for it (an SSH session's partner
+   *  shell is recognised against that record). Otherwise only whether it is
+   *  present is read. */
   ssh?: unknown
+  /** Only whether it is present is read (the partner shell carries none). */
   terminalOptions?: unknown
 }
 
@@ -122,6 +144,9 @@ interface TicketData {
   sessionId: string
   /** The config the spawn is a copy of, or null for a spawn that is not a copy. */
   config: string | null
+  /** #86: a copy's ssh block as the request asked for it (a detached copy),
+   *  recorded for the session once the spawn is accepted. */
+  ssh?: Readonly<Record<string, unknown>>
   isLive: (sessionId: string) => boolean
   /** PR-level ADR-009 round 1 (B1): whether the spawn's preparation is still
    *  the session's current one (pty-manager's); absent for a spawn that
@@ -134,6 +159,11 @@ const tickets = new WeakMap<ConfigLaunchTicket, TicketData>()
  *  right to respawn outlives their process. */
 const held = new Map<string, string>()
 export const HELD_MAX = 512
+
+/** #86: the ssh block each session in `held` was accepted with, as its request
+ *  asked for it. Kept and dropped with its `held` entry; an accepted spawn with
+ *  no ssh block has none. Only the partner of an SSH session is read against it. */
+const heldSsh = new Map<string, Readonly<Record<string, unknown>>>()
 
 /** Copies that passed the gate and are not yet accepted, per session id, oldest
  *  first. Dropped when pty:spawn discards the ticket, and at the next look once
@@ -211,11 +241,37 @@ function holds(sessionId: string, configId: string): boolean {
   return held.get(sessionId) === configId || restored.get(sessionId) === configId
 }
 
-/** The renderer's own partner terminal, exactly as it starts one. */
+/** A detached copy of a request's ssh block (data only), or undefined for one
+ *  that is not a plain object. The request has passed the spawn schema; this
+ *  only makes sure nothing the caller still holds can change the record. */
+function recordSsh(ssh: unknown): Readonly<Record<string, unknown>> | undefined {
+  if (!ssh || typeof ssh !== 'object' || Array.isArray(ssh)) return undefined
+  try {
+    const copy: unknown = JSON.parse(JSON.stringify(ssh))
+    return copy && typeof copy === 'object' && !Array.isArray(copy) ? Object.freeze(copy as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The renderer's own partner terminal, exactly as it starts one: a local
+ *  shell, or (#86) the plain-connection shell of an SSH session main accepted
+ *  for this config in this run, with the partner block of the ssh block main
+ *  recorded for that session. */
 function isPartnerShell(sessionId: string, request: ConfigLaunchRequest): boolean {
+  if (!isPartnerShaped(sessionId, request)) return false
+  if (request.ssh === undefined) return true
+  const parent = parentOfPartnerPtyId(sessionId)
+  if (parent === null || typeof request.configId !== 'string' || held.get(parent) !== request.configId) return false
+  const recorded = heldSsh.get(parent)
+  return recorded !== undefined && isPartnerSshOf(recorded, request.ssh)
+}
+
+/** The shape the renderer starts a partner terminal in: shell-only, the
+ *  partner id, no terminal options and no elevation (an ssh block or none). */
+function isPartnerShaped(sessionId: string, request: ConfigLaunchRequest): boolean {
   return request.shellOnly === true
     && isPartnerPtyId(sessionId)
-    && request.ssh === undefined
     && request.terminalOptions === undefined
     && request.elevated !== true
 }
@@ -242,6 +298,14 @@ export function claimConfigLaunch(sessionId: string, request: ConfigLaunchReques
   const configId = request?.configId
   if (!request || typeof configId !== 'string' || configId === '') return notACopy(sessionId, deps)
   if (isPartnerShell(sessionId, request)) return notACopy(sessionId, deps)
+  // #86: an SSH session's partner shell that main cannot place beside a
+  // session it accepted for this config in this run is refused, never
+  // admitted as a copy (the header says why). Multi Spawn or not: it is no
+  // copy at all, and nothing is recorded for it.
+  if (isPartnerShaped(sessionId, request) && request.ssh !== undefined) {
+    logWarn(`[launch] partner shell ${sessionId} refused: no session of config ${stripSpoofableText(configId, 64)} accepted in this run with this connection`)
+    return { refused: { code: 'partner-needs-session', providerId: request.provider ?? 'claude', message: PARTNER_NEEDS_SESSION_MESSAGE } }
+  }
   const saved = findSavedConfig(deps.savedConfigs(), configId)
   if (!saved) return notACopy(sessionId, deps)
 
@@ -266,7 +330,7 @@ export function claimConfigLaunch(sessionId: string, request: ConfigLaunchReques
     logWarn(`[launch] session ${sessionId} refused: ${INFLIGHT_PER_ID} spawns of it are already under way`)
     return { refused: { code: 'already-running', providerId: request.provider ?? 'claude', message: alreadyRunningRefusalMessage(labelOf(saved)) } }
   }
-  return { ticket: newTicket({ sessionId, config: saved.id, isLive: deps.isLive }) }
+  return { ticket: newTicket({ sessionId, config: saved.id, isLive: deps.isLive, ssh: recordSsh(request.ssh) }) }
 }
 
 /** Keep `held` within HELD_MAX: an entry whose session has ended goes first,
@@ -283,6 +347,7 @@ function evictRights(except: string, isLive: (sessionId: string) => boolean): vo
     const victim = ended ?? oldest
     if (victim === undefined) return
     held.delete(victim)
+    heldSsh.delete(victim)
   }
 }
 
@@ -301,8 +366,10 @@ export function settleConfigLaunch(ticket: ConfigLaunchTicket): void {
   const id = data.sessionId
   forgetPending(ticket, id)
   held.delete(id)
+  heldSsh.delete(id)
   if (typeof data.config !== 'string') return
   held.set(id, data.config)
+  if (data.ssh) heldSsh.set(id, data.ssh)
   restored.delete(id)
   evictRights(id, data.isLive)
 }
@@ -389,6 +456,7 @@ export function _heldSessionIdsForTest(): string[] {
 /** Test seam: forget everything, as at a fresh start. */
 export function _resetConfigLaunchClaimsForTest(): void {
   held.clear()
+  heldSsh.clear()
   inflight.clear()
   restored.clear()
   restoreSeeded = false

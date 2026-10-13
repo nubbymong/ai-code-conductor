@@ -16,12 +16,17 @@ import shipped from '../../../../resources/codex-model-catalogue.json'
 
 const FIXTURE = join(__dirname, '../../../fixtures/codex/cli/0.153.4/debug-models-bundled.trimmed.json')
 const REAL_0153 = readFileSync(FIXTURE, 'utf8')
+// The shipped list is the union over the supported versions; a model's own
+// cliVersions names the versions that list it (gpt-6-sol and gpt-6-luna:
+// 0.156.1 only), so 0.153.4's share is every model with none or with it.
+const SHIPPED_0153 = (shipped.models as Array<{ id: string; label: string; cliVersions?: string[] }>)
+  .filter((m) => !m.cliVersions || m.cliVersions.includes('0.153.4'))
 
 describe('parseCodexModelCatalogue: what the picker lists, in its order', () => {
-  it('reads the 0.153.4 catalogue as the list shipped with this build (same ids, same order)', () => {
+  it('reads the 0.153.4 catalogue as the list shipped with this build gives for 0.153.4 (same ids, same order)', () => {
     const models = parseCodexModelCatalogue(REAL_0153)!
-    expect(models.map((m) => m.id)).toEqual(shipped.models.map((m) => m.id))
-    expect(models.map((m) => m.label)).toEqual(shipped.models.map((m) => m.label))
+    expect(models.map((m) => m.id)).toEqual(SHIPPED_0153.map((m) => m.id))
+    expect(models.map((m) => m.label)).toEqual(SHIPPED_0153.map((m) => m.label))
     // Hidden entries (migrated, internal, review-only) are not offered.
     for (const hidden of ['gpt-5.4', 'gpt-5.4-mini', 'codex-auto-review', 'gpt-daybreak-blue-latest']) expect(models.some((m) => m.id === hidden)).toBe(false)
   })
@@ -292,7 +297,7 @@ describe("the accounts service's model catalogue read: the launch rule, then the
     const h = await harness({ catalogueDeps: catalogue(runs) })
     const r = await h.service.readModelCatalogue('codex')
     expect(r).toMatchObject({ ok: true, catalogue: { ok: true, version: '0.155.1' } })
-    expect(r.ok && r.catalogue.ok && r.catalogue.models.map((m) => m.id)).toEqual(shipped.models.map((m) => m.id))
+    expect(r.ok && r.catalogue.ok && r.catalogue.models.map((m) => m.id)).toEqual(SHIPPED_0153.map((m) => m.id))
     expect(h.discoveries()).toBe(1)
     expect(runs).toEqual(['debug models --bundled @ C:\\tmp\\ccc-codex-models-x'])
     // A second read reuses the proof.

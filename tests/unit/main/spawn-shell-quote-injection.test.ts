@@ -17,8 +17,16 @@
  * These assert the PROPERTY (no token escapes its quotes), not the exact
  * command string; the golden-shape tests live in spawn-resume-command.test.ts.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { buildClaudeLaunchCommand, quoteArgForShell } from '../../../src/main/spawn-claude-command'
+
+// The Windows picker cases need the picker on the line, so node.exe is
+// answered as found (pickerNodeFound, 2.1.1-beta.3), never by this runner's
+// PATH: without it they would pass on a line that holds no picker path.
+vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/windows-programs')>()
+  return { ...actual, findOnWindowsPath: (...a: Parameters<typeof actual.findOnWindowsPath>) => (a[0].length === 1 && a[0][0] === 'node.exe' ? 'C:\\nodejs\\node.exe' : actual.findOnWindowsPath(...a)) }
+})
 
 /** The five characters PowerShell treats as single-quote delimiters. */
 const PS_QUOTE_CHARS = ['\u0027', '\u2018', '\u2019', '\u201A', '\u201B']
@@ -115,7 +123,7 @@ describe('win32: no PowerShell single-quote delimiter can escape the cwd quoting
       useResumePicker: false,
       pickerScript: null,
     })
-    expect(out).toContain("Set-Location 'F:\\o''brien\\proj'")
+    expect(out).toContain("Set-Location -LiteralPath 'F:\\o''brien\\proj'")
     expect(outsideSingleQuotes(out)).not.toContain('brien')
   })
 
@@ -282,6 +290,6 @@ describe('the binary and picker paths are single-quoted, so no shell expands the
       platform: 'win32', cwd: 'C:\\p', claudeBin: 'C:\\Program Files\\claude.exe',
       extraFlags: '', agentsFlag: '', useResumePicker: false, pickerScript: null,
     })
-    expect(spaced).toBe("Set-Location 'C:\\p'; & 'C:\\Program Files\\claude.exe'; exit")
+    expect(spaced).toBe("Set-Location -LiteralPath 'C:\\p'; & 'C:\\Program Files\\claude.exe'; exit")
   })
 })

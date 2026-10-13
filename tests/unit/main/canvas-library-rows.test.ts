@@ -65,10 +65,14 @@ const FOREIGN = 'bbbb2222bbbb2222bbbb2222'
 const PROJECT = path.join(getResourcesDirectory(), 'project')
 const CFG_ID = 'cfg-checkout'
 
-registerCanvasHandlers(() => ({ isDestroyed: () => false, webContents: { send: () => {} } }) as never)
+/** The app window and its main frame: the only sender these handlers answer. */
+const APP_FRAME = {}
+const APP_WIN = { isDestroyed: () => false, webContents: { mainFrame: APP_FRAME, send: () => {} } }
+const APP_EVENT = { sender: APP_WIN.webContents, senderFrame: APP_FRAME }
+registerCanvasHandlers(() => APP_WIN as never)
 
 const listLibrary = async (args: Record<string, unknown>): Promise<CanvasLibraryResult> =>
-  (await handlers.get(IPC.CANVAS_LIBRARY_LIST)!({} as never, args)) as CanvasLibraryResult
+  (await handlers.get(IPC.CANVAS_LIBRARY_LIST)!(APP_EVENT as never, args)) as CanvasLibraryResult
 
 /** configs.json, as config-manager reads it. Written directly so a RENAME is a
  *  plain file edit — which is exactly the scenario the id-not-label design
@@ -207,7 +211,7 @@ describe('one row per ARTEFACT, not per canvas', () => {
     store.renderVersion(OWNER, { mode: 'plan', title: 'Checkout flow', html: '<!doctype html><p>p</p>' })
     // Approve the MOCKUP so its run has nothing open and no live round, then
     // start a note the user never sends.
-    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!({} as never, {
+    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!(APP_EVENT as never, {
       sessionId: OWNER,
       versionId: mock.versionId,
       state: 'approved',
@@ -320,7 +324,7 @@ describe('THE PRIVACY RULE — in flight is private to the live session holding 
   it('shows a COMPLETED canvas even while its owner is live — READ-ONLY', async () => {
     const canvasId = ownerRenders()
     const v = store.getCanvasStateById(canvasId)!.versions[0].id
-    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!({} as never, { sessionId: OWNER, versionId: v, state: 'approved' })
+    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!(APP_EVENT as never, { sessionId: OWNER, versionId: v, state: 'approved' })
     expect(store.getCanvasStateById(canvasId)?.completed).toBeTruthy()
 
     spawn(FOREIGN)
@@ -354,7 +358,7 @@ describe('THE PRIVACY RULE — in flight is private to the live session holding 
     const canvasId = ownerRenders()
     spawn(FOREIGN)
     h.livePtySessions.add(OWNER)
-    const entries = (await handlers.get(IPC.CANVAS_LIST_ALL)!({} as never, {
+    const entries = (await handlers.get(IPC.CANVAS_LIST_ALL)!(APP_EVENT as never, {
       sessionId: FOREIGN,
       openTileSessionIds: [FOREIGN],
     })) as Array<{ canvasId: string }>
@@ -433,7 +437,7 @@ describe('search, tabs, filters and the cap', () => {
     const owed = store.renderVersion(OWNER, { mode: 'design', title: 'Owed', html: '<!doctype html><p>a</p>' })
     // A second subject, approved, so it is signed off and owes nothing.
     const doneRender = store.renderVersion(OWNER, { mode: 'design', title: 'Done', html: '<!doctype html><p>b</p>' })
-    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!({} as never, {
+    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!(APP_EVENT as never, {
       sessionId: OWNER,
       versionId: doneRender.versionId,
       state: 'approved',
@@ -451,7 +455,7 @@ describe('search, tabs, filters and the cap', () => {
 
     // Archive the owed artefact: it leaves the default view and appears under
     // its own chip.
-    await handlers.get(IPC.CANVAS_ARCHIVE_ARTIFACT)!({} as never, {
+    await handlers.get(IPC.CANVAS_ARCHIVE_ARTIFACT)!(APP_EVENT as never, {
       sessionId: OWNER,
       canvasId: owed.canvasId,
       versionId: owed.versionId,
@@ -545,7 +549,7 @@ describe('delete is guarded at the seam (M4)', () => {
     spawn(FOREIGN)
     h.livePtySessions.add(OWNER)
 
-    const result = await handlers.get(IPC.CANVAS_DELETE)!({} as never, {
+    const result = await handlers.get(IPC.CANVAS_DELETE)!(APP_EVENT as never, {
       sessionId: FOREIGN,
       canvasId,
       openTileSessionIds: [FOREIGN],
@@ -562,7 +566,7 @@ describe('delete is guarded at the seam (M4)', () => {
       html: '<!doctype html><p>m</p>',
     })
     h.livePtySessions.add(OWNER)
-    const result = await handlers.get(IPC.CANVAS_DELETE)!({} as never, {
+    const result = await handlers.get(IPC.CANVAS_DELETE)!(APP_EVENT as never, {
       sessionId: OWNER,
       canvasId,
       openTileSessionIds: [OWNER],
@@ -582,7 +586,7 @@ describe('delete is guarded at the seam (M4)', () => {
     // (W2), which is how a canvas becomes memorialised in the first place.
     // `completeCanvasGuarded` alone would refuse here — the version was still
     // awaiting review, which is exactly what an approval settles.
-    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!({} as never, {
+    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!(APP_EVENT as never, {
       sessionId: OWNER,
       versionId: rendered.versionId,
       state: 'approved',
@@ -590,7 +594,7 @@ describe('delete is guarded at the seam (M4)', () => {
     expect(store.getCanvasStateById(rendered.canvasId)?.completed).toBeTruthy()
     spawn(FOREIGN)
 
-    const result = await handlers.get(IPC.CANVAS_DELETE)!({} as never, {
+    const result = await handlers.get(IPC.CANVAS_DELETE)!(APP_EVENT as never, {
       sessionId: FOREIGN,
       canvasId: rendered.canvasId,
       openTileSessionIds: [FOREIGN],
@@ -602,7 +606,7 @@ describe('delete is guarded at the seam (M4)', () => {
 
 describe('resume, at the IPC seam', () => {
   const listResumables = async (sessionId: string, tiles: string[]) =>
-    (await handlers.get(IPC.CANVAS_LIST_RESUMABLES)!({} as never, {
+    (await handlers.get(IPC.CANVAS_LIST_RESUMABLES)!(APP_EVENT as never, {
       sessionId,
       openTileSessionIds: tiles,
     })) as Array<{ canvasId: string; configName?: string; expectedOwnerSessionId: string; noteCount: number }>
@@ -635,7 +639,7 @@ describe('resume, at the IPC seam', () => {
     const canvasId = strandOne()
     const [row] = await listResumables(FOREIGN, [FOREIGN])
     const resume = (sessionId: string) =>
-      handlers.get(IPC.CANVAS_RESUME)!({} as never, {
+      handlers.get(IPC.CANVAS_RESUME)!(APP_EVENT as never, {
         sessionId,
         canvasId,
         expectedOwnerSessionId: row.expectedOwnerSessionId,
@@ -659,7 +663,7 @@ describe('resume, at the IPC seam', () => {
     h.livePtySessions.add(OWNER)
     expect(await listResumables(FOREIGN, [FOREIGN])).toEqual([])
     expect(
-      await handlers.get(IPC.CANVAS_RESUME)!({} as never, {
+      await handlers.get(IPC.CANVAS_RESUME)!(APP_EVENT as never, {
         sessionId: FOREIGN,
         canvasId,
         expectedOwnerSessionId: OWNER,
@@ -671,7 +675,7 @@ describe('resume, at the IPC seam', () => {
   it('dismiss discards the canvas AND its review record', async () => {
     const canvasId = strandOne()
     expect(
-      await handlers.get(IPC.CANVAS_DISMISS)!({} as never, {
+      await handlers.get(IPC.CANVAS_DISMISS)!(APP_EVENT as never, {
         sessionId: FOREIGN,
         canvasId,
         openTileSessionIds: [FOREIGN],
@@ -719,7 +723,7 @@ describe('"Needs you" is the USER\u2019s move, not merely "something is outstand
     const rendered = store.renderVersion(OWNER, { mode: 'design', title: 'Drafting', html: '<!doctype html><p>x</p>' })
     // A second artefact keeps the canvas from auto-completing on the approve.
     store.renderVersion(OWNER, { mode: 'plan', title: 'Drafting', html: '<!doctype html><p>p</p>' })
-    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!({} as never, {
+    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!(APP_EVENT as never, {
       sessionId: OWNER,
       versionId: rendered.versionId,
       state: 'approved',
@@ -745,7 +749,7 @@ describe('"Needs you" is the USER\u2019s move, not merely "something is outstand
   it('leaves a settled row out of the chip entirely', async () => {
     spawn(OWNER, { configId: CFG_ID })
     const rendered = store.renderVersion(OWNER, { mode: 'design', title: 'Done', html: '<!doctype html><p>x</p>' })
-    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!({} as never, {
+    await handlers.get(IPC.CANVAS_VERSION_VERDICT)!(APP_EVENT as never, {
       sessionId: OWNER,
       versionId: rendered.versionId,
       state: 'approved',

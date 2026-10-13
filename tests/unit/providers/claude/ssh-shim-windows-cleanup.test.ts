@@ -78,7 +78,7 @@ describe('the Windows removal of a session\'s files', () => {
     expect(line).toMatch(/^powershell -NoProfile -NonInteractive -Command "\[Text\.Encoding\]::UTF8\.GetString\(\[Convert\]::FromBase64String\('[A-Za-z0-9+/=]+'\)\)\|node"$/)
   })
 
-  it('the POSIX removal is unchanged', () => {
-    expect(buildRemoteSessionCleanupCommand('sid-1')).toBe('rm -f ~/.claude/settings-sid-1.json ~/.claude/mcp-sid-1.json ~/.claude/ccc-status-sid-1.url\n')
+  it('the POSIX removal is unchanged, plus the attention files only a POSIX remote gets', () => {
+    expect(buildRemoteSessionCleanupCommand('sid-1')).toBe('rm -f ~/.claude/settings-sid-1.json ~/.claude/mcp-sid-1.json ~/.claude/ccc-status-sid-1.url ~/.claude/ccc-attn-sid-1.key ~/.claude/ccc-attn-sid-1.up\n')
   })
 })

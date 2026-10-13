@@ -38,6 +38,13 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../../../src/main/ipc/setup-handlers', () => ({ getResourcesDirectory: () => h.res, getDataDirectory: () => os.tmpdir(), registerSetupHandlers: () => {}, writeCliSetupPty: () => {} }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: () => {}, logError: () => {}, logDebug: () => {} }))
+// The Windows picker case assumes node.exe is found (pickerNodeFound,
+// 2.1.1-beta.3): answered here, never by this runner's PATH. Every other
+// program is looked up as before.
+vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/windows-programs')>()
+  return { ...actual, findOnWindowsPath: (...a: Parameters<typeof actual.findOnWindowsPath>) => (a[0].length === 1 && a[0][0] === 'node.exe' ? 'C:\\nodejs\\node.exe' : actual.findOnWindowsPath(...a)) }
+})
 vi.mock('../../../src/main/spawn-claude-command', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/spawn-claude-command')>()),
   resolveResumeLaunch: (target?: { uuid: string; cwd: string }) => (target ? { resumeUuid: target.uuid, claudeCwd: target.cwd } : null),
@@ -76,6 +83,7 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
 }))
 
 const { spawnPty, killPty } = await import('../../../src/main/pty-manager')
+const { __markScriptFoldersCheckedForTests, __resetScriptFoldersForTests } = await import('../../../src/main/script-folders')
 
 const fakeWin = { isDestroyed: () => false, webContents: { send: () => {} } } as unknown as Parameters<typeof spawnPty>[0]
 const WIN = process.platform === 'win32'
@@ -103,13 +111,14 @@ beforeEach(() => {
   fs.writeFileSync(h.files.settings, '{}')
   fs.writeFileSync(h.files.mcp, '{}')
   fs.mkdirSync(h.files.plugin)
-  fs.mkdirSync(path.join(h.res, 'scripts'), { recursive: true })
+  fs.mkdirSync(path.join(h.res, 'scripts'), { recursive: true, mode: 0o700 })
   h.bin = WIN ? 'C:\\Users\\Jo Smith\\.local\\bin\\claude.exe' : 'claude'
   h.writes = []
   h.envs = []
 })
 afterEach(() => {
   try { killPty(SID) } catch { /* not started */ }
+  __resetScriptFoldersForTests()
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
@@ -120,7 +129,11 @@ const launched = async (): Promise<{ line: string; env: Record<string, string> }
   while (!h.writes.some((w) => w.includes('--settings')) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
   return { line: (h.writes.find((w) => w.includes('--settings')) ?? '').replace(/\r$/, ''), env: h.envs[h.envs.length - 1] ?? {} }
 }
-const withPicker = (): void => { fs.writeFileSync(path.join(h.res, 'scripts', 'resume-picker.js'), '// picker\n') }
+/** The picker deployed, in a scripts folder this run made the user's alone (as the start does before a launch). */
+const withPicker = (): void => {
+  fs.writeFileSync(path.join(h.res, 'scripts', 'resume-picker.js'), '// picker\n', { mode: 0o600 })
+  __markScriptFoldersCheckedForTests(h.res)
+}
 
 describe('a local Claude launch with agent templates', () => {
   // Mutation to prove this can fail: put the templates back on the Windows line.
@@ -143,12 +156,20 @@ describe('a local Claude launch with agent templates', () => {
     withPicker()
     spawnPty(fakeWin, SID, { cols: 100, rows: 30, cwd: tmp, agentsConfig: TEMPLATES, useResumePicker: true })
     const { line, env } = await launched()
-    expect(line).toContain(`node ${quoteArgForShell(path.join(h.res, 'scripts', 'resume-picker.js'), WIN)} --agents `)
+    const picker = quoteArgForShell(path.join(h.res, 'scripts', 'resume-picker.js'), WIN)
     if (WIN) {
+      // node.exe by the full path the lookup returned (mocked above).
+      expect(line).toContain(`; & 'C:\\nodejs\\node.exe' ${picker} --agents `)
       expect(env[AGENTS_ENV]).toBe(agentsEnvValue(AGENTS, 'node'))
       expect(env[AGENTS_ENV]).not.toBe(agentsEnvValue(AGENTS, h.bin))
       expect(line).toContain(' --agents ${env:CCC_AGENTS} --settings ')
     } else {
+      // 2.1.1-beta.3 (S10): the session's shell picks the program, node and
+      // the picker when it finds node, and the options follow once, after
+      // "$@", single-quoted for the sh family.
+      expect(line).toContain(`then set -- node ${picker}; else `)
+      expect(line).toContain(`"$@" --agents ${quoteArgForShell(JSON.stringify(AGENTS), false)} --settings `)
+      expect(line.split(' --agents ')).toHaveLength(2)
       expect(env[AGENTS_ENV]).toBeUndefined()
     }
   })

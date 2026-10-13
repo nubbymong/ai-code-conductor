@@ -58,7 +58,7 @@ const ODD_NAME = 'web.app_1-x'
 const NEEDS = { outcome: 'container-needs-sudo', container: { engine: 'docker', name: ODD_NAME, host: 'rocky.lan' } }
 const EXPECTED =
   `sudo docker exec web.app_1-x sh -c '` +
-  String.raw`rm -f ~/.claude/settings-odd_id___x_.json ~/.claude/mcp-odd_id___x_.json ~/.claude/ccc-status-odd_id___x_.url 2>/dev/null; exec pkill -f "/settings-odd_id___x_\.json"` +
+  String.raw`rm -f ~/.claude/settings-odd_id___x_.json ~/.claude/mcp-odd_id___x_.json ~/.claude/ccc-status-odd_id___x_.url ~/.claude/ccc-attn-odd_id___x_.key ~/.claude/ccc-attn-odd_id___x_.up 2>/dev/null; exec pkill -f "/settings-odd_id___x_\.json"` +
   `'`
 
 /** A promise the test resolves by hand, to prove callers do not wait on End. */

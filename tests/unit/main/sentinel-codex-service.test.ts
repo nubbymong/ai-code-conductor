@@ -136,13 +136,15 @@ const transport = vi.hoisted(() => ({ pick: null as null | ((raw: string) => Rec
 const versionThrows = vi.hoisted(() => ({ on: false, value: undefined as unknown }))
 /** Fixer 10: the Claude Code version installed, and its analysis's reply (none: no findings). */
 /** Fixer 13: `versionCode`, the exit code of `claude --version` (not 0: the version is unavailable). */
-const claude = vi.hoisted(() => ({ version: '2.1.300', answer: null as null | string, versionCode: 0 }))
+/** `failWith`: an analysis run fails with this as the error envelope's reason. */
+const claude = vi.hoisted(() => ({ version: '2.1.300', answer: null as null | string, versionCode: 0, failWith: null as null | string }))
 const spawnClaudeHeadless = vi.fn(async (args: string[], _t?: number, _stdin?: string, _home?: string | null, _signal?: AbortSignal, opts?: { cwd?: string; env?: Record<string, string>; transportEnv?: Record<string, string> }) => {
   if (args[0] === '--version') {
     if (versionThrows.on) throw (versionThrows.value ?? new Error('the version check broke'))
     return { code: claude.versionCode, stdout: claude.versionCode === 0 ? `${claude.version} (Claude Code)` : '', stderr: '' }
   }
   if (opts?.cwd) claudeRuns.push({ cwd: opts.cwd, listing: fs.readdirSync(opts.cwd), env: opts.env, transportEnv: opts.transportEnv })
+  if (claude.failWith !== null) return { code: 1, stdout: JSON.stringify({ type: 'result', is_error: true, result: claude.failWith }), stderr: '' }
   return { code: 0, stdout: JSON.stringify({ type: 'result', result: claude.answer ?? JSON.stringify({ breakingChanges: [] }) }), stderr: '' }
 })
 vi.mock('../../../src/main/claude-headless', () => ({ spawnClaudeHeadless: (...a: unknown[]) => spawnClaudeHeadless(...(a as [string[], number, string])) }))
@@ -160,7 +162,13 @@ vi.mock('../../../src/main/sentinel/sentinel-codex-changelog', async (orig) => (
   fetchCodexReleaseNotes: (last: string | null, installed: string) => fetchCodexReleaseNotes(last, installed),
 }))
 
-const SHIPPED = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2']
+// What each supported Codex lists (resources/codex-model-catalogue.json): 0.153.4
+// these six, 0.155.1 the same less gpt-5.2, and 0.156.1 adds gpt-6-sol and gpt-6-luna.
+const V0153 = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2']
+const V0156 = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5']
+// The "possibly retired" notices a check without the S18 review fix raised for
+// the two models a Codex before 0.156.1 has not listed yet (new, not retired).
+const GPT6_NOT_LISTED = ['models:codex-retired:gpt-6-sol', 'models:codex-retired:gpt-6-luna']
 const liveList = (version: string, ids: string[]) => ({ ok: true, version, models: ids.map((id) => ({ id, label: id.toUpperCase() })) })
 const PREFIX = 'ccc-sentinel-codex-svc-'
 let dir = ''
@@ -169,7 +177,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), PREFIX))
   svc.pref = { claude: 'on', codex: 'on' }
   svc.installation = { discoveryState: 'found', version: '0.155.1', compatibility: 'supported' }
-  svc.catalogue = liveList('0.155.1', SHIPPED.filter((id) => id !== 'gpt-5.2'))
+  svc.catalogue = liveList('0.155.1', V0153.filter((id) => id !== 'gpt-5.2'))
   svc.discovers = 0
   svc.catalogueReads = 0
   svc.holdRead = null
@@ -190,6 +198,7 @@ beforeEach(() => {
   claude.version = '2.1.300'
   claude.answer = null
   claude.versionCode = 0
+  claude.failWith = null
   fetchChangelog.mockClear()
   fetchChangelog.mockImplementation(async () => null)
   fetchCodexReleaseNotes.mockClear()
@@ -297,6 +306,21 @@ describe("the analysis of a Codex update, on the provider that is on (row 42; OD
     expect(stdin).toMatch(/--- BEGIN RELEASE NOTES [0-9a-f]{16} ---\n## 0\.155\.1\n- The rollout file format changed\./)
     expect(svc.prepares).toEqual([])
     expect(s.getSentinelState()!.snapshot()).toMatchObject({ lastSeenCodexVersion: '0.155.1', analyzing: false, lastAnalysisError: null })
+  })
+
+  it('failure text hides credentials inside a url', async () => {
+    claude.failWith = 'API Error: 500 upstream failure via http://alice:hunter2Secret@proxy.corp.example:8080'
+    const s = await sentinel({ lastSeenCcVersion: '2.1.300', lastSeenCodexVersion: '0.153.4' })
+    await s.sentinelStartupCheck()
+    expect(claudeAnalyses().length).toBeGreaterThan(0)
+    const err = s.getSentinelState()!.snapshot().lastAnalysisError!
+    expect(err).toContain('upstream failure via http://')
+    expect(err).not.toContain('hunter2Secret')
+    expect(err).not.toContain('alice:')
+    const file = fs.readFileSync(path.join(dir, 'sentinel', 'sentinel-state.json'), 'utf-8')
+    expect(file).toContain('upstream failure via')
+    expect(file).not.toContain('hunter2Secret')
+    expect(file).not.toContain('alice:')
   })
 
   it("round 2: Claude Code's analysis runs in a fresh empty folder of its own in Sentinel's runs folder, with its switches; the folder goes after", async () => {
@@ -433,13 +457,46 @@ describe("the analysis of a Codex update, on the provider that is on (row 42; OD
     expect(svc.released).toBe(1)
   })
 
-  it('no Codex account can run it: the panel says why, and nothing runs', async () => {
+  // Owner findings 2026-10-11: an account that must be confirmed at each
+  // launch is never confirmed for an unattended analysis, so the panel names
+  // the way forward (the real Settings labels), never the confirm text.
+  const NEEDS_ACCOUNT = "Sentinel's analysis could not run on Codex: the Codex account it would use must be confirmed at each launch, and a background analysis has nobody to confirm it. Choose another Analysis account in Settings, General, Sentinel, or add a Codex account in Settings, Accounts with Add Codex account, then choose it as the Analysis account."
+  const CONFIRM_TEXT = 'This sign-in is unverified: confirm that this launch may use it.'
+
+  it('no Codex account can run it unattended: the panel names the way forward, not the confirm text, and nothing runs', async () => {
     svc.pref.claude = 'off'
-    svc.prepareAnswer = () => ({ ok: false, code: 'acknowledgement-required', message: 'This sign-in is unverified: confirm that this launch may use it.' })
+    svc.prepareAnswer = () => ({ ok: false, code: 'acknowledgement-required', message: CONFIRM_TEXT })
     const s = await sentinel({ lastSeenCodexVersion: '0.153.4' })
     await s.sentinelStartupCheck()
     expect(review.runs).toHaveLength(0)
-    expect(s.getSentinelState()!.snapshot().lastAnalysisError).toBe("Sentinel's analysis could not run on Codex: This sign-in is unverified: confirm that this launch may use it.")
+    const err = s.getSentinelState()!.snapshot().lastAnalysisError!
+    expect(err).toBe(NEEDS_ACCOUNT)
+    expect(err).not.toContain('confirm that this launch')
+    expect(svc.prepares.map((p) => p.acknowledgeRealmOnly)).toEqual([undefined])
+  })
+
+  it("the chosen account cannot run and Codex's review default must be confirmed at each launch (the reviewer fallback): the way forward, not the confirm text", async () => {
+    svc.pref.claude = 'off'
+    settings.value = { sentinelCodexAccountId: 'acct-gone' }
+    svc.prepareAnswer = (input) => input.providerAccountId === 'acct-gone'
+      ? { ok: false, code: 'not-found', message: 'That account is not available.' }
+      : { ok: false, code: 'acknowledgement-required', message: CONFIRM_TEXT }
+    const s = await sentinel({ lastSeenCodexVersion: '0.153.4' })
+    await s.sentinelStartupCheck()
+    expect(svc.prepares.map((p) => p.providerAccountId)).toEqual(['acct-gone', undefined])
+    expect(svc.prepares.map((p) => p.acknowledgeRealmOnly)).toEqual([undefined, undefined])
+    expect(review.runs).toHaveLength(0)
+    expect(s.getSentinelState()!.snapshot().lastAnalysisError).toBe(NEEDS_ACCOUNT)
+    expect(s.getSentinelState()!.snapshot().lastSeenCodexVersion).toBe('0.153.4')
+  })
+
+  it('any other refusal is said as before, with its own reason', async () => {
+    svc.pref.claude = 'off'
+    svc.prepareAnswer = () => ({ ok: false, code: 'not-found', message: 'no account of this provider is set up to review' })
+    const s = await sentinel({ lastSeenCodexVersion: '0.153.4' })
+    await s.sentinelStartupCheck()
+    expect(review.runs).toHaveLength(0)
+    expect(s.getSentinelState()!.snapshot().lastAnalysisError).toBe("Sentinel's analysis could not run on Codex: no account of this provider is set up to review")
   })
 
   it("Codex's release notes unavailable: a calm note, and the version is analysed again next time", async () => {
@@ -525,7 +582,7 @@ describe("the title-bar chip's failed-analysis mark (owner answers review, E-S6)
     svc.prepareAnswer = () => ({ ok: false, code: 'acknowledgement-required', message: 'This sign-in is unverified: confirm that this launch may use it.' })
     await s.sentinelRerun()
     expect(snap(s)).toMatchObject({ lastAnalysisFailed: true })
-    expect(snap(s).lastAnalysisError).toContain('This sign-in is unverified')
+    expect(snap(s).lastAnalysisError).toContain('must be confirmed at each launch')
   })
   it('unmatched findings (the analysis completed) are not a failure [host]', async () => {
     svc.pref.claude = 'off'
@@ -964,5 +1021,62 @@ describe('fixer 10: a Codex downgrade still raises its version finding', () => {
     expect(fetchCodexReleaseNotes).not.toHaveBeenCalled()
     // Fixer 11: the panel names what is installed; the highest checked stays.
     expect(s.getSentinelState()!.snapshot()).toMatchObject({ lastSeenCodexVersion: '0.150.0', highestCheckedCodexVersion: '0.155.1' })
+  })
+})
+
+// O8: the Codex model check closes a Codex model finding whose cause is gone
+// (sentinel-models.ts, staleCodexModelFindingIds), at start and on a Re-run,
+// as the Claude half closes the owner's three stale 5.5 notices
+// (sentinel-model-findings-retire.test.ts). Only on evidence that the claim
+// is false now: a read that fails (the shipped list answers) closes nothing.
+describe('stale Codex model findings close (O8)', () => {
+  const modelFinding = (id: string) => ({ id, kind: 'compat', severity: 'warn', title: id, evidence: 'e', provider: 'codex', status: 'open', createdAt: 1 })
+  const openModelIds = (s: Awaited<ReturnType<typeof sentinel>>) => s.getSentinelState()!.snapshot().findings.filter((f) => f.status === 'open' && f.id.startsWith('models:')).map((f) => f.id)
+
+  it('a start closes a codex-missing notice the registry covers and a failed check that now completes; a notice still true is raised', async () => {
+    const s = await sentinel({ findings: [modelFinding('models:codex-missing:gpt-5.5'), modelFinding('models:codex-check-failed')] })
+    await s.sentinelStartupCheck()
+    expect(openModelIds(s)).toEqual(['models:codex-retired:gpt-5.2'])
+  })
+
+  it('the gpt-5.2 notice stays while the read fails, and a Re-run with a Codex that lists gpt-5.2 again closes it', async () => {
+    const s = await sentinel()
+    await s.sentinelStartupCheck()
+    expect(openModelIds(s)).toEqual(['models:codex-retired:gpt-5.2'])
+    svc.catalogue = { ok: false, code: 'failed', detail: 'exit 2' }
+    await s.sentinelRerun()
+    expect(openModelIds(s)).toEqual(['models:codex-retired:gpt-5.2'])
+    svc.installation = { discoveryState: 'found', version: '0.153.4', compatibility: 'supported' }
+    svc.catalogue = liveList('0.153.4', V0153)
+    await s.sentinelRerun()
+    // 0.153.4 lists gpt-5.2, and has not listed either gpt-6 model yet: nothing is said.
+    expect(openModelIds(s)).toEqual([])
+  })
+
+  // S18 review (2026-10-12): the registry carries gpt-6-sol and gpt-6-luna,
+  // which Codex lists from 0.156.1. A supported Codex before that has not
+  // listed them yet, so they are new there, not retired: no "possibly retired"
+  // notice is raised for either, and one an earlier check raised closes at the
+  // next start. A Re-run on 0.156.1 lists both; the gpt-5.2 notice, true on
+  // 0.155.1 and on 0.156.1, stays throughout.
+  it('on a supported Codex before 0.156.1, GPT-6-Sol and GPT-6-Luna are not called retired, and a notice that called them so closes', async () => {
+    const s = await sentinel({ findings: GPT6_NOT_LISTED.map(modelFinding) })
+    await s.sentinelStartupCheck()
+    expect(openModelIds(s)).toEqual(['models:codex-retired:gpt-5.2'])
+    svc.installation = { discoveryState: 'found', version: '0.156.1', compatibility: 'supported' }
+    svc.catalogue = liveList('0.156.1', V0156)
+    await s.sentinelRerun()
+    expect(openModelIds(s)).toEqual(['models:codex-retired:gpt-5.2'])
+  })
+
+  // Only the Codex check closes a Codex finding, and it runs only while Codex
+  // is on (a provider that is off is never checked).
+  it('with Codex off, its check does not run, so a Codex model finding is not touched', async () => {
+    svc.pref.codex = 'off'
+    const s = await sentinel({ findings: [modelFinding('models:codex-missing:gpt-5.5')] })
+    await s.sentinelStartupCheck()
+    await s.sentinelRerun()
+    expect(svc.catalogueReads).toBe(0)
+    expect(openModelIds(s)).toEqual(['models:codex-missing:gpt-5.5'])
   })
 })

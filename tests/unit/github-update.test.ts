@@ -243,6 +243,29 @@ function releaseWithBothAssets(tagName: string, version: string, isPrerelease = 
   }
 }
 
+/**
+ * An execFile stand-in that answers as gh does for the update check's fallback:
+ * no token, `gh release list` with only the fields it supports (it has no
+ * assets field, and asking for one fails as it does in gh), and
+ * `gh release view <tag>` with the downloads. github-update-gh-release-fields
+ * .test.ts covers this fallback in full.
+ */
+function ghAnswering(releases: Array<{ tagName: string; isPrerelease: boolean; isDraft: boolean; assets: unknown[] }>) {
+  return (_cmd: string, args: string[], _opts: any, cb: any) => {
+    const fields = (args[args.indexOf('--json') + 1] ?? '').split(',')
+    const project = (r: Record<string, unknown>) => Object.fromEntries(fields.map((f) => [f, r[f]]))
+    if (args[0] === 'release' && args[1] === 'list') {
+      if (fields.includes('assets')) return cb(new Error('Unknown JSON field: "assets"'), '', '')
+      return cb(null, JSON.stringify(releases.map(project)), '')
+    }
+    if (args[0] === 'release' && args[1] === 'view') {
+      const rel = releases.find((r) => r.tagName === args[2])
+      return rel ? cb(null, JSON.stringify(project(rel)), '') : cb(new Error('release not found'), '', '')
+    }
+    return cb(null, '', '')
+  }
+}
+
 describe('github-update', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -618,15 +641,13 @@ describe('github-update', () => {
 
     it('falls back to gh CLI when public API returns 404 (private repo)', async () => {
       httpsState.nextResponse = { statusCode: 404, body: null as any }
-      mockExecFile.mockImplementation((_cmd: string, _args: string[], _opts: any, cb: any) => {
-        cb(null, JSON.stringify([
-          { tagName: 'v1.2.125', isPrerelease: false, isDraft: false, assets: [
-            { name: 'ClaudeCommandCenter-Beta-1.2.125.exe', url: 'https://x/y.exe', size: 100 },
-            { name: 'ClaudeCommandCenter-Beta-1.2.125-mac.dmg', url: 'https://x/y.dmg', size: 100 },
-            { name: 'ClaudeCommandCenter-Beta-1.2.125-linux-x86_64.AppImage', url: 'https://x/y.AppImage', size: 100 },
-          ] },
-        ]), '')
-      })
+      mockExecFile.mockImplementation(ghAnswering([
+        { tagName: 'v1.2.125', isPrerelease: false, isDraft: false, assets: [
+          { name: 'ClaudeCommandCenter-Beta-1.2.125.exe', url: 'https://x/y.exe', size: 100 },
+          { name: 'ClaudeCommandCenter-Beta-1.2.125-mac.dmg', url: 'https://x/y.dmg', size: 100 },
+          { name: 'ClaudeCommandCenter-Beta-1.2.125-linux-x86_64.AppImage', url: 'https://x/y.AppImage', size: 100 },
+        ] },
+      ]))
       const result = await checkGitHubRelease()
       expect(result).not.toBeNull()
       expect(result!.version).toBe('1.2.125')
@@ -807,15 +828,13 @@ describe('github-update', () => {
 
     it('falls back to gh CLI on 403 without rate-limit header', async () => {
       httpsState.nextResponse = { statusCode: 403, body: null as any }
-      mockExecFile.mockImplementation((_cmd: string, _args: string[], _opts: any, cb: any) => {
-        cb(null, JSON.stringify([
-          { tagName: 'v1.2.125', isPrerelease: false, isDraft: false, assets: [
-            { name: 'ClaudeCommandCenter-Beta-1.2.125.exe', url: 'https://x/y.exe', size: 100 },
-            { name: 'ClaudeCommandCenter-Beta-1.2.125-mac.dmg', url: 'https://x/y.dmg', size: 100 },
-            { name: 'ClaudeCommandCenter-Beta-1.2.125-linux-x86_64.AppImage', url: 'https://x/y.AppImage', size: 100 },
-          ] },
-        ]), '')
-      })
+      mockExecFile.mockImplementation(ghAnswering([
+        { tagName: 'v1.2.125', isPrerelease: false, isDraft: false, assets: [
+          { name: 'ClaudeCommandCenter-Beta-1.2.125.exe', url: 'https://x/y.exe', size: 100 },
+          { name: 'ClaudeCommandCenter-Beta-1.2.125-mac.dmg', url: 'https://x/y.dmg', size: 100 },
+          { name: 'ClaudeCommandCenter-Beta-1.2.125-linux-x86_64.AppImage', url: 'https://x/y.AppImage', size: 100 },
+        ] },
+      ]))
       const result = await checkGitHubRelease()
       expect(result).not.toBeNull()
       expect(mockExecFile).toHaveBeenCalled()

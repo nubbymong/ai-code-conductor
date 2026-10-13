@@ -19,7 +19,7 @@ import * as path from 'path'
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const picker = require('../../../scripts/resume-picker.js') as {
   gatedDirsFromEnv: (env: Record<string, string | undefined>) => string[] | null
-  isGatedDir: (dir: string, gated: string[]) => boolean
+  isGatedDir: (dir: string, gated: string[]) => string | null
   resolveRetargetCwd: (
     resumeId: string | null,
     sourceCwd: string | null,
@@ -52,13 +52,34 @@ describe('the picker honours the gated directory set of a managed launch', () =>
     expect(picker.gatedDirsFromEnv({ CCC_GATED_DIRS: JSON.stringify(['/a', 7, '', '/b']) })).toEqual(['/a', '/b'])
   })
 
-  it('matches a directory by its resolved path, in either spelling on Windows', () => {
-    expect(picker.isGatedDir(A, [A])).toBe(true)
-    expect(picker.isGatedDir(path.join(A, '..', 'gated-a'), [A])).toBe(true)
-    expect(picker.isGatedDir(B, [A])).toBe(false)
-    if (process.platform === 'win32') {
-      expect(picker.isGatedDir(A.toUpperCase(), [A])).toBe(true)
-      expect(picker.isGatedDir(A.replace(/\\/g, '/'), [A])).toBe(true)
+  it('matches a directory that is not on disk by its resolved spelling, in either separator on Windows', () => {
+    // Names inside a fresh folder of this test's own, never made, so none of
+    // them is on disk whatever else the temp folder holds.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-gated-absent-'))
+    try {
+      const gone = path.join(root, 'gated-a')
+      const other = path.join(root, 'gated-b')
+      const upper = path.join(root, 'GATED-A')
+      for (const p of [gone, other, upper]) expect(fs.existsSync(p), p).toBe(false)
+      // Matched by its spelling, a folder starts where it is spelled.
+      expect(picker.isGatedDir(gone, [gone])).toBe(gone)
+      // A parent part, passed as written: on Windows it is settled on the
+      // text; elsewhere a spelling with one is kept as written when the disk
+      // cannot be asked, because past a link `..` is not the parent it names.
+      const dotted = [root, 'gated-b', '..', 'gated-a'].join(path.sep)
+      expect(picker.isGatedDir(dotted, [gone])).toBe(process.platform === 'win32' ? dotted : null)
+      expect(picker.isGatedDir(other, [gone])).toBeNull()
+      // Its real path cannot be read, so its name in another case is not taken
+      // for it; one on disk is matched by its real path instead
+      // (resume-picker-gated-real-path.test.ts).
+      expect(picker.isGatedDir(upper, [gone])).toBeNull()
+      if (process.platform === 'win32') {
+        const slashed = gone.replace(/\\/g, '/')
+        expect(picker.isGatedDir(slashed, [gone])).toBe(slashed)
+      }
+    } finally {
+      // TEST CLEANUP GUARD: only this case's own folder, by its prefix and parent.
+      if (path.basename(root).startsWith('ccc-gated-absent-') && path.dirname(root) === path.resolve(os.tmpdir())) fs.rmSync(root, { recursive: true, force: true })
     }
   })
 
@@ -91,7 +112,10 @@ describe('a launch acts on the gated directory set', () => {
   let wt: string
   let projectDir: string
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-gated-launch-'))
+    // Spelled as the disk spells it: a managed launch starts in the real
+    // path's own names, so a temp folder named with an 8.3 short name or
+    // through a link (a CI runner's, say) would start elsewhere than `wt`.
+    root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-gated-launch-')))
     wt = path.join(root, 'wt')
     fs.mkdirSync(wt)
     projectDir = path.join(os.homedir(), '.claude', 'projects', picker.encodeProjectPath(fs.realpathSync(wt)))
@@ -132,6 +156,19 @@ describe('a launch acts on the gated directory set', () => {
     expect(gated.calls[0].file).toBe('C:\\native\\claude.exe')
     expect(gated.calls[0].opts.cwd).toBe(wt)
     expect(gated.exits).toEqual([0])
+  })
+
+  it('the refusal names every reason a worktree is not cleared, and says when the app log has it and when to start again', () => {
+    // A worktree whose settings were checked and refused, or could not be
+    // checked, is left out of the set on purpose and the app log names it, so
+    // starting again may just repeat the refusal. One that was not listed when
+    // the session started (the listing failed, or the worktree is newer) is not
+    // in the log, and starting again is the advice that helps.
+    const said = launchFrom(wt, [process.cwd()]).said
+    expect(said).toContain("did not clear that folder's project settings for this account when the session started (they would redirect the account, could not be checked, or the folder was not listed then)")
+    expect(said).toContain('The app log names the folder and why when it was checked; otherwise start the session again and pick it then.')
+    expect(said).not.toContain('The app log names the reason.')
+    expect(said).not.toContain('did not check that folder')
   })
 
   it('decides the retarget BEFORE the companion directory is created, so a refusal leaves nothing on disk', () => {

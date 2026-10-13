@@ -9,7 +9,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import type { SentinelFinding, SentinelProvider } from '../../shared/sentinel-types'
 import { stripSpoofableText } from '../../shared/safe-text'
-import { redactFailure } from '../providers/review-support'
+import { redactFailure, redactHead } from '../providers/review-support'
 import { ANALYSIS_UNREACHABLE_WORDS } from '../../shared/sentinel-analysis-contract'
 import { evidenceIsQuoted, normaliseQuoteText, quoteKey, dropTokenRuns } from './sentinel-quote'
 
@@ -430,11 +430,17 @@ export function envelopeError(stdout: string): { rateLimited: boolean; unreachab
   if (!isError) return null
   // `result` on an api_error is the CLI's own error string (not model output).
   // Strip control chars + trim + cap, so nothing pathological reaches the panel.
-  const raw = typeof env.result === 'string' ? plainErrorReason(env.result) : ''
-  const reason = raw || (status !== null ? `the account returned HTTP ${status}` : 'the account could not be reached')
-  const rateLimited = status === 429 || /\blimit\b/i.test(reason)
+  // The reason shown, kept and logged goes through the shared failure
+  // redactor first, before the cut and the JSON-message swap, so a cut never
+  // splits a secret. The rate-limit and unreachable checks still read the
+  // unredacted line, exactly as before.
+  const text = typeof env.result === 'string' ? env.result : ''
+  const fallback = status !== null ? `the account returned HTTP ${status}` : 'the account could not be reached'
+  const raw = (text ? plainErrorReason(text) : '') || fallback
+  const reason = (text ? plainErrorReason(redactHead(text, redactFailure)) : '') || fallback
+  const rateLimited = status === 429 || /\blimit\b/i.test(raw)
   // An HTTP status is an answer from the service, so it never counts as unreachable.
-  const unreachable = status === null && !rateLimited && UNREACHABLE_REASON.test(reason)
+  const unreachable = status === null && !rateLimited && UNREACHABLE_REASON.test(raw)
   return { rateLimited, unreachable, reason }
 }
 

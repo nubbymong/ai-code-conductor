@@ -27,6 +27,10 @@ export interface ScreenLine {
   text: string
   /** The same row with every dim cell (a placeholder) as a space, trimmed. */
   typed: string
+  /** The same row with every cell that is NOT drawn inverse as a space,
+   *  trimmed (a cursor block a TUI paints itself is inverse). Absent when the
+   *  reader does not know which cells are. */
+  inverse?: string
   /** The row's width in cells, and the cell just past its last non-blank one
    *  (P3.8 round 4: where a right-aligned segment ends). Absent when the
    *  reader does not know them. */
@@ -42,7 +46,7 @@ export interface XtermLike {
   cols: number
   buffer: { active: {
     baseY: number
-    getLine(y: number): { getCell(x: number): { getChars(): string; getWidth(): number; isDim(): number | boolean } | undefined } | undefined
+    getLine(y: number): { getCell(x: number): { getChars(): string; getWidth(): number; isDim(): number | boolean; isInverse?(): number | boolean } | undefined } | undefined
   } }
 }
 
@@ -56,6 +60,8 @@ export function readXtermScreen(term: XtermLike): ScreenLine[] {
     if (!line) { out.push({ text: '', typed: '', width: term.cols, end: 0 }); continue }
     let text = ''
     let typed = ''
+    let inverse = ''
+    let knowsInverse = false
     let end = 0
     for (let x = 0; x < term.cols; x++) {
       const cell = line.getCell(x)
@@ -64,9 +70,21 @@ export function readXtermScreen(term: XtermLike): ScreenLine[] {
       const ch = cell.getChars() || ' '
       text += ch
       typed += cell.isDim() ? ' '.repeat(ch.length) : ch
+      if (typeof cell.isInverse === 'function') {
+        knowsInverse = true
+        inverse += cell.isInverse() ? ch : ' '.repeat(ch.length)
+      } else {
+        inverse += ' '.repeat(ch.length)
+      }
       if (ch.trim() !== '') end = x + Math.max(1, cell.getWidth())
     }
-    out.push({ text: text.replace(/\s+$/, ''), typed: typed.replace(/\s+$/, ''), width: term.cols, end })
+    out.push({
+      text: text.replace(/\s+$/, ''),
+      typed: typed.replace(/\s+$/, ''),
+      ...(knowsInverse ? { inverse: inverse.replace(/\s+$/, '') } : {}),
+      width: term.cols,
+      end,
+    })
   }
   return out
 }

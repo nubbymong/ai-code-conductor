@@ -12,8 +12,7 @@ import {
   parseEndSudoSentinel, getWindowsRemoteSetupCommand, buildWindowsClaudeCommand, statusPostUrl,
 } from './ssh-shim'
 import { detectClaudeUi, lastPromptLineForClaude, looksLikeShellPromptTail } from './ui-detection'
-import { deployClaudeStatuslineScript, deployClaudeResumePickerScript, healGlobalStatusline } from './statusline'
-import { buildStatuslineSetting } from './statusline-command'
+import { deployClaudeStatuslineScript, deployClaudeResumePickerScript, healGlobalStatusline, launchStatuslineSetting } from './statusline'
 import { watchClaudeStatuslineFile, listClaudeResumableSessions, notifyClaudeTelemetry } from './telemetry'
 import {
   claudeAuthorityEnvVariables, CLAUDE_MIN_MANAGED_CLI_VERSION,
@@ -118,7 +117,7 @@ export class ClaudeProvider implements SshCapableProvider {
     sessionId: string,
     remotePath: string,
     hooksConfig: { port: number; secret: string } | null,
-    opts: { includeStatusLine?: boolean; includeConductorMcp?: boolean; remoteMcpPort?: number } | undefined,
+    opts: { includeStatusLine?: boolean; includeConductorMcp?: boolean; remoteMcpPort?: number; includeAttention?: boolean } | undefined,
     nonce: string,
   ): string {
     return getRemoteSetupCommand(sessionId, remotePath, hooksConfig, opts, nonce)
@@ -139,8 +138,8 @@ export class ClaudeProvider implements SshCapableProvider {
   deliverStatusline(data: StatuslineData): void {
     notifyClaudeTelemetry(data)
   }
-  statuslineSetting(resourcesDir: string, sessionId?: string, statusUrlFile?: string): { type: 'command'; command: string } | null {
-    return buildStatuslineSetting(resourcesDir, sessionId, statusUrlFile)
+  statuslineSetting(resourcesDir: string, sessionId?: string, statusUrlFile?: string): { type: 'command'; command: string } | null | undefined {
+    return launchStatuslineSetting(resourcesDir, sessionId, statusUrlFile)
   }
   statusPostUrl(sessionId: string, remoteMcpPort: number | undefined, mcpPort: number, includeConductorMcp: boolean): string {
     return statusPostUrl(sessionId, remoteMcpPort, mcpPort, includeConductorMcp)

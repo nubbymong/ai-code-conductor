@@ -169,11 +169,16 @@ export function RenamePageView({ fresh }: { fresh: boolean }) {
 
         {/* One bullet (owner R7/R8: the deep-integration strip, the
             "first-class" line and the smallprint all cut). Upgraders only —
-            a fresh install has nothing to carry over (spec review F2). */}
+            a fresh install has nothing to carry over (spec review F2).
+            O3 C12: it said "Nothing changes ... accounts all carry over",
+            and the earlier Codex setting does not: the one-time Codex
+            question follows this run for every upgrader who sees the page
+            (a pre-rename build had no way to answer it). Owner sign-off
+            owed on this wording (it replaces canvas v8 copy). */}
         {!fresh && (
           <div className="rn-points" data-ux-id="rename-points">
             <div className="rn-pt" data-ux-id="rename-pt-nothing">
-              <span className="wn-dot" /><div><b>Nothing changes.</b> Same install, same path &mdash; sessions, configs and accounts all carry over.</div>
+              <span className="wn-dot" /><div><b>Same install, same path.</b> Your sessions, configs and Claude accounts carry over. Codex asks you once, after these pages.</div>
             </div>
           </div>
         )}

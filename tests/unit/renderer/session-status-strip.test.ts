@@ -93,6 +93,8 @@ const ptyWrite = vi.fn()
 
 const { default: SessionStatusStrip } = await import('../../../src/renderer/components/SessionStatusStrip')
 const { useSettingsStore: mockedSettings } = await import('../../../src/renderer/stores/settingsStore')
+const { registerScreenReader } = await import('../../../src/renderer/components/terminal/screenRegistry')
+const { READY: CLAUDE_READY } = await import('../shared/claude-screens')
 /** The saved Codex answer the strip reads: true (on), or absent (not set up). */
 function setCodexSaved(on: boolean | undefined): void {
   const settings = (mockedSettings as any).getState().settings as Record<string, unknown>
@@ -218,13 +220,30 @@ describe('SessionStatusStrip -- controls (Claude)', () => {
     expect(buttonByTitle('Restart session')).toBeTruthy()
   })
 
-  it('Compact writes /compact to THIS session pty', async () => {
+  // Compact and the model pill type into Claude Code only at its ready, empty
+  // prompt (src/shared/claude-screen.ts; the screens that are not are covered
+  // in session-status-strip-claude-compact.test.tsx), so the terminal shows
+  // that prompt here. Fake timers, run out at the end, so a send's settle
+  // time never carries into the next test.
+  const atReadyPrompt = async (body: () => Promise<void>): Promise<void> => {
+    const off = registerScreenReader(claudeSession.id, () => CLAUDE_READY)
+    vi.useFakeTimers()
+    try {
+      await body()
+    } finally {
+      act(() => { vi.advanceTimersByTime(60_000) })
+      vi.useRealTimers()
+      off()
+    }
+  }
+
+  it('Compact writes /compact to THIS session pty', () => atReadyPrompt(async () => {
     await render(claudeSession.id)
     act(() => { buttonByTitle('Compact the conversation')!.click() })
     expect(ptyWrite).toHaveBeenCalledWith(claudeSession.id, '/compact\n')
-  })
+  }))
 
-  it('selecting a model writes /model <value> to THIS session pty', async () => {
+  it('selecting a model writes /model <value> to THIS session pty', () => atReadyPrompt(async () => {
     await render(claudeSession.id)
     act(() => { buttonByTitle('Model')!.click() })
     const opt = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
@@ -233,7 +252,7 @@ describe('SessionStatusStrip -- controls (Claude)', () => {
     expect(opt).toBeTruthy()
     act(() => { opt!.click() })
     expect(ptyWrite).toHaveBeenCalledWith(claudeSession.id, '/model opus\n')
-  })
+  }))
 
   it('Restart invokes the restart hook', async () => {
     await render(claudeSession.id)

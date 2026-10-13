@@ -14,8 +14,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 type ExecCb = (err: Error | null, stdout?: string) => void
 const execFile = vi.fn((_bin: string, _args: string[], _opts: unknown, cb: ExecCb) => { cb(null, '2.1.281 (Claude Code)\n') })
 const probeClaudeCli = vi.fn(async () => ({ installed: true, path: '/usr/local/bin/claude', probe: 'test' }))
+/** The rules handed to the Windows PowerShell profile lookup (claude-cli-probe.ts). */
+const profileRules: Array<() => boolean> = []
 vi.mock('node:child_process', () => ({ execFile: (b: string, a: string[], o: unknown, cb: ExecCb) => execFile(b, a, o, cb) }))
-vi.mock('../../../src/main/claude-cli-probe', () => ({ probeClaudeCli: () => probeClaudeCli() }))
+vi.mock('../../../src/main/claude-cli-probe', () => ({
+  probeClaudeCli: () => probeClaudeCli(),
+  setClaudeProfileLookupAllowed: (rule: () => boolean) => { profileRules.push(rule) },
+}))
 
 const {
   probeClaudeCliVersion, ensureClaudeCliVersion, peekClaudeCliVersion, setClaudeCliProbeAllowed, claudeCliProbeAllowed, _resetClaudeCliVersionForTest,
@@ -65,6 +70,15 @@ describe('the Claude CLI probe while Claude Code is off', () => {
   it('with Claude Code on, the probe runs as before (the control)', async () => {
     await expect(probeClaudeCliVersion()).resolves.toBe('2.1.281')
     expect(execFile).toHaveBeenCalledTimes(1)
+  })
+
+  // 2.1.1-beta.3 (F26). Mutation to prove this can fail: drop the
+  // setClaudeProfileLookupAllowed call from setClaudeCliProbeAllowed.
+  it('main\'s rule also decides when Windows PowerShell may be asked, with the profile, where Claude Code is', () => {
+    profileRules.length = 0
+    const rule = (): boolean => claudeOn
+    setClaudeCliProbeAllowed(rule)
+    expect(profileRules).toEqual([rule])
   })
 
   it('a gate that cannot answer is a no; until one is set, probes run as they always have', () => {

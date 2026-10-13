@@ -13,7 +13,7 @@
   "scripts/resume-picker.js :: spawn(first.file": {
    "count": 1,
    "how": "full-path",
-   "reason": "Claude Code: on Windows by the full path found in PATH's fully qualified folders (resolveClaudeCmd: claude.exe, then claude.cmd, then claude.bat, the app's order), a claude.cmd or claude.bat launcher through the system cmd.exe (buildSpawnTarget) whose environment keeps PATH to its fully qualified folders with NoDefaultCurrentDirectoryInExePath (withFullyQualifiedProgramLookup, the app's rule); elsewhere claude by name in the session's own login-shell PATH."
+   "reason": "Claude Code: the one the app's launch line names for the picker (CCC_CLAUDE_BIN, resolveClaudeCmd via forwardedClaudeCmd) when it is an absolute path (on Windows drive-absolute, never a share or a device path) to a file named as Claude Code goes by (claude.exe, claude.cmd or claude.bat on Windows; claude, runnable, elsewhere), started by the same route and checks; otherwise on Windows by the full path found in PATH's fully qualified folders (resolveClaudeCmd: claude.exe, then claude.cmd, then claude.bat, the app's order), a claude.cmd or claude.bat launcher through the system cmd.exe (buildSpawnTarget) whose environment keeps PATH to its fully qualified folders with NoDefaultCurrentDirectoryInExePath (withFullyQualifiedProgramLookup, the app's rule); elsewhere claude by name in the session's own login-shell PATH."
   },
   "scripts/resume-picker.js :: spawn(fresh.file": {
    "count": 1,
@@ -263,39 +263,30 @@
    "how": "not-windows",
    "reason": "macOS and Linux only (inside the non-Windows branch): the user's login shell asked where node is."
   },
-  "src/main/pty-manager.ts :: execFile(bin": {
-   "count": 2,
-   "how": "by-name",
-   "programs": [
-    "ssh"
-   ],
-   "reason": "ssh by name (ssh.exe on Windows) for an SSH session's separate end and liveness execs, argv only, as the user's own terminal starts it: ssh keeps its own lookup by an owner decision."
-  },
   "src/main/pty-manager.ts :: execFile(git": {
    "count": 1,
    "how": "full-path",
    "reason": "git for the picker's worktree list by the full path found in PATH's fully qualified folders (pickerGitLookup), with NoDefaultCurrentDirectoryInExePath; none found lists nothing."
   },
-  "src/main/pty-manager.ts :: pty.spawn(bin": {
+  "src/main/pty-manager.ts :: execFile(sshProgram()": {
    "count": 2,
-   "how": "by-name",
-   "programs": [
-    "ssh"
-   ],
-   "reason": "ssh by name (ssh.exe on Windows) for the password route of an SSH session's end and liveness execs, as the user's own terminal starts it: ssh keeps its own lookup by an owner decision."
+   "how": "full-path",
+   "reason": "ssh for an SSH session's separate End and liveness execs, argv only: on Windows ssh.exe by the full path found in PATH's fully qualified folders (sshProgram, findOnWindowsPath; none found: nothing starts, and the exec settles as failed or unverified); elsewhere ssh by name, as before."
   },
   "src/main/pty-manager.ts :: pty.spawn(spawnCmd": {
    "count": 3,
    "how": "full-path",
    "reason": "A session's own program as its provider builds it: on Windows PowerShell by its full path in the system folder for a Claude session or a terminal tab, gsudo by the full path found in PATH's folders for an elevated tab, Codex or its cmd.exe line by full paths, and the Codex resume list's node by the full path found in PATH's fully qualified folders (none found: nothing starts). The install or update tab the app opens to type its own npm line starts with its program lookup kept to PATH's fully qualified folders and NoDefaultCurrentDirectoryInExePath set, so that npm.cmd and the node it starts by a bare name are found only there."
   },
-  "src/main/pty-manager.ts :: pty.spawn(sshBinary": {
+  "src/main/pty-manager.ts :: pty.spawn(sshBin": {
    "count": 1,
-   "how": "by-name",
-   "programs": [
-    "ssh"
-   ],
-   "reason": "An SSH session's ssh by name (ssh.exe on Windows), as the user's own terminal starts it: ssh keeps its own lookup by an owner decision."
+   "how": "full-path",
+   "reason": "ssh for an SSH session: the same program found the same way as the sshProgram() sites, asked once at the top of the SSH branch (const sshBin = sshProgram()) before the launch's MCP record is made, and started here. On Windows ssh.exe by the full path found in PATH's fully qualified folders (sshProgram, findOnWindowsPath; none found: nothing starts, the session fails with SSH_NOT_ON_PATH and no record is left); elsewhere ssh by name, as before."
+  },
+  "src/main/pty-manager.ts :: pty.spawn(sshProgram()": {
+   "count": 2,
+   "how": "full-path",
+   "reason": "ssh for the password route of an SSH session's End and liveness execs: on Windows ssh.exe by the full path found in PATH's fully qualified folders (sshProgram, findOnWindowsPath; none found: nothing starts, and the exec settles as failed or unverified); elsewhere ssh by name, as before."
   },
   "src/main/registry.ts :: execFileSync(systemTool('reg.exe')": {
    "count": 1,
@@ -340,6 +331,16 @@
     "msedge"
    ],
    "reason": "The vision browser at a known install path that exists; with none there, the browser by its name (chrome or msedge on Windows), as the system finds it. Not one of the programs the Windows lookup promise names (the Feature Guide's, which the inventory test reads)."
+  },
+  "src/main/windows-programs.ts :: execFile(taskkill": {
+   "count": 1,
+   "how": "system-folder",
+   "reason": "taskkill.exe by its full path in the system folder (systemTool), stopping a PowerShell profile question that did not answer in time while that PowerShell is still running; with no plain system folder to name it from, none is started."
+  },
+  "src/main/windows-programs.ts :: spawn(start.file": {
+   "count": 1,
+   "how": "system-folder",
+   "reason": "Windows PowerShell by its full path in the system folder (systemTool, through windowsStartCommand), asked with the user's profile where Claude Code is (findWithPowerShellProfile): a fixed command, -NonInteractive, in the home folder, PATH kept to fully qualified folders with NoDefaultCurrentDirectoryInExePath set; with no plain system folder to name it from, none is started. Its answer is used only when it is a plain drive-absolute path to an existing claude.exe, claude.cmd or claude.bat outside the folder it ran in."
   }
  }
 }

@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import type { ReactNode } from 'react'
 import { BrandMark } from '../components/BrandMark'
+import { WindowControls } from '../components/WindowControls'
 import { useContainFocus } from './contain-focus'
 
 /** Phase-based breadcrumb (matches the mockup's crumbsHtml / PHASE map). */
@@ -46,7 +47,16 @@ export function OnboardingShell({
         <div className="ring r2" />
         <div className="ring r3" />
       </div>
-      <div className="top">
+      {/* The pages cover the title bar, so this bar stands in for it
+          (aicc_planning #211): it drags the window, and on Windows and Linux
+          it carries the window's own minimize, maximize and close at its
+          right end (no-drag, so they take clicks), as tab stops inside the
+          trap above. With no breadcrumb, ml-auto puts them at the right end;
+          with one, they follow it (the breadcrumb already takes the free
+          space). The hidden title bar and panels behind the page declare no
+          drag regions while they are inert (styles.css), so nothing re-marks
+          this bar or the buttons, whatever order the regions are folded in. */}
+      <div className="top titlebar-drag">
         <BrandMark className="blogo" />
         <span className="bname">AI Code Conductor</span>
         {isNew && <span className="ob-new">New in this release</span>}
@@ -60,6 +70,7 @@ export function OnboardingShell({
             ))}
           </div>
         )}
+        <WindowControls className={showPhases ? undefined : 'ml-auto'} />
       </div>
       <div className="pages">
         <section className="page active">{children}</section>

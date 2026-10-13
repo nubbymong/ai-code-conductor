@@ -1,16 +1,36 @@
 /**
- * "Has this user been offered Multi Spawn for the build they are running?" —
- * the Allow Multi Spawn startup page's gate, built as a sibling of
- * `whats-new-gate.ts` and deliberately using the same mechanism.
+ * "Has this user ever been offered Multi Spawn?" This is the Allow Multi Spawn
+ * startup page's gate. It sits beside `whats-new-gate.ts` and reads the same
+ * boot-time meta, but its marker means something different.
  *
- * The marker is a VERSION STAMP, not a boolean, for the reason the What's New
- * stamp is one: a `seen: true` flag can only ever be turned on once, so the
- * surface can never be shown again, and a build that has to re-deliver
- * something has no way to say so. `multiSpawnIntroVersion` records the build
- * that showed the page; a later build has not shown it, so it shows it once.
- * Its own stamp is keyed on `__APP_VERSION__` — the version RUNNING, never
- * `changelog[0].version`, which on any build between two releases is a release
- * ahead of itself (#369).
+ * The page is shown ONCE EVER, on the upgrade into Multi Spawn. It is a
+ * one-time migration page: it lists the saved configs so an upgrader can opt
+ * them in or out before the one-copy limit bites. Once any build has offered
+ * it there is nothing new to ask, so the marker counts by PRESENCE: once
+ * `multiSpawnIntroVersion` holds any version, the page is never shown again,
+ * not even after a later upgrade (2.1.1-beta.1 to beta.2, 2.1.0 to 2.1.1,
+ * 2.1.x to 2.2). That is the same rule as the introduction-seen stamp next to
+ * it in appMetaStore.ts.
+ *
+ * It used to count as seen only when the stamp EQUALLED the running version,
+ * so every update put the page back up, with "New in this update" copy that was
+ * no longer true. Nothing needs migrating: the gate runs in the new build and
+ * only asks whether a stamp exists.
+ *
+ * The stamp still records `__APP_VERSION__`, the version RUNNING, never
+ * `changelog[0].version` (#369), so the meta file says which build made the
+ * offer. Only its presence is read.
+ *
+ * A missing stamp means "never offered". Every start of a build with this page
+ * either stamps (fresh install, no configs, Skip, Continue) or shows the page
+ * again until it is answered. So a 2.0.x upgrader still gets the page once,
+ * where Multi Spawn really is new, and a user who closed the app with the page
+ * still up sees it again on the next start.
+ *
+ * What this page does NOT do: announce a LATER automatic enable. The migration
+ * in App.tsx (`configsToEnableMultiSpawn`) runs on every start, so a config
+ * that is found running two copies on some later start is enabled silently.
+ * That was already true of any restart on the same build, so it is not new.
  *
  * It is a SEPARATE stamp from `lastSeenVersion` rather than a second reader of
  * it. The two surfaces are dismissed independently — the release notes close,
@@ -26,14 +46,13 @@
  *     about which launch is somebody's first.
  *   - NO SAVED CONFIGS. An empty list is an empty page. It stamps anyway, so a
  *     user who creates their first config an hour later is not ambushed by a
- *     migration page on the next start of the same build.
+ *     migration page on the next start, or after any later upgrade.
  *
  * Both of those are decided from meta read at BOOT, before anything stamps —
  * by the time the harness has closed, `lastSeenVersion` says the current
  * version and a first install is indistinguishable from an upgrade.
  */
 
-import { compareVersions } from '../../shared/version-order'
 import { useAppMetaStore } from '../stores/appMetaStore'
 import { decideUpgradeFlow } from './upgrade-flow'
 import { runningVersion } from './whats-new-gate'
@@ -76,10 +95,10 @@ export function decideMultiSpawnIntro(input: MultiSpawnIntroInput): MultiSpawnIn
   // build): show nothing and stamp nothing rather than guess.
   if (!currentVersion) return { show: false, markSeen: false, reason: 'no-version' }
 
-  // Compared, not string-equal, for the same reason the What's New gate is:
-  // `2.1.0` and `v2.1.0` are one release, and a formatting difference must not
-  // re-fire a once-per-upgrade page on every launch.
-  if (multiSpawnIntroVersion && compareVersions(multiSpawnIntroVersion, currentVersion) === 0) {
+  // Presence, not comparison: any stamp means some build has already offered
+  // the page, so no build offers it again. Comparing it to the running version
+  // re-showed the page on every update.
+  if (multiSpawnIntroVersion) {
     return { show: false, markSeen: false, reason: 'already-seen' }
   }
 

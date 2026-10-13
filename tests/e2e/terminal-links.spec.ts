@@ -8,6 +8,9 @@
  *   2. Right-clicking a link offers "Copy link address", which puts the URL on
  *      the OS clipboard (exercises link detection → hover tracking → the context
  *      menu → the copy handler).
+ *   3. (aicc_planning#126) The right-click does NOT also open the link: xterm
+ *      activates a link on the mouseup of any button, and only a plain left
+ *      click may open.
  *
  * Drives a local shell-only PTY (linkification is renderer-side text matching,
  * so local == tmux/SSH here). Windows-only (uses a powershell terminal config).
@@ -66,6 +69,26 @@ async function hoverLink(p: { x: number; y: number }) {
   await page.waitForTimeout(500) // linkifier hover debounce
 }
 
+/**
+ * electronAPI is a frozen contextBridge object, so intercept in MAIN: swap the
+ * shell:openExternal IPC handler for a recorder (and empty the record). Safe to
+ * call again: each call replaces the handler and starts a fresh record.
+ */
+async function recordOpenExternal() {
+  await ctx.app.evaluate(({ ipcMain }) => {
+    ;(globalThis as unknown as { __ext: string[] }).__ext = []
+    ipcMain.removeHandler('shell:openExternal')
+    ipcMain.handle('shell:openExternal', (_e, u: string) => {
+      ;(globalThis as unknown as { __ext: string[] }).__ext.push(u)
+      return true
+    })
+  })
+}
+
+async function openedUrls(): Promise<string[]> {
+  return ctx.app.evaluate(() => (globalThis as unknown as { __ext: string[] }).__ext)
+}
+
 test.describe('#21 terminal link handling (real app, real xterm)', () => {
   test.skip(process.platform !== 'win32', 'uses a powershell terminal config')
 
@@ -86,23 +109,14 @@ test.describe('#21 terminal link handling (real app, real xterm)', () => {
 
   test('clicking an https link routes to shell.openExternal with the URL', async () => {
     test.setTimeout(120000)
-    // electronAPI is a frozen contextBridge object, so intercept in MAIN: swap
-    // the shell:openExternal IPC handler for a recorder. This proves the click
-    // routed the URL through the real renderer→IPC path (safe-url validation is
-    // unit-tested separately).
-    await ctx.app.evaluate(({ ipcMain }) => {
-      ;(globalThis as unknown as { __ext: string[] }).__ext = []
-      ipcMain.removeHandler('shell:openExternal')
-      ipcMain.handle('shell:openExternal', (_e, u: string) => {
-        ;(globalThis as unknown as { __ext: string[] }).__ext.push(u)
-        return true
-      })
-    })
+    // The recorder proves the click routed the URL through the real
+    // renderer→IPC path (safe-url validation is unit-tested separately).
+    await recordOpenExternal()
     const p = await printUrlAndPoint()
     await hoverLink(p)
     await page.mouse.click(p.x, p.y)
     await page.waitForTimeout(400)
-    const opened = await ctx.app.evaluate(() => (globalThis as unknown as { __ext: string[] }).__ext)
+    const opened = await openedUrls()
     await page.screenshot({ path: 'test-results/21-link-click.png' }).catch(() => {})
     expect(opened, `expected shell.openExternal to be called with ${URL}`).toContain(URL)
   })
@@ -110,15 +124,23 @@ test.describe('#21 terminal link handling (real app, real xterm)', () => {
   test('right-click a link → "Copy link address" copies the URL to the clipboard', async () => {
     test.setTimeout(120000)
     await ctx.app.evaluate(({ clipboard }) => clipboard.writeText(''))
+    await recordOpenExternal()
     const p = await printUrlAndPoint()
     await hoverLink(p)
     await page.mouse.click(p.x, p.y, { button: 'right' })
     const copyLink = page.locator('button:has-text("Copy link address")').first()
     await expect(copyLink).toBeVisible({ timeout: 5000 })
+    // aicc_planning#126: the right-click opened the menu and nothing else. Same
+    // settle time the left-click test gives the IPC to reach main.
+    await page.waitForTimeout(400)
+    expect(await openedUrls(), 'a right-click must not open the link').toEqual([])
     await copyLink.click()
     await page.waitForTimeout(300)
     const clip = await ctx.app.evaluate(({ clipboard }) => clipboard.readText())
     await page.screenshot({ path: 'test-results/21-copy-link.png' }).catch(() => {})
     expect(clip).toBe(URL)
+    // The menu click is a left click near the link: if it ever reached xterm's
+    // mouseup it would pass the button-0 gate, so check it opened nothing too.
+    expect(await openedUrls(), 'right-click then Copy link address must not open the link').toEqual([])
   })
 })

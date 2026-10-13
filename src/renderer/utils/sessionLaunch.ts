@@ -125,8 +125,9 @@ export function sshMappedProfileId(
  * How a RESUMED session (an app-relaunch restore) chooses its account (#446).
  *   - 'auto-last' (default): continue silently under the account the session
  *     ran under — restored sessions are marked predetermined, no gate.
- *   - 'ask': the account picker opens per restored session (pre-selecting the
- *     last account), by NOT marking it predetermined.
+ *   - 'ask': the account picker opens per restored session (with the account
+ *     that session last ran on already chosen), by NOT marking it
+ *     predetermined.
  * Absent or unrecognised => 'auto-last', so no existing install changes on
  * upgrade. Resolver-based default (the settings enum convention here), not a
  * DEFAULT_SETTINGS entry.
@@ -144,6 +145,28 @@ export function resolveResumeAccountMode(value: unknown): 'ask' | 'auto-last' {
  */
 export function shouldPredetermineRestoredAccount(resumeAccountMode: unknown): boolean {
   return resolveResumeAccountMode(resumeAccountMode) === 'auto-last'
+}
+
+/**
+ * The account a RESUMED session last ran on (O9), as the account picker names
+ * it and as the launch decides whether a choice is new:
+ *   - its saved pin, while that account is still set up here;
+ *   - no pin: the primary, because main runs a pinless Claude session on the
+ *     primary profile (a no-primary install ran on the bare home, so there is
+ *     no account to name and `id` is undefined);
+ *   - a pin to a since-removed account: no account, and `gone` is true. The
+ *     primary is NOT put in its place: the session never ran on it.
+ */
+export function resumedSessionOwnAccount(
+  pinnedId: string | undefined,
+  profiles: ReadonlyArray<{ id: string; isPrimary?: boolean }>,
+): { id: string | undefined; gone: boolean } {
+  if (pinnedId) {
+    return profiles.some((p) => p.id === pinnedId)
+      ? { id: pinnedId, gone: false }
+      : { id: undefined, gone: true }
+  }
+  return { id: profiles.find((p) => p.isPrimary)?.id, gone: false }
 }
 
 /**

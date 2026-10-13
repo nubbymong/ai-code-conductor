@@ -133,7 +133,7 @@ describe('GuidedTour: every card, per assistants in use', () => {
       const { bodies: cards, wholes } = walk(on)
       expect(wholes.size).toBe(7)
       for (const [title, text] of wholes) expect(text, `${title} ${JSON.stringify(on)}`).not.toContain('Codex')
-      expect(cards.get('Saved configs live here')).toContain(`whenever you want (Claude, here or on another machine over SSH ${DASH} plain, or persistent so a dropped link does not kill it).`)
+      expect(cards.get('Saved configs live here')).toContain(`whenever you want (Claude, here or on another machine over SSH, where a session ends if the link drops unless you choose SSH Persistent).`)
       expect(cards.get('Review what your agent builds')).toContain('anyone here can pick up.')
       expect(cards.get('Help lives here')).toBe('The Feature Guide explains every feature in depth whenever you want it and can hand your question to Ask Conductor, a Claude session that knows the app.')
     }
@@ -147,14 +147,27 @@ describe('GuidedTour: every card, per assistants in use', () => {
     expect(walk(CLAUDE_ONLY).bodies.get('Review what your agent builds')).toBe(CANVAS_BEFORE_NOTE)
   })
 
-  it('both on: every card word for word as before, the canvas and help cards apart (P4.1, P4.3)', () => {
+  it('both on: every card word for word as before, the canvas and help cards apart (P4.1, P4.3), and the SSH kinds named by what a dropped link does (aicc_planning#88)', () => {
     const cards = walk(BOTH).bodies
-    expect(cards.get('Saved configs live here')).toBe(`The left panel has two modes ${DASH} Saved is your launcher, Running is your live sessions. A saved config is a reusable launcher: project folder, model, account. Open the Saved tab, press "+ New" and pick Config to create one, then start a session from it whenever you want (Claude or Codex here, or Claude on another machine over SSH ${DASH} plain, or persistent so a dropped link does not kill it).`)
+    expect(cards.get('Saved configs live here')).toBe(`The left panel has two modes ${DASH} Saved is your launcher, Running is your live sessions. A saved config is a reusable launcher: project folder, model, account. Open the Saved tab, press "+ New" and pick Config to create one, then start a session from it whenever you want (Claude or Codex here, or Claude on another machine over SSH, where a session ends if the link drops unless you choose SSH Persistent).`)
     // WP2 PR 4, P4.1: the Codex note is gone; the card is the same for both.
     expect(cards.get('Review what your agent builds')).toBe(CANVAS_BEFORE_NOTE)
     // P4.3: with both on, Ask runs on the one chosen in Settings, so the card names neither.
     expect(cards.get('Help lives here')).toBe('The Feature Guide explains every feature in depth whenever you want it and can hand your question to Ask Conductor, a session that knows the app.')
     expect(cards.get('Everything has a home')).toContain('Cloud Agents, Insights, Tokenomics, Memory, Logs and the built-in tools (Conductor MCP) all live on this rail')
     expect(cards.get('Change anything, anytime')).toContain('Everything you just set up lives in Settings: your assistants and their accounts under Accounts, GitHub, the status line and the built-in tools.')
+  })
+
+  // aicc_planning#88: "plain" for SSH read as "no AI", the word the session
+  // dialog's Terminal only card uses. The card names SSH Persistent, the
+  // dialog's own label, and says what a dropped link does to the other kind.
+  it('the saved-config card never calls an SSH session plain, whichever assistants are in use', () => {
+    for (const on of [BOTH, CLAUDE_ONLY]) {
+      act(() => { root.unmount() })
+      root = createRoot(container)
+      const card = walk(on).bodies.get('Saved configs live here')!
+      expect(card, JSON.stringify(on)).not.toMatch(/\bplain\b/i)
+      expect(card, JSON.stringify(on)).toContain('a session ends if the link drops unless you choose SSH Persistent')
+    }
   })
 })

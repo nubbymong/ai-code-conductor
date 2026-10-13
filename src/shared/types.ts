@@ -651,13 +651,46 @@ export type AskConductorNotice =
   | { sessionId: string; kind: 'not-delivered'; reason: SubmitNotDeliveredReason }
 
 /** A queued Agent Canvas marker the submit primitive could not deliver
- *  (P4.1): the line as the canvas filed it, so the canvas can show it on the
- *  review it belongs to. */
+ *  (P4.1), or a Claude Code marker dropped untyped
+ *  (src/main/canvas/claude-marker-typing.ts: `busy-timeout` held past its
+ *  bound, `session-gone` its run ended or there was none, `refused-text`
+ *  refused as not well formed): the line as the canvas filed it, so the
+ *  canvas can show it on the review it belongs to. */
 export interface CanvasMarkerUndelivered {
   sessionId: string
   canvasId: string
   line: string
   reason: SubmitNotDeliveredReason
+}
+
+/** What main asks the renderer about a Claude Code session's prompt, for a
+ *  canvas marker (src/main/canvas/claude-marker-typing.ts): 'probe' reads it
+ *  and types nothing; 'type' types the line and its Enter only if it reads
+ *  ready and empty then. */
+export type ClaudeMarkerMode = 'probe' | 'type'
+
+/** One such request (main -> renderer, canvas:claudeMarkerAsk). */
+export interface ClaudeMarkerAsk {
+  requestId: string
+  sessionId: string
+  /** The marker's own id, the same on every request for it: a marker the
+   *  renderer has already typed reads as typed again and is not typed twice
+   *  (its answer may have arrived after main stopped waiting). */
+  markerId: string
+  mode: ClaudeMarkerMode
+  /** The marker line, without its Enter. */
+  line: string
+}
+
+/** The renderer's answer (canvas:claudeMarkerAnswer). `ok`: for a probe, the
+ *  prompt reads ready and empty (or the marker was already typed); for a
+ *  type, the line was typed (now or before). `reason`: why not, in words, or
+ *  CLAUDE_MARKER_REFUSED (src/shared/canvas-marker-line.ts) for a request
+ *  that is not well formed, which no later read can change. */
+export interface ClaudeMarkerAnswer {
+  requestId: string
+  ok: boolean
+  reason?: string
 }
 
 /** Whether a session's launch had the Agent Canvas and vision skills in its

@@ -67,12 +67,14 @@ export function launchRefusalOf(value: unknown): ProviderLaunchRefusal | null {
 
 /** What pty:spawn refuses besides what the provider gate refuses: the config
  *  is not a Multi Spawn config and a copy of it is already running
- *  (`already-running`, the one-at-a-time rule: src/main/launch-one-at-a-time.ts).
+ *  (`already-running`, the one-at-a-time rule: src/main/launch-one-at-a-time.ts),
+ *  or (#86) the partner shell of an SSH session that main cannot place beside
+ *  a session it accepted for the config in this run (`partner-needs-session`).
  *  It names the provider the session would have run, though it is not about
  *  the provider. */
-export type SpawnRefusalCode = ProviderLaunchRefusalCode | 'already-running'
+export type SpawnRefusalCode = ProviderLaunchRefusalCode | 'already-running' | 'partner-needs-session'
 
-export const SPAWN_REFUSAL_CODES: readonly SpawnRefusalCode[] = [...PROVIDER_LAUNCH_REFUSAL_CODES, 'already-running']
+export const SPAWN_REFUSAL_CODES: readonly SpawnRefusalCode[] = [...PROVIDER_LAUNCH_REFUSAL_CODES, 'already-running', 'partner-needs-session']
 
 export interface SpawnRefusal {
   code: SpawnRefusalCode

@@ -186,7 +186,6 @@ export function helloCodexPages(opts: HelloCodexCopyInputs): HelloCodexPage[] {
       points: [
         { lead: 'One folder per account.', rest: 'Each account has its own sign-in folder, so sessions never mix identities.' },
         { lead: 'A default, and a reviewer default.', rest: 'New sessions use the default account. Code reviews use the reviewer default, or the default if none is set.' },
-        { lead: 'An existing sign-in.', rest: 'A sign-in this app did not create (for example `~/.codex`) must be confirmed at each launch, and cannot run reviews.' },
         { lead: 'Sign-in methods.', rest: 'Sign in with ChatGPT or an API key. The key goes to Codex, and this app never stores it.' },
       ],
       where: 'Settings, Accounts',
@@ -199,6 +198,8 @@ export function helloCodexPages(opts: HelloCodexCopyInputs): HelloCodexPage[] {
         { lead: 'Pick Codex.', rest: "In New saved config, choose the Codex card and an account. The project folder is Codex's workspace." },
         { lead: 'Resume where you left off.', rest: 'In a Codex session\'s Restart menu, "Restart and pick a conversation" offers its recent conversations in the terminal: type a number to pick one, n for a new one.' },
         { lead: 'Local only for now.', rest: 'The SSH options are off for Codex, and the dialog says why.' },
+        // O3 C8: the one-time prompt every Codex account meets (2.1.1-beta.2).
+        { lead: 'Trust the hooks once.', rest: "For the attention dot, Codex asks once per account to review this app's hooks: choose Trust all and continue." },
       ],
       where: "the sidebar's + New, Config",
     },
@@ -217,7 +218,9 @@ export function helloCodexPages(opts: HelloCodexCopyInputs): HelloCodexPage[] {
         { lead: 'Instructions.', rest: 'Codex reads `AGENTS.md`; Claude reads `CLAUDE.md`.' },
         { lead: 'Permissions.', rest: "Codex has its own approval and sandbox modes. Choose a preset in the session dialog; Claude's permission settings do not apply to it." },
         { lead: 'Conductor tools.', rest: 'Codex sessions get the Conductor tools too: the Agent Canvas, Vision and the push to your in-app browser.' },
-        { lead: 'Usage.', rest: "Codex reports tokens per session and review. Claude's rate-limit figures do not apply to Codex." },
+        // O3 C6: since 2.1.1 the Usage page shows each Codex account's
+        // allowance; an API-key account has none (billed per token).
+        { lead: 'Usage.', rest: "A Codex account signed in with ChatGPT shows its 5-hour and weekly allowance, or its credits, on the Usage page; an API-key account is billed per token. Tokens and cost per account are in Tokenomics, apart from Claude's." },
       ],
       where: 'Feature Guide, Integrations',
     },
@@ -238,6 +241,6 @@ export function helloCodexComparison(opts: HelloCodexCopyInputs): Array<[string,
     ['Runs over SSH', 'Yes', 'Not in this release'],
     ['Vision, browser, canvas', 'Yes', 'Yes'],
     ['Code review', 'Asks Codex', codexReviewCell(opts)],
-    ['Usage shown', 'Rate limits', 'Tokens, and its limits when it sends them'],
+    ['Usage page', '5-hour and weekly limits', '5-hour and weekly allowance, or credits; per token for an API key'],
   ]
 }

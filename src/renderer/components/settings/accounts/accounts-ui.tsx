@@ -19,8 +19,10 @@ const PILL_TOKEN: Record<PillTone, string> = {
   running: 'var(--status-success)',
 }
 
-/** A rounded badge ("Default", "Reviewer", "Beta", "Confirm each launch"). */
-export function Pill({ tone, children, testId, title }: { tone: PillTone; children: React.ReactNode; testId?: string; title?: string }) {
+/** A rounded badge ("Default", "Reviewer", "Beta", "Confirm each launch").
+ *  `describedBy`: the id of the text that says why (a pill takes no focus,
+ *  so a title alone reaches only a mouse; #181). */
+export function Pill({ tone, children, testId, title, describedBy }: { tone: PillTone; children: React.ReactNode; testId?: string; title?: string; describedBy?: string }) {
   const t = PILL_TOKEN[tone]
   return (
     <span
@@ -28,10 +30,21 @@ export function Pill({ tone, children, testId, title }: { tone: PillTone; childr
       style={{ borderColor: `color-mix(in srgb, ${t} 50%, transparent)`, color: t, background: `color-mix(in srgb, ${t} 10%, transparent)` }}
       data-testid={testId}
       title={title}
+      aria-describedby={describedBy}
     >
       {children}
     </span>
   )
+}
+
+/** U+2011, the non-breaking hyphen: "ChatGPT sign-in" stays on one line in
+ *  a narrow cell instead of breaking after "sign-" (#181). Built with
+ *  String.fromCodePoint, never an escape in JSX (esbuild, AGENTS.md). */
+const NO_BREAK_HYPHEN = String.fromCodePoint(0x2011)
+
+/** A short label with its hyphens made non-breaking, for display only. */
+export function noBreakHyphens(text: string): string {
+  return text.replace(/-/g, NO_BREAK_HYPHEN)
 }
 
 /** "N running" on an account row (design 5.3): the sessions running on it now. */
@@ -70,7 +83,9 @@ export function ErrorLine({ children, testId }: { children: React.ReactNode; tes
   return <div className="text-[11.5px] leading-snug mt-1" style={{ color: 'var(--status-danger)' }} role="alert" data-testid={testId}>{children}</div>
 }
 
-/** A small secondary button for row-level actions. */
+/** A small secondary button for row-level actions. Its label wraps inside
+ *  its cell rather than run past it on a narrow card ("This is still my
+ *  account" on a blocked row; #181). */
 export function RowButton({ children, onClick, disabled, testId, title }: { children: React.ReactNode; onClick: () => void; disabled?: boolean; testId?: string; title?: string }) {
   return (
     <button
@@ -78,7 +93,7 @@ export function RowButton({ children, onClick, disabled, testId, title }: { chil
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className="inline-flex items-center rounded-[6px] border px-2 py-0.5 text-[11.5px] font-medium whitespace-nowrap focus-ring transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--surface-overlay)]"
+      className="inline-flex items-center max-w-full rounded-[6px] border px-2 py-0.5 text-[11.5px] font-medium text-left focus-ring transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--surface-overlay)]"
       style={{ borderColor: 'var(--border-strong)', color: 'var(--text-secondary)' }}
       data-testid={testId}
     >

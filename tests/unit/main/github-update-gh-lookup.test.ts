@@ -128,7 +128,7 @@ describe('on Windows the update check starts gh by its full path, never by name'
       ['C:\\Tools\\gh.exe', ['auth', 'token']],
       ['C:\\Tools\\gh.exe', ['release', 'list']],
     ])
-    expect(h.execFile[1].args).toEqual(['release', 'list', '--repo', activeRepo(), '--limit', expect.any(String), '--json', 'tagName,isPrerelease,isDraft,assets'])
+    expect(h.execFile[1].args).toEqual(['release', 'list', '--repo', activeRepo(), '--limit', expect.any(String), '--json', 'tagName,isPrerelease,isDraft'])
     for (const c of h.execFile) {
       expect(c.opts).not.toHaveProperty('shell')
       expect(c.opts).toMatchObject({ windowsHide: true, encoding: 'utf-8' })

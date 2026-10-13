@@ -12,7 +12,7 @@
 // (V3); the picker is told which conversations other tabs are on, and Codex
 // is not (V2). Nothing is started: the node lookup is a fake.
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, existsSync } from 'fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, existsSync, renameSync } from 'fs'
 import { join, basename, dirname } from 'path'
 import { tmpdir } from 'os'
 
@@ -30,6 +30,13 @@ vi.mock('fs', async (importOriginal) => {
     statSync: vi.fn((p: unknown, o?: unknown) => {
       if (p === 'C:\\ccc-test-only\\nodejs\\node.exe') return { isFile: () => true } as import('fs').Stats
       return (actual.statSync as (a: unknown, b?: unknown) => import('fs').Stats)(p, o)
+    }),
+    // What a path reads as without following a link, where a case stands one
+    // in (a hard link or a link, which this machine is never asked to make).
+    lstatSync: vi.fn((p: unknown, o?: unknown) => {
+      const stub = (globalThis as any).__mockLstat?.(p)
+      if (stub) return stub
+      return (actual.lstatSync as (a: unknown, b?: unknown) => import('fs').Stats)(p, o)
     }),
   }
 })
@@ -62,6 +69,8 @@ vi.mock('../../../../src/main/config-manager', async (importOriginal) => ({
 import { CodexProvider } from '../../../../src/main/providers/codex'
 import { codexHookCommand, codexHookConfigArgs, codexPlainWrapperDir, __setCodexLocalAppDataForTests, __resetCodexHookFoldersForTests, CODEX_HOOK_FILE_ENV, CODEX_HOOK_FOLDERS_RETRY_MS } from '../../../../src/main/providers/codex/hooks'
 import { codexCmdExeTarget, CODEX_OPEN_ELSEWHERE_ENV } from '../../../../src/main/providers/codex/spawn'
+import { __markScriptFoldersCheckedForTests, __resetScriptFoldersForTests, secureScriptFolders, scriptFoldersDeployed } from '../../../../src/main/script-folders'
+import { deployScriptFile } from '../../../../src/main/script-deploy'
 
 const TEST_PREFIX = 'p310-spawn-hooks-'
 const made: string[] = []
@@ -73,16 +82,19 @@ function tempDir(): string {
 function resources(deploy = true, sub?: string): string {
   const top = tempDir()
   const d = sub ? join(top, sub) : top
-  mkdirSync(join(d, 'scripts'), { recursive: true })
+  mkdirSync(join(d, 'scripts'), { recursive: true, mode: 0o700 })
   if (deploy) {
-    writeFileSync(join(d, 'scripts', 'ccc-codex-hook.js'), '// test copy')
-    writeFileSync(join(d, 'scripts', 'ccc-codex-hook.cmd'), 'rem test copy')
+    writeFileSync(join(d, 'scripts', 'ccc-codex-hook.js'), '// test copy', { mode: 0o600 })
+    writeFileSync(join(d, 'scripts', 'ccc-codex-hook.cmd'), 'rem test copy', { mode: 0o600 })
   }
   ;(globalThis as any).__mockResourcesDir = d
+  // As the start does before a launch: the scripts folder made the user's alone.
+  __markScriptFoldersCheckedForTests(d)
   return d
 }
 afterEach(() => {
   vi.useRealTimers()
+  __resetScriptFoldersForTests()
   ;(globalThis as any).__mockResourcesDir = undefined
   __setCodexLocalAppDataForTests(null)
   __resetCodexHookFoldersForTests()
@@ -105,7 +117,7 @@ const ID_B = '019dd000-0001-7000-8000-0000000000c2'
  *  `ok` its verdict. */
 function secureWith(ok: boolean) {
   return async (dirs: readonly string[]) => dirs.map((dir) => {
-    try { mkdirSync(dir) } catch { /* there already */ }
+    try { mkdirSync(dir, { mode: 0o700 }) } catch { /* there already */ }
     return { dir, ok, detail: ok ? 'owner-only' : 'not this user\'s alone' }
   })
 }
@@ -117,7 +129,7 @@ function hookArgs(args: string[]): string[] {
 }
 /** The picker, deployed (a stub), so a launch through it is visible. */
 function deployPicker(res: string): void {
-  writeFileSync(join(res, 'scripts', 'codex-resume-picker.js'), '// stub')
+  writeFileSync(join(res, 'scripts', 'codex-resume-picker.js'), '// stub', { mode: 0o600 })
 }
 /** A realm in `res` with this conversation's rollout, run in `cwd`. */
 function realmWith(res: string, id: string, cwd: string): string {
@@ -208,6 +220,173 @@ describe('buildCodexSpawn: the app\'s hooks', () => {
       expect(out.hooksInstalled).toBe(false)
     }
     expect(out.commandLine).toBeTruthy()
+  })
+})
+
+// What a hook event runs is taken only when it is a plain file with one name
+// (isPlainScriptFile): the forwarder, and on Windows the wrapper and the
+// forwarder it starts from its own folder. Anything else there (a directory,
+// a link, a hard link) is refused with a warning naming the file, and the
+// launch starts without hooks. Mutation to prove this can fail: take the
+// target whenever fs.statSync(target).isFile() holds (it follows a link,
+// counts no other name, and on Windows reads the wrapper only).
+describe('the hook command runs only plain files with one name', () => {
+  const HOOK_REFUSED = /for the app's hooks is not a plain file with one name/
+  /** How a stand-in reads, without following a link. */
+  const standIn = (isFile: boolean, nlink: number) => ({ isFile: () => isFile, isSymbolicLink: () => !isFile, isDirectory: () => false, nlink, mode: isFile ? 0o100600 : 0o120777 })
+  /** What a hook event runs, by platform: the forwarder, and on Windows the wrapper too. */
+  const runs = (res: string): string[] => [join(res, 'scripts', 'ccc-codex-hook.js'), ...(process.platform === 'win32' ? [join(res, 'scripts', 'ccc-codex-hook.cmd')] : [])]
+  afterEach(() => { delete (globalThis as any).__mockLstat })
+
+  it('a directory holding index.js at the forwarder, beside a plain wrapper: no hooks, and one warning naming the file', () => {
+    const res = resources(false)
+    writeFileSync(join(res, 'scripts', 'ccc-codex-hook.cmd'), 'rem test copy', { mode: 0o600 })
+    mkdirSync(join(res, 'scripts', 'ccc-codex-hook.js'))
+    writeFileSync(join(res, 'scripts', 'ccc-codex-hook.js', 'index.js'), '// not the app\'s')
+    const out = new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } })
+    expect(out.hooksInstalled).toBe(false)
+    expect(hookArgs(out.args)).toEqual([])
+    expect(out.env[CODEX_HOOK_FILE_ENV]).toBeUndefined()
+    const said = warns.filter((w) => HOOK_REFUSED.test(w))
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain('ccc-codex-hook.js')
+    // The launch check's own words (checkDeployedScript), since on macOS and
+    // Linux a file that is not this user's, or that others may write to, is refused here too.
+    expect(said[0]).toContain('is not a plain file with one name that only this user can change; this launch starts without hooks')
+    expect(said[0]).not.toContain(res)
+  })
+
+  it('a file with another name (a hard link) at any of them: no hooks, and a warning naming it', () => {
+    const res = resources(true)
+    for (const p of runs(res)) {
+      warns.length = 0
+      ;(globalThis as any).__mockLstat = (q: unknown) => (q === p ? standIn(true, 2) : null)
+      const out = new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } })
+      expect(out.hooksInstalled, basename(p)).toBe(false)
+      expect(hookArgs(out.args)).toEqual([])
+      expect(warns.filter((w) => HOOK_REFUSED.test(w) && w.includes(basename(p)))).toHaveLength(1)
+    }
+  })
+
+  it('a link at any of them: no hooks, and a warning naming it', () => {
+    const res = resources(true)
+    for (const p of runs(res)) {
+      warns.length = 0
+      ;(globalThis as any).__mockLstat = (q: unknown) => (q === p ? standIn(false, 1) : null)
+      const out = new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } })
+      expect(out.hooksInstalled, basename(p)).toBe(false)
+      expect(warns.filter((w) => HOOK_REFUSED.test(w) && w.includes(basename(p)))).toHaveLength(1)
+    }
+  })
+
+  it('plain files with one name: hooks, and nothing said; nothing deployed: no hooks, and nothing said either', () => {
+    resources(true)
+    expect(new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } }).hooksInstalled).toBe(true)
+    resources(false)
+    expect(new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } }).hooksInstalled).toBe(false)
+    expect(warns.filter((w) => HOOK_REFUSED.test(w))).toEqual([])
+  })
+
+  it.runIf(process.platform === 'win32')('Windows: a plain wrapper with no forwarder beside it gives no hooks (the wrapper would start nothing of the app\'s)', () => {
+    const res = resources(false)
+    writeFileSync(join(res, 'scripts', 'ccc-codex-hook.cmd'), 'rem test copy', { mode: 0o600 })
+    const out = new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } })
+    expect(out.hooksInstalled).toBe(false)
+    expect(warns.filter((w) => HOOK_REFUSED.test(w))).toEqual([])
+  })
+})
+
+// The hooks run only from the scripts folder the start made the user's alone
+// in this run (script-folders.ts): the forwarder and its wrapper run from
+// there, and the npm shim route's plain-path copies are judged against its
+// bytes. Mutation to prove this can fail: drop the folder check in
+// buildCodexSpawnCommand.
+describe('the hook command runs only from the scripts folder made the user\'s alone in this run', () => {
+  const FOLDER_REFUSED = /the scripts folder in the resources folder (was not made this user's alone in this run|is not the folder made this user's alone in this run); this launch starts without hooks/
+
+  it('the start never checked it: no hooks, nothing named, and one warning naming the folder, never its path', () => {
+    const res = resources(true)
+    __resetScriptFoldersForTests()
+    const out = new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } })
+    expect(out.hooksInstalled).toBe(false)
+    expect(hookArgs(out.args)).toEqual([])
+    expect(out.env[CODEX_HOOK_FILE_ENV]).toBeUndefined()
+    const said = warns.filter((w) => FOLDER_REFUSED.test(w))
+    expect(said).toHaveLength(1)
+    expect(said[0]).not.toContain(res)
+  })
+
+  it('the owner-only rule refused it at start: no hooks, and one warning', async () => {
+    const res = resources(true)
+    await secureScriptFolders(res, async (dirs) => dirs.map((dir) => ({ dir, ok: false, detail: 'not owner-only' })))
+    scriptFoldersDeployed()
+    warns.length = 0
+    const out = new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } })
+    expect(out.hooksInstalled).toBe(false)
+    expect(warns.filter((w) => FOLDER_REFUSED.test(w))).toHaveLength(1)
+  })
+
+  it('the rule passed it at start: hooks, and nothing said', async () => {
+    const res = resources(true)
+    await secureScriptFolders(res, async (dirs) => dirs.map((dir) => ({ dir, ok: true })))
+    scriptFoldersDeployed()
+    warns.length = 0
+    expect(new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } }).hooksInstalled).toBe(true)
+    expect(warns.filter((w) => FOLDER_REFUSED.test(w))).toEqual([])
+  })
+
+  // Nor when this run's deploy could not bring the forwarder, or on Windows
+  // its wrapper, up to date (script-deploy.ts deployFailedThisRun). A source
+  // that cannot be read (a folder) fails the deploy, as a copy that cannot be
+  // replaced does. Mutations to prove this can fail: drop that check in
+  // buildCodexSpawnCommand; check the forwarder only.
+  const HOOK_STALE = (name: string) => `${name} for the app's hooks could not be brought up to date this run; this launch starts without hooks`
+  it('the forwarder\'s deploy failed this run: no hooks, and one warning naming the file, never its path', () => {
+    const res = resources(true)
+    mkdirSync(join(res, 'a-folder.js'))
+    expect(() => deployScriptFile(join(res, 'a-folder.js'), join(res, 'scripts', 'ccc-codex-hook.js'))).toThrow()
+    warns.length = 0
+    const out = new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } })
+    expect(out.hooksInstalled).toBe(false)
+    expect(hookArgs(out.args)).toEqual([])
+    const said = warns.filter((w) => w.includes(HOOK_STALE('ccc-codex-hook.js')))
+    expect(said).toHaveLength(1)
+    expect(said[0]).not.toContain(res)
+  })
+
+  it.runIf(process.platform === 'win32')('the wrapper\'s deploy failed this run: no hooks, and one warning naming it', () => {
+    const res = resources(true)
+    mkdirSync(join(res, 'a-folder.cmd'))
+    expect(() => deployScriptFile(join(res, 'a-folder.cmd'), join(res, 'scripts', 'ccc-codex-hook.cmd'))).toThrow()
+    warns.length = 0
+    const out = new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } })
+    expect(out.hooksInstalled).toBe(false)
+    expect(warns.filter((w) => w.includes(HOOK_STALE('ccc-codex-hook.cmd')))).toHaveLength(1)
+  })
+
+  it('another folder put at its path since the check: no hooks, and one warning', () => {
+    const res = resources(true)
+    renameSync(join(res, 'scripts'), join(res, 'scripts-checked'))
+    mkdirSync(join(res, 'scripts'), { mode: 0o700 })
+    writeFileSync(join(res, 'scripts', 'ccc-codex-hook.js'), '// test copy', { mode: 0o600 })
+    writeFileSync(join(res, 'scripts', 'ccc-codex-hook.cmd'), 'rem test copy', { mode: 0o600 })
+    const out = new CodexProvider().buildSpawnCommand({ ...opts, codexHooks: { hookFile } })
+    expect(out.hooksInstalled).toBe(false)
+    expect(warns.filter((w) => FOLDER_REFUSED.test(w))).toHaveLength(1)
+  })
+
+  it.runIf(process.platform === 'win32')('the npm shim route: the staged plain-path copy is not run either while the scripts folder is not the user\'s alone', async (ctx) => {
+    const res = resources(true, 'AI Code Conductor')
+    const lad = tempDir()
+    __setCodexLocalAppDataForTests(lad)
+    if (!codexPlainWrapperDir(lad, res)) { ctx.skip(); return }
+    const viaShim = () => new CodexProvider().buildSpawnCommand({ ...opts, realmLaunch: { ...launch, executable: 'C:\\npm\\codex.cmd' }, codexHooks: { hookFile } })
+    expect(await new CodexProvider().prepareHookFolders(res, secureWith(true))).toBe(true)
+    expect(viaShim().hooksInstalled).toBe(true)
+    __resetScriptFoldersForTests()
+    warns.length = 0
+    expect(viaShim().hooksInstalled).toBe(false)
+    expect(warns.filter((w) => FOLDER_REFUSED.test(w))).toHaveLength(1)
   })
 })
 

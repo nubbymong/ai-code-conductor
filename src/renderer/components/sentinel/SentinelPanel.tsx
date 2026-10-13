@@ -5,7 +5,7 @@ import { usesClaude, usesCodex } from '../../onboarding/provider-choice'
 import type { SentinelFinding } from '../../../shared/sentinel-types'
 import {
   selectBreakingFindings, surfaceLabel, providerTag, formatFindingText, formatSentinelReportText,
-  sentinelVersionParts, sentinelCompatibleSubject, sentinelAnalyzingText, SENTINEL_SEPARATOR, type SentinelScope,
+  sentinelVersionParts, sentinelCompatibleSubject, sentinelAnalyzingText, SENTINEL_SEPARATOR, SENTINEL_NOTHING_CHECKED, type SentinelScope,
 } from './sentinel-report-text'
 import {
   DialogOverlay,
@@ -204,7 +204,15 @@ export default function SentinelPanel() {
             </p>
           )}
 
-          {breaking.length === 0 && !snap?.analyzing && !snap?.lastAnalysisError && (
+          {/* No assistant in use has a completed check: nothing is called
+              compatible, and there is no green verdict. */}
+          {breaking.length === 0 && !snap?.analyzing && !snap?.lastAnalysisError && compatible.text === '' && (
+            <p className="text-xs py-6 text-center" style={{ color: 'var(--text-muted)' }} data-testid="sentinel-nothing-checked">
+              {SENTINEL_NOTHING_CHECKED}
+            </p>
+          )}
+
+          {breaking.length === 0 && !snap?.analyzing && !snap?.lastAnalysisError && compatible.text !== '' && (
             <div className="py-8 text-center">
               <svg
                 width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor"

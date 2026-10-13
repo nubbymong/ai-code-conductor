@@ -37,11 +37,29 @@
 //     that started once is not warmed again this run; a changed file is a new
 //     identity.
 //   - A warm-up still running at quit is ended (flushFirstStartWarmups).
+//     From then on nothing is warmed and no caller is answered: a caller
+//     waiting on a warm-up, or asking for one, waits for good (the process is
+//     ending), so none goes on to start its own program during the teardown,
+//     after the agents and terminals were ended. A warm-up still reading its
+//     file or building its environment then starts no worker. The first
+//     caller held this way is logged once, so a wait left by a quit that was
+//     cancelled after the teardown can be traced.
+//     That hold reaches every start that awaits warmFirstStart first,
+//     whatever the platform or the program (the latch is read before
+//     either). Four callers ask for a warm-up only on some paths: the setup
+//     terminal (Windows only), and headless runs, cloud agents and
+//     `claude auth status` (a direct claude.exe on Windows only). For their
+//     other paths, the same call sets the quit hold (quit-hold.ts), which
+//     each of the four reads in the same step as its own start. No other
+//     start is held. And only the before-quit teardown sets either
+//     (flushFirstStartWarmups, through flushPendingProviderCliKills): the
+//     exit that installs an update and SIGTERM end the app without it.
 import { Worker } from 'node:worker_threads'
 import fs from 'node:fs'
 import path from 'node:path'
 import workerSource from './first-start-worker.cjs?raw'
 import { logInfo } from './debug-logger'
+import { beginQuitHold } from './quit-hold'
 import { windowsPathHasTrailingDotOrSpace } from './providers/windows-path-names'
 import { programBaseName, SLOW_START_MS } from './main-thread-ops'
 
@@ -137,13 +155,30 @@ const failed = (spawnError: string): FirstStartRun => ({ exitCode: null, timedOu
 
 export function createFirstStartWarmup(deps: FirstStartWarmupDeps): {
   warm(program: string, env: FirstStartEnvSource): Promise<FirstStartOutcome>
-  /** At quit: ends every warm-up still running. */
+  /** At quit: ends every warm-up still running, and from then on starts
+   *  nothing and answers no caller (see the header). */
   stopAll(): void
 } {
   const warmed = new Set<string>()
   const inFlight = new Map<string, { done: Promise<FirstStartRun>; startedAt: number }>()
   const workers = new Set<FirstStartWorker>()
   const log = (m: string) => { try { deps.log(m) } catch { /* logging never breaks a warm-up */ } }
+  /** Set by stopAll (the quit). Read at every step that could start a worker
+   *  or answer a caller. */
+  let stopped = false
+  /** Whether held() has logged its one line yet. */
+  let heldLogged = false
+  /** What a caller gets once the quit has begun: an answer that never comes,
+   *  so it never goes on to its own start. Nothing at quit waits on it. The
+   *  first time, one line is logged, so a caller left waiting (a quit that
+   *  was cancelled after the teardown ran) can be traced. */
+  const held = (): Promise<FirstStartOutcome> => {
+    if (!heldLogged) {
+      heldLogged = true
+      log('[first-start] the app is quitting: a caller of the first-start warm-up is held and starts nothing')
+    }
+    return new Promise<FirstStartOutcome>(() => { /* the process is ending */ })
+  }
 
   const runOnce = async (key: string, canonical: string, envSource: FirstStartEnvSource, name: string): Promise<FirstStartRun> => {
     let source: FirstStartEnv
@@ -154,6 +189,12 @@ export function createFirstStartWarmup(deps: FirstStartWarmupDeps): {
       return failed('no-environment')
     }
     const dispose = () => { try { source?.dispose?.() } catch { /* a leftover throwaway folder is harmless */ } }
+    // Read again right before the worker is made: the quit may have begun
+    // while the file was read or the environment built.
+    if (stopped) {
+      dispose()
+      return failed('stopped')
+    }
     const request: FirstStartRequest = {
       file: canonical,
       args: [...FIRST_START_ARGS],
@@ -199,7 +240,7 @@ export function createFirstStartWarmup(deps: FirstStartWarmupDeps): {
     return { outcome: 'ran', exitCode: r.exitCode, timedOut: r.timedOut, ...(r.spawnError !== undefined ? { spawnError: r.spawnError } : {}) }
   }
 
-  const warm = async (program: string, envSource: FirstStartEnvSource): Promise<FirstStartOutcome> => {
+  const warmOnce = async (program: string, envSource: FirstStartEnvSource): Promise<FirstStartOutcome> => {
     try {
       if (deps.platform() !== 'win32') return { outcome: 'skipped', reason: 'not-windows' }
       if (typeof program !== 'string' || !DRIVE_OR_SHARE.test(program) || windowsPathHasTrailingDotOrSpace(program)) return { outcome: 'skipped', reason: 'refused-path' }
@@ -216,6 +257,8 @@ export function createFirstStartWarmup(deps: FirstStartWarmupDeps): {
       } catch {
         return { outcome: 'skipped', reason: 'unreadable' }
       }
+      // The quit may have begun while the file was read: no new worker.
+      if (stopped) return held()
       if (!st || st.isFile !== true) return { outcome: 'skipped', reason: 'unreadable' }
       const key = firstStartIdentityKey(canonical, st)
       if (warmed.has(key)) return { outcome: 'skipped', reason: 'already-warm' }
@@ -235,9 +278,18 @@ export function createFirstStartWarmup(deps: FirstStartWarmupDeps): {
     }
   }
 
+  /** Once the quit has begun, nothing starts and no answer is given, even one
+   *  reached before it (a skip, or a worker ended by stopAll itself). */
+  const warm = async (program: string, envSource: FirstStartEnvSource): Promise<FirstStartOutcome> => {
+    if (stopped) return held()
+    const outcome = await warmOnce(program, envSource)
+    return stopped ? held() : outcome
+  }
+
   return {
     warm,
     stopAll: () => {
+      stopped = true
       for (const w of [...workers]) { try { w.stop() } catch { /* best effort at quit */ } }
     },
   }
@@ -321,7 +373,14 @@ export function warmFirstStart(program: string, env: FirstStartEnvSource): Promi
   return warmup().warm(program, env)
 }
 
-/** At app quit: a warm-up's program still running is ended. Never throws. */
+/** At the app's before-quit teardown (index.ts, through
+ *  flushPendingProviderCliKills; the exit that installs an update and SIGTERM
+ *  do not call it): a warm-up's program still running is ended, and from
+ *  then on no warm-up starts and no caller of warmFirstStart is answered,
+ *  also when none was asked for before the quit. The quit hold
+ *  (quit-hold.ts) is set at the same moment, for the four starts that ask
+ *  for a warm-up only on some paths (see the header). Never throws. */
 export function flushFirstStartWarmups(): void {
-  try { shared?.stopAll() } catch { /* best effort at quit */ }
+  try { beginQuitHold() } catch { /* best effort at quit */ }
+  try { warmup().stopAll() } catch { /* best effort at quit */ }
 }

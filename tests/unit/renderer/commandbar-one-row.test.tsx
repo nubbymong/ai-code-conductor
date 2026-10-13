@@ -413,18 +413,21 @@ describe('the words come from the session, not from a hard-coded "Claude" (D2, D
     expect(logsButton()!.title).toBe('Open session logs')
   })
 
-  it('an SSH session badges the partner shell and the Partner tool "this PC", names the host on the agent mark, and dims Logs because the transcript lives on the host', async () => {
+  // #86 (2.1.1): an SSH session's partner shell runs on the host, so nothing
+  // says "this PC" for it any more; its mark and chips name the host.
+  it('an SSH session names the host on the partner and agent marks, badges nothing "this PC", and dims Logs because the transcript lives on the host', async () => {
     SESSIONS = [{ ...BASE_SESSION, sessionType: 'ssh', sshConfig: { host: 'box' } }]
     await render({ sessionType: 'ssh', ...PARTNER() })
     const session = byTestId('command-band-config')!
     const partnerMark = byTestId('command-cluster-partner', session)
     expect(partnerMark).not.toBeNull()
-    expect(byTestId('command-machine-badge', partnerMark!)?.textContent).toBe('this PC')
-    expect(partnerMark!.getAttribute('title')).toBe('These run in the partner shell — on this PC, not the host')
+    expect(byTestId('command-machine-badge', partnerMark!)).toBeNull()
+    expect(partnerMark!.getAttribute('title')).toBe('These run in the partner shell on box')
     expect(byTestId('command-cluster-agent', session)?.getAttribute('title')).toBe('These run in Claude on box')
     const partner = byTestId('partner-toggle')!
-    expect(byTestId('command-machine-badge', partner)?.textContent).toBe('this PC')
-    expect(chipById('c1')?.title).toContain('runs in the partner shell (this PC)')
+    expect(byTestId('command-machine-badge', partner)).toBeNull()
+    expect(partner.getAttribute('title')).not.toContain('this PC')
+    expect(chipById('c1')?.title).toContain('runs in the partner shell on box')
     const logs = dimmedLogs()
     expect(logs).not.toBeNull()
     // The reason names the host (ADR-018 D3 / canvas: "lives on build-box").

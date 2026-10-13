@@ -46,6 +46,7 @@ vi.mock('../../../../src/main/providers/codex/rollout-lookup', async (importOrig
 })
 
 const { buildCodexSpawn } = await import('../../../../src/main/providers/codex/spawn')
+const { __markScriptFoldersCheckedForTests } = await import('../../../../src/main/script-folders')
 
 const ID = '019dd000-0001-7000-8000-0000000000c1'
 const SHIM = 'C:\\Users\\u\\AppData\\Roaming\\npm\\codex.cmd'
@@ -115,8 +116,10 @@ describe('everything else starts as before', () => {
     const os = await vi.importActual<typeof import('os')>('os')
     const res = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-unc-picker-'))
     try {
-      fs.mkdirSync(path.join(res, 'scripts'), { recursive: true })
-      fs.writeFileSync(path.join(res, 'scripts', 'codex-resume-picker.js'), '// stub')
+      fs.mkdirSync(path.join(res, 'scripts'), { recursive: true, mode: 0o700 })
+      fs.writeFileSync(path.join(res, 'scripts', 'codex-resume-picker.js'), '// stub', { mode: 0o600 })
+      // As the start does before a launch: the scripts folder made the user's alone.
+      __markScriptFoldersCheckedForTests(res)
       ;(globalThis as any).__uncResDir = res
       const out = win32(() => buildCodexSpawn({ sessionId: 'sid', realmLaunch: { executable: SHIM, env: { ...winEnv, PATH: 'C:\\ccc-test-only\\nodejs' }, sessionsDir: 'C:\\r\\sessions' }, codexOptions: STANDARD, cwd: '\\\\srv\\share\\project', useResumePicker: true }))
       const pickDir = out.pickFile ? path.dirname(out.pickFile) : null

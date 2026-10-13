@@ -16,6 +16,9 @@ import { TIPS_LIBRARY } from '../../../src/renderer/tips-library'
 import { trainingSteps } from '../../../src/renderer/training-steps'
 import { changelog } from '../../../src/renderer/changelog'
 import { CODEX_CONDUCTOR_TOOLS } from '../../../src/main/providers/codex/conductor-tools'
+import { codexModelOptions } from '../../../src/renderer/codex-models'
+import type { ModelRegistry } from '../../../src/shared/model-registry'
+import registryJson from '../../../resources/model-registry.json'
 
 describe('app knowledge is publishable', () => {
   it('has unique, stable-looking ids and a title and body for every section', () => {
@@ -364,7 +367,8 @@ describe('the PR 3 user-facing sweep (P3.16)', () => {
     expect(c).toMatch(/An inactive account, or one signed in a different way than before, is greyed/)
     expect(c).not.toMatch(/one that needs attention/)
     expect(c).toMatch(/archiving the account removes it/)
-    expect(c).toMatch(/signs it in again in place after a warning/)
+    // 2.1.1-beta.3 (F11): the retired sign-in has no Sign in again.
+    expect(c).toMatch(/Sign in again is not offered on it\./)
     expect(c).not.toMatch(/When a Codex account is signed out or expired, Sign in again/)
     expect(c).not.toMatch(/The app never signs in to it for you/)
     const recovery = titled('Check Sign-in and Sign In Again').variants.primary.body
@@ -388,24 +392,24 @@ describe('the PR 3 user-facing sweep (P3.16)', () => {
 
   it('Alt+V (P3.15, P3.16a U6 and N9): the plain-terminal and partner-shell routes, in the Feature Guide, the tip and the guide card', () => {
     const k = body('shortcuts')
-    expect(k).toMatch(/Alt\+V types only the image's path into a plain terminal, or into a session's partner shell/)
+    expect(k).toMatch(/Alt\+V types only the image's path into a plain terminal, or into a local session's partner shell/)
     expect(k).toMatch(/quoted for the shell, with no Enter/)
     // PR-level ADR-009 round 1 (A1): off Windows, a path is typed only into a shell of the sh family.
     expect(k).toMatch(/On macOS and Linux the path is typed only into an sh, bash, zsh, dash or ksh shell/)
-    expect(k).toMatch(/Any other shell there, a plain terminal over SSH, or a terminal that is not running gets nothing/)
+    expect(k).toMatch(/Any other shell there, a plain terminal over SSH, an SSH session's partner shell \(it runs on the host\), or a terminal that is not running gets nothing/)
     expect(k).toMatch(/the hint says where the image was saved/)
     // The copied-file route reads File Explorer's and Finder's clipboard only.
     expect(k).toMatch(/an image file you copied in File Explorer or Finder/)
     expect(k).not.toMatch(/file manager/)
     const t = tip('tip.paste-image').variants.primary.body
-    expect(t).toMatch(/\*\*Alt\+V\*\* types only the image's path into a plain terminal, or into the partner shell/)
+    expect(t).toMatch(/\*\*Alt\+V\*\* types only the image's path into a plain terminal, or into a local session's partner shell/)
     expect(t).toMatch(/quoted for the shell, with no Enter/)
     expect(t).toMatch(/On macOS and Linux the path is typed only into an sh, bash, zsh, dash or ksh shell/)
-    expect(t).toMatch(/Any other shell there, or a plain terminal over SSH, gets nothing/)
+    expect(t).toMatch(/Any other shell there, a plain terminal over SSH, or an SSH session's partner shell \(it runs on the host\) gets nothing/)
     expect(t).toMatch(/an image file you copied in File Explorer or Finder/)
     expect(t).not.toMatch(/file manager/)
     const guide = trainingSteps.flatMap((s) => s.highlights ?? []).find((l) => l.startsWith('Alt+V'))!
-    expect(guide).toMatch(/a plain terminal, or the partner shell in a partner view, gets only the quoted path/)
+    expect(guide).toMatch(/a plain terminal, or a local session's partner shell in a partner view, gets only the quoted path \(an SSH session's partner gets nothing; the hint says where the image was saved\)/)
     expect(guide).toMatch(/with no Enter/)
     // Fixer 7b (N5): off Windows, only a shell of the sh family gets the path.
     expect(guide).toMatch(/on macOS and Linux, only an sh, bash, zsh, dash or ksh shell/)
@@ -539,7 +543,8 @@ describe('app knowledge after PR 4 (ADR-009 round 2)', () => {
 
   it('[host] says where the canvas skills go for this computer\'s own Codex sign-in, when they leave, and what a same-named skill of the user\'s own gets (question 5, answered C)', () => {
     const all = APP_KNOWLEDGE_SECTIONS.map((x) => x.body).join('\n')
-    expect(all).toMatch(/The sign-in already on this computer gets them in your own Codex skills folder \(~\/\.codex\/skills, or the skills folder inside the folder CODEX_HOME names\), where Codex lists them for every session that uses that folder, however it is started\./)
+    expect(all).toMatch(/The app copies its three canvas skills into your own Codex folder for an account 2\.1\.1-beta\.2 registered for the Codex sign-in already on this computer\./)
+    expect(all).toMatch(/That account gets them in your own Codex skills folder \(~\/\.codex\/skills, or the skills folder inside the folder CODEX_HOME names\), where Codex lists them for every session that uses that folder, however it is started\./)
     expect(all).toMatch(/they are removed when you turn Codex or the built-in tools off, and kept up to date while both are on\./)
     expect(all).toMatch(/A skill of your own with the same name \(agent-canvas, canvas-plan or conductor-vision\) is never touched/)
     // Option A's words are gone: no developer instructions, no picker clause.
@@ -910,7 +915,7 @@ describe('app knowledge for the 2.1.1-beta.2 hardening', () => {
       /make sure Windows PowerShell, whoami and icacls are allowed to run for your user/,
       /Insights runs only when the insights folder in your resources folder is a real folder, not a link or junction/,
       /and on macOS and Linux one you own whose permissions let only you write to it\./,
-      /On macOS the app keeps your accounts' sign-in folders in your resources folder to you alone, and the Insights and Sentinel folders there writable only by you, through their owner and permissions\. That holds when the resources folder is on a volume that honours ownership/,
+      /On macOS the app keeps your accounts' sign-in folders in your resources folder to you alone, and the Insights and Sentinel folders there writable only by you, through their owner and permissions\. That holds when the resources folder and the folder that holds it are on a volume that honours ownership/,
       /Workaround: keep the resources folder on your Mac's own disk, or on a drive whose Get Info has Ignore ownership on this volume turned off/,
       /On Windows, an account cannot be used when a file, folder or link directly in its own folder, its Claude Code folder or its identity copy belongs to another Windows account and the app can neither make it yours nor copy that folder into a new one of yours/,
       /but never a link, a sign-in file \(\.credentials\.json or \.claude\.json\) or a file with a second name \(a hard link\)\. Workaround: take ownership of it or remove it, then restart the app\./,
@@ -922,7 +927,7 @@ describe('app knowledge for the 2.1.1-beta.2 hardening', () => {
 
   it('says on macOS that the sign-in folders stay yours only while only you can write to the resources folder, and how to keep it so', () => {
     const k = body('known-issues')
-    expect(k).toMatch(/That holds when the resources folder is on a volume that honours ownership, only you can write to the resources folder, and no access entry on it, or passed down to it from a folder above, lets another user in\./)
+    expect(k).toMatch(/That holds when the resources folder and the folder that holds it are on a volume that honours ownership, only you can write to them, and no access entry on them, or passed down to them from a folder above, lets another user in\./)
     expect(k).toMatch(/Ignore ownership on this volume turned off, as a folder only you can write to, and not inside a folder you have opened to other users with access entries/)
   })
 
@@ -966,7 +971,10 @@ describe('installing from setup, in What\'s New (2.1.1-beta.2) and the Feature G
     expect(body('providers')).toMatch(/If Claude Code is not installed, the first setup screen says so and lists its install commands, Anthropic's native installer first and npm second, each with Run it for me and Copy: Run it for me runs the command in a terminal on that screen once you confirm it, and setup checks again when it ends and carries on as soon as Claude Code is found\./)
     const t = body('troubleshooting')
     expect(t).toMatch(/The page lists the install commands, each with Run it for me and Copy, says which check it ran, and has Check again; setup checks again by itself when a command it ran ends, and carries on once Claude Code is found\./)
-    expect(t).toMatch(/The setup screens where you choose the app's folders and install and set up Claude Code have Exit, which closes the window \(and quits the app on Windows and Linux\); the pages after them do not\./)
+    // 2.1.1-beta.3: the pages after the setup screens have the window's own buttons.
+    expect(t).toMatch(/The setup screens where you choose the app's folders and install and set up Claude Code have Exit, which closes the window \(and quits the app on Windows and Linux\)\. These screens and the pages after them/)
+    expect(t).toMatch(/all have the window's own minimize, maximize and close at the top right on Windows and Linux/)
+    expect(t).not.toMatch(/the pages after them do not/)
     expect(t).not.toMatch(/The first-run setup screens that check for Claude Code have Exit/)
     expect(t).not.toMatch(/Every setup screen has Exit/)
     expect(t).not.toMatch(/restart the app so it picks up the new PATH/)
@@ -993,7 +1001,8 @@ describe("an installer's folder off PATH, in What's New, the Feature Guide, the 
   it('the Feature Guide names the folder, Add it to PATH for me and Not now, the shell line, and when a restart helps', () => {
     const p = body('providers')
     expect(p).toMatch(/Anthropic's native installer puts Claude Code in %USERPROFILE%\\\.local\\bin on Windows \(~\/\.local\/bin on a Mac or Linux\) and does not add that folder to your PATH\./)
-    expect(p).toMatch(/on Windows, Add it to PATH for me adds that one folder to the end of your PATH for your Windows account and checks again, and Not now leaves your PATH as it is; on a Mac or Linux it shows the line to add to the shell file your login shell reads, with Copy, and never changes that file itself\./)
+    // 2.1.1-beta.3 (F5): Copy gives a command to run once.
+    expect(p).toMatch(/on Windows, Add it to PATH for me adds that one folder to the end of your PATH for your Windows account and checks again, and Not now leaves your PATH as it is; on a Mac or Linux it shows a command to run once in a terminal, with Copy, which adds the folder to the shell file your login shell reads; the app never changes that file itself\./)
     expect(p).toMatch(/The app advises quitting and starting it again only when that would help/)
   })
 
@@ -1017,5 +1026,788 @@ describe("an installer's folder off PATH, in What's New, the Feature Guide, the 
     const k = body('known-issues')
     expect(k).toMatch(/Until you add a Codex account, Claude sessions have no Codex review\. The Codex review row in Settings, General, Built-in Tools says why, and so does the Codex section of Settings, Accounts, under Code reviews use, with the next step\./)
     expect(k).toMatch(/The workaround: add a Codex account in Settings, Accounts \(Add Codex account\), then choose Make reviewer in its menu if the sign-in already on this computer is still your default\./)
+  })
+})
+
+// The 2.1.1-beta.3 surface sweep: what the beta.3 fixes made true is said where
+// Ask Conductor and the Feature Guide read it, the retired Codex sign-in is
+// described only as something a 2.1.1-beta.2 user may still have, and every
+// known issue it ships with carries its workaround.
+describe('app knowledge after the 2.1.1-beta.3 sweep', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((s) => s.id === id)!.body
+
+  // F19: "plain" means Terminal only. An SSH session is named by
+  // what a dropped link does to it, never as a plain one.
+  it('no entry calls an SSH or remote session plain', () => {
+    for (const s of APP_KNOWLEDGE_SECTIONS) {
+      expect(`${s.title} ${s.body}`, s.id).not.toMatch(/\bplain (ssh|remote|session)\b/i)
+    }
+  })
+
+  it('a Codex account is always added in the app; the computer\'s own sign-in is only a beta.2 leftover with no Sign in again', () => {
+    expect(body('providers')).not.toMatch(/or lets you use the Codex sign-in already on this computer/)
+    const c = body('codex')
+    expect(c).not.toMatch(/can be used too, but the app never takes it in on its own/)
+    expect(c).toMatch(/a Codex account is always one you add in the app/)
+    expect(c).toMatch(/Only 2\.1\.1-beta\.2 offered Use this sign-in/)
+    expect(c).toMatch(/Replace this sign-in with a Codex account/)
+    expect(c).toMatch(/Sign in again is not offered on it\./)
+    expect(c).not.toMatch(/signs it in again in place/)
+    expect(c).toMatch(/Sign Codex out on this computer\.\.\., at the end, signs the Codex CLI out everywhere on this computer/)
+  })
+
+  // Owner decision 3 (2026-10-11): a 2.1.0 Codex user adds an app-managed
+  // account once, and is told only what really reaches the earlier history.
+  it('a 2.1.0 Codex user adds a Codex account once, and codex resume in a terminal reaches the earlier conversations', () => {
+    const c = body('codex')
+    expect(c).toMatch(/a 2\.1\.0 Codex user adds a Codex account once, in the app/)
+    expect(c).toMatch(/run codex resume/)
+    expect(c).toMatch(/for the Codex CLI to resume, not the app/)
+  })
+
+  it('an SSH session\'s partner runs on the host, and Alt+V types nothing into it', () => {
+    expect(body('sessions')).toMatch(/On an SSH session it is a plain shell on the session's host/)
+    expect(body('shortcuts')).toMatch(/an SSH session's partner shell \(it runs on the host\)/)
+  })
+
+  it('these known issues ship with their workarounds', () => {
+    const k = body('known-issues')
+    expect(k).toMatch(/With session-log indexing turned off, a restored tab can come back to the resume picker instead of its own conversation\. Pick the conversation there, or run \/resume in the tab\./)
+    expect(k).toMatch(/On a host whose sign-in banner, message of the day or shell startup draws a box with rounded corners, partner command buttons type nothing/)
+    expect(k).toMatch(/where partner buttons type nothing, type the command in the partner view/)
+    expect(k).toMatch(/After a crash, the app's Something went wrong page has no minimize, maximize or close buttons on Windows and Linux/)
+    expect(k).toMatch(/Press Try to recover to go back to the app, or close the window with Alt\+F4 or from the taskbar\./)
+  })
+
+  it('the other beta.3 known issues carry their workarounds', () => {
+    const k = body('known-issues')
+    for (const said of [
+      /type the command at the prompt yourself: \/compact, \/model followed by the model, or \/effort followed by the level\./,
+      /Constrained Language Mode/,
+      /A restored tab of a Codex session that ran on the Codex sign-in already on this computer/,
+      /choose Launch in that confirmation instead, then use Switch account on the running session/,
+      /Windows remote hosts do not raise the attention indicator in this release\. Workaround: keep the session visible/,
+      /when node is only a shell alias \(for example alias node=nodejs\)/,
+      /PowerShell profile that takes more than about 10 seconds to load/,
+    ]) expect(k).toMatch(said)
+    expect(body('troubleshooting')).toMatch(/Without Node\.js a new session starts Claude Code or Codex directly, with no resume list\./)
+  })
+
+  // The installer (O4): where the Data and Resources folders are chosen,
+  // and that an upgrade preselects every page rather than skipping any.
+  it('says what the Windows installer asks, in order, and that an upgrade preselects each page', () => {
+    const p = body('providers')
+    expect(p).toMatch(/On Windows the installer opens with a Welcome page, then asks for the Data folder \(sessions, logs and configuration data\) and the Resources folder/)
+    expect(p).toMatch(/On an upgrade, every one of those pages comes up with the earlier install's choices already selected\./)
+    expect(p).not.toMatch(/unless an earlier install already settled it/)
+  })
+})
+
+// The 2.1.1-beta.3 tips: none offers the computer's own Codex sign-in or Sign
+// in again on it, the Feature Guide tip describes What's New as it now works,
+// and the partner and SSH marks are worded as the code behaves.
+describe('tips after the 2.1.1-beta.3 sweep', () => {
+  const tip = (id: string) => TIPS_LIBRARY.find((t) => t.id === id)!.variants.primary
+  const titled = (title: string) => TIPS_LIBRARY.find((t) => t.variants.primary.title === title)!.variants.primary
+  it('no tip offers the Codex sign-in already on this computer, or Sign in again on it', () => {
+    const all = JSON.stringify(TIPS_LIBRARY)
+    expect(all).not.toMatch(/already on this computer \(in `~\/\.codex`/)
+    expect(all).not.toMatch(/on its row, which first signs out every app that uses that sign-in/)
+    expect(titled('Check Sign-in and Sign In Again').body).toMatch(/\*\*Sign in again\*\* is not offered on it\./)
+    expect(titled('Hello Codex, Again').body).not.toMatch(/does not count/)
+  })
+  it("the Feature Guide tip says an update shows a short summary, and the full notes stay in What's New", () => {
+    const b = titled('Feature Guide').body
+    expect(b).not.toMatch(/the same notes you are shown after an update/)
+    // Owner rule (2026-10-11): every prerelease of a release shows its whole
+    // story, so the tip says so, as the Feature Guide and the README do.
+    expect(b).toMatch(/After an update you see a short summary of what is new since the version you came from, and every prerelease of a release shows that release's whole story/)
+    expect(b).not.toMatch(/since your last version/)
+    const top = changelog.find((e) => e.version === '2.1.1-beta.3')!
+    expect(top.highlights).toMatch(/What's New shows what is new since the release you came from, and every prerelease of 2\.1\.1 shows the whole 2\.1\.1 story\./)
+    expect(top.highlights).not.toMatch(/only what is new since the version you came from/)
+  })
+  it('the remote attention tip names the host classes it covers, as the changelog and the known issues do', () => {
+    const b = tip('tip.remote-attention').body
+    expect(b).toMatch(/An SSH session to a Linux or macOS host lights the attention indicator when Claude is waiting on you, just like a local one\./)
+    expect(b).toMatch(/Windows hosts are not covered yet\./)
+  })
+  it('the partner, SSH and Node.js tips say what the code does', () => {
+    expect(tip('tip.partner-terminal').body).toMatch(/On an SSH session it is a plain shell on the host, in the config's remote folder there/)
+    expect(tip('tip.partner-terminal').body).not.toMatch(/home for SSH sessions/)
+    expect(tip('tip.ssh-persistence').body).not.toMatch(/for a plain one/)
+    expect(tip('tip.resume-list-needs-node').body).toMatch(/Without Node\.js the session starts Claude Code or Codex directly instead/)
+    expect(tip('tip.claude-powershell-profile').body).toMatch(/restart the app so it looks again/)
+  })
+  it('the partner card says an SSH session\'s partner runs on the host, and the What\'s New marks line names SSH by its kind', () => {
+    const card = JSON.stringify(trainingSteps.find((s) => s.id === 'combined-mode')!)
+    expect(card).not.toMatch(/at home over SSH/)
+    expect(card).toMatch(/on an SSH session it runs on the host, in the config's remote folder/)
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'onboarding', 'WhatsNewV2Step.tsx'), 'utf8')
+    expect(src).not.toMatch(/Plain SSH, persistent and container sessions/)
+  })
+})
+
+// The 2.1.1-beta.3 README and user guide: the computer's own Codex sign-in is
+// no longer offered, Node.js is optional, the pages after setup have the
+// window's own buttons, and codex resume reaches the earlier Codex history.
+describe('README and user guide after the 2.1.1-beta.3 sweep', () => {
+  const root = path.resolve(__dirname, '..', '..', '..')
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
+  const guide = fs.readFileSync(path.join(root, 'docs', 'USER_GUIDE.md'), 'utf8').replace(/\s+/g, ' ')
+  it('the README no longer offers the computer\'s own Codex sign-in, and says Node.js is optional', () => {
+    expect(readme).not.toMatch(/can be used too, confirmed at each launch/)
+    expect(readme).not.toMatch(/used only after you choose \*\*Use this sign-in\*\*/)
+    expect(readme).toMatch(/Codex accounts are always added in the app, as Claude accounts are/)
+    expect(readme).toMatch(/`codex resume` in a terminal picks them up/)
+    expect(readme).toMatch(/\| \*\*Node\.js\*\* \(optional\) \|/)
+  })
+  it('the README security table and remote paragraph say no more than is true', () => {
+    // A session on an account 2.1.1-beta.2 registered for ~/.codex does sign in
+    // from it once the launch is confirmed, so "never used for sign-in" was false.
+    expect(readme).not.toMatch(/`~\/\.codex` is never used for sign-in/)
+    expect(readme).toMatch(/Your own `~\/\.codex` is no longer offered as an account; one that 2\.1\.1-beta\.2 registered for it is used for a session only when you confirm that launch, and never for a review/)
+    // Windows remotes report status like the others but do not raise attention yet.
+    expect(readme).not.toMatch(/macOS remotes all behave identically/)
+    expect(readme).toMatch(/Windows, Linux and macOS remotes all report status identically/)
+  })
+  it('the user guide: window buttons after setup, no Sign in again on the retired sign-in, and codex resume', () => {
+    expect(guide).not.toMatch(/the pages after them do not/)
+    expect(guide).toMatch(/all have the window's own minimize, maximize and close at the top right on Windows and Linux/)
+    expect(guide).toMatch(/\*\*Sign in again\*\* is not offered on it\./)
+    expect(guide).toMatch(/run `codex resume`/)
+    expect(guide).toMatch(/Node\.js is optional for running sessions\./)
+  })
+})
+
+// The 2.1.1-beta.3 text pass before the code freeze. Each case pins one of
+// its changes.
+describe('surfaces after the 2.1.1-beta.3 text pass', () => {
+  const root = path.resolve(__dirname, '..', '..', '..')
+  const all = APP_KNOWLEDGE_SECTIONS.map((s) => s.body).join('\n')
+  const tip = (id: string) => TIPS_LIBRARY.find((t) => t.id === id)!.variants.primary
+  const guide = fs.readFileSync(path.join(root, 'docs', 'USER_GUIDE.md'), 'utf8').replace(/\s+/g, ' ')
+  const when = 'on the Claude Code row in Settings, Accounts when it shows one'
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((s) => s.id === id)!.body
+
+  // The Claude Code row offers Check again only while Claude Code is missing,
+  // unchecked or unusable (ProvidersCard offersCheckAgain), so wherever Claude
+  // Code is found the step is a restart, and Check again is only conditional.
+  it('restart the app is the step where Claude Code is found, and Check again only where the row shows one', () => {
+    const p = tip('tip.claude-powershell-profile').body
+    expect(p).not.toMatch(/After you change the profile, press \*\*Check again\*\* in \*\*Settings, Accounts\*\*/)
+    expect(p).toMatch(/After you change the profile, restart the app so it looks again \(or press \*\*Check again\*\* on the Claude Code row in \*\*Settings, Accounts\*\* when it shows one\)\./)
+    const n = tip('tip.resume-list-needs-node').body
+    expect(n).not.toMatch(/press Check again on a setup page/)
+    expect(n).toContain(`On Windows, restart the app after installing (or press Check again ${when}), then open a new session to get the list back.`)
+    expect(all).not.toMatch(/restart the app or press Check again on a setup page \(or in Settings\)/)
+    expect(all).not.toMatch(/until you press Check again in Settings, Accounts \(or restart the app\)/)
+    expect(all).not.toMatch(/If you change your profile, press Check again\./)
+    expect(all).not.toMatch(/Check again on a setup page/)
+    expect(all).toContain(`add the folder that holds node.exe to your PATH for your Windows account, then restart the app (or press Check again ${when}), or in a Claude Code session type /resume.`)
+    expect(all).toContain(`after you install Node.js, restart the app before you open a new session (or press Check again ${when})`)
+    expect(all).toContain('It asks once and keeps the answer until you restart the app or press Check again')
+    expect(all).toContain(`If you change your profile, restart the app (or press Check again ${when}).`)
+    expect(all).toContain(`Sessions keep using the Claude Code the app found until you restart the app (or press Check again ${when}).`)
+    expect(guide).not.toMatch(/It asks once: press \*\*Check again\*\* after you change your profile\./)
+    expect(guide).not.toMatch(/or press \*\*Check again\*\* on a setup page before opening a new session/)
+    expect(guide).toContain('It asks once: after you change your profile, restart CCC (or press **Check again** on the Claude Code row in Settings, Accounts when it shows one).')
+    expect(guide).toContain('On Windows, after you install Node.js, restart CCC before opening a new session (or press **Check again** on the Claude Code row in Settings, Accounts when it shows one).')
+  })
+
+  // A Codex account has no second try with new folders, so its sentence must
+  // not follow the Claude-only one with "the same applies".
+  it('the Codex account folder sentence stands on its own, after the Claude Code rebuild sentence', () => {
+    expect(all).not.toMatch(/The same applies to a Codex account's folder/)
+    expect(all).toContain("only when that fails too is the account refused, and it cannot sign in until the folders are fixed as above. If the app cannot make a Codex account's new sign-in folder readable by you alone, adding the account, or signing it in again, stops with The account folder could not be prepared., and the app's log says which folder could not be made private and why.")
+  })
+
+  const beta3 = () => changelog.find((e) => e.version === '2.1.1-beta.3')!.changes
+  it("What's New for 2.1.1-beta.3 says the gh fallback of the update check finds new releases", () => {
+    expect(beta3()).toContainEqual({ type: 'fix', description: 'Update checks that fall back to the GitHub command-line tool (gh) now find new releases.' })
+  })
+
+  // 2.1.1-beta.2 already saved a drive root whole; what changed is that %, !
+  // and a backtick are no longer taken out. Saving the folder is not the
+  // status line setup, whose own limit on those characters still stands.
+  it("What's New for 2.1.1-beta.3 says a folder path holding %, ! or a backtick is saved as chosen, and the status line limit stays", () => {
+    expect(beta3()).toContainEqual({ type: 'fix', description: 'On Windows, a data or resources folder whose path holds a percent sign (%), an exclamation mark (!) or a backtick is now saved exactly as you chose it. Before, the app left those characters out when it saved the folder, so after a restart it could look in a different folder.' })
+    const savingRows = beta3().filter((c) => /saved exactly as you chose it|now saves correctly/.test(c.description))
+    expect(savingRows).toHaveLength(1)
+    for (const c of savingRows) expect(c.description).not.toMatch(/drive root/i)
+    expect(all).toContain("The app's status line is not set up when the path of the resources folder or of your home folder holds a $, a backtick, a double quote or a control character, or a % or ! on Windows, or a backslash on macOS and Linux; the log says so, and a status line of your own still shows. Workaround: choose a resources folder whose path has none of these. A home folder path that holds one has no workaround yet.")
+  })
+
+  // aicc_planning#87: tmux's scrollback view keeps an offset from the bottom,
+  // not a place in the history, so it drifts while output arrives. A local
+  // session holds still, so "exactly as local" was not true.
+  it('the SSH Persistent wheel entry no longer says exactly as local, and scrolling back during output is a known issue with its workaround', () => {
+    expect(all).not.toMatch(/exactly as it scrolls local history/)
+    expect(all).toContain('the wheel scrolls back through remote history, and no arrow key is sent. Unlike local history, that view does not hold your place while output is still arriving (see the entry on scrolling back during output, below).')
+    expect(all).toContain('Scrolling back in an SSH Persistent session while output is still arriving does not hold your place.')
+    expect(all).toContain('Nothing is lost: it is still in the history, further up. Workaround: let the output finish before you scroll back, or scroll further up to find your place again.')
+  })
+
+  // The dialogs check the command and each argument field on their own, but
+  // the launch fills in the joined line, so a backslash in one field leaves a
+  // {secret} in another unfilled with no warning at save.
+  it('a {secret} left unfilled by a backslash or backtick in another field is a known issue with its workaround', () => {
+    expect(body('known-issues')).toContain('A {secret} in a terminal config\'s command, or a command button\'s command, is left as written when another field of the same command (its arguments) holds a backslash or a backtick, or the other way round, and the dialog does not warn when you save. Workaround: use forward slashes in paths, and no backticks, anywhere in the command and its arguments.')
+  })
+
+  // F16: macOS and Linux share one rule (secureFoldersPosix, the 0700
+  // sign-in folders, the Insights and Sentinel owner checks): the folder's
+  // own owner and permissions. So both say only when that holds, never more.
+  it('says on Linux, as on macOS, only when the sign-in folders are yours alone, with the folder that holds the resources folder in the condition', () => {
+    const k = body('known-issues')
+    expect(k).toContain('That holds when the resources folder and the folder that holds it are on a volume that honours ownership, only you can write to them, and no access entry on them, or passed down to them from a folder above, lets another user in.')
+    expect(k).toContain("On Linux the app keeps your accounts' sign-in folders in your resources folder to you alone, and the Insights and Sentinel folders there writable only by you, through their owner and permissions. That holds when the resources folder and the folder that holds it are on a volume that honours file ownership and permissions, and only you can write to them. Workaround: keep the resources folder on a Linux file system, in a folder only you can write to (inside your home folder, for example), not on a FAT, exFAT or NTFS drive or a network share mounted without file permissions.")
+    expect(k.indexOf('On Linux the app keeps')).toBeGreaterThan(k.indexOf('On macOS the app keeps'))
+  })
+})
+
+// The 2.1.1-beta.3 fixes: one coherent pass over the user-facing text of
+// every fix since that text pass. The What's New entry is grouped by area,
+// every note lands where Ask Conductor reads it, two corrections hold (no
+// Skip during connect, and a project file the app does not add is never said
+// not to run), and each known issue that ships carries its workaround.
+describe('surfaces after the 2.1.1-beta.3 fixes', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((s) => s.id === id)!.body
+  const all = APP_KNOWLEDGE_SECTIONS.map((s) => s.body).join('\n')
+  const rows = () => changelog.find((e) => e.version === '2.1.1-beta.3')!.changes.map((c) => c.description)
+  const at = (re: RegExp) => rows().findIndex((d) => re.test(d))
+  const together = (re: RegExp) => {
+    const hits = rows().map((d, i) => (re.test(d) ? i : -1)).filter((i) => i >= 0)
+    expect(hits.length, String(re)).toBeGreaterThan(0)
+    expect(hits[hits.length - 1] - hits[0] + 1, `${re} rows sit together`).toBe(hits.length)
+  }
+
+  it("What's New for 2.1.1-beta.3 lists the fixes, in plain ASCII", () => {
+    for (const said of [
+      "An SSH session's status line no longer misses an update that arrives split across two reads.",
+      'On an SSH session, terminal output that follows an incomplete status line marker is now shown at once',
+      "On Windows, a new session's resume list now always starts the Node.js the app found, or skips the list and says why in the app's log",
+      'On Windows, Claude Code now starts in a project folder whose name holds [ or ] (for example app[v2]).',
+      'First-run setup no longer moves on as if a folder were set when it was not saved. If a folder is empty, is not a full path, or cannot be created or saved, the folder step stays open and says which folder',
+      "the resume picker resumes a worktree's conversation in the folder that was checked when the session started",
+      'and does not resume one in a worktree whose folder was missing when the session started (see Known issues in the Feature Guide).',
+      "an SSH session to a Linux or macOS host now also gets the remote project's own Claude Code hooks added to its settings file",
+      "a session now adds to its settings file the project's Claude Code hooks from the same files Claude Code reads for it",
+      'Claude Code hooks in a settings file saved with a UTF-8 byte-order mark, or as UTF-16LE, now run in sessions the app starts',
+      'An SSH session now reads your ~/.claude/settings.json on a Linux, macOS or Windows host as Claude Code does',
+      'A Claude Code verdict still waiting when its session ends or restarts gets that notice too',
+      "in a Claude Code cloud agent's error output and in an Insights run's terminal output, as other failure text does, also when one arrives split across two reads.",
+      'When you quit the app, a check or run that is waiting on that first run, or asks for one then, no longer goes on to start.',
+      'Once the app has started quitting, the Claude Code setup terminal, background Claude Code runs, cloud agents and the account sign-in check no longer start',
+      'on Windows, when another program, such as a sync, backup or antivirus tool, has the old copy open, the app writes the new contents into that copy instead',
+      "The app's status line, the resume list and Codex's hooks now start only from the app's own copy of their scripts.",
+      'or in place of the lib folder the Codex resume list loads its helper from',
+      'A Claude Code version pinned in an older release is no longer used; sessions and cloud agents start your installed Claude Code.',
+      "It opens in the config's remote folder once it recognises the host's first shell prompt",
+    ]) expect(rows().some((d) => d.includes(said)), said).toBe(true)
+    for (const gone of [
+      /found walking up/,
+      /The app holds it until the turn ends, and only sends it early if two minutes pass/,
+      /Once the app is quitting, nothing that is waiting on that first run/,
+      /now always stops the setup terminal/,
+      /The app's log line for a Claude Code cloud agent's error output/,
+      /SSH sessions now also run the remote project's own Claude Code hooks \(from its/,
+      /\(on Windows\) its path cannot be saved in the registry/,
+      /set to an older Claude Code version now runs that version/,
+    ]) expect(rows().some((d) => gone.test(d)), String(gone)).toBe(false)
+    for (const d of rows()) expect(/^[\x20-\x7e]*$/.test(d), `non-ASCII: ${d.slice(0, 60)}`).toBe(true)
+  })
+
+  // These rows and entries were reworded for beta.3. Pin them whole, so a later
+  // change to any of them is made here on purpose too.
+  it("What's New for 2.1.1-beta.3: the Windows launch, resume picker and helper script rows, and their known issues, read exactly as approved", () => {
+    for (const exact of [
+      "On Windows, a new session's resume list now always starts the Node.js the app found, or skips the list and says why in the app's log, and a session that uses the npm-installed Claude Code looks for Node.js only in the folders PATH names by their full path, even after your PowerShell profile has changed PATH.",
+      "On Windows, Claude Code now starts in a project folder whose name holds [ or ] (for example app[v2]). When Claude Code itself is installed in a folder whose path holds [ or ], a session that starts it directly stops and says why; install Claude Code in a folder without them.",
+      "Managed accounts: the resume picker resumes a worktree's conversation in the folder that was checked when the session started, also when the worktree is reached through a link, and does not resume one in a worktree whose folder was missing when the session started (see Known issues in the Feature Guide).",
+      "At start, each of the app's helper scripts in the resources folder is brought up to date on its own, so one that cannot be put in place no longer holds the others back. A changed script is put in place as a new file; on Windows, when another program, such as a sync, backup or antivirus tool, has the old copy open, the app writes the new contents into that copy instead, so it is still brought up to date. On macOS and Linux a copy whose permissions were loosened is replaced with one only you can read.",
+      "The app's status line, the resume list and Codex's hooks now start only from the app's own copy of their scripts. If something else sits in the scripts folder in a script's place, or in place of the lib folder the Codex resume list loads its helper from, the session starts directly, without the app's status line, or without hooks, and the app log names the file or folder.",
+    ]) expect(rows(), exact.slice(0, 60)).toContain(exact)
+    const entries = APP_KNOWLEDGE_SECTIONS.flatMap((s) => s.body.split('\n'))
+    for (const exact of [
+      "On Windows, a folder path that holds [ or ] limits how a Claude Code session can start. When Claude Code is installed in such a folder, a session that starts it directly stops and says why; a session that opens the resume list is not affected. When the Node.js found on PATH is in such a folder, a new Claude Code session starts Claude Code directly, without the resume list, and the app log says so. Workaround: install Claude Code and Node.js in folders without [ or ].",
+      "On Windows, the npm-installed Claude Code can say node is not recognized when your PowerShell profile adds Node.js to PATH only by a relative folder (such as node_modules\\.bin or .): a session that starts it looks for Node.js only in the folders PATH names by their full path. Workaround: add the Node.js folder to PATH by its full path (such as the nodejs folder in Program Files), or install the native Claude Code.",
+      "A new session opened without the resume list or the app's status line, or a Codex session had no hooks, and the log names a script file or folder. The app runs its status line, the resume list and a Codex session's hooks only from its own copy of each script in the scripts folder inside your resources folder. If something else sits there in a script's place (a folder, a symbolic link or junction, or a second name for the same file), the app does not run it: the session starts directly, without the app's status line, or without hooks, and the app log has one line naming the file. The app puts its own copy back at the next start on its own, a copy marked read-only included, except where a folder that is not empty sits in a script's place: the app never deletes what a folder holds. To fix it, close the app, move that folder out of the scripts folder, and start the app again.",
+      "The same goes for the lib folder inside the scripts folder, which a Codex session's resume list loads a helper from: if anything other than a plain folder sits there (a symbolic link, a junction or a file), the resume list is skipped, Codex starts directly, and the app log says the scripts/lib folder is not a real folder. At the next start the app removes a link there (never what it points to) and puts a plain folder in its place, and the resume list is back from the start after that: restart the app once more if it is still missing. A file there, or a folder it cannot replace, it leaves alone, and the log says the lib folder could not be made a real folder: close the app, move that file or folder out of the scripts folder, and start the app again.",
+      "If the app could not bring one of these scripts up to date at start (for example another program held the old copy open), it does not run that copy: the log says the script could not be brought up to date this run, and sessions start without what it serves until the app starts again. Close the other program, or let it finish, then restart the app.",
+    ]) expect(entries, exact.slice(0, 60)).toContain(exact)
+  })
+
+  it("What's New for 2.1.1-beta.3 is grouped by area", () => {
+    const sentinel = /^(Sentinel |The same goes for Codex model notices|A copied Sentinel |A Sentinel model notice|With Codex on and no Codex check|When Sentinel's )/
+    expect(rows().filter((d) => sentinel.test(d)).length).toBe(6)
+    together(sentinel)
+    together(/^Agent Canvas:/)
+    together(/partner/i)
+    together(/Claude Code hooks|settings\.json/)
+    together(/helper scripts|their scripts/)
+    together(/^Managed (sessions|accounts)/)
+    // The folder-saving row sits with first-run setup, not at the end.
+    expect(at(/is now saved exactly as you chose it/) + 1).toBe(at(/^First-run setup no longer moves on as if a folder were set/))
+    expect(at(/^Codex accounts are now always added in the app/)).toBe(0)
+    expect(at(/fall back to the GitHub command-line tool/)).toBe(rows().length - 1)
+  })
+
+  it("the SSH partner: the Feature Guide says when it opens in the remote folder, and Known issues has the cases and their workarounds, with no Skip", () => {
+    expect(body('sessions')).toContain("opening in the config's remote folder there once it recognises the host's first shell prompt: one that ends in $, #, >, ~, or a % on its own or after a space, as long as you have not typed anything in the partner before then (a password typed by hand counts). Otherwise it opens in your home folder there, and you can type cd and the folder (see Known issues and workarounds, which also covers a Mac host whose shell is zsh).")
+    const k = body('known-issues')
+    for (const said of [
+      "It opens in the config's remote folder only when it recognises the host's first shell prompt as that prompt appears: a prompt that ends in $, #, >, ~, or a % on its own or after a space",
+      'a zsh prompt whose % follows other text directly (such as box% or [user@box]~%) included',
+      'when the first prompt, or the line just above it, names a sign-in word (password, passphrase, passcode, a one-time, verification or authenticator code, OTP, TOTP, token, PIN, 2FA or MFA)',
+      'when the app typed a saved password and the shell prompt that follows is only $, #, > or %, or a two-line prompt whose last line is only one of them',
+      'or a two-line prompt whose last line is only one of them. With a bare prompt like that after a saved password, the partner can take up to about 13 seconds to settle;',
+      'It types that folder line (cd and the folder) only before you type anything in the partner: the first key you type there (a letter, Enter, an arrow key or a paste), or a password you type there by hand, gives the line up for that connection, so it never lands in a command you are typing.',
+      'the partner can take that prompt for its shell and type its folder line into it; answer the prompt again, then type cd and the folder at the shell.',
+      'if the prompt then says the password was wrong, that line was taken as the password, which counts as one attempt.',
+      "where it did not type the saved password, type the password at the partner's prompt yourself, then type cd and the folder;",
+    ]) expect(k).toContain(said)
+    // The UI offers no Skip while a partner connects.
+    for (const s of APP_KNOWLEDGE_SECTIONS) expect(s.body, s.id).not.toMatch(/After Skip|press(es|ed)? Skip during connect/)
+    const partner = k.slice(k.indexOf("An SSH session's partner shell is a connection of its own"))
+    expect(partner.slice(0, partner.indexOf('\n'))).not.toMatch(/\bSkip\b/)
+  })
+
+  // Live run at 3ecc8230: on a macOS host whose shell is zsh, reached from the
+  // app on Windows, the partner opened in the home folder at 80 and 200
+  // columns. The prompt arrives redrawn with cleared rows after it, so the
+  // read ends in an empty line, partnerPromptTail reads '' and the idle
+  // fallback opens it at home, typing nothing. The text said that prompt opens
+  // in the folder; it now lists it with the cases that open at home. The redraw
+  // is zsh's own (its PROMPT_SP), not something macOS adds, so the text also
+  // says it may happen on another host whose shell is zsh (only the Mac was
+  // seen; lane review NIT). Pinned whole, so a later change to the paragraph
+  // is made here on purpose too.
+  it('the SSH partner on a Mac host whose shell is zsh: no surface says its prompt opens in the folder, and Known issues lists it with the cases that open at home', () => {
+    const PARTNER_PARA = "An SSH session's partner shell is a connection of its own to the host. It does not survive a dropped connection the way an SSH Persistent session does. It opens in the config's remote folder only when it recognises the host's first shell prompt as that prompt appears: a prompt that ends in $, #, >, ~, or a % on its own or after a space. It types that folder line (cd and the folder) only before you type anything in the partner: the first key you type there (a letter, Enter, an arrow key or a paste), or a password you type there by hand, gives the line up for that connection, so it never lands in a command you are typing. The terminal's own automatic replies to the host do not count as typing. Otherwise it opens in your home folder. That happens on a Windows host; on a Mac host whose shell is zsh (the Mac's default), and possibly on another host whose shell is zsh, at least when the app runs on Windows: that prompt ends in a % after a space, but it arrives redrawn with empty lines after it, which the partner does not read as a prompt; on a host whose prompt ends in anything else (some prompt themes end in an arrow or another symbol, or draw on the right of the line), a zsh prompt whose % follows other text directly (such as box% or [user@box]~%) included; on a host whose sign-in banner, message of the day or shell startup draws a box with rounded corners; when the host is slow to show its first prompt (a slow link, or an extra sign-in step such as a verification code); when the first prompt, or the line just above it, names a sign-in word (password, passphrase, passcode, a one-time, verification or authenticator code, OTP, TOTP, token, PIN, 2FA or MFA), which also covers a shell prompt that contains one, such as a host named pin, and a notice just above the prompt that your password expires soon; when the app typed a saved password and the shell prompt that follows is only $, #, > or %, or a two-line prompt whose last line is only one of them. With a bare prompt like that after a saved password, the partner can take up to about 13 seconds to settle; typing in it meanwhile is fine, and nothing is typed for you. On a host whose first prompt is not a shell but ends in one of those marks and names none of those words, such as a jump-host menu ending in > or a code prompt worded differently, the partner can take that prompt for its shell and type its folder line into it; answer the prompt again, then type cd and the folder at the shell. With a saved password, a sign-in banner whose last line ends in one of those marks (a row of # signs, or a percentage written after a space, such as 45 %), with no line break before the password prompt, is taken for the shell prompt too: the partner does not type the saved password, and its folder line (cd and the folder) can arrive ahead of the password prompt; if the prompt then says the password was wrong, that line was taken as the password, which counts as one attempt. On a host that asks for a verification code or a key passphrase, or when you type the password by hand and take more than about 13 seconds, a partner command button pressed while that sign-in prompt is waiting types its command into the prompt. On a host whose sign-in banner, message of the day or shell startup draws a box with rounded corners, partner command buttons type nothing, and the note says the partner has not reported its shell prompt. Workaround: after a drop, show the partner and press Restart to open it again; where it opened in your home folder, type cd and the folder; where it did not type the saved password, type the password at the partner's prompt yourself, then type cd and the folder; sign in to the partner first, and press partner buttons only once its shell prompt shows; where partner buttons type nothing, type the command in the partner view."
+    const paras = body('known-issues').split('\n')
+    expect(paras.filter((p) => p.startsWith("An SSH session's partner shell is a connection of its own"))).toEqual([PARTNER_PARA])
+    expect(PARTNER_PARA).toMatch(/^[\x20-\x7E]+$/)
+    expect(rows()).toContainEqual(expect.stringContaining("It opens in the config's remote folder once it recognises the host's first shell prompt, such as bash's, as long as you have not typed anything in the partner before then (a password typed by hand counts), and in your home folder there otherwise (see Known issues in the Feature Guide, which also covers a Mac host whose shell is zsh)."))
+    const claim = /zsh prompt on a Mac|as in the default zsh prompt/i
+    for (const s of APP_KNOWLEDGE_SECTIONS) expect(s.body, s.id).not.toMatch(claim)
+    for (const e of changelog) for (const c of e.changes) expect(c.description, e.version).not.toMatch(claim)
+    expect(JSON.stringify(TIPS_LIBRARY)).not.toMatch(claim)
+    expect(JSON.stringify(trainingSteps)).not.toMatch(claim)
+  })
+
+  it('remote project hooks: the lookup is described as it is, and a file the app does not add is never said not to run', () => {
+    const r = body('remote-sessions')
+    expect(r).not.toMatch(/found walking up from the session's folder/)
+    expect(r).not.toMatch(/one-time value/)
+    expect(r).toContain('ccc-attn-<session>.key (a key for this connection only, readable by you alone)')
+    expect(r).toContain("an SSH session to a Linux or macOS host also gets the remote project's own Claude Code hooks added to its settings file")
+    expect(r).toContain('which the app finds by asking git on the host; a .git folder or file nearer the session\'s folder than the checkout git names marks the checkout instead, as it does for Claude Code.')
+    expect(r).toContain("What an SSH session's setup does to your user settings (~/.claude/settings.json) and to Claude Code's config file (~/.claude.json) on the host.")
+    expect(r).toContain('user-settings-left for settings.json, claude-json-left for .claude.json')
+    expect(body('settings-scope')).toContain('Which Claude Code hooks the app adds to a session. While the HTTP Hooks Gateway switch is on,')
+    expect(body('settings-scope')).toContain("In every case Claude Code still reads the project's own settings files itself")
+    const k = body('known-issues')
+    expect(k).toContain("the app does not add a project's hooks to the session's settings file when its .claude folder or settings file")
+    expect(k).toContain('An SSH session to a Windows host does not get the project\'s hooks added to its settings file by the app')
+    expect(k).toContain('on an SSH host where git is not installed, a session started in a subfolder of a git checkout')
+    for (const s of APP_KNOWLEDGE_SECTIONS) {
+      expect(s.body, s.id).not.toMatch(/project's hooks are skipped when/i)
+      expect(s.body, s.id).not.toMatch(/project's own hooks \([^)]*\) do not run there/i)
+    }
+  })
+
+  it("local project hooks: the checkout's own file is the only parent folder file said to be read, and the host's log is named one way", () => {
+    const row = rows().find((d) => d.startsWith('While the HTTP Hooks Gateway switch is on, a session now adds to its settings file'))!
+    expect(row).toContain("the checkout's own .claude/settings.local.json (for a worktree, the main checkout's). No other file in a parent folder's .claude is added, as Claude Code does not read those either")
+    expect(row).not.toMatch(/Hooks in a parent folder's \.claude are not added/)
+    const scope = body('settings-scope')
+    expect(scope).toContain("No other file in a parent folder's .claude is read (Claude Code does not read those either)")
+    expect(scope).not.toMatch(/A parent folder's \.claude is never read/)
+    for (const sec of APP_KNOWLEDGE_SECTIONS) expect(sec.body, sec.id).not.toMatch(/conductor-shim\.log in the remote's Claude folder/)
+    expect(rows().some((d) => d.includes('~/.claude/conductor-shim.log on the host'))).toBe(false)
+    expect(rows().find((d) => d.startsWith('An SSH session now reads your ~/.claude/settings.json'))).toContain("noted in conductor-shim.log in the host's Claude folder (~/.claude; inside the container for a container session).")
+  })
+
+  it("the partner tip and the Combined Mode card say an SSH partner opens in the remote folder once it recognises the host's prompt", () => {
+    const tip = TIPS_LIBRARY.find((t) => t.id === 'tip.partner-terminal')!.variants.primary.body
+    expect(tip).toContain("If it does not recognise the host's shell prompt, or you type in it before that prompt shows (a password typed by hand counts), it opens in your home folder there instead (see Known issues in the Feature Guide).")
+    const card = JSON.stringify(trainingSteps.find((st) => st.id === 'combined-mode')!)
+    expect(card).toContain("in the config's remote folder once it recognises the host's shell prompt")
+  })
+
+  it('canvas decisions in a Claude Code session: the Feature Guide and the known issue say when they are typed, and when the canvas says one was not sent', () => {
+    expect(body('canvas-review-model')).toContain("In a Claude Code session, the line that tells the agent about your decision is typed only once Claude Code waits at its ready, empty prompt. With Claude Code's turn events (the default), it is held to the end of the agent's turn")
+    const k = body('known-issues')
+    expect(k).not.toMatch(/A canvas verdict can still be missed while the agent is mid-answer/)
+    expect(k).not.toMatch(/its own interface can swallow that line/)
+    expect(k).toContain('A canvas verdict can reach the agent late, or not at all.')
+    expect(k).toContain('If a session ends or restarts with several decisions still waiting, the canvas lists them in the order you made them (it keeps the latest five notices on each canvas).')
+    expect(k).toContain('If more than 32 decisions are waiting for a turn to end, only the latest 32 are kept, and the others are dropped without a notice.')
+    expect(k).toContain("A Codex decision still waiting for a turn to end when its session ends or restarts is shown as not sent too; one already waiting for Codex's prompt when its session ends is dropped without that notice.")
+    expect(k).toContain('say it in chat ("I approved version 4", or "I sent version 4 back, there are 3 notes")')
+  })
+
+  it('Compact, model and effort: the screens on which nothing is typed, and vim mode in the Claude controls known issue', () => {
+    expect(body('statusline')).toContain("or the screen is one the app does not recognise (for example an earlier Claude Code screen left above a shell, or vim mode's visual mode), nothing is typed")
+    const k = body('known-issues')
+    expect(k).toContain('A canvas decision waits in the same case; if the agent has not picked it up, say it in chat (see the canvas verdict entry above).')
+    expect(k).toContain("If your own Claude Code settings hide vim mode's indicator, its VISUAL mode looks like the ready prompt too.")
+    expect(k).toContain('Press i to go to INSERT mode first, or type the command yourself.')
+  })
+
+  it('the resume picker: a missing worktree folder, the folder it starts in, and short 8.3 names as a known issue with its workaround', () => {
+    const k = body('known-issues')
+    expect(k).toContain('or in any worktree (including the one the session last ran in) whose folder was not there when the session started, saying so if you pick one')
+    expect(k).toContain('A conversation it does resume starts in the folder that was checked, also when the worktree is reached through a link).')
+    expect(k).toContain('If the folder of the worktree the session last ran in is not there when the session starts, the session starts in its configured folder')
+    // Owner question 17 (mandatory known issue), after the working folder entry it builds on.
+    const short = 'On Windows, the resume picker cannot resume a conversation from a worktree that git lists with a short 8.3 folder name in its path (such as PROGRA~1).'
+    expect(k).toContain(short)
+    expect(k).toContain('Workaround: to avoid this for new conversations, add worktrees with their full folder names, as File Explorer shows them')
+    const anchor = k.indexOf('On Windows, give a Claude config its working folder as Windows spells it.')
+    expect(anchor).toBeGreaterThanOrEqual(0)
+    expect(k.indexOf(short)).toBeGreaterThan(anchor)
+    expect(all).not.toMatch(/this computer's own Claude Code sign-in/)
+  })
+
+  it('Windows launch: [ or ] in a path, node for the npm Claude Code, and a folder setup cannot save', () => {
+    const k = body('known-issues')
+    expect(k).toContain('On Windows, a folder path that holds [ or ] limits how a Claude Code session can start.')
+    expect(k).toContain('Workaround: install Claude Code and Node.js in folders without [ or ]')
+    expect(k).toContain('(such as node_modules\\.bin or .): a session that starts it looks for Node.js only in the folders PATH names by their full path.')
+    expect(k).toContain('Setup can say a folder could not be saved. Check that the folder is a full path.')
+    expect(k).toContain('type a network share with backslashes (\\\\server\\share), not forward slashes.')
+    expect(k).toContain('If that file cannot be written, for example because the home folder is read-only or full, setup says the folder could not be saved. Workaround: free some space, or make the home folder writable, then press Continue again.')
+    expect(body('providers')).toContain("Setup's first step saves two folders: the data directory and the resources directory.")
+    expect(body('providers')).toContain('If either folder is empty, is not a full path, cannot be created or cannot be saved, setup stays on that step and says which folder could not be saved.')
+    expect(all).not.toMatch(/\(on Windows\) its path cannot be saved in the registry/)
+    expect(all).not.toMatch(/Setup can say a folder could not be saved on Windows\./)
+  })
+
+  it('a Claude Code version pinned in an older release: the Feature Guide and the known issue say the installed one starts, with the workaround', () => {
+    expect(body('sessions')).toContain('A config set in an older release to a particular Claude Code version starts the installed Claude Code, as every other config does (see Known issues and workarounds).')
+    expect(body('known-issues')).toContain('If a saved config was set, in an older release, to use a particular Claude Code version, that setting is no longer used')
+    expect(body('known-issues')).toContain('Workaround: to run a particular Claude Code version, install that version yourself and make it the only Claude Code in the folders PATH names')
+    expect(all).not.toMatch(/runs that version everywhere it starts/)
+    expect(all).not.toMatch(/for an older Claude Code version the app keeps/)
+  })
+
+  it('the scripts folder: what the app will not run, and how to clear what sits in a script\'s place or the lib folder\'s', () => {
+    const t = body('troubleshooting')
+    expect(t).toContain("A new session opened without the resume list or the app's status line, or a Codex session had no hooks, and the log names a script file or folder. The app runs its status line, the resume list and a Codex session's hooks only from its own copy of each script")
+    expect(t).toContain('the app never deletes what a folder holds.')
+    expect(t).toContain('the app log says the scripts/lib folder is not a real folder.')
+    expect(t).toContain('close the app, move that file or folder out of the scripts folder, and start the app again.')
+  })
+})
+
+// The last user-facing pass for 2.1.1-beta.3: the notes of the fixes that
+// came last. The partner's folder line, the settings and
+// config files the SSH setup leaves as they are, the folder step on every
+// platform, the scripts folder made private at start, the project's new home,
+// and the known issues each of them ships with. New rows and entries are
+// pinned whole, so a later change to any of them is made here on purpose too.
+describe('surfaces for the last 2.1.1-beta.3 fixes', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((s) => s.id === id)!.body
+  const all = APP_KNOWLEDGE_SECTIONS.map((s) => s.body).join('\n')
+  const entries = APP_KNOWLEDGE_SECTIONS.flatMap((s) => s.body.split('\n'))
+  const rows = () => changelog.find((e) => e.version === '2.1.1-beta.3')!.changes.map((c) => c.description)
+
+  it("What's New for 2.1.1-beta.3: the new rows read exactly as written, and the partner row says typing first keeps it at home", () => {
+    for (const exact of [
+      "On a Linux or macOS SSH host, the session's setup now keeps your ~/.claude.json's owner and links when it marks the session folder as trusted: the file keeps its owner (a new one is created 0600, as Claude Code creates it), and a ~/.claude.json that is a link stays a link, with the file it points at updated. A ~/.claude.json it could not change in place (for example one that is read-only, has a second name (a hard link), or belongs to another user) is left as it is and noted in conductor-shim.log in the host's Claude folder (~/.claude; inside the container for a container session), and Claude Code then asks once whether you trust the folder (see Known issues in the Feature Guide).",
+      'At each start the app now makes the folder its session scripts run from private to your account. The scripts are the status line, the resume lists and the Codex hooks. If it cannot, sessions start without those extras and the app log says why (see Known issues in the Feature Guide).',
+      'The project now lives at github.com/nubbymong/ai-code-conductor, and old links to it redirect there. The app finds updates there on its own; if no update shows, restart the app once.',
+      "First-run setup no longer moves on as if a folder were set when it was not saved. If a folder is empty, is not a full path, or cannot be created or saved, the folder step stays open and says which folder, so you can choose another one.",
+    ]) expect(rows(), exact.slice(0, 60)).toContain(exact)
+    const partner = rows().find((d) => d.startsWith("The partner terminal of an SSH session now opens on the session's host"))!
+    expect(partner).toContain('as long as you have not typed anything in the partner before then (a password typed by hand counts), and in your home folder there otherwise')
+    const settings = rows().find((d) => d.startsWith('An SSH session now reads your ~/.claude/settings.json'))!
+    expect(settings).toContain('A file it cannot read as JSON, or could not change in place (for example one that is read-only, has a second name (a hard link), or on a Linux or macOS host belongs to another user), is left as it is')
+    expect(settings).toContain('on a Linux or macOS host it also keeps its permission bits and owner, and on a Windows host it takes the permissions of its folder (~/.claude)')
+    // The new rows sit with their areas: the trust flag row right after the
+    // settings row, the scripts folder row after the scripts rows, and the
+    // new home row just before the update check row, which stays last.
+    const at = (start: string) => rows().findIndex((d) => d.startsWith(start))
+    expect(at('On a Linux or macOS SSH host, the session\'s setup now keeps your ~/.claude.json')).toBe(at('An SSH session now reads your ~/.claude/settings.json') + 1)
+    expect(at('At each start the app now makes the folder its session scripts run from private')).toBe(at("The app's status line, the resume list and Codex's hooks now start only") + 1)
+    expect(at('The project now lives at github.com/nubbymong/ai-code-conductor')).toBe(rows().length - 2)
+    for (const d of rows()) expect(/^[\x20-\x7e]*$/.test(d), `non-ASCII: ${d.slice(0, 60)}`).toBe(true)
+  })
+
+  it('the local project hooks row keeps the home folder rule apart from where to put hooks for every session, and says writable by', () => {
+    const row = rows().find((d) => d.startsWith('While the HTTP Hooks Gateway switch is on, a session now adds to its settings file'))!
+    expect(row).toContain("No other file in a parent folder's .claude is added, as Claude Code does not read those either; put hooks meant for every session in the session folder's .claude or in ~/.claude/settings.json. Project hooks are never taken from your home folder or a folder above it.")
+    expect(row).toContain("writable by your own per-user group is fine, but not by a group other accounts share, such as macOS's staff group.")
+    expect(row).not.toMatch(/a folder above it: put hooks/)
+    expect(body('settings-scope')).toContain('see the known issues about project hooks if one does not run in an app session.')
+  })
+
+  it("conductor-shim.log is placed inside the container for a container session, wherever the host's Claude folder is named", () => {
+    const texts = [...APP_KNOWLEDGE_SECTIONS.map((s) => s.body), ...rows()]
+    let named = 0
+    for (const t of texts) {
+      let i = t.indexOf("conductor-shim.log in the host's Claude folder (~/.claude")
+      while (i >= 0) {
+        named++
+        const after = t.slice(i + "conductor-shim.log in the host's Claude folder (~/.claude".length)
+        expect(after.startsWith('; inside the container for a container session)'), t.slice(i, i + 120)).toBe(true)
+        i = t.indexOf("conductor-shim.log in the host's Claude folder (~/.claude", i + 1)
+      }
+    }
+    expect(named).toBeGreaterThanOrEqual(9)
+  })
+
+  it('the remote settings entry says which files the setup leaves as they are, and why', () => {
+    const r = body('remote-sessions')
+    expect(r).toContain('Both changes are made only when you could change the file in place: it must open for writing (not read-only, not append-only, and writing not denied to you, for example by a Windows ACL), must have no second name (a hard link), and on a Linux or macOS host must belong to the user the session runs as.')
+    expect(r).toContain('On a Linux or macOS host it also marks the session\'s folder as trusted in .claude.json, so Claude Code does not ask about it; only that flag is added, and a missing .claude.json is created 0600, as Claude Code creates it.')
+    expect(r).toContain('each with the reason (for example readonly, hardlink, owner or group). The session still starts.')
+  })
+
+  it('the folder step is described for every platform, with no example path that could be one machine\'s', () => {
+    expect(body('providers')).toContain("Each must be a full path, for example one with a drive letter or a network share (\\\\server\\share) on Windows, or one starting with / on macOS and Linux.")
+    expect(body('providers')).toContain("Windows saves the folders in the registry; macOS and Linux save them in the app's settings file in your home folder.")
+    expect(body('providers')).toContain('Continue, the folder fields and Browse wait while the folders are being saved.')
+  })
+
+  it('the scripts folder known issues and the reviewer menu read as the app behaves', () => {
+    for (const exact of [
+      'Status line, resume list or Codex hooks missing when the resources folder is on a FAT drive or a network share that cannot keep file permissions. At each start the app makes the scripts folder inside your resources folder private to your account, and it runs session scripts only from there. A FAT or exFAT drive cannot keep those permissions, and some network shares cannot either. Then the app does not use its status line, the resume list or the Codex hooks, and sessions start without them. The app log has a line starting "[scripts] the scripts folder in the resources folder could not be made this user\'s alone". If the reason in that line is a time limit rather than the drive, restart the app first: the check runs again at each start. Workaround: choose a resources folder on a local drive that keeps file permissions (NTFS on Windows), for example one inside your user folder, then restart the app.',
+      'A tab restored at start opened without the status line or the resume list. At each start the app checks its scripts folder before sessions use it, and a session that starts meanwhile waits up to 5 seconds for that check. On a slow or busy computer the check can take longer. A tab restored at start then runs that session without the app\'s status line, the resume list or the Codex hooks, and the app log has a line saying the scripts folder is still being checked. Workaround: restart the tab once the app has finished starting. If restarting the tab does not bring them back, restart the app.',
+      "A resources folder chosen in the app's first-run setup gets its scripts folder checked, and the app's session scripts put in it, only at the app's next start. Until then, new sessions start without the app's status line, the resume list and the Codex hooks. Workaround: once setup is done, quit the app and start it again.",
+    ]) expect(entries, exact.slice(0, 60)).toContain(exact)
+    expect(body('code-review')).toContain("Choose it with Make reviewer in the account's menu, for a Codex or a Claude account, in Settings, Accounts.")
+    expect(all).not.toMatch(/on a Claude account's row/)
+  })
+
+  it('the SSH settings and config files the app leaves as they are, the npm launcher resume through a link to a share, and a slow share at start, each with its workaround', () => {
+    for (const exact of [
+      "If your user settings on an SSH host (~/.claude/settings.json) still hold entries an older version of the app put there (a statusLine that runs conductor-ssh-statusline.js, or conductor or conductor-vision MCP server entries), and the app could not change the file in place (for example it is read-only, has a second name (a hard link), or belongs to another user), the app leaves those entries in place and notes why in conductor-shim.log in the host's Claude folder (~/.claude; inside the container for a container session). Workaround: remove those entries from the file yourself.",
+      "On a Linux or macOS SSH host where the app could not change Claude Code's config file (~/.claude.json) in place (for example it is read-only, has a second name (a hard link), or belongs to another user), the app leaves that file as it is and does not mark the session's folder as trusted; a claude-json-left line in conductor-shim.log in the host's Claude folder (~/.claude; inside the container for a container session) says why. Claude Code then asks once whether you trust the folder: answer yes. If two sessions to that folder start at the same time, answer in one of them first, then reconnect the other.",
+      'On Windows, when the app manages your Claude accounts (see Multiple Claude accounts) and Claude Code is installed through npm (claude.cmd) or as claude.bat, the resume picker cannot resume a conversation from a worktree reached through a folder link (a symbolic link or a junction) to a network share: it starts nothing and says it cannot start Claude Code in a network folder through its npm launcher. Workaround: start the session again and begin a new conversation, reach the worktree through a mapped drive letter rather than a folder link, or install the native Claude Code.',
+    ]) expect(entries, exact.slice(0, 60)).toContain(exact)
+    expect(body('known-issues')).toContain('A worktree folder on a network share that answers too slowly while the session starts can be treated the same way: resuming there is refused and the session says to start it again, which works once the share answers in time.')
+  })
+
+  it('the SSH partner: typing in it before its first prompt keeps it at home, a hand-typed password included, as its own known issue with the workaround', () => {
+    const partnerHomeIssue = "An SSH session's partner shell opens in your home folder there, not in the config's remote folder, whenever you type the password into it by hand: the partner types its folder line only before you type anything in it, and a password typed by hand counts as typing. Workaround: save the password in the SSH config, so the app types it for you, or type cd and the folder in the partner yourself."
+    expect(entries).toContain(partnerHomeIssue)
+    const k = body('known-issues')
+    expect(k.indexOf(partnerHomeIssue)).toBeGreaterThan(k.indexOf("An SSH session's partner shell is a connection of its own"))
+    expect(k).toContain('The terminal\'s own automatic replies to the host do not count as typing.')
+    expect(all).not.toMatch(/when you type the password by hand, either taking more than about 13 seconds or on a host that shows nothing/)
+    expect(all).not.toMatch(/and when you type anything in the partner before its first prompt is recognised/)
+    expect(all).not.toMatch(/With such a bare prompt after a saved password/)
+  })
+
+  // A share that keeps file permissions works as a resources folder, so the
+  // scripts folder entry and the README say only that a share which cannot
+  // keep them fails, as the share entries in Known issues already do.
+  it('a resources folder on a network share is said to fail only when the share cannot keep file permissions', () => {
+    const root = path.resolve(__dirname, '..', '..', '..')
+    const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
+    expect(readme).toContain('| **Resources folder** | On a drive that keeps file permissions (NTFS on Windows), not a FAT or exFAT drive or a network share that does not keep them; otherwise the app\'s status line, the resume list and the Codex hooks are not used |')
+    expect(readme).not.toMatch(/not a network share or a FAT or exFAT drive/)
+    expect(all).not.toMatch(/A network share, or a FAT or exFAT drive, cannot keep those permissions\./)
+    expect(all).not.toMatch(/missing when the resources folder is on a network share or a FAT drive\./)
+    expect(body('known-issues')).toContain('A resources folder on a network share that cannot be made owner-only is refused the same way.')
+  })
+
+  // A Claude account's Make reviewer is a menu item, as a Codex account's is
+  // (AccountsPanel's RowMenu), so the User Guide says so too.
+  it('the User Guide names Make reviewer in the account\'s menu for both providers, as the Feature Guide does', () => {
+    const root = path.resolve(__dirname, '..', '..', '..')
+    const guide = fs.readFileSync(path.join(root, 'docs', 'USER_GUIDE.md'), 'utf8').replace(/\s+/g, ' ')
+    expect(guide).toContain("Set it with **Make reviewer** in the account's menu, for a Codex or a Claude account.")
+    expect(guide).toContain("so *This computer's Codex* (the row kept for a 2.1.1-beta.2 **Use this sign-in**) never does.")
+    expect(guide).not.toMatch(/on a Claude account's row/)
+    expect(guide).not.toMatch(/this computer's own Codex sign-in never does/)
+  })
+
+  // The rewritten file's group is the one a new file in that folder gets,
+  // which need not be your own; and the attention hook's log is in the
+  // container for a container session, as every other conductor-shim.log
+  // mention says.
+  it('the remote settings entry names the group a rewritten file gets, and the attention log place for a container session', () => {
+    const r = body('remote-sessions')
+    expect(r).toContain("a file in a group you are not in is written in the group a new file in that folder gets when the file's own group has the same access to it as everyone else, and is left as it is when it has more or less (0640, 0664 or 0604, for example).")
+    expect(r).toContain('writes one claude-json-mode line in conductor-shim.log with the mode the file had')
+    expect(r).not.toMatch(/takes your own group when that group has no more access/)
+    expect(r).toContain('The hook writes a trace line to conductor-shim.log in that same folder on the remote host (inside the container for a container session) when it cannot reach the terminal')
+  })
+})
+
+// The Codex reviewer is sent the change itself and runs no commands; the
+// ~/.claude.json owner-only row joins the trust flag row; the Combined Mode
+// card carries the partner's typing-first rule, as the tip and Known issues do.
+describe('surfaces for the Codex review fix and the last 2.1.1-beta.3 text', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((s) => s.id === id)!.body
+  const rows = () => changelog.find((e) => e.version === '2.1.1-beta.3')!.changes.map((c) => c.description)
+  const at = (start: string) => rows().findIndex((d) => d.startsWith(start))
+
+  it("What's New for 2.1.1-beta.3: the Codex review row and the ~/.claude.json owner-only row read exactly as written, the latter right after the trust flag row", () => {
+    expect(rows()).toContain('Codex code reviews now receive the change itself and run no commands, so they work on Windows too, where a Codex review could not look at the change and asked for it instead. Uncommitted changes to tracked files and a range arrive as the git diff, as they do for a Claude review, and files you name arrive with their content. A change larger than 512 KB is refused, never cut.')
+    const ownerOnly = "An SSH session's setup now keeps ~/.claude.json on a Linux or macOS host readable only by you, and sets it back to that if its permissions were widened."
+    expect(rows().find((d) => d.startsWith(ownerOnly))).toBe(`${ownerOnly} On every connect, permissions on that file for its group or for other users are removed and yours are kept (0644 becomes 0600), with a line in conductor-shim.log in the host's Claude folder (~/.claude; inside the container for a container session). A ~/.claude.json with a second name (a hard link), or that belongs to another user, is left as it is.`)
+    expect(at(ownerOnly)).toBe(at("On a Linux or macOS SSH host, the session's setup now keeps your ~/.claude.json") + 1)
+    expect(rows().join('\n')).not.toContain('the file keeps its permission bits and owner')
+  })
+
+  it('the Feature Guide says what each reviewer is sent and that the Codex reviewer runs no commands', () => {
+    const cr = body('code-review')
+    expect(cr).toContain('The app sends the reviewer the change itself: the git diff of the uncommitted changes to tracked files, or of a range you name. For files you name, the Codex reviewer is sent their content, and the Claude reviewer reads them in the project. A change larger than 512 KB is refused, never cut.')
+    expect(cr).toContain("The Codex reviewer runs no commands and cannot read or change files: it reviews what it is sent, plus the project's AGENTS.md if there is one, which Codex loads by itself. The Claude reviewer can also read other files in the project.")
+    expect(cr).not.toMatch(/Codex reviewer (reads|runs git)/)
+  })
+
+  it("the Combined Mode card says the partner opens in the remote folder only if you have not typed in it first", () => {
+    const card = JSON.stringify(trainingSteps.find((st) => st.id === 'combined-mode')!)
+    expect(card).toContain("in the config's remote folder once it recognises the host's shell prompt, if you have not typed in it first")
+  })
+})
+
+// VM row 4.10 (2.1.1-beta.3 qualification): on Windows, a data or resources
+// folder whose full path holds a character outside plain English letters,
+// digits and ordinary punctuation is not found at start, and the app starts
+// without what it holds. Until the fix ships, the known issue says who is hit
+// (the default folders too, under a user folder with such a name), what they
+// see, and the way out, in the words the app and the installer show. The
+// entry is pinned whole, so any change to it is made here on purpose too.
+describe('known issue: a Windows data or resources folder path outside plain English letters (VM row 4.10)', () => {
+  const root = path.resolve(__dirname, '..', '..', '..')
+  const read = (...p: string[]) => fs.readFileSync(path.join(root, ...p), 'utf8')
+  const k = () => APP_KNOWLEDGE_SECTIONS.find((s) => s.id === 'known-issues')!.body
+  const ENTRY = "On Windows, the app does not find its data or resources folder when the full path of that folder holds a character other than a plain English letter, a digit or ordinary punctuation, such as an accented letter (an e with an acute accent, for example), a curly apostrophe, or Chinese or Japanese characters. That includes the default folders, which the installer puts inside your Windows user folder, when the name of that folder (usually your Windows user name) holds such a character. macOS and Linux are not affected. It happens at every start. The app does not ask for its folders again, but your saved configs, accounts and sessions can look missing: the app either says Your configuration could not be loaded or starts as if it were new, and it can show the Claude CLI Setup screen and the onboarding pages that follow setup on a new install. Everything in the folder you chose is still there, and setting the app up again while it starts this way does not bring it back. Workaround: note the version that Settings, About shows, then close the app and make a new folder whose full path holds only plain English letters, digits, spaces, dots, hyphens and underscores, on this computer's own disk (not a USB drive, a FAT or exFAT drive or a network share). If the name of your Windows user folder holds none of those other characters, a folder inside it will do; if it holds one, make the new folder outside it, for example a folder named AICC-data at the top of your C: drive. Move what is inside the affected folder into the new one (with the default folders, what is inside the data folder, which holds the resources folder); the app does not move anything for you. Then download the installer for that version, or a newer one, from the Releases page on GitHub (the release marked Latest there can be older than yours), run it, and on its Data folder and Resources folder pages choose the folders in their new place. This is being fixed in a later release."
+  // The paragraph as Known issues and workarounds holds it, found by its
+  // opening words, so the cases after the first read the text the app ships
+  // and not ENTRY: they still hold if the exact match is ever loosened.
+  const para = () => {
+    const p = k().split('\n').find((x) => x.startsWith('On Windows, the app does not find its data or resources folder '))
+    expect(p, 'the entry is in Known issues and workarounds').toBeDefined()
+    return p!
+  }
+  // The body of one NSIS Function, up to its FunctionEnd.
+  const nsisFunction = (nsh: string, name: string) => {
+    const from = nsh.indexOf(`\nFunction ${name}\n`)
+    expect(from, `Function ${name} is in the installer script`).toBeGreaterThan(-1)
+    return nsh.slice(from, nsh.indexOf('\nFunctionEnd', from))
+  }
+
+  it('is one known-issues paragraph, read exactly as written, in plain ASCII, right after the entry for a folder setup cannot save', () => {
+    const paras = k().split('\n')
+    const at = paras.indexOf(ENTRY)
+    expect(at, 'the entry is in Known issues and workarounds').toBeGreaterThan(-1)
+    expect(paras[at - 1]).toBe('')
+    expect(paras[at - 2]).toMatch(/^Setup can say a folder could not be saved\./)
+    expect(ENTRY).toMatch(/^[\x20-\x7E]+$/)
+  })
+
+  it('names the notice, the setup screen, the version to download and the installer pages by the words the app and the installer show', () => {
+    const p = para()
+    expect(p).toContain('the app either says Your configuration could not be loaded or starts as if it were new')
+    expect(read('src', 'renderer', 'components', 'ConfigLoadFailedNotice.tsx')).toContain('>Your configuration could not be loaded<')
+    expect(p).toContain('it can show the Claude CLI Setup screen')
+    expect(read('src', 'renderer', 'components', 'SetupDialog.tsx')).toContain('title="Claude CLI Setup"')
+    const settings = read('src', 'renderer', 'components', 'SettingsPage.tsx')
+    expect(settings).toContain("{ id: 'about', label: 'About' }")
+    expect(settings).toContain('<span className="text-sm text-text">Version</span>')
+    const nsh = read('build', 'installer.nsh').replace(/\r\n/g, '\n')
+    expect(nsh).toContain('MUI_HEADER_TEXT "Data folder"')
+    expect(nsh).toContain('MUI_HEADER_TEXT "Resources folder"')
+    // Both pages show on every run of the installer by hand, an install over
+    // the same version included: neither page skips itself.
+    expect(nsh).toContain('\nPage custom DataDirPage DataDirPageLeave\n')
+    expect(nsh).toContain('\nPage custom ResourcesDirPage ResourcesDirPageLeave\n')
+    expect(nsisFunction(nsh, 'DataDirPage')).not.toMatch(/\bAbort\b/)
+    expect(nsisFunction(nsh, 'ResourcesDirPage')).not.toMatch(/\bAbort\b/)
+    // The installer's fresh-install defaults sit in the user's own local app
+    // data folder, which is why the default folders are named as affected.
+    expect(nsh).toContain('StrCpy $1 "$LOCALAPPDATA\\AI Code Conductor"')
+    expect(nsh).toContain('StrCpy $1 "$LOCALAPPDATA\\AI Code Conductor\\resources"')
+  })
+
+  // What a start into an empty folder can show: the setup screen for Claude
+  // Code, then the onboarding pages (the guide's own name for them). Not the
+  // setup's first page (its folder step, which does not come back), and not
+  // the Welcome tour, which opens only when asked for.
+  it('says the onboarding pages can show, by the name the guide gives them, and not a welcome page or the Welcome tour', () => {
+    const p = para()
+    expect(p).toContain('it can show the Claude CLI Setup screen and the onboarding pages that follow setup on a new install')
+    expect(p).not.toMatch(/welcome (page|tour)/i)
+    expect(APP_KNOWLEDGE_SECTIONS.find((s) => s.id === 'troubleshooting')!.body).toContain('(the onboarding pages, ')
+  })
+
+  // The workaround closes the app, so the version is read from it first.
+  it('has the version read in Settings, About before the app is closed, and the installer downloaded for that version', () => {
+    const p = para()
+    const w = p.slice(p.indexOf('Workaround: '))
+    expect(w).toMatch(/^Workaround: note the version that Settings, About shows, then close the app and make a new folder /)
+    expect(w).toContain('Then download the installer for that version, or a newer one, from the Releases page on GitHub')
+    expect(w.match(/Settings, About/g)).toHaveLength(1)
+  })
+
+  // Who is hit is decided by the name of the user FOLDER, and the workaround
+  // decides where the new folder goes by that same name: a Windows user
+  // renamed later keeps the old folder name, and with a Microsoft sign-in the
+  // folder is named from the email address, so the two names can differ.
+  it('decides where the new folder goes by the name of the Windows user folder, the same name that sets the issue off', () => {
+    const p = para()
+    expect(p).toContain('when the name of that folder (usually your Windows user name) holds such a character')
+    expect(p).toContain('If the name of your Windows user folder holds none of those other characters, a folder inside it will do; if it holds one, make the new folder outside it, ')
+    expect(p).not.toMatch(/If your Windows user name holds/)
+  })
+
+  it("puts the new folder on this computer's own disk, as the entries for the scripts folder and the sign-in folders need", () => {
+    expect(para()).toContain("on this computer's own disk (not a USB drive, a FAT or exFAT drive or a network share)")
+    expect(k()).toContain('A FAT or exFAT drive cannot keep those permissions, and some network shares cannot either.')
+    expect(k()).toContain('A resources folder on a network share that cannot be made owner-only is refused the same way.')
+  })
+})
+
+// S18 (2026-10-12): GPT-6-Sol and GPT-6-Luna join the Codex model picker for
+// Codex 0.156.1, and GPT-5.5 retires from Codex with ChatGPT sign-in on
+// October 14, 2026 (OpenAI's Codex models page, read 2026-10-12). The What's New
+// row and the known issue are pinned whole. The models and the picker choice
+// they name must be ones the Codex picker offers under those labels, so this
+// text needs the registry entries that add the two models.
+describe('surfaces for GPT-6-Sol and GPT-6-Luna, and the GPT-5.5 retirement', () => {
+  const beta3 = () => changelog.find((e) => e.version === '2.1.1-beta.3')!.changes
+  const rows = () => beta3().map((c) => c.description)
+  const ROW = 'GPT-6-Sol and GPT-6-Luna are in the Codex model picker. Codex lists both from version 0.156.1, the newest Codex this release is tested with. OpenAI names them as the replacements for GPT-5.5, which retires from Codex with ChatGPT sign-in on October 14, 2026 (see Known issues in the Feature Guide).'
+  const ENTRY = 'GPT-5.5 retires from Codex with ChatGPT sign-in on October 14, 2026, OpenAI says; the retirement does not apply to the OpenAI API. Codex itself still lists GPT-5.5, so it stays in the model picker, but from that date a Codex config set to GPT-5.5 on an account signed in with ChatGPT needs another model. Workaround: edit the config and pick a model your account offers: GPT-6-Sol, which OpenAI names as the replacement on Plus, Pro, Business, Enterprise and Edu plans when available, or "Default: follows Codex".'
+
+  it("What's New for 2.1.1-beta.3 has the row, read exactly as written, in plain ASCII, right after the Codex review row", () => {
+    expect(rows()).toContain(ROW)
+    expect(ROW).toMatch(/^[\x20-\x7E]+$/)
+    expect(rows().indexOf(ROW)).toBe(rows().findIndex((d) => d.startsWith('Codex code reviews now receive the change itself')) + 1)
+    expect(beta3().find((c) => c.description === ROW)!.type).toBe('improvement')
+  })
+
+  it('Known issues has the GPT-5.5 retirement, read exactly as written, in plain ASCII, after the Codex over SSH entry', () => {
+    const paras = APP_KNOWLEDGE_SECTIONS.find((s) => s.id === 'known-issues')!.body.split('\n')
+    const at = paras.indexOf(ENTRY)
+    expect(at, 'the entry is in Known issues and workarounds').toBeGreaterThan(-1)
+    expect(ENTRY).toMatch(/^[\x20-\x7E]+$/)
+    expect(paras[at - 1]).toBe('')
+    expect(paras[at - 2]).toMatch(/^Codex does not run over SSH in this release\./)
+  })
+
+  it('names models and a choice the Codex picker offers, under the labels it shows, GPT-5.5 still among them', () => {
+    const labels = codexModelOptions(registryJson as unknown as ModelRegistry).map((o) => o.label)
+    for (const l of ['GPT-6-Sol', 'GPT-6-Luna', 'GPT-5.5', 'Default: follows Codex']) expect(labels, l).toContain(l)
+  })
+
+  // Lane review (MINOR): OpenAI's page names GPT-6-Sol for Plus, Pro, Business,
+  // Enterprise and Edu "when available", and GPT-6-Luna for Free and Go only
+  // "in the desktop app when available". The known issue says no more than the
+  // page: Sol keeps its qualifier, and Luna is not offered as a pick for the
+  // Codex this app runs.
+  it('the known issue keeps the page\'s "when available" on GPT-6-Sol and does not offer GPT-6-Luna, which the page names only for its desktop app', () => {
+    const para = APP_KNOWLEDGE_SECTIONS.find((s) => s.id === 'known-issues')!.body.split('\n').find((p) => p.startsWith('GPT-5.5 retires from Codex'))!
+    expect(para).toContain('GPT-6-Sol, which OpenAI names as the replacement on Plus, Pro, Business, Enterprise and Edu plans when available')
+    expect(para).not.toContain('GPT-6-Luna')
+    expect(para).toContain('pick a model your account offers')
   })
 })

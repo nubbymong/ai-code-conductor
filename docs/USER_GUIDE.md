@@ -15,7 +15,12 @@ next to your install see [`dev-alongside-prod.md`](./dev-alongside-prod.md).
    **Check again**; or choose **Use Codex only** if you only use Codex. The
    screens where you choose CCC's folders and install and set up Claude Code
    have **Exit**, which closes the window (and quits CCC on Windows and
-   Linux); the pages after them do not.
+   Linux). These screens and the pages after them (the onboarding pages, the
+   release notes page, and the one-time pages shown after an upgrade, such as
+   the **Do you use Codex?** question, the **Multi Spawn** page and the Codex
+   introduction) all have the window's own minimize, maximize and close at the
+   top right on Windows and Linux, and the bar along their top moves the
+   window; on a Mac the window's usual buttons stay at the top left.
 2. A fresh install asks **Which assistants will you use?**: Claude Code, Codex,
    or both. Choosing Codex adds a **Set up Codex** page (see
    [Installing or updating Codex](#installing-or-updating-codex) and
@@ -84,8 +89,11 @@ things make sure that is the account the session actually signs in as:
   before the session starts, and **if they carry one of those settings the
   session is refused** — in the terminal, naming the file and the key (never a
   value). When a session resumes a conversation that ran in another folder,
-  that folder is checked too, and so is every worktree the resume picker can
-  offer; the refusal says which one. On Linux and
+  that folder is checked too. Each other worktree the resume picker can offer
+  is checked on its own: the picker will not resume a conversation in one
+  whose settings would redirect the account or that could not be checked (it
+  says so if you pick one), the session itself still starts, and the app log
+  names the folder and why. On Linux and
   macOS, Claude Code also reads `settings.local.json` from the root of the git
   checkout you are in (the main checkout, for a linked worktree), so that file
   is checked as well. CCC never edits a project's files, and it has no way to
@@ -127,9 +135,9 @@ row per provider:
 - once you have said you use Codex (see below) and a Codex account you added
   in CCC is signed in, **Show the Codex
   introduction**, which replays the five-page Hello Codex introduction (also
-  on the Codex card in the Feature Guide, under Integrations). The Codex
-  sign-in already on this computer does not count: with only that one, Hello
-  Codex and its replay stay hidden.
+  on the Codex card in the Feature Guide, under Integrations). An account
+  2.1.1-beta.2 registered for the Codex sign-in already on this computer does
+  not count: with only that one, Hello Codex and its replay stay hidden.
 
 A fresh install asks **Which assistants will you use?** during setup. You can
 change the answer at any time on the Providers card.
@@ -140,9 +148,14 @@ don't use Codex**. Codex now has accounts of its own, so nothing carries over
 from your earlier Codex setting: everyone who updates answers again, and until
 you answer, Codex is *not set up* and nothing of it starts (the Providers card
 says so, and a Codex config says *Codex is not set up yet*). **Yes** turns Codex
-on and opens the **Set up Codex** page, where you add a Codex account, or choose
-**Use this sign-in** for the Codex sign-in already on this computer; that
-sign-in is used only after you choose it. **No** turns Codex off; you can set it
+on and opens the **Set up Codex** page, where you sign in to a Codex account in
+CCC. Codex now signs in inside CCC's own folder for each account, so a 2.1.0
+Codex user signs in once more. The Codex CLI's own sign-in in `~/.codex` is left
+as it is, and your earlier Codex conversations stay there, for the Codex CLI to
+resume; CCC does not resume them. To pick one up, open a terminal in its
+project folder and run `codex resume`, which offers the Codex CLI's own
+earlier conversations; it runs on the Codex CLI's own sign-in, not on an
+account in CCC. **No** turns Codex off; you can set it
 up later in Settings → Accounts. With Claude Code off, **No** cannot be chosen,
 because one assistant always stays on. Your Claude Code setting is not
 changed. The old Settings Codex tab is gone: its switch and install commands
@@ -182,8 +195,9 @@ for Codex and says why.
   colour, or choose **The same person as an existing account**, so that, for
   example, your Work Claude account and your Work Codex account share one name
   and colour.
-- The Codex sign-in already on this computer always keeps an identity of its
-  own, because CCC cannot tell whose it is.
+- An account 2.1.1-beta.2 registered for the Codex sign-in already on this
+  computer always keeps an identity of its own, because CCC cannot tell whose
+  it is.
 - To change an identity later, click the round chip at the left of any account
   row in Settings, Accounts, Claude or Codex. Its editor holds the **Name**,
   the **Colour** and the **Group**, and **Link another account** ties the
@@ -211,40 +225,58 @@ Codex section of Settings → Accounts, or on the Set up Codex page):
   to Codex, and CCC never stores it. Then name the account.
 - The menu on each account row has **Make default** (new Codex sessions use it
   unless a config picks another account), **Make reviewer** (code reviews use
-  it; with none set, reviews use the default), **Sign in again**, **Check
+  it; with none set, reviews use the default), **Sign in again** (not on
+  *This computer's Codex*, the row kept for a 2.1.1-beta.2 **Use this
+  sign-in**; see below), **Check
   sign-in**, **Sign out**, **Make inactive** or **Make active**, and
   **Archive**. Inactive and archived accounts are not offered at launch.
-  Archived accounts are listed under **Archived**, each with **Restore**.
+  Archived accounts are listed under **Archived**, each with **Restore**,
+  except *This computer's Codex* (see below).
 - A setup you started and did not finish is listed under *Unfinished setups*,
   with **Resume** and **Discard**.
 
 **This computer's own sign-in** is the one the Codex CLI uses outside CCC:
 `~/.codex`, or the folder `CODEX_HOME` pointed at when CCC started.
 
-- CCC never takes this sign-in in on its own. The Set up Codex page asks Codex
-  whether it is signed in, without taking it in, so the page says it is only
-  when it is. CCC uses it only when you choose to: **Use this sign-in** on the
-  Set up Codex page, or **Use this computer's Codex sign-in** in the Codex
-  section of Settings → Accounts
-  (offered once Codex is on; while you have not said whether you use Codex,
-  that section shows **Yes, I use Codex**, which only records your answer).
-  (It does read the conversation files Codex writes there for Tokenomics; see
-  [PRIVACY.md](../PRIVACY.md).) Choosing it asks Codex whether that folder is
-  signed in, and only if it is, lists it as *This computer's Codex*, with
-  the folder it checked, such as *(~/.codex)*. If Codex could not answer, the button becomes **Check again**;
-  if the folder is signed out, sign in there first (see below) and choose it
-  again.
+- CCC does not use it for sign-in. Since 2.1.1-beta.3 a Codex account is
+  always one you add in CCC, as a Claude account is: the Set up Codex page
+  and Settings, Accounts offer only **Add Codex account**. (CCC does read the
+  conversation files Codex writes there for Tokenomics; see
+  [PRIVACY.md](../PRIVACY.md).)
+- Only 2.1.1-beta.2 offered **Use this sign-in**. If you chose it, that
+  account stays as *This computer's Codex*, with the folder it checked, such
+  as *(~/.codex)*, and keeps working as described below. Its row says it is
+  being retired. To move off it: choose **Add Codex account**, choose **Make
+  default** (and **Make reviewer**) on the new account, move each open
+  session on it with **Switch account** (the conversation comes along),
+  change the account in each saved config that names it (or pick the new
+  account in the confirmation when that config next starts), then choose **Make
+  inactive** and **Archive** on *This computer's Codex*. Archiving it is
+  final: it has no **Restore**, since CCC no longer uses that sign-in.
+  Archiving only forgets it in CCC: `~/.codex` stays signed in for the Codex
+  CLI. Its menu lists **Make inactive** and **Archive** first; **Sign Codex
+  out on this computer...**, at the end, signs the Codex CLI out everywhere
+  on this computer, so do not choose it to move off the sign-in.
+- At a start after updating to 2.1.1-beta.3, CCC shows one page, once:
+  *Replace this sign-in with a Codex account*, with **Add a Codex account**
+  and **Not now**. It signs nothing out. When a session or saved config on
+  that sign-in next starts, the confirmation lists your other Codex
+  accounts; **Use this account** starts it there, and a saved config that
+  used that sign-in moves to it too. A restored tab moved that way starts
+  without its earlier conversation (the confirmation says so): to keep it,
+  choose **Launch**, then use **Switch account** on the running session,
+  which carries the conversation over. Do that before archiving the
+  sign-in.
 - Because CCC did not create it, the row reads **Confirm each launch** and
   **Cannot run reviews**. Every launch on it asks you to confirm, either with
   the tick in the session dialog or just before the session starts. A code
   review, which nobody is there to confirm, never runs on it.
-- CCC never signs in to it on its own. If it is signed out, run `codex login`
-  in a terminal, then **Check sign-in** on its row, or choose **Sign in again**
-  in its menu: CCC warns first that this signs out every app that uses that
-  sign-in, and that it stays signed out if the new sign-in does not finish.
+- CCC never signs in to it. If it is signed out, run `codex login` in a
+  terminal, then **Check sign-in** on its row. **Sign in again** is not
+  offered on it.
 - Signing out of it or archiving it asks first: signing out also signs Codex out
   for everything else on this computer that uses it, while archiving only
-  forgets it in CCC.
+  forgets it in CCC, and the archive confirmation says archiving is final.
 
 To start a Codex session, open **New saved config** (the sidebar's + New, then
 Config), choose the **Codex** card and an account. The default account is
@@ -315,8 +347,9 @@ signed in a different way than before cannot be picked until you confirm it
   reviews on the account until you press **This is still my account**, which
   checks it again and records the new sign-in; that is the only way to clear
   it.
-- A signed-out *This computer's Codex*: run `codex login` in a terminal, then
-  **Check sign-in**.
+- A signed-out *This computer's Codex* (only there if you chose **Use this
+  sign-in** in 2.1.1-beta.2): run `codex login` in a terminal, then **Check
+  sign-in**, or move to a Codex account you add, as described above.
 
 ### chatgpt.com in the app
 
@@ -386,7 +419,11 @@ Linux), then `npm install -g @anthropic-ai/claude-code`.
 - The line ends its terminal when the command ends, also when it fails (and,
   on Windows, when you press Ctrl+C), and CCC checks again then: once the tool
   is found, setup carries on. **Check again** works while the command runs
-  too. On Windows each check first reads the PATH Windows now gives new
+  too. If that check finds the tool while the command still runs, CCC leaves
+  the command to finish, says so, and carries on when it ends; on macOS and
+  Linux, **Stop it and continue** ends a terminal left at a prompt. On
+  Windows, **Back** stops a running install. On Windows each check first
+  reads the PATH Windows now gives new
   programs, so a tool installed while CCC was open is found without
   restarting it.
 - Anthropic's installer puts Claude Code in `%USERPROFILE%\.local\bin` on
@@ -395,12 +432,32 @@ Linux), then `npm install -g @anthropic-ai/claude-code`.
   CCC says so. On Windows, **Add it to PATH for me** adds that one folder to
   the end of your PATH for your Windows account (nothing else in it changes)
   and checks again; **Not now** leaves PATH as it is and says how to add the
-  folder yourself. On macOS and Linux CCC shows the line to add to the shell
-  file your login shell reads (`~/.zprofile` for zsh), with **Copy**; it
-  never edits that file. Codex gets the same on macOS and Linux. CCC advises
-  quitting and starting it again only when that would help.
+  folder yourself. On macOS and Linux CCC shows a command to run once in a
+  terminal, with **Copy**, which adds the folder to the shell file your login
+  shell reads (`~/.zprofile` for zsh); CCC itself never edits that file.
+  Codex gets the same on macOS and Linux. CCC advises quitting and starting
+  it again only when that would help (on Windows: the tool is in a folder
+  your PATH names that CCC could not pick up; or, as a note beside the
+  not-found message, your PATH names a folder through a variable set after
+  CCC started).
+- On Windows, when Claude Code is in none of the folders PATH names, CCC also
+  asks Windows PowerShell, with your profile, where it is (for example when
+  fnm puts Node.js and Claude Code on PATH only in your profile). It looks
+  only in the folders of that PATH that start with a drive letter, never a
+  network path that starts with two backslashes; a drive letter mapped to a
+  network share counts as a drive. It asks once: after you change your
+  profile, restart CCC (or press **Check again** on the Claude Code row in
+  Settings, Accounts when it shows one). A profile that takes more than
+  about 10 seconds to load is not waited for; add the folder that holds
+  Claude Code to your PATH in Windows settings instead, then restart CCC.
 - An npm command needs Node.js. When CCC does not find Node.js, the npm
   command says so, and only **Copy** works for it.
+- Node.js is optional for running sessions. Without it a new session starts
+  Claude Code or Codex directly, with no resume list, and a Claude Code
+  session has no status line; in a Claude Code session `/resume` still lists
+  earlier conversations. On Windows, after you install Node.js, restart CCC
+  before opening a new session (or press **Check again** on the Claude Code
+  row in Settings, Accounts when it shows one).
 - On Windows the npm commands run as `npm.cmd`. After a command you copied
   and ran yourself, press **Check again**.
 - When OpenAI's installer asks whether to start Codex now, answer N: CCC
@@ -416,10 +473,10 @@ Linux), then `npm install -g @anthropic-ai/claude-code`.
   of your open sessions, and it cannot ask for another review.
 - Reviews run on the reviewing provider's **reviewer** account, or on its
   **default** account when no reviewer is set. Set it with **Make reviewer**
-  (in a Codex account's menu, or the button on a Claude account's row). A
-  sign-in you confirm at each launch cannot review, so this computer's own
-  Codex sign-in never does. On macOS, Claude reviews use your normal Claude
-  sign-in.
+  in the account's menu, for a Codex or a Claude account. A sign-in you
+  confirm at each launch cannot review, so *This computer's Codex* (the row
+  kept for a 2.1.1-beta.2 **Use this sign-in**) never does. On macOS, Claude
+  reviews use your normal Claude sign-in.
 - Each direction has its own switch in **Settings → General → Built-in Tools →
   Code review**: *Codex review* (Claude sessions can ask Codex) and *Claude
   review* (Codex sessions can ask Claude). Each row names the account reviews
@@ -430,7 +487,9 @@ Linux), then `npm install -g @anthropic-ai/claude-code`.
 
 ## Known issues with Codex
 
-- **No Codex review while your only Codex sign-in is `~/.codex`.** That sign-in
+- **No Codex review while your only Codex sign-in is `~/.codex` (if you chose
+  Use this sign-in in 2.1.1-beta.2).** If you chose **Use this sign-in** in
+  2.1.1-beta.2, that sign-in
   is confirmed at each launch, so it never reviews, and Claude sessions are not
   offered Codex review. Add a Codex account in Settings → Accounts, and choose
   **Make reviewer** on it if `~/.codex` is still your default; Claude sessions
@@ -466,7 +525,8 @@ Linux), then `npm install -g @anthropic-ai/claude-code`.
   Auto starts Codex with no prompts, so it cannot ask before them. Use
   *Standard*, where Codex asks before each one, or *Unrestricted*.
 - **CCC copies its three canvas skills into your own Codex skills folder** for
-  the sign-in already on this computer (`~/.codex/skills`, or `skills` in the
+  an account 2.1.1-beta.2 registered for the sign-in already on this computer
+  (`~/.codex/skills`, or `skills` in the
   folder `CODEX_HOME` names), where Codex lists them for every session that
   uses that folder, started in CCC or not. CCC rewrites or removes only the skill
   folders it marked as its own, removes them when you turn Codex or the built-in

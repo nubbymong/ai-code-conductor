@@ -997,14 +997,99 @@ function getForwardedArgs() {
   return process.argv.slice(2)
 }
 
-// Resolve the claude command. On Windows: the first of CLAUDE_WINDOWS_NAMES in
-// the folders PATH names -- the native claude.exe in any of them, then
-// claude.cmd, then claude.bat, as the app's own lookup asks -- found in-process
-// (findOnPath), never through the where command or a shell, never in the
-// project folder, never the bare name; null when none is there, and the launch
-// says so. A claude.cmd and a claude.bat both start through the system cmd.exe
-// on the same line (buildSpawnTarget). Elsewhere the bare name, as before.
-function resolveClaudeCmd(platform = os.platform(), env = process.env, isFile = isFileOnDisk) {
+/** The variable the app's launch line names its Claude Code in when it starts
+ *  the picker (src/main/spawn-claude-command.ts CLAUDE_BIN_ENV): the program
+ *  the session would start itself, a pinned version's when the session has
+ *  one, so the picker starts the same one. */
+const CLAUDE_BIN_ENV = 'CCC_CLAUDE_BIN'
+/** The name Claude Code goes by off Windows, for a named path. */
+const POSIX_CLAUDE_NAMES = Object.freeze(['claude'])
+/** `name`'s one value in `env`, matched in either case on Windows; undefined
+ *  when it is unset or two spellings disagree. */
+function envValue(env, name, platform) {
+  const values = new Set()
+  for (const k of Object.keys(env || {})) {
+    const match = platform === 'win32' ? k.toUpperCase() === name : k === name
+    if (match && typeof env[k] === 'string') values.add(env[k])
+  }
+  return values.size === 1 ? [...values][0] : undefined
+}
+/** A path the picker takes as the Claude Code the app named on Windows: a
+ *  drive-absolute one (`C:\...`, either slash), never a share
+ *  (`\\server\share\...`) or a device path (`\\?\`, `\\.\`). This is the
+ *  drive-absolute part of the rule the app's own lookup applies to a Claude
+ *  Code path it is handed rather than finds in PATH's folders
+ *  (src/main/windows-programs.ts powerShellProfileAnswer, which this script
+ *  cannot import), not the whole of it: that rule also wants every step of
+ *  the path plain. Here the name, a control character and the file check
+ *  are tested beside it (forwardedClaudeCmd), and a claude.cmd or
+ *  claude.bat path cmd.exe would re-read is refused (buildSpawnTarget). */
+const DRIVE_ABSOLUTE_PIN_RE = /^[A-Za-z]:[\\/]/
+/** A path that starts with two slashes of either kind: a share or a device
+ *  path, which the picker never takes from the app (DRIVE_ABSOLUTE_PIN_RE),
+ *  and says so when it starts another file (forwardedClaudeNotice). */
+const SHARE_OR_DEVICE_PIN_RE = /^[\\/]{2}/
+/** The Claude Code the app's launch line named (CLAUDE_BIN_ENV), when the
+ *  picker may start it: on Windows a drive-absolute path, never a share or a
+ *  device path (DRIVE_ABSOLUTE_PIN_RE), to a file named claude.exe,
+ *  claude.cmd or claude.bat (CLAUDE_WINDOWS_NAMES); elsewhere an absolute
+ *  path to a file named claude; with no control character, and passing
+ *  `isFile` (elsewhere a file the user may run). Otherwise null: the picker
+ *  looks for Claude Code as it always has. A claude.cmd or claude.bat named
+ *  here starts by the same route and checks as one found in PATH's folders
+ *  (buildSpawnTarget). A pinned version whose folder holds only a claude.ps1
+ *  is not taken (no allowed name), so the picker starts the one in PATH's
+ *  folders: a known gap, as npm writes claude.cmd beside claude.ps1. */
+function forwardedClaudeCmd(env, platform, isFile) {
+  const value = envValue(env, CLAUDE_BIN_ENV, platform)
+  if (typeof value !== 'string' || value === '' || /\p{Cc}/u.test(value)) return null
+  if (platform === 'win32') {
+    if (!DRIVE_ABSOLUTE_PIN_RE.test(value) || !CLAUDE_WINDOWS_NAMES.includes(path.win32.basename(value).toLowerCase())) return null
+  } else if (!value.startsWith('/') || !POSIX_CLAUDE_NAMES.includes(path.posix.basename(value))) {
+    return null
+  }
+  try { return isFile(value) ? value : null } catch { return null }
+}
+
+/** Whether two Windows paths name one file as a PATH walk reads them: each
+ *  normalized (path.win32.normalize, so either slash and `.` or `..` steps
+ *  agree), each step read as Windows runs it (folderAsRun), and compared
+ *  ignoring case. A device path (`\\?\`, `\\.\`) never matches a path found
+ *  in PATH's folders, which is never spelled that way. */
+function sameWindowsPath(a, b) {
+  const canon = (p) => folderAsRun(path.win32.normalize(p)).toLowerCase()
+  return canon(a) === canon(b)
+}
+
+/** What the picker prints, on Windows, when the app named a Claude Code on a
+ *  share or a device path (CLAUDE_BIN_ENV, SHARE_OR_DEVICE_PIN_RE), which it
+ *  does not take (forwardedClaudeCmd), and the Claude Code it starts instead,
+ *  `cmd` (found in PATH's folders), is another file: that may be another
+ *  version than an exact resume or a Restart of this session starts. Null
+ *  when `cmd` is that same file (a share folder PATH names holds it), when
+ *  `cmd` is null (the launch's not-found message says so), otherwise, and
+ *  elsewhere. */
+function forwardedClaudeNotice(env, platform, cmd) {
+  if (platform !== 'win32' || typeof cmd !== 'string' || cmd === '') return null
+  const value = envValue(env, CLAUDE_BIN_ENV, platform)
+  if (typeof value !== 'string' || !SHARE_OR_DEVICE_PIN_RE.test(value)) return null
+  if (sameWindowsPath(value, cmd)) return null
+  return `The resume list starts the Claude Code found in PATH's folders (${displayPath(cmd)}), not the one this session names (${displayPath(value)}): the resume list does not take a named path on a network share or a device path. To have it start the named one, reach that folder through a drive letter: map the share to a drive letter and, for a session set to an older Claude Code version, point the app's resources folder at that drive.`
+}
+
+// Resolve the claude command: the one the app's launch line named, when the
+// picker may start it (forwardedClaudeCmd), so a session pinned to a version
+// runs that version from the picker too, as its exact resume and its Restart
+// do. Otherwise, on Windows: the first of CLAUDE_WINDOWS_NAMES in the folders
+// PATH names -- the native claude.exe in any of them, then claude.cmd, then
+// claude.bat, as the app's own lookup asks -- found in-process (findOnPath),
+// never through the where command or a shell, never in the project folder,
+// never the bare name; null when none is there, and the launch says so. A
+// claude.cmd and a claude.bat both start through the system cmd.exe on the
+// same line (buildSpawnTarget). Elsewhere the bare name, as before.
+function resolveClaudeCmd(platform = os.platform(), env = process.env, isFile = platform === 'win32' ? isFileOnDisk : isRunnableOnDisk) {
+  const named = forwardedClaudeCmd(env, platform, isFile)
+  if (named) return named
   if (platform !== 'win32') return 'claude'
   return findOnPath(CLAUDE_WINDOWS_NAMES, env, platform, isFile)
 }
@@ -1036,7 +1121,7 @@ function launchClaude(resumeId, sourceCwd, deps) {
   const platform = d.platform || os.platform()
   const forwarded = d.argv || getForwardedArgs()
   const args = resumeId ? ['--resume', resumeId, ...forwarded] : [...forwarded]
-  const cmd = resolveClaudeCmd(platform, env, d.isFile || isFileOnDisk)
+  const cmd = resolveClaudeCmd(platform, env, d.isFile)
   // The folder the picker runs in: a launch that names no other starts there.
   const here = d.cwd || process.cwd()
 
@@ -1052,7 +1137,7 @@ function launchClaude(resumeId, sourceCwd, deps) {
     // Refused, visibly, and NOT started in the configured directory instead:
     // a `--resume` there would fall through to a fresh session in silence.
     // The directory is untrusted text on its way to the terminal: stripped.
-    console.error(`\n  Not resuming in ${displayPath(retarget.refused)}: AI Code Conductor did not check that folder's project settings for this account before the session started. Start the session again and pick it then.\n`)
+    console.error(`\n  Not resuming in ${displayPath(retarget.refused)}: AI Code Conductor did not clear that folder's project settings for this account when the session started (they would redirect the account, could not be checked, or the folder was not listed then). The app log names the folder and why when it was checked; otherwise start the session again and pick it then.\n`)
     return exit(1)
   }
 
@@ -1062,6 +1147,10 @@ function launchClaude(resumeId, sourceCwd, deps) {
     shell: false,
     windowsHide: false,
   }
+  // For a managed launch, the folder the gated-set check settled (isGatedDir).
+  // Both launches below start there, the fresh-session fallback included, and
+  // the conversation's companion folder is named from it: nothing below asks
+  // the disk for the worktree's spelling again.
   if (retarget.cwd) spawnOpts.cwd = retarget.cwd
 
   // Whether the launch can start at all is settled before anything is
@@ -1072,14 +1161,22 @@ function launchClaude(resumeId, sourceCwd, deps) {
     return exit(1)
   }
 
+  // A Claude Code the app named on a share or a device path is not taken
+  // (forwardedClaudeCmd): when the one that starts is another file, said in
+  // the session, never in silence. A launch that starts nothing has said why
+  // above instead.
+  const notice = forwardedClaudeNotice(env, platform, cmd)
+  if (notice) console.log(`\n  ${notice}\n`)
+
   // Ensure the chosen conversation's companion dir exists so a direct-work
   // conversation (no subagent/workflow → no companion dir from the CLI) can be
-  // resumed. Best-effort: any failure must NOT block the launch.
+  // resumed. Best-effort: any failure must NOT block the launch. Its project
+  // folder is named from the folder the CLI starts in, as the CLI names it.
   if (resumeId) {
     try {
       const projectDir = resolveProjectDir(
         path.join(os.homedir(), '.claude', 'projects'),
-        sourceCwd || here,
+        retarget.cwd || sourceCwd || here,
       )
       if (projectDir) ensureCompanionDir(projectDir, resumeId)
     } catch { /* best-effort */ }
@@ -1108,8 +1205,7 @@ function launchClaude(resumeId, sourceCwd, deps) {
 
 // The gated directory set a MANAGED launch hands the picker (see pty-manager's
 // pickerCandidateDirs). Absent or unparseable means "not a managed launch":
-// nothing to enforce. A directory is compared resolved, and case-folded on
-// Windows, where git and the app may spell one directory in two cases.
+// nothing to enforce. How a directory is matched against it: isGatedDir.
 function gatedDirsFromEnv(env) {
   const raw = env && env.CCC_GATED_DIRS
   if (typeof raw !== 'string' || raw === '') return null
@@ -1121,13 +1217,100 @@ function gatedDirsFromEnv(env) {
   }
 }
 
-function isGatedDir(dir, gated) {
-  const norm = (p) => {
-    const r = path.resolve(p)
-    return process.platform === 'win32' ? r.toLowerCase() : r
+// Whether `dir` is one of the folders in `gated`, as the disk answers it, and
+// if it is, the folder a launch into it starts in; null when it is not. Two
+// paths are the same folder when their real paths are equal
+// (fs.realpathSync.native: links and junctions followed; on Windows also the
+// case on disk, the drive letter and the separators settled). So one folder in
+// two spellings matches (git lists a folder in the case on disk, the app keeps
+// it as it was typed), and two folders whose names differ only in case, which
+// a folder made case-sensitive can hold, stay two. When either real path
+// cannot be read, only the same spelling matches: resolved, with the
+// separators and a trailing separator settled and, on Windows, the drive
+// letter in one case (a drive letter names one drive in either case). A folder
+// name is never matched case-blind. Off Windows a spelling with a `..` part is
+// then kept as written, because past a link `..` is not the parent the text
+// names. On Windows a path with a name ending in a dot or a space, as written
+// or once resolved, is not read from the disk at all, and is matched by its
+// spelling alone: Node's fs opens that name as written, while the system
+// drops the ending before it starts a program in the folder, so the disk's
+// answer would be about another folder than the one the CLI runs in. A real
+// path with such a name is not taken either, because the CLI would be started
+// in it. The launch gate (hasWin32RewrittenComponent in
+// managed-launch-diagnostics.ts) looks for such a name in the resolved path
+// only; this check looks in the path as written too, so a spelling the gate
+// will not read from the disk is not read here either.
+//
+// The folder a launch starts in is the folder the match was made on, named so
+// that nothing in `dir` is followed again when the CLI starts: a link pointed
+// somewhere else after this check does not move the CLI. For a match by real
+// path, every name below the drive (or the share) is the real path's own, so
+// no folder outside the real path is passed through, whichever links `dir`
+// holds and whether or not Node's JS resolver follows them (on Windows it
+// does not follow a junction whose target is not a drive-letter path). The
+// drive is the one `dir` reaches the folder through once its links are
+// followed by fs.realpathSync (the JS one, as Claude Code names a project
+// folder), so a subst drive or a mapped drive keeps the conversation's project
+// folder; it is taken only when the drive's own real path holds the real path
+// the match was made on. Otherwise, or when either cannot be read, it is the
+// real path itself. A name spelled in another case starts in the case on disk,
+// which names the same project folder on a case-insensitive disk; an 8.3 short
+// name starts at its long name, which names another one, and so does a path
+// through a junction the JS resolver does not follow (Claude Code's project
+// folder keeps that junction). Starting at the JS-followed path instead, taken
+// when its native real path is the matched one, would keep both names, but
+// that path can still pass through such a junction: the check would follow it
+// and a launch would follow it again, wherever it then points. For a match by
+// spelling alone it is `dir`. Each path is read once a call (one call a
+// launch), and a folder that matches is read once more, with its links
+// followed, and its drive. `opts.realpath`, `opts.followLinks` and
+// `opts.platform` are for tests.
+function isGatedDir(dir, gated, opts) {
+  const o = opts || {}
+  if (typeof dir !== 'string' || dir === '' || !Array.isArray(gated)) return null
+  const win = (o.platform || process.platform) === 'win32'
+  const paths = win ? path.win32 : path.posix
+  const readReal = o.realpath || ((p) => fs.realpathSync.native(p))
+  const followLinks = o.followLinks || ((p) => fs.realpathSync(p))
+  const endsInDotOrSpace = (p) => p.split(/[\\/]/).some((c) => c !== '.' && c !== '..' && /[. ]$/.test(c))
+  const rewrittenOnWindows = (p) => win && (endsInDotOrSpace(p) || endsInDotOrSpace(path.win32.resolve(p)))
+  // A path the disk answers for, or null: not readable, no path in the
+  // answer, or a spelling or an answer with a name the system rewrites.
+  const read = (resolve, p) => {
+    if (rewrittenOnWindows(p)) return null
+    try {
+      const v = resolve(p)
+      return typeof v === 'string' && v !== '' && !rewrittenOnWindows(v) ? v : null
+    } catch {
+      return null
+    }
   }
-  const target = norm(dir)
-  return gated.some((d) => norm(d) === target)
+  const known = new Map()
+  const real = (p) => {
+    if (!known.has(p)) known.set(p, read(readReal, p))
+    return known.get(p)
+  }
+  const spelling = (p) => {
+    if (win) return path.win32.resolve(p).replace(/^[a-z](?=:)/, (c) => c.toUpperCase())
+    return p.split('/').includes('..') ? p : path.posix.resolve(p)
+  }
+  const target = real(dir)
+  for (const g of gated) {
+    if (typeof g !== 'string' || g === '') continue
+    const other = target === null ? null : real(g)
+    if (target === null || other === null) {
+      if (spelling(g) === spelling(dir)) return dir
+    } else if (target === other) {
+      const start = read(followLinks, dir)
+      const root = start === null ? '' : paths.parse(start).root
+      const drive = root === '' ? null : real(root)
+      if (drive === null) return target
+      const under = drive.endsWith(paths.sep) ? drive : drive + paths.sep
+      if (target !== drive && !target.startsWith(under)) return target
+      return paths.join(root, target.slice(under.length))
+    }
+  }
+  return null
 }
 
 // Where a resume relaunches the CLI: `{ cwd }` to retarget into the
@@ -1137,11 +1320,17 @@ function isGatedDir(dir, gated) {
 // Conductor account, which arrives with the directories its project-settings
 // gate checked in CCC_GATED_DIRS) and the worktree is not one of them: the CLI
 // must not be relaunched anywhere the gate did not scan, because a worktree's
-// own settings files can redirect the account. The set covers every worktree
-// git listed when the session started, so this refuses only a worktree that
-// appeared since. Pure, so the decision has a test; the caller exits on
-// `refused` and says why.
-function resolveRetargetCwd(resumeId, sourceCwd, currentCwd, env, existsSync) {
+// own settings files can redirect the account. The set holds the launch's own
+// folders and only the worktrees whose settings were checked clean; a worktree
+// that was refused, could not be checked, or was not listed when the session
+// started (the listing failed, or it appeared since) is refused. A worktree is
+// in the set when it is the same folder on disk as one of its entries, and a
+// managed launch then starts in the folder that check settled, not at the
+// worktree's spelling (isGatedDir; `gateOpts` is for tests), so both of
+// launchClaude's launches run in the folder that was checked. Pure apart from
+// those disk reads, so the decision has a test; the caller exits on `refused`
+// and says why.
+function resolveRetargetCwd(resumeId, sourceCwd, currentCwd, env, existsSync, gateOpts) {
   if (!resumeId || !sourceCwd) return { cwd: null }
   try {
     if (sourceCwd === currentCwd || !existsSync(sourceCwd)) return { cwd: null }
@@ -1149,8 +1338,9 @@ function resolveRetargetCwd(resumeId, sourceCwd, currentCwd, env, existsSync) {
     return { cwd: null }
   }
   const gated = gatedDirsFromEnv(env)
-  if (gated && !isGatedDir(sourceCwd, gated)) return { cwd: null, refused: sourceCwd }
-  return { cwd: sourceCwd }
+  if (!gated) return { cwd: sourceCwd }
+  const start = isGatedDir(sourceCwd, gated, gateOpts)
+  return start === null ? { cwd: null, refused: sourceCwd } : { cwd: start }
 }
 
 // Pure-logic exports for unit testing. Guarded so `require()` from the test (or
@@ -1166,6 +1356,7 @@ module.exports = {
   launchSpec,
   launchClaude,
   resolveClaudeCmd,
+  CLAUDE_BIN_ENV,
   CLAUDE_WINDOWS_NAMES,
   withFullyQualifiedProgramLookup,
   encodeProjectPath,

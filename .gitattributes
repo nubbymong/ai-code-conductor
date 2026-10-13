@@ -20,3 +20,7 @@ CHANGELOG.md text eol=lf
 # the Windows runner and its ledger gate failed to load there only (PR #619).
 # tests/unit/scripts/mjs-eol.test.ts holds the rule on every platform.
 scripts/**/*.mjs text eol=lf
+
+# The installer artwork (scripts/gen-installer-art.mjs). NSIS reads these byte for
+# byte; a line-ending conversion would corrupt every one of them.
+build/**/*.bmp binary

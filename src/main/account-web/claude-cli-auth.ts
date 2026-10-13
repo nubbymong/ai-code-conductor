@@ -38,8 +38,10 @@ import { isProfileInUseByLiveSession, sessionsOnProfile } from '../claude-accoun
 import { DEFAULT_CLI_AUTH_METHOD, PROFILE_ID_RE, isCliAuthMethod, type CliAuthMethod } from '../../shared/account-web-session'
 import { windowsStartCommand } from '../windows-programs'
 import { CLAUDE_NOT_ON_PATH, findClaudeOnWindowsAsync, recentClaudeOnWindows } from '../claude-cli-probe'
-import { warmFirstStart } from '../first-start-warmup'
+import { warmFirstStart, FIRST_START_CALLER_BOUND_MS } from '../first-start-warmup'
+import { quitHold } from '../quit-hold'
 import { claudeVersionRunEnv } from '../providers/review-support'
+import { providerProbeRefusal } from '../provider-launch-gate'
 
 /** promisify(execFile), made when a CLI runs rather than when this module
  *  loads: the composition root imports it at start (WP2 PR 4, the Claude
@@ -280,10 +282,14 @@ async function readClaudeCliAuthUncached(profileId: string, runner?: ClaudeCliAu
   //
   //    Through a runner (the provider-neutral check, WP2 PR 4) the profile is
   //    held for the runner's own time limit plus a grace, and let go only once
-  //    a stopped process tree has ended.
+  //    a stopped process tree has ended. Without one, the hold also covers
+  //    the first-start warm-up (up to FIRST_START_CALLER_BOUND_MS) before the
+  //    CLI's own time limit, so it is sized for both plus the same grace: a
+  //    hold swept as leaked while the CLI still reads the account's sign-in
+  //    would let a token refresh run beside it.
   const release = runner
     ? acquireProfileConsumer(profileId, { maxAgeMs: STATUS_TIMEOUT_MS + CLI_HOLD_GRACE_MS })
-    : acquireProfileConsumer(profileId)
+    : acquireProfileConsumer(profileId, { maxAgeMs: STATUS_TIMEOUT_MS + FIRST_START_CALLER_BOUND_MS + CLI_HOLD_GRACE_MS })
   let kill: Promise<void> | undefined
   try {
     const rotation = pendingProfileRefresh(profileId)
@@ -310,6 +316,11 @@ async function readClaudeCliAuthUncached(profileId: string, runner?: ClaudeCliAu
       if (!profileCredentialFoldersChecked(profileId)) await checkProfileCredentialFolders(profileId)
       const env = Object.assign(withProfileHome({ ...process.env } as Record<string, string>, home, { launchId: 'auth-status', cwd: probeCwd, probe: true, projectGate }), process.platform === 'darwin' ? {} : { HOME: home })
       if (runner) {
+        // Once the before-quit teardown has run, the status is not read, on
+        // any platform and for any program (quit-hold.ts): the account hold
+        // is let go (below), and the probe is never answered.
+        const heldNow = quitHold<ClaudeCliAuthStatus>('claude auth status')
+        if (heldNow) return heldNow
         const r = await runner.run(['auth', 'status'], env, STATUS_TIMEOUT_MS)
         if (r.killSettled instanceof Promise) kill = r.killSettled
         // `claude auth status` exits 1 when signed out, its answer on stdout.
@@ -329,6 +340,21 @@ async function readClaudeCliAuthUncached(profileId: string, runner?: ClaudeCliAu
         if (process.platform === 'win32' && /\\claude\.exe$/i.test(run.file)) {
           await warmFirstStart(run.file, () => ({ env: claudeVersionRunEnv(process.env, 'win32') }))
         }
+        // The caller asked whether Claude Code is switched off before this
+        // probe. The waits since then (a token refresh under way, the project
+        // gate, the sign-in folder check, the PATH walk, the warm-up above)
+        // can take seconds, so it is asked again right before the CLI runs in
+        // the account's home, on every platform. Off: nothing runs, and the
+        // answer says why, as the caller's own check does.
+        const off = providerProbeRefusal('claude')
+        if (off) return { authenticated: false, notChecked: off.message }
+        // And once the before-quit teardown has run, it is not read either,
+        // on any platform and for any program (quit-hold.ts): the account
+        // hold is let go (below), and the probe is never answered. A direct
+        // claude.exe on Windows is held by its warm-up too; macOS, Linux and
+        // an npm claude.cmd were not.
+        const held = quitHold<ClaudeCliAuthStatus>('claude auth status')
+        if (held) return held
         const { stdout } = await execFileAsync(run.file, run.args, run.options)
         const parsed = parseAuthStatus(stdout)
         if (parsed) return parsed

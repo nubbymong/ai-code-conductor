@@ -36,7 +36,8 @@
 
 import { useAppMetaStore } from '../stores/appMetaStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import { decideUpgradeFlow, lastRunVersionOf, seenVersionFor } from './upgrade-flow'
+import { changelog } from '../changelog'
+import { decideUpgradeFlow, lastRunVersionOf, seenVersionFor, whatsNewAnchorFor } from './upgrade-flow'
 
 declare const __APP_VERSION__: string
 
@@ -74,10 +75,30 @@ export function shouldShowWhatsNew(): boolean {
  */
 export function seenVersion(): string | undefined {
   try {
-    const meta = useAppMetaStore.getState().meta
-    return seenVersionFor({ lastSeenVersion: meta.lastSeenVersion, lastRunVersion: lastRunVersionOf(meta) })
+    return seenVersionOf(useAppMetaStore.getState().meta)
   } catch {
     return undefined
+  }
+}
+
+/**
+ * `seenVersion()` for a given meta snapshot. App reads it from the meta it
+ * loaded at boot, BEFORE it stamps `lastRunVersion` with the running build:
+ * after that stamp the #369 clamp has nothing left to clamp against, so a
+ * stamp written ahead of its build would read as "already seen". The harness
+ * takes this boot value as a prop (`bootSeenVersion`) for the same reason.
+ */
+export function seenVersionOf(meta: { lastSeenVersion?: string; lastRunVersion?: string; setupVersion?: string }): string | undefined {
+  return seenVersionFor({ lastSeenVersion: meta.lastSeenVersion, lastRunVersion: lastRunVersionOf(meta) })
+}
+
+/** The What's New anchor for this build, from a seen version (see
+ *  `whatsNewAnchorFor`): what the summary and the showcase diff from. */
+export function whatsNewAnchorFrom(seen: string | undefined): string | undefined {
+  try {
+    return whatsNewAnchorFor({ seenVersion: seen, currentVersion: runningVersion(), releases: changelog })
+  } catch {
+    return seen
   }
 }
 

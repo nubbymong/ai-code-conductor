@@ -36,12 +36,14 @@ const APP_VERSION = JSON.parse(
  *    last CTA read "Set it up →", not "Continue", and dismissing the notes
  *    handed to that step rather than to resume — the staleness #448 is about.
  * 2. It must be past RENAME_SHIPPED_IN (2.1.0-beta.6), so the rename/roadmap
- *    prelude (#525) stays down and the run OPENS on the notes summary. The
- *    prelude also has a tester arm this constant cannot reach — beta channel
- *    + any prerelease build shows it regardless of lastSeenVersion (owner
- *    call, canvas R2 2026-08-27; `showRenamePageFor` in WhatsNewV2Step.tsx) —
- *    which is why the settings seed below pins `updateChannel: 'stable'`.
- *    rc.10 broke this spec through that arm, not through stepsNewSince.
+ *    prelude (#525) stays down and the run OPENS on the notes summary. (The
+ *    beta-channel tester arm that once showed the prelude on every prerelease
+ *    is gone, O2 2026-10-11; the channel no longer decides it.)
+ * 3. What's New diffs from it (whatsNewAnchorFor): rc.9 is a prerelease of an
+ *    OLDER release than this build, so it counts as 2.1.0, and the run shows
+ *    the pages new since 2.1.0 (the 2.1.1 Codex pages): a summary plus at
+ *    least one page, which the showcase test below needs. Moving PREV_VERSION
+ *    to the release before the running one keeps that true.
  *
  * Bump this when ANY trigger fires: a later step ships with a newer
  * `sinceVersion` (the frozen table in tests/unit/renderer/onboarding-registry.test.ts
@@ -83,14 +85,12 @@ test.beforeAll(async () => {
       onboardingAppVersion: PREV_VERSION,
     }),
   )
-  // `updateChannel: 'stable'`, deliberately (was 'beta'): on the beta channel
-  // every PRERELEASE build opens the notes on the rename/roadmap prelude page
-  // (the tester arm in `showRenamePageFor`) instead of the summary this spec
-  // pins, and this build is an rc. The stable channel keeps the ordinary
-  // post-rename upgrade shape — summary first — on rc and final builds alike,
-  // and `decideUpgradeFlow` still shows the notes for a within-line move on
-  // stable ('within-line'). `updateChannelChosen` marks it an explicit choice
-  // so no channel pre-selection may ever flip it back mid-run.
+  // `updateChannel: 'stable'`, deliberately (was 'beta'): it pins the
+  // ordinary post-rename upgrade shape, summary first, and `decideUpgradeFlow`
+  // still shows the notes for a within-line move on stable ('within-line').
+  // (It once also kept the rename prelude's beta-channel tester arm away; that
+  // arm is gone.) `updateChannelChosen` marks it an explicit choice so no
+  // channel pre-selection may ever flip it back mid-run.
   fs.writeFileSync(
     path.join(config, 'settings.json'),
     JSON.stringify({
@@ -154,7 +154,8 @@ test('an upgrade opens the full-screen page, not the What\'s New modal', async (
   // modal absent — because the modal still exists for Settings and a regression
   // would put it back on the boot path rather than delete the page.
   await expect(page.locator('.ob-root')).toBeVisible({ timeout: 20000 })
-  await expect(page.locator('.ob-root h2')).toContainText('What\'s new in')
+  // O1: the heading names where the user comes from ("What's new since 2.1.0").
+  await expect(page.locator('.ob-root h2')).toContainText('What\'s new since')
   await expect(page.getByRole('heading', { name: 'What\'s New', exact: true })).toHaveCount(0)
 })
 
@@ -163,7 +164,7 @@ test('the notes open on the summary page of the multi-page showcase', async () =
   // footer carries dot navigation, page 0 is the summary, and its CTA advances
   // rather than ending the run. Assert the SHAPE (summary + N showcases), not a
   // fixed page count, so adding a showcase page does not re-break this.
-  await expect(page.locator('[data-ux-id="whatsnew-heading"]')).toContainText("What's new in")
+  await expect(page.locator('[data-ux-id="whatsnew-heading"]')).toContainText("What's new since")
   const dots = page.locator('[data-ux-id="whatsnew-dots"] .wn-fdot')
   const total = await dots.count()
   expect(total).toBeGreaterThan(1) // summary + at least one showcase

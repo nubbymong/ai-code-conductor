@@ -32,6 +32,16 @@ vi.mock('../../src/main/bundled-conpty', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/main/bundled-conpty')>()),
   bundledConptyChoice: () => ({ kind: 'bundled', options: { useConpty: true, useConptyDll: true }, dir: '/np/prebuilds/win32-x64' }),
 }))
+// On Windows ssh.exe is found in the folders PATH names (the rule is pinned in
+// tests/unit/main/ssh-program-lookup.test.ts); here the lookup answers one full
+// path on every runner, so what this file reads is the argv.
+vi.mock('../../src/main/windows-programs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/main/windows-programs')>()
+  return {
+    ...real,
+    findOnWindowsPath: (...a: Parameters<typeof real.findOnWindowsPath>) => (a[0][0] === 'ssh.exe' ? 'C:\\Windows\\System32\\OpenSSH\\ssh.exe' : real.findOnWindowsPath(...a)),
+  }
+})
 
 import * as osMod from 'os'
 import type { SessionProvider } from '../../src/main/providers/types'
@@ -73,8 +83,8 @@ describe('SSH spawn path uses buildSshArgs (call-site pin, #265 finding 4)', () 
     expect(() => spawnPty(fakeWin, 'sidcallsite', { ssh, cwd: osMod.homedir() })).toThrow('__spawn_captured__')
 
     expect(captured).not.toBeNull()
-    // win32 => ssh.exe binary
-    expect(captured!.file).toBe('ssh.exe')
+    // win32 => ssh.exe by the full path the PATH lookup found
+    expect(captured!.file).toBe('C:\\Windows\\System32\\OpenSSH\\ssh.exe')
     // The EXACT argv the pure builder produces for win32. Computed with the same
     // live MCP port the spawn path reads, so this equals what pty-manager built.
     // A revert to an inline array that drops ControlMaster/ControlPath fails here.

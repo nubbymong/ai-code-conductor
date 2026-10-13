@@ -36,6 +36,64 @@ describe('SentinelState', () => {
     expect(s.snapshot().findings[0].status).toBe('applied')
     expect(pushes).toBe(2)
   })
+  // Owner findings 2026-10-11: a model notice kept open said "read ... just
+  // now" for days. A check's own finding raised again while open takes the
+  // evidence of the check in hand, so one stored by 2.1.1-beta.2 loses the
+  // stale words at the next check.
+  describe('a check finding raised again while open takes fresh evidence', () => {
+    const stored = {
+      id: 'models:missing:claude-opus-6', kind: 'compat' as const, severity: 'warn' as const,
+      title: 'Claude Code offers claude-opus-6, but it is not in the model picker',
+      evidence: 'claude-opus-6 is listed by the Claude Code model configuration (read from https://support.example/article just now); resources/model-registry.json has no entry covering it.',
+      badgeText: 'New model: claude-opus-6', status: 'open' as const, createdAt: 5,
+    }
+    const again = {
+      ...stored, createdAt: 99, title: 'a different title', badgeText: 'a different badge',
+      evidence: 'claude-opus-6 is listed by the Claude Code model configuration (read online from https://support.example/article); resources/model-registry.json has no entry covering it.',
+    }
+
+    it('only its evidence changes, saved and pushed once; the same evidence again writes nothing', () => {
+      const s = new SentinelState(dir)
+      s.upsertFinding(stored)
+      let pushes = 0; s.subscribe(() => pushes++)
+      s.upsertFinding(again)
+      expect(s.snapshot().findings).toEqual([{ ...stored, evidence: again.evidence }])
+      expect(new SentinelState(dir).snapshot().findings[0].evidence).toBe(again.evidence)
+      expect(pushes).toBe(1)
+      s.upsertFinding(again)
+      expect(pushes).toBe(1)
+    })
+
+    it('one loaded from a file an earlier build wrote is refreshed too', () => {
+      fs.mkdirSync(path.join(dir, 'sentinel'), { recursive: true })
+      fs.writeFileSync(path.join(dir, 'sentinel', 'sentinel-state.json'), JSON.stringify({ lastSeenCcVersion: '2.1.300', analyzing: false, lastAnalysisAt: null, lastAnalysisError: null, findings: [stored] }))
+      const s = new SentinelState(dir)
+      s.upsertFinding(again)
+      expect(new SentinelState(dir).snapshot().findings[0].evidence).not.toContain('just now')
+    })
+
+    for (const status of ['muted', 'dismissed', 'applied'] as const) {
+      it(`a ${status} one keeps its evidence and its status`, () => {
+        const s = new SentinelState(dir)
+        s.upsertFinding(stored)
+        s.setStatus(stored.id, status)
+        s.upsertFinding(again)
+        expect(s.snapshot().findings).toEqual([{ ...stored, status }])
+      })
+    }
+
+    it('an analysis finding keeps the quote it was matched by', () => {
+      const analysis = {
+        id: 'cc:2.1.300:flag-removed', kind: 'compat' as const, severity: 'high' as const, title: 'A flag was removed',
+        evidence: '"--legacy-flag was removed from the CLI"', status: 'open' as const, createdAt: 1, ccVersionFrom: '2.1.200', ccVersionTo: '2.1.300',
+      }
+      const s = new SentinelState(dir)
+      s.upsertFinding(analysis)
+      s.upsertFinding({ ...analysis, evidence: '"--legacy-flag is gone in this release of the CLI"' })
+      expect(s.snapshot().findings).toEqual([analysis])
+    })
+  })
+
   it('corrupt state file -> empty state, no throw (fail-open)', () => {
     fs.mkdirSync(path.join(dir, 'sentinel'), { recursive: true })
     fs.writeFileSync(path.join(dir, 'sentinel', 'sentinel-state.json'), 'oops')
@@ -245,5 +303,59 @@ describe('SentinelState: unmatched-analysis counts (round 4, fixer 10)', () => {
     // A lower version counted now is kept; the lowest of the others goes.
     expect(s.countUnverified('codex:0.140.0')).toBe(1)
     expect(codexKeys()).toEqual(['codex:0.140.0', ...versions.slice(3).map((v) => `codex:${v}`)].sort())
+  })
+})
+
+// O8: a finding whose cause a later check found gone is closed (dropped), so
+// a stale model notice no longer keeps the chip amber. One the user muted,
+// dismissed or applied is kept, so the user's choice holds.
+describe('SentinelState.retireOpen (O8)', () => {
+  type Status = 'open' | 'muted' | 'dismissed' | 'applied'
+  const f = (id: string, status: Status = 'open', createdAt = 1) => ({
+    id, kind: 'compat' as const, severity: 'warn' as const, title: id, evidence: 'e', status, createdAt,
+  })
+  const file = () => path.join(dir, 'sentinel', 'sentinel-state.json')
+
+  it('drops only the listed open findings; muted, dismissed, applied and unlisted ones are kept, and a reload agrees', () => {
+    const s = new SentinelState(dir)
+    for (const x of [f('models:missing:a'), f('models:missing:b', 'muted'), f('models:missing:c', 'dismissed'), f('models:missing:d', 'applied'), f('models:missing:e')]) s.upsertFinding(x)
+    s.retireOpen(['models:missing:a', 'models:missing:b', 'models:missing:c', 'models:missing:d'])
+    const kept = [['models:missing:b', 'muted'], ['models:missing:c', 'dismissed'], ['models:missing:d', 'applied'], ['models:missing:e', 'open']]
+    expect(s.snapshot().findings.map((x) => [x.id, x.status])).toEqual(kept)
+    expect(new SentinelState(dir).snapshot().findings.map((x) => [x.id, x.status])).toEqual(kept)
+  })
+
+  it('writes nothing and tells no one when nothing it names is open', () => {
+    const s = new SentinelState(dir)
+    s.upsertFinding(f('models:missing:a', 'muted'))
+    s.upsertFinding(f('models:missing:b'))
+    const before = fs.readFileSync(file(), 'utf-8')
+    let pushes = 0
+    s.subscribe(() => pushes++)
+    s.retireOpen([])
+    s.retireOpen(['models:missing:zzz'])
+    s.retireOpen(['models:missing:a'])
+    expect(pushes).toBe(0)
+    expect(fs.readFileSync(file(), 'utf-8')).toBe(before)
+    expect(s.snapshot().findings.map((x) => x.id)).toEqual(['models:missing:a', 'models:missing:b'])
+  })
+
+  it('tells subscribers once when it drops something', () => {
+    const s = new SentinelState(dir)
+    s.upsertFinding(f('models:missing:a'))
+    s.upsertFinding(f('models:missing:b'))
+    let pushes = 0
+    s.subscribe(() => pushes++)
+    s.retireOpen(['models:missing:a', 'models:missing:b'])
+    expect(pushes).toBe(1)
+    expect(s.snapshot().findings).toEqual([])
+  })
+
+  it('the same cause arising again after a close is raised afresh', () => {
+    const s = new SentinelState(dir)
+    s.upsertFinding(f('models:missing:a', 'open', 1))
+    s.retireOpen(['models:missing:a'])
+    s.upsertFinding(f('models:missing:a', 'open', 2))
+    expect(s.snapshot().findings.map((x) => [x.id, x.status, x.createdAt])).toEqual([['models:missing:a', 'open', 2]])
   })
 })

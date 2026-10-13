@@ -3,7 +3,7 @@
 // Persisted record of WHICH accounts hold a claude.ai web session (#216).
 //
 // It stores metadata only — account email, when it was acquired, when the
-// earliest cookie expires. The cookies themselves live in Electron's partition
+// session cookie expires. The cookies themselves live in Electron's partition
 // store and are never written here: duplicating a live session into a JSON file
 // beside the config would be a second copy to protect for no benefit.
 //
@@ -266,6 +266,34 @@ export function saveWebSession(s: AccountWebSession): boolean {
     return false
   }
   f.sessions = [...f.sessions.filter((x) => x.profileId !== s.profileId), s]
+  return writeSafely(f)
+}
+
+/**
+ * Bring one account's saved expiry up to its live session cookie's
+ * (web-session-expiry.ts). The record is written once, at sign-in, and
+ * claude.ai renews the cookie while the account is in use, so without this the
+ * status read "expired" over a session that still worked.
+ *
+ * Writes ONLY expiresAt, and only while the record is still the one the caller
+ * read (`seen`: the same acquiredAt and expiresAt), so a sign-in or a sign-out
+ * that landed meanwhile is never written over. Never creates a record. True
+ * once written; false when there was nothing to write, the record changed or
+ * is gone, the value is not a finite epoch-ms or null, the store was written
+ * by a newer build (left as it is), or the write failed.
+ */
+export function refreshWebSessionExpiry(
+  profileId: string,
+  seen: Pick<AccountWebSession, 'acquiredAt' | 'expiresAt'>,
+  expiresAt: number | null,
+): boolean {
+  if (expiresAt !== null && !Number.isFinite(expiresAt)) return false
+  const { f, newer } = readStore()
+  if (newer) return false
+  const cur = f.sessions.find((x) => x.profileId === profileId)
+  if (!cur || cur.acquiredAt !== seen.acquiredAt || cur.expiresAt !== seen.expiresAt) return false
+  if (cur.expiresAt === expiresAt) return false
+  f.sessions = f.sessions.map((x) => (x === cur ? { ...x, expiresAt } : x))
   return writeSafely(f)
 }
 

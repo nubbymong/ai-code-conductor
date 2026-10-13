@@ -296,8 +296,9 @@ interface PaneEntry {
   /** When the user last pressed a mouse button, tapped a touch screen, or
    *  pressed Enter or Space on a link or a button in this view (an OS input
    *  event; a page cannot make one; a key's time is its press, not when its
-   *  landing place was read), on the steady clock (inputClock); null for
-   *  never. */
+   *  landing place was read), or released the mouse press that set it while
+   *  that press is unused and still the latest input (noteMouseRelease), on
+   *  the steady clock (inputClock); null for never. */
   inputAt: number | null
   /** That input has already let one popup or link through. */
   inputUsed: boolean
@@ -310,6 +311,10 @@ interface PaneEntry {
   /** Where the latest Enter or Space landed, still being read; null when
    *  none is. A hand-off waits for it. */
   keyCheck: Promise<void> | null
+  /** The count (inputSeq) of the latest mouse press whose release has not
+   *  been seen yet, and its button; 0 and null for none. */
+  pressSeq: number
+  pressButton: string | null
 }
 
 /** How long a user's input lets one popup or one link out of the view through. */
@@ -329,6 +334,33 @@ function noteUserInput(entry: PaneEntry): void {
   entry.inputUsed = false
   // A press or a tap needs no read: a hand-off after it goes at once.
   entry.keyCheck = null
+}
+
+/** Note a mouse press in the view: an input like any other, whose release is
+ *  watched for (noteMouseRelease). */
+function noteMousePress(entry: PaneEntry, button: string | null): void {
+  noteUserInput(entry)
+  entry.pressSeq = entry.inputSeq
+  entry.pressButton = button
+}
+
+/**
+ * Note the release of a mouse press in the view, so a click held longer than
+ * the input window still opens what it clicks (the page's click comes on the
+ * release). The release renews the age of its own press's arm, and only
+ * while that arm is unused and still the view's latest input: a key, a tap or
+ * another press since then, or a hand-off the press already let through, and
+ * it renews nothing. It never counts as a new input and never makes a used
+ * arm usable again, so a press still lets at most one popup or link through.
+ */
+function noteMouseRelease(entry: PaneEntry, button: string | null): void {
+  const seq = entry.pressSeq
+  const sameButton = entry.pressButton === button
+  entry.pressSeq = 0
+  entry.pressButton = null
+  if (seq === 0 || !sameButton || entry.inputUsed) return
+  if (entry.inputSeq !== seq || entry.inputAtSeq !== seq) return
+  entry.inputAt = inputClock()
 }
 
 /** The world the view's focused element is read in: one of the app's own,
@@ -817,6 +849,8 @@ function openPane(
       inputSeq: 0,
       inputAtSeq: 0,
       keyCheck: null,
+      pressSeq: 0,
+      pressButton: null,
     }
 
     // MAIN-FRAME ONLY. The session-security invariant is about the top-level,
@@ -909,9 +943,12 @@ function openPane(
     // The user's own input in the view: a mouse press, a tap on a touch
     // screen, or Enter / Space that landed on a link or a button (read just
     // after the key, noteKeyInput). Only these let a popup or a link out
-    // through (above).
+    // through (above). A press's release renews that press's own unused arm
+    // (noteMouseRelease), so a slow click still opens what it clicks.
     view.webContents.on('before-mouse-event', (_event, mouse) => {
-      if (mouse?.type === 'mouseDown') noteUserInput(entry)
+      const button = typeof mouse?.button === 'string' ? mouse.button : null
+      if (mouse?.type === 'mouseDown') noteMousePress(entry, button)
+      else if (mouse?.type === 'mouseUp') noteMouseRelease(entry, button)
     })
     view.webContents.on('input-event', (_event, input) => {
       if (isTap(input)) noteUserInput(entry)

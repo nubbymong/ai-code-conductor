@@ -1066,6 +1066,115 @@ describe('[host] the account view follows a popup only from its own page, and op
       closeAccountPane('sess-pop')
     })
 
+    it(`${s.kind}: a click held longer than a second still opens what it clicks, once, on its release`, async () => {
+      const wc = await signedInView()
+      const now = vi.spyOn(performance, 'now')
+      const nav = (url: string) => wc.handlers['will-navigate']({ preventDefault: vi.fn(), isMainFrame: true }, url)
+      try {
+        now.mockReturnValue(1_000_000)
+        click(wc)
+        now.mockReturnValue(1_000_000 + 1_500)
+        click(wc, 'mouseUp')
+        now.mockReturnValue(1_000_000 + 1_550)
+        wc.handlers.__open(newTabLink('https://example.com/paper'))
+        wc.handlers.__open(newTabLink('https://example.com/second'))
+        nav('https://example.com/third')
+        // A second release (no press before it) renews nothing.
+        click(wc, 'mouseUp')
+        wc.handlers.__open(newTabLink('https://example.com/fourth'))
+        expect(openedExternal).toEqual(['https://example.com/paper'])
+        // The same for a link in the view itself and a popup to the service.
+        now.mockReturnValue(1_010_000)
+        click(wc)
+        now.mockReturnValue(1_010_000 + 1_500)
+        click(wc, 'mouseUp')
+        nav('https://example.com/in-view')
+        expect(openedExternal).toEqual(['https://example.com/paper', 'https://example.com/in-view'])
+        now.mockReturnValue(1_020_000)
+        click(wc)
+        now.mockReturnValue(1_020_000 + 1_500)
+        click(wc, 'mouseUp')
+        wc.handlers.__open(popup(s.page, s.home))
+        expect(wc.loadURL.mock.calls).toEqual([[s.page]])
+        // And the renewed second runs out like any other.
+        now.mockReturnValue(1_030_000)
+        click(wc)
+        now.mockReturnValue(1_030_000 + 1_500)
+        click(wc, 'mouseUp')
+        now.mockReturnValue(1_030_000 + 1_500 + 1_001)
+        wc.handlers.__open(newTabLink('https://example.com/late'))
+        // A stray release after that, with no press before it, renews nothing either.
+        click(wc, 'mouseUp')
+        wc.handlers.__open(newTabLink('https://example.com/stray'))
+        expect(openedExternal).toEqual(['https://example.com/paper', 'https://example.com/in-view'])
+      } finally {
+        now.mockRestore()
+      }
+      closeAccountPane('sess-pop')
+    })
+
+    it(`${s.kind}: a press that already let one popup through is not renewed by its release`, async () => {
+      const wc = await signedInView()
+      const now = vi.spyOn(performance, 'now')
+      try {
+        now.mockReturnValue(1_000_000)
+        click(wc)
+        now.mockReturnValue(1_000_000 + 100)
+        wc.handlers.__open(newTabLink('https://example.com/first'))
+        now.mockReturnValue(1_000_000 + 1_500)
+        click(wc, 'mouseUp')
+        wc.handlers.__open(newTabLink('https://example.com/second'))
+        // Even a quick release within the second gives the page no second popup.
+        now.mockReturnValue(1_010_000)
+        click(wc)
+        wc.handlers.__open(newTabLink('https://example.com/third'))
+        click(wc, 'mouseUp')
+        wc.handlers.__open(newTabLink('https://example.com/fourth'))
+        expect(openedExternal).toEqual(['https://example.com/first', 'https://example.com/third'])
+      } finally {
+        now.mockRestore()
+      }
+      closeAccountPane('sess-pop')
+    })
+
+    it(`${s.kind}: the release of a press never renews anything over a newer input, nor for another button`, async () => {
+      const wc = await signedInView()
+      keyLandsOn(wc, () => false)
+      const now = vi.spyOn(performance, 'now')
+      const out = (n: number) => wc.handlers.__open(newTabLink(`https://example.com/n${n}`))
+      const release = (button: string) => wc.handlers['before-mouse-event']?.({ preventDefault() {} }, { type: 'mouseUp', button, x: 10, y: 10 })
+      try {
+        // A key typed after the press (into a text box: it arms nothing) is newer than the press.
+        now.mockReturnValue(1_000_000)
+        click(wc)
+        now.mockReturnValue(1_000_000 + 500)
+        press(wc, { key: 'Enter', code: 'Enter' })
+        await flush()
+        now.mockReturnValue(1_000_000 + 1_500)
+        click(wc, 'mouseUp')
+        out(1)
+        await flush()
+        // A tap after the press: its own second runs from the tap, not renewed by the release.
+        now.mockReturnValue(1_010_000)
+        click(wc)
+        now.mockReturnValue(1_010_000 + 500)
+        tap(wc)
+        now.mockReturnValue(1_010_000 + 1_600)
+        click(wc, 'mouseUp')
+        out(2)
+        // Another button's release.
+        now.mockReturnValue(1_020_000)
+        click(wc)
+        now.mockReturnValue(1_020_000 + 1_500)
+        release('middle')
+        out(3)
+        expect(openedExternal).toEqual([])
+      } finally {
+        now.mockRestore()
+      }
+      closeAccountPane('sess-pop')
+    })
+
     it(`${s.kind}: Escape still closes the view, and a refused popup is logged by host only`, async () => {
       const win = new FakeParentWindow()
       const wc = await signedInView(win)

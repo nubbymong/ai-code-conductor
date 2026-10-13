@@ -127,8 +127,10 @@ export function AccountRow({ testId, chip, name, nameMuted, nameTestId, secondar
   // chip's initial, however far the cells below it run; centring each cell on
   // its own height scattered them. The tracks never depend on what a row
   // holds, so columns line up from row to row; a row with no plan gives that
-  // track to its name. A long name wraps to a second line, never truncated,
-  // so it stays whole when a plan, recorded later, takes its track back. The
+  // track to its name. A long name wraps onto a second line rather than being
+  // cut at one, so it still reads when a plan, recorded later, takes its
+  // track back; a name that needs more than two lines is cut there, and its
+  // title keeps the full text. The
   // badge track keeps 128px, in px like the pills it holds, so a pill never
   // runs into the state column; on a narrow card that floor comes out of the
   // other text tracks, and the state cell breaks a long email anywhere

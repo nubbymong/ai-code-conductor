@@ -149,7 +149,8 @@ async function walk(page: Page, choice: Choice, seen: { codexSetupState?: string
     if (await visible(page.locator('[data-ux-id="whatsnew-skip"]'))) { await go('showcase:skip', page.locator('[data-ux-id="whatsnew-skip"]')); continue }
     if (await visible(page.getByTestId('codex-setup'))) {
       // Settled once it says where Codex stands (the CLI check is async).
-      const states = ['missing', 'update', 'sign-in', 'adopt', 'done', 'unavailable']
+      // No 'adopt' state since O5 (2.1.1-beta.3): this computer's own Codex sign-in is never offered.
+      const states = ['missing', 'update', 'sign-in', 'done', 'unavailable']
       let state = ''
       await expect.poll(async () => {
         for (const s of states) if (await visible(page.getByTestId(`codex-setup-${s}`))) { state = s; return s }

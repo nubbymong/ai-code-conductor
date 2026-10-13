@@ -106,11 +106,15 @@ describe('the external home (WP1.24, WP1.50)', () => {
     expect(h.runs.slice(before).map((r) => [r.args, r.home])).toEqual([['login status', EXT_HOME], ['logout', EXT_HOME], ['login status', EXT_HOME]])
   })
 
-  it('archiving it needs the credentials-remain acknowledgement and never signs it out', async () => {
+  it('archiving it needs the credentials-remain acknowledgement, which says it is final (O5), and never signs it out', async () => {
     const h = await harness()
     const ext = await withExternal(h)
     await h.service.setLifecycle({ accountId: ext, lifecycle: 'inactive' })
-    expect(await h.service.setLifecycle({ accountId: ext, lifecycle: 'archived' })).toMatchObject({ ok: false, code: 'acknowledgement-required' })
+    expect(await h.service.setLifecycle({ accountId: ext, lifecycle: 'archived' })).toEqual({
+      ok: false,
+      code: 'acknowledgement-required',
+      message: 'Archiving is final: this account cannot be restored, because this app no longer uses this sign-in. Archiving only forgets it here; it stays signed in for other apps. Confirm to continue.',
+    })
     const before = h.runs.length
     expect(await h.service.setLifecycle({ accountId: ext, lifecycle: 'archived', acknowledgeExternal: true })).toEqual({ ok: true })
     expect(h.runs.slice(before).map((r) => [r.args, r.home])).toEqual([['login status', EXT_HOME]])
@@ -915,8 +919,10 @@ describe('signing an existing account in again (WP2 6b)', () => {
   it('never on an external home, an archived account, or a key that was not deposited for this account by this window', async () => {
     const h = await harness()
     const ext = await withExternal(h)
-    // This computer's own sign-in: only with the user's acknowledgement (P3.3 review round 1, S2).
-    expect(await h.service.signInAgain({ sameAccount: true, accountId: ext, method: 'browser' }, 1)).toMatchObject({ ok: false, code: 'acknowledgement-required' })
+    // This computer's own sign-in: retired, so never signed in again, with
+    // or without an acknowledgement (O5, #196).
+    expect(await h.service.signInAgain({ sameAccount: true, accountId: ext, method: 'browser' }, 1)).toEqual({ ok: false, code: 'unsupported', message: 'This app no longer uses the Codex sign-in already on this computer, so it is not signed in again here. Add a Codex account in Settings, Accounts instead.' })
+    expect(await h.service.signInAgain({ sameAccount: true, acknowledgeExternal: true, accountId: ext, method: 'browser' }, 1)).toEqual({ ok: false, code: 'unsupported', message: 'This app no longer uses the Codex sign-in already on this computer, so it is not signed in again here. Add a Codex account in Settings, Accounts instead.' })
     expect(h.service.issueSecretHandle({ accountId: ext }, 1)).toMatchObject({ ok: false, code: 'unsupported' })
     const a = await addCodexAccount(h, 'A')
     const b = await addCodexAccount(h, 'B')
@@ -1151,7 +1157,14 @@ describe('Archived (N) with Restore, and a refusal that names its sessions (P3.2
     expect(h.doc().accounts.find((x) => x.id === a)).toMatchObject({ lifecycle: 'archived' })
   })
 
-  it('an archived external home whose home was adopted again is not restored over the newer account', async () => {
+  // O5 (2.1.1-beta.3, owner decision 2026-10-11): archiving the account
+  // 2.1.1-beta.2 registered for this computer's own sign-in is how a user
+  // moves off that retired sign-in, so it is final. Before O5 an archived one
+  // came back unless a newer adoption held the home. (The two adoptions here
+  // seed beta.2 records through the harness's test seam; the seam does not
+  // re-enable Restore.)
+  it('an archived external home is never restored, whether or not a newer adoption holds the home (O5)', async () => {
+    const RETIRED = 'This app no longer uses the Codex sign-in already on this computer, so this account cannot be restored. Add a Codex account in Settings, Accounts instead.'
     const h = await harness()
     const m = await addCodexAccount(h, 'M')
     const e1 = await withExternal(h)
@@ -1160,12 +1173,21 @@ describe('Archived (N) with Restore, and a refusal that names its sessions (P3.2
     expect(await h.service.setLifecycle({ accountId: e1, lifecycle: 'archived', acknowledgeExternal: true })).toEqual({ ok: true })
     const again = await h.service.adoptExternalDefault({ providerId: 'codex' })
     if (!again.ok) throw new Error(again.code)
-    expect(await h.service.setLifecycle({ accountId: e1, lifecycle: 'inactive' })).toMatchObject({ ok: false, code: 'realm-conflict' })
-    // Once the newer one is archived too, the older one can come back.
+    expect(await h.service.setLifecycle({ accountId: e1, lifecycle: 'inactive' })).toEqual({ ok: false, code: 'unsupported', message: RETIRED })
+    // Nor once the newer one is archived too and nothing holds the home.
     await h.service.setLifecycle({ accountId: again.accountId, lifecycle: 'inactive' })
     expect(await h.service.setLifecycle({ accountId: again.accountId, lifecycle: 'archived', acknowledgeExternal: true })).toEqual({ ok: true })
-    expect(await h.service.setLifecycle({ accountId: e1, lifecycle: 'inactive' })).toEqual({ ok: true })
-    expect(h.doc().accounts.find((x) => x.id === e1)).toMatchObject({ lifecycle: 'inactive', identityAssurance: 'realm-only' })
+    const doc = JSON.stringify(h.doc())
+    const runs = h.runs.length
+    for (const id of [e1, again.accountId]) expect(await h.service.setLifecycle({ accountId: id, lifecycle: 'inactive' }), id).toEqual({ ok: false, code: 'unsupported', message: RETIRED })
+    expect(JSON.stringify(h.doc())).toBe(doc)
+    expect(h.runs.length).toBe(runs)
+    expect(h.doc().accounts.filter((x) => x.id === e1 || x.id === again.accountId).map((x) => x.lifecycle)).toEqual(['archived', 'archived'])
+    // A managed account archived beside them still comes back.
+    const n = await addCodexAccount(h, 'N')
+    await h.service.setLifecycle({ accountId: n, lifecycle: 'inactive' })
+    expect(await h.service.setLifecycle({ accountId: n, lifecycle: 'archived' })).toEqual({ ok: true })
+    expect(await h.service.setLifecycle({ accountId: n, lifecycle: 'inactive' })).toEqual({ ok: true })
   })
 
   it('a Claude record comes back where it was removed, never through Restore', async () => {

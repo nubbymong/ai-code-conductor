@@ -169,9 +169,11 @@ export interface PendingSetupView {
 }
 
 /** A provider's own default sign-in on this computer (6.3; Codex's
- *  ~/.codex). It is taken in only by the user's explicit choice (owner
- *  decision 2026-09-26). `marker`: the answer recorded when it was, and any
- *  answer a development build's start-up check recorded. Whether the user
+ *  ~/.codex). 2.1.1-beta.2 took it in on the user's explicit choice; since
+ *  O5 (2.1.1-beta.3, owner decision 2026-10-11) it is never taken in, and
+ *  this view only names its folder for an account beta.2 registered.
+ *  `marker`: the answer recorded when it was, and any answer a development
+ *  build's start-up check recorded. Whether the user
  *  must first say they use the provider is the provider's own preference
  *  ("not answered yet"), not this view's. */
 export interface ExternalDefaultView {
@@ -320,15 +322,19 @@ export interface InstallRecipeView {
  *  - `add-to-path` (Windows): the publisher's installer put the tool in
  *    `folder`, which is not on PATH; the app can add it (addToPath).
  *  - `shell-profile` (macOS, Linux): the tool is in `folder`, which the login
- *    shell's PATH lacks; `line` added to `file` puts it there. The app never
- *    edits that file.
+ *    shell's PATH lacks; `line` is a command to run once that adds it to
+ *    `file`. The app never edits that file.
  *  - `restart` (Windows): the tool is in a folder Windows' PATH names that
  *    this process could not take in; a restart of the app is what helps.
- *    The only case where a restart is advised. */
+ *    `unresolved` when the tool was not seen, but an entry of Windows' PATH
+ *    that this process did not start with names a %VARIABLE% it does not
+ *    have, so its folder can be looked in only after a restart: a note a
+ *    surface shows beside its own not-found words, never in their place.
+ *    The only cases where a restart is advised. */
 export type PathHintView =
   | { kind: 'add-to-path'; folder: string }
   | { kind: 'shell-profile'; folder: string; file: string; line: string }
-  | { kind: 'restart' }
+  | { kind: 'restart'; unresolved?: true }
 
 /** An account's allowance as the Account usage page shows it (usage track
  *  MP3; plan section 3). Views only: percentages, reset times, window labels,
@@ -397,9 +403,10 @@ export type SignInAgainResult = { state: KnownAuthState; separateAccountId?: str
 
 export interface BeginSetupRequest { providerId: ProviderId; method: SignInMethod }
 export interface SignInRequest { accountId: string; method: SignInMethod; secretHandle?: string }
-/** Sign in again: `sameAccount` is the user's answer (design 9.2), required;
- *  `acknowledgeExternal` their yes to signing in again this computer's own
- *  sign-in in place. */
+/** Sign in again: `sameAccount` is the user's answer (design 9.2), required.
+ *  `acknowledgeExternal` is no longer sent: this computer's own sign-in is
+ *  retired and never signed in again here, and main refuses it before
+ *  reading this field (O5, #196). Kept so an older caller still validates. */
 export interface SignInAgainRequest extends SignInRequest { sameAccount: true; acknowledgeExternal?: true }
 export type SetupIdentityChoice =
   | { mode: 'new'; friendlyName?: string; colourKey: string; groupId?: string }

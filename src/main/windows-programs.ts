@@ -14,10 +14,22 @@
 // - A batch file (an npm `.cmd` shim) runs through the system cmd.exe with
 //   the switches and quoting claude-cli-version.ts's versionProbeCommand uses
 //   (windowsBatchFileCommand), never through `shell: true`.
+// - A program that only the user's PowerShell profile puts on PATH (a
+//   version manager such as fnm adds its folder there and nowhere else) is
+//   asked of Windows PowerShell WITH that profile, by its full path in the
+//   system folder, with a fixed command, in the home folder and off the
+//   event loop (findWithPowerShellProfile). The command searches only the
+//   PATH folders named from a drive letter, so a relative entry the profile
+//   adds is never searched. Its one answer is taken only when it is a plain
+//   drive-absolute path to an existing file of an allowed name: never a bare
+//   or relative name, a share, or a file in the folder the question ran in.
 //
 // So what runs never depends on the folder a process happens to run in.
-// Pure apart from the default file tests; starts no process.
+// Pure apart from the default file tests and findWithPowerShellProfile, the
+// one function here that starts a process.
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
+import { homedir } from 'node:os'
 import path from 'node:path'
 import { windowsFolderAsRun, windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
 
@@ -122,7 +134,9 @@ function isRegularFileSync(p: string): boolean {
   }
 }
 
-async function isRegularFileAsync(p: string): Promise<boolean> {
+/** isRegularFileSync, off the event loop: false for "not there" or "not a
+ *  file", REJECTS for anything else. */
+export async function isRegularFileAsync(p: string): Promise<boolean> {
   try {
     return (await fs.promises.stat(p)).isFile()
   } catch (e) {
@@ -309,4 +323,265 @@ export function withFullyQualifiedProgramLookup<T extends Record<string, string 
     else delete out[key]
   }
   return out as T & { NoDefaultCurrentDirectoryInExePath: string }
+}
+
+// ---------------------------------------------------------------------------
+// A program only the user's PowerShell profile puts on PATH
+// ---------------------------------------------------------------------------
+
+/** How many times a check the user asked for has brought this process's PATH
+ *  up to date (windows-path-refresh.ts refreshWindowsPath calls
+ *  noteWindowsPathRefresh for each one, for any provider: Check again on the
+ *  setup screen or in Settings, a provider's setup page, the check after an
+ *  install ends). A lookup that keeps its answer for the run
+ *  (claude-cli-probe.ts keeps the PowerShell profile's) asks again once this
+ *  count has moved, and never because of a check the app runs by itself. */
+let pathRefreshes = 0
+
+export function noteWindowsPathRefresh(): void {
+  pathRefreshes += 1
+}
+
+export function windowsPathRefreshCount(): number {
+  return pathRefreshes
+}
+
+/** A program file name the profile lookup may ask for: letters, digits, `.`,
+ *  `_` and `-` only, ending in `.exe`, `.cmd` or `.bat`, so a PowerShell
+ *  single-quoted string holds it exactly as written. */
+const PROFILE_LOOKUP_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:exe|cmd|bat)$/i
+
+/** The markers around the answer findWithPowerShellProfile's command prints:
+ *  a profile may print before it, so only the text between the LAST opening
+ *  marker and the first closing marker after it counts. */
+const PROFILE_ANSWER_BEGIN = '__CCC_PROGRAM_BEGIN__'
+const PROFILE_ANSWER_END = '__CCC_PROGRAM_END__'
+
+/** How long the PowerShell profile has to answer (a profile that loads conda
+ *  or a prompt theme can take a few seconds). After it the question counts as
+ *  unanswered, and PowerShell, with whatever it started, is stopped. */
+export const POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS = 10_000
+
+/** How long the output is still read after PowerShell has exited, when
+ *  something the profile started (an agent such as gpg-agent or ssh-agent)
+ *  still holds the output open, so it never closes: what PowerShell printed
+ *  before it exited has arrived by then. */
+export const POWERSHELL_PROFILE_EXIT_DRAIN_MS = 300
+
+/** About how much of the END of PowerShell's output is kept (a profile may
+ *  print a lot before the answer). */
+const PROFILE_LOOKUP_MAX_OUTPUT = 256 * 1024
+
+/** What findWithPowerShellProfile learned. `found`: the program's full path.
+ *  `none`: PowerShell answered, and named no program the app takes (none of
+ *  those names, one powerShellProfileAnswer refuses, or one that is not a
+ *  regular file). `failed`: no answer to go by: PowerShell did not start,
+ *  did not answer in time, exited without printing one, or the file could
+ *  not be checked. */
+export type PowerShellProfileLookup = { outcome: 'found'; path: string } | { outcome: 'none' } | { outcome: 'failed' }
+
+function assertProfileLookupNames(names: readonly string[]): void {
+  if (!Array.isArray(names) || names.length === 0) throw new Error('findWithPowerShellProfile: no program names')
+  for (const n of names) {
+    if (typeof n !== 'string' || !PROFILE_LOOKUP_NAME.test(n)) throw new Error(`findWithPowerShellProfile: ${JSON.stringify(n)} is not a plain program file name`)
+  }
+}
+
+/** The fixed command Windows PowerShell runs, after the user's profile, to
+ *  say where the first of `names` is. First the PATH the profile built is
+ *  kept to the folders named from a drive letter (`C:\...`, in quotes or
+ *  not, no `%`): a relative entry (`.`, `bin`, `node_modules\.bin`) is
+ *  dropped, and a share's answer is refused anyway. Then each name in turn:
+ *  the first program (an application, never a script, alias or function) of
+ *  that name in that PATH, in PATH's order, as Get-Command finds it (the
+ *  names in claude-cli-probe.ts CLAUDE_WINDOWS_NAMES order, as the app's own
+ *  walk asks them). The path goes out between the markers as Base64 of its
+ *  UTF-8 bytes, so no console code page can change a character of it and no
+ *  profile banner can be mistaken for it. No double quote anywhere in it, so
+ *  Windows PowerShell's command line cannot split it. THROWS for a name
+ *  PROFILE_LOOKUP_NAME refuses. */
+export function powerShellProfileLookupCommand(names: readonly string[]): string {
+  assertProfileLookupNames(names)
+  const list = names.map((n) => `'${n}'`).join(',')
+  return [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    "$env:PATH = (@($env:PATH -split ';') | Where-Object { $_.Trim() -match '^\\x22?[A-Za-z]:[\\\\/]' -and $_ -notmatch '%' }) -join ';'",
+    "$found = ''",
+    `foreach ($name in @(${list})) { $c = Get-Command -Name $name -CommandType Application | Select-Object -First 1; if ($c) { $found = [string]$c.Source; break } }`,
+    `[Console]::Out.Write('${PROFILE_ANSWER_BEGIN}' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($found)) + '${PROFILE_ANSWER_END}')`,
+  ].join('; ')
+}
+
+/** Two folders that are one for Windows (case and a trailing separator aside). */
+function sameWindowsFolder(a: string, b: string): boolean {
+  const key = (p: string): string => path.win32.resolve(p).replace(/[\\/]+$/, '').toLowerCase()
+  return key(a) === key(b)
+}
+
+/** The text between the last opening marker and the first closing marker
+ *  after it, or null when the output holds no such pair (the command never
+ *  got to print its answer). */
+function printedProfileAnswer(stdout: string): string | null {
+  const open = stdout.lastIndexOf(PROFILE_ANSWER_BEGIN)
+  if (open < 0) return null
+  const start = open + PROFILE_ANSWER_BEGIN.length
+  const end = stdout.indexOf(PROFILE_ANSWER_END, start)
+  return end < 0 ? null : stdout.slice(start, end)
+}
+
+/** The program path in findWithPowerShellProfile's output, or null. Taken
+ *  only when the text between the markers is Base64 of whole UTF-8 that reads
+ *  as one plain drive-absolute path (`C:\...`, every step a plain name: not a
+ *  share, the device namespace or a relative path, and no `.`, `..`, `%`,
+ *  wildcard, quote, line break or other control character), whose file name
+ *  is one of `names` (in any case) and whose folder is not `workingFolder`,
+ *  the folder the question ran in (what a `.` PATH entry would answer).
+ *  Returned with backslashes. Whether the file exists is the caller's to ask. */
+export function powerShellProfileAnswer(stdout: string, names: readonly string[], workingFolder: string): string | null {
+  const encoded = printedProfileAnswer(stdout)
+  if (encoded === null) return null
+  if (encoded === '' || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return null
+  const decoded = Buffer.from(encoded, 'base64').toString('utf8')
+  if (Buffer.from(decoded, 'utf8').toString('base64') !== encoded) return null
+  const m = /^([A-Za-z]:)[\\/](.+)$/.exec(decoded.trim())
+  if (!m) return null
+  const steps = m[2].split(/[\\/]/)
+  if (!steps.every(isPlainStep)) return null
+  const file = path.win32.join(`${m[1]}\\`, ...steps)
+  const base = steps[steps.length - 1].toLowerCase()
+  if (!names.some((n) => typeof n === 'string' && n.toLowerCase() === base)) return null
+  if (sameWindowsFolder(path.win32.dirname(file), workingFolder)) return null
+  return file
+}
+
+/** What findWithPowerShellProfile may be told. */
+export interface PowerShellProfileLookupOptions {
+  /** The environment PowerShell starts with (this process's by default),
+   *  with its PATH kept to fully qualified folders and the current folder
+   *  kept out of program lookup (withFullyQualifiedProgramLookup). */
+  env?: NodeJS.ProcessEnv
+  /** The folder the question runs in: the home folder by default. It must be
+   *  a plain drive-absolute folder, or nothing is asked. */
+  cwd?: string
+  timeoutMs?: number
+  /** Whether the answer is a regular file (a real file test by default). */
+  stat?: (p: string) => Promise<boolean>
+}
+
+/** Stop a question that did not answer in time. `taskkill /T` (by its full
+ *  path in the system folder) finds what the profile started only while
+ *  PowerShell is alive and still its root, so nothing is killed once
+ *  PowerShell has exited: its process id is Windows's to reuse. Best-effort,
+ *  never throws. */
+function stopPowerShellLookup(child: ChildProcess | undefined, env: NodeJS.ProcessEnv): void {
+  if (!child) return
+  const kill = (): void => { try { child.kill() } catch { /* best-effort */ } }
+  try {
+    if (child.exitCode == null && child.signalCode == null) {
+      let taskkill: string | null = null
+      try { taskkill = systemTool('taskkill.exe', env) } catch { taskkill = null }
+      if (taskkill && child.pid) {
+        execFile(taskkill, ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 5_000, cwd: path.win32.dirname(taskkill) }, () => kill())
+      } else {
+        kill()
+      }
+    }
+    child.stdout?.destroy()
+  } catch { /* best-effort */ }
+}
+
+/** The full path of the first of `names` that Windows PowerShell finds after
+ *  running the user's profile (`found`), that it named none the app takes
+ *  (`none`), or that there is no answer to go by (`failed`). Windows
+ *  PowerShell starts by its full path in the system folder (systemTool; with
+ *  no plain SystemRoot nothing starts), WITH the profile, `-NonInteractive`,
+ *  the fixed command of powerShellProfileLookupCommand, in `opts.cwd` (the
+ *  home folder), no shell, off the event loop. The answer is
+ *  powerShellProfileAnswer's, and only when it is a regular file. It is read
+ *  when the output closes, or POWERSHELL_PROFILE_EXIT_DRAIN_MS after
+ *  PowerShell exits when something the profile started still holds the
+ *  output open. No answer within `opts.timeoutMs` and a start that failed are
+ *  `failed`. Rejects only for names PROFILE_LOOKUP_NAME refuses. Windows
+ *  only: the caller decides when. */
+export function findWithPowerShellProfile(names: readonly string[], opts: PowerShellProfileLookupOptions = {}): Promise<PowerShellProfileLookup> {
+  const FAILED: PowerShellProfileLookup = { outcome: 'failed' }
+  const NONE: PowerShellProfileLookup = { outcome: 'none' }
+  let command: string
+  try {
+    command = powerShellProfileLookupCommand(names)
+  } catch (e) {
+    return Promise.reject(e)
+  }
+  const env = opts.env ?? process.env
+  const cwd = opts.cwd ?? homedir()
+  if (!isPlainDriveFolder(cwd)) return Promise.resolve(FAILED)
+  let start: WindowsStartCommand
+  try {
+    const how = windowsStartCommand(systemTool('WindowsPowerShell\\v1.0\\powershell.exe', env), ['-NoLogo', '-NonInteractive', '-Command', command], env)
+    if ('refused' in how) return Promise.resolve(FAILED)
+    start = how
+  } catch {
+    return Promise.resolve(FAILED)
+  }
+  const timeoutMs = opts.timeoutMs ?? POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS
+  const stat = opts.stat ?? isRegularFileAsync
+  return new Promise<PowerShellProfileLookup>((resolve) => {
+    let settled = false
+    let reading = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let drain: ReturnType<typeof setTimeout> | undefined
+    let child: ChildProcess | undefined
+    const chunks: Buffer[] = []
+    let size = 0
+    const finish = (answer: PowerShellProfileLookup): void => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      if (drain) clearTimeout(drain)
+      resolve(answer)
+    }
+    const read = (): void => {
+      if (settled || reading) return
+      reading = true
+      // Nothing more is read: PowerShell has exited, and what it started
+      // may hold the output open for good.
+      try { child?.stdout?.destroy() } catch { /* best-effort */ }
+      const out = Buffer.concat(chunks).toString('utf8')
+      if (printedProfileAnswer(out) === null) { finish(FAILED); return }
+      const found = powerShellProfileAnswer(out, names, cwd)
+      if (!found) { finish(NONE); return }
+      stat(found).then((ok) => finish(ok === true ? { outcome: 'found', path: found } : NONE), () => finish(FAILED))
+    }
+    try {
+      child = spawn(start.file, start.args, {
+        cwd,
+        env: start.env,
+        windowsHide: true,
+        windowsVerbatimArguments: start.windowsVerbatimArguments,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      // The answer is printed last, so the end of the output is what is kept.
+      child.stdout?.on('data', (d: Buffer) => {
+        chunks.push(d)
+        size += d.length
+        while (size - chunks[0].length >= PROFILE_LOOKUP_MAX_OUTPUT) size -= (chunks.shift() as Buffer).length
+      })
+      child.on('error', () => finish(FAILED))
+      child.on('exit', () => {
+        if (settled || drain) return
+        drain = setTimeout(read, POWERSHELL_PROFILE_EXIT_DRAIN_MS)
+        drain.unref?.()
+      })
+      child.on('close', () => read())
+    } catch {
+      finish(FAILED)
+      return
+    }
+    timer = setTimeout(() => {
+      if (settled) return
+      finish(FAILED)
+      stopPowerShellLookup(child, env)
+    }, timeoutMs)
+    timer.unref?.()
+  })
 }

@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar'
 import TabBar from './components/TabBar'
 import SessionHeader from './components/SessionHeader'
 import TerminalView, { killSessionPty } from './components/TerminalView'
+import PartnerTerminalPane from './components/PartnerTerminalPane'
 import CommandBar from './components/CommandBar'
 import SessionStatusStrip from './components/SessionStatusStrip'
 import WebviewPane from './components/WebviewPane'
@@ -17,6 +18,7 @@ import { setupCanvasListener } from './stores/canvasStore'
 import { setupCodexMarkerNoticeListener } from './stores/codexMarkerNoticeStore'
 import { setupCanvasReviewListener } from './stores/canvasReviewStore'
 import { setupCanvasSnapshotHost } from './canvas/canvas-snapshot-host'
+import { setupClaudeMarkerHost } from './lib/claudePrompt'
 import { useLogsStore } from './stores/useLogsStore'
 import BottomBar from './components/BottomBar'
 import UsageDashboard from './components/UsageDashboard'
@@ -28,7 +30,8 @@ import TokenomicsPage from './components/TokenomicsPage'
 import ConductorMcpPage from './components/ConductorMcpPage'
 import MemoryPage from './components/MemoryPage'
 import SetupDialog from './components/SetupDialog'
-import { shouldShowWhatsNew } from './onboarding/whats-new-gate'
+import { AppLoadingScreen } from './components/AppLoadingScreen'
+import { shouldShowWhatsNew, seenVersionOf } from './onboarding/whats-new-gate'
 import AccountLaunchGate from './components/AccountLaunchGate'
 import LaunchAckConfirm from './components/LaunchAckConfirm'
 import { grantLaunchAcknowledgement } from './stores/launchAckStore'
@@ -66,6 +69,8 @@ import { useSettingsStore } from './stores/settingsStore'
 import { OnboardingHarness } from './onboarding/OnboardingHarness'
 import { CodexReconfirmPage } from './onboarding/CodexReconfirmPage'
 import { decideCodexReconfirm, codexAnswered, codexReconfirmDue } from './onboarding/codex-reconfirm-gate'
+import { CodexReplacePage } from './onboarding/CodexReplacePage'
+import { decideCodexReplace } from './onboarding/codex-replace-gate'
 import { noteCodexChosenOnUpgrade } from './onboarding/provider-choice'
 import { HelloCodexHost, helloCodexShowing, useHeldCodexSessionStart } from './onboarding/HelloCodex'
 import { useHelloCodexStore } from './onboarding/hello-codex'
@@ -161,6 +166,12 @@ export default function App() {
    *  completed the flow, but has not seen the notes for the build now running.
    *  Armed once in postConfigInit, cleared when the harness completes. */
   const [whatsNewOnly, setWhatsNewOnly] = useState(false)
+  /** The version the user had seen the notes for, from the meta loaded at
+   *  boot, BEFORE this launch stamps lastRunVersion (O2): What's New diffs
+   *  from it. Read after that stamp, the #369 clamp has nothing to clamp
+   *  against. Captured once in postConfigInit; undefined on a fresh install,
+   *  and until then (the harness then reads the live, still unstamped, meta). */
+  const [bootSeenVersion, setBootSeenVersion] = useState<string | undefined>(undefined)
   /** WP2: a setup screen in this run (the first-run or the version-change
    *  one) ended with "Use Codex only". Upgraders (including a new computer
    *  pointed at an existing resources folder, on the first-run screen) never
@@ -182,6 +193,22 @@ export default function App() {
    *  `shown`: the page is on screen, so only its own answer closes it. */
   const [codexReconfirmArmed, setCodexReconfirmArmed] = useState(false)
   const [codexReconfirmShown, setCodexReconfirmShown] = useState(false)
+  /** O5: "Replace this sign-in with a Codex account", shown once to someone
+   *  who chose the Codex sign-in already on this computer in 2.1.1-beta.2
+   *  (onboarding/codex-replace-gate.ts). Armed ONCE per start, from the
+   *  first accounts snapshot it receives (the snapshot arrives after the
+   *  config, so not in postConfigInit); cleared when the page is left. */
+  const [codexReplaceArmed, setCodexReplaceArmed] = useState(false)
+  const codexReplaceDecided = useRef(false)
+  const providerAccountsLoaded = useProviderAccountsStore((s) => s.loaded)
+  useEffect(() => {
+    if (!configLoaded || !providerAccountsLoaded || codexReplaceDecided.current) return
+    codexReplaceDecided.current = true
+    if (decideCodexReplace({
+      snapshot: useProviderAccountsStore.getState().snapshot,
+      seenVersion: useAppMetaStore.getState().meta.codexReplaceSeenVersion,
+    })) setCodexReplaceArmed(true)
+  }, [configLoaded, providerAccountsLoaded])
   /** Config ids the grandfathering migration turned on THIS START — the rows
    *  the startup page marks "auto · N copies found". Accumulated because the
    *  page mounts after the migration has already written `true`, at which point
@@ -593,6 +620,11 @@ export default function App() {
 
     async function postConfigInit() {
       const appMeta = useAppMetaStore.getState().meta
+      // What's New diffs from this (O2): taken from the same pre-stamp
+      // snapshot as every boot decision below, before lastRunVersion is
+      // stamped further down. Set in this same synchronous block, so it is
+      // in place by the render that mounts the harness.
+      setBootSeenVersion(seenVersionOf(appMeta))
 
       // Re-fire the first-run tour when the VERSION warrants it: an
       // ONBOARDING_VERSION bump, or a crossed release line (2.0.x → 2.1.x) on
@@ -718,11 +750,14 @@ export default function App() {
       setupSleepListeners()
       setupActiveListeners()
       setupCanvasListener()
-      // WP2 PR 4, P4.1 (review A-1): canvas markers a Codex session did not get, kept
-      // while the canvas page is closed.
+      // WP2 PR 4, P4.1 (review A-1): canvas markers a session did not get (Codex
+      // or Claude Code), kept while the canvas page is closed.
       setupCodexMarkerNoticeListener()
       setupCanvasReviewListener()
       setupCanvasSnapshotHost()
+      // A canvas marker into a Claude Code session is typed
+      // only at its ready, empty prompt, read from that session's terminal here.
+      setupClaudeMarkerHost()
       useGitHubStore.getState().loadConfig()
       useConductorMcpStore.getState().loadConfig()
       useConductorMcpStore.getState().fetchStatus()
@@ -1057,9 +1092,10 @@ export default function App() {
             {sessions.map((session) => {
               const isShowingPartner = partnerActive.has(session.id)
               // Partner terminal is permanent for every config type (2 Aug):
-              // no per-config opt-in. It opens in the working directory for
-              // local sessions and at home for SSH (the working directory
-              // there is a remote path this PC can't resolve). Mounted LAZILY on
+              // no per-config opt-in. A local session's opens on this PC in
+              // its working directory; an SSH session's (#86) is a plain shell
+              // on the session's own host, its own plain connection, in the
+              // config's remote folder (PartnerTerminalPane, utils/partnerShell). Mounted LAZILY on
               // first activation so its PTY isn't spawned for every session up
               // front (adversarial review, #188); once opened it stays mounted.
               const hasPartner = partnerEverActivated.has(session.id)
@@ -1132,50 +1168,15 @@ export default function App() {
                         minHeight: 0,
                       }}
                     >
-                      {/* Which terminal am I in? The Canvas and webview panes
-                          answer that by looking different; the partner pane is
-                          another terminal, so a user who switched could be
-                          typing into a plain shell believing it was Claude, with
-                          the only cue a label change on one button in the command
-                          bar. This strip states it and carries the way back.
-                          P3.7 (the C item "narrow-window overlap", row 64):
-                          pr-12 keeps the way back clear of the GitHub button
-                          floating over this corner (GitHubPanel gh-fab:
-                          absolute top-2 right-2, 32px), as the switch note
-                          does; the note wraps, the button never shrinks. */}
-                      <div
-                        className="flex-none flex items-center gap-2 pl-3 pr-12 py-1 text-[11px] border-b"
-                        style={{
-                          background: 'color-mix(in srgb, var(--color-green) 12%, transparent)',
-                          borderColor: 'color-mix(in srgb, var(--color-green) 28%, transparent)',
-                          color: 'var(--color-subtext0)',
-                        }}
-                        data-ux-id="partner-identity-strip"
-                      >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-green)' }} aria-hidden>
-                          <polyline points="4 17 10 11 4 5" />
-                          <line x1="12" y1="19" x2="20" y2="19" />
-                        </svg>
-                        <span className="min-w-0">Partner terminal &mdash; a plain shell, not {agentName}</span>
-                        <button
-                          onClick={() => togglePartner(session.id)}
-                          className="ml-auto shrink-0 whitespace-nowrap flex items-center gap-1 px-2 py-0.5 rounded focus-ring transition-colors hover:bg-surface1"
-                          style={{ color: 'var(--color-text)' }}
-                          title={`Back to the ${agentName} terminal`}
-                        >
-                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                            <path d="M19 12H5M11 18l-6-6 6-6" />
-                          </svg>
-                          Back to {agentName}
-                        </button>
-                      </div>
-                      <TerminalView
-                        key={partnerPtyId + '-' + session.createdAt}
-                        sessionId={partnerPtyId}
-                        configId={session.configId}
-                        cwd={session.sessionType === 'local' ? session.workingDirectory : undefined}
-                        shellOnly={true}
+                      {/* The partner's identity strip (which terminal, and #86
+                          WHERE it runs: this PC, or the SSH session's host) and
+                          its shell: PartnerTerminalPane. */}
+                      <PartnerTerminalPane
+                        session={session}
+                        ptyId={partnerPtyId}
+                        agentName={agentName}
                         isActive={session.id === activeSessionId && view === 'sessions' && isShowingPartner && !altPaneShowing}
+                        onBack={() => togglePartner(session.id)}
                       />
                     </PaneFade>
                   )}
@@ -1255,13 +1256,10 @@ export default function App() {
   // until logsWipe detection resolves: pickBootGate returns null while
   // logsWipeBytes === null, so rendering the shell here would flash an
   // ungated, interactive app for a few frames before a due gate (onboarding,
-  // wipe) pops over it.
+  // wipe) pops over it. No title bar here, so the screen draws the window's
+  // own buttons and a drag bar (AppLoadingScreen).
   if (setupComplete === null || (setupComplete && (!configLoaded || logsWipeBytes === null))) {
-    return (
-      <div className="flex flex-col h-screen bg-base text-text items-center justify-center">
-        <div className="text-overlay1">Loading...</div>
-      </div>
-    )
+    return <AppLoadingScreen />
   }
 
   // Show setup dialog on first run
@@ -1324,6 +1322,7 @@ export default function App() {
     codexReconfirmDue: codexReconfirmDue({ armed: codexReconfirmArmed, shown: codexReconfirmShown, answered: codexAnsweredNow }),
     resumePending: pendingRestore !== null,
     multiSpawnIntroDue,
+    codexReplaceDue: codexReplaceArmed,
     helloCodexOpen: helloCodexTakeoverOpen,
     whatsNewDue: shouldShowWhatsNew(),
     githubOnboardingDue: isGitHubOnboardingDue(),
@@ -1333,12 +1332,14 @@ export default function App() {
   const boot = bootChain(bootGateState)
   const bootGate = boot.gate
   // The onboarding pages (unless they stepped aside for a terminal they
-  // opened) and the introduction's takeover or replay cover the whole
-  // window. Behind them the app is inert: no Tab stop, click or screen
-  // reader reaches the title bar, sidebar or sessions they hide (VM audit,
-  // 2026-09-25: Tab walked out of the pages into hidden controls). The
+  // opened), the Multi Spawn page and the introduction's takeover or replay
+  // cover the whole window. Behind them the app is inert: no Tab stop, click
+  // or screen reader reaches the title bar, sidebar or sessions they hide
+  // (VM audit, 2026-09-25: Tab walked out of the pages into hidden
+  // controls), and the hidden title bar declares no drag regions over the
+  // page's own bar and window buttons (styles.css; aicc_planning #211). The
   // dialogs that open above them (the close dialogs) are outside it.
-  const appCovered = (bootGate === 'onboarding' && !onboardingAside) || bootGate === 'codexReconfirm' || helloCodexShowing(helloCodexOpen, boot.helloCodexTurn)
+  const appCovered = (bootGate === 'onboarding' && !onboardingAside) || bootGate === 'codexReconfirm' || bootGate === 'multiSpawnIntro' || bootGate === 'codexReplace' || helloCodexShowing(helloCodexOpen, boot.helloCodexTurn)
 
   return (
     <ErrorBoundary>
@@ -1349,6 +1350,7 @@ export default function App() {
         {bootGate === 'onboarding' && (
           <OnboardingHarness
             whatsNewOnly={whatsNewOnly}
+            bootSeenVersion={bootSeenVersion}
             codexSetupOnly={harness.codexSetupOnly}
             onAsideChange={setOnboardingAside}
             onComplete={(startTour, extra) => {
@@ -1506,6 +1508,13 @@ export default function App() {
             tally={restoreTally}
             onDone={() => setMultiSpawnIntroDue(false)}
           />
+        )}
+
+        {/* O5: "Replace this sign-in with a Codex account" (bootGates:
+            after the Multi Spawn page, before the Codex introduction). Shown
+            once; the launches of sessions on that sign-in wait behind it. */}
+        {bootGate === 'codexReplace' && (
+          <CodexReplacePage onDone={() => setCodexReplaceArmed(false)} />
         )}
 
         {/* WP2 commit 6f: the Codex introduction outside onboarding. The

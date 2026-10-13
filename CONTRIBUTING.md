@@ -13,8 +13,8 @@ Thanks for your interest in contributing! This document covers setup, coding sta
 ## Getting Started
 
 ```bash
-git clone https://github.com/nubbymong/claude-command-center.git
-cd claude-command-center
+git clone https://github.com/nubbymong/ai-code-conductor.git
+cd ai-code-conductor
 npm install
 npm run dev
 ```

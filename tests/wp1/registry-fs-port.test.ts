@@ -131,7 +131,8 @@ describe('the registry follows the resources directory (plan: carried from slice
     let stored: string | null = initial
     vi.doMock('../../src/main/registry', () => ({
       readRegistry: (key: string) => (key === 'ResourcesDirectory' ? stored : null),
-      writeRegistry: (key: string, value: string) => { if (key === 'ResourcesDirectory') stored = value },
+      // Saved, as the real writeRegistry answers when the registry took the value.
+      writeRegistry: (key: string, value: string) => { if (key === 'ResourcesDirectory') stored = value; return true },
     }))
     vi.doUnmock('../../src/main/data-paths')
     const paths = await import('../../src/main/data-paths')

@@ -13,6 +13,7 @@ import { ensureHelpWorkspace } from '../help-workspace'
 import { getResourcesDirectory } from './setup-handlers'
 import { loginShellWithOwnPath, shFamilyLoginShell } from '../login-shell'
 import { claudeInLoginShellPathAsync, findClaudeOnWindowsAsync } from '../claude-cli-probe'
+import { warmPickerNodeOnWindows } from '../spawn-claude-command'
 import { IPC } from '../../shared/ipc-channels'
 import { providerProbeRefusal } from '../provider-launch-gate'
 
@@ -33,10 +34,18 @@ export function registerCliHandlers(): void {
     const execFileAsync = promisify(execFile)
     try {
       if (process.platform === 'win32') {
-        // No process is started: the same PATH walk the launch uses
-        // (claude-cli-probe.ts CLAUDE_WINDOWS_NAMES, in that order), one stat
-        // at a time off the event loop. Its answer is what the next launch
-        // uses while it is recent (findClaudeOnWindows).
+        // The same PATH walk the launch uses (claude-cli-probe.ts
+        // CLAUDE_WINDOWS_NAMES, in that order), one stat at a time off the
+        // event loop. Its answer is what the next launch uses while it is
+        // recent (findClaudeOnWindows). No process is started unless the walk
+        // finds none and the PowerShell profile has no current answer
+        // (claude-cli-probe.ts claudeFromPowerShellProfile): then Windows
+        // PowerShell is asked once, and its answer is kept.
+        // Beside it, node.exe, which runs a fresh session's resume list, is
+        // looked for the same way, so the next launch reads that answer and
+        // walks no PATH itself (spawn-claude-command.ts pickerNodeFound). Not
+        // awaited: this answer never waits for it.
+        void warmPickerNodeOnWindows(process.env)
         return (await findClaudeOnWindowsAsync(process.env)) !== null
       } else {
         // A login shell outside the sh family: Claude Code in the PATH it

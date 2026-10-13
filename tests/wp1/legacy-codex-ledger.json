@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "e25be70e219f2554d9bd7edea77e27efc28fef226fda8ea5a919484b01aefa0b",
-  "manifestHead": "7ed87dad76dc9815bda74148d2a6660b3765684f",
+  "manifestPathDigest": "db972d30ac81e27f73e6fd473ca948150e1f3717648b2a3e39ce108966146608",
+  "manifestHead": "48b9a38efdd5bc8d791443e2433aa6a5fe0923e6",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -1856,8 +1856,8 @@
         "P14"
       ],
       "category": "RESUME-PICKER",
-      "disposition": "retain",
-      "evidence": "unchanged observable behaviour; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); runs unchanged in the merge-candidate suite (WP1.33); WP1.68 resume picker UNCHANGED; tests/unit/providers/codex/resume-picker-deploy.test.ts",
+      "disposition": "replace",
+      "evidence": "deploy behaviour at the WP1 baseline unchanged by WP1; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); runs unchanged in the merge-candidate suite (WP1.33); WP1.68 resume picker UNCHANGED; tests/unit/providers/codex/resume-picker-deploy.test.ts; 2.1.1-beta.3 (WP1.68): before it writes the helper lib, the deploy makes the resources folder scripts/lib a real folder (prepareScriptFolder: a real folder kept; a link removed as a link, never what it names; a directory that does not resolve to its own place removed without recursion; a real folder made, without making any folder above it, and checked again); tests/unit/providers/codex/resume-picker-deploy.test.ts, tests/unit/main/script-deploy-folder.test.ts",
       "note": "deploys the picker script; the picker reads CODEX_HOME from the PTY env, so a managed realm works unchanged"
     },
     {
@@ -1905,7 +1905,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "move",
-      "evidence": "WP1.68 outcomes: PTY launch flags UNCHANGED and authenticated per-spawn MCP UNCHANGED (pinned by tests/wp1/codex-characterization.test.ts C3 and tests/unit/providers/codex/spawn.test.ts); realm env ADAPTED (tests/wp1/launch-handoff.test.ts, WP1.38, WP1.2); executable identity WP1.17/WP1.49 (tests/wp1/cli-discovery.test.ts); WP2 PR 3 P3.5 (rows 34, 35; parity): an exact resume runs codex resume <id> before the flags, only for a conversation whose rollout is in the launch's own realm, the id checked again before argv, bypassing the picker, and says where the CLI starts; the picker's launch gets a fresh pick file in the temp folder and the config folder (WP1.38); tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 3 P3.10: a launch with a hook file gets six -c command hooks running the deployed forwarder (a plain wrapper path, or PowerShell's call of a quoted one on a direct launch; none when the command cannot be given safely on the route) and the hook file's path in its environment; the token is never on the command line (WP1.68); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): the npm shim route runs the checked plain-path copy of the wrapper when the resources folder's path has a space (V3); the picker is told which conversations other open tabs are on (V2); the cmd.exe path rule shared with hooks.ts (A3); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): a comment names preparedCodexHookRoot; tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.11 (row 62, extra CLI arguments; parity) (WP1.68): the extra arguments, checked again, are one argument per word after every flag the app sets, on every route; tests/unit/providers/codex/spawn-extra-args.test.ts; WP2 PR 3 P3.11 round 1 (ADR-009 pass 1, spec and quality findings) (WP1.68): the builder reads the shared rule; tests/unit/providers/codex/spawn-extra-args.test.ts; WP2 PR 4 P4.1/P4.2: the canvas approval keys per preset, developer instructions on the direct route only, the cmd.exe line fit (WP1.68); tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 P4.3 re-review (RASK-3, RASK-4, 56200cd5): no lone surrogate on argv, so such a question is typed through the pane (WP1.68); tests/unit/providers/codex/spawn-ask.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the builder returns the logged launch line (logLine) (WP1.55); tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): the Ask question after -- on the direct route's fresh launch only, named by its length on the logged line, and -c project_doc_max_bytes (bound checked) and -c project_root_markers=[] on every Ask launch (WP1.68); tests/unit/providers/codex/spawn-ask.test.ts; WP2 PR 4 ADR-009 round 1 (63968ba0): changed by the pass's fixes (WP1.68); tests/unit/providers/codex/spawn-ask.test.ts; WP2 PR 4 VM checkpoint fixes (5e5d0478), review fixes (758cb407): changed by those fixes (WP1.68); tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 review fixes (988e02a0): changed by those fixes (WP1.68); tests/unit/providers/codex/spawn-ask.test.ts; WP2 PR 4 owner answers (2026-10-04) (785b886e, 1f607839, integration round 3): the developer_instructions flag and its log redaction removed (question 5 answered C); on Windows the first fully qualified PATH entry holding codex.exe or codex.cmd wins, PATHEXT order within an entry, no process or shell, only fully qualified PATH folders (a drive or a share); the picker flag (viaPicker) and codexLaunchRoute removed, no consumer left (WP1.68); tests/unit/providers/codex/spawn-canvas.test.ts, tests/unit/providers/codex/codex-binary-path-order.test.ts, tests/unit/providers/codex/spawn-ask.test.ts; WP2 PR 4 owner answers review fix pass (aaa6990e; reviews B-S2, B-S3, B-Q4, ADR-009 delta L3): a form PATHEXT does not list is looked for only in a second pass; a PATH folder that could not be read is asked nothing more in that lookup; network share entries and names ending in a dot or a space were not read (round 2 reads shares and names each folder as Windows does) (WP1.68); tests/unit/providers/codex/codex-binary-path-order.test.ts; WP2 PR 4 owner answers review round 2 (1e11f4db; reviews B-S10, B-S11): share PATH folders are read again as a terminal reads them (device paths never), the unreadable-folder memo kept; each folder is named as Windows names it when it runs a program (a name's single trailing dot dropped, a share's own names kept, . and .. folded) (WP1.68); tests/unit/providers/codex/codex-binary-path-order.test.ts; WP2 PR 4 polish (205e670d): the folder-naming rule is the shared windowsFolderAsRun of src/main/providers/windows-path-names.ts, byte-identical, the Codex name kept (WP1.68); tests/unit/providers/codex/codex-binary-path-order.test.ts, tests/unit/providers/windows-path-names.test.ts; WP2 PR 4 final review nits (L3): the PATH folders read come from the shared windowsPathFolderIsFullyQualified (a drive, or a share spelled with two leading slashes), the rule the Claude walk uses too; comments say what is read (WP1.68); tests/unit/providers/codex/codex-binary-path-order.test.ts, tests/unit/providers/windows-path-names.test.ts",
+      "evidence": "WP1.68 outcomes: PTY launch flags UNCHANGED and authenticated per-spawn MCP UNCHANGED (pinned by tests/wp1/codex-characterization.test.ts C3 and tests/unit/providers/codex/spawn.test.ts); realm env ADAPTED (tests/wp1/launch-handoff.test.ts, WP1.38, WP1.2); executable identity WP1.17/WP1.49 (tests/wp1/cli-discovery.test.ts); WP2 PR 3 P3.5 (rows 34, 35; parity): an exact resume runs codex resume <id> before the flags, only for a conversation whose rollout is in the launch's own realm, the id checked again before argv, bypassing the picker, and says where the CLI starts; the picker's launch gets a fresh pick file in the temp folder and the config folder (WP1.38); tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 3 P3.10: a launch with a hook file gets six -c command hooks running the deployed forwarder (a plain wrapper path, or PowerShell's call of a quoted one on a direct launch; none when the command cannot be given safely on the route) and the hook file's path in its environment; the token is never on the command line (WP1.68); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): the npm shim route runs the checked plain-path copy of the wrapper when the resources folder's path has a space (V3); the picker is told which conversations other open tabs are on (V2); the cmd.exe path rule shared with hooks.ts (A3); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): a comment names preparedCodexHookRoot; tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.11 (row 62, extra CLI arguments; parity) (WP1.68): the extra arguments, checked again, are one argument per word after every flag the app sets, on every route; tests/unit/providers/codex/spawn-extra-args.test.ts; WP2 PR 3 P3.11 round 1 (ADR-009 pass 1, spec and quality findings) (WP1.68): the builder reads the shared rule; tests/unit/providers/codex/spawn-extra-args.test.ts; WP2 PR 4 P4.1/P4.2: the canvas approval keys per preset, developer instructions on the direct route only, the cmd.exe line fit (WP1.68); tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 P4.3 re-review (RASK-3, RASK-4, 56200cd5): no lone surrogate on argv, so such a question is typed through the pane (WP1.68); tests/unit/providers/codex/spawn-ask.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the builder returns the logged launch line (logLine) (WP1.55); tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): the Ask question after -- on the direct route's fresh launch only, named by its length on the logged line, and -c project_doc_max_bytes (bound checked) and -c project_root_markers=[] on every Ask launch (WP1.68); tests/unit/providers/codex/spawn-ask.test.ts; WP2 PR 4 ADR-009 round 1 (63968ba0): changed by the pass's fixes (WP1.68); tests/unit/providers/codex/spawn-ask.test.ts; WP2 PR 4 VM checkpoint fixes (5e5d0478), review fixes (758cb407): changed by those fixes (WP1.68); tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 review fixes (988e02a0): changed by those fixes (WP1.68); tests/unit/providers/codex/spawn-ask.test.ts; WP2 PR 4 owner answers (2026-10-04) (785b886e, 1f607839, integration round 3): the developer_instructions flag and its log redaction removed (question 5 answered C); on Windows the first fully qualified PATH entry holding codex.exe or codex.cmd wins, PATHEXT order within an entry, no process or shell, only fully qualified PATH folders (a drive or a share); the picker flag (viaPicker) and codexLaunchRoute removed, no consumer left (WP1.68); tests/unit/providers/codex/spawn-canvas.test.ts, tests/unit/providers/codex/codex-binary-path-order.test.ts, tests/unit/providers/codex/spawn-ask.test.ts; WP2 PR 4 owner answers review fix pass (aaa6990e; reviews B-S2, B-S3, B-Q4, ADR-009 delta L3): a form PATHEXT does not list is looked for only in a second pass; a PATH folder that could not be read is asked nothing more in that lookup; network share entries and names ending in a dot or a space were not read (round 2 reads shares and names each folder as Windows does) (WP1.68); tests/unit/providers/codex/codex-binary-path-order.test.ts; WP2 PR 4 owner answers review round 2 (1e11f4db; reviews B-S10, B-S11): share PATH folders are read again as a terminal reads them (device paths never), the unreadable-folder memo kept; each folder is named as Windows names it when it runs a program (a name's single trailing dot dropped, a share's own names kept, . and .. folded) (WP1.68); tests/unit/providers/codex/codex-binary-path-order.test.ts; WP2 PR 4 polish (205e670d): the folder-naming rule is the shared windowsFolderAsRun of src/main/providers/windows-path-names.ts, byte-identical, the Codex name kept (WP1.68); tests/unit/providers/codex/codex-binary-path-order.test.ts, tests/unit/providers/windows-path-names.test.ts; WP2 PR 4 final review nits (L3): the PATH folders read come from the shared windowsPathFolderIsFullyQualified (a drive, or a share spelled with two leading slashes), the rule the Claude walk uses too; comments say what is read (WP1.68); tests/unit/providers/codex/codex-binary-path-order.test.ts, tests/unit/providers/windows-path-names.test.ts; 2.1.1-beta.3 (WP1.68): a picker launch takes the picker only when the resources folder scripts/lib, where it is there, is a real folder (isRealScriptFolder: a directory that is not a link and resolves to its own place), and otherwise starts Codex directly with one warning; tests/unit/providers/codex/spawn.test.ts",
       "note": "resolveCodexBinary is unchanged (its own $SHELL -l probe on macOS and Linux, where on Windows) and is now only discovery's lookup: discovery binds what it finds to the executable identity record and proves it under the login shell's PATH (process-env.ts, through src/main/login-shell.ts), and a session runs only that proven executable; buildCodexSpawn takes the prepared launch (the executable, the realm env with CODEX_HOME set last, the known provider credential variables stripped per decision D3) instead of an implicit global home; CONDUCTOR_MCP_TOKEN is kept by the launch env policy",
       "adaptsTests": [
         "tests/unit/providers/codex/spawn.test.ts"
@@ -3317,16 +3317,26 @@
       "note": "approved mockup .ccc-canvas/upgrade-codex-confirm.html, screen 1; the Codex mark is the app's ProviderMark"
     },
     {
-      "path": "src/renderer/onboarding/CodexSetupStep.tsx",
+      "path": "src/renderer/onboarding/CodexReplacePage.tsx",
       "predicates": [
         "P01",
-        "P04",
-        "P05",
         "P11"
       ],
       "category": "SETUP",
       "disposition": "added",
-      "evidence": "WP2 commit 6e Codex setup page: discovery, install recipes, sign-in, this computer's sign-in (WP1.2); tests/unit/renderer/onboarding-codex-setup.test.tsx; WP2 commit 6e review fix: Run in a terminal only for a recipe main sent a line for, typing that line exactly, one install at a time (WP1.18); tests/unit/renderer/onboarding-codex-setup.test.tsx; WP2 commit 6e review round 2: an earlier check's answer maps honestly: settled F2 d, or the sign-in choices with the reason (WP1.2); WP2 reconfirm (owner decision 2026-09-26): the page registers nothing on load; it asks Codex read-only whether this computer's sign-in is signed in (probeExternal, keeping nothing), once Codex is answered on; F2 d is offered without claiming a sign-in it has not checked, and only Use this sign-in takes it in (status, then register), a signed-out answer moving to the new-account sign-in with a note (WP1.2, WP1.43); tests/unit/renderer/onboarding-codex-setup.test.tsx; WP2 visual fixes (VM audit 2026-09-25): focus follows the page's primary control in each state (install command, sign-in method, Recommended new account, Next), never taken from a control the user is on (WP1.2); tests/unit/renderer/onboarding-initial-focus.test.tsx; WP2 final fixes: a Codex newer than tested reads \"Newer than the versions this app was tested with; it will still be used\" (WP1.17); tests/unit/renderer/onboarding-codex-setup.test.tsx; WP2 final fixes (VM capture at 38cbc9d7): the newer-than-tested row wears the amber caution badge, as Settings, Accounts shows the same state (WP1.17); tests/unit/renderer/onboarding-codex-setup.test.tsx; WP2 P2 review round 1: asking again after a signed-out answer repeats the read-only check and never adopts; a folder that overlaps the app's own, or a check Codex cannot run here, offers nothing; an old found marker is asked again, never trusted (WP1.43); tests/unit/renderer/onboarding-codex-setup.test.tsx",
+      "evidence": "O5 adopter path (owner-agreed 2026-10-11): the one-time \"Replace this sign-in with a Codex account\" page for a 2.1.1-beta.2 user who chose the Codex sign-in already on this computer, a boot gate offering the usual add-account dialog and Not now, stamped when left; it signs nothing out and archives nothing (WP1.34, WP1.60 enable/disable); tests/unit/renderer/codex-replace-page.test.tsx",
+      "note": "shown once; moving a session or config off that sign-in is the launch confirmation's offer (LaunchAckConfirm)"
+    },
+    {
+      "path": "src/renderer/onboarding/CodexSetupStep.tsx",
+      "predicates": [
+        "P01",
+        "P04",
+        "P11"
+      ],
+      "category": "SETUP",
+      "disposition": "added",
+      "evidence": "WP2 commit 6e Codex setup page: discovery, install recipes, sign-in, this computer's sign-in (WP1.2); tests/unit/renderer/onboarding-codex-setup.test.tsx; WP2 commit 6e review fix: Run in a terminal only for a recipe main sent a line for, typing that line exactly, one install at a time (WP1.18); tests/unit/renderer/onboarding-codex-setup.test.tsx; WP2 commit 6e review round 2: an earlier check's answer maps honestly: settled F2 d, or the sign-in choices with the reason (WP1.2); WP2 reconfirm (owner decision 2026-09-26): the page registers nothing on load; it asks Codex read-only whether this computer's sign-in is signed in (probeExternal, keeping nothing), once Codex is answered on; F2 d is offered without claiming a sign-in it has not checked, and only Use this sign-in takes it in (status, then register), a signed-out answer moving to the new-account sign-in with a note (WP1.2, WP1.43); tests/unit/renderer/onboarding-codex-setup.test.tsx; WP2 visual fixes (VM audit 2026-09-25): focus follows the page's primary control in each state (install command, sign-in method, Recommended new account, Next), never taken from a control the user is on (WP1.2); tests/unit/renderer/onboarding-initial-focus.test.tsx; WP2 final fixes: a Codex newer than tested reads \"Newer than the versions this app was tested with; it will still be used\" (WP1.17); tests/unit/renderer/onboarding-codex-setup.test.tsx; WP2 final fixes (VM capture at 38cbc9d7): the newer-than-tested row wears the amber caution badge, as Settings, Accounts shows the same state (WP1.17); tests/unit/renderer/onboarding-codex-setup.test.tsx; WP2 P2 review round 1: asking again after a signed-out answer repeats the read-only check and never adopts; a folder that overlaps the app's own, or a check Codex cannot run here, offers nothing; an old found marker is asked again, never trusted (WP1.43); tests/unit/renderer/onboarding-codex-setup.test.tsx; O5 (2.1.1-beta.3, owner decision 2026-10-11): this computer's Codex sign-in is never offered, checked or taken in, and an account 2.1.1-beta.2 adopted does not count as set up; the page offers only a new Codex account (WP1.2, WP1.43); tests/unit/renderer/onboarding-codex-setup.test.tsx; tests/unit/renderer/onboarding-initial-focus.test.tsx",
       "note": "replaces the legacy Codex onboarding pages in the flow"
     },
     {
@@ -3370,13 +3380,12 @@
       "path": "src/renderer/onboarding/HelloCodex.tsx",
       "predicates": [
         "P01",
-        "P04",
         "P10",
         "P11"
       ],
       "category": "SETUP",
       "disposition": "added",
-      "evidence": "WP2 commit 6f: the Hello Codex pages, the onboarding page after Codex setup, and the one-time takeover and replay outside onboarding (WP1.34, WP1.6); tests/unit/renderer/hello-codex.acceptance.test.ts; WP2 commit 6f review round 1: the takeover at the shared z-50 under the close dialogs, keys left to a dialog open above it, keys ignored while arming and when auto-repeated, page 1 Back in onboarding, a replay while still due stamps, and \"Start a Codex session\" held behind the resume prompt (WP1.34, WP1.6); tests/unit/renderer/hello-codex.acceptance.test.ts; WP2 visual fixes (VM audit 2026-09-25): Tab stays inside it through the onboarding shell, helloCodexShowing is the host's render rule that App makes the app behind inert on, the close dialogs paint above the takeover on the top layer, and its column fits the page (WP1.34, WP1.6); tests/unit/renderer/onboarding-focus-trap.test.tsx; tests/unit/renderer/window-close-dialogs.test.tsx; tests/unit/renderer/onboarding-layout-contract.test.ts",
+      "evidence": "WP2 commit 6f: the Hello Codex pages, the onboarding page after Codex setup, and the one-time takeover and replay outside onboarding (WP1.34, WP1.6); tests/unit/renderer/hello-codex.acceptance.test.ts; WP2 commit 6f review round 1: the takeover at the shared z-50 under the close dialogs, keys left to a dialog open above it, keys ignored while arming and when auto-repeated, page 1 Back in onboarding, a replay while still due stamps, and \"Start a Codex session\" held behind the resume prompt (WP1.34, WP1.6); tests/unit/renderer/hello-codex.acceptance.test.ts; WP2 visual fixes (VM audit 2026-09-25): Tab stays inside it through the onboarding shell, helloCodexShowing is the host's render rule that App makes the app behind inert on, the close dialogs paint above the takeover on the top layer, and its column fits the page (WP1.34, WP1.6); tests/unit/renderer/onboarding-focus-trap.test.tsx; tests/unit/renderer/window-close-dialogs.test.tsx; tests/unit/renderer/onboarding-layout-contract.test.ts; O5 (2.1.1-beta.3, owner decision 2026-10-11): the Accounts drawing no longer shows this computer's Codex sign-in (WP1.34); tests/unit/renderer/hello-codex.acceptance.test.ts; 2.1.1-beta.3 What's New showcase: the hello, launch and review drawings moved unchanged to codex-art.tsx, shared with the What's New showcase (WP1.35); tests/unit/renderer/hello-codex.acceptance.test.ts",
       "note": ""
     },
     {
@@ -3405,6 +3414,16 @@
       "note": "re-dispositioned in WP2 PR 4 P4.11 (was retain): the Codex tile's label changed"
     },
     {
+      "path": "src/renderer/onboarding/ShowcaseVignette.tsx",
+      "predicates": [
+        "P11"
+      ],
+      "category": "UI-ONLY",
+      "disposition": "replace",
+      "evidence": "user-facing drawings only, no account/auth/setup logic; 2.1.1-beta.3 What's New showcase (O3): the showcase draws the 2.1.1 Codex pages with the Hello Codex drawings (codex-art.tsx) and a usage drawing; the Codex drawing follows whether Claude Code is on, and the accounts drawing has no row for the computer's own sign-in (WP1.35); tests/unit/renderer/whatsnew-showcase.test.tsx",
+      "note": ""
+    },
+    {
       "path": "src/renderer/onboarding/TransparencyStep.tsx",
       "predicates": [
         "P11"
@@ -3431,7 +3450,18 @@
       ],
       "category": "UI-ONLY",
       "disposition": "replace",
-      "evidence": "user-facing copy/labels only, no account/auth/setup logic; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md) (WP1.33); its Codex mention is unchanged; the WP2 final fixes respelled one title Built-in Tools, as the Settings section is; WP2 PR 3 P3.4 (parity row 14): a line that needs Claude Code in this release (needsClaude) is hidden while Claude Code is off or setup found none, and a section left empty goes (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.4 fix round 1: the 2.0 set's guide line (it promises Ask) carries needsClaude, lifted in P4.3; the partner terminal line stays (it works beside a Codex session) (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.4 follow-up (VM walk M1): the SSH Persistent and Remote Resumable lines carry needsClaude with the remote resume page, since the persistent remote session wraps the remote claude command and an SSH session runs no other agent in this release (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.6 (row 22): Switch mid-session reads for both providers and shows with Claude Code off; the claude.ai sign-in it also named is its own line, Claude Code only; a page shown with Claude Code off leaves out its Claude-only points (WP1.68); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.10: the Session Watchdog line is shown with Claude Code off (the Watchdog arms for Codex too) and the section heading reads Working with Codex then (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.1 and P4.3 (rows 51, 53; 0014a464): the guide, Agent Canvas and Ask Conductor lines show with Claude Code off (needsClaude lifted), and the canvas line names your agent (WP1.68); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.11 (4bf3d0ac, 103a5b7b): the 2.0 Codex line carries no Beta tag (row 54); the heading over the canvas, Watchdog and Ask lines names both assistants while both are on (INT-7) (WP1.21); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.7 fix pass 1: the comment on points that need Claude Code says none does in this release (WP1.21); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 Electron 44 (c6c437e6): the engine card names Electron 44; its Codex mention is unchanged (WP1.35); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 surface sweep before the 2.1.1-beta.2 cut: a line for Codex with accounts of its own, and the 2.0 Codex line names accounts instead of one sign-in (WP1.35); surface sweep review: the Codex accounts line moved and shortened, the 2.0 Codex line no longer repeats it (WP1.35)",
+      "evidence": "user-facing copy/labels only, no account/auth/setup logic; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md) (WP1.33); its Codex mention is unchanged; the WP2 final fixes respelled one title Built-in Tools, as the Settings section is; WP2 PR 3 P3.4 (parity row 14): a line that needs Claude Code in this release (needsClaude) is hidden while Claude Code is off or setup found none, and a section left empty goes (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.4 fix round 1: the 2.0 set's guide line (it promises Ask) carries needsClaude, lifted in P4.3; the partner terminal line stays (it works beside a Codex session) (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.4 follow-up (VM walk M1): the SSH Persistent and Remote Resumable lines carry needsClaude with the remote resume page, since the persistent remote session wraps the remote claude command and an SSH session runs no other agent in this release (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.6 (row 22): Switch mid-session reads for both providers and shows with Claude Code off; the claude.ai sign-in it also named is its own line, Claude Code only; a page shown with Claude Code off leaves out its Claude-only points (WP1.68); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.10: the Session Watchdog line is shown with Claude Code off (the Watchdog arms for Codex too) and the section heading reads Working with Codex then (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.1 and P4.3 (rows 51, 53; 0014a464): the guide, Agent Canvas and Ask Conductor lines show with Claude Code off (needsClaude lifted), and the canvas line names your agent (WP1.68); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.11 (4bf3d0ac, 103a5b7b): the 2.0 Codex line carries no Beta tag (row 54); the heading over the canvas, Watchdog and Ask lines names both assistants while both are on (INT-7) (WP1.21); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.7 fix pass 1: the comment on points that need Claude Code says none does in this release (WP1.21); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 Electron 44 (c6c437e6): the engine card names Electron 44; its Codex mention is unchanged (WP1.35); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 surface sweep before the 2.1.1-beta.2 cut: a line for Codex with accounts of its own, and the 2.0 Codex line names accounts instead of one sign-in (WP1.35); surface sweep review: the Codex accounts line moved and shortened, the 2.0 Codex line no longer repeats it (WP1.35); 2.1.1-beta.3 What's New showcase (O1/O2/O3): lines are tagged with their first build and chosen by the anchor (keyed to the final release) instead of the release line; the 2.1.1 set tells what Codex became against 2.1.0, upgraders only, with nothing about the computer's own Codex sign-in; the fresh-install Codex accounts line is freshOnly (WP1.35); tests/unit/renderer/whatsnew-showcase.test.tsx",
+      "note": ""
+    },
+    {
+      "path": "src/renderer/onboarding/codex-art.tsx",
+      "predicates": [
+        "P01",
+        "P11"
+      ],
+      "category": "UI-ONLY",
+      "disposition": "added",
+      "evidence": "2.1.1-beta.3 What's New showcase (O3): the Hello Codex drawings (hello, launch, review) moved out of HelloCodex.tsx unchanged so the What's New showcase can draw them without Hello Codex's stores, plus a Codex accounts drawing without the computer's own sign-in (WP1.35); tests/unit/renderer/whatsnew-showcase.test.tsx; tests/unit/renderer/hello-codex.acceptance.test.ts",
       "note": ""
     },
     {
@@ -3444,6 +3474,17 @@
       "category": "SETUP",
       "disposition": "added",
       "evidence": "WP2 reconfirm (owner decision 2026-09-26): the gate as a pure decision: armed for any launch that is not a fresh install and has not answered (settings.codexAnswered, the answer itself, never a seen stamp), due while unanswered, closed only by its own answer once shown (WP1.34, WP1.60 enable/disable); tests/unit/renderer/codex-reconfirm-gate.test.ts",
+      "note": ""
+    },
+    {
+      "path": "src/renderer/onboarding/codex-replace-gate.ts",
+      "predicates": [
+        "P01",
+        "P11"
+      ],
+      "category": "SETUP",
+      "disposition": "added",
+      "evidence": "O5 adopter path (owner-agreed 2026-10-11): the gate as a pure decision: armed once per start from the first accounts snapshot, only with Codex on as answered, an account for that sign-in still listed, and no codexReplaceSeenVersion stamp (presence counts, as Hello Codex) (WP1.34, WP1.60 enable/disable); tests/unit/renderer/codex-replace-page.test.tsx, tests/unit/renderer/boot-gates.test.ts",
       "note": ""
     },
     {
@@ -3477,7 +3518,7 @@
       ],
       "category": "SETUP",
       "disposition": "added",
-      "evidence": "WP2 commit 6f: Hello Codex, the Codex introduction: when it is due (Codex on, found, not refused, one vouched-for signed-in account), its seen stamp, the replay and takeover state, and the copy as data with the Claude review line read from the build (WP1.34, WP1.6); tests/unit/renderer/hello-codex.acceptance.test.ts; WP2 commit 6f review round 1: with Claude Code off (a Codex-only install) no line claims Claude sessions or Claude reviews, and the Claude review line needs both the build and Claude Code on; external sign-ins excluded outright (WP1.2, WP1.34); tests/unit/renderer/hello-codex.acceptance.test.ts; WP2 PR 4 P4.1 and P4.2 (rows 51, 52; 0014a464): the Conductor tools line says Codex sessions get the Agent Canvas, Vision and the push to the in-app browser (WP1.2); tests/unit/renderer/hello-codex.acceptance.test.ts; WP2 PR 4 P4.11 (103a5b7b): the comparison row says Codex has Vision, the browser and the canvas (P4.1, P4.2) (WP1.36); tests/unit/renderer/hello-codex.acceptance.test.ts",
+      "evidence": "WP2 commit 6f: Hello Codex, the Codex introduction: when it is due (Codex on, found, not refused, one vouched-for signed-in account), its seen stamp, the replay and takeover state, and the copy as data with the Claude review line read from the build (WP1.34, WP1.6); tests/unit/renderer/hello-codex.acceptance.test.ts; WP2 commit 6f review round 1: with Claude Code off (a Codex-only install) no line claims Claude sessions or Claude reviews, and the Claude review line needs both the build and Claude Code on; external sign-ins excluded outright (WP1.2, WP1.34); tests/unit/renderer/hello-codex.acceptance.test.ts; WP2 PR 4 P4.1 and P4.2 (rows 51, 52; 0014a464): the Conductor tools line says Codex sessions get the Agent Canvas, Vision and the push to the in-app browser (WP1.2); tests/unit/renderer/hello-codex.acceptance.test.ts; WP2 PR 4 P4.11 (103a5b7b): the comparison row says Codex has Vision, the browser and the canvas (P4.1, P4.2) (WP1.36); tests/unit/renderer/hello-codex.acceptance.test.ts; 2.1.1-beta.3 What's New showcase (O3 C6, C7, C8): the usage point and the comparison row say each Codex account's allowance is on the Usage page (per token for an API key), and the launch page names the one-time hooks prompt (WP1.35); tests/unit/renderer/hello-codex-usage-copy.test.ts",
       "note": ""
     },
     {
@@ -3539,7 +3580,7 @@
       ],
       "category": "UI-ONLY",
       "disposition": "replace",
-      "evidence": "user-facing copy/labels only, no account/auth/setup logic; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md) (WP1.33); WP2 PR 3 P3.4 (parity row 14): the pages about something that needs Claude Code in this release (canvas, remote resume, accounts, watchdog, Ask Conductor) carry needsClaude and are not shown while Claude Code is off (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.6 (row 22): the accounts page reads for both providers and shows with Claude Code off (P3.4's needsClaude lifted); its Insights point alone keeps the flag, point by point (WP1.68); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.10: the watchdog page no longer needs Claude Code (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.1 and P4.3 (rows 51, 53; 0014a464): the Agent Canvas and Ask Conductor pages no longer need Claude Code, and their points name your agent and the assistant Ask runs on; integration round 2: the Ask points in ASCII, and the helper skill reaching that assistant's sessions (on Codex, those of that account) (WP1.68); tests/unit/renderer/whatsnew-showcase.test.tsx",
+      "evidence": "user-facing copy/labels only, no account/auth/setup logic; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md) (WP1.33); WP2 PR 3 P3.4 (parity row 14): the pages about something that needs Claude Code in this release (canvas, remote resume, accounts, watchdog, Ask Conductor) carry needsClaude and are not shown while Claude Code is off (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.6 (row 22): the accounts page reads for both providers and shows with Claude Code off (P3.4's needsClaude lifted); its Insights point alone keeps the flag, point by point (WP1.68); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.10: the watchdog page no longer needs Claude Code (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.1 and P4.3 (rows 51, 53; 0014a464): the Agent Canvas and Ask Conductor pages no longer need Claude Code, and their points name your agent and the assistant Ask runs on; integration round 2: the Ask points in ASCII, and the helper skill reaching that assistant's sessions (on Codex, those of that account) (WP1.68); tests/unit/renderer/whatsnew-showcase.test.tsx; 2.1.1-beta.3 What's New showcase (O1/O2/O3): pages are tagged with their first build and chosen by the anchor; five 2.1.1 Codex pages, upgraders only, told against 2.1.0 and naming no computer-own Codex sign-in (WP1.35); tests/unit/renderer/whatsnew-showcase.test.tsx",
       "note": ""
     },
     {
@@ -5825,6 +5866,16 @@
       "note": ""
     },
     {
+      "path": "tests/unit/main/canvas-marker-claude-gate.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.1-beta.3 test (tests/unit/main/canvas-marker-claude-gate.test.ts): through the real spawn, marker queue and renderer reading, a canvas marker into a Claude Code session is typed only at its ready, empty prompt, in the order filed, and never into a later run; its mock of the Conductor MCP server names the review-session functions pty-manager imports, which it does not test (WP1.68); tests/unit/main/canvas-marker-claude-gate.test.ts",
+      "note": "created by the 2.1.1-beta.3 canvas marker fix"
+    },
+    {
       "path": "tests/unit/main/canvas-marker-codex-delivery.test.ts",
       "predicates": [
         "P01",
@@ -6046,6 +6097,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 4 P4.1 (row 51) test: question 5's default A, one case per settings layer (WP1.33); tests/unit/main/codex-guidance.test.ts; WP2 PR 4 VM checkpoint fixes (aa581eda): changed by those fixes (WP1.33); tests/unit/main/codex-guidance.test.ts; WP2 PR 4 owner answers (2026-10-04) (785b886e, integration round 3): option A's cases removed with the code; the C launch decision and the interim route case removed (WP1.33); tests/unit/main/codex-guidance.test.ts; WP2 PR 4 owner answers review fix pass (aaa6990e): a link at a skill's own name is the user's, a linked skills folder is not staged, and only the switch removes this computer's copies at a launch (WP1.33); tests/unit/main/codex-guidance.test.ts",
       "note": ""
+    },
+    {
+      "path": "tests/unit/main/codex-history-copy-not-link.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.1-beta.3 test (tests/unit/main/codex-history-copy-not-link.test.ts): a sign in again on Windows links the earlier conversation files in only when the account folder in use reads back owner-only (a read that writes nothing); from any other folder, or with no answer, each file is copied; every other history rule holds; the realm folder code with no check copies (WP1.52); tests/unit/main/codex-history-copy-not-link.test.ts",
+      "note": "created by the 2.1.1-beta.3 owner-only folders change"
     },
     {
       "path": "tests/unit/main/codex-hook-folders.test.ts",
@@ -6893,6 +6955,17 @@
       "note": ""
     },
     {
+      "path": "tests/unit/main/pty-spawn-waits-for-script-folders.test.ts",
+      "predicates": [
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.1-beta.3 test (tests/unit/main/pty-spawn-waits-for-script-folders.test.ts): while the start's check of the resources folder's scripts folders and the deploys into them still run, a local Claude Code or Codex launch is held as a prepared spawn and starts once they have run; a close while it waits starts nothing; a launch over SSH or a terminal-only one is not held (WP1.68); tests/unit/main/pty-spawn-waits-for-script-folders.test.ts",
+      "note": "created by the 2.1.1-beta.3 scripts folders change; the Codex launch case added in its review fix pass"
+    },
+    {
       "path": "tests/unit/main/pty-ssh-color-query-passthrough.test.ts",
       "predicates": [
         "P13"
@@ -7068,6 +7141,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.9 round 1 test (tests/unit/main/stale-folder-sweep.test.ts): the sweep through an injected filesystem: own-prefix real folders past the age only, a link never removed, another user's folder kept on POSIX, a short prefix or a name with a separator never touched, and one folder that cannot be read or removed never stops the rest (WP1.68)",
       "note": "created by WP2 PR 3 P3.9 round 1; pure"
+    },
+    {
+      "path": "tests/unit/main/startup-script-deploys.test.ts",
+      "predicates": [
+        "P08",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.1-beta.3 test (tests/unit/main/startup-script-deploys.test.ts): the start's three script deploy steps, cut from index.ts, each have their own catch, so a failing statusline or Claude resume picker deploy no longer skips the Codex resume picker and hook script deploys (WP1.68)",
+      "note": "created for the 2.1.1-beta.3 start's script deploy steps; index.ts cut out and run against fakes"
     },
     {
       "path": "tests/unit/main/terminal-query-responder-xterm.test.ts",
@@ -7528,6 +7612,18 @@
       "note": "real folders under the system temp folder; no Codex process"
     },
     {
+      "path": "tests/unit/providers/codex/deploy-steps.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.1-beta.3 test (tests/unit/providers/codex/deploy-steps.test.ts): the Codex provider tries its resume picker and hook script deploys whatever the other did, and passes the first failure on once both were tried (WP1.68)",
+      "note": "created for the 2.1.1-beta.3 Codex deploy steps; both deploys faked, nothing written"
+    },
+    {
       "path": "tests/unit/providers/codex/failure-text-hides-credentials.test.ts",
       "predicates": [
         "P01",
@@ -7687,6 +7783,17 @@
       "note": ""
     },
     {
+      "path": "tests/unit/providers/codex/realm-history-link-wiring.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.1-beta.3 test (tests/unit/providers/codex/realm-history-link-wiring.test.ts): the managed folders on this disk get the app read-only owner-only check for a sign in again history copy: on Windows linked when it answers owner-only, copied otherwise; POSIX never asks; the composition passes no check of its own (WP1.52); tests/unit/providers/codex/realm-history-link-wiring.test.ts",
+      "note": "created by the 2.1.1-beta.3 owner-only folders change"
+    },
+    {
       "path": "tests/unit/providers/codex/resume-picker-deploy.test.ts",
       "predicates": [
         "P01",
@@ -7694,9 +7801,21 @@
         "P13"
       ],
       "category": "TEST",
-      "disposition": "retain",
-      "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json",
+      "disposition": "replace",
+      "evidence": "WP1.33 mapping, not a WP1 change: 2.1.1-beta.3 added a group of cases for the helper lib folder (a link there, one that cannot be removed, a real folder kept, a directory that resolves to another folder); the existing cases are kept; listed in docs/wp1/baseline-test-inventory.json; tests/unit/providers/codex/resume-picker-deploy.test.ts",
       "note": ""
+    },
+    {
+      "path": "tests/unit/providers/codex/resume-picker-lib-links.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.1-beta.3 test (tests/unit/providers/codex/resume-picker-lib-links.test.ts; host quarantine, CI and the VM only): with a real junction or directory link at the resources folder scripts/lib (on Windows also a junction that names its folder by volume), a Codex picker launch starts Codex directly with one warning, and the picker deploy removes that link as a link, never what it names, and makes a real folder before it writes the lib (WP1.33, WP1.68)",
+      "note": "the real-link cases; the host-safe ones are in resume-picker-deploy.test.ts, spawn.test.ts and script-deploy-folder.test.ts"
     },
     {
       "path": "tests/unit/providers/codex/rollout-lookup.test.ts",
@@ -7835,7 +7954,7 @@
       ],
       "category": "TEST",
       "disposition": "replace",
-      "evidence": "WP1.58: cases retained; realm-env cases added (tests/wp1/launch-handoff.test.ts); WP2 final fixes: the resolveBinary case now asserts that CodexProvider refuses both PATH lookups, and resolveCodexBinary, the discovery lookup, keeps its cases (WP1.17); WP2 P3 usage track MP3 follow-up (a stale case CI caught): the telemetry case now pins the sixth argument, the allowance callback that records the session's figure as its own realm's live figure and forgets it when the session stops (WP1.68); tests/unit/providers/codex/spawn.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 added one case (max and ultra reach the launch; Default adds no -m and no effort); the existing cases are kept; tests/unit/providers/codex/spawn.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 1 added one case (the plan preset launches as standard does); tests/unit/providers/codex/spawn.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 2: the plan preset case now expects the read-only launch; tests/unit/providers/codex/spawn.test.ts; 2.1.1-beta.2 (WP1.68): the node fallback case says that no process starts when no PATH folder holds node.exe; tests/unit/providers/codex/spawn.test.ts",
+      "evidence": "WP1.58: cases retained; realm-env cases added (tests/wp1/launch-handoff.test.ts); WP2 final fixes: the resolveBinary case now asserts that CodexProvider refuses both PATH lookups, and resolveCodexBinary, the discovery lookup, keeps its cases (WP1.17); WP2 P3 usage track MP3 follow-up (a stale case CI caught): the telemetry case now pins the sixth argument, the allowance callback that records the session's figure as its own realm's live figure and forgets it when the session stops (WP1.68); tests/unit/providers/codex/spawn.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 added one case (max and ultra reach the launch; Default adds no -m and no effort); the existing cases are kept; tests/unit/providers/codex/spawn.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 1 added one case (the plan preset launches as standard does); tests/unit/providers/codex/spawn.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 2: the plan preset case now expects the read-only launch; tests/unit/providers/codex/spawn.test.ts; 2.1.1-beta.2 (WP1.68): the node fallback case says that no process starts when no PATH folder holds node.exe; tests/unit/providers/codex/spawn.test.ts; WP1.33 mapping: 2.1.1-beta.3 added cases for the helper lib folder (a link, one read as a link and a directory, a plain directory that resolves to another folder, one whose resolved path cannot be read, a file, none at all); the existing cases are kept; tests/unit/providers/codex/spawn.test.ts",
       "note": ""
     },
     {
@@ -8415,6 +8534,18 @@
       "note": ""
     },
     {
+      "path": "tests/unit/renderer/codex-replace-page.test.tsx",
+      "predicates": [
+        "P01",
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "O5 adopter path (owner-agreed 2026-10-11): the gate decision and its turn in the boot chain, the page copy, Not now and Escape stamping it, an account added through the dialog closing it, a dialog closed with nothing added leaving it up, nothing signed out or archived, and the App wiring (WP1.34, WP1.60 enable/disable); tests/unit/renderer/codex-replace-page.test.tsx",
+      "note": ""
+    },
+    {
       "path": "tests/unit/renderer/codex-review-sub-tool.test.ts",
       "predicates": [
         "P01",
@@ -8626,6 +8757,17 @@
       "category": "TEST",
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.4 closure test (parity row 14): the guided tour's first card names the assistants in use, as the title bar reads them (usesClaude, usesCodex): both on word for word as before, Claude Code alone with Codex off or not answered yet, Codex alone with Claude Code off, and it follows a switch (WP1.2); tests/unit/renderer/guided-tour-provider-copy.test.tsx; every card walked for Codex alone (no Claude), Claude Code alone (no Codex) and both on (word for word as before) (WP1.2); tests/unit/renderer/guided-tour-provider-copy.test.tsx; WP2 PR 3 fixer 9 (gate 3, quality item 6, row 14): walk() returns each card's body and whole text, no shared state (WP1.2); tests/unit/renderer/guided-tour-provider-copy.test.tsx; WP2 PR 4 P4.1 and P4.3 (rows 51, 53; 0014a464): the canvas card is one text for every assistant mix, and the help card names the assistant Ask runs on (WP1.2); tests/unit/renderer/guided-tour-provider-copy.test.tsx",
+      "note": ""
+    },
+    {
+      "path": "tests/unit/renderer/hello-codex-usage-copy.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.1-beta.3 What's New showcase (O3 C6, C7, C8): Hello Codex says where each Codex account's usage is (the Usage page allowance, or per token for an API key) and names the one-time hooks prompt on its launch page (WP1.35); tests/unit/renderer/hello-codex-usage-copy.test.ts",
       "note": ""
     },
     {
@@ -9120,6 +9262,16 @@
       "disposition": "retain",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json",
       "note": ""
+    },
+    {
+      "path": "tests/unit/renderer/session-autosave.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "replace",
+      "evidence": "WP1.33 mapping: adapted in place for the 2.1.1-beta.3 session durability change (P47): the autosave saves an account pin at once, and the registry account case is a Codex tab so the pinned providerAccountId (the Codex account binding, WP1.42) is shown to reach the saved state; the existing cases are kept; tests/unit/renderer/session-autosave.test.tsx",
+      "note": "its Codex mentions are all in the registry account pin case, which uses a Codex-shaped session"
     },
     {
       "path": "tests/unit/renderer/session-capabilities.test.ts",
@@ -9633,6 +9785,16 @@
       "note": ""
     },
     {
+      "path": "tests/unit/renderer/upgrade-flow.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "replace",
+      "evidence": "existing test, cases rewritten with the rule they cover: What's New picks its lines by the anchor (whatsNewAnchorFor, keyed to the final release) instead of the release line, so the 2.1.1 Codex lines are named in its cases (O1/O2, 2.1.1-beta.3 What's New showcase); the anchor, finalRelease, lastFinalBefore and newSince are new cases (WP1.34); tests/unit/renderer/upgrade-flow.test.ts",
+      "note": ""
+    },
+    {
       "path": "tests/unit/renderer/use-launch-config.test.tsx",
       "predicates": [
         "P04",
@@ -9676,14 +9838,25 @@
       "note": ""
     },
     {
+      "path": "tests/unit/renderer/whatsnew-anchor-harness.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.1-beta.3 What's New showcase (O1/O2/O3 C1): the real harness hands the notes page the anchor from App's boot snapshot, uses it for the setup pages new since, and its last-page hint names the one-time Codex question when it follows (WP1.34); tests/unit/renderer/whatsnew-anchor-harness.test.tsx",
+      "note": ""
+    },
+    {
       "path": "tests/unit/renderer/whatsnew-showcase.test.tsx",
       "predicates": [
+        "P04",
         "P05",
         "P13"
       ],
       "category": "TEST",
       "disposition": "replace",
-      "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP2 PR 3 P3.4 (parity row 14): its existing cases are unchanged; two cases added, the Claude-only lines and pages hidden while Claude Code is off and in a run that goes on with Codex only (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.10: the Watchdog is told for both providers and shows with Claude Code off (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.1 and P4.3 (rows 51, 53; 0014a464): the Agent Canvas and Ask Conductor pages and lines show with Claude Code off; the Insights point keeps its flag (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.11 (4bf3d0ac, 103a5b7b): no Beta tag or badge; the heading with both on (WP1.21); tests/unit/renderer/whatsnew-showcase.test.tsx",
+      "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP2 PR 3 P3.4 (parity row 14): its existing cases are unchanged; two cases added, the Claude-only lines and pages hidden while Claude Code is off and in a run that goes on with Codex only (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 3 P3.10: the Watchdog is told for both providers and shows with Claude Code off (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.1 and P4.3 (rows 51, 53; 0014a464): the Agent Canvas and Ask Conductor pages and lines show with Claude Code off; the Insights point keeps its flag (WP1.2); tests/unit/renderer/whatsnew-showcase.test.tsx; WP2 PR 4 P4.11 (4bf3d0ac, 103a5b7b): no Beta tag or badge; the heading with both on (WP1.21); tests/unit/renderer/whatsnew-showcase.test.tsx; 2.1.1-beta.3 What's New showcase (O1/O2/O3): rewritten for the anchor rule with the cohort matrix, a frozen tag table and a drift guard; it gains P04 from a check that no 2.1.1 line or page names the computer's own Codex folder (WP1.35); tests/unit/renderer/whatsnew-showcase.test.tsx",
       "note": ""
     },
     {

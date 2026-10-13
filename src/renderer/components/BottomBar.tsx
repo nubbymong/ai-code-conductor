@@ -12,7 +12,7 @@ import { claudeCodeInstallCommand } from '../utils/claudeInstallCommand'
 import type { InstallRecipeView, PathHintView } from '../../shared/providers'
 import { providerAccountActions } from '../stores/providerAccountsStore'
 import { InstallRecipeList, afterInstallMessage, type RunnableRecipe } from '../onboarding/InstallRecipeList'
-import { PathHintNotice, cliHelpLooksText } from '../onboarding/PathHintNotice'
+import { PathHintNotice, cliHelpLooksText, pathHintIsNote } from '../onboarding/PathHintNotice'
 import { openInstallTab, useInstallTabRunning, type InstallTab } from '../utils/installTab'
 
 /** Where the confirmation says the line runs. */
@@ -104,6 +104,22 @@ export default function BottomBar({ currentView, onViewChange, onUpdateRequested
     setTab(openInstallTab({ label: 'Install Claude Code', runLine: recipe.runLine, show: true, onEnded: () => { void recheck('ended') } }))
   }
   const listed = Array.isArray(recipes) && recipes.some((r) => r.purpose === 'install')
+  // What main said helps, once a check after an install or Check again still
+  // found nothing. A hint that says what helps (the folder off PATH, a
+  // restart) leads the help in place of the still-not-found line; a restart
+  // that only may help (pathHintIsNote) is a note: the line stays and the
+  // note follows it.
+  const shownHint = stillMissing && !rechecking ? pathHint : undefined
+  const hintReplacesLine = !!shownHint && !pathHintIsNote(shownHint)
+  const hintNotice = shownHint && (
+    <PathHintNotice
+      hint={shownHint}
+      toolName="Claude Code"
+      providerId="claude"
+      testIdPrefix="bottombar"
+      onAdded={() => { void recheck('checked') }}
+    />
+  )
 
   // Claude Code switched off in Settings, Accounts: there is no Claude CLI
   // to watch, so the indicator is absent, as the bar treats any feature that
@@ -244,15 +260,7 @@ export default function BottomBar({ currentView, onViewChange, onUpdateRequested
             />
             <DialogBody>
               <div className="space-y-3 text-sm">
-                {stillMissing && !rechecking && pathHint && (
-                  <PathHintNotice
-                    hint={pathHint}
-                    toolName="Claude Code"
-                    providerId="claude"
-                    testIdPrefix="bottombar"
-                    onAdded={() => { void recheck('checked') }}
-                  />
-                )}
+                {hintReplacesLine && hintNotice}
                 {recipes === undefined ? null : listed ? (
                   <div className="install-recipes">
                     <InstallRecipeList
@@ -291,11 +299,12 @@ export default function BottomBar({ currentView, onViewChange, onUpdateRequested
                   </div>
                 )}
 
-                {stillMissing && !rechecking && !pathHint && (
+                {stillMissing && !rechecking && !hintReplacesLine && (
                   <p className="text-xs" role="status" style={{ color: 'var(--status-warning)' }} data-testid="bottombar-cli-after-install">
                     {afterInstallMessage('Claude Code', { ended: stillMissing === 'ended' })}
                   </p>
                 )}
+                {!hintReplacesLine && hintNotice}
 
                 <div className="rounded p-3" style={{ background: 'var(--surface-overlay)' }}>
                   <div className="font-medium mb-1" style={{ color: 'var(--text-primary)' }}>Already installed?</div>

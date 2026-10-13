@@ -11,8 +11,12 @@
  *   - a row with nothing for the plan track renders no plan cell and gives
  *     that track to the name, which otherwise truncated beside an empty one;
  *   - a row with a plan keeps its cell, and the name stays in its own track;
- *   - a long name wraps to a second line and is never truncated, with a plan
- *     cell or without one, and keeps its full text as its title;
+ *   - a long name wraps onto a second line rather than being cut at one,
+ *     with a plan cell or without one; past two lines it is cut, and its
+ *     title keeps the full text (#181 item 4: the old wording said "never
+ *     truncated", which line-clamp-2 is not);
+ *   - a row button's label may wrap inside its cell (#181 item 1: "This is
+ *     still my account" ran past a narrow card's state cell);
  *   - the state cell breaks a long unbroken line (an email) anywhere, rather
  *     than run it under the "..." menu;
  *   - the layout is set on the cells themselves, never by a child selector
@@ -63,6 +67,29 @@ function renderRow(planCell?: React.ReactNode) {
   return { grid, nameCell, cells: [...grid.children] as HTMLElement[] }
 }
 
+describe('a row button (#181 item 1)', () => {
+  it('may wrap its label inside its cell, left-aligned, and never wider than the cell', async () => {
+    const { RowButton } = await import('../../../src/renderer/components/settings/accounts/accounts-ui')
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    act(() => { root!.render(React.createElement(RowButton, { onClick: () => {}, testId: 'btn' }, 'This is still my account')) })
+    const btn = container.querySelector('[data-testid="btn"]') as HTMLElement
+    expect(btn.classList.contains('whitespace-nowrap')).toBe(false)
+    expect(btn.classList.contains('truncate')).toBe(false)
+    expect(btn.classList.contains('max-w-full')).toBe(true)
+    expect(btn.classList.contains('text-left')).toBe(true)
+  })
+})
+
+describe('no-break hyphens (#181 item 2)', () => {
+  it('keeps a hyphenated label on one line, for display only', async () => {
+    const { noBreakHyphens } = await import('../../../src/renderer/components/settings/accounts/accounts-ui')
+    expect(noBreakHyphens('ChatGPT sign-in')).toBe('ChatGPT sign' + String.fromCodePoint(0x2011) + 'in')
+    expect(noBreakHyphens('API key')).toBe('API key')
+  })
+})
+
 describe('the account row grid', () => {
   it('lines every cell up on its first line of text, never centred on its own height', () => {
     const { grid } = renderRow(null)
@@ -107,7 +134,7 @@ describe('the account row grid', () => {
   it.each<[string, React.ReactNode]>([
     ['no plan', null],
     ['a plan', React.createElement('span', null, 'Plus')],
-  ])('with %s, a long name wraps to two lines, is never truncated, and keeps its full text as its title', (_label, planCell) => {
+  ])('with %s, a long name wraps onto a second line rather than being cut at one, is cut only past two, and keeps its full text as its title', (_label, planCell) => {
     const { nameCell } = renderRow(planCell)
     const name = nameCell.querySelector('[data-testid="name"]') as HTMLElement
     expect(name.classList.contains('line-clamp-2')).toBe(true)

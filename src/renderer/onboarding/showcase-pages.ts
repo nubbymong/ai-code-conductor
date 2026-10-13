@@ -1,5 +1,5 @@
-import { releaseLine } from '../utils/versionLabel'
 import askMarkUrl from '../assets/aicc-code-conductor.svg'
+import { newSince } from './upgrade-flow'
 
 /**
  * The What's New feature showcase (owner-approved design, 2026-08-24; scope
@@ -7,12 +7,17 @@ import askMarkUrl from '../assets/aicc-code-conductor.svg'
  * gets a full page of its own — heading, tagline, a few one-liner points, a
  * "where to find it" locator, and a drawn vignette (ShowcaseVignette).
  *
- * The set tours EVERYTHING the 2.1 line added over 2.0 — the Agent Canvas is
- * completely new since 2.0, and the pages say so — because the showcase has
+ * SHOWCASES_21 tours everything the 2.1 line added over 2.0, because it has
  * two audiences (#463): a 2.0 user deciding what the update gave them, and a
  * first-run user meeting these features for the first time. Copy must read
  * for both: name what the feature IS before what it replaced, and keep
  * upgrade-only framing ("three rows became one") out of headings.
+ *
+ * SHOWCASES_211 is the 2.1.1 story, told against 2.1.0 (O3, 2026-10-11):
+ * Codex was already there, as a Beta with one switch and one sign-in, so the
+ * pages lead with what changed, never with "Codex arrived". It is upgrade
+ * only: a fresh install meets Codex on its own setup pages and in Hello
+ * Codex, and the summary there stays the 2.1 story.
  *
  * Curated HERE, not in changelog.ts, for the same reason WhatsNewV2Step's
  * SECTIONS are: changelog.ts is a fragile pure-data literal that
@@ -36,6 +41,12 @@ export type ShowcaseArtKind =
   | 'remoteResume'
   | 'sidebarMarks'
   | 'askConductor'
+  // 2.1.1: drawings shared with Hello Codex (codex-art.tsx), and the usage page.
+  | 'codexHello'
+  | 'codexAccounts'
+  | 'codexLaunch'
+  | 'codexReview'
+  | 'usage'
 
 export interface ShowcasePoint {
   /** Bold lead-in, ending in a full stop unless the rest continues the sentence. */
@@ -49,6 +60,14 @@ export interface ShowcasePoint {
 
 export interface ShowcasePage {
   id: string
+  /** The first build that shipped this page, prerelease included (O2's
+   *  table): the page shows only to someone whose anchor is older
+   *  (whatsNewAnchorFor, newSince). Pinned by a frozen table in
+   *  whatsnew-showcase.test.tsx, so a new page cannot inherit an old tag. */
+  since: string
+  /** Shown to upgraders only: the page is told against a before (2.1.1's
+   *  Codex pages are told against 2.1.0). */
+  upgradeOnly?: boolean
   heading: string
   tagline: string
   /** Three or four; more is a wall and belongs in the Feature Guide. */
@@ -72,7 +91,10 @@ export interface ShowcasePage {
 export const SHOWCASES_21: ShowcasePage[] = [
   {
     id: 'canvas',
-    heading: 'The Agent Canvas — new to this line',
+    since: '2.1.0-rc.1',
+    // O3 C3: "new to this line" read as news to a 2.1.0 user who has had the
+    // canvas all along, and broke this file's own rule on upgrade framing.
+    heading: 'The Agent Canvas',
     tagline: "Your agent renders its work as a real page inside the app. You point at what's wrong; it reads every note and fixes it all in one pass.",
     points: [
       { lead: 'Mockups, plans, your build.', rest: 'Ask for something visual and it appears on the canvas, versioned.' },
@@ -85,6 +107,7 @@ export const SHOWCASES_21: ShowcasePage[] = [
   },
   {
     id: 'oneRow',
+    since: '2.1.0-rc.1',
     heading: 'One row runs the session',
     tagline: "Tools first, then your Global buttons, then this config's Session buttons — under every terminal, in a single row.",
     points: [
@@ -97,6 +120,7 @@ export const SHOWCASES_21: ShowcasePage[] = [
   },
   {
     id: 'panel',
+    since: '2.1.0-rc.3',
     heading: 'The left panel has two modes',
     tagline: 'Saved configs are the launcher; Running sessions are the work. Quick Start keeps your pinned configs one click away.',
     points: [
@@ -109,6 +133,7 @@ export const SHOWCASES_21: ShowcasePage[] = [
   },
   {
     id: 'multiSpawn',
+    since: '2.1.0-rc.12',
     heading: 'Several copies of one config, on purpose',
     tagline: 'A saved config runs one session at a time unless you say otherwise. Mark it Allow Multi Spawn and it gains a copy count, a batch launcher, and a firm stop on the accidental double.',
     points: [
@@ -122,6 +147,7 @@ export const SHOWCASES_21: ShowcasePage[] = [
   },
   {
     id: 'remoteResume',
+    since: '2.1.0-rc.12',
     needsClaude: true, // kept: resuming a remote Claude; Codex over SSH is excluded in this release
     heading: 'Pick a remote session back up',
     tagline: 'Leave a persistent SSH session running on its host and it waits for you in the sidebar. One click puts you back in the same Claude, in the same conversation.',
@@ -136,10 +162,12 @@ export const SHOWCASES_21: ShowcasePage[] = [
   },
   {
     id: 'sidebarMarks',
+    since: '2.1.0-rc.12',
     heading: 'Read the sidebar at a glance',
     tagline: 'Three kinds of remote session wear three different marks, the account dot leads every row, and nothing hides behind the buttons that appear on hover.',
     points: [
-      { lead: 'Blue SSH.', rest: 'A plain remote session: the link dropping ends it.' },
+      // aicc_planning#88: not "plain", which reads as "no AI" (Terminal only's word).
+      { lead: 'Blue SSH.', rest: 'A remote session that ends when the link drops.' },
       { lead: 'Green SSH, with a chain link.', rest: 'Persistent, so it keeps running on the host without you.' },
       { lead: 'A teal container mark.', rest: 'The session runs inside a container on that host, named on hover.' },
       { lead: 'Identity first.', rest: 'The account dot leads the row, and loose configs sit under an Ungrouped heading that folds.' },
@@ -153,6 +181,7 @@ export const SHOWCASES_21: ShowcasePage[] = [
     // Code off; P4.7 (row 68) lifted its Insights point too: Run all makes one
     // report over every account of both assistants.
     id: 'accounts',
+    since: '2.1.0-rc.3',
     heading: 'Every account, one app',
     tagline: 'Sign in to more than one account and switch mid-session. Usage and costs follow each account separately.',
     points: [
@@ -166,6 +195,7 @@ export const SHOWCASES_21: ShowcasePage[] = [
   },
   {
     id: 'watchdog',
+    since: '2.1.0-rc.1',
     heading: "The Watchdog waits so you don't have to",
     tagline: "A rate limit doesn't have to end your evening: the session reads the banner, waits out the reset, and types the retry itself.",
     points: [
@@ -178,6 +208,7 @@ export const SHOWCASES_21: ShowcasePage[] = [
   },
   {
     id: 'askConductor',
+    since: '2.1.0-rc.14',
     heading: 'Ask Conductor',
     tagline: 'A session that has read the manual. Ask how the app works — settings, accounts, remote sessions — in plain English.',
     points: [
@@ -193,15 +224,114 @@ export const SHOWCASES_21: ShowcasePage[] = [
 ]
 
 /**
- * Which showcase pages a build shows. Same fallback rule as sectionsFor: a
- * line with no set of its own (2.2 before anyone authors one) gets the NEWEST
- * set, never nothing-with-a-heading; the 2.0 line predates the showcase and
- * gets none. Unlike sectionsFor this does not depend on where the user came
- * FROM — the showcase presents the current line's flagships, and stacking a
- * second line's pages behind them is exactly the wall the one-line summary
- * exists to avoid. (First-run users see the same pages via the fresh-install
- * step, #463 — the flagships ARE the app's introduction.)
+ * The 2.1.1 story (O3 B1-B5, as its verdict corrected them): what Codex became
+ * in 2.1.1, told against 2.1.0. Nothing here offers or describes using the
+ * computer's own Codex sign-in: that option is removed (owner rule,
+ * 2026-10-11), and every Codex account is one the app adds.
  */
-export function showcasesFor(currentVersion: string): ShowcasePage[] {
-  return releaseLine(currentVersion) === '2.0' ? [] : SHOWCASES_21
+export const SHOWCASES_211: ShowcasePage[] = [
+  {
+    id: 'codexAssistant',
+    since: '2.1.1-beta.2',
+    upgradeOnly: true,
+    heading: 'Codex is now a full assistant',
+    // Worded as the summary's "Codex asks once." line is: it never names the
+    // retired tab the way a pointer to it would (settings-codex-tab-retired).
+    tagline: 'Codex no longer has its own Settings tab or single sign-in: it now has accounts of its own, its own setup, and most of what Claude sessions have.',
+    points: [
+      { lead: 'One switch each.', rest: 'The Providers card turns Claude Code and Codex on or off, and says whether each is installed and which version.' },
+      { lead: 'Installed for you.', rest: "Codex missing or too old? Its row lists OpenAI's own commands, each with Run it for me and Copy." },
+      { lead: 'Codex alone works too.', rest: 'With Claude Code off, Ask Conductor, Insights and Cloud Agents run on Codex.' },
+      { lead: 'On this computer.', rest: 'In this release Codex sessions and reviews run locally, not over SSH.' },
+    ],
+    where: { pre: 'Where: ', em: 'Settings, Accounts', post: ', the Providers card at the top.' },
+    art: 'codexHello',
+  },
+  {
+    id: 'codexAccounts',
+    since: '2.1.1-beta.2',
+    upgradeOnly: true,
+    heading: 'Codex accounts of their own',
+    tagline: 'Add every Codex account you use. Each one signs in inside its own folder, so sessions never mix identities.',
+    points: [
+      { lead: 'ChatGPT or an API key.', rest: 'Sign in either way; a key goes to Codex, and this app never stores it.' },
+      { lead: 'A default and a reviewer.', rest: 'New sessions use the default; reviews use the reviewer, or the default when none is set.' },
+      { lead: 'Named and linked.', rest: "Click an account's round chip to name it, colour it, or link it to another of your accounts." },
+      { lead: 'chatgpt.com in the app.', rest: 'Each Codex account can sign in to chatgpt.com from its menu, in its own browser storage.' },
+    ],
+    where: { pre: 'Where: ', em: 'Settings, Accounts', post: ', then Add Codex account.' },
+    art: 'codexAccounts',
+  },
+  {
+    id: 'codexSessions',
+    since: '2.1.1-beta.2',
+    upgradeOnly: true,
+    // Not O3's "A Codex session works like a Claude one": the verdict has the
+    // page lead with reopening, Restart and Switch Account, and some of a
+    // Claude session's tools are still Claude's only (the safeguard check).
+    // The shared tools are the summary's "The tools you know." line.
+    heading: 'A Codex session keeps its place',
+    tagline: 'A Codex session now comes back to its conversation, and keeps it through a restart or a change of account.',
+    points: [
+      { lead: 'It reopens where it was.', rest: 'A Codex session open when the app closed comes back in the same conversation, under the same account.' },
+      { lead: 'Restart and pick a conversation.', rest: "From the session's Restart menu, choose an earlier conversation to carry on." },
+      { lead: 'Switch Account.', rest: 'With two or more Codex accounts, move a running session to another and keep the conversation.' },
+      { lead: 'Trust the hooks once.', rest: "For the attention dot, Codex asks once per account to review this app's hooks: choose Trust all and continue." },
+    ],
+    where: { pre: "Where: a Codex session's ", em: 'Restart menu', post: ', in its header.' },
+    art: 'codexLaunch',
+  },
+  {
+    id: 'codeReview',
+    since: '2.1.1-beta.2',
+    upgradeOnly: true,
+    needsClaude: true, // a review asks the OTHER assistant: both must be on
+    heading: 'Code review, both ways',
+    // Told against 2.1.0: a Claude session could already ask Codex.
+    tagline: 'A Codex session can now ask Claude for a second opinion, too.',
+    points: [
+      { lead: 'From a Codex session (new).', rest: 'Ask for a "Claude review", and Claude reviews the change on your Claude reviewer account.' },
+      { lead: 'Reviewer accounts.', rest: 'Each review runs on the reviewer account of the assistant asked, or its default when none is set.' },
+      { lead: 'A switch each way.', rest: 'Settings, General, Built-in Tools names the account each direction uses, and says why when a review cannot run.' },
+      { lead: 'A separate reviewer.', rest: 'Each review is a one-off, read-only reviewer in the project; it never uses one of your open sessions.' },
+    ],
+    where: { pre: 'Where: ask in ', em: 'any session', post: '; the switches are in Settings, General, Built-in Tools.' },
+    art: 'codexReview',
+  },
+  {
+    id: 'usageBoth',
+    since: '2.1.1-beta.2',
+    upgradeOnly: true,
+    heading: 'Usage and spend for Codex',
+    tagline: 'Every Codex account gets its own usage and spend, kept apart from every other account and never merged.',
+    points: [
+      { lead: 'The Usage page.', rest: 'A section per assistant. A Codex account signed in with ChatGPT shows its 5-hour and weekly allowance, or its credits; an API-key account is billed per token.' },
+      { lead: 'The usage strip.', rest: 'One pill per person at the foot of the window, grouped by provider.' },
+      { lead: 'Tokenomics by account.', rest: 'Provider and Account filters, with each figure split by assistant.' },
+      { lead: 'Insights for Codex.', rest: 'Pick a Codex account in the Insights account picker and run its report.' },
+    ],
+    where: { pre: 'Where: ', em: 'Account usage', post: ' on the left rail (with two or more accounts), and Tokenomics.' },
+    art: 'usage',
+  },
+]
+
+/** Every showcase page, oldest set first: the order the app changed in. */
+export const SHOWCASES: readonly ShowcasePage[] = [...SHOWCASES_21, ...SHOWCASES_211]
+
+/**
+ * Which showcase pages to show someone whose anchor is `anchor`
+ * (whatsNewAnchorFor): the pages new since it, oldest first, and for a fresh
+ * install (`fresh`, no anchor) every page that is not upgrade-only.
+ *
+ * This reverses the earlier rule that the showcase did NOT depend on where
+ * the user came from (O1/O2, 2026-10-11): that rule replayed all nine 2.1
+ * pages on every 2.1.x update, beta.1 to beta.2 included. Now a 2.1.0 user
+ * gets the 2.1.1 pages only; a 2.0 user gets the 2.1 pages and then the
+ * 2.1.1 ones, fourteen after the rename page and the summary (an open owner
+ * question on the Agent Canvas review); a fixes-only update gets
+ * none. (First-run users see the 2.1 pages via the fresh-install step, #463:
+ * the flagships ARE the app's introduction.)
+ */
+export function showcasesFor(anchor: string | undefined, opts: { fresh?: boolean } = {}): ShowcasePage[] {
+  return SHOWCASES.filter((p) => newSince(p.since, anchor) && !(opts.fresh && p.upgradeOnly))
 }

@@ -38,8 +38,9 @@ const prepareLaunch = vi.fn(async () => ({
 }))
 const run = vi.fn(async () => ({ ok: true, text: '1. A finding.\n', usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 1 } }))
 const diff = vi.fn(async () => ({ ok: true, diff: 'diff --git a/x b/x\n+y\n' }))
+const files = vi.fn(async () => ({ ok: true, files: [{ path: 'a.ts', text: 'a' }] }))
 // No launchRefusal here: the real rule (provider-launch-gate.ts) is asked.
-const deps = () => ({ accounts: () => ({ prepareLaunch }) as never, reviewer: () => ({ run }) as never, diff: diff as never })
+const deps = () => ({ accounts: () => ({ prepareLaunch }) as never, reviewer: () => ({ run }) as never, diff: diff as never, files: files as never })
 
 let gitCwd = ''
 beforeEach(() => {
@@ -49,12 +50,14 @@ beforeEach(() => {
   prepareLaunch.mockClear()
   run.mockClear()
   diff.mockClear()
+  files.mockClear()
   release.mockClear()
 })
 afterEach(() => { rmSync(gitCwd, { recursive: true, force: true }) })
 
 const nothingDone = () => {
   expect(diff).not.toHaveBeenCalled()
+  expect(files).not.toHaveBeenCalled()
   expect(prepareLaunch).not.toHaveBeenCalled()
   expect(run).not.toHaveBeenCalled()
 }

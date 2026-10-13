@@ -43,6 +43,8 @@ import {
 } from '../canvas/canvas-evidence'
 import { setCanvasFrameNavigatedSink } from '../canvas/ccc-ux-protocol'
 import { deliverCanvasMarker } from '../canvas/canvas-marker-delivery'
+import { resolveClaudeMarkerAnswer, setClaudeMarkerSender } from '../canvas/claude-marker-typing'
+import { CANVAS_MARKER_MAX_LINE, MARKER_CONTROL_CHARS_RE } from '../../shared/canvas-marker-line'
 import {
   MAX_SKETCH_PNG_BYTES,
   clearComposerDraft,
@@ -664,9 +666,11 @@ const reviewSubmitSchema = z
  * deleted (deleting would silently splice `abc\x03def` into a single word).
  * Nothing legitimate is lost: the real markers are ASCII text plus `·` and `—`,
  * both well above this range.
+ *
+ * MARKER_CONTROL_CHARS_RE and the length bound live in
+ * src/shared/canvas-marker-line.ts, which the renderer's own check of a marker
+ * line (before it types one into a Claude Code session) reads too.
  */
-// eslint-disable-next-line no-control-regex -- matching the control range IS the point
-const MARKER_CONTROL_CHARS_RE = /[\u0000-\u001F\u007F-\u009F]+/g
 
 /**
  * The marker line (#580) and the canvas it speaks for.
@@ -694,7 +698,7 @@ const agentMarkerSchema = z
     line: z
       .string()
       .min(1)
-      .max(400)
+      .max(CANVAS_MARKER_MAX_LINE)
       .transform((s) => s.replace(MARKER_CONTROL_CHARS_RE, ' ').trim())
       .refine((s) => s.length > 0, { message: 'marker line is empty' }),
   })
@@ -820,7 +824,21 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   // session that carries the same work after a restart.
   installCanvasSessionLink()
 
-  ipcMain.handle(IPC.CANVAS_GET_STATE, async (_e, args: unknown) => {
+  // Every channel below answers only the app's own window, its main frame
+  // (trusted-sender.ts), checked before the payload is read. The canvas
+  // content frames have no bridge, so the app window is the one caller these
+  // channels have. A refused request gets the channel's own empty or refused
+  // answer and one warning line, which carries no part of the request. That
+  // answer is not always the shape the renderer's types declare: the app's
+  // own renderer, the only caller with the bridge, never receives one.
+  const trusted = appWindowSender(getWindow)
+  const refused = <T>(what: string, answer: T): T => {
+    logWarn(`[canvas] ${what} refused: not the app window`)
+    return answer
+  }
+
+  ipcMain.handle(IPC.CANVAS_GET_STATE, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('state read', null)
     const { sessionId } = getStateSchema.parse(args)
     // Read-shaped and read-only. An earlier cut ran canvas adoption from here;
     // a GET that can transfer ownership of the user's review notes is the
@@ -832,7 +850,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   // nothing — the record already says this session — so there is no oracle and
   // no compare-and-set here. A foreign canvas is refused; taking one is
   // `canvas:resume`, below.
-  ipcMain.handle(IPC.CANVAS_RECLAIM, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_RECLAIM, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('open here', { ok: false, state: null })
     const { sessionId, canvasId } = openHereSchema.parse(args)
     const ok = openOwnCanvasForSessionLink(sessionId, canvasId)
     return { ok, state: getCanvasStateForSession(sessionId) }
@@ -850,7 +869,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
    * the rest because `truncated` is only honest when the narrowing happens
    * where the cap does.
    */
-  ipcMain.handle(IPC.CANVAS_LIBRARY_LIST, async (_e, args: unknown): Promise<CanvasLibraryResult> => {
+  ipcMain.handle(IPC.CANVAS_LIBRARY_LIST, async (e, args: unknown): Promise<CanvasLibraryResult> => {
+    if (!trusted(e)) return refused('library list', { rows: [], truncated: false })
     // `openTileSessionIds` is accepted by the schema (callers send it) and
     // deliberately NOT read here: the Library's privacy rule reads the
     // PTY-lifecycle oracle alone, and threading a caller-composed hint through
@@ -875,7 +895,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
 
   /** OWNERLESS IN-FLIGHT canvases on this project. Pure read — nothing moves
    *  until the user names one and the compare-and-set below runs. */
-  ipcMain.handle(IPC.CANVAS_LIST_RESUMABLES, async (_e, args: unknown): Promise<ResumableRow[]> => {
+  ipcMain.handle(IPC.CANVAS_LIST_RESUMABLES, async (e, args: unknown): Promise<ResumableRow[]> => {
+    if (!trusted(e)) return refused('resumables list', [])
     const { sessionId, openTileSessionIds } = listResumablesSchema.parse(args)
     // The config name is resolved AT READ, here, because this is the layer that
     // may read config-manager — so a renamed config renames the row, and no
@@ -892,7 +913,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
    * 'changed'; a refusal is one word from a closed set, so nothing free-text
    * ever crosses this boundary.
    */
-  ipcMain.handle(IPC.CANVAS_RESUME, async (_e, args: unknown): Promise<CanvasResumeResult> => {
+  ipcMain.handle(IPC.CANVAS_RESUME, async (e, args: unknown): Promise<CanvasResumeResult> => {
+    if (!trusted(e)) return refused('resume', { ok: false })
     const { sessionId, canvasId, expectedOwnerSessionId, openTileSessionIds } = resumeSchema.parse(args)
     const result = resumeCanvasFromSession(sessionId, canvasId, expectedOwnerSessionId, openTileSessionIds ?? [])
     if (!result.ok) return { ok: false, reason: result.reason }
@@ -902,7 +924,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
 
   /** DISMISS: discard an in-flight canvas and its evidence. The armed confirm
    *  in front of this says the evidence goes; this is what makes that true. */
-  ipcMain.handle(IPC.CANVAS_DISMISS, async (_e, args: unknown): Promise<CanvasDismissResult> => {
+  ipcMain.handle(IPC.CANVAS_DISMISS, async (e, args: unknown): Promise<CanvasDismissResult> => {
+    if (!trusted(e)) return refused('dismiss', { ok: false })
     const { sessionId, canvasId, openTileSessionIds } = dismissSchema.parse(args)
     return dismissCanvasForSession(sessionId, canvasId, openTileSessionIds ?? [])
   })
@@ -924,7 +947,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
    * images come through `canvas:evidenceRead`, which is already owner-or-same
    * -project scoped and resolves only paths the record itself carries.
    */
-  ipcMain.handle(IPC.CANVAS_GET_READONLY, async (_e, args: unknown): Promise<CanvasState | null> => {
+  ipcMain.handle(IPC.CANVAS_GET_READONLY, async (e, args: unknown): Promise<CanvasState | null> => {
+    if (!trusted(e)) return refused('read-only view', null)
     const { sessionId, canvasId } = getReadonlySchema.parse(args)
     const state = getCanvasStateById(canvasId)
     if (!state) return null
@@ -936,7 +960,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
 
   // The library. Pure read over every canvas on disk; listing one never binds
   // it to anything.
-  ipcMain.handle(IPC.CANVAS_LIST_ALL, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_LIST_ALL, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('list all', [])
     const { openTileSessionIds, sessionId } = listAllSchema.parse(args ?? {})
     // Scope to the asking session's project. Resolved HERE from main's own spawn
     // record rather than accepted from the renderer, so the caller cannot ask to
@@ -987,7 +1012,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   // Now the same guard the dismiss path uses decides — owner yes, live other
   // no, and a completed canvas is its owner's history rather than anyone's
   // housekeeping.
-  ipcMain.handle(IPC.CANVAS_DELETE, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_DELETE, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('delete', { ok: false as const })
     const { sessionId, canvasId, openTileSessionIds } = deleteCanvasSchema.parse(args)
     const allowed = canvasMutationAllowed(sessionId, canvasId, openTileSessionIds ?? [])
     if (!allowed.ok) return { ok: false as const, reason: allowed.reason }
@@ -1000,7 +1026,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
     return { ok }
   })
 
-  ipcMain.handle(IPC.CANVAS_RENDER, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_RENDER, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('render', null)
     const { sessionId, source } = renderSchema.parse(args)
     const result = renderVersion(sessionId, source)
     // C1: a ready render auto-superseded the previously open version — settle
@@ -1027,7 +1054,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   //      an error — it means something is still owed elsewhere on the canvas,
   //      which is a perfectly ordinary state — so it is logged and the verdict
   //      is returned as the result.
-  ipcMain.handle(IPC.CANVAS_VERSION_VERDICT, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_VERSION_VERDICT, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('verdict', { error: 'not-app-window' })
     const { sessionId, versionId, state, note } = versionVerdictSchema.parse(args)
     // Resolved BEFORE the write: afterwards the version is decided and is no
     // longer "the open one", so the settle would have nothing to key on.
@@ -1074,15 +1102,11 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
    * on both sides.
    *
    * SENDER. It types a line into a live session, so it answers only the app's
-   * own window, its main frame (trusted-sender.ts), checked before the payload
-   * is read; that refusal is reported in the same shape.
+   * own window, its main frame, as every channel here does (above), checked
+   * before the payload is read; that refusal is reported in the same shape.
    */
-  const trustedMarkerSender = appWindowSender(getWindow)
   ipcMain.handle(IPC.CANVAS_AGENT_MARKER, async (e, args: unknown) => {
-    if (!trustedMarkerSender(e)) {
-      logWarn('[canvas] agent marker refused: not the app window')
-      return { delivery: 'refused' as const, reason: 'not-app-window' }
-    }
+    if (!trusted(e)) return refused('agent marker', { delivery: 'refused' as const, reason: 'not-app-window' })
     const { sessionId, canvasId, line } = agentMarkerSchema.parse(args)
     const allowed = canvasArtifactMutationAllowed(sessionId, canvasId)
     if (!allowed.ok) return { delivery: 'refused' as const, reason: allowed.reason }
@@ -1092,7 +1116,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
     return { delivery: deliverCanvasMarker(sessionId, line, canvasId) }
   })
 
-  ipcMain.handle(IPC.CANVAS_VERSION_REOPEN, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_VERSION_REOPEN, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('version reopen', { error: 'not-app-window' })
     const { sessionId, versionId } = versionReopenSchema.parse(args)
     const result = reopenVersionForReview(sessionId, versionId, 'user')
     if ('error' in result) return result
@@ -1103,7 +1128,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   // Archive/unarchive one artifact (item C, phase 5). Reversible: it only moves
   // the artifact into (or out of) the muted Archived history group. Returns the
   // updated state so the pane reflects it without waiting for the change push.
-  ipcMain.handle(IPC.CANVAS_ARCHIVE_ARTIFACT, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_ARCHIVE_ARTIFACT, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('archive', { ok: false as const, state: null })
     const { sessionId, canvasId, versionId, archived, openTileSessionIds } = artifactArchiveSchema.parse(args)
     // OWNER-ONLY since M4 — the stricter guard, not the delete/dismiss one.
     // Reversible or not, reaching inside a canvas you do not own to tuck ONE of
@@ -1121,7 +1147,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   // two-store shape CANVAS_DELETE uses for dropReviewsForCanvas. The review drop
   // only runs on a successful version delete, so a refused delete never clears a
   // note.
-  ipcMain.handle(IPC.CANVAS_DELETE_ARTIFACT, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_DELETE_ARTIFACT, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('artifact delete', { ok: false as const, reason: 'not-eligible' as const })
     const { sessionId, canvasId, versionId, openTileSessionIds } = artifactDeleteSchema.parse(args)
     // OWNER-ONLY, for the reason archive is: this destroys part of somebody
     // else's canvas and leaves the rest, with no confirm they ever see.
@@ -1139,27 +1166,32 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
     return { ok: true as const, deletedVersions: result.deletedVersionIds.length, notesDeleted: notesDeleted ?? 0 }
   })
 
-  ipcMain.handle(IPC.CANVAS_SET_ACTIVE_VERSION, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_SET_ACTIVE_VERSION, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('active version', null)
     const { sessionId, versionId } = setActiveVersionSchema.parse(args)
     return setActiveVersion(sessionId, versionId)
   })
 
-  ipcMain.handle(IPC.CANVAS_REVIEW_GET_STATE, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_REVIEW_GET_STATE, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('review read', null)
     const { sessionId } = reviewGetStateSchema.parse(args)
     return getReviewStateForSession(sessionId)
   })
 
-  ipcMain.handle(IPC.CANVAS_ANNOTATION_UPSERT, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_ANNOTATION_UPSERT, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('note save', null)
     const { sessionId, draft } = annotationUpsertSchema.parse(args)
     return upsertAnnotation(sessionId, draft)
   })
 
-  ipcMain.handle(IPC.CANVAS_ANNOTATION_DELETE, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_ANNOTATION_DELETE, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('note delete', null)
     const { sessionId, annotationId } = annotationDeleteSchema.parse(args)
     return deleteAnnotation(sessionId, annotationId)
   })
 
-  ipcMain.handle(IPC.CANVAS_REVIEW_SUBMIT, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_REVIEW_SUBMIT, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('review submit', null)
     const { sessionId, reviewId, sketches, decision, trail } = reviewSubmitSchema.parse(args)
     const state = submitReview(sessionId, reviewId, sketches, decision, trail)
     // The submit-with-notes half of the auto-complete (W2). The store already
@@ -1172,7 +1204,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
 
   // The USER puts a settled ROUND back in play — with the per-note reopen
   // below, the ONLY two writes that may move a round `resolved -> submitted`.
-  ipcMain.handle(IPC.CANVAS_REVIEW_REOPEN, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_REVIEW_REOPEN, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('review reopen', null)
     const { sessionId, canvasId, reviewId } = reviewReopenSchema.parse(args)
     return reopenReview(sessionId, canvasId, reviewId)
   })
@@ -1180,7 +1213,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   // The user's eyes on an addressed round — the one input to the close-out
   // barrier that no agent can produce. Renderer-only: the MCP surface has no
   // path here, and must never be given one.
-  ipcMain.handle(IPC.CANVAS_REVIEW_MARK_SEEN, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_REVIEW_MARK_SEEN, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('mark seen', null)
     const { sessionId, canvasId, annotationIds } = reviewMarkSeenSchema.parse(args)
     return markAddressedNotesSeen(sessionId, canvasId, annotationIds)
   })
@@ -1190,19 +1224,22 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   // note, the target, the pasted screenshots and the drawing without asking.
   // Renderer-only and owner-scoped: no MCP tool reaches this channel, and the
   // store refuses a canvas this session does not hold.
-  ipcMain.handle(IPC.CANVAS_COMPOSER_DRAFT_SET, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_COMPOSER_DRAFT_SET, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('draft save', null)
     const { sessionId, canvasId, draft } = composerDraftSetSchema.parse(args)
     return setComposerDraft(sessionId, canvasId, draft)
   })
 
-  ipcMain.handle(IPC.CANVAS_COMPOSER_DRAFT_CLEAR, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_COMPOSER_DRAFT_CLEAR, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('draft clear', null)
     const { sessionId, canvasId } = composerDraftClearSchema.parse(args)
     return clearComposerDraft(sessionId, canvasId)
   })
 
   // The undo half of close-out. Cheap and one click away, which is what makes
   // a bulk close safe to offer at all.
-  ipcMain.handle(IPC.CANVAS_ANNOTATION_REOPEN, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_ANNOTATION_REOPEN, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('note reopen', null)
     const { sessionId, annotationId } = annotationReopenSchema.parse(args)
     return reopenAnnotation(sessionId, annotationId)
   })
@@ -1212,7 +1249,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   // unreadable review store; the canvas store re-checks ownership against the
   // record itself. Detaches the canvas as the session's current one, so the
   // pane falls back to its front page.
-  ipcMain.handle(IPC.CANVAS_COMPLETE, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_COMPLETE, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('complete', { ok: false as const, reason: 'not-app-window' })
     const { sessionId, canvasId } = canvasCompleteSchema.parse(args)
     const result = completeCanvasGuarded(canvasId, 'user', sessionId)
     return 'error' in result ? { ok: false as const, reason: result.error } : { ok: true as const, state: result }
@@ -1222,7 +1260,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   // and signs the subject off. USER-only by construction — `completeCanvasGuarded`
   // honours `force` only for `by: 'user'`, and there is no MCP path to this
   // channel — so `canvas_complete` keeps every refusal it has.
-  ipcMain.handle(IPC.CANVAS_COMPLETE_FORCE, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_COMPLETE_FORCE, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('force complete', { ok: false as const, reason: 'not-app-window' })
     const { sessionId, canvasId } = canvasCompleteSchema.parse(args)
     const result = completeCanvasGuarded(canvasId, 'user', sessionId, { force: true })
     return 'error' in result ? { ok: false as const, reason: result.error } : { ok: true as const, state: result }
@@ -1232,14 +1271,16 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   // commits. Pure read — and OWNER-ONLY: these tallies are the canvas's private
   // review state, so answering them to a foreign session would be an oracle for
   // exactly what `canvas:completeForce` refuses to act on. Null for a stranger.
-  ipcMain.handle(IPC.CANVAS_DESCRIBE_FORCE_CLOSURES, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_DESCRIBE_FORCE_CLOSURES, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('force closures read', null)
     const { sessionId, canvasId } = canvasCompleteSchema.parse(args)
     return describeForceClosures(canvasId, sessionId)
   })
 
   // The undo half (#476): clears the stamp, restores obligations, and rebinds
   // the canvas as current when the owner session shows nothing else.
-  ipcMain.handle(IPC.CANVAS_COMPLETE_REOPEN, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_COMPLETE_REOPEN, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('complete reopen', { ok: false as const, reason: 'not-app-window' })
     const { sessionId, canvasId } = canvasCompleteReopenSchema.parse(args)
     const result = reopenCanvasGuarded(canvasId, sessionId)
     return 'error' in result ? { ok: false as const, reason: result.error } : { ok: true as const, state: result }
@@ -1269,6 +1310,7 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
    * never carry a path or a store message into the pane.
    */
   ipcMain.handle(IPC.CANVAS_EVIDENCE_CAPTURE, async (event, args: unknown): Promise<EvidenceCaptureResult> => {
+    if (!trusted(event)) return refused('evidence capture', { ok: false as const, reason: 'not-owner' as const })
     const parsed = evidenceCaptureSchema.parse(args)
     const state = getCanvasStateById(parsed.canvasId)
     if (!state || state.sessionId !== parsed.sessionId) return { ok: false, reason: 'not-owner' }
@@ -1327,7 +1369,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
   /** Cancel: the capture is thrown away. Scoped to the caller's own canvas —
    *  an id alone must not reach into another canvas's pending shot, even to
    *  destroy it. */
-  ipcMain.handle(IPC.CANVAS_EVIDENCE_DISCARD, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_EVIDENCE_DISCARD, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('evidence discard', { ok: false as const })
     const { sessionId, canvasId, evidenceId } = evidenceDiscardSchema.parse(args)
     const state = getCanvasStateById(canvasId)
     if (!state || state.sessionId !== sessionId) return { ok: false as const }
@@ -1347,7 +1390,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
    *
    * Fails closed on both. A session we have no project for matches nothing.
    */
-  ipcMain.handle(IPC.CANVAS_EVIDENCE_READ, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_EVIDENCE_READ, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('evidence read', null)
     const { sessionId, canvasId, path: recordedPath } = evidenceReadSchema.parse(args)
     const owner = getCanvasStateById(canvasId)?.sessionId
     if (owner !== sessionId) {
@@ -1370,7 +1414,8 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
    * because the ones that are bugs (a draft id reaching this channel) should
    * leave a trace.
    */
-  ipcMain.handle(IPC.CANVAS_SET_PACK_NAME, async (_e, args: unknown) => {
+  ipcMain.handle(IPC.CANVAS_SET_PACK_NAME, async (e, args: unknown) => {
+    if (!trusted(e)) return refused('pack rename', null)
     const { sessionId, canvasId, versionId, name } = setPackNameSchema.parse(args)
     const result = setPackName(sessionId, canvasId, versionId, name)
     if ('error' in result) {
@@ -1436,7 +1481,29 @@ export function registerCanvasHandlers(getWindow: () => BrowserWindow | null): v
     }
   })
 
-  ipcMain.on(IPC.CANVAS_SNAPSHOT_RESULT, (_e, reply: unknown) => {
+  ipcMain.on(IPC.CANVAS_SNAPSHOT_RESULT, (e, reply: unknown) => {
+    if (!trusted(e)) return refused('snapshot reply', undefined)
     resolveCanvasSnapshot(reply)
+  })
+
+  // A canvas marker into a Claude Code session is typed only
+  // at its ready, empty prompt, which only the renderer's terminal shows; main
+  // asks it to read or type (canvas/claude-marker-typing.ts owns correlation
+  // and the timeout; this just moves bytes). The answer is the app window's
+  // main frame's only.
+  setClaudeMarkerSender((ask) => {
+    const win = getWindow()
+    if (!win || win.isDestroyed()) return false
+    try {
+      win.webContents.send(IPC.CANVAS_CLAUDE_MARKER_ASK, ask)
+      return true
+    } catch {
+      return false
+    }
+  })
+
+  ipcMain.on(IPC.CANVAS_CLAUDE_MARKER_ANSWER, (e, answer: unknown) => {
+    if (!trusted(e)) return refused('claude marker answer', undefined)
+    resolveClaudeMarkerAnswer(answer)
   })
 }

@@ -13,7 +13,8 @@
 // else, or any doubt, refuses it, and every folder below a folder whose own
 // rights were refused is refused too.
 //
-// For the account sign-in folders (secureSignInFoldersWindows; every other
+// For the account sign-in folders (secureSignInFoldersWindows) and the
+// resources folder's scripts folders (secureScriptFoldersRule; every other
 // caller gets the folders' own rights only), what is already inside a folder
 // made owner-only in place is put right too, one level deep. The owner and
 // the rights are written to the folder separately, the owner first, so that
@@ -60,7 +61,16 @@
 // written to it (only this user, or an administrator, who can take any
 // folder anyway, can make a folder that this user or that group owns). A
 // folder the call makes itself is read the same way once made, so one that
-// another account put in its place meanwhile is refused too.
+// another account put in its place meanwhile is refused too. The script
+// writes the owner only to a folder the Administrators group owns: a folder
+// this user already owns keeps its owner as it is, since writing an owner
+// needs WRITE_OWNER, which Modify does not include and which owning a folder
+// does not give (full control or a take-ownership grant does), so a parent
+// that gives this user Modify alone (a second drive's root) leaves even the
+// folder's own owner without it. The route with Windows' own programs
+// (secureFoldersNative) writes the rights first (this user full control) and
+// then the owner, of every folder. Either way the read-back still requires
+// this user as the owner.
 //
 // Windows: ONE Windows PowerShell call for all the folders, started
 // asynchronously (execFile, never the synchronous form) from the system folder
@@ -173,8 +183,9 @@ const CONTAINER_AND_OBJECT_INHERIT = 3
 export interface OwnerOnlyOptions {
   /** Read what is directly inside each folder too, put right what may be,
    *  and pass a folder only when that holds (see the file's header). Only
-   *  the account sign-in folders ask for it (secureSignInFoldersWindows);
-   *  off, the rule writes and reads the folders' own rights alone. */
+   *  the account sign-in folders (secureSignInFoldersWindows) and the
+   *  scripts folders (secureScriptFoldersRule) ask for it; off, the rule
+   *  writes and reads the folders' own rights alone. */
   inside?: boolean
   /** Entries inside a folder (full paths) that the read of what is inside
    *  leaves out while each is a file with more than one name: the home
@@ -230,7 +241,8 @@ export function runWindowsPowerShell(script: string, extraEnv: Record<string, st
 }
 
 /** The one script: for each folder in turn (see the file's header), make it
- *  when missing, set owner and rights, read both back by SID, then read what
+ *  when missing, set the owner (when it is not already this user) and the
+ *  rights, read both back by SID, then read what
  *  is inside it (putting right what may be). Prints one JSON object: the
  *  user's SID and, per folder, the read or the error, with what is inside. */
 export const OWNER_ONLY_SCRIPT = [
@@ -300,10 +312,17 @@ export const OWNER_ONLY_SCRIPT = [
   "    $was = [IO.Directory]::GetAccessControl($d, [Security.AccessControl.AccessControlSections]'Owner').GetOwner([Security.Principal.SecurityIdentifier]).Value",
   "    if ($was -ne $user.Value -and $was -ne '" + OWNER_ONLY_ADMINISTRATORS_SID + "') { throw 'its owner is not this user' }",
   // The owner alone, then the rights alone (see the file's header): a write
-  // of rights alone reaches what is inside, whoever owns it.
-  '    $o = New-Object Security.AccessControl.DirectorySecurity',
-  '    $o.SetOwner($user)',
-  '    [IO.Directory]::SetAccessControl($d, $o)',
+  // of rights alone reaches what is inside, whoever owns it. The owner is
+  // written only when this user is not already the owner (2.1.1-beta.3, O6):
+  // that write needs WRITE_OWNER, which Modify does not include, so a folder
+  // made under a parent that gives this user Modify alone (a second drive's
+  // root) lacks it, even for the folder's own owner; the rights write below
+  // needs only WRITE_DAC, which an owner always has.
+  '    if ($was -ne $user.Value) {',
+  '      $o = New-Object Security.AccessControl.DirectorySecurity',
+  '      $o.SetOwner($user)',
+  '      [IO.Directory]::SetAccessControl($d, $o)',
+  '    }',
   '    $s = New-Object Security.AccessControl.DirectorySecurity',
   '    $s.SetAccessRuleProtection($true, $false)',
   '    $s.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($user, $full, $inherit, $none, $allow)))',
@@ -565,7 +584,7 @@ function sharedEntries(shared: readonly string[] | undefined): string[] {
  *  folder that cannot be named, an answer that does not match what was asked,
  *  or any failure of the call, is refused; the last two say `unread`.
  *
- *  With `opts.inside` (the account sign-in folders only), what is directly
+ *  With `opts.inside` (the sign-in and scripts folders only), what is directly
  *  inside each folder is read and put right too, and a folder passes only
  *  when that holds (see the file's header); without it, the rule writes and
  *  judges the folders' own rights alone, and the call says so
@@ -627,8 +646,9 @@ export async function secureFoldersWindows(
 /** The account sign-in folders' rule (Windows): secureFoldersWindows with
  *  what is directly inside each folder read and put right too, `shared` (the home
  *  mirror's links to the user's own files) left out of that read while each
- *  is a file with more than one name. Every other caller of the rule gets
- *  the folders' own rights only (secureOwnerOnlyFolders). */
+ *  is a file with more than one name. The scripts folders get the same read
+ *  of what is inside (secureScriptFoldersRule); every other caller of the
+ *  rule gets the folders' own rights only (secureOwnerOnlyFolders). */
 export function secureSignInFoldersWindows(dirs: readonly string[], shared: readonly string[] = []): Promise<OwnerOnlyFolderResult[]> {
   return secureFoldersWindows(dirs, runWindowsPowerShell, nativeOwnerOnlyTools, { inside: true, shared })
 }
@@ -1155,6 +1175,54 @@ export async function secureFoldersNative(dirs: readonly string[], given: Native
   return results.map((r, i) => r ?? { dir: dirs[i], ok: false, detail: 'no answer' })
 }
 
+/**
+ * Whether each folder is owner-only as it stands, by its own rights alone
+ * (ownerOnlyVerdict: owner the user; inheritance from above off; allow
+ * entries of its own for the user, SYSTEM and the Administrators group only;
+ * the user with full control passed to what is inside; SYSTEM present). What
+ * is inside is not read. Read only (2.1.1-beta.3): nothing is made, written or
+ * reset -- whoami.exe for the user's SID, then ONE read of the folders'
+ * attributes and owner and rights as SDDL (OWNER_ONLY_READ_SCRIPT, only what
+ * Constrained Language Mode allows), matched by place. A folder that cannot be
+ * named, is missing, is a link (any reparse point) or not a folder, or whose
+ * read failed, is not owner-only; a call that gave no read at all says
+ * `unread`. Never throws. Windows only: a caller asks it nowhere else.
+ */
+export async function readOwnerOnlyFoldersWindows(
+  dirs: readonly string[],
+  tools: Pick<NativeOwnerOnlyTools, 'run'> = nativeOwnerOnlyTools,
+  read: PowerShellRunner = runWindowsPowerShell,
+): Promise<OwnerOnlyFolderResult[]> {
+  const sent = dirs.filter((d) => unnameable(d) === null)
+  const answer = (verdicts: OwnerOnlyFolderResult[]): OwnerOnlyFolderResult[] => {
+    let at = 0
+    return dirs.map((dir) => {
+      const why = unnameable(dir)
+      return why ? { dir, ok: false, detail: why } : verdicts[at++] ?? { dir, ok: false, detail: 'no answer', unread: true }
+    })
+  }
+  if (sent.length === 0) return answer([])
+  const unreadAll = (detail: string) => answer(sent.map((dir) => ({ dir, ok: false, detail, unread: true as const })))
+  try {
+    const who = await tools.run('whoami', ['/user', '/fo', 'csv', '/nh'])
+    const user = who && who.code === 0 ? sidFromWhoami(who.stdout) : ''
+    if (!user) return unreadAll('the user could not be named')
+    const reads = await readNative(sent, read)
+    if (!reads) return unreadAll('its rights could not be read')
+    return answer(sent.map((dir, i): OwnerOnlyFolderResult => {
+      const r = reads[i]
+      if (r.error) return { dir, ok: false, detail: 'it could not be read' }
+      if (r.missing) return { dir, ok: false, detail: 'it is missing' }
+      if (r.attributes === null || r.sddl === null) return { dir, ok: false, detail: 'its rights could not be read' }
+      if ((r.attributes & FILE_ATTRIBUTE_REPARSE_POINT) !== 0) return { dir, ok: false, detail: 'a link' }
+      if ((r.attributes & FILE_ATTRIBUTE_DIRECTORY) === 0) return { dir, ok: false, detail: 'not a folder' }
+      return { dir, ...ownerOnlyVerdict(folderReadFromSddl(r.sddl, user), user) }
+    }))
+  } catch {
+    return unreadAll('its rights could not be read')
+  }
+}
+
 /** POSIX: each folder in turn made when missing (inside its parent), a real
  *  folder, this user's, 0700. Never throws. */
 export async function secureFoldersPosix(dirs: readonly string[]): Promise<OwnerOnlyFolderResult[]> {
@@ -1187,8 +1255,23 @@ export async function secureFoldersPosix(dirs: readonly string[]): Promise<Owner
 }
 
 /** This platform's rule, for every caller but the account sign-in folders
- *  (secureSignInFoldersWindows): the folders' own rights only, never what is
+ *  (secureSignInFoldersWindows) and the scripts folders
+ *  (secureScriptFoldersRule): the folders' own rights only, never what is
  *  inside them. */
 export function secureOwnerOnlyFolders(dirs: readonly string[]): Promise<OwnerOnlyFolderResult[]> {
   return process.platform === 'win32' ? secureFoldersWindows(dirs) : secureFoldersPosix(dirs)
+}
+
+/** The resources folder's scripts folders' rule (script-folders.ts), where
+ *  the scripts the app's sessions run are deployed. On Windows,
+ *  what is directly inside each folder is read and put right too, as for the
+ *  sign-in folders (nothing left out as shared): an entry there that another
+ *  account owns is made this user's or refuses the folder, and one that gives
+ *  rights to anyone else is put right or refuses it. On macOS and Linux each
+ *  folder's own rights (0700, this user's); each script is held to its own
+ *  owner and mode at its launch (script-deploy.ts isPlainScriptFile).
+ *  `run` and `platform` are for tests (a test's runner gets no fallback). */
+export function secureScriptFoldersRule(dirs: readonly string[], run: PowerShellRunner = runWindowsPowerShell, platform: NodeJS.Platform = process.platform): Promise<OwnerOnlyFolderResult[]> {
+  if (platform !== 'win32') return secureFoldersPosix(dirs)
+  return secureFoldersWindows(dirs, run, run === runWindowsPowerShell ? nativeOwnerOnlyTools : null, { inside: true })
 }

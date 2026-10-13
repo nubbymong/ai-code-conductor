@@ -14,6 +14,14 @@
       "reason": "Names icacls only in its fake child_process, which answers or refuses every program start the code it drives makes; the terminal and the headless runs are fakes, the owner-only rule is a test rule and the shared-folder links are stubbed. No process starts, no ACL is changed and no link is made."
     },
     {
+      "path": "tests/unit/main/harden-dir-acl-fallback.test.ts",
+      "reason": "Names icacls only as the program its fake execFileSync answers from an in-memory access list (the folder path is a fixture string, never a real folder); every other child_process call refuses. No process starts, no folder is made, no ACL is read or changed and no link is made."
+    },
+    {
+      "path": "tests/unit/main/owner-only-folders-read.test.ts",
+      "reason": "Names icacls only as a program its fake tools refuse to run and in a check of the script text; whoami and Windows PowerShell are fakes handed to the function under test, and every child_process call refuses. No process starts, no folder is made, no ACL is read or changed and no link is made."
+    },
+    {
       "path": "tests/unit/main/owner-only-folders-default-rule.test.ts",
       "reason": "Names icacls only as a program its fake execFile answers from an in-memory record of each folder's owner and rights; every other child_process call refuses. Real temp folders are made, but no process starts, no ACL is changed and no link is made."
     },
@@ -24,6 +32,10 @@
     {
       "path": "tests/unit/main/sentinel-start-steps-wait.test.ts",
       "reason": "Names icacls only in its fake child_process, which answers or refuses every program start the code it drives makes; the headless runner is a recording fake, the owner-only rule is a test rule and the account resolver links nothing. No process starts, no ACL is changed and no link is made."
+    },
+    {
+      "path": "tests/unit/main/spawn-claude-no-node.test.ts",
+      "reason": "Its only real process starts are in its last block, the macOS/Linux launch line in real POSIX shells: that block is skipped on Windows (its list of shells is empty there), and elsewhere it starts only /bin/sh-family shells on stub programs it writes into its own temp folder, with PATH naming only that folder and a 10 s limit, never a real node or Claude Code. Every Windows case mocks the program lookup and starts nothing."
     },
     {
       "path": "tests/unit/main/spawn-site-inventory.test.ts",
@@ -317,7 +329,7 @@
     },
     {
       "path": "tests/unit/pr600-r3-fresh-wait.test.ts",
-      "reason": "Through app code it makes, moves or repairs account folders and prepares a managed launch, which asks an installed Claude Code CLI for its version; on Windows that runs icacls on folders under the test's temp root. One run on the test VM started: icacls.exe (53), cmd.exe running the Claude Code CLI (1)."
+      "reason": "Through app code it makes, moves or repairs account folders and prepares a managed launch; on Windows that runs icacls on folders under the test's temp root. One run on the test VM started: icacls.exe (53), cmd.exe running the Claude Code CLI (1). Since 2026-10-11 the launch's Claude Code version probe is faked in the suite, so no CLI starts; icacls still does."
     },
     {
       "path": "tests/unit/providers/provider-entry-routing.test.ts",

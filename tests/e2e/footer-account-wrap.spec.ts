@@ -59,7 +59,7 @@ async function measure(accounts: number, footerWidth: number, wrap: boolean) {
         pill.setAttribute('data-probe-pill', '')
         pill.innerHTML =
           `<span class="w-2 h-2 rounded-full shrink-0"></span>` +
-          `<span class="font-medium truncate">nicholas.moger${i}@icloud.com</span>` +
+          `<span class="font-medium truncate">user.accounts${i}@example.com</span>` +
           `<span class="flex items-center gap-2 shrink-0">` +
           `<span>5h</span><span style="display:inline-block;width:46px;height:6px"></span>` +
           `<span>W</span><span style="display:inline-block;width:46px;height:6px"></span>` +

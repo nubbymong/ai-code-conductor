@@ -25,6 +25,8 @@ const windowState = vi.hoisted(() => ({
   captureRects: [] as Array<{ x: number; y: number; width: number; height: number }>,
   captureThrows: false as boolean,
   sent: [] as Array<{ channel: string; payload: unknown }>,
+  /** The app window's main frame: the only sender the handlers answer. */
+  mainFrame: {},
 }))
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
@@ -44,6 +46,7 @@ vi.mock('electron', () => {
     isDestroyed: () => windowState.destroyed,
     getContentBounds: () => windowState.bounds,
     webContents: {
+      mainFrame: windowState.mainFrame,
       send: (channel: string, payload: unknown) => windowState.sent.push({ channel, payload }),
       capturePage: async (rect: { x: number; y: number; width: number; height: number }) => {
         if (windowState.captureThrows) throw new Error('capture blew up')
@@ -86,7 +89,8 @@ const uxProtocol = await import('../../../src/main/canvas/ccc-ux-protocol')
 const SID = 'a1b2c3d4e5f6a7b8c9d0e1f2'
 const OTHER_SID = 'b1b2c3d4e5f6a7b8c9d0e1f2'
 
-const invoke = (ch: string, args: unknown) => handlers.get(ch)!({ sender: electron.__fakeWindow.webContents } as never, args)
+const invoke = (ch: string, args: unknown) =>
+  handlers.get(ch)!({ sender: electron.__fakeWindow.webContents, senderFrame: windowState.mainFrame } as never, args)
 
 function tmpDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix))

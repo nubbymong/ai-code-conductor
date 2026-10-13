@@ -184,8 +184,9 @@ describe('Alt+V with focus outside the terminal (P3.15, row 70)', () => {
 })
 
 /**
- * P3.16a (N9): the partner view shows the tab's partner shell (a plain shell on
- * this computer, PTY id `<session id>-partner`) in place of the session's own
+ * P3.16a (N9): the partner view shows the tab's partner shell (a plain shell,
+ * PTY id `<session id>-partner`; on this computer for a local tab, on the host
+ * for an SSH tab since #86) in place of the session's own
  * terminal, which is hidden then. Alt+V goes to the pane on screen: in the
  * partner view that is the partner shell, which gets what a plain terminal
  * gets (the quoted path, no sentence, no Enter), and the hidden assistant gets
@@ -279,7 +280,10 @@ describe('Alt+V in the partner view goes to the partner shell on screen (P3.16a,
     expect(h.sendImagePathToCodex).not.toHaveBeenCalled()
   })
 
-  it('an SSH tab showing its partner shell: the partner is a shell on this computer, so the path is typed into it and no remote-shell hint shows', async () => {
+  // #86: an SSH tab's partner shell runs on the HOST now, which cannot read a
+  // file on this computer: nothing is typed, and the hint says where the image
+  // is, as for a plain terminal over SSH.
+  it('an SSH tab showing its partner shell: the partner is a shell on the host, so nothing is typed and the hint says the remote shell cannot read it', async () => {
     for (const extra of [{}, { provider: 'codex' }, { shellOnly: true }] as Array<Partial<Session>>) {
       const label = JSON.stringify(extra)
       h.typeImagePathIntoShell.mockReset()
@@ -287,13 +291,20 @@ describe('Alt+V in the partner view goes to the partner shell on screen (P3.16a,
       for (const el of paneEls) el.remove()
       paneEls = []
       mountPanes([['ss1', false], ['ss1-partner', true]])
-      await altV([session('ss1', { sessionType: 'ssh', ...extra } as Partial<Session>)], 'ss1')
-      expect(h.typeImagePathIntoShell, label).toHaveBeenCalledTimes(1)
-      expect(h.typeImagePathIntoShell.mock.calls[0].slice(0, 2), label).toEqual(['ss1-partner', IMG])
+      await altV([session('ss1', { sessionType: 'ssh', sshConfig: { host: 'build-box', port: 22, username: 'nick', remotePath: '~' }, ...extra } as Partial<Session>)], 'ss1')
+      expect(h.typeImagePathIntoShell, label).not.toHaveBeenCalled()
       expect(h.sendImageToSession, label).not.toHaveBeenCalled()
       expect(h.sendImagePathToCodex, label).not.toHaveBeenCalled()
-      expect(usePasteHintStore.getState().hints.ss1, label).toBeUndefined()
+      expect(usePasteHintStore.getState().hints.ss1, label).toBe(`The image was saved on this computer at ${IMG}; the remote shell cannot read it, so nothing was typed.`)
     }
+  })
+
+  it('an SSH tab with no ssh block: its partner is a shell on this computer (nothing to connect with), so the path is typed into it', async () => {
+    mountPanes([['ss2', false], ['ss2-partner', true]])
+    await altV([session('ss2', { sessionType: 'ssh' } as Partial<Session>)], 'ss2')
+    expect(h.typeImagePathIntoShell).toHaveBeenCalledTimes(1)
+    expect(h.typeImagePathIntoShell.mock.calls[0].slice(0, 2)).toEqual(['ss2-partner', IMG])
+    expect(usePasteHintStore.getState().hints.ss2).toBeUndefined()
   })
 
   it('the path is quoted for the shell the partner runs: PowerShell on Windows, a POSIX shell elsewhere', async () => {

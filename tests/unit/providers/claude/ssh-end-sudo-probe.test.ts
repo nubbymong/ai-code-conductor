@@ -43,7 +43,7 @@ const NONCE = 'a1b2c3d4e5f60718a1b2c3d4'
 const ROOTLESS = { type: 'container', engine: 'podman', container: 'ccc-test' } as const
 const ROOTFUL = { ...ROOTLESS, sudo: true } as const
 const inner = (sid: string): string =>
-  String.raw`rm -f ~/.claude/settings-${sid}.json ~/.claude/mcp-${sid}.json ~/.claude/ccc-status-${sid}.url 2>/dev/null; exec pkill -f "/settings-${sid}\.json"`
+  String.raw`rm -f ~/.claude/settings-${sid}.json ~/.claude/mcp-${sid}.json ~/.claude/ccc-status-${sid}.url ~/.claude/ccc-attn-${sid}.key ~/.claude/ccc-attn-${sid}.up 2>/dev/null; exec pkill -f "/settings-${sid}\.json"`
 /** The probe prefix End puts before the kill (buildContainerKillCommand, 3). */
 const probe = (engine: string, nonce: string): string =>
   `sh -c 'sudo -n ${engine} --version >/dev/null 2>&1' || ` + String.raw`printf '\n%s_%s\n' CCC_END_SUDO_NEEDED ` + `${nonce}; `

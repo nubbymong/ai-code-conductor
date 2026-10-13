@@ -240,7 +240,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Add a partner shell next to Claude or Codex',
         title: 'Partner Terminal',
-        body: 'A **partner terminal** is a second shell that runs in the same session tab, alongside Claude or Codex. One click on the Partner button in the command bar toggles between them — every session has one, no setup needed.\n\nUse it to:\n• Run `npm run dev` while the assistant edits code\n• Keep a test watcher running\n• Run git commands without the assistant\'s interference\n• Tail a log file\n\nIt opens in the session\'s working directory (home for SSH sessions).',
+        body: 'A **partner terminal** is a second shell that runs in the same session tab, alongside Claude or Codex. One click on the Partner button in the command bar toggles between them — every session has one, no setup needed.\n\nUse it to:\n• Run `npm run dev` while the assistant edits code\n• Keep a test watcher running\n• Run git commands without the assistant\'s interference\n• Tail a log file\n\nOn a local session it opens in the session\'s working directory on this PC. On an SSH session it is a plain shell on the host, in the config\'s remote folder there; the strip above it says which. If it does not recognise the host\'s shell prompt, or you type in it before that prompt shows (a password typed by hand counts), it opens in your home folder there instead (see Known issues in the Feature Guide).',
       },
       postUse: {
         shortText: 'Route command buttons to your partner shell',
@@ -387,7 +387,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Paste clipboard images with Alt+V',
         title: 'Paste Image from Clipboard',
-        body: 'Image on your clipboard? Click into a session on this computer and press **Alt+V**: the key goes to the assistant, which pastes the image itself (Codex shows it as [Image #1]).\n\nWith focus elsewhere in the app, **Alt+V** saves the image and types a line with its path into the session, for the assistant to open. On a Codex session the app types it only into an empty Codex prompt, and says why when it cannot. On an SSH session, press **Alt+V** with focus outside the terminal: the app saves the image on this computer and asks Claude to fetch it over the connection.\n\nWith focus elsewhere, **Alt+V** types only the image\'s path into a plain terminal, or into the partner shell while a session\'s partner view is shown: quoted for the shell, with no Enter, ready for a command of your own. On macOS and Linux the path is typed only into an sh, bash, zsh, dash or ksh shell. Any other shell there, or a plain terminal over SSH, gets nothing, and the hint says where the image was saved.\n\nWorks with screenshots, images copied from a browser, diagrams from Excalidraw, or an image file you copied in File Explorer or Finder. No more "let me save this to disk first and drag it in".',
+        body: 'Image on your clipboard? Click into a session on this computer and press **Alt+V**: the key goes to the assistant, which pastes the image itself (Codex shows it as [Image #1]).\n\nWith focus elsewhere in the app, **Alt+V** saves the image and types a line with its path into the session, for the assistant to open. On a Codex session the app types it only into an empty Codex prompt, and says why when it cannot. On an SSH session, press **Alt+V** with focus outside the terminal: the app saves the image on this computer and asks Claude to fetch it over the connection.\n\nWith focus elsewhere, **Alt+V** types only the image\'s path into a plain terminal, or into a local session\'s partner shell while its partner view is shown: quoted for the shell, with no Enter, ready for a command of your own. On macOS and Linux the path is typed only into an sh, bash, zsh, dash or ksh shell. Any other shell there, a plain terminal over SSH, or an SSH session\'s partner shell (it runs on the host) gets nothing, and the hint says where the image was saved.\n\nWorks with screenshots, images copied from a browser, diagrams from Excalidraw, or an image file you copied in File Explorer or Finder. No more "let me save this to disk first and drag it in".',
       },
     },
   },
@@ -611,9 +611,9 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Where the app stores everything',
         title: 'Resources Folder',
-        body: 'The app uses a **Resources Directory** for all user data. Configurable at first-run setup.\n\nContents:\n• `CONFIG/` -- JSON files for your configs, commands, settings, encrypted credentials, tokenomics, usage tracking\n• `logs/` -- per-session JSONL activity logs\n• `screenshots/` -- any screenshots captured by the Snap features\n• `insights/` -- AI-generated usage reports\n• `status/` -- real-time session metrics (written by the statusline script)\n• `scripts/` -- deployed helper scripts like the statusline\n• `claude-versions/` -- installed legacy Claude CLI versions\n• `providers/` -- your Claude and Codex account list: names, colours, the default and reviewer accounts\n• `codex-realms/` -- one sign-in folder per Codex account you add; Codex writes its own sign-in there and the app never reads it\n\nBack up the whole `resources/` folder to move to a new machine (note: encrypted credentials won\'t transfer -- see the credential tip).',
-        bodyMac: 'The app stores everything under `~/Library/Application Support/Claude Conductor/resources/`:\n\n• `CONFIG/` -- JSON files for configs, commands, settings, encrypted credentials, tokenomics, usage tracking\n• `logs/` -- per-session JSONL activity logs\n• `screenshots/` -- captured by Snap features\n• `insights/` -- AI usage reports\n• `status/` -- real-time session metrics (from statusline script)\n• `scripts/` -- deployed helper scripts\n• `claude-versions/` -- installed legacy Claude CLI versions\n• `providers/` -- your Claude and Codex account list: names, colours, the default and reviewer accounts\n• `codex-realms/` -- one sign-in folder per Codex account you add; Codex writes its own sign-in there and the app never reads it\n\nBack up the whole `resources/` folder to move to a new machine (encrypted credentials won\'t transfer since they\'re tied to Keychain).',
-        bodyWin: 'The app stores everything under your resources folder -- `%LOCALAPPDATA%\\AI Code Conductor\\resources\\` on a new install, `...\\Claude Command Center\\...` if you upgraded:\n\n• `CONFIG\\` -- JSON files for configs, commands, settings, encrypted credentials, tokenomics, usage tracking\n• `logs\\` -- per-session JSONL activity logs\n• `screenshots\\` -- captured by Snap features\n• `insights\\` -- AI usage reports\n• `status\\` -- real-time session metrics (from statusline script)\n• `scripts\\` -- deployed helper scripts\n• `claude-versions\\` -- installed legacy Claude CLI versions\n• `providers\\` -- your Claude and Codex account list: names, colours, the default and reviewer accounts\n• `codex-realms\\` -- one sign-in folder per Codex account you add; Codex writes its own sign-in there and the app never reads it\n\nBack up the whole `resources\\` folder to move to a new machine (encrypted credentials won\'t transfer since they\'re tied to DPAPI).',
+        body: 'The app uses a **Resources Directory** for all user data. Configurable at first-run setup.\n\nContents:\n• `CONFIG/` -- JSON files for your configs, commands, settings, encrypted credentials, tokenomics, usage tracking\n• `logs/` -- per-session JSONL activity logs\n• `screenshots/` -- any screenshots captured by the Snap features\n• `insights/` -- AI-generated usage reports\n• `status/` -- real-time session metrics (written by the statusline script)\n• `scripts/` -- deployed helper scripts like the statusline\n• `claude-versions/` -- Claude Code versions installed by older releases; no longer used, safe to delete\n• `providers/` -- your Claude and Codex account list: names, colours, the default and reviewer accounts\n• `codex-realms/` -- one sign-in folder per Codex account you add; Codex writes its own sign-in there and the app never reads it\n\nBack up the whole `resources/` folder to move to a new machine (note: encrypted credentials won\'t transfer -- see the credential tip).',
+        bodyMac: 'The app stores everything under `~/Library/Application Support/Claude Conductor/resources/`:\n\n• `CONFIG/` -- JSON files for configs, commands, settings, encrypted credentials, tokenomics, usage tracking\n• `logs/` -- per-session JSONL activity logs\n• `screenshots/` -- captured by Snap features\n• `insights/` -- AI usage reports\n• `status/` -- real-time session metrics (from statusline script)\n• `scripts/` -- deployed helper scripts\n• `claude-versions/` -- Claude Code versions installed by older releases; no longer used, safe to delete\n• `providers/` -- your Claude and Codex account list: names, colours, the default and reviewer accounts\n• `codex-realms/` -- one sign-in folder per Codex account you add; Codex writes its own sign-in there and the app never reads it\n\nBack up the whole `resources/` folder to move to a new machine (encrypted credentials won\'t transfer since they\'re tied to Keychain).',
+        bodyWin: 'The app stores everything under your resources folder -- `%LOCALAPPDATA%\\AI Code Conductor\\resources\\` on a new install, `...\\Claude Command Center\\...` if you upgraded:\n\n• `CONFIG\\` -- JSON files for configs, commands, settings, encrypted credentials, tokenomics, usage tracking\n• `logs\\` -- per-session JSONL activity logs\n• `screenshots\\` -- captured by Snap features\n• `insights\\` -- AI usage reports\n• `status\\` -- real-time session metrics (from statusline script)\n• `scripts\\` -- deployed helper scripts\n• `claude-versions\\` -- Claude Code versions installed by older releases; no longer used, safe to delete\n• `providers\\` -- your Claude and Codex account list: names, colours, the default and reviewer accounts\n• `codex-realms\\` -- one sign-in folder per Codex account you add; Codex writes its own sign-in there and the app never reads it\n\nBack up the whole `resources\\` folder to move to a new machine (encrypted credentials won\'t transfer since they\'re tied to DPAPI).',
       },
     },
   },
@@ -923,7 +923,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Keep a remote session alive when the link drops',
         title: 'SSH Persistent Sessions',
-        body: 'You run sessions over SSH -- so you have met the failure: the laptop sleeps, the VPN blinks, and the work on the other end dies with the connection.\n\nHow a config connects is a choice of three cards, not a checkbox: **Local**, **SSH**, and **SSH Persistent**. Pick the third and the remote Claude runs inside a tmux session, so the link dropping no longer kills it -- reconnect and you are reattached where you were, output and all.\n\nClosing a persistent session asks what you actually meant -- **End it** on the host, or **Leave it running**, in which case it waits for you in the **Remote Resumable** section at the foot of the Running tab.\n\nThe sidebar tells the three kinds of remote session apart wherever they appear: a blue **SSH** mark for a plain one, a green **SSH** mark with a chain link for a persistent one, and a teal container mark for a session running inside a container.\n\n(If you set the old **Detachable** checkbox on a config, it already opens as SSH Persistent. Nothing to re-save.)',
+        body: 'You run sessions over SSH -- so you have met the failure: the laptop sleeps, the VPN blinks, and the work on the other end dies with the connection.\n\nHow a config connects is a choice of three cards, not a checkbox: **Local**, **SSH**, and **SSH Persistent**. Pick the third and the remote Claude runs inside a tmux session, so the link dropping no longer kills it -- reconnect and you are reattached where you were, output and all.\n\nClosing a persistent session asks what you actually meant -- **End it** on the host, or **Leave it running**, in which case it waits for you in the **Remote Resumable** section at the foot of the Running tab.\n\nThe sidebar tells the three kinds of remote session apart wherever they appear: a blue **SSH** mark for one that ends when the link drops, a green **SSH** mark with a chain link for a persistent one, and a teal container mark for a session running inside a container.\n\n(If you set the old **Detachable** checkbox on a config, it already opens as SSH Persistent. Nothing to re-save.)',
         focusHint: 'Session config -- the connection cards, the third one: "SSH Persistent"',
       },
     },
@@ -1041,7 +1041,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'More than one Codex account, and one for reviews',
         title: 'Codex Accounts and the Reviewer',
-        body: 'You can add more than one Codex account in **Settings, Accounts** -- each one signs in inside its own folder, so sessions never mix identities.\n\n• **Default** -- what a new Codex session uses unless its config picks another\n• **Reviewer** -- what a Codex review uses. With none set, reviews use the default\n\nSet either from the menu on the account row (**Make default**, **Make reviewer**).\n\nThe Codex sign-in already on this computer (in `~/.codex`, or the folder `CODEX_HOME` names when it is set) can be used too, but it must be confirmed at each launch, and it cannot run reviews. For code review, add a Codex account and make it the reviewer.',
+        body: 'You can add more than one Codex account in **Settings, Accounts** -- each one signs in inside its own folder, so sessions never mix identities.\n\n• **Default** -- what a new Codex session uses unless its config picks another\n• **Reviewer** -- what a Codex review uses. With none set, reviews use the default\n\nSet either from the menu on the account row (**Make default**, **Make reviewer**).\n\nCodex accounts are always added here, in the app, each with its own sign-in.',
         actionLabel: 'Open Settings',
         actionTarget: 'settings',
         focusHint: 'Settings, Accounts -- the Codex section, the menu on each account row',
@@ -1095,7 +1095,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Is that Codex account still signed in?',
         title: 'Check Sign-in and Sign In Again',
-        body: 'Each Codex account in **Settings, Accounts** has a menu:\n\n• **Check sign-in** asks Codex right now and shows the answer on the row\n• **Sign in again** signs the account in again, after you confirm it is the same account as before (close its sessions first). An account that is still signed in signs in inside a new folder and moves there only once that sign-in works, with its earlier conversations carried over, so a sign-in that fails or is cancelled leaves it as it was\n\nA check also notices when an account is now signed in a different way than before (an API key where it had a ChatGPT sign-in, for example): the row reads **Needs attention: signed in a different way than before**, and nothing runs on it until you confirm it with **This is still my account**.\n\nFor the Codex sign-in already on this computer, run `codex login` in a terminal, then **Check sign-in**; or use **Sign in again** on its row, which first signs out every app that uses that sign-in, after a warning.',
+        body: 'Each Codex account in **Settings, Accounts** has a menu:\n\n• **Check sign-in** asks Codex right now and shows the answer on the row\n• **Sign in again** signs the account in again, after you confirm it is the same account as before (close its sessions first). An account that is still signed in signs in inside a new folder and moves there only once that sign-in works, with its earlier conversations carried over, so a sign-in that fails or is cancelled leaves it as it was\n\nA check also notices when an account is now signed in a different way than before (an API key where it had a ChatGPT sign-in, for example): the row reads **Needs attention: signed in a different way than before**, and nothing runs on it until you confirm it with **This is still my account**.\n\nFor the Codex sign-in already on this computer (chosen in 2.1.1-beta.2), run `codex login` in a terminal, then **Check sign-in**. **Sign in again** is not offered on it.',
         actionLabel: 'Open Settings',
         actionTarget: 'settings',
         focusHint: 'Settings, Accounts -- the menu on a Codex account row',
@@ -1209,7 +1209,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Replay the Codex introduction',
         title: 'Hello Codex, Again',
-        body: 'The five-page Codex introduction shows once, when you have said you use Codex and a Codex account you added in the app is signed in. To see it again, press **Show the Codex introduction**:\n\n• in the **Feature Guide**, under Integrations, on the Codex card\n• in **Settings, Accounts**, on the Codex row of the Providers card\n\nBoth appear once you have said you use Codex and a Codex account you added in the app is signed in; the Codex sign-in already on this computer does not count.',
+        body: 'The five-page Codex introduction shows once, when you have said you use Codex and a Codex account you added in the app is signed in. To see it again, press **Show the Codex introduction**:\n\n• in the **Feature Guide**, under Integrations, on the Codex card\n• in **Settings, Accounts**, on the Codex row of the Providers card\n\nBoth appear once you have said you use Codex and a Codex account you added in the app is signed in.',
         actionLabel: 'Open the Feature Guide',
         actionTarget: 'help',
       },
@@ -1227,8 +1227,55 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Run more than one Claude account, session by session',
         title: 'Multi-Account',
-        body: 'Each session runs as **one account**, and different sessions can run as different ones -- work on one, personal on another, a spare for when the first hits its weekly limit.\n\n**Right-click a session** and pick an account to move it. The footer strip shows every live account with its usage, one pill per person grouped by provider, so you can see which one has room before you choose.\n\nEach account keeps its own credentials, its own browser session and its own limits -- switching a session is not switching your whole app.\n\nA Codex session moves between your Codex accounts the same way, from the account pill on its status line or **Switch Account** in its right-click menu, and keeps its conversation.',
+        body: 'Each session runs as **one account**, and different sessions can run as different ones -- work on one, personal on another, a spare for when the first hits its weekly limit.\n\n**Right-click a session** and pick an account to move it. The footer strip shows every live account with its usage, one pill per person grouped by provider, so you can see which one has room before you choose.\n\nEach account keeps its own credentials, its own browser session and its own limits -- switching a session is not switching your whole app.\n\nA Codex session moves between your Codex accounts the same way, from the account pill on its status line or **Switch Account** in its right-click menu, and keeps its conversation.\n\nAfter a restart, **Settings, Accounts, Resuming sessions** decides whether each session just comes back on its own account or asks first.',
         focusHint: 'Right-click a session in the sidebar -- the account list is in the menu',
+      },
+    },
+  },
+
+  {
+    id: 'tip.resume-list-needs-node',
+    category: 'sessions',
+    complexity: 'simple',
+    priority: 40,
+    variants: {
+      primary: {
+        shortText: 'The resume list runs on Node.js',
+        title: 'Where is the resume list?',
+        body: 'A new session normally opens a list of your earlier conversations to pick from. That list runs on Node.js.\n\nWithout Node.js the session starts Claude Code or Codex directly instead, and nothing else changes. In a Claude Code session, type /resume to pick an earlier conversation, or install Node.js 22 or later. On Windows, restart the app after installing (or press Check again on the Claude Code row in Settings, Accounts when it shows one), then open a new session to get the list back.',
+        actionLabel: 'Got it',
+        focusHint: 'Open a new session -- the resume list appears first when Node.js is installed',
+      },
+    },
+  },
+
+  {
+    id: 'tip.claude-powershell-profile',
+    category: 'sessions',
+    complexity: 'intermediate',
+    priority: 30,
+    provider: 'claude',
+    platforms: ['win32'],
+    variants: {
+      primary: {
+        shortText: 'Claude Code in your PowerShell profile is found too',
+        title: 'Claude Code From Your PowerShell Profile',
+        body: 'Set up Node.js with fnm or another version manager in your PowerShell profile? The app finds Claude Code there too.\n\nAfter you change the profile, restart the app so it looks again (or press **Check again** on the Claude Code row in **Settings, Accounts** when it shows one).',
+      },
+    },
+  },
+
+  {
+    id: 'tip.remote-attention',
+    category: 'sessions',
+    complexity: 'simple',
+    priority: 45,
+    provider: 'claude',
+    variants: {
+      primary: {
+        shortText: 'Remote sessions flash too',
+        title: 'Remote Attention',
+        body: 'An SSH session to a Linux or macOS host lights the attention indicator when Claude is waiting on you, just like a local one. Windows hosts are not covered yet.\n\nThe signal comes back over the session\'s own terminal, so there is nothing to set up on the host. It follows the **HTTP Hooks Gateway** switch in **Settings, Hooks**.',
       },
     },
   },
@@ -1259,7 +1306,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'The Feature Guide is the map of this app',
         title: 'Feature Guide',
-        body: 'Tips arrive one at a time and in no particular order. The **Feature Guide** is the same material laid out properly: Getting started, Integrations, Admin & data and Productivity, each with what the feature is for rather than only where it lives.\n\nIt also carries **What\'s New** -- the full release history, the same notes you are shown after an update, browsable any time rather than only in the moment they appear.\n\nWorth ten minutes on a quiet afternoon; most of what people ask Ask Conductor is answered there.',
+        body: 'Tips arrive one at a time and in no particular order. The **Feature Guide** is the same material laid out properly: Getting started, Integrations, Admin & data and Productivity, each with what the feature is for rather than only where it lives.\n\nIt also carries **What\'s New**: every version\'s full notes, newest first. After an update you see a short summary of what is new since the version you came from, and every prerelease of a release shows that release\'s whole story; the full notes stay here, any time.\n\nWorth ten minutes on a quiet afternoon; most of what people ask Ask Conductor is answered there.',
         actionLabel: 'Open Feature Guide',
         actionTarget: 'help',
       },

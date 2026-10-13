@@ -592,3 +592,88 @@ describe('a Claude review launch: round-1 regressions (WP2 5b)', () => {
     expect(h.leases.count(a)).toBe(0)
   })
 })
+
+// 2.1.1-beta.3 (owner decision 2026-10-11): the Codex sign-in already on this
+// computer is never taken in any more; a Codex account is always added in
+// the app. Only 2.1.1-beta.2 offered "Use this sign-in", and the account it
+// registered keeps working as it did: confirmed at each launch.
+describe('the sign-in already on this computer is retired (O5)', () => {
+  const RETIRED = 'This app no longer uses the Codex sign-in already on this computer. Add a Codex account in Settings, Accounts instead.'
+
+  it('a new adoption, or the check before one, is refused before anything is reserved, written or run; adding a Codex account still works', async () => {
+    const h = await harness({ retiredAdoption: true })
+    h.signedIn.set(EXT_HOME.toLowerCase(), 'chatgpt')
+    const doc = JSON.stringify(h.doc())
+    const cliRuns = h.runs.length
+    const discoveries = h.discoveries()
+    for (const r of [await h.service.adoptExternalDefault({ providerId: 'codex' }), await h.service.probeExternalDefault({ providerId: 'codex' })]) {
+      expect(r).toEqual({ ok: false, code: 'unsupported', message: RETIRED })
+    }
+    expect([h.runs.length, h.discoveries()]).toEqual([cliRuns, discoveries])
+    expect(JSON.stringify(h.doc())).toBe(doc)
+    const snap = h.service.snapshot()
+    expect(snap.accounts.some((a) => a.external)).toBe(false)
+    expect(snap.pendingSetups).toEqual([])
+    const work = await addCodexAccount(h, 'Work')
+    expect(h.service.snapshot().accounts.find((a) => a.id === work)).toMatchObject({ external: false, unverified: false })
+  })
+
+  it('an account 2.1.1-beta.2 adopted keeps launching after the update, each launch only with its own acknowledgement', async () => {
+    const port = new MemoryPort()
+    const folders = memoryFs()
+    // A beta.2 user who chose "Use this sign-in".
+    const beta2 = await harness({ port, folders })
+    beta2.signedIn.set(EXT_HOME.toLowerCase(), 'chatgpt')
+    const ext = await beta2.service.adoptExternalDefault({ providerId: 'codex' })
+    if (!ext.ok) throw new Error(ext.code)
+    // The update: the same registry, the shipped service.
+    const h = await harness({ port, folders, retiredAdoption: true })
+    h.signedIn.set(EXT_HOME.toLowerCase(), 'chatgpt')
+    expect(h.service.snapshot().accounts.find((a) => a.id === ext.accountId)).toMatchObject({ external: true, unverified: true, lifecycle: 'active', lastKnownAuthState: 'signed-in' })
+    const cliRuns = h.runs.length
+    expect(await h.service.prepareLaunch(session('s1', { providerAccountId: ext.accountId }))).toMatchObject({ ok: false, code: 'acknowledgement-required' })
+    expect([h.leases.count(ext.accountId), h.runs.length]).toEqual([0, cliRuns])
+    const r = await h.service.prepareLaunch(session('s2', { providerAccountId: ext.accountId, acknowledgeRealmOnly: true }))
+    if (!r.ok) throw new Error(r.code)
+    expect([r.realmOnly, r.home]).toEqual([true, EXT_HOME])
+    // It is never adopted again, and nothing else of it changed.
+    expect(await h.service.adoptExternalDefault({ providerId: 'codex' })).toEqual({ ok: false, code: 'unsupported', message: RETIRED })
+    expect(h.doc().accounts.filter((a) => a.providerId === 'codex').map((a) => a.id)).toEqual([ext.accountId])
+  })
+
+  it('once the account 2.1.1-beta.2 adopted is archived after the update, Restore is refused: archiving it is final', async () => {
+    const port = new MemoryPort()
+    const folders = memoryFs()
+    const beta2 = await harness({ port, folders })
+    beta2.signedIn.set(EXT_HOME.toLowerCase(), 'chatgpt')
+    const ext = await beta2.service.adoptExternalDefault({ providerId: 'codex' })
+    if (!ext.ok) throw new Error(ext.code)
+    const h = await harness({ port, folders, retiredAdoption: true })
+    h.signedIn.set(EXT_HOME.toLowerCase(), 'chatgpt')
+    // The way off it the row describes: a Codex account, made the default,
+    // then this one made inactive and archived.
+    const work = await addCodexAccount(h, 'Work')
+    expect(await h.service.setDefault({ accountId: work })).toEqual({ ok: true })
+    expect(await h.service.setLifecycle({ accountId: ext.accountId, lifecycle: 'inactive' })).toEqual({ ok: true })
+    expect(await h.service.setLifecycle({ accountId: ext.accountId, lifecycle: 'archived', acknowledgeExternal: true })).toEqual({ ok: true })
+    const doc = JSON.stringify(h.doc())
+    const cliRuns = h.runs.length
+    expect(await h.service.setLifecycle({ accountId: ext.accountId, lifecycle: 'inactive' })).toEqual({
+      ok: false, code: 'unsupported',
+      message: 'This app no longer uses the Codex sign-in already on this computer, so this account cannot be restored. Add a Codex account in Settings, Accounts instead.',
+    })
+    expect(JSON.stringify(h.doc())).toBe(doc)
+    expect(h.runs.length).toBe(cliRuns)
+    expect(h.service.snapshot().accounts.find((a) => a.id === ext.accountId)).toMatchObject({ lifecycle: 'archived', external: true })
+    // Nor can it be taken in again as a new account.
+    expect(await h.service.adoptExternalDefault({ providerId: 'codex' })).toEqual({ ok: false, code: 'unsupported', message: RETIRED })
+  })
+
+  it('names the retired sign-in only for a provider that had one: Claude gets a bare refusal', async () => {
+    const h = await harness({ retiredAdoption: true })
+    for (const r of [await h.service.adoptExternalDefault({ providerId: 'claude' }), await h.service.probeExternalDefault({ providerId: 'claude' })]) {
+      expect(r).toMatchObject({ ok: false, code: 'unsupported' })
+      expect(r.ok ? '' : r.message).not.toContain('already on this computer')
+    }
+  })
+})

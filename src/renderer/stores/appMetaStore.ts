@@ -9,8 +9,10 @@ export interface AppMeta {
    *  build it names (#369); `lastRunVersionOf` falls back to setupVersion on metas older than it. */
   lastRunVersion?: string
   lastTrainingVersion?: string
-  /** The build that showed the Allow Multi Spawn startup page. A version stamp
-   *  rather than a boolean, exactly like lastSeenVersion — see
+  /** The build that first offered the Allow Multi Spawn startup page (shown
+   *  and left with Skip or Continue, or silently stamped on a fresh install or
+   *  with no configs). Presence is what counts: once written, it is never
+   *  shown again, not even after an upgrade. See
    *  onboarding/multi-spawn-intro-gate.ts. */
   multiSpawnIntroVersion?: string
   /** The build running when the Codex introduction was first left (Done,
@@ -19,6 +21,12 @@ export interface AppMeta {
    *  it is never shown again, not even after an upgrade. A replay of an
    *  introduction already seen never writes it. See onboarding/hello-codex.ts. */
   helloCodexSeenVersion?: string
+  /** The build running when the one-time "Replace this sign-in with a Codex
+   *  account" page was left (Add a Codex account finished, or Not now), shown
+   *  to someone who chose the Codex sign-in already on this computer in
+   *  2.1.1-beta.2 (O5). Presence is what counts: once written, it is never
+   *  shown again. See onboarding/codex-replace-gate.ts. */
+  codexReplaceSeenVersion?: string
   commandsSeeded?: boolean
   colorMigrated?: boolean
   /** Set once the saved config the RETIRED "Ask the Conductor" path used to

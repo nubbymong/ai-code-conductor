@@ -33,6 +33,12 @@ export function createAppSessionDurability(): SessionDurability {
       getExactResumeTarget: (id) => getTranscriptBinder()?.getExactResumeTarget(id) ?? null,
       getLatestTranscriptPath: (id) => getTranscriptBinder()?.getLatestTranscriptPath(id) ?? null,
       isExactBindSourceActive,
+      // aicc_planning#104: no binder (logging off at start): a session with no
+      // bind is never given the target it was last saved with.
+      isBinderAvailable: () => getTranscriptBinder() !== null,
+      // aicc_planning#104: a session's last exact bind this run, kept after
+      // its CLI exits or while a Restart's next run has not bound yet.
+      getLastExactResumeTarget: (id) => getTranscriptBinder()?.getLastExactResumeTarget(id) ?? null,
       resolveResumeTargetFromTranscript,
       // P3.5: the conversation a Codex session is on, as main keeps it (pty-manager).
       getProviderResumeTarget: (id) => getKeptCodexConversation(id) ?? null,
@@ -46,6 +52,8 @@ export function createAppSessionDurability(): SessionDurability {
     // Fixer 11: the session:clear path (index.ts) clears through the core,
     // which drops the cache whatever the clear did. Looked up when called.
     clear: () => clearSessionState(),
+    // aicc_planning#104: a closed session's kept last exact bind is dropped.
+    retainSessions: (open) => { getTranscriptBinder()?.retainLastExact(open) },
     // P3.6: read back before any restored session respawns. P3.7: the running
     // times too, even when the uncertain list cannot be read back.
     readBack: (state) => {

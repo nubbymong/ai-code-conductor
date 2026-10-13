@@ -951,6 +951,251 @@
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 
+; ============================================================
+; PLUGIN ANSWERS: asked once in .onInit, read by the pages
+; ============================================================
+; The pages below need two answers: is this the elevated inner instance
+; (${UAC_IsInnerInstance}, the UAC plugin), and did the updater start this run
+; (${isUpdated}, which electron-builder builds on the StdUtils plugin). Both
+; plugins live in electron-builder's nsis-resources folder, not in NSIS's own
+; Plugins folder. electron-builder adds that folder to the plugin path and
+; includes this file from two tasks that run at the same time (app-builder-lib
+; NsisTarget.js, computeCommonInstallerScriptHeader), so either line can come
+; first in the generated script. A Function at file scope here is compiled
+; when this file is included, so a plugin call inside one fails the build with
+; "Plugin not found" whenever the include comes first. A macro body is
+; compiled where it is inserted instead, and installer.nsi inserts preInit
+; inside .onInit, after the whole header, when the folder is always on the
+; plugin path.
+;
+; So preInit asks both questions once and the pages read the answers from
+; these variables. preInit is the first hook in .onInit, and .onInit runs
+; before .onGUIInit and before every page, so the answers are there before
+; anything reads them. Neither can change while Setup runs: both come from how
+; the process was started. Not customInit: the makensis probe
+; (installer-nsis-behaviour.test.ts) lifts that macro verbatim and has no
+; StdUtils. installer-branding-guard.test.ts fails on a plugin call from these
+; plugins at file scope.
+!ifndef BUILD_UNINSTALLER
+  Var cccIsInnerInstance
+  Var cccIsUpdated
+!endif
+
+!macro preInit
+  !ifndef BUILD_UNINSTALLER
+    ; ${isUpdated} writes $R9; leave it as it was.
+    Push $R9
+    StrCpy $cccIsInnerInstance 0
+    ${If} ${UAC_IsInnerInstance}
+      StrCpy $cccIsInnerInstance 1
+    ${EndIf}
+    StrCpy $cccIsUpdated 0
+    ${If} ${isUpdated}
+      StrCpy $cccIsUpdated 1
+    ${EndIf}
+    Pop $R9
+  !endif
+!macroend
+
+; ============================================================
+; BRANDING: dark theme, artwork, light motion, fresh-install splash
+; ============================================================
+; The art is drawn from the boot splash by scripts/gen-installer-art.mjs and
+; committed under build/ (installerSidebar.bmp, installerHeader.bmp,
+; installerSplash.bmp, installer-art/). package.json names the sidebar and the
+; header explicitly, so a missing file fails the build instead of silently
+; shipping NSIS's stock bitmap.
+;
+; ORDER. This file is compiled ahead of electron-builder's installer.nsi, so
+; the Welcome page below is page 1 and the two folder pages stay pages 2 and 3.
+; Modern UI reads its interface settings (MUI_BGCOLOR, MUI_TEXTCOLOR) when the
+; FIRST page macro is inserted, which is now MUI_PAGE_WELCOME, so they are
+; defined above it. MUI_CUSTOMFUNCTION_GUIINIT is read when addLangs inserts
+; the language, after all of this. None of it may move into customHeader,
+; customInit or customInstall: those macros are lifted verbatim into the
+; makensis probe (tests/unit/main/installer-nsis-behaviour.test.ts).
+;
+; TWO PASSES. electron-builder compiles this file twice, once for the installer
+; and once with BUILD_UNINSTALLER for the uninstaller, both with -WX. A Function
+; or Var that one pass declares but never references is a warning, and so a
+; failed build. So every installer-only Function, Var and the defines that
+; reference them sit inside !ifndef BUILD_UNINSTALLER, and the folder pages
+; (compiled in both passes) only call them from inside the same guard.
+;
+; The colours are shared by both passes, so the uninstaller matches.
+!define CCC_BRAND_BG "0B0E15"
+!define CCC_BRAND_TEXT "F4F7FA"
+!define CCC_BRAND_FIELD "161B26"
+!define MUI_BGCOLOR "${CCC_BRAND_BG}"
+!define MUI_TEXTCOLOR "${CCC_BRAND_TEXT}"
+; A themed checkbox ignores SetCtlColors, which would leave the Finish page's
+; "Run" label dark on dark. Stock MUI: this drops the high-contrast-only guard
+; in Finish.nsh (the IsHighContrastModeActive branch), so every check and radio
+; control the Finish pages can show (Run, Show readme and the two reboot
+; choices) is unthemed and takes the light text colour. A control a page does
+; not create gets SetWindowTheme on a null handle, which does nothing.
+!define MUI_FORCECLASSICCONTROLS
+
+!ifndef BUILD_UNINSTALLER
+  !define CCC_ART_DIR "${BUILD_RESOURCES_DIR}\installer-art"
+  ; Frames 1..CCC_ANIM_STEPS-1 are files; the last step is the static bitmap.
+  ; Must match ANIM_STEPS in scripts/gen-installer-art.mjs.
+  !define CCC_ANIM_STEPS 8
+  !define CCC_ANIM_INTERVAL_MS 90
+
+  Var cccAnimCtl
+  Var cccAnimPrefix
+  Var cccAnimExt
+  Var cccAnimFinal
+  Var cccAnimStretch
+  Var cccAnimFrame
+  Var cccAnimPath
+  Var cccAnimBitmap
+  Var cccAnimNext
+
+  !define MUI_CUSTOMFUNCTION_GUIINIT CccBrandGuiInit
+
+  ; ---- Page 1: Welcome (new) ----
+  ; Not customWelcomePage: electron-builder inserts that after the folder pages.
+  !define MUI_WELCOMEPAGE_TITLE "Welcome to AI Code Conductor"
+  !define MUI_WELCOMEPAGE_TEXT "Setup will install AI Code Conductor ${VERSION}. If an earlier version is installed, Setup updates it and keeps your data and resources folders.$\r$\n$\r$\nClick Next to continue."
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE CccWelcomePre
+  !define MUI_PAGE_CUSTOMFUNCTION_SHOW CccWelcomeShow
+  !define MUI_PAGE_CUSTOMFUNCTION_DESTROYED CccAnimStop
+  !insertmacro MUI_PAGE_WELCOME
+
+  ; Runs from .onGUIInit, after .onInit: never on a silent (/S) run.
+  Function CccBrandGuiInit
+    Push $R0
+    InitPluginsDir
+    File "/oname=$PLUGINSDIR\ccc-side-1.bmp" "${CCC_ART_DIR}\sidebar-1.bmp"
+    File "/oname=$PLUGINSDIR\ccc-side-2.bmp" "${CCC_ART_DIR}\sidebar-2.bmp"
+    File "/oname=$PLUGINSDIR\ccc-side-3.bmp" "${CCC_ART_DIR}\sidebar-3.bmp"
+    File "/oname=$PLUGINSDIR\ccc-side-4.bmp" "${CCC_ART_DIR}\sidebar-4.bmp"
+    File "/oname=$PLUGINSDIR\ccc-side-5.bmp" "${CCC_ART_DIR}\sidebar-5.bmp"
+    File "/oname=$PLUGINSDIR\ccc-side-6.bmp" "${CCC_ART_DIR}\sidebar-6.bmp"
+    File "/oname=$PLUGINSDIR\ccc-side-7.bmp" "${CCC_ART_DIR}\sidebar-7.bmp"
+    File "/oname=$PLUGINSDIR\ccc-emblem-1.bmp" "${CCC_ART_DIR}\emblem-1.bmp"
+    File "/oname=$PLUGINSDIR\ccc-emblem-2.bmp" "${CCC_ART_DIR}\emblem-2.bmp"
+    File "/oname=$PLUGINSDIR\ccc-emblem-3.bmp" "${CCC_ART_DIR}\emblem-3.bmp"
+    File "/oname=$PLUGINSDIR\ccc-emblem-4.bmp" "${CCC_ART_DIR}\emblem-4.bmp"
+    File "/oname=$PLUGINSDIR\ccc-emblem-5.bmp" "${CCC_ART_DIR}\emblem-5.bmp"
+    File "/oname=$PLUGINSDIR\ccc-emblem-6.bmp" "${CCC_ART_DIR}\emblem-6.bmp"
+    File "/oname=$PLUGINSDIR\ccc-emblem-7.bmp" "${CCC_ART_DIR}\emblem-7.bmp"
+    File "/oname=$PLUGINSDIR\ccc-emblem.bmp" "${CCC_ART_DIR}\emblem.bmp"
+
+    ; The splash fade, on a FRESH install only. The in-app updater starts this
+    ; installer with no arguments (src/main/ipc/update-handlers.ts), so an
+    ; update is told apart by what is already on the machine: a recorded data
+    ; folder under any brand key (the test DataDirPage uses for its default),
+    ; or the app's executable where initMultiUser pointed $INSTDIR from the
+    ; previous install's record. Never in the elevated inner instance either:
+    ; the outer one has already shown it.
+    ;
+    ; The executable probe is a cosmetic freshness hint for the splash and
+    ; nothing else. It is never an install-ownership test: whether a previous
+    ; install is still there is decided from the recorded uninstaller, by
+    ; ClassifyUninstallRecord, and brand-identity-guard.test.ts forbids an
+    ; exe-existence gate for that. It is spelled with PRODUCT_FILENAME on
+    ; purpose: APP_EXECUTABLE_FILENAME is defined by electron-builder's
+    ; common.nsh, which is included after this file. An exe from beta.5 or
+    ; older carries an older name and is missed here; the data-folder read
+    ; below still recognises that install. The first two answers come from
+    ; preInit (see PLUGIN ANSWERS above).
+    ${IfNot} $cccIsInnerInstance == 1
+    ${AndIfNot} $cccIsUpdated == 1
+    ${AndIfNot} ${FileExists} "$INSTDIR\${PRODUCT_FILENAME}.exe"
+      !insertmacro ReadUserPath "DataDirectory" $R0
+      ${If} $R0 == ""
+        File "/oname=$PLUGINSDIR\ccc-splash.bmp" "${BUILD_RESOURCES_DIR}\installerSplash.bmp"
+        ; 350 ms in, 1000 ms held, 250 ms out. AdvSplash takes the name without .bmp.
+        advsplash::show 1000 350 250 -1 "$PLUGINSDIR\ccc-splash"
+        Pop $R0
+        Delete "$PLUGINSDIR\ccc-splash.bmp"
+      ${EndIf}
+    ${EndIf}
+    ClearErrors
+    Pop $R0
+  FunctionEnd
+
+  ; The elevated inner instance starts its wizard again from page 1. The user
+  ; has just read the Welcome page in the outer one, so it starts at the Data
+  ; folder page, exactly as it did before this page existed. DataDirPage hides
+  ; and disables its Back button there to match: Back from it would skip this
+  ; page backwards and end Setup.
+  Function CccWelcomePre
+    ${If} $cccIsInnerInstance == 1
+      Abort
+    ${EndIf}
+  FunctionEnd
+
+  Function CccWelcomeShow
+    StrCpy $cccAnimCtl $mui.WelcomePage.Image
+    StrCpy $cccAnimPrefix "ccc-side-"
+    ; The settled frame is the sidebar Modern UI itself extracted.
+    StrCpy $cccAnimFinal "$PLUGINSDIR\modern-wizard.bmp"
+    StrCpy $cccAnimStretch 1
+    Call CccAnimStart
+  FunctionEnd
+
+  ; Folder pages: an emblem under the fields, centred in a full-width strip
+  ; (SS_CENTERIMAGE keeps the bitmap at its own size).
+  Function CccFolderArt
+    nsDialogs::CreateControl STATIC ${DEFAULT_STYLES}|${SS_BITMAP}|${SS_CENTERIMAGE} 0 0 64% 100% 36% ""
+    Pop $cccAnimCtl
+    SetCtlColors $cccAnimCtl "" "${CCC_BRAND_BG}"
+    StrCpy $cccAnimPrefix "ccc-emblem-"
+    StrCpy $cccAnimFinal "$PLUGINSDIR\ccc-emblem.bmp"
+    StrCpy $cccAnimStretch 0
+    Call CccAnimStart
+  FunctionEnd
+
+  ; Light motion with no extra plugin: an nsDialogs timer swaps the image a
+  ; few times and stops on the static frame. Expects $cccAnimCtl,
+  ; $cccAnimPrefix, $cccAnimFinal and $cccAnimStretch. The first frame is set
+  ; before nsDialogs::Show, so the page never flashes the settled image first.
+  Function CccAnimStart
+    StrCpy $cccAnimExt ".bmp"
+    StrCpy $cccAnimFrame 1
+    StrCpy $cccAnimBitmap 0
+    Call CccAnimShowFrame
+    ${NSD_CreateTimer} CccAnimTick ${CCC_ANIM_INTERVAL_MS}
+  FunctionEnd
+
+  Function CccAnimTick
+    IntOp $cccAnimFrame $cccAnimFrame + 1
+    ${If} $cccAnimFrame >= ${CCC_ANIM_STEPS}
+      ${NSD_KillTimer} CccAnimTick
+    ${EndIf}
+    Call CccAnimShowFrame
+  FunctionEnd
+
+  ; Loads the current frame into the control and frees the one it replaces
+  ; (a static control never frees a bitmap it was given).
+  Function CccAnimShowFrame
+    ${If} $cccAnimFrame >= ${CCC_ANIM_STEPS}
+      StrCpy $cccAnimPath "$cccAnimFinal"
+    ${Else}
+      StrCpy $cccAnimPath "$PLUGINSDIR\$cccAnimPrefix$cccAnimFrame$cccAnimExt"
+    ${EndIf}
+    ${If} $cccAnimStretch == 1
+      ${NSD_SetStretchedImage} $cccAnimCtl "$cccAnimPath" $cccAnimNext
+    ${Else}
+      ${NSD_SetImage} $cccAnimCtl "$cccAnimPath" $cccAnimNext
+    ${EndIf}
+    ${NSD_FreeImage} $cccAnimBitmap
+    StrCpy $cccAnimBitmap $cccAnimNext
+  FunctionEnd
+
+  ; After the page closes (Next, Back or Cancel): stop the timer and free the
+  ; last frame this code loaded. Modern UI frees its own sidebar bitmap.
+  Function CccAnimStop
+    ${NSD_KillTimer} CccAnimTick
+    ${NSD_FreeImage} $cccAnimBitmap
+    StrCpy $cccAnimBitmap 0
+  FunctionEnd
+!endif
+
 Var DataDir
 Var ResourcesDir
 
@@ -960,11 +1205,14 @@ Page custom ResourcesDirPage ResourcesDirPageLeave
 
 ; --- Data Directory Page ---
 Function DataDirPage
+  !insertmacro MUI_HEADER_TEXT "Data folder" "Where AI Code Conductor keeps sessions, logs and configuration data."
   nsDialogs::Create 1018
   Pop $0
+  SetCtlColors $0 "" "${CCC_BRAND_BG}"
 
   ${NSD_CreateLabel} 0 0 100% 24u "Choose where to store sessions, logs, and configuration data:"
   Pop $0
+  SetCtlColors $0 "${CCC_BRAND_TEXT}" "${CCC_BRAND_BG}"
 
   ; Current brand key first, then each legacy key, then the fresh-install default.
   ReadRegStr $1 HKCU "Software\AI Code Conductor" "DataDirectory"
@@ -983,12 +1231,32 @@ Function DataDirPage
 
   ${NSD_CreateDirRequest} 0 30u 75% 12u "$1"
   Pop $DataDir
+  SetCtlColors $DataDir "${CCC_BRAND_TEXT}" "${CCC_BRAND_FIELD}"
 
   ${NSD_CreateBrowseButton} 77% 29u 23% 14u "Browse..."
   Pop $0
   ${NSD_OnClick} $0 OnBrowseDataDir
 
+  !ifndef BUILD_UNINSTALLER
+    ; The elevated inner instance shows this page first, but it is no longer
+    ; page 1: the Welcome page ahead of it aborts there (CccWelcomePre), so NSIS
+    ; gives this page a live Back button. Back would land on that Welcome page,
+    ; which aborts again and carries the wizard off its front edge. Setup then
+    ; ends with nothing installed and without passing .onUserAbort, so a
+    ; suspended uninstall record is never put back (CccRestoreInstallLocation).
+    ; Before the Welcome page existed this was page 1 and had no Back button,
+    ; so hide it and disable it here (disabled, so no key press reaches it).
+    ${If} $cccIsInnerInstance == 1
+      GetDlgItem $0 $HWNDPARENT 3
+      ShowWindow $0 ${SW_HIDE}
+      EnableWindow $0 0
+    ${EndIf}
+    Call CccFolderArt
+  !endif
   nsDialogs::Show
+  !ifndef BUILD_UNINSTALLER
+    Call CccAnimStop
+  !endif
 FunctionEnd
 
 Function OnBrowseDataDir
@@ -1009,11 +1277,14 @@ FunctionEnd
 
 ; --- Resources Directory Page ---
 Function ResourcesDirPage
+  !insertmacro MUI_HEADER_TEXT "Resources folder" "Shared insights, screenshots, skills and scripts."
   nsDialogs::Create 1018
   Pop $0
+  SetCtlColors $0 "" "${CCC_BRAND_BG}"
 
   ${NSD_CreateLabel} 0 0 100% 36u "Choose where to store shared resources (insights, screenshots, skills, scripts).$\nUse a network-mountable path to share across SSH sessions."
   Pop $0
+  SetCtlColors $0 "${CCC_BRAND_TEXT}" "${CCC_BRAND_BG}"
 
   ; Current brand key first, then each legacy key, then the fresh-install default.
   ReadRegStr $1 HKCU "Software\AI Code Conductor" "ResourcesDirectory"
@@ -1030,12 +1301,19 @@ Function ResourcesDirPage
 
   ${NSD_CreateDirRequest} 0 42u 75% 12u "$1"
   Pop $ResourcesDir
+  SetCtlColors $ResourcesDir "${CCC_BRAND_TEXT}" "${CCC_BRAND_FIELD}"
 
   ${NSD_CreateBrowseButton} 77% 41u 23% 14u "Browse..."
   Pop $0
   ${NSD_OnClick} $0 OnBrowseResourcesDir
 
+  !ifndef BUILD_UNINSTALLER
+    Call CccFolderArt
+  !endif
   nsDialogs::Show
+  !ifndef BUILD_UNINSTALLER
+    Call CccAnimStop
+  !endif
 FunctionEnd
 
 Function OnBrowseResourcesDir
@@ -1060,6 +1338,20 @@ FunctionEnd
 ; ============================================================
 ; UNINSTALLER — protect CONFIG/ by default
 ; ============================================================
+
+; Uninstaller page 1. electron-builder inserts this in place of the stock
+; Welcome page, in the BUILD_UNINSTALLER pass only. Every sentence has to hold
+; for customUnInstall below: program files go, the data and resources folders
+; stay, and the CONFIG question is asked only when that folder exists.
+; Known edge: customUnInstall finds the resources folder through HKCU only, so
+; a per-machine uninstall elevated as a different administrator account reads
+; that account's record. When it has none, the question is not asked and
+; CONFIG is kept. That is the safe side, and it was the same before this page.
+!macro customUnWelcomePage
+  !define MUI_WELCOMEPAGE_TITLE "Uninstall AI Code Conductor"
+  !define MUI_WELCOMEPAGE_TEXT "Setup will remove AI Code Conductor from this computer.$\r$\n$\r$\nYour data and resources folders stay where they are. If your resources folder holds a CONFIG folder of settings, Setup asks whether to remove that too.$\r$\n$\r$\nClick Next to continue."
+  !insertmacro MUI_UNPAGE_WELCOME
+!macroend
 !macro customUnInstall
   ; Read ResourcesDirectory from new key, fall back to old key
   ReadRegStr $0 HKCU "Software\AI Code Conductor" "ResourcesDirectory"

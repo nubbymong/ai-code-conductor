@@ -26,6 +26,10 @@ vi.mock('../../src/main/windows-programs', async (importOriginal) => ({
   findOnWindowsPath: (names: readonly string[]) => `C:\\Tools\\${names[0]}`,
   findOnWindowsPathAsync: async (names: readonly string[]) => `C:\\Tools\\${names[0]}`,
 }))
+// Claude Code is on here: the probe asks the launch rule again right before the CLI runs, and
+// main's launch rule has its own suites (tests/unit/main/provider-launch-gate.test.ts,
+// tests/unit/main/first-start-auth-status.test.ts).
+vi.mock('../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal: () => null, providerProbeRefusal: () => null }))
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'

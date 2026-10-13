@@ -496,9 +496,16 @@ describe('the enumeration cannot rot', () => {
     IPC.CANVAS_SNAPSHOT_REQUEST,
     IPC.CANVAS_FRAME_NAVIGATED,
     IPC.CANVAS_AGENT_MARKER_UNDELIVERED,
+    IPC.CANVAS_CLAUDE_MARKER_ASK,
     // renderer -> main REPLY to a main-initiated request, correlated by an
     // id main minted. It names no canvas and mutates nothing.
     IPC.CANVAS_SNAPSHOT_RESULT,
+    // The same shape: the reply to one canvas:claudeMarkerAsk, correlated by
+    // the request id main minted (an unknown or late id is dropped). It names
+    // no canvas and mutates no canvas state; it only says whether a marker
+    // main already holds was read ready or typed. Taken from the app window's
+    // main frame only.
+    IPC.CANVAS_CLAUDE_MARKER_ANSWER,
   ])
 
   it('covers every CANVAS_* channel that a renderer can invoke', () => {
@@ -555,6 +562,7 @@ describe('the enumeration cannot rot', () => {
       expect(handlers.has(channel), `${channel} is not registered`).toBe(true)
     }
     expect(listeners.has(IPC.CANVAS_SNAPSHOT_RESULT)).toBe(true)
+    expect(listeners.has(IPC.CANVAS_CLAUDE_MARKER_ANSWER)).toBe(true)
   })
 })
 
