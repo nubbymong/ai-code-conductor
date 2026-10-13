@@ -7,6 +7,10 @@
 // PURE: the in-memory accounts harness, and the tokenomics service with its
 // supervisor and worker replaced (the worker's own folder walk is covered by
 // the native tokenomics suites, which run on CI and the VM only).
+//
+// WP1.5 (as owner decision U1 amends it, docs/wp1/owner-decisions-2026-09-26.md):
+// after an upgrade, the usage of this computer's own sign-in is still read and
+// reported, named as that sign-in ('names each folder's account').
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { harness, addCodexAccount, managedHome, EXT_HOME } from './accounts-harness'
 import type { Harness } from './accounts-harness'

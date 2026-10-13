@@ -10,6 +10,8 @@
 // Codex being off or missing does not make Claude unusable.
 //
 // PURE.
+//
+// WP1.7: the last provider on stays on ('the saved on/off is read three-way').
 import { describe, it, expect } from 'vitest'
 import { harness, addCodexAccount, claudeSnapshot, claudeSide, EXT_HOME } from './accounts-harness'
 import type { Harness } from './accounts-harness'

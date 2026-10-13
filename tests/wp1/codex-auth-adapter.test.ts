@@ -7,6 +7,16 @@
 // 9.2, 11, 12): the Codex sign-in, status and logout operations, through
 // injected ports (no process is started, no file is read). The real-process
 // counterpart is tests/wp1/fake-cli.test.ts (CI/VM).
+//
+// WP1.21: the device sign-in runs only as its own method, and an unsupported
+// method is refused ('browser and device sign-in'); the capability gate and the
+// experimental label are in provider-core.test.ts and setup-journal-recovery.test.ts.
+// WP1.25: status is read from the CLI's own outputs, and anything unexpected is
+// an error with a code, never "signed out", so the account state built on it
+// can say what to do ('login status', 'status').
+// WP1.51: a printed key is never kept or returned, sign-in output reaches the
+// display redacted, and an API key goes from a single-use handle to stdin only
+// (the real non-TTY pipe is proven in fake-cli.test.ts).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { parseCodexLoginStatus, createCodexAuthOperations, createCodexOutputRedactor, createCodexPackage, createCodexRealmLocks } from '../../src/main/providers/codex'
 import type { CodexAuthDeps, CodexDiscovery, CodexDiscoveryDeps, CodexCommand, CodexRunOptions, CodexRunResult, CodexRealmFsPort } from '../../src/main/providers/codex'

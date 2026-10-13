@@ -3,6 +3,10 @@
 // environment negatives at the contract level; the launch handoff slice
 // exercises the real spawn). Provider core only: no concrete provider is
 // imported here, the packages under test are synthetic.
+//
+// WP1.21: a capability is off unless supported, experimental only when the owner
+// enabled it for this provider, and a sign-in method's action is labelled
+// experimental ('resolves capabilities', 'actions derive from capabilities').
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   CAPABILITY_KEYS, WP1_REQUIRED_CAPABILITIES, resolveCapability, missingCapabilityKeys, isCapabilityPlatform,

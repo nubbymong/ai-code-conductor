@@ -7,6 +7,10 @@
 //
 // PURE: the real Codex package on a fake CLI, an in-memory folder tree and an
 // in-memory registry (./accounts-harness).
+//
+// WP1.21: a device sign-in setup is refused until the owner enables the method,
+// and the method is labelled experimental either way ('a setup is refused when
+// the provider is off, the method is not enabled').
 import { describe, it, expect, vi } from 'vitest'
 import { harness, addCodexAccount, managedHome, EXT_HOME, KEY, MemoryPort, RES } from './accounts-harness'
 import { findRealm } from '../../src/shared/providers'

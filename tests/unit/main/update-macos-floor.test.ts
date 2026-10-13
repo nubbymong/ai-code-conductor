@@ -311,13 +311,26 @@ describe('the packaged app declares the floor the updater applies', () => {
     const changelog = fs.readFileSync(path.join(ROOT, 'src/renderer/changelog.ts'), 'utf8')
     const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8')
     expect(knowledge).not.toMatch(/can still offer this update/)
-    for (const text of [knowledge, changelog, readme]) {
-      expect(text).toMatch(/On macOS 12, stay on 2\.1\.1-beta\.1\./)
+    // 2.1.1 is the stable release a 2.1.0 Mac moves to, so a Mac that cannot
+    // run it is sent back to 2.1.0, not to a prerelease. The 2.1.1-beta.2
+    // entry keeps its own words (stay on 2.1.1-beta.1) as the history of that
+    // beta; the stable entry, the Feature Guide and the README say 2.1.0.
+    const stableEntry = changelog.slice(changelog.indexOf("version: '2.1.1',"), changelog.indexOf("version: '2.1.1-beta.3',"))
+    expect(stableEntry.length).toBeGreaterThan(0)
+    for (const text of [knowledge, stableEntry, readme]) {
+      expect(text).toMatch(/On macOS 12, stay on 2\.1\.0\./)
       expect(text).toMatch(/On macOS 13 or later, download .{1,40}\.dmg from the Releases page on GitHub once by hand/)
     }
+    for (const text of [knowledge, readme]) expect(text).not.toMatch(/stay on 2\.1\.1-beta\.1/)
     for (const text of [knowledge, changelog]) expect(text).toMatch(/ending in macos13\.dmg/)
     expect(readme).toMatch(/AICodeConductor-x\.y\.z-macos13\.dmg/)
     expect(builtMacName('2.1.1-beta.2').endsWith('macos13.dmg')).toBe(true)
+    // 2.1.1-beta.1 is the last version that shipped the old -mac.dmg name
+    // (the shipped update check above offers it under that name), so the
+    // text that lists the versions whose updater misses the new name
+    // includes it, not only 2.1.0.
+    expect(readme).toMatch(/Up to 2\.1\.1-beta\.1 \(2\.1\.0 included\) the Mac download was `AI-Code-Conductor-x\.y\.z-mac\.dmg`/)
+    expect(knowledge).toMatch(/the updater in 2\.1\.0, 2\.1\.1-beta\.1 and earlier versions does not look for/)
   })
 
   it('an Electron of 44 or later is packaged with a floor of macOS 13 or later', () => {

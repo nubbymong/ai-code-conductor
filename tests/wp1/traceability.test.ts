@@ -1,9 +1,10 @@
 // WP1.70 / WP1.73: bidirectional traceability between the 73 acceptance items
 // and the tests/evidence that prove them. Structural rules apply in every
-// phase; completeness rules (nothing planned, every evidence record
-// digest-bound and taken at boundHead, an ancestor of HEAD with nothing but
-// neutral paths changed since: ./binding.ts) apply once the phase is DECLARED
-// candidate (env or manifest; see ./phase.ts).
+// phase (an `unavailable` item's rules among them, ADR-026); completeness
+// rules (every item evidenced or, on a recorded owner decision, unavailable;
+// every evidence record digest-bound and taken at boundHead, an ancestor of
+// HEAD with nothing but neutral paths changed since: ./binding.ts) apply once
+// the phase is DECLARED candidate (env or manifest; see ./phase.ts).
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -11,15 +12,16 @@ import { join, resolve } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { resolvePhaseDetailed } from './phase'
 import {
-  MANIFEST_PATH, RELEASE_WP1_PHASE, SHA_RE, ancestry, bindingBreaks, changedPaths, staleRecords, suiteSteps, type EvidenceRecord, type Git,
+  ITEM_STATUSES, MANIFEST_PATH, RELEASE_WP1_PHASE, SHA_RE, UNAVAILABLE_ELIGIBLE, ancestry, bindingBreaks, changedPaths, evidenceProblems, incompleteItems, staleRecords,
+  suiteSteps, unavailableIds, unavailableProblems, type EvidenceRecord, type Git, type ItemStatus, type Unavailable,
 } from './binding'
 import { DEEPEN_STEPS, deepenUntilDecidable, invocation, readBoundHead } from '../../scripts/wp1/fetch-ledger-commit.mjs'
 
 const ROOT = resolve(__dirname, '..', '..')
 type Item = {
-  id: string; title: string; kind: string; tests: string[]; evidence: string[]; status: 'planned' | 'evidenced'
+  id: string; title: string; kind: string; tests: string[]; evidence: string[]; status: ItemStatus
   reason?: string; currentTests?: string[]; baseCoverage?: string
-  evidenceRecords?: EvidenceRecord[]
+  evidenceRecords?: EvidenceRecord[]; unavailable?: Unavailable
 }
 const manifest = JSON.parse(readFileSync(resolve(ROOT, MANIFEST_PATH), 'utf8')) as {
   schema: string; phase: 'gate0' | 'candidate'; boundHead: string | null; designDigest: string; items: Item[]
@@ -85,9 +87,11 @@ describe('WP1 traceability manifest', () => {
     expect(manifest.designDigest).toBe('e4d5b99a562952694be034ed8e71db6da379d8cb15bb24df6c2ca3f02cd83140')
   })
 
-  it('every item names at least one test or evidence record, a known kind, a reason when not automated, and its base coverage', () => {
+  it('every item names at least one test or evidence record, a known kind and status, a reason when not automated, and its base coverage', () => {
     for (const i of manifest.items) {
       expect(KINDS.has(i.kind), `${i.id} kind ${i.kind}`).toBe(true)
+      // A mistyped status ('Evidenced') fails PR CI at gate0, not 25 minutes into the stable run.
+      expect(ITEM_STATUSES as readonly string[], `${i.id} status ${String(i.status)}`).toContain(i.status)
       expect(i.tests.length + i.evidence.length, `${i.id} has no test or evidence link`).toBeGreaterThan(0)
       if (i.kind !== 'automated') expect((i.reason ?? '').length, `${i.id} (${i.kind}) needs a reason why automation is not safe or possible`).toBeGreaterThanOrEqual(10)
       expect(Array.isArray(i.currentTests), `${i.id} must state currentTests (empty when the base has none)`).toBe(true)
@@ -115,26 +119,62 @@ describe('WP1 traceability manifest', () => {
     }
   })
 
-  it('evidenced items point at non-empty files that name the item, with digest-bound evidence records', () => {
-    for (const i of manifest.items) {
-      if (i.status !== 'evidenced') continue
-      for (const t of i.tests) {
-        expect(nonEmpty(t), `${i.id}: missing or empty ${t}`).toBe(true)
-        if (t.startsWith('tests/wp1/')) expect(new RegExp(`${i.id.replace('.', '\\.')}(?![0-9])`).test(readFileSync(resolve(ROOT, t), 'utf8')), `${t} does not name ${i.id}`).toBe(true)
-      }
-      for (const e of i.evidence) {
-        expect(nonEmpty(e), `${i.id}: missing or empty ${e}`).toBe(true)
-        if (e.startsWith('docs/wp1/evidence/')) {
-          const rec = (i.evidenceRecords ?? []).find((r) => r.artifact === e)
-          expect(rec, `${i.id}: no evidence record for ${e}`).toBeDefined()
-          expect(rec!.sha256).toBe(sha256(e))
-          expect(rec!.head, `${i.id}: the record for ${e} names no 40-hex head it was taken at`).toMatch(SHA_RE)
-          expect(rec!.actor.length).toBeGreaterThan(0)
-          expect(Number.isNaN(Date.parse(rec!.at))).toBe(false)
-          expect(rec!.commands.length).toBeGreaterThan(0)
-        }
-      }
+  // An unavailable item is held to all of this too (ADR-026): it records a
+  // gap inside the bound evidence, never in place of it. The rules are
+  // ./binding.ts evidenceProblems, proven on injected files below.
+  it('evidenced and unavailable items point at non-empty files that name the item, with digest-bound evidence records', () => {
+    const problems = evidenceProblems(manifest.items, { nonEmpty, text: (p) => readFileSync(resolve(ROOT, p), 'utf8'), sha256 })
+    expect(problems, problems.join('\n')).toEqual([])
+  })
+
+  // A record pins its file by the sha256 of its bytes, so the file must be the
+  // same bytes on every runner. Unpinned, Windows checks a text file out CRLF
+  // and Linux and macOS LF, and one leg of the stable run goes red. A working
+  // copy's line endings say nothing about the runners, so the rule is held by
+  // ATTRIBUTE (as tests/unit/scripts/mjs-eol.test.ts does), for every tracked
+  // file and for one not written yet.
+  it('every file under docs/wp1/evidence is checked out LF on every runner, so its record has one sha256', () => {
+    const tracked = execFileSync('git', ['-C', ROOT, 'ls-files', '-z', '--', 'docs/wp1/evidence'], { encoding: 'utf8' }).split('\0').filter(Boolean)
+    expect(tracked.length, 'no tracked file under docs/wp1/evidence: the check would be vacuous').toBeGreaterThan(0)
+    const paths = [...tracked, 'docs/wp1/evidence/not-written-yet.md']
+    // `check-attr -z` prints path, attribute, value, each NUL-terminated.
+    const fields = execFileSync('git', ['-C', ROOT, 'check-attr', '-z', 'text', 'eol', '--', ...paths], { encoding: 'utf8' }).split('\0')
+    const unpinned: string[] = []
+    for (let i = 0; i + 2 < fields.length; i += 3) {
+      const want = fields[i + 1] === 'eol' ? 'lf' : 'set'
+      if (fields[i + 2] !== want) unpinned.push(`${fields[i]}: ${fields[i + 1]} ${fields[i + 2]}`)
     }
+    expect(fields.length, 'git check-attr answered nothing').toBeGreaterThan(paths.length * 2 * 3 - 1)
+    expect(unpinned, `these would be checked out CRLF on Windows, so their record's sha256 matches one runner only:\n${unpinned.join('\n')}`).toEqual([])
+  })
+
+  // [host] The same rules on injected files (nothing is read): an item
+  // recorded unavailable answers for every test and evidence record an
+  // evidenced one does; a planned one is not checked yet.
+  it('[host] an unavailable item is held to every evidence rule of an evidenced one; a planned item to none yet', () => {
+    const X = 'a'.repeat(40)
+    const T = 'tests/wp1/fake-keyring.test.ts'
+    const E = 'docs/wp1/evidence/keyring-smoke.md'
+    const text: Record<string, string> = { [T]: '// WP1.11 / WP1.72', 'tests/wp1/other.test.ts': '// WP1.110', 'tests/unit/x.test.ts': '// names nothing', [E]: `Taken at ${X}.`, 'README.md': 'x' }
+    const files = { nonEmpty: (p: string) => (text[p] ?? '').length > 0, text: (p: string) => text[p], sha256: (p: string) => `sha256 of ${p}` }
+    const rec = { artifact: E, sha256: `sha256 of ${E}`, head: X, actor: 'agent', at: '2026-10-13T11:00:00Z', commands: ['npx vitest run'] }
+    const item = (over: Record<string, unknown>) => ({ id: 'WP1.11', tests: [T], evidence: [E], evidenceRecords: [rec], ...over })
+    for (const status of ['evidenced', 'unavailable']) {
+      const one = (over: Record<string, unknown>) => evidenceProblems([item({ status, ...over })], files)
+      expect(one({}), status).toEqual([])
+      expect(one({ tests: [T, 'tests/unit/x.test.ts'], evidence: [E, 'README.md'] }), status).toEqual([])
+      expect(one({ tests: ['tests/wp1/missing.test.ts'] }), status).toEqual(['WP1.11: missing or empty tests/wp1/missing.test.ts'])
+      expect(one({ tests: ['tests/wp1/other.test.ts'] }), status).toEqual(['tests/wp1/other.test.ts does not name WP1.11'])
+      expect(one({ evidence: ['docs/wp1/evidence/missing.md'] }), status).toEqual(['WP1.11: missing or empty docs/wp1/evidence/missing.md'])
+      expect(one({ evidenceRecords: undefined }), status).toEqual([`WP1.11: no evidence record for ${E}`])
+      expect(one({ evidenceRecords: [{ ...rec, artifact: 'docs/wp1/evidence/other.md' }] }), status).toEqual([`WP1.11: no evidence record for ${E}`])
+      expect(one({ evidenceRecords: [{ ...rec, sha256: 'stale' }] }), status).toEqual([`WP1.11: the record for ${E} has sha256 stale, the file has sha256 of ${E}`])
+      expect(one({ evidenceRecords: [{ ...rec, head: 'HEAD' }] }), status).toEqual([`WP1.11: the record for ${E} names no 40-hex head it was taken at`])
+      expect(one({ evidenceRecords: [{ ...rec, actor: '' }] }), status).toEqual([`WP1.11: the record for ${E} names no actor`])
+      expect(one({ evidenceRecords: [{ ...rec, at: 'today' }] }), status).toEqual([`WP1.11: the record for ${E} has no valid time`])
+      expect(one({ evidenceRecords: [{ ...rec, commands: [] }] }), status).toEqual([`WP1.11: the record for ${E} lists no commands`])
+    }
+    expect(evidenceProblems([item({ status: 'planned', tests: ['tests/wp1/missing.test.ts'], evidenceRecords: undefined })], files)).toEqual([])
   })
 
   it('every WP1 test file is named by at least one item (no dangling tests)', () => {
@@ -242,6 +282,12 @@ describe('WP1 traceability manifest', () => {
       `WP1.11: ${ks} does not name the head ${D} its record claims`,
     ])
     expect(staleRecords([{ id: 'WP1.10', evidenceRecords: [{ artifact: rcm, head: '' }] }], X, textOf)).toEqual([`WP1.10: ${rcm} was taken at (no head), not at boundHead ${X}`])
+    // A head a reader cannot see, only inside an HTML comment, is not named;
+    // in a fenced block a reader sees it (a command's output names it).
+    const hiddenHead = (a: string) => (a === rcm ? `Taken on 0.155.1. <!-- ${X} -->` : textOf(a))
+    expect(staleRecords([items[0]], X, hiddenHead)).toEqual([`WP1.2: ${rcm} does not name the head ${X} its record claims`])
+    const fencedHead = (a: string) => (a === rcm ? ['Taken on 0.155.1:', '', '```', '$ git rev-parse HEAD', X, '```', ''].join('\n') : textOf(a))
+    expect(staleRecords([items[0]], X, fencedHead)).toEqual([])
   })
 
   // [host] scripts/wp1/fetch-ledger-commit.mjs makes boundHead's ancestry
@@ -375,10 +421,166 @@ describe('WP1 traceability manifest', () => {
     }
   })
 
-  it(`candidate phase: nothing is still planned, every evidence record was taken at boundHead, and boundHead is an ancestor of HEAD with only neutral paths changed since (phase ${phase}: ${reason})`, () => {
+  // [host] ADR-026: 'unavailable' records a part of an item's evidence that
+  // cannot be taken (a second identity, or a consent the owner does not give),
+  // on the owner's decision recorded in this repository. Files are injected;
+  // nothing is read or spawned. A record that passes, then each rule broken
+  // on its own.
+  const OD = 'docs/wp1/owner-decisions-2099-01-01.md'
+  const KS = 'docs/wp1/evidence/keyring-smoke.md'
+  const OD_TEXT = [
+    '# Owner decisions, 2099-01-01', '',
+    '## Q2. Something else', '', 'WP1.63 and WP1.20 are decided here, not under Q3.', '',
+    '## Q3. Consents', '', 'The second identity is consented for the Windows test VM only, so the macOS and Linux parts of WP1.11 are unavailable.', '',
+    '## Q4. Later', '', 'WP1.2 and WP1.64: the disposable identity is Unavailable.', '',
+    '## Q5. Evidenced', '', 'WP1.11 was evidenced in full.', '',
+    '```', '## Q6. In a code fence', '', 'WP1.11 is unavailable.', '```', '',
+    '<!--', '## Q7. In a comment', '', 'WP1.11 is unavailable.', '-->', '',
+    '```', '~~~', '## Q8. Still in the code fence: a ~~~ line does not close a ``` fence', '', 'WP1.11 is unavailable.', '```', '',
+  ].join('\n')
+  function unavailableFixture(over: Record<string, unknown> = {}, record: Record<string, unknown> = {}) {
+    const unavailable = { reason: 'the second identity is consented for the Windows test VM only', decision: `${OD}#Q3`, ...record }
+    const files: Record<string, string> = {
+      [OD]: OD_TEXT,
+      [KS]: `Taken at ${'a'.repeat(40)}. The macOS and Linux second-identity parts were not taken (${String(unavailable.decision)}).`,
+    }
+    const item = { id: 'WP1.11', kind: 'real-cli', status: 'unavailable', tests: ['tests/wp1/fake-keyring.test.ts'], evidence: [KS], unavailable, ...over }
+    return { item, files, textOf: (p: string) => (p in files ? files[p] : null) }
+  }
+  const problemsOf = (over: Record<string, unknown> = {}, record: Record<string, unknown> = {}) => {
+    const f = unavailableFixture(over, record)
+    return unavailableProblems([f.item], f.textOf)
+  }
+
+  it('[host] \'unavailable\' is open to eight named real-cli and packaged items only: never an automated, ci or document item, nor WP1.71', () => {
+    expect([...UNAVAILABLE_ELIGIBLE]).toEqual(['WP1.2', 'WP1.10', 'WP1.11', 'WP1.20', 'WP1.32', 'WP1.63', 'WP1.64', 'WP1.72'])
+    for (const id of UNAVAILABLE_ELIGIBLE) expect(['real-cli', 'packaged'], `${id} kind`).toContain(byId.get(id)?.kind)
+    for (const i of manifest.items) if (['automated', 'ci', 'document'].includes(i.kind)) expect(UNAVAILABLE_ELIGIBLE, i.id).not.toContain(i.id)
+    expect(UNAVAILABLE_ELIGIBLE).not.toContain('WP1.71')
+    // Every manifest item, given an otherwise sound record: the eight pass,
+    // every other one is refused by its id, whatever its kind.
+    const decision = `${OD}#Q3`
+    const files: Record<string, string> = { [OD]: `## Q3. All\n\n${manifest.items.map((i) => i.id).join(' ')} unavailable\n`, [KS]: `not taken: ${decision}` }
+    for (const i of manifest.items) {
+      const problems = unavailableProblems(
+        [{ ...i, status: 'unavailable', evidence: [KS], unavailable: { reason: 'cannot be taken on this host, by owner decision', decision } }],
+        (p) => files[p] ?? null,
+      )
+      if (UNAVAILABLE_ELIGIBLE.includes(i.id)) expect(problems, i.id).toEqual([])
+      else expect(problems, i.id).toEqual([`${i.id} (${i.kind}) may not be unavailable: only ${UNAVAILABLE_ELIGIBLE.join(', ')} may (ADR-026)`])
+    }
+    // A listed item whose kind was edited to another kind is refused as well.
+    expect(problemsOf({ kind: 'automated' })).toEqual(['WP1.11: an unavailable item must be real-cli or packaged, not automated'])
+  })
+
+  it('[host] an \'unavailable\' item gives a reason of 20 characters or more and an owner decision recorded in docs/wp1 whose section names it, and its evidence record cites that decision', () => {
+    expect(problemsOf()).toEqual([])
+    // The reason: 20 characters or more, the spaces around it not counted.
+    const REASON = 'WP1.11: an unavailable item needs a reason of at least 20 characters: what could not be taken, and why'
+    expect(problemsOf({}, { reason: 'x'.repeat(20) })).toEqual([])
+    for (const reason of ['x'.repeat(19), `  ${'x'.repeat(19)}  `, '', undefined, 42]) expect(problemsOf({}, { reason }), String(reason)).toEqual([REASON])
+    // The decision: a dated owner-decisions record under docs/wp1, and the ID its section heading starts with.
+    const FORMAT = 'WP1.11: an unavailable item needs decision "docs/wp1/owner-decisions-YYYY-MM-DD.md#<ID>", the owner decision recorded in this repository'
+    for (const decision of ['aicc_planning#286', OD, `${OD}#`, `${OD}#Q3.`, `${OD}#3`, `/${OD}#Q3`, `./${OD}#Q3`, 'docs/wp1/../wp1/owner-decisions-2099-01-01.md#Q3',
+      'docs/owner-decisions-2099-01-01.md#Q3', 'docs/wp1/evidence/owner-decisions-2099-01-01.md#Q3', 'docs/wp1/owner-decisions-2099-1-1.md#Q3', undefined, 7]) {
+      expect(problemsOf({}, { decision }), String(decision)).toEqual([FORMAT])
+    }
+    expect(problemsOf({ unavailable: undefined })).toEqual([REASON, FORMAT])
+    expect(problemsOf({ unavailable: 'not taken' })).toEqual([REASON, FORMAT])
+    // The decision file must be there, with a "## <ID>" heading whose own section names the item.
+    expect(problemsOf({}, { decision: 'docs/wp1/owner-decisions-2099-01-02.md#Q3' })).toEqual(['WP1.11: the decision file docs/wp1/owner-decisions-2099-01-02.md is not there'])
+    expect(problemsOf({}, { decision: `${OD}#Q9` })).toEqual([`WP1.11: ${OD} has no "## Q9" heading`])
+    expect(problemsOf({}, { decision: `${OD}#Q` })).toEqual([`WP1.11: ${OD} has no "## Q" heading`])
+    expect(problemsOf({}, { decision: `${OD}#Q2` })).toEqual([`WP1.11: section Q2 of ${OD} does not name WP1.11`])
+    // WP1.20 is not WP1.2, and WP1.2 named in Q4 does not count for Q2.
+    expect(problemsOf({ id: 'WP1.2' }, { decision: `${OD}#Q2` })).toEqual([`WP1.2: section Q2 of ${OD} does not name WP1.2`])
+    expect(problemsOf({ id: 'WP1.2' }, { decision: `${OD}#Q4` })).toEqual([])
+    expect(problemsOf({ id: 'WP1.64' }, { decision: `${OD}#Q4` })).toEqual([])
+    // The section says what is unavailable, and a heading in a code fence or an HTML comment is no section.
+    expect(problemsOf({}, { decision: `${OD}#Q5` })).toEqual([`WP1.11: section Q5 of ${OD} does not say what is unavailable`])
+    expect(problemsOf({}, { decision: `${OD}#Q6` })).toEqual([`WP1.11: ${OD} has no "## Q6" heading`])
+    expect(problemsOf({}, { decision: `${OD}#Q7` })).toEqual([`WP1.11: ${OD} has no "## Q7" heading`])
+    expect(problemsOf({}, { decision: `${OD}#Q8` })).toEqual([`WP1.11: ${OD} has no "## Q8" heading`])
+    // A CRLF file reads the same.
+    const crlf = unavailableFixture()
+    crlf.files[OD] = OD_TEXT.replace(/\n/g, '\r\n')
+    expect(unavailableProblems([crlf.item], crlf.textOf)).toEqual([])
+    // Its evidence: a docs/wp1/evidence record, one of which cites the decision.
+    const RECORD = 'WP1.11: an unavailable item needs a docs/wp1/evidence/ record, which says what was not taken'
+    expect(problemsOf({ evidence: [] })).toEqual([RECORD])
+    expect(problemsOf({ evidence: ['tests/wp1/legacy-codex-ledger.json', 'docs/wp1/baseline-2026-09-19.md'] })).toEqual([RECORD])
+    const silent = unavailableFixture()
+    silent.files[KS] = `Taken at ${'a'.repeat(40)}. The macOS and Linux parts were not taken.`
+    expect(unavailableProblems([silent.item], silent.textOf)).toEqual([`WP1.11: none of its evidence records (${KS}) cites ${OD}#Q3: say there what was not taken, and cite the decision`])
+    // The reference whole: citing Q30 (or Q3-b) is not citing Q3; Q3 then a full stop or a bracket is.
+    for (const cited of [`${OD}#Q30`, `${OD}#Q3-b`, `${OD}#Q3a`]) {
+      const other = unavailableFixture()
+      other.files[KS] = `Taken at ${'a'.repeat(40)}. The macOS and Linux parts were not taken (${cited}).`
+      expect(unavailableProblems([other.item], other.textOf), cited).toEqual([`WP1.11: none of its evidence records (${KS}) cites ${OD}#Q3: say there what was not taken, and cite the decision`])
+    }
+    for (const cited of [`${OD}#Q3.`, `[Q3](${OD}#Q3)`, `${OD}#Q3`]) {
+      const whole = unavailableFixture()
+      whole.files[KS] = `Taken at ${'a'.repeat(40)}. Not taken: ${cited}`
+      expect(unavailableProblems([whole.item], whole.textOf), cited).toEqual([])
+    }
+    // Q3 then an underscore or a sub-number is another reference, not Q3.
+    for (const cited of [`${OD}#Q3_x`, `${OD}#Q3.2`]) {
+      const other = unavailableFixture()
+      other.files[KS] = `Taken at ${'a'.repeat(40)}. The macOS and Linux parts were not taken (${cited}).`
+      expect(unavailableProblems([other.item], other.textOf), cited).toEqual([`WP1.11: none of its evidence records (${KS}) cites ${OD}#Q3: say there what was not taken, and cite the decision`])
+    }
+    // A citation a reader of the record cannot see does not count: inside an
+    // HTML comment, or after one that is never closed.
+    for (const hidden of [`<!-- ${OD}#Q3 -->`, `<!-- not taken: ${OD}#Q3`]) {
+      const h = unavailableFixture()
+      h.files[KS] = `Taken at ${'a'.repeat(40)}. The macOS and Linux parts were not taken. ${hidden}`
+      expect(unavailableProblems([h.item], h.textOf), hidden).toEqual([`WP1.11: none of its evidence records (${KS}) cites ${OD}#Q3: say there what was not taken, and cite the decision`])
+    }
+    expect(problemsOf({ evidence: ['docs/wp1/evidence/missing.md'] })).toEqual([`WP1.11: none of its evidence records (docs/wp1/evidence/missing.md) cites ${OD}#Q3: say there what was not taken, and cite the decision`])
+    expect(problemsOf({ evidence: ['docs/wp1/evidence/missing.md', KS] })).toEqual([])
+    // An unavailable record on an item that is not unavailable is refused, so
+    // a status flipped back never leaves a stale gap on record.
+    for (const status of ['evidenced', 'planned']) {
+      expect(problemsOf({ status }), status).toEqual([`WP1.11: carries an unavailable record, but its status is ${status}: remove the record, or set the status to unavailable`])
+    }
+    expect(unavailableProblems([{ id: 'WP1.11', kind: 'real-cli', status: 'evidenced', evidence: [KS] }], () => null)).toEqual([])
+    expect(unavailableProblems([{ id: 'WP1.3', kind: 'automated', status: 'planned', evidence: [] }], () => null)).toEqual([])
+  })
+
+  it('[host] the candidate check counts \'evidenced\' and \'unavailable\' as recorded, and still refuses \'planned\' and any other status', () => {
+    expect([...ITEM_STATUSES]).toEqual(['planned', 'evidenced', 'unavailable'])
+    const items = [
+      { id: 'WP1.1', status: 'evidenced' }, { id: 'WP1.11', status: 'unavailable' }, { id: 'WP1.3', status: 'planned' },
+      { id: 'WP1.4', status: 'Evidenced' }, { id: 'WP1.5', status: 'unavailable ' }, { id: 'WP1.6', status: 'waived' }, { id: 'WP1.7' },
+      // Not on the list: refused by the candidate check itself, not only by the eligibility case.
+      { id: 'WP1.8', status: 'unavailable' }, { id: 'WP1.71', status: 'unavailable' },
+    ]
+    expect(incompleteItems(items)).toEqual(['WP1.3', 'WP1.4', 'WP1.5', 'WP1.6', 'WP1.7', 'WP1.8', 'WP1.71'])
+    for (const id of UNAVAILABLE_ELIGIBLE) expect(incompleteItems([{ id, status: 'unavailable' }]), id).toEqual([])
+    expect(unavailableIds(items)).toEqual(['WP1.11', 'WP1.8', 'WP1.71'])
+    // An unavailable item's evidence is bound like any other: taken at boundHead.
+    const X = 'a'.repeat(40)
+    const D = 'd'.repeat(40)
+    expect(staleRecords([{ id: 'WP1.11', evidenceRecords: [{ artifact: KS, head: X }] }], D, () => `head ${X}`)).toEqual([`WP1.11: ${KS} was taken at ${X}, not at boundHead ${D}`])
+    // The other readers of the manifest read only their own field.
+    expect(readBoundHead(JSON.stringify({ boundHead: D, items: [{ id: 'WP1.11', status: 'unavailable' }] }))).toEqual({ sha: D })
+  })
+
+  it('every \'unavailable\' item in the manifest keeps the rules of ADR-026, in every phase', () => {
+    const problems = unavailableProblems(manifest.items, (p) => (existsSync(resolve(ROOT, p)) ? readFileSync(resolve(ROOT, p), 'utf8') : null))
+    expect(problems, problems.join('\n')).toEqual([])
+  })
+
+  // At the candidate phase the case prints the unavailable items on stdout,
+  // which vitest's default reporter shows for a passing case too (it shows a
+  // passing case's title only when the case is slow), so the stable run's log
+  // lists them at go. The title names them as well, for a failing run.
+  const unavailable = unavailableIds(manifest.items)
+  it(`candidate phase: nothing is still planned (unavailable on a recorded owner decision: ${unavailable.join(', ') || 'none'}), every evidence record was taken at boundHead, and boundHead is an ancestor of HEAD with only neutral paths changed since (phase ${phase}: ${reason})`, () => {
     if (phase !== 'candidate') return
-    const planned = manifest.items.filter((i) => i.status !== 'evidenced').map((i) => i.id)
-    expect(planned, `planned items at candidate phase: ${planned.join(', ')}`).toEqual([])
+    console.info(`WP1 candidate: unavailable on a recorded owner decision: ${unavailable.join(', ') || 'none'}`)
+    const planned = incompleteItems(manifest.items)
+    expect(planned, `items neither evidenced nor unavailable at candidate phase: ${planned.join(', ')}`).toEqual([])
     expect(manifest.boundHead).toMatch(SHA_RE)
     const bound = manifest.boundHead!
     const stale = staleRecords(manifest.items, bound, (a) => readFileSync(resolve(ROOT, a), 'utf8'))

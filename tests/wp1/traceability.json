@@ -2,7 +2,7 @@
   "schema": "wp1-traceability/1",
   "phase": "gate0",
   "boundHead": null,
-  "note": "Gate 0 plan: every WP1.* item maps to the tests/evidence that will prove it and to the CURRENT base tests that protect the behaviour today. `status` flips to `evidenced` (with digest-bound evidenceRecords for docs/wp1/evidence artifacts: artifact, sha256, head (the 40-hex commit the evidence was taken at, which the artifact names in its text; at the candidate phase every head must equal boundHead), actor, at, commands) when the artifact exists; ./phase.ts derives the candidate phase and traceability.test.ts enforces completeness there. Non-automated items carry the reason automation is not safe or possible (design 16.1).",
+  "note": "Gate 0 plan: every WP1.* item maps to the tests/evidence that will prove it and to the CURRENT base tests that protect the behaviour today. `status` flips to `evidenced` (with digest-bound evidenceRecords for docs/wp1/evidence artifacts: artifact, sha256, head (the 40-hex commit the evidence was taken at, which the artifact names in its text; at the candidate phase every head must equal boundHead), actor, at, commands) when the artifact exists. Where a part of the evidence cannot be taken (a second identity, or a consent the owner does not give), one of the eight items ./binding.ts names in UNAVAILABLE_ELIGIBLE may read `unavailable` instead, with `unavailable`: { reason (20 characters or more), decision (docs/wp1/owner-decisions-YYYY-MM-DD.md#<ID>, whose section names the item and says unavailable) }; it keeps every rule of `evidenced`, and one of its docs/wp1/evidence records cites the decision (ADR-026). `evidenced` means every part is recorded (ADR-026, settled point 2). A real-cli or packaged item's parts are taken on every OS its text, or else its release plan, gives it: a part not taken makes a listed item `unavailable` and leaves WP1.71 `planned`. An automated, ci or document item's parts are what its tests prove in CI at boundHead on the three OS runners and what each evidence file it cites records; a release-plan check that no cited file records is a known limitation in docs/wp1/evidence/release-qualification.md section 3, not a part of the item. An item whose own text names a part its tests and records do not prove stays `planned` unless an owner-decision section it cites amends its scope. ./phase.ts derives the candidate phase and traceability.test.ts enforces completeness there: nothing planned. Non-automated items carry the reason automation is not safe or possible (design 16.1).",
   "items": [
     {
       "id": "WP1.1",
@@ -441,15 +441,17 @@
       "title": "Windows ACL and Unix mode tests prove owner-only realm protection",
       "kind": "ci",
       "tests": [
-        "tests/wp1/realm-paths.test.ts",
         "tests/wp1/codex-realm-folders.test.ts",
-        "tests/wp1/codex-realm-isolation.test.ts"
+        "tests/wp1/codex-realm-isolation.test.ts",
+        "tests/unit/providers/codex/realm-folders-owner-only-wiring.test.ts",
+        "tests/unit/main/owner-only-folders-real.test.ts",
+        "tests/unit/main/owner-only-folders-native.test.ts"
       ],
       "evidence": [
         "docs/wp1/evidence/ci-matrix.md"
       ],
       "status": "planned",
-      "reason": "ACL/mode semantics are platform-native; the tests are automated but must execute on each OS runner, so the evidence is the CI matrix run. In WP2 slice 3d the managed Codex folders prove the Unix half: owner-only 0700, refused where it cannot be set. The Windows half is deliberately deferred while the shared ACL primitive is investigated (aicc_planning #103), and those tests assert that no permission change is made on Windows.",
+      "reason": "ACL/mode semantics are platform-native; the tests are automated but must execute on each OS runner, so the evidence is the CI matrix run. POSIX: the managed Codex root and each home are owner-only 0700, refused where that cannot be set (codex-realm-folders.test.ts). Windows, since 2.1.1-beta.2: before a home is used, the app's owner-only folder rule makes the managed root and then the home this user's and owner-only and reads them back, and a folder that does not read back so is refused (codex-realm-folders.test.ts, with the rule injected; realm-folders-owner-only-wiring.test.ts, the app's own composition; owner-only-folders-real.test.ts, the real rights on the Windows runner, Constrained Language Mode included; owner-only-folders-native.test.ts, that mode's route against an in-memory fake). Before 2.1.1-beta.2 the Windows half was deferred while the shared ACL primitive was investigated (aicc_planning #103); ADR-026, settled point 5.",
       "currentTests": [
         "tests/unit/harden-dir-acl-windows.test.ts",
         "tests/unit/credential-file-mode-hardening.test.ts"
@@ -576,9 +578,7 @@
         "tests/wp1/claude-reviewer.test.ts",
         "tests/wp1/review-profile-home.test.ts"
       ],
-      "evidence": [
-        "docs/wp1/evidence/claude-settings-isolation-2026-09-21.md"
-      ],
+      "evidence": [],
       "status": "planned",
       "currentTests": [
         "tests/unit/pty-spawn-env.test.ts",
@@ -1081,13 +1081,14 @@
     },
     {
       "id": "WP1.73",
-      "title": "All acceptance items block merge; real-CLI qualification is not deferred",
+      "title": "All acceptance items block merge; real-CLI qualification is not deferred, except a part an owner decision recorded in this repository says cannot be taken, which is recorded unavailable on an item ADR-026 lists, or otherwise as a known limitation in release-qualification.md section 3, and listed at go",
       "kind": "document",
       "tests": [
         "tests/wp1/traceability.test.ts"
       ],
       "evidence": [
-        "docs/wp1/evidence/release-qualification.md"
+        "docs/wp1/evidence/release-qualification.md",
+        "docs/wp1/owner-decisions-2026-10-13.md"
       ],
       "status": "planned",
       "reason": "a merge-policy statement enforced by the traceability test at the candidate phase",

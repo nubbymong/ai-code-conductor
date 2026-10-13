@@ -16,6 +16,13 @@
 // surface that opened the tab sees it end and checks again. An installer
 // command must be exactly one of the documented shapes filled in with its
 // address (review fix, 2026-10-10).
+//
+// WP1.19 (in part): a recipe line ends its shell however its command ends, an
+// error or Ctrl+C included, so the surface that opened the tab sees it end and
+// checks the install again ('every line ends its shell however its command ends').
+// WP1.44: an outdated CLI is offered the update for the install it is, from the
+// install its last check resolved ('the update offered is the one for the install
+// sessions run').
 import { describe, it, expect, vi } from 'vitest'
 import { codexInstallRecipes, codexInstallKind, CODEX_INSTALL_SOURCE_URL, CODEX_README_COMMIT } from '../../src/main/providers/codex'
 import {

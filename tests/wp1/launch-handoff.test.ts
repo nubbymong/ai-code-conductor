@@ -9,6 +9,11 @@
 // selector set last. Codex runs on this computer only in this release.
 //
 // PURE: the real Codex package on a fake CLI, in-memory everything.
+//
+// WP1.2 (the contract half; the real run is docs/wp1/evidence/real-cli-matrix.md):
+// a session launches on the account it names, else the provider default, in
+// that account's own realm, and its environment carries nothing of Claude
+// ('preparing a launch in its account's realm').
 import { describe, it, expect } from 'vitest'
 import { harness, addCodexAccount, claudeSnapshot, managedHome, memoryFs, MemoryPort, EXE, EXT_HOME } from './accounts-harness'
 import type { ClaudeReviewPorts } from '../../src/main/providers/claude'

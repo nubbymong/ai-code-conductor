@@ -683,3 +683,8 @@ covered above.
   `%LOCALAPPDATA%\Claude Command Center`) — the installer reads the existing
   path from the registry and never moves your data. A dev build uses a `dev`
   sub-folder under whichever data root applies.
+- **Configs, accounts and sessions look missing after a start (Windows):** if
+  the full path of the data or resources folder holds a character other than a
+  plain English letter, a digit or ordinary punctuation (an accented letter in
+  your Windows user name, for example), CCC does not find that folder. The
+  workaround is under *Known issues and workarounds* in the Feature Guide.

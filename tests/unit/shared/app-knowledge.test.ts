@@ -1574,7 +1574,7 @@ describe('surfaces for the last 2.1.1-beta.3 fixes', () => {
 
   it('the scripts folder known issues and the reviewer menu read as the app behaves', () => {
     for (const exact of [
-      'Status line, resume list or Codex hooks missing when the resources folder is on a FAT drive or a network share that cannot keep file permissions. At each start the app makes the scripts folder inside your resources folder private to your account, and it runs session scripts only from there. A FAT or exFAT drive cannot keep those permissions, and some network shares cannot either. Then the app does not use its status line, the resume list or the Codex hooks, and sessions start without them. The app log has a line starting "[scripts] the scripts folder in the resources folder could not be made this user\'s alone". If the reason in that line is a time limit rather than the drive, restart the app first: the check runs again at each start. Workaround: choose a resources folder on a local drive that keeps file permissions (NTFS on Windows), for example one inside your user folder, then restart the app.',
+      'Status line, resume list or Codex hooks missing when the resources folder is on a FAT drive or a network share that cannot keep file permissions. At each start the app makes the scripts folder inside your resources folder private to your account, and it runs session scripts only from there. A FAT or exFAT drive cannot keep those permissions, and some network shares cannot either. Then the app does not use its status line, the resume list or the Codex hooks, and sessions start without them. The app log has a line starting "[scripts] the scripts folder in the resources folder could not be made this user\'s alone". If the reason in that line is a time limit rather than the drive, restart the app first: the check runs again at each start. Workaround: choose a resources folder on a local drive that keeps file permissions (NTFS on Windows), for example one inside your user folder, then restart the app. On Windows, if the name of your user folder holds a character other than a plain English letter, a digit or ordinary punctuation, choose a folder outside it instead (see the entry above about such folder paths).',
       'A tab restored at start opened without the status line or the resume list. At each start the app checks its scripts folder before sessions use it, and a session that starts meanwhile waits up to 5 seconds for that check. On a slow or busy computer the check can take longer. A tab restored at start then runs that session without the app\'s status line, the resume list or the Codex hooks, and the app log has a line saying the scripts folder is still being checked. Workaround: restart the tab once the app has finished starting. If restarting the tab does not bring them back, restart the app.',
       "A resources folder chosen in the app's first-run setup gets its scripts folder checked, and the app's session scripts put in it, only at the app's next start. Until then, new sessions start without the app's status line, the resume list and the Codex hooks. Workaround: once setup is done, quit the app and start it again.",
     ]) expect(entries, exact.slice(0, 60)).toContain(exact)
@@ -1809,5 +1809,146 @@ describe('surfaces for GPT-6-Sol and GPT-6-Luna, and the GPT-5.5 retirement', ()
     expect(para).toContain('GPT-6-Sol, which OpenAI names as the replacement on Plus, Pro, Business, Enterprise and Edu plans when available')
     expect(para).not.toContain('GPT-6-Luna')
     expect(para).toContain('pick a model your account offers')
+  })
+})
+
+// The 2.1.1 stable release text, written for someone coming from 2.1.0: one
+// What's New entry for everything since 2.1.0 (the beta entries stay as the
+// history), whose known issues each carry a workaround and each have a Known
+// issues entry in the Feature Guide, which Ask Conductor also reads.
+describe('2.1.1: the stable entry and its known issues', () => {
+  const stable = () => changelog.find((e) => e.version === '2.1.1')!
+  const rows = () => stable().changes.map((c) => c.description)
+  const knownIssues = () => APP_KNOWLEDGE_SECTIONS.find((s) => s.id === 'known-issues')!.body
+  const paraStarting = (start: string) => knownIssues().split('\n').find((p) => p.startsWith(start))
+
+  it('is the newest entry, under the bare version, and still leaves every 2.1.1 beta entry in place', () => {
+    expect(changelog[0]).toBe(stable())
+    for (const v of ['2.1.1-beta.3', '2.1.1-beta.2', '2.1.1-beta.1', '2.1.0']) expect(changelog.some((e) => e.version === v), v).toBe(true)
+  })
+
+  it('names each known issue as one, with what to do, and the pinned version as a notice', () => {
+    const issue = (re: RegExp) => rows().filter((d) => d.startsWith('Known issue: ') && re.test(d))
+    for (const [re, todo] of [
+      [/Up to date when a newer release is out/, /restart the app once while online/],
+      [/Up to date when it cannot reach GitHub/, /Releases page on GitHub/],
+      [/a Mac on 2\.1\.0 is not offered 2\.1\.1/, /On macOS 12, stay on 2\.1\.0\./],
+      [/shell is zsh/, /Type cd and the folder/],
+      [/if you used Codex in 2\.1\.0/, /Add Codex account in Settings, Accounts/],
+      [/GPT-5\.5 retires from Codex/, /pick one your account offers/],
+      [/newer than 0\.156\.1/, /install Codex 0\.156\.1/],
+      [/plain English letter, a digit or ordinary punctuation/, /run the installer again/],
+      [/debug port 9222 is in use/, /Sign out of Windows and back in, or restart the computer; Vision then starts as usual./],
+    ] as const) {
+      const found = issue(re)
+      expect(found, String(re)).toHaveLength(1)
+      expect(found[0], String(re)).toMatch(todo)
+    }
+    const notice = rows().filter((d) => d.startsWith('Notice: '))
+    expect(notice).toHaveLength(1)
+    expect(notice[0]).toMatch(/Claude Code version .* is no longer used/)
+  })
+
+  it('names the Codex version this release is tested with, as the app checks it', async () => {
+    const { CODEX_MAX_TESTED_VERSION } = await import('../../../src/main/providers/codex/cli-contract')
+    expect(rows().some((d) => d.includes(`newer than ${CODEX_MAX_TESTED_VERSION},`))).toBe(true)
+    expect(paraStarting(`This release is tested with Codex up to version ${CODEX_MAX_TESTED_VERSION}.`)).toBeDefined()
+  })
+
+  it('never presents 2.1.1 itself as a beta, and stays plain ASCII with no em dash', () => {
+    for (const text of [stable().highlights ?? '', ...rows()]) {
+      expect(text, text.slice(0, 60)).toMatch(/^[\x20-\x7E]+$/)
+      expect(text, text.slice(0, 60)).not.toMatch(/this beta|2\.1\.1 beta|pre-?release of 2\.1\.1/i)
+    }
+  })
+
+  it('has a Known issues entry with a workaround for each issue new in the stable text', () => {
+    const update = paraStarting('Check for Updates can say Up to date when a newer release is out.')
+    expect(update).toBeDefined()
+    expect(update).toContain('Workaround: restart the app once while online, then check again.')
+    expect(update).toContain('Check for Updates also says Up to date when it cannot reach GitHub at all')
+    expect(update).toContain('Workaround: restart the app and check again later, or see the newest release on the Releases page on GitHub.')
+    const mac = paraStarting('A Mac on 2.1.0 is not offered 2.1.1 in the app')
+    expect(mac).toBeDefined()
+    expect(mac).toContain('On macOS 12, stay on 2.1.0.')
+    const codex210 = paraStarting('If you used Codex in 2.1.0, add your Codex account once in the app.')
+    expect(codex210).toBeDefined()
+    expect(codex210).toContain('Workaround: choose Yes, set up Codex on that page')
+    expect(paraStarting('This release is tested with Codex up to version')).toContain('Workaround, if anything misbehaves with it: install Codex')
+  })
+
+  it('the FAT or share entry does not send a user whose user folder name is affected into that folder', () => {
+    const k = knownIssues()
+    const fat = k.indexOf('Status line, resume list or Codex hooks missing when the resources folder is on a FAT drive')
+    const nonAscii = k.indexOf('On Windows, the app does not find its data or resources folder when the full path of that folder holds')
+    expect(fat).toBeGreaterThan(-1)
+    expect(nonAscii).toBeGreaterThan(-1)
+    // "the entry above" in the FAT or share entry points at the non-ASCII one.
+    expect(nonAscii).toBeLessThan(fat)
+    expect(paraStarting('Status line, resume list or Codex hooks missing when the resources folder is on a FAT drive')).toContain('choose a folder outside it instead (see the entry above about such folder paths)')
+  })
+
+  it('every line that names the macOS 13 floor says what a Mac on macOS 12 does', () => {
+    const texts = [stable().highlights ?? '', ...rows()].filter((t) => /macOS 13/.test(t))
+    expect(texts.length).toBeGreaterThanOrEqual(3)
+    for (const t of texts) expect(t, t.slice(0, 60)).toMatch(/on macOS 12, stay on 2\.1\.0\./i)
+  })
+
+  it('the summary sends readers to the Known issues section by its title, and claims no more than it holds', () => {
+    const section = APP_KNOWLEDGE_SECTIONS.find((s) => s.id === 'known-issues')!
+    expect(stable().highlights).toContain(`${section.title} in the Feature Guide has the full list`)
+    expect(stable().highlights).not.toMatch(/every known issue with its workaround/)
+  })
+
+  it('the non-English folder line keeps the beta.3 condition that the new folder is on this computer\'s own disk', () => {
+    const disk = "on this computer's own disk (not a USB drive, a FAT or exFAT drive or a network share)"
+    const row = rows().find((d) => d.startsWith('Known issue: on Windows, the app does not find its data or resources folder'))
+    expect(row).toBeDefined()
+    expect(row).toContain(`a new folder ${disk} whose full path holds only plain English letters`)
+    expect(paraStarting('On Windows, the app does not find its data or resources folder')).toContain(disk)
+  })
+
+  it('the 2.1.0 Codex line says to turn Codex on before Add Codex account, which only shows while Codex is on', () => {
+    const step = 'turn Codex on and choose Add Codex account in Settings, Accounts'
+    const row = rows().find((d) => d.startsWith('Known issue: if you used Codex in 2.1.0'))
+    expect(row).toContain(`or later ${step}.`)
+    expect(paraStarting('If you used Codex in 2.1.0, add your Codex account once in the app.')).toContain(`or later ${step}.`)
+  })
+
+  it('the newer-Codex line and entry name the Providers card, which says so whether or not Sentinel is on', () => {
+    const store = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'stores', 'providerAccountsStore.ts'), 'utf8')
+    expect(store).toContain('is newer than the versions this app was tested with; it will still be used')
+    const row = rows().find((d) => d.startsWith('Known issue: with a Codex newer than'))
+    expect(row).toContain('the Providers card in Settings, Accounts, the Set up Codex page and Sentinel (when it is on) show a notice.')
+    expect(row).toContain('; in PowerShell on Windows, npm.cmd install -g @openai/codex@')
+    const entry = paraStarting('This release is tested with Codex up to version')
+    expect(entry).toContain('the Providers card in Settings, Accounts says it is newer than the versions this app was tested with and will still be used')
+    expect(entry).toContain("A closed Codex account's card on the Usage page then shows its last reading (see the entry below on a closed account's allowance).")
+    const k = knownIssues()
+    expect(k.indexOf("If Codex cannot check a closed account's allowance")).toBeGreaterThan(k.indexOf('This release is tested with Codex up to version'))
+    expect(row).toContain('such as GPT-6.1-Sol, and Sentinel then says it is not in the model picker: choose Default: follows Codex in the config')
+    expect(entry).toContain('such as GPT-6.1-Sol, and Sentinel then says that model is not in the picker; choose Default: follows Codex in the config')
+    const models = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'codex-models.ts'), 'utf8')
+    expect(models).toContain("label: 'Default: follows Codex'")
+    const vision = paraStarting('After an in-app update on Windows (from 2.1.0, or from 2.1.1-beta.1 to beta.3),')
+    expect(vision).toContain('Start browser then says its debug port 9222 is in use.')
+    expect(vision).toContain('Workaround: sign out of Windows and back in, or restart the computer; Vision then starts as usual.')
+    expect(k.indexOf('After an in-app update on Windows (from 2.1.0')).toBeGreaterThan(k.indexOf('Vision works in one copy of the app at a time'))
+  })
+
+  it('the SSH lines carry the limits the Feature Guide gives: an SSH Persistent session from before the update, and the zsh partner on Windows', () => {
+    const ssh = rows().find((d) => d.startsWith('SSH: '))
+    expect(ssh).toContain('(Linux and macOS hosts; an SSH Persistent session started before the update gets it once you End it and start it again)')
+    expect(paraStarting('Remote attention needs the Claude that is running to have started from 2.1.1-beta.3 or later.')).toContain('End the session (not just close it) and start it again')
+    const zsh = rows().find((d) => d.startsWith('Known issue: on an SSH host whose shell is zsh'))
+    expect(zsh).toContain('and possibly on another host whose shell is zsh, at least when the app runs on Windows, the SSH session')
+    expect(paraStarting("An SSH session's partner shell is a connection of its own to the host.")).toContain('possibly on another host whose shell is zsh, at least when the app runs on Windows')
+  })
+
+  it('the Codex lines say Codex is local only, and that a Claude session could already ask for a Codex review in 2.1.0', () => {
+    expect(rows()[0]).toMatch(/^Codex is a full assistant beside Claude Code/)
+    expect(rows()[0]).toContain('Codex sessions and reviews run on this computer only, not over SSH.')
+    expect(paraStarting('Codex does not run over SSH in this release.')).toBeDefined()
+    expect(rows().find((d) => d.startsWith('Code review now works both ways:'))).toContain('a Codex session can ask for a Claude review, as a Claude session already could for a Codex review')
   })
 })
