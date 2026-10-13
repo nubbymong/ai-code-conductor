@@ -10,17 +10,17 @@ Every check here was taken at d1525759a7a42d941beeff601af3415fddd8afdd, the squa
 the release `v2.1.1-beta` (release run 38409628911).
 
 **Status: partly recorded.** The VM agent's rows and the CI conformance smoke are recorded below. The owner's rows
-(real sign-ins, the second consented identity, the disposable Claude account, a real prompt to a working model and
-`codex_review`, and the macOS sign-in) have not run yet; each is a PENDING block below. Until they are recorded, every
-item this file serves except WP1.71 stays `planned`.
+(real sign-ins, the second consented identity, the disposable Claude account, a real prompt to a working model,
+`codex_review` and the session-strip meters, and the macOS sign-in) have not run yet; each is a PENDING block below.
+Until they are recorded, every item this file serves except WP1.71 stays `planned`.
 
 | Item | Recorded here at the head | Still owed (PENDING) | Expected unavailable, pending the owner's confirmation |
 |---|---|---|---|
-| WP1.2 | Rows 2, 9, 25 and 33 on the Windows test VM: the real Codex 0.153.4 and 0.155.1 on both install routes, fake keys, the loopback fake model. The mode-matrix cells are in `mode-matrix.md` | A real signed-in Codex session with a consented identity on Windows, and with the owner's sign-in on the macOS test user | A real Codex-only session on Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA1` |
+| WP1.2 | Rows 2, 9, 25 and 33 on the Windows test VM: the real Codex 0.153.4 and 0.155.1 on both install routes, fake keys, the loopback fake model. The mode-matrix cells are in `mode-matrix.md` | A real signed-in Codex session with a consented identity on Windows, and with the owner's sign-in on the macOS test user. Rows 9, 25 and 33 on macOS and Linux with fake keys, as on Windows, unless the owner rules otherwise: they are open (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`) | A real Codex-only session on Linux, with rows 9, 25 and 33 there in a signed-in session: `docs/wp1/owner-decisions-2026-10-13.md#UA1` |
 | WP1.10 | Nothing yet | The two-account run on Windows with two consented identities | The two-account run on macOS and Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA2` |
 | WP1.20 | Nothing yet | The browser sign-in into the selected managed account on Windows and on macOS | A disposable identity, and the Linux sign-in: `docs/wp1/owner-decisions-2026-10-13.md#UA4` |
 | WP1.32 | The CI conformance job's installs on each OS (WP1.71 below; npm, not through the app) | The app's own install ("Run it for me") and sign-in on the Windows test VM | The real installer smoke through the app on macOS and Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA5` |
-| WP1.64 | Nothing yet (every agent row uses fake keys) | The real Claude smoke with the disposable Claude account; the real Codex sign-in, status and sign-out; one real prompt to a working model; `codex_review`; the macOS sign-in | Disposable Codex identities, the API-key flow, the second-identity flows off Windows, every credential-bearing flow on Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA6` |
+| WP1.64 | Nothing yet (every agent row uses fake keys) | The real Claude smoke with the disposable Claude account; the real Codex sign-in, status and sign-out; one real prompt to a working model; `codex_review`; the macOS sign-in | Disposable Codex identities, the API-key flow, the second-identity flows off Windows, every credential-bearing flow on Linux, and `codex_review` (row 49) on macOS and Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA6` |
 | WP1.71 | All 9 legs: the minimum, pinned and release-candidate CLI on Windows, macOS and Linux | Nothing (the owner confirms the release-candidate version at go) | None: WP1.71 may never read `unavailable` (ADR-026) |
 
 ## The VM agent's rows (item part: rows 2, 9, 25 and 33)
@@ -34,7 +34,8 @@ item this file serves except WP1.71 stays `planned`.
   has the cause.
 - **Row 25: the index matched its own per-turn rule on every session.** But in 1 of 6 real rollouts, 3 turns are priced
   twice (finding F-L1-2). That part fails the row's "each turn priced once".
-- **No-item rows 1, 12, 23 and 48: PASS** (12 and 23 as rewritten for O5). Rows 21, 64, 74, 13, 27 and 50 were not reached (see the no-item part).
+- **No-item rows 1, 12, 23 and 48: PASS** (12 and 23 as rewritten for O5). Row 21 was skipped for a harness gap, rows 64
+  and 74 were passed over for row 12, and rows 13, 27 and 50 were not reached in the window (see the no-item part).
 
 ### How the rows ran
 
@@ -217,7 +218,9 @@ non-secret: it names which kind of identity was used, never an address or an acc
 > **PENDING: WP1.2, a real signed-in Codex-only session.** On the Windows test VM, with a consented identity: start a
 > Codex session on the managed account, choose a GPT-6 model, send one prompt and record the answer. On the macOS test
 > user, with the owner's sign-in: "Use Codex only" at setup, sign in, start a Codex session, send one prompt, sign out.
-> Expected unavailable: the Linux session, `docs/wp1/owner-decisions-2026-10-13.md#UA1`.
+> Expected unavailable: the Linux session, `docs/wp1/owner-decisions-2026-10-13.md#UA1`. Also owed unless the owner
+> rules otherwise: rows 9, 25 and 33 on macOS and Linux with fake keys, as on Windows (open,
+> `docs/wp1/owner-decisions-2026-10-13.md#OQ1`).
 
 > **PENDING: WP1.10, two Codex accounts in distinct homes.** On the Windows test VM: account A and account B signed in
 > to their own folders, the second with the second consented identity; status of each; a quit and relaunch with B's
@@ -238,11 +241,13 @@ non-secret: it names which kind of identity was used, never an address or an acc
 > disposable Claude account signed in, used, signed out, and still signed out after a relaunch; the real Codex sign-in,
 > status and sign-out with the consented identities; one real prompt to a working model; `codex_review` asked from a
 > Claude session (on 0.155.1, then 0.153.4), with its first finding.
-> On the macOS test user: the owner's Codex sign-in and sign-out. Expected unavailable: `docs/wp1/owner-decisions-2026-10-13.md#UA6`.
+> On the macOS test user: the owner's Codex sign-in and sign-out. Expected unavailable, `codex_review` on macOS and
+> Linux included: `docs/wp1/owner-decisions-2026-10-13.md#UA6`.
 
 ## No-item part: rows 1, 23, 48 and 12 (VM agent)
 
-These rows ran with the same setup as above, after the item rows. They follow the plan's order for the no-item rows.
+These rows ran with the same setup as above, after the item rows. The plan's order for the no-item rows was 1, 23, 21,
+48, 64, 74, 12, 13, 27, 50; the agent ran 1, 23, 48 and 12, in that order, and did not run the others (below).
 
 **Row 1 (provider on/off, "not set up", last provider on): PASS** on 0.153.4 npm `codex.cmd` and on 0.155.1 `codex.exe`
 (run row1-r1, 08:25 PDT). Each version ran in its own instance:
@@ -292,9 +297,22 @@ These rows ran with the same setup as above, after the item rows. They follow th
   account" (ChatGPT, or an API key). It made no offer to use this computer's sign-in.
 - The saved settings then had Codex on and answered. A relaunch showed neither the notes nor the question.
 
-**Not reached: rows 21, 64, 74, 13, 27 and 50.** The agent ran the rows in the plan's order and the qualification
-window ended before these. They are recorded as known limitations in `release-qualification.md` section 3, citing
+**Not taken: rows 21, 64, 74, 13, 27 and 50.**
+- Row 21 was skipped for a harness gap: its usage-header pills needed more test harness than the time left allowed, and
+  the agent ran row 12 in its place.
+- Rows 64 and 74 were passed over in favour of row 12 too.
+- Rows 13, 27 and 50 were not reached in the window.
+
+They are recorded as known limitations in `release-qualification.md` section 3, citing
 `docs/wp1/owner-decisions-2026-10-13.md#KL2` (a draft section until the owner confirms it).
+
+> **PENDING (the owner's sitting on the Windows test VM): row 18, the session-strip meters (OR4, no item).** Taken
+> with the owner's prompt to a working model (the WP1.64 block above), on 0.155.1: the session strip's meters on that
+> live Codex tab are read and recorded, and the 0.155.1 rollout that session writes is the row's fixture from a real
+> session. The record gives what each meter showed and the fixture's SHA-256, and nothing from the conversation.
+> Adding the fixture beside the strip's tests would change a path outside the binding-neutral ones
+> (`tests/wp1/binding.ts`), so it is not made at this head. Until this is recorded, row 18 is listed as pending in
+> `docs/wp1/owner-decisions-2026-10-13.md#KL2`. Not run yet.
 
 > **PENDING (the owner's sitting on the Windows test VM): the managed re-authentication proof.** Owed by WP1.52's
 > reason, which this file records but WP1.52 does not cite. Sign in again three times on account B (file store on

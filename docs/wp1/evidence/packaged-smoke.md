@@ -14,7 +14,7 @@ boundHead: d1525759a7a42d941beeff601af3415fddd8afdd (PR #644's squash merge on `
 ## The build under test
 
 - Release run 38409628911 (`release.yml` on `release/v2.1.1`, channel beta, `skip_vt=false`) concluded success.
-  It published the prerelease tag `v2.1.1-beta`, whose tag object is boundHead.
+  It published the prerelease tag `v2.1.1-beta`, which points at boundHead.
 - Windows installer `AI-Code-Conductor-2.1.1.exe`, 194103848 bytes.
   - SHA-256 `da72adf4e5d9f175c9a3e8c1b58f8e4234f9be5f9acc2eeef7a4b64a0e6f5952`.
   - That hash matches the release's `CHECKSUMS.txt` and GitHub's asset digest, both on the downloading host and on the
@@ -145,9 +145,9 @@ regression. The app inside it is signed, notarized and stapled.
 - Codex 0.155.1 from the npm platform package (no installer; its sha512 and sha1 equal the registry's), and the
   stand-in Claude Code (`2.1.296 (Claude Code)`), first on the test user's PATH. A throwaway `CODEX_HOME` was signed
   in with a fake API key (file store).
-- **Known issue (not a regression): FUSE 2 is missing.** Rocky Linux 10.2 has `fuse-libs` (`libfuse.so.2`) and
-  `fuse3` (`fusermount3`), but not the FUSE 2 `fuse` package, so there is no `fusermount`. Both AppImages, 2.1.1
-  and 2.1.0, fail to mount the same way ("fuse: failed to exec fusermount: No such file or directory", then "Cannot
+- **Known issue (not a regression): FUSE 2 is missing.** The test host has `fuse-libs` (`libfuse.so.2`) and
+  `fuse3` (`fusermount3`) installed, but not the FUSE 2 `fuse` package, so there is no `fusermount`. Both AppImages,
+  2.1.1 and 2.1.0, fail to mount the same way ("fuse: failed to exec fusermount: No such file or directory", then "Cannot
   mount AppImage, please check your FUSE setup"). Both use the same AppImage runtime, linked against
   `libfuse.so.2`. The run below therefore starts both versions with `--appimage-extract-and-run`, and records that it
   did. `README.md` (Requirements) and `release-qualification.md` section 3 carry the known issue.

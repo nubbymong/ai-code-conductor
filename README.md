@@ -116,7 +116,7 @@ On-demand reports over your own usage, Claude Code's and Codex's, runnable acros
 | **Resources folder** | On a drive that keeps file permissions (NTFS on Windows), not a FAT or exFAT drive or a network share that does not keep them; otherwise the app's status line, the resume list and the Codex hooks are not used |
 | **Windows** | 10 or 11, x64. Installers are code-signed (SSL.com, publisher "Nicholas Moger"); SmartScreen may still prompt on a brand-new release — More info → Run anyway |
 | **macOS** | 13 (Ventura) or later on Apple Silicon; on macOS 12, stay on 2.1.0. Builds are signed and notarised |
-| **Linux** | Experimental — glibc 2.39+ (Ubuntu 24.04+, Rocky 10+, Fedora 40+), x64. `chmod +x` the AppImage; needs FUSE 2 and GTK 3. Known issue: where FUSE 2 is missing (Rocky Linux 10 ships `fuse-libs` and `fuse3` but not `fuse`, so there is no `fusermount`), the AppImage cannot mount: install the `fuse` package, or start it with `--appimage-extract-and-run`. The vision browser needs a deb/rpm Chrome — the snap build's confinement blocks the debug profile |
+| **Linux** | Experimental — glibc 2.39+ (Ubuntu 24.04+, Rocky 10+, Fedora 40+), x64. `chmod +x` the AppImage; needs FUSE 2 and GTK 3. Known issue: start the AppImage with `--appimage-extract-and-run` where FUSE 2's `fusermount` is missing, as on a default Rocky Linux 10 install, because the AppImage cannot mount there. The vision browser needs a deb/rpm Chrome — the snap build's confinement blocks the debug profile |
 
 ## Under the hood
 

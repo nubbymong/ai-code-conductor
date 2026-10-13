@@ -6,7 +6,8 @@ no item cites a section of it as its `unavailable` decision: every item that
 would (WP1.2, WP1.10, WP1.11, WP1.20, WP1.32, WP1.64 and WP1.72) reads
 `planned`, and so do WP1.19 (AM2) and WP1.73 (AM1). Sections KL2 and KL3
 were added when the 2.1.1 evidence was assembled, from what the qualification
-runs did and did not reach; they are proposals in the same way. This line is
+runs did and did not take; they are proposals in the same way. OQ1 was added
+then too: it is a question for the owner, not a decision. This line is
 removed when the owner confirms the file.
 
 This record supplements `owner-decisions-2026-09-20.md`,
@@ -36,15 +37,17 @@ Sections UA1 to UA7 each name one item, say what is unavailable and why, and
 say what is still taken. Everything that could be taken is recorded at the
 qualified build, as ADR-026 requires. A part not named as unavailable here
 is owed in full. Sections AM1, AM2, KL1, KL2 and KL3 change acceptance text or record
-known limitations; none of them is an item's `unavailable` decision.
+known limitations; none of them is an item's `unavailable` decision. OQ1 is a
+question still open for the owner's ruling, and decides nothing.
 
 ## UA1. WP1.2: a real Codex-only session on Linux is unavailable
 
 | What | Decision |
 | --- | --- |
-| Unavailable | A real, signed-in Codex-only session on Linux. |
+| Unavailable | On Linux: a real, signed-in Codex-only session, and with it the Linux column of `docs/wp1/evidence/release-qualification.md` section 4 rows 9, 25 and 33 (WP1.2's rows) in a signed-in session. |
 | Why | No Linux sign-in is taken for the 2.1.1 qualification: no Linux identity is consented (Q3), and Linux sign-in is moved to after stable (Linux is experimental). |
 | Still taken | On the Windows test VM: a fresh Codex-only setup with the real CLI at 0.153.4 and 0.155.1, a fake key and a loopback model, and a real signed-in session with a consented identity. On macOS: the session with the owner's sign-in on the macOS test user. |
+| Not covered here | The macOS and Linux columns of rows 9, 25 and 33 run with fake keys and the loopback fake model, as on Windows. They need no identity, so this section cannot cover them. They are open for the owner's ruling (OQ1), and WP1.2 stays `planned` until that is settled. |
 
 ## UA2. WP1.10: two Codex accounts on macOS and Linux are unavailable
 
@@ -78,13 +81,13 @@ known limitations; none of them is an item's `unavailable` decision.
 | Why | Running the vendor installer is not among the consents for those hosts. No Linux sign-in is taken for the 2.1.1 qualification: no Linux identity is consented (Q3), and Linux sign-in is moved to after stable (Linux is experimental). |
 | Still taken | The install and sign-in recipes against fakes (automated), the app's own install and sign-in on the Windows test VM, and the CI conformance job, which installs the CLI on each OS runner (not through the app). |
 
-## UA6. WP1.64: disposable Codex identities, the API-key flow and the second-identity flows off Windows are unavailable
+## UA6. WP1.64: disposable Codex identities, the API-key flow, and the second-identity flows and codex_review off Windows are unavailable
 
 | What | Decision |
 | --- | --- |
-| Unavailable | A disposable Codex identity on every OS; the API-key sign-in, status and sign-out; the second-identity flows on macOS and Linux; every credential-bearing flow on Linux. |
-| Why | The Codex identities are the owner's own, consented as listed above; there is no OpenAI API key; the second identity is consented for the Windows test VM only. No Linux sign-in is taken for the 2.1.1 qualification: no Linux identity is consented (Q3), and Linux sign-in is moved to after stable (Linux is experimental). |
-| Still taken | The real Claude smoke with the disposable Claude account; the real Codex sign-in, status and sign-out with the consented identities on the Windows test VM; one real prompt to a working model; the owner's sign-in on the macOS test user. |
+| Unavailable | A disposable Codex identity on every OS; the API-key sign-in, status and sign-out; the second-identity flows on macOS and Linux; every credential-bearing flow on Linux; and `codex_review` on a signed-in account with a working model (`docs/wp1/evidence/release-qualification.md` section 4 row 49, WP1.64's row) on macOS and on Linux. |
+| Why | The Codex identities are the owner's own, consented as listed above; there is no OpenAI API key; the second identity is consented for the Windows test VM only. No Linux sign-in is taken for the 2.1.1 qualification: no Linux identity is consented (Q3), and Linux sign-in is moved to after stable (Linux is experimental). On macOS the run is the owner's own Codex sign-in on the macOS test user, set up Codex only; `codex_review` is asked from a signed-in Claude session, and no Claude sign-in on macOS is among the 2.1.1 runs (the disposable Claude account is used on the Windows test VM). |
+| Still taken | The real Claude smoke with the disposable Claude account; the real Codex sign-in, status and sign-out with the consented identities on the Windows test VM; one real prompt to a working model; `codex_review` asked from a Claude session on the Windows test VM; the owner's sign-in on the macOS test user. |
 
 ## UA7. WP1.72: an ephemeral identity and the macOS and Linux stores are unavailable
 
@@ -146,24 +149,29 @@ They are release completion, not parts of the items (ADR-026, settled point
 | Launch, resume and the account picker on Linux (rows 9, 23, 33) | WP1.38, WP1.42 | No Linux identity is consented (Q3). |
 | A real install through the app on macOS and Linux (row 3) | WP1.18, WP1.19 | Running the vendor installer is not among the consents for those hosts (Q3). |
 
-## KL2. Release-plan checks not reached in the 2.1.1 qualification window, recorded as known limitations
+## KL2. No-item release-plan checks on Windows not taken in the 2.1.1 qualification window, recorded as known limitations
 
 These no-item checks of `docs/wp1/evidence/release-qualification.md`
-section 4 were planned on the Windows test VM for 2.1.1 and were not reached.
-The VM agent ran the rows in the plan's order, and the window ended before
-these. They could have been taken; they were not run. No item cites them
-(the no-item part of `docs/wp1/evidence/real-cli-matrix.md`), so they are
-release completion, not parts of an item (ADR-026, settled point 2). Under
-Q3 everything not run is recorded as not run and listed at go.
+section 4 were planned on Windows for 2.1.1. The plan's order for the VM
+agent's no-item rows was 1, 23, 21, 48, 64, 74, 12, 13, 27, 50. The agent
+ran rows 1, 23, 48 and 12. Rows 13, 21, 27, 50, 64 and 74 could have been
+taken and were not run; the table says why for each. Row 18 is the
+owner's and is still pending: it is listed here so that, if it is not
+recorded by go, it is a known limitation, and its line is removed once it
+is recorded. No item cites these rows (the no-item part of
+`docs/wp1/evidence/real-cli-matrix.md`), so they are release completion,
+not parts of an item (ADR-026, settled point 2). Under Q3 everything not run
+is recorded as not run and listed at go.
 
 | Check (section 4 row) | Items it relates to | Why not taken |
 | --- | --- | --- |
 | Hello Codex on the final build (row 13) | none | Not reached in the window. |
-| The multi-account footer, two managed accounts live, usage headers from the fake model (row 21) | none | Not reached: its usage-header pills needed more harness than the window left. |
+| The session-strip meters: a 0.155.1 rollout fixture from a real session, and a run with a working model (row 18) | none | Pending, not yet a limitation: the owner takes it with the prompt to a working model on the Windows test VM (the PENDING block for row 18 in `docs/wp1/evidence/real-cli-matrix.md`). |
+| The multi-account footer, two managed accounts live, usage headers from the fake model (row 21) | none | Skipped for a harness gap: its usage-header pills needed more test harness than the time left allowed, so the agent ran row 12 in its place. |
 | A subagent rollout indexed without a collision (row 27) | none | Not reached in the window. |
 | `claude_review` waiting past 300 s (row 50) | none | Not reached in the window. |
-| The partner terminal wording on a live tab, and at a narrow window (row 64) | none | Not reached in the window. |
-| Command buttons, the preset pill, the restart menu and both themes on the real CLI (row 74) | none | Not reached in the window. |
+| The partner terminal wording on a live tab, and at a narrow window (row 64) | none | Passed over: the agent ran row 12 in the time left instead. |
+| Command buttons, the preset pill, the restart menu and both themes on the real CLI (row 74) | none | Passed over: the agent ran row 12 in the time left instead. |
 
 ## KL3. Other checks not taken for 2.1.1, recorded as known limitations
 
@@ -172,8 +180,26 @@ of an item's text as ADR-026 settled point 2 reads it, so none is an item's
 `unavailable` decision. Under Q3 they are recorded as not run and listed at
 go. The owner may instead have any of them run before go.
 
+The macOS and Linux columns of section 4 rows 9, 25 and 33 (WP1.2's rows)
+and row 49 (WP1.64's) are parts of those items, so no known-limitation
+section can cover them and they are not here. Their signed-in parts are in
+UA1 (Linux) and UA6 (`codex_review` on macOS and Linux). The macOS and Linux
+columns of rows 9, 25 and 33 with fake keys are open for the owner's ruling
+(OQ1).
+
 | Check | Items it relates to | Why not taken |
 | --- | --- | --- |
-| The macOS and Linux columns of `release-qualification.md` section 4 rows 1, 2, 9, 12, 13, 18, 21, 23, 25, 27, 29, 33, 48, 49, 50, 64 and 74, other than the parts KL1, the unavailable sections above and the real-CLI conformance job (WP1.71, on every OS) cover | WP1.2, WP1.38, WP1.42 and no-item rows | The 2.1.1 qualification runs on macOS and Linux are a packaged smoke, an upgrade and a rollback (on macOS also the owner's sign-in on the macOS test user). These columns were not among them, and Q3 records everything else as not run. |
+| The macOS and Linux columns of `release-qualification.md` section 4 rows 1, 2, 12, 13, 18, 21, 23, 27, 29, 48, 50, 64 and 74, other than the parts KL1 and the real-CLI conformance job (WP1.71, on every OS) cover | WP1.1, WP1.3, WP1.6, WP1.7 and WP1.60 (row 1); WP1.17, WP1.44 and WP1.49 (row 2); WP1.5 and WP1.43 (row 12); WP1.38 and WP1.42 (row 23); no item for the other rows | The 2.1.1 qualification runs on macOS and Linux are a packaged smoke, an upgrade and a rollback (on macOS also the owner's sign-in on the macOS test user). These columns were not among them, and Q3 records everything else as not run. |
 | The four WP1.30 cases that need a Windows process that is not elevated (three in `tests/unit/main/owner-only-folders-real.test.ts`, one in `tests/wp1/codex-realm-isolation.test.ts`) | WP1.30 | The CI runner is elevated, so they skip there by design, and the non-elevated VM run that covers them was not in the 2.1.1 qualification window. Every other WP1.30 case ran on each OS where it applies (`docs/wp1/evidence/ci-matrix.md`). |
 | The rollback rehearsal of the published qualification release (set it to draft, confirm the in-app update list no longer offers it, publish it again unchanged) | none | The agent's permission policy refused the change to a public release, and it was not attempted another way. Its pre-checks passed. |
+
+## OQ1. Open for the owner's ruling: WP1.2's rows 9, 25 and 33 on macOS and Linux, with fake keys
+
+This is a question, not a decision. It is listed at go with the sections
+above.
+
+| What | Open question |
+| --- | --- |
+| The checks | The macOS and Linux columns of `docs/wp1/evidence/release-qualification.md` section 4 rows 9 (launch and resume in the exact account), 25 (Tokenomics reads the managed realms and `~/.codex`) and 33 (resume in the exact realm), run as on Windows: the real CLI, managed accounts signed in with fake keys, and the loopback fake model (`docs/wp1/evidence/real-cli-matrix.md`). |
+| Why it is open | They are parts of WP1.2, which cites `real-cli-matrix.md`, so no known-limitation section can cover them (ADR-026, settled point 2). They need no identity, so they could be taken, and ADR-026's third status never covers a part that could have been taken. They were not among the 2.1.1 qualification runs on macOS and Linux. KL1 lists the Linux columns of rows 9 and 33 for WP1.38 and WP1.42, which do not cite that file; for WP1.2, which does, they belong here. |
+| What the owner decides | Either they are taken before go, on the qualification build, and recorded in `real-cli-matrix.md`; or the owner records a ruling on them in this file. Until one of the two, WP1.2 stays `planned`. |
