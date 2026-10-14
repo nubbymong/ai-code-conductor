@@ -3,7 +3,7 @@
 **Status: confirmed by the owner on 2026-10-14.** At about 02:01 BST on
 2026-10-14, after the owner's sitting on the Windows test VM, the owner was
 asked in chat "may I record every remaining decision at its default?", with
-this list:
+this list, as the coordinating agent recorded it:
 
 > - the checks skipped tonight are recorded as not run (older Codex version
 >   review W8 on 0.153.4, Claude sign-out after restart W11, second-account
@@ -25,12 +25,20 @@ macOS test user, and VM.18 is the release plan's upgrade check. Earlier in
 the same sitting the owner had taken a short path through it, and the checks
 that path left out are the "checks skipped tonight" (section SP1).
 
-So every section of this file is a decision of the owner, as written below:
-UA1 to UA8, AM1 to AM3, KL1 to KL3, KR1, RC1, SP1, WN1, and the rulings on
-OQ1 and OQ2. AM3, KR1, RC1, SP1, UA8 and WN1 were written from that answer,
-each from its line in the list above. The owner's answer did not cover the
-stable go (the plan's Q5): nothing is merged to main or published as stable
-before the owner says go.
+One line of that record is wrong. "OQ1 = take the fake-key macOS and Linux
+columns" was the coordinating agent's paraphrase, not part of the question:
+the question did not name OQ1, and the draft of this file had listed OQ1 as
+an open question with no default. So the answer did not rule OQ1. Section
+OQ1 records what applies instead, which the coordinating agent set from the
+owner's short path after the answer, and told the owner.
+
+So the sections of this file are decisions of the owner, as written below:
+UA1 to UA8, AM1 to AM3, KL1 to KL3, KR1, RC1, SP1, WN1, and the ruling on
+OQ2. AM3, KR1, RC1, SP1, UA8 and WN1 were written from that answer, each
+from its line in the list above. OQ1 is not the owner's ruling, and neither
+are the lines UA1, UA8, KL3 and SP1 gained for it; each of those lines names
+OQ1. The owner's answer did not cover the stable go (the plan's Q5): nothing
+is merged to main or published as stable before the owner says go.
 
 This record supplements `owner-decisions-2026-09-20.md`,
 `owner-decisions-2026-09-26.md` and `owner-decisions-2026-09-27.md`. It
@@ -62,7 +70,7 @@ recorded at the qualified build, as ADR-026 requires. A part not named as
 unavailable here is owed in full. Sections AM1 to AM3, KL1 to KL3, KR1, RC1,
 SP1 and WN1 change acceptance text, record known limitations or record a
 ruling; none of them is an item's `unavailable` decision. OQ1 and OQ2 were
-questions, and record the owner's rulings on them.
+questions: OQ2 records the owner's ruling, and OQ1 what applies in its place.
 
 Where a part could have been taken and the owner ruled it not run (SP1,
 UA8, and the "Not run" rows added on 2026-10-14 to UA1 to UA4, UA6 and UA7),
@@ -78,8 +86,8 @@ and the owner confirmed that they are recorded so.
 | Unavailable | On Linux: a real, signed-in Codex-only session, and with it the Linux column of `docs/wp1/evidence/release-qualification.md` section 4 rows 9, 25 and 33 (WP1.2's rows) in a signed-in session. |
 | Why | No Linux sign-in is taken for the 2.1.1 qualification: no Linux identity is consented (Q3), and Linux sign-in is moved to after stable (Linux is experimental). |
 | Still taken | On the Windows test VM: a fresh Codex-only setup with the real CLI at 0.153.4 and 0.155.1, a fake key and a loopback model, and a real signed-in session with a consented identity. On macOS: the session with the owner's sign-in on the macOS test user. |
-| Not covered here | The macOS and Linux columns of rows 9, 25 and 33 run with fake keys and the loopback fake model, as on Windows. They need no identity, so this section cannot cover them. The owner ruled that they are taken before go (OQ1), and WP1.2 stays `planned` until they are recorded. |
-| Not run (2026-10-14) | On macOS, the session with the owner's sign-in on the macOS test user: the macOS sitting was not run, on the owner's ruling (UA8). The signed-in session on the Windows test VM was taken at the owner's sitting. |
+| Not covered here | The macOS and Linux columns of rows 9, 25 and 33 run with fake keys and the loopback fake model, as on Windows. They need no identity, so the reason above does not cover them (OQ1). The Linux columns were taken, on the Linux test host on 2026-10-14 (`docs/wp1/evidence/real-cli-matrix.md`). The macOS columns were not run: see the next row. |
+| Not run (2026-10-14) | On macOS, the session with the owner's sign-in on the macOS test user: the macOS sitting was not run, on the owner's ruling (UA8). With it, rows 9, 25 and 33 on macOS with fake keys were not run: a host part not run, under UA8, as the coordinating agent applied it (OQ1). The signed-in session on the Windows test VM was taken at the owner's sitting. |
 
 ## UA2. WP1.10: two Codex accounts on macOS and Linux are unavailable
 
@@ -138,10 +146,10 @@ and the owner confirmed that they are recorded so.
 
 | What | Decision |
 | --- | --- |
-| Unavailable | The owner's run on the macOS test user (the sitting's steps M1 to M8), and with it these items' macOS parts: WP1.63, the install of the DMG, first launch, Codex found and classed, a session on a managed account's own folder and a clean Quit, then the upgrade from 2.1.0 (and the macOS rollback leg, which is support for WP1.31); WP1.2, the signed-in Codex-only session on macOS; WP1.20, the browser sign-in on macOS; WP1.64, the owner's Codex sign-in and sign-out on macOS. |
-| Why | The macOS test user was consented and the run could have been taken. The owner ruled it not run: it is among the checks the owner's short path left out (SP1), and the owner confirmed "UA8 for any host part not run" on 2026-10-14. |
-| Still taken | On macOS: the DMG's signature, notarization and Gatekeeper checks, and the CI conformance smoke on the macOS runner (WP1.71). The Windows parts of these items in full. The Linux packaged run is owed in full: this section does not cover it. |
-| How each item uses it | WP1.63 reads `unavailable` on this section once its Linux run is recorded. WP1.2, WP1.20 and WP1.64 keep their own sections (UA1, UA4, UA6) as their decision, and each of those names this macOS part as not run. |
+| Unavailable | The owner's run on the macOS test user (the sitting's steps M1 to M8), and with it these items' macOS parts: WP1.63, the install of the DMG, first launch, Codex found and classed, a session on a managed account's own folder and a clean Quit, then the upgrade from 2.1.0 (and the macOS rollback leg, which is support for WP1.31); WP1.2, the signed-in Codex-only session on macOS, and its rows 9, 25 and 33 on macOS with fake keys (OQ1); WP1.20, the browser sign-in on macOS; WP1.64, the owner's Codex sign-in and sign-out on macOS. |
+| Why | The macOS test user was consented and the run could have been taken. The owner ruled it not run: it is among the checks the owner's short path left out (SP1), and the owner confirmed "UA8 for any host part not run" on 2026-10-14. WP1.2's rows 9, 25 and 33 on macOS with fake keys were not in the question: the coordinating agent recorded them here as a host part not run with that sitting, and told the owner (OQ1). |
+| Still taken | On macOS: the DMG's signature, notarization and Gatekeeper checks, and the CI conformance smoke on the macOS runner (WP1.71). The Windows parts of these items in full. On Linux, the packaged run and WP1.2's rows 9, 25 and 33 with fake keys were taken: this section does not cover Linux. |
+| How each item uses it | WP1.63 reads `unavailable` on this section; its Linux run is recorded (`docs/wp1/evidence/packaged-smoke.md`). WP1.2, WP1.20 and WP1.64 keep their own sections (UA1, UA4, UA6) as their decision, and each of those names this macOS part as not run. |
 
 ## AM1. WP1.73: the release-blocking text, as it reads for 2.1.1
 
@@ -250,9 +258,9 @@ go. The owner may instead have any of them run before go.
 The macOS and Linux columns of section 4 rows 9, 25 and 33 (WP1.2's rows)
 and row 49 (WP1.64's) are parts of those items, so no known-limitation
 section can cover them and they are not here. Their signed-in parts are in
-UA1 (Linux) and UA6 (`codex_review` on macOS and Linux). The macOS and Linux
-columns of rows 9, 25 and 33 with fake keys are taken before go, on the
-owner's ruling (OQ1).
+UA1 (Linux) and UA6 (`codex_review` on macOS and Linux). Of rows 9, 25 and
+33 with fake keys, the Linux columns were taken and the macOS columns were
+not run (OQ1, under UA8).
 
 | Check | Items it relates to | Why not taken |
 | --- | --- | --- |
@@ -270,16 +278,22 @@ known limitation for its Windows half). The owner confirmed it on
 with KL3"), so WP1.30 reads `evidenced` with these four cases as a known
 limitation, and no non-elevated VM run is taken for 2.1.1.
 
-## OQ1. Ruled: WP1.2's rows 9, 25 and 33 on macOS and Linux, with fake keys, are taken before go
+## OQ1. WP1.2's rows 9, 25 and 33 on macOS and Linux, with fake keys: taken on Linux, not run on macOS
 
-This was a question. The owner ruled on 2026-10-14 ("OQ1 = take the fake-key
-macOS and Linux columns"): they are taken before go.
+This was a question, with no default. The owner's answer of 2026-10-14 did
+not rule it: the line "OQ1 = take the fake-key macOS and Linux columns" in
+the list quoted at the top of this file was the coordinating agent's
+paraphrase, not part of the question. What applies was set afterwards by the
+coordinating agent, from the owner's short path (SP1), and the owner was
+told. The owner may object before go.
 
-| What | Question and ruling |
+| What | Question, and what applies |
 | --- | --- |
 | The checks | The macOS and Linux columns of `docs/wp1/evidence/release-qualification.md` section 4 rows 9 (launch and resume in the exact account), 25 (Tokenomics reads the managed realms and `~/.codex`) and 33 (resume in the exact realm), run as on Windows: the real CLI, managed accounts signed in with fake keys, and the loopback fake model (`docs/wp1/evidence/real-cli-matrix.md`). |
 | Why it was open | They are parts of WP1.2, which cites `real-cli-matrix.md`, so no known-limitation section can cover them (ADR-026, settled point 2). They need no identity, so they could be taken, and ADR-026's third status never covers a part that could have been taken. They were not among the 2.1.1 qualification runs on macOS and Linux. KL1 lists the Linux columns of rows 9 and 33 for WP1.38 and WP1.42, which do not cite that file; for WP1.2, which does, they belong here. |
-| What the owner decided | They are taken before go, on the qualification build, and recorded in `real-cli-matrix.md`. Until they are, WP1.2 stays `planned`. |
+| What applies on Linux | Taken, by an agent on the Linux test host on 2026-10-14, on the qualification build, with the real CLI, fake keys and the loopback fake model, and recorded in `docs/wp1/evidence/real-cli-matrix.md`: rows 9 and 33 passed, and row 25's index matched its rule on every session, with F-L1-2 reproduced as AM3 accepts it. |
+| What applies on macOS | Not run. The macOS host consented for the 2.1.1 runs is the macOS test user, and the owner's short path left out the sitting on it (SP1). The coordinating agent recorded these columns as a host part not run, under the owner's "UA8 for any host part not run", and UA8 names them. This is the one part recorded unavailable on the coordinating agent's reading of the owner's answer rather than on the owner's own words. |
+| WP1.2 | Reads `unavailable` on UA1, which names the parts not taken, and cites this file as evidence for AM3. |
 
 ## OQ2. Ruled: WP1.32's Windows part, the app's own Codex install
 
@@ -332,7 +346,7 @@ owner's ruling.
 | `codex_review` asked from a Claude session on Codex 0.153.4 (the sitting's W8, second run) | WP1.64 | UA6 |
 | The disposable Claude account signed out, then still signed out after a relaunch (W11) | WP1.64 | UA6 |
 | The native keyring smoke with fake keys in an interactive logon | WP1.11, WP1.72 | UA3, UA7, KR1 |
-| The sitting on the macOS test user (M1 to M8) | WP1.2, WP1.20, WP1.63, WP1.64, and the macOS rollback leg (support for WP1.31) | UA8 |
+| The sitting on the macOS test user (M1 to M8), and with it, as the coordinating agent applied it (OQ1), WP1.2's rows 9, 25 and 33 on macOS with fake keys | WP1.2, WP1.20, WP1.63, WP1.64, and the macOS rollback leg (support for WP1.31) | UA8 |
 
 WP1.52 is an automated item, so it may never read `unavailable`. Its reason
 owed a VM proof on Codex 0.153.4 and 0.155.1 with the file and keyring

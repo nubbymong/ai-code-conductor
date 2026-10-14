@@ -9,7 +9,8 @@ Every check here is taken at d1525759a7a42d941beeff601af3415fddd8afdd, the squas
 (release run 38409628911), installed from its signed installer, never through the in-app updater (the updater ranks
 this build below 2.1.1-beta.3, so it never offers it to a beta-channel install).
 
-**Status: recorded on Windows.** The install chain below ran on the Windows test VM.
+**Status: recorded on Windows.** The install chain below ran on the Windows test VM. The rollback leg on Linux, which
+supports this record, passed too (at the end of this file); the macOS leg was not run.
 - The rollback to 2.1.0 (a release with no WP1 change) and the re-upgrade from it passed every check.
 - At the 2.1.1-beta.2 and 2.1.1-beta.1 steps every other check passed in the first run, but the profile starts were
   not confirmed. A second run from the same starting point repeated those two steps as the chain makes them (each
@@ -208,6 +209,16 @@ qualification build over it, then 2.1.0 again, with the setup still there and th
 step. It was part of the owner's run on the macOS test user, which was not run, on the owner's ruling of 2026-10-14
 (`docs/wp1/owner-decisions-2026-10-13.md#SP1`, `docs/wp1/owner-decisions-2026-10-13.md#UA8`; `packaged-smoke.md`).
 
-> **PENDING: the rollback leg on Linux (support, not WP1.31's record).** On the Linux test host: 2.1.0, then the
-> qualification build over it, then 2.1.0 again, with the setup still there and the app's data folder hashed after each
-> step (`packaged-smoke.md`). Not run yet.
+**The rollback leg on Linux (support, not WP1.31's record): PASS.** On the Linux test host, 2026-10-14, in the test
+user's graphical session, by an agent (`packaged-smoke.md`, "Linux"):
+- 2.1.0 was run once on a seeded fictional user, and created the second Claude profile through its own IPC. Then the
+  qualification build ran on that data, and then 2.1.0 again. An AppImage is not installed, so each step starts that
+  version's AppImage on the same data folder, and the data folder was hashed before the upgrade, after it and after
+  the rollback.
+- Both versions were started with `--appimage-extract-and-run`, because the host has no FUSE 2, and on X11 through
+  Xwayland, because the session's screen was locked (`packaged-smoke.md`).
+- 2.1.0 again: it started, showed its own "What's new in 2.1", read both profiles signed in with all three configs,
+  and started both profiles, each with its own folder as its home. It quit cleanly with two live sessions.
+- Every credential, config and the transcript was byte-equal from before the upgrade to after the rollback. The only
+  path removed was a Codex temp lock, which Codex itself rotates. 2.1.0 put back its own picker scripts, help and app
+  data, and left 2.1.1's added files in place.

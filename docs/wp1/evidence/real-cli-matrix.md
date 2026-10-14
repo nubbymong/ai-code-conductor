@@ -16,17 +16,16 @@ Every check here was taken at d1525759a7a42d941beeff601af3415fddd8afdd, the squa
 `release/v2.1.1` points at (tree `12310fe71f3706f624e3905f8b92f06f099cdc3f`). The qualification build of that commit is
 the release `v2.1.1-beta` (release run 38409628911).
 
-**Status: recorded on Windows; WP1.2's rows on macOS and Linux with fake keys are still owed.** Recorded below: the VM
-agent's rows, the packaged-build agent's runs of the app's own Codex install (WP1.32), the CI conformance smoke, and
-the owner's sitting on the Windows test VM (2026-10-14). The owner took a short path through that sitting; the checks
-it left out are recorded as not run, on the owner's ruling (`docs/wp1/owner-decisions-2026-10-13.md#SP1`), and the
-owner's run on the macOS test user was not run either (`docs/wp1/owner-decisions-2026-10-13.md#UA8`). The owner ruled
-that rows 9, 25 and 33 on macOS and Linux with fake keys are taken before go
-(`docs/wp1/owner-decisions-2026-10-13.md#OQ1`); until they are, WP1.2 stays `planned`.
+**Status: recorded.** Recorded below: the VM agent's rows, the packaged-build agent's runs of the app's own Codex
+install (WP1.32), the CI conformance smoke, the owner's sitting on the Windows test VM (2026-10-14), and WP1.2's rows
+9, 25 and 33 on the Linux test host with fake keys (2026-10-14). The owner took a short path through that sitting; the
+checks it left out are recorded as not run, on the owner's ruling (`docs/wp1/owner-decisions-2026-10-13.md#SP1`), and
+the owner's run on the macOS test user was not run either (`docs/wp1/owner-decisions-2026-10-13.md#UA8`). WP1.2's rows
+9, 25 and 33 on macOS with fake keys went with that run, so they were not run either (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`).
 
 | Item | Recorded here at the head | Not taken | Status, and the owner's decision (confirmed 2026-10-14) |
 |---|---|---|---|
-| WP1.2 | Rows 2, 9, 25 and 33 on the Windows test VM: the real Codex 0.153.4 and 0.155.1 on both install routes, fake keys, the loopback fake model. A real signed-in Codex session with a consented identity on Windows (the owner's sitting). The mode-matrix cells are in `mode-matrix.md` | Rows 9, 25 and 33 on macOS and Linux with fake keys: owed, taken before go (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`). The session with the owner's sign-in on the macOS test user: not run (`docs/wp1/owner-decisions-2026-10-13.md#UA8`). Row 25's twice-priced turns (F-L1-2) are accepted for 2.1.1 (`docs/wp1/owner-decisions-2026-10-13.md#AM3`) | `planned` until the fake-key rows are recorded. Then unavailable: the Linux signed-in session, `docs/wp1/owner-decisions-2026-10-13.md#UA1` |
+| WP1.2 | Rows 2, 9, 25 and 33 on the Windows test VM: the real Codex 0.153.4 and 0.155.1 on both install routes, fake keys, the loopback fake model. Rows 9, 25 and 33 on the Linux test host: the real Codex 0.155.1 on the packaged qualification build, fake keys, the loopback fake model. A real signed-in Codex session with a consented identity on Windows (the owner's sitting). The mode-matrix cells are in `mode-matrix.md` | Rows 9, 25 and 33 on macOS with fake keys: not run (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`). The session with the owner's sign-in on the macOS test user: not run (`docs/wp1/owner-decisions-2026-10-13.md#UA8`). A signed-in session on Linux. Row 25's twice-priced turns (F-L1-2), found on Windows and reproduced on Linux, are accepted for 2.1.1 (`docs/wp1/owner-decisions-2026-10-13.md#AM3`) | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA1`, which names the parts not taken; row 25 reads as AM3 amends it |
 | WP1.10 | Two managed Codex accounts on Windows, each signed in by the browser sign-in with the same consented identity, both signed in and ready (the owner's sitting) | The run with the second consented identity on Windows: not run, on the owner's short path. The two-account run on macOS and Linux | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA2` |
 | WP1.20 | The browser sign-in into the selected managed account on Windows: accounts A and B, and Sign in again on B (the owner's sitting) | The sign-in on macOS: not run (UA8). A disposable identity on every OS, and the Linux sign-in | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA4` |
 | WP1.32 | The CI conformance job's installs on each OS (WP1.71 below; npm, not through the app). The app's own install ("Run it for me") on the Windows test VM: OpenAI's installer route reached a version class, and counts as the Windows install smoke (`docs/wp1/owner-decisions-2026-10-13.md#OQ2`); the npm route reaches one only once npm's global folder is on the user's PATH, and that cause is proven (below). A real sign-in through the app on Windows (the owner's sitting) | The real installer smoke through the app on macOS and Linux | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA5` |
@@ -187,6 +186,117 @@ Run vm16-r3, on 0.155.1 `codex.exe`:
     ordinal in the dedup key).
   - **Class:** neither severe nor a regression against 2.1.0. It is recorded as a known limitation in
     `release-qualification.md` section 3.
+
+## WP1.2's rows 9, 25 and 33 on Linux (agent, 2026-10-14)
+
+**Result, judged as the Windows rows above were:**
+- **Row 9: PASS.** Each tab was saved with its own conversation at the quit. After the relaunch it ran
+  `resume <its id>` directly in its own account's folder, and its second prompt landed in that account's one rollout.
+- **Row 33: PASS.** Each resume list showed only its own conversation, on one shared project folder.
+- **Row 25: the index matched its own per-turn rule on every session.** No rollout on this host repeats a usage
+  event, so a labelled synthetic copy that repeats one was added, and it was priced twice. So F-L1-2 reproduces on
+  Linux, and for that shape the row's "each turn priced once" fails, as on Windows. It is accepted for 2.1.1
+  (`docs/wp1/owner-decisions-2026-10-13.md#AM3`).
+- **Class:** nothing severe, and no regression against 2.1.0.
+
+### How the rows ran, and how that differs from Windows
+
+- **Who and where:** an agent (Claude Code) on the Linux test host (Rocky Linux 10.2, x86_64), as its fresh standard
+  test user, over key SSH, inside the graphical session the owner had logged in (`packaged-smoke.md`, "Linux").
+  2026-10-14, 01:57 to 02:19 UTC. No administrator rights were used, no login, lock or password setting was changed,
+  and no real sign-in was made.
+- **The app:** the packaged qualification build (`AI-Code-Conductor-2.1.1-linux-x86_64.AppImage`, its SHA-256
+  checked before each of the 3 starts), driven over a loopback DevTools port by a client on the host. On Windows the
+  rows ran on the dev build under Playwright. The page steps are ports of the Windows spec's steps and of the tracked
+  e2e helpers. The terminals used the DOM renderer, as the helpers set it, so a tab's rows could be read.
+- **The environment, as in `packaged-smoke.md`:** `--appimage-extract-and-run` (no FUSE 2); X11 through Xwayland
+  (`--ozone-platform=x11`), because the session's screen was locked; and, as on Windows, a dead proxy for everything
+  but loopback.
+- **Real Codex:** 0.155.1 only, on its one install route there: the npm package's own binary, linked onto the test
+  user's PATH. 0.153.4 is not on the host, and the Windows routes (`codex.cmd` and `codex.exe`) do not exist on
+  Linux.
+- **The fake model:** the same loopback fake model as on Windows (the same file). Each account folder's
+  `config.toml` pointed at it with the Windows spec's text. It received exactly 5 requests: the one that made this
+  computer's rollout (below) and the four prompts of row 9. Nothing else reached it. A program that ignores
+  the proxy settings would not be caught by this.
+- **Managed accounts A and B** were made through the app: Settings > Accounts > Add Codex account > Use an API key,
+  with fake keys. The app ran the real Codex sign-in in each account's folder (its exact command line was not
+  captured), and `codex login status` there read "Logged in using an API key". On Windows the accounts were written
+  with the app's registry transitions instead. The two saved configs, one per account, on the same project folder,
+  were added by file while the app was closed.
+- **First screens** were answered by plan 9.2's rules: trust ("1. Yes, continue"), then hooks ("Continue without
+  trusting"). Codex shows no sandbox screen on Linux.
+
+### Row 9 on Linux: launch and resume in the exact account
+
+1. Each tab started `codex` with `CODEX_HOME` set to its own account's folder and the project as its working folder,
+   both read from the process. Its first screens were answered, and one prompt each was answered by the fake model.
+2. The app was quit with the Close dialog's "Save sessions" ("You have 2 active sessions..."). The saved state then
+   held each tab with its own account and its own conversation id.
+3. The app was relaunched, and Resume previous sessions, which listed both tabs, was answered "Resume". The app ran
+   `codex resume <A's id>` in A's folder and `codex resume <B's id>` in B's (the processes' arguments and
+   environment, and the app log). Codex showed its hooks screen again, because "Continue without trusting" is not
+   remembered; that is Codex's own behaviour, on Windows too, and it was answered by the same rule. Each tab then
+   showed its own first prompt and nothing of the other's: not its prompt, its tab name or its conversation id.
+4. One more prompt was sent in each. Each landed in its own account's one original rollout: A's holds A's two prompts
+   and B's holds B's, and neither holds the other's.
+
+- **`config.toml`** (both accounts): unchanged from the first quit through the relaunch, the resume, the second
+  prompts and the resume list. It was not hashed during the first run; read afterwards, its only change from the
+  seeded text is Codex's own trust entry for the project, from the first screen's answer.
+- **When B's conversation was claimed:** it was absent from the saved state 20 seconds after B's first turn, and
+  present in the save at the quit, which is the path this row takes.
+- **F-L1-1:** its letter-case form cannot arise on Linux's case-sensitive file system, and did not: both tabs were
+  claimed and resumed directly. The claim still matches the recorded folder as an exact string, so a project folder
+  reached through a symbolic link might miss it the same way. That was not tested: the project here is a real folder.
+
+### Row 33 on Linux: resume in the exact realm
+
+After the relaunch, in each tab: Restart, then "Restart and pick a conversation". Codex's resume list for the shared
+project folder was then read.
+
+| Tab | Its list |
+|---|---|
+| B | 1 conversation: B's (its first prompt); nothing of A's |
+| A | 1 conversation: A's (its first prompt); nothing of B's |
+
+"Nothing of the other's" means: neither its tab name, nor either of its prompts, nor its conversation id. Both
+conversations were in the same project folder, so only the account separated them.
+
+### Row 25 on Linux: Tokenomics reads the managed realms and `~/.codex`
+
+- The test user never ran a real Codex, so there were no real rollouts to read. This computer's `~/.codex` held one
+  rollout, made by the real CLI (`codex exec`) against the fake model with a fake key. On Windows, 6 real rollouts
+  were copied in.
+- `tokenomics.indexStatus()` reported the first index complete: 3 of 3 files, none failed. The expected figures were
+  recomputed from each rollout's own bytes, with the same rule as on Windows.
+
+| Session | Account key | Turns (index / rollout) | Input, cached, output: index = rollout | One row |
+|---|---|---|---|---|
+| account A | `codex:<A's id>` | 2 / 2 | yes (152,022 / 0 / 80) | yes |
+| account B | `codex:<B's id>` | 2 / 2 | yes (154,022 / 0 / 80) | yes |
+| this computer's `~/.codex` | `codex:external` | 1 / 1 | yes (5,011 / 0 / 40) | yes |
+
+- Each session was listed once, under its own key. An account's conversation was never counted as this computer's,
+  nor the reverse. Every model had a price (0 unpriced tokens). A and B have the same figures as on Windows.
+- **F-L1-2 reproduces.** A labelled synthetic copy of the `~/.codex` rollout was added, under a made-up id, with its
+  one usage (`token_count`) event written twice: the shape F-L1-2 found in a real Windows rollout. The index listed it
+  once, under `codex:external`, with 2 turns and 10,022 / 0 / 80, against the rollout's own cumulative total of 5,011
+  in and 40 out. So the repeated event was priced again: the same rule as on Windows and in 2.1.0.
+
+**Observation.** At the second launch the "Hello, Codex" showcase was open while the configs were launched. It did not
+block them.
+
+**State left.** The app quit cleanly with both sessions, ending its Vision browser at every quit; the fake model was
+stopped by its own process id, checked first; no process or port of the run was left. The run's files were moved
+aside, and the test user's folders then listed the same entries as before the run, apart from the leftovers
+`packaged-smoke.md` names under "State left".
+
+**Commands:** the AppImage started after its hash check with `--appimage-extract-and-run`, `--ozone-platform=x11`
+and a loopback DevTools port; the app's own pages driven over that port; `codex login status` per account folder;
+`codex exec` with a fake key for this computer's rollout; each Codex process's arguments, environment and working
+folder read from `/proc`; `tokenomics.indexStatus()`, `tokenomics.sessions({ provider: 'codex' })` and
+`sessionDetail(id)` read in the page.
 
 ## WP1.71: the conformance smoke on the minimum, pinned and release-candidate CLI, per OS
 
@@ -532,4 +642,5 @@ Every run:
 - put the registry PATH back byte-equal;
 - left the checkout's status unchanged.
 
-Not run in these rows: macOS and Linux, the packaged build, and a real sign-in (the owner's sitting, above).
+Not run in these rows: macOS and Linux (WP1.2's rows 9, 25 and 33 on Linux have their own section above), the packaged
+build, and a real sign-in (the owner's sitting, above).

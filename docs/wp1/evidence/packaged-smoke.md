@@ -4,12 +4,12 @@ This file is the evidence for WP1.63: a clean install of the signed release buil
 found and classed, a session on a managed account's own `CODEX_HOME`, and a clean Quit. It covers Windows, macOS and
 Linux.
 
-**Status: partly recorded.** Recorded below: the Windows smoke, the Windows upgrade from 2.1.0, the Windows checks of
-the owner's sitting (2026-10-14: the console check, which settles the upgrade's Vision row for an interactive logon,
-and the window buttons), and the macOS signature checks. The owner's run on the macOS test user (install, first launch,
-Codex, upgrade and rollback) was not run, on the owner's ruling: that part of WP1.63 is unavailable,
-`docs/wp1/owner-decisions-2026-10-13.md#UA8`. The Linux run is still a PENDING block. WP1.63 stays `planned` until it
-is recorded.
+**Status: recorded.** Recorded below: the Windows smoke, the Windows upgrade from 2.1.0, the Windows checks of the
+owner's sitting (2026-10-14: the console check, which settles the upgrade's Vision row for an interactive logon, and
+the window buttons), the macOS signature checks, and the Linux run (2026-10-14: a clean run of the AppImage, then the
+upgrade from 2.1.0 and the rollback to it). The owner's run on the macOS test user (install, first launch, Codex,
+upgrade and rollback) was not run, on the owner's ruling: that part of WP1.63 is unavailable, and WP1.63 reads
+`unavailable` on `docs/wp1/owner-decisions-2026-10-13.md#UA8`.
 
 boundHead: d1525759a7a42d941beeff601af3415fddd8afdd (PR #644's squash merge on `beta`; `release/v2.1.1` points at it).
 
@@ -225,8 +225,106 @@ are what was taken.
   `libfuse.so.2`. The run below therefore starts both versions with `--appimage-extract-and-run`, and records that it
   did. `README.md` (Requirements) and `release-qualification.md` section 3 carry the known issue.
 
-> **PENDING: the run in the test user's graphical session.** After the owner logs the test user in once at the
-> console: a clean run of 2.1.1 (the window opens, typing works, Settings opens, Codex is detected and classed, a
-> session on a managed account runs on its own `CODEX_HOME`, Quit is clean); then the data moved aside, 2.1.0 run with
-> seeded fixtures, 2.1.1 on the same data (hashes, What's New, a profile starts) and 2.1.0 again (rollback). Then the
-> test user is removed. Not run yet.
+### The run in the test user's graphical session (agent, 2026-10-14)
+
+**Where and how it ran.**
+- The owner logged the test user in once at the console. The agent then worked inside that user's own graphical
+  session (GNOME on Wayland), over key SSH as that user, from 01:10 to 01:34 UTC. It started no session of its own,
+  used no administrator rights, and changed no login, lock or password setting.
+- The CLIs were the ones staged above: Codex 0.155.1 and the stand-in Claude Code. No real sign-in: the Codex account
+  was signed in with a fake API key.
+- The AppImage's SHA-256 was checked before every start. The app was started with a loopback DevTools port and driven
+  over it, by a client running on the test host itself.
+
+**How it differs from the plan.** Every difference comes from the test host's state, none from the build:
+- **FUSE 2.** Every start, of both versions, used `--appimage-extract-and-run` (above). The AppImage removed its
+  extraction folder at every quit.
+- **The locked screen.** GNOME's idle lock had locked the session after the owner left the console, before the run
+  began. The agent did not unlock it and changed no lock setting. While the screen is locked, the Wayland compositor
+  gives the window no frames, so the terminal view never mounts and no session can start. So:
+  - the first clean run used native Wayland. It covers the window, the first run, Settings, Codex and Claude Code
+    found, the Codex account, and Quit;
+  - the sessions and the typing, and every start in the upgrade and the rollback, ran on X11 through Xwayland
+    (`--ozone-platform=x11`), where frames run. Both versions used it for the upgrade and the rollback, so that
+    comparison is like for like.
+- **Typing was injected through the DevTools port**, not typed on a keyboard: `Input.insertText` into a Settings field,
+  and key events into a session's terminal. This proves the path from the page to the session's terminal. It does not
+  exercise the desktop's own keyboard path, and typing into a terminal under native Wayland was not tested.
+- **No screenshots.** A locked screen gives nothing to capture. The window evidence is DevTools reads of the page.
+- **The test user was not removed.** That needs administrator rights, which the run did not use. Its files from the
+  run were moved aside instead ("State left", below).
+
+#### A clean run of 2.1.1
+
+| Check | Result |
+|---|---|
+| Window | **PASS** (native Wayland). The page loads and is visible, 1280 by 768 inside; the GPU process runs on Wayland; Electron 44.5.1; the footer reads `v2.1.1`. |
+| First run | **PASS.** The storage folders page (its defaults under `~/.ai-code-conductor`; Continue), Claude CLI Setup, the onboarding with both assistants chosen, then the workbench and the tour. On Claude CLI Setup, "Skip & Continue" stayed disabled for about 80 s, so the walk used "Skip for now" (see the observations). |
+| Codex detected, with its version class | **PASS.** Set up Codex read "Codex 0.155.1 found" and "Version supported"; Settings > Accounts reads "Codex 0.155.1 - ready". |
+| Claude Code detected | **PASS.** The stand-in, found through a login shell (`command -v claude`): "Claude Code 2.1.296 - ready". |
+| Settings opens | **PASS.** The Settings tab opened, with Accounts. A value typed into Local Machine Name (injected, above) read back. |
+| A managed account's session runs on its own `CODEX_HOME` | **PASS** (Xwayland). Add Codex account > Use an API key (fake key) made the account's own folder under `codex-realms/`, with `auth.json` (mode 600). A Codex config on that account, added by file while the app was closed, started Codex 0.155.1 with `CODEX_HOME` set to that folder and the project as its working folder, both read from the process. Codex's state files appeared in that folder, and `~/.codex` was never created. |
+| A Claude session starts (stand-in) | **PASS** (Xwayland). The stand-in started in the project folder with the app's `--settings`, `--mcp-config` and `--plugin-dir` arguments and `CCC_CONFIG_DIR` set. Ctrl+C sent to its terminal ended it; the stand-in ends only on that byte or at the end of its input, so the keys reached the session. |
+| Quit leaves no process | **PASS.** Three quits. Two showed "You have 2 active sessions..." and were answered "Close sessions", but neither had two live sessions: on the locked screen the first had none, and in the second only Codex was live (Ctrl+C had ended the stand-in). A quit with two live sessions is in the upgrade below. After each quit: no app, Codex, stand-in or browser process; ports 9222, 19333 and 19334 free; the extraction folder removed. |
+| Vision | **PASS.** The app started a headless Chromium on loopback port 9222, connected to it, and ended it at every quit (`[vision] Ended the app-started browser`). 2.1.0 also ends it. |
+
+#### The upgrade from 2.1.0, then the rollback to it (on the same data)
+
+**Setup.**
+1. The clean run's data was moved aside.
+2. A 2.1.0 user was seeded by file (fictional, never a real sign-in): 2.1.0's settings and app data; two configs, a
+   local Claude config and an SSH config to a documentation address, never started; a saved transcript; stand-in Claude
+   credentials and `.claude.json`; and a stand-in Codex `auth.json` in the home folder.
+3. 2.1.0 was run once. It walked its storage page, Claude CLI Setup and the GitHub notice; a setting was changed
+   through Settings; and 2.1.0 created a second Claude account profile through its own IPC. It was then quit.
+4. The second profile's stand-in credentials and a third config, bound to it, were written by file, and every file
+   was hashed.
+
+An AppImage is not installed: each step starts that version's AppImage on the same data folder. So there is no
+installer, uninstall entry or uninstaller to check, as there is on Windows.
+
+| Check | 2.1.1 on 2.1.0's data | 2.1.0 again (rollback) |
+|---|---|---|
+| Starts, version shown | **PASS.** Footer `v2.1.1` | **PASS.** Footer `v2.1.0` |
+| What's New | **PASS** on the owner's ruling (`docs/wp1/owner-decisions-2026-10-13.md#WN1`): "What's new since 2.1.0", with "13 things worth knowing, in one line each, and 5 of them have a page of their own, just behind this one.", the same words as on Windows | Its own "What's new in 2.1" |
+| The one-time Codex question | **PASS.** After What's New and the GitHub notice, "Do you use Codex?" was shown once and answered No: the same order as on Windows | Not asked (2.1.0 has no such question) |
+| Both profiles read signed in, all three configs listed | **PASS.** Each profile's credential state has its address and no "credentials missing". The second profile reads "(setup incomplete)" in the account list, as on Windows (a fixture effect, "Upgrade from 2.1.0" above) | **PASS** |
+| Both profiles start | **PASS.** The Start session dialog preselected each config's own account. The stand-in started in the project with each profile's own folder as its home, and each session card names its profile's account | **PASS.** Each with its own folder as its home |
+| User data and credentials | **PASS.** No file was removed. Byte-equal: the stand-in Claude credentials and `.claude.json`, the Codex `auth.json`, the transcript, `configs.json`, `window-state.json`, and the second profile's credentials and `.claude.json` | **PASS.** The same files are still byte-equal with those before the upgrade. The only path removed is a Codex temp lock, which Codex itself rotates |
+| Quit | **PASS.** With two live sessions: "Gracefully exiting 2 sessions ... All sessions exited", and no process left | **PASS.** The same |
+
+The hashes are SHA-256 (the first 16 hex digits) with the size, taken before the upgrade, after it and after the
+rollback.
+
+**What changes between versions, by design.**
+- 2.1.1 rewrites `settings.json`, `app-meta.json`, `github-config.json`, `usage-tracking.json`, the help docs, the
+  databases' journal files and the logs, and the shell history in both profile folders changes. It rewrites the 3
+  resume-picker scripts to its own bytes.
+- 2.1.1 adds its Codex hook scripts (`ccc-codex-hook.js` and `.cmd`), `providers/registry.json`,
+  `conductor-secret.json`, `openai-model-pricing.json`, `help/AGENTS.md` and `help/.git`, the `canvas-plugin` folder
+  (2.1.0 also builds it when it starts a session), and the second profile's `identity` copies of its sign-in files.
+- On the rollback, 2.1.0 puts back its own picker scripts, help, app data and `github-config.json`. It leaves 2.1.1's
+  added files in place, and the canvas plugin they share has the same bytes in both. `settings.json` keeps 2.1.1's
+  rewrite, and 2.1.0 runs on it.
+
+#### Observations (neither severe nor a regression against 2.1.0)
+
+- On Claude CLI Setup, "Skip & Continue" waits for the page's own setup terminal to start. On the locked screen that
+  terminal never started, so the button stayed disabled. 2.1.0 has the same rule. On Windows the button was enabled.
+- Both versions log `Error occurred in handler for 'sentinel:getState': No handler registered` once in every run, and
+  Node's DEP0190 warning (a shell with arguments) in one run of each. `gh` is not installed on the test host, and the
+  app logs that its check of it failed.
+- The runs created these in the test user's home folder: `~/.config/claude-conductor` (Electron's user data folder,
+  named after the package name, which stays frozen), `~/.config/chromium` (crash reports of Vision's Chromium),
+  `~/.local/share/pki`, an empty `~/.local/share/applications/mimeapps.list` and `~/.cache/fontconfig`. The last three
+  appeared at the first start of 2.1.1; whether 2.1.0 alone makes them was not seen, because they were still there
+  when 2.1.0 ran.
+- Vision's Chromium leaves small singleton folders and files in `/tmp` (`org.chromium.Chromium.*`). 2.1.0 leaves the
+  same.
+- Claude CLI Setup runs `claude` in a login shell, and that shell adds a line to the test user's shell history. 2.1.0
+  does the same.
+
+**State left.** Every file of the run was moved aside, by its literal path. The test user's `~/.config`,
+`~/.local/share` and `~/.cache` then listed the same entries as before the run; no process or port of the run was
+left; and both AppImages' hashes were unchanged. Not cleared: Vision's `/tmp` leftovers and the shell-history lines,
+which go when the test user is removed. The graphical session stayed logged in: it was never unlocked or logged out.
