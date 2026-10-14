@@ -62,9 +62,8 @@ Reviews now:
 - **Square brackets in a Windows session folder name** could start Claude Code, or the resume list, in a different folder, because the launch line read the brackets as a pattern. The launch now uses the folder name literally. This affected Windows releases up to 2.1.1-beta.2.
 - **One more Claude Code npm launch case was hardened.**
 - **SSH remote setup could reset the host's Claude Code `settings.json`.** This affected 1.3.0 through 2.1.1-beta.2. A file the setup script could not parse as plain JSON was replaced with `{}` on the next connect. That happened to a file with a byte-order mark, a UTF-16 file (as Windows PowerShell writes) or one with a syntax slip. It silently removed the user's remote settings, including permission deny rules and sandbox settings. The file is now:
-  - decoded the way Claude Code decodes it;
-  - rewritten only to remove keys the app itself added earlier, with the rest of its content unchanged;
-  - otherwise left untouched.
+  - decoded the way Claude Code decodes it, and left as it is when it cannot be parsed;
+  - otherwise cleaned of the status-line and MCP server entries the app recognises by name (a status line whose command names `conductor-ssh-statusline`, and MCP servers named `conductor` or `conductor-vision`), and rewritten only when one was removed.
 
   Users who rely on deny rules or sandboxing on an SSH host should check that file on the host.
 
