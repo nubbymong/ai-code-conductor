@@ -1,7 +1,7 @@
 {
   "schema": "wp1-traceability/1",
   "phase": "gate0",
-  "boundHead": null,
+  "boundHead": "d1525759a7a42d941beeff601af3415fddd8afdd",
   "note": "Gate 0 plan: every WP1.* item maps to the tests/evidence that will prove it and to the CURRENT base tests that protect the behaviour today. `status` flips to `evidenced` (with digest-bound evidenceRecords for docs/wp1/evidence artifacts: artifact, sha256, head (the 40-hex commit the evidence was taken at, which the artifact names in its text; at the candidate phase every head must equal boundHead), actor, at, commands) when the artifact exists. Where a part of the evidence cannot be taken (a second identity, or a consent the owner does not give), one of the eight items ./binding.ts names in UNAVAILABLE_ELIGIBLE may read `unavailable` instead, with `unavailable`: { reason (20 characters or more), decision (docs/wp1/owner-decisions-YYYY-MM-DD.md#<ID>, whose section names the item and says unavailable) }; it keeps every rule of `evidenced`, and one of its docs/wp1/evidence records cites the decision (ADR-026). `evidenced` means every part is recorded (ADR-026, settled point 2). A real-cli or packaged item's parts are taken on every OS its text, or else its release plan, gives it: a part not taken makes a listed item `unavailable` and leaves WP1.71 `planned`. An automated, ci or document item's parts are what its tests prove in CI at boundHead on the three OS runners and what each evidence file it cites records; a release-plan check that no cited file records is a known limitation in docs/wp1/evidence/release-qualification.md section 3, not a part of the item. An item whose own text names a part its tests and records do not prove stays `planned` unless an owner-decision section it cites amends its scope. ./phase.ts derives the candidate phase and traceability.test.ts enforces completeness there: nothing planned. Non-automated items carry the reason automation is not safe or possible (design 16.1).",
   "items": [
     {
@@ -15,9 +15,25 @@
       "evidence": [
         "docs/wp1/evidence/mode-matrix.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
-      "baseCoverage": "new capability, none on base"
+      "baseCoverage": "new capability, none on base",
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/mode-matrix.md",
+          "sha256": "4389191e59a688b4e64677c6483dce11e22c12954c4ecf1e0709e81967e2d8f1",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the VM operator agent (Claude Code), on the Windows test VM, detached runner",
+          "at": "2026-10-13T07:13:24-07:00",
+          "commands": [
+            "git checkout --detach d1525759a7a42d941beeff601af3415fddd8afdd",
+            "npm run build",
+            "npx playwright test --reporter=line,json <the 27 specs of git ls-files tests/e2e/*.spec.ts>",
+            "npx playwright test --reporter=line,json tests/e2e/onboarding-provider-select.spec.ts (alone, registry PATH adjusted for the run)"
+          ],
+          "runId": "e2e-d1525759"
+        }
+      ]
     },
     {
       "id": "WP1.2",
@@ -32,12 +48,41 @@
         "tests/e2e/codex-session-creation.spec.ts"
       ],
       "evidence": [
-        "docs/wp1/evidence/real-cli-matrix.md"
+        "docs/wp1/evidence/real-cli-matrix.md",
+        "docs/wp1/owner-decisions-2026-10-13.md"
       ],
-      "status": "planned",
+      "status": "unavailable",
       "reason": "launching a genuine Codex session needs the real CLI and a disposable signed-in realm; fakes prove the contract, the real run is a recorded release-qualification gate",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "unavailable": {
+        "reason": "A real, signed-in Codex-only session on Linux, and with it rows 9, 25 and 33 there signed in (no Linux identity is consented); on macOS the signed-in session and rows 9, 25 and 33 with fake keys, not run (the owner's short path left out the macOS test user's sitting: UA8; the owner ruled on 2026-10-14 that the fake-key rows go with it: OQ1); taken: rows 2, 9, 25 and 33 on Windows on Codex 0.153.4 and 0.155.1 with fake keys, rows 9, 25 and 33 on Linux with fake keys on the packaged build, and a real signed-in session on Windows; row 25 reads as AM3 amends it (docs/wp1/evidence/real-cli-matrix.md)",
+        "decision": "docs/wp1/owner-decisions-2026-10-13.md#UA1"
+      },
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/real-cli-matrix.md",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
+          "at": "2026-10-14T02:16:40Z",
+          "commands": [
+            "npx playwright test --reporter=line,json tests/e2e/<VM-local real-CLI spec> (staged for the run, moved out after)",
+            "codex login --with-api-key (fake key on stdin) and codex login status, per throwaway realm",
+            "gh workflow run ci.yml --ref release/v2.1.1 -f codex_rc_version=0.156.1",
+            "gh run download 38409643796",
+            "the app's Set up Codex, Run it for me on the npm recipe (two runs) and on OpenAI's installer recipe (once), driven over a loopback DevTools port in a fresh install of the qualification build",
+            "the cause test: the user Path saved with its kind, npm's global folder appended, the app started again, the saved value written back and read equal",
+            "codex.cmd --version; the user and machine Path read from the registry; npm.cmd uninstall -g @openai/codex",
+            "the owner's sitting: Settings > Accounts > Add Codex account > Sign in with ChatGPT (twice), Make reviewer, a Codex session prompt, Sign in to the disposable Claude account, a Claude session asking Codex for a review, a printed link clicked, Sign in again (twice), each by the owner; the app's state read over the loopback DevTools port",
+            "codex login status and codex logout with CODEX_HOME set to each of the account's two sign-in folders (the staged proof script, run by the owner)",
+            "the Linux AppImage, hash-checked before each start, started with --appimage-extract-and-run --ozone-platform=x11 and a loopback DevTools port; the app's pages driven over that port (Add Codex account > Use an API key twice, two configs launched, Save sessions, Resume, Restart and pick a conversation)",
+            "codex login status per account folder; codex exec with a fake key against the loopback fake model; each Codex process's arguments, environment and working folder read from /proc",
+            "tokenomics.indexStatus(), tokenomics.sessions({ provider: 'codex' }) and sessionDetail(id) read in the page; a labelled synthetic rollout for the F-L1-2 probe"
+          ],
+          "runId": "38409643796"
+        }
+      ]
     },
     {
       "id": "WP1.3",
@@ -49,7 +94,7 @@
         "tests/e2e/onboarding-provider-select.spec.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -66,7 +111,7 @@
       "evidence": [
         "docs/wp1/baseline-2026-09-19.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/account-profiles.test.ts",
         "tests/unit/account-profiles-primary.test.ts",
@@ -89,7 +134,7 @@
       "evidence": [
         "docs/wp1/owner-decisions-2026-09-26.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -101,7 +146,7 @@
         "tests/unit/renderer/accounts-surface.test.tsx"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -114,7 +159,7 @@
         "tests/wp1/fault-isolation.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -126,7 +171,7 @@
         "tests/wp1/migration-claude.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/account-profiles-primary.test.ts",
         "tests/unit/main/account-profiles-set-active.test.ts",
@@ -141,7 +186,7 @@
         "tests/wp1/migration-claude.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/account-profiles-identity.test.ts",
         "tests/unit/account-profiles-heal-names.test.ts"
@@ -157,10 +202,38 @@
       "evidence": [
         "docs/wp1/evidence/real-cli-matrix.md"
       ],
-      "status": "planned",
+      "status": "unavailable",
       "reason": "two genuine logins into distinct homes need real provider credentials; automated with disposable identities where CI can hold them, otherwise a controlled manual gate with evidence",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "unavailable": {
+        "reason": "The two-account run with a second identity on macOS and Linux (the second identity is consented for the Windows test VM only), and on Windows the run with the second consented identity, which the owner's short path of 2026-10-14 left out; taken on Windows: two managed accounts signed in by the browser sign-in with the same consented identity, both signed in and ready (docs/wp1/evidence/real-cli-matrix.md)",
+        "decision": "docs/wp1/owner-decisions-2026-10-13.md#UA2"
+      },
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/real-cli-matrix.md",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
+          "at": "2026-10-14T02:16:40Z",
+          "commands": [
+            "npx playwright test --reporter=line,json tests/e2e/<VM-local real-CLI spec> (staged for the run, moved out after)",
+            "codex login --with-api-key (fake key on stdin) and codex login status, per throwaway realm",
+            "gh workflow run ci.yml --ref release/v2.1.1 -f codex_rc_version=0.156.1",
+            "gh run download 38409643796",
+            "the app's Set up Codex, Run it for me on the npm recipe (two runs) and on OpenAI's installer recipe (once), driven over a loopback DevTools port in a fresh install of the qualification build",
+            "the cause test: the user Path saved with its kind, npm's global folder appended, the app started again, the saved value written back and read equal",
+            "codex.cmd --version; the user and machine Path read from the registry; npm.cmd uninstall -g @openai/codex",
+            "the owner's sitting: Settings > Accounts > Add Codex account > Sign in with ChatGPT (twice), Make reviewer, a Codex session prompt, Sign in to the disposable Claude account, a Claude session asking Codex for a review, a printed link clicked, Sign in again (twice), each by the owner; the app's state read over the loopback DevTools port",
+            "codex login status and codex logout with CODEX_HOME set to each of the account's two sign-in folders (the staged proof script, run by the owner)",
+            "the Linux AppImage, hash-checked before each start, started with --appimage-extract-and-run --ozone-platform=x11 and a loopback DevTools port; the app's pages driven over that port (Add Codex account > Use an API key twice, two configs launched, Save sessions, Resume, Restart and pick a conversation)",
+            "codex login status per account folder; codex exec with a fake key against the loopback fake model; each Codex process's arguments, environment and working folder read from /proc",
+            "tokenomics.indexStatus(), tokenomics.sessions({ provider: 'codex' }) and sessionDetail(id) read in the page; a labelled synthetic rollout for the F-L1-2 probe"
+          ],
+          "runId": "38409643796"
+        }
+      ]
     },
     {
       "id": "WP1.11",
@@ -173,10 +246,29 @@
       "evidence": [
         "docs/wp1/evidence/keyring-smoke.md"
       ],
-      "status": "planned",
+      "status": "unavailable",
       "reason": "OS keyring behaviour is native and per-runner identity; the pinned-source contract test is automated, the native smoke runs on an ephemeral identity",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "unavailable": {
+        "reason": "The native keyring smoke: on macOS and Linux with a second identity (consented for Windows only), and on Windows, where the owner ruled the keyring store out of 2.1.1's scope on 2026-10-14 (2.1.1 sets no credential store) and the short path left the smoke out; taken: the pinned-source contract test and the store check (docs/wp1/evidence/keyring-smoke.md)",
+        "decision": "docs/wp1/owner-decisions-2026-10-13.md#UA3"
+      },
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/keyring-smoke.md",
+          "sha256": "179b5aad74abeb5c25d44fae22482088d7cc7146104c5e07d2445ca247eba961",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the packaged-build agent (Claude Code), on the Windows test VM, standard test account; the store observed at the owner's sitting (2026-10-14) by the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port",
+          "at": "2026-10-14T00:52:11Z",
+          "commands": [
+            "git grep cli_auth_credentials_store d1525759a7a42d941beeff601af3415fddd8afdd -- src/",
+            "codex.exe -c cli_auth_credentials_store=\"bogus\" login status; codex.exe login --with-api-key; codex.exe -c cli_auth_credentials_store=\"keyring\" login --with-api-key (throwaway CODEX_HOME, fake key)",
+            "cmdkey /list (before and after)",
+            "Test-Path auth.json in each of the account's two sign-in folders, around codex logout (the staged proof script, run by the owner)"
+          ]
+        }
+      ]
     },
     {
       "id": "WP1.12",
@@ -186,7 +278,7 @@
         "tests/wp1/identity-registry.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -198,7 +290,7 @@
         "tests/wp1/identity-registry.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -210,7 +302,7 @@
         "tests/wp1/identity-registry.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -223,7 +315,7 @@
         "tests/unit/renderer/accounts-surface.test.tsx"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/main/account-profiles-set-active.test.ts",
         "tests/unit/renderer/accounts-panel.test.tsx"
@@ -240,7 +332,7 @@
         "tests/wp1/conversation-carry-service.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/profile-consumers.test.ts",
         "tests/unit/main/pty-spawn-waits-for-refresh.test.ts",
@@ -257,7 +349,7 @@
         "tests/wp1/claude-reviewer.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/main/claude-cli-probe.test.ts",
         "tests/unit/main/login-shell.test.ts",
@@ -275,7 +367,7 @@
         "tests/unit/renderer/providers-card-install-commands.test.tsx"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -285,10 +377,14 @@
       "kind": "automated",
       "tests": [
         "tests/wp1/install-recipes.test.ts",
-        "tests/wp1/fake-cli.test.ts"
+        "tests/unit/renderer/onboarding-codex-setup.test.tsx",
+        "tests/unit/renderer/providers-card-install-commands.test.tsx",
+        "tests/unit/renderer/setup-cli-install.test.tsx"
       ],
-      "evidence": [],
-      "status": "planned",
+      "evidence": [
+        "docs/wp1/owner-decisions-2026-10-13.md"
+      ],
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/renderer/setup-cli-hard-stop.test.tsx"
       ]
@@ -303,10 +399,38 @@
       "evidence": [
         "docs/wp1/evidence/real-cli-matrix.md"
       ],
-      "status": "planned",
+      "status": "unavailable",
       "reason": "browser sign-in requires an interactive provider web flow; controlled manual gate with disposable identity and recorded non-secret result",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "unavailable": {
+        "reason": "A disposable identity for the browser sign-in on every OS and the Linux sign-in (none consented), and the macOS sign-in, not run on the owner's ruling of 2026-10-14 (UA8); taken on Windows: the browser sign-in into two managed accounts and Sign in again, with the owner's consented identity (docs/wp1/evidence/real-cli-matrix.md)",
+        "decision": "docs/wp1/owner-decisions-2026-10-13.md#UA4"
+      },
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/real-cli-matrix.md",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
+          "at": "2026-10-14T02:16:40Z",
+          "commands": [
+            "npx playwright test --reporter=line,json tests/e2e/<VM-local real-CLI spec> (staged for the run, moved out after)",
+            "codex login --with-api-key (fake key on stdin) and codex login status, per throwaway realm",
+            "gh workflow run ci.yml --ref release/v2.1.1 -f codex_rc_version=0.156.1",
+            "gh run download 38409643796",
+            "the app's Set up Codex, Run it for me on the npm recipe (two runs) and on OpenAI's installer recipe (once), driven over a loopback DevTools port in a fresh install of the qualification build",
+            "the cause test: the user Path saved with its kind, npm's global folder appended, the app started again, the saved value written back and read equal",
+            "codex.cmd --version; the user and machine Path read from the registry; npm.cmd uninstall -g @openai/codex",
+            "the owner's sitting: Settings > Accounts > Add Codex account > Sign in with ChatGPT (twice), Make reviewer, a Codex session prompt, Sign in to the disposable Claude account, a Claude session asking Codex for a review, a printed link clicked, Sign in again (twice), each by the owner; the app's state read over the loopback DevTools port",
+            "codex login status and codex logout with CODEX_HOME set to each of the account's two sign-in folders (the staged proof script, run by the owner)",
+            "the Linux AppImage, hash-checked before each start, started with --appimage-extract-and-run --ozone-platform=x11 and a loopback DevTools port; the app's pages driven over that port (Add Codex account > Use an API key twice, two configs launched, Save sessions, Resume, Restart and pick a conversation)",
+            "codex login status per account folder; codex exec with a fake key against the loopback fake model; each Codex process's arguments, environment and working folder read from /proc",
+            "tokenomics.indexStatus(), tokenomics.sessions({ provider: 'codex' }) and sessionDetail(id) read in the page; a labelled synthetic rollout for the F-L1-2 probe"
+          ],
+          "runId": "38409643796"
+        }
+      ]
     },
     {
       "id": "WP1.21",
@@ -318,7 +442,7 @@
         "tests/wp1/setup-journal-recovery.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -333,7 +457,7 @@
         "tests/wp1/secret-channel.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/wp1/codex-auth-adapter.test.ts",
         "tests/wp1/secret-channel.test.ts"
@@ -347,7 +471,7 @@
         "tests/wp1/codex-realm-isolation.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -360,7 +484,7 @@
         "tests/unit/renderer/accounts-surface.test.tsx"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -373,7 +497,7 @@
         "tests/wp1/account-state-machine.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -386,7 +510,7 @@
         "tests/wp1/registry-fs-port.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -399,7 +523,7 @@
         "tests/wp1/registry-fs-port.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -414,7 +538,7 @@
         "tests/wp1/codex-realm-isolation.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/main/profile-id.test.ts",
         "tests/unit/profile-id-path-guard.test.ts",
@@ -430,7 +554,7 @@
         "tests/wp1/provider-ipc.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/wp1/provider-ipc.test.ts",
         "tests/wp1/secret-scan.test.ts"
@@ -450,11 +574,28 @@
       "evidence": [
         "docs/wp1/evidence/ci-matrix.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "reason": "ACL/mode semantics are platform-native; the tests are automated but must execute on each OS runner, so the evidence is the CI matrix run. POSIX: the managed Codex root and each home are owner-only 0700, refused where that cannot be set (codex-realm-folders.test.ts). Windows, since 2.1.1-beta.2: before a home is used, the app's owner-only folder rule makes the managed root and then the home this user's and owner-only and reads them back, and a folder that does not read back so is refused (codex-realm-folders.test.ts, with the rule injected; realm-folders-owner-only-wiring.test.ts, the app's own composition; owner-only-folders-real.test.ts, the real rights on the Windows runner, Constrained Language Mode included; owner-only-folders-native.test.ts, that mode's route against an in-memory fake). Before 2.1.1-beta.2 the Windows half was deferred while the shared ACL primitive was investigated (aicc_planning #103); ADR-026, settled point 5.",
       "currentTests": [
         "tests/unit/harden-dir-acl-windows.test.ts",
         "tests/unit/credential-file-mode-hardening.test.ts"
+      ],
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/ci-matrix.md",
+          "sha256": "4ee606a9eb717e7adfe4c950c08f9101c806ba1b58a607bbe398e32fdf713915",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the CI evidence agent (Claude Code), GitHub API reads",
+          "at": "2026-10-13T14:49:34Z",
+          "commands": [
+            "gh run view 38400973974",
+            "gh run view 38409628911",
+            "gh run view 38409643796",
+            "gh api repos/<owner>/<repo>/actions/jobs/<Test, build and conformance job ids>/logs",
+            "per-file vitest results compared per OS"
+          ],
+          "runId": "38400973974"
+        }
       ]
     },
     {
@@ -467,9 +608,27 @@
       "evidence": [
         "docs/wp1/evidence/rollback.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
-      "baseCoverage": "new capability, none on base"
+      "baseCoverage": "new capability, none on base",
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/rollback.md",
+          "sha256": "3d92a5520380a26b36b666efab1aa39b3c9e9f3b3006ede4a963d8fbc08aaf32",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the packaged-build agent (Claude Code), on the Windows test VM, standard test account, over SSH; the Linux agent (Claude Code), on the Linux test host, for the Linux rollback leg (2026-10-14)",
+          "at": "2026-10-14T01:33:10Z",
+          "commands": [
+            "each signed installer started by double-click, wizard forward buttons only: 2.1.1-beta.2, the qualification build, 2.1.1-beta.1, 2.1.0, the qualification build",
+            "a second run from the same starting point: the qualification build over 2.1.0, then 2.1.1-beta.2, the qualification build, 2.1.1-beta.1 and the qualification build, each by double-click, wizard forward buttons only",
+            "the app driven over a loopback DevTools port (main window only in the second run; the start-page walk waits for the page to settle); both Claude configs started from the Saved tab",
+            "Get-AuthenticodeSignature on each installer and installed uninstaller; uninstall entries read from HKCU and HKLM",
+            "SHA-256 of 17 user-data and credential files before the first upgrade and after each step",
+            "on the Linux test host: 2.1.0's AppImage on a seeded fictional user, 2.1.1's on its data, then 2.1.0's again, each with --appimage-extract-and-run --ozone-platform=x11 and a loopback DevTools port; the data and credential files hashed at each step"
+          ],
+          "runId": "38409628911"
+        }
+      ]
     },
     {
       "id": "WP1.32",
@@ -482,10 +641,38 @@
       "evidence": [
         "docs/wp1/evidence/real-cli-matrix.md"
       ],
-      "status": "planned",
+      "status": "unavailable",
       "reason": "real installer execution touches the machine PATH and provider publisher endpoints; one opt-in real smoke per OS is recorded, fakes cover the rest",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "unavailable": {
+        "reason": "The real installer and sign-in smoke through the app on macOS and Linux (running the vendor installer is not among the consents for those hosts); taken on Windows: the app's own install by OpenAI's installer route, which counts on the owner's OQ2 ruling of 2026-10-14, and a real sign-in through the app, plus the CI installs per OS (docs/wp1/evidence/real-cli-matrix.md)",
+        "decision": "docs/wp1/owner-decisions-2026-10-13.md#UA5"
+      },
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/real-cli-matrix.md",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
+          "at": "2026-10-14T02:16:40Z",
+          "commands": [
+            "npx playwright test --reporter=line,json tests/e2e/<VM-local real-CLI spec> (staged for the run, moved out after)",
+            "codex login --with-api-key (fake key on stdin) and codex login status, per throwaway realm",
+            "gh workflow run ci.yml --ref release/v2.1.1 -f codex_rc_version=0.156.1",
+            "gh run download 38409643796",
+            "the app's Set up Codex, Run it for me on the npm recipe (two runs) and on OpenAI's installer recipe (once), driven over a loopback DevTools port in a fresh install of the qualification build",
+            "the cause test: the user Path saved with its kind, npm's global folder appended, the app started again, the saved value written back and read equal",
+            "codex.cmd --version; the user and machine Path read from the registry; npm.cmd uninstall -g @openai/codex",
+            "the owner's sitting: Settings > Accounts > Add Codex account > Sign in with ChatGPT (twice), Make reviewer, a Codex session prompt, Sign in to the disposable Claude account, a Claude session asking Codex for a review, a printed link clicked, Sign in again (twice), each by the owner; the app's state read over the loopback DevTools port",
+            "codex login status and codex logout with CODEX_HOME set to each of the account's two sign-in folders (the staged proof script, run by the owner)",
+            "the Linux AppImage, hash-checked before each start, started with --appimage-extract-and-run --ozone-platform=x11 and a loopback DevTools port; the app's pages driven over that port (Add Codex account > Use an API key twice, two configs launched, Save sessions, Resume, Restart and pick a conversation)",
+            "codex login status per account folder; codex exec with a fake key against the loopback fake model; each Codex process's arguments, environment and working folder read from /proc",
+            "tokenomics.indexStatus(), tokenomics.sessions({ provider: 'codex' }) and sessionDetail(id) read in the page; a labelled synthetic rollout for the F-L1-2 probe"
+          ],
+          "runId": "38409643796"
+        }
+      ]
     },
     {
       "id": "WP1.33",
@@ -498,7 +685,7 @@
         "tests/wp1/legacy-codex-ledger.json",
         "docs/wp1/baseline-2026-09-19.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/wp1/legacy-codex-gate.test.ts"
       ]
@@ -511,7 +698,7 @@
         "tests/unit/renderer/onboarding-provider-flow.test.tsx"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/renderer/onboarding-registry.test.ts",
         "tests/unit/renderer/onboarding-gate.test.ts",
@@ -530,7 +717,7 @@
         "PRIVACY.md",
         "src/renderer/tips-library.ts"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "reason": "documentation content is reviewed, not executed; evidence is the reviewed diff",
       "currentTests": [],
       "baseCoverage": "evidence record, no base test"
@@ -545,7 +732,7 @@
         "src/shared/app-knowledge.ts",
         "PRIVACY.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "reason": "documentation content is reviewed, not executed; evidence is the reviewed diff",
       "currentTests": [],
       "baseCoverage": "evidence record, no base test"
@@ -558,10 +745,28 @@
       "evidence": [
         "docs/wp1/evidence/release-qualification.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "reason": "the release evidence is a compiled record of runs, not a test",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/release-qualification.md",
+          "sha256": "e3f82fa10f36d2fce3d5876e4685fd7f39145de74e51bb210efb8f9f02688321",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "evidence assembly (Claude Code), compiled from the runs section 3 lists",
+          "at": "2026-10-14T05:10:07Z",
+          "commands": [
+            "gh run view 38409628911",
+            "the release verifier, Get-AuthenticodeSignature, gen-changelog --notes 2.1.1",
+            "compiled from mode-matrix.md, ci-matrix.md, skip-ledger.md, real-cli-matrix.md, packaged-smoke.md, rollback.md",
+            "compiled from the owner's sitting (real-cli-matrix.md, packaged-smoke.md, keyring-smoke.md) and docs/wp1/owner-decisions-2026-10-13.md",
+            "compiled from the Linux test host runs (packaged-smoke.md, rollback.md, real-cli-matrix.md) and the OQ1 correction in docs/wp1/owner-decisions-2026-10-13.md",
+            "compiled from the owner's ruling of 2026-10-14 on OQ1 and on SP1's amendment of WP1.52's 2.1.1 scope (docs/wp1/owner-decisions-2026-10-13.md, sections OQ1 and SP1)"
+          ],
+          "runId": "38409628911"
+        }
+      ]
     },
     {
       "id": "WP1.38",
@@ -579,7 +784,7 @@
         "tests/wp1/review-profile-home.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/pty-spawn-env.test.ts",
         "tests/wp1/claude-characterization.test.ts",
@@ -596,7 +801,7 @@
         "tests/unit/renderer/accounts-surface.test.tsx"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -609,7 +814,7 @@
         "tests/unit/renderer/accounts-surface.test.tsx"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -623,7 +828,7 @@
         "tests/wp1/provider-conformance.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -638,7 +843,7 @@
         "tests/wp1/conversation-carry-service.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -655,7 +860,7 @@
       "evidence": [
         "docs/wp1/owner-decisions-2026-09-26.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -668,7 +873,7 @@
         "tests/wp1/install-recipes.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -682,7 +887,7 @@
         "tests/wp1/codex-realm-folders.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -696,7 +901,7 @@
         "tests/wp1/launch-handoff-pty.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/profile-consumers.test.ts",
         "tests/unit/main/pty-spawn-waits-for-refresh.test.ts"
@@ -710,7 +915,7 @@
         "tests/wp1/setup-journal-recovery.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -722,7 +927,7 @@
         "tests/wp1/migration-claude.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -734,7 +939,7 @@
         "tests/wp1/cli-discovery.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -746,7 +951,7 @@
         "tests/wp1/account-lifecycle.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -759,7 +964,7 @@
         "tests/wp1/codex-auth-adapter.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -775,11 +980,38 @@
         "tests/unit/renderer/accounts-surface.test.tsx",
         "tests/unit/tokenomics/tokenomics-carried-history-once.test.ts"
       ],
-      "evidence": [],
-      "status": "planned",
+      "evidence": [
+        "docs/wp1/evidence/real-cli-matrix.md",
+        "docs/wp1/owner-decisions-2026-10-13.md"
+      ],
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base",
-      "reason": "automated tests cover the staging, the decision, the switch, recovery and in-place re-authentication; owed before evidenced: the VM proof that signing out a retired realm never invalidates its replacement (real CLI 0.153.4 and 0.155.1, file and keyring stores), and the real-CLI replacement revalidation after that sign-out (the ADR-009 pass is done)"
+      "reason": "automated tests cover the staging, the decision, the switch, recovery and in-place re-authentication; the VM proof that signing out a retired realm never invalidates its replacement, with the real-CLI revalidation of the replacement after that sign-out, was taken once at boundHead on Codex 0.155.1 with the file store (docs/wp1/evidence/real-cli-matrix.md); its runs on 0.153.4 and with the keyring store were not run: the owner's short path left them out and the owner ruled the keyring store out of 2.1.1's scope on 2026-10-14; the owner ruled on 2026-10-14 that its 2.1.1 proof is the run taken (docs/wp1/owner-decisions-2026-10-13.md, sections SP1 and KR1); the ADR-009 pass is done",
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/real-cli-matrix.md",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
+          "at": "2026-10-14T02:16:40Z",
+          "commands": [
+            "npx playwright test --reporter=line,json tests/e2e/<VM-local real-CLI spec> (staged for the run, moved out after)",
+            "codex login --with-api-key (fake key on stdin) and codex login status, per throwaway realm",
+            "gh workflow run ci.yml --ref release/v2.1.1 -f codex_rc_version=0.156.1",
+            "gh run download 38409643796",
+            "the app's Set up Codex, Run it for me on the npm recipe (two runs) and on OpenAI's installer recipe (once), driven over a loopback DevTools port in a fresh install of the qualification build",
+            "the cause test: the user Path saved with its kind, npm's global folder appended, the app started again, the saved value written back and read equal",
+            "codex.cmd --version; the user and machine Path read from the registry; npm.cmd uninstall -g @openai/codex",
+            "the owner's sitting: Settings > Accounts > Add Codex account > Sign in with ChatGPT (twice), Make reviewer, a Codex session prompt, Sign in to the disposable Claude account, a Claude session asking Codex for a review, a printed link clicked, Sign in again (twice), each by the owner; the app's state read over the loopback DevTools port",
+            "codex login status and codex logout with CODEX_HOME set to each of the account's two sign-in folders (the staged proof script, run by the owner)",
+            "the Linux AppImage, hash-checked before each start, started with --appimage-extract-and-run --ozone-platform=x11 and a loopback DevTools port; the app's pages driven over that port (Add Codex account > Use an API key twice, two configs launched, Save sessions, Resume, Restart and pick a conversation)",
+            "codex login status per account folder; codex exec with a fake key against the loopback fake model; each Codex process's arguments, environment and working folder read from /proc",
+            "tokenomics.indexStatus(), tokenomics.sessions({ provider: 'codex' }) and sessionDetail(id) read in the page; a labelled synthetic rollout for the F-L1-2 probe"
+          ],
+          "runId": "38409643796"
+        }
+      ]
     },
     {
       "id": "WP1.53",
@@ -789,7 +1021,7 @@
         "tests/wp1/account-registry-uniqueness.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -804,7 +1036,7 @@
       "evidence": [
         "docs/wp1/baseline-2026-09-19.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "reason": "the baseline record is a digest-bound document plus the characterization tests it lists",
       "currentTests": [
         "tests/wp1/claude-characterization.test.ts",
@@ -819,7 +1051,7 @@
         "tests/wp1/dependency-boundaries.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -831,7 +1063,7 @@
         "tests/wp1/provider-conformance.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -847,7 +1079,7 @@
       "evidence": [
         "tests/wp1/legacy-codex-ledger.json"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/wp1/codex-characterization.test.ts"
       ]
@@ -862,7 +1094,7 @@
       "evidence": [
         "tests/wp1/legacy-codex-ledger.json"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -874,7 +1106,7 @@
         "tests/wp1/fault-isolation.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -892,9 +1124,25 @@
       "evidence": [
         "docs/wp1/evidence/mode-matrix.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
-      "baseCoverage": "new capability, none on base"
+      "baseCoverage": "new capability, none on base",
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/mode-matrix.md",
+          "sha256": "4389191e59a688b4e64677c6483dce11e22c12954c4ecf1e0709e81967e2d8f1",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the VM operator agent (Claude Code), on the Windows test VM, detached runner",
+          "at": "2026-10-13T07:13:24-07:00",
+          "commands": [
+            "git checkout --detach d1525759a7a42d941beeff601af3415fddd8afdd",
+            "npm run build",
+            "npx playwright test --reporter=line,json <the 27 specs of git ls-files tests/e2e/*.spec.ts>",
+            "npx playwright test --reporter=line,json tests/e2e/onboarding-provider-select.spec.ts (alone, registry PATH adjusted for the run)"
+          ],
+          "runId": "e2e-d1525759"
+        }
+      ]
     },
     {
       "id": "WP1.61",
@@ -906,7 +1154,7 @@
         "tests/wp1/consumer-leases.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -920,7 +1168,7 @@
         "tests/wp1/cli-discovery.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -932,10 +1180,38 @@
       "evidence": [
         "docs/wp1/evidence/packaged-smoke.md"
       ],
-      "status": "planned",
+      "status": "unavailable",
       "reason": "packaged-app smoke must run the installed artifact outside the checkout on each OS; not reproducible inside the unit runner",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "unavailable": {
+        "reason": "The owner's run on the macOS test user (the DMG installed, first launch, Codex found and classed, a session on a managed account's own folder, a clean Quit, the upgrade from 2.1.0 and the rollback), not run on the owner's ruling of 2026-10-14 (UA8); taken: the Windows smoke, upgrade and console checks, the macOS signature, notarization and Gatekeeper checks, and the Linux run: a clean run, the upgrade from 2.1.0 and the rollback (docs/wp1/evidence/packaged-smoke.md)",
+        "decision": "docs/wp1/owner-decisions-2026-10-13.md#UA8"
+      },
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/packaged-smoke.md",
+          "sha256": "c79234cc4be309106b4dee8e7e42b5f777e8ec6027474c0e64a58562ff5c8d3a",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the packaged-build agents (Claude Code) on the Windows test VM (the clean install, then the upgrade from 2.1.0); the macOS agent (signature checks); the Linux agent (staging); the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the console check (2026-10-14); the agent (Claude Code), for the window buttons, clicking each with mouse events it injected into the page through that DevTools port, the owner restoring the window from the taskbar after each minimise (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for the clean run, the upgrade from 2.1.0 and the rollback (2026-10-14)",
+          "at": "2026-10-14T01:33:10Z",
+          "commands": [
+            "the signed installer started by double-click, wizard forward buttons only",
+            "the app driven over a loopback DevTools port",
+            "spctl -a -t exec -vv; xcrun stapler validate; codesign --verify --deep --strict -vv (DMG mounted read-only)",
+            "sha256sum against CHECKSUMS.txt (Windows, macOS, Linux)",
+            "2.1.0 installed with /S, then the qualification installer run over it by double-click, wizard forward buttons only",
+            "SHA-256 of 17 user-data and credential files before and after the upgrade",
+            "the console check: the staged probe (Chrome started with 2.1.0's Vision arguments, then the app's CIM browser query), then the test copy started and its app log read",
+            "the harness test: Chrome 155.0.8059.40 started with the app's arguments on spare ports: a fresh profile, a fresh profile with USERPROFILE and HOME overridden, and a copy of the existing Vision profile",
+            "the window buttons: mouse events injected into the page over the loopback DevTools port (Input.dispatchMouseEvent), each after the page's own hit test (document.elementFromPoint); isMaximized and visibilityState read; process and port checks after Close",
+            "the Linux AppImages (2.1.1 and 2.1.0), hash-checked before each start, started with --appimage-extract-and-run (and --ozone-platform=x11 once the screen had locked) and a loopback DevTools port; the app's pages driven over that port",
+            "a fictional 2.1.0 user seeded by file; 2.1.0 run once, then 2.1.1 on its data, then 2.1.0 again; SHA-256 (first 16 hex digits) and size of the data and credential files before the upgrade, after it and after the rollback",
+            "process, port and /proc reads after each quit; the run's files moved aside by literal path, and the home folder's lists compared with those before the run"
+          ],
+          "runId": "38409628911"
+        }
+      ]
     },
     {
       "id": "WP1.64",
@@ -945,10 +1221,38 @@
       "evidence": [
         "docs/wp1/evidence/real-cli-matrix.md"
       ],
-      "status": "planned",
+      "status": "unavailable",
       "reason": "credential-bearing login/status/logout needs disposable provider identities and revocation after the run; controlled gate with recorded evidence",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "unavailable": {
+        "reason": "Disposable Codex identities, the API-key flow, the second-identity flows off Windows, every credential-bearing flow on Linux and codex_review on macOS and Linux (no consent); on the owner's short path of 2026-10-14 the Claude sign-out and its relaunch check, codex_review on 0.153.4 and the second identity's flows on Windows, and the macOS sign-in (UA8); taken on Windows: the disposable Claude account signed in, the Codex sign-ins, a real prompt and codex_review on 0.155.1 (docs/wp1/evidence/real-cli-matrix.md)",
+        "decision": "docs/wp1/owner-decisions-2026-10-13.md#UA6"
+      },
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/real-cli-matrix.md",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
+          "at": "2026-10-14T02:16:40Z",
+          "commands": [
+            "npx playwright test --reporter=line,json tests/e2e/<VM-local real-CLI spec> (staged for the run, moved out after)",
+            "codex login --with-api-key (fake key on stdin) and codex login status, per throwaway realm",
+            "gh workflow run ci.yml --ref release/v2.1.1 -f codex_rc_version=0.156.1",
+            "gh run download 38409643796",
+            "the app's Set up Codex, Run it for me on the npm recipe (two runs) and on OpenAI's installer recipe (once), driven over a loopback DevTools port in a fresh install of the qualification build",
+            "the cause test: the user Path saved with its kind, npm's global folder appended, the app started again, the saved value written back and read equal",
+            "codex.cmd --version; the user and machine Path read from the registry; npm.cmd uninstall -g @openai/codex",
+            "the owner's sitting: Settings > Accounts > Add Codex account > Sign in with ChatGPT (twice), Make reviewer, a Codex session prompt, Sign in to the disposable Claude account, a Claude session asking Codex for a review, a printed link clicked, Sign in again (twice), each by the owner; the app's state read over the loopback DevTools port",
+            "codex login status and codex logout with CODEX_HOME set to each of the account's two sign-in folders (the staged proof script, run by the owner)",
+            "the Linux AppImage, hash-checked before each start, started with --appimage-extract-and-run --ozone-platform=x11 and a loopback DevTools port; the app's pages driven over that port (Add Codex account > Use an API key twice, two configs launched, Save sessions, Resume, Restart and pick a conversation)",
+            "codex login status per account folder; codex exec with a fake key against the loopback fake model; each Codex process's arguments, environment and working folder read from /proc",
+            "tokenomics.indexStatus(), tokenomics.sessions({ provider: 'codex' }) and sessionDetail(id) read in the page; a labelled synthetic rollout for the F-L1-2 probe"
+          ],
+          "runId": "38409643796"
+        }
+      ]
     },
     {
       "id": "WP1.65",
@@ -958,10 +1262,25 @@
       "evidence": [
         "docs/wp1/evidence/skip-ledger.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "reason": "the skip/flaky ledger is a reviewed record derived from the candidate run",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/skip-ledger.md",
+          "sha256": "f938a4df679c7214c3ac148cbf863041456069e0dbbbecac306b86be4a82cf9d",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the CI evidence agent (Claude Code), GitHub API reads",
+          "at": "2026-10-13T14:49:34Z",
+          "commands": [
+            "gh api repos/<owner>/<repo>/actions/jobs/<Test and build job ids>/logs",
+            "per-file skips per OS parsed from the logs",
+            "skip conditions read at d1525759a7a42d941beeff601af3415fddd8afdd"
+          ],
+          "runId": "38400973974"
+        }
+      ]
     },
     {
       "id": "WP1.66",
@@ -972,7 +1291,7 @@
         "tests/wp1/provider-conformance.test.ts"
       ],
       "evidence": [],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -987,7 +1306,7 @@
         "docs/wp1/legacy-codex-manifest.json",
         "tests/wp1/legacy-codex-ledger.json"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -1005,7 +1324,7 @@
       "evidence": [
         "tests/wp1/legacy-codex-ledger.json"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [
         "tests/unit/providers/codex/spawn.test.ts",
         "tests/unit/providers/codex/telemetry.test.ts",
@@ -1027,7 +1346,7 @@
         "tests/wp1/fake-cli/oracle.json",
         "tests/wp1/fixtures/codex-cli-source.json"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -1045,7 +1364,7 @@
         "docs/wp2/parity-checklist.md",
         "docs/wp2/completion-plan.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base"
     },
@@ -1059,10 +1378,34 @@
         "docs/wp2/evidence/codex-cli-capabilities-2026-09-27.md",
         "docs/wp2/evidence/codex-artifacts-section-19-record.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "reason": "executing three CLI versions per OS needs the binaries installed on each runner; recorded per-OS run",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/real-cli-matrix.md",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
+          "at": "2026-10-14T02:16:40Z",
+          "commands": [
+            "npx playwright test --reporter=line,json tests/e2e/<VM-local real-CLI spec> (staged for the run, moved out after)",
+            "codex login --with-api-key (fake key on stdin) and codex login status, per throwaway realm",
+            "gh workflow run ci.yml --ref release/v2.1.1 -f codex_rc_version=0.156.1",
+            "gh run download 38409643796",
+            "the app's Set up Codex, Run it for me on the npm recipe (two runs) and on OpenAI's installer recipe (once), driven over a loopback DevTools port in a fresh install of the qualification build",
+            "the cause test: the user Path saved with its kind, npm's global folder appended, the app started again, the saved value written back and read equal",
+            "codex.cmd --version; the user and machine Path read from the registry; npm.cmd uninstall -g @openai/codex",
+            "the owner's sitting: Settings > Accounts > Add Codex account > Sign in with ChatGPT (twice), Make reviewer, a Codex session prompt, Sign in to the disposable Claude account, a Claude session asking Codex for a review, a printed link clicked, Sign in again (twice), each by the owner; the app's state read over the loopback DevTools port",
+            "codex login status and codex logout with CODEX_HOME set to each of the account's two sign-in folders (the staged proof script, run by the owner)",
+            "the Linux AppImage, hash-checked before each start, started with --appimage-extract-and-run --ozone-platform=x11 and a loopback DevTools port; the app's pages driven over that port (Add Codex account > Use an API key twice, two configs launched, Save sessions, Resume, Restart and pick a conversation)",
+            "codex login status per account folder; codex exec with a fake key against the loopback fake model; each Codex process's arguments, environment and working folder read from /proc",
+            "tokenomics.indexStatus(), tokenomics.sessions({ provider: 'codex' }) and sessionDetail(id) read in the page; a labelled synthetic rollout for the F-L1-2 probe"
+          ],
+          "runId": "38409643796"
+        }
+      ]
     },
     {
       "id": "WP1.72",
@@ -1074,10 +1417,29 @@
       "evidence": [
         "docs/wp1/evidence/keyring-smoke.md"
       ],
-      "status": "planned",
+      "status": "unavailable",
       "reason": "native keyring smoke needs an ephemeral runner identity and a residue check that cannot run against a developer keyring",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "unavailable": {
+        "reason": "An ephemeral identity on every OS (none exists for 2.1.1) and the native keyring smoke on macOS and Linux, and on Windows, where the owner ruled the keyring store out of 2.1.1's scope on 2026-10-14 and the short path left the smoke out; the fake keyring tests are automated (docs/wp1/evidence/keyring-smoke.md)",
+        "decision": "docs/wp1/owner-decisions-2026-10-13.md#UA7"
+      },
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/keyring-smoke.md",
+          "sha256": "179b5aad74abeb5c25d44fae22482088d7cc7146104c5e07d2445ca247eba961",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "the packaged-build agent (Claude Code), on the Windows test VM, standard test account; the store observed at the owner's sitting (2026-10-14) by the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port",
+          "at": "2026-10-14T00:52:11Z",
+          "commands": [
+            "git grep cli_auth_credentials_store d1525759a7a42d941beeff601af3415fddd8afdd -- src/",
+            "codex.exe -c cli_auth_credentials_store=\"bogus\" login status; codex.exe login --with-api-key; codex.exe -c cli_auth_credentials_store=\"keyring\" login --with-api-key (throwaway CODEX_HOME, fake key)",
+            "cmdkey /list (before and after)",
+            "Test-Path auth.json in each of the account's two sign-in folders, around codex logout (the staged proof script, run by the owner)"
+          ]
+        }
+      ]
     },
     {
       "id": "WP1.73",
@@ -1090,10 +1452,28 @@
         "docs/wp1/evidence/release-qualification.md",
         "docs/wp1/owner-decisions-2026-10-13.md"
       ],
-      "status": "planned",
+      "status": "evidenced",
       "reason": "a merge-policy statement enforced by the traceability test at the candidate phase",
       "currentTests": [],
-      "baseCoverage": "evidence record, no base test"
+      "baseCoverage": "evidence record, no base test",
+      "evidenceRecords": [
+        {
+          "artifact": "docs/wp1/evidence/release-qualification.md",
+          "sha256": "e3f82fa10f36d2fce3d5876e4685fd7f39145de74e51bb210efb8f9f02688321",
+          "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
+          "actor": "evidence assembly (Claude Code), compiled from the runs section 3 lists",
+          "at": "2026-10-14T05:10:07Z",
+          "commands": [
+            "gh run view 38409628911",
+            "the release verifier, Get-AuthenticodeSignature, gen-changelog --notes 2.1.1",
+            "compiled from mode-matrix.md, ci-matrix.md, skip-ledger.md, real-cli-matrix.md, packaged-smoke.md, rollback.md",
+            "compiled from the owner's sitting (real-cli-matrix.md, packaged-smoke.md, keyring-smoke.md) and docs/wp1/owner-decisions-2026-10-13.md",
+            "compiled from the Linux test host runs (packaged-smoke.md, rollback.md, real-cli-matrix.md) and the OQ1 correction in docs/wp1/owner-decisions-2026-10-13.md",
+            "compiled from the owner's ruling of 2026-10-14 on OQ1 and on SP1's amendment of WP1.52's 2.1.1 scope (docs/wp1/owner-decisions-2026-10-13.md, sections OQ1 and SP1)"
+          ],
+          "runId": "38409628911"
+        }
+      ]
     }
   ],
   "designDigest": "e4d5b99a562952694be034ed8e71db6da379d8cb15bb24df6c2ca3f02cd83140"

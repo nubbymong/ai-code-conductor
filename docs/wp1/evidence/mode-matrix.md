@@ -6,7 +6,7 @@ This file is evidence for WP1.1 and WP1.60 (`docs/wp1/evidence/mode-matrix.md`).
 
 The ledger also cites WP1.2. Its real-CLI evidence is `docs/wp1/evidence/real-cli-matrix.md` (P4.10); this file holds WP1.2's two mode-matrix cells below (Codex only on a fresh install, and the minimum real launch).
 
-The matrix below has its recorded VM runs ("The mode matrix's runs (P4.9, PR 4)"). WP1.1 and WP1.60 are still `planned` in the traceability manifest: they move to evidenced when the traceability binding records this file with its digest (P4.10), not in this file.
+The record at the 2.1.1 qualification commit, d1525759a7a42d941beeff601af3415fddd8afdd, is "The mode matrix's runs at 2.1.1" below. The runs at older commits ("The mode matrix's runs (P4.9, PR 4)" and the sections after it) are history. WP1.1 and WP1.60 move to `evidenced` when the traceability manifest records this file, with its digest, at that commit; this file does not set their status.
 
 ## The mode matrix (P4.9, PR 4, row 67)
 
@@ -30,6 +30,124 @@ What the VM run must give:
   - `CCC_E2E_REAL_CODEX`: the installs, `<version>=<absolute path>` joined by `;`, for example the npm `codex.cmd` of 0.153.4 and the `codex.exe` 0.155.1 ships (both routes are then covered). Given, it must name both versions, each an existing file, or the spec fails;
   - `CCC_E2E_FAKE_MODEL_URL`: the loopback fake model's base URL, the fake model already running on the VM (9.2, report item 17);
 - the isolation below (a fake home, `CODEX_HOME` and `CLAUDE_CONFIG_DIR` cleared). No spec starts Codex on, or writes into, the VM user's own `~/.codex`.
+
+## The mode matrix's runs at 2.1.1 (phase 5, the qualification commit)
+
+Taken at d1525759a7a42d941beeff601af3415fddd8afdd, the squash-merge of PR #644 on beta and the commit `release/v2.1.1`
+points at. Its tree is `12310fe71f3706f624e3905f8b92f06f099cdc3f`. This section is the record for WP1.1 and WP1.60
+(and the WP1.3 cell) at that commit. The runs recorded after this section were taken at older commits and are history.
+
+**Result: every cell of the matrix passed at d1525759a7a42d941beeff601af3415fddd8afdd.** The full run had 2 failures of 98
+tests. Neither is a product defect:
+- the "both, no Codex installed" cell failed because the VM is not a machine without Codex (a harness gap, fixed and rerun green);
+- the terminal-only secret test is the known DPAPI limit of a run with no interactive logon (not a matrix cell).
+
+### Setup
+
+- Machine: the Windows test VM (Hyper-V, Windows 11 Enterprise Evaluation, 2.6 GB RAM). Run by the VM operator agent
+  (Claude Code) over key-authenticated SSH. The runner was started detached through WMI `Win32_Process.Create`, so it ran
+  in session 0, elevated, with a NETWORK logon.
+- Checkout:
+  - the VM checkout was fetched and checked out detached at d1525759a7a42d941beeff601af3415fddd8afdd;
+  - HEAD and `HEAD^{tree}` were verified, and there were 0 tracked changes;
+  - `node_modules` came from `npm ci` (exit 0) at PR #644's head, which has the same tree and lockfile;
+  - `node node_modules\electron\install.js` restored Electron's binary, as in every earlier record.
+- Build: `npm run build` exited 0 in 37 s, and `out/main/index.js` names the short sha `d152575`.
+- Toolchain: Node v24.16.0, Electron 44.5.1, @playwright/test 1.63.0, app 2.1.1.
+- Specs: the 27 from `git ls-files tests/e2e/*.spec.ts`, passed explicitly, `--workers=1` (the config's), `retries: 1`.
+  The checkout also holds two untracked VM-local specs, which were not run.
+- Real Codex for `codex-real-launch.spec.ts` (`CCC_E2E_REAL_CODEX`): 0.153.4 as the npm `codex.cmd` shim and 0.155.1 as
+  the `codex.exe` its npm install ships. Both were hash-checked before the run.
+- Fake model (`CCC_E2E_FAKE_MODEL_URL`): the loopback fake model on port 18893, already running.
+
+### Isolation (every run here)
+
+- `USERPROFILE` and `HOME` pointed to a fresh folder in the run's own folder, and so did `TEMP` and `TMP`.
+- `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, every `CCC_*` variable, and the credential and proxy variables were unset.
+- Every PATH folder holding a real `codex` or `claude` was dropped:
+  - the OpenAI installer's `bin`;
+  - npm's global folder, which holds a real Codex 0.157.1 and the real `claude`.
+  `where codex` and `where claude` then found nothing.
+- Before and after snapshots matched for:
+  - the VM user's real `~\.claude` (557 files) and `~\.codex` (6,535 files);
+  - `~\.claude.json`;
+  - the app's data folder under `%LOCALAPPDATA%` (477 files);
+  - `HKCU\Software\AI Code Conductor` and its two legacy keys.
+  For each, the list of path, size and write time was hashed.
+- `codex-real-launch.spec.ts` checked the VM user's own `~\.codex` as well. It had 6,536 entries, the same before and after
+  each real launch.
+- No app, Electron, Node or Codex process was left. The helper's `ccc-e2e-*` folders were left in the run's own `TEMP`
+  (22, with EPERM while Windows released handles). They are outside the real `%TEMP%`, and they are kept for the record.
+
+### Run e2e-d1525759 (2026-10-13, VM local start 07:13:24 PDT)
+
+`npx playwright test --reporter=line,json <the 27 tracked specs>`: **98 tests, 96 passed, 2 failed, 0 skipped, 0 flaky**
+(6.3 min, exit 1). Each failed spec file was then rerun once, alone. Both failed the same way.
+
+| Cell | Items | Spec | Result |
+|---|---|---|---|
+| Fresh install, Claude Code only, no Codex installed | WP1.1 | `onboarding-provider-select.spec.ts` | PASS |
+| Fresh install, Codex only | WP1.2 | `onboarding-provider-select.spec.ts`, `codex-session-creation.spec.ts` (2) | PASS |
+| Fresh install, both | WP1.3 | `onboarding-provider-select.spec.ts` | FAIL in this run (harness gap, below); PASS in the rerun with the gap closed |
+| Upgrade | WP1.60 | `codex-reconfirm-upgrade.spec.ts` (3: Claude-only, Codex-only and dual upgraders) | PASS |
+| Restart: a tab, an app relaunch | WP1.60 | `codex-mode-restart.spec.ts` (2) | PASS |
+| Enable and disable round trips | WP1.60 | `codex-mode-enable-disable.spec.ts` (4) | PASS |
+| Minimum real launch | WP1.60, WP1.2 | `codex-real-launch.spec.ts` (3) | PASS |
+
+The minimum real launch, cell by cell:
+- The run gave both supported versions, each an existing install.
+- **0.153.4** (`codex.cmd`): the tab answered the trust, hooks and sandbox screens by the VM rules and reached a ready
+  composer, and the prompt was answered. `config.toml` hashes: f37303ed seeded, c60ca0d4 after the answers. 18.4 s.
+- **0.155.1** (`codex.exe`): the same three screens and the same answer. `config.toml` hashes: f37303ed seeded, 221886c5
+  after the answers. 18.3 s.
+
+The matrix's 6 specs hold 17 tests. The other 21 specs hold 81 tests: 80 passed and 1 failed, the secret test below.
+Those 21 include `codex-settings-section.spec.ts` (2 of 2 passed), the other spec this gate covers.
+
+**Failure 1: the "both" cell (WP1.3). Cause: a harness gap, not the product.**
+- Set up Codex said the CLI was not found (`codexSetup:missing`), as the cell expects.
+- Settings, Accounts then read "Codex 0.157.1 is newer than the versions this app was tested with; it will still be
+  used", not "Codex was not found on this computer". This happened on both attempts and in the solo rerun.
+- Why:
+  - The VM user's own PATH in the registry (`HKCU\Environment`) names both real-Codex folders.
+  - The run took them off the process PATH only.
+  - Before a check, the app appends the registry PATH folders it does not have yet. This is owner decision D4 (ADR-024,
+    `src/main/windows-path-refresh.ts`): an installer's new PATH entry is found without a restart.
+  - So the app found the VM's real Codex 0.157.1.
+- The cell's precondition, "no Codex installed", was therefore false on this VM. beta.3's VM run recorded the same
+  failure as base-equal.
+- **The fix, in the harness only:**
+  - For the rerun, the two folders were also taken out of the user's registry PATH value.
+  - The original value was put back afterwards, with the same value kind (REG_SZ) and the same bytes, and this was
+    verified.
+  - `HKCU\Environment` hashed the same before and after the rerun.
+- **Rerun e2e-d1525759-wp13** (07:31:36 PDT), `onboarding-provider-select.spec.ts` alone: **3 of 3 passed** (20.9 s). The
+  three cells are Claude only, both, and Codex only. In the "both" cell, Set up Codex said not found, both were saved on,
+  and Accounts read "Codex was not found on this computer". The real-folder and registry snapshots were the same before
+  and after. No process was left.
+
+**Failure 2: `session-dialog-permutations.spec.ts:200`, the terminal-only config's secret. This is an environment limit
+and not a matrix cell.**
+- Received `ARGV=--token` with an empty value, on both attempts and alone.
+- The secret is kept with `safeStorage` (DPAPI). At the time of the run, the VM user had no interactive logon (`quser`
+  listed no one), and the runner's logon was NETWORK. DPAPI could therefore not open the user's master key.
+- This is the same cause and the same result as the records at `0cb1bf31`, `c55ba0c7`, `229f3d9c`, `633d37db`, `36b83da1` and
+  `38cbc9d7` below. The test needs an interactive desktop logon to count. Its 7 sibling tests passed.
+
+**Observation (not a finding):** the VM has 2.6 GB of RAM. While the Electron instances ran, new SSH logons for the VM user
+were refused, from about 07:17 to 07:25. The detached runner was not affected.
+
+Commands, in order:
+- `git fetch origin`, then `git checkout --detach d1525759a7a42d941beeff601af3415fddd8afdd`;
+- `npm run build`;
+- `npx playwright test --reporter=line,json <27 specs>`;
+- `npx playwright test --reporter=line,json tests/e2e/onboarding-provider-select.spec.ts`, alone;
+- `npx playwright test --reporter=line,json tests/e2e/session-dialog-permutations.spec.ts`, alone;
+- the same `onboarding-provider-select.spec.ts` run with the registry PATH adjusted for the run.
+
+The VM-side logs, the JSON reports and the snapshot lists are kept with the runs. They hold fictional data only.
+
+Not run here: macOS and Linux (these specs are VM-only).
 
 ## The mode matrix's runs (P4.9, PR 4)
 

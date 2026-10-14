@@ -4,9 +4,12 @@ This file collects the release evidence the WP1 ledger and traceability items
 cite. Section 1 is the **documentation sweep** (WP1.35, WP1.36), written with
 the WP2 guidance commit (commit 7, on top of `accec3c2`,
 branch `session/beta/c4d568ce-wp2-codex`, 2026-09-25). Section 3 is the
-release-run record (WP1.37, WP1.73), which is **not recorded yet**: those items
-stay `planned` in `tests/wp1/traceability.json` until the qualification run
-fills it in. Section 4 maps the verification the 20 DONE parity rows still owe
+release-run record (WP1.37, WP1.73), written for 2.1.1 at its qualification
+commit, d1525759a7a42d941beeff601af3415fddd8afdd. Every part of it is
+recorded, and `tests/wp1/traceability.json` declared the 2.1.1 candidate on
+it for the promotion to main (pull request #645); on beta the manifest is
+back at phase gate0, keeping its statuses and the records bound to this
+commit. Section 4 maps the verification the 20 DONE parity rows still owe
 to the check that gives it and the file it is recorded in (PR 4, P4.10).
 
 Every statement below was checked against the code of this build before it was
@@ -113,20 +116,326 @@ on Windows included.
 
 ## 3. Release-run record (WP1.37, WP1.73)
 
-Not recorded yet. The qualification run records here the tested commit, the
-Claude Code and Codex CLI versions, the OS runners, the commands, the scope of
-the real-CLI smoke and the known limitations. Until then WP1.37 and WP1.73
-stay `planned`, and the e2e mode matrix lives in its own record
-(`docs/wp1/evidence/mode-matrix.md`, from the VM run).
+Written for 2.1.1 at its qualification commit. **Status: recorded.** The commit, the builds, the CI runs, the agents'
+runs on the Windows test VM and the Linux test host, the owner's sitting on the Windows test VM (2026-10-14) and the
+known limitations are recorded here. No PENDING block is left, here or in the files this section cites. The owner
+confirmed `docs/wp1/owner-decisions-2026-10-13.md` on 2026-10-14, and ruled OQ1 and SP1's amendment of WP1.52's
+2.1.1 scope later that morning (section 3.10). WP1.37 and WP1.73 read `evidenced` in
+`tests/wp1/traceability.json`, which declared the candidate for the promotion to main (back at phase gate0 on beta).
 
-Before the run is planned (completion plan section 7, "The WP1 candidate at a
-stable release"): only a stable release that is not a dry run declares the
-WP1 candidate from the workflow, so the beta-channel cut runs at the
-manifest's phase; and since `package.json` and `changelog.ts` are not
-neutral paths, the final `2.1.1` version and changelog entry land before the
-signed cut whose build carries the WP1.63 smoke, the evidence is taken at that
-head, a manifest-only commit declares the candidate, and the same tree is
-promoted. A bump after the signed cut can never pass the binding.
+### 3.1 The tested commit
+
+- **d1525759a7a42d941beeff601af3415fddd8afdd**, tree `12310fe71f3706f624e3905f8b92f06f099cdc3f`: the squash merge of
+  PR #644 on beta (2026-10-13). Its only parent is `28ec75df2abdbd14afcf774c51c5ec7083928b21` (2.1.1-beta.3).
+  `release/v2.1.1` points at it. It is the binding's head (`boundHead`): every evidence record names it, and only
+  binding-neutral paths may change after it (`tests/wp1/binding.ts`).
+- The pull request's head, `0834df263e40a727e787fc58a799ea552df84196`, and GitHub's merge commit for its final CI run,
+  `72639eba01b52aebfde6a8fed05d67db0feadfb8`, have the same tree.
+- `package.json` reads 2.1.1. The release notes are the 2.1.1 entry of `src/renderer/changelog.ts` at this commit,
+  word for word.
+
+### 3.2 The builds
+
+The qualification build is release run 38409628911 (`release.yml`, `workflow_dispatch` on `release/v2.1.1`, channel
+beta, `skip_vt=false`, attempt 1, conclusion success). Its `headSha` is the commit above. It published the prerelease
+`v2.1.1-beta` (2026-10-13T14:24:49Z), a plain tag on that commit; the latest release stayed v2.1.0. A bare 2.1.1 on
+the beta channel is tagged `v<version>-beta`, so the build reads 2.1.1 throughout.
+
+| Asset | SHA-256 | Checks |
+|---|---|---|
+| `AI-Code-Conductor-2.1.1.exe` (194,103,848 bytes) | `da72adf4e5d9f175c9a3e8c1b58f8e4234f9be5f9acc2eeef7a4b64a0e6f5952` | Authenticode Valid, thumbprint `00EC0DEE208F91785D253C0731E28249C68053FD`, SSL.com timestamp, file and product version 2.1.1; the uninstaller it carries is Valid with the same thumbprint. VirusTotal 0 of 55 |
+| `AICodeConductor-2.1.1-macos13.dmg` | `262cc39c0aca5dff04d41539b004b8aa3222df6e5626f291d0090d18fa4a6c0a` | The app inside: Developer ID signed (the same team as 2.1.0), hardened runtime, notarized, ticket stapled, `spctl` accepted. The DMG itself is unsigned and unstapled by design (known limitation 6). VirusTotal 0 of 52 |
+| `AI-Code-Conductor-2.1.1-linux-x86_64.AppImage` | `7be0348a24a11fe58d90a75aa4594b9a31d6a24839f3e8714d68d5b64b5f952b` | Unsigned by convention. VirusTotal 0 of 50 |
+
+`CHECKSUMS.txt` lists 8 assets; every line equals GitHub's own asset digest and the downloaded bytes. Each
+`latest*.yml` reads 2.1.1 and names one file whose size and sha512 equal the downloaded bytes.
+
+### 3.3 CI at the commit
+
+| Run | What | Result |
+|---|---|---|
+| CI run 38400973974 (the pull request's final run, merge commit `72639eba`, the same tree) | `Test` on Windows, macOS and Linux; the minimum and pinned Codex legs on each OS; SSH smoke; Changelog in sync; Desktop test gate | All green, attempt 1 |
+| Release run 38409628911 (the commit itself) | `build-windows` and `build-linux` run the whole suite (`npx vitest run`) before building | Green; every file's result equals the pull request run's on the same OS |
+| CI run 38409643796 (`ci.yml` dispatch on `release/v2.1.1`, `codex_rc_version` 0.156.1) | The real-CLI conformance smoke: minimum, pinned and release candidate on each OS (WP1.71) | All 9 legs green |
+
+The suite: 1,462 files on each OS; Windows 23,013 tests (22,891 passed, 1 expected fail, 119 skipped, 2 todo), macOS
+22,970 (22,704 passed, 1 expected fail, 263 skipped, 2 todo), Linux 22,962 (22,683 passed, 1 expected fail, 276
+skipped, 2 todo). No test failed and none was retried.
+Every skip is explained in `skip-ledger.md`; per-OS detail is in `ci-matrix.md`. `release.yml` runs no test step on
+macOS, so macOS has no suite run at the commit's own SHA; its run is the pull request's, on the same tree. The release
+run's test steps ran with `WP1_PHASE` empty (a beta-channel run), so the traceability gate there ran at the manifest's
+phase, gate0. The candidate phase first runs in the promotion pull request and the stable run.
+
+### 3.4 CLI versions
+
+- **Codex.** The minimum 0.153.4 and the pinned 0.155.1 (`src/main/providers/codex/cli-contract.ts`), and the release
+  candidate 0.156.1, the newest version tested against the app (the owner confirmed that choice on 2026-10-14,
+  `docs/wp1/owner-decisions-2026-10-13.md#RC1`). In CI each was installed from the published `@openai/codex` package.
+  On the Windows test VM: 0.153.4 and 0.155.1, each as the npm `codex.cmd` shim and as the `codex.exe` its npm install
+  ships. The packaged smokes and the owner's sitting use 0.155.1. On the Linux test host: 0.155.1 only, the npm
+  package's own binary (0.153.4 is not on that host).
+- **Claude Code.** No session of a real Claude Code runs in CI or in the agents' runs: their sessions use a stand-in
+  that answers `--version` with `2.1.296 (Claude Code)` and records each start. At the owner's sitting the disposable
+  Claude account was signed in, and a Claude session in that copy asked Codex for a review (`real-cli-matrix.md`,
+  WP1.64). The authority list the app strips is derived from Claude Code 2.1.278 (known limitation 9).
+
+### 3.5 Runners and hosts
+
+- **CI:** `windows-2025` (image windows-2025-vs2026, 20260925.250.1), `macos-latest` (macos-26-arm64, 20260907.0351.1)
+  and `ubuntu-latest` (ubuntu-24.04, 20261004.327.1), Node 20.20.2.
+- **The Windows test VM:** Hyper-V, Windows 11 Enterprise Evaluation, x64. The dev build at the commit for the e2e
+  matrix and the real-CLI rows (Node 24.16.0, Electron 44.5.1, @playwright/test 1.63.0); the signed installer for the
+  packaged smoke, in a standard (non-administrator) account; for the owner's sitting, a hash-equal copy of that install
+  in the VM's administrator test account, at the console (an interactive logon), the app not elevated.
+- **The macOS test Mac:** macOS 27.0.1, arm64; a standard test user for the owner's run, which was not run.
+- **The Linux test host:** Rocky Linux 10.2, x86_64, GNOME on Wayland; a fresh standard test user, logged in at the
+  console by the owner. The agent worked inside that session over key SSH, with no administrator rights.
+
+### 3.6 Commands
+
+- CI: `gh workflow run release.yml --ref release/v2.1.1 -f channel=beta -f skip_vt=false`;
+  `gh workflow run ci.yml --ref release/v2.1.1 -f codex_rc_version=0.156.1`; each run read with `gh run view` and its
+  job logs (`ci-matrix.md`, `skip-ledger.md`).
+- The release: the shared release verifier (tag, version, assets, update metadata, `CHECKSUMS.txt`),
+  `Get-AuthenticodeSignature` on the installer and on the uninstaller it carries, `node scripts/gen-changelog.js
+  --notes 2.1.1` at the commit against the release body, and VirusTotal read per file.
+- The Windows test VM: `git checkout --detach d1525759a7a42d941beeff601af3415fddd8afdd`, `npm run build`, then
+  `npx playwright test --reporter=line,json` with the 27 tracked specs named (`mode-matrix.md`) and with a VM-local
+  spec for the real-CLI rows (`real-cli-matrix.md`); the signed installers by double-click and their wizards
+  (`packaged-smoke.md`, `rollback.md`); the app's own Codex install, driven over a loopback DevTools port in a fresh
+  install of the qualification build (`real-cli-matrix.md`, WP1.32).
+- The owner's sitting on the Windows test VM: the app's own pages and buttons, by the owner, with the app's state read
+  over a loopback DevTools port; two staged scripts for the console check and its harness cause; one for the managed
+  re-authentication proof (`codex login status` and `codex logout` with `CODEX_HOME` set per folder); for the window
+  buttons, mouse events injected into the page through the loopback DevTools port, not the operating system's mouse,
+  each after the page's own hit test (`real-cli-matrix.md`, `packaged-smoke.md`).
+- The Mac: `spctl -a -t exec -vv`, `xcrun stapler validate`, `codesign --verify --deep --strict -vv` and the bundle's
+  `Info.plist`, on the DMG mounted read-only (`packaged-smoke.md`).
+- The Linux test host: the AppImage checked against `CHECKSUMS.txt`, and against its SHA-256 before each start; started
+  with `--appimage-extract-and-run` (and `--ozone-platform=x11` once the screen had locked) and a loopback DevTools
+  port, and driven over it by a client on the host; `codex login status` per account folder; the loopback fake model;
+  process, port and file-hash reads (`packaged-smoke.md`, `rollback.md`, `real-cli-matrix.md`).
+
+### 3.7 The scope of the real smoke
+
+Recorded at the commit:
+- the e2e mode matrix on the Windows test VM, every cell green, with the real Codex 0.153.4 and 0.155.1 in the minimum
+  real launch (`mode-matrix.md`; WP1.1, WP1.60);
+- the real-CLI rows 2, 9, 25 and 33 and the no-item rows 1, 12, 23 and 48 on the Windows test VM: the real CLI on both
+  versions and both install routes, fake keys, the loopback fake model, no real sign-in (`real-cli-matrix.md`);
+- the non-secret conformance smoke on the minimum, pinned and release-candidate CLI on all three OSes
+  (`real-cli-matrix.md`, WP1.71);
+- the packaged smoke of the signed installer on Windows, and the macOS signature, notarization and Gatekeeper checks
+  (`packaged-smoke.md`);
+- the packaged upgrade from 2.1.0 on Windows (`packaged-smoke.md`, "Upgrade from 2.1.0"). Every check passed, Vision
+  by the console check: Vision did not start in the agent's network logon (known limitation 11), and in an interactive
+  logon the console check passed (below). The What's New heading names the release the user comes from, which the owner
+  ruled correct (`docs/wp1/owner-decisions-2026-10-13.md#WN1`);
+- the install chain on Windows: 2.1.1-beta.2, the qualification build, 2.1.1-beta.1, 2.1.0 and the qualification build
+  again, then a second run that repeated the 2.1.1-beta.2 and 2.1.1-beta.1 steps, each installed over the qualification
+  build. Every step passed (Vision aside, as above). The profile starts at those two steps, not confirmed in the first
+  run, were confirmed in the second (`rollback.md`, note 1);
+- the app's own Codex install on Windows ("Run it for me", WP1.32): OpenAI's installer route reached a version class,
+  and counts as the Windows install smoke (`docs/wp1/owner-decisions-2026-10-13.md#OQ2`). The npm route installed
+  Codex, but the app found it only once npm's global folder was on the user's PATH, which proves why it did not before
+  (`real-cli-matrix.md`; known limitation 12);
+- the owner's sitting on the Windows test VM, 2026-10-14, in an interactive logon with the app not elevated
+  (`real-cli-matrix.md`, `packaged-smoke.md`):
+  - the console check: the app recognised a leftover browser of 2.1.0's shape as its own, ended it and started Vision;
+    the test copy's own Vision browser then did not connect, for a harness cause that was proven (known limitation 14);
+  - two managed Codex accounts signed in by the browser sign-in with the owner's consented identity (WP1.20, WP1.10,
+    and WP1.32's sign-in through the app), one made the reviewer default;
+  - a real prompt in a Codex session on a managed account, on a model the owner chose as GPT-6 (not read independently);
+  - the disposable Claude account signed in, and `codex_review` asked from a Claude session on Codex 0.155.1, which
+    answered with Codex's finding;
+  - a link in a session's output, which opened in the default browser;
+  - Sign in again on a Codex account, then WP1.52's proof: the old sign-in folder signed out with `codex logout`, the
+    new one still signed in, the file store in both (once, on 0.155.1). Sign in again's "same account" box starts
+    unticked (known limitation 13);
+  - the window buttons on the setup page and the Multi Spawn page: each button's action worked, clicked by the agent
+    through the DevTools port, which cannot rule out a window drag region over a button (`packaged-smoke.md`);
+- the packaged run on the Linux test host, 2026-10-14, in the test user's graphical session: a clean run of the
+  AppImage, then the upgrade from 2.1.0 and the rollback to it, on the same data. Every check passed. Every start used
+  `--appimage-extract-and-run` (known limitation 1). The screen was locked, so the sessions, the typing, the upgrade
+  and the rollback ran on X11 through Xwayland, not native Wayland; the typing was injected through the DevTools port;
+  and there are no screenshots (known limitation 16; `packaged-smoke.md`, `rollback.md`);
+- WP1.2's rows 9, 25 and 33 on the Linux test host, on the packaged qualification build, with Codex 0.155.1, fake keys
+  and the loopback fake model: rows 9 and 33 passed, and row 25's index matched its rule on every session, with F-L1-2
+  reproduced on a labelled synthetic rollout (`real-cli-matrix.md`; known limitation 8).
+
+Not run, on the owner's ruling of 2026-10-14 (`docs/wp1/owner-decisions-2026-10-13.md#SP1`; known limitation 15):
+- on the Windows test VM: Sign in again a second and a third time (Codex 0.153.4, the keyring store), the second
+  consented identity's run, `codex_review` on Codex 0.153.4, the disposable Claude account's sign-out and its check after
+  a relaunch, and the keyring smoke (the keyring store is out of 2.1.1's scope, `#KR1`);
+- on the macOS test user: the owner's install, first launch, Codex sign-in, prompt, upgrade from 2.1.0 and rollback
+  (`#UA8`).
+
+Not run on macOS either: WP1.2's rows 9, 25 and 33 with fake keys, with the macOS test user's sitting, on the
+owner's later ruling of 2026-10-14 (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`, section 3.10).
+
+Not taken: section 4 row 18, the session-strip meters with a working model (known limitation 3).
+
+### 3.8 Known limitations
+
+Items 2 to 4 and 15 are checks not taken, each citing the owner-decision section that says why. The others are limits
+of this release or of what was taken, each with the file that records it where there is one. They cite no owner
+decision, except that item 8 cites AM3, which accepts its second finding, and item 12 cites the owner's ruling that
+accepts it (OQ2). The owner confirmed every section cited here on 2026-10-14: OQ1, which item 4 cites, and SP1's
+amendment of WP1.52's 2.1.1 scope, which item 15 bears on, by the later ruling in section 3.10.
+
+1. **Linux: the AppImage needs FUSE 2.** Start the AppImage with `--appimage-extract-and-run` where FUSE 2's
+   `fusermount` is missing, because the AppImage cannot mount there. This was seen on the Rocky Linux 10.2 test host,
+   which had FUSE 2's library and FUSE 3, but no `fusermount` (`packaged-smoke.md`). 2.1.0's AppImage fails the same
+   way. `README.md` (Requirements) says so.
+2. **Release-plan checks not taken** (`docs/wp1/owner-decisions-2026-10-13.md#KL1`): the API-key sign-in, status and
+   sign-out on every OS; the ChatGPT sign-in, status and sign-out on Linux; launch, resume and the account picker on
+   Linux (section 4 rows 9, 23 and 33); a real install through the app on macOS and Linux (row 3). Rows 9 and 33 on
+   Linux were later taken with fake keys, for WP1.2 (`real-cli-matrix.md`); signed in, and row 23, they were not.
+3. **No-item rows not taken on Windows** (`docs/wp1/owner-decisions-2026-10-13.md#KL2`): section 4 rows 13, 18, 21,
+   27, 50, 64 and 74 on the Windows test VM, which could have been taken and were not run. Row 21 was skipped for a
+   harness gap (its usage-header pills needed more test harness than the time left allowed), rows 64 and 74 were
+   passed over for row 12, and rows 13, 27 and 50 were not reached in the window. Row 18 (the session-strip meters
+   with a working model, the owner's) was not taken at the owner's sitting: the prompt was sent, but the meters and its
+   rollout were not read (`real-cli-matrix.md`).
+4. **Other checks not taken** (`docs/wp1/owner-decisions-2026-10-13.md#KL3`): the macOS and Linux columns of the
+   section 4 rows that nothing else covers; the four WP1.30 cases that need a non-elevated Windows process (the CI
+   runner is elevated, so they skip by design; every other WP1.30 case ran on each OS, `ci-matrix.md`); and the
+   rollback rehearsal of the published release (set to draft, gone from the in-app update list, published again),
+   refused by the agent's permission policy as a change to a public release, with its pre-checks passed. KL3 does not
+   cover the macOS and Linux columns of rows 9, 25 and 33 (WP1.2) or row 49 (WP1.64): they are parts of those items.
+   Their signed-in parts are unavailable (UA1 on Linux; UA6, `codex_review` on macOS and Linux; UA8 for the macOS
+   sitting; section 3.9). Of rows 9, 25 and 33 with fake keys, the Linux columns were taken (`real-cli-matrix.md`) and
+   the macOS columns were not run, on the owner's ruling (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`, under UA8).
+5. **Cases that run in no CI job.** `skip-ledger.md` ("Unexplained or to decide") lists them with where each would
+   run: the makensis cases, the opt-in real-Claude and live cases, the manual console check, the authority-list
+   re-derivation, cases that need Node 24, other shells, or helper-made folders on a VM, and the WP1.30 cases above.
+6. **The macOS DMG is unsigned and unstapled by design** (`build.dmg.sign: false`, unchanged since 2.1.0). The app
+   inside it is signed, notarized and stapled, and Gatekeeper accepts it.
+7. **The Vision browser outlives Quit when the app runs in a non-administrator network logon.** The app ends it with
+   `taskkill`, which such a logon is denied. In an administrator's logon the same build ended it at every quit. In an
+   interactive logon with the app not elevated it was not observed: at the owner's sitting the test copy's own Vision
+   browser never opened its port (item 14), and its quit was not checked for a leftover browser (`packaged-smoke.md`).
+   2.1.0 leaves it running after every quit, so this is not a regression.
+8. **Two findings, neither severe nor a regression against 2.1.0** (`real-cli-matrix.md`):
+   - a Codex tab started through the npm `codex.cmd` shim, whose configured project folder differs in letter case from
+     the folder on disk, opens the resume list after a relaunch instead of resuming directly. It lists only that
+     account's conversation, and nothing is lost; 2.1.0 has no exact Codex resume at all;
+   - Tokenomics prices a Codex `token_count` event that repeats the previous cumulative total. In 1 of 6 real
+     rollouts, 3 turns were priced twice (0.63% over that rollout's own total). 2.1.0 has the same rule. The owner
+     accepted it for WP1.2's row 25 (`docs/wp1/owner-decisions-2026-10-13.md#AM3`);
+   - on Linux, F-L1-1's letter-case form cannot arise and did not; a project folder reached through a symbolic link,
+     which could miss the claim in the same way, was not tested. F-L1-2 reproduced there on a labelled synthetic
+     rollout that repeats its one usage event.
+9. **WP1.38** (ADR-026, settled point 4): the authority list is derived from Claude Code 2.1.278, and a later Claude
+   Code is not re-derived in this release; the in-app project-gate refusal and worktree resume were last run on the
+   installed app at `c9c908a5` and `f2332e39`, not at the commit above.
+10. **WP1.71:** the release-candidate legs capture the help but do not compare it, since no fixture exists for 0.156.1.
+    The smoke is non-secret by design: it proves detection, the command lines' flags, the model list and the features
+    against each real CLI, not a signed-in turn.
+11. **Windows: Vision may not start after an upgrade from 2.1.0, in a logon where the app cannot list running
+    programs.** 2.1.0's Vision browser outlives 2.1.0's quit and keeps port 9222. At each start the qualification build
+    first asks Windows (CIM) which program holds that port, and ends the browser only if it is the app's own. The
+    agent's non-administrator NETWORK-token logon is denied that query, so there the build ended nothing and did not
+    start Vision, and logged that port 9222 is in use (`packaged-smoke.md`, "Upgrade from 2.1.0"). In the same logon
+    2.1.0 and 2.1.1-beta.1 attach to the leftover browser and start Vision (`rollback.md`, "Vision"), so in that logon
+    type this differs from 2.1.0. In an interactive logon it does not happen: at the owner's console check the same
+    build, not elevated, recognised a leftover browser of 2.1.0's shape as its own, ended it and started Vision
+    (`packaged-smoke.md`). The app's help carries a known issue for it after an in-app update from 2.1.0, with the
+    workaround: sign out of Windows and back in, or restart the computer; Vision then starts.
+12. **Windows: "Run it for me" with npm does not find Codex where npm's global folder is not on the user's PATH.** On a
+    computer where another user installed Node.js, npm installs Codex into the account's own npm folder
+    (`%APPDATA%\npm`), which is then on neither the user's nor the computer's PATH. The app looks for Codex only on the
+    PATH (re-read from the registry after an install), so Set up Codex reads "The command ended, but Codex was still
+    not found". With that folder on the user's PATH the same build found that Codex (`real-cli-matrix.md`, WP1.32).
+    Workaround: use OpenAI's installer, the other recipe on the same page, which found Codex in the same account; or
+    add that folder to the PATH and run it again.
+    Not a regression: 2.1.0 has no "Run it for me". The app's help does not carry this yet: its known issues live in
+    `src/shared/app-knowledge.ts`, which is not a binding-neutral path, so the entry, and a check that also looks in
+    npm's global folder or a message that names the PATH cause, are follow-ups for the next release.
+    The owner accepted this as a known limitation on 2026-10-14 (`docs/wp1/owner-decisions-2026-10-13.md#OQ2`).
+13. **Codex: Sign in again's "Sign in to the same account as before." box starts unticked.** Left unticked, the sign-in
+    is added as a new account, by design, and the account it was started from is left as it was. At the owner's
+    sitting the obvious path made a second account this way (`real-cli-matrix.md`). Workaround: tick the box. A
+    follow-up for 2.1.2.
+14. **The owner's sitting: the test copy's Vision did not connect, because of the test harness, not the product.** The
+    sitting's launcher gave the app a home folder of its own (`USERPROFILE` and `HOME`). Chrome 155 started that way
+    refuses remote debugging ("DevTools remote debugging requires a non-default data directory") and never opens its
+    port. With the account's normal environment the same Chrome, with the app's arguments, listened within about half a
+    second (`packaged-smoke.md`). A normal install sets no such override.
+15. **Checks the owner's short path left out** (`docs/wp1/owner-decisions-2026-10-13.md#SP1`): on the Windows test VM,
+    Sign in again a second and a third time (Codex 0.153.4, the keyring store), the second consented identity's run,
+    `codex_review` on Codex 0.153.4, the disposable Claude account's sign-out and its check after a relaunch, and the
+    keyring smoke; and the owner's run on the macOS test user. A part of an item that may read `unavailable` is in
+    section 3.9. WP1.52's VM proof was taken once, on Codex 0.155.1 with the file store; the keyring store is out of
+    2.1.1's scope (`docs/wp1/owner-decisions-2026-10-13.md#KR1`).
+16. **Linux: what the packaged run did not exercise.** GNOME's idle lock had locked the test user's screen, and the
+    agent did not unlock it; a locked Wayland session gives the window no frames. So the sessions, the typing, the
+    upgrade and the rollback ran on X11 through Xwayland, not native Wayland. The typing was injected through the
+    DevTools port, so the desktop's own keyboard path, and typing into a terminal under native Wayland, were not
+    tested. There are no screenshots. Only Codex 0.155.1, on one install route, was on the host (`packaged-smoke.md`,
+    `real-cli-matrix.md`).
+
+### 3.9 Unavailable items
+
+Eight items read `unavailable`, each on a section of `docs/wp1/owner-decisions-2026-10-13.md` the owner confirmed on
+2026-10-14. The OQ1 lines in UA1 and UA8, for WP1.2's rows 9, 25 and 33 on macOS with fake keys, rest on the owner's
+later ruling of OQ1 the same day (section 3.10). Each decision section says what was taken.
+
+| Item | Status | What is unavailable | Decision |
+|---|---|---|---|
+| WP1.10 | `unavailable` | The two-account run on macOS and Linux; on Windows, the run with the second consented identity, not run on the owner's short path | `docs/wp1/owner-decisions-2026-10-13.md#UA2` |
+| WP1.11 | `unavailable` | The native keyring smoke with a second identity on macOS and Linux; on Windows, the keyring smoke, the store being out of 2.1.1's scope | `docs/wp1/owner-decisions-2026-10-13.md#UA3` |
+| WP1.20 | `unavailable` | A disposable identity for the browser sign-in, and the Linux sign-in; the macOS sign-in, not run (UA8) | `docs/wp1/owner-decisions-2026-10-13.md#UA4` |
+| WP1.32 | `unavailable` | The real installer smoke through the app on macOS and Linux | `docs/wp1/owner-decisions-2026-10-13.md#UA5` |
+| WP1.64 | `unavailable` | Disposable Codex identities, the API-key flow, the second-identity flows off Windows, every credential-bearing flow on Linux, `codex_review` (section 4 row 49) on macOS and Linux; on the owner's short path the Claude sign-out and its relaunch check, `codex_review` on 0.153.4 and the second identity's flows on Windows; the macOS sign-in (UA8) | `docs/wp1/owner-decisions-2026-10-13.md#UA6` |
+| WP1.72 | `unavailable` | An ephemeral identity, the macOS and Linux stores, and the Windows smoke, the store being out of 2.1.1's scope | `docs/wp1/owner-decisions-2026-10-13.md#UA7` |
+| WP1.2 | `unavailable` | A real, signed-in Codex-only session on Linux, with section 4 rows 9, 25 and 33 there in a signed-in session; on macOS, the signed-in session and rows 9, 25 and 33 with fake keys, not run (UA8, OQ1) | `docs/wp1/owner-decisions-2026-10-13.md#UA1` |
+| WP1.63 | `unavailable` | The owner's install, first launch, upgrade and rollback on the macOS test user, not run on the owner's ruling | `docs/wp1/owner-decisions-2026-10-13.md#UA8` |
+
+WP1.2's rows 9, 25 and 33 with fake keys were taken on Linux (`real-cli-matrix.md`) and not run on macOS (OQ1, under
+UA8). Its row 25 reads as AM3 amends it, so WP1.2 also cites the decisions file as evidence. WP1.63's Linux run is
+recorded (`packaged-smoke.md`); only its macOS host part is unavailable.
+
+The candidate run prints the items that read `unavailable` (`WP1 candidate: unavailable on a recorded owner decision:
+...`), and that list goes to go with this section.
+
+### 3.10 Owner answers
+
+Given on 2026-10-14, in one answer ("Yes") to "may I record every remaining decision at its default?"
+(`docs/wp1/owner-decisions-2026-10-13.md`, its status paragraph, which quotes the question's list as it was recorded):
+- confirmed as drafted: UA1 to UA7 (UA1 to UA4, UA6 and UA7 gained their "Not run (2026-10-14)" rows afterwards,
+  from the answer's lines), AM1 (WP1.73's text), AM2 (WP1.19), KL1, KL2 and KL3. Written afterwards, each from a line
+  of the list the owner confirmed: UA8 (the macOS sitting), AM3 (WP1.2's row 25, finding F-L1-2), KR1 (the keyring
+  store out of 2.1.1's scope), RC1 (WP1.71's release candidate, 0.156.1), SP1 (the checks the short path left out)
+  and WN1 (the What's New heading). UA1, UA8, KL3 and SP1 were then updated for OQ1, below;
+- OQ1: not ruled by this answer. The list as first recorded named it ("OQ1 = take the fake-key macOS and Linux
+  columns"), but that line was the coordinating agent's paraphrase, not part of the question, which did not name OQ1.
+  The owner ruled its macOS part later the same morning (below): the macOS columns of WP1.2's rows 9, 25 and 33 with
+  fake keys are recorded as not run. The Linux columns were taken by an agent run on the Linux test host
+  (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`);
+- WP1.52: SP1 amends its 2.1.1 scope to the one run taken (Sign in again once, on Codex 0.155.1 with the file store).
+  This answer's question named neither WP1.52, nor Sign in again's run on Codex 0.153.4, nor any amendment; the owner
+  ruled the amendment later the same morning (below; `docs/wp1/owner-decisions-2026-10-13.md#SP1`);
+- OQ2: its default. OpenAI's installer route is WP1.32's Windows install smoke, and the npm route in an account whose
+  npm global folder is on no PATH is known limitation 12. WP1.32's sign-in through the app was taken at the owner's
+  sitting;
+- the What's New heading: "What's new since 2.1.0" is correct, and the upgrade check's heading clause reads "What's new
+  since <from-version>" (WN1). No wording change, so the binding head does not move;
+- WP1.30's four non-elevated Windows cases: KL3's row confirmed, which this section had set out before the answer as
+  against ADR-026 settled points 2 and 5. WP1.30 reads `evidenced`, with those cases as known limitation 4, and no
+  non-elevated VM run is taken for 2.1.1.
+
+The owner's go (the plan's Q5), which this answer did not give, was given later on 2026-10-14, at about 02:12 BST, on
+condition that the remaining gates pass with no severe finding: the Linux run and its independent check, the review of
+this evidence, the candidate check, and green CI on the promotion pull request. A severe finding or a red gate goes
+back to the owner. The go came before the OQ1 correction, and its conditions did not include a ruling on OQ1 or on
+WP1.52's amendment, so both were then put to the owner in one question of their own. At about 06:00 BST on
+2026-10-14 the owner ruled both, answering "OK both vms are on - go" (the question and the answer are quoted in
+`docs/wp1/owner-decisions-2026-10-13.md#OQ1` and `docs/wp1/owner-decisions-2026-10-13.md#SP1`): WP1.2's rows 9, 25
+and 33 on macOS with fake keys are recorded as not run with the macOS sitting (UA8); and WP1.52's 2.1.1 proof is the
+one Sign in again run taken, on Codex 0.155.1 with the file store, its runs on Codex 0.153.4 and with the keyring
+store recorded as not run. The promotion pull request is merged with "Create a merge commit", so the commit above
+stays an ancestor of main.
 
 ## 4. Verification owed by the 20 DONE rows (PR 4, P4.10)
 
