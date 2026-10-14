@@ -32,6 +32,7 @@ thumbprint `00EC0DEE208F91785D253C0731E28249C68053FD` and an SSL.com timestamp.
 | 2.1.0 (stable) | `AI-Code-Conductor-2.1.0.exe` | `dccbd244c916eeb74d98ed722a6330418e1e27eac2e8feb3768b40db8c8f0041` |
 | 2.1.1-beta.1 | `AI-Code-Conductor-2.1.1-beta.1.exe` | `379ac216baae55181388ef1ba9f08615ef73f033d32ea76d624db08aac36f47e` |
 | 2.1.1-beta.2 | `AI-Code-Conductor-2.1.1-beta.2.exe` | `1b2b60be0d6bb4ea1a3b6a1d605c43d3bc3366a0e8a883aca9fe51d300a74a84` |
+| 2.1.1-beta.3 (staged and checked with the others; not installed in the chain below) | `AI-Code-Conductor-2.1.1-beta.3.exe` | `d63877e007fd358bcc1270a8fa9bf3f2a1a91caf2c2334277c86b0dc5a31343e` |
 | 2.1.1, the qualification build (release `v2.1.1-beta`, run 38409628911) | `AI-Code-Conductor-2.1.1.exe` | `da72adf4e5d9f175c9a3e8c1b58f8e4234f9be5f9acc2eeef7a4b64a0e6f5952` |
 
 ## Windows (agent, 2026-10-13)

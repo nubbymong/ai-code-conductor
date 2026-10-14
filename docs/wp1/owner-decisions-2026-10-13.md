@@ -1,8 +1,9 @@
 # Owner decisions, 2026-10-13: WP1 evidence that is unavailable for 2.1.1
 
 **Status: confirmed by the owner on 2026-10-14. OQ1 and SP1's amendment of
-WP1.52's 2.1.1 scope were ruled by the owner separately, at about 06:00 BST
-the same day (sections OQ1 and SP1).**
+WP1.52's 2.1.1 scope were ruled by the owner later, together in one
+question, at about 06:00 BST on 2026-10-14, apart from the 02:01 answer
+(sections OQ1 and SP1).**
 At about 02:01 BST on 2026-10-14, after the owner's sitting on the Windows
 test VM, the owner was asked in chat "may I record every remaining decision
 at its default?", with this list, as the coordinating agent recorded it:

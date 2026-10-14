@@ -614,7 +614,7 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/rollback.md",
-          "sha256": "104286b9b9cdcc4fde02b22089b005113c4724a876d5f42836da1156b56a61b9",
+          "sha256": "3d92a5520380a26b36b666efab1aa39b3c9e9f3b3006ede4a963d8fbc08aaf32",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "the packaged-build agent (Claude Code), on the Windows test VM, standard test account, over SSH; the Linux agent (Claude Code), on the Linux test host, for the Linux rollback leg (2026-10-14)",
           "at": "2026-10-14T01:33:10Z",
