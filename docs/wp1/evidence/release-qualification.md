@@ -6,8 +6,10 @@ the WP2 guidance commit (commit 7, on top of `accec3c2`,
 branch `session/beta/c4d568ce-wp2-codex`, 2026-09-25). Section 3 is the
 release-run record (WP1.37, WP1.73), written for 2.1.1 at its qualification
 commit, d1525759a7a42d941beeff601af3415fddd8afdd. Every part of it is
-recorded, and `tests/wp1/traceability.json` declares the 2.1.1 candidate on
-it. Section 4 maps the verification the 20 DONE parity rows still owe
+recorded, and `tests/wp1/traceability.json` declared the 2.1.1 candidate on
+it for the promotion to main (pull request #645); on beta the manifest is
+back at phase gate0, keeping its statuses and the records bound to this
+commit. Section 4 maps the verification the 20 DONE parity rows still owe
 to the check that gives it and the file it is recorded in (PR 4, P4.10).
 
 Every statement below was checked against the code of this build before it was
@@ -119,7 +121,7 @@ runs on the Windows test VM and the Linux test host, the owner's sitting on the 
 known limitations are recorded here. No PENDING block is left, here or in the files this section cites. The owner
 confirmed `docs/wp1/owner-decisions-2026-10-13.md` on 2026-10-14, and ruled OQ1 and SP1's amendment of WP1.52's
 2.1.1 scope later that morning (section 3.10). WP1.37 and WP1.73 read `evidenced` in
-`tests/wp1/traceability.json`, which declares the candidate.
+`tests/wp1/traceability.json`, which declared the candidate for the promotion to main (back at phase gate0 on beta).
 
 ### 3.1 The tested commit
 
@@ -408,8 +410,9 @@ Given on 2026-10-14, in one answer ("Yes") to "may I record every remaining deci
   and WN1 (the What's New heading). UA1, UA8, KL3 and SP1 were then updated for OQ1, below;
 - OQ1: not ruled by this answer. The list as first recorded named it ("OQ1 = take the fake-key macOS and Linux
   columns"), but that line was the coordinating agent's paraphrase, not part of the question, which did not name OQ1.
-  The owner ruled it later the same morning (below): the Linux columns of WP1.2's rows 9, 25 and 33 with fake keys
-  were taken, and the macOS columns are recorded as not run (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`);
+  The owner ruled its macOS part later the same morning (below): the macOS columns of WP1.2's rows 9, 25 and 33 with
+  fake keys are recorded as not run. The Linux columns were taken by an agent run on the Linux test host
+  (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`);
 - WP1.52: SP1 amends its 2.1.1 scope to the one run taken (Sign in again once, on Codex 0.155.1 with the file store).
   This answer's question named neither WP1.52, nor Sign in again's run on Codex 0.153.4, nor any amendment; the owner
   ruled the amendment later the same morning (below; `docs/wp1/owner-decisions-2026-10-13.md#SP1`);

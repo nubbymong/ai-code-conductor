@@ -31,8 +31,9 @@ One line of that record is wrong. "OQ1 = take the fake-key macOS and Linux
 columns" was the coordinating agent's paraphrase, not part of the question:
 the question did not name OQ1, and the draft of this file had listed OQ1 as
 an open question with no default. So that answer did not rule OQ1. The
-owner ruled it later, at about 06:00 BST on 2026-10-14, in a question of its
-own; section OQ1 quotes the question and the answer.
+owner ruled it later, at about 06:00 BST on 2026-10-14, in one question
+together with SP1's amendment of WP1.52's 2.1.1 scope; section OQ1 quotes
+the question and the answer.
 
 So the sections of this file are decisions of the owner, as written below:
 UA1 to UA8, AM1 to AM3, KL1 to KL3, KR1, RC1, SP1, WN1, and the rulings on
@@ -286,7 +287,7 @@ known limitation for its Windows half). The owner confirmed it on
 with KL3"), so WP1.30 reads `evidenced` with these four cases as a known
 limitation, and no non-elevated VM run is taken for 2.1.1.
 
-## OQ1. Ruled: WP1.2's rows 9, 25 and 33 on macOS and Linux, with fake keys: taken on Linux, not run on macOS
+## OQ1. WP1.2's rows 9, 25 and 33 on macOS and Linux, with fake keys: not run on macOS, on the owner's ruling; taken on Linux, by an agent run
 
 This was a question, with no default. The owner's answer of about 02:01 BST
 on 2026-10-14 did not rule it: the line "OQ1 = take the fake-key macOS and
