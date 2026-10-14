@@ -56,13 +56,13 @@
       "currentTests": [],
       "baseCoverage": "evidence record, no base test",
       "unavailable": {
-        "reason": "A real, signed-in Codex-only session on Linux, and with it rows 9, 25 and 33 there signed in (no Linux identity is consented); on macOS the signed-in session and rows 9, 25 and 33 with fake keys, not run (the owner's short path left out the macOS test user's sitting: UA8, and OQ1 for the fake-key rows); taken: rows 2, 9, 25 and 33 on Windows on Codex 0.153.4 and 0.155.1 with fake keys, rows 9, 25 and 33 on Linux with fake keys on the packaged build, and a real signed-in session on Windows; row 25 reads as AM3 amends it (docs/wp1/evidence/real-cli-matrix.md)",
+        "reason": "A real, signed-in Codex-only session on Linux, and with it rows 9, 25 and 33 there signed in (no Linux identity is consented); on macOS the signed-in session and rows 9, 25 and 33 with fake keys, not run (the owner's short path left out the macOS test user's sitting: UA8; the owner ruled on 2026-10-14 that the fake-key rows go with it: OQ1); taken: rows 2, 9, 25 and 33 on Windows on Codex 0.153.4 and 0.155.1 with fake keys, rows 9, 25 and 33 on Linux with fake keys on the packaged build, and a real signed-in session on Windows; row 25 reads as AM3 amends it (docs/wp1/evidence/real-cli-matrix.md)",
         "decision": "docs/wp1/owner-decisions-2026-10-13.md#UA1"
       },
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/real-cli-matrix.md",
-          "sha256": "f8e35cd0f1f65445e74f6c1e24ac78e2b88c37882fd65eb044cda5eb786b5860",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
           "at": "2026-10-14T02:16:40Z",
@@ -213,7 +213,7 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/real-cli-matrix.md",
-          "sha256": "f8e35cd0f1f65445e74f6c1e24ac78e2b88c37882fd65eb044cda5eb786b5860",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
           "at": "2026-10-14T02:16:40Z",
@@ -410,7 +410,7 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/real-cli-matrix.md",
-          "sha256": "f8e35cd0f1f65445e74f6c1e24ac78e2b88c37882fd65eb044cda5eb786b5860",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
           "at": "2026-10-14T02:16:40Z",
@@ -652,7 +652,7 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/real-cli-matrix.md",
-          "sha256": "f8e35cd0f1f65445e74f6c1e24ac78e2b88c37882fd65eb044cda5eb786b5860",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
           "at": "2026-10-14T02:16:40Z",
@@ -752,16 +752,17 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/release-qualification.md",
-          "sha256": "0033333eaf0a1df23970a98a1aee1f80a54e27c08573ac9618f60c8a87f86d9e",
+          "sha256": "65203fbef6456c325ebbdf868582017ea1b6c4a5ad38a694f9c25fe8f8ff01eb",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "evidence assembly (Claude Code), compiled from the runs section 3 lists",
-          "at": "2026-10-14T03:21:13Z",
+          "at": "2026-10-14T05:10:07Z",
           "commands": [
             "gh run view 38409628911",
             "the release verifier, Get-AuthenticodeSignature, gen-changelog --notes 2.1.1",
             "compiled from mode-matrix.md, ci-matrix.md, skip-ledger.md, real-cli-matrix.md, packaged-smoke.md, rollback.md",
             "compiled from the owner's sitting (real-cli-matrix.md, packaged-smoke.md, keyring-smoke.md) and docs/wp1/owner-decisions-2026-10-13.md",
-            "compiled from the Linux test host runs (packaged-smoke.md, rollback.md, real-cli-matrix.md) and the OQ1 correction in docs/wp1/owner-decisions-2026-10-13.md"
+            "compiled from the Linux test host runs (packaged-smoke.md, rollback.md, real-cli-matrix.md) and the OQ1 correction in docs/wp1/owner-decisions-2026-10-13.md",
+            "compiled from the owner's ruling of 2026-10-14 on OQ1 and on SP1's amendment of WP1.52's 2.1.1 scope (docs/wp1/owner-decisions-2026-10-13.md, sections OQ1 and SP1)"
           ],
           "runId": "38409628911"
         }
@@ -986,11 +987,11 @@
       "status": "evidenced",
       "currentTests": [],
       "baseCoverage": "new capability, none on base",
-      "reason": "automated tests cover the staging, the decision, the switch, recovery and in-place re-authentication; the VM proof that signing out a retired realm never invalidates its replacement, with the real-CLI revalidation of the replacement after that sign-out, was taken once at boundHead on Codex 0.155.1 with the file store (docs/wp1/evidence/real-cli-matrix.md); its runs on 0.153.4 and with the keyring store were not run, on the owner's decisions of 2026-10-14, which set its 2.1.1 proof to the run taken (docs/wp1/owner-decisions-2026-10-13.md, sections SP1 and KR1); the ADR-009 pass is done",
+      "reason": "automated tests cover the staging, the decision, the switch, recovery and in-place re-authentication; the VM proof that signing out a retired realm never invalidates its replacement, with the real-CLI revalidation of the replacement after that sign-out, was taken once at boundHead on Codex 0.155.1 with the file store (docs/wp1/evidence/real-cli-matrix.md); its runs on 0.153.4 and with the keyring store were not run: the owner's short path left them out and the owner ruled the keyring store out of 2.1.1's scope on 2026-10-14; the owner ruled on 2026-10-14 that its 2.1.1 proof is the run taken (docs/wp1/owner-decisions-2026-10-13.md, sections SP1 and KR1); the ADR-009 pass is done",
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/real-cli-matrix.md",
-          "sha256": "f8e35cd0f1f65445e74f6c1e24ac78e2b88c37882fd65eb044cda5eb786b5860",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
           "at": "2026-10-14T02:16:40Z",
@@ -1190,7 +1191,7 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/packaged-smoke.md",
-          "sha256": "f572097361d8d46fca41a74d28f18484f8267e6643da43384822e33fe55a93dc",
+          "sha256": "c79234cc4be309106b4dee8e7e42b5f777e8ec6027474c0e64a58562ff5c8d3a",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "the packaged-build agents (Claude Code) on the Windows test VM (the clean install, then the upgrade from 2.1.0); the macOS agent (signature checks); the Linux agent (staging); the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the console check and the window buttons (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for the clean run, the upgrade from 2.1.0 and the rollback (2026-10-14)",
           "at": "2026-10-14T01:33:10Z",
@@ -1203,7 +1204,7 @@
             "SHA-256 of 17 user-data and credential files before and after the upgrade",
             "the console check: the staged probe (Chrome started with 2.1.0's Vision arguments, then the app's CIM browser query), then the test copy started and its app log read",
             "the harness test: Chrome 155.0.8059.40 started with the app's arguments on spare ports: a fresh profile, a fresh profile with USERPROFILE and HOME overridden, and a copy of the existing Vision profile",
-            "the window buttons: real mouse events over the loopback DevTools port; isMaximized and visibilityState read; process and port checks after Close",
+            "the window buttons: mouse events injected into the page over the loopback DevTools port (Input.dispatchMouseEvent), each after the page's own hit test (document.elementFromPoint); isMaximized and visibilityState read; process and port checks after Close",
             "the Linux AppImages (2.1.1 and 2.1.0), hash-checked before each start, started with --appimage-extract-and-run (and --ozone-platform=x11 once the screen had locked) and a loopback DevTools port; the app's pages driven over that port",
             "a fictional 2.1.0 user seeded by file; 2.1.0 run once, then 2.1.1 on its data, then 2.1.0 again; SHA-256 (first 16 hex digits) and size of the data and credential files before the upgrade, after it and after the rollback",
             "process, port and /proc reads after each quit; the run's files moved aside by literal path, and the home folder's lists compared with those before the run"
@@ -1231,7 +1232,7 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/real-cli-matrix.md",
-          "sha256": "f8e35cd0f1f65445e74f6c1e24ac78e2b88c37882fd65eb044cda5eb786b5860",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
           "at": "2026-10-14T02:16:40Z",
@@ -1384,7 +1385,7 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/real-cli-matrix.md",
-          "sha256": "f8e35cd0f1f65445e74f6c1e24ac78e2b88c37882fd65eb044cda5eb786b5860",
+          "sha256": "69793b8886f001d7bd2199c16fc8af1b7904fc7fe773ccfff9b6da636697d034",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "the VM operator agent (Claude Code) for rows 2, 9, 25, 33, 1, 12, 23 and 48; the CI evidence agent (Claude Code) for WP1.71; the packaged-build agent (Claude Code) for the app's own Codex install; the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the owner's sitting (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for WP1.2's rows 9, 25 and 33 on the packaged build (2026-10-14)",
           "at": "2026-10-14T02:16:40Z",
@@ -1458,16 +1459,17 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/release-qualification.md",
-          "sha256": "0033333eaf0a1df23970a98a1aee1f80a54e27c08573ac9618f60c8a87f86d9e",
+          "sha256": "65203fbef6456c325ebbdf868582017ea1b6c4a5ad38a694f9c25fe8f8ff01eb",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "evidence assembly (Claude Code), compiled from the runs section 3 lists",
-          "at": "2026-10-14T03:21:13Z",
+          "at": "2026-10-14T05:10:07Z",
           "commands": [
             "gh run view 38409628911",
             "the release verifier, Get-AuthenticodeSignature, gen-changelog --notes 2.1.1",
             "compiled from mode-matrix.md, ci-matrix.md, skip-ledger.md, real-cli-matrix.md, packaged-smoke.md, rollback.md",
             "compiled from the owner's sitting (real-cli-matrix.md, packaged-smoke.md, keyring-smoke.md) and docs/wp1/owner-decisions-2026-10-13.md",
-            "compiled from the Linux test host runs (packaged-smoke.md, rollback.md, real-cli-matrix.md) and the OQ1 correction in docs/wp1/owner-decisions-2026-10-13.md"
+            "compiled from the Linux test host runs (packaged-smoke.md, rollback.md, real-cli-matrix.md) and the OQ1 correction in docs/wp1/owner-decisions-2026-10-13.md",
+            "compiled from the owner's ruling of 2026-10-14 on OQ1 and on SP1's amendment of WP1.52's 2.1.1 scope (docs/wp1/owner-decisions-2026-10-13.md, sections OQ1 and SP1)"
           ],
           "runId": "38409628911"
         }
