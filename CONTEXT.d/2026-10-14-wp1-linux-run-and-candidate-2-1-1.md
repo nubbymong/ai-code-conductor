@@ -15,15 +15,20 @@
   (release-qualification 3.8, known limitation 16). The test user was not
   removed (that needs administrator rights); its run files were moved aside.
 - OQ1 corrected: the owner's "Yes" did not rule it. Its line in the
-  recorded question list was the coordinating agent's paraphrase. What
-  applies was set by the coordinating agent from the owner's short path,
-  and the owner has not ruled on it: the Linux columns taken, the macOS
-  columns not run, under UA8. UA1, UA8, KL3, SP1 and OQ1 in
-  `docs/wp1/owner-decisions-2026-10-13.md` say so.
-- Corrected after the spec and quality review: the records now say which
-  parts rest on the coordinating agent's reading rather than on the owner's
-  words (OQ1's macOS fake-key rows, and SP1's amendment of WP1.52's 2.1.1
-  scope), and that both go to the owner before the promotion; the window
+  recorded question list was the coordinating agent's paraphrase. The
+  Linux columns were taken.
+- The owner's ruling, about 06:00 BST: asked in one question whether the
+  macOS fake-key rows of OQ1, and the Sign in again runs SP1 drops from
+  WP1.52's 2.1.1 proof, are recorded as not run, the owner answered "OK
+  both vms are on - go". So the macOS columns are not run with the macOS
+  sitting, under UA8, and WP1.52's 2.1.1 proof is the one Sign in again run
+  taken (Codex 0.155.1, the file store). OQ1 and SP1 in
+  `docs/wp1/owner-decisions-2026-10-13.md` quote the question and the
+  answer; UA1, UA8 and KL3 cite them.
+- Corrected after the spec and quality review: the review found that the
+  records stated an owner decision for those two parts that the owner had
+  not yet made; both were then put to the owner, who ruled them (above),
+  and the records cite that ruling. Also corrected: the window
   buttons were clicked by mouse events injected through the DevTools port,
   which shows each button's action but cannot rule out a drag region over
   a button; the Linux run's `/tmp` leftovers need their own removal; and
