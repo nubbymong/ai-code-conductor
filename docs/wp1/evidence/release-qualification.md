@@ -117,8 +117,9 @@ on Windows included.
 Written for 2.1.1 at its qualification commit. **Status: recorded.** The commit, the builds, the CI runs, the agents'
 runs on the Windows test VM and the Linux test host, the owner's sitting on the Windows test VM (2026-10-14) and the
 known limitations are recorded here. No PENDING block is left, here or in the files this section cites. The owner
-confirmed `docs/wp1/owner-decisions-2026-10-13.md` on 2026-10-14, except OQ1, which that answer did not rule (section
-3.10). WP1.37 and WP1.73 read `evidenced` in `tests/wp1/traceability.json`, which declares the candidate.
+confirmed `docs/wp1/owner-decisions-2026-10-13.md` on 2026-10-14, except OQ1 and SP1's amendment of WP1.52's 2.1.1
+scope, which that answer did not rule (section 3.10). WP1.37 and WP1.73 read `evidenced` in
+`tests/wp1/traceability.json`, which declares the candidate.
 
 ### 3.1 The tested commit
 
@@ -203,8 +204,9 @@ phase, gate0. The candidate phase first runs in the promotion pull request and t
   install of the qualification build (`real-cli-matrix.md`, WP1.32).
 - The owner's sitting on the Windows test VM: the app's own pages and buttons, by the owner, with the app's state read
   over a loopback DevTools port; two staged scripts for the console check and its harness cause; one for the managed
-  re-authentication proof (`codex login status` and `codex logout` with `CODEX_HOME` set per folder); real mouse
-  events over the loopback port for the window buttons (`real-cli-matrix.md`, `packaged-smoke.md`).
+  re-authentication proof (`codex login status` and `codex logout` with `CODEX_HOME` set per folder); for the window
+  buttons, mouse events injected into the page through the loopback DevTools port, not the operating system's mouse,
+  each after the page's own hit test (`real-cli-matrix.md`, `packaged-smoke.md`).
 - The Mac: `spctl -a -t exec -vv`, `xcrun stapler validate`, `codesign --verify --deep --strict -vv` and the bundle's
   `Info.plist`, on the DMG mounted read-only (`packaged-smoke.md`).
 - The Linux test host: the AppImage checked against `CHECKSUMS.txt`, and against its SHA-256 before each start; started
@@ -248,7 +250,8 @@ Recorded at the commit:
   - Sign in again on a Codex account, then WP1.52's proof: the old sign-in folder signed out with `codex logout`, the
     new one still signed in, the file store in both (once, on 0.155.1). Sign in again's "same account" box starts
     unticked (known limitation 13);
-  - the window buttons on the setup page and the Multi Spawn page;
+  - the window buttons on the setup page and the Multi Spawn page: each button's action worked, clicked by the agent
+    through the DevTools port, which cannot rule out a window drag region over a button (`packaged-smoke.md`);
 - the packaged run on the Linux test host, 2026-10-14, in the test user's graphical session: a clean run of the
   AppImage, then the upgrade from 2.1.0 and the rollback to it, on the same data. Every check passed. Every start used
   `--appimage-extract-and-run` (known limitation 1). The screen was locked, so the sessions, the typing, the upgrade
@@ -266,8 +269,8 @@ Not run, on the owner's ruling of 2026-10-14 (`docs/wp1/owner-decisions-2026-10-
   (`#UA8`).
 
 Not run on macOS either: WP1.2's rows 9, 25 and 33 with fake keys. The owner's answer did not rule them; the
-coordinating agent set them as not run, with the macOS test user's sitting, and told the owner
-(`docs/wp1/owner-decisions-2026-10-13.md#OQ1`).
+coordinating agent set them as not run, with the macOS test user's sitting, and the owner has not ruled on them
+(`docs/wp1/owner-decisions-2026-10-13.md#OQ1`, section 3.10).
 
 Not taken: section 4 row 18, the session-strip meters with a working model (known limitation 3).
 
@@ -276,8 +279,8 @@ Not taken: section 4 row 18, the session-strip meters with a working model (know
 Items 2 to 4 and 15 are checks not taken, each citing the owner-decision section that says why. The others are limits
 of this release or of what was taken, each with the file that records it where there is one. They cite no owner
 decision, except that item 8 cites AM3, which accepts its second finding, and item 12 cites the owner's ruling that
-accepts it (OQ2). The owner confirmed every section cited here on 2026-10-14, except OQ1, which item 4 cites (section
-3.10).
+accepts it (OQ2). The owner confirmed every section cited here on 2026-10-14, except OQ1, which item 4 cites, and
+SP1's amendment of WP1.52's 2.1.1 scope, which item 15 bears on (section 3.10).
 
 1. **Linux: the AppImage needs FUSE 2.** Start the AppImage with `--appimage-extract-and-run` where FUSE 2's
    `fusermount` is missing, because the AppImage cannot mount there. This was seen on the Rocky Linux 10.2 test host,
@@ -374,7 +377,9 @@ accepts it (OQ2). The owner confirmed every section cited here on 2026-10-14, ex
 ### 3.9 Unavailable items
 
 Eight items read `unavailable`, each on a section of `docs/wp1/owner-decisions-2026-10-13.md` the owner confirmed on
-2026-10-14. Each decision section says what was taken.
+2026-10-14, except the OQ1 lines in UA1 and UA8 for WP1.2's rows 9, 25 and 33 on macOS with fake keys: the
+coordinating agent set those, and the owner has not ruled on them (section 3.10). Each decision section says what was
+taken.
 
 | Item | Status | What is unavailable | Decision |
 |---|---|---|---|
@@ -392,22 +397,27 @@ UA8). Its row 25 reads as AM3 amends it, so WP1.2 also cites the decisions file 
 recorded (`packaged-smoke.md`); only its macOS host part is unavailable.
 
 The candidate run prints the items that read `unavailable` (`WP1 candidate: unavailable on a recorded owner decision:
-...`), and that list goes to go with this section.
+...`), and that list goes to go with this section. For WP1.2's macOS fake-key part, that line says more than the
+record holds until the owner rules OQ1.
 
 ### 3.10 Owner answers
 
 Given on 2026-10-14, in one answer ("Yes") to "may I record every remaining decision at its default?"
 (`docs/wp1/owner-decisions-2026-10-13.md`, its status paragraph, which quotes the question's list as it was recorded):
-- every section of `docs/wp1/owner-decisions-2026-10-13.md` confirmed as written: UA1 to UA7, AM1 (WP1.73's text),
-  AM2 (WP1.19), KL1, KL2 and KL3, and the sections written from the same answer, UA8 (the macOS sitting), AM3 (WP1.2's
-  row 25, finding F-L1-2), KR1 (the keyring store out of 2.1.1's scope), RC1 (WP1.71's release candidate, 0.156.1),
-  SP1 (the checks the short path left out) and WN1 (the What's New heading). UA1, UA8, KL3 and SP1 were then updated
-  for OQ1, below;
+- confirmed as drafted: UA1 to UA7 (UA1 to UA4, UA6 and UA7 gained their "Not run (2026-10-14)" rows afterwards,
+  from the answer's lines), AM1 (WP1.73's text), AM2 (WP1.19), KL1, KL2 and KL3. Written afterwards, each from a line
+  of the list the owner confirmed: UA8 (the macOS sitting), AM3 (WP1.2's row 25, finding F-L1-2), KR1 (the keyring
+  store out of 2.1.1's scope), RC1 (WP1.71's release candidate, 0.156.1), SP1 (the checks the short path left out)
+  and WN1 (the What's New heading). UA1, UA8, KL3 and SP1 were then updated for OQ1, below;
 - OQ1: not ruled by this answer. The list as first recorded named it ("OQ1 = take the fake-key macOS and Linux
   columns"), but that line was the coordinating agent's paraphrase, not part of the question, which did not name OQ1.
-  What applies instead was set by the coordinating agent from the owner's short path, and the owner was told: the
-  Linux columns of WP1.2's rows 9, 25 and 33 with fake keys were taken, and the macOS columns were not run
-  (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`);
+  What applies instead was set by the coordinating agent from the owner's short path: the Linux columns of WP1.2's
+  rows 9, 25 and 33 with fake keys were taken, and the macOS columns were not run
+  (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`). The owner has not ruled on it;
+- WP1.52: SP1 amends its 2.1.1 scope to the one run taken (Sign in again once, on Codex 0.155.1 with the file store).
+  That amendment is the coordinating agent's reading of "recorded as not run": the question named neither WP1.52, nor
+  Sign in again's run on Codex 0.153.4, nor any amendment. The owner has not ruled on it
+  (`docs/wp1/owner-decisions-2026-10-13.md#SP1`);
 - OQ2: its default. OpenAI's installer route is WP1.32's Windows install smoke, and the npm route in an account whose
   npm global folder is on no PATH is known limitation 12. WP1.32's sign-in through the app was taken at the owner's
   sitting;
@@ -420,8 +430,9 @@ Given on 2026-10-14, in one answer ("Yes") to "may I record every remaining deci
 The owner's go (the plan's Q5), which this answer did not give, was given later on 2026-10-14, on condition that the
 remaining gates pass with no severe finding: the Linux run and its independent check, the review of this evidence,
 the candidate check, and green CI on the promotion pull request. A severe finding or a red gate goes back to the
-owner. The promotion pull request is merged with "Create a merge commit", so the commit above stays an ancestor of
-main.
+owner. The go came before the OQ1 correction, and its conditions do not include a ruling on OQ1 or on WP1.52's
+amendment, so both are put to the owner before the promotion. The promotion pull request is merged with "Create a
+merge commit", so the commit above stays an ancestor of main.
 
 ## 4. Verification owed by the 20 DONE rows (PR 4, P4.10)
 

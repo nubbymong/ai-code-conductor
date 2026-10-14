@@ -125,7 +125,8 @@ exit 0). The account was then restored to its state before the lane, with a matc
 interactive logon), from 00:16 to 01:05 UTC. The app ran without elevation. It was the test copy that
 `real-cli-matrix.md` describes ("The owner's sitting"): a hash-equal copy of the install above, started by a launcher
 with its own data folder, its own home folder (`USERPROFILE`, `HOME` and `CODEX_HOME`) and a loopback DevTools port.
-The agent read the app's state over that port and, for the window buttons, sent real mouse events over it.
+The agent read the app's state over that port and, for the window buttons, injected mouse events into the page through
+it.
 
 **The console check: PASS in the app.**
 - The owner first ran the staged probe in an elevated PowerShell. The app's browser query answered in the interactive
@@ -154,11 +155,18 @@ The agent read the app's state over that port and, for the window buttons, sent 
   override: the clean install above logged `[vision] CDP root connected to chrome on port 9222` 30 s after it launched
   its browser (in the agent's logon). `release-qualification.md` section 3 records this as known limitation 14.
 
-**The window buttons: PASS.** The agent clicked each button with real mouse events over the loopback port; after each
-minimise the owner restored the window from the taskbar. A shortcut started the copy on its setup page, and at a second
-launch on the Multi Spawn page.
+**The window buttons: PASS for each button's action.** The plan had the owner click each button. Instead the agent
+clicked them: mouse events injected into the page through the loopback DevTools port (`Input.dispatchMouseEvent`), not
+the operating system's mouse. After each minimise the owner restored the window from the taskbar. A shortcut started
+the copy on its setup page, and at a second launch on the Multi Spawn page.
 
-| Page | Buttons present and not covered (the hit test at each is the button) | Results |
+Before each click, the page's own hit test (`document.elementFromPoint` at the button's centre) returned the button.
+That test and the injected events stay inside the page: neither goes through the window's own hit test, so neither can
+see a drag region of the window lying over a button. This check therefore does not rule out a drag region over a
+button. What it shows is that each button's action worked. The Linux run's typing, also injected through the DevTools
+port, has the same kind of limit (below).
+
+| Page | Buttons present (the page's own hit test at each is the button) | Results |
 |---|---|---|
 | Setup page ("Claude CLI Setup") | Minimize, Maximize, Close | Maximize: maximised false to true. Restore: true to false. Minimize: the page went from visible to hidden, with the window on the taskbar; the owner clicked the taskbar icon, and it was visible again and focused. Close: the page stopped answering, the DevTools port and port 19333 stopped listening, and no app process was left. |
 | Multi Spawn page ("Enable Multi Spawn") | Minimize, Restore, Close (it opened maximised, so Maximize reads Restore) | Restore: maximised true to false. Minimize: visible to hidden; restored from the taskbar by the owner. Maximize: false to true. Close: the page stopped answering, no app process was left, and the DevTools port and ports 19333 and 19334 were free. |
@@ -326,5 +334,6 @@ rollback.
 
 **State left.** Every file of the run was moved aside, by its literal path. The test user's `~/.config`,
 `~/.local/share` and `~/.cache` then listed the same entries as before the run; no process or port of the run was
-left; and both AppImages' hashes were unchanged. Not cleared: Vision's `/tmp` leftovers and the shell-history lines,
-which go when the test user is removed. The graphical session stayed logged in: it was never unlocked or logged out.
+left; and both AppImages' hashes were unchanged. Not cleared: Vision's `/tmp` singleton folders and files, which need
+their own removal (removing the test user does not clear `/tmp`), and the shell-history lines, which go when the test
+user is removed. The graphical session stayed logged in: it was never unlocked or logged out.

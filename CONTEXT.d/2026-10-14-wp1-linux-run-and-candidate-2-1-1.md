@@ -16,10 +16,19 @@
   removed (that needs administrator rights); its run files were moved aside.
 - OQ1 corrected: the owner's "Yes" did not rule it. Its line in the
   recorded question list was the coordinating agent's paraphrase. What
-  applies, set by the coordinating agent from the owner's short path and
-  told to the owner: the Linux columns taken, the macOS columns not run,
-  under UA8. UA1, UA8, KL3, SP1 and OQ1 in
+  applies was set by the coordinating agent from the owner's short path,
+  and the owner has not ruled on it: the Linux columns taken, the macOS
+  columns not run, under UA8. UA1, UA8, KL3, SP1 and OQ1 in
   `docs/wp1/owner-decisions-2026-10-13.md` say so.
+- Corrected after the spec and quality review: the records now say which
+  parts rest on the coordinating agent's reading rather than on the owner's
+  words (OQ1's macOS fake-key rows, and SP1's amendment of WP1.52's 2.1.1
+  scope), and that both go to the owner before the promotion; the window
+  buttons were clicked by mouse events injected through the DevTools port,
+  which shows each button's action but cannot rule out a drag region over
+  a button; the Linux run's `/tmp` leftovers need their own removal; and
+  the disposable Claude account's record keeps to what the saved reads
+  hold (no refresh-token claim).
 - With these, every item is `evidenced` or `unavailable`: WP1.2 reads
   `unavailable` on UA1 (and cites the decisions file for AM3), WP1.63 on
   UA8, and WP1.37 and WP1.73 read `evidenced`. The manifest

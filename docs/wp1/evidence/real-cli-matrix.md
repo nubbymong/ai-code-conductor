@@ -21,16 +21,17 @@ install (WP1.32), the CI conformance smoke, the owner's sitting on the Windows t
 9, 25 and 33 on the Linux test host with fake keys (2026-10-14). The owner took a short path through that sitting; the
 checks it left out are recorded as not run, on the owner's ruling (`docs/wp1/owner-decisions-2026-10-13.md#SP1`), and
 the owner's run on the macOS test user was not run either (`docs/wp1/owner-decisions-2026-10-13.md#UA8`). WP1.2's rows
-9, 25 and 33 on macOS with fake keys went with that run, so they were not run either (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`).
+9, 25 and 33 on macOS with fake keys went with that run, so they were not run either: the coordinating agent recorded
+them so, and the owner has not ruled on them (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`).
 
-| Item | Recorded here at the head | Not taken | Status, and the owner's decision (confirmed 2026-10-14) |
+| Item | Recorded here at the head | Not taken | Status, and the owner's decision (confirmed 2026-10-14, except OQ1 and SP1's WP1.52 amendment) |
 |---|---|---|---|
-| WP1.2 | Rows 2, 9, 25 and 33 on the Windows test VM: the real Codex 0.153.4 and 0.155.1 on both install routes, fake keys, the loopback fake model. Rows 9, 25 and 33 on the Linux test host: the real Codex 0.155.1 on the packaged qualification build, fake keys, the loopback fake model. A real signed-in Codex session with a consented identity on Windows (the owner's sitting). The mode-matrix cells are in `mode-matrix.md` | Rows 9, 25 and 33 on macOS with fake keys: not run (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`). The session with the owner's sign-in on the macOS test user: not run (`docs/wp1/owner-decisions-2026-10-13.md#UA8`). A signed-in session on Linux. Row 25's twice-priced turns (F-L1-2), found on Windows and reproduced on Linux, are accepted for 2.1.1 (`docs/wp1/owner-decisions-2026-10-13.md#AM3`) | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA1`, which names the parts not taken; row 25 reads as AM3 amends it |
+| WP1.2 | Rows 2, 9, 25 and 33 on the Windows test VM: the real Codex 0.153.4 and 0.155.1 on both install routes, fake keys, the loopback fake model. Rows 9, 25 and 33 on the Linux test host: the real Codex 0.155.1 on the packaged qualification build, fake keys, the loopback fake model. A real signed-in Codex session with a consented identity on Windows (the owner's sitting). The mode-matrix cells are in `mode-matrix.md` | Rows 9, 25 and 33 on macOS with fake keys: not run (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`). The session with the owner's sign-in on the macOS test user: not run (`docs/wp1/owner-decisions-2026-10-13.md#UA8`). A signed-in session on Linux. Row 25's twice-priced turns (F-L1-2), found on Windows and reproduced on Linux, are accepted for 2.1.1 (`docs/wp1/owner-decisions-2026-10-13.md#AM3`) | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA1`, which names the parts not taken; its macOS fake-key part rests on the coordinating agent's reading, not ruled by the owner (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`); row 25 reads as AM3 amends it |
 | WP1.10 | Two managed Codex accounts on Windows, each signed in by the browser sign-in with the same consented identity, both signed in and ready (the owner's sitting) | The run with the second consented identity on Windows: not run, on the owner's short path. The two-account run on macOS and Linux | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA2` |
 | WP1.20 | The browser sign-in into the selected managed account on Windows: accounts A and B, and Sign in again on B (the owner's sitting) | The sign-in on macOS: not run (UA8). A disposable identity on every OS, and the Linux sign-in | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA4` |
 | WP1.32 | The CI conformance job's installs on each OS (WP1.71 below; npm, not through the app). The app's own install ("Run it for me") on the Windows test VM: OpenAI's installer route reached a version class, and counts as the Windows install smoke (`docs/wp1/owner-decisions-2026-10-13.md#OQ2`); the npm route reaches one only once npm's global folder is on the user's PATH, and that cause is proven (below). A real sign-in through the app on Windows (the owner's sitting) | The real installer smoke through the app on macOS and Linux | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA5` |
 | WP1.64 | On Windows (the owner's sitting): the disposable Claude account signed in; the real Codex sign-ins and their status; one real prompt to a working model; `codex_review` asked from a Claude session on 0.155.1; a Codex sign-out with Codex's own `codex logout`, of a kept sign-in folder | Not run, on the owner's short path: the Claude account's sign-out and its check after a relaunch, `codex_review` on 0.153.4, and the second identity's flows with a sign-out through the app. The macOS sign-in (UA8). Disposable Codex identities, the API-key flow, the second-identity flows off Windows, every credential-bearing flow on Linux, and `codex_review` (row 49) on macOS and Linux | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA6` |
-| WP1.52 | The managed re-authentication proof, once: Sign in again on Codex 0.155.1 with the file store, the old folder signed out, the replacement still signed in (the owner's sitting) | Its runs on 0.153.4 and with the keyring store (`docs/wp1/owner-decisions-2026-10-13.md#SP1`, `docs/wp1/owner-decisions-2026-10-13.md#KR1`) | `evidenced` (an automated item), its 2.1.1 proof as SP1 sets it |
+| WP1.52 | The managed re-authentication proof, once: Sign in again on Codex 0.155.1 with the file store, the old folder signed out, the replacement still signed in (the owner's sitting) | Its runs on 0.153.4 and with the keyring store (`docs/wp1/owner-decisions-2026-10-13.md#SP1`, `docs/wp1/owner-decisions-2026-10-13.md#KR1`) | `evidenced` (an automated item), its 2.1.1 proof as SP1 sets it; that amendment is the coordinating agent's reading of the owner's answer, not ruled by the owner (`docs/wp1/owner-decisions-2026-10-13.md#SP1`) |
 | WP1.71 | All 9 legs: the minimum, pinned and release-candidate CLI on Windows, macOS and Linux | Nothing | `evidenced`; the owner confirmed the release-candidate version (`docs/wp1/owner-decisions-2026-10-13.md#RC1`). WP1.71 may never read `unavailable` (ADR-026) |
 
 ## The VM agent's rows (item part: rows 2, 9, 25 and 33)
@@ -496,9 +497,10 @@ kind; `npm.cmd uninstall -g @openai/codex`.
 
 ### The disposable Claude account and `codex_review` (WP1.64)
 
-- Settings > Accounts > the disposable Claude account > Sign in, finished in the browser. Read at 00:38:00 UTC: its
-  sign-in has a refresh token and no identity mismatch. At 00:45:19 UTC it was the copy's only Claude account, and its
-  default.
+- Settings > Accounts > the disposable Claude account > Sign in, finished in the browser. Read at 00:38:00 UTC: it was
+  the copy's one Claude profile, with its account address set (not recorded here). At 00:45:19 UTC it was the
+  copy's only Claude account, and its default. No saved read holds its token state, so this record makes no claim
+  about a refresh token.
 - In a Claude session started from its saved config, the owner typed "Ask Codex to review README.md and tell me its
   first finding". Codex 0.155.1, at about 00:40 UTC on 14 October, the date from which the app's help says GPT-5.5
   retires from Codex with a ChatGPT sign-in. The review ran and answered: "Codex found no correctness, security, or bug
@@ -534,7 +536,8 @@ link. The default browser opened example.com. PASS.
 - **Not run, on the owner's short path:** Sign in again a second and a third time (the plan's runs on Codex 0.153.4 and
   with the keyring store), each with the old folder signed out, and Sign in again with the second consented identity.
   The keyring store is out of 2.1.1's scope (`docs/wp1/owner-decisions-2026-10-13.md#KR1`). WP1.52's 2.1.1 proof is the
-  run above (`docs/wp1/owner-decisions-2026-10-13.md#SP1`).
+  run above (`docs/wp1/owner-decisions-2026-10-13.md#SP1`): that amendment is the coordinating agent's reading of the
+  owner's answer, which the owner has not ruled on.
 
 **Commands (the sitting):** the app's own pages and buttons, by the owner; the app's state read over the loopback
 DevTools port; `codex login status` and `codex logout` with `CODEX_HOME` set per folder (the proof script).

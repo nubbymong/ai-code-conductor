@@ -1,9 +1,10 @@
 # Owner decisions, 2026-10-13: WP1 evidence that is unavailable for 2.1.1
 
-**Status: confirmed by the owner on 2026-10-14.** At about 02:01 BST on
-2026-10-14, after the owner's sitting on the Windows test VM, the owner was
-asked in chat "may I record every remaining decision at its default?", with
-this list, as the coordinating agent recorded it:
+**Status: confirmed by the owner on 2026-10-14, except OQ1 and SP1's
+amendment of WP1.52's 2.1.1 scope, which the owner has not ruled (below).**
+At about 02:01 BST on 2026-10-14, after the owner's sitting on the Windows
+test VM, the owner was asked in chat "may I record every remaining decision
+at its default?", with this list, as the coordinating agent recorded it:
 
 > - the checks skipped tonight are recorded as not run (older Codex version
 >   review W8 on 0.153.4, Claude sign-out after restart W11, second-account
@@ -30,15 +31,19 @@ columns" was the coordinating agent's paraphrase, not part of the question:
 the question did not name OQ1, and the draft of this file had listed OQ1 as
 an open question with no default. So the answer did not rule OQ1. Section
 OQ1 records what applies instead, which the coordinating agent set from the
-owner's short path after the answer, and told the owner.
+owner's short path after the answer. The owner has not ruled on it.
 
 So the sections of this file are decisions of the owner, as written below:
 UA1 to UA8, AM1 to AM3, KL1 to KL3, KR1, RC1, SP1, WN1, and the ruling on
-OQ2. AM3, KR1, RC1, SP1, UA8 and WN1 were written from that answer, each
-from its line in the list above. OQ1 is not the owner's ruling, and neither
-are the lines UA1, UA8, KL3 and SP1 gained for it; each of those lines names
-OQ1. The owner's answer did not cover the stable go (the plan's Q5): nothing
-is merged to main or published as stable before the owner says go.
+OQ2. UA1 to UA7, AM1, AM2 and KL1 to KL3 were in the draft the owner
+confirmed; AM3, KR1, RC1, SP1, UA8 and WN1 were written afterwards, each
+from a line of the list above. Two parts are not the owner's ruling. OQ1 is
+not, and neither are the lines UA1, UA8, KL3 and SP1 gained for it; each of
+those lines names OQ1. Nor is SP1's amendment of WP1.52's 2.1.1 scope: the
+question named neither WP1.52 nor any amendment, and the coordinating agent
+drew it from "recorded as not run" (SP1). The owner's answer did not cover
+the stable go (the plan's Q5): nothing is merged to main or published as
+stable before the owner says go.
 
 This record supplements `owner-decisions-2026-09-20.md`,
 `owner-decisions-2026-09-26.md` and `owner-decisions-2026-09-27.md`. It
@@ -77,7 +82,8 @@ UA8, and the "Not run" rows added on 2026-10-14 to UA1 to UA4, UA6 and UA7),
 the section says so. ADR-026 says the third status never covers a part that could have
 been taken but was not run in time, and that the decision record says which:
 these parts were not run on the owner's ruling, not for want of a consent,
-and the owner confirmed that they are recorded so.
+and the owner confirmed that they are recorded so, except WP1.2's rows 9, 25
+and 33 on macOS with fake keys, which the coordinating agent recorded (OQ1).
 
 ## UA1. WP1.2: a real Codex-only session on Linux is unavailable
 
@@ -147,7 +153,7 @@ and the owner confirmed that they are recorded so.
 | What | Decision |
 | --- | --- |
 | Unavailable | The owner's run on the macOS test user (the sitting's steps M1 to M8), and with it these items' macOS parts: WP1.63, the install of the DMG, first launch, Codex found and classed, a session on a managed account's own folder and a clean Quit, then the upgrade from 2.1.0 (and the macOS rollback leg, which is support for WP1.31); WP1.2, the signed-in Codex-only session on macOS, and its rows 9, 25 and 33 on macOS with fake keys (OQ1); WP1.20, the browser sign-in on macOS; WP1.64, the owner's Codex sign-in and sign-out on macOS. |
-| Why | The macOS test user was consented and the run could have been taken. The owner ruled it not run: it is among the checks the owner's short path left out (SP1), and the owner confirmed "UA8 for any host part not run" on 2026-10-14. WP1.2's rows 9, 25 and 33 on macOS with fake keys were not in the question: the coordinating agent recorded them here as a host part not run with that sitting, and told the owner (OQ1). |
+| Why | The macOS test user was consented and the run could have been taken. The owner ruled it not run: it is among the checks the owner's short path left out (SP1), and the owner confirmed "UA8 for any host part not run" on 2026-10-14. WP1.2's rows 9, 25 and 33 on macOS with fake keys were not in the question: the coordinating agent recorded them here as a host part not run with that sitting, and the owner has not ruled on them (OQ1). |
 | Still taken | On macOS: the DMG's signature, notarization and Gatekeeper checks, and the CI conformance smoke on the macOS runner (WP1.71). The Windows parts of these items in full. On Linux, the packaged run and WP1.2's rows 9, 25 and 33 with fake keys were taken: this section does not cover Linux. |
 | How each item uses it | WP1.63 reads `unavailable` on this section; its Linux run is recorded (`docs/wp1/evidence/packaged-smoke.md`). WP1.2, WP1.20 and WP1.64 keep their own sections (UA1, UA4, UA6) as their decision, and each of those names this macOS part as not run. |
 
@@ -284,8 +290,13 @@ This was a question, with no default. The owner's answer of 2026-10-14 did
 not rule it: the line "OQ1 = take the fake-key macOS and Linux columns" in
 the list quoted at the top of this file was the coordinating agent's
 paraphrase, not part of the question. What applies was set afterwards by the
-coordinating agent, from the owner's short path (SP1), and the owner was
-told. The owner may object before go.
+coordinating agent, from the owner's short path (SP1). The draft the owner
+confirmed said, in UA1 and here, that WP1.2 stays `planned` until OQ1 is
+settled; WP1.2 reads `unavailable` now only on the coordinating agent's
+reading. The owner has not ruled on it. It is put to the owner before the
+promotion to main: if the owner does not accept it, the macOS columns are
+taken on the macOS test user first, or WP1.2 reads `planned` and the stable
+run refuses it.
 
 | What | Question, and what applies |
 | --- | --- |
@@ -356,6 +367,13 @@ folder then signed out with `codex logout`, and the replacement still signed
 in (`docs/wp1/evidence/real-cli-matrix.md`). This amends WP1.52's 2.1.1
 scope, as U1 in `owner-decisions-2026-09-26.md` amends WP1.5, and WP1.52
 cites this file as evidence.
+
+The amendment is the coordinating agent's reading of the owner's answer,
+not the owner's own words, as OQ1 is. The question put to the owner asked
+whether the checks skipped are "recorded as not run". It named the keyring
+rows, but neither WP1.52, nor Sign in again's run on Codex 0.153.4, nor any
+amendment. The owner has not ruled on it. It is put to the owner before the
+promotion to main, with OQ1.
 
 ## WN1. The What's New heading after an upgrade
 

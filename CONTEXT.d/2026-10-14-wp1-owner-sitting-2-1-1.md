@@ -4,10 +4,13 @@
   interactive console logon, the app not elevated) is recorded at the
   qualification commit d1525759a7a42d941beeff601af3415fddd8afdd, and
   `docs/wp1/owner-decisions-2026-10-13.md` is final: the owner confirmed
-  every decision at its default ("Yes"). Recorded: the console check
+  every decision at its default ("Yes"), except OQ1 and SP1's amendment of
+  WP1.52's 2.1.1 scope, which the answer did not rule (see the next
+  fragment). Recorded: the console check
   (`packaged-smoke.md`): the app recognised a leftover Vision browser of
   2.1.0's shape as its own, ended it and started Vision; the window buttons
-  on both full-window pages; in `real-cli-matrix.md`, two managed Codex
+  on both full-window pages (each button's action, clicked by the agent
+  through the DevTools port); in `real-cli-matrix.md`, two managed Codex
   accounts by the browser sign-in (one consented identity), a real prompt,
   the disposable Claude account signed in, `codex_review` on Codex 0.155.1,
   a link click, and WP1.52's re-authentication proof once (0.155.1, file
