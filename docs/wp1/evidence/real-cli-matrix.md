@@ -1,33 +1,38 @@
 # Real-CLI matrix: per-item evidence at 2.1.1
 
 This file is the real-CLI evidence that WP1.2, WP1.10, WP1.20, WP1.32, WP1.64 and WP1.71 cite in
-`tests/wp1/traceability.json`. It has the two parts `docs/wp1/evidence/release-qualification.md` section 4 gives it:
-the item part (rows 2, 3, 4, 6, 9, 25, 33 and 49) and the no-item part (rows 1, 12, 13, 18, 21, 23, 27, 29, 48, 50, 64
-and 74). Each entry gives the CLI version and route, the actor and the commands.
+`tests/wp1/traceability.json`, and the managed re-authentication proof that WP1.52 cites. It has the two parts
+`docs/wp1/evidence/release-qualification.md` section 4 gives it: the item part (rows 2, 3, 4, 6, 9, 25, 33 and 49) and
+the no-item part (rows 1, 12, 13, 18, 21, 23, 27, 29, 48, 50, 64 and 74). Each entry gives the CLI version and route,
+the actor and the commands.
 
 Rows 3, 4, 6 and 29 have no entry of their own:
 - rows 3 and 29 owe nothing on Windows (section 4);
-- row 4 (sign-in) is the WP1.20 and WP1.64 PENDING blocks below;
-- row 6 (multiple isolated accounts) is the WP1.10 PENDING block below; its keyring smoke is in `keyring-smoke.md`.
+- row 4 (sign-in) is in the owner's sitting below (WP1.20, WP1.64);
+- row 6 (multiple isolated accounts) is WP1.10's part of the owner's sitting below; its keyring smoke is in
+  `keyring-smoke.md`.
 
 Every check here was taken at d1525759a7a42d941beeff601af3415fddd8afdd, the squash merge of PR #644 on beta and the commit
 `release/v2.1.1` points at (tree `12310fe71f3706f624e3905f8b92f06f099cdc3f`). The qualification build of that commit is
 the release `v2.1.1-beta` (release run 38409628911).
 
-**Status: partly recorded.** The VM agent's rows, the packaged-build agent's runs of the app's own Codex install
-(WP1.32) and the CI conformance smoke are recorded below. The owner's rows
-(real sign-ins, the second consented identity, the disposable Claude account, a real prompt to a working model,
-`codex_review` and the session-strip meters, and the macOS sign-in) have not run yet; each is a PENDING block below.
-Until they are recorded, every item this file serves except WP1.71 stays `planned`.
+**Status: recorded on Windows; WP1.2's rows on macOS and Linux with fake keys are still owed.** Recorded below: the VM
+agent's rows, the packaged-build agent's runs of the app's own Codex install (WP1.32), the CI conformance smoke, and
+the owner's sitting on the Windows test VM (2026-10-14). The owner took a short path through that sitting; the checks
+it left out are recorded as not run, on the owner's ruling (`docs/wp1/owner-decisions-2026-10-13.md#SP1`), and the
+owner's run on the macOS test user was not run either (`docs/wp1/owner-decisions-2026-10-13.md#UA8`). The owner ruled
+that rows 9, 25 and 33 on macOS and Linux with fake keys are taken before go
+(`docs/wp1/owner-decisions-2026-10-13.md#OQ1`); until they are, WP1.2 stays `planned`.
 
-| Item | Recorded here at the head | Still owed (PENDING) | Expected unavailable, pending the owner's confirmation |
+| Item | Recorded here at the head | Not taken | Status, and the owner's decision (confirmed 2026-10-14) |
 |---|---|---|---|
-| WP1.2 | Rows 2, 9, 25 and 33 on the Windows test VM: the real Codex 0.153.4 and 0.155.1 on both install routes, fake keys, the loopback fake model. The mode-matrix cells are in `mode-matrix.md` | A real signed-in Codex session with a consented identity on Windows, and with the owner's sign-in on the macOS test user. Rows 9, 25 and 33 on macOS and Linux with fake keys, as on Windows, unless the owner rules otherwise: they are open (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`) | A real Codex-only session on Linux, with rows 9, 25 and 33 there in a signed-in session: `docs/wp1/owner-decisions-2026-10-13.md#UA1` |
-| WP1.10 | Nothing yet | The two-account run on Windows with two consented identities | The two-account run on macOS and Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA2` |
-| WP1.20 | Nothing yet | The browser sign-in into the selected managed account on Windows and on macOS | A disposable identity, and the Linux sign-in: `docs/wp1/owner-decisions-2026-10-13.md#UA4` |
-| WP1.32 | The CI conformance job's installs on each OS (WP1.71 below; npm, not through the app). The app's own install ("Run it for me") on the Windows test VM: OpenAI's installer route reached a version class; the npm route reaches one only once npm's global folder is on the user's PATH, and that cause is proven (below) | The sign-in after the install, on the Windows test VM. The owner's ruling on the npm route's account shape, which has a stated default (`docs/wp1/owner-decisions-2026-10-13.md#OQ2`) | The real installer smoke through the app on macOS and Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA5` |
-| WP1.64 | Nothing yet (every agent row uses fake keys) | The real Claude smoke with the disposable Claude account; the real Codex sign-in, status and sign-out; one real prompt to a working model; `codex_review`; the macOS sign-in | Disposable Codex identities, the API-key flow, the second-identity flows off Windows, every credential-bearing flow on Linux, and `codex_review` (row 49) on macOS and Linux: `docs/wp1/owner-decisions-2026-10-13.md#UA6` |
-| WP1.71 | All 9 legs: the minimum, pinned and release-candidate CLI on Windows, macOS and Linux | Nothing (the owner confirms the release-candidate version at go) | None: WP1.71 may never read `unavailable` (ADR-026) |
+| WP1.2 | Rows 2, 9, 25 and 33 on the Windows test VM: the real Codex 0.153.4 and 0.155.1 on both install routes, fake keys, the loopback fake model. A real signed-in Codex session with a consented identity on Windows (the owner's sitting). The mode-matrix cells are in `mode-matrix.md` | Rows 9, 25 and 33 on macOS and Linux with fake keys: owed, taken before go (`docs/wp1/owner-decisions-2026-10-13.md#OQ1`). The session with the owner's sign-in on the macOS test user: not run (`docs/wp1/owner-decisions-2026-10-13.md#UA8`). Row 25's twice-priced turns (F-L1-2) are accepted for 2.1.1 (`docs/wp1/owner-decisions-2026-10-13.md#AM3`) | `planned` until the fake-key rows are recorded. Then unavailable: the Linux signed-in session, `docs/wp1/owner-decisions-2026-10-13.md#UA1` |
+| WP1.10 | Two managed Codex accounts on Windows, each signed in by the browser sign-in with the same consented identity, both signed in and ready (the owner's sitting) | The run with the second consented identity on Windows: not run, on the owner's short path. The two-account run on macOS and Linux | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA2` |
+| WP1.20 | The browser sign-in into the selected managed account on Windows: accounts A and B, and Sign in again on B (the owner's sitting) | The sign-in on macOS: not run (UA8). A disposable identity on every OS, and the Linux sign-in | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA4` |
+| WP1.32 | The CI conformance job's installs on each OS (WP1.71 below; npm, not through the app). The app's own install ("Run it for me") on the Windows test VM: OpenAI's installer route reached a version class, and counts as the Windows install smoke (`docs/wp1/owner-decisions-2026-10-13.md#OQ2`); the npm route reaches one only once npm's global folder is on the user's PATH, and that cause is proven (below). A real sign-in through the app on Windows (the owner's sitting) | The real installer smoke through the app on macOS and Linux | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA5` |
+| WP1.64 | On Windows (the owner's sitting): the disposable Claude account signed in; the real Codex sign-ins and their status; one real prompt to a working model; `codex_review` asked from a Claude session on 0.155.1; a Codex sign-out with Codex's own `codex logout`, of a kept sign-in folder | Not run, on the owner's short path: the Claude account's sign-out and its check after a relaunch, `codex_review` on 0.153.4, and the second identity's flows with a sign-out through the app. The macOS sign-in (UA8). Disposable Codex identities, the API-key flow, the second-identity flows off Windows, every credential-bearing flow on Linux, and `codex_review` (row 49) on macOS and Linux | `unavailable`: `docs/wp1/owner-decisions-2026-10-13.md#UA6` |
+| WP1.52 | The managed re-authentication proof, once: Sign in again on Codex 0.155.1 with the file store, the old folder signed out, the replacement still signed in (the owner's sitting) | Its runs on 0.153.4 and with the keyring store (`docs/wp1/owner-decisions-2026-10-13.md#SP1`, `docs/wp1/owner-decisions-2026-10-13.md#KR1`) | `evidenced` (an automated item), its 2.1.1 proof as SP1 sets it |
+| WP1.71 | All 9 legs: the minimum, pinned and release-candidate CLI on Windows, macOS and Linux | Nothing | `evidenced`; the owner confirmed the release-candidate version (`docs/wp1/owner-decisions-2026-10-13.md#RC1`). WP1.71 may never read `unavailable` (ADR-026) |
 
 ## The VM agent's rows (item part: rows 2, 9, 25 and 33)
 
@@ -210,7 +215,7 @@ The model lists: 0.153.4 lists gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-
 
 Limits of this record:
 - The release-candidate legs' help is captured, not compared: no fixture exists for 0.156.1, and the suite's summary line reads "0 differ" because nothing was compared. The minimum and pinned legs compared all 15 captures and the comparison was asserted.
-- The release candidate is 0.156.1, the newest version tested against the app (the tested ceiling), not a newer published Codex; the owner confirms that choice at go.
+- The release candidate is 0.156.1, the newest version tested against the app (the tested ceiling), not a newer published Codex; the owner confirmed that choice on 2026-10-14 (`docs/wp1/owner-decisions-2026-10-13.md#RC1`).
 - The smoke is no-sign-in by design ("non-secret"): it proves detection, the command lines' flags, the model list and the features against each real CLI, not a signed-in turn. The signed-in rows are elsewhere in this file.
 
 Supporting, the same tree: the 2.1.1 pull request's final run, CI run 38400973974, ran the minimum and pinned legs on all three OSes (jobs 115308204067 and 115308204138 on Windows, 115308204162 and 115308204098 on macOS, 115308204111 and 115308204085 on Linux) on GitHub's merge commit 72639eba01b52aebfde6a8fed05d67db0feadfb8, whose tree is the head's tree 12310fe71f3706f624e3905f8b92f06f099cdc3f. Every one of the six passed with the same results as the dispatch's minimum and pinned legs.
@@ -228,11 +233,13 @@ build.
   proven:** npm's global folder for this account is on no PATH, because Node.js was installed by another user. With
   only that folder added to the account's user PATH, the same build found the same Codex and read the same version
   class.
-- **Not taken:** the sign-in after the install. The agent's runs make no real sign-in; it is PENDING in the owner's
-  rows below.
+- **The sign-in:** the agent's runs make no real sign-in. The owner's real sign-in through the app was taken at the
+  owner's sitting (below), in a copy of the same build in another account of the same VM, with Codex 0.155.1. The
+  Codex these runs installed was removed after them.
 - **Class:** neither severe nor a regression against 2.1.0, which has no "Run it for me". The npm-route case is known
-  limitation 12 in `release-qualification.md` section 3, and `docs/wp1/owner-decisions-2026-10-13.md#OQ2` asks the
-  owner to rule on it.
+  limitation 12 in `release-qualification.md` section 3. The owner ruled on 2026-10-14 that OpenAI's installer route
+  counts as WP1.32's Windows install smoke and that the npm-route case is that known limitation
+  (`docs/wp1/owner-decisions-2026-10-13.md#OQ2`).
 
 ### How it ran
 
@@ -315,43 +322,112 @@ installed.
 the account; the user and computer `Path` read from the registry, and the user `Path` saved and written back with its
 kind; `npm.cmd uninstall -g @openai/codex`.
 
-## The owner's rows (item part)
+## The owner's sitting on the Windows test VM (item part, 2026-10-14)
 
-None of these has run yet. Each block is replaced by its record when it runs. Every one is taken on the qualification
-build `v2.1.1-beta` (the commit above), installed outside any checkout, with the owner signing in. The record is
-non-secret: it names which kind of identity was used, never an address or an account name.
+**Result:**
+- **The browser sign-in (WP1.20, row 4 on Windows): PASS.** Two managed Codex accounts, A and B, each added with Add
+  Codex account > Sign in with ChatGPT, read signed in and ready. Sign in again on B, with its box ticked, moved B to a
+  new sign-in folder, which `codex login status` reads signed in.
+- **Two Codex accounts (WP1.10, row 6 on Windows): taken with one consented identity.** A and B were signed in with the
+  same consented identity, the owner's own, and both read signed in and ready. The run with the second consented
+  identity was not run (below).
+- **A real signed-in Codex session (WP1.2, and WP1.64's prompt): PASS.** A Codex session on A answered the owner's
+  prompt.
+- **The disposable Claude account and `codex_review` (WP1.64, row 49 on Windows): PASS on Codex 0.155.1.** The account
+  was signed in by the browser sign-in, and `codex_review`, asked from a Claude session, answered with Codex's finding.
+- **The sign-in through the app (WP1.32 on Windows): PASS** (accounts A and B above).
+- **The managed re-authentication proof (WP1.52): PASS, once, on Codex 0.155.1 with the file store.** After B's old
+  sign-in folder was signed out, B's new folder still read signed in.
+- **A link in a session's output: PASS.**
+- **A finding, for 2.1.2:** Sign in again's "Sign in to the same account as before." box starts unticked. Left
+  unticked, the sign-in is added as a new account, by design; the obvious path therefore makes a second account
+  (known limitation 13 in `release-qualification.md` section 3).
+- **Not run, on the owner's short path** (`docs/wp1/owner-decisions-2026-10-13.md#SP1`): Sign in again a second and a
+  third time (the plan's runs on Codex 0.153.4 and with the keyring store); the second consented identity's run
+  (WP1.10: `docs/wp1/owner-decisions-2026-10-13.md#UA2`); the disposable Claude account's sign-out and its check after a
+  relaunch, `codex_review` on Codex 0.153.4, and a Codex sign-out through the app (WP1.64:
+  `docs/wp1/owner-decisions-2026-10-13.md#UA6`); and the owner's run on the macOS test user (WP1.2, WP1.20, WP1.64:
+  `docs/wp1/owner-decisions-2026-10-13.md#UA8`).
 
-> **PENDING: WP1.2, a real signed-in Codex-only session.** On the Windows test VM, with a consented identity: start a
-> Codex session on the managed account, choose a GPT-6 model, send one prompt and record the answer. On the macOS test
-> user, with the owner's sign-in: "Use Codex only" at setup, sign in, start a Codex session, send one prompt, sign out.
-> Expected unavailable: the Linux session, `docs/wp1/owner-decisions-2026-10-13.md#UA1`. Also owed unless the owner
-> rules otherwise: rows 9, 25 and 33 on macOS and Linux with fake keys, as on Windows (open,
-> `docs/wp1/owner-decisions-2026-10-13.md#OQ1`).
+### How it ran
 
-> **PENDING: WP1.10, two Codex accounts in distinct homes.** On the Windows test VM: account A and account B signed in
-> to their own folders, the second with the second consented identity; status of each; a quit and relaunch with B's
-> conversation continued; a running session switched from A to B; then B signed out and archived while A still reads
-> signed in. Expected unavailable: the same run on macOS and Linux, `docs/wp1/owner-decisions-2026-10-13.md#UA2`.
+- **Who and where:** the owner, at the console of the Windows test VM (an interactive logon), in the VM's administrator
+  test account, with the app not elevated. 2026-10-14, from 00:16 to 01:05 UTC. The agent read the app's state over a
+  loopback DevTools port (account and identity states, never a credential), with the owner's consent. Every account
+  action (Add Codex account, the sign-ins, Make reviewer, Sign in again) and every prompt was the owner's: the agent's
+  permission policy refused agent clicks on account actions.
+- **The build:** a copy of the qualification build's install from `packaged-smoke.md`, 195 of 195 files; its exe,
+  `app.asar` (`8013c70e2f03884fed5c5e42994a218ae7a95ca1adab2226e4cf82f8f9ae5a35`) and uninstaller hash-equal to that
+  install. A launcher started it with its own data folder, an empty home folder of its own (`USERPROFILE`, `HOME` and
+  `CODEX_HOME`) and a loopback DevTools port, with Codex 0.155.1 (`codex.exe`) first on its PATH. Its start pages had
+  been answered before the sitting, Claude Code and Codex were both on, and it held no account.
+- **Identities:** the owner's own ChatGPT identity, consented, for both Codex accounts; the disposable Claude account.
+  No address or account name is recorded. Codex accounts show no address by design: the app never reads Codex's
+  sign-in file.
 
-> **PENDING: WP1.20, the browser sign-in in the selected realm.** On the Windows test VM: Settings, Accounts, Add Codex
-> account, Sign in with ChatGPT, twice (accounts A and B), each landing in its own folder with no credential parsed by
-> the app. On the macOS test user: the same, once. Expected unavailable: a disposable identity on every OS, and the
-> Linux sign-in, `docs/wp1/owner-decisions-2026-10-13.md#UA4`.
+### Two Codex accounts by the browser sign-in (WP1.20, WP1.10; WP1.32's sign-in)
 
-> **PENDING: WP1.32, the sign-in after the app's own install.** On the Windows test VM, in the owner's sitting: a real
-> sign-in through the app (Sign in with ChatGPT) into a managed Codex account, on the qualification build. The install
-> part is recorded above ("The packaged-build agent's runs"), and the CI installs per OS under WP1.71. Expected
-> unavailable: the same through the app on macOS and Linux, `docs/wp1/owner-decisions-2026-10-13.md#UA5`. Open for the
-> owner's ruling, with a stated default: whether OpenAI's installer route counts as the Windows install smoke, and the
-> npm route in an account whose npm global folder is on no PATH (`docs/wp1/owner-decisions-2026-10-13.md#OQ2`). Not
-> run yet.
+- Settings > Accounts > Add Codex account > Sign in with ChatGPT, finished in the browser, twice: account A, then
+  account B, both with the same ChatGPT identity.
+- Read at 00:34:15 UTC: two Codex accounts, each `active`, signed in by the browser, `ready`, each with an app identity
+  of its own (named A and B by the owner); A is the Codex default; no conflict. Codex reviews read ready, on A.
+- The owner then chose Make reviewer on A. Read at 00:38:00 UTC: A is the reviewer default, and the review source reads
+  `reviewer-default`.
+- This is WP1.32's real sign-in through the app on Windows, in a copy of the qualification build. The app's own install
+  ("Run it for me", above) ran in another account of the same VM.
 
-> **PENDING: WP1.64, real Claude and Codex smoke and the credential-bearing flows.** On the Windows test VM: the
-> disposable Claude account signed in, used, signed out, and still signed out after a relaunch; the real Codex sign-in,
-> status and sign-out with the consented identities; one real prompt to a working model; `codex_review` asked from a
-> Claude session (on 0.155.1, then 0.153.4), with its first finding.
-> On the macOS test user: the owner's Codex sign-in and sign-out. Expected unavailable, `codex_review` on macOS and
-> Linux included: `docs/wp1/owner-decisions-2026-10-13.md#UA6`.
+### A real signed-in Codex session (WP1.2; WP1.64's prompt)
+
+- A Codex session on A was started from its saved config. The owner sent a short greeting of their own, a variant of
+  the plan's prompt. The answer: "Hlo there, hope you're well!".
+- The model: the owner chose a GPT-6 model, as the step asked. The agent did not read the model independently.
+- Read at 00:38:00 UTC: A has one running session.
+- The copy had Claude Code and Codex both on. WP1.2's Codex-only setup is the e2e cell in `mode-matrix.md`.
+
+### The disposable Claude account and `codex_review` (WP1.64)
+
+- Settings > Accounts > the disposable Claude account > Sign in, finished in the browser. Read at 00:38:00 UTC: its
+  sign-in has a refresh token and no identity mismatch. At 00:45:19 UTC it was the copy's only Claude account, and its
+  default.
+- In a Claude session started from its saved config, the owner typed "Ask Codex to review README.md and tell me its
+  first finding". Codex 0.155.1, at about 00:40 UTC on 14 October, the date from which the app's help says GPT-5.5
+  retires from Codex with a ChatGPT sign-in. The review ran and answered: "Codex found no correctness, security, or bug
+  issues in README.md - documentation-only, the project currently has no code".
+- Not read: the review's usage record (the owner stopped that read).
+- Not run, on the owner's short path: the same review on Codex 0.153.4, and the Claude account's sign-out and its
+  check after a relaunch.
+
+### A link in a session's output
+
+In that Claude session the owner typed "Print https://example.com and nothing else" and left-clicked the printed
+link. The default browser opened example.com. PASS.
+
+### Sign in again, and the managed re-authentication proof (WP1.52; WP1.20)
+
+- **First attempt.** The owner left "Sign in to the same account as before." unticked, its default. By design the
+  sign-in was added as a new account, named "B" automatically, with an app identity of its own. Read at 00:45:19 UTC: A
+  and the original B were unchanged (signed in, ready, the same sign-in times as before), and the new account was signed
+  in and ready.
+- **Second attempt, with the box ticked.** B moved to a new sign-in folder. Its row read "Needs attention: the old
+  sign-in is kept ... Archiving the account removes it" (the owner's screenshot).
+- **The proof**, at 00:52:11 UTC. The owner ran a staged script in the same account; it read the copy's registry (never
+  a credential) and ran Codex with `CODEX_HOME` set to each of B's folders:
+  - B's folders: the old one, kept (`recovery`), with `auth.json`; the new one, `active`, with `auth.json`. Codex
+    `codex-cli 0.155.1`.
+  - Before: `codex login status` on the new folder "Logged in using ChatGPT"; on the old folder "Logged in using
+    ChatGPT".
+  - `codex logout` on the old folder only: "Successfully logged out".
+  - After: the old folder "Not logged in" (exit 1), its `auth.json` gone; the new folder "Logged in using ChatGPT",
+    its `auth.json` present.
+  - The store observed: the file store (`auth.json`) in both folders. 2.1.1 sets none itself (`keyring-smoke.md`).
+  - The app's row for B was not read again afterwards: the app had been closed for the window check.
+- **Not run, on the owner's short path:** Sign in again a second and a third time (the plan's runs on Codex 0.153.4 and
+  with the keyring store), each with the old folder signed out, and Sign in again with the second consented identity.
+  The keyring store is out of 2.1.1's scope (`docs/wp1/owner-decisions-2026-10-13.md#KR1`). WP1.52's 2.1.1 proof is the
+  run above (`docs/wp1/owner-decisions-2026-10-13.md#SP1`).
+
+**Commands (the sitting):** the app's own pages and buttons, by the owner; the app's state read over the loopback
+DevTools port; `codex login status` and `codex logout` with `CODEX_HOME` set per folder (the proof script).
 
 ## No-item part: rows 1, 23, 48 and 12 (VM agent)
 
@@ -394,8 +470,8 @@ These rows ran with the same setup as above, after the item rows. The plan's ord
 - No tool was called: "canvas" names none exactly.
 - **Observation, not a finding:** a first attempt (row48-r1) used the build's default model id, gpt-6-astra. Against
   the loopback fake model, Codex 0.155.1 then sent no tools at all, and none in plain turns either. The fake model has no
-  model catalogue, and the CLI evidently decides tools by model. The owner's prompt on a GPT-6 model with a real account
-  (pending, below) is the check for GPT-6.
+  model catalogue, and the CLI evidently decides tools by model. The owner's prompt with a real account (the owner's
+  sitting, above) was sent on a model the owner chose as GPT-6; the agent did not read the model.
 
 **Row 12, as rewritten for O5 (only the upgrade question is still owed): PASS** on 0.153.4 `codex.cmd` and 0.155.1
 `codex.exe` (run row12-r1, 08:37 PDT).
@@ -413,27 +489,14 @@ These rows ran with the same setup as above, after the item rows. The plan's ord
 - Rows 13, 27 and 50 were not reached in the window.
 
 They are recorded as known limitations in `release-qualification.md` section 3, citing
-`docs/wp1/owner-decisions-2026-10-13.md#KL2` (a draft section until the owner confirms it).
+`docs/wp1/owner-decisions-2026-10-13.md#KL2`, which the owner confirmed on 2026-10-14.
 
-> **PENDING (the owner's sitting on the Windows test VM): row 18, the session-strip meters (OR4, no item).** Taken
-> with the owner's prompt to a working model (the WP1.64 block above), on 0.155.1: the session strip's meters on that
-> live Codex tab are read and recorded, and the 0.155.1 rollout that session writes is the row's fixture from a real
-> session. The record gives what each meter showed and the fixture's SHA-256, and nothing from the conversation.
-> Adding the fixture beside the strip's tests would change a path outside the binding-neutral ones
-> (`tests/wp1/binding.ts`), so it is not made at this head. Until this is recorded, row 18 is listed as pending in
-> `docs/wp1/owner-decisions-2026-10-13.md#KL2`. Not run yet.
+**Row 18, the session-strip meters (no item): not taken.** It was to be taken with the owner's prompt to a working
+model at the owner's sitting: the session strip's meters on that live Codex tab read, and the 0.155.1 rollout the
+session wrote kept as the row's fixture. At the sitting the prompt was sent (above), but the meters and the rollout
+were not read. Row 18 is therefore a known limitation, as `docs/wp1/owner-decisions-2026-10-13.md#KL2` provides.
 
-> **PENDING (the owner's sitting on the Windows test VM): the managed re-authentication proof.** Owed by WP1.52's
-> reason, which this file records but WP1.52 does not cite. Sign in again three times on account B (file store on
-> 0.153.4 and 0.155.1, then the keyring store on 0.155.1), and once more with the second consented identity; after
-> each, the old folder is signed out with the same CLI version, and the replacement must still read signed in
-> (`codex login status` and Settings, Accounts). Each folder's store is recorded as observed (`auth.json` present:
-> file; none, with a credential-store entry: keyring). 2.1.1 sets no credential store itself (see
-> `keyring-smoke.md`), so the keyring runs use Codex's own `cli_auth_credentials_store` setting, given outside the
-> app; the record says so. Not run yet.
-
-> **PENDING (the owner's sitting on the Windows test VM): a link in a session's output.** In a Claude session, a
-> printed web address is left-clicked; the record says what opened. Not run yet.
+The managed re-authentication proof and the link click are in the owner's sitting above.
 
 ## Commands (per run)
 
@@ -469,4 +532,4 @@ Every run:
 - put the registry PATH back byte-equal;
 - left the checkout's status unchanged.
 
-Not run in these rows: macOS and Linux, the packaged build, and a real sign-in (the owner's rows, pending above).
+Not run in these rows: macOS and Linux, the packaged build, and a real sign-in (the owner's sitting, above).

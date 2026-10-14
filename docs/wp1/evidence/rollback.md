@@ -191,8 +191,9 @@ is in use`: the qualification build, at every start of steps 0, 2 and 5, and 2.1
 - **Why the qualification build and 2.1.1-beta.2 did not start Vision.** Each first asks Windows (CIM) which process
   owns 9222. In this logon CIM answers "Access denied", so the app logs `The check of the browsers on port 9222 did not
   answer; nothing is ended` and does not start Vision. 2.1.1-beta.1 and 2.1.0 logged no such check.
-- **The interactive standard-user case** is the console check in `packaged-smoke.md`. It has not run: it needs the
-  owner at the VM console.
+- **The interactive case** is the console check in `packaged-smoke.md`, which passed at the owner's sitting on
+  2026-10-14: in an interactive logon, with the app not elevated, the qualification build ended a leftover browser of
+  2.1.0's shape and started Vision.
 - Each leftover Chrome was ended by its verified pid (name, start time, and the only listener on 9222).
 - **In the second run (note 1)** each build's own Vision browser also outlived its quit in this logon. Each was ended
   by its verified pid (name, owner, command line and start time) before the next step, so every build started with
@@ -202,6 +203,11 @@ is in use`: the qualification build, at every start of steps 0, 2 and 5, and 2.1
 account was then restored to its state before the run, and the state report matched the one taken before the run,
 its header and the stand-in's count of calls aside.
 
-> **PENDING: the rollback legs on macOS and Linux (support, not WP1.31's record).** On the macOS test user and on the
-> Linux test host: 2.1.0, then the qualification build over it, then 2.1.0 again, with the setup still there and the
-> app's data folder hashed after each step (`packaged-smoke.md`). Not run yet.
+**The rollback leg on macOS (support, not WP1.31's record): not run.** On the macOS test user: 2.1.0, then the
+qualification build over it, then 2.1.0 again, with the setup still there and the app's data folder hashed after each
+step. It was part of the owner's run on the macOS test user, which was not run, on the owner's ruling of 2026-10-14
+(`docs/wp1/owner-decisions-2026-10-13.md#SP1`, `docs/wp1/owner-decisions-2026-10-13.md#UA8`; `packaged-smoke.md`).
+
+> **PENDING: the rollback leg on Linux (support, not WP1.31's record).** On the Linux test host: 2.1.0, then the
+> qualification build over it, then 2.1.0 again, with the setup still there and the app's data folder hashed after each
+> step (`packaged-smoke.md`). Not run yet.

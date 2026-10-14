@@ -4,11 +4,12 @@ This file is the evidence for WP1.63: a clean install of the signed release buil
 found and classed, a session on a managed account's own `CODEX_HOME`, and a clean Quit. It covers Windows, macOS and
 Linux.
 
-**Status: partly recorded.** Recorded below: the Windows smoke, the Windows upgrade from 2.1.0, and the macOS signature
-checks. In the upgrade, Vision did not start, and only the console check can say whether that happens outside the
-agent's logon. The rest is in PENDING blocks: the Windows checks in an interactive logon, the macOS install and first
-launch by the owner on the macOS test user, and the Linux run. WP1.63 stays `planned` until every part is recorded. No
-part of it is expected to be unavailable: it would be only if a host part could not be taken, on an owner decision.
+**Status: partly recorded.** Recorded below: the Windows smoke, the Windows upgrade from 2.1.0, the Windows checks of
+the owner's sitting (2026-10-14: the console check, which settles the upgrade's Vision row for an interactive logon,
+and the window buttons), and the macOS signature checks. The owner's run on the macOS test user (install, first launch,
+Codex, upgrade and rollback) was not run, on the owner's ruling: that part of WP1.63 is unavailable,
+`docs/wp1/owner-decisions-2026-10-13.md#UA8`. The Linux run is still a PENDING block. WP1.63 stays `planned` until it
+is recorded.
 
 boundHead: d1525759a7a42d941beeff601af3415fddd8afdd (PR #644's squash merge on `beta`; `release/v2.1.1` points at it).
 
@@ -76,7 +77,9 @@ step. Its model was the loopback fake model, named in that account folder's `con
   - In an administrator's logon, where WMI answers, a byte-identical copy of this install (equal exe and `app.asar`
     hashes) logged `[vision] Ended the app-started browser (pid …)` at each of four quits. No Chrome and no listener
     on 9222, 19333 or 19334 was left.
-  - In an interactive standard-user console logon (the user's real case): PENDING, below.
+  - In an interactive console logon, with the app not elevated: not observed. At the owner's sitting the test copy's
+    own Vision browser never opened its port, for a harness cause (below), and its quit was not checked for a
+    leftover browser.
 
 ### Upgrade from 2.1.0 (agent, 2026-10-13)
 
@@ -111,22 +114,54 @@ exit 0). The account was then restored to its state before the lane, with a matc
 | Data and credentials kept | **PASS.** All 17 user-data and credential files have equal SHA-256 before and after: the three stand-in credential files in the account's home, the transcript, `configs.json`, `profiles.json`, `window-state.json` and its backup, `command-bar-ui.json`, both profiles' credential and identity files, and the first-run Claude config backup. No file was removed. These changed, as the migration and use write them: `settings.json`, `app-meta.json`, `usage-tracking.json` and `github-config.json`; the help docs (`app-knowledge.md`, `ask-conductor-skill.md` and `ask-conductor-skill-portable.md`); the picker scripts ("Scripts rewritten", below); and the two app databases' journal files (`-shm` and `-wal`; `tokenomics.db` and `transcripts.db` themselves are equal). |
 | Profiles start | **PASS.** Each local Claude config was started from the Saved tab. The account dialog preselected the primary account for the first config and the bound profile for the second, and each was started with Launch. Each session card names its own profile's account. The stand-in Claude Code recorded both starts in the project folder. Both profiles read signed in: each one's credential state, as the app reads it, has its address and an expiry, and no "credentials missing". The agent's reader drops every token field, so this says nothing about a refresh token. For the second profile, the account address the app keeps for the profile (`accountEmail`) is empty, as step 4 of the setup explains; the address in its credential state (`oauthEmail`) is there. |
 | The one-time Codex question | **PASS.** "Do you use Codex?" was shown once, after What's New and the GitHub notice. Its text: "Codex now has accounts of its own in this app. Choose again: your earlier Codex setting does not carry over." It was answered with "No, I don't use Codex". It was not asked again at a later start, nor after the install chain (`rollback.md`). |
-| What's New heading | **Shown. The exact words:** the heading is **"What's new since 2.1.0"**. Under it: "13 things worth knowing, in one line each, and 5 of them have a page of their own, just behind this one." The first section is "CODEX, A FULL ASSISTANT". It was dismissed with "Skip the showcase". The heading names the release the user came from. The release plan's upgrade check reads "the heading names the running release". Which wording is the check's criterion is a ruling owed at go (`release-qualification.md` section 3.10). Changing the wording needs a new binding head. |
+| What's New heading | **Shown. The exact words:** the heading is **"What's new since 2.1.0"**. Under it: "13 things worth knowing, in one line each, and 5 of them have a page of their own, just behind this one." The first section is "CODEX, A FULL ASSISTANT". It was dismissed with "Skip the showcase". The heading names the release the user came from. The release plan's upgrade check read "the heading names the running release". **PASS on the owner's ruling of 2026-10-14:** the heading is correct, and for 2.1.1 the check's heading clause reads "What's new since <from-version>" (`docs/wp1/owner-decisions-2026-10-13.md#WN1`). |
 | Scripts rewritten | **PASS.** At the first start of the qualification build, the shipped scripts were rewritten to its bytes: `resume-picker.js` (32841 to 71063 B), `codex-resume-picker.js` (6673 to 9173 B) and `lib/codex-resume-picker-lib.js` (8335 to 38551 B). `ccc-codex-hook.js` (7525 B) and `ccc-codex-hook.cmd` (400 B) were added. `claude-multi-statusline.js` (8003 B) is byte-equal, so it was not rewritten, by design. |
-| Vision | **NOT STARTED in this logon. Open: the console check below decides the user's case, and it has not run.** 2.1.0's Vision Chrome (started at its run, on port 9222) survived its quit, as 2.1.0 always does. At each start of the qualification build, the log has `The check of the browsers on port 9222 did not answer; nothing is ended`, then `[ERROR] [vision] Vision was not started at boot: the vision browser's debug port 9222 is in use`. The check is a CIM process query, which this non-administrator NETWORK-token logon (the agent's SSH logon) is denied. Whether the app ends or adopts the old browser in an interactive standard-user logon is the console check's question; it needs the owner at the VM console. Until it runs, this is neither shown to be a regression against 2.1.0 for a user nor shown not to be one. In this logon type it does differ from 2.1.0, which attaches to its leftover browser and starts Vision (`rollback.md`, "Vision"). `release-qualification.md` section 3 lists it as known limitation 11. The old Chrome was then ended by its verified pid (name, start time within 5 ms, the only listener on 9222), and all 9 of its processes ended. |
+| Vision | **NOT STARTED in this logon. In an interactive logon, with the app not elevated, the console check passed (below): the same build ended a leftover browser of 2.1.0's shape and started Vision.** 2.1.0's Vision Chrome (started at its run, on port 9222) survived its quit, as 2.1.0 always does. At each start of the qualification build, the log has `The check of the browsers on port 9222 did not answer; nothing is ended`, then `[ERROR] [vision] Vision was not started at boot: the vision browser's debug port 9222 is in use`. The check is a CIM process query, which this non-administrator NETWORK-token logon (the agent's SSH logon) is denied. The console check below answered for an interactive logon with the app not elevated: there the same build ended the old browser and started Vision. In this logon type it does differ from 2.1.0, which attaches to its leftover browser and starts Vision (`rollback.md`, "Vision"). `release-qualification.md` section 3 lists it as known limitation 11. The old Chrome was then ended by its verified pid (name, start time within 5 ms, the only listener on 9222), and all 9 of its processes ended. |
 | Quit | **PASS for the app.** "Close sessions" left no app process. |
 
-### Windows: still owed
+### Windows: the owner's sitting (2026-10-14)
 
-> **PENDING: the console check in an interactive standard-user logon.** The owner signs in to the standard test account
-> at the VM's console and runs a staged script. It starts a browser the way 2.1.0's Vision did, runs the app's own
-> browser query (`WINDOWS_BROWSERS_SCRIPT` at the head; `src/main/vision-browser-owner.ts` is unchanged from
-> 2.1.1-beta.3), and records the logon's token, the query's exit code and whether the browser is listed, and the exit
-> code of the same `taskkill` call the app makes at Quit. It passes on an interactive token, a query that exits 0 and
-> the browser listed. It also decides the Vision row of the upgrade from 2.1.0 above. Not run yet.
+**Where and how.** The owner, at the console of the Windows test VM, in the VM's administrator test account (an
+interactive logon), from 00:16 to 01:05 UTC. The app ran without elevation. It was the test copy that
+`real-cli-matrix.md` describes ("The owner's sitting"): a hash-equal copy of the install above, started by a launcher
+with its own data folder, its own home folder (`USERPROFILE`, `HOME` and `CODEX_HOME`) and a loopback DevTools port.
+The agent read the app's state over that port and, for the window buttons, sent real mouse events over it.
 
-> **PENDING: the window buttons.** On the setup page and on the Allow Multi Spawn page of the packaged build, each of
-> minimise, maximise and restore, and close, clicked by the owner. Not run yet.
+**The console check: PASS in the app.**
+- The owner first ran the staged probe in an elevated PowerShell. The app's browser query answered in the interactive
+  token: exit 0, in 1411 ms. The probe's own verdict line read FAIL, for two faults of the probe, not of the app:
+  Windows PowerShell 5.1 unwrapped a one-entry JSON array, so the probe could not parse its count; and Chrome replaced
+  the probe's launcher process when it relaunched itself without elevation, so the probe could not tell whether its
+  browser was listed.
+- The probe left a browser on port 9222 shaped like the one 2.1.0's Vision leaves: started with 2.1.0's Vision
+  arguments, its profile folder (`chrome-debug-9222`) in the account's temporary folder, and not elevated, so an app
+  that is not elevated may end it.
+- The test copy, not elevated, then started. Its log has, at 2026-10-14T00:21:23.537Z, `[vision] Ending the app's
+  vision browser left from an earlier run (pid …) on port 9222`; it launched its own browser and logged `Global vision
+  started`. So in an interactive logon the qualification build recognises a leftover browser of 2.1.0's shape as its
+  own, ends it and starts Vision. This settles the Vision row of the upgrade from 2.1.0 above for that logon.
+
+**The test copy's own Vision browser did not connect, for a harness cause, proven.**
+- After that start, the test copy's own Vision browser never opened its debugging port, through 4 automatic
+  relaunches.
+- The owner then ran a second staged script, not elevated. It started Chrome 155.0.8059.40 with the app's exact
+  arguments on spare ports, three ways:
+  - A, a fresh profile in the account's normal environment: listening after 507 ms;
+  - B, a fresh profile with the test copy's environment (`USERPROFILE` and `HOME` set to the launcher's home folder):
+    never listening, and Chrome printed "DevTools remote debugging requires a non-default data directory";
+  - C, a copy of the existing Vision profile, in the normal environment: listening after 516 ms.
+- So the cause is the launcher's home-folder override, not the app and not the profile. A normal install sets no such
+  override: the clean install above logged `[vision] CDP root connected to chrome on port 9222` 30 s after it launched
+  its browser (in the agent's logon). `release-qualification.md` section 3 records this as known limitation 14.
+
+**The window buttons: PASS.** The agent clicked each button with real mouse events over the loopback port; after each
+minimise the owner restored the window from the taskbar. A shortcut started the copy on its setup page, and at a second
+launch on the Multi Spawn page.
+
+| Page | Buttons present and not covered (the hit test at each is the button) | Results |
+|---|---|---|
+| Setup page ("Claude CLI Setup") | Minimize, Maximize, Close | Maximize: maximised false to true. Restore: true to false. Minimize: the page went from visible to hidden, with the window on the taskbar; the owner clicked the taskbar icon, and it was visible again and focused. Close: the page stopped answering, the DevTools port and port 19333 stopped listening, and no app process was left. |
+| Multi Spawn page ("Enable Multi Spawn") | Minimize, Restore, Close (it opened maximised, so Maximize reads Restore) | Restore: maximised true to false. Minimize: visible to hidden; restored from the taskbar by the owner. Maximize: false to true. Close: the page stopped answering, no app process was left, and the DevTools port and ports 19333 and 19334 were free. |
 
 ## macOS
 
@@ -158,14 +193,18 @@ exit 0). The account was then restored to its state before the lane, with a matc
 The DMG being unsigned and unstapled is a configuration choice that is unchanged since 2.1.0. It is not a
 regression. The app inside it is signed, notarized and stapled.
 
-### First launch, Codex, upgrade and rollback (the owner)
+### First launch, Codex, upgrade and rollback (the owner): not run
 
-> **PENDING: the owner's run on the macOS test user (a standard account; its earlier app data is moved aside first, nothing deleted).** The DMG
-> above, with the quarantine flag a browser download carries, so Gatekeeper's first-launch check is met: the app
-> dragged into the home folder's Applications folder and opened (Open if asked, no override); "Use Codex only" at setup
-> with Codex 0.155.1 on the user's PATH; the owner's ChatGPT sign-in; a Codex session and one prompt; sign out. Then
-> 2.1.0 set up with Claude Code only, 2.1.1 over it (What's New, setup kept), and 2.1.0 over that again (setup still
-> there), with hashes of the app's data folder after each step. Not run yet.
+The owner's run on the macOS test user (a standard account) was planned: the DMG above, with the quarantine flag a
+browser download carries, dragged into the home folder's Applications folder and opened; "Use Codex only" at setup with
+Codex 0.155.1 on the user's PATH; the owner's ChatGPT sign-in; a Codex session and one prompt; sign out; then 2.1.0 set
+up with Claude Code only, 2.1.1 over it (What's New, setup kept), and 2.1.0 over that again (setup still there), with
+hashes of the app's data folder after each step. The agent had staged it, and it could have been taken.
+
+It was not run, on the owner's ruling of 2026-10-14: the owner's short path left the macOS sitting out
+(`docs/wp1/owner-decisions-2026-10-13.md#SP1`), and this host part of WP1.63 is unavailable on
+`docs/wp1/owner-decisions-2026-10-13.md#UA8`. On macOS, the DMG's signature, notarization and Gatekeeper checks above
+are what was taken.
 
 ## Linux
 
