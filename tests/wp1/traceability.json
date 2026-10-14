@@ -1,6 +1,6 @@
 {
   "schema": "wp1-traceability/1",
-  "phase": "candidate",
+  "phase": "gate0",
   "boundHead": "d1525759a7a42d941beeff601af3415fddd8afdd",
   "note": "Gate 0 plan: every WP1.* item maps to the tests/evidence that will prove it and to the CURRENT base tests that protect the behaviour today. `status` flips to `evidenced` (with digest-bound evidenceRecords for docs/wp1/evidence artifacts: artifact, sha256, head (the 40-hex commit the evidence was taken at, which the artifact names in its text; at the candidate phase every head must equal boundHead), actor, at, commands) when the artifact exists. Where a part of the evidence cannot be taken (a second identity, or a consent the owner does not give), one of the eight items ./binding.ts names in UNAVAILABLE_ELIGIBLE may read `unavailable` instead, with `unavailable`: { reason (20 characters or more), decision (docs/wp1/owner-decisions-YYYY-MM-DD.md#<ID>, whose section names the item and says unavailable) }; it keeps every rule of `evidenced`, and one of its docs/wp1/evidence records cites the decision (ADR-026). `evidenced` means every part is recorded (ADR-026, settled point 2). A real-cli or packaged item's parts are taken on every OS its text, or else its release plan, gives it: a part not taken makes a listed item `unavailable` and leaves WP1.71 `planned`. An automated, ci or document item's parts are what its tests prove in CI at boundHead on the three OS runners and what each evidence file it cites records; a release-plan check that no cited file records is a known limitation in docs/wp1/evidence/release-qualification.md section 3, not a part of the item. An item whose own text names a part its tests and records do not prove stays `planned` unless an owner-decision section it cites amends its scope. ./phase.ts derives the candidate phase and traceability.test.ts enforces completeness there: nothing planned. Non-automated items carry the reason automation is not safe or possible (design 16.1).",
   "items": [
@@ -752,7 +752,7 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/release-qualification.md",
-          "sha256": "65203fbef6456c325ebbdf868582017ea1b6c4a5ad38a694f9c25fe8f8ff01eb",
+          "sha256": "e3f82fa10f36d2fce3d5876e4685fd7f39145de74e51bb210efb8f9f02688321",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "evidence assembly (Claude Code), compiled from the runs section 3 lists",
           "at": "2026-10-14T05:10:07Z",
@@ -1193,7 +1193,7 @@
           "artifact": "docs/wp1/evidence/packaged-smoke.md",
           "sha256": "c79234cc4be309106b4dee8e7e42b5f777e8ec6027474c0e64a58562ff5c8d3a",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
-          "actor": "the packaged-build agents (Claude Code) on the Windows test VM (the clean install, then the upgrade from 2.1.0); the macOS agent (signature checks); the Linux agent (staging); the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the console check and the window buttons (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for the clean run, the upgrade from 2.1.0 and the rollback (2026-10-14)",
+          "actor": "the packaged-build agents (Claude Code) on the Windows test VM (the clean install, then the upgrade from 2.1.0); the macOS agent (signature checks); the Linux agent (staging); the owner at the console of the Windows test VM (interactive logon, the app not elevated), with the agent (Claude Code) reading the app's state over a loopback DevTools port, for the console check (2026-10-14); the agent (Claude Code), for the window buttons, clicking each with mouse events it injected into the page through that DevTools port, the owner restoring the window from the taskbar after each minimise (2026-10-14); the Linux agent (Claude Code), on the Linux test host as its test user over key SSH, inside the graphical session the owner logged in, for the clean run, the upgrade from 2.1.0 and the rollback (2026-10-14)",
           "at": "2026-10-14T01:33:10Z",
           "commands": [
             "the signed installer started by double-click, wizard forward buttons only",
@@ -1459,7 +1459,7 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/release-qualification.md",
-          "sha256": "65203fbef6456c325ebbdf868582017ea1b6c4a5ad38a694f9c25fe8f8ff01eb",
+          "sha256": "e3f82fa10f36d2fce3d5876e4685fd7f39145de74e51bb210efb8f9f02688321",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "evidence assembly (Claude Code), compiled from the runs section 3 lists",
           "at": "2026-10-14T05:10:07Z",
