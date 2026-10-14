@@ -345,10 +345,11 @@ describe('Commands card -- a plain searchable list', () => {
     expect(p1).toContain('Page')
     expect(p1).toContain('runs in the browser pane')
     expect(p1).toContain('shows in Global')
-    // s1: on an SSH config the partner shell is on THIS PC, and the row says so.
+    // s1: on an SSH config the partner shell runs on the host (#86), and the row says so.
     const s1 = rowFor('s1')!.textContent ?? ''
     expect(s1).toContain('Shell line')
-    expect(s1).toContain('runs in the partner shell (this PC)')
+    expect(s1).toContain('runs in the partner shell on box')
+    expect(s1).not.toContain('this PC')
     expect(s1).toContain('shows in Box')
   })
 
@@ -423,7 +424,9 @@ describe('Commands card -- Edit re-uses CommandDialog with the command\'s own co
     expect(dlg.getAttribute('data-agent')).toBe('Claude')
     expect(dlg.getAttribute('data-remote')).toBe('box')
     expect(dialogProps().capabilities.remoteHost).toBe('box')
-    expect(dialogProps().capabilities.panesOnDifferentMachines).toBe(true)
+    // #86: the partner runs on the host with the session: one machine
+    expect(dialogProps().capabilities.partnerRunsOn).toBe('remote')
+    expect(dialogProps().capabilities.panesOnDifferentMachines).toBe(false)
     expect(dialogProps().configName).toBe('Box')
   })
 

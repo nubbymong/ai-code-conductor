@@ -1,0 +1,404 @@
+// The installed Claude Code version, cached.
+//
+// Needed because everything the managed launch relies on -- the realm roots the
+// CLI honours, the authority manifest the sanitiser and the project gate read,
+// the settings scopes the CLI actually applies -- was measured on ONE pinned
+// version, and the managed-launch preflight has to say which side of that
+// floor the user is on. See src/main/providers/claude/managed-launch.ts.
+//
+// It RESOLVES the binary rather than execing the bare name. That is not
+// tidiness: claude-cli-probe.ts documents why a bare name is wrong here -- a
+// GUI-launched Electron's PATH on macOS and Linux does not carry Homebrew, nvm
+// or asdf, so `execFile('claude', ...)` reports "missing" for a CLI the user's
+// login shell finds perfectly well. Getting that wrong would not fail safe: it
+// would leave the version permanently `unknown` and put a blocking preflight
+// finding on every managed launch for a user whose CLI is perfectly up to date.
+// On macOS and Linux it resolves through `probeClaudeCli()`; on Windows, where
+// a GUI app gets the user's full PATH, it walks that PATH in-process (see
+// findClaudeOnWindowsPath for why not `where`), and when that finds none it
+// takes the Claude Code the user's PowerShell profile finds (resolveForVersionProbe).
+//
+// Deliberately NOT on the spawn path. A managed launch must not wait on a
+// subprocess, and must not fail because one was slow: the preflight reports
+// `unknown` until a probe has answered, which is a loud state rather than a
+// silent pass. The probe runs at boot, and again on demand when something asks
+// and the answer is still unknown.
+import { execFile, type ChildProcess } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import { logInfo, logWarn } from './debug-logger'
+import { CLAUDE_PROFILE_PROBE, claudeFromPowerShellProfile, probeClaudeCli, setClaudeProfileLookupAllowed, type ClaudeCliProbe } from './claude-cli-probe'
+import { windowsFolderAsRun, windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
+import { claudeVersionRunEnv } from './providers/review-support'
+import { warmFirstStart } from './first-start-warmup'
+import { timedStart } from './main-thread-ops'
+
+/** Extract the semver from `claude --version` output ("2.1.278 (Claude Code)").
+ *  Exported for the test: the shape of that line is the CLI's to change. */
+export function parseClaudeCliVersion(raw: string): string | null {
+  const m = /(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(raw ?? '')
+  return m ? m[1] : null
+}
+
+let cached: string | null = null
+let inFlight: Promise<string | null> | null = null
+let lastFailureAt = 0
+
+/** WP2: whether a probe may run the Claude CLI now. No probe runs while
+ *  Claude Code is switched off: not the one at start, and not the one a
+ *  launch path starts on demand (ensureClaudeCliVersion, from the managed
+ *  launch preflight). Set at start from main's launch rule
+ *  (provider-launch-gate.ts, providerProbeRefusal); injected rather than
+ *  imported because that rule's accounts graph imports this module's
+ *  importers. Until it is set, probes run as they always have. The same rule
+ *  decides when Windows PowerShell may be asked, with the user's profile,
+ *  where Claude Code is (claude-cli-probe.ts claudeFromPowerShellProfile). */
+let probeAllowed: () => boolean = () => true
+
+export function setClaudeCliProbeAllowed(allowed: () => boolean): void {
+  probeAllowed = allowed
+  setClaudeProfileLookupAllowed(allowed)
+}
+
+/** Whether a probe may run the Claude CLI now (setClaudeCliProbeAllowed). An
+ *  answer that throws is a no. */
+export function claudeCliProbeAllowed(): boolean {
+  try { return probeAllowed() === true } catch { return false }
+}
+
+/** How long after a FAILED probe `ensureClaudeCliVersion` declines to try again.
+ *
+ *  `probeClaudeCli()` coalesces only while a probe is in flight; it caches
+ *  nothing between calls. Without a floor, a user with no resolvable CLI would
+ *  start a fresh resolution chain on every managed spawn -- and on POSIX that
+ *  chain spawns a LOGIN SHELL (`$SHELL -lc 'command -v claude'`, 8s timeout).
+ *  It is bounded by user-initiated spawns and never blocks a launch, so this is
+ *  a floor on wasted work rather than a fix for a hang. */
+const FAILED_PROBE_BACKOFF_MS = 60_000
+
+/** The last version a probe returned, or null if none has. SYNCHRONOUS, for
+ *  callers on a launch path that must not wait -- `null` means "no version
+ *  yet" (not probed, or the probe could not run the CLI), never "old" and
+ *  never "fine". */
+export function peekClaudeCliVersion(): string | null {
+  return cached
+}
+
+/** A fully qualified Windows path: drive-absolute (`C:\`) or UNC
+ *  (`\\server\share`), and not in the device namespace (`\\?\`, `\\.\`, in
+ *  either slash, or the bare `\\?` / `\\.` roots). The rule for the programs
+ *  this module runs (cmd.exe and taskkill); PATH folders follow
+ *  windowsPathFolderIsFullyQualified. */
+function isWindowsAbsolute(p: string | undefined): p is string {
+  return !!p && /^([A-Za-z]:[\\/]|\\\\)/.test(p) && !/^[\\/]{2}[?.]([\\/]|$)/.test(p)
+}
+
+/** Find the CLI on a Windows PATH IN-PROCESS, in the order every check and
+ *  start asks for it (claude-cli-probe.ts CLAUDE_WINDOWS_NAMES: `claude.exe`
+ *  anywhere on the PATH first, then `claude.cmd`, then `claude.bat`).
+ *
+ *  Not `where` itself: it writes its answer in the console's OEM code page,
+ *  which the UTF-8 decode turns into U+FFFD (and CJK into `?`), so every
+ *  install under a profile name like `José` resolved to a path that does not
+ *  exist and the version stayed unknown -- the same permanent finding as the
+ *  shim bug below. It reads only fully qualified PATH folders (a drive or a
+ *  share, windowsPathFolderIsFullyQualified) with no unexpanded `%VAR%`: the
+ *  same folder rule as the launch's own in-process walk (windows-programs.ts),
+ *  so the two agree, non-ASCII install paths included. Each folder of an entry
+ *  is named as Windows names it when it starts the program (windowsFolderAsRun:
+ *  a name ending in one dot loses it, anywhere in the entry), so the walk reads
+ *  the folder a terminal runs from (WP2 PR 4 review, ADR-009 L3).
+ *
+ *  ASYNC, one stat at a time: a PATH entry on a dead network share can hold a
+ *  stat for tens of seconds, which must not be the main process's event loop;
+ *  and a folder that could not be reached at all is not asked again for the
+ *  next name.
+ *
+ *  Exported for the test. */
+export async function findClaudeOnWindowsPath(
+  pathVar: string | undefined,
+  statFile: (p: string) => Promise<'file' | 'none' | 'unreachable'>,
+): Promise<string | null> {
+  const dirs = (pathVar ?? '').split(';')
+    .map((d) => d.trim().replace(/^"(.*)"$/, '$1').trim())
+    .filter((d) => d !== '' && !d.includes('%') && windowsPathFolderIsFullyQualified(d))
+    // `.` and `..` steps stay (path.win32.join folds them: `C:\a\..` is the parent).
+    .map((d) => windowsFolderAsRun(d))
+  const unreachable = new Set<string>()
+  for (const name of ['claude.exe', 'claude.cmd', 'claude.bat']) {
+    for (const dir of dirs) {
+      if (unreachable.has(dir)) continue
+      const candidate = path.win32.join(dir, name)
+      const found = await statFile(candidate)
+      if (found === 'file') return candidate
+      if (found === 'unreachable') unreachable.add(dir)
+    }
+  }
+  return null
+}
+
+/** `none` for an answer that says the file is not there (or is not a file);
+ *  `unreachable` for anything else -- a share that did not answer, a denied
+ *  folder -- so the walk stops asking that folder. */
+async function statRegularFile(p: string): Promise<'file' | 'none' | 'unreachable'> {
+  try {
+    return (await fs.promises.stat(p)).isFile() ? 'file' : 'none'
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'none' : 'unreachable'
+  }
+}
+
+/** How to run `<resolved> --version`, or why it will not be run.
+ *
+ *  A resolved EXECUTABLE is run directly, with no shell, which keeps a path
+ *  with a space in it out of a shell's word splitting.
+ *
+ *  A Windows `.cmd` / `.bat` shim -- what `npm install -g` puts on the PATH --
+ *  cannot be run that way at all: since the CVE-2024-27980 fix Node refuses to
+ *  spawn a batch file without a shell and throws EINVAL. Found on the packaged
+ *  app on a Windows VM: every probe threw, the version stayed `unknown`, and
+ *  every managed launch carried a blocking "not yet verified" finding for a
+ *  current CLI. So a shim is run through cmd.exe the way Node itself runs a
+ *  `shell: true` command (`/d /s /c "<line>"`, verbatim), with the path
+ *  quoted, AutoRun skipped (`/d`) and delayed expansion off (`/v:off`).
+ *
+ *  Inside those quotes cmd.exe takes `& ^ ( )` literally, but it still acts on
+ *  `%` and a `"` -- and the shim npm writes then re-reads its OWN folder
+ *  unquoted (`SET dp0=%~dp0`), where an `&` or `^` in a folder name is a
+ *  command separator or an escape again. A shim path carrying any of
+ *  `" % & ^` or a control character is therefore NOT run: the version stays
+ *  unknown, the loud state. (With an `&` or `^` the shim could not have found
+ *  the CLI anyway: its own folder is cut or mangled when it re-reads it.)
+ *
+ *  The shim runs in its own folder with NoDefaultCurrentDirectoryInExePath
+ *  set, so the bare `node` it starts cannot come from whatever directory the
+ *  app happens to run in; cmd.exe itself is the absolute System32 one unless
+ *  ComSpec names a cmd.exe by absolute path (Node applies the same "is it
+ *  cmd.exe" test before using these switches, which mean something else to
+ *  any other shell).
+ *
+ *  Exported for the test. */
+export function versionProbeCommand(
+  resolved: string,
+  platform: NodeJS.Platform,
+  env: { ComSpec?: string; SystemRoot?: string },
+):
+  | { file: string; args: string[]; verbatim: boolean; viaCmd: boolean; cwd?: string; env?: Record<string, string> }
+  | { refused: string } {
+  if (platform !== 'win32' || !/\.(cmd|bat)$/i.test(resolved)) {
+    return { file: resolved, args: ['--version'], verbatim: false, viaCmd: false }
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/["%&^\x00-\x1f]/.test(resolved)) {
+    return { refused: 'the shim path carries a character cmd.exe or the shim would re-read (" % & ^ or a control character)' }
+  }
+  const absoluteCmd = (p: string | undefined): p is string => isWindowsAbsolute(p) && /[\\/]cmd\.exe$/i.test(p)
+  const system32 = env.SystemRoot ? path.win32.join(env.SystemRoot, 'System32', 'cmd.exe') : undefined
+  const shell = absoluteCmd(env.ComSpec) ? env.ComSpec : absoluteCmd(system32) ? system32 : 'cmd.exe'
+  return {
+    file: shell,
+    args: ['/d', '/v:off', '/s', '/c', `""${resolved}" --version"`],
+    verbatim: true,
+    viaCmd: true,
+    cwd: path.win32.dirname(resolved),
+    env: { NoDefaultCurrentDirectoryInExePath: '1' },
+  }
+}
+
+/** A probe that has not answered in this long counts as failed and is killed. */
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000
+let probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS
+
+/** Stop a probe that did not answer in time. The probe is already SETTLED by
+ *  then (see runVersionProbe): a descendant holding stdout open would keep
+ *  execFile's callback from ever firing, and an unsettled probe pins
+ *  `inFlight` for the life of the app.
+ *
+ *  Through cmd.exe the CLI is a GRANDCHILD. `taskkill /T` can only find that
+ *  tree while cmd.exe is alive and still its root, so it runs FIRST and cmd.exe
+ *  is killed from its callback. Nothing is killed once the child has EXITED:
+ *  its pid is Windows's to reuse, and `/T` against a reused pid would take a
+ *  stranger's tree. The streams are destroyed either way, so a survivor
+ *  holding them cannot keep the probe's handles open. Best-effort, never
+ *  throws. */
+function abandonProbe(child: ChildProcess | undefined, exited: boolean, viaCmd: boolean): void {
+  if (!child) return
+  const kill = (): void => { try { child.kill() } catch { /* best-effort */ } }
+  try {
+    const root = process.env.SystemRoot
+    if (!exited && viaCmd && child.pid && process.platform === 'win32' && isWindowsAbsolute(root)) {
+      execFile(path.win32.join(root, 'System32', 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'],
+        { windowsHide: true, timeout: 5_000, cwd: root }, () => kill())
+    } else if (!exited) {
+      kill()
+    }
+    child.stdout?.destroy()
+    child.stderr?.destroy()
+  } catch { /* best-effort */ }
+}
+
+/** On Windows: the walk of PATH above, and when it finds none, the Claude
+ *  Code the user's PowerShell profile finds (claude-cli-probe.ts
+ *  claudeFromPowerShellProfile, the answer every other check and start
+ *  shares), so the version is known for the Claude Code a session runs. */
+async function resolveForVersionProbe(): Promise<ClaudeCliProbe> {
+  if (process.platform !== 'win32') return probeClaudeCli()
+  const found = await findClaudeOnWindowsPath(process.env.PATH, statRegularFile)
+  const probe = 'PATH walk (claude.exe, claude.cmd, claude.bat)'
+  if (found) return { installed: true, path: found, probe }
+  const viaProfile = await claudeFromPowerShellProfile()
+  return viaProfile ? { installed: true, path: viaProfile, probe: CLAUDE_PROFILE_PROBE } : { installed: false, probe }
+}
+
+/** The executable this probe runs, or null: the Claude reviewer's discovery
+ *  (WP2 commit 5b) resolves exactly as the version probe does. */
+export async function resolveClaudeExecutable(): Promise<string | null> {
+  const probe = await resolveForVersionProbe()
+  return probe.installed && probe.path ? probe.path : null
+}
+
+/** The version, null for a failed probe, or undefined for one that ran
+ *  nothing because Claude Code was switched off meanwhile. */
+function runVersionProbe(): Promise<string | null | undefined> {
+  return resolveForVersionProbe().then(async (probe) => {
+    if (!probe.installed || !probe.path) {
+      logWarn(`[claude-version] no Claude CLI resolved (${probe.probe}); version stays unknown`)
+      return null
+    }
+    const command = versionProbeCommand(probe.path, process.platform, { ComSpec: process.env.ComSpec, SystemRoot: process.env.SystemRoot })
+    if ('refused' in command) {
+      logWarn(`[claude-version] not running ${probe.path}: ${command.refused}; version stays unknown`)
+      return null
+    }
+    // ADR-025: at boot this is often the first start of a Claude Code that
+    // updated itself while the app was closed. On Windows that start holds
+    // the start call while the OS checks the new program, so it runs once off
+    // the main thread first (a direct claude.exe only), with Claude's
+    // --version environment. A pre-start, never a gate: it never rejects, and
+    // what it answers changes nothing below.
+    await warmFirstStart(probe.path, () => ({ env: claudeVersionRunEnv(process.env, process.platform) }))
+    // Claude Code switched off while the warm-up ran: no probe runs, and, as
+    // for a probe never started, nothing is recorded (no backoff).
+    if (!claudeCliProbeAllowed()) return undefined
+    return startVersionProbe(probe.path, command)
+  }).catch((e: unknown) => {
+    logWarn(`[claude-version] binary resolution failed: ${(e as Error)?.message ?? e}`)
+    return null
+  })
+}
+
+/** One `--version` run of the resolved CLI; settles exactly once. */
+function startVersionProbe(
+  probePath: string,
+  command: Exclude<ReturnType<typeof versionProbeCommand>, { refused: string }>,
+): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
+    try {
+      // Settled exactly once, by whichever comes first: the answer or the
+      // timer. After that the timer can kill nothing (see abandonProbe).
+      let settled = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const settle = (v: string | null): void => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        resolve(v)
+      }
+      // The start holds the main thread (ADR-025): timed, and a slow one
+      // logged by the program's base name only.
+      const child = timedStart(command.file, () => execFile(
+        command.file,
+        command.args,
+        {
+          encoding: 'utf-8',
+          windowsHide: true,
+          windowsVerbatimArguments: command.verbatim,
+          ...(command.cwd ? { cwd: command.cwd } : {}),
+          ...(command.env ? { env: { ...process.env, ...command.env } } : {}),
+        },
+        (err, stdout) => {
+          if (settled) return
+          if (err) { logWarn(`[claude-version] probe failed: ${err.message}`); settle(null); return }
+          const v = parseClaudeCliVersion(String(stdout ?? ''))
+          if (v) logInfo(`[claude-version] installed Claude Code ${v} (${probePath})`)
+          else logWarn('[claude-version] probe returned no recognisable version')
+          settle(v)
+        },
+      ))
+      if (!settled) {
+        timer = setTimeout(() => {
+          if (settled) return
+          logWarn(`[claude-version] probe timed out after ${probeTimeoutMs} ms (${probePath})`)
+          settle(null)
+          // Node sets exitCode / signalCode before it emits 'exit' and before it
+          // releases the process handle, so while both are null the pid is
+          // still this child's.
+          abandonProbe(child, child?.exitCode != null || child?.signalCode != null, command.viaCmd)
+        }, probeTimeoutMs)
+        timer.unref?.()
+      }
+    } catch (e) {
+      logWarn(`[claude-version] probe threw: ${(e as Error).message}`)
+      resolve(null)
+    }
+  })
+}
+
+/**
+ * Probe and cache. Overlapping calls share one subprocess.
+ *
+ * A failure is cached as NOTHING, not as a version, so a transient failure can
+ * never make an old CLI look verified -- and so a later call genuinely re-runs.
+ * That is also what makes "install or update the CLI, then start a session"
+ * work: `ensureClaudeCliVersion()` below re-probes while the answer is unknown.
+ */
+export function probeClaudeCliVersion(): Promise<string | null> {
+  if (inFlight) return inFlight
+  // Claude Code switched off: no probe runs, and nothing is recorded -- not a
+  // version and not a failure -- so the first probe once it is back on runs
+  // at once, with no backoff to wait out.
+  if (!claudeCliProbeAllowed()) return Promise.resolve(null)
+  const run = runVersionProbe().then((v) => {
+    if (v) cached = v
+    else if (v === null) lastFailureAt = Date.now()
+    inFlight = null
+    return v ?? null
+  }, (e: unknown) => {
+    lastFailureAt = Date.now()
+    inFlight = null
+    logWarn(`[claude-version] probe rejected: ${(e as Error)?.message ?? e}`)
+    return null
+  })
+  inFlight = run
+  return run
+}
+
+/** Kick off a probe IF the version is still unknown, without waiting for it.
+ *
+ *  Called from the launch path so a user who installs or updates the CLI after
+ *  the app started gets a correct answer on a later launch, instead of being
+ *  stuck on a permanent `unknown` from one failed boot probe. Never throws,
+ *  never waits, and never retries a FAILED probe more often than
+ *  FAILED_PROBE_BACKOFF_MS. An explicit `probeClaudeCliVersion()` call ignores
+ *  the backoff -- this is the opportunistic path, not the deliberate one. */
+export function ensureClaudeCliVersion(): void {
+  if (cached !== null) return
+  if (lastFailureAt && Date.now() - lastFailureAt < FAILED_PROBE_BACKOFF_MS) return
+  void probeClaudeCliVersion()
+}
+
+/** Test-only: drop the cache so a suite can drive the probe deterministically. */
+export function _resetClaudeCliVersionForTest(): void {
+  cached = null
+  inFlight = null
+  lastFailureAt = 0
+  probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS
+  probeAllowed = () => true
+}
+
+/** Test-only: a shorter probe timeout, so a real-process test can prove a hung
+ *  probe settles and leaves nothing running. Reset by the function above. */
+export function _setProbeTimeoutForTest(ms: number): void {
+  probeTimeoutMs = ms
+}

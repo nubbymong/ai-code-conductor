@@ -1,3 +1,4 @@
+// HOST QUARANTINE: changes ACLs on temp folders (through the app's own folder hardening). [CI] [VM] only -- never run on the owner's machine.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -42,6 +43,7 @@ vi.mock('../../src/main/conductor-mcp-server', () => ({
   getConductorMcpPort: () => 19333,
   // GHSA-q83v: the shim embeds the per-session HMAC, not the raw secret.
   mcpSessionToken: (sessionId: string) => `tok-${sessionId}`,
+  issueMcpSessionToken: (sessionId: string) => `tok-${sessionId}`,
 }))
 
 const { saveAllCredentials } = await import('../../src/main/credential-store')
@@ -112,20 +114,74 @@ describe('(C) ssh-shim remote setup script', () => {
     expect(s).toContain('rmSync(sesPath,{force:true})')
     expect(s).toContain("writeFileSync(sesPath,JSON.stringify(sesCfg,null,2),{mode:0o600,flag:'wx'})")
   })
+
+  // The trust flag in the remote ~/.claude.json: written through the shared
+  // writer, which keeps an existing file's mode exactly (fchmod, which the
+  // umask does not touch) and creates a missing one 0600, as Claude Code does.
+  // Behaviour is covered in providers/claude/ssh-shim-user-settings.test.ts.
+  it('marks the remote session folder trusted in ~/.claude.json through the shared writer: own mode kept, a new file 0600, an exclusive temporary file', () => {
+    const s = script()
+    expect(s).toContain("sReplace(cj,JSON.stringify(c,null,2),0o600,'claude-json-left')")
+    expect(s).toContain('const mode=st?st.mode&511:newMode;')
+    expect(s).toContain("fd=fs.openSync(tmp,'wx',mode);")
+    expect(s).toContain('fs.fchmodSync(fd,mode);fs.writeFileSync(fd,data);')
+    // A group the user cannot give the temporary file leaves the file
+    // whenever the file's group bits differ from its other bits, either way.
+    expect(s).toContain("if(((mode>>3)^mode)&7)throw{code:'group'}")
+    // The earlier shape: a temporary file written with no mode and renamed
+    // over the named path.
+    expect(s).not.toContain('.ccctrust.')
+  })
+
+  // On every connect, not only when the trust flag is written, the remote
+  // ~/.claude.json is made owner-only when its real path is a plain file with
+  // one name the user owns: its group and other bits are cleared, its owner's
+  // kept. Behaviour is covered in providers/claude/ssh-shim-user-settings.test.ts.
+  it('makes the remote ~/.claude.json owner-only on every connect', () => {
+    const s = script()
+    expect(s).toContain("const r=fs.realpathSync(cj);const st=fs.statSync(r);if(st.isFile()&&st.nlink===1&&st.uid===process.geteuid()&&(st.mode&0o077)){fs.chmodSync(r,st.mode&0o700);")
+    expect(s).toContain(' claude-json-mode sid=')
+  })
 })
 
 describe('(D) insights kpis.json', () => {
-  // The two writers live deep in run-orchestration functions that are impractical
-  // to invoke in isolation, so pin the source: both go through the atomic helper
-  // with 0600, and no bare writeFileSync of kpis.json survives (fails-first).
+  // The writers live deep in run-orchestration functions that are impractical
+  // to invoke in isolation, so pin the source: each goes through the atomic
+  // helper with 0600, and no bare writeFileSync of kpis.json survives (fails-first).
   const src = readFileSync(join(__dirname, '../../src/main/insights-runner.ts'), 'utf8')
 
   it('has no bare writeFileSync of kpis.json', () => {
     expect(src).not.toMatch(/[^c]writeFileSync\(\s*join\(archiveDir, 'kpis\.json'\)/)
   })
 
-  it('writes kpis.json through the atomic helper with mode 0600 (both sites)', () => {
-    const matches = src.match(/atomicWriteFileSync\(\s*join\(archiveDir, 'kpis\.json'\),[\s\S]*?\{ mode: 0o600 \}\)/g) ?? []
-    expect(matches.length).toBe(2)
+  // Every file of a run, the copy of Claude Code's report and its facets
+  // included, is written by one writer, which checks the run's own folder
+  // (and the folder made in it for the facets) first and writes through the
+  // atomic helper with 0600.
+  const writer = src.match(/function writeArchiveFile\([\s\S]*?\n\}/)?.[0] ?? ''
+
+  it("a run's files have one writer: the atomic helper with mode 0600", () => {
+    expect(writer).toMatch(/atomicWriteFileSync\(join\(dir, name\), text, \{ mode: 0o600 \}\)/)
+    expect((src.match(/atomicWriteFileSync\(/g) ?? []).length).toBe(2) // the writer, and the catalogue's own
+    expect(src).not.toMatch(/atomicWriteFileSync\(\s*join\(archiveDir,/)
+  })
+
+  it("copies Claude Code's report and its facets through that writer, never by a plain copy", () => {
+    expect(src).not.toMatch(/copyFileSync\(/)
+    expect((src.match(/writeArchiveFile\(archiveDir, 'report\.html', /g) ?? []).length).toBe(1)
+    expect((src.match(/writeArchiveFile\(archiveDir, file, facet, FACETS_DIRNAME\)/g) ?? []).length).toBe(1)
+  })
+
+  it('writes kpis.json through that writer (every site)', () => {
+    // Claude's run, Claude's roll-up, and (WP2 PR 4, P4.7) a Codex report, a
+    // roll-up whose written analysis ran on Codex, and (fix pass 4) a roll-up
+    // whose comparison could not be marked off, kept as numbers only.
+    expect((src.match(/writeArchiveFile\(archiveDir, 'kpis\.json',/g) ?? []).length).toBe(5)
+    expect(src).not.toMatch(/join\(archiveDir, 'kpis\.json'\)/)
+  })
+
+  it("P4.7: a Codex report's report.json goes through that writer too", () => {
+    expect((src.match(/writeArchiveFile\(archiveDir, 'report\.json',/g) ?? []).length).toBe(1)
+    expect(src).not.toMatch(/join\(archiveDir, 'report\.json'\)/)
   })
 })

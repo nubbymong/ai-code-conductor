@@ -1,3 +1,4 @@
+// HOST QUARANTINE: changes ACLs on temp folders (through the app's own folder hardening). [CI] [VM] only -- never run on the owner's machine.
 /**
  * R-DEC-3: per-launch secret for the Conductor MCP server.
  *
@@ -11,7 +12,7 @@
  *
  * isAuthorizedMcpRequest is a pure helper (no I/O, no http types) so the
  * auth contract can be unit-tested directly -- the same idiom as
- * parseSourceFromUrl / buildSessionNotFoundResponse in this module.
+ * parseCccSessionIdFromUrl / buildSessionNotFoundResponse in this module.
  */
 import { describe, it, expect } from 'vitest'
 import {

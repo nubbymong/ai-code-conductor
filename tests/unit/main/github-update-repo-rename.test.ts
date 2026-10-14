@@ -1,5 +1,7 @@
+// HOST QUARANTINE: starts real processes (reg.exe reads the app's registry key). [CI] [VM] only -- never run on the owner's machine.
 // Pre-emptive repo-rename soft-switch (adoptRenamedRepoIfLive):
-//   - a valid existing override wins (manual choice / prior adopt)
+//   - an existing override naming one of the project's two repositories wins
+//     (manual choice / prior adopt); any other override is ignored
 //   - no override + renamed repo LIVE  -> adopt + persist + use it this session
 //   - no override + renamed repo 404/error -> stay on the current repo (fail-safe)
 // Deps are injected so this needs no network or registry.
@@ -50,13 +52,23 @@ describe('adoptRenamedRepoIfLive', () => {
     expect(d.writes).toEqual([])
   })
 
-  it('respects an existing valid override and never re-probes', async () => {
+  it.each([DEFAULT_REPO, RENAMED_REPO])('respects an existing override of %s and never re-probes', async (value) => {
+    const probe = vi.fn(async () => true)
+    const d = deps({ readOverride: () => value, probe })
+    const got = await adoptRenamedRepoIfLive(d)
+    expect(got).toBe(value)
+    expect(probe).not.toHaveBeenCalled()
+    expect(activeRepo()).toBe(value)
+  })
+
+  it('ignores an override naming any other repository and probes as if none were set', async () => {
     const probe = vi.fn(async () => true)
     const d = deps({ readOverride: () => 'someorg/custom-fork', probe })
     const got = await adoptRenamedRepoIfLive(d)
-    expect(got).toBe('someorg/custom-fork')
-    expect(probe).not.toHaveBeenCalled()
-    expect(activeRepo()).toBe('someorg/custom-fork')
+    expect(got).toBe(RENAMED_REPO)
+    expect(probe).toHaveBeenCalledWith(RENAMED_REPO)
+    expect(d.writes).toEqual([RENAMED_REPO])
+    expect(activeRepo()).toBe(RENAMED_REPO)
   })
 
   it('ignores a malformed override and still adopts the renamed repo when live', async () => {

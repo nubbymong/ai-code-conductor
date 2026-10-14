@@ -12,11 +12,22 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { getResourcesDirectory } from './ipc/setup-handlers'
-import { isValidProfileId, PROFILES_ROOT_DIRNAME } from './profile-id'
+import { isValidProfileId, profileIdFromHome, PROFILES_ROOT_DIRNAME } from './profile-id'
 import { atomicWriteFileSync } from './atomic-write'
-import { logWarn } from './debug-logger'
+import { secureSignInFoldersWindows, OWNER_ONLY_INSIDE_REASONS, OWNER_ONLY_INSIDE_FAILED_REASONS } from './owner-only-folders'
+import type { OwnerOnlyFolderResult } from './owner-only-folders'
+import { logInfo, logWarn } from './debug-logger'
+import { recordSettingsSanitise, recordAmbientStrip, clearSettingsSanitise } from './managed-launch-state'
+import { recordManagedLaunchPreflight } from './managed-launch-diagnostics'
+import { decodeSettingsText } from './settings-text'
+// Via the neutral barrel, never a package entry point: the dependency boundary
+// (tests/wp1/dependency-boundaries.test.ts, R3/R4) keeps provider knowledge
+// behind the registry so a launch path cannot opt out of a provider's policy.
+import { realmEnvForProvider, ambientAuthVariablesForProvider, sanitizeManagedSettingsFor } from './providers'
 import { canonicaliseEmail } from '../shared/account-chip-color'
+import { lowerAsciiLetters } from '../shared/profile-id'
 import type { AccountProfile, AccountProfilesConfig } from '../shared/account-types'
+import type { ProjectGateResult } from '../shared/providers'
 
 // Shared-directory names junctioned from a profile back to the shared root.
 // Identity files (.credentials.json, .claude.json, statsig, telemetry, caches)
@@ -67,6 +78,12 @@ export function getProfileConfigDir(id: string): string {
 // Linux those copies would land 0o644 (world-readable), letting any other local
 // user read the tokens. We chmod them to 0o600 (and credential dirs to 0o700).
 // On Windows fs mode bits are ignored, so these are cheap no-ops there.
+/** The largest shared `settings.json` this app will read and copy, matching the
+ *  cap the project-settings scan already uses. Both sit on the launch path, and
+ *  this one is SYNCHRONOUS, so the bound is on blocked main-thread time rather
+ *  than on disk. See writeSanitisedSettingsCopy. */
+const MAX_SHARED_SETTINGS_BYTES = 128 * 1024
+
 const IS_POSIX = process.platform !== 'win32'
 const CRED_FILE_MODE = 0o600
 const CRED_DIR_MODE = 0o700
@@ -120,7 +137,22 @@ export function hardenCredentialFile(file: string): void {
 //     afterwards, alongside the two ACEs we had just added. That is the whole
 //     ACE this change exists to remove, so the DACL is now REPLACED, not added
 //     to: every principal currently on it is `/remove`d in the same invocation,
-//     ahead of the grants.
+//     ahead of the grants -- except the two being granted wherever their
+//     printed names are known: `/grant:r` replaces their entries that carry
+//     the grant's own flags, so those are not removed; a deny entry of theirs
+//     is (`/remove:d`), and so are their allow entries when one of them
+//     carries other flags, which `/grant:r` leaves in place (`/remove:g`,
+//     only in a write that grants them, ahead of the grants; aicc_planning#103,
+//     2.1.1-beta.3; see `hardenDirAclWindows`).
+//   * `/grant:r` replaces only the principal's entries with the same
+//     inheritance flags as the grant. Measured on a Windows 11 VM
+//     (2026-10-11): a folder made under a parent that hands nothing down
+//     takes the creator's default list, whose `NT AUTHORITY\SYSTEM:(F)`
+//     applies to the folder alone, and that entry stayed through
+//     `/grant:r *S-1-5-18:(OI)(CI)F`, beside the `(OI)(CI)(F)` entry the grant
+//     wrote. Such an entry grants nothing the grant does not, but a folder
+//     carrying it never reads back as the two entries the skip below
+//     recognises.
 //   * Option order inside one invocation is honoured, and it is load-bearing:
 //     remove-then-grant leaves exactly the two intended ACEs, while the same
 //     options as grant-then-remove leave an EMPTY DACL. Both measured.
@@ -306,8 +338,25 @@ const ACL_MAX_REMOVALS = 32
  * entries there are. A bare SID (an ACE whose account no longer resolves, which
  * icacls prints unadorned) is handed back with the `*` prefix that makes icacls
  * read it as a SID instead of a name.
+ *
+ * `granted` names the principals the same call grants (upper-cased, in the
+ * spelling icacls prints; aclPrincipalKey): those are not removed outright
+ * (aicc_planning#103, 2.1.1-beta.3). `/grant:r` replaces their entries that
+ * carry the grant's flags, so all a removal of those could add is a moment
+ * with no entry of theirs. A deny entry of theirs is still taken off, alone
+ * (`/remove:d`). With `takeLeftInPlace`, an allow entry of theirs that
+ * `/grant:r` leaves in place (entryGrantLeaves) is taken too, with
+ * `/remove:g`: the single replace asks for that, and writes it in the same
+ * invocation as the grants, so the write that takes it grants them again.
+ * The one-at-a-time fallback does not ask: it never names a granted
+ * principal's allow entries.
  */
-export function windowsAclRemovalArgs(entries: string[], ignorable?: ReadonlySet<string>): string[] {
+export function windowsAclRemovalArgs(
+  entries: string[],
+  ignorable?: ReadonlySet<string>,
+  granted?: ReadonlySet<string>,
+  takeLeftInPlace = false,
+): string[] {
   if (entries.length > ACL_MAX_REMOVALS) return []
   const args: string[] = []
   const seen = new Set<string>()
@@ -321,9 +370,50 @@ export function windowsAclRemovalArgs(entries: string[], ignorable?: ReadonlySet
     const principal = /^S-1-[\d-]+$/.test(raw) ? `*${raw}` : raw
     if (seen.has(principal) || ignorable?.has(raw)) continue
     seen.add(principal)
+    const key = aclPrincipalKey(raw)
+    if (granted?.has(key)) {
+      const theirs = entries.filter((e) => aclPrincipalKey(aclEntryPrincipal(e)) === key)
+      if (theirs.some((e) => e.includes('(DENY)'))) args.push('/remove:d', principal)
+      if (takeLeftInPlace && theirs.some(entryGrantLeaves)) args.push('/remove:g', principal)
+      continue
+    }
     args.push('/remove', principal)
   }
   return args
+}
+
+/** A principal as icacls prints it, compared as Windows compares account
+ *  names: in any letter case. */
+function aclPrincipalKey(printed: string): string {
+  return printed.toUpperCase()
+}
+
+/** The account half of a principal (after its last `\`), compared as
+ *  aclPrincipalKey compares: what a bare account-name spelling can match. */
+function aclAccountKey(printed: string): string {
+  return aclPrincipalKey(printed.slice(printed.lastIndexOf('\\') + 1))
+}
+
+/** An entry icacls prints as explicit Full Control passed to what is inside,
+ *  allow, not inherited: exactly what `/grant:r <who>:(OI)(CI)F` writes. */
+function isExplicitFullControl(entry: string): boolean {
+  return entry === `${aclEntryPrincipal(entry)}:(OI)(CI)(F)`
+}
+
+/**
+ * Whether `entry`, of a principal the step grants, is one that
+ * `/grant:r <who>:(OI)(CI)F` leaves in place beside the entry it writes: an
+ * explicit allow entry other than exactly that one. `/grant:r` replaces only
+ * the entries with the grant's own inheritance flags (measured; see the notes
+ * above), so one that applies to the folder alone, as the creator's default
+ * list gives, stays. Inherited entries are not counted (`/inheritance:r`
+ * takes them), nor deny entries (`/remove:d` does). An entry with the
+ * grant's flags and narrower rights is counted too: taking it costs nothing,
+ * since the same write grants full control.
+ */
+function entryGrantLeaves(entry: string): boolean {
+  const flags = entry.slice(aclEntryPrincipal(entry).length)
+  return !flags.includes('(I)') && !flags.includes('(DENY)') && !isExplicitFullControl(entry)
 }
 
 /**
@@ -408,15 +498,6 @@ function icacls(args: string[]): boolean {
  */
 const ERROR_NONE_MAPPED = 1332
 
-/**
- * REPLACE `dir`'s Windows DACL with the current user + SYSTEM: drop every
- * inherited ACE, remove every explicit one, grant those two. Returns whether it
- * was applied.
- *
- * Never throws. Every caller sits on a session-spawn or config-write path where
- * a permissions failure must not be fatal -- including the case where a mocked
- * or absent `child_process` makes `execFileSync` unusable.
- */
 /**
  * Principals this machine's DACLs NAME but icacls cannot resolve back, learned
  * by trying. Per-process and never invalidated, which is safe because it is a
@@ -588,8 +669,142 @@ export function _resetAclStateForTest(): void {
   hardenedPrincipals = null
   unremovableAclPrincipals.clear()
   learnAttemptsLeft = LEARN_ATTEMPT_MAX
+  fallbackUnprovenLogged.clear()
 }
 
+/**
+ * What `hardenDirAclWindows` logs when its fallback stops before removing
+ * anything (aicc_planning#103, 2.1.1-beta.3): fixed words, never a path. Once
+ * per folder per process (logFallbackUnproven): the step runs on every config
+ * write, and a folder that answers so once answers so every time.
+ */
+export const ACL_FALLBACK_UNPROVEN_LOG =
+  "[acl] a folder was not narrowed to you alone: after granting you full control the app could not read that grant back as yours, so it removed no other entry and left the folder usable"
+
+/** The folders ACL_FALLBACK_UNPROVEN_LOG was written for in this process, by
+ *  their resolved path in lower case (only ever compared, never logged). */
+const fallbackUnprovenLogged = new Set<string>()
+const FALLBACK_LOG_MEMO_MAX = 64
+
+/** ACL_FALLBACK_UNPROVEN_LOG, at most once per folder per process, and for at
+ *  most FALLBACK_LOG_MEMO_MAX folders: past that the log already says it. */
+function logFallbackUnproven(dir: string): void {
+  let key: string
+  try { key = path.resolve(dir).toLowerCase() } catch { key = dir.toLowerCase() }
+  if (fallbackUnprovenLogged.has(key) || fallbackUnprovenLogged.size >= FALLBACK_LOG_MEMO_MAX) return
+  fallbackUnprovenLogged.add(key)
+  logWarn(ACL_FALLBACK_UNPROVEN_LOG)
+}
+
+/**
+ * The principal, as icacls prints it, of the user's own explicit full-control
+ * entry in `now` -- a read-back taken just after a strip-and-grant that granted
+ * `spelling` -- or null when it cannot be told apart. `before` is the read
+ * taken ahead of that write.
+ *
+ * A `DOMAIN\user` spelling is matched in full, in any letter case. A bare
+ * account name is matched against the account half (after the last `\`) of
+ * each entry, because icacls prints a user with the domain it resolved, never
+ * bare: of the entries that match, the one the grant just made (in `now`, not
+ * in `before`), else the only one there is. Two candidates are no answer, and
+ * neither is an inherited, deny or narrower entry.
+ *
+ * Exported so the matching runs on every leg of the CI matrix.
+ */
+export function grantedUserEntryPrincipal(now: readonly string[], before: readonly string[], spelling: string): string | null {
+  const full = now.filter(isExplicitFullControl)
+  const key = aclPrincipalKey(spelling)
+  if (spelling.includes('\\')) {
+    const hit = full.find((e) => aclPrincipalKey(aclEntryPrincipal(e)) === key)
+    return hit ? aclEntryPrincipal(hit) : null
+  }
+  const matching = full.filter((e) => aclAccountKey(aclEntryPrincipal(e)) === key)
+  const made = matching.filter((e) => !before.includes(e))
+  const pick = new Set((made.length > 0 ? made : matching).map(aclEntryPrincipal))
+  return pick.size === 1 ? [...pick][0] : null
+}
+
+/**
+ * What the strip-and-grant that grants `spelling` writes ahead of its grants,
+ * read from the first read (`entries`): `/remove:g` of each granted principal
+ * that may hold an allow entry the grants leave in place (entryGrantLeaves),
+ * so that write leaves each of them with the grant's entry alone.
+ *
+ * Each is named as the grants name it -- the user by `spelling`, SYSTEM by
+ * its SID -- so each resolves exactly when its grant does, and none adds a
+ * way for that write to fail. The user's is written when such an entry's
+ * account half is the spelling's; SYSTEM's, whose printed name is localized
+ * and may not be learned yet, when any other principal has one. Either may be
+ * written where it takes nothing (a same-named account of another domain, an
+ * entry of a third principal), which costs nothing: it takes only the named
+ * principal's entries, in the write that grants that principal again.
+ */
+function stripAndGrantRemovals(entries: readonly string[], spelling: string): string[] {
+  const user = aclAccountKey(spelling)
+  const left = entries.filter(entryGrantLeaves)
+  const out: string[] = []
+  if (left.some((e) => aclAccountKey(aclEntryPrincipal(e)) === user)) out.push('/remove:g', spelling)
+  if (left.some((e) => aclAccountKey(aclEntryPrincipal(e)) !== user)) out.push('/remove:g', SYSTEM_SID)
+  return out
+}
+
+/**
+ * Principals this call will leave on the DACL that the skip check will NOT
+ * discount, and so proof that reading the result back cannot recognise
+ * anything. `windowsAclRemovalArgs` refuses to hand back a principal it cannot
+ * spell safely and drops the ones over its cap, and those stay exactly where
+ * they are. A principal the call grants (`granted`) is one only through an
+ * entry `/grant:r` leaves in place (entryGrantLeaves) that no removal of its
+ * allow entries names: `/grant:r` replaces the rest. Counted BEFORE any
+ * write, so a read-back that is already known to be pointless is never paid
+ * for -- which is the other half of the cost bug: the un-nameable machine ran
+ * `learnHardenedPrincipals` on every single call and it could not have
+ * succeeded on any of them.
+ */
+function strandedPrincipals(entries: string[], removals: string[], granted: ReadonlySet<string>): number {
+  const namedBack = new Set<string>()
+  const allowNamedBack = new Set<string>()
+  for (let i = 1; i < removals.length; i += 2) {
+    const printed = removals[i].startsWith('*') ? removals[i].slice(1) : removals[i]
+    namedBack.add(printed)
+    if (removals[i - 1] !== '/remove:d') allowNamedBack.add(printed)
+  }
+  return new Set(entries
+    .filter((e) => {
+      const p = aclEntryPrincipal(e)
+      if (unremovableAclPrincipals.has(p)) return false
+      if (granted.has(aclPrincipalKey(p))) return entryGrantLeaves(e) && !allowNamedBack.has(p)
+      return !namedBack.has(p)
+    })
+    .map(aclEntryPrincipal)).size
+}
+
+/**
+ * REPLACE `dir`'s Windows DACL with the current user + SYSTEM: drop every
+ * inherited ACE, remove every explicit one, grant those two. Returns whether it
+ * was applied.
+ *
+ * Never an empty DACL, and never one without the user's own full control
+ * (aicc_planning#103, 2.1.1-beta.3). Every removal is written in the same
+ * invocation as the grants (remove, then grant). A principal the call grants
+ * is not removed outright where its printed name is known: the user as
+ * spelled or as learned, and SYSTEM once learned. A deny entry of its is
+ * removed alone (`/remove:d`). Its allow entries are taken (`/remove:g`) only
+ * by the two writes that grant it -- the single replace and the
+ * strip-and-grant -- and only when one of them is an entry `/grant:r` leaves
+ * in place (entryGrantLeaves); the one-at-a-time fallback never names a
+ * granted principal's allow entries. The one-at-a-time fallback starts only
+ * once a read-back shows the user's own explicit full-control entry
+ * (grantedUserEntryPrincipal), and none of its calls removes that entry:
+ * through it the process keeps WRITE_DAC for every later call, whoever owns
+ * the folder. Without that read-back the fallback removes nothing, logs
+ * ACL_FALLBACK_UNPROVEN_LOG (once per folder) and answers false; the folder
+ * keeps the grants just written, and stays usable.
+ *
+ * Never throws. Every caller sits on a session-spawn or config-write path where
+ * a permissions failure must not be fatal -- including the case where a mocked
+ * or absent `child_process` makes `execFileSync` unusable.
+ */
 export function hardenDirAclWindows(dir: string): boolean {
   if (!IS_WINDOWS) return false
   const spellings = windowsAclPrincipals()
@@ -598,29 +813,19 @@ export function hardenDirAclWindows(dir: string): boolean {
   const entries = windowsAclEntries(dir)
   if (windowsAclIsOwnerOnly(entries, hardenedPrincipals, unremovableAclPrincipals)) return true
 
-  const removals = windowsAclRemovalArgs(entries, unremovableAclPrincipals)
-
-  // Principals this call will leave on the DACL that the skip check will NOT
-  // discount, and so proof that reading the result back cannot recognise
-  // anything. `windowsAclRemovalArgs` refuses to hand back a principal it cannot
-  // spell safely and drops the ones over its cap, and those stay exactly where
-  // they are. Counted BEFORE any write, so a read-back that is already known to
-  // be pointless is never paid for -- which is the other half of the cost bug:
-  // the un-nameable machine ran `learnHardenedPrincipals` on every single call
-  // and it could not have succeeded on any of them.
-  const namedBack = new Set<string>()
-  for (let i = 1; i < removals.length; i += 2) {
-    namedBack.add(removals[i].startsWith('*') ? removals[i].slice(1) : removals[i])
-  }
-  const strandedAtStart = entries
-    .map(aclEntryPrincipal)
-    .filter((p) => !namedBack.has(p) && !unremovableAclPrincipals.has(p)).length
-
   for (const principal of spellings) {
     const grants = ['/inheritance:r', '/grant:r', `${principal}:(OI)(CI)F`, `${SYSTEM_SID}:(OI)(CI)F`]
+    // The principals this call grants, in the spelling icacls prints: the user
+    // as spelled here, and the pair a write already read back (SYSTEM's
+    // printed name is localized, so it is known only once learned).
+    const granted = new Set<string>([aclPrincipalKey(principal), ...[...(hardenedPrincipals ?? [])].map(aclPrincipalKey)])
+    const removals = windowsAclRemovalArgs(entries, unremovableAclPrincipals, granted, true)
+    const strandedAtStart = strandedPrincipals(entries, removals, granted)
 
     // The replace, in one invocation: nothing is stripped unless every name in
-    // it resolved, so there is no window in which the app has no access.
+    // it resolved, so there is no window in which the app has no access. A
+    // granted principal's allow entry that `/grant:r` leaves in place is taken
+    // here too (`/remove:g`), ahead of the grant that writes its entry again.
     if (removals.length > 0 && icacls([dir, ...removals, ...grants])) {
       if (strandedAtStart === 0) learnHardenedPrincipals(dir)
       return true
@@ -630,22 +835,62 @@ export function hardenDirAclWindows(dir: string): boolean {
     // one is tried below -- or one of the removals does not, and the exit code
     // does not say which. Establish the app's own access FIRST, with the
     // strip-and-grant that shipped: if this fails it is the spelling, nothing
-    // has been removed, and the next spelling gets its turn.
-    if (!icacls([dir, ...grants])) continue
+    // has been removed, and the next spelling gets its turn. An allow entry of
+    // the user's or SYSTEM's that `/grant:r` leaves in place goes in this same
+    // write (`/remove:g`, then the grants; stripAndGrantRemovals), so the
+    // fallback below never has to name either. Those removals name the two as
+    // the grants do, so they add no way for this write to fail.
+    if (!icacls([dir, ...stripAndGrantRemovals(entries, principal), ...grants])) continue
     if (removals.length === 0) {
       if (strandedAtStart === 0) learnHardenedPrincipals(dir)
       return true
     }
 
-    // Access is granted and the grants are now PROVEN to resolve. Remove the
-    // rest one at a time -- each is independent, and a failure names the
-    // principal that caused it. Doing this rather than giving up on the
-    // removals is the difference between an explicit `Authenticated Users`
-    // being removed on such a machine and surviving.
-    let stranded = strandedAtStart
-    for (let i = 1; i < removals.length; i += 2) {
-      const target = removals[i]
-      const status = icaclsStatus([dir, '/remove', target])
+    // Before anything is removed one at a time (aicc_planning#103): the user's
+    // own explicit full-control entry, read back, in the spelling icacls
+    // prints (which for a bare spelling carries a domain). None of the calls
+    // below removes it, so through it the process keeps the right to write
+    // this DACL (WRITE_DAC) for every one of them, whoever owns the folder.
+    // Without that read-back nothing more is removed.
+    const now = windowsAclEntries(dir)
+    const own = grantedUserEntryPrincipal(now, entries, principal)
+    if (!own) {
+      logFallbackUnproven(dir)
+      return false
+    }
+    granted.add(aclPrincipalKey(own))
+    // The other principal granted is SYSTEM, whose printed name is localized.
+    // An explicit full-control entry the write above just made (in the
+    // read-back, not in the first read), other than the user's, is taken as
+    // SYSTEM's -- but only when there is exactly one; with more than one,
+    // none is, and the grants every removal carries put SYSTEM back in the
+    // same write that names it.
+    const madeOthers = new Set(now
+      .filter((e) => isExplicitFullControl(e) && !entries.includes(e))
+      .map((e) => aclPrincipalKey(aclEntryPrincipal(e)))
+      .filter((k) => !granted.has(k)))
+    if (madeOthers.size === 1) granted.add([...madeOthers][0])
+
+    // Remove the rest one at a time -- each is independent, and a failure
+    // names the principal that caused it. Doing this rather than giving up on
+    // the removals is the difference between an explicit `Authenticated
+    // Users` being removed on such a machine and surviving. Each removal
+    // carries the grants in the same invocation (remove, then grant), so no
+    // write leaves the folder without them: a granted principal whose printed
+    // name is not known is put back in the same write that removed it. A
+    // granted principal's allow entries are never named here, only a deny
+    // entry of its; one that `/grant:r` leaves in place and that turned up
+    // after the strip-and-grant stays, counted as stranded, for the next
+    // call's single replace. The list is the read-back's, so what is removed
+    // and what counts as left is what the folder holds now (the inherited
+    // entries are already gone, and an entry that turned up since the first
+    // read is not passed over).
+    const oneByOne = windowsAclRemovalArgs(now, unremovableAclPrincipals, granted)
+    let stranded = strandedPrincipals(now, oneByOne, granted)
+    for (let i = 1; i < oneByOne.length; i += 2) {
+      const option = oneByOne[i - 1]
+      const target = oneByOne[i]
+      const status = icaclsStatus([dir, option, target, ...grants])
       if (status === 0) continue
       // Memoised in the spelling icacls PRINTS, which is what both the removal
       // builder and the skip check compare against -- a bare SID is handed to
@@ -653,16 +898,15 @@ export function hardenDirAclWindows(dir: string): boolean {
       // matched neither, so the memo silently did nothing and the directory
       // could never settle. `noteUnremovableAclPrincipal` refuses everything
       // that is not a proven name-resolution failure, and everything too broad
-      // to give up on whatever the exit code says.
+      // to give up on whatever the exit code says. A granted principal's deny
+      // entry that stays is never memoised: it is no name the app cannot say.
       const printed = target.startsWith('*') ? target.slice(1) : target
-      if (!noteUnremovableAclPrincipal(printed, status)) stranded++
+      if (option !== '/remove' || !noteUnremovableAclPrincipal(printed, status)) stranded++
     }
-    // The pass above removes the app's own entries too, so re-grant. The same
-    // argv succeeded moments ago, which is why it is safe to have removed them:
-    // the only window where this directory has no DACL of ours is between those
-    // two calls, and it closes with a command already known to work. Its result
-    // is the answer -- reporting success after a re-grant that did not land
-    // would report a directory the app has just locked itself out of as hardened.
+    // The grants once more. Every call above carried them, so this repairs
+    // nothing it did; its result is the answer -- reporting success after a
+    // grant that did not land would report a folder the app cannot use as
+    // hardened.
     const regranted = icacls([dir, ...grants])
     // A principal still on the DACL that the memo does not discount makes the
     // read-back unable to match, so it is not paid for.
@@ -745,9 +989,14 @@ export function mkdirSecure(dir: string): void {
   }
 }
 /** Atomic write of a credential file with a restrictive 0o600 mode (POSIX),
- *  creating parent dirs (subsumes the old plain atomicWriteFile). */
-function writeCredentialFile(file: string, data: string): void {
+ *  creating parent dirs (subsumes the old plain atomicWriteFile). Into a
+ *  profile's sign-in folder only once that folder is checked owner-only in
+ *  this run (see the owner-only block below); otherwise it throws and writes
+ *  nothing. `holdsNoCredential`: the empty object that signs a copy out, which
+ *  may always replace what is there. */
+function writeCredentialFile(file: string, data: string, opts?: { holdsNoCredential?: boolean }): void {
   mkdirSecure(path.dirname(file))
+  if (opts?.holdsNoCredential !== true) guardCredentialFolder(path.dirname(file))
   atomicWriteSecure(file, data, IS_POSIX ? CRED_FILE_MODE : undefined)
   hardenCredentialFile(file)   // rename preserves the tmp's mode; re-assert to be safe
 }
@@ -759,8 +1008,809 @@ function writeCredentialFile(file: string, data: string): void {
  *  exclusive-create staging instead, then re-assert 0o600. Exported for tests. */
 export function copyCredentialFile(src: string, dest: string): void {
   mkdirSecure(path.dirname(dest))
+  guardCredentialFolder(path.dirname(dest))
   atomicWriteSecure(dest, fs.readFileSync(src), IS_POSIX ? CRED_FILE_MODE : undefined)
   hardenCredentialFile(dest)
+}
+
+/** A profile home's `.claude.json` (the CLI's identity file, which can carry a
+ *  token), owner-only on POSIX and, on Windows, only into a home checked
+ *  owner-only in this run (as writeCredentialFile). */
+function writeProfileHomeIdentity(home: string, data: string | Uint8Array): void {
+  mkdirSecure(home)
+  guardCredentialFolder(home)
+  atomicWriteSecure(path.join(home, '.claude.json'), data, IS_POSIX ? CRED_FILE_MODE : undefined)
+}
+
+// ── Owner-only sign-in folders (Windows) ────────────────────────────────────
+// A profile's three sign-in folders -- its home (`<profiles>/<id>`, where the
+// CLI keeps its `.claude.json`), the CLI's config folder (`<home>/.claude`,
+// where it keeps `.credentials.json`) and the identity copy (`<home>/identity`)
+// -- are written into by the app, and a session runs in the profile, only once
+// each is made this user's and owner-only and read back by the app's
+// owner-only folder rule (owner-only-folders.ts: owner the user; rights exactly
+// the user and SYSTEM, passed to what is inside; nothing inherited from above;
+// the Administrators group accepted beside them) in this run:
+//
+//   1. In place: the folder is given the rule and read back, and so is
+//      every entry directly inside it (the sign-in files among them): one
+//      another account owns is made this user's first (never a sign-in file
+//      or a file with more than one name), then each one this user, the
+//      Administrators group or SYSTEM owns takes the folder's rights (never a
+//      link or a file with more than one name), and the folder passes only
+//      when every such entry read back lets no other account in (the home's
+//      links to the user's own dot-files are left out while each has more
+//      than one name); how many were made this user's is logged. What is
+//      deeper is not read: it keeps the rights Windows gives it when the
+//      folder's rights are written. A sign-in file that is a link or that
+//      another account owns, any other entry (a link among them) still
+//      another account's, an entry that cannot be read or put right, or a
+//      file with more than one name that is not owner-only refuses it; a
+//      link's own rights are not judged, and it is never followed.
+//   2. Where that is refused (its owner cannot be made this user, say), a new
+//      folder is made beside it by the rule and read back, everything plain in
+//      the old one is copied in as new files (each takes the new folder's
+//      rights; times kept; links are made again afterwards, not copied), and
+//      the new folder is swapped into place: a sign-in file rewritten during
+//      the copy -- the folder's own or, for a profile folder, one in the
+//      folders inside it -- is copied again first, and the old copy then goes,
+//      every such sign-in file first (one newer than the copy in place is
+//      carried in, never dropped). A failure at any step undoes that step and
+//      falls to 3. The copy is complete before the swap begins, so a swap a
+//      quit interrupted is settled by the next check. Once swapped in, the
+//      new folder is read again with what it holds; if that read refuses it,
+//      it stays in place (the old copy goes), no sign-in is written to it and
+//      its account is refused as in 3.
+//   3. Otherwise nothing is written there, a launch is refused with
+//      CREDENTIAL_FOLDER_REFUSAL, the folder and what it holds stay exactly as
+//      they were, and one log line says why, in fixed words (never a path).
+//
+// The check is asynchronous -- one Windows PowerShell call for the folders it
+// asks about (where Constrained Language Mode leaves that call no read, the
+// same rule with Windows' own programs: owner-only-folders.ts), off the main
+// thread: at start for every profile, when a profile
+// is made, and whenever a write or a launch finds a folder with no verdict for
+// what it is now. A verdict, a pass or a refusal, holds for this run while the
+// folder stays the same folder (its file identity). A call that gives no read
+// at all (it could not run or end) is no verdict and no refusal: nothing is
+// made anew, and the folders are asked again (once more at once at start, for
+// the home kept ready and by a waiting launch, else by the next write or
+// launch, which is told they could not be checked, CREDENTIAL_FOLDER_UNCHECKED). A check whose account
+// was removed while it ran leaves nothing in that account's place. The write
+// and launch paths are synchronous and only READ the verdict: with none yet
+// they write nothing and refuse with CREDENTIAL_FOLDER_PENDING (the check
+// they start then lets a retry through). A new profile takes a home already
+// made and checked (one is kept ready in the profiles folder), so its first
+// sign-in is written at once. The main process turns the rule on at start
+// (startOwnerOnlyCredentialFolders), and what launches in a profile, launches
+// naming no account (it runs on the primary one) or lists the profiles at
+// start waits for the start's profile steps too (startProfileStepsSettled,
+// startProfileStepsPending). POSIX keeps its 0700 folders and the rule is off
+// there.
+
+/** What a launch or a write is told when step 3 refused a folder. The remedy
+ *  is the known issue's (app-knowledge.ts): the owner of the resources folder
+ *  AND of everything in it (2.1.1-beta.3, F7: owning the top folder alone
+ *  leaves the folders inside it as they were). */
+export const CREDENTIAL_FOLDER_REFUSAL =
+  "Windows did not let AI Code Conductor make this account's sign-in folders readable by you alone, so nothing was written there " +
+  "and the account cannot be used until they are. Make your Windows user the owner of AI Code Conductor's resources folder (the folder chosen for its data when it was set up) " +
+  'and of everything in it, or move that folder to an NTFS disk, then restart AI Code Conductor.'
+/** What a launch or a write is told while its folders have no verdict yet. */
+export const CREDENTIAL_FOLDER_PENDING =
+  "AI Code Conductor is still checking that this account's sign-in folders are readable by you alone. Try again in a moment."
+/** What a launch or a write is told when the last check of its folders gave no read (it could not run or end). */
+export const CREDENTIAL_FOLDER_UNCHECKED =
+  "AI Code Conductor could not check this account's sign-in folders just now, so nothing was written there. " +
+  'Try again in a moment; if this keeps happening, restart AI Code Conductor.'
+/** The sign-in folders inside a profile home. */
+const SIGN_IN_FOLDER_NAMES = ['.claude', 'identity'] as const
+/** The sign-in files: an old copy's go first, and are the ones copied again. */
+const CREDENTIAL_FILE_NAMES = ['.credentials.json', '.claude.json']
+const STAGED_SUFFIX = '.owner-only-new'
+const ASIDE_SUFFIX = '.owner-only-old'
+/** The checked home kept ready for the next new profile (never a profile id). */
+const READY_HOME_NAME = '.owner-only-ready'
+/** How much a remade folder carries over. */
+const CARRY_MAX_ENTRIES = 20_000
+const CARRY_MAX_BYTES = 256 * 1024 * 1024
+
+type CredentialFolderRule = (dirs: readonly string[]) => Promise<OwnerOnlyFolderResult[]> | OwnerOnlyFolderResult[]
+let enabledCredentialFolderRule: CredentialFolderRule | null = null
+let credentialFolderRuleForTest: CredentialFolderRule | null = null
+let credentialFolderRenameForTest: ((from: string, to: string) => void) | null = null
+/** This run's verdicts: a folder's key -> its file identity then, and whether it passed. */
+const credentialFolderVerdicts = new Map<string, { id: string; ok: boolean }>()
+/** Checks running: a home's key -> the check that will give its folders a verdict. */
+const credentialFolderChecks = new Map<string, Promise<void>>()
+/** Homes whose last check gave no read for some folder: a home's key. */
+const credentialChecksUnanswered = new Set<string>()
+let readyHomeCheck: Promise<void> | null = null
+/** The start's profile steps while they are still to run. */
+let startStepsPending: Promise<void> | null = null
+
+/** The app's own rule for the sign-in folders (Windows): each folder made
+ *  owner-only and read back with what is inside it, the home mirror's links
+ *  to the user's own files left out of that read (homeMirrorLinks). */
+const signInFolderRule: CredentialFolderRule = (dirs) => secureSignInFoldersWindows(dirs, homeMirrorLinks(dirs))
+
+/** The home mirror's links to the user's own files (mirrorRealHome) in each
+ *  profile home among `dirs`, by full path: the real home's dot-files, but
+ *  never the private or sign-in ones. The rule leaves each out of its read of
+ *  what is inside that home while it is a file with more than one name, so
+ *  that read never resets the user's real files: they keep their own entries
+ *  (what the home's own rights pass on still reaches them, as it reaches any
+ *  file in the home; a copy made where a link could not be is the profile's
+ *  own, and is read). Best-effort: none when the real home cannot be read. */
+function homeMirrorLinks(dirs: readonly string[]): string[] {
+  const homes = dirs.filter((d) => isProfileHome(d))
+  if (homes.length === 0) return []
+  let names: string[]
+  try {
+    names = fs.readdirSync(realHomeDir(), { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.startsWith('.') && !HOME_PRIVATE.has(e.name) && !CREDENTIAL_FILE_NAMES.includes(e.name))
+      .map((e) => e.name)
+  } catch { return [] }
+  return homes.flatMap((home) => names.map((name) => path.join(home, name)))
+}
+
+/** Start (main process): turns the owner-only rule on for the sign-in folders
+ *  (Windows), checks every profile's folders and makes a checked home ready
+ *  for the next new profile, THEN runs `steps` -- the start's profile steps
+ *  that write a sign-in. The steps run once the check has ended, whatever it
+ *  found: each write reads its own folder's verdict. `rule` is the app's own
+ *  owner-only rule unless a test brings one. */
+export async function startOwnerOnlyCredentialFolders(
+  steps: () => void | Promise<void>,
+  rule: CredentialFolderRule = signInFolderRule,
+): Promise<void> {
+  enabledCredentialFolderRule = rule
+  let settle!: () => void
+  const settled = new Promise<void>((resolve) => { settle = resolve })
+  startStepsPending = settled
+  try {
+    try { await checkEveryProfileCredentialFolders() } catch { /* no verdict: every write refuses as pending */ }
+    await steps()
+  } finally {
+    if (startStepsPending === settled) startStepsPending = null
+    settle()
+  }
+}
+
+/** Resolves once the start's profile steps have run (or failed); at once when
+ *  none are pending (the start never ran, or they are done). Never rejects.
+ *  The steps make the first account from the user's own sign-in and move a
+ *  kept sign-in in, so what lists the profiles or launches in one at start
+ *  waits for this. */
+export function startProfileStepsSettled(): Promise<void> {
+  return startStepsPending ?? Promise.resolve()
+}
+
+/** Whether the start's profile steps are still to run (or running): a launch
+ *  that may wait for them (one that names no account runs on the primary
+ *  account the steps may still be making) asks this synchronously first. */
+export function startProfileStepsPending(): boolean {
+  return startStepsPending !== null
+}
+
+/** Every listed profile's sign-in folders checked (those without a verdict),
+ *  then a checked home made ready for the next new profile. Never rejects. */
+export async function checkEveryProfileCredentialFolders(): Promise<void> {
+  const rule = credentialFolderRule()
+  if (!rule) return
+  const homes: string[] = []
+  try { for (const p of listProfiles()) if (isValidProfileId(p.id)) homes.push(getProfileConfigDir(p.id)) } catch { /* none listed */ }
+  await checkHomesAnswering(homes, rule)
+  await prepareReadyHome(rule)
+}
+
+/** One profile's sign-in folders checked unless they have a verdict this run;
+ *  resolves once they do (or the check ended without one, after asking once
+ *  more when it gave no read). While the start's profile steps are pending it
+ *  waits for them first. Never rejects. A launch that may run asynchronously
+ *  waits for this before its synchronous part reads the verdict. */
+export function checkProfileCredentialFolders(profileId: string): Promise<void> {
+  const steps = startStepsPending
+  if (steps) return steps.then(() => checkProfileCredentialFolders(profileId))
+  const rule = credentialFolderRule()
+  if (!rule || !isValidProfileId(profileId)) return Promise.resolve()
+  return checkHomesAnswering([getProfileConfigDir(profileId)], rule)
+}
+
+/** Whether a launch in the profile can read a verdict at once: every one of
+ *  its sign-in folders has one this run for what it is now (a pass or a
+ *  refusal), and the start's profile steps are not pending; always true where
+ *  the rule is off. Read only: it never starts a check. A launch that may run
+ *  asynchronously awaits checkProfileCredentialFolders first only when this
+ *  is false, so its common path stays synchronous up to its start. */
+export function profileCredentialFoldersChecked(profileId: string): boolean {
+  if (!credentialFolderRule()) return true
+  if (startStepsPending) return false
+  if (!isValidProfileId(profileId)) return true
+  return credentialFoldersOfHome(getProfileConfigDir(profileId)).every((d) => hasVerdict(d) || (realFolderId(d) === null && existsAtAll(d)))
+}
+
+/** Test seam: the rule (on any platform; it may answer at once or later) and,
+ *  optionally, the rename the swap uses; null puts both back and turns the
+ *  app's own rule off. Forgets every verdict. */
+export function _setCredentialFolderRuleForTest(rule: CredentialFolderRule | null, rename: ((from: string, to: string) => void) | null = null): void {
+  credentialFolderRuleForTest = rule
+  credentialFolderRenameForTest = rename
+  enabledCredentialFolderRule = null
+  credentialFolderVerdicts.clear()
+  credentialFolderChecks.clear()
+  credentialChecksUnanswered.clear()
+  readyHomeCheck = null
+  startStepsPending = null
+}
+
+function credentialFolderRule(): CredentialFolderRule | null {
+  if (credentialFolderRuleForTest) return credentialFolderRuleForTest
+  return IS_WINDOWS ? enabledCredentialFolderRule : null
+}
+
+const CASE_FOLDING_PATHS = IS_WINDOWS || process.platform === 'darwin'
+const folderKey = (dir: string): string => { const r = path.resolve(dir); return CASE_FOLDING_PATHS ? lowerAsciiLetters(r) : r }
+
+/** The folder's file identity when it is a real folder (never a link), else null. */
+function realFolderId(dir: string): string | null {
+  try {
+    const st = fs.lstatSync(dir, { bigint: true })
+    return !st.isSymbolicLink() && st.isDirectory() ? `${st.dev}:${st.ino}` : null
+  } catch { return null }
+}
+
+function existsAtAll(p: string): boolean {
+  try { fs.lstatSync(p); return true } catch { return false }
+}
+
+/** Whether `dir` is a profile home: a valid profile id directly inside the
+ *  profiles folder, compared as the file system compares names (so a path
+ *  spelled in another case is still checked). */
+function isProfileHome(dir: string): boolean {
+  const name = path.basename(dir)
+  const id = CASE_FOLDING_PATHS ? lowerAsciiLetters(name) : name
+  if (!isValidProfileId(id)) return false
+  try { return folderKey(dir) === folderKey(path.join(getProfilesRoot(), id)) } catch { return false }
+}
+
+/** Whether `dir` is one of a profile's sign-in folders. */
+function isProfileCredentialFolder(dir: string): boolean {
+  if (isProfileHome(dir)) return true
+  const name = CASE_FOLDING_PATHS ? lowerAsciiLetters(path.basename(dir)) : path.basename(dir)
+  return (SIGN_IN_FOLDER_NAMES as readonly string[]).includes(name) && isProfileHome(path.dirname(dir))
+}
+
+const homeOfFolder = (dir: string): string => (isProfileHome(dir) ? dir : path.dirname(dir))
+/** The profile a sign-in folder belongs to, and the folder's name, for a log line (never a path). */
+const profileOfFolder = (dir: string): string => path.basename(homeOfFolder(dir))
+const folderLabel = (dir: string): string => (isProfileHome(dir) ? 'profile' : path.basename(dir))
+
+/** A home's three sign-in folders, the home first. */
+const signInFoldersOf = (home: string): string[] => [home, ...SIGN_IN_FOLDER_NAMES.map((n) => path.join(home, n))]
+
+/** A profile home's sign-in folders that a launch checks: the home, its
+ *  config folder, and its identity folder once there is one. None for any
+ *  other home. */
+function credentialFoldersOfHome(home: string): string[] {
+  if (!isProfileHome(home)) return []
+  const identity = path.join(home, 'identity')
+  return existsAtAll(identity) ? signInFoldersOf(home) : signInFoldersOf(home).slice(0, 2)
+}
+
+/**
+ * The verdict this run for each folder, read only (the rule never runs here,
+ * so this is safe on any synchronous path). ok:false, with the message to
+ * show, when any was refused (or is not a real folder), or when any has no
+ * verdict for what it is now -- its check is then started, so a retry passes
+ * once it ends (told the folders could not be checked when the last check
+ * gave no read). Always ok where the rule is off (POSIX, or before the main
+ * process turns it on).
+ */
+export function credentialFoldersVerdict(dirs: readonly string[]): { ok: true } | { ok: false; message: string } {
+  const rule = credentialFolderRule()
+  if (!rule) return { ok: true }
+  let refused = false
+  const unchecked = new Set<string>()
+  for (const dir of dirs) {
+    const id = realFolderId(dir)
+    if (id === null && existsAtAll(dir)) { refused = true; continue }
+    const v = id === null ? undefined : credentialFolderVerdicts.get(folderKey(dir))
+    if (!v || v.id !== id) { unchecked.add(homeOfFolder(dir)); continue }
+    if (!v.ok) refused = true
+  }
+  if (refused) return { ok: false, message: CREDENTIAL_FOLDER_REFUSAL }
+  if (unchecked.size > 0) {
+    const unanswered = [...unchecked].some((home) => credentialChecksUnanswered.has(folderKey(home)))
+    void checkHomes([...unchecked], rule)
+    return { ok: false, message: unanswered ? CREDENTIAL_FOLDER_UNCHECKED : CREDENTIAL_FOLDER_PENDING }
+  }
+  return { ok: true }
+}
+
+/** Throws (nothing written) when `dir` is a profile's sign-in folder without a
+ *  passing verdict for what it is now. */
+function guardCredentialFolder(dir: string): void {
+  if (!isProfileCredentialFolder(dir)) return
+  const v = credentialFoldersVerdict([dir])
+  if (!v.ok) throw new Error(v.message)
+}
+
+function recordVerdict(dir: string, ok: boolean): void {
+  credentialFolderVerdicts.set(folderKey(dir), { id: realFolderId(dir) ?? '', ok })
+}
+
+/** A folder read back owner-only: its verdict recorded, and the entries
+ *  directly inside it that another account owned, which the rule made this
+ *  user's (OwnerOnlyFolderResult.takenOver), logged in fixed words. */
+function recordPass(dir: string, answers: RuleAnswers): void {
+  recordVerdict(dir, true)
+  const n = answers.get(dir)?.answer?.takenOver
+  if (typeof n === 'number' && Number.isInteger(n) && n > 0) {
+    logWarn(`[profiles] ${profileOfFolder(dir)}: ${n} ${n === 1 ? 'entry' : 'entries'} directly inside the ${folderLabel(dir)} folder ${n === 1 ? 'was' : 'were'} another account's and ${n === 1 ? 'is' : 'are'} now this Windows user's, owner-only (none of them a sign-in file)`)
+  }
+}
+
+function hasVerdict(dir: string): boolean {
+  const id = realFolderId(dir)
+  return id !== null && credentialFolderVerdicts.get(folderKey(dir))?.id === id
+}
+
+/** The homes' folders checked, each home at most once at a time: a home with
+ *  a check running waits for that one; one whose folders all have a verdict
+ *  is not asked again. Never rejects. */
+function checkHomes(homes: readonly string[], rule: CredentialFolderRule): Promise<void> {
+  const waits: Promise<void>[] = []
+  const fresh = new Map<string, string>()
+  for (const home of homes) {
+    if (!isProfileHome(home)) continue
+    const key = folderKey(home)
+    const running = credentialFolderChecks.get(key)
+    if (running) { waits.push(running); continue }
+    if (fresh.has(key)) continue
+    if (signInFoldersOf(home).every((d) => hasVerdict(d))) continue
+    fresh.set(key, home)
+  }
+  if (fresh.size > 0) {
+    const run: Promise<void> = checkFolders([...fresh.values()], rule)
+      .catch(() => { /* a check that failed leaves no verdict: writes stay pending */ })
+      .finally(() => { for (const key of fresh.keys()) if (credentialFolderChecks.get(key) === run) credentialFolderChecks.delete(key) })
+    for (const key of fresh.keys()) credentialFolderChecks.set(key, run)
+    waits.push(run)
+  }
+  return Promise.all(waits).then(() => undefined)
+}
+
+/** The homes checked, then asked once more where that check gave no read (a
+ *  cold Windows PowerShell can run past its bound once). Never rejects. */
+async function checkHomesAnswering(homes: readonly string[], rule: CredentialFolderRule): Promise<void> {
+  await checkHomes(homes, rule)
+  const again = homes.filter((home) => credentialChecksUnanswered.has(folderKey(home)))
+  if (again.length > 0) await checkHomes(again, rule)
+}
+
+/** The rule's answer for each folder asked, matched by place (none on any
+ *  failure), with the folder's file identity when it was asked (null: the
+ *  rule was to make it). */
+type RuleAnswers = Map<string, { answer: OwnerOnlyFolderResult | undefined; asked: string | null }>
+async function askRule(rule: CredentialFolderRule, dirs: readonly string[]): Promise<RuleAnswers> {
+  const asked = dirs.map((dir) => realFolderId(dir))
+  let answers: unknown
+  try { answers = dirs.length > 0 ? await rule(dirs) : [] } catch { answers = [] }
+  const out: RuleAnswers = new Map()
+  dirs.forEach((dir, i) => { out.set(dir, { answer: Array.isArray(answers) ? answers[i] as OwnerOnlyFolderResult | undefined : undefined, asked: asked[i] }) })
+  return out
+}
+
+/** Read back owner-only: the answer is for this folder and says so, and the
+ *  folder is a real one -- the same one the rule was asked about. */
+function passed(dir: string, answers: RuleAnswers): boolean {
+  const r = answers.get(dir)
+  const id = realFolderId(dir)
+  return !!r?.answer && r.answer.ok === true && r.answer.dir === dir && id !== null && (r.asked === null || r.asked === id)
+}
+
+/** The rule's read of what is inside this folder failed (an entry gone while
+ *  it was read can do that), as against an entry read and judged. */
+function insideReadFailed(dir: string, answers: RuleAnswers): boolean {
+  const a = answers.get(dir)?.answer
+  return !!a && a.ok !== true && OWNER_ONLY_INSIDE_FAILED_REASONS.includes(String(a.detail))
+}
+
+/** `dirs` asked once more, as one call, when the read of what is inside any of
+ *  them failed (insideReadFailed): a passing condition is not taken for a
+ *  refusal and made anew, as a call that gave no read is not
+ *  (checkHomesAnswering). Their answers are replaced by the new ones. */
+async function askAgainWhereInsideFailed(rule: CredentialFolderRule, dirs: readonly string[], answers: RuleAnswers): Promise<void> {
+  if (!dirs.some((d) => insideReadFailed(d, answers))) return
+  const again = await askRule(rule, dirs)
+  for (const d of dirs) answers.set(d, again.get(d)!)
+}
+
+/** The rule gave no read of this folder: no answer for it, an answer for
+ *  another folder, or a call that could not run or end. No verdict, never a
+ *  refusal: nothing is made anew for it. */
+function unread(dir: string, answers: RuleAnswers): boolean {
+  const a = answers.get(dir)?.answer
+  return !a || a.dir !== dir || a.unread === true
+}
+
+/** Whether a profile home's account is no longer listed. A list that cannot
+ *  be read never says so. */
+function profileRemoved(home: string): boolean {
+  const listed = readProfilesStrict()
+  if (listed === null) return false
+  const key = folderKey(home)
+  return !listed.some((p) => {
+    const id = (p as { id?: unknown } | null)?.id
+    return isValidProfileId(id) && folderKey(getProfileConfigDir(id)) === key
+  })
+}
+
+/** An account removed while its folders were checked: the folder now in its
+ *  home's place, made after the check began (by the check, as the account's
+ *  own was removed), goes -- links as links, never followed -- and nothing
+ *  there keeps a verdict. */
+function dropRemovedProfileHome(home: string): void {
+  for (const dir of signInFoldersOf(home)) credentialFolderVerdicts.delete(folderKey(dir))
+  credentialChecksUnanswered.delete(folderKey(home))
+  if (realFolderId(home) === null) return
+  try { safeTeardown(home) } catch {
+    logWarn(`[profiles] ${path.basename(home)}: a folder made for an account removed meanwhile could not be removed yet`)
+  }
+}
+
+/** The rule's refusals in the app's own words: a reason the rule wrote itself
+ *  is kept; anything else (an error's text can name a path or a user) is
+ *  given as a fixed phrase. */
+const LOGGED_REASONS = new Set([
+  'no answer', 'the user could not be named', 'its owner is not this user', 'it inherits rights from above',
+  'an entry could not be read', 'an inherited entry', 'a deny entry', 'this user lacks full control over it and what is inside',
+  'SYSTEM is missing', 'the folder cannot be named safely', 'a name in its path ends in a dot or a space',
+  'the answer could not be read', 'the answer does not match what was asked',
+  'its owner could not be read', 'it was replaced while it was checked',
+  ...OWNER_ONLY_INSIDE_REASONS,
+])
+function loggedReason(a: { answer: OwnerOnlyFolderResult | undefined } | undefined): string {
+  const detail = typeof a?.answer?.detail === 'string' ? a.answer.detail : 'no answer'
+  if (LOGGED_REASONS.has(detail)) return detail
+  if (/^an entry for S-1-[0-9-]+$/.test(detail)) return 'an entry for another account'
+  return 'the rights could not be set or read'
+}
+
+/** Homes a check gave no read for: a home's folder key (however the home or a
+ *  folder inside it was spelled) -> the home as first named, for its log line. */
+type Unanswered = Map<string, string>
+function markUnanswered(unanswered: Unanswered, home: string): void {
+  const key = folderKey(home)
+  if (!unanswered.has(key)) unanswered.set(key, home)
+}
+
+/** One check: the folders of each home with no verdict for what they are now
+ *  asked in one call (a home before what is inside it), each refusal remade
+ *  (step 2) or refused (step 3), every folder inside a remade home asked again
+ *  there; then one log line per refused folder. */
+async function checkFolders(homes: readonly string[], rule: CredentialFolderRule): Promise<void> {
+  const refused: Array<[string, string]> = []
+  const unanswered: Unanswered = new Map()
+  const checks: Array<{ home: string; homeId: string; set: string[] }> = []
+  const ask: string[] = []
+  for (const home of homes) {
+    for (const dir of signInFoldersOf(home)) {
+      try { settleInterruptedRemake(dir) } catch { /* still in the way: its remake says so */ }
+    }
+    const homeId = realFolderId(home)
+    if (homeId === null) {
+      // A missing home is not made here; a link or a file is refused as it stands.
+      if (existsAtAll(home)) refused.push([home, 'it is a link or not a folder'])
+      continue
+    }
+    const set: string[] = []
+    for (const dir of signInFoldersOf(home)) {
+      if (realFolderId(dir) === null && existsAtAll(dir)) { refused.push([dir, 'it is a link or not a folder']); continue }
+      if (!hasVerdict(dir)) set.push(dir)
+    }
+    if (set.length === 0) continue
+    checks.push({ home, homeId, set })
+    ask.push(...set)
+  }
+  const answers = await askRule(rule, ask)
+  const again: string[] = []
+  for (const { home, homeId, set } of checks) {
+    // The home is another folder (or none) now and its account was removed
+    // meanwhile: what is in its place was made after the check began.
+    if (realFolderId(home) !== homeId && profileRemoved(home)) { dropRemovedProfileHome(home); continue }
+    await askAgainWhereInsideFailed(rule, set, answers)
+    for (const dir of set) {
+      if (!isProfileHome(dir)) { await settleOne(dir, answers, rule, refused, unanswered); continue }
+      if (passed(dir, answers)) { recordPass(dir, answers); clearAside(dir); continue }
+      if (unread(dir, answers)) { markUnanswered(unanswered, home); continue }
+      const was = realFolderId(dir)
+      const made = await remakeOwnerOnly(dir, rule)
+      if (made === UNREAD) markUnanswered(unanswered, home)
+      else if (made !== null) { recordVerdict(dir, false); refused.push([dir, `${loggedReason(answers.get(dir))}; ${made}`]) }
+      // Not made anew: the folders inside it keep their own answers.
+      if (realFolderId(dir) === was) continue
+      // The home is another folder now (whatever its new read said):
+      // everything inside it is a new copy.
+      for (const inside of signInFoldersOf(dir).slice(1)) if (realFolderId(inside) !== null) again.push(inside)
+      break
+    }
+  }
+  if (again.length > 0) {
+    const second = await askRule(rule, again)
+    await askAgainWhereInsideFailed(rule, again, second)
+    for (const dir of again) await settleOne(dir, second, rule, refused, unanswered)
+  }
+  for (const { home } of checks) {
+    if (unanswered.has(folderKey(home))) credentialChecksUnanswered.add(folderKey(home))
+    else credentialChecksUnanswered.delete(folderKey(home))
+  }
+  for (const [dir, why] of refused) {
+    logWarn(`[profiles] ${profileOfFolder(dir)}: the ${folderLabel(dir)} folder could not be made readable by this user alone (${why}); nothing was written to it`)
+  }
+  for (const home of unanswered.values()) {
+    logWarn(`[profiles] ${path.basename(home)}: the sign-in folders could not be checked this time (the check gave no read); nothing was written to them, and the next write or launch checks them again`)
+  }
+}
+
+/** One folder's verdict from its answer: passed in place, else remade, else
+ *  refused; no read (of it, or of the folder made for it) is no verdict. */
+async function settleOne(dir: string, answers: RuleAnswers, rule: CredentialFolderRule, refused: Array<[string, string]>, unanswered: Unanswered): Promise<void> {
+  if (passed(dir, answers)) { recordPass(dir, answers); clearAside(dir); return }
+  if (unread(dir, answers)) { markUnanswered(unanswered, homeOfFolder(dir)); return }
+  const made = await remakeOwnerOnly(dir, rule)
+  if (made === UNREAD) { markUnanswered(unanswered, homeOfFolder(dir)); return }
+  if (made !== null) { recordVerdict(dir, false); refused.push([dir, `${loggedReason(answers.get(dir))}; ${made}`]) }
+}
+
+/** The old copy left beside a folder that has just passed (a quit came between
+ *  a swap and its clearing): cleared, a newer sign-in file in it carried in. */
+function clearAside(dir: string): void {
+  const aside = dir + ASIDE_SUFFIX
+  if (realFolderId(aside) === null) return
+  try { clearOldCopy(aside, dir) } catch { logWarn(`[profiles] ${profileOfFolder(dir)}: the earlier ${folderLabel(dir)} folder could not be removed yet; the next check removes it`) }
+}
+
+/** A remade folder's sign-in files, by their path inside it: its own and,
+ *  for a profile folder, those of the sign-in folders inside it. */
+function signInFilesOf(dir: string): string[] {
+  if (!isProfileHome(dir)) return [...CREDENTIAL_FILE_NAMES]
+  return [...CREDENTIAL_FILE_NAMES, ...SIGN_IN_FOLDER_NAMES.flatMap((folder) => CREDENTIAL_FILE_NAMES.map((name) => path.join(folder, name)))]
+}
+
+/** Whether the folder holding `rel` inside `root` is a real one (or `root`
+ *  itself): a sign-in file is never read or removed through a link. */
+const inRealFolder = (root: string, rel: string): boolean =>
+  path.dirname(rel) === '.' || realFolderId(path.join(root, path.dirname(rel))) !== null
+
+/** The old folder's copy after a swap: every sign-in file in it first (the
+ *  folder's own and, for a profile folder, those of the folders inside it) --
+ *  one newer than the copy now in place is carried into the place first, so a
+ *  sign-in is never lost -- so none is left in it should the rest not go;
+ *  then the rest (links removed as links, never followed). */
+function clearOldCopy(aside: string, dir: string): void {
+  for (const rel of signInFilesOf(dir)) {
+    if (!inRealFolder(aside, rel)) continue
+    const old = path.join(aside, rel)
+    let st: fs.Stats
+    try { st = fs.lstatSync(old) } catch { continue }
+    if (st.isFile()) {
+      if (!inRealFolder(dir, rel)) throw new Error('the folder for the sign-in in place is not a folder')
+      const cur = path.join(dir, rel)
+      let now: fs.Stats | null = null
+      try { now = fs.lstatSync(cur) } catch { now = null }
+      if (now && !now.isFile()) throw new Error('the sign-in in place is not a file')
+      if (!now || st.mtimeMs > now.mtimeMs) {
+        fs.writeFileSync(cur, fs.readFileSync(old), IS_POSIX ? { mode: CRED_FILE_MODE } : {})
+        fs.utimesSync(cur, st.atime, st.mtime)
+      }
+    }
+    fs.rmSync(old, { force: true })
+  }
+  safeTeardown(aside)
+}
+
+/** What an earlier remake that a quit interrupted left beside `dir`: between
+ *  the two renames the new folder (its copy complete) goes into place, else the
+ *  old one goes back; a new folder never swapped in goes. An old copy beside a
+ *  folder in place is cleared once that folder passes (clearAside). Throws
+ *  when it cannot settle. */
+function settleInterruptedRemake(dir: string): void {
+  const staged = dir + STAGED_SUFFIX
+  const aside = dir + ASIDE_SUFFIX
+  if (realFolderId(aside) !== null && !existsAtAll(dir)) fs.renameSync(realFolderId(staged) !== null ? staged : aside, dir)
+  if (realFolderId(staged) !== null && realFolderId(dir) !== null) safeTeardown(staged)
+}
+
+/** Every plain file and folder below `from` copied into `to` as new files and
+ *  folders, so each takes `to`'s rights; links and special files are left out
+ *  (the profile's links are made again after the swap). Times kept. Bounded;
+ *  throws past the bound or on any failure. Answers the size and time, as
+ *  copied, of each file in `track` (paths inside `from`). */
+async function carryFolder(from: string, to: string, budget: { entries: number; bytes: number }, track: readonly string[], stamps = new Map<string, string>(), rel = ''): Promise<Map<string, string>> {
+  for (const name of await fs.promises.readdir(from)) {
+    if (--budget.entries < 0) throw new Error('more than the app carries over')
+    const src = path.join(from, name)
+    const dest = path.join(to, name)
+    const inside = rel ? path.join(rel, name) : name
+    const st = await fs.promises.lstat(src)
+    if (st.isSymbolicLink()) continue
+    if (st.isDirectory()) {
+      await fs.promises.mkdir(dest)
+      await carryFolder(src, dest, budget, track, stamps, inside)
+    } else if (st.isFile()) {
+      budget.bytes -= st.size
+      if (budget.bytes < 0) throw new Error('more than the app carries over')
+      await fs.promises.writeFile(dest, await fs.promises.readFile(src), { flag: 'wx', ...(IS_POSIX ? { mode: CRED_FILE_MODE } : {}) })
+      await fs.promises.utimes(dest, st.atime, st.mtime)
+      if (track.includes(inside)) stamps.set(inside, `${st.size}:${st.mtimeMs}`)
+    }
+  }
+  return stamps
+}
+
+/** After the old folder moved aside: each sign-in file (`files`, paths inside
+ *  it) that changed there while the copy ran (rewritten, made or removed) is
+ *  copied again, so the folder that goes into place holds it as it is now. */
+function recarrySignInFiles(aside: string, staged: string, stamps: Map<string, string>, files: readonly string[]): void {
+  for (const rel of files) {
+    const old = path.join(aside, rel)
+    const dest = path.join(staged, rel)
+    let st: fs.Stats | null = null
+    if (inRealFolder(aside, rel)) { try { st = fs.lstatSync(old) } catch { st = null } }
+    if (!st || !st.isFile()) {
+      if (stamps.has(rel)) fs.rmSync(dest, { force: true })
+      continue
+    }
+    if (stamps.get(rel) === `${st.size}:${st.mtimeMs}`) continue
+    // A sign-in folder made inside the old one during the copy is made in the new one too.
+    if (!existsAtAll(path.dirname(dest))) fs.mkdirSync(path.dirname(dest))
+    fs.writeFileSync(dest, fs.readFileSync(old), IS_POSIX ? { mode: CRED_FILE_MODE } : {})
+    fs.utimesSync(dest, st.atime, st.mtime)
+  }
+}
+
+/** A home's or its config folder's links made again after a remake: the
+ *  config folder's shared folders and, for a home, the mirror of the real
+ *  home. Best-effort: the next launch's setup makes them too. */
+function relinkAfterRemake(dir: string): void {
+  if (folderLabel(dir) === 'identity') return
+  const home = homeOfFolder(dir)
+  try {
+    const claudeDir = path.join(home, '.claude')
+    if (realFolderId(claudeDir) !== null) linkSharedDirs(claudeDir)
+    if (dir === home) mirrorRealHome(home)
+  } catch {
+    logWarn(`[profiles] ${profileOfFolder(dir)}: the account's shared folders could not be linked again yet; its next launch links them`)
+  }
+}
+
+/** remakeOwnerOnly's answer when the rule gave no read of the new folder. */
+const UNREAD = Symbol('unread')
+
+/** Step 2 for one folder the rule refused in place. Null when the new folder
+ *  is in place and checked (its verdict recorded); UNREAD (no verdict) when
+ *  the rule gave no read of the new folder; else why not. Every step before
+ *  the swap is undone unless null. Once swapped in, the new folder is asked
+ *  about again with what it now holds (the copy, its sign-in files and its
+ *  links): it passes only when that read holds; a refusal is recorded, and
+ *  no read leaves it without a verdict. The old copy goes either way: the
+ *  new folder holds everything it held. */
+async function remakeOwnerOnly(dir: string, rule: CredentialFolderRule): Promise<string | null | typeof UNREAD> {
+  if (realFolderId(dir) === null) return 'it is missing'
+  const staged = dir + STAGED_SUFFIX
+  const aside = dir + ASIDE_SUFFIX
+  if (existsAtAll(staged) || existsAtAll(aside)) return 'a folder from an earlier attempt is in the way'
+  const stagedAnswers = await askRule(rule, [staged])
+  const stagedId = realFolderId(staged)
+  if (stagedId === null || !passed(staged, stagedAnswers)) {
+    try { if (stagedId !== null) safeTeardown(staged) } catch { /* settled by the next check */ }
+    return unread(staged, stagedAnswers) ? UNREAD : 'a new folder could not be made owner-only'
+  }
+  const files = signInFilesOf(dir)
+  let stamps: Map<string, string>
+  try {
+    stamps = await carryFolder(dir, staged, { entries: CARRY_MAX_ENTRIES, bytes: CARRY_MAX_BYTES }, files)
+  } catch {
+    try { safeTeardown(staged) } catch { /* settled by the next check */ }
+    return 'what it holds could not be copied'
+  }
+  // From here to the swap nothing waits: no other step of the app runs in
+  // between. The read of the new folder once it is in place does wait; the
+  // old copy is cleared when that read is done, whatever it says.
+  const rename = credentialFolderRenameForTest ?? fs.renameSync
+  try {
+    rename(dir, aside)
+  } catch {
+    try { safeTeardown(staged) } catch { /* settled by the next check */ }
+    return 'it is in use'
+  }
+  try {
+    recarrySignInFiles(aside, staged, stamps, files)
+  } catch {
+    try { rename(aside, dir) } catch { /* the next check puts it back */ }
+    try { if (realFolderId(dir) !== null) safeTeardown(staged) } catch { /* settled by the next check */ }
+    return 'a sign-in file changed during the copy and could not be copied again'
+  }
+  try {
+    rename(staged, dir)
+  } catch {
+    try { rename(aside, dir) } catch { /* the next check puts it back */ }
+    try { if (realFolderId(dir) !== null) safeTeardown(staged) } catch { /* settled by the next check */ }
+    return 'the new folder could not be put in its place'
+  }
+  if (realFolderId(dir) !== stagedId) return 'the new folder could not be put in its place'
+  relinkAfterRemake(dir)
+  const answers = await askRule(rule, [dir])
+  await askAgainWhereInsideFailed(rule, [dir], answers)
+  const ok = passed(dir, answers) && realFolderId(dir) === stagedId
+  if (ok) recordPass(dir, answers)
+  else if (!unread(dir, answers)) recordVerdict(dir, false)
+  clearAside(dir)
+  if (ok) return null
+  return unread(dir, answers) ? UNREAD : 'the new folder did not read back owner-only with what it holds'
+}
+
+/** The checked home kept ready for the next new profile: made by the rule with
+ *  its two sign-in folders, all read back owner-only. One at a time; one this
+ *  run has not read back owner-only (an earlier run's, or one found already
+ *  there) is taken away first and made anew; one whose check gave no read is
+ *  asked once more; a refused one goes. */
+function readyHomePath(): string { return path.join(getProfilesRoot(), READY_HOME_NAME) }
+
+/** A ready home holds only its two sign-in folders, both empty real folders. */
+function readyHomeIsEmpty(ready: string): boolean {
+  try {
+    if (realFolderId(ready) === null) return false
+    const names = fs.readdirSync(ready)
+    return names.every((n) => (SIGN_IN_FOLDER_NAMES as readonly string[]).includes(n) && realFolderId(path.join(ready, n)) !== null && fs.readdirSync(path.join(ready, n)).length === 0)
+  } catch { return false }
+}
+
+function prepareReadyHome(rule: CredentialFolderRule): Promise<void> {
+  const ready = readyHomePath()
+  if (signInFoldersOf(ready).every((d) => hasVerdict(d) && credentialFolderVerdicts.get(folderKey(d))?.ok === true) && readyHomeIsEmpty(ready)) return Promise.resolve()
+  if (readyHomeCheck) return readyHomeCheck
+  const run: Promise<void> = (async () => {
+    fs.mkdirSync(getProfilesRoot(), { recursive: true })
+    // Whatever is there has no passing verdict from this run (see the early
+    // answer above), so the rule makes the home anew rather than taking over
+    // a folder it did not make. A link or a file is left as it is: no home
+    // is ready.
+    if (existsAtAll(ready)) {
+      if (realFolderId(ready) === null) return
+      for (const d of signInFoldersOf(ready)) credentialFolderVerdicts.delete(folderKey(d))
+      safeTeardown(ready)
+    }
+    const set = signInFoldersOf(ready)
+    let answers = await askRule(rule, set)
+    // A call that gave no read is no refusal: asked once more at once, as a
+    // profile's folders are (checkHomesAnswering). On a first run this is the
+    // run's first, coldest call, and the first account is made in this home.
+    if (set.some((d) => unread(d, answers))) answers = await askRule(rule, set)
+    if (set.every((d) => passed(d, answers))) { for (const d of set) recordVerdict(d, true); return }
+    if (realFolderId(ready) !== null) safeTeardown(ready)
+  })().catch(() => { /* no home ready: a new profile is checked after it is made */ })
+    .finally(() => { if (readyHomeCheck === run) readyHomeCheck = null })
+  readyHomeCheck = run
+  return run
+}
+
+/** A new profile's home taken from the ready one (Windows, rule on): renamed
+ *  into place, its folders keeping the verdicts they were checked with. False
+ *  when none is ready. */
+function takeReadyHome(home: string): boolean {
+  if (!credentialFolderRule()) return false
+  const ready = readyHomePath()
+  const from = signInFoldersOf(ready)
+  const ids = from.map((d) => realFolderId(d))
+  if (!from.every((d, i) => ids[i] !== null && credentialFolderVerdicts.get(folderKey(d))?.id === ids[i] && credentialFolderVerdicts.get(folderKey(d))?.ok === true)) return false
+  if (!readyHomeIsEmpty(ready) || existsAtAll(home)) return false
+  try { fs.renameSync(ready, home) } catch { return false }
+  for (const d of from) credentialFolderVerdicts.delete(folderKey(d))
+  signInFoldersOf(home).forEach((d, i) => { if (realFolderId(d) === ids[i]) credentialFolderVerdicts.set(folderKey(d), { id: ids[i]!, ok: true }) })
+  return true
 }
 
 function profilesMetaFile(): string { return path.join(getProfilesRoot(), 'profiles.json') }
@@ -784,6 +1834,41 @@ export function upsertProfile(p: AccountProfile): void {
 }
 export function deleteProfileMeta(id: string): void {
   saveProfiles(listProfiles().filter((x) => x.id !== id))
+}
+
+/** profiles.json read strictly, for the provider account registry (WP2): no
+ *  file is an empty list, and ANY other failure -- unreadable, not JSON, no
+ *  profiles array -- is null. Never the `[]` listProfiles returns, which the
+ *  registry would read as "every account was removed". */
+export function readProfilesStrict(): AccountProfile[] | null {
+  let raw: string
+  try { raw = fs.readFileSync(profilesMetaFile(), 'utf8') } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? [] : null
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<AccountProfilesConfig> | null
+    return Array.isArray(parsed?.profiles) ? parsed.profiles : null
+  } catch { return null }
+}
+
+/** Edit profiles.json in place, and only when it read completely. `edit`
+ *  gets copies of the profile OBJECTS and returns whether it changed any;
+ *  anything else in the list, and every other key of the file, is written
+ *  back exactly as it was. Returns false when the file could not be read
+ *  (nothing is written then). */
+export function updateProfilesStrict(edit: (profiles: AccountProfile[]) => boolean): boolean {
+  const file = profilesMetaFile()
+  let top: Record<string, unknown>
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray((parsed as { profiles?: unknown }).profiles)) return false
+    top = parsed as Record<string, unknown>
+  } catch { return false }
+  const isRecord = (v: unknown): v is AccountProfile => !!v && typeof v === 'object' && !Array.isArray(v)
+  const entries = (top.profiles as unknown[]).map((v) => (isRecord(v) ? { ...v } : v))
+  if (!edit(entries.filter(isRecord))) return true
+  atomicWriteSecure(file, JSON.stringify({ ...top, profiles: entries }, null, 2))
+  return true
 }
 
 /** The captured-global "primary" account, or null if none is marked yet. */
@@ -844,7 +1929,17 @@ export function resolveHeadlessProfileHome(preferredProfileId?: string | null): 
  *  touches the default ~/.claude. */
 export function createProfile(name?: string): AccountProfile {
   const id = `profile-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`
+  // Windows: a new profile takes the home kept ready, made and checked
+  // owner-only, so its first sign-in can be written at once; without one its
+  // folders are checked now (a write before that ends is refused as pending).
+  // Either way the next new profile's home is made ready.
+  const tookReady = takeReadyHome(getProfileConfigDir(id))
   setupProfileLinks(id)
+  const rule = credentialFolderRule()
+  if (rule) {
+    if (!tookReady) void checkHomes([getProfileConfigDir(id)], rule)
+    void prepareReadyHome(rule)
+  }
   const trimmed = name?.trim()
   const profile: AccountProfile = {
     id,
@@ -897,6 +1992,53 @@ function isSelfReferentialLink(target: string, link: string): boolean {
   } catch {
     return false // a parent isn't resolvable -> rely on the string check above
   }
+}
+
+/**
+ * Does `child` resolve INSIDE `dir`?
+ *
+ * Both sides are canonicalised before comparing, so a junctioned profiles root
+ * (which this app supports -- the resources directory is user-chosen and may
+ * itself be a link) stays inside itself, while a link planted at
+ * `<home>/.claude` that points somewhere else does not. The comparison folds
+ * case exactly where the filesystem does, and appends a separator so
+ * `<...>/profiles/ab` is not read as inside `<...>/profiles/a`.
+ *
+ * `child` is resolved through its PARENT plus its basename: the leaf is usually
+ * a file about to be written and may not exist yet. An unresolvable path falls
+ * back to its textual resolution, which can only make the check STRICTER.
+ */
+function resolvesInsideDir(dir: string, child: string): boolean {
+  const canon = (p: string): string => {
+    try { return fs.realpathSync.native(p) } catch { return path.resolve(p) }
+  }
+  const fold = (p: string): string => (isWin || process.platform === 'darwin' ? p.toLowerCase() : p)
+  const root = fold(canon(dir))
+  const leaf = fold(path.join(canon(path.dirname(child)), path.basename(child)))
+  return leaf === root || leaf.startsWith(root.endsWith(path.sep) ? root : root + path.sep)
+}
+
+/**
+ * Is `p` itself a link?
+ *
+ * Both path guards canonicalise through the PARENT and re-append the basename,
+ * because the leaf is usually a file about to be created. That is right for the
+ * case they were written for and blind to one they were not: a leaf that
+ * ALREADY exists as a symlink, in an otherwise ordinary directory, resolves
+ * "inside" and "not self-referential" on the strength of its parent alone. The
+ * write is then a rename-over, which replaces the directory entry rather than
+ * following the link -- but that is a property of the write, argued for POSIX,
+ * and the adversarial pass could not verify it for a Windows symlink because
+ * creating one needs a privilege the sandbox did not have (PLAUSIBLE, not
+ * confirmed).
+ *
+ * So do not rely on rename semantics for it. A leaf this app owns is never a
+ * link; if it is one, something else planted it, and refusing costs a settings
+ * copy while accepting could cost whatever the link points at. Never throws: an
+ * absent leaf is not a link.
+ */
+function isLink(p: string): boolean {
+  try { return fs.lstatSync(p).isSymbolicLink() } catch { return false }
 }
 
 /** The real user home (parent of the shared ~/.claude). Test-overridable seam. */
@@ -1145,15 +2287,211 @@ function writeUserScopeClaudeMd(claudeDir: string, shared: string): void {
   fs.writeFileSync(dest, next)
 }
 
-function buildHomeLinks(home: string): void {
-  migrateOldLayout(home)
+// What the sanitiser removed from a profile's settings copy, and what the
+// ambient pass removed from its launch environment, both live in
+// `./managed-launch-state`. They are re-exported here because every existing
+// caller imports them from this module, and because the preflight recorder --
+// which this module now calls from the choke point -- has to read them without
+// importing this module back (see that file's header).
+export { lastSettingsSanitiseFor, lastAmbientStripFor } from './managed-launch-state'
 
-  // Private Claude config dir: shared junctions + a one-way settings copy.
-  const claudeDir = path.join(home, '.claude')
-  fs.mkdirSync(claudeDir, { recursive: true })
-  // 0700 (POSIX): it holds .credentials.json + the settings copy; the umask
-  // default (0755) left the credential filenames enumerable by other local users.
-  hardenCredentialDir(claudeDir)
+/**
+ * Write the APP-OWNED copy of the shared user-scope settings into a managed
+ * profile home, with the provider's authority entries removed.
+ *
+ * The source file is the one the USER edits and is never touched: it is read,
+ * and a separate destination is written. That separation is the whole point of
+ * the copy -- the user keeps their `env` block and their helpers on their own
+ * machine; the managed realm gets a copy that cannot redirect the account.
+ *
+ * Two fail-closed behaviours, both deliberate:
+ *   - an unreadable or unparseable source writes NOTHING and leaves no stale
+ *     copy behind. A session then starts without the shared settings, which is
+ *     visible and recoverable; copying a file we could not inspect is neither.
+ *   - the write goes through `atomicWriteFileSync`, which stages under a random
+ *     name with `wx` and RENAMES over the destination. Rename-over replaces the
+ *     directory entry rather than the inode, so it breaks a pre-existing
+ *     hardlink -- the hazard `writeUserScopeClaudeMd` documents for CLAUDE.md,
+ *     where a plain write would edit the user's own settings.json THROUGH the
+ *     link, turning a sanitiser into a mutation of the file it protects. The
+ *     earlier unlink-then-write did break the link, but it also left a window
+ *     on EVERY spawn (`setupProfileLinks` runs per spawn) in which the copy did
+ *     not exist, so a concurrent second session of the same account could start
+ *     with no shared settings at all. Rename has no such window.
+ */
+/**
+ * Remove the app-written settings copy at `dest` because its source is gone.
+ * Returns false, with the refusal RECORDED for the panel, when the location
+ * fails the same containment and leaf-link guards the write path applies --
+ * a `.claude` junction into another profile's realm, or a settings.json
+ * planted as a link. Never touches anything but the app-written copy.
+ */
+function removeStaleSettingsCopy(home: string, dest: string): boolean {
+  if (!resolvesInsideDir(home, dest)) {
+    recordSettingsSanitise(home, {
+      removed: [],
+      refused: 'the settings location for this account resolves outside its own home, so the stale copy was left in place',
+    })
+    logWarn(`[profiles] the settings copy path for ${path.basename(home)} resolves outside that profile home; refusing to remove it`)
+    return false
+  }
+  if (isLink(dest)) {
+    recordSettingsSanitise(home, {
+      removed: [],
+      refused: 'the settings file for this account is a link to somewhere else, so it was left in place',
+    })
+    logWarn(`[profiles] the settings copy path for ${path.basename(home)} is a symbolic link; refusing to remove it`)
+    return false
+  }
+  try { fs.rmSync(dest, { force: true }) } catch { /* absent */ }
+  return true
+}
+
+function writeSanitisedSettingsCopy(src: string, dest: string): void {
+  // `<profileHome>/.claude/settings.json` -> `<profileHome>`. Both call sites
+  // build `dest` as `path.join(<profile home>, '.claude', 'settings.json')`, so
+  // this is the same string the launch path passes to the preflight.
+  const home = path.dirname(path.dirname(dest))
+
+  // SELF-REFERENCE GUARD -- FIRST, before any read, delete or write.
+  //
+  // Mirrors the guard `writeUserScopeClaudeMd` already carries, for the same
+  // REACHABLE case: `sharedRoot()` is `os.homedir()`-derived, `os.homedir()`
+  // reads USERPROFILE, and a CCC launched from INSIDE a CCC session inherits
+  // USERPROFILE=<profileDir> -- so `src` and `dest` become ONE file.
+  //
+  // Both outcomes destroy the very file this function exists to protect:
+  //   - valid JSON: the source is REWRITTEN, silently and permanently stripping
+  //     the user's own `apiKeyHelper` and `env` authority entries from their
+  //     real settings.json;
+  //   - malformed JSON: the refusal path's `fs.rmSync(dest, { force: true })`
+  //     DELETES it outright.
+  // `atomicWriteFileSync` does not save us -- it breaks a hardlink AT the
+  // destination, so when the destination IS the source the rename-over lands
+  // back on the source. Use the canonicalising check rather than a bare string
+  // compare, so an 8.3 short name, a `\\?\` prefix or a symlinked shared root
+  // cannot spell its way around it. (adversarial review, MAJOR 4)
+  if (isSelfReferentialLink(src, dest)) {
+    recordSettingsSanitise(home, {
+      removed: [],
+      refused: 'the profile home resolves to the shared settings location, so no copy was written',
+    })
+    logWarn(`[profiles] shared settings.json and the profile copy for ${path.basename(home)} resolve to one file; leaving it untouched`)
+    return
+  }
+
+  // CONTAINMENT GUARD. The self-reference check above catches the destination
+  // resolving back onto the SOURCE. This catches it resolving anywhere else
+  // outside the account home it is supposed to be inside -- a `.claude`
+  // junction pointing at another profile, so one account's copy lands in
+  // another's realm. Same-OS-user, so it is not a privilege boundary (D17), but
+  // writing an account's settings into a directory this app did not resolve is
+  // not something to do silently: refuse, and say so on the panel.
+  if (!resolvesInsideDir(home, dest)) {
+    recordSettingsSanitise(home, {
+      removed: [],
+      refused: 'the settings location for this account resolves outside its own home, so no copy was written',
+    })
+    logWarn(`[profiles] the settings copy path for ${path.basename(home)} resolves outside that profile home; refusing to write it`)
+    return
+  }
+
+  // ...and the LEAF itself, which neither guard above canonicalises: both
+  // resolve the parent and re-append the basename, so a settings.json planted
+  // as a symlink inside an ordinary `.claude` passes both. The app never
+  // creates this file as a link, so one here was planted by something else.
+  if (isLink(dest)) {
+    recordSettingsSanitise(home, {
+      removed: [],
+      refused: 'the settings file for this account is a link to somewhere else, so no copy was written',
+    })
+    logWarn(`[profiles] the settings copy path for ${path.basename(home)} is a symbolic link; refusing to write through it`)
+    return
+  }
+
+  let raw: string
+  try {
+    // SIZE-GATE BEFORE READ. This function is on the SYNCHRONOUS spawn path --
+    // all five launch paths plus the boot-time junction repair -- so everything
+    // it does blocks the Electron main thread before the PTY exists.
+    //
+    // The project-settings scan got this cap when a pretty-printed stringify was
+    // measured at O(depth^2) in output size; this path kept an uncapped
+    // `readFileSync` and an unguarded stringify, one function away. Measured on
+    // this machine: a 128 KB shared settings.json nested 4000 deep produced a
+    // 512 MB string, 734 ms of blocked main thread and +533 MB RSS on EVERY
+    // spawn; at 136 KB it threw `RangeError: Invalid string length`, which every
+    // caller swallows into a single warn line -- so the home build aborted
+    // before the CLAUDE.md regeneration and the dot-entry mirror, and the
+    // session lost its git/ssh/npm config with no other trace (adversarial
+    // round 4).
+    //
+    // THE BUFFER IS THE BOUND, not a stat. The first version of this gate was
+    // `statSync(src).size` followed by an unconditional `readFileSync(src)`, so a
+    // file that grew between the two was read in full anyway -- the same
+    // advisory-cap defect the project scan had, restated one function away
+    // (adversarial round 5). One descriptor, one read of at most cap+1 bytes:
+    // a byte past the cap IS the refusal, whatever any stat said. Read-only, so
+    // the source is never opened for writing on any path through here.
+    const fd = fs.openSync(src, 'r')
+    let bytesRead: number
+    const buf = Buffer.allocUnsafe(MAX_SHARED_SETTINGS_BYTES + 1)
+    try {
+      bytesRead = fs.readSync(fd, buf, 0, MAX_SHARED_SETTINGS_BYTES + 1, 0)
+    } finally {
+      fs.closeSync(fd)
+    }
+    if (bytesRead > MAX_SHARED_SETTINGS_BYTES) {
+      recordSettingsSanitise(home, {
+        removed: [],
+        refused: `shared settings.json is larger than ${Math.floor(MAX_SHARED_SETTINGS_BYTES / 1024)} KB, so no copy was written`,
+      })
+      logWarn(`[profiles] shared settings.json is over the ${MAX_SHARED_SETTINGS_BYTES}-byte cap; not copying it into profile ${path.basename(home)}`)
+      try { fs.rmSync(dest, { force: true }) } catch { /* absent */ }
+      return
+    }
+    // Decoded as the CLI decodes it (BOM-aware, UTF-16LE recognised), so a
+    // file the CLI applies is one the copy carries: a BOM-prefixed source used
+    // to be refused here as invalid JSON (adversarial review, design lens).
+    raw = decodeSettingsText(buf, bytesRead)
+  } catch (e) {
+    // The errno ONLY, never the message: a Node fs error message embeds the
+    // absolute path, and therefore the OS username, and this string now reaches
+    // a renderer surface. The path is not what the user needs here anyway --
+    // they know where their own shared settings live.
+    const code = (e as NodeJS.ErrnoException)?.code ?? 'unknown error'
+    recordSettingsSanitise(home, { removed: [], refused: `shared settings.json could not be read (${code})` })
+    try { fs.rmSync(dest, { force: true }) } catch { /* absent */ }
+    return
+  }
+  const result = sanitizeManagedSettingsFor('claude', raw)
+  if (result.text === null) {
+    recordSettingsSanitise(home, { removed: result.removed, refused: result.refused })
+    // A refusal IS a warning: the user's shared settings silently stop applying
+    // to this account until they fix the file.
+    logWarn(`[profiles] not copying shared settings.json into profile ${path.basename(home)}: ${result.refused ?? 'sanitiser refused it'}`)
+    try { fs.rmSync(dest, { force: true }) } catch { /* absent */ }
+    return
+  }
+  // Staged `wx` write + rename-over: atomic, and the rename replaces the
+  // directory entry rather than the inode, so a pre-existing hardlink back to
+  // the shared file is broken instead of written through (see the header).
+  //
+  // The record is written AFTER this, not before: a failed write (ENOSPC, or a
+  // rename that never wins its retry budget) otherwise left a report claiming
+  // removals that are not in the copy on disk (adversarial round 4).
+  atomicWriteFileSync(dest, result.text)
+  recordSettingsSanitise(home, { removed: result.removed, refused: result.refused })
+  if (result.removed.length) {
+    // Routine, not a fault: this fires on every spawn for a user who keeps an
+    // `env` block in their shared settings, and the profile ID is the useful
+    // part -- the absolute path just puts their directory layout in the log.
+    logInfo(`[profiles] sanitised the settings copy for profile ${path.basename(home)}: removed ${result.removed.join(', ')}`)
+  }
+}
+
+/** A config folder's shared folders, each linked to the shared one. */
+function linkSharedDirs(claudeDir: string): void {
   const shared = sharedRoot()
   for (const name of SHARED_DIR_NAMES) {
     const target = path.join(shared, name)
@@ -1164,8 +2502,60 @@ function buildHomeLinks(home: string): void {
     // MEMORY.md index that is NOT union-safe, and the rest are synced config.
     ensureLink(target, path.join(claudeDir, name), name === 'projects')
   }
+}
+
+function buildHomeLinks(home: string): void {
+  // This build's verdict starts empty. Anything that throws between here and
+  // the settings block then reports `'not-evaluated'` -- the truth -- instead of
+  // reusing the verdict of whichever launch last got that far. See
+  // clearSettingsSanitise.
+  clearSettingsSanitise(home)
+  migrateOldLayout(home)
+
+  // Private Claude config dir: shared junctions + a one-way settings copy.
+  const claudeDir = path.join(home, '.claude')
+  fs.mkdirSync(claudeDir, { recursive: true })
+  // 0700 (POSIX): it holds .credentials.json + the settings copy; the umask
+  // default (0755) left the credential filenames enumerable by other local users.
+  hardenCredentialDir(claudeDir)
+  // The per-realm Anthropic profile store (profileRealmConfigRoot). Created
+  // eagerly, and AFTER the harden above, for one reason: it then sits under a
+  // 0700 .claude from the moment it exists, rather than being created later by
+  // the CLI under whatever umask it runs with. It is NOT created because the
+  // CLI needs it to exist -- measured against the pinned binary, a nonexistent
+  // store and an empty one behave identically. (The secure-storage root needs
+  // no line of its own: it IS .claude.)
+  const realmConfigRoot = profileRealmConfigRoot(home)
+  if (realmConfigRoot) fs.mkdirSync(realmConfigRoot, { recursive: true })
+  const shared = sharedRoot()
+  linkSharedDirs(claudeDir)
   const srcSettings = path.join(shared, 'settings.json')
-  if (fs.existsSync(srcSettings)) fs.copyFileSync(srcSettings, path.join(claudeDir, 'settings.json'))
+  if (fs.existsSync(srcSettings)) {
+    writeSanitisedSettingsCopy(srcSettings, path.join(claudeDir, 'settings.json'))
+  } else {
+    // The source is GONE, so the copy goes too. Every refusal path already
+    // removes it; this one did not, so a user who deleted their shared
+    // settings.json kept the last copy applying to the account indefinitely
+    // while the panel reported there was nothing to sanitise (adversarial
+    // round 5). Only ever the app-written COPY: the source is never touched.
+    //
+    // ...under the same two guards the write path carries for this location
+    // (code-quality review, MINOR): a `.claude` junction into another profile
+    // would otherwise make this line delete THAT account's copy, and a leaf
+    // link here was planted by something other than this app. Delete is the
+    // more destructive of the two operations; it is not the less guarded. A
+    // refusal is recorded and the rest of the home is still built.
+    if (removeStaleSettingsCopy(home, path.join(claudeDir, 'settings.json'))) {
+      // NOTHING TO COPY is a RESULT, not the absence of one. A user with no
+      // shared settings.json is an ordinary, healthy install -- this app
+      // deliberately stopped writing that file -- and leaving no record made
+      // every launch report "this launch did not check the settings copy", which
+      // put a permanent notice on every account and told the user to do something
+      // that could not change it (adversarial re-attack, MAJOR). The home WAS
+      // built; there was simply nothing to sanitise.
+      recordSettingsSanitise(home, { removed: [] })
+    }
+  }
 
   // #170: user-scope CLAUDE.md, generated beside the settings copy.
   writeUserScopeClaudeMd(claudeDir, shared)
@@ -1248,13 +2638,21 @@ export function repairSharedProjectJunctions(): void {
   }
 }
 
-/** Re-copy settings.json from shared -> profile's `.claude/` (after shared edits). */
+/** Re-copy settings.json from shared -> profile's `.claude/` (after shared edits).
+ *  Sanitised on the same terms as the build-time copy -- both writers go
+ *  through writeSanitisedSettingsCopy, so they cannot diverge.
+ *
+ *  No production caller today: `buildHomeLinks` re-runs on every spawn and
+ *  re-copies there, which covers the shared-edit case in practice. Kept as the
+ *  named resync entry point (and exercised by the suite) because a settings
+ *  copy that is only ever refreshed as a side effect of spawning is a fragile
+ *  contract to rely on silently. */
 export function resyncProfileSettings(id: string): void {
   const src = path.join(sharedRoot(), 'settings.json')
   if (fs.existsSync(src)) {
     const claudeDir = path.join(getProfileConfigDir(id), '.claude')
     fs.mkdirSync(claudeDir, { recursive: true })
-    fs.copyFileSync(src, path.join(claudeDir, 'settings.json'))
+    writeSanitisedSettingsCopy(src, path.join(claudeDir, 'settings.json'))
   }
 }
 
@@ -1353,7 +2751,7 @@ export function cleanupSessionHomes(): void {
   try { entries = fs.readdirSync(root, { withFileTypes: true }) } catch { return } // absent -> nothing to do
 
   const profiles = listProfiles()
-  type Cand = { claudeJson: string; credentials: string | undefined; exp: number; fromSession: boolean }
+  type Cand = { claudeJson: string; credentials: string | undefined; exp: number; fromSession: boolean; dir: string }
   const best = new Map<string, Cand>() // profileId -> freshest candidate
 
   const consider = (profileId: string, dir: string, fromSession: boolean): void => {
@@ -1363,7 +2761,7 @@ export function cleanupSessionHomes(): void {
     try { credentials = fs.readFileSync(path.join(dir, '.claude', '.credentials.json'), 'utf8') } catch { credentials = undefined }
     const exp = credentialExpiry(credentials)
     const cur = best.get(profileId)
-    if (!cur || exp > cur.exp) best.set(profileId, { claudeJson, credentials, exp, fromSession })
+    if (!cur || exp > cur.exp) best.set(profileId, { claudeJson, credentials, exp, fromSession, dir })
   }
 
   // Seed candidates with each profile's CURRENT home so we never downgrade it.
@@ -1376,18 +2774,26 @@ export function cleanupSessionHomes(): void {
     const prof = profiles.find((p) => p.accountEmail && normEmail(p.accountEmail) === normEmail(email))
     if (prof) consider(prof.id, path.join(root, e.name), true)
   }
-  // Apply only when a session home was fresher than the profile home.
+  // Apply only when a session home was fresher than the profile home. A
+  // session home whose sign-in did not land in its profile's home (a write
+  // refused -- on Windows, a profile folder not checked owner-only -- or
+  // failed) keeps its own copies below, so the next start tries again and the
+  // freshest sign-in is never dropped.
+  const unsalvaged = new Set<string>()
   for (const [profileId, cand] of best) {
     if (!cand.fromSession) continue
     // Per-item: a reparse-point plant (or any fs error) on ONE profile's dir must
     // not abort salvaging the others, nor the shared-dir repair pass further down.
     try { writeCanonicalIdentity(profileId, { claudeJson: cand.claudeJson, credentials: cand.credentials }) } catch { /* best-effort */ }
     const home = getProfileConfigDir(profileId)
-    // Token-bearing .claude.json — owner-only atomic write, not a bare 0644 one.
-    try { atomicWriteSecure(path.join(home, '.claude.json'), cand.claudeJson, IS_POSIX ? CRED_FILE_MODE : undefined) } catch { /* best-effort */ }
+    let landed = true
+    // Token-bearing .claude.json — owner-only atomic write, not a bare 0644 one,
+    // and on Windows only into a home checked owner-only.
+    try { writeProfileHomeIdentity(home, cand.claudeJson) } catch { landed = false }
     if (cand.credentials != null) {
-      try { const cd = path.join(home, '.claude'); fs.mkdirSync(cd, { recursive: true }); hardenCredentialDir(cd); writeCredentialFile(path.join(cd, '.credentials.json'), cand.credentials) } catch { /* best-effort */ }
+      try { const cd = path.join(home, '.claude'); fs.mkdirSync(cd, { recursive: true }); hardenCredentialDir(cd); writeCredentialFile(path.join(cd, '.credentials.json'), cand.credentials) } catch { landed = false }
     }
+    if (!landed) unsalvaged.add(path.resolve(cand.dir))
   }
 
   // UPGRADE GUARD -- do NOT delete the retired session homes. A session created
@@ -1408,10 +2814,13 @@ export function cleanupSessionHomes(): void {
     const home = path.join(root, e.name)
     try {
       // Drop the private per-session identity copies (freshest token already
-      // salvaged into the profile + canonical above).
-      try { fs.unlinkSync(path.join(home, '.claude.json')) } catch { /* absent */ }
+      // salvaged into the profile + canonical above) -- unless that salvage did
+      // not land, when they stay for the next start.
       const claudeDir = path.join(home, '.claude')
-      try { fs.unlinkSync(path.join(claudeDir, '.credentials.json')) } catch { /* absent */ }
+      if (!unsalvaged.has(path.resolve(home))) {
+        try { fs.unlinkSync(path.join(home, '.claude.json')) } catch { /* absent */ }
+        try { fs.unlinkSync(path.join(claudeDir, '.credentials.json')) } catch { /* absent */ }
+      }
       // Re-point the shared dirs to canonical (self-heals a missing/old junction).
       fs.mkdirSync(claudeDir, { recursive: true })
       for (const name of SHARED_DIR_NAMES) {
@@ -1443,6 +2852,8 @@ export function writeCanonicalIdentity(
   // credential filenames enumerable by any other local user even though their
   // contents are 0600.
   hardenCredentialDir(dir)
+  // Windows: nothing is written here until the folder is checked owner-only.
+  guardCredentialFolder(dir)
   if (files.claudeJson != null) {
     const f = path.join(dir, '.claude.json')
     // .claude.json carries the account's OAuth token; write it owner-only, not at
@@ -1475,7 +2886,7 @@ export function captureGlobalLogin(name?: string): AccountProfile | null {
     writeCanonicalIdentity(profile.id, { claudeJson, credentials })
     // Also seed the per-account-home layout the spawn reads (USERPROFILE=<profileDir>):
     const home = getProfileConfigDir(profile.id)
-    fs.writeFileSync(path.join(home, '.claude.json'), claudeJson)
+    writeProfileHomeIdentity(home, claudeJson)
     if (credentials != null) {
       const claudeDir = path.join(home, '.claude')
       fs.mkdirSync(claudeDir, { recursive: true })
@@ -1566,9 +2977,9 @@ export function restoreProfileHomeFromCanonical(id: string): boolean {
   if (!fs.existsSync(srcJson)) return false
   const home = getProfileConfigDir(id)
   // .claude.json can carry OAuth tokens, so restore it through the same
-  // link-safe path as the credential file rather than a plain copyFileSync.
-  mkdirSecure(home)
-  atomicWriteSecure(path.join(home, '.claude.json'), fs.readFileSync(srcJson))
+  // link-safe path as the credential file rather than a plain copyFileSync
+  // (and, on Windows, only into a home checked owner-only).
+  writeProfileHomeIdentity(home, fs.readFileSync(srcJson))
   const srcCred = path.join(idDir, '.credentials.json')
   if (fs.existsSync(srcCred)) {
     const claudeDir = path.join(home, '.claude')
@@ -1626,7 +3037,7 @@ export function stripIdentityTokens(claudeJson: string): string {
 }
 
 /**
- * rc.15 review R4 (aicc_planning#50): the restore the CAPTURE path runs after
+ * rc.15 review R4: the restore the CAPTURE path runs after
  * another account was captured out of this profile's shared home. IDENTITY
  * ONLY. Canonical is the last SETTLED observation of this account; a token
  * that rotated after it and was then overwritten by the /login (a rotation and
@@ -1662,7 +3073,7 @@ export function restoreProfileIdentityFromCanonical(id: string): boolean {
   try { fs.rmSync(cred, { force: true, recursive: true }) } catch { /* fall through to the overwrite */ }
   if (fs.existsSync(cred)) {
     try {
-      writeCredentialFile(cred, '{}')
+      writeCredentialFile(cred, '{}', { holdsNoCredential: true })
     } catch (e) {
       // ADR-009 adversarial review (Lens B, round 2): the token file cannot be
       // neutralised here (a reparse point, or an OS lock held by a live session
@@ -1677,8 +3088,46 @@ export function restoreProfileIdentityFromCanonical(id: string): boolean {
       return false
     }
   }
+  // Windows: the identity goes back only into a home checked owner-only;
+  // otherwise the home keeps no identity (as when the sign-in cannot be cleared).
+  const homeFolder = credentialFoldersVerdict(isProfileHome(home) ? [home] : [])
+  if (!homeFolder.ok) {
+    logWarn(`[profiles] restore ${id}: the profile folder is not checked readable by this user alone; its identity was removed instead`)
+    try { fs.rmSync(path.join(home, '.claude.json'), { force: true }) } catch { /* best-effort */ }
+    return false
+  }
   atomicWriteSecure(path.join(home, '.claude.json'), stripIdentityTokens(fs.readFileSync(srcJson, 'utf8')), IS_POSIX ? CRED_FILE_MODE : undefined)
   return true
+}
+
+/** Remove the credential copy in a profile's canonical identity folder
+ *  (`<profile>/identity/.credentials.json`), after a sign-out of the profile
+ *  ran (WP2 PR 4): a signed-out account keeps no copy of its tokens. The rest
+ *  of the identity (its `.claude.json`) stays, so the account's name and email
+ *  still show. Link-safe, as restoreProfileIdentityFromCanonical is: the
+ *  profile folder and the identity folder are app-created, so a link or
+ *  junction at either is refused and nothing is removed; a link AT the file
+ *  is removed as the link, never its target. True when no copy is left. */
+export function removeProfileIdentityCredentials(id: string): boolean {
+  if (!isValidProfileId(id)) return false
+  const home = getProfileConfigDir(id)
+  const idDir = getAccountIdentityDir(id)
+  for (const dir of [home, idDir]) {
+    let st: fs.Stats
+    try { st = fs.lstatSync(dir) } catch { return true } // absent: no copy to remove
+    if (st.isSymbolicLink() || !st.isDirectory()) {
+      logWarn(`[profiles] ${id}: the identity folder is not a plain folder; its credential copy was left in place`)
+      return false
+    }
+  }
+  const cred = path.join(idDir, '.credentials.json')
+  // `recursive` so a folder planted at the file's name goes too; rmSync on a
+  // link removes the link itself.
+  try { fs.rmSync(cred, { force: true, recursive: true }) } catch { /* reported below */ }
+  let left = false
+  try { fs.lstatSync(cred); left = true } catch { left = false }
+  if (left) logWarn(`[profiles] ${id}: the identity credential copy could not be removed`)
+  return !left
 }
 
 /** Snapshot a profile's CURRENT per-account-home identity into its canonical
@@ -1810,7 +3259,7 @@ export function captureDetectedAccount(profileId: string, name?: string): Accoun
   try {
     writeCanonicalIdentity(np.id, { claudeJson, credentials })
     const npHome = getProfileConfigDir(np.id)
-    fs.writeFileSync(path.join(npHome, '.claude.json'), claudeJson)
+    writeProfileHomeIdentity(npHome, claudeJson)
     if (credentials != null) {
       const cd = path.join(npHome, '.claude'); fs.mkdirSync(cd, { recursive: true })
       hardenCredentialDir(cd)
@@ -1823,4 +3272,439 @@ export function captureDetectedAccount(profileId: string, name?: string): Accoun
     try { safeTeardownProfile(np.id) } catch { /* best-effort */ }
     return null
   }
+}
+
+/**
+ * Per-process account isolation: run Claude under a per-account fake HOME so the
+ * account identity (~/.claude.json, which follows USERPROFILE on Windows / HOME
+ * on Unix) is private. CLAUDE_CONFIG_DIR alone does NOT isolate identity. Git/npm
+ * are pointed back at the real home so shared dev tooling is unaffected.
+ *
+ * THIS IS THE MANAGED-LAUNCH CHOKE POINT for local Claude. Every path that runs
+ * the CLI against an app-managed account comes through here -- the interactive
+ * PTY, shell-only sessions pinned to an account, the headless runner, the
+ * insights runner, the cloud-agent env, and `claude auth status`. So this is
+ * where the realm is applied and the launch is gated, in one place, rather
+ * than restated at six call sites where the seventh would be the one that
+ * forgot:
+ *
+ *   - ambient authority variables the developer's environment might carry are
+ *     REMOVED (the package's `ambientAuthVariables`);
+ *   - the realm is set: USERPROFILE (and HOME on Linux) to the profile home,
+ *     plus the two realm roots the CLI reads outside the home;
+ *   - the project gate's verdict is enforced: a working directory whose own
+ *     settings files carry an override REFUSES the launch here, after the
+ *     report that says so has been recorded (owner decision, 2026-09-22).
+ *
+ * There is no host-side control any more. The flag slice 2 first applied made
+ * the CLI read no stored login at all (evidence Part 7), and the Claude Desktop
+ * entrypoint that was probed instead was rejected (Part 8). This app sets
+ * nothing the CLI reads as "managed by a host", owns no token and refreshes
+ * none.
+ *
+ * `home == null` is the UNMANAGED case -- the Default account, or a plain shell
+ * that is not pinned to a profile -- and returns the environment untouched. The
+ * user's own machine, their own settings, their own credentials: the gate is
+ * for realms this app manages, and refusing a shell the app does not own would
+ * be refusing the user their own machine.
+ *
+ * The PREFLIGHT is recorded here too, for the same reason the hardening is.
+ * It used to be a separate call in `pty-manager`, which is one of FIVE paths
+ * through this function -- so a stale CLI or a refused settings copy on a
+ * profile only ever used headlessly, for insights or for cloud agents produced
+ * no report at all, and the Accounts panel said nothing was wrong because it
+ * had never been told (adversarial review, MAJOR 9). Recording it from the
+ * choke point makes "every managed launch is reported" the same kind of fact as
+ * "every managed launch is hardened".
+ */
+/** Prefix every managed-launch refusal carries, so a caller can tell an
+ *  ISOLATION FAULT apart from an ordinary failure (a missing CLI, a timeout)
+ *  instead of swallowing both in one bare catch (adversarial review, MAJOR 7). */
+export const MANAGED_LAUNCH_REFUSAL = '[profiles] refusing a managed Claude launch'
+
+/** Who is launching, for the preflight report.
+ *
+ *  `launchId` is what the Accounts panel shows beside a finding, so it is the
+ *  PTY session id where there is one and a stable name for the four background
+ *  paths that have no session (`headless`, `insights`, ...). `cwd` is the
+ *  directory the launch runs in; `projectGate` is what `gateManagedLaunch`
+ *  decided about that directory's own settings files, awaited by the caller
+ *  BEFORE this synchronous function runs -- a refusal is enforced here, so
+ *  every launch path refuses the same way, and a caller that has a directory
+ *  but no verdict is a caller that skipped the gate.
+ *
+ *  Optional in the TYPE and mandatory in PRACTICE: every call site in `src/` is
+ *  required to pass one by the source guard in tests/wp1/managed-launch.test.ts,
+ *  which is what stops a sixth launch path being added without a report. It
+ *  stays optional so a caller composing an environment for something that is
+ *  not a launch does not have to invent one. */
+export interface ManagedLaunchContext {
+  launchId: string
+  cwd?: string | null
+  /** The project gate's verdict for `cwd`. Required whenever `cwd` is given:
+   *  `withProfileHome` refuses a launch that names a directory and no verdict,
+   *  because that is a launch that skipped the gate, and the source guard
+   *  checks every call site states it. `null` says "this launch has no
+   *  directory to gate" and is only honest when `cwd` is absent. */
+  projectGate?: ProjectGateResult | null
+  /** True for a launch THIS APP started by itself rather than one the user
+   *  asked for -- the `claude auth status` probe behind the Accounts panel. It
+   *  is a real managed launch and gets the full hardening; it is flagged so the
+   *  panel cannot mistake it for the newest thing the user ran. */
+  probe?: boolean
+  /** A PINNED legacy CLI this launch runs instead of the installed one, and
+   *  whether it is installed yet (a cloud agent installs its pin after this
+   *  record). The preflight checks the CLI floor against it: a session pinned
+   *  to 2.0.x must not be reported as the installed CLI's 2.1.280 "at or above
+   *  the verified version". Absent = the launch runs the installed CLI. */
+  pinnedCli?: { version: string; installed: boolean }
+}
+
+/**
+ * The per-realm Anthropic PROFILE STORE for a profile home, or null on a
+ * platform where the realm is not redirected.
+ *
+ * Redirecting USERPROFILE (win32) or HOME (linux) is not enough on its own. The
+ * bundled Anthropic SDK does not resolve its config root from the home
+ * directory first. In Claude Code 2.1.278, win32-x64, binary digest
+ * 006ea5c8638f67f10a5ae66bb232fd267c9f6af294e3f03f4cfcf1fd3f2cced8, it resolves:
+ *
+ *     ANTHROPIC_CONFIG_DIR                                  <- checked FIRST, returns immediately
+ *       Windows: %APPDATA%\Anthropic
+ *                then %USERPROFILE%\AppData\Roaming\Anthropic
+ *       else:    $XDG_CONFIG_HOME/anthropic
+ *                then $HOME/.config/anthropic
+ *
+ * APPDATA and XDG_CONFIG_HOME therefore OUTRANK the variable this app
+ * redirects, and both carried `ambient: 'replace'` -- "the fake-home mechanism
+ * sets this deliberately" -- while nothing set either. Every managed profile
+ * resolved that identity store to the SAME real-user directory whichever
+ * profile was selected (adversarial round 4).
+ *
+ * WHY THIS SETS THE FIRST KEY RATHER THAN OWNING THE SECOND. Owning APPDATA
+ * would isolate the store and break everything else that reads it: `gh` keeps
+ * its OAuth tokens under %APPDATA%\GitHub CLI, npm its cache and global prefix,
+ * git its XDG-style config -- all tools Claude's Bash tool is meant to run
+ * against the DEVELOPER's real configuration (D3, terminal-wrapper fidelity).
+ * Stripping APPDATA is worse again. Because ANTHROPIC_CONFIG_DIR is consulted
+ * first and returns immediately, setting it isolates the Anthropic identity
+ * store completely while leaving APPDATA and XDG_CONFIG_HOME at the user's own
+ * values. Both properties hold; neither is traded for the other.
+ *
+ * SCOPE: this is a statement about the pinned binary above and nothing else. A
+ * CLI whose resolution order changed would need revalidating BY A MAINTAINER --
+ * nothing at runtime does it. The manifest's digest covers the manifest's own
+ * entries, never the installed binary, and the only runtime gate is a version
+ * FLOOR, so a newer auto-updated CLI reports "supported" with this order
+ * unverified. That is a known limit of a pinned-binary claim, stated here
+ * rather than implied away (adversarial round 5).
+ *
+ * WHY IT LIVES UNDER `.claude`. The obvious choices mirror the SDK's own
+ * layout -- `<home>/AppData/Roaming/Anthropic` on Windows, `<home>/.config/anthropic`
+ * elsewhere -- and the second is a NO-OP. `mirrorRealHome` links every dot-entry
+ * of the real home into the profile home, and `HOME_PRIVATE` excludes only
+ * `.claude` and `.claude.json`, so `<profileHome>/.config` IS a symlink to the
+ * developer's real `~/.config`: every profile would resolve to one shared store,
+ * which is the exact defect this function exists to fix. Proven by execution
+ * against the pinned binary, not reasoned (adversarial round 5, BLOCKER).
+ *
+ * `.claude` is mirror-private and `anthropic` is not a SHARED_DIR_NAME, so this
+ * path is per-profile on every platform and the two platforms stop differing.
+ *
+ * macOS returns null deliberately: HOME is not redirected there either (the
+ * keychain reason withProfileHome documents), multi-account is disabled in the
+ * UI, and a half-redirected realm is worse than an honest single one.
+ */
+export function profileRealmConfigRoot(home: string): string | null {
+  if (process.platform === 'darwin') return null
+  return path.join(home, '.claude', 'anthropic')
+}
+
+/**
+ * The per-realm SECURE-STORAGE root, or null where the realm is not redirected.
+ *
+ * Claude Code's own OAuth store has a second backend that neither
+ * ANTHROPIC_CONFIG_DIR nor USERPROFILE outranks: a Windows Credential Manager
+ * entry whose service name is built as
+ * `Claude Code-credentials` + (a directory hash, ONLY when
+ * CLAUDE_SECURESTORAGE_CONFIG_DIR or CLAUDE_CONFIG_DIR is set). With neither
+ * set the suffix is empty, so the target is a per-OS-USER CONSTANT -- identical
+ * for every managed profile -- and the credman backend is selected by a
+ * server-side feature flag (`tengu_windows_credman`), not by anything this app
+ * or the user controls. The flag is off in this build, which makes the collapse
+ * LATENT rather than absent: the trigger belongs to someone else (adversarial
+ * round 5, MAJOR).
+ *
+ * Setting this keys both backends on the profile home -- the credman service
+ * name by its hash, and the plaintext fallback by the same directory -- so the
+ * store is isolated whichever backend the flag selects. Nothing outside Claude
+ * Code reads this variable, so D3 fidelity is untouched.
+ */
+export function profileSecureStorageRoot(home: string): string | null {
+  if (process.platform === 'darwin') return null
+  return path.join(home, '.claude')
+}
+
+/** What a profile-home launch composes BEFORE its realm patch, for a session
+ *  (withProfileHome) and a reviewer (profileRealmLaunch) alike. */
+function profileHomeLaunchBase(env: Record<string, string>, home: string): Record<string, string> {
+  const realHome = os.homedir()
+  const next: Record<string, string> = {
+    ...env,
+    // Belt-and-suspenders: keep git/npm reading the real shared config even if a
+    // hard-linked dotfile ever desyncs (the mirror also links these through).
+    GIT_CONFIG_GLOBAL: path.join(realHome, '.gitconfig'),
+    npm_config_userconfig: path.join(realHome, '.npmrc'),
+  }
+  // Claude's native install lives at `$HOME/.local/bin`. With the home redirected,
+  // CC computes that as `<home>/.local/bin` (a junction to the real ~/.local) but
+  // PATH still carries the *real* home's `.local/bin`, so `/doctor` falsely warns
+  // "Native installation ... is not in your PATH". Add the redirected bin dir
+  // (deduped, under the env's existing path key) so the self-check passes. The
+  // real entry stays first, so which `claude` actually resolves is unchanged.
+  const localBin = path.join(home, '.local', 'bin')
+  const pathKey = Object.keys(next).find((k) => k.toLowerCase() === 'path') ?? 'PATH'
+  const curPath = next[pathKey] ?? ''
+  const already = curPath.split(path.delimiter).some((p) => p.toLowerCase() === localBin.toLowerCase())
+  if (!already) next[pathKey] = curPath ? `${curPath}${path.delimiter}${localBin}` : localBin
+  return next
+}
+
+/** A profile home's realm selector, applied last through the Claude package's
+ *  own policy (see withProfileHome for why each variable is here). */
+function profileRealmSet(home: string): Record<string, string> {
+  const realmSet: Record<string, string> =
+    process.platform === 'linux' ? { USERPROFILE: home, HOME: home } : { USERPROFILE: home }
+  const realmConfigRoot = profileRealmConfigRoot(home)
+  if (realmConfigRoot) realmSet.ANTHROPIC_CONFIG_DIR = realmConfigRoot
+  const secureStorageRoot = profileSecureStorageRoot(home)
+  if (secureStorageRoot) realmSet.CLAUDE_SECURESTORAGE_CONFIG_DIR = secureStorageRoot
+  return realmSet
+}
+
+/** A reviewer launch in a Claude account's home (WP2 commit 5b). */
+export interface ProfileRealmLaunch {
+  /** The profile home; on macOS the real home (the normal sign-in). */
+  home: string
+  /** The environment before the realm patch: this process's, with git and
+   *  npm reading the real home's config and the home's `.local/bin` on PATH. */
+  baseEnv: Record<string, string>
+  /** The realm selector. The accounts service applies it through the Claude
+   *  package's policy, which removes the ambient authority variables first. */
+  realmEnv: { set: Record<string, string> }
+  /** Where Claude writes this home's transcripts. */
+  sessionsDir: string
+}
+
+/** Why this profile cannot run Claude reviews on this platform, or null when
+ *  it can. The one rule, read by the reviewer launch below and, through the
+ *  Claude package's ports, by the accounts service (the tool is not offered,
+ *  the profile cannot be made the reviewer, and the snapshot says why).
+ *
+ *  macOS: Claude has one account there, the normal sign-in, which is the
+ *  primary profile (see profileRealmLaunch); every other profile is refused.
+ *  THROWS when it cannot tell (profiles.json unreadable, or no primary
+ *  recorded): a caller must not read that as "not the primary" -- nothing is
+ *  offered on it, and nothing already chosen is cleared because of it. */
+export function profileReviewRefusal(profileId: string, platform: NodeJS.Platform = process.platform): string | null {
+  if (platform !== 'darwin') return null
+  const all = readProfilesStrict()
+  if (all === null) throw new Error('the profile list could not be read')
+  const primary = all.find((p) => p && p.isPrimary)?.id
+  if (!primary) throw new Error('no primary profile is recorded')
+  if (primary === profileId) return null
+  return 'On macOS only your normal Claude sign-in can run Claude reviews.'
+}
+
+/** The profile-home composition of withProfileHome, for a reviewer launch the
+ *  accounts service prepares and hardens (WP2 commit 5b). The ONLY other place
+ *  a profile home's USERPROFILE/HOME is composed (the managed-launch source
+ *  guard allows this module alone): the Claude package receives this through
+ *  its injected ports and never imports this module (rule R2).
+ *
+ *  It refreshes the home's links first (setupProfileLinks), as every launch
+ *  under a profile home does. Session-only work is NOT done: no CCC_*
+ *  variables, no primary-credential sync, no project-settings gate (the
+ *  reviewer runs `--restricted`, which reads no user, project or local
+ *  settings file).
+ *
+ *  macOS: Claude has one account there, the normal sign-in (multi-account is
+ *  off, D2: the login keychain is found through $HOME and is shared), which
+ *  is the primary profile first-run capture made of it. The review runs on
+ *  that sign-in with no redirect -- nothing is patched -- and only for the
+ *  primary: any other profile would be named while the primary's sign-in
+ *  was used.
+ *
+ *  `source` is the environment to start from (this process's by default). */
+export function profileRealmLaunch(
+  profileId: string,
+  source: Readonly<Record<string, string | undefined>> = process.env,
+): ProfileRealmLaunch | { refused: string } {
+  if (!isValidProfileId(profileId)) throw new Error('invalid profile id')
+  const env: Record<string, string> = {}
+  for (const k of Object.keys(source)) { const v = source[k]; if (typeof v === 'string') env[k] = v }
+  if (process.platform === 'darwin') {
+    // A launch must fail with a reason either way, so "could not tell" is a
+    // refusal here (it matters only to offering and clearing).
+    let refused: string | null
+    try {
+      refused = profileReviewRefusal(profileId, 'darwin')
+    } catch {
+      refused = 'This app could not tell which Claude account is your normal sign-in on this Mac.'
+    }
+    if (refused) return { refused }
+    const realHome = os.homedir()
+    return { home: realHome, baseEnv: env, realmEnv: { set: {} }, sessionsDir: path.join(realHome, '.claude', 'projects') }
+  }
+  setupProfileLinks(profileId)
+  const home = getProfileConfigDir(profileId)
+  // Windows: the account's sign-in folders are checked owner-only before
+  // anything runs in them (see credentialFoldersVerdict).
+  const folders = credentialFoldersVerdict(credentialFoldersOfHome(home))
+  if (!folders.ok) return { refused: folders.message }
+  const baseEnv = profileHomeLaunchBase(env, home)
+  // Diagnostic, as withProfileHome records it: the ambient variables the
+  // accounts service's hardening will remove, for the launch's preflight.
+  try {
+    const ambient = new Set(ambientAuthVariablesForProvider('claude').map((k) => k.toLowerCase()))
+    recordAmbientStrip(home, Object.keys(baseEnv).filter((k) => ambient.has(k.toLowerCase())))
+  } catch { /* never let a diagnostic refuse a launch */ }
+  return { home, baseEnv, realmEnv: { set: profileRealmSet(home) }, sessionsDir: path.join(home, '.claude', 'projects') }
+}
+
+/** Record the preflight of a reviewer launch (WP2 commit 5b) on the env the
+ *  accounts service hardened. A diagnostic: it never refuses. There is no
+ *  project gate verdict to report: the reviewer reads no project settings. */
+export function recordProfileReviewPreflight(profileId: string, env: Readonly<Record<string, string>>): void {
+  try {
+    if (!isValidProfileId(profileId)) return
+    const home = process.platform === 'darwin' ? os.homedir() : getProfileConfigDir(profileId)
+    recordManagedLaunchPreflight('review', profileId, home, env, null, 'probe')
+  } catch { /* diagnostic only */ }
+}
+
+export function withProfileHome(
+  env: Record<string, string>,
+  home: string | null,
+  context?: ManagedLaunchContext,
+): Record<string, string> {
+  if (!home) return env
+  // Windows: the account's sign-in folders are checked owner-only before
+  // anything runs in them -- the CLI writes its sign-in into the home and its
+  // config folder (see credentialFoldersVerdict). Refused, as an isolation
+  // fault, otherwise.
+  const folders = credentialFoldersVerdict(credentialFoldersOfHome(home))
+  if (!folders.ok) throw new Error(`${MANAGED_LAUNCH_REFUSAL}: ${folders.message}`)
+  const next = profileHomeLaunchBase({ ...env, USERPROFILE: home }, home)
+  // macOS locates the login keychain via $HOME (~/Library/Keychains/login.keychain-db).
+  // Pointing HOME at the fake profile home — which mirrors only dot-entries, never
+  // ~/Library (see mirrorRealHome) — leaves the spawned `claude` with no keychain to
+  // resolve, surfacing the macOS "A keychain cannot be found to store ..." dialog (#117).
+  // Multi-account is disabled on macOS anyway (see AccountsPanel), so HOME-based identity
+  // isolation buys nothing there; leaving HOME at the real home restores keychain access
+  // and resolves the single global account correctly. Linux keychains (Secret Service /
+  // D-Bus) are not HOME-path-based, so keep the redirect there for multi-account isolation.
+  if (process.platform === 'linux') next.HOME = home
+
+  // One call does the ambient removal, the realm patch and the host control,
+  // in that order, from the REGISTERED package's own policy. It is deliberately
+  // not three calls: a launch path that can apply them separately is a launch
+  // path that can apply two of the three.
+  //
+  // The patch re-states USERPROFILE/HOME that `next` already carries. That is
+  // not redundant -- those are the only two variables the Claude package is
+  // allowed to own, so routing them through the patch is what makes the realm
+  // selector subject to the same validation as everything else. PATH,
+  // GIT_CONFIG_GLOBAL and npm_config_userconfig stay composed above, because a
+  // realm patch may not own a variable that decides what the child EXECUTES.
+  // Any failure to HARDEN is itself a refusal, and must be marked as one.
+  //
+  // With the provider registry uncomposed, `realmEnvForProvider` throws
+  // `ProviderPackage "claude" not registered` -- which fails closed correctly,
+  // but carries none of the marker a caller keys on, so `claude-cli-auth`'s
+  // catch would log nothing and fall back to the credential file in silence.
+  // That is the same MAJOR 7 defect one layer up, and it is why this wrap
+  // exists rather than only the assertion below.
+  // The realm selector, and with it the Anthropic profile store -- because the
+  // SDK resolves that store BEFORE consulting the home directory, so the
+  // selector alone did not move it (profileRealmConfigRoot). Both go through
+  // the patch for the same reason: they are the variables the Claude package is
+  // allowed to own, so routing them here subjects them to the same validation
+  // as everything else.
+  //
+  // APPDATA and XDG_CONFIG_HOME are deliberately NOT set. They outrank the home
+  // selector too, but they are also where `gh`, npm and git keep the
+  // developer's own configuration, which D3 says a managed session inherits.
+  // ANTHROPIC_CONFIG_DIR outranks THEM, so isolating the store costs nothing
+  // here.
+  const realmSet = profileRealmSet(home)
+  let hardened: Record<string, string>
+  try {
+    hardened = realmEnvForProvider('claude', next, { set: realmSet })
+  } catch (e) {
+    throw new Error(`${MANAGED_LAUNCH_REFUSAL}: the launch environment could not be hardened (${(e as Error)?.message ?? String(e)})`)
+  }
+
+  // A launch that names a working directory but carries no gate verdict skipped
+  // the gate. That is refused rather than tolerated: the gate is the one thing
+  // that stands between a repository's settings file and the account this
+  // session runs as, and "the caller forgot" must not look like "clean".
+  if (context?.cwd && context.projectGate === undefined) {
+    throw new Error(`${MANAGED_LAUNCH_REFUSAL}: launch ${context.launchId} names a working directory but did not run the project-settings gate`)
+  }
+  // Record what the AMBIENT pass removed, so the preflight can report it.
+  //
+  // The difference between the two key sets is not the answer on its own:
+  // applyRealmEnvPatch also drops keys an environment object cannot carry (an
+  // '=' , NUL, CR or LF in the name) and keys whose value is not a string.
+  // Reporting those under "authority variables were removed" would be a label
+  // the data does not support, so the difference is intersected with the
+  // provider's OWN declared list -- read from the registry, never restated
+  // here, because a second copy of that list is a list that drifts.
+  // EVERYTHING DIAGNOSTIC FROM HERE DOWN IS INSIDE ONE GUARD, and the guard
+  // starts HERE rather than three lines further on. The ambient-strip record is
+  // diagnostic too, and it calls the registry -- the same registry read that is
+  // wrapped a few lines above precisely because an uncomposed one throws. An
+  // earlier version of this comment claimed "the whole block is guarded" while
+  // the block began below these two lines (adversarial review, MINOR).
+  //
+  // Layer 4 is recorded from the choke point rather than from one of the five
+  // callers. Diagnostics only: nothing in this block can refuse a launch. A
+  // home outside the profiles root has no account to attribute a report to --
+  // that is a fault worth saying out loud rather than a report worth inventing.
+  try {
+    const kept = new Set(Object.keys(hardened).map((k) => k.toLowerCase()))
+    const ambient = new Set(ambientAuthVariablesForProvider('claude').map((k) => k.toLowerCase()))
+    recordAmbientStrip(home, Object.keys(next).filter((k) => !kept.has(k.toLowerCase()) && ambient.has(k.toLowerCase())))
+
+    if (context) {
+      const profileId = profileIdFromHome(home)
+      if (profileId) {
+        recordManagedLaunchPreflight(
+          context.launchId, profileId, home, hardened,
+          context.projectGate ?? null,
+          context.probe ? 'probe' : 'launch',
+          context.pinnedCli ? { pinnedCli: context.pinnedCli } : {},
+        )
+      } else {
+        logWarn(`[managed-launch] ${context.launchId}: no profile id resolves from this launch home, so no preflight was recorded`)
+      }
+    }
+  } catch { /* never let a diagnostic refuse a launch */ }
+
+  // THE REFUSAL, after the record that explains it and before any caller sees
+  // an environment. The gate found a credential helper, an account pin, a
+  // provider switch or an endpoint redirect in the working directory's own
+  // settings files. Those files are not this app's to change, and there is no
+  // control that makes a managed session safe to start under them, so the
+  // session does not start. File and key are named; a value never is (the gate
+  // produces names only, and the terminal line that shows this strips control
+  // and spoofing characters -- see emitDeferredSpawnFailure).
+  if (context?.projectGate?.status === 'refused') {
+    throw new Error(
+      `${MANAGED_LAUNCH_REFUSAL}: the project's own settings could redirect this account -- ${context.projectGate.keys.join(', ')}. ` +
+      'Remove those keys from .claude/settings.json or settings.local.json in that directory (AI Code Conductor never edits them), then start the session again.',
+    )
+  }
+  return hardened
 }

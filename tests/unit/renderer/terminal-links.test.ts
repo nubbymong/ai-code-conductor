@@ -2,9 +2,12 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { ILink } from '@xterm/xterm'
 import { decorateTerminalLinks, createLinkHoverControl, LINK_HOVER_CLASS } from '../../../src/renderer/components/terminal/terminalLinks'
 
-// The decorator ignores the event arg (handlers key off the URI), so a plain
-// cast avoids needing a DOM environment for MouseEvent.
+// hover/leave ignore the event arg (they key off the URI), so a plain cast
+// avoids needing a DOM environment for MouseEvent. activate reads the button
+// (aicc_planning#126), so its events carry one.
 const EV = {} as MouseEvent
+const click = (button: number, ctrlKey = false) => ({ button, ctrlKey }) as MouseEvent
+const LEFT = click(0)
 
 function fakeLink(text: string): ILink {
   return {
@@ -34,10 +37,57 @@ describe('decorateTerminalLinks (#21)', () => {
       [fakeLink('https://a.dev'), fakeLink('http://b.local')],
       { open, onHover: () => {}, onLeave: () => {} },
     )!
-    links[0].activate(EV, 'https://a.dev')
-    links[1].activate(EV, 'http://b.local')
+    links[0].activate(LEFT, 'https://a.dev')
+    links[1].activate(LEFT, 'http://b.local')
     expect(open).toHaveBeenNthCalledWith(1, 'https://a.dev')
     expect(open).toHaveBeenNthCalledWith(2, 'http://b.local')
+  })
+
+  describe('only a plain left click opens the link (aicc_planning#126)', () => {
+    // xterm calls activate on the mouseup of ANY button over a link, so a
+    // right-click (whose job is the context menu with "Copy link address")
+    // also opened the browser. The decorator now filters the gesture.
+    afterEach(() => { vi.unstubAllGlobals() })
+    const decorate = () => {
+      const open = vi.fn()
+      const [d] = decorateTerminalLinks([fakeLink('https://x.dev')], { open, onHover: () => {}, onLeave: () => {} })!
+      return { d, open }
+    }
+
+    it('a left click (button 0) opens', () => {
+      const { d, open } = decorate()
+      d.activate(LEFT, 'https://x.dev')
+      expect(open).toHaveBeenCalledExactlyOnceWith('https://x.dev')
+    })
+
+    it('a right click (button 2) does not open', () => {
+      const { d, open } = decorate()
+      d.activate(click(2), 'https://x.dev')
+      expect(open).not.toHaveBeenCalled()
+    })
+
+    it('a middle click (button 1) does not open', () => {
+      const { d, open } = decorate()
+      d.activate(click(1), 'https://x.dev')
+      expect(open).not.toHaveBeenCalled()
+    })
+
+    it('on macOS, Ctrl + left click (the context-menu gesture) does not open', () => {
+      vi.stubGlobal('window', { electronPlatform: 'darwin' })
+      const { d, open } = decorate()
+      d.activate(click(0, true), 'https://x.dev')
+      expect(open).not.toHaveBeenCalled()
+      // ...but a plain left click on macOS still opens.
+      d.activate(LEFT, 'https://x.dev')
+      expect(open).toHaveBeenCalledExactlyOnceWith('https://x.dev')
+    })
+
+    it('on Windows, Ctrl + left click is still a left click and opens', () => {
+      vi.stubGlobal('window', { electronPlatform: 'win32' })
+      const { d, open } = decorate()
+      d.activate(click(0, true), 'https://x.dev')
+      expect(open).toHaveBeenCalledExactlyOnceWith('https://x.dev')
+    })
   })
 
   it('records the hovered URI and clears it on leave (for the Copy-link menu item)', () => {

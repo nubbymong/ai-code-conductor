@@ -2,10 +2,11 @@
  * claude-cli-auth.ts — the CODE-session half of #216, by delegation (not invention).
  *
  * CCC already solves this for the other provider and should not solve it twice:
- * it never implements Codex's OAuth. It shells out to `codex login` and then
- * READS `~/.codex/auth.json` for the result (`src/main/providers/codex/auth.ts`).
- * The vendor CLI opens the SYSTEM browser with a loopback redirect; CCC only
- * reads the credential file the CLI writes.
+ * it never implements Codex's OAuth. It shells out to `codex login` in the
+ * account's own realm and judges the result by `codex login status` alone
+ * (`src/main/providers/codex/auth-operations.ts`); it never opens the
+ * credential file the CLI writes. The vendor CLI opens the SYSTEM browser with
+ * a loopback redirect.
  *
  * The same seam exists for Claude — `claude auth` and `claude setup-token` — and
  * it is the right one for a managed environment for exactly the reason the
@@ -25,15 +26,63 @@
  */
 
 import { execFile } from 'node:child_process'
+import type { ExecFileOptions } from 'node:child_process'
 import { promisify } from 'node:util'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { logError, logInfo } from '../debug-logger'
-import { getProfileConfigDir, getProfilesRoot } from '../account-profiles'
-import { acquireProfileConsumer, pendingProfileRefresh } from '../profile-consumers'
+import { logError, logInfo, logWarn } from '../debug-logger'
+import { gateManagedLaunch, peekGateVerdict } from '../managed-launch-diagnostics'
+import { getProfileConfigDir, getProfilesRoot, getPrimaryProfileId, withProfileHome, readProfilesStrict, removeProfileIdentityCredentials, checkProfileCredentialFolders, profileCredentialFoldersChecked, MANAGED_LAUNCH_REFUSAL } from '../account-profiles'
+import { acquireProfileConsumer, holdProfileForRun, pendingProfileRefresh } from '../profile-consumers'
+import { isProfileInUseByLiveSession, sessionsOnProfile } from '../claude-account-identity'
 import { DEFAULT_CLI_AUTH_METHOD, PROFILE_ID_RE, isCliAuthMethod, type CliAuthMethod } from '../../shared/account-web-session'
+import { windowsStartCommand } from '../windows-programs'
+import { CLAUDE_NOT_ON_PATH, findClaudeOnWindowsAsync, recentClaudeOnWindows } from '../claude-cli-probe'
+import { warmFirstStart, FIRST_START_CALLER_BOUND_MS } from '../first-start-warmup'
+import { quitHold } from '../quit-hold'
+import { claudeVersionRunEnv } from '../providers/review-support'
+import { providerProbeRefusal } from '../provider-launch-gate'
 
-const execFileAsync = promisify(execFile)
+/** promisify(execFile), made when a CLI runs rather than when this module
+ *  loads: the composition root imports it at start (WP2 PR 4, the Claude
+ *  package's sign-in ports), long before anything here runs. Synchronous up
+ *  to the spawn, as before. */
+type ExecFileAsync = (file: string, args: readonly string[], options: ExecFileOptions & { encoding: 'utf-8' }) => Promise<{ stdout: string; stderr: string }>
+const execFileAsync: ExecFileAsync = (file, args, options) => (promisify(execFile) as unknown as ExecFileAsync)(file, args, options)
+
+type AuthStatusStart = { file: string; args: string[]; options: ExecFileOptions & { encoding: 'utf-8' } }
+
+/** How `claude auth status` starts when no runner is given. Windows: Claude
+ *  Code by the full path found in PATH's folders (claude-cli-probe.ts
+ *  CLAUDE_WINDOWS_NAMES, in that order: a recent answer of that walk, else the
+ *  walk one stat at a time off the event loop), with no shell -- an npm
+ *  claude.cmd through the system cmd.exe -- and the child looks for programs
+ *  it starts by name only in PATH's folders; it REJECTS when Claude Code is in
+ *  none of them or cannot be started that way, which the caller reads as "CLI
+ *  absent" (it then reads the credential file). Elsewhere `claude` through
+ *  `sh`, as before. Exported for the test. */
+export async function claudeAuthStatusCommand(
+  env: Record<string, string>,
+  platform: NodeJS.Platform = process.platform,
+): Promise<AuthStatusStart> {
+  return authStatusStart(env, platform, platform === 'win32' ? recentClaudeOnWindows(env) ?? await findClaudeOnWindowsAsync(env) : null)
+}
+
+/** claudeAuthStatusCommand's start once Claude Code is known (`bin`, Windows
+ *  only), synchronously: the probe below takes this path while the PATH
+ *  walk's answer is recent, so the lookup adds no wait of its own. */
+function authStatusStart(env: Record<string, string>, platform: NodeJS.Platform, bin: string | null): AuthStatusStart {
+  const base = { encoding: 'utf-8' as const, timeout: STATUS_TIMEOUT_MS, windowsHide: true }
+  if (platform !== 'win32') return { file: 'claude', args: ['auth', 'status'], options: { ...base, shell: true, env } }
+  if (!bin) throw new Error(CLAUDE_NOT_ON_PATH)
+  const how = windowsStartCommand(bin, ['auth', 'status'], env)
+  if ('refused' in how) throw new Error(`Claude Code could not be started: ${how.refused}`)
+  return {
+    file: how.file,
+    args: how.args,
+    options: { ...base, env: how.env, ...(how.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) },
+  }
+}
 
 export interface ClaudeCliAuthStatus {
   /** True when this account is signed in to the CLI. */
@@ -50,6 +99,9 @@ export interface ClaudeCliAuthStatus {
   source?: 'cli-status' | 'credential-file'
   /** Set when nothing could be determined. */
   error?: string
+  /** WP2: the CLI was not asked because Claude Code is switched off (or its
+   *  on/off could not be read): the reason, in plain words. */
+  notChecked?: string
 }
 
 /**
@@ -109,6 +161,12 @@ export function parseCliAuth(raw: string): ClaudeCliAuthStatus {
  * and the accounts panel (every row on mount). Running it synchronously blocked
  * the Electron main event loop for up to 10s each time — long enough to trip the
  * usage fetch's own 8s socket timeout. execFileAsync keeps it off the loop.
+ *
+ * WP2 PR 4: the provider-neutral sign-in check passes a `runner` (the
+ * executable discovery proved, run with no shell); the Accounts panel and the
+ * Sidebar pass none and run the probe as before. Either waits for a sign-out
+ * of the profile under way, and either joins a probe of the profile already
+ * running (one CLI per profile at a time).
  */
 // Overlapping probes for ONE profile share a single subprocess. The renderer
 // fires ACCOUNT_WEB_STATUS on every account-row mount, every auth-method toggle,
@@ -119,12 +177,63 @@ export function parseCliAuth(raw: string): ClaudeCliAuthStatus {
 // refreshInFlight map. Deduping also means one consumer ref per profile, not N.
 const authProbesInFlight = new Map<string, Promise<ClaudeCliAuthStatus>>()
 
-export function readClaudeCliAuth(profileId: string): Promise<ClaudeCliAuthStatus> {
+/** A sign-out of a profile while it runs (logoutClaudeCli), settled once its
+ *  process has ended and the profile is let go. A probe of that profile waits
+ *  for it before it starts: `claude auth status` beside a sign-out could
+ *  rotate the token the sign-out is removing (WP2 PR 4 review, A2-Q3). */
+const signOutsInFlight = new Map<string, Promise<void>>()
+
+/** How the provider-neutral account actions run the Claude CLI (WP2 PR 4):
+ *  the executable discovery last proved, started with no shell by the app's
+ *  CLI runner, its whole process tree stopped at the time limit. The
+ *  composition root builds it (compose.ts claudeCliAuthRunner); the Accounts
+ *  panel's own probe does not take one and runs as it always has. */
+export interface ClaudeCliAuthRunner {
+  /** The folder the CLI runs in: the project gate reads this one. */
+  readonly cwd: string
+  run(args: readonly string[], env: Record<string, string>, timeoutMs: number): Promise<ClaudeCliAuthRun>
+}
+
+/** One run through a ClaudeCliAuthRunner. */
+export interface ClaudeCliAuthRun {
+  /** Nothing was started, and why (the command line was refused). */
+  refused?: string
+  /** The process could not be started. */
+  spawnError?: string
+  exitCode: number | null
+  stdout: string
+  /** Stopped at the time limit. */
+  timedOut: boolean
+  /** A stopped run whose kill is still under way: resolves once it has
+   *  ended (never rejects). The profile stays held until then. */
+  killSettled?: Promise<void>
+}
+
+const STATUS_TIMEOUT_MS = 10_000
+/** How long past its own time limits a runner-run check or sign-out may hold
+ *  the profile: the project gate, and a slow kill of a stopped process tree.
+ *  Sized as the reviewer's (CLAUDE_REVIEW_HOLD_GRACE_MS). */
+const CLI_HOLD_GRACE_MS = 60_000
+
+// The environment of a CLI auth run in a profile's home, built where the run
+// starts, in one expression: withProfileHome's hardened environment (its
+// context named in place, as at every managed launch), with HOME pointed at
+// the profile home as well, except on macOS. There withProfileHome leaves HOME
+// at the real home on purpose (the login keychain is found through it, #117),
+// so every profile on a Mac runs on the Mac's one Claude Code sign-in (D2), and
+// a check or a sign-out reads and acts on that sign-in, as a session on the
+// profile does. Object.assign MUTATES the result rather than spreading it into
+// a literal: the realm patch builds it with a null prototype (see
+// src/shared/providers/realm-env.ts).
+
+export function readClaudeCliAuth(profileId: string, runner?: ClaudeCliAuthRunner): Promise<ClaudeCliAuthStatus> {
   const existing = authProbesInFlight.get(profileId)
   if (existing) return existing
   const probe = (async () => {
     try {
-      return await readClaudeCliAuthUncached(profileId)
+      const signingOut = signOutsInFlight.get(profileId)
+      if (signingOut) await signingOut
+      return await readClaudeCliAuthUncached(profileId, runner)
     } finally {
       authProbesInFlight.delete(profileId)
     }
@@ -133,7 +242,7 @@ export function readClaudeCliAuth(profileId: string): Promise<ClaudeCliAuthStatu
   return probe
 }
 
-async function readClaudeCliAuthUncached(profileId: string): Promise<ClaudeCliAuthStatus> {
+async function readClaudeCliAuthUncached(profileId: string, runner?: ClaudeCliAuthRunner): Promise<ClaudeCliAuthStatus> {
   // VALIDATE HERE, not only at the IPC boundary. `join` does not sandbox: with
   // `../../..` segments it walks straight out of the profiles root, and the id
   // below becomes both a filesystem path and the HOME of a spawned process. The
@@ -162,29 +271,114 @@ async function readClaudeCliAuthUncached(profileId: string): Promise<ClaudeCliAu
   //    can start), then wait for the in-flight one to land, then spawn. The
   //    other order left a microtask between the wait settling and the acquire
   //    in which a fresh rotation could begin (adversarial pass on #598).
-  //    Awaited ONLY when a rotation is actually in flight: the common path
-  //    stays synchronous up to the spawn, which is what lets overlapping probes
-  //    for one profile share a single subprocess.
-  const release = acquireProfileConsumer(profileId)
+  //    Awaited ONLY when a rotation is actually in flight, when the project
+  //    gate has no recent verdict for this process's directory (the first
+  //    probe, and once per reuse window after), or when the account's
+  //    sign-in folders have no verdict yet this run (Windows), and behind the
+  //    first-start warm-up of a claude.exe started directly (Windows,
+  //    ADR-025); otherwise the path stays synchronous up to the spawn.
+  //    Overlapping probes for one profile share a single subprocess either
+  //    way (authProbesInFlight).
+  //
+  //    Through a runner (the provider-neutral check, WP2 PR 4) the profile is
+  //    held for the runner's own time limit plus a grace, and let go only once
+  //    a stopped process tree has ended. Without one, the hold also covers
+  //    the first-start warm-up (up to FIRST_START_CALLER_BOUND_MS) before the
+  //    CLI's own time limit, so it is sized for both plus the same grace: a
+  //    hold swept as leaked while the CLI still reads the account's sign-in
+  //    would let a token refresh run beside it.
+  const release = runner
+    ? acquireProfileConsumer(profileId, { maxAgeMs: STATUS_TIMEOUT_MS + CLI_HOLD_GRACE_MS })
+    : acquireProfileConsumer(profileId, { maxAgeMs: STATUS_TIMEOUT_MS + FIRST_START_CALLER_BOUND_MS + CLI_HOLD_GRACE_MS })
+  let kill: Promise<void> | undefined
   try {
     const rotation = pendingProfileRefresh(profileId)
     if (rotation) await rotation
+    // The project gate for the directory the CLI runs in (the one this probe
+    // inherits, or the runner's). A recent verdict is read synchronously so
+    // the common path stays synchronous up to the spawn (see above); only a
+    // miss awaits the gate.
+    const probeCwd = runner ? runner.cwd : process.cwd()
+    const projectGate = peekGateVerdict(probeCwd) ?? await gateManagedLaunch(probeCwd)
     const home = join(getProfilesRoot(), profileId)
     if (existsSync(home)) {
-      const { stdout } = await execFileAsync('claude', ['auth', 'status'], {
-        encoding: 'utf-8',
-        timeout: 10_000,
-        windowsHide: true,
-        shell: true,          // resolves claude.cmd on Windows, as elsewhere in the app
-        env: { ...process.env, USERPROFILE: home, HOME: home },
-      })
-      const parsed = parseAuthStatus(stdout)
-      if (parsed) return parsed
+      // `claude auth status` is an AUTH path, so it is a managed launch and
+      // gets the same hardening as a session: ambient authority variables
+      // removed, the host control applied last. It used to hand-build
+      // `{ ...process.env, USERPROFILE, HOME }`, which is the shape
+      // withProfileHome exists to own -- and being the one launch path that
+      // built its own env is exactly how it would have kept inheriting an
+      // ambient ANTHROPIC_API_KEY and reported the wrong account as signed
+      // in. For HOME, see the note on the CLI auth environment above.
+      // Windows: the account's sign-in folders are checked owner-only (once a
+      // run, asynchronously) before the CLI first runs in its home, and the
+      // environment below reads their verdict.
+      if (!profileCredentialFoldersChecked(profileId)) await checkProfileCredentialFolders(profileId)
+      const env = Object.assign(withProfileHome({ ...process.env } as Record<string, string>, home, { launchId: 'auth-status', cwd: probeCwd, probe: true, projectGate }), process.platform === 'darwin' ? {} : { HOME: home })
+      if (runner) {
+        // Once the before-quit teardown has run, the status is not read, on
+        // any platform and for any program (quit-hold.ts): the account hold
+        // is let go (below), and the probe is never answered.
+        const heldNow = quitHold<ClaudeCliAuthStatus>('claude auth status')
+        if (heldNow) return heldNow
+        const r = await runner.run(['auth', 'status'], env, STATUS_TIMEOUT_MS)
+        if (r.killSettled instanceof Promise) kill = r.killSettled
+        // `claude auth status` exits 1 when signed out, its answer on stdout.
+        const parsed = r.refused !== undefined || r.spawnError !== undefined || r.timedOut ? null : parseAuthStatus(r.stdout)
+        if (parsed) return parsed
+      } else {
+        // A recent answer of Windows' PATH walk is used at once (see above);
+        // without one the walk runs off the event loop.
+        const recent = process.platform === 'win32' ? recentClaudeOnWindows(env) : null
+        const run = process.platform === 'win32' && !recent ? await claudeAuthStatusCommand(env) : authStatusStart(env, process.platform, recent)
+        // ADR-025: a claude.exe started directly (not an npm claude.cmd, which
+        // cmd.exe starts) may be a new file this run has not started yet, whose
+        // first start holds the start call while the OS checks it. That first
+        // start runs off the main thread first: the program found above in
+        // PATH's folders, with Claude's --version environment (never this
+        // account's home). A pre-start, never a gate.
+        if (process.platform === 'win32' && /\\claude\.exe$/i.test(run.file)) {
+          await warmFirstStart(run.file, () => ({ env: claudeVersionRunEnv(process.env, 'win32') }))
+        }
+        // The caller asked whether Claude Code is switched off before this
+        // probe. The waits since then (a token refresh under way, the project
+        // gate, the sign-in folder check, the PATH walk, the warm-up above)
+        // can take seconds, so it is asked again right before the CLI runs in
+        // the account's home, on every platform. Off: nothing runs, and the
+        // answer says why, as the caller's own check does.
+        const off = providerProbeRefusal('claude')
+        if (off) return { authenticated: false, notChecked: off.message }
+        // And once the before-quit teardown has run, it is not read either,
+        // on any platform and for any program (quit-hold.ts): the account
+        // hold is let go (below), and the probe is never answered. A direct
+        // claude.exe on Windows is held by its warm-up too; macOS, Linux and
+        // an npm claude.cmd were not.
+        const held = quitHold<ClaudeCliAuthStatus>('claude auth status')
+        if (held) return held
+        const { stdout } = await execFileAsync(run.file, run.args, run.options)
+        const parsed = parseAuthStatus(stdout)
+        if (parsed) return parsed
+      }
     }
-  } catch {
+  } catch (e) {
     // CLI absent, slow, or erroring — fall through to the file.
+    //
+    // But a managed-launch REFUSAL is not that. `withProfileHome` throws when
+    // the host control could not be applied, and this bare catch swallowed it
+    // with no log line at all; the probe then fell back to reading the
+    // credential file and answered as if nothing had happened. This call site
+    // records no preflight either, so a regressed control here left ZERO trace
+    // anywhere (adversarial review, MAJOR 7). The fallback is still correct --
+    // it reads a file rather than launching the CLI, so it cannot act as the
+    // wrong account -- but the silence was not.
+    const message = (e as Error)?.message ?? String(e)
+    if (message.includes(MANAGED_LAUNCH_REFUSAL)) {
+      logWarn(`[account-web] profile ${profileId}: the CLI auth probe was refused -- ${message}. Falling back to the credential file; this is an isolation fault, not a missing CLI.`)
+    }
   } finally {
-    release()
+    const letGo = (): void => { release() }
+    if (kill) void kill.then(letGo, letGo)
+    else letGo()
   }
 
   // 2. Fall back to the credential file at <profileHome>/.claude/.credentials.json
@@ -204,6 +398,168 @@ async function readClaudeCliAuthUncached(profileId: string): Promise<ClaudeCliAu
   } catch (err) {
     logError(`[account-web] could not read CLI auth for ${profileId}: ${(err as Error)?.message}`)
     return { authenticated: false, error: 'could not determine CLI auth state' }
+  }
+}
+
+/** What a sign-out did. `ran`: `claude auth logout` was started, so the
+ *  profile may have changed whatever followed. `after`: the CLI's own answer
+ *  for the profile, read afresh once the sign-out ended; null when it could
+ *  not be read, and not read at all after a sign-out stopped at its time
+ *  limit (its result is unconfirmed). `refused`: nothing was started, and
+ *  why. */
+export interface ClaudeCliLogoutResult {
+  ran: boolean
+  after: ClaudeCliAuthStatus | null
+  refused?: 'invalid-profile' | 'in-use' | 'no-home' | 'project-gate' | 'host-control' | 'cli-unavailable' | 'computer-sign-in'
+  timedOut?: boolean
+}
+
+/** How a sign-out runs. */
+export interface ClaudeCliLogoutOptions {
+  /** The CLI run: the executable discovery proved, no shell. Absent or null:
+   *  discovery has proved no file, and nothing runs ('cli-unavailable'). */
+  runner?: ClaudeCliAuthRunner | null
+  /** The user's acknowledgement that this sign-out reaches this computer's
+   *  own Claude Code sign-in (see profileSharesComputerSignIn). */
+  acknowledgeComputerSignIn?: boolean
+}
+
+const LOGOUT_TIMEOUT_MS = 30_000
+
+/** Whether signing this profile out reaches this computer's own Claude Code
+ *  sign-in, the one the user's Claude Code uses outside the app:
+ *  - macOS: every profile. withProfileHome leaves HOME at the real home there,
+ *    so the login keychain, and with it the Mac's one Claude Code sign-in, is
+ *    what every profile's session runs on (D2, #117);
+ *  - elsewhere: the primary profile, whose credentials the app keeps on the
+ *    same token as the user's own login (syncPrimaryCredentialsWithGlobal).
+ *  A profile list that cannot be read counts as shared: the acknowledgement
+ *  is then asked for rather than skipped. */
+function profileSharesComputerSignIn(profileId: string): boolean {
+  if (process.platform === 'darwin') return true
+  let all: ReturnType<typeof readProfilesStrict>
+  try { all = readProfilesStrict() } catch { return true }
+  if (all === null) return true
+  // The token sync's own rule: getPrimaryProfileId reads any truthy isPrimary.
+  // Asked through that helper too, so the two can never disagree.
+  return all.some((p) => !!p && typeof p === 'object' && !!p.isPrimary && p.id === profileId) || getPrimaryProfileId() === profileId
+}
+
+const refusedLogout = (refused: NonNullable<ClaudeCliLogoutResult['refused']>): ClaudeCliLogoutResult => ({ ran: false, after: null, refused })
+
+/**
+ * Sign one account's CLI out: `claude auth logout` in that profile's own home,
+ * by delegation, as the status probe above reads it. WP2 PR 4: the Claude
+ * package's `auth.logout` (owner answers 2026-10-04).
+ *
+ * It runs the Claude executable discovery found, through the runner (no
+ * shell, the whole process tree stopped at the time limit), with the probe's
+ * hardened profile-home environment and the project gate for the folder the
+ * CLI runs in. The credential file is never opened here; the CLI owns it.
+ * The CLI also revokes the sign-in's token with the service, so a sign-out
+ * that reaches this computer's own sign-in (profileSharesComputerSignIn) signs
+ * out every Claude Code using it: that one runs only with the user's
+ * acknowledgement.
+ *
+ * Refused, before anything starts, while the profile is in use (a live
+ * session, or another check or run holding it): signing out removes the
+ * credentials that consumer reads -- the rule a profile removal follows. The
+ * profile is then held for the whole run (holdProfileForRun, with the run's
+ * full bound), a probe of it waits for the sign-out, and the sessions on it
+ * are asked again just before the start. The verdict is the profile's state
+ * read afterwards, not the exit code. Once a sign-out has run to its end (not
+ * stopped at its time limit), the profile's identity copy of its credentials
+ * is removed, unless the profile still reads as signed in.
+ */
+export async function logoutClaudeCli(profileId: string, opts: ClaudeCliLogoutOptions = {}): Promise<ClaudeCliLogoutResult> {
+  if (!PROFILE_ID_RE.test(profileId)) return refusedLogout('invalid-profile')
+  if (opts.acknowledgeComputerSignIn !== true && profileSharesComputerSignIn(profileId)) return refusedLogout('computer-sign-in')
+  const runner = opts.runner
+  if (!runner) return refusedLogout('cli-unavailable')
+  if (signOutsInFlight.has(profileId) || isProfileInUseByLiveSession(profileId)) return refusedLogout('in-use')
+  // Published before anything awaits, so a probe asked for from here on waits.
+  const run = runLogout(profileId, runner)
+  const settled = run.then(() => undefined, () => undefined)
+  signOutsInFlight.set(profileId, settled)
+  try {
+    return await run
+  } finally {
+    if (signOutsInFlight.get(profileId) === settled) signOutsInFlight.delete(profileId)
+  }
+}
+
+async function runLogout(profileId: string, runner: ClaudeCliAuthRunner): Promise<ClaudeCliLogoutResult> {
+  // Held before the wait for a rotation in flight, then again with the run's
+  // full bound: the sign-out, the status read after it and a slow kill.
+  // No cancel signal is passed, so the hold always comes back (null is only
+  // the answer to a cancel).
+  const release = (await holdProfileForRun(profileId, LOGOUT_TIMEOUT_MS + STATUS_TIMEOUT_MS + CLI_HOLD_GRACE_MS)) as () => void
+  const kills: Promise<void>[] = []
+  const ended = async (r: ClaudeCliAuthRun): Promise<void> => {
+    if (r.killSettled instanceof Promise) {
+      kills.push(r.killSettled)
+      await r.killSettled
+    }
+  }
+  try {
+    const projectGate = peekGateVerdict(runner.cwd) ?? await gateManagedLaunch(runner.cwd)
+    const home = join(getProfilesRoot(), profileId)
+    if (!existsSync(home)) return refusedLogout('no-home')
+    // Windows: as for the check, the account's sign-in folders have a
+    // verdict before the sign-out runs in its home (account-profiles).
+    if (!profileCredentialFoldersChecked(profileId)) await checkProfileCredentialFolders(profileId)
+    let env: Record<string, string>
+    try {
+      env = Object.assign(withProfileHome({ ...process.env } as Record<string, string>, home, { launchId: 'auth-logout', cwd: runner.cwd, probe: true, projectGate }), process.platform === 'darwin' ? {} : { HOME: home })
+    } catch (e) {
+      logWarn(`[account-web] profile ${profileId}: the CLI sign-out was refused -- ${(e as Error)?.message ?? String(e)}. Nothing was run.`)
+      // The project gate's refusal, or the environment could not be
+      // hardened: each says its own reason to the user.
+      return refusedLogout(projectGate?.status === 'refused' ? 'project-gate' : 'host-control')
+    }
+    // Asked again after every wait, immediately before the start: a session
+    // opened on the profile meanwhile refuses the sign-out. The sessions are
+    // what is asked; the hold above is this run's own.
+    if (sessionsOnProfile(profileId).length > 0) return refusedLogout('in-use')
+    const out = await runner.run(['auth', 'logout'], env, LOGOUT_TIMEOUT_MS)
+    await ended(out)
+    if (out.refused !== undefined || out.spawnError !== undefined) {
+      logWarn(`[account-web] profile ${profileId}: the Claude executable could not be started for the sign-out (${out.refused ?? out.spawnError}). Nothing was run.`)
+      return refusedLogout('cli-unavailable')
+    }
+    if (out.timedOut) {
+      // Its process tree has ended (awaited above). Whether it signed out is
+      // not known, and no status is read in its place. The identity copy
+      // stays: a run stopped before it changed anything leaves the profile
+      // signed in, and that copy is what restores its identity.
+      logInfo(`[account-web] ${profileId}: the claude CLI sign-out was stopped at its time limit; signed out is unconfirmed`)
+      return { ran: true, after: null, timedOut: true }
+    }
+    const after = await readStatusAfterLogout(runner, env, ended)
+    const signedOut = !!after && after.error === undefined && after.authenticated === false
+    const stillSignedIn = !!after && after.error === undefined && after.authenticated === true
+    if (!stillSignedIn) removeProfileIdentityCredentials(profileId)
+    logInfo(`[account-web] ${profileId}: the claude CLI sign-out ran; ${signedOut ? 'signed out (confirmed by its status)' : stillSignedIn ? 'the profile still reads as signed in' : 'signed out is unconfirmed'}`)
+    return { ran: true, after }
+  } finally {
+    // Let go once every process the run started has ended.
+    const letGo = (): void => { try { release() } catch { /* a release never replaces the result */ } }
+    if (kills.length) void Promise.all(kills).then(letGo, letGo)
+    else letGo()
+  }
+}
+
+/** The profile's state straight from the CLI, never a probe already in
+ *  flight (that one started before the sign-out). `claude auth status`
+ *  exits 1 when signed out, with its answer still on stdout. */
+async function readStatusAfterLogout(runner: ClaudeCliAuthRunner, env: Record<string, string>, ended: (r: ClaudeCliAuthRun) => Promise<void>): Promise<ClaudeCliAuthStatus | null> {
+  try {
+    const r = await runner.run(['auth', 'status'], env, STATUS_TIMEOUT_MS)
+    await ended(r)
+    if (r.refused !== undefined || r.spawnError !== undefined || r.timedOut) return null
+    return parseAuthStatus(r.stdout)
+  } catch {
+    return null
   }
 }
 

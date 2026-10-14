@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+// Every provider is on here: main's launch rule has its own suites
+// (tests/unit/main/provider-launch-gate.test.ts and the provider-off tests).
+vi.mock('../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal: () => null, providerProbeRefusal: () => null }))
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -313,6 +316,47 @@ describe('runCrossAccountInsights', () => {
     const memberRun = getCatalogue().runs.find((r) => r.id === c.runId)!
     expect(memberRun.authFailed).toBe(true)
     expect(memberRun.error).toMatch(/OAuth session expired/)
+  })
+
+  it("keeps Claude Code's written analysis as plain text in the roll-up's kpis.json", async () => {
+    seedProfile('a', 'a@example.com', { isPrimary: true })
+    seedProfile('b', 'b@example.com')
+    h.synthesisStdout = JSON.stringify({
+      type: 'result',
+      is_error: false,
+      result: JSON.stringify({
+        summary: { improvements: ['both \u202eaccounts\u202c steady', '\u001b[31mred\u001b[0m alert'] },
+        accounts: [{ key: 'A1\u0007', highlights: ['see \u001b]8;;https://example.invalid\u0007here\u001b]8;;\u0007'] }, { key: 'A2', highlights: ['quiet\u2028line'] }],
+        crossAccount: { observations: ['A1\u2029A2 level'] }
+      })
+    })
+
+    const id = await runCrossAccountInsights(getWin) as string
+    const data = readAggregateData(id)
+    expect(data.synthesis).toBe('ai')
+    const text = [
+      ...(data.summary?.improvements ?? []),
+      ...(data.crossAccount?.observations ?? []),
+      ...data.accounts.flatMap((a) => a.highlights ?? [])
+    ]
+    expect(text.length).toBeGreaterThanOrEqual(5)
+    for (const t of text) expect(t, JSON.stringify(t)).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2028\u2029]/)
+    expect(data.summary!.improvements![0]).toContain('accounts')
+    // The key was made plain too, so A1's highlight still finds its account.
+    expect(data.accounts.find((a) => a.key === 'A1')!.highlights![0]).toContain('here')
+  })
+
+  it("keeps the reason for a missing written analysis as plain text", async () => {
+    seedProfile('a', 'a@example.com', { isPrimary: true })
+    seedProfile('b', 'b@example.com')
+    h.synthesisCode = 1
+    h.synthesisStdout = JSON.stringify({ is_error: true, result: 'boom \u001b[31mred\u001b[0m \u202eevil\u202c \u2028next' })
+
+    const id = await runCrossAccountInsights(getWin)
+    const agg = getCatalogue().runs.find((r) => r.id === id)!
+    expect(agg.status).toBe('complete')
+    expect(agg.error).toMatch(/No written analysis: boom/)
+    expect(agg.error).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2028\u2029]/)
   })
 
   it('explains a missing written analysis instead of degrading silently', async () => {

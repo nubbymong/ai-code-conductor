@@ -84,6 +84,19 @@ export function releaseLine(version: string): string | null {
 }
 
 /**
+ * The FINAL release a version belongs to: `2.1.1-beta.2` -> `2.1.1`, and a
+ * final release is itself (`v2.1.0` -> `2.1.0`). Null when it does not parse.
+ *
+ * What's New keys its content to the final release (owner rule 2026-10-11):
+ * every prerelease of 2.1.1 shows the 2.1.1 story, and none of them counts as
+ * having seen it. See `whatsNewAnchorFor` in renderer/onboarding/upgrade-flow.ts.
+ */
+export function finalRelease(version: string): string | null {
+  const p = parse(version)
+  return p ? p.release.join('.') : null
+}
+
+/**
  * True for a build with a prerelease suffix — `2.1.0-beta.17`, `2.1.0-rc.5` —
  * and false for a final release or anything unparseable. Unparseable errs
  * toward false: a garbled version must not claim tester-only behaviour.

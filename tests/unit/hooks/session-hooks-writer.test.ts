@@ -1,3 +1,4 @@
+// HOST QUARANTINE: changes ACLs on temp folders (through the app's own folder hardening). [CI] [VM] only -- never run on the owner's machine.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -19,9 +20,16 @@ function cmdHook(command: string, matcher = '') {
   return { matcher, hooks: [{ type: 'command', command }] }
 }
 
+// On POSIX the folder is made 0755 and the file 0644 whatever the umask: a
+// project .claude folder or file writable by others, or by a group other than
+// the user's own per-user group (the same number as the user id), is skipped.
 function writeSettings(claudeDir: string, hooks: unknown, file = 'settings.json') {
   fs.mkdirSync(claudeDir, { recursive: true })
   fs.writeFileSync(path.join(claudeDir, file), JSON.stringify({ hooks }))
+  if (process.platform !== 'win32') {
+    fs.chmodSync(claudeDir, 0o755)
+    fs.chmodSync(path.join(claudeDir, file), 0o644)
+  }
 }
 
 describe('session-hooks-writer', () => {
@@ -33,8 +41,7 @@ describe('session-hooks-writer', () => {
     dir = tmp()
     file = path.join(dir, 'settings-sid-a.json')
     home = path.join(dir, 'home')
-    // Project cwd nested UNDER the fake home so the project-root walk is bounded
-    // by the homeDir ceiling (keeps the test off the real ~/.claude).
+    // Project cwd nested UNDER the fake home (keeps the test off the real ~/.claude).
     proj = path.join(home, 'work')
     fs.mkdirSync(home, { recursive: true })
     fs.mkdirSync(proj, { recursive: true })
@@ -139,12 +146,14 @@ describe('session-hooks-writer', () => {
     expect(cmds).toEqual(['user.sh', 'project.sh', 'local.sh'])
   })
 
-  it('resolves project hooks from a nested cwd (walks up to the .claude root)', () => {
+  it('a nested cwd reads its own .claude only, not a folder above it (as Claude Code does)', () => {
     writeSettings(path.join(proj, '.claude'), { Stop: [cmdHook('root.sh')] })
     const nested = path.join(proj, 'packages', 'app')
     fs.mkdirSync(nested, { recursive: true })
+    expect(resolveInheritedHooks(nested, home)).toEqual({})
+    writeSettings(path.join(nested, '.claude'), { Stop: [cmdHook('app.sh')] })
     const inherited = resolveInheritedHooks(nested, home)
-    expect(inherited.Stop[0].hooks[0].command).toBe('root.sh')
+    expect(inherited.Stop.map((e: { hooks: { command: string }[] }) => e.hooks[0].command)).toEqual(['app.sh'])
   })
 
   it('dedupes a byte-identical hook present in both project and local (no double-fire)', () => {

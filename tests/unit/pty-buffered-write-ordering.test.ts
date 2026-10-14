@@ -1,3 +1,4 @@
+// HOST QUARANTINE: runs the real session start-up path, which writes session files. [CI] [VM] only -- never run on the owner's machine.
 // A PTY exists ~300ms before its launch line is written, so for that window the
 // terminal is a bare interactive shell that has not yet become Claude. A write
 // landing there went straight to that shell, and its trailing `\r` submitted it
@@ -7,7 +8,8 @@
 // Note the window that matters is AFTER spawn, not before it: spawnPty calls
 // killPty(sessionId) on entry, which drops any pre-spawn `pendingWrites`, so a
 // write buffered before the spawn is discarded rather than replayed.
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
+import { putFakeClaudeOnPath } from '../helpers/fake-claude-on-path'
 
 const writeMock = vi.fn()
 const spawnMock = vi.fn(() => ({
@@ -19,6 +21,10 @@ const spawnMock = vi.fn(() => ({
 }))
 
 vi.mock('node-pty', () => ({ spawn: spawnMock }))
+// Each spawn writes the session's settings and MCP files. The real writer puts
+// them in os.homedir()/.claude, the real Claude config folder of whoever runs
+// this: they go to a temp folder instead, removed after the file.
+vi.mock('../../src/main/hooks/per-session-settings', async () => (await import('../helpers/temp-session-settings')).tempSessionSettings())
 vi.mock('electron', () => ({
   // getAllWindows is a STATIC, and pushAccountIdentity calls it during spawn --
   // a bare `class {}` throws there and the spawn never reaches its launch timer.
@@ -31,6 +37,9 @@ const { spawnPty, writePty, killPty } = await import('../../src/main/pty-manager
 const { registerProvider } = await import('../../src/main/providers')
 const { ClaudeProvider } = await import('../../src/main/providers/claude')
 registerProvider(new ClaudeProvider())
+// On Windows the launch names Claude Code by the full path its PATH walk finds,
+// and starts nothing without one: a stand-in it finds (tests/helpers).
+const fakeClaude = putFakeClaudeOnPath()
 
 const fakeWin = { webContents: { send: () => {} }, isDestroyed: () => false } as never
 
@@ -49,6 +58,12 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+})
+
+afterAll(async () => {
+  const settings = await import('../../src/main/hooks/per-session-settings') as unknown as { dispose: () => void }
+  settings.dispose()
+  fakeClaude.restore()
 })
 
 describe('a write that lands while the launch line is still queued', () => {
@@ -71,6 +86,8 @@ describe('a write that lands while the launch line is still queued', () => {
     expect(launch).toBeGreaterThanOrEqual(0)
     expect(question).toBeGreaterThanOrEqual(0) // delivered, not dropped
     expect(question).toBeGreaterThan(launch) // and only once claude is running
+    // On Windows the launch line names the Claude Code the PATH walk found, by its full path.
+    if (fakeClaude.claude) expect(String(writeMock.mock.calls[launch][0])).toContain(fakeClaude.claude)
 
     killPty(id)
   })
@@ -135,7 +152,8 @@ describe('a write that lands while the launch line is still queued', () => {
     // launch line is a SEPARATE, single un-chunked write -- a command line is not
     // a multi-KB paste and is deliberately not routed through the chunker -- and
     // its --plugin-dir/--settings/--mcp-config paths live under the per-worker
-    // temp root `ccc-vitest-<rand>`. `fs.mkdtempSync` fills that random suffix
+    // temp root `ccc-vitest-<rand>` (the settings and MCP files through the temp
+    // stand-in above). `fs.mkdtempSync` fills that random suffix
     // from [A-Za-z0-9], so ~9% of runs it contains an uppercase 'X'; that launch
     // line (278-424 B, > 256) then matched `includes('X')` and tripped the <=256
     // assertion meant only for paste chunks. A pure-run filter is deterministic

@@ -7,17 +7,22 @@
  * Why one function: until 2.1.0-beta.16 the bar's only type-awareness was a
  * single boolean, `mainPaneIsShell`. Provider and transport never reached the
  * labels, so a Codex session was told "Claude", and on every SSH session the
- * partner shell -- which is a LOCAL PTY (App.tsx spawns it with no ssh prop) --
- * was described only as "the partner shell", with nothing on screen saying it
- * runs on this PC and not on the host. Three axes standing behind one flag
- * is exactly how those lies happened; deriving everything here is how they
- * stop. A future session type is added in this file alone.
+ * partner shell -- then a LOCAL PTY -- was described only as "the partner
+ * shell", with nothing on screen saying it ran on this PC and not on the host.
+ * Three axes standing behind one flag is exactly how those lies happened;
+ * deriving everything here is how they stop. A future session type is added in
+ * this file alone.
+ *
+ * #86 (2.1.1): the partner shell runs where the session runs. An SSH session's
+ * partner is a plain shell on the session's own host (its own plain
+ * connection, components/PartnerTerminalPane.tsx), so the two panes are on
+ * the same machine on every session type.
  */
 import type { Session } from '../stores/sessionStore'
 
 export type CommandTarget = 'claude' | 'partner'
 export type AgentId = 'claude' | 'codex'
-export type LogsEmptyReason = 'shell-only' | 'ssh' | 'codex'
+export type LogsEmptyReason = 'shell-only' | 'ssh'
 
 export type CapabilitySource = Pick<Session, 'provider' | 'sessionType' | 'shellOnly' | 'configId' | 'sshConfig' | 'kind'>
 
@@ -30,14 +35,19 @@ export interface SessionCapabilities {
   mainAccepts: 'prompt' | 'shell'
   /** Where the main pane's process runs. */
   mainRunsOn: 'local' | 'remote'
-  /** The partner pane is ALWAYS a local shell, SSH or not (App.tsx). */
-  partnerRunsOn: 'local'
+  /** Where the partner shell runs: where the main pane runs (#86), unless an
+   *  SSH tab has no ssh block to connect with (its partner is a shell here). */
+  partnerRunsOn: 'local' | 'remote'
   /** Host name for wording when the main pane is remote. */
   remoteHost?: string
-  /** True on every SSH session: the two panes are on different computers. */
+  /** Whether the two panes are on different computers. Since #86 the partner
+   *  runs where the session runs, so this is false but for an SSH tab with no
+   *  ssh block (its partner is a shell here); the labels that read it say
+   *  "this PC" only then. */
   panesOnDifferentMachines: boolean
   /** Mirrors LogsPane's structural predicate: a shell has no transcript; an SSH
-   *  transcript lives on the host; Codex transcripts are not indexed. */
+   *  transcript lives on the host. A local Codex session's rollout is indexed
+   *  as a Claude session's transcript is (P3.12). */
   logsEmptyReason: LogsEmptyReason | null
   canIndexLogs: boolean
   /** Snap types an English prompt into the main pane -- nonsense on a shell. */
@@ -49,8 +59,9 @@ export interface SessionCapabilities {
   /** Where a button with this target runs. A page button has no target. */
   runsOn: (target: CommandTarget) => 'local' | 'remote'
   /** A secret argument is injected only into LOCAL shell spawns (main sets the
-   *  env var when the shell starts; the SSH branch never does), and a reference
-   *  typed into an agent's TUI is just text. So: a local shell target only. */
+   *  env var when the shell starts; the SSH branch never does, the partner of
+   *  an SSH session included), and a reference typed into an agent's TUI is
+   *  just text. So: a local shell target only. */
   canDeliverSecret: (target: CommandTarget) => boolean
   /** Whether the main pane IS a shell (the old `mainPaneIsShell`). */
   mainPaneIsShell: boolean
@@ -63,17 +74,21 @@ export function sessionCapabilities(session: CapabilitySource | null | undefined
   const shellOnly = !!session?.shellOnly
   const ssh = session?.sessionType === 'ssh'
   const agent: AgentId | null = shellOnly ? null : provider
-  const logsEmptyReason: LogsEmptyReason | null = shellOnly ? 'shell-only' : ssh ? 'ssh' : provider === 'codex' ? 'codex' : null
+  const logsEmptyReason: LogsEmptyReason | null = shellOnly ? 'shell-only' : ssh ? 'ssh' : null
   const mainRunsOn: 'local' | 'remote' = ssh ? 'remote' : 'local'
-  const runsOn = (target: CommandTarget): 'local' | 'remote' => (target === 'partner' ? 'local' : mainRunsOn)
+  // #86: the partner shell runs on the session's own machine, exactly as
+  // PartnerTerminalPane starts it (utils/partnerShell): over SSH on the host,
+  // unless the tab has no ssh block to connect with (then a shell here).
+  const partnerRunsOn: 'local' | 'remote' = ssh && session?.sshConfig ? 'remote' : 'local'
+  const runsOn = (target: CommandTarget): 'local' | 'remote' => (target === 'partner' ? partnerRunsOn : mainRunsOn)
   return {
     agent,
     agentName: agent ? AGENT_NAMES[agent] : '',
     mainAccepts: shellOnly ? 'shell' : 'prompt',
     mainRunsOn,
-    partnerRunsOn: 'local',
+    partnerRunsOn,
     remoteHost: ssh ? session?.sshConfig?.host : undefined,
-    panesOnDifferentMachines: ssh,
+    panesOnDifferentMachines: partnerRunsOn !== mainRunsOn,
     logsEmptyReason,
     canIndexLogs: logsEmptyReason === null,
     canSendImageToAgent: !shellOnly,
@@ -89,7 +104,11 @@ export function sessionCapabilities(session: CapabilitySource | null | undefined
 
 /** Plain words for where a target runs, for tooltips, menus and the dialog. */
 export function describeTarget(caps: SessionCapabilities, target: CommandTarget): string {
-  if (target === 'partner') return caps.panesOnDifferentMachines ? 'the partner shell (this PC)' : 'the partner shell'
+  // #86: the partner runs where the session runs; over SSH, on its host.
+  if (target === 'partner') {
+    if (caps.partnerRunsOn === 'remote') return `the partner shell on ${caps.remoteHost ?? 'the host'}`
+    return caps.panesOnDifferentMachines ? 'the partner shell (this PC)' : 'the partner shell'
+  }
   if (caps.mainPaneIsShell) return caps.mainRunsOn === 'remote' ? `this shell on ${caps.remoteHost ?? 'the host'}` : 'this shell'
   return caps.mainRunsOn === 'remote' ? `${caps.agentName} on ${caps.remoteHost ?? 'the host'}` : `the ${caps.agentName} terminal`
 }

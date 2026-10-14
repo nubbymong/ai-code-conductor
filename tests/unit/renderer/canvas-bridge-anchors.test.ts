@@ -308,6 +308,31 @@ describe('reported events (click-to-lock, the two keys)', () => {
     expect(events[0]).toMatchObject({ type: 'contentClick' })
   })
 
+  // aicc_planning#107: a PLAN asks its frame to stop the pointer stream (no
+  // hover is resolved on a plan) but keeps clicks, because a click is how a
+  // plan section is chosen for a note. In beta.2 the one switch silenced both,
+  // so a plan click never reached the host and the section was never selected.
+  it('reports a click with its page point on a PLAN, where the pointer stream is off', async () => {
+    setBody(`<main data-test-box="0,0,800,600"><section data-ux-id="step-2" data-test-box="20,20,300,80"><h2 data-test-box="24,24,200,20">Step 2</h2></section></main>`)
+    pointHits(document.querySelector('h2'))
+    try {
+      const reply = await bridgeRequest('hoverReporting', { enabled: false, clicks: true })
+      expect(reply.ok).toBe(true)
+      const eventsPromise = collectEvents('contentClick', 200)
+      document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 40, clientY: 30 }))
+      const events = await eventsPromise
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({ type: 'contentClick' })
+      expect(events[0].hit, 'the click names what was clicked, as the inspect ladder will').toBeTruthy()
+      // The point the host inspects at to lock the section.
+      expect(typeof events[0].pageX).toBe('number')
+      expect(typeof events[0].pageY).toBe('number')
+    } finally {
+      // Bridge state is module state shared by every test in this file.
+      await bridgeRequest('hoverReporting', { enabled: true, clicks: true })
+    }
+  })
+
   it('reports Escape and ArrowUp from a non-editable target, and nothing else', async () => {
     setBody(`<main data-test-box="0,0,800,600"><input data-test-box="0,0,100,20" /></main>`)
     const keysPromise = collectEvents('contentKey', 250)

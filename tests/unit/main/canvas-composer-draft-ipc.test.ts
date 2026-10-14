@@ -33,7 +33,11 @@ const { registerCanvasHandlers } = await import('../../../src/main/ipc/canvas-ha
 
 const SID = 'a1b2c3d4e5f6a7b8c9d0e1f2'
 const CID = 'c1c2c3c4c5c6c7c8c9c0d1d2'
-const invoke = (ch: string, args: unknown) => handlers.get(ch)!({} as never, args)
+/** The app window and its main frame: the only sender these handlers answer. */
+const APP_FRAME = {}
+const APP_WIN = { isDestroyed: () => false, webContents: { mainFrame: APP_FRAME, send: () => {} } }
+const APP_EVENT = { sender: APP_WIN.webContents, senderFrame: APP_FRAME }
+const invoke = (ch: string, args: unknown) => handlers.get(ch)!(APP_EVENT as never, args)
 
 const PNG_B64 = Buffer.concat([
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -49,7 +53,7 @@ function goodDraft(over: Record<string, unknown> = {}): Record<string, unknown> 
 beforeEach(() => {
   handlers.clear()
   vi.clearAllMocks()
-  registerCanvasHandlers(() => null)
+  registerCanvasHandlers(() => APP_WIN as never)
 })
 
 describe('registration', () => {

@@ -5,7 +5,7 @@
  * shape is unit-testable without the full pty-manager dependency graph.
  *
  * The wrapper is a has-session conditional: `if tmux has-session -t
- * =ccc-<safeSid>; then tmux attach; else tmux new-session -s ccc-<safeSid>
+ * '=ccc-<safeSid>'; then tmux attach; else tmux new-session -s ccc-<safeSid>
  * <cmd>; fi`. The attach branch reattaches a still-running claude; the
  * fresh branch (reached when the session is gone, e.g. after a remote
  * reboot) creates a new one, resuming the conversation via `--continue`
@@ -15,6 +15,14 @@
  *
  * No default export (project convention).
  */
+
+import {
+  TMUX_WHEEL_UP_KEYNAME,
+  TMUX_WHEEL_DOWN_KEYNAME,
+  TMUX_WHEEL_EXIT_KEYNAME,
+  TMUX_WHEEL_LINES_PER_NOTCH,
+  TMUX_WHEEL_NOOP_COMMAND,
+} from '../shared/tmux-wheel'
 
 /**
  * Allowlist for a tmux binary path (adversarial review, #242 BLOCKER).
@@ -109,6 +117,138 @@ export const STAGED_TMUX_BIN_EXPR = '"$HOME"/.claude/bin/tmux'
 export const ON_PATH_TMUX_BIN_EXPR = 'command tmux'
 
 /**
+ * #85 — the tmux key bindings that turn CCC's private wheel keys into
+ * copy-mode scrollback movement. See src/shared/tmux-wheel.ts for the whole
+ * design (why the wheel breaks under tmux, why `mouse on` is not the fix, and
+ * which bytes the renderer writes).
+ *
+ * Ten commands across three key tables:
+ *
+ *   root           every key -> no-op  (nothing can leak to the pane; the
+ *                                       down/exit keys keep this binding, and
+ *                                       the up key's is overwritten last)
+ *   copy-mode      exit -> `send -X cancel`
+ *                  up   -> `send -X -N 3 scroll-up`
+ *                  down -> `send -X -N 3 scroll-down`
+ *   copy-mode-vi   the same three (see `inCopyMode` below for why both tables)
+ *   root           up   -> `copy-mode -e`  (ENTER the scrollback view; `-e`
+ *                                           leaves it again on its own once
+ *                                           the user is back at the live
+ *                                           bottom) -- LAST, see the ordering
+ *                                           note on `commands`
+ *
+ * Each binding is a SINGLE tmux command. A multi-command binding needs a `\;`
+ * INSIDE the binding, and a `;` that reaches tmux unescaped does not bind — it
+ * ends the bind-key command and RUNS the rest immediately (`not in a mode`,
+ * observed against tmux 3.4 on 2026-09-20). The renderer compensates for the
+ * root binding being entry-only by sending the up-key twice on the first notch.
+ *
+ * WHY THESE RUN BESIDE THE SESSION OPTIONS, NOT ONCE UP FRONT. `bind-key` is
+ * server-scoped and needs no target, so hoisting it ahead of the whole
+ * has-session conditional looks free — and silently does nothing: a tmux server
+ * with no sessions EXITS as soon as its last client leaves, so each hoisted
+ * `bind-key` started a server, bound the key, and took the binding down with it
+ * (verified 2026-09-20 — the keys arrived at the pane as raw bytes). They have
+ * to run where a session already exists: the attach branch's pre-attach options
+ * and the fresh pane's own options.
+ *
+ * That means three copies on one command line, so the six bindings ride ONE
+ * tmux invocation, separated by `\;` arguments, and use tmux's standard short
+ * aliases (`bind`/`set`/`send`). The line is read by the remote tty in
+ * canonical mode, where anything past ~4 KiB is silently truncated — with the
+ * full names and one invocation each this fix alone added ~1.4 KiB.
+ *
+ * The `\;` survives both quoting levels: the outer login shell (attach branch)
+ * and tmux's own `sh -c` inside `new-session` (fresh branch, where the whole
+ * inner command is singleQuote'd and the backslash therefore reaches that
+ * inner shell intact) each turn `\;` into a lone `;` ARGUMENT, which is what
+ * tmux's parser splits commands on.
+ *
+ * SCOPE. Unlike the session options beside them these bindings are visible to
+ * the user's other tmux sessions on the same host. Accepted deliberately: the
+ * keys are ctrl+alt+F10/F11/F12, which nothing else binds, and tmux has no
+ * session-scoped binding table — the `key-table` session option REPLACES the
+ * root table rather than adding to it, which would silently drop every other
+ * root binding the user has.
+ *
+ * Trust posture is unchanged from the options beside it (#242): `tmuxBinToken`
+ * is one of the two compile-time binary expressions, every other operand is a
+ * compile-time literal, and no wire-reported value reaches the command. Errors
+ * are swallowed (`2>/dev/null`) so an old tmux that rejects a binding still
+ * falls through to launching claude — the wheel is worth less than the session.
+ */
+export function buildTmuxWheelBindings(tmuxBinToken: string): string {
+  const bind = (table: string, key: string, command: string): string =>
+    `bind -T ${table} ${key} ${command}`
+  const scroll = (direction: 'up' | 'down'): string =>
+    `send -X -N ${TMUX_WHEEL_LINES_PER_NOTCH} scroll-${direction}`
+  // BOTH copy-mode tables, not just the one `mode-keys emacs` should have
+  // selected. That option is set with an error-swallowed `set-option -w`, and a
+  // swallowed failure here does not degrade gracefully -- it strands the user
+  // IN copy-mode with the leave key unbound, eating every keystroke. Observed
+  // for real on the attach branch (2026-09-20), where the window target had to
+  // be corrected; covering both tables means the wheel no longer depends on
+  // that option landing at all.
+  const inCopyMode = (table: string): string[] => [
+    bind(table, TMUX_WHEEL_EXIT_KEYNAME, 'send -X cancel'),
+    bind(table, TMUX_WHEEL_UP_KEYNAME, scroll('up')),
+    bind(table, TMUX_WHEEL_DOWN_KEYNAME, scroll('down')),
+  ]
+  // ORDER IS THE SAFETY PROPERTY (adversarial review, 2026-09-20). tmux runs a
+  // `\;` list until the FIRST failure and KEEPS what already ran -- it is not
+  // all-or-nothing, and `2>/dev/null` hides which command stopped it. Two
+  // partial states were reproduced on tmux 3.4:
+  //   - nothing bound at all      -> tmux forwards the keys to the PANE, i.e.
+  //                                  raw `ESC [ 24;7~` typed at claude.
+  //   - root bound, copy-mode not -> the user ENTERS the scrollback view with
+  //                                  no leave key, and CCC has the status line
+  //                                  off, so their typing vanishes with no hint.
+  // So the list is ordered worst-last: every key is first bound to the silent
+  // no-op (nothing can leak from here on), then the copy-mode tables get their
+  // leave key BEFORE their scroll keys, and only the very last command turns
+  // the up-key into the copy-mode ENTRY. Any prefix of this list is safe: the
+  // wheel does less, never more, and it can never open a view it cannot close.
+  const commands = [
+    bind('root', TMUX_WHEEL_EXIT_KEYNAME, TMUX_WHEEL_NOOP_COMMAND),
+    bind('root', TMUX_WHEEL_DOWN_KEYNAME, TMUX_WHEEL_NOOP_COMMAND),
+    bind('root', TMUX_WHEEL_UP_KEYNAME, TMUX_WHEEL_NOOP_COMMAND),
+    ...inCopyMode('copy-mode'),
+    ...inCopyMode('copy-mode-vi'),
+    bind('root', TMUX_WHEEL_UP_KEYNAME, 'copy-mode -e'),
+  ].join(' \\; ')
+  return `${tmuxBinToken} ${commands} 2>/dev/null`
+}
+
+/**
+ * #85 — the hard ceiling on the launch line, and what CCC drops to stay under
+ * it (adversarial review, 2026-09-20).
+ *
+ * The line is typed into the remote shell through a PTY. A tty in CANONICAL
+ * mode has a 4096-byte line limit and TRUNCATES silently past it; an
+ * interactive bash with readline reads it raw and survives, but `/bin/sh`
+ * (dash) and a non-readline bash do not — and `sh` is a first-class choice for
+ * a container runtime (`<engine> exec -it <name> sh`), where an Alpine image
+ * has no bash at all. A truncation lands mid-line, plausibly inside the
+ * single-quoted inner command, leaving the remote shell sitting at a `> `
+ * continuation prompt forever. Neither tmux-launch-failure regex in
+ * pty-manager matches a `> ` prompt, so nothing recovers it: the session
+ * reports claude-running and claude never starts.
+ *
+ * Measured on this builder: pre-#85 the worst case (every flag the app
+ * composes, plus `--extra-args` at its enforced 512-char maximum) was 2837
+ * bytes — under the limit and therefore never a problem. #85's bindings ride
+ * the line THREE times (once before the attach, once in each of the two fresh
+ * creates), and that same worst case became 4473: past the ceiling, entirely
+ * because of this feature. So the bindings — by far the most expendable thing
+ * on the line — are what goes when the result would come close, and such a
+ * session launches with pre-#85 wheel behaviour instead of not launching.
+ *
+ * 3800 keeps the wheel for every ordinary command (a full flag set with no
+ * extra args measures ~3200) while leaving ~300 bytes under the 4096 ceiling.
+ */
+export const TMUX_LAUNCH_LINE_BUDGET = 3800
+
+/**
  * Sanitize a CCC session id into a tmux-safe session name. Mirrors the
  * `safeSid` rule in ssh-shim.ts (generateRemoteSetupScript / getSshSettingsPath)
  * so the same sessionId maps to the same identifier everywhere it is
@@ -159,18 +299,29 @@ export interface TmuxLaunchInput {
    * be exported as separate tokens before the tmux binary token, because
    * tmux's own launch environment does not come from this command line.
    *
-   * IMPORTANT: pass the BARE claude command WITHOUT `--continue`. This
-   * builder appends `--continue` itself, and ONLY on the fresh-create
-   * branch of the has-session wrapper (see `reconnect` below and
-   * buildTmuxLaunchCommand's doc comment) -- never on the attach branch,
-   * where a second claude in an already-live pane would be wrong.
+   * IMPORTANT: pass the BARE claude command WITHOUT `--continue`: the
+   * line a first connect's fresh create runs. On a reconnect the fresh
+   * create runs `continueCmd` instead (see `reconnect` below and
+   * buildTmuxLaunchCommand's doc comment) -- never the attach branch, where
+   * a second claude in an already-live pane would be wrong.
    */
   innerCmd: string
+  /**
+   * The same launch line with `--continue` among the app's own options,
+   * AHEAD of the user's extra args, which stay the last words on the line
+   * (pty-manager's claudeCmdWith('--continue')): what the fresh create runs
+   * on a reconnect, as given. This builder never adds the flag to a line
+   * itself, so an option among the user's words that takes a value can never
+   * take the app's flag as it. Required when `reconnect` is true: the build
+   * is refused without it (the caller then writes the bare launch, with the
+   * flag placed the same way).
+   */
+  continueCmd?: string
   /**
    * SSH tmux enhancement (item 6 — silent-blank-chat fix): true when this
    * spawn respawns a session that had previously reached claude-running
    * (SSHOptions.reconnect). Gates whether the wrapper's FRESH-create branch
-   * appends `--continue` to `innerCmd`.
+   * runs `continueCmd` (the line carrying `--continue`) instead of `innerCmd`.
    *
    * The bug this closes: the pre-enhancement wrapper was `new-session -A`,
    * which cannot tell "attach to the still-running claude" from "the tmux
@@ -194,13 +345,13 @@ export interface TmuxLaunchInput {
  * session is still alive, attach to it" apart from "the session is gone
  * (remote reboot), create a fresh one and resume the conversation". Produces,
  * for a tier-1 (`staged: false`) binary (#546 mouse-off elided as `<mo>` =
- * `command tmux set-option -t =ccc-<sid> mouse off 2>/dev/null`):
- *   `if command tmux has-session -t =ccc-<sid> 2>/dev/null; then`
- *   ` <mo>; command tmux attach -t =ccc-<sid> || <fresh>;`
+ * `command tmux set-option -t '=ccc-<sid>' mouse off 2>/dev/null`):
+ *   `if command tmux has-session -t '=ccc-<sid>' 2>/dev/null; then`
+ *   ` <mo>; command tmux attach -t '=ccc-<sid>' || <fresh>;`
  *   ` else <fresh>; fi`   where <fresh> =
- *   ` command tmux new-session -s ccc-<sid> '<mo>; <innerCmd[ --continue]>'`
- * Every `-t` operand carries tmux's `=` EXACT-match prefix; the `-s` NAME does
- * not (see `name` / `target` below).
+ *   ` command tmux new-session -s ccc-<sid> '<mo>; <innerCmd | continueCmd>'`
+ * Every `-t` operand carries tmux's `=` EXACT-match prefix, single-quoted; the
+ * `-s` NAME does not (see `name` / `target` below).
  * and for a tier-2/3/4 (`staged: true`) binary the identical shape with
  * `"$HOME"/.claude/bin/tmux` as the token. The leading token is literally
  * `ON_PATH_TMUX_BIN_EXPR` / `STAGED_TMUX_BIN_EXPR`, NEVER a value this
@@ -208,13 +359,15 @@ export interface TmuxLaunchInput {
  * wire-reported path reaches the command). `has-session`/`attach`/
  * `new-session`/`then`/`else`/`fi`/`2>/dev/null` are all compile-time
  * literals with no operand an attacker controls; `ccc-<sid>` is safeSid-
- * sanitized; `<innerCmd>` is single-quoted exactly as before.
+ * sanitized; `<innerCmd>` / `<continueCmd>` is single-quoted exactly as before.
  *
- * `--continue` is appended to the FRESH-create branch's inner command only
- * (never the attach branch, never on a first connect) — see TmuxLaunchInput.
- * reconnect. That is the whole silent-blank-chat fix: on a reconnect where
- * the remote session vanished, the fresh claude resumes the conversation;
- * on an attach it does not double-launch.
+ * `--continue` rides the FRESH-create branch's inner command only (never the
+ * attach branch, never on a first connect) — see TmuxLaunchInput.reconnect —
+ * as part of the caller's `continueCmd`, which places it ahead of the user's
+ * extra args: this builder never adds it to a line. That is the whole
+ * silent-blank-chat fix: on a reconnect where the remote session vanished,
+ * the fresh claude resumes the conversation; on an attach it does not
+ * double-launch.
  *
  * #242 round-3 correction (I3): an earlier version took a `tmuxBin` string
  * here for the `staged:
@@ -269,8 +422,31 @@ export function buildTmuxLaunchCommand(input: TmuxLaunchInput): string {
    * agent believing it is theirs. tmux's `=` prefix takes only an exact match
    * and is standard target syntax on every tmux the fleet runs (3.x across the
    * fleet, plus the pinned static build tiers 3/4 stage).
+   *
+   * SINGLE-QUOTED for the remote shell (WP2 final fix batch, the Mac T6 live
+   * run). This line is typed into the remote LOGIN shell, and zsh (the macOS
+   * default) expands an unquoted word that begins with `=` to the path of the
+   * command named by the rest of the word (its EQUALS option, on by default):
+   * `-t =ccc-<sid>` failed with `zsh: ccc-<sid> not found`, which aborts the
+   * whole command line, so claude never started in a tmux-wrapped SSH session
+   * on a Mac. Quoted, the POSIX-family shells (sh, bash, dash, zsh) all hand
+   * tmux the same `=ccc-<sid>` bytes: single quotes are literal in each. (fish
+   * and tcsh are out of scope for the whole wrapper, which is `if/then/fi`
+   * syntax neither runs.) cmd.exe does NOT remove single quotes, so this
+   * builder must not be reached for a Windows remote, and it is not: with
+   * `remoteOs: 'windows'` the setup hard-codes `tmux=none`
+   * (getWindowsRemoteSetupCommand, ssh-shim.ts) and tier-3/4 staging is gated
+   * off (`!isWindowsRemote`, pty-manager.ts); with `'auto'` it is reached only
+   * after the POSIX setup or staging script reported a tmux binary through
+   * its nonce-checked sentinel, which a cmd.exe or PowerShell login shell
+   * cannot run.
+   * `windowTarget` is the WINDOW form (the same exact session plus a trailing
+   * `:`, see the `w` note below), quoted as one word for the same reason.
+   * `name` is `ccc-<safeSid>`, `[A-Za-z0-9_-]` only, so the quoting never has
+   * an embedded quote to escape; singleQuote handles one anyway.
    */
-  const target = `=${name}`
+  const target = singleQuote(`=${name}`)
+  const windowTarget = singleQuote(`=${name}:`)
   // #546: force mouse mode OFF for CCC's own tmux session so classic
   // drag-selection works even when the remote user's ~/.tmux.conf has
   // `set -g mouse on` -- with mouse on, tmux captures the drag and xterm never
@@ -303,20 +479,63 @@ export function buildTmuxLaunchCommand(input: TmuxLaunchInput): string {
   //     name, a swallowed error), interval 0 stops the timed CLOCK REPAINT that
   //     is PTY output resetting the watchdog's silence clock every ~15s. The bar
   //     no longer flashes the session "working". Belt-and-braces to `status off`.
-  const sessionOpts = (t: string): string =>
+  //   mode-keys emacs — #85, pins WHICH copy-mode key table the wheel bindings
+  //     below have to cover. A remote `~/.tmux.conf` with `set -g mode-keys vi`
+  //     would route copy-mode keys to `copy-mode-vi` instead, and the wheel
+  //     would stop scrolling on exactly those hosts. Window-scoped (`-w`), so
+  //     the user's other sessions keep their own mode-keys.
+  //
+  // `w` is the WINDOW-target prefix, and it is NOT the session one with `-w`
+  // bolted on: `set-option -w -t '=ccc-<sid>'` fails outright ("no such window",
+  // observed 2026-09-20 — a session name is not a window target, and the error
+  // is swallowed, so the option silently did not land on the attach branch).
+  // The window form is the same `=`-exact session plus a trailing `:`
+  // (`windowTarget`), which resolves to that session's CURRENT window while
+  // keeping the exact-match guarantee #242 added to every other `-t` here.
+  //   key-table root — #85, and the reason the wheel bindings are reachable at
+  //     all. `key-table` is a SESSION option naming which table tmux consults
+  //     for an un-prefixed key; a remote `~/.tmux.conf` that builds a modal
+  //     setup with `set -g key-table <custom>` means the `root` table is never
+  //     consulted, so every wheel key would be forwarded to the pane as raw
+  //     escape bytes — the #85 bug restored, on exactly the hosts whose owner
+  //     customised tmux most. Session-scoped, so their other sessions keep
+  //     their custom table.
+  const sessionOpts = (t: string, w: string, wheel: boolean): string =>
     `${tmuxBinToken} set-option ${t}mouse off 2>/dev/null; ` +
     `${tmuxBinToken} set-option ${t}status off 2>/dev/null; ` +
-    `${tmuxBinToken} set-option ${t}status-interval 0 2>/dev/null`
-  const mouseOff = sessionOpts(`-t ${target} `)
-  const mouseOffInPane = sessionOpts('')
+    `${tmuxBinToken} set-option ${t}status-interval 0 2>/dev/null` +
+    (wheel
+      ? `; ${tmuxBinToken} set-option ${t}key-table root 2>/dev/null; ` +
+        `${tmuxBinToken} set-option -w ${w}mode-keys emacs 2>/dev/null; ` +
+        buildTmuxWheelBindings(tmuxBinToken)
+      : '')
+  /**
+   * #85 — leave copy-mode before attaching. copy-mode is PANE state, not client
+   * state: it survives a dropped connection, an app restart and the detach, and
+   * the renderer's own "are we scrolled back" belief starts false in a new
+   * process. Reproduced on tmux 3.4 — scroll up, drop the link, reattach, and
+   * every keystroke goes to the scrollback viewer with the status line off and
+   * nothing on screen to say why. #85 is what makes this the NORMAL case: the
+   * wheel now opens copy-mode, where it used to take a deliberate `C-b [`.
+   * `-X cancel` on a pane that is not in a mode is an error, swallowed.
+   */
+  const leaveCopyMode = `${tmuxBinToken} send-keys -t ${windowTarget} -X cancel 2>/dev/null`
+  const buildAttachOpts = (wheel: boolean): string =>
+    `${sessionOpts(`-t ${target} `, `-t ${windowTarget} `, wheel)}${wheel ? `; ${leaveCopyMode}` : ''}`
   // Fresh-create branch only: resume the prior conversation on a reconnect
-  // where the remote session was gone. Appended to innerCmd BEFORE quoting so
-  // it rides inside tmux's single `<shell-cmd>` argument, next to `claude`.
-  const claudeInner = input.reconnect ? `${input.innerCmd} --continue` : input.innerCmd
+  // where the remote session was gone, with the caller's line that carries
+  // --continue ahead of the user's extra args (TmuxLaunchInput.continueCmd),
+  // as given, quoted below so it rides inside tmux's single `<shell-cmd>`
+  // argument. No line has the flag added to it here: one ending with the
+  // user's words would hand it to an option among them as its value.
+  if (input.reconnect && typeof input.continueCmd !== 'string') {
+    throw new Error('a reconnect needs the launch line that carries --continue')
+  }
+  const claudeInner = input.reconnect ? input.continueCmd! : input.innerCmd
   // The mouse-off runs INSIDE the freshly-created pane (where the session is
   // live and addressable), then claude; both ride tmux's single quoted arg.
-  const freshInner = `${mouseOffInPane}; ${claudeInner}`
-  const fresh = `${tmuxBinToken} new-session -s ${name} ${singleQuote(freshInner)}`
+  const buildFresh = (wheel: boolean): string =>
+    `${tmuxBinToken} new-session -s ${name} ${singleQuote(`${sessionOpts('', '', wheel)}; ${claudeInner}`)}`
   // has-session/attach is NOT atomic: the session can die (claude exits, remote
   // reboots) in the gap between `has-session` returning 0 and `attach` running
   // (measured ~10ms on a real host), and a bare `attach` then fails with
@@ -329,11 +548,21 @@ export function buildTmuxLaunchCommand(input: TmuxLaunchInput): string {
   // shell (server reachable — has-session just returned 0) BEFORE attaching, so
   // a reattach to a session created by an older CCC (or before this fix) is also
   // forced mouse-off.
-  return (
-    `if ${tmuxBinToken} has-session -t ${target} 2>/dev/null; ` +
-    `then ${mouseOff}; ${tmuxBinToken} attach -t ${target} || ${fresh}; ` +
-    `else ${fresh}; fi`
-  )
+  const assemble = (wheel: boolean): string => {
+    const fresh = buildFresh(wheel)
+    return (
+      `if ${tmuxBinToken} has-session -t ${target} 2>/dev/null; ` +
+      `then ${buildAttachOpts(wheel)}; ${tmuxBinToken} attach -t ${target} || ${fresh}; ` +
+      `else ${fresh}; fi`
+    )
+  }
+  // #85: the wheel is the most expendable thing on this line, so it is what
+  // goes when the line would come close to the remote tty's canonical-mode
+  // truncation (see TMUX_LAUNCH_LINE_BUDGET). Dropping it costs the user
+  // pre-#85 wheel behaviour on a session with an unusually long claude
+  // command; keeping it would cost them the session.
+  const withWheel = assemble(true)
+  return withWheel.length <= TMUX_LAUNCH_LINE_BUDGET ? withWheel : assemble(false)
 }
 
 /**

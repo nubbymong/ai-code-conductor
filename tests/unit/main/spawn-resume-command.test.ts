@@ -16,7 +16,14 @@
 import { describe, it, expect, vi } from 'vitest'
 import * as os from 'os'
 import * as path from 'path'
-import { buildClaudeLaunchCommand, resolveResumeLaunch, recoverOrphanResumeLaunch, buildResumeTranscriptPath } from '../../../src/main/spawn-claude-command'
+import { LAUNCHER_PROGRAM_LOOKUP, buildClaudeLaunchCommand, resolveResumeLaunch, recoverOrphanResumeLaunch, buildResumeTranscriptPath } from '../../../src/main/spawn-claude-command'
+
+// The Windows picker goldens assume node.exe is found (pickerNodeFound,
+// 2.1.1-beta.3): answered here, never by this runner's PATH.
+vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/windows-programs')>()
+  return { ...actual, findOnWindowsPath: (...a: Parameters<typeof actual.findOnWindowsPath>) => (a[0].length === 1 && a[0][0] === 'node.exe' ? 'C:\\nodejs\\node.exe' : actual.findOnWindowsPath(...a)) }
+})
 
 const CWD = 'F:\\proj\\worktree'
 const CLAUDE = 'C:\\bin\\claude.cmd'
@@ -52,22 +59,32 @@ function goldenNoResume(opts: {
   // `$(...)`/backticks — a path containing either executed at launch. The
   // shape is otherwise byte-identical to the pre-refactor construction.
   const quotedBin = `'${claudeBin.replace(/'/g, win32 ? "''" : "'\\''")}'`
+  // 2.1.1-beta.3: a line that starts a launcher other than an .exe sets the session's lookup again first.
+  const lookup = win32 && !/\.exe$/i.test(claudeBin) ? LAUNCHER_PROGRAM_LOOKUP : ''
   const quotedPicker = pickerScript ? `'${pickerScript.replace(/'/g, win32 ? "''" : "'\\''")}'` : null
   if (useResumePicker) {
     // P1.1: the picker branch now also forwards agentsFlag (it previously
     // dropped --agents on a restored session). Oracle updated to the fixed shape.
     if (quotedPicker) {
+      // 2.1.1-beta.3 (S10): off Windows the line asks the session's shell
+      // for node as a program (an absolute path to an executable file, no
+      // alias or function) and picks the program with it: the picker by that
+      // node when it finds one, else a notice and Claude Code directly; the
+      // options follow once. Windows decides before the line (node.exe is
+      // answered as found by the mock above, and started by that full
+      // path). Either way the line first names Claude Code for the picker,
+      // which starts that one.
       return win32
-        ? `Set-Location '${escapedCwd}'; node ${quotedPicker}${agentsFlag}${extraFlags}; exit`
-        : `cd '${posixCwd}' && node ${quotedPicker}${agentsFlag}${extraFlags}; exit`
+        ? `Set-Location -LiteralPath '${escapedCwd}'; $env:CCC_CLAUDE_BIN = ${quotedBin}; & 'C:\\nodejs\\node.exe' ${quotedPicker}${agentsFlag}${extraFlags}; exit`
+        : `cd '${posixCwd}' && export CCC_CLAUDE_BIN=${quotedBin} && if { unalias node; command -v node; } >/dev/null 2>&1; then set -- node ${quotedPicker}; else printf '%s\\n' 'Node.js was not found, so the resume list was skipped.'; set -- "$CCC_CLAUDE_BIN"; fi && "$@"${agentsFlag}${extraFlags}; exit`
     } else {
       return win32
-        ? `Set-Location '${escapedCwd}'; & ${quotedBin}${agentsFlag}${extraFlags}; exit`
+        ? `Set-Location -LiteralPath '${escapedCwd}'; ${lookup}& ${quotedBin}${agentsFlag}${extraFlags}; exit`
         : `cd '${posixCwd}' && ${quotedBin}${agentsFlag}${extraFlags}; exit`
     }
   }
   return win32
-    ? `Set-Location '${escapedCwd}'; & ${quotedBin}${agentsFlag}${extraFlags}; exit`
+    ? `Set-Location -LiteralPath '${escapedCwd}'; ${lookup}& ${quotedBin}${agentsFlag}${extraFlags}; exit`
     : `cd '${posixCwd}' && ${quotedBin}${agentsFlag}${extraFlags}; exit`
 }
 
@@ -110,7 +127,7 @@ describe('buildClaudeLaunchCommand — GOLDEN (no resumeUuid, byte-identical)', 
       platform: 'win32', cwd: "F:\\o'brien", claudeBin: CLAUDE,
       extraFlags: '', agentsFlag: '', useResumePicker: false, pickerScript: null,
     })
-    expect(out).toContain("Set-Location 'F:\\o''brien'")
+    expect(out).toContain("Set-Location -LiteralPath 'F:\\o''brien'")
   })
 
   it('uses clean single-escape for posix cwds with a quote (fixes the old double-escape)', () => {
@@ -164,7 +181,7 @@ describe('buildClaudeLaunchCommand — RESUME (resumeUuid present)', () => {
     expect(out).not.toContain('resume-picker.js')
     expect(out).not.toContain('node ')
     // direct claude launch with --resume first
-    expect(out).toBe(`Set-Location '${CWD.replace(/'/g, "''")}'; & '${CLAUDE}' --resume ${UUID}${AGENTS}${EXTRA}; exit`)
+    expect(out).toBe(`Set-Location -LiteralPath '${CWD.replace(/'/g, "''")}'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CLAUDE}' --resume ${UUID}${AGENTS}${EXTRA}; exit`)
     // ordering: --resume precedes --settings / --mcp-config / --agents
     expect(out.indexOf('--resume')).toBeLessThan(out.indexOf('--settings'))
     expect(out.indexOf('--resume')).toBeLessThan(out.indexOf('--agents'))
@@ -629,5 +646,20 @@ describe('buildResumeTranscriptPath — canonical ~/.claude/projects path', () =
 
   it('returns null for an empty cwd', () => {
     expect(buildResumeTranscriptPath('', UUID2, () => HOME)).toBeNull()
+  })
+
+  // P3.16a round 2 (Q1): the folder Claude Code writes the resumed conversation to.
+  it('a launch folder whose name is longer than 200 characters: the name cut at 200 with the hash Claude Code adds', () => {
+    const out = buildResumeTranscriptPath('C:\\Users\\jane\\' + 'a'.repeat(190), UUID2, () => HOME)
+    expect(out).toBe(path.join(HOME, '.claude', 'projects', 'C--Users-jane-' + 'a'.repeat(186) + '-vwg8id', `${UUID2}.jsonl`))
+  })
+
+  it('a launch folder reached through a link: the folder it points to (on every platform, fixer 3, F6)', () => {
+    const realpath = (p: string) => (p === '/home/u/link' ? '/data/proj' : p)
+    const out = buildResumeTranscriptPath('/home/u/link', UUID2, () => HOME, { realpath })
+    expect(out).toBe(path.join(HOME, '.claude', 'projects', '-data-proj', `${UUID2}.jsonl`))
+    const junction = (p: string) => (p === 'C:\\w\\link' ? 'C:\\w\\Target Real' : p)
+    expect(buildResumeTranscriptPath('C:\\w\\link', UUID2, () => HOME, { realpath: junction }))
+      .toBe(path.join(HOME, '.claude', 'projects', 'C--w-Target-Real', `${UUID2}.jsonl`))
   })
 })

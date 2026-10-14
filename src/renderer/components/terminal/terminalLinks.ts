@@ -1,4 +1,5 @@
 import type { ILink } from '@xterm/xterm'
+import { isContextMenuGesture } from '../../lib/pointer'
 
 /**
  * #21: decorate the links produced by WebLinksAddon so they DO NOT draw a hover
@@ -19,11 +20,12 @@ import type { ILink } from '@xterm/xterm'
  * duration of `loadAddon` and passes each produced link set through here — we
  * reuse the addon's proven matching and only augment the ILink objects.
  *
- * `activate` is replaced so clicking opens via the OS browser (the addon's
- * default `window.open` is denied by the main window). `hover`/`leave` record
- * the URI under the cursor so the right-click menu can offer "Copy link
- * address" for the exact link the linkifier matched (any http/https URI —
- * copy has no scheme gate; opening is https-gated in main).
+ * `activate` is replaced so a plain left click opens via the OS browser (the
+ * addon's default `window.open` is denied by the main window; other buttons
+ * and the macOS Ctrl + click menu gesture open nothing, aicc_planning#126).
+ * `hover`/`leave` record the URI under the cursor so the right-click menu can
+ * offer "Copy link address" for the exact link the linkifier matched (any
+ * http/https URI — copy has no scheme gate; opening is https-gated in main).
  */
 export interface TerminalLinkActions {
   /** Open the URI (renderer → shell.openExternal; main re-validates https-only). */
@@ -50,7 +52,14 @@ export function decorateTerminalLinks(
     // cursor is managed by createLinkHoverControl instead, which rides the same
     // hover/leave callbacks but debounces the leave, so the churn is invisible.
     decorations: { underline: false, pointerCursor: false },
-    activate: (_e: MouseEvent, uri: string) => actions.open(uri),
+    // aicc_planning#126: xterm calls activate on the mouseup of ANY button over
+    // a link, so a right-click (whose job is the menu with "Copy link address")
+    // also opened the browser. Only a plain left click opens: not the right or
+    // middle button, and not macOS Ctrl + click, the context-menu gesture.
+    activate: (e: MouseEvent, uri: string) => {
+      if (e.button !== 0 || isContextMenuGesture(e)) return
+      actions.open(uri)
+    },
     hover: (_e: MouseEvent, uri: string) => actions.onHover(uri),
     leave: () => actions.onLeave(),
   }))

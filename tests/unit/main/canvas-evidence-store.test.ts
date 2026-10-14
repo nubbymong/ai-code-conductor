@@ -1,3 +1,4 @@
+// HOST QUARANTINE: plants symbolic links and hard links. [CI] [VM] only -- never run on the owner's machine.
 // Testing-mode EVIDENCE (M3), main-side: the ladder, the clamp, the rate gate,
 // the pack cap, the pending → lock → delete cascade, the read allow-list, the
 // pack name, and the run trail at submit.
@@ -366,7 +367,11 @@ describe('pending → lock → delete', () => {
     expect(fs.existsSync(pendingFile)).toBe(true)
 
     // Past the TTL it is exactly what sweepStalePendingEvidence would take.
-    expect(evidence.sweepOrphanEvidence(canvasId, new Set(), Date.now() + evidence.PENDING_EVIDENCE_TTL_MS + 1)).toBe(1)
+    // Dated from the file's own mtime, not Date.now(): the file system's clock
+    // and the process clock can differ by more than a millisecond (seen on a
+    // Windows CI runner), and the sweep measures age against the mtime.
+    const pastTtl = fs.statSync(pendingFile).mtimeMs + evidence.PENDING_EVIDENCE_TTL_MS + 1
+    expect(evidence.sweepOrphanEvidence(canvasId, new Set(), pastTtl)).toBe(1)
     expect(fs.existsSync(pendingFile)).toBe(false)
   })
 

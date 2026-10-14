@@ -21,7 +21,9 @@ import { generateId } from '../utils/id'
 import { buildCommandLine, commandSecretRef, commandSecretKey } from '../../shared/command-secret'
 import { isAllowedBrowserUrl } from '../../shared/browser-url'
 import { trackUsage } from '../stores/tipsStore'
-import { CODEX_MODELS } from '../codex-models'
+import { codexModelOptions, codexEffortSupported } from '../codex-models'
+import { typeIntoCodexComposer, codexPlanModeShown, type CodexTyping } from '../lib/codexComposer'
+import { useRegistryStore } from '../stores/registryStore'
 import { useResolvedTheme } from '../hooks/useThemeController'
 import { sessionCapabilities } from '../lib/session-capabilities'
 import { planBar, inapplicability, effectiveKind, type BandPlan } from './command-bar/layout'
@@ -39,6 +41,9 @@ import { useBandFolding, type FoldBand } from './command-bar/useBandFolding'
 import NotesTool, { type NotesToolHandle } from './command-bar/NotesTool'
 import { CommandIcon } from './command-icons'
 import { DEFAULT_COMMAND_COLOR } from '../lib/command-swatches'
+import { writeSessionInput } from './terminal/tmuxWheelScroll'
+import { usePasteHintStore } from '../stores/pasteHintStore'
+import { stripSpoofableText } from '../../shared/safe-text'
 
 // User-picked section colours are Mocha pastels tuned for dark surfaces;
 // rendered as bare text on the light theme they wash out. Darken them toward
@@ -56,11 +61,70 @@ export function openSettingsTab(tab: string): void {
 
 // -- Codex toolbar sub-components --
 
-const CODEX_PRESETS = ['read-only', 'standard', 'auto', 'unrestricted'] as const
+/** P3.8 (L2; round 2, PM1): 'plan' is Claude's Plan mode launch option
+ *  (read-only, then Codex's own /plan in its first ready prompt). */
+const CODEX_PRESETS = ['read-only', 'standard', 'plan', 'auto', 'unrestricted'] as const
 type CodexPreset = typeof CODEX_PRESETS[number]
 
+/** How long a pill says why a Codex command was not sent. */
+const CODEX_PILL_NOTE_MS = 6000
+
+/** How long the bar says why a partner button typed nothing into an SSH
+ *  partner (#86). Longer than a paste hint: the note asks the user to sign in
+ *  first, and it is read before the next press. */
+const PARTNER_NOTE_MS = 6000
+
+/** #86: the SSH partner connections that have reported their shell, as the
+ *  partner's PTY id -> its session's createdAt (a Restart or Retry bumps it,
+ *  and that is a new connection). Kept outside the component because App
+ *  remounts the bar on every tab switch, and main's state cannot say whether
+ *  a 'claude-running' partner reached its shell first. One small entry per
+ *  partner id, overwritten by its next connection. */
+const partnersAtShell = new Map<string, string>()
+
+/**
+ * P3.8 round 1 (L1, row 41; the default pending the owner's decision): on a
+ * live session the model pill opens Codex's own model-and-effort picker. Codex
+ * has no one-line command for a model or an effort (the VM probe: `/model
+ * <slug>` is sent as a message and there is no /effort), so a bare `/model` is
+ * typed, only at Codex's ready prompt (lib/codexComposer.ts); the choice is
+ * made in Codex's picker, keeping the conversation, and the strip then shows
+ * what Codex reports.
+ */
+function CodexModelPill({ sessionId, label }: { sessionId: string; label: string }) {
+  const [note, setNote] = React.useState<string | null>(null)
+  const pending = React.useRef<CodexTyping | null>(null)
+  React.useEffect(() => () => { pending.current?.cancel(); pending.current = null }, [sessionId])
+  React.useEffect(() => {
+    if (!note) return
+    const t = setTimeout(() => setNote(null), CODEX_PILL_NOTE_MS)
+    return () => clearTimeout(t)
+  }, [note])
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          const typing = typeIntoCodexComposer(sessionId, '/model')
+          if (typing.typed) { pending.current = typing; setNote(null) } else setNote(typing.reason ?? null)
+        }}
+        className="bg-base border border-surface1 rounded px-1.5 h-7 text-xs text-text"
+        title="Model and effort: opens Codex's own picker"
+        data-testid="codex-model-pill"
+      >
+        {label}
+      </button>
+      {note && <span className="text-[10px] text-overlay1" role="status" data-testid="codex-model-note">{note}</span>}
+    </div>
+  )
+}
+
+/** P3.8 (row 39): the registry's Codex models, as the session dialog offers
+ *  them ('' = Default: Codex's own choice). For a session with no live run:
+ *  the choice applies at its next start. */
 function CodexModelDropdown({ value, onChange }: { value: string; onChange: (next: string) => void }) {
   const [dirty, setDirty] = React.useState(false)
+  const registry = useRegistryStore((s) => s.registry)
   return (
     <div className="flex items-center gap-1">
       <select
@@ -68,25 +132,64 @@ function CodexModelDropdown({ value, onChange }: { value: string; onChange: (nex
         onChange={(e) => { setDirty(true); onChange(e.target.value) }}
         className="bg-base border border-surface1 rounded px-1.5 h-7 text-xs text-text"
       >
-        {CODEX_MODELS.map((m) => (<option key={m} value={m}>{m}</option>))}
+        {codexModelOptions(registry, value).map((m) => (<option key={m.value || 'default'} value={m.value}>{m.label}</option>))}
       </select>
       {dirty && <span className="text-[10px] text-overlay1">Restart session to apply</span>}
     </div>
   )
 }
 
-function PermissionsPresetDropdown({ value, onChange }: { value: CodexPreset; onChange: (next: CodexPreset) => void }) {
+/** How often a live Plan mode session's pill reads Codex's footer. */
+const PLAN_MODE_READ_MS = 1000
+
+/**
+ * P3.8 rounds 2 and 3 (PM1, T19): whether Codex's own footer shows its Plan
+ * mode, read from the session's live screen (the footer row under its
+ * composer, the session's models) while `active`; the last reading holds
+ * while no footer shows (a popup or a prompt is up). null until one is read.
+ */
+function useCodexPlanModeShown(sessionId: string, active: boolean): boolean | null {
+  const [shown, setShown] = React.useState<boolean | null>(null)
+  React.useEffect(() => {
+    setShown(null)
+    if (!active) return
+    const read = () => {
+      const now = codexPlanModeShown(sessionId)
+      if (now !== null) setShown(now)
+    }
+    read()
+    const t = setInterval(read, PLAN_MODE_READ_MS)
+    return () => clearInterval(t)
+  }, [sessionId, active])
+  return shown
+}
+
+function PermissionsPresetDropdown({ sessionId, live, launched, value, onChange }: { sessionId: string; live: boolean; launched?: CodexPreset; value: CodexPreset; onChange: (next: CodexPreset) => void }) {
   const [dirty, setDirty] = React.useState(false)
+  // P3.8 round 3 (PB1): a live run is compared with the preset it launched
+  // with (main's record, per run), so the hint and the label survive a
+  // remount: "Restart session to apply" while the choice differs from the
+  // run. Without that record (a stopped session) a change made here is.
+  const known = live && launched !== undefined
+  const pendingRestart = known ? launched !== value : dirty
+  // P3.8 rounds 2 and 3 (PM1): a Plan mode run starts read-only and is in
+  // Codex's Plan mode only while its footer says so; the pill says which,
+  // for a run launched in Plan mode and still set to it. Any other choice
+  // reads as chosen.
+  const truthful = known && launched === 'plan' && value === 'plan'
+  const planShown = useCodexPlanModeShown(sessionId, truthful)
+  const label = (p: CodexPreset): string => (p === 'plan' && truthful && planShown !== true ? 'read-only (Plan mode off)' : p)
   return (
     <div className="flex items-center gap-1">
       <select
         value={value}
         onChange={(e) => { setDirty(true); onChange(e.target.value as CodexPreset) }}
         className="bg-base border border-surface1 rounded px-1.5 h-7 text-xs text-text"
+        title={truthful ? (planShown === true ? "In Codex's Plan mode (read-only)" : 'Read-only; Codex is not in Plan mode: type /plan to plan, /permissions to change what it may do') : undefined}
       >
-        {CODEX_PRESETS.map((p) => (<option key={p} value={p}>{p}</option>))}
+        {CODEX_PRESETS.map((p) => (<option key={p} value={p}>{label(p)}</option>))}
       </select>
-      {dirty && <span className="text-[10px] text-overlay1">Restart session to apply</span>}
+      {pendingRestart && <span className="text-[10px] text-overlay1">Restart session to apply</span>}
     </div>
   )
 }
@@ -265,8 +368,60 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [webviewKey, webviewUrlsKey])
 
+  // #86: an SSH session's partner is its own connection to the host, and a
+  // partner button pressed with the partner closed is what opens it. A line
+  // typed while it connects goes into an ssh process that may be asking for a
+  // password, so typeIntoPty types nothing until main reports the partner's
+  // flow as 'shell-only'. That state is not proof of a shell prompt: main's
+  // idle fallback also reports it over a sign-in prompt it does not recognise
+  // (a verification code, a key passphrase) after 1.5 s, and over a password
+  // prompt once its auth hold ends (about 13.5 s). A press then types into
+  // that prompt. Accepted: the note below asks the user to sign in first and
+  // to press again only at the shell prompt. Read from main's flow state for
+  // the partner's PTY: pushed, and caught up once on mount.
+  //
+  // Main does not stay on 'shell-only': its claude UI latch is not gated on a
+  // shell-only PTY, so anything the partner prints with a rounded box rule
+  // (an assistant CLI run there, a lazygit or btop border, a pnpm update box)
+  // moves it to 'claude-running' for good. So the gate is "this connection
+  // has reported its shell" (partnersAtShell), not the state now. From
+  // 'shell-only' main moves a partner to nothing unsafe: its exit handler
+  // keeps 'shell-only', and the launch and post-command paths refuse partner
+  // ids. Any push other than the shell or that latch drops it (fail closed).
+  // A partner that reports 'claude-running' before its shell (a banner, MOTD
+  // or rc output with a rounded box) is never typed into: the note says to
+  // type the command in the partner view. The connection is the session record's
+  // createdAt: a Restart or Retry gives the partner a new connection, and main
+  // does not announce its 'connecting'. A ref for the state: it is read only
+  // at a press, for the note.
+  const partnerRemote = caps.partnerRunsOn === 'remote'
+  const partnerFlowState = useRef<string>('connecting')
+  const sessionCreatedAt = session?.createdAt
+  const partnerConnection = String(sessionCreatedAt ?? '')
+  useEffect(() => {
+    partnerFlowState.current = 'connecting'
+    const ssh = window.electronAPI?.ssh
+    if (!partnerRemote || !partnerSessionId || typeof ssh?.onFlowState !== 'function') return
+    if (partnersAtShell.get(partnerSessionId) !== partnerConnection) partnersAtShell.delete(partnerSessionId)
+    const note = (state: string) => {
+      partnerFlowState.current = state
+      if (state === 'shell-only') partnersAtShell.set(partnerSessionId, partnerConnection)
+      else if (state !== 'claude-running') partnersAtShell.delete(partnerSessionId)
+    }
+    let cancelled = false
+    let pushed = false
+    const off = ssh.onFlowState(partnerSessionId, (msg) => { pushed = true; note(msg.state) })
+    if (typeof ssh.getState === 'function') {
+      ssh.getState(partnerSessionId)
+        .then((cur) => { if (!cancelled && !pushed && cur?.state) note(cur.state) })
+        .catch(() => { /* not known: stays not at its shell */ })
+    }
+    return () => { cancelled = true; off() }
+  }, [partnerRemote, partnerSessionId, partnerConnection])
+
   /**
-   * Type a command into the appropriate PTY. The original behaviour, unchanged.
+   * Type a command into the appropriate PTY. The original behaviour, unchanged,
+   * except for an SSH partner that is not at its shell yet (above).
    *
    * `expectBleed` is set when we know the line starts a Windows GUI-subsystem
    * program (#379): it will `AttachConsole` to this pty's console and write its
@@ -279,7 +434,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
     const target = cmd.target || 'claude'
     const webViewUrl = cmd.webView?.enabled ? cmd.webView.url : null
     const writeTo = (ptyId: string) => {
-      window.electronAPI.pty.write(ptyId, fullCommand + '\r')
+      writeSessionInput(ptyId, fullCommand + '\r')
       if (expectBleed) scheduleBleedRepaints(ptyId)
       if (webViewUrl) startWebviewPolling(webViewUrl)
       else if (webviewUrls.length > 0) void probeWebviewUrls(webviewKey, webviewUrls)
@@ -289,6 +444,27 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
       // command a second time. TerminalView owns the xterm instance; it
       // listens for this and focuses the helper textarea.
       window.dispatchEvent(new CustomEvent('ccc:focus-terminal', { detail: { sessionId: ptyId } }))
+    }
+    if (target === 'partner' && partnerRemote && partnerSessionId && partnersAtShell.get(partnerSessionId) !== partnerConnection) {
+      // Show it (the press often starts its connection), type nothing, and say
+      // so. No queueing: the user signs in if asked and presses again at the
+      // shell prompt. The note follows the state now. A connection that
+      // failed never reaches 'shell-only': only a Restart opens it again.
+      // 'skipped' is not expected for a partner (the overlay offers Skip only
+      // in states a plain-shell partner never enters); if it happens, main
+      // moves it to 'shell-only' at its next prompt, and a Restart also works.
+      if (!isPartnerActive && onTogglePartner) onTogglePartner()
+      const host = stripSpoofableText(caps.remoteHost ?? 'the host', 200)
+      const state = partnerFlowState.current
+      usePasteHintStore.getState().show(sessionId, state === 'failed'
+        ? `The partner shell could not reach ${host}, so nothing was typed. Press Restart in the partner view to try again.`
+        : state === 'skipped'
+          ? `The partner shell on ${host} skipped its setup, so nothing was typed. Press Restart in the partner view to open it again.`
+          : state === 'claude-running'
+            ? `The partner shell on ${host} has not reported its shell prompt, so nothing was typed. Type the command in the partner view, or press Restart there and try again.`
+            : `The partner shell is connecting to ${host}. Sign in there if it asks, then press the button again once its shell prompt shows.`,
+      PARTNER_NOTE_MS)
+      return
     }
     if (target === 'partner' && !isPartnerActive && onTogglePartner && partnerSessionId) {
       onTogglePartner()
@@ -352,6 +528,10 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
    */
   const syncDecision = (cmd: CustomCommand, fullCommand: string): (() => void) | null => {
     if (effectiveKind(cmd, caps) !== 'shell') return () => typeIntoPty(cmd, fullCommand)
+    // #86: a line for a shell on another machine (an SSH tab's partner, or its
+    // own terminal) runs THERE. The probe and a captured run look at, and
+    // start, programs on this PC, so neither applies: it is typed, as always.
+    if (caps.runsOn(cmd.target || 'claude') === 'remote') return () => typeIntoPty(cmd, fullCommand)
     if (cmd.guiExePolicy === 'terminal') return () => typeIntoPty(cmd, fullCommand, true)
     // No probe available (an older preload, or a test harness that does not stub
     // it): type it, exactly as the button always did. The warning is an
@@ -852,14 +1032,37 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
         {(session?.provider ?? 'claude') === 'codex' && session?.codexOptions && (
           <>
             <div className="w-px h-4 mx-0.5 shrink-0" style={{ background: 'var(--border-subtle)' }} />
+            {/* Keyed by the run (P3.8 round 1, J4): a pill's "Restart session to
+                apply" goes with the Restart it asked for. */}
             <PermissionsPresetDropdown
+              key={`preset-${session.createdAt}`}
+              sessionId={session.id}
+              live={!session.ptyExited && !session.neverStarted}
+              launched={session.launchedCodexPreset}
               value={session.codexOptions.permissionsPreset ?? 'standard'}
               onChange={(next) => updateSession(session.id, { codexOptions: { ...session.codexOptions!, permissionsPreset: next } })}
             />
+            {!session.ptyExited && !session.neverStarted ? (
+              <CodexModelPill
+                key={`model-${session.id}`}
+                sessionId={session.id}
+                label={session.modelName
+                  ? `${session.modelName}${session.reasoningEffort ? ` ${session.reasoningEffort}` : ''}`
+                  : (session.codexOptions.model || 'Default')}
+              />
+            ) : (
             <CodexModelDropdown
-              value={session.codexOptions.model ?? 'gpt-5.5'}
-              onChange={(next) => updateSession(session.id, { codexOptions: { ...session.codexOptions!, model: next } })}
+              key={`model-${session.createdAt}`}
+              value={session.codexOptions.model ?? ''}
+              onChange={(next) => {
+                // As the session dialog: an effort the new model cannot run
+                // drops to Default rather than ride the next start.
+                const co = session.codexOptions!
+                const keep = codexEffortSupported(useRegistryStore.getState().registry, next, co.reasoningEffort)
+                updateSession(session.id, { codexOptions: { ...co, model: next || undefined, ...(keep ? {} : { reasoningEffort: undefined }) } })
+              }}
             />
+            )}
           </>
         )}
 

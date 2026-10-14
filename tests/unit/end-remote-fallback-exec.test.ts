@@ -38,6 +38,11 @@ vi.mock('child_process', async (importOriginal) => ({
 }))
 
 const { endSshRemote, _setSshTargetForTest } = await import('../../src/main/pty-manager')
+const { registerProvider } = await import('../../src/main/providers')
+const { ClaudeProvider } = await import('../../src/main/providers/claude')
+// End remote reaches the Claude SSH helpers through the registered provider
+// (WP2 PR 4): the real one, as the app registers it.
+registerProvider(new ClaudeProvider())
 
 /** Resolve the exec immediately with a clean exit, like a host that answered. */
 const execOk = () => execFile.mockImplementation((_bin: string, _args: string[], _opts: unknown, cb: (e: unknown) => void) => {
@@ -64,6 +69,21 @@ describe('endSshRemote — a fallback target reaches the host', () => {
     expect(execFile).not.toHaveBeenCalled()
   })
 
+  it('[host] the remote command comes from the registered Claude provider\'s SSH surface (WP2 PR 4: no deep import)', async () => {
+    const asked: string[] = []
+    registerProvider(Object.assign(Object.create(ClaudeProvider.prototype) as object, {
+      id: 'claude', displayName: 'Claude',
+      remoteTmuxKillCommand: (sid: string) => { asked.push(sid); return 'ROUTED-KILL' },
+    }) as never)
+    try {
+      await expect(endSshRemote('routed1', KEY_TARGET)).resolves.toBe('completed')
+      expect(asked).toEqual(['routed1'])
+      expect(remoteCommand()).toBe('ROUTED-KILL')
+    } finally {
+      registerProvider(new ClaudeProvider())
+    }
+  })
+
   it('with a fallback target it DOES dispatch the kill, to the saved host and user', async () => {
     await expect(endSshRemote('detached2', KEY_TARGET)).resolves.toBe('completed')
     expect(execFile).toHaveBeenCalledTimes(1)
@@ -74,7 +94,7 @@ describe('endSshRemote — a fallback target reaches the host', () => {
   it('the tmux session it kills is ccc-<sessionId>, computed from the input', async () => {
     const sid = 'a1b2c3d4e5f6a1b2c3d4e5f6'
     await endSshRemote(sid, KEY_TARGET)
-    expect(remoteCommand()).toContain(`kill-session -t =ccc-${sid}`)
+    expect(remoteCommand()).toContain(`kill-session -t '=ccc-${sid}'`)
     // ...and the sidecars for that same id, nothing wider.
     expect(remoteCommand()).toContain(`settings-${sid}.json`)
   })
@@ -93,8 +113,8 @@ describe('endSshRemote — a fallback target reaches the host', () => {
     const operands = [...cmd.matchAll(/kill-session -t (\S+)/g)].map((m) => m[1])
     expect(operands.length).toBeGreaterThan(0)
     for (const t of operands) {
-      expect(t).toBe('=ccc-a__tmux_kill-server___')
-      expect(t).toMatch(/^=ccc-[A-Za-z0-9_-]+$/)
+      expect(t).toBe("'=ccc-a__tmux_kill-server___'")
+      expect(t).toMatch(/^'=ccc-[A-Za-z0-9_-]+'$/)
     }
     // The injected command never becomes a command of its own.
     expect(cmd).not.toContain('; tmux kill-server')
@@ -115,7 +135,7 @@ describe('endSshRemote — a fallback target reaches the host', () => {
     const cmd = remoteCommand()
     const operands = [...cmd.matchAll(/kill-session -t (\S+)/g)].map((m) => m[1])
     expect(operands.length).toBeGreaterThan(0)
-    for (const t of operands) expect(t).toBe('=ccc-a')
+    for (const t of operands) expect(t).toBe("'=ccc-a'")
     expect(cmd).not.toMatch(/kill-session -t ccc-a(\s|$)/)
   })
 

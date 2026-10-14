@@ -36,7 +36,7 @@ import { NotificationsPoller } from '../github/session/notifications-poller'
 import { buildSessionContext } from '../github/session/session-context-service'
 import { extractFileSignals } from '../github/session/tool-call-inspector'
 import { scanTranscriptMessages } from '../github/session/transcript-scanner'
-import { loadTranscriptEvents } from '../github/session/transcript-loader'
+import { loadSessionTranscriptEvents } from '../github/session/codex-rollout-loader'
 import { emptyGitHubConfig, DEFAULT_AUTH_FEATURE_TOGGLES } from '../../shared/github-constants'
 import { buildOAuthScopeString } from '../github/auth/oauth-scope'
 import { reauthPlanForProfile } from '../github/auth/reauth-plan'
@@ -45,6 +45,7 @@ import { emitPrMerged } from '../channel-emitters'
 import { AiUsageScheduler } from '../github/copilot-usage'
 import { readConfig } from '../config-manager'
 import { logWarn } from '../debug-logger'
+import { appWindowSender } from './trusted-sender'
 
 // Binds repo + branch into the session registry without touching the label
 // that pty-manager set at spawn time. updateSessionMeta's patch type makes
@@ -61,7 +62,13 @@ interface RegisterDeps {
   getWindow: () => BrowserWindow | null
   loadSessions: LoadSessions
   saveSessions: SaveSessions
+  /** P3.12 (row 65): the rollout a Codex session's watcher holds (pty-manager),
+   *  which its Session Context reads; absent = none. */
+  codexRolloutFor?: (sessionId: string) => { path: string; sessionsDir: string } | null
 }
+
+/** What a refused request on an `{ ok }` channel is answered. */
+const NOT_APP_WINDOW = Object.freeze({ ok: false as const, error: 'not-app-window' })
 
 interface OAuthFlow {
   deviceCode: string
@@ -321,7 +328,20 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
   // (and clears any cache) when disabled, so this is safe unconditionally.
   aiUsageScheduler.start()
 
-  ipcMain.handle(IPC.GITHUB_AI_USAGE_GET, async (_e, force?: boolean) => {
+  // Every channel below answers only the app's own window, its main frame
+  // (trusted-sender.ts), checked before anything else runs. A refused request
+  // gets the channel's own empty or refused answer and one log line, which
+  // carries no part of the request. That answer is not always the shape the
+  // renderer's types declare: the app's own renderer, the only caller with
+  // the bridge, never receives one.
+  const trusted = appWindowSender(deps.getWindow)
+  const refused = <T>(what: string, answer: T): T => {
+    logWarn(`[github] ${what} refused: not the app window`)
+    return answer
+  }
+
+  ipcMain.handle(IPC.GITHUB_AI_USAGE_GET, async (e, force?: boolean) => {
+    if (!trusted(e)) return refused('ai usage', { report: null, status: 'error' as const, cycle: null })
     // Return the cached report + status if present, else drive a fresh fetch.
     // `force` (the popover Refresh button, a cycle-start change in Settings)
     // bypasses the cache so the user sees an up-to-date figure immediately
@@ -341,11 +361,13 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     }
   })
 
-  ipcMain.handle(IPC.GITHUB_CONFIG_GET, async () => {
+  ipcMain.handle(IPC.GITHUB_CONFIG_GET, async (e) => {
+    if (!trusted(e)) return refused('config read', null)
     return (await configStore.read()) ?? null
   })
 
-  ipcMain.handle(IPC.GITHUB_CONFIG_UPDATE, async (_e, patch: Partial<GitHubConfig>) => {
+  ipcMain.handle(IPC.GITHUB_CONFIG_UPDATE, async (e, patch: Partial<GitHubConfig>) => {
+    if (!trusted(e)) return refused('config update', null)
     const cur = (await configStore.read()) ?? emptyGitHubConfig()
     const next = { ...cur, ...patch }
     await configStore.write(next)
@@ -356,7 +378,7 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
   ipcMain.handle(
     IPC.GITHUB_PROFILE_ADD_PAT,
     async (
-      _e,
+      e,
       input: {
         kind: 'pat-classic' | 'pat-fine-grained'
         label: string
@@ -364,6 +386,7 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
         allowedRepos?: string[]
       },
     ) => {
+      if (!trusted(e)) return refused('profile add', NOT_APP_WINDOW)
       const v = await verifyToken(input.rawToken).catch(() => null)
       if (!v) return { ok: false, error: 'Invalid token' }
       const caps = scopesToCapabilities(
@@ -396,7 +419,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     },
   )
 
-  ipcMain.handle(IPC.GITHUB_PROFILE_ADOPT_GHCLI, async (_e, username: string) => {
+  ipcMain.handle(IPC.GITHUB_PROFILE_ADOPT_GHCLI, async (e, username: string) => {
+    if (!trusted(e)) return refused('profile adopt', NOT_APP_WINDOW)
     try {
       await ghAuthToken(username, defaultGhRun())
     } catch {
@@ -424,7 +448,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     return { ok: true, id }
   })
 
-  ipcMain.handle(IPC.GITHUB_PROFILE_REMOVE, async (_e, id: string) => {
+  ipcMain.handle(IPC.GITHUB_PROFILE_REMOVE, async (e, id: string) => {
+    if (!trusted(e)) return refused('profile remove', NOT_APP_WINDOW)
     await profileStore.removeProfile(id)
     cachedConfig = undefined
     void syncNotificationsPollerToConfig()
@@ -468,7 +493,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     return { ok: true }
   })
 
-  ipcMain.handle(IPC.GITHUB_PROFILE_RENAME, async (_e, id: string, label: string) => {
+  ipcMain.handle(IPC.GITHUB_PROFILE_RENAME, async (e, id: string, label: string) => {
+    if (!trusted(e)) return refused('profile rename', NOT_APP_WINDOW)
     await profileStore.updateProfile(id, { label })
     return { ok: true }
   })
@@ -487,7 +513,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
   // drops everything else so a compromised/buggy renderer can't forge them here.
   ipcMain.handle(
     IPC.GITHUB_PROFILE_UPDATE,
-    async (_e, id: string, patch: RendererProfilePatch) => {
+    async (e, id: string, patch: RendererProfilePatch) => {
+    if (!trusted(e)) return refused('profile update', NOT_APP_WINDOW)
     await profileStore.updateProfile(id, pickRendererProfilePatch(patch ?? {}))
     // The cached config snapshot now holds a stale profile; force a re-read on
     // the next consumer so feature-gating sees the new toggles immediately.
@@ -497,7 +524,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     },
   )
 
-  ipcMain.handle(IPC.GITHUB_PROFILE_TEST, async (_e, id: string) => {
+  ipcMain.handle(IPC.GITHUB_PROFILE_TEST, async (e, id: string) => {
+    if (!trusted(e)) return refused('profile test', NOT_APP_WINDOW)
     const token = await profileStore.getToken(id)
     if (!token) return { ok: false, error: 'no-token' }
     try {
@@ -511,10 +539,11 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
   ipcMain.handle(
     IPC.GITHUB_OAUTH_START,
     async (
-      _e,
+      e,
       mode: 'public' | 'private',
       opts?: { extraScopes?: string[]; includeUserScope?: boolean },
     ) => {
+    if (!trusted(e)) return refused('sign-in start', null)
     // Default sign-in scopes are UNCHANGED. `extraScopes` is the general path —
     // the per-profile re-auth flow passes a computed scope union (e.g. `user`,
     // which unlocks the billing /ai_credit endpoint) so the broadened scopes are
@@ -540,7 +569,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     },
   )
 
-  ipcMain.handle(IPC.GITHUB_OAUTH_POLL, async (_e, flowId: string) => {
+  ipcMain.handle(IPC.GITHUB_OAUTH_POLL, async (e, flowId: string) => {
+    if (!trusted(e)) return refused('sign-in poll', NOT_APP_WINDOW)
     const flow = activeFlows.get(flowId)
     if (!flow) return { ok: false, error: 'not-found' }
     try {
@@ -592,14 +622,16 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     }
   })
 
-  ipcMain.handle(IPC.GITHUB_OAUTH_CANCEL, async (_e, flowId: string) => {
+  ipcMain.handle(IPC.GITHUB_OAUTH_CANCEL, async (e, flowId: string) => {
+    if (!trusted(e)) return refused('sign-in cancel', NOT_APP_WINDOW)
     const f = activeFlows.get(flowId)
     if (f) f.cancelled = true
     activeFlows.delete(flowId)
     return { ok: true }
   })
 
-  ipcMain.handle(IPC.GITHUB_REAUTH_PROFILE, async (_e, profileId: string): Promise<ReauthResult> => {
+  ipcMain.handle(IPC.GITHUB_REAUTH_PROFILE, async (e, profileId: string): Promise<ReauthResult> => {
+    if (!trusted(e)) return refused('reauth', NOT_APP_WINDOW)
     const cfg = await getCachedConfig()
     const profile = cfg?.authProfiles?.[profileId]
     if (!profile) return { ok: false, error: 'not-found' }
@@ -631,19 +663,22 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     return { ok: true, plan }
   })
 
-  ipcMain.handle(IPC.GITHUB_GHCLI_DETECT, async () => {
+  ipcMain.handle(IPC.GITHUB_GHCLI_DETECT, async (e) => {
+    if (!trusted(e)) return refused('gh detect', { ok: false, users: [] as string[] })
     const users = await ghAuthStatus(defaultGhRun())
     return { ok: true, users }
   })
 
-  ipcMain.handle(IPC.GITHUB_REPO_DETECT, async (_e, cwd: string) => {
+  ipcMain.handle(IPC.GITHUB_REPO_DETECT, async (e, cwd: string) => {
+    if (!trusted(e)) return refused('repo detect', { ok: false, slug: null })
     const slug = await detectRepoFromCwd(cwd, defaultGitRun())
     return { ok: true, slug }
   })
 
   ipcMain.handle(
     IPC.GITHUB_SESSION_CONFIG_UPDATE,
-    async (_e, sessionId: string, patch: Partial<SessionGitHubIntegration>) => {
+    async (e, sessionId: string, patch: Partial<SessionGitHubIntegration>) => {
+      if (!trusted(e)) return refused('session config update', NOT_APP_WINDOW)
       const sessions = await deps.loadSessions()
       const idx = sessions.findIndex((s) => s.id === sessionId)
       if (idx < 0) return { ok: false, error: 'not-found' }
@@ -688,18 +723,21 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     },
   )
 
-  ipcMain.handle(IPC.GITHUB_LOCALGIT_GET, async (_e, cwd: string) => {
+  ipcMain.handle(IPC.GITHUB_LOCALGIT_GET, async (e, cwd: string) => {
+    if (!trusted(e)) return refused('local git read', { ok: false, state: null })
     const state = await readLocalGitState(cwd, defaultGitRun())
     return { ok: true, state }
   })
 
-  ipcMain.handle(IPC.GITHUB_DATA_GET, async (_e, slug: string) => {
+  ipcMain.handle(IPC.GITHUB_DATA_GET, async (e, slug: string) => {
+    if (!trusted(e)) return refused('data read', { ok: false, data: null })
     const c = await cacheStore.load()
     const data: RepoCache | null = c.repos[slug] ?? null
     return { ok: true, data }
   })
 
-  ipcMain.handle(IPC.GITHUB_SYNC_NOW, async (_e, sessionId: string) => {
+  ipcMain.handle(IPC.GITHUB_SYNC_NOW, async (e, sessionId: string) => {
+    if (!trusted(e)) return refused('sync', NOT_APP_WINDOW)
     // Renderer may hit this before the orchestrator saw the session (e.g.
     // restart before restore completes, or renderer-first enable). Look up
     // the current integration and auto-register so manual refresh always
@@ -726,7 +764,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     return { ok: true }
   })
 
-  ipcMain.handle(IPC.GITHUB_SYNC_FOCUSED_NOW, async () => {
+  ipcMain.handle(IPC.GITHUB_SYNC_FOCUSED_NOW, async (e) => {
+    if (!trusted(e)) return refused('focused sync', NOT_APP_WINDOW)
     const id = focusedSessionResolver()
     if (!id) return { ok: false, error: 'no-focused-session' }
     // Mirror SYNC_NOW: auto-register if the session has integration but
@@ -756,7 +795,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
   // Renderer pushes the active session id on every tab switch. We also use
   // this value as the focused-session resolver so SYNC_FOCUSED_NOW resolves
   // correctly without needing a separate session-state round-trip.
-  ipcMain.on(IPC.GITHUB_FOCUS_CHANGED, (_e, sessionId: string | null) => {
+  ipcMain.on(IPC.GITHUB_FOCUS_CHANGED, (e, sessionId: string | null) => {
+    if (!trusted(e)) return refused('focus change', undefined)
     // Mirror the viewed-session id into the shared tracker so focus-aware
     // main-side features can tell which session the user is currently viewing.
     setActiveSessionId(sessionId)
@@ -766,7 +806,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     if (sessionId) orchestrator.setFocus(sessionId, true)
   })
 
-  ipcMain.handle(IPC.GITHUB_SYNC_PAUSE, async () => {
+  ipcMain.handle(IPC.GITHUB_SYNC_PAUSE, async (e) => {
+    if (!trusted(e)) return refused('sync pause', NOT_APP_WINDOW)
     orchestrator.pause()
     // Also pause the notifications poller so "Pause sync" is a complete
     // network-silence. Previously the orchestrator paused but the
@@ -776,13 +817,15 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     return { ok: true }
   })
 
-  ipcMain.handle(IPC.GITHUB_SYNC_RESUME, async () => {
+  ipcMain.handle(IPC.GITHUB_SYNC_RESUME, async (e) => {
+    if (!trusted(e)) return refused('sync resume', NOT_APP_WINDOW)
     orchestrator.resume()
     notificationsPoller.resume()
     return { ok: true }
   })
 
-  ipcMain.handle(IPC.GITHUB_SESSION_CONTEXT_GET, async (_e, sessionId: string) => {
+  ipcMain.handle(IPC.GITHUB_SESSION_CONTEXT_GET, async (e, sessionId: string) => {
+    if (!trusted(e)) return refused('session context', { ok: false, data: null })
     const sessions = await deps.loadSessions()
     const session = sessions.find((s) => s.id === sessionId)
     const integration = session?.githubIntegration
@@ -798,8 +841,12 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     // signals (recent files edited via Read/Edit/Bash) come from a
     // separate, narrower inspector that never reads message bodies.
     const cfg = await getCachedConfig()
-    const events = await loadTranscriptEvents(session?.workingDirectory)
-    const recentFiles = extractFileSignals(events.toolCalls)
+    // P3.12 (row 65): a Codex session's own rollout (the one its watcher
+    // holds, in its realm), else Claude's project folder, as before.
+    const events = await loadSessionTranscriptEvents(session, deps.codexRolloutFor ?? (() => null))
+    // P3.12 round 1 (A4): the paths relative to the session's folder, so a
+    // file named relative and absolute is listed once.
+    const recentFiles = extractFileSignals(events.toolCalls, session?.workingDirectory)
     const transcriptRefs = cfg?.transcriptScanningOptIn
       ? scanTranscriptMessages(events.messages)
       : []
@@ -842,7 +889,9 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
         }
       },
     })
-    return { ok: true, data: ctx }
+    // P3.12 round 1 (A4): the heading of the recent files names the
+    // session's own assistant.
+    return { ok: true, data: { ...ctx, assistant: session?.provider === 'codex' ? 'codex' : 'claude' } }
   })
 
   // Helper: resolve a token for an action IPC. Every action needs a token
@@ -867,7 +916,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
 
   ipcMain.handle(
     IPC.GITHUB_ACTIONS_RERUN,
-    async (_e, slug: string, runId: number) => {
+    async (e, slug: string, runId: number) => {
+      if (!trusted(e)) return refused('actions rerun', NOT_APP_WINDOW)
       if (!validateSlug(slug)) return { ok: false, error: 'invalid-slug' }
       // Fail fast on non-finite IDs — GitHub returns HTML error pages for
       // malformed paths which the shield-aware fetch would then parse as
@@ -897,11 +947,12 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
   ipcMain.handle(
     IPC.GITHUB_PR_MERGE,
     async (
-      _e,
+      e,
       slug: string,
       prNumber: number,
       method: 'merge' | 'squash' | 'rebase',
     ) => {
+      if (!trusted(e)) return refused('pr merge', NOT_APP_WINDOW)
       if (!validateSlug(slug)) return { ok: false, error: 'invalid-slug' }
       if (!['merge', 'squash', 'rebase'].includes(method)) {
         return { ok: false, error: 'invalid-method' }
@@ -939,7 +990,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
 
   ipcMain.handle(
     IPC.GITHUB_PR_READY,
-    async (_e, slug: string, prNumber: number) => {
+    async (e, slug: string, prNumber: number) => {
+      if (!trusted(e)) return refused('pr ready', NOT_APP_WINDOW)
       if (!validateSlug(slug)) return { ok: false, error: 'invalid-slug' }
       if (!Number.isFinite(prNumber) || prNumber <= 0) {
         return { ok: false, error: 'invalid-pr-number' }
@@ -981,7 +1033,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
 
   ipcMain.handle(
     IPC.GITHUB_REVIEW_REPLY,
-    async (_e, slug: string, threadId: string, body: string) => {
+    async (e, slug: string, threadId: string, body: string) => {
+      if (!trusted(e)) return refused('review reply', NOT_APP_WINDOW)
       if (!validateSlug(slug)) return { ok: false, error: 'invalid-slug' }
       if (!body || typeof body !== 'string') return { ok: false, error: 'empty-body' }
       const id = focusedSessionResolver()
@@ -1013,7 +1066,8 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
 
   ipcMain.handle(
     IPC.GITHUB_NOTIF_MARK_READ,
-    async (_e, profileId: string, threadId: string) => {
+    async (e, profileId: string, threadId: string) => {
+      if (!trusted(e)) return refused('notification read', NOT_APP_WINDOW)
       if (!profileId || !threadId) return { ok: false, error: 'missing-args' }
       // threadId is string-typed on the wire; reject anything other than a
       // strict positive integer to avoid path-traversal into unintended

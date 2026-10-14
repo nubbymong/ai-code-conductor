@@ -75,10 +75,13 @@ vi.mock('../../../src/main/logging/logging-service', () => ({
 vi.mock('../../../src/main/conductor-mcp-server', () => ({
   getConductorMcpPort: () => 0,
   registerCodexReviewSession: () => {},
+  registerClaudeReviewSession: () => {},
   unregisterCodexReviewSession: () => {},
+  releaseMcpSessionProvider: () => {},
 }))
 vi.mock('../../../src/main/providers', () => ({
   getProvider: () => ({
+    resolveBinary: () => ({ cmd: 'claude', source: 'system' }), // WP2 PR 4: the local launch resolves Claude through the provider
     buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: {} }),
     ingestSessionTelemetry: () => ({ stop: () => {} }),
   }),

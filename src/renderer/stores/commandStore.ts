@@ -17,8 +17,9 @@ export type CommandReviewReason =
   /** The button sat in a user section literally named "Global" that was dissolved
    *  into the fixed Global band. */
   | 'section-dissolved'
-  /** A shell button scoped to an SSH config: its partner shell is on this PC,
-   *  not on the host, which the old row label never said. */
+  /** A shell button scoped to an SSH config. Written when its partner shell
+   *  ran on this PC, which the old row label never said; since #86 (2.1.1) the
+   *  partner runs on the host. The id is stored, so it keeps its name. */
   | 'ssh-partner-is-local'
 
 export interface CustomCommand {

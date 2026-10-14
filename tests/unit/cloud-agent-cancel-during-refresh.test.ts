@@ -3,14 +3,39 @@
 // the desired behaviour, credit Codex rc.15 stability review; RED against
 // 7ef62a2e before this change.
 //
-// Dispatch publishes its running record, then parks on an await (the legacy
-// CLI install, the account refresh). A Cancel that lands there finds no process,
+// Dispatch publishes its running record, then parks on an await (the account
+// refresh; before 2.1.1-beta.3 also a legacy CLI install). A Cancel that lands there finds no process,
 // marks the record cancelled and returns true -- and the resumed dispatch used
 // to spawn anyway: work running while labelled cancelled, with a second Cancel
 // refused and Remove hiding the row. Dispatch now re-reads the record after
 // EVERY pre-spawn await and, if it was cancelled or removed, releases the hold,
 // deletes the prompt file, broadcasts and returns without spawning.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+//
+// On Windows, dispatch awaits the first-start warm-up (ADR-025) before it writes the
+// prompt file. Here that is the setup file's default fake (tests/unit/setup.ts), which
+// answers at once: by the timer tick that sees the record published, the dispatch has
+// written the prompt file and is parked on the refresh wait. The real warm-up read the
+// program's path on the thread pool first, and raced that tick on Windows CI.
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+// On Windows a start with a recent answer of the PATH walk (claude-cli-probe.ts) is synchronous, and the
+// cases here are about that path (the hold, the release, the waits), not about the lookup, which
+// windows-program-lookup.test.ts covers: the answer is always recent here.
+vi.mock('../../src/main/claude-cli-probe', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/claude-cli-probe')>()),
+  recentClaudeOnWindows: () => 'C:\\Tools\\claude.exe',
+}))
+// On Windows, programs are found in PATH's folders (windows-programs.ts); stubbed here,
+// so no real PATH is read: the first name asked for, in one fully qualified folder
+// (the walk on the event loop and the one off it alike).
+vi.mock('../../src/main/windows-programs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/windows-programs')>()),
+  findOnWindowsPath: (names: readonly string[]) => `C:\\Tools\\${names[0]}`,
+  findOnWindowsPathAsync: async (names: readonly string[]) => `C:\\Tools\\${names[0]}`,
+}))
+// Every provider is on here: main's launch rule has its own suites
+// (tests/unit/main/provider-launch-gate.test.ts and the provider-off tests).
+vi.mock('../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal: () => null, providerProbeRefusal: () => null }))
+import { composeProviders } from '../../src/main/providers/compose'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -27,6 +52,7 @@ vi.mock('../../src/main/legacy-version-manager', () => ({
   resolveVersionBinary: () => null,
   isVersionInstalled: () => legacy.installed,
   installVersion: () => new Promise<{ ok: boolean }>((resolve) => { legacy.install = () => resolve({ ok: false }) }),
+  legacyCliPin: (l?: { enabled: boolean; version: string }) => (l?.enabled ? { version: l.version, installed: legacy.installed } : undefined),
 }))
 const state = vi.hoisted(() => ({ home: '' }))
 vi.mock('../../src/main/account-profiles', async (original) => ({
@@ -38,9 +64,33 @@ vi.mock('../../src/main/account-profiles', async (original) => ({
 import { initCloudAgentManager, dispatchAgent, listAgents, cancelAgent, removeAgent, _resetCloudAgentLatchForTest } from '../../src/main/cloud-agent-manager'
 import { noteProfileRefreshInFlight, _resetProfileConsumersForTest, hasTransientProfileConsumer } from '../../src/main/profile-consumers'
 
+// The cloud agent runs the CLI under a managed profile home, so its env goes
+// through withProfileHome -- which takes the Claude package's own ambient-strip
+// list and host control from the registry and fails closed when nothing is
+// registered. Boot composes before anything dispatches; so must this.
+beforeAll(() => { composeProviders() })
+
+
 const handlers: Record<string, (...args: any[]) => void> = {}
 const promptFile = (id: string) => path.join(os.tmpdir(), `ccc-agent-${id}.txt`)
-const tick = async (n = 6) => { for (let i = 0; i < n; i++) await Promise.resolve() }
+/** Wait for a condition the project-settings GATE has to answer first.
+ *  `dispatchAgent` awaits `gateManagedLaunch(params.projectPath)` before it
+ *  publishes the record -- real file I/O, so the record lands on a MACROTASK
+ *  and no microtask drain brings it forward. Bounded past the gate's own
+ *  3000 ms deadline so a dispatch that never arrives fails the assertion
+ *  rather than hanging the suite. */
+const until = async (cond: () => boolean, why: string) => {
+  const deadline = Date.now() + 5000
+  while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
+  if (!cond()) throw new Error(`timed out waiting for ${why}`)
+}
+/** The published record of the one dispatch under test, once the gate has let
+ *  it through. Every case below parks the dispatch on an await AFTER this
+ *  point, so this is where "it is waiting" becomes observable. */
+const waitingAgent = async () => {
+  await until(() => listAgents().length === 1, 'the dispatch to pass the project gate')
+  return listAgents()[0]
+}
 
 beforeEach(() => {
   state.home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-vitest-cloud-cancel-'))
@@ -68,8 +118,7 @@ describe('cancel while dispatch is waiting (Codex R5, flipped)', () => {
     let settle!: () => void
     noteProfileRefreshInFlight('profile-review', new Promise<void>((resolve) => { settle = resolve }))
     const dispatch = dispatchAgent({ ...params, projectPath: state.home })
-    await tick()
-    const waiting = listAgents()[0]
+    const waiting = await waitingAgent()
     expect(mockSpawn).not.toHaveBeenCalled()
     expect(fs.existsSync(promptFile(waiting.id))).toBe(true)
     expect(cancelAgent(waiting.id)).toBe(true)
@@ -87,8 +136,7 @@ describe('cancel while dispatch is waiting (Codex R5, flipped)', () => {
     let settle!: () => void
     noteProfileRefreshInFlight('profile-review', new Promise<void>((resolve) => { settle = resolve }))
     const dispatch = dispatchAgent({ ...params, projectPath: state.home })
-    await tick()
-    const waiting = listAgents()[0]
+    const waiting = await waitingAgent()
     expect(removeAgent(waiting.id)).toEqual({ ok: true, removed: true })
     expect(listAgents()).toHaveLength(0)
     settle()
@@ -100,24 +148,11 @@ describe('cancel while dispatch is waiting (Codex R5, flipped)', () => {
     expect(listAgents()).toHaveLength(0)
   })
 
-  it('cancelling during the legacy CLI install (the older await of the same shape) -> nothing spawns', async () => {
-    const dispatch = dispatchAgent({ ...params, projectPath: state.home, legacyVersion: { enabled: true, version: '1.0.0' } })
-    await tick()
-    expect(legacy.install).not.toBeNull()
-    const waiting = listAgents()[0]
-    expect(cancelAgent(waiting.id)).toBe(true)
-    legacy.install!()
-    const agent = await dispatch
-    expect(agent.status).toBe('cancelled')
-    expect(mockSpawn).not.toHaveBeenCalled()
-    expect(hasTransientProfileConsumer('profile-review')).toBe(false)
-  })
-
   it('positive control: an uncancelled dispatch spawns exactly once after the refresh settles and keeps its hold while the child lives', async () => {
     let settle!: () => void
     noteProfileRefreshInFlight('profile-review', new Promise<void>((resolve) => { settle = resolve }))
     const dispatch = dispatchAgent({ ...params, projectPath: state.home })
-    await tick()
+    await waitingAgent()
     expect(mockSpawn).not.toHaveBeenCalled()
     settle()
     const agent = await dispatch
@@ -126,5 +161,19 @@ describe('cancel while dispatch is waiting (Codex R5, flipped)', () => {
     expect(hasTransientProfileConsumer('profile-review')).toBe(true)
     handlers.close?.(0)
     expect(hasTransientProfileConsumer('profile-review')).toBe(false)
+  })
+})
+
+describe('a Claude Code version pinned in an older release', () => {
+  // 2.1.1-beta.3: the pin is no longer used, so a pinned agent no longer
+  // parks on an install (an older await of the same shape as the cancel
+  // cases above): it goes straight on and starts once.
+  it('a pinned agent waits on no install and runs', async () => {
+    const dispatch = dispatchAgent({ ...params, projectPath: state.home, legacyVersion: { enabled: true, version: '1.0.0' } })
+    await until(() => mockSpawn.mock.calls.length > 0 || legacy.install !== null, 'the dispatch to spawn (or to park on an install)')
+    expect(legacy.install).toBeNull()
+    const agent = await dispatch
+    expect(agent.status).toBe('running')
+    expect(mockSpawn).toHaveBeenCalledTimes(1)
   })
 })

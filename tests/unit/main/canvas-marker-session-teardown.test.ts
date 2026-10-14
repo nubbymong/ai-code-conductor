@@ -96,4 +96,25 @@ describe('cleanupSessionResources drops the session`s queued canvas markers', ()
     expect(() => { killPty(SID); killPty(SID) }).not.toThrow()
     expect(written).toEqual([])
   })
+
+  it('a marker held across a respawn is told to its canvas once, the session gone, however many teardowns run', () => {
+    const CANVAS = 'c1c2c3c4c5c6c7c8c9c0d1d2'
+    const told: Array<Record<string, unknown>> = []
+    marker._resetCanvasMarkerQueueForTest()
+    marker.startCanvasMarkerQueue({
+      write: (_sessionId, line) => { written.push(line) },
+      subscribe: (cb) => { emit = cb },
+      onUndelivered: (u) => { told.push({ ...u }) },
+    })
+    emit(SID, 'UserPromptSubmit')
+    expect(marker.deliverCanvasMarker(SID, APPROVAL, CANVAS)).toBe('queued')
+
+    killPty(SID)                     // Restart / switch-account teardown
+    marker.forgetCanvasMarkers(SID)  // a tab's close runs it again (pty:kill)
+    killPty(SID)
+
+    emit(SID, 'SessionStart')
+    expect(written).toEqual([])
+    expect(told).toEqual([{ sessionId: SID, canvasId: CANVAS, line: APPROVAL, reason: 'session-gone' }])
+  })
 })

@@ -18,6 +18,7 @@ import {
   normalizeModelLabel,
   type ModelRegistry,
   type ModelPickerRow,
+  type ModelProvider,
 } from '../../shared/model-registry'
 
 export interface OptionItem {
@@ -35,9 +36,11 @@ export interface ModelOptionGroup {
 // Registry-derived model and effort lists. Components should derive these via
 // useRegistryStore((s) => s.registry) so dropdowns hot-reload on registry updates.
 
-/** Picker rows grouped for a popover or a <select> with <optgroup>s. */
-export function modelGroupsFromRegistry(reg: ModelRegistry): ModelOptionGroup[] {
-  return groupPickerRows(buildModelPickerRows(reg)).map((g) => ({
+/** Picker rows grouped for a popover or a <select> with <optgroup>s. `provider`
+ *  (P3.8, row 39): whose models; Claude Code's unless a caller names another
+ *  provider. */
+export function modelGroupsFromRegistry(reg: ModelRegistry, provider: ModelProvider = 'claude'): ModelOptionGroup[] {
+  return groupPickerRows(buildModelPickerRows(reg, provider)).map((g) => ({
     title: g.title,
     items: g.rows.map((r: ModelPickerRow) => ({ label: r.label, value: r.value, hint: r.hint })),
   }))
@@ -47,36 +50,24 @@ export function modelGroupsFromRegistry(reg: ModelRegistry): ModelOptionGroup[] 
  * Effort rows for a specific model, each carrying `disabled` for a level that
  * model does not support. Levels are disabled rather than dropped so the list
  * keeps a stable shape; an unknown or fuzzily-matched model enables everything
- * (see buildEffortRows).
+ * (see buildEffortRows). `provider` (P3.8, row 40): whose levels; Claude
+ * Code's unless a caller names another provider.
  */
 export function effortsForModel(
   reg: ModelRegistry,
   modelId: string | undefined | null,
+  provider: ModelProvider = 'claude',
 ): (OptionItem & { disabled?: boolean })[] {
-  return buildEffortRows(reg, modelId).map((e) => ({
+  return buildEffortRows(reg, modelId, provider).map((e) => ({
     label: e.label, value: e.value, hint: e.hint,
     ...(e.supported ? {} : { disabled: true }),
   }))
 }
 
-/**
- * The charset the PTY IPC boundary already enforces for a `--model` value
- * (`src/main/ipc/pty-handlers.ts`), mirrored for values written into a LIVE PTY
- * as a slash command (`/model <v>`, `/effort <v>`).
- *
- * That path has no schema in front of it. The pinned picker rows are derived
- * from the registry, and `registry-overlay.json` is a hand-editable user file
- * whose entries are validated on APPLY rather than on load — so an id carrying a
- * newline would be written into the PTY as a second, attacker-chosen line.
- * Defence in depth (the overlay is a local file, not remote input), and it costs
- * a regex. Legit values: 'opus', 'opus[1m]', 'claude-opus-4-8', 'xhigh'.
- */
-export const PICKER_VALUE_RE = /^[a-zA-Z0-9._[\]-]+$/
-
-/** True when `v` is safe to write into a PTY as a slash-command argument. */
-export function isWritablePickerValue(v: unknown): v is string {
-  return typeof v === 'string' && v.length > 0 && v.length <= 64 && PICKER_VALUE_RE.test(v)
-}
+// The picker's value rule (what may be written into a live PTY as `/model <v>`)
+// lives beside the registry so main holds a proposed registry entry to it too;
+// re-exported here for the renderer's existing imports.
+export { PICKER_VALUE_RE, isWritablePickerValue } from '../../shared/model-registry'
 
 export const PERMISSION_MODES: OptionItem[] = [
   { label: 'Ask permissions', value: 'default', hint: 'Claude asks before most actions' },

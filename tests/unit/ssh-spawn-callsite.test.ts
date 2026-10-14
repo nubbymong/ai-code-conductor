@@ -18,14 +18,30 @@ vi.mock('os', async (importOriginal) => {
   return { ...actual, platform: vi.fn(() => 'linux') }
 })
 
-let captured: { file: string; args: string[] } | null = null
+let captured: { file: string; args: string[]; opts: Record<string, unknown> } | null = null
 vi.mock('node-pty', () => ({
-  spawn: (file: string, args: string[]) => {
-    captured = { file, args }
+  spawn: (file: string, args: string[], opts: Record<string, unknown>) => {
+    captured = { file, args, opts }
     // Abort the rest of spawnPty — we only need the argv it hands to spawn.
     throw new Error('__spawn_captured__')
   },
 }))
+// P3.15 round 1 (F7): the bundled ConPTY is on offer on every leg, whatever the
+// runner's platform, so an SSH spawn that took it would be caught here too.
+vi.mock('../../src/main/bundled-conpty', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/bundled-conpty')>()),
+  bundledConptyChoice: () => ({ kind: 'bundled', options: { useConpty: true, useConptyDll: true }, dir: '/np/prebuilds/win32-x64' }),
+}))
+// On Windows ssh.exe is found in the folders PATH names (the rule is pinned in
+// tests/unit/main/ssh-program-lookup.test.ts); here the lookup answers one full
+// path on every runner, so what this file reads is the argv.
+vi.mock('../../src/main/windows-programs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/main/windows-programs')>()
+  return {
+    ...real,
+    findOnWindowsPath: (...a: Parameters<typeof real.findOnWindowsPath>) => (a[0][0] === 'ssh.exe' ? 'C:\\Windows\\System32\\OpenSSH\\ssh.exe' : real.findOnWindowsPath(...a)),
+  }
+})
 
 import * as osMod from 'os'
 import type { SessionProvider } from '../../src/main/providers/types'
@@ -67,8 +83,8 @@ describe('SSH spawn path uses buildSshArgs (call-site pin, #265 finding 4)', () 
     expect(() => spawnPty(fakeWin, 'sidcallsite', { ssh, cwd: osMod.homedir() })).toThrow('__spawn_captured__')
 
     expect(captured).not.toBeNull()
-    // win32 => ssh.exe binary
-    expect(captured!.file).toBe('ssh.exe')
+    // win32 => ssh.exe by the full path the PATH lookup found
+    expect(captured!.file).toBe('C:\\Windows\\System32\\OpenSSH\\ssh.exe')
     // The EXACT argv the pure builder produces for win32. Computed with the same
     // live MCP port the spawn path reads, so this equals what pty-manager built.
     // A revert to an inline array that drops ControlMaster/ControlPath fails here.
@@ -88,6 +104,17 @@ describe('SSH spawn path uses buildSshArgs (call-site pin, #265 finding 4)', () 
     expect(captured!.file).toBe('ssh')
     expect(captured!.args).toEqual(buildSshArgs(ssh, getConductorMcpPort(), 'linux'))
     expect(captured!.args).not.toContain('ControlMaster=no')
+  })
+
+  // P3.15 (row 71): node-pty's bundled ConPTY is for one kind of local session
+  // only; an SSH session keeps the system ConPTY, with exactly the options it had.
+  it('an SSH session keeps the system ConPTY: useConpty and no useConptyDll', () => {
+    vi.mocked(osMod.platform).mockReturnValue('win32' as NodeJS.Platform)
+    const ssh = { username: 'me', host: 'example.com', port: 22, remotePath: '~/proj' }
+    expect(() => spawnPty(fakeWin, 'sidconpty', { ssh, cwd: osMod.homedir() })).toThrow('__spawn_captured__')
+    expect(captured!.opts.useConpty).toBe(true)
+    expect('useConptyDll' in captured!.opts).toBe(false)
+    expect(Object.keys(captured!.opts).sort()).toEqual(['cols', 'cwd', 'env', 'name', 'rows', 'useConpty'])
   })
 
   // #265 sink-guard backstop on the REAL spawn path. Calling spawnPty directly

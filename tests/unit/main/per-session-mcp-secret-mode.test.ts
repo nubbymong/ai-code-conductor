@@ -1,3 +1,4 @@
+// HOST QUARANTINE: changes ACLs on temp folders (through the app's own folder hardening). [CI] [VM] only -- never run on the owner's machine.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, statSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
@@ -27,6 +28,7 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({
   getConductorMcpPort: () => 19333,
   // GHSA-q83v: the writer embeds the per-session HMAC, not the raw secret.
   mcpSessionToken: (sessionId: string) => `tok-${sessionId}`,
+  issueMcpSessionToken: (sessionId: string) => `tok-${sessionId}`,
 }))
 
 vi.mock('../../../src/main/providers/claude/statusline-command', () => ({

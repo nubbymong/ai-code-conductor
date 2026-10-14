@@ -1,8 +1,19 @@
-import { useSessionStore } from './stores/sessionStore'
+import { useSessionStore, type Session } from './stores/sessionStore'
 import { useAccountGateStore } from './stores/accountGateStore'
 import { useSettingsStore } from './stores/settingsStore'
 import { useDetachedRemotesStore } from './stores/detachedRemotesStore'
+import { useCommandBarStore } from './stores/commandBarStore'
 import type { SessionState, SavedSession } from './types/electron'
+import { migrateColorRecords } from './utils/migrateIdentityColors'
+import { markSessionForResumePicker } from './utils/resumePicker'
+import { shouldPredetermineRestoredAccount } from './utils/sessionLaunch'
+import { isConfigLaunchBlocked } from './hooks/useLaunchConfig'
+// Type-only: livenessStore imports persistSessionState from THIS module, so a
+// value import of either store here closes a renderer import cycle (benign
+// while nothing reads across it at module scope; a boot-time TDZ crash the day
+// something does). The caller injects both (code-quality review, 2.1.1).
+import type { probeGoneSessions } from './stores/livenessStore'
+import type { pingAllDetachedHosts } from './stores/hostReachability'
 
 // Serialize the current sessionStore into the shape the main process persists.
 // Previously lived inline in App.tsx but the GitHub per-session config save
@@ -12,7 +23,12 @@ import type { SessionState, SavedSession } from './types/electron'
 // before invoking session-scoped IPC to keep the on-disk view in sync.
 export function buildSessionState(): SessionState {
   const state = useSessionStore.getState()
-  const sessions: SavedSession[] = state.sessions.map((s) => ({
+  // A transient tab (commandTerminal: a confirmed install command) is never
+  // saved: restoring it would run that command again at the next launch, with
+  // nobody asked. Nor is it saved as the active session.
+  const kept = state.sessions.filter((s) => !s.transient)
+  const activeKept = kept.some((s) => s.id === state.activeSessionId)
+  const sessions: SavedSession[] = kept.map((s) => ({
     id: s.id,
     configId: s.configId,
     kind: s.kind,
@@ -55,6 +71,11 @@ export function buildSessionState(): SessionState {
     // T8b (bug #5): persist the exact conversation so app-relaunch resumes it.
     // Sync pass-through of whatever is on the store record; enrichWithResumeTargets
     // (the async caller) refreshes these from the live binder before save.
+    // aicc_planning#104: once the spawn has taken a restored target the record
+    // carries none, and main's session:save keeps the session's conversation
+    // when a lookup fails, while session-log indexing is on
+    // (session-resume-enrich.ts has the rules). The renderer keeps no copy
+    // of its own: one would be stale after /clear or /resume inside the tab.
     resumeUuid: s.resumeUuid,
     resumeCwd: s.resumeCwd,
     claudeOptions: (s.provider ?? 'claude') === 'claude' ? {
@@ -74,16 +95,34 @@ export function buildSessionState(): SessionState {
       loggingEnabled: s.loggingEnabled,
     } : undefined,
     codexOptions: s.codexOptions,
+    // WP2: a reopened Codex session keeps the account it ran under. The
+    // account id only: a launch acknowledgement is never saved, so the
+    // reopened session asks again if its account needs one.
+    providerAccountId: s.provider === 'codex' ? s.providerAccountId : undefined,
   }))
+  // P3.5 (a C item): while the resume prompt is unanswered, the saved set it
+  // offers stays in the file, before the tabs open now (each tab once, as it
+  // is now), so a tab launched meanwhile never overwrites a choice the user
+  // has not made yet.
+  const offered = unansweredRestore ? unansweredRestore.sessions.filter((s) => !sessions.some((k) => k.id === s.id)) : []
   return {
-    sessions,
-    activeSessionId: state.activeSessionId,
+    sessions: [...offered, ...sessions],
+    activeSessionId: activeKept ? state.activeSessionId : (kept[kept.length - 1]?.id ?? unansweredRestore?.activeSessionId ?? null),
     savedAt: Date.now(),
     // SSH Persistent (Phase 1): fold the left-running registry into the same
     // persisted file so a detached remote survives an app restart. Main round-
     // trips this untouched (only `sessions` is migrated on load).
     detachedRemotes: useDetachedRemotesStore.getState().entries,
   }
+}
+
+/** The saved set the resume prompt offers while it is unanswered (P3.5, a C
+ *  item): App keeps it in step with its pendingRestore, and clears it the
+ *  moment the prompt is answered. Every write of the session file keeps it
+ *  (buildSessionState). */
+let unansweredRestore: SessionState | null = null
+export function setUnansweredRestore(state: SessionState | null): void {
+  unansweredRestore = state && Array.isArray(state.sessions) && state.sessions.length > 0 ? state : null
 }
 
 /**
@@ -137,6 +176,24 @@ export function hydrateDetachedFromSavedState(saved: Pick<SessionState, 'detache
 }
 
 /**
+ * P3.5 (the C item "Resume replaces the tab list"): what the resume prompt's
+ * Refresh offers. The re-read file may hold tabs launched while the prompt was
+ * open (the autosave rewrites it on every tab added): those are running, so
+ * they are never offered again (a Resume would add a second copy). Nothing
+ * left to offer, or no file: the list it had. Answered already (`prev` null):
+ * nothing comes back.
+ */
+export function refreshRestoreOffer(
+  prev: SessionState | null,
+  saved: SessionState | null | undefined,
+  openIds: ReadonlySet<string>,
+): SessionState | null {
+  if (!prev) return null
+  const offered = (saved?.sessions ?? []).filter((s) => !openIds.has(s.id))
+  return saved && offered.length > 0 ? { ...saved, sessions: offered } : prev
+}
+
+/**
  * T8b (bug #5): build the persisted session state AND enrich each live Claude
  * session with its exact-conversation resume target (resumeUuid/resumeCwd) so an
  * app-relaunch resumes the SAME conversation, not the newest in the cwd's folder.
@@ -144,9 +201,12 @@ export function hydrateDetachedFromSavedState(saved: Pick<SessionState, 'detache
  * buildSessionState() is sync (used by several call sites); this async wrapper is
  * the choke point for the save-and-quit / autosave paths where we can afford one
  * IPC round-trip per session. Fully fail-safe: any session whose target can't be
- * resolved keeps whatever was already on the record (typically undefined), so the
- * fallback is exactly today's behaviour. Non-Claude / shell-only sessions are
- * skipped (the binder only tracks Claude transcripts).
+ * resolved keeps whatever was already on the record (typically undefined). Main's
+ * session:save then gives it the conversation of its last exact bind this run,
+ * else, while session-log indexing and the hooks are on, the conversation it was
+ * last saved with (aicc_planning#104; session-resume-enrich.ts has the rules).
+ * Non-Claude / shell-only sessions are skipped (the binder only tracks Claude
+ * transcripts).
  */
 export async function buildSessionStateWithResumeTargets(): Promise<SessionState> {
   const state = buildSessionState()
@@ -211,18 +271,41 @@ export function markRestoredSessionsPredetermined(sessionIds: string[]): void {
   for (const id of sessionIds) gate.markPredetermined(id)
 }
 
-export async function persistLastUsedAccount(sessionId: string, profileId: string | undefined): Promise<void> {
+export async function persistLastUsedAccount(
+  sessionId: string,
+  profileId: string | undefined,
+  opts: { recordMostRecent?: boolean } = {},
+): Promise<void> {
   useSessionStore.getState().updateSession(sessionId, { profileId })
   // Record it as the GLOBAL last-used account so the launch gate can offer it as
-  // a one-click default for the next new session. Only a real choice updates it
-  // (never clear it back to undefined). Best-effort persist.
-  if (profileId) {
+  // a one-click "Most recent" default for the next new session. Only a real
+  // choice updates it (never clear it back to undefined). Best-effort persist.
+  // O9: `recordMostRecent: false` pins the session only. The caller passes it
+  // when a resumed session is confirmed on its OWN account: that is not a new
+  // choice, and in a multi-session resume it would make "Most recent" just
+  // whichever session happened to be answered last.
+  if (profileId && opts.recordMostRecent !== false) {
     // updateSettings returns a Promise: attach .catch (a bare try/catch would
     // not see an async rejection and it would surface as unhandled).
     try {
       void useSettingsStore.getState().updateSettings({ lastUsedAccountId: profileId }).catch(() => { /* non-fatal */ })
     } catch { /* non-fatal (synchronous set() failure) */ }
   }
+  try {
+    await window.electronAPI.session.save(buildSessionState())
+  } catch {
+    /* best-effort: the choice still lives in the store for this run */
+  }
+}
+
+/**
+ * P3.6 (row 22): pin the registry account a session of an account-attributed
+ * provider (Codex) now runs under, as persistLastUsedAccount pins a Claude
+ * profile, and flush it to disk eagerly so a crash cannot lose the switch.
+ * The store update is synchronous, before any respawn reads it.
+ */
+export async function persistSessionProviderAccount(sessionId: string, providerAccountId: string | undefined): Promise<void> {
+  useSessionStore.getState().updateSession(sessionId, { providerAccountId })
   try {
     await window.electronAPI.session.save(buildSessionState())
   } catch {
@@ -325,6 +408,190 @@ export async function discardAndClose(deps: {
   } catch (err) {
     console.error('[App] Error during close:', err)
     if (!deps.isUpdate) deps.allowClose()
+    return false
+  }
+}
+
+export interface RestoreSavedSessionsDeps {
+  probeGoneSessions: typeof probeGoneSessions
+  pingAllDetachedHosts: typeof pingAllDetachedHosts
+}
+
+// Restore saved sessions on startup. Lifted out of App.tsx (2.1.1) as a pure
+// move: the one component-scope value it read, restoreUnsettledRef, is passed
+// as the ref OBJECT so the write at the end still lands on the live ref.
+export async function restoreSavedSessions(
+  savedState: SessionState,
+  restoreUnsettledRef: { current: boolean },
+  deps: RestoreSavedSessionsDeps,
+): Promise<boolean> {
+  try {
+    console.log(`[App] Restoring ${savedState.sessions.length} sessions...`)
+
+    // Idempotent session colour migration (no guard). The restore SAVES the live
+    // set right after this (#397 -- the clear that used to sit there left a gap
+    // where a crash lost everything), so migrated keys reach disk immediately.
+    // Still safe to recompute each launch: it is a no-op once keyed, raw `color` is
+    // always preserved, and the notice guard below prevents re-notifying.
+    const { records: migratedSaved, summary: sessionSummary } = migrateColorRecords(savedState.sessions || [])
+    console.log('[colourMigration] sessions', sessionSummary)
+
+    const restoredSessions: Session[] = migratedSaved.map((saved: SavedSession) => {
+      // v1.5 provider-shape: read Claude fields from claudeOptions, fall back to
+      // legacy top-level fields for un-migrated files (belt-and-braces).
+      const claude = saved.claudeOptions
+      return {
+        id: saved.id,
+        configId: saved.configId,
+        // Without this an Ask Conductor session comes back as an ordinary
+        // config-less session: plain tab dot, loose in the project list, no
+        // dock. Same silent-drop class as the loggingEnabled / detachable bugs.
+        kind: saved.kind,
+        label: saved.label,
+        customName: saved.customName,
+        workingDirectory: saved.workingDirectory,
+        model: claude?.model ?? saved.model ?? '',
+        color: saved.color,
+        identityColorKey: saved.identityColorKey,
+        legacyColor: saved.legacyColor,
+        sessionType: saved.sessionType,
+        shellOnly: saved.shellOnly,
+        terminalOptions: saved.terminalOptions,
+        partnerTerminalPath: saved.partnerTerminalPath,
+        partnerElevated: saved.partnerElevated,
+        sshConfig: saved.sshConfig,
+        legacyVersion: claude?.legacyVersion ?? saved.legacyVersion,
+        agentIds: claude?.agentIds ?? saved.agentIds,
+        effortLevel: claude?.effortLevel ?? saved.effortLevel,
+        disableAutoMemory: claude?.disableAutoMemory ?? saved.disableAutoMemory,
+        enableCodexReview: claude?.enableCodexReview,
+        // P3.12: a Codex session's opt-out rides in its codexOptions.
+        loggingEnabled: saved.provider === 'codex' ? saved.codexOptions?.loggingEnabled : claude?.loggingEnabled,
+        // #397 Group 4: these were dropped on save+restore, so a restored session
+        // came back with the wrong permission mode / without its extra CLI args.
+        permissionMode: claude?.permissionMode,
+        extraArgs: claude?.extraArgs,
+        machineName: saved.machineName,
+        githubIntegration: saved.githubIntegration,
+        status: 'idle' as const,
+        createdAt: Date.now(),
+        provider: saved.provider,
+        profileId: saved.profileId,
+        // T8b (bug #5): carry the persisted exact-conversation resume target so
+        // TerminalView passes `resume:{uuid,cwd}` through pty.spawn on relaunch.
+        resumeUuid: saved.resumeUuid,
+        resumeCwd: saved.resumeCwd,
+        codexOptions: saved.codexOptions,
+        providerAccountId: saved.provider === 'codex' && typeof saved.providerAccountId === 'string' ? saved.providerAccountId : undefined,
+        // Its provider cannot launch now (off, or Codex not set up: the launch
+        // rule): main will start nothing for it, so it is Not started from
+        // the restore on, and never counts as its config running before its
+        // tab is first viewed (a tab starts on first view). Its view checks
+        // the Multi Spawn rule before it tries (TerminalView), so a session
+        // that CAN launch keeps counting from the restore as before.
+        ...(isConfigLaunchBlocked({ provider: saved.provider ?? 'claude', shellOnly: saved.shellOnly }) ? { neverStarted: true } : {}),
+      }
+    })
+
+    for (const session of restoredSessions) {
+      // Both providers support a resume picker. For Codex, the picker script
+      // may not be deployed yet on first boot -- buildCodexSpawn falls back
+      // to direct codex spawn in that case (see src/main/providers/codex/spawn.ts).
+      // T8b (bug #5): when a persisted exact-conversation target exists, the
+      // spawn resumes THAT conversation directly (cwd-overridden) -- so the
+      // resume PICKER is only the fallback for sessions WITHOUT a persisted uuid.
+      const hasExactResume = !!(session.resumeUuid && session.resumeCwd)
+      if (!session.shellOnly && session.sessionType === 'local' && !hasExactResume) {
+        markSessionForResumePicker(session.id)
+      }
+    }
+
+    // Relaunch continues each session under the account it was closed on
+    // (issue #76): the account is already determined (persisted profileId),
+    // so — like in-session Restart/Recover/Switch — mark the restored sessions
+    // predetermined BEFORE the store restore mounts their TerminalViews, so
+    // each spawn skips the pre-spawn AccountLaunchGate and respawns under its
+    // saved account. #446: this is the DEFAULT ('auto-last'); under 'ask' the
+    // marking is skipped so the picker opens per restored session
+    // (pre-selecting that saved account). With <2 profiles the gate is inert
+    // regardless, so the branch only bites a genuine multi-account user.
+    // Mark them RESTORED regardless of mode (#446): "was restored" is a
+    // property of the session, and it is what lets a cancelled resume-gate
+    // keep the session rather than discard it. Only the predetermined mark
+    // (which SKIPS the gate) is mode-conditional.
+    const restoredIds = restoredSessions.map((s) => s.id)
+    useAccountGateStore.getState().markRestored(restoredIds)
+    if (shouldPredetermineRestoredAccount(useSettingsStore.getState().settings.resumeAccountMode)) {
+      markRestoredSessionsPredetermined(restoredIds)
+    }
+
+    useSessionStore.getState().restoreSessions(restoredSessions, savedState.activeSessionId)
+    // SSH Persistent (Phase 1): rehydrate the left-running registry from the
+    // same persisted file BEFORE the save below (which folds it back in via
+    // buildSessionState). App-restart restore is otherwise UNCHANGED — the
+    // sessions that were open reattach by keeping their id; the registry only
+    // feeds the resume surface + the amber re-attachable counter, never the
+    // launch path (a config launch always starts new).
+    useDetachedRemotesStore.getState().hydrate(savedState.detachedRemotes)
+    // SSH Persistent (resume liveness, tier 1): ONE initial reachability pass
+    // over the distinct hosts we just rehydrated, so a box that is off at
+    // launch is already demoted before the user looks. A single pass, not an
+    // armed timer — the ~90s ping clock only runs while the Running tab is
+    // visible (Phase 3 arms it via armHostPings/disarmHostPings). Fire and
+    // forget: never blocks restore, never throws.
+    void deps.pingAllDetachedHosts()
+    // Per-session "hide this tool" entries key on session ids, which persist
+    // across restarts; drop the ones whose session did not come back (ADR-018 M3).
+    useCommandBarStore.getState().reconcile(useSessionStore.getState().sessions.map((s) => s.id))
+    // #397 Group 4: previously session.clear() unlinked the file here and relied on
+    // the ~1s debounced autosave to rewrite it -- a crash in that window lost every
+    // session. Instead persist the restored (live) set immediately so the on-disk
+    // copy is always current, with no empty gap. main enriches on save, and the
+    // restored resumeUuid/resumeCwd are still on the records (TerminalView clears
+    // them only at spawn), so the exact-resume targets are preserved.
+    try {
+      await window.electronAPI.session.save(buildSessionState())
+    } catch {
+      /* best-effort: the debounced autosave rewrites on the next session-set change */
+    }
+
+    // SSH Persistent (resume liveness): app-restart auto-reattach is UNCHANGED
+    // (each persistent SSH session already re-spawned above and reattaches
+    // optimistically). Reconcile ASYNC — never blocking restore: probe each
+    // restored persistent SSH session's own tmux target, and for any the host
+    // CONFIRMS is gone, flag it so the pane shows the "remote session ended"
+    // notice with Start new (rather than silently handing back a blank session
+    // that looks like the one left running). Unverified hosts flag nothing.
+    void (async () => {
+      const persistentSsh = restoredSessions.filter(
+        (s) => s.sessionType === 'ssh' && !!s.sshConfig && s.sshConfig.detachable !== false && !!s.configId,
+      )
+      if (persistentSsh.length === 0) return
+      const gone = await deps.probeGoneSessions(persistentSsh.map((s) => ({ id: s.id, configId: s.configId })))
+      const store = useSessionStore.getState()
+      for (const id of gone) {
+        // Only flag a session still present (the user may have closed it in the
+        // window between restore and the probe returning).
+        if (store.getSession(id)) store.updateSession(id, { sshRemoteReattachGone: true })
+      }
+    })()
+
+    if (sessionSummary.changed > 0) {
+      const s = useSettingsStore.getState()
+      if (!s.settings.colourMigrationNoticeDismissed && !s.settings.colourMigrationNoticePending) {
+        s.updateSettings({ colourMigrationNoticePending: true })
+      }
+    }
+
+    console.log('[App] Sessions restored')
+    // ADR-009 (Lens C, R7): the restore landed -- the saved file is now
+    // represented by the live set, so a later zero-session close may clear it.
+    restoreUnsettledRef.current = false
+    return true
+  } catch (err) {
+    console.error('[App] Failed to restore sessions:', err)
+    // The restore did NOT land: leave restoreUnsettledRef set so a close now
+    // keeps the saved file rather than clearing it under an empty live set.
     return false
   }
 }

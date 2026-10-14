@@ -1,9 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getConductorMcpPort, mcpSessionToken } from '../conductor-mcp-server'
-import { buildStatuslineSetting } from '../providers/claude/statusline-command'
-import { statusPostUrl } from '../providers/claude/ssh-shim'
+import { getConductorMcpPort, issueMcpSessionToken } from '../conductor-mcp-server'
+import { getProvider } from '../providers'
 import { atomicWriteSecure, mkdirSecure, hardenCredentialDir } from '../account-profiles'
 import { logWarn } from '../debug-logger'
 
@@ -63,7 +62,12 @@ export interface WriteSessionSettingsOptions {
   /** U2: when provided, inject the CCC statusLine command per-session (pointing
    *  at `<resourcesDir>/scripts/claude-multi-statusline.js`) instead of writing
    *  it into the user's global ~/.claude/settings.json. Overrides any statusLine
-   *  inherited from the shared-settings clone. */
+   *  inherited from the shared-settings clone. When the command cannot be set
+   *  up (a path the shell would read as more than a path, or a deployed
+   *  script a launch may not run, which the provider says in the log), the
+   *  app's status line is not set up and the clone's own statusLine stays,
+   *  exactly as when no resourcesDir is given (the app's status line switched
+   *  off). */
   resourcesDir?: string
   /** 2026-08-14 (SEC-BATCH FLAG): union CCC's own Agent Canvas tools into
    *  permissions.allow so the render->review loop doesn't stall in approval
@@ -139,9 +143,12 @@ export function writeLocalSessionSettings(sessionId: string, opts: WriteSessionS
   // command carries no argv[3] at all and the bridge degrades to the status-file
   // delivery — never a fallback that would put the URL back on the command line.
   if (opts.resourcesDir) {
+    // The Claude package's statusline helpers, through the registered
+    // provider (WP2 PR 4: no deep import into the package).
+    const claude = getProvider('claude')
     let statusUrl = ''
     try {
-      statusUrl = statusPostUrl(sessionId, undefined, getConductorMcpPort(), true)
+      statusUrl = claude.statusPostUrl?.(sessionId, undefined, getConductorMcpPort(), true) ?? ''
     } catch {
       statusUrl = ''
     }
@@ -151,7 +158,16 @@ export function writeLocalSessionSettings(sessionId: string, opts: WriteSessionS
     } else {
       removeLocalSessionStatusUrl(sessionId)
     }
-    sesCfg.statusLine = buildStatuslineSetting(opts.resourcesDir, sessionId, urlFile || undefined)
+    const statusLine = claude.statuslineSetting?.(opts.resourcesDir, sessionId, urlFile || undefined)
+    if (statusLine) {
+      sesCfg.statusLine = statusLine
+    } else if (statusLine === null) {
+      // The command would carry a folder path the shell reads as more than a
+      // path: the app's status line is not set up (statusline-command.ts).
+      // The user's own statusLine from the shared clone stays, as it does
+      // with the app's status line switched off.
+      logWarn(`[per-session-settings] session ${sessionId}: the app's status line is not set up: the resources folder's or the home folder's path holds a character a shell reads as more than a path ($, a backtick, a double quote or a control character; on Windows % or !; elsewhere a backslash). A status line of your own, if you set one, stays.`)
+    }
   }
 
   // Union the canvas tools into permissions.allow, preserving everything the
@@ -214,7 +230,7 @@ export function writeLocalSessionMcpConfig(sessionId: string, includeConductor =
     // endpoint, so follow-up POSTs carry it too.
     mcpServers['conductor'] = {
       type: 'sse',
-      url: `http://localhost:${mcpPort}/sse?cccSessionId=${encodedSid}&token=${mcpSessionToken(sessionId)}`,
+      url: `http://localhost:${mcpPort}/sse?cccSessionId=${encodedSid}&token=${issueMcpSessionToken(sessionId, 'claude')}`,
     }
   }
   const cfg = { mcpServers }

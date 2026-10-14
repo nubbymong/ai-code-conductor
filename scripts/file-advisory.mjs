@@ -36,7 +36,7 @@ import { resolve, relative, isAbsolute, join } from 'path'
 import { tmpdir } from 'os'
 import { execFileSync } from 'child_process'
 
-const REPO = 'nubbymong/claude-command-center'
+const REPO = 'nubbymong/ai-code-conductor'
 const DEFAULT_CVSS = 'CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:L/I:N/A:N'
 const MAX_SUMMARY = 1024
 
@@ -100,7 +100,7 @@ export function buildPayload({ summary, description, cvss, cwe, range, functions
     vulnerabilities: [
       {
         // 'other' is correct: this app is not published to a package registry.
-        package: { ecosystem: 'other', name: 'claude-command-center' },
+        package: { ecosystem: 'other', name: 'ai-code-conductor' },
         vulnerable_version_range: range || '<= 2.1.0-beta.5',
         vulnerable_functions: functions && functions.length > 0 ? functions : undefined
       }

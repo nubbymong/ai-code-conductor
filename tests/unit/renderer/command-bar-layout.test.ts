@@ -58,7 +58,9 @@ describe('clusters inside a band follow the target, named for THIS session', () 
   it('cluster titles name the agent and the machine', () => {
     expect(clusterTitle('agent', codex)).toBe('These run in Codex')
     expect(clusterTitle('agent', ssh)).toBe('These run in Claude on box')
-    expect(clusterTitle('partner', ssh)).toContain('this PC')
+    // #86: an SSH session's partner shell runs on the host, and its mark says so.
+    expect(clusterTitle('partner', ssh)).toBe('These run in the partner shell on box')
+    expect(clusterTitle('partner', local)).toBe('These run in the partner shell')
     expect(clusterTitle('main-shell', term)).toBe('These run in this shell')
   })
   it('sections group chips inside a cluster: unsectioned first, then the band\'s own sections in order', () => {
@@ -86,7 +88,9 @@ describe('applicability -- computed, never stored', () => {
   })
   it('a secret-bearing shell button whose shell is remote cannot run; a local partner can', () => {
     expect(inapplicability(cmd({ id: 'r', target: 'claude', kind: 'shell', hasSecretArg: true }), sessionCapabilities({ provider: 'claude', sessionType: 'ssh', shellOnly: true, configId: 'cfg' } as never))?.reason).toContain('this PC only')
-    expect(inapplicability(cmd({ id: 'l', target: 'partner', hasSecretArg: true }), ssh)).toBeNull()
+    expect(inapplicability(cmd({ id: 'l', target: 'partner', hasSecretArg: true }), local)).toBeNull()
+    // #86: an SSH session's partner is a shell on the host now, where main sets no env var
+    expect(inapplicability(cmd({ id: 'l', target: 'partner', hasSecretArg: true }), ssh)?.reason).toContain('this PC only')
   })
   it('a page button always applies', () => {
     expect(inapplicability(cmd({ id: 'pg', kind: 'page', pageUrl: 'http://x' }), term)).toBeNull()
@@ -96,7 +100,7 @@ describe('applicability -- computed, never stored', () => {
 describe('chip title = menu header, one string', () => {
   it('says kind, where it runs, scope, section and args', () => {
     const t = chipTitle(cmd({ id: 'Deploy', label: 'Deploy', target: 'partner', defaultArgs: ['-Env prod'] }), ssh, 'Deploy')
-    expect(t).toBe('Deploy — Shell line · runs in the partner shell (this PC) · Global — every config · section Deploy · args: -Env prod (Ctrl+click to change for one run)')
+    expect(t).toBe('Deploy — Shell line · runs in the partner shell on box · Global — every config · section Deploy · args: -Env prod (Ctrl+click to change for one run)')
   })
   it('a Codex prompt names Codex; a page names its url', () => {
     expect(chipTitle(cmd({ id: 'Fix', label: 'Fix' }), codex)).toContain('runs in the Codex terminal')

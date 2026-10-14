@@ -6,9 +6,18 @@
 // the fourteen in between.
 
 import { describe, it, expect } from 'vitest'
-import { decideUpgradeFlow, entriesSince, bootWhatsNewSurface, seenVersionFor, lastRunVersionOf } from '../../../src/renderer/onboarding/upgrade-flow'
-import { compareVersions, crossedReleaseLine, releaseLine } from '../../../src/shared/version-order'
-import { sectionsFor } from '../../../src/renderer/onboarding/WhatsNewV2Step'
+import * as UF from '../../../src/renderer/onboarding/upgrade-flow'
+import * as VO from '../../../src/shared/version-order'
+import * as WN from '../../../src/renderer/onboarding/WhatsNewV2Step'
+
+const { decideUpgradeFlow, entriesSince, bootWhatsNewSurface, seenVersionFor, lastRunVersionOf } = UF
+const { compareVersions, crossedReleaseLine, releaseLine } = VO
+// Read off the module object, so a run against a build without them fails on
+// the assertion rather than on the import.
+const { sectionsFor } = WN as any
+const { whatsNewAnchorFor, lastFinalBefore, newSince } = UF as any
+const { finalRelease } = VO as any
+const ALL_SECTIONS: any[] = (WN as any).WHATS_NEW_SECTIONS ?? []
 
 describe('compareVersions', () => {
   it('orders the release tuple', () => {
@@ -178,60 +187,159 @@ describe('entriesSince', () => {
   })
 })
 
-describe('sectionsFor — which highlights the upgrade page shows', () => {
-  // Was `cardsFor`, returning a flat list of paragraph cards. The page is now
-  // named sections with one line per item (user call 2026-08-21); the cohort
-  // rules underneath are unchanged, so these are the same assertions against
-  // the flattened item titles.
-  const titlesFor = (from: string | undefined, to: string) =>
-    sectionsFor(from, to).flatMap((s) => s.items.map((i) => i.title))
+describe('sectionsFor — which highlights the upgrade page shows, by anchor', () => {
+  // Was keyed on the release LINE (O1): every 2.0 or 2.1 arrival got the whole
+  // 2.1 set, and a 2.1.x build named only "2.1". Now each line carries the
+  // first build that shipped it and shows when it is newer than the anchor
+  // (whatsNewAnchorFor). Cohort (fresh / upgrade-only) and provider filters
+  // are the page's (summarySections); these are the raw sets.
+  const titlesFor = (anchor: string | undefined) =>
+    sectionsFor(anchor).flatMap((s: any) => s.items.map((i: any) => i.title))
 
-  it('shows the 2.1 story to someone coming from 2.0', () => {
-    const titles = titlesFor('2.0.4', '2.1.0')
+  it('shows the 2.1 story and the 2.1.1 one to someone coming from 2.0', () => {
+    const titles = titlesFor('2.0.4')
     expect(titles).toContain('New name.')
     expect(titles).toContain('Agent Canvas.')
+    expect(titles).toContain('Codex, no longer Beta.')
     // They lived through 2.0; re-announcing it is noise.
     expect(titles).not.toContain('Guided setup.')
   })
 
-  it('shows both to someone arriving from 1.x', () => {
-    const titles = titlesFor('1.5.45', '2.1.0')
+  it('shows everything to someone arriving from 1.x, oldest first', () => {
+    const titles = titlesFor('1.5.45')
     expect(titles).toContain('Guided setup.')
     expect(titles).toContain('New name.')
     // Oldest first: the order the app actually changed in.
     expect(titles.indexOf('Guided setup.')).toBeLessThan(titles.indexOf('New name.'))
+    expect(titles.indexOf('New name.')).toBeLessThan(titles.indexOf('Codex, no longer Beta.'))
   })
 
-  it('shows both when the stored version cannot be read', () => {
-    expect(titlesFor(undefined, '2.1.0')).toContain('Guided setup.')
-    expect(titlesFor('garbage', '2.1.0')).toContain('New name.')
+  it('shows everything when the stored version cannot be read', () => {
+    expect(titlesFor(undefined)).toContain('Guided setup.')
+    expect(titlesFor('garbage')).toContain('New name.')
   })
 
-  it('keeps a beta tester on the 2.1 set', () => {
-    const titles = titlesFor('2.1.0-beta.13', '2.1.0-beta.14')
-    expect(titles).toContain('New name.')
-    expect(titles).not.toContain('Guided setup.')
+  it('O1: a 2.1.0 user gets the 2.1.1 set, and none of the 2.1 set', () => {
+    const titles = titlesFor('2.1.0')
+    expect(titles).toContain('Codex, no longer Beta.')
+    expect(titles).toContain('Codex asks once.')
+    for (const old of ['New name.', 'Agent Canvas.', 'SSH Persistent.', 'Insights.']) expect(titles, old).not.toContain(old)
   })
 
-  it('falls back to the NEWEST set on a future line, never the oldest', () => {
-    // 2.2 has no set yet. Showing 2.0 content under a "What's new in 2.2"
-    // heading is the bug this page already had once; the newest known set is
-    // the least wrong thing to show.
-    const titles = titlesFor('2.1.0', '2.2.0')
-    expect(titles).toContain('New name.')
-    expect(titles).not.toContain('Guided setup.')
+  it('nothing curated since the anchor gives nothing: the page then shows its fixes line, never an older set', () => {
+    // The beta.2 rule fell back to the NEWEST set on a line with none of its
+    // own, which is the owner's complaint again on the next patch (O1 verdict).
+    expect(titlesFor('2.1.1')).toEqual([])
+    expect(titlesFor('2.2.0')).toEqual([])
   })
 
   it('every line stays ONE line — the whole point of the rewrite', () => {
     // The rejected version had 3-4 sentence descriptions per card. A cap that
     // no input can trip is worse than none, so this is deliberately tight
-    // enough to fail if someone pastes a paragraph back in.
-    for (const s of [...sectionsFor('2.0.0', '2.1.0'), ...sectionsFor('1.0.0', '2.1.0')]) {
+    // enough to fail if someone pastes a paragraph back in. Every set,
+    // the 2.1.1 one included.
+    expect(ALL_SECTIONS.length).toBeGreaterThan(0)
+    for (const s of ALL_SECTIONS) {
       for (const it of s.items) {
         expect(it.desc.length, `${it.title} is too long for one line`).toBeLessThanOrEqual(110)
         expect(it.title.length, `${it.title} is not a short lead-in`).toBeLessThanOrEqual(32)
       }
     }
+  })
+})
+
+describe('finalRelease / lastFinalBefore', () => {
+  it('finalRelease drops the prerelease and keeps a final as itself', () => {
+    expect(finalRelease('2.1.1-beta.2')).toBe('2.1.1')
+    expect(finalRelease('2.1.0-rc.17')).toBe('2.1.0')
+    expect(finalRelease('v2.1.0')).toBe('2.1.0')
+    expect(finalRelease('garbage')).toBeNull()
+  })
+
+  it('lastFinalBefore is the newest FINAL release below a version, skipping prereleases', () => {
+    const log = [{ version: '2.1.1-beta.2' }, { version: '2.1.0' }, { version: '2.1.0-rc.17' }, { version: '2.0.5' }, { version: 'junk' }]
+    expect(lastFinalBefore('2.1.1', log)).toBe('2.1.0')
+    expect(lastFinalBefore('2.1.0', log)).toBe('2.0.5')
+    expect(lastFinalBefore('2.0.5', log)).toBeUndefined()
+  })
+})
+
+describe("whatsNewAnchorFor: where What's New diffs from (owner rule 2026-10-11)", () => {
+  // Content is keyed to the FINAL release: prereleases of a release never
+  // count as having seen it; a prerelease of an OLDER release counts as that
+  // release; a fresh install has no anchor.
+  const releases = [
+    { version: '2.1.1-beta.2' }, { version: '2.1.1-beta.1' }, { version: '2.1.0' }, { version: '2.1.0-rc.17' },
+    { version: '2.0.5' }, { version: '2.0.0' }, { version: '1.5.45' },
+  ]
+  const a = (seenVersion: string | undefined, currentVersion: string) => whatsNewAnchorFor({ seenVersion, currentVersion, releases })
+
+  it('a fresh install has none', () => {
+    expect(a(undefined, '2.1.1-beta.3')).toBeUndefined()
+  })
+
+  it('a stable 2.1.0 user diffs from 2.1.0, on every 2.1.1 build', () => {
+    expect(a('2.1.0', '2.1.1-beta.3')).toBe('2.1.0')
+    expect(a('2.1.0', '2.1.1')).toBe('2.1.0')
+  })
+
+  it('a prerelease never counts as having seen its own release: beta.1 -> beta.2 -> beta.3 -> 2.1.1 all diff from 2.1.0', () => {
+    expect(a('2.1.1-beta.1', '2.1.1-beta.2')).toBe('2.1.0')
+    expect(a('2.1.1-beta.2', '2.1.1-beta.3')).toBe('2.1.0')
+    expect(a('2.1.1-beta.3', '2.1.1')).toBe('2.1.0')
+  })
+
+  it('a prerelease of an OLDER release counts as that release (2.1.0-rc.17 = 2.1.0)', () => {
+    expect(a('2.1.0-rc.17', '2.1.1-beta.3')).toBe('2.1.0')
+    expect(a('2.1.0-rc.17', '2.1.1')).toBe('2.1.0')
+  })
+
+  it('older finals stay where they are', () => {
+    expect(a('2.0.4', '2.1.1')).toBe('2.0.4')
+    expect(a('1.5.45', '2.1.1-beta.3')).toBe('1.5.45')
+  })
+
+  it('the next patch diffs from the last final: 2.1.1 -> 2.1.2 (and its prereleases) from 2.1.1', () => {
+    // The seen final counts even with no 2.1.1 entry in the list.
+    expect(a('2.1.1', '2.1.2-beta.1')).toBe('2.1.1')
+    expect(a('2.1.1', '2.1.2')).toBe('2.1.1')
+  })
+
+  it("a downgrade onto a prerelease still shows that release's whole story", () => {
+    expect(a('2.1.1', '2.1.1-beta.3')).toBe('2.1.0')
+  })
+
+  it('a pre-rename 2.1.0 beta tester arriving at the 2.1.0 final diffs from the last 2.0 final', () => {
+    expect(a('2.1.0-beta.5', '2.1.0')).toBe('2.0.5')
+  })
+
+  it('an unreadable stamp is kept (it ranks oldest, so everything shows)', () => {
+    expect(a('garbage', '2.1.1-beta.3')).toBe('garbage')
+  })
+
+  it('composes with the #369 clamp: a stamp written ahead of its build diffs from what ran', () => {
+    // Values that do not floor to 2.1.0, so the clamp decides them: a run of
+    // 2.0.5 under a stamp of the running prerelease, and a final build
+    // stamped ahead of the 2.1.0 that ran (no prerelease floor there).
+    const seen = seenVersionFor({ lastSeenVersion: '2.1.1-beta.3', lastRunVersion: '2.0.5' })
+    expect(a(seen, '2.1.1-beta.3')).toBe('2.0.5')
+    const seenFinal = seenVersionFor({ lastSeenVersion: '2.1.1', lastRunVersion: '2.1.0' })
+    expect(a(seenFinal, '2.1.1')).toBe('2.1.0')
+  })
+})
+
+describe('newSince: one rule for every line and page', () => {
+  it('newer than the anchor shows; at or below it does not; no anchor shows everything', () => {
+    expect(newSince('2.1.1-beta.2', '2.1.0')).toBe(true)
+    expect(newSince('2.1.0-rc.1', '2.1.0')).toBe(false)
+    expect(newSince('2.1.0', '2.1.0')).toBe(false)
+    expect(newSince('2.0.0', undefined)).toBe(true)
+  })
+
+  it("has NO upper bound: a line tagged with its final shows on that release's prereleases", () => {
+    // O2 verdict: with a "since <= current" bound, a tag of 2.1.1 would hide
+    // on every 2.1.1 prerelease, the tester's view included.
+    expect(newSince('2.1.1', '2.1.0')).toBe(true)
   })
 })
 

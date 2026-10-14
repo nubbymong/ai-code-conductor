@@ -1,10 +1,12 @@
 import React from 'react'
 import { useTipsStore, countUnseenTips } from '../stores/tipsStore'
 import type { ViewType } from '../types/views'
-import { resolveBody, resolveFocusHint } from '../tips-library'
+import { resolveBody, resolveFocusHint, TIP_PROVIDER_NAMES } from '../tips-library'
 import { BrandMark } from './BrandMark'
+import { ProviderMark } from './sidebar/Badges'
 import { LightbulbMark } from './ui/LightbulbMark'
 import { launchAskConductor } from '../lib/askConductor'
+import { ASK_CLAUDE_OFF, useAskConductorBlocked } from '../lib/askConductorGate'
 import { isContextMenuGesture } from '../lib/pointer'
 import {
   DialogBody,
@@ -137,6 +139,8 @@ export default function TipCard({ onClose, onNavigate, sidebarCollapsed }: Props
   const markTipActed = useTipsStore((s) => s.markTipActed)
   const pickNextTip = useTipsStore((s) => s.pickNextTip)
   const silenceUntilRestart = useTipsStore((s) => s.silenceUntilRestart)
+  // Ask Conductor runs on Claude Code: while that is off, Ask is not offered.
+  const askOff = useAskConductorBlocked()
 
   const [overflowOpen, setOverflowOpen] = React.useState(false)
   const [anchor, setAnchor] = React.useState(anchorToPill)
@@ -238,6 +242,9 @@ export default function TipCard({ onClose, onNavigate, sidebarCollapsed }: Props
   const body = resolveBody(content, isMac)
   const focusHint = resolveFocusHint(content, isMac)
   const unseen = countUnseenTips(tracking)
+  // The two ways this card opens Ask Conductor (Discuss, and a tip whose action
+  // is Ask): with Claude Code off they are disabled and say why.
+  const askAction = content.actionTarget === 'ask-conductor'
 
   const handleAction = () => {
     markTipActed(tip.id)
@@ -335,6 +342,13 @@ export default function TipCard({ onClose, onNavigate, sidebarCollapsed }: Props
             {unseen > 0 && <span data-testid="tip-card-unseen"> · {unseen} new</span>}
           </p>
           <h2 id="tip-card-title" className="text-[13.5px] font-semibold leading-snug">
+            {/* A tip about one assistant alone carries that assistant's mark
+                (the owner's 2026-10-04 answer: a mark, not a filter). */}
+            {tip.provider && (
+              <span className="inline-block align-[-2px] mr-1.5">
+                <ProviderMark providerId={tip.provider} size={15} title={TIP_PROVIDER_NAMES[tip.provider]} />
+              </span>
+            )}
             {content.title}
           </h2>
         </div>
@@ -424,7 +438,8 @@ export default function TipCard({ onClose, onNavigate, sidebarCollapsed }: Props
         <DialogButton
           data-ux-id="tip-ask-conductor"
           onClick={handleDiscuss}
-          title="Ask Conductor about this tip"
+          disabled={askOff}
+          title={askOff ? ASK_CLAUDE_OFF : 'Ask Conductor about this tip'}
           testId="tip-card-discuss"
           style={{
             color: 'var(--brand)',
@@ -442,6 +457,8 @@ export default function TipCard({ onClose, onNavigate, sidebarCollapsed }: Props
           <DialogButton
             variant="primary"
             onClick={handleAction}
+            disabled={askAction && askOff}
+            title={askAction && askOff ? ASK_CLAUDE_OFF : undefined}
             testId="tip-card-primary"
             style={{ background: 'var(--accent-tip)', color: ON_BRAND }}
           >

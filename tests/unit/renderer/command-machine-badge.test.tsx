@@ -7,6 +7,11 @@
  * "SSH: user@host" line already say where those run, so it was redundant chrome
  * over the command buttons. (#570 had already cut the raw-IP form down to a
  * side label; this removes the remaining "remote" side label.)
+ *
+ * #86 (2.1.1): the partner shell of an SSH session runs on the host now, so the
+ * two panes are on the same machine and the "this PC" badge would be a lie
+ * there: no cluster carries a machine badge on any session type. The cluster
+ * tooltip names the host.
  */
 import React from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
@@ -52,7 +57,7 @@ describe('TargetMark machine badge (harmonise-remote Phase 3)', () => {
     expect(mark!.getAttribute('title')).toContain('192.168.50.201')
   })
 
-  it('shows NO badge on the main-shell cluster, but KEEPS "this PC" on the partner cluster on SSH', () => {
+  it('shows NO badge on the main-shell cluster, nor (#86) "this PC" on the partner cluster on SSH: its tooltip names the host', () => {
     const caps = sessionCapabilities(ssh())
     render(
       <>
@@ -60,8 +65,9 @@ describe('TargetMark machine badge (harmonise-remote Phase 3)', () => {
         <TargetMark kind="partner" caps={caps} />
       </>,
     )
-    const badges = Array.from(host!.querySelectorAll('[data-testid="command-machine-badge"]')).map((b) => b.textContent)
-    expect(badges).toEqual(['this PC'])
+    expect(host!.querySelector('[data-testid="command-machine-badge"]')).toBeNull()
+    const mark = host!.querySelector('[data-testid="command-cluster-partner"]')
+    expect(mark!.getAttribute('title')).toBe('These run in the partner shell on 192.168.50.201')
   })
 
   it('shows no badge at all when both panes are on this PC', () => {

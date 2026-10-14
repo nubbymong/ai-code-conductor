@@ -38,6 +38,10 @@ describe('canvas IPC channels', () => {
     expect(IPC.CANVAS_EVIDENCE_READ).toBe('canvas:evidenceRead')
     expect(IPC.CANVAS_SET_PACK_NAME).toBe('canvas:setPackName')
     expect(IPC.CANVAS_FRAME_NAVIGATED).toBe('canvas:frameNavigated')
+    // Main asks the renderer to read or type a canvas marker
+    // at a Claude Code session's prompt, and the renderer answers.
+    expect(IPC.CANVAS_CLAUDE_MARKER_ASK).toBe('canvas:claudeMarkerAsk')
+    expect(IPC.CANVAS_CLAUDE_MARKER_ANSWER).toBe('canvas:claudeMarkerAnswer')
   })
 
   it('no longer carries the channels the settled machine removed', () => {

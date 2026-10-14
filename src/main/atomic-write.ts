@@ -213,13 +213,15 @@ export function atomicWriteFileSync(file: string, data: string | Uint8Array, opt
       // O_CREAT means a failure AFTER the open (ENOSPC, EIO, EDQUOT) still
       // leaves a partial file behind, under a random name nothing will reuse.
       if (err?.code !== 'EEXIST') { try { unlinkSync(tmp) } catch { /* best-effort */ } }
-      // Tag which stage failed. Today both consumers (conductor-mcp-server,
-      // codex-review-usage) use this ONLY to pick a log word -- no caller may use
-      // it to authorise a direct write over the real target. If one ever does,
-      // it MUST gate on `isRenameStageFailure` (own-property only): a staging
-      // failure that fell back would open the target with O_TRUNC and destroy a
-      // file the write never got near, which is strictly worse than the original
-      // failure. Keeping the tag accurate now keeps that guard honest later.
+      // Tag which stage failed. conductor-mcp-server and codex-review-usage
+      // use this only to pick a log word. script-deploy is the one caller that
+      // uses it to authorise a direct write over the real target (its Windows
+      // in-place write after a refused rename), and it gates on
+      // `isRenameStageFailure`. Any caller that does so MUST gate on it
+      // (own-property only): a staging failure that fell back would open the
+      // target with O_TRUNC and destroy a file the write never got near,
+      // which is strictly worse than the original failure. Keeping the tag
+      // accurate now keeps that guard honest later.
       tagStage(err, 'write')
       throw err
     }

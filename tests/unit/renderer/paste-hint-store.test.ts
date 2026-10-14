@@ -23,6 +23,14 @@ describe('pasteHintStore', () => {
     expect(usePasteHintStore.getState().hints.s1).toBeUndefined()
   })
 
+  it('a note given a longer time stays up for that time (#86: the partner note)', () => {
+    usePasteHintStore.getState().show('s1', 'long note', 6000)
+    vi.advanceTimersByTime(3000)
+    expect(usePasteHintStore.getState().hints.s1).toBe('long note')
+    vi.advanceTimersByTime(3000)
+    expect(usePasteHintStore.getState().hints.s1).toBeUndefined()
+  })
+
   it('keeps hints independent per session', () => {
     usePasteHintStore.getState().show('s1', 'x')
     usePasteHintStore.getState().show('s2', 'y')

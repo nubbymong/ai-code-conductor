@@ -2,11 +2,12 @@
  * Boot-gate sequencing unit tests.
  *
  * First-launch gates (LogsWipe, the onboarding harness, training tour, GitHub
- * onboarding, machine-name prompt, logging consent, resume) each have an
- * independent trigger, so without a shared priority they mount simultaneously
- * and stack (VM finding #1, 2026-06-13: consent dialog painted on top of the
- * What's New modal; and 2026-08-21: release notes, the resume prompt and the
- * Sentinel panel all at once).
+ * onboarding, logging consent, resume) each have an independent trigger, so
+ * without a shared priority they mount simultaneously and stack (VM finding #1,
+ * 2026-06-13: consent dialog painted on top of the What's New modal; and
+ * 2026-08-21: release notes, the resume prompt and the Sentinel panel all at
+ * once). The machine-name prompt gate is gone (2.1.1): nothing ever set
+ * showMachineNamePrompt to true, so it was dead code.
  *
  * pickBootGate is the single priority chain: it returns the one gate allowed
  * to render right now, or null when none should.
@@ -15,6 +16,8 @@
  * release-notes surface, so a notes launch arrives here as `onboardingDue`.
  */
 import { describe, it, expect } from 'vitest'
+import * as fs from 'fs'
+import * as path from 'path'
 import { pickBootGate, type BootGateState } from '../../../src/renderer/utils/bootGates'
 
 function makeState(overrides: Partial<BootGateState> = {}): BootGateState {
@@ -27,11 +30,9 @@ function makeState(overrides: Partial<BootGateState> = {}): BootGateState {
     tourActive: false,
     showGuidedConfig: false,
     showGitHubOnboarding: false,
-    showMachineNamePrompt: false,
     loggingConsentSeen: true,
     resumePending: false,
     whatsNewDue: false,
-    trainingDue: false,
     githubOnboardingDue: false,
     ...overrides,
   }
@@ -55,6 +56,11 @@ describe('pickBootGate — the tour and the first-config dialog own turns (#609)
     expect(pickBootGate(makeState({ showGuidedConfig: true, resumePending: true }))).toBe('guidedConfig')
   })
 
+  it('P3.12 round 2 (W9): a due conversation indexing notice comes before the first-config dialog, which launches a session', () => {
+    expect(pickBootGate(makeState({ showGuidedConfig: true, loggingConsentSeen: false }))).toBe('loggingConsent')
+    expect(pickBootGate(makeState({ showGuidedConfig: true, loggingConsentSeen: true }))).toBe('guidedConfig')
+  })
+
   it('the tour outranks the dialog it can open', () => {
     expect(pickBootGate(makeState({ tourActive: true, showGuidedConfig: true }))).toBe('guidedTour')
   })
@@ -67,7 +73,7 @@ describe('pickBootGate — the tour and the first-config dialog own turns (#609)
   it('neither is starved by a pending boot timer', () => {
     // They are opened by a user action that has ALREADY happened, so unlike the
     // one-time notices they must not wait on the *Due short-circuit.
-    expect(pickBootGate(makeState({ tourActive: true, whatsNewDue: true, trainingDue: true }))).toBe('guidedTour')
+    expect(pickBootGate(makeState({ tourActive: true, whatsNewDue: true }))).toBe('guidedTour')
     expect(pickBootGate(makeState({ showGuidedConfig: true, githubOnboardingDue: true }))).toBe('guidedConfig')
   })
 
@@ -83,12 +89,12 @@ describe('pickBootGate — the tour and the first-config dialog own turns (#609)
     // input that can produce an unknown value fails here.
     const known = new Set([
       'logsWipe', 'onboarding', 'training', 'guidedTour', 'guidedConfig',
-      'githubOnboarding', 'machineName', 'loggingConsent', 'resume', 'multiSpawnIntro',
+      'githubOnboarding', 'codexReconfirm', 'loggingConsent', 'resume', 'multiSpawnIntro', 'codexReplace', 'helloCodex',
     ])
     const flags = [
       'onboardingDue', 'showTraining', 'showTrainingAll', 'tourActive', 'showGuidedConfig',
-      'showGitHubOnboarding', 'showMachineNamePrompt', 'loggingConsentSeen', 'resumePending',
-      'multiSpawnIntroDue', 'whatsNewDue', 'trainingDue', 'githubOnboardingDue',
+      'showGitHubOnboarding', 'codexReconfirmDue', 'loggingConsentSeen', 'resumePending',
+      'multiSpawnIntroDue', 'codexReplaceDue', 'helloCodexOpen', 'whatsNewDue', 'githubOnboardingDue',
     ] as const
     for (let mask = 0; mask < (1 << flags.length); mask++) {
       const over: Record<string, boolean> = {}
@@ -114,7 +120,6 @@ describe('pickBootGate', () => {
       onboardingDue: true,
       showTraining: true,
       showGitHubOnboarding: true,
-      showMachineNamePrompt: true,
       loggingConsentSeen: false,
       resumePending: true,
     })
@@ -125,12 +130,11 @@ describe('pickBootGate', () => {
     expect(pickBootGate(makeState({ onboardingDue: true, loggingConsentSeen: false }))).toBe('onboarding')
   })
 
-  it('the harness outranks training, GitHub onboarding, machine name and resume', () => {
+  it('the harness outranks training, GitHub onboarding and resume', () => {
     const state = makeState({
       onboardingDue: true,
       showTraining: true,
       showGitHubOnboarding: true,
-      showMachineNamePrompt: true,
       resumePending: true,
     })
     expect(pickBootGate(state)).toBe('onboarding')
@@ -154,28 +158,44 @@ describe('pickBootGate', () => {
     // surface must not let resume paint for the few hundred ms before it opens
     // and then get swapped out from under the user mid-decision.
     expect(pickBootGate(makeState({ resumePending: true, whatsNewDue: true }))).toBeNull()
-    expect(pickBootGate(makeState({ resumePending: true, trainingDue: true }))).toBeNull()
     expect(pickBootGate(makeState({ resumePending: true, githubOnboardingDue: true }))).toBeNull()
+  })
+
+  // [host] PR 4 VM final: nothing opens the tour by itself any more (the
+  // onboarding page replaced its auto-open, ba6b0df9, 2026-08-21), so a tour
+  // card the user has not seen must hold no gate below it. It held them all
+  // (trainingDue in the *Due short-circuit): a boot whose tour version read as
+  // older than a card never showed the resume prompt, the consent notice, the
+  // Codex question, the Multi Spawn page or Hello Codex.
+  it('an unseen tour card holds nothing below it: every gate takes its turn', () => {
+    const unseen = { trainingDue: true } as unknown as Partial<BootGateState>
+    expect(pickBootGate(makeState({ ...unseen, resumePending: true }))).toBe('resume')
+    expect(pickBootGate(makeState({ ...unseen, loggingConsentSeen: false }))).toBe('loggingConsent')
+    expect(pickBootGate(makeState({ ...unseen, codexReconfirmDue: true }))).toBe('codexReconfirm')
+    expect(pickBootGate(makeState({ ...unseen, multiSpawnIntroDue: true }))).toBe('multiSpawnIntro')
+    expect(pickBootGate(makeState({ ...unseen, helloCodexOpen: true }))).toBe('helloCodex')
+  })
+
+  it('[host] App feeds the chain no tour-due input, and the GitHub page does not wait on the tour either', () => {
+    const app = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'App.tsx'), 'utf8')
+    expect(app).not.toMatch(/trainingDue/)
+    expect(app).not.toMatch(/shouldShowTraining\(\)|isFirstInstall\(\)/)
   })
 
   it('the one-time consent notice goes before the every-boot resume prompt', () => {
     expect(pickBootGate(makeState({ resumePending: true, loggingConsentSeen: false }))).toBe('loggingConsent')
   })
 
-  it('training outranks onboarding and machine name', () => {
-    expect(pickBootGate(makeState({ showTraining: true, showGitHubOnboarding: true, showMachineNamePrompt: true }))).toBe('training')
+  it('training outranks GitHub onboarding', () => {
+    expect(pickBootGate(makeState({ showTraining: true, showGitHubOnboarding: true }))).toBe('training')
   })
 
   it('help-mode tour (showTrainingAll) counts as the training gate', () => {
     expect(pickBootGate(makeState({ showTraining: true, showTrainingAll: true }))).toBe('training')
   })
 
-  it('GitHub onboarding outranks the machine-name prompt', () => {
-    expect(pickBootGate(makeState({ showGitHubOnboarding: true, showMachineNamePrompt: true }))).toBe('githubOnboarding')
-  })
-
-  it('machine-name prompt shows when nothing above it is pending', () => {
-    expect(pickBootGate(makeState({ showMachineNamePrompt: true, loggingConsentSeen: false }))).toBe('machineName')
+  it('GitHub onboarding shows when nothing above it is pending', () => {
+    expect(pickBootGate(makeState({ showGitHubOnboarding: true, loggingConsentSeen: false }))).toBe('githubOnboarding')
   })
 
   it('logging consent shows only when every other gate is resolved', () => {
@@ -186,9 +206,6 @@ describe('pickBootGate', () => {
     expect(pickBootGate(makeState({ loggingConsentSeen: false, whatsNewDue: true }))).toBeNull()
   })
 
-  it('logging consent waits while the training tour is due but not yet open', () => {
-    expect(pickBootGate(makeState({ loggingConsentSeen: false, trainingDue: true }))).toBeNull()
-  })
 
   it('logging consent waits while GitHub onboarding is due but its 120ms timer has not fired yet', () => {
     expect(pickBootGate(makeState({ loggingConsentSeen: false, githubOnboardingDue: true }))).toBeNull()
@@ -235,5 +252,77 @@ describe('pickBootGate — the Multi Spawn startup page', () => {
     const { multiSpawnIntroDue, ...withoutIt } = makeState({ multiSpawnIntroDue: true })
     expect(multiSpawnIntroDue).toBe(true)
     expect(pickBootGate(withoutIt as BootGateState)).toBeNull()
+  })
+})
+
+/**
+ * WP2 commit 6f: the Codex introduction's one-time takeover takes the LAST
+ * turn. It must never cover a running setup, so it waits for every gate above
+ * it, the `*Due` waits included. App asks this chain whether the takeover
+ * would be next (helloCodexOpen: true) before it latches it open.
+ */
+describe('pickBootGate: the Codex introduction takeover', () => {
+  it('takes its turn when nothing else is up', () => {
+    expect(pickBootGate(makeState({ helloCodexOpen: true }))).toBe('helloCodex')
+  })
+
+  it('waits for every gate above it, the Multi Spawn page included', () => {
+    for (const over of [
+      { onboardingDue: true }, { showTraining: true }, { tourActive: true }, { showGuidedConfig: true },
+      { showGitHubOnboarding: true }, { codexReconfirmDue: true }, { loggingConsentSeen: false }, { resumePending: true }, { multiSpawnIntroDue: true },
+      { codexReplaceDue: true },
+    ] as Partial<BootGateState>[]) {
+      const gate = pickBootGate(makeState({ helloCodexOpen: true, ...over }))
+      expect(gate, JSON.stringify(over)).not.toBe('helloCodex')
+      expect(gate, JSON.stringify(over)).not.toBeNull()
+    }
+  })
+
+  it('waits while a gate above it is still due but not yet up', () => {
+    for (const over of [{ whatsNewDue: true }, { githubOnboardingDue: true }] as Partial<BootGateState>[]) {
+      expect(pickBootGate(makeState({ helloCodexOpen: true, ...over })), JSON.stringify(over)).toBeNull()
+    }
+  })
+
+  it('is absent === false, like the other optional gates', () => {
+    expect(pickBootGate(makeState())).toBeNull()
+  })
+})
+
+/**
+ * O5 (owner-agreed 2026-10-11): "Replace this sign-in with a Codex account",
+ * shown once to a 2.1.1-beta.2 user who chose the Codex sign-in already on
+ * this computer. Armed from the first accounts snapshot of a start, which can
+ * land after a page below the notes is already showing, so it sits after
+ * every surface it could otherwise take the screen from, and before the
+ * Codex introduction (which then follows it).
+ */
+describe('pickBootGate: the one-time replace page for the retired Codex sign-in', () => {
+  it('takes its turn when nothing else is up', () => {
+    expect(pickBootGate(makeState({ codexReplaceDue: true }))).toBe('codexReplace')
+  })
+
+  it('waits for every gate above it, the resume prompt and the Multi Spawn page included', () => {
+    for (const over of [
+      { onboardingDue: true }, { showTraining: true }, { tourActive: true }, { showGuidedConfig: true },
+      { showGitHubOnboarding: true }, { codexReconfirmDue: true }, { loggingConsentSeen: false }, { resumePending: true }, { multiSpawnIntroDue: true },
+    ] as Partial<BootGateState>[]) {
+      const gate = pickBootGate(makeState({ codexReplaceDue: true, ...over }))
+      expect(gate, JSON.stringify(over)).not.toBe('codexReplace')
+      expect(gate, JSON.stringify(over)).not.toBeNull()
+    }
+    for (const over of [{ whatsNewDue: true }, { githubOnboardingDue: true }] as Partial<BootGateState>[]) {
+      expect(pickBootGate(makeState({ codexReplaceDue: true, ...over })), JSON.stringify(over)).toBeNull()
+    }
+  })
+
+  it('comes before the Codex introduction, which follows once it is left', () => {
+    expect(pickBootGate(makeState({ codexReplaceDue: true, helloCodexOpen: true }))).toBe('codexReplace')
+    expect(pickBootGate(makeState({ codexReplaceDue: false, helloCodexOpen: true }))).toBe('helloCodex')
+  })
+
+  it('holds the launch confirmations back while it is up, like every gate but the resume offer', async () => {
+    const { launchDialogsSuppressed } = await import('../../../src/renderer/utils/bootGates')
+    expect(launchDialogsSuppressed('codexReplace')).toBe(true)
   })
 })

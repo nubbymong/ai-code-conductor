@@ -46,17 +46,35 @@ const readline = require('readline')
 // name for dotted/worktree paths, which is exactly why worktree conversations
 // were invisible. The case-insensitive readdirSync match in main() is kept as a
 // belt-and-braces guard on top of this.
+//
+// P3.16a round 2 (Q1): a name longer than 200 characters is cut at 200, and
+// `-` and the base-36 absolute value of a 32-bit hash of the WHOLE folder
+// follow it, as Claude Code names it (src/shared/project-key.ts, replicated).
 function encodeProjectPath(p) {
-  return String(p).replace(/[^A-Za-z0-9]/g, '-')
+  const cwd = String(p)
+  const name = cwd.replace(/[^A-Za-z0-9]/g, '-')
+  if (name.length <= 200) return name
+  let h = 0
+  for (let i = 0; i < cwd.length; i++) h = (h << 5) - h + cwd.charCodeAt(i) | 0
+  return name.slice(0, 200) + '-' + Math.abs(h).toString(36)
 }
 
 // ── Project-dir resolution ──────────────────────────────────────────
 // Mangle a cwd and case-insensitively match it against the on-disk
 // ~/.claude/projects folders (belt-and-braces on top of the now-correct
 // mangle). Returns the matched absolute folder path or null. FAIL-SAFE.
-function resolveProjectDir(claudeProjectsDir, cwd) {
+//
+// PR-level ADR-009 round 1 (A3): the folder is named from the cwd's REAL path,
+// as Claude Code names it and as the app does (src/main/logging/
+// transcript-discovery.ts claudeProjectDirName: fs.realpathSync, the JS one),
+// so a folder reached through a link or a junction finds its conversations; a
+// cwd whose real path cannot be read is named as given, as there. `realpath`
+// is injectable for the unit test.
+function resolveProjectDir(claudeProjectsDir, cwd, realpath = fs.realpathSync) {
   try {
-    const encoded = encodeProjectPath(cwd)
+    let folder = cwd
+    try { folder = realpath(cwd) } catch { /* named as given */ }
+    const encoded = encodeProjectPath(folder)
     let dirs
     try { dirs = fs.readdirSync(claudeProjectsDir) } catch { return null }
     for (const d of dirs) {
@@ -152,22 +170,161 @@ function parseWorktrees(porcelainText) {
   return worktrees
 }
 
+// ── Programs from PATH's folders ────────────────────────────────────
+// The picker starts git -- and, on Windows, Claude Code -- only by a full
+// path found in a folder PATH names: never by a bare name (which Windows, or
+// a shell, also looks up in the current folder -- the project). It finds
+// them in-process, never through the where command or a shell; git starts
+// without a shell, and a claude.cmd or claude.bat launcher only through the
+// system cmd.exe, by its full path (buildSpawnTarget). Elsewhere Claude Code
+// is started by its name, as before. The folder rule is the app's own
+// (src/main/windows-programs.ts and src/main/providers/windows-path-names.ts,
+// which this script cannot import; a parity test holds the copy to the same
+// answer): on Windows only a fully qualified folder -- a drive, or a share --
+// with one pair of surrounding quotes dropped, never one holding an
+// unexpanded `%`, each named as Windows names it when it starts a program from
+// it (a folder name's one trailing dot dropped); elsewhere only an absolute
+// folder, and only a file the user may run. `env`, `platform` and `isFile`
+// are for tests.
+function isFileOnDisk(p) {
+  try {
+    return fs.statSync(p).isFile()
+  } catch (e) {
+    // Not there; any other failure (a folder that does not answer) is thrown.
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return false
+    throw e
+  }
+}
+// Elsewhere a program is also one the user may run, as the system's own
+// lookup requires: a file without that permission is passed over.
+function isRunnableOnDisk(p) {
+  if (!fs.statSync(p).isFile()) return false
+  fs.accessSync(p, fs.constants.X_OK)
+  return true
+}
+function pathVariable(env, platform) {
+  const source = env || {}
+  if (typeof source.PATH === 'string') return source.PATH
+  if (platform !== 'win32') return ''
+  const key = Object.keys(source).find((k) => k.toUpperCase() === 'PATH')
+  return key !== undefined && typeof source[key] === 'string' ? source[key] : ''
+}
+function folderAsRun(dir) {
+  const parts = dir.split(/([\\/])/)
+  // A share keeps `\\server\share` as it is: parts '', sep, '', sep, server, sep, share.
+  const root = /^[\\/]{2}/.test(dir) ? 7 : 1
+  return parts.map((part, i) => (i < root || i % 2 === 1 ? part : part.replace(/([^.])\.$/, '$1'))).join('')
+}
+/** A fully qualified Windows folder: a drive (`C:\`) or a share
+ *  (`\\server\share`), never one named relative to the folder a program runs
+ *  in. The app's own test (src/main/providers/windows-path-names.ts
+ *  windowsPathFolderIsFullyQualified). */
+const FULLY_QUALIFIED_FOLDER_RE = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/?.][^\\/]*[\\/][^\\/]+)/
+function pathFolders(env, platform) {
+  if (platform === 'win32') {
+    return pathVariable(env, platform).split(';')
+      .map((d) => d.trim().replace(/^"(.*)"$/, '$1').trim())
+      .filter((d) => d !== '' && !d.includes('%') && FULLY_QUALIFIED_FOLDER_RE.test(d))
+      .map(folderAsRun)
+  }
+  return pathVariable(env, platform).split(':').filter((d) => d.startsWith('/'))
+}
+/** The names Claude Code goes by on Windows, in the order the app asks for
+ *  them (src/main/claude-cli-probe.ts CLAUDE_WINDOWS_NAMES, which this script
+ *  cannot import; a parity test holds the copy to the same list): the native
+ *  claude.exe in any folder PATH names, then claude.cmd, then claude.bat. */
+const CLAUDE_WINDOWS_NAMES = Object.freeze(['claude.exe', 'claude.cmd', 'claude.bat'])
+/** The full path of the first of `names` found in PATH's folders -- every
+ *  folder for the first name, then every folder for the next -- or null. A
+ *  folder whose check throws (one that does not answer) is not asked again
+ *  for another name, as the app's walk does. */
+function findOnPath(names, env, platform, isFile) {
+  const api = platform === 'win32' ? path.win32 : path.posix
+  const dirs = pathFolders(env, platform)
+  const unreachable = new Set()
+  for (const name of names) {
+    for (const dir of dirs) {
+      if (unreachable.has(dir)) continue
+      const candidate = api.join(dir, name)
+      try { if (isFile(candidate)) return candidate } catch { unreachable.add(dir) }
+    }
+  }
+  return null
+}
+/** A child's environment: on Windows NoDefaultCurrentDirectoryInExePath=1, in
+ *  one spelling, so a program the child starts by a bare name is looked up in
+ *  PATH's folders only, never in the folder it runs in. `env` is not changed. */
+function withoutCurrentFolderLookup(env, platform) {
+  const out = {}
+  for (const k of Object.keys(env || {})) {
+    if (platform === 'win32' && k.toUpperCase() === 'NODEFAULTCURRENTDIRECTORYINEXEPATH') continue
+    out[k] = env[k]
+  }
+  if (platform === 'win32') out.NoDefaultCurrentDirectoryInExePath = '1'
+  return out
+}
+/** The environment of a child the picker starts on Windows (a launcher's
+ *  cmd.exe, git): withoutCurrentFolderLookup, and every spelling of PATH kept
+ *  to its fully qualified folders (FULLY_QUALIFIED_FOLDER_RE), each read as a
+ *  PATH walk reads it (trimmed, and without the quotes around a quoted one),
+ *  a spelling left with none dropped. A program the child starts by a bare
+ *  name (a launcher's `node`) is then found only in a folder PATH names in
+ *  full: never in the project folder, nor in one named relative to it. The
+ *  app's own rule (src/main/windows-programs.ts
+ *  withFullyQualifiedProgramLookup, which this script cannot import; a parity
+ *  test holds the copy to it). Elsewhere as withoutCurrentFolderLookup gives
+ *  it. `env` is not changed. */
+function withFullyQualifiedProgramLookup(env, platform) {
+  const out = withoutCurrentFolderLookup(env, platform)
+  if (platform !== 'win32') return out
+  for (const key of Object.keys(out)) {
+    if (key.toUpperCase() !== 'PATH') continue
+    const value = out[key]
+    const kept = []
+    for (const raw of typeof value === 'string' ? value.split(';') : []) {
+      let dir = raw.trim()
+      if (dir.length >= 2 && dir.startsWith('"') && dir.endsWith('"')) dir = dir.slice(1, -1).trim()
+      if (FULLY_QUALIFIED_FOLDER_RE.test(dir)) kept.push(dir)
+    }
+    if (kept.length) out[key] = kept.join(';')
+    else delete out[key]
+  }
+  return out
+}
+
 // Enumerate the project's worktrees from `cwd`. The configured cwd may itself BE
 // a worktree — we include every worktree git reports regardless.
 //
+// git is started by its full path from PATH's folders (findOnPath), without a
+// shell, its environment carrying the Windows rule for what it starts by name
+// (withFullyQualifiedProgramLookup: PATH's fully qualified folders only, never
+// the current folder); its command line keeps the repository's own settings
+// from running anything (no pager, no file-system monitor hook). The project
+// folder is git's working folder only.
+//
 // FAIL-SAFE: if git is missing, errors, or cwd isn't a repo, returns a SINGLE
 // synthetic main-worktree record for `cwd` so callers degrade to exactly the
-// old single-source behaviour (no labels).
-function listWorktrees(cwd) {
+// old single-source behaviour (no labels). `platform` and `deps` (spawn, env,
+// isFile) are for tests.
+const GIT_WORKTREE_ARGS = Object.freeze(['--no-pager', '-c', 'core.fsmonitor=false', 'worktree', 'list', '--porcelain'])
+function listWorktrees(cwd, platform, deps) {
   const fallback = [{ path: cwd, branch: null, isMain: true }]
+  const plat = platform || process.platform
+  const env = (deps && deps.env) || process.env
+  const spawn = (deps && deps.spawn) || spawnSync
+  const isFile = (deps && deps.isFile) || (plat === 'win32' ? isFileOnDisk : isRunnableOnDisk)
   try {
-    const res = spawnSync('git', ['worktree', 'list', '--porcelain'], {
+    const git = findOnPath([plat === 'win32' ? 'git.exe' : 'git'], env, plat, isFile)
+    if (!git) return fallback
+    const res = spawn(git, [...GIT_WORKTREE_ARGS], {
       cwd,
+      env: withFullyQualifiedProgramLookup(env, plat),
       encoding: 'utf-8',
       timeout: 5000,
       windowsHide: true,
+      shell: false,
     })
-    if (res.error || res.status !== 0 || !res.stdout) return fallback
+    if (!res || res.error || res.status !== 0 || !res.stdout) return fallback
     const parsed = parseWorktrees(res.stdout)
     return parsed.length > 0 ? parsed : fallback
   } catch {
@@ -382,8 +539,8 @@ function mergeAndLabel(conversationsBySource, cap = 20) {
 }
 
 // ── Time formatting ─────────────────────────────────────────────────
-function timeAgo(ms) {
-  const sec = Math.floor((Date.now() - ms) / 1000)
+function timeAgo(ms, now = Date.now()) {
+  const sec = Math.floor((now - ms) / 1000)
   if (sec < 60) return 'just now'
   const min = Math.floor(sec / 60)
   if (min < 60) return `${min}m ago`
@@ -417,9 +574,37 @@ const C = {
   surface: '\x1b[38;2;69;71;90m',
 }
 
+// ── Display text ────────────────────────────────────────────────────
+// Everything the picker shows that it did not write itself -- the folder, a
+// work name, a title or message, a model, a session id, a worktree's name --
+// is shown as plain text, by the same rule the app applies everywhere else
+// (src/shared/safe-text.ts, which this script cannot import; a parity test
+// holds the copies to one answer): every character a reader cannot see --
+// the C0 and C1 controls and every character Unicode counts as
+// default-ignorable (the bidi marks, overrides and isolates, the zero-width
+// and invisible formatters, the fillers, the variation selectors, the TAG
+// block) -- and, named one by one, the line and paragraph separators, the
+// braille blank, the interlinear annotation marks and a lone half of a
+// surrogate pair, each replaced by a space; then cut at `max` code points,
+// never inside a surrogate pair. The only escapes the picker prints are its
+// own colours (C above).
+const SPOOFABLE = /[\p{Cc}\p{Default_Ignorable_Code_Point}\u2028\u2029\u2800\ufff9-\ufffb\ud800-\udfff]/gu
+function displayText(raw, max = 500) {
+  const clean = (raw === undefined || raw === null ? '' : String(raw)).replace(SPOOFABLE, ' ')
+  const points = Array.from(clean)
+  return points.length <= max ? clean : points.slice(0, max).join('')
+}
+// A name on its way to a refusal message, read at the moment something has
+// gone wrong: the same rule.
+function displayPath(raw, max = 500) {
+  return displayText(raw, max)
+}
+
+/** Cut to `maxLen` code points, the last one an ellipsis when it was cut. */
 function truncate(str, maxLen) {
-  if (str.length <= maxLen) return str
-  return str.slice(0, maxLen - 1) + '…'
+  const points = Array.from(str)
+  if (points.length <= maxLen) return str
+  return points.slice(0, Math.max(0, maxLen - 1)).join('') + '…'
 }
 
 // ── Layout width ────────────────────────────────────────────────────
@@ -474,6 +659,94 @@ function readSidecarName(transcriptFilePath) {
   } catch { return null }
 }
 
+// ── The picker's lines ──────────────────────────────────────────────
+// The ONE place the lines the picker prints are built, from the folder it was
+// started in, the conversations, their work names and the layout width
+// (computeLayoutWidth). `names` answers a conversation's work name: a
+// function of the conversation, or a Map keyed by session id. `opts.now`
+// fixes the clock and `opts.hasWorktrees` adds the worktree note. Pure: main()
+// prints the lines as they come back. Every field shown here goes through
+// displayText first and is then cut to fit (see "Display text").
+function pickerLines(cwd, conversations, names, width, opts) {
+  const o = opts || {}
+  const nameOf = typeof names === 'function'
+    ? names
+    : (conv) => (names && typeof names.get === 'function' ? names.get(conv.sessionId) : undefined)
+  const list = Array.isArray(conversations) ? conversations : []
+  const maxWidth = width
+  const innerWidth = maxWidth - 6
+  const dirDisplay = truncate(displayText(cwd), innerWidth)
+  const lines = []
+
+  lines.push('')
+  lines.push(`  ${C.surface}╭─${C.blue} Resume Conversation ${C.surface}─ ${C.subtext}${dirDisplay} ${C.surface}${'─'.repeat(Math.max(0, maxWidth - 26 - Array.from(dirDisplay).length))}╮${C.reset}`)
+  if (o.hasWorktrees) {
+    const note = truncate('includes git worktrees — ⑂ tags the worktree', innerWidth)
+    lines.push(`  ${C.surface}│${C.reset}  ${C.dim}${C.overlay}${note}${C.reset}`)
+  }
+  lines.push(`  ${C.surface}│${C.reset}`)
+
+  // A field counts as text to show only when something in it is left to see
+  // once it is cleaned (displayText); otherwise the next field is tried.
+  const visible = (x) => (x !== undefined && x !== null && displayText(x).trim() !== '' ? x : null)
+
+  for (let i = 0; i < list.length; i++) {
+    const conv = list[i]
+    const num = String(i + 1).padStart(2)
+    const workName = visible(nameOf(conv))
+    const lastMessages = Array.isArray(conv.lastMessages) ? conv.lastMessages : []
+    // Best available label, most→least useful: the user's own work name, then
+    // Claude's AI title, then the first real user message, then the last prompt,
+    // then the most recent user message. "(continued session)" only when the
+    // conversation truly yielded no readable text (#130).
+    const recent = lastMessages.length ? lastMessages[lastMessages.length - 1] : null
+    const primary = workName || visible(conv.aiTitle) || visible(conv.firstMessage) || visible(conv.lastPrompt) || visible(recent) || '(continued session)'
+    const shownPrimary = truncate(displayText(primary), innerWidth - 6)
+    const primaryColored = workName
+      ? `${C.bold}${C.peach}${shownPrimary}${C.reset}`
+      : `${C.text}${shownPrimary}${C.reset}`
+    const meta = [
+      timeAgo(conv.mtime, o.now),
+      formatSize(conv.size),
+      conv.model ? displayText(conv.model, 64) : null,
+      conv.sessionId ? displayText(conv.sessionId, 64) : null,
+    ].filter(Boolean).join(' · ')
+
+    // Title line. A non-main worktree conversation gets a distinct themed tag
+    // (⑂ = branch/fork glyph) appended so the worktree is CALLED OUT.
+    let titleLine = `  ${C.surface}│${C.reset}  ${C.green}${num}${C.reset}  ${primaryColored}`
+    if (conv.worktreeLabel) {
+      titleLine += `  ${C.mauve}⑂ ${truncate(displayText(conv.worktreeLabel, 64), 24)}${C.reset}`
+    }
+    lines.push(titleLine)
+    // Meta line
+    lines.push(`  ${C.surface}│${C.reset}      ${C.overlay}${meta}${C.reset}`)
+    // When we led with the work name, show the AI title / first message beneath
+    // so the row still says what the conversation was about.
+    const sub = workName ? (visible(conv.aiTitle) || visible(conv.firstMessage) || visible(conv.lastPrompt)) : null
+    if (sub) {
+      lines.push(`  ${C.surface}│${C.reset}      ${C.dim}${C.subtext}${truncate(displayText(sub), innerWidth - 10)}${C.reset}`)
+    }
+
+    // Last 5 user messages (dim, indented)
+    for (const msg of lastMessages) {
+      const line = truncate(displayText(msg), innerWidth - 10)
+      lines.push(`  ${C.surface}│${C.reset}      ${C.dim}${C.subtext}> ${line}${C.reset}`)
+    }
+
+    if (i < list.length - 1) {
+      lines.push(`  ${C.surface}│${C.reset}      ${C.surface}${'─'.repeat(Math.max(0, innerWidth - 6))}${C.reset}`)
+    }
+  }
+
+  lines.push(`  ${C.surface}│${C.reset}`)
+  lines.push(`  ${C.surface}│${C.reset}  ${C.yellow} n${C.reset}  ${C.text}New conversation${C.reset}`)
+  lines.push(`  ${C.surface}│${C.reset}`)
+  lines.push(`  ${C.surface}╰${'─'.repeat(Math.max(0, maxWidth - 4))}╯${C.reset}`)
+  lines.push('')
+  return lines
+}
+
 // ── Main ────────────────────────────────────────────────────────────
 async function main() {
   const cwd = process.cwd()
@@ -502,75 +775,12 @@ async function main() {
   }
 
   // ── Display ─────────────────────────────────────────────────────
-  const maxWidth = computeLayoutWidth(process.stdout.columns)
-  const innerWidth = maxWidth - 6
-  const dirDisplay = truncate(cwd, innerWidth)
-
-  // Map resume UUID -> CCC work name so a renamed session is recognizable here.
+  // Map resume UUID -> CCC work name so a renamed session is recognizable here;
+  // the name sidecar beside the transcript wins (#536).
   const workNames = loadWorkNames(process.env.CCC_CONFIG_DIR)
-
-  console.log('')
-  console.log(`  ${C.surface}╭─${C.blue} Resume Conversation ${C.surface}─ ${C.subtext}${dirDisplay} ${C.surface}${'─'.repeat(Math.max(0, maxWidth - 26 - dirDisplay.length))}╮${C.reset}`)
-  if (hasWorktrees) {
-    const note = truncate('includes git worktrees — ⑂ tags the worktree', innerWidth)
-    console.log(`  ${C.surface}│${C.reset}  ${C.dim}${C.overlay}${note}${C.reset}`)
-  }
-  console.log(`  ${C.surface}│${C.reset}`)
-
-  for (let i = 0; i < conversations.length; i++) {
-    const conv = conversations[i]
-    const num = String(i + 1).padStart(2)
-    const workName = readSidecarName(conv.filePath) || workNames.get(conv.sessionId)
-    // Best available label, most→least useful: the user's own work name, then
-    // Claude's AI title, then the first real user message, then the last prompt,
-    // then the most recent user message. "(continued session)" only when the
-    // conversation truly yielded no readable text (#130).
-    const recent = conv.lastMessages.length ? conv.lastMessages[conv.lastMessages.length - 1] : null
-    const primary = workName || conv.aiTitle || conv.firstMessage || conv.lastPrompt || recent || '(continued session)'
-    const primaryColored = workName
-      ? `${C.bold}${C.peach}${truncate(primary, innerWidth - 6)}${C.reset}`
-      : `${C.text}${truncate(primary, innerWidth - 6)}${C.reset}`
-    const meta = [
-      timeAgo(conv.mtime),
-      formatSize(conv.size),
-      conv.model || null,
-      conv.sessionId || null,
-    ].filter(Boolean).join(' · ')
-
-    // Title line. A non-main worktree conversation gets a distinct themed tag
-    // (⑂ = branch/fork glyph) appended so the worktree is CALLED OUT.
-    let titleLine = `  ${C.surface}│${C.reset}  ${C.green}${num}${C.reset}  ${primaryColored}`
-    if (conv.worktreeLabel) {
-      titleLine += `  ${C.mauve}⑂ ${truncate(conv.worktreeLabel, 24)}${C.reset}`
-    }
-    console.log(titleLine)
-    // Meta line
-    console.log(`  ${C.surface}│${C.reset}      ${C.overlay}${meta}${C.reset}`)
-    // When we led with the work name, show the AI title / first message beneath
-    // so the row still says what the conversation was about.
-    const sub = workName ? (conv.aiTitle || conv.firstMessage || conv.lastPrompt) : null
-    if (sub) {
-      console.log(`  ${C.surface}│${C.reset}      ${C.dim}${C.subtext}${truncate(sub, innerWidth - 10)}${C.reset}`)
-    }
-
-    // Last 5 user messages (dim, indented)
-    if (conv.lastMessages.length > 0) {
-      for (const msg of conv.lastMessages) {
-        const line = truncate(msg, innerWidth - 10)
-        console.log(`  ${C.surface}│${C.reset}      ${C.dim}${C.subtext}> ${line}${C.reset}`)
-      }
-    }
-
-    if (i < conversations.length - 1) {
-      console.log(`  ${C.surface}│${C.reset}      ${C.surface}${'─'.repeat(Math.max(0, innerWidth - 6))}${C.reset}`)
-    }
-  }
-
-  console.log(`  ${C.surface}│${C.reset}`)
-  console.log(`  ${C.surface}│${C.reset}  ${C.yellow} n${C.reset}  ${C.text}New conversation${C.reset}`)
-  console.log(`  ${C.surface}│${C.reset}`)
-  console.log(`  ${C.surface}╰${'─'.repeat(maxWidth - 4)}╯${C.reset}`)
-  console.log('')
+  const nameOf = (conv) => readSidecarName(conv.filePath) || workNames.get(conv.sessionId)
+  const shown = pickerLines(cwd, conversations, nameOf, computeLayoutWidth(process.stdout.columns), { hasWorktrees })
+  for (const line of shown) console.log(line)
 
   // ── Read choice ─────────────────────────────────────────────────
   process.stdout.write(`  ${C.blue}>${C.reset} `)
@@ -625,16 +835,161 @@ async function main() {
  *
  * `shell: false` fixes both: Node passes argv to CreateProcess directly and
  * quotes each element itself. The only thing shell:true was buying is the
- * ability to invoke a `.cmd` shim, so do that explicitly through cmd.exe with
- * an ARGS ARRAY -- the same shape src/main/providers/codex/spawn.ts already
- * uses. cmd.exe still parses the shim path, but the arguments are passed as
- * separate argv elements rather than concatenated into one command line.
+ * ability to invoke a `.cmd` or `.bat` shim, so that runs through cmd.exe
+ * explicitly, the one route for both.
+ *
+ * cmd.exe reads what follows `/c` itself: without /s it keeps the quotes only
+ * when the line holds exactly two of them around a program name, with none of
+ * `& < > ( ) @ ^ |` between them, and otherwise drops the first quote and the
+ * last one. A shim in a folder with a space or parentheses (npm's folder under
+ * a Windows user name with a space) therefore lost its quotes as soon as one
+ * argument needed quotes too (a `--settings` path with a space, the `--agents`
+ * JSON), and the launch did not start. So the shim
+ * runs the way Node runs a `shell: true` command, and the way the Claude
+ * version probe and the Codex picker run one: `/d /v:off /s /c "<line>"`,
+ * passed VERBATIM (AutoRun skipped, delayed expansion off). With /s cmd.exe
+ * drops exactly that outer pair; inside it the shim path is quoted and each
+ * argument is written so it stays one argument, exactly as written
+ * (quoteArgForCmdShim): wrapped in double quotes, every double quote inside
+ * it doubled, and the backslashes before a double quote doubled as the C
+ * runtime reads them. cmd.exe's quote state turns at every double quote, so
+ * every other character of every argument stays inside quotes, where
+ * `& | < > ^ ( )` are text -- on the /c line and again on the shim's own `%*`
+ * line -- and the program's argument parser (the C runtime rule, which node
+ * and the native binary follow) reads a doubled quote inside quotes as one
+ * quote. cmd.exe reads `%` inside quotes as well, and a /c line has no way
+ * to keep it as text, so an argument holding `%` or a control character is
+ * refused (null) and the launch says which one (notStartedMessage). `!` is
+ * text: the line runs with delayed expansion off, and npm's shims do not
+ * turn it on. A shim path carrying one of `" % & ^` or a control character
+ * is refused (null), as the version probe refuses it: cmd.exe or the shim
+ * itself would re-read it.
+ *
+ * `cwd`: the folder the shim starts in. cmd.exe cannot start in a share or a
+ * device path (two leading slashes of either kind), so the shim is never
+ * started there (null), and the launch says why and names the two ways out
+ * (notStartedMessage), as the app's own launch does. The native claude.exe
+ * starts in any folder.
+ *
+ * P3.10 round 3b: the picker resolves its helpers from fixed locations: the
+ * cmd.exe that runs a shim is the system's own, by its full path
+ * (systemCmdExe).
  */
-function buildSpawnTarget(cmd, args) {
-  if (os.platform() === 'win32' && /\.(cmd|bat)$/i.test(cmd)) {
-    return { file: 'cmd.exe', argv: ['/c', cmd, ...args] }
+// eslint-disable-next-line no-control-regex
+const SHIM_PATH_UNSAFE_RE = /["%&^\x00-\x1f\x7f]/
+/** A variable's one value in `env`, matched as Windows matches names (either
+ *  case, ASCII names only): undefined when unset, null when two spellings
+ *  disagree. */
+function envOne(env, name) {
+  const values = new Set()
+  for (const k of Object.keys(env || {})) {
+    const v = env[k]
+    if (typeof v === 'string' && v !== '' && /^[A-Za-z]+$/.test(k) && k.toUpperCase() === name.toUpperCase()) values.add(v)
   }
-  return { file: cmd, argv: args }
+  if (values.size > 1) return null
+  return values.size === 1 ? [...values][0] : undefined
+}
+/** A folder name that cmd.exe or the file system would read as more than a name. */
+const ROOT_PART_UNSAFE_RE = /[<>|*?:]/
+/**
+ * P3.10 round 3b: the cmd.exe that runs a shim, by its full path:
+ * `<SystemRoot>\System32\cmd.exe`, written as ComSpec spells it only when
+ * ComSpec names exactly that file (in any case). SystemRoot is read from `env`
+ * and is C:\Windows only when it is not set; one that is not a plain absolute
+ * folder (a drive, then names, none of them `.` or `..`), or two spellings that
+ * disagree, give null (no start).
+ */
+function systemCmdExe(env) {
+  const root = envOne(env, 'SystemRoot')
+  if (root === null) return null
+  const base = (root === undefined ? 'C:\\Windows' : root).replace(/\\+$/, '')
+  const parts = base.split(/[\\/]/)
+  if (!/^[A-Za-z]:$/.test(parts[0]) || SHIM_PATH_UNSAFE_RE.test(base)) return null
+  if (parts.slice(1).some((p) => p === '' || p === '.' || p === '..' || ROOT_PART_UNSAFE_RE.test(p))) return null
+  const system = `${base}\\System32\\cmd.exe`
+  const comSpec = envOne(env, 'ComSpec')
+  return typeof comSpec === 'string' && comSpec.toLowerCase() === system.toLowerCase() ? comSpec : system
+}
+/** One argument on the shim's line: in double quotes, each double quote in
+ *  it doubled, the backslashes before a double quote (or before the closing
+ *  one) doubled. cmd.exe and the C runtime then both read it as one argument,
+ *  exactly as written. */
+function quoteArgForCmdShim(arg) {
+  let out = '"'
+  let slashes = 0
+  for (const ch of arg) {
+    if (ch === '\\') { slashes++; continue }
+    if (ch === '"') { out += '\\'.repeat(slashes * 2) + '""'; slashes = 0; continue }
+    out += '\\'.repeat(slashes) + ch
+    slashes = 0
+  }
+  return out + '\\'.repeat(slashes * 2) + '"'
+}
+/** What no quoting keeps as text on a /c line: `%`, and any control character. */
+const SHIM_ARG_REFUSED_RE = /[%\p{Cc}]/u
+/** The index of the first argument the shim route refuses, or -1. */
+function shimArgRefused(args) {
+  return args.findIndex((a) => typeof a !== 'string' || SHIM_ARG_REFUSED_RE.test(a))
+}
+/** The name of the first agent template in an `--agents` value that holds
+ *  what the shim route refuses -- a list of templates each with a `name` (as
+ *  the app writes it), or an object keyed by name -- or null when the value
+ *  names none. A name counts only when something in it is left to see once
+ *  it is shown (displayText), as for the picker's rows. */
+function refusedTemplateName(value) {
+  let parsed
+  try { parsed = JSON.parse(value) } catch { return null }
+  if (!parsed || typeof parsed !== 'object') return null
+  const entries = Array.isArray(parsed)
+    ? parsed.map((t) => [t && typeof t === 'object' ? t.name : undefined, t])
+    : Object.entries(parsed)
+  for (const [name, template] of entries) {
+    if (typeof name === 'string' && displayText(name).trim() !== '' && SHIM_ARG_REFUSED_RE.test(JSON.stringify([name, template]))) return name
+  }
+  return null
+}
+/** A folder cmd.exe cannot start in: a share or a device path. */
+const CMD_EXE_NETWORK_FOLDER_RE = /^[\\/]{2}/
+const NETWORK_FOLDER_REFUSAL = 'Cannot start Claude Code in a network folder through its npm launcher: open the folder from a mapped drive letter, or install the native Claude Code.'
+const isShim = (cmd) => /\.(cmd|bat)$/i.test(cmd)
+const inNetworkFolder = (cwd) => typeof cwd === 'string' && CMD_EXE_NETWORK_FOLDER_RE.test(cwd)
+function buildSpawnTarget(cmd, args, platform = os.platform(), env = process.env, cwd) {
+  if (platform === 'win32' && isShim(cmd)) {
+    if (inNetworkFolder(cwd)) return null
+    if (SHIM_PATH_UNSAFE_RE.test(cmd)) return null
+    const shell = systemCmdExe(env)
+    if (!shell) return null
+    if (shimArgRefused(args) !== -1) return null
+    const line = [`"${cmd}"`, ...args.map(quoteArgForCmdShim)].join(' ')
+    // The shim starts node by a bare name when no node.exe sits beside it:
+    // it looks in PATH's fully qualified folders only, never in the project
+    // folder nor in one named relative to it.
+    return { file: shell, argv: ['/d', '/v:off', '/s', '/c', `"${line}"`], verbatim: true, env: withFullyQualifiedProgramLookup(env, platform) }
+  }
+  return { file: cmd, argv: args, verbatim: false }
+}
+/** What the launch says when it starts nothing: `cmd` null (Claude Code not
+ *  found), or why buildSpawnTarget refused, checked in its order (`cwd`: the
+ *  folder it would start in). A name shown in it is plain text. */
+function notStartedMessage(cmd, args, env = process.env, cwd) {
+  if (!cmd) return `Not starting Claude Code: it was not found in a folder PATH names (${CLAUDE_WINDOWS_NAMES.join(', ')}). Install it, or add its folder to PATH, then start the session again.`
+  if (isShim(cmd) && inNetworkFolder(cwd)) return NETWORK_FOLDER_REFUSAL
+  if (SHIM_PATH_UNSAFE_RE.test(cmd)) return `Not starting Claude Code from ${displayPath(cmd)}: cmd.exe would re-read a character in that path. Install it in a folder without " % & or ^.`
+  const refused = shimArgRefused(args)
+  if (systemCmdExe(env) && refused !== -1) {
+    const flagOf = (a) => (typeof a === 'string' && a.startsWith('--') ? a.split('=')[0] : null)
+    const inline = flagOf(args[refused])
+    const flag = inline || flagOf(args[refused - 1])
+    if (flag === '--agents') {
+      const value = inline ? args[refused].slice(inline.length + 1) : args[refused]
+      const name = typeof value === 'string' ? refusedTemplateName(value) : null
+      const which = name ? `the agent template "${displayText(name, 64)}"` : 'an agent template'
+      return `Not starting Claude Code: ${which} holds a % sign or a control character, which Claude Code started through its claude.cmd or claude.bat launcher cannot be given exactly as written. Remove it from the template, or install the native Claude Code.`
+    }
+    const what = flag ? `the value of ${displayText(flag, 64)}` : 'an argument'
+    return `Not starting Claude Code: ${what} holds a % sign or a control character, which Claude Code started through its claude.cmd or claude.bat launcher cannot be given exactly as written. Remove it, or install the native Claude Code.`
+  }
+  return 'Not starting Claude Code: the Windows folder (SystemRoot) is not a plain absolute folder, so the system cmd.exe cannot be named.'
 }
 
 function getForwardedArgs() {
@@ -642,89 +997,368 @@ function getForwardedArgs() {
   return process.argv.slice(2)
 }
 
-// Resolve claude command — try native .exe first, then npm .cmd.
-function resolveClaudeCmd() {
-  let cmd = 'claude'
-  if (os.platform() === 'win32') {
-    const { execSync } = require('child_process')
-    for (const bin of ['claude.exe', 'claude.cmd']) {
-      try {
-        // stdio: ignore stderr so Windows `where`'s "INFO: Could not find files
-        // for the given pattern(s)." (printed when claude.exe isn't found before
-        // claude.cmd) doesn't leak into the session terminal.
-        cmd = execSync(`where ${bin}`, { encoding: 'utf-8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
-          .trim().split('\n')[0].trim()
-        break
-      } catch { /* try next */ }
-    }
+/** The variable the app's launch line names its Claude Code in when it starts
+ *  the picker (src/main/spawn-claude-command.ts CLAUDE_BIN_ENV): the program
+ *  the session would start itself, a pinned version's when the session has
+ *  one, so the picker starts the same one. */
+const CLAUDE_BIN_ENV = 'CCC_CLAUDE_BIN'
+/** The name Claude Code goes by off Windows, for a named path. */
+const POSIX_CLAUDE_NAMES = Object.freeze(['claude'])
+/** `name`'s one value in `env`, matched in either case on Windows; undefined
+ *  when it is unset or two spellings disagree. */
+function envValue(env, name, platform) {
+  const values = new Set()
+  for (const k of Object.keys(env || {})) {
+    const match = platform === 'win32' ? k.toUpperCase() === name : k === name
+    if (match && typeof env[k] === 'string') values.add(env[k])
   }
-  return cmd
+  return values.size === 1 ? [...values][0] : undefined
+}
+/** A path the picker takes as the Claude Code the app named on Windows: a
+ *  drive-absolute one (`C:\...`, either slash), never a share
+ *  (`\\server\share\...`) or a device path (`\\?\`, `\\.\`). This is the
+ *  drive-absolute part of the rule the app's own lookup applies to a Claude
+ *  Code path it is handed rather than finds in PATH's folders
+ *  (src/main/windows-programs.ts powerShellProfileAnswer, which this script
+ *  cannot import), not the whole of it: that rule also wants every step of
+ *  the path plain. Here the name, a control character and the file check
+ *  are tested beside it (forwardedClaudeCmd), and a claude.cmd or
+ *  claude.bat path cmd.exe would re-read is refused (buildSpawnTarget). */
+const DRIVE_ABSOLUTE_PIN_RE = /^[A-Za-z]:[\\/]/
+/** A path that starts with two slashes of either kind: a share or a device
+ *  path, which the picker never takes from the app (DRIVE_ABSOLUTE_PIN_RE),
+ *  and says so when it starts another file (forwardedClaudeNotice). */
+const SHARE_OR_DEVICE_PIN_RE = /^[\\/]{2}/
+/** The Claude Code the app's launch line named (CLAUDE_BIN_ENV), when the
+ *  picker may start it: on Windows a drive-absolute path, never a share or a
+ *  device path (DRIVE_ABSOLUTE_PIN_RE), to a file named claude.exe,
+ *  claude.cmd or claude.bat (CLAUDE_WINDOWS_NAMES); elsewhere an absolute
+ *  path to a file named claude; with no control character, and passing
+ *  `isFile` (elsewhere a file the user may run). Otherwise null: the picker
+ *  looks for Claude Code as it always has. A claude.cmd or claude.bat named
+ *  here starts by the same route and checks as one found in PATH's folders
+ *  (buildSpawnTarget). A pinned version whose folder holds only a claude.ps1
+ *  is not taken (no allowed name), so the picker starts the one in PATH's
+ *  folders: a known gap, as npm writes claude.cmd beside claude.ps1. */
+function forwardedClaudeCmd(env, platform, isFile) {
+  const value = envValue(env, CLAUDE_BIN_ENV, platform)
+  if (typeof value !== 'string' || value === '' || /\p{Cc}/u.test(value)) return null
+  if (platform === 'win32') {
+    if (!DRIVE_ABSOLUTE_PIN_RE.test(value) || !CLAUDE_WINDOWS_NAMES.includes(path.win32.basename(value).toLowerCase())) return null
+  } else if (!value.startsWith('/') || !POSIX_CLAUDE_NAMES.includes(path.posix.basename(value))) {
+    return null
+  }
+  try { return isFile(value) ? value : null } catch { return null }
+}
+
+/** Whether two Windows paths name one file as a PATH walk reads them: each
+ *  normalized (path.win32.normalize, so either slash and `.` or `..` steps
+ *  agree), each step read as Windows runs it (folderAsRun), and compared
+ *  ignoring case. A device path (`\\?\`, `\\.\`) never matches a path found
+ *  in PATH's folders, which is never spelled that way. */
+function sameWindowsPath(a, b) {
+  const canon = (p) => folderAsRun(path.win32.normalize(p)).toLowerCase()
+  return canon(a) === canon(b)
+}
+
+/** What the picker prints, on Windows, when the app named a Claude Code on a
+ *  share or a device path (CLAUDE_BIN_ENV, SHARE_OR_DEVICE_PIN_RE), which it
+ *  does not take (forwardedClaudeCmd), and the Claude Code it starts instead,
+ *  `cmd` (found in PATH's folders), is another file: that may be another
+ *  version than an exact resume or a Restart of this session starts. Null
+ *  when `cmd` is that same file (a share folder PATH names holds it), when
+ *  `cmd` is null (the launch's not-found message says so), otherwise, and
+ *  elsewhere. */
+function forwardedClaudeNotice(env, platform, cmd) {
+  if (platform !== 'win32' || typeof cmd !== 'string' || cmd === '') return null
+  const value = envValue(env, CLAUDE_BIN_ENV, platform)
+  if (typeof value !== 'string' || !SHARE_OR_DEVICE_PIN_RE.test(value)) return null
+  if (sameWindowsPath(value, cmd)) return null
+  return `The resume list starts the Claude Code found in PATH's folders (${displayPath(cmd)}), not the one this session names (${displayPath(value)}): the resume list does not take a named path on a network share or a device path. To have it start the named one, reach that folder through a drive letter: map the share to a drive letter and, for a session set to an older Claude Code version, point the app's resources folder at that drive.`
+}
+
+// Resolve the claude command: the one the app's launch line named, when the
+// picker may start it (forwardedClaudeCmd), so a session pinned to a version
+// runs that version from the picker too, as its exact resume and its Restart
+// do. Otherwise, on Windows: the first of CLAUDE_WINDOWS_NAMES in the folders
+// PATH names -- the native claude.exe in any of them, then claude.cmd, then
+// claude.bat, as the app's own lookup asks -- found in-process (findOnPath),
+// never through the where command or a shell, never in the project folder,
+// never the bare name; null when none is there, and the launch says so. A
+// claude.cmd and a claude.bat both start through the system cmd.exe on the
+// same line (buildSpawnTarget). Elsewhere the bare name, as before.
+function resolveClaudeCmd(platform = os.platform(), env = process.env, isFile = platform === 'win32' ? isFileOnDisk : isRunnableOnDisk) {
+  const named = forwardedClaudeCmd(env, platform, isFile)
+  if (named) return named
+  if (platform !== 'win32') return 'claude'
+  return findOnPath(CLAUDE_WINDOWS_NAMES, env, platform, isFile)
+}
+
+/** What one launch starts -- the program, its arguments and its spawn options
+ *  (`base`, plus the npm route's environment and verbatim line) -- or, when
+ *  it starts nothing, the message it shows (notStartedMessage). `inherited`:
+ *  the folder it starts in when `base` names none (the picker's own). Pure:
+ *  both of launchClaude's launches run exactly what this returns. */
+function launchSpec(cmd, args, base, platform = os.platform(), env = process.env, inherited) {
+  const folder = base && typeof base.cwd === 'string' && base.cwd !== '' ? base.cwd : inherited
+  const target = cmd ? buildSpawnTarget(cmd, args, platform, env, folder) : null
+  if (!target) return { message: notStartedMessage(cmd, args, env, folder) }
+  const opts = { ...base, windowsVerbatimArguments: target.verbatim }
+  if (target.env) opts.env = target.env
+  return { file: target.file, argv: target.argv, opts }
 }
 
 // Launch Claude. When `sourceCwd` is provided and differs from the current cwd
 // (a worktree conversation), spawn from that directory so the cwd-scoped
 // `--resume` resolves it. New/fresh launches always use process.cwd().
-function launchClaude(resumeId, sourceCwd) {
-  const forwarded = getForwardedArgs()
+// `deps` (spawn, exit, argv, env, platform, isFile, cwd) are for tests; the
+// picker itself passes none.
+function launchClaude(resumeId, sourceCwd, deps) {
+  const d = deps || {}
+  const spawn = d.spawn || spawnSync
+  const exit = d.exit || ((code) => process.exit(code))
+  const env = d.env || process.env
+  const platform = d.platform || os.platform()
+  const forwarded = d.argv || getForwardedArgs()
   const args = resumeId ? ['--resume', resumeId, ...forwarded] : [...forwarded]
-  const cmd = resolveClaudeCmd()
+  const cmd = resolveClaudeCmd(platform, env, d.isFile)
+  // The folder the picker runs in: a launch that names no other starts there.
+  const here = d.cwd || process.cwd()
 
-  // Ensure the chosen conversation's companion dir exists so a direct-work
-  // conversation (no subagent/workflow → no companion dir from the CLI) can be
-  // resumed. Best-effort: any failure must NOT block the launch.
-  if (resumeId) {
-    try {
-      const projectDir = resolveProjectDir(
-        path.join(os.homedir(), '.claude', 'projects'),
-        sourceCwd || process.cwd(),
-      )
-      if (projectDir) ensureCompanionDir(projectDir, resumeId)
-    } catch { /* best-effort */ }
-  }
-
-
+  // The retarget decision comes FIRST, before anything touches the disk for
+  // the chosen directory: a refusal used to be reached only after the
+  // companion directory below had been created under the unscanned
+  // worktree's project key, a durable side effect keyed on a directory the
+  // gate never checked (adversarial confirmation pass, MINOR).
   // Only override cwd for an actual resume into a different directory. Be
   // FAIL-SAFE: an unresolvable/missing sourceCwd silently falls back to inherit.
+  const retarget = resolveRetargetCwd(resumeId, sourceCwd, here, env, fs.existsSync)
+  if (retarget.refused) {
+    // Refused, visibly, and NOT started in the configured directory instead:
+    // a `--resume` there would fall through to a fresh session in silence.
+    // The directory is untrusted text on its way to the terminal: stripped.
+    console.error(`\n  Not resuming in ${displayPath(retarget.refused)}: AI Code Conductor did not clear that folder's project settings for this account when the session started (they would redirect the account, could not be checked, or the folder was not listed then). The app log names the folder and why when it was checked; otherwise start the session again and pick it then.\n`)
+    return exit(1)
+  }
+
   const spawnOpts = {
     stdio: 'inherit',
     // NEVER shell:true here -- see buildSpawnTarget.
     shell: false,
     windowsHide: false,
   }
-  if (resumeId && sourceCwd) {
-    try {
-      if (sourceCwd !== process.cwd() && fs.existsSync(sourceCwd)) {
-        spawnOpts.cwd = sourceCwd
-      }
-    } catch { /* leave cwd inherited */ }
+  // For a managed launch, the folder the gated-set check settled (isGatedDir).
+  // Both launches below start there, the fresh-session fallback included, and
+  // the conversation's companion folder is named from it: nothing below asks
+  // the disk for the worktree's spelling again.
+  if (retarget.cwd) spawnOpts.cwd = retarget.cwd
+
+  // Whether the launch can start at all is settled before anything is
+  // written for it: a launch that starts nothing leaves nothing behind.
+  const first = launchSpec(cmd, args, spawnOpts, platform, env, here)
+  if (first.message) {
+    console.error(`\n  ${first.message}\n`)
+    return exit(1)
   }
 
-  const target = buildSpawnTarget(cmd, args)
-  const result = spawnSync(target.file, target.argv, spawnOpts)
+  // A Claude Code the app named on a share or a device path is not taken
+  // (forwardedClaudeCmd): when the one that starts is another file, said in
+  // the session, never in silence. A launch that starts nothing has said why
+  // above instead.
+  const notice = forwardedClaudeNotice(env, platform, cmd)
+  if (notice) console.log(`\n  ${notice}\n`)
+
+  // Ensure the chosen conversation's companion dir exists so a direct-work
+  // conversation (no subagent/workflow → no companion dir from the CLI) can be
+  // resumed. Best-effort: any failure must NOT block the launch. Its project
+  // folder is named from the folder the CLI starts in, as the CLI names it.
+  if (resumeId) {
+    try {
+      const projectDir = resolveProjectDir(
+        path.join(os.homedir(), '.claude', 'projects'),
+        retarget.cwd || sourceCwd || here,
+      )
+      if (projectDir) ensureCompanionDir(projectDir, resumeId)
+    } catch { /* best-effort */ }
+  }
+
+  const result = spawn(first.file, first.argv, first.opts)
 
   // If resume failed (conversation no longer exists), fall back to fresh session.
   // The fresh fallback runs in the SAME (worktree) cwd so it lands where the
   // user expected, not back in the configured project root.
   if (resumeId && result.status !== 0) {
     console.log('\n  Conversation no longer available - starting fresh session...\n')
-    const freshOpts = {
-      stdio: 'inherit',
-      shell: false,
-      windowsHide: false,
+    // Its arguments are a part of the first launch's, so it is refused only if
+    // that one was; checked all the same.
+    const fresh = launchSpec(cmd, forwarded, spawnOpts, platform, env, here)
+    if (fresh.message) {
+      console.error(`\n  ${fresh.message}\n`)
+      return exit(1)
     }
-    if (spawnOpts.cwd) freshOpts.cwd = spawnOpts.cwd
-    const freshTarget = buildSpawnTarget(cmd, forwarded)
-    const fresh = spawnSync(freshTarget.file, freshTarget.argv, freshOpts)
-    process.exit(fresh.status || 0)
+    const again = spawn(fresh.file, fresh.argv, fresh.opts)
+    return exit(again.status || 0)
   }
 
-  process.exit(result.status || 0)
+  return exit(result.status || 0)
+}
+
+// The gated directory set a MANAGED launch hands the picker (see pty-manager's
+// pickerCandidateDirs). Absent or unparseable means "not a managed launch":
+// nothing to enforce. How a directory is matched against it: isGatedDir.
+function gatedDirsFromEnv(env) {
+  const raw = env && env.CCC_GATED_DIRS
+  if (typeof raw !== 'string' || raw === '') return null
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((d) => typeof d === 'string' && d !== '') : null
+  } catch {
+    return null
+  }
+}
+
+// Whether `dir` is one of the folders in `gated`, as the disk answers it, and
+// if it is, the folder a launch into it starts in; null when it is not. Two
+// paths are the same folder when their real paths are equal
+// (fs.realpathSync.native: links and junctions followed; on Windows also the
+// case on disk, the drive letter and the separators settled). So one folder in
+// two spellings matches (git lists a folder in the case on disk, the app keeps
+// it as it was typed), and two folders whose names differ only in case, which
+// a folder made case-sensitive can hold, stay two. When either real path
+// cannot be read, only the same spelling matches: resolved, with the
+// separators and a trailing separator settled and, on Windows, the drive
+// letter in one case (a drive letter names one drive in either case). A folder
+// name is never matched case-blind. Off Windows a spelling with a `..` part is
+// then kept as written, because past a link `..` is not the parent the text
+// names. On Windows a path with a name ending in a dot or a space, as written
+// or once resolved, is not read from the disk at all, and is matched by its
+// spelling alone: Node's fs opens that name as written, while the system
+// drops the ending before it starts a program in the folder, so the disk's
+// answer would be about another folder than the one the CLI runs in. A real
+// path with such a name is not taken either, because the CLI would be started
+// in it. The launch gate (hasWin32RewrittenComponent in
+// managed-launch-diagnostics.ts) looks for such a name in the resolved path
+// only; this check looks in the path as written too, so a spelling the gate
+// will not read from the disk is not read here either.
+//
+// The folder a launch starts in is the folder the match was made on, named so
+// that nothing in `dir` is followed again when the CLI starts: a link pointed
+// somewhere else after this check does not move the CLI. For a match by real
+// path, every name below the drive (or the share) is the real path's own, so
+// no folder outside the real path is passed through, whichever links `dir`
+// holds and whether or not Node's JS resolver follows them (on Windows it
+// does not follow a junction whose target is not a drive-letter path). The
+// drive is the one `dir` reaches the folder through once its links are
+// followed by fs.realpathSync (the JS one, as Claude Code names a project
+// folder), so a subst drive or a mapped drive keeps the conversation's project
+// folder; it is taken only when the drive's own real path holds the real path
+// the match was made on. Otherwise, or when either cannot be read, it is the
+// real path itself. A name spelled in another case starts in the case on disk,
+// which names the same project folder on a case-insensitive disk; an 8.3 short
+// name starts at its long name, which names another one, and so does a path
+// through a junction the JS resolver does not follow (Claude Code's project
+// folder keeps that junction). Starting at the JS-followed path instead, taken
+// when its native real path is the matched one, would keep both names, but
+// that path can still pass through such a junction: the check would follow it
+// and a launch would follow it again, wherever it then points. For a match by
+// spelling alone it is `dir`. Each path is read once a call (one call a
+// launch), and a folder that matches is read once more, with its links
+// followed, and its drive. `opts.realpath`, `opts.followLinks` and
+// `opts.platform` are for tests.
+function isGatedDir(dir, gated, opts) {
+  const o = opts || {}
+  if (typeof dir !== 'string' || dir === '' || !Array.isArray(gated)) return null
+  const win = (o.platform || process.platform) === 'win32'
+  const paths = win ? path.win32 : path.posix
+  const readReal = o.realpath || ((p) => fs.realpathSync.native(p))
+  const followLinks = o.followLinks || ((p) => fs.realpathSync(p))
+  const endsInDotOrSpace = (p) => p.split(/[\\/]/).some((c) => c !== '.' && c !== '..' && /[. ]$/.test(c))
+  const rewrittenOnWindows = (p) => win && (endsInDotOrSpace(p) || endsInDotOrSpace(path.win32.resolve(p)))
+  // A path the disk answers for, or null: not readable, no path in the
+  // answer, or a spelling or an answer with a name the system rewrites.
+  const read = (resolve, p) => {
+    if (rewrittenOnWindows(p)) return null
+    try {
+      const v = resolve(p)
+      return typeof v === 'string' && v !== '' && !rewrittenOnWindows(v) ? v : null
+    } catch {
+      return null
+    }
+  }
+  const known = new Map()
+  const real = (p) => {
+    if (!known.has(p)) known.set(p, read(readReal, p))
+    return known.get(p)
+  }
+  const spelling = (p) => {
+    if (win) return path.win32.resolve(p).replace(/^[a-z](?=:)/, (c) => c.toUpperCase())
+    return p.split('/').includes('..') ? p : path.posix.resolve(p)
+  }
+  const target = real(dir)
+  for (const g of gated) {
+    if (typeof g !== 'string' || g === '') continue
+    const other = target === null ? null : real(g)
+    if (target === null || other === null) {
+      if (spelling(g) === spelling(dir)) return dir
+    } else if (target === other) {
+      const start = read(followLinks, dir)
+      const root = start === null ? '' : paths.parse(start).root
+      const drive = root === '' ? null : real(root)
+      if (drive === null) return target
+      const under = drive.endsWith(paths.sep) ? drive : drive + paths.sep
+      if (target !== drive && !target.startsWith(under)) return target
+      return paths.join(root, target.slice(under.length))
+    }
+  }
+  return null
+}
+
+// Where a resume relaunches the CLI: `{ cwd }` to retarget into the
+// conversation's worktree, `{ cwd: null }` to inherit the current directory
+// (no resume, same directory, or a directory that is gone -- fail-safe, as
+// before), or `{ refused }` when this is a MANAGED launch (an AI Code
+// Conductor account, which arrives with the directories its project-settings
+// gate checked in CCC_GATED_DIRS) and the worktree is not one of them: the CLI
+// must not be relaunched anywhere the gate did not scan, because a worktree's
+// own settings files can redirect the account. The set holds the launch's own
+// folders and only the worktrees whose settings were checked clean; a worktree
+// that was refused, could not be checked, or was not listed when the session
+// started (the listing failed, or it appeared since) is refused. A worktree is
+// in the set when it is the same folder on disk as one of its entries, and a
+// managed launch then starts in the folder that check settled, not at the
+// worktree's spelling (isGatedDir; `gateOpts` is for tests), so both of
+// launchClaude's launches run in the folder that was checked. Pure apart from
+// those disk reads, so the decision has a test; the caller exits on `refused`
+// and says why.
+function resolveRetargetCwd(resumeId, sourceCwd, currentCwd, env, existsSync, gateOpts) {
+  if (!resumeId || !sourceCwd) return { cwd: null }
+  try {
+    if (sourceCwd === currentCwd || !existsSync(sourceCwd)) return { cwd: null }
+  } catch {
+    return { cwd: null }
+  }
+  const gated = gatedDirsFromEnv(env)
+  if (!gated) return { cwd: sourceCwd }
+  const start = isGatedDir(sourceCwd, gated, gateOpts)
+  return start === null ? { cwd: null, refused: sourceCwd } : { cwd: start }
 }
 
 // Pure-logic exports for unit testing. Guarded so `require()` from the test (or
 // a sanity `node -e "require('./scripts/resume-picker.js')"`) does NOT run main.
 module.exports = {
+  gatedDirsFromEnv,
+  isGatedDir,
+  resolveRetargetCwd,
+  displayPath,
+  displayText,
   buildSpawnTarget,
+  notStartedMessage,
+  launchSpec,
+  launchClaude,
+  resolveClaudeCmd,
+  CLAUDE_BIN_ENV,
+  CLAUDE_WINDOWS_NAMES,
+  withFullyQualifiedProgramLookup,
   encodeProjectPath,
   resolveProjectDir,
   ensureCompanionDir,
@@ -735,6 +1369,8 @@ module.exports = {
   mergeAndLabel,
   parseConversation,
   computeLayoutWidth,
+  pickerLines,
+  colours: C,
   loadWorkNames,
   readSidecarName,
   sanitizeMessageText,

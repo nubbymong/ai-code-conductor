@@ -1940,13 +1940,17 @@ export type CanvasBridgeRequest =
   | { ns: typeof CANVAS_BRIDGE_NS; id: number; type: 'inspect'; x: number; y: number }
   | { ns: typeof CANVAS_BRIDGE_NS; id: number; type: 'resolveAnchors'; anchors: AnchorRef[] }
   /**
-   * Ask the content to stop (or resume) emitting its unsolicited `pointer` and
-   * `contentClick` events — x-ray Off (#367).
+   * Ask the content to stop (or resume) emitting its unsolicited `pointer`
+   * events (`enabled`) and its `contentClick` events (`clicks`): x-ray Off
+   * (#367). Two switches since aicc_planning#107: a plan drops the pointer
+   * stream and keeps clicks, which select the section a note points at.
+   * `clicks` left out follows `enabled`, the meaning this request had before
+   * the split.
    *
    * The only request that is not a question, and it is worth being precise
    * about why it does not breach D8 ("content is never commanded to draw"): it
-   * can only make the bridge QUIETER. No value of `enabled` makes the page
-   * report more than it already would, draw anything, or change what it
+   * can only make the bridge QUIETER. No value of either switch makes the page
+   * report more than it does by default, draw anything, or change what it
    * renders. Off means the page does no per-mousemove work at all, which is
    * what "view it as a normal browser tab" has to mean to be worth having.
    *
@@ -1955,12 +1959,15 @@ export type CanvasBridgeRequest =
    * (AgentCanvasPane's onPointer/onContentClick), and that gate is the one that
    * decides what reaches the review store.
    */
-  | { ns: typeof CANVAS_BRIDGE_NS; id: number; type: 'hoverReporting'; enabled: boolean }
+  | { ns: typeof CANVAS_BRIDGE_NS; id: number; type: 'hoverReporting'; enabled: boolean; clicks?: boolean }
 
 /** Reply to 'hoverReporting': what the bridge says it is now doing. Advisory —
- *  the host enforces the mode itself and never needs this to be true. */
+ *  the host enforces the mode itself and never needs this to be true. `clicks`
+ *  is absent only from an answer shaped before aicc_planning#107, where
+ *  clicks followed `enabled`. */
 export interface CanvasHoverReportingResult {
   enabled: boolean
+  clicks?: boolean
 }
 
 export interface CanvasSnapshotNode extends CanvasHitInfo {

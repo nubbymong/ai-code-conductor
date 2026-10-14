@@ -1,3 +1,4 @@
+// HOST QUARANTINE: changes ACLs on temp folders (through the app's own folder hardening). [CI] [VM] only -- never run on the owner's machine.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import {
@@ -47,13 +48,13 @@ describe('captureGlobalLogin', () => {
 
   it('leaves name empty (not "New account") when no name is passed, so email shows via resolveAccountName', () => {
     const homeRoot = path.dirname(sharedRoot)
-    fs.writeFileSync(path.join(homeRoot, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'nicholas@live.co.uk' } }))
+    fs.writeFileSync(path.join(homeRoot, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'user1@example.com' } }))
 
     const profile = captureGlobalLogin() // no name argument
 
     expect(profile).not.toBeNull()
     expect(profile!.name).toBe('')
     // resolveAccountName must fall back to the email
-    expect(resolveAccountName(profile!.accountEmail, profile!.name, undefined)).toBe('nicholas@live.co.uk')
+    expect(resolveAccountName(profile!.accountEmail, profile!.name, undefined)).toBe('user1@example.com')
   })
 })

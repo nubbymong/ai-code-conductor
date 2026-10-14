@@ -3,10 +3,21 @@ import * as path from 'path'
 import * as fs from 'fs'
 import { homedir } from 'os'
 import * as pty from 'node-pty'
+import { guardPtyIo } from '../pty-input-guard'
+import { stripSpoofableText } from '../../shared/safe-text'
 import { logInfo } from '../debug-logger'
 import { getInstallPath } from '../update-watcher'
 import { resolveClaudeForPty } from '../pty-manager'
 import { probeClaudeCli } from '../claude-cli-probe'
+import { afterPathRefresh } from '../windows-path-refresh'
+import { pathHintFor } from '../install-folder-path'
+import type { PathHintView } from '../../shared/providers'
+import { defaultLoginShell } from '../login-shell'
+import { withFullyQualifiedProgramLookup } from '../windows-programs'
+import { warmFirstStart } from '../first-start-warmup'
+import { quitHold } from '../quit-hold'
+import { timedStart } from '../main-thread-ops'
+import { claudeVersionRunEnv } from '../providers/review-support'
 import {
   getDataDirectory,
   getResourcesDirectory,
@@ -16,6 +27,19 @@ import {
 } from '../data-paths'
 
 export { getDataDirectory, getResourcesDirectory } from '../data-paths'
+
+/**
+ * The environment the first-run Claude Code setup terminal runs under: `env`,
+ * and on Windows with the child's own program lookup kept to the folders PATH
+ * names in full (withFullyQualifiedProgramLookup: only fully qualified PATH
+ * folders, and the lookup setting in one spelling). There Claude Code is
+ * often an npm command shim, which starts `node` by a bare name; that name is
+ * looked for only in those folders, never in the terminal's working folder nor
+ * in one named relative to it. `env` itself is not changed.
+ */
+export function setupTerminalEnv(env: Record<string, string>, platform: NodeJS.Platform = process.platform): Record<string, string> {
+  return platform === 'win32' ? withFullyQualifiedProgramLookup(env) : env
+}
 
 // Check if setup is complete (uses cached registry/config check)
 export function isSetupComplete(): boolean {
@@ -57,9 +81,41 @@ export function isCliReady(): boolean {
 
 // Track CLI setup PTY
 let cliSetupPty: pty.IPty | null = null
+/** ADR-025: which start of the setup terminal is the current one. A start
+ *  takes the next number before it awaits the first-start warm-up; a kill,
+ *  or a newer start, moves it on. A start whose number is no longer the
+ *  current one after the wait starts nothing: the setup screen that asked
+ *  for it has closed it (Skip for now, Finish, Exit) or asked again. */
+let cliSetupStart = 0
+
+/** WP2: the CLI setup terminal runs Claude Code for as long as it is open, so
+ *  it counts as Claude Code in use for the switch-off rule
+ *  (provider-in-use.ts). It is registered in the same step as its launch
+ *  check, and dropped when it exits or is killed. */
+export function countCliSetupInUse(): number {
+  return cliSetupPty ? 1 : 0
+}
 
 export function writeCliSetupPty(data: string): void {
   cliSetupPty?.write(data)
+}
+
+/** Ends the Claude Code setup terminal, and cancels a start still waiting on
+ *  its first-start warm-up (it then starts nothing). The setup screen's own
+ *  ways out (Skip for now, Finish, Exit, and its Close, which runs Exit) reach
+ *  this through setup:killCliSetup. The app's quit teardown and the macOS
+ *  last-window sweep (index.ts) call it directly, so a window closed any
+ *  other way (Alt+F4, the taskbar, Cmd+Q, the red button) ends it too: before
+ *  that, those routes left the terminal to process exit. Safe with nothing
+ *  running, and safe twice: a running terminal is killed once, never again. */
+export function killCliSetupPty(): void {
+  cliSetupStart++
+  if (!cliSetupPty) return
+  try {
+    cliSetupPty.kill()
+  } catch { /* already gone */ }
+  cliSetupPty = null
+  logInfo('[setup] CLI setup PTY killed')
 }
 
 export function registerSetupHandlers(): void {
@@ -126,9 +182,22 @@ export function registerSetupHandlers(): void {
   // now runs on the event loop and collapses overlapping calls onto one probe;
   // this handler must AWAIT it so a rejection still lands in the catch below
   // rather than escaping as an unhandled rejection.
+  // Owner decision D4 (2026-10-10): every probe here is one the setup screen
+  // asked for (on entry, Retry, the check after its install ends), so on
+  // Windows this process's PATH is brought up to date from the registry
+  // first (windows-path-refresh.ts: folders appended, never dropped), and a
+  // Claude Code installed since the app started is found without a restart.
+  // A probe that still finds nothing says what helps (install-folder-path.ts):
+  // Anthropic's installer put claude in its own folder, which PATH does not
+  // name (Windows: Add it to PATH for me; macOS and Linux: the shell line),
+  // or a restart would help. Display text only.
   ipcMain.handle('setup:probeCli', async () => {
     try {
-      return await probeClaudeCli()
+      const found = await afterPathRefresh(probeClaudeCli)
+      if (found.installed) return found
+      let pathHint: PathHintView | undefined
+      try { pathHint = await pathHintFor('claude') } catch { pathHint = undefined }
+      return pathHint ? { ...found, pathHint } : found
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       logInfo(`[setup] Claude CLI probe failed: ${message}`)
@@ -137,37 +206,88 @@ export function registerSetupHandlers(): void {
   })
 
   ipcMain.handle('setup:spawnCliSetup', async (event, cols: number, rows: number) => {
+    // WP2: this terminal runs Claude Code itself (its folder-trust prompt), so
+    // it is refused while Claude Code is off, before anything is spawned
+    // (provider-launch-gate.ts). The renderer skips this step then anyway
+    // (skipsClaudeCliSetup); this is the authority behind it. Answered, so
+    // the setup terminal says why. Loaded lazily: config-manager imports this
+    // module, and the gate's accounts graph imports config-manager.
+    const { providerLaunchRefusal } = await import('../provider-launch-gate')
+    const refused = providerLaunchRefusal('claude')
+    if (refused) return { refused }
+    const thisStart = ++cliSetupStart
     const sessionId = '__cli_setup__'
     const installPath = getInstallPath()
     const cwd = installPath && fs.existsSync(installPath) ? installPath : homedir()
 
     const { cmd } = resolveClaudeForPty()
-    logInfo(`[setup] Spawning CLI setup PTY: ${cmd} in ${cwd}`)
 
+    // Once the before-quit teardown has run, no setup terminal starts, on any
+    // platform (quit-hold.ts): the start is never answered. On Windows the
+    // warm-up below holds it too; on macOS and Linux nothing else would.
+    const held = quitHold<null>('the Claude Code setup terminal')
+    if (held) return held
+
+    // The log line names what this terminal runs on each platform.
     if (process.platform === 'win32') {
-      // Windows: spawn claude directly
-      cliSetupPty = pty.spawn(cmd, [], {
+      // ADR-025: straight after an install this is often the first start of
+      // a new claude.exe, which holds the start call while the OS checks the
+      // new program. That first start runs off the main thread first: the
+      // Claude Code main resolved above (nothing the renderer sent), with
+      // Claude's --version environment. A pre-start, never a gate.
+      await warmFirstStart(cmd, () => ({ env: claudeVersionRunEnv(process.env, 'win32') }))
+      // Closed, or asked for again, while the warm-up ran: a kill then found
+      // no terminal to end, so this start must not make one (it would run
+      // hidden, and count as Claude Code in use, until the app quits). The
+      // screen that asked has gone, so there is nothing to say.
+      if (thisStart !== cliSetupStart) {
+        logInfo('[setup] CLI setup PTY not started: the setup terminal was closed while its first start was prepared')
+        return null
+      }
+      // The launch check again, in the same step as the start: Claude Code
+      // may have been switched off while the warm-up ran.
+      const offNow = providerLaunchRefusal('claude')
+      if (offNow) return { refused: offNow }
+      // Windows: spawn claude directly; a program it starts by a bare name is
+      // found only in the folders PATH names (setupTerminalEnv).
+      logInfo(`[setup] Spawning CLI setup PTY: ${cmd} in ${cwd}`)
+      cliSetupPty = timedStart(cmd, () => pty.spawn(cmd, [], {
         name: 'xterm-256color',
         cols: cols || 100,
         rows: rows || 20,
         cwd,
-        env: process.env as Record<string, string>
-      })
+        env: setupTerminalEnv(process.env as Record<string, string>),
+      }))
     } else {
       // macOS/Linux: spawn interactive login shell so PATH includes Homebrew etc.
-      const shell = process.env.SHELL || '/bin/zsh'
-      cliSetupPty = pty.spawn(shell, ['-l'], {
+      // The platform is passed explicitly and is the same source as the gate above.
+      const shell = defaultLoginShell(process.env, process.platform)
+      logInfo(`[setup] Spawning CLI setup PTY: ${shell} -l in ${cwd}, then claude by name`)
+      cliSetupPty = timedStart(shell, () => pty.spawn(shell, ['-l'], {
         name: 'xterm-256color',
         cols: cols || 100,
         rows: rows || 20,
         cwd,
         env: process.env as Record<string, string>,
-      })
-      // Send the claude command after a brief delay for shell init
+      }))
+      // Send the claude command after a brief delay for shell init. The
+      // user's own login shell runs this terminal and finds Claude Code by
+      // name; with fish or PowerShell 7.3 or later that is the Claude Code the
+      // CLI check found in the PATH it reports.
       setTimeout(() => {
-        if (cliSetupPty) cliSetupPty.write(`${cmd}\r`)
+        if (cliSetupPty) cliSetupPty.write('claude\r')
       }, 500)
     }
+
+    // This start's own terminal. Its exit drops it from the slot only while
+    // the slot still holds it: an earlier terminal's exit, which node-pty
+    // reports after the kill, must not drop a newer one, or the quit teardown
+    // (killCliSetupPty) could not reach the newer one.
+    const term = cliSetupPty
+
+    // P3.15 round 4 (P2): an error on this terminal's input (the user types
+    // into it) or output never quits the app; it ends on its own exit.
+    guardPtyIo(cliSetupPty, (side, err) => logInfo(`[setup] CLI setup PTY ${side} failed (${stripSpoofableText(String(err?.code ?? err?.message ?? err), 120)})`))
 
     const win = BrowserWindow.fromWebContents(event.sender)
 
@@ -182,20 +302,15 @@ export function registerSetupHandlers(): void {
       if (win && !win.isDestroyed()) {
         win.webContents.send(`pty:exit:${sessionId}`, exitCode)
       }
-      cliSetupPty = null
+      if (cliSetupPty === term) cliSetupPty = null
     })
 
     return sessionId
   })
 
   ipcMain.handle('setup:killCliSetup', async () => {
-    if (cliSetupPty) {
-      try {
-        cliSetupPty.kill()
-      } catch { /* ignore */ }
-      cliSetupPty = null
-      logInfo('[setup] CLI setup PTY killed')
-    }
+    // Also a start still waiting on its warm-up: it then starts nothing.
+    killCliSetupPty()
     return true
   })
 }

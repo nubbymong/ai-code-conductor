@@ -1,3 +1,4 @@
+// HOST QUARANTINE: changes ACLs on temp folders (through the app's own folder hardening). [CI] [VM] only -- never run on the owner's machine.
 // BLOCKER 1, second pass (adversarial review, 2026-08-15) — WHERE THE SERVED
 // ROOT COMES FROM.
 //
@@ -108,10 +109,13 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({
     h.codexReviewRoots.push({ sessionId, cwd })
   },
   unregisterCodexReviewSession: () => {},
+  releaseMcpSessionProvider: () => {},
+  registerClaudeReviewSession: () => {},
 }))
 
 vi.mock('../../../src/main/providers', () => ({
   getProvider: () => ({
+    resolveBinary: () => ({ cmd: 'claude', source: 'system' }), // WP2 PR 4: the local launch resolves Claude through the provider
     buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: {} }),
     ingestSessionTelemetry: () => ({ stop: () => {} }),
   }),

@@ -1,10 +1,75 @@
+// Claude provider package: public entry point (WP1, design 7.1). Everything
+// outside this directory imports from here; the dependency-boundary test
+// holds the deep imports at zero.
 import type { SshCapableProvider, SpawnOptions, TelemetrySource, HistorySession } from '../types'
-import type { LegacyVersion, StatuslineData } from '../../../shared/types'
+import type { LegacyVersion, SshRuntime, StatuslineData } from '../../../shared/types'
+import type { ProviderCapabilities } from '../../../shared/providers'
+import type { ProviderPackage } from '../core'
 import { resolveClaudeBinary, buildClaudeLocalSpawn } from './spawn'
-import { getRemoteSetupCommand, remoteSessionSettingsPath, remoteSessionMcpConfigPath } from './ssh-shim'
-import { detectClaudeUi } from './ui-detection'
-import { deployClaudeStatuslineScript, deployClaudeResumePickerScript } from './statusline'
-import { watchClaudeStatuslineFile, listClaudeResumableSessions } from './telemetry'
+import {
+  getRemoteSetupCommand, remoteSessionSettingsPath, remoteSessionMcpConfigPath,
+  buildRemoteSessionCleanupCommand, buildWindowsRemoteSessionCleanupCommand, buildTmuxBinPatchCommand, buildRemoteTmuxKillCommand, buildContainerKillCommand,
+  parseEndSudoSentinel, getWindowsRemoteSetupCommand, buildWindowsClaudeCommand, statusPostUrl,
+} from './ssh-shim'
+import { detectClaudeUi, lastPromptLineForClaude, looksLikeShellPromptTail } from './ui-detection'
+import { deployClaudeStatuslineScript, deployClaudeResumePickerScript, healGlobalStatusline, launchStatuslineSetting } from './statusline'
+import { watchClaudeStatuslineFile, listClaudeResumableSessions, notifyClaudeTelemetry } from './telemetry'
+import {
+  claudeAuthorityEnvVariables, CLAUDE_MIN_MANAGED_CLI_VERSION,
+  sanitizeClaudeManagedSettings, claudeAuthoritySettingsKeys, claudeManagedLaunchPreflight, claudeTransportSettingsEnv,
+} from './managed-launch'
+import { createClaudeLegacyAccountsPort } from './legacy-store'
+import type { ClaudeLegacyAccountsIo } from './legacy-store'
+import { createClaudeReviewLaunch } from './review-launch'
+import type { ClaudeReviewPorts } from './review-launch'
+import { createClaudeAuthOperations } from './auth-operations'
+import type { ClaudeAuthPorts } from './auth-operations'
+import { CLAUDE_ENABLEMENT } from './enablement'
+
+// The managed-launch surface is re-exported so the composition root and the
+// conformance suite reach it through this entry point, never by deep import.
+export {
+  claudeAuthorityVariables, claudeAuthorityEnvVariables,
+  CLAUDE_CREDENTIAL_HELPER_SETTINGS_KEYS, CLAUDE_AUTH_PIN_SETTINGS_KEYS,
+  CLAUDE_REMOVED_SETTINGS_KEYS, CLAUDE_MIN_MANAGED_CLI_VERSION,
+  isClaudeAuthorityEnvVariable, sanitizeClaudeManagedSettings, claudeAuthoritySettingsKeys,
+  claudeAuthorityFamilyRules,
+  claudeManagedCliCompatibility, claudeManagedLaunchPreflight, claudeTransportSettingsEnv,
+} from './managed-launch'
+export type { AuthorityKind, AuthorityEntry } from './managed-launch'
+
+// profiles.json as the neutral account registry sees it (WP2, design 6.2).
+export { claudeLegacySnapshot, claudeProfilePathRef } from './legacy-accounts'
+export type { ClaudeLegacyAccountsIo } from './legacy-store'
+
+// The reviewer for Codex sessions (WP2 commit 5b): its launch, discovery and
+// adapter, and the ports the composition root hands it.
+// Claude Code's install commands, from Anthropic's setup page (ADR-024).
+export { claudeInstallRecipes, CLAUDE_INSTALL_SOURCE_URL } from './install-recipes'
+export { createClaudeReviewLaunch } from './review-launch'
+export type { ClaudeReviewPorts } from './review-launch'
+export { createClaudeReviewOperations, parseClaudeResult, CLAUDE_REVIEW_ARGS, CLAUDE_REVIEW_MAX_STDOUT, CLAUDE_REVIEW_HOLD_GRACE_MS } from './review'
+export type { ClaudeCliPorts, ClaudeCliCommand, ClaudeCliRunOptions, ClaudeCliRunResult, ClaudeReviewDeps, ClaudeResultOutcome } from './review'
+export { discoverClaude, verifyClaudeExecutable, claudeCompatibilityAllowsUse, parseClaudeVersion } from './discovery'
+export type { ClaudeDiscovery, ClaudeDiscoveryDeps, ClaudeExecutableIdentity, ClaudeExecutableCheck, ClaudeFileStat, ClaudeVersionRun } from './discovery'
+// WP2 PR 4: sign-in status and sign-out, and the ports the root hands them.
+export { createClaudeAuthOperations, CLAUDE_COMPUTER_SIGN_IN_ACK } from './auth-operations'
+export type { ClaudeAuthPorts, ClaudeAuthCli, ClaudeProfileAuthStatus, ClaudeProfileLogout } from './auth-operations'
+
+/** What the composition root injects: the main-process stores the package
+ *  reads and writes without importing them (a shared main module imported
+ *  here would reach the Codex package: rule R2). Absent where only the
+ *  session surface is needed. */
+export interface ClaudePackageDeps {
+  legacyAccountsIo?: ClaudeLegacyAccountsIo
+  /** The reviewer's ports (WP2 commit 5b). Absent: the package offers no
+   *  setup, launch or review, and `claude_review` is never offered. */
+  review?: ClaudeReviewPorts
+  /** The sign-in status and sign-out ports (WP2 PR 4): the app's own
+   *  `claude auth status` probe and the sign-out beside it. Absent: the
+   *  package offers no auth operations. */
+  auth?: ClaudeAuthPorts
+}
 
 export class ClaudeProvider implements SshCapableProvider {
   readonly id = 'claude' as const
@@ -19,8 +84,8 @@ export class ClaudeProvider implements SshCapableProvider {
     if (opts.ssh) throw new Error('SSH spawn handled by configureRemoteSettings -- see P0.5')
     return buildClaudeLocalSpawn(opts)
   }
-  detectUiRunning(data: string): boolean {
-    return detectClaudeUi(data, true)  // post-spawn convenience: assume claudeSent
+  detectUiRunning(data: string, commandSent = true): boolean {
+    return detectClaudeUi(data, commandSent)  // post-spawn convenience: assume claudeSent
   }
   ingestSessionTelemetry(
     sessionId: string,
@@ -52,7 +117,7 @@ export class ClaudeProvider implements SshCapableProvider {
     sessionId: string,
     remotePath: string,
     hooksConfig: { port: number; secret: string } | null,
-    opts: { includeStatusLine?: boolean; includeConductorMcp?: boolean; remoteMcpPort?: number } | undefined,
+    opts: { includeStatusLine?: boolean; includeConductorMcp?: boolean; remoteMcpPort?: number; includeAttention?: boolean } | undefined,
     nonce: string,
   ): string {
     return getRemoteSetupCommand(sessionId, remotePath, hooksConfig, opts, nonce)
@@ -62,5 +127,197 @@ export class ClaudeProvider implements SshCapableProvider {
   }
   async deployResumePickerScript(resourcesDir: string): Promise<void> {
     return deployClaudeResumePickerScript(resourcesDir)
+  }
+
+  // WP2 PR 4: what the PTY manager, the per-session settings writer and the
+  // statusline dispatcher used to deep-import, offered through the
+  // registered provider. Each delegates unchanged.
+  healGlobalStatusline(): void {
+    healGlobalStatusline()
+  }
+  deliverStatusline(data: StatuslineData): void {
+    notifyClaudeTelemetry(data)
+  }
+  statuslineSetting(resourcesDir: string, sessionId?: string, statusUrlFile?: string): { type: 'command'; command: string } | null | undefined {
+    return launchStatuslineSetting(resourcesDir, sessionId, statusUrlFile)
+  }
+  statusPostUrl(sessionId: string, remoteMcpPort: number | undefined, mcpPort: number, includeConductorMcp: boolean): string {
+    return statusPostUrl(sessionId, remoteMcpPort, mcpPort, includeConductorMcp)
+  }
+  remoteSessionCleanupCommand(sessionId: string): string {
+    return buildRemoteSessionCleanupCommand(sessionId)
+  }
+  windowsRemoteSessionCleanupCommand(sessionId: string): string {
+    return buildWindowsRemoteSessionCleanupCommand(sessionId)
+  }
+  tmuxBinPatchCommand(sessionId: string): string {
+    return buildTmuxBinPatchCommand(sessionId)
+  }
+  remoteTmuxKillCommand(sessionId: string): string {
+    return buildRemoteTmuxKillCommand(sessionId)
+  }
+  containerKillCommand(sessionId: string, runtime: SshRuntime | undefined, opts?: { hasSudoPassword?: boolean; sudoProbeNonce?: string }): string {
+    return buildContainerKillCommand(sessionId, runtime, opts)
+  }
+  parseEndSudoSentinel(output: string, nonce: string): boolean {
+    return parseEndSudoSentinel(output, nonce)
+  }
+  windowsRemoteSetupCommand(
+    sessionId: string,
+    opts: { includeStatusLine?: boolean; includeConductorMcp?: boolean; remoteMcpPort?: number } | undefined,
+    nonce: string,
+  ): string {
+    return getWindowsRemoteSetupCommand(sessionId, opts, nonce)
+  }
+  windowsLaunchCommand(input: { sessionId: string; envPrefixVars: string[]; extraFlags: string; continueFlag: string }): string {
+    return buildWindowsClaudeCommand(input)
+  }
+  lastPromptLine(data: string): string {
+    return lastPromptLineForClaude(data)
+  }
+  looksLikeShellPromptTail(data: string): boolean {
+    return looksLikeShellPromptTail(data)
+  }
+}
+
+/** What Claude Code supports through this app, stated honestly (design 7.3),
+ *  for a package created with no ports (the session surface only). A key is
+ *  `supported` only once this package exposes the operation behind it
+ *  (registration enforces that); claudeCapabilitiesFor declares the keys the
+ *  composition root's ports back. Account isolation is the existing
+ *  profile-home mechanism (owner decision D1); it is not available on macOS,
+ *  where the login keychain is located through $HOME (D2, WP1 only). No
+ *  tested CLI version range is declared yet: the range is established by the
+ *  D7 conformance evidence (dev host: Claude Code 2.1.278). */
+export const claudeCapabilities: ProviderCapabilities = {
+  'cli.discovery': { state: 'unknown', note: 'claude --version through setup.discover, which exists once the composition root hands the package its CLI ports; this package has none' },
+  'install.recipes': { state: 'unknown', note: 'the install commands from Anthropic\'s setup page, through setup.installRecipes, which exists once the composition root hands the package its CLI ports; this package has none' },
+  'auth.browser': { state: 'unknown', note: 'the genuine CLI login in a Conductor terminal (the Accounts panel); not wired through this package yet' },
+  'auth.device': { state: 'unsupported', note: 'Claude Code has no device-code sign-in' },
+  'auth.apiKey': { state: 'unsupported', note: 'managed accounts use the CLI sign-in; an API key is never collected' },
+  'auth.status': { state: 'unknown', note: 'the profile\'s claude auth status, which exists once the composition root hands the package its sign-in ports; this package has none' },
+  'auth.logout': { state: 'unknown', note: 'the profile\'s claude auth logout, which exists once the composition root hands the package its sign-in ports; this package has none' },
+  'auth.retireReplaced': { state: 'unsupported', note: 'a Claude profile signs in again in its own home; nothing is replaced' },
+  'realm.isolated': { state: 'unknown', platformOverrides: { darwin: 'unsupported' }, note: 'profile homes; not on macOS in WP1 (D2); not wired through this package yet' },
+  'account.labelFields': { state: 'unknown', note: 'email read from the profile identity file; not wired through this package yet' },
+  'account.usage': { state: 'unknown', note: 'the per-account usage fetch lives in src/main/usage, not on this package; wired in a later slice' },
+  'session.launch': { state: 'supported' },
+  'session.history': { state: 'supported', note: 'resume picker and history listing' },
+  'session.cloud': { state: 'unknown', note: 'cloud agents run through cloud-agent-manager, not through the provider package; wired in a later slice' },
+  'session.ssh': { state: 'supported' },
+}
+
+/** The declaration of the package the composition root registers, with the
+ *  CLI ports (setup.discover) and the sign-in ports (auth.status,
+ *  auth.logout). WP2 PR 4 (owner answers 2026-10-04): each note says what
+ *  runs. Status and sign-out run the executable discovery proved, with no
+ *  shell. On macOS every profile runs on the Mac's one Claude Code sign-in
+ *  (withProfileHome leaves HOME, and so the login keychain, at the real home;
+ *  D2), so a check there reads that sign-in and a sign-out there signs it out
+ *  for every Claude Code on the Mac: like the primary profile's sign-out
+ *  elsewhere, it runs only with the user's acknowledgement
+ *  (CLAUDE_COMPUTER_SIGN_IN_ACK). */
+export const claudeWiredCapabilities: ProviderCapabilities = {
+  ...claudeCapabilities,
+  'cli.discovery': { state: 'supported', note: 'claude --version on the executable the app resolves, through its runner with no Conductor variable, absolute PATH entries only and no shell (setup.discover); run at start while Claude Code is on, by Check again in Settings, Accounts, and again before a reviewer launch when the proven file changed' },
+  'install.recipes': { state: 'supported', note: 'the commands from Anthropic\'s setup page, copied verbatim (npm named npm.cmd on Windows), never scraped: the native installer first, then npm; each runs only in a visible terminal after the user confirms its line (for the installer, a confirmation that names claude.ai, the host its script comes from), never on its own and never elevated (setup.installRecipes)' },
+  'auth.status': { state: 'supported', note: 'claude auth status in the account\'s own profile home, run from the executable discovery proved with no shell, by the probe the Accounts panel uses (the profile held as a credential consumer, the project gate, the hardened profile-home environment; one check per profile at a time, so a check that finds the panel\'s own probe of the profile running shares its answer); signed out only on the CLI\'s own answer; on macOS it reads the Mac\'s one Claude Code sign-in, which every profile runs on there (D2)' },
+  'auth.logout': { state: 'supported', note: 'claude auth logout in the account\'s own profile home, run from the executable discovery proved with no shell (its process tree stopped at the time limit), with the status probe\'s hold, gate and environment, refused while a session or a check uses the profile, confirmed by the profile\'s state read afresh; the CLI also revokes the token. Signing out this computer\'s own sign-in (the primary profile; every profile on macOS, D2) needs the user\'s acknowledgement' },
+}
+
+/** The declaration for the ports a package was created with: each key is
+ *  claimed only when the operation behind it can run. Status and sign-out
+ *  run the executable discovery proved, so they need the CLI ports too. */
+function claudeCapabilitiesFor(wired: { setup: boolean; auth: boolean }): ProviderCapabilities {
+  if (wired.setup && wired.auth) return claudeWiredCapabilities
+  if (!wired.setup) return claudeCapabilities
+  return { ...claudeCapabilities, 'cli.discovery': claudeWiredCapabilities['cli.discovery'], 'install.recipes': claudeWiredCapabilities['install.recipes'] }
+}
+
+/** Ambient variables that could override a bound Claude realm (D3).
+ *
+ *  Slice 1 carried four names and left an open question beside them: do the
+ *  authority/cloud switches (`ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`,
+ *  ...) belong here, given they redirect where a credential GOES rather than
+ *  which realm is read? The owner's ruling of 2026-09-21 answers it -- yes:
+ *  a session pointed at an attacker's endpoint is not isolated merely because
+ *  it read the right stored login. The full derived, classified list now lives
+ *  in ./managed-launch, one entry per variable with its authority kind and
+ *  whether it is documented, observed in the pinned binary, or both. */
+export function claudeAmbientAuthVariables(): readonly string[] {
+  return claudeAuthorityEnvVariables()
+}
+
+/** Variables the realm patch may set: the profile-home selector, HOME as its
+ *  POSIX sibling (D1), and the Anthropic PROFILE STORE that outranks the home
+ *  selector in the bundled SDK's own resolution order. Nothing else.
+ *
+ *  ANTHROPIC_CONFIG_DIR is here because the SDK checks it FIRST and returns
+ *  immediately; %APPDATA%\Anthropic and then
+ *  %USERPROFILE%\AppData\Roaming\Anthropic come after it. Until this entry
+ *  nothing set any of the three, so APPDATA decided which stored identity was
+ *  read and the home redirect never got a vote (adversarial round 4).
+ *
+ *  APPDATA and XDG_CONFIG_HOME are deliberately NOT owned. They would isolate
+ *  the store too, and they are also where `gh` keeps its OAuth tokens, npm its
+ *  cache and global prefix, and git its XDG-style config -- the developer
+ *  configuration D3 says a managed session inherits. Owning the first key costs
+ *  none of that. See profileRealmConfigRoot.
+ *
+ *  Three things withProfileHome also sets are deliberately NOT here, for one
+ *  reason: a realm patch can only REPLACE a variable wholesale, and none of
+ *  them is a realm selector.
+ *  - PATH: withProfileHome APPENDS <home>/.local/bin to the inherited PATH, so
+ *    a system binary still wins. Owning it would hand the package the child's
+ *    whole executable search order -- the PATH hijack this contract forbids.
+ *  - GIT_CONFIG_GLOBAL and npm_config_userconfig: withProfileHome points these
+ *    at the REAL home ("keep git/npm reading the real shared config",
+ *    src/main/account-profiles.ts), i.e. deliberately OUTSIDE the realm. They
+ *    take an arbitrary absolute path, and a git config file executes commands
+ *    (core.pager, core.sshCommand, alias.*, filter.*), so owning them would be
+ *    the PATH hijack one indirection later.
+ *  All three stay in the launch path, where withProfileHome already composes
+ *  them. Registration refuses them (NEVER_OWNED_LAUNCH_VARIABLES). */
+export const claudeOwnedLaunchVariables: readonly string[] = [
+  'USERPROFILE', 'HOME', 'ANTHROPIC_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR',
+]
+
+/** Created by the composition root; importing this entry point has no side
+ *  effects -- and in particular it does not read the authority manifest.
+ *
+ *  The factory is where the manifest is first read: `claudeAmbientAuthVariables()`
+ *  throws for an unusable manifest, and the factory runs inside
+ *  `composeProviders()`, which `index.ts` calls inside its startup error
+ *  boundary. A malformed manifest therefore reaches the user as the "cannot
+ *  start" dialog rather than as a main process that died while loading. */
+export function createClaudePackage(deps: ClaudePackageDeps = {}): ProviderPackage {
+  const ambientAuthVariables = claudeAmbientAuthVariables()
+  const session = new ClaudeProvider()
+  const reviewLaunch = deps.review ? createClaudeReviewLaunch(deps.review) : null
+  return {
+    id: session.id,
+    displayName: session.displayName,
+    session,
+    capabilities: claudeCapabilitiesFor({ setup: !!deps.review, auth: !!deps.auth }),
+    ambientAuthVariables,
+    ownedLaunchVariables: claudeOwnedLaunchVariables,
+    // On unless the user turned it off (A4): Claude-only users change nothing.
+    enablement: CLAUDE_ENABLEMENT,
+    managedLaunch: {
+      minimumCliVersion: CLAUDE_MIN_MANAGED_CLI_VERSION,
+      sanitizeManagedSettings: sanitizeClaudeManagedSettings,
+      authoritySettingsKeys: claudeAuthoritySettingsKeys,
+      preflight: claudeManagedLaunchPreflight,
+      transportSettingsEnv: claudeTransportSettingsEnv,
+    },
+    ...(deps.legacyAccountsIo ? { legacyAccounts: createClaudeLegacyAccountsPort(deps.legacyAccountsIo) } : {}),
+    // A reviewer for Codex sessions: discovery, a review-only launch in the
+    // reviewer account's profile home, and the adapter (commit 5b). Claude
+    // sessions keep their own launch path (A12).
+    ...(reviewLaunch ? { setup: reviewLaunch.setup, launch: reviewLaunch.launch, review: reviewLaunch.review } : {}),
+    // Sign-in status and sign-out in the account's own profile home, by the
+    // app's existing probe and the sign-out beside it (WP2 PR 4), run from
+    // the executable this package's discovery proved (none without it).
+    ...(deps.auth ? { auth: createClaudeAuthOperations(deps.auth, reviewLaunch ? { executable: reviewLaunch.executable } : null) } : {}),
   }
 }

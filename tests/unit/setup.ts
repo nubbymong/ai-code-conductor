@@ -32,7 +32,11 @@ vi.mock('electron', () => ({
     show: vi.fn(),
   })),
   dialog: { showOpenDialog: vi.fn() },
-  clipboard: { readImage: vi.fn(), readText: vi.fn() },
+  // Electron 44's clipboard shape: read() resolves ClipboardItem[] and
+  // readText() resolves a string (the sync readImage/readBuffer/availableFormats
+  // are gone), and an image is decoded with nativeImage.createFromBuffer.
+  clipboard: { read: vi.fn(async () => []), readText: vi.fn(async () => '') },
+  nativeImage: { createFromBuffer: vi.fn() },
   safeStorage: { isEncryptionAvailable: vi.fn(() => false) },
   Menu: { buildFromTemplate: vi.fn(), setApplicationMenu: vi.fn() },
   protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
@@ -60,8 +64,37 @@ vi.mock('../../src/main/ipc/setup-handlers', () => ({
   registerSetupHandlers: vi.fn(),
 }))
 
+// The first-start warm-up (src/main/first-start-warmup.ts, ADR-025) is faked by default.
+// The real one is a Windows first-run check that a unit test should only ever run on purpose:
+//   - it reads the program's real path on the thread pool, so the caller's next step (a
+//     prompt file, a spawn) lands some ticks later, and a test that waits one tick races it;
+//   - it then starts the program in a worker thread, which the home guard refuses
+//     (TEST_ISOLATION_VIOLATION).
+// The fake answers at once with what the real one answers on Linux and macOS (skipped,
+// not-windows), so the caller goes straight on to its own start, as on those hosts.
+// Every other export is real. A plain function, not vi.fn, so a mock reset cannot blank it.
+// To run the real warm-up, a suite opts in with vi.unmock('<relative path>/src/main/
+// first-start-warmup') or reads it with vi.importActual. A suite's own vi.mock of the
+// module replaces this one (it registers after this file has run); one that spreads
+// importOriginal() gets the real warmFirstStart back, so it must set warmFirstStart itself.
+vi.mock('../../src/main/first-start-warmup', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/first-start-warmup')>()),
+  warmFirstStart: async () => ({ outcome: 'skipped' as const, reason: 'not-windows' as const }),
+}))
+
 // Mock window.electronAPI for renderer store tests
 const mockElectronAPI = {
+  // The window controls (WindowControls) read the maximized state on mount,
+  // and the onboarding shell renders them, so every onboarding page needs
+  // these. Plain functions, not vi.fn, so a mock reset cannot blank them; a
+  // suite that checks the calls installs its own.
+  window: {
+    isMaximized: () => Promise.resolve(false),
+    onMaximizedChanged: () => () => {},
+    minimize: () => {},
+    maximize: () => {},
+    close: () => {},
+  },
   registry: {
     get: vi.fn(() => Promise.resolve({ models: [], families: {}, effortLevels: [], dropdown: [] })),
     onUpdate: vi.fn(() => () => {}),
@@ -118,17 +151,6 @@ const mockElectronAPI = {
     getLatest: vi.fn(() => Promise.resolve(null)),
     isRunning: vi.fn(() => Promise.resolve(false)),
     onStatusChanged: vi.fn(() => () => {}),
-  },
-  codex: {
-    status: vi.fn(() => Promise.resolve({
-      installed: false,
-      version: null,
-      authMode: 'none' as const,
-      hasOpenAiApiKeyEnv: false,
-    })),
-    login: vi.fn(() => Promise.resolve({ ok: true })),
-    logout: vi.fn(() => Promise.resolve({ ok: true })),
-    testConnection: vi.fn(() => Promise.resolve({ ok: true, message: 'connected' })),
   },
   dialog: { openFolder: vi.fn(() => Promise.resolve(null)) },
   vision: {

@@ -3,6 +3,7 @@ import { Excalidraw, restoreElements } from '@excalidraw/excalidraw'
 import '@excalidraw/excalidraw/index.css'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import CanvasEmptyState from './CanvasEmptyState'
+import CodexCanvasNotices from './CodexCanvasNotices'
 import { CanvasLibrary, clearCanvasReadonlyView, useCanvasReadonlyRequest } from './CanvasLibrary'
 import CanvasFiledStrip from './CanvasFiledStrip'
 import CanvasNotesPanel from './CanvasNotesPanel'
@@ -54,9 +55,11 @@ import {
   resolveCanvasXrayMode,
   xrayClickSelects,
   xrayDrawsOnPage,
+  xrayFrameReporting,
   xrayHoverIsLive,
   xrayHoverResolves,
   xrayReadsOutInPanel,
+  type CanvasFrameReporting,
   type CanvasXrayMode,
 } from '../canvas/xray-mode'
 import { draftAnnotationsOf, openReviewsOf, openSubmittedNotesOf, useCanvasReviewStore } from '../stores/canvasReviewStore'
@@ -103,6 +106,32 @@ const MAX_HOVER_REPORTING_DEFERRALS = 12
  */
 const MAX_HOVER_REPORTING_SENDS_PER_WINDOW = 12
 const HOVER_REPORTING_SEND_WINDOW_MS = 1000
+
+/** What a freshly loaded bridge does before the host has said anything: it
+ *  reports both pointer moves and clicks. */
+const BRIDGE_DEFAULT_REPORTING: Readonly<CanvasFrameReporting> = Object.freeze({ hover: true, clicks: true })
+
+/**
+ * The frame's own account of what it is now doing, from its answer to a
+ * hoverReporting request. The answer is page-authored, so anything that is not
+ * a boolean is no answer at all and the host is left not knowing. An answer
+ * with no `clicks` is read the way the bridge reads a request with none
+ * (clicks follow `enabled`): the shape from before aicc_planning#107.
+ */
+function frameReportingFromAnswer(raw: unknown): CanvasFrameReporting | 'unknown' {
+  const answer = raw as CanvasHoverReportingResult | null | undefined
+  const hover = answer?.enabled
+  if (typeof hover !== 'boolean') return 'unknown'
+  const clicks = answer?.clicks
+  if (clicks === undefined) return { hover, clicks: hover }
+  return typeof clicks === 'boolean' ? { hover, clicks } : 'unknown'
+}
+
+/** Does the host's belief about the frame match what it wants? Unknown never
+ *  matches, so a frame the host has no account of is always asked again. */
+function frameReportingMatches(belief: CanvasFrameReporting | 'unknown', wanted: CanvasFrameReporting): boolean {
+  return belief !== 'unknown' && belief.hover === wanted.hover && belief.clicks === wanted.clicks
+}
 
 /** resolveAnchors RPCs one resolution intent may spend (#368, N1). The frame
  *  can refuse or sit on a resolve forever, and the settle-time retry would
@@ -466,6 +495,7 @@ export default function AgentCanvasPane({ sessionId, isActive = false }: Props) 
       // because the element is created BY the swap — mounting is the trigger.
       <div className="flex-1 flex flex-col min-h-0 pane-fade-in" data-testid="canvas-pane-root">
         <CanvasFiledStrip sessionId={sessionId} />
+        <CodexCanvasNotices sessionId={sessionId} canvasId={canvasState?.canvasId} />
         {draftPending && (
           <div
             className="shrink-0 px-3 py-1.5 text-[11px] border-b"
@@ -491,6 +521,7 @@ export default function AgentCanvasPane({ sessionId, isActive = false }: Props) 
       {/* Above the surface, so the one thing that happened without asking is
           the first thing read. */}
       <CanvasFiledStrip sessionId={sessionId} />
+      <CodexCanvasNotices sessionId={sessionId} canvasId={canvasState.canvasId} />
       <CanvasSurface
         // Keyed by CANVAS (quality MED-2): a Library "open here" swaps the
         // canvas under a mounted surface, and every per-version mechanism
@@ -733,8 +764,9 @@ function CanvasSurface({
   const isPlanRef = useRef(isPlan)
   const versionIdRef = useRef(version.id)
   /**
-   * What the CURRENT document says it is doing about hover reporting. A bridge
-   * starts reporting, so a freshly loaded frame is `true` and only a mode that
+   * What the CURRENT document says it is doing about hover and click reporting
+   * (two switches since aicc_planning#107). A bridge starts reporting both, so
+   * a freshly loaded frame is BRIDGE_DEFAULT_REPORTING and only a mode that
    * disagrees costs a round-trip. Written from the frame's ANSWER, never from
    * the send.
    *
@@ -750,7 +782,7 @@ function CanvasSurface({
    * nothing, with no report left to repair from (fix-delta verification, #405).
    * Unknown never equals what is wanted, so it always re-sends.
    */
-  const frameHoverReportingRef = useRef<boolean | 'unknown'>(true)
+  const frameHoverReportingRef = useRef<CanvasFrameReporting | 'unknown'>(BRIDGE_DEFAULT_REPORTING)
   /** One hoverReporting request in flight at a time. */
   const hoverReportingPendingRef = useRef(false)
   /**
@@ -1480,13 +1512,16 @@ function CanvasSurface({
   const syncHoverReporting = useCallback(() => {
     // A PLAN never runs live hover resolution: it corrupted/flashed the pane on
     // every mousemove and its notes anchor on CLICK anyway (owner, 2026-08-31).
-    const enabled = xrayHoverResolves(xrayModeRef.current, { isPlan: isPlanRef.current })
+    // So a plan asks for no pointer stream but KEEPS clicks
+    // (aicc_planning#107): with one switch for both, the bridge silenced the
+    // very click a plan section is chosen by. Only x-ray Off asks for no clicks.
+    const wanted = xrayFrameReporting(xrayModeRef.current, { isPlan: isPlanRef.current })
     // Recorded BEFORE the nothing-to-do check, so that passing through a mode
     // the frame already agrees with still counts as changing the intent. Keyed
     // after it, "Off (gave up) -> On -> Off" read as the same intent as the
     // first Off and the second one got no attempts at all — the user asking
     // again is the clearest signal there is that they want it to work.
-    const intent = `${frameGenerationRef.current}:${enabled}`
+    const intent = `${frameGenerationRef.current}:${wanted.hover}:${wanted.clicks}`
     if (hoverReportingIntentRef.current !== intent) {
       hoverReportingIntentRef.current = intent
       hoverReportingAttemptsRef.current = 0
@@ -1494,7 +1529,7 @@ function CanvasSurface({
     }
     // Unknown is never equal to what is wanted, so a frame the host has no
     // account of is always asked again rather than short-circuited here.
-    if (frameHoverReportingRef.current === enabled) return
+    if (frameReportingMatches(frameHoverReportingRef.current, wanted)) return
     if (hoverReportingPendingRef.current) return
     if (hoverReportingAttemptsRef.current >= MAX_HOVER_REPORTING_ATTEMPTS) return
     const target = iframeRef.current?.contentWindow
@@ -1520,15 +1555,19 @@ function CanvasSurface({
     hoverReportingAttemptsRef.current += 1
     hoverReportingDeferralsRef.current = 0
     hoverReportingWindowRef.current.sent += 1
-    askCanvasFrame(target, canvasId, { type: 'hoverReporting', enabled }, HOVER_REPORTING_TIMEOUT_MS)
+    askCanvasFrame(
+      target,
+      canvasId,
+      { type: 'hoverReporting', enabled: wanted.hover, clicks: wanted.clicks },
+      HOVER_REPORTING_TIMEOUT_MS,
+    )
       .then(
         (raw) => {
           // Believed only about the document it was asked of, and only as the
           // frame's own account of itself — the reply is page-authored, so a
           // non-boolean is no answer at all and the host is left not knowing.
           if (generation !== frameGenerationRef.current) return
-          const answered = (raw as CanvasHoverReportingResult | null | undefined)?.enabled
-          frameHoverReportingRef.current = typeof answered === 'boolean' ? answered : 'unknown'
+          frameHoverReportingRef.current = frameReportingFromAnswer(raw)
         },
         () => {
           /* Never landed: refused by the in-flight cap, a frame mid-navigation,
@@ -1596,7 +1635,7 @@ function CanvasSurface({
           // The generation bump is what stops the PREVIOUS document's parked
           // answer from landing on this one's state and undoing this reset.
           frameGenerationRef.current += 1
-          frameHoverReportingRef.current = true
+          frameHoverReportingRef.current = BRIDGE_DEFAULT_REPORTING
           syncHoverReporting()
           // The run's baseline, once per version — see captureBaseline.
           captureBaseline()
@@ -1829,7 +1868,7 @@ function CanvasSurface({
     // and undo it. (The reset without the bump was the one place the two were
     // not kept together — fix-delta verification, #405.)
     frameGenerationRef.current += 1
-    frameHoverReportingRef.current = true
+    frameHoverReportingRef.current = BRIDGE_DEFAULT_REPORTING
     setBridgeReady(false)
     setViewport(null)
     setHover(null)

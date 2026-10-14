@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import './onboarding.css'
 import { OnboardingShell } from './OnboardingShell'
@@ -12,14 +12,19 @@ import { AccountsStep } from './AccountsStep'
 import { StatusLineStep } from './StatusLineStep'
 import { GitHubStep } from './GitHubStep'
 import { BuiltinToolsStep } from './BuiltinToolsStep'
-import { CodexStep } from './CodexStep'
-import { CodexSignInStep } from './CodexSignInStep'
+import { AssistantsStep } from './AssistantsStep'
+import { CodexSetupStep } from './CodexSetupStep'
+import { HelloCodexStep } from './HelloCodex'
+import { helloCodexDue } from './hello-codex'
 import { TransparencyStep } from './TransparencyStep'
 import { FinishStep } from './FinishStep'
 import { settleOnboardingFinish, settleWhatsNewOnly } from './settle'
-import { seenVersion } from './whats-new-gate'
+import { seenVersion, whatsNewAnchorFrom } from './whats-new-gate'
+import { codexAnswered } from './codex-reconfirm-gate'
+import { usesClaude, usesCodex, claudeWasMissingAtSetup, codexWasChosenOnUpgrade } from './provider-choice'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useAppMetaStore } from '../stores/appMetaStore'
+import { useProviderAccountsStore } from '../stores/providerAccountsStore'
 
 interface StepNav {
   onNext: () => void
@@ -31,6 +36,21 @@ interface StepNav {
 interface OnboardingCtx {
   version: string | null
   setVersion: (v: string | null) => void
+  /** Step aside so a terminal a page opened can be seen; the harness shows
+   *  the way back and keeps the page as it was. */
+  stepAside: () => void
+  /** How many times the user has come back from stepping aside. */
+  returns: number
+  /** Hello Codex's "Start a Codex session": open New saved config with
+   *  Codex chosen once this run ends (the harness covers the window until
+   *  then). */
+  requestCodexSession: () => void
+}
+
+/** What a run hands back beyond the tour choice. Only ever passed when set. */
+export interface OnboardingCompleteExtra {
+  /** Open New saved config with the Codex card chosen (Hello Codex). */
+  startCodexSession?: boolean
 }
 
 interface StepDone {
@@ -55,6 +75,25 @@ interface RunShape {
   whatsNewOnly: boolean
   /** True when nothing follows this page — its CTA ends the run. */
   isLast: boolean
+  /** True when no page comes before this one: Back would go nowhere. */
+  isFirst: boolean
+  /** Where What's New diffs from (whatsNewAnchorFor), fixed for the run.
+   *  Undefined on a fresh install. */
+  whatsNewAnchor?: string
+}
+
+/**
+ * The notes page's hint when nothing follows it in this run (O3). It used
+ * to say "Nothing to set up", and the very next screen after an update can be
+ * the one-time "Do you use Codex?" page (it follows the notes while Codex is
+ * unanswered: codex-reconfirm-gate) or the Multi Spawn startup page. So it
+ * says only what is true: the settings carried over, and the Codex question
+ * comes next when it does.
+ */
+export function notesRunEndHint(codexQuestionNext: boolean): string {
+  return codexQuestionNext
+    ? 'Your settings carried over. Next: one question about Codex.'
+    : 'Your settings carried over.'
 }
 
 /** #463: one predicate, used straight and negated, so the upgrade and
@@ -64,6 +103,33 @@ interface RunShape {
  *  whatsNewV2Fresh deliberately has NO steps.ts entry: it must never surface
  *  via stepsNewSince; the stamp alone retires it. */
 const isUpgrader = () => !!useAppMetaStore.getState().meta.lastSeenVersion
+
+/** WP2: the assistants page's choice, read at navigation time like every
+ *  when(). The page saves it before it moves on, so the pages after it
+ *  follow the choice, forwards and back. */
+const claudeChosen = () => usesClaude(useSettingsStore.getState().settings)
+const codexChosen = () => usesCodex(useSettingsStore.getState().settings)
+
+/** WP2: an upgrader who pressed "Use Codex only" on a setup screen in THIS
+ *  run (the Claude Code CLI was missing): the version-change screen, or the
+ *  first-run screen of a new computer pointed at an existing resources
+ *  folder, whose user has run the app before. Or one who answered Yes on the
+ *  one-time "Do you use Codex?" page after an update in this run
+ *  (CodexReconfirmPage, owner decision 2026-09-26). Upgraders never see the
+ *  fresh-install assistants page, so without this they would be left with
+ *  Codex on and no way shown to set it up. They are handed the Codex setup
+ *  page once, in this run: the flags are in memory only (provider-choice.ts),
+ *  so a later start never shows it again, and nothing else is re-run. */
+const codexHandOff = () => isUpgrader() && (claudeWasMissingAtSetup() || codexWasChosenOnUpgrade()) && codexChosen()
+
+/** Where the Codex setup page is shown: a fresh install that chose Codex,
+ *  and the upgrader handed to it above. */
+const codexSetupShown = () => (!isUpgrader() && codexChosen()) || codexHandOff()
+
+/** WP2 commit 6f: the Codex introduction is due (Codex set up per the
+ *  accounts snapshot, and never seen). Read at navigation time, so signing
+ *  in on the Codex setup page makes it the next page. */
+const helloCodexIsDue = () => helloCodexDue(useProviderAccountsStore.getState().snapshot, useAppMetaStore.getState().meta)
 
 // The built onboarding pages in flow order. Grows as each page lands; the full
 // registry-driven flow (completedSteps stamping, per-step settle, finish, and
@@ -81,12 +147,13 @@ const PAGES: BuiltStep[] = [
     render: (nav, _ctx, _done, run) => (
       <WhatsNewV2Step
         onNext={nav.onNext}
+        anchor={run.whatsNewAnchor}
         // The page's own footer promised "the next pages set these up", which
         // is a lie on the common upgrade where nothing new needs setting up.
         ctaLabel={run.isLast ? 'Continue' : 'Set it up →'}
         hint={
           run.isLast
-            ? 'Nothing to set up — your settings carried over.'
+            ? notesRunEndHint(!codexAnswered(useSettingsStore.getState().settings))
             : run.whatsNewOnly
               ? "Next: the settings this release added, and nothing else."
               : 'The next pages set these up, one at a time.'
@@ -101,8 +168,8 @@ const PAGES: BuiltStep[] = [
     // First-runners (#463): the same showcase, right after Welcome — the
     // flagships ARE the app's introduction, so a fresh install meets them
     // here instead of never. The component swaps its heading off the
-    // "what's new" diff framing; sectionsFor already yields the full
-    // 2.0 + 2.1 story when there is no lastSeenVersion.
+    // "what's new" diff framing; with `fresh`, summarySections and
+    // summaryShowcases show every line and page that is not upgrade-only.
     when: () => !isUpgrader(),
     render: (nav, _ctx, _done, run) => (
       <WhatsNewV2Step
@@ -113,6 +180,18 @@ const PAGES: BuiltStep[] = [
       />
     ),
   },
+  {
+    id: 'assistants',
+    phase: 0,
+    // "Which assistants will you use?" (WP2): fresh installs only (owner
+    // call). An upgrader keeps the providers they have, and changes them in
+    // Settings, Accounts; steps.ts marks it freshInstallOnly for the notes run.
+    // After Welcome and its showcase, as the first setup page: the showcase
+    // has no Back, so this is where Back from the pages the choice decides
+    // can always return to, to choose again.
+    when: () => !isUpgrader(),
+    render: (nav) => <AssistantsStep onNext={nav.onNext} onBack={nav.onBack} />,
+  },
   // The one-row command bar (#382): new in 2.1.0-beta.17, so an upgrader's
   // notes run shows it right after the release notes; the full flow shows it
   // after Welcome. Back is offered only when there is a page before it.
@@ -121,14 +200,18 @@ const PAGES: BuiltStep[] = [
     phase: 0,
     render: (nav, _ctx, _done, run) => <CommandBarStep onNext={nav.onNext} onBack={run.whatsNewOnly ? undefined : nav.onBack} />,
   },
+  // Claude Code's own pages (find it, check its version, its accounts, its
+  // status line) follow the assistants choice: a Codex-only run skips them.
   {
     id: 'findClaude',
     phase: 0,
+    when: claudeChosen,
     render: (nav, ctx) => <FindClaudeStep onNext={nav.onNext} onBack={nav.onBack} onVersion={ctx.setVersion} />,
   },
   {
     id: 'compatibility',
     phase: 0,
+    when: claudeChosen,
     render: (nav, ctx) => (
       <CompatibilityStep onNext={nav.onNext} onBack={nav.onBack} version={ctx.version} onVersion={ctx.setVersion} />
     ),
@@ -140,23 +223,46 @@ const PAGES: BuiltStep[] = [
     // token lives in the login Keychain, which HOME redirection cannot
     // isolate, so the page's "logins never mix" promise would be false there
     // (Mac readiness review 2026-07-02). Skip the page on darwin.
-    when: () => window.electronPlatform !== 'darwin',
+    when: () => claudeChosen() && window.electronPlatform !== 'darwin',
     render: (nav) => <AccountsStep onNext={nav.onNext} onBack={nav.onBack} />,
+  },
+  {
+    id: 'codexSetup',
+    phase: 1,
+    // "Set up Codex" (WP2): install, update and sign in, when Codex was
+    // chosen. Fresh installs only, like the choice itself, with one exception:
+    // the upgrader handed to it by this run's "Use Codex only" (codexHandOff).
+    // It replaces the "Do you use Codex?" and Codex sign-in pages, which have
+    // left the flow.
+    when: codexSetupShown,
+    render: (nav, ctx, _done, run) => (
+      <CodexSetupStep
+        onNext={nav.onNext}
+        onBack={run.isFirst ? undefined : nav.onBack}
+        stepAside={ctx.stepAside}
+        returns={ctx.returns}
+      />
+    ),
+  },
+  {
+    id: 'helloCodex',
+    phase: 1,
+    // "Hello, Codex" (WP2 commit 6f): straight after Codex setup, wherever
+    // that page is shown, once Codex is set up and the introduction has not
+    // been seen. Every way forward stamps it seen, so Back from a later page
+    // never shows it twice; Back from its own page 1 returns to Codex setup
+    // unstamped. Anyone else (an upgrader, or Codex set up later in Settings)
+    // meets it as the one-time takeover outside onboarding instead.
+    when: () => codexSetupShown() && helloCodexIsDue(),
+    render: (nav, ctx, _done, run) => (
+      <HelloCodexStep onNext={nav.onNext} onBack={run.isFirst ? undefined : nav.onBack} onStartSession={ctx.requestCodexSession} />
+    ),
   },
   // GitHub deliberately precedes Status line (user call 2026-07-01): the p4
   // preview's Copilot element only exists once the meter is enabled, so the
   // integration must be introduced first.
   { id: 'github', phase: 2, render: (nav) => <GitHubStep onNext={nav.onNext} onBack={nav.onBack} /> },
-  { id: 'statusline', phase: 2, render: (nav) => <StatusLineStep onNext={nav.onNext} onBack={nav.onBack} /> },
-  // Codex precedes Built-in tools (user call 2026-07-02): the answer drives
-  // p6's Code review card ("Codex off" state) and the codex_review tool gate.
-  { id: 'codex', phase: 2, render: (nav) => <CodexStep onNext={nav.onNext} onBack={nav.onBack} /> },
-  {
-    id: 'codexSignIn',
-    phase: 2,
-    when: () => useSettingsStore.getState().settings.codexEnabled === true,
-    render: (nav) => <CodexSignInStep onNext={nav.onNext} onBack={nav.onBack} />,
-  },
+  { id: 'statusline', phase: 2, when: claudeChosen, render: (nav) => <StatusLineStep onNext={nav.onNext} onBack={nav.onBack} /> },
   { id: 'builtinTools', phase: 2, render: (nav) => <BuiltinToolsStep onNext={nav.onNext} onBack={nav.onBack} /> },
   { id: 'transparency', phase: 3, render: (nav) => <TransparencyStep onNext={nav.onNext} onBack={nav.onBack} /> },
   {
@@ -175,43 +281,93 @@ const PAGES: BuiltStep[] = [
  *   the whole flow again. This is the ordinary upgrade path since 2026-08-21;
  *   before it, an upgrade either re-walked all twelve pages or fell back to a
  *   wall-of-text modal.
+ * @param codexSetupOnly The harness opened only to hand an upgrader who chose
+ *   "Use Codex only" on a setup screen in this run (first-run or version
+ *   change), or Yes on the one-time "Do you use Codex?" page, to the Codex
+ *   setup page (see codexHandOff): that page alone, no
+ *   notes, no phases, and nothing stamped when it ends. App sets it only when
+ *   neither the full flow nor the notes are due; in those runs the page joins
+ *   them instead. The Codex introduction follows it when due (WP2 commit 6f).
+ * @param onComplete `extra` is passed only when a page asked for something
+ *   after the run: Hello Codex's "Start a Codex session".
+ * @param onAsideChange Told whenever the pages step aside for a terminal a
+ *   page opened, and come back (and false when the harness goes away): App
+ *   makes the app behind the pages inert only while they are showing, since
+ *   that terminal is the user's while they are aside.
  */
 export function OnboardingHarness({
   onComplete,
   whatsNewOnly = false,
+  codexSetupOnly = false,
+  bootSeenVersion,
+  onAsideChange,
 }: {
-  onComplete: (startTour: boolean) => void
+  onComplete: (startTour: boolean, extra?: OnboardingCompleteExtra) => void
   whatsNewOnly?: boolean
+  codexSetupOnly?: boolean
+  /** The version the user had seen the notes for, read by App from the
+   *  meta it loaded at boot, before it stamped lastRunVersion (O2). Absent
+   *  when the harness mounts before App has read it: the meta is then still
+   *  unstamped, and is read here instead. */
+  bootSeenVersion?: string
+  onAsideChange?: (aside: boolean) => void
 }) {
-  // The page list for THIS run, fixed at mount. Not recomputed per render: the
-  // pages write the very settings their when() reads (codexSignIn follows the
-  // codex toggle), so a live list would reshuffle underneath the user
+  // Where this run diffs from, fixed at mount like the page list below: the
+  // #369-clamped stamp from the boot snapshot, and the What's New anchor
+  // derived from it. Read once, so a stamp landing mid-run (the settle at the
+  // end of this very run) cannot reshape the pages under the user.
+  const [{ seen, whatsNewAnchor }] = useState(() => {
+    const s = bootSeenVersion ?? seenVersion()
+    return { seen: s, whatsNewAnchor: whatsNewAnchorFrom(s) }
+  })
+  // The page list for THIS run, fixed at mount, and which of them carry the
+  // "New" badge. Not recomputed per render: the pages write the very settings
+  // their when() reads (the assistants choice decides the Claude Code and
+  // Codex setup pages), so a live list would reshuffle underneath the user
   // mid-flow. The full flow keeps evaluating when() at navigation time, which
-  // is where that reshuffle is wanted.
-  const [pages] = useState<BuiltStep[]>(() => {
-    if (!whatsNewOnly) return PAGES
+  // is where that reshuffle is wanted: the pages after the assistants page
+  // follow the choice as it is saved.
+  const [{ pages, newIds }] = useState<{ pages: BuiltStep[]; newIds: ReadonlySet<string> }>(() => {
+    if (codexSetupOnly) return { pages: PAGES.filter((p) => p.id === 'codexSetup' || p.id === 'helloCodex'), newIds: new Set() }
+    if (!whatsNewOnly) return { pages: PAGES, newIds: new Set() }
     // The stamp clamped to the last build that ran, not the raw stamp — the
     // same origin the launch decision used (#369), so a stamp written ahead of
-    // its build cannot hide a page that is new in this one.
-    const lastSeen = seenVersion()
-    const settings = { codexEnabled: useSettingsStore.getState().settings.codexEnabled }
-    const newIds = new Set(stepsNewSince(lastSeen, settings).map((s) => s.id))
-    return PAGES.filter((p) => p.id === 'whatsNewV2' || newIds.has(p.id))
+    // its build cannot hide a page that is new in this one. From the boot
+    // snapshot: by now App has stamped lastRunVersion, which makes the clamp
+    // a no-op when read live.
+    const lastSeen = seen
+    const { codexEnabled, claudeEnabled } = useSettingsStore.getState().settings
+    // In a notes run, every page after the notes is there BECAUSE it is new in
+    // this build, and is badged so; the Codex setup hand-off (and the Codex
+    // introduction after it, when due) is there because of this run's "Use
+    // Codex only", so it joins the run unbadged.
+    const fresh = new Set(stepsNewSince(lastSeen, { codexEnabled, claudeEnabled }).map((s) => s.id))
+    const handOff = codexHandOff()
+    return {
+      pages: PAGES.filter((p) => p.id === 'whatsNewV2' || fresh.has(p.id) || (handOff && (p.id === 'codexSetup' || p.id === 'helloCodex'))),
+      newIds: fresh,
+    }
   })
-  // Which pages carry the "New" badge: in a notes run, everything except the
-  // notes page itself is there BECAUSE it is new in this build.
-  const newIds = useMemo(
-    () => new Set(whatsNewOnly ? pages.filter((p) => p.id !== 'whatsNewV2').map((p) => p.id) : []),
-    [whatsNewOnly, pages],
-  )
+  // Hello Codex's "Start a Codex session", held until the run ends.
+  const codexSessionRequested = useRef(false)
   // Start at the first APPLICABLE page — pages[0] (whatsNewV2) is upgrader-only,
   // so a fresh install must open on welcome, not render a when():false page.
   const [cursor, setCursor] = useState(() => (pages.find((p) => !p.when || p.when()) ?? pages[0]).id)
   const [version, setVersion] = useState<string | null>(null)
+  // Stepped aside for a terminal a page opened (Codex setup's "Run in a
+  // terminal"): the pages stay mounted, just hidden, so the one the user left
+  // is exactly as they left it when they come back.
+  const [aside, setAside] = useState(false)
+  const [returns, setReturns] = useState(0)
+  const onAsideChangeRef = useRef(onAsideChange)
+  onAsideChangeRef.current = onAsideChange
+  useEffect(() => { onAsideChangeRef.current?.(aside) }, [aside])
+  useEffect(() => () => onAsideChangeRef.current?.(false), [])
   const idx = Math.max(0, pages.findIndex((p) => p.id === cursor))
   const step = pages[idx]
   const applicable = (p: BuiltStep | undefined) => !!p && (!p.when || p.when())
   const isLast = !pages.slice(idx + 1).some(applicable)
+  const isFirst = !pages.slice(0, idx).some(applicable)
   const done: StepDone = {
     finish: (startTour) => {
       // Stamp completion + retire legacy popups, THEN hand control back to App.
@@ -219,10 +375,14 @@ export function OnboardingHarness({
       // gate unmounts this harness on the next render.
       //
       // A notes run settles NARROWLY: it must not claim the setup pages it
-      // never showed were completed. See settleWhatsNewOnly.
-      if (whatsNewOnly) settleWhatsNewOnly()
+      // never showed were completed. See settleWhatsNewOnly. The Codex setup
+      // hand-off alone settles nothing: it delivered no notes and completed
+      // no flow, and App closes it by its own flag.
+      if (codexSetupOnly) { /* nothing to stamp */ }
+      else if (whatsNewOnly) settleWhatsNewOnly()
       else settleOnboardingFinish()
-      onComplete(startTour)
+      if (codexSessionRequested.current) onComplete(startTour, { startCodexSession: true })
+      else onComplete(startTour)
     },
   }
   const nav: StepNav = {
@@ -243,11 +403,42 @@ export function OnboardingHarness({
       }
     },
   }
-  const ctx: OnboardingCtx = { version, setVersion }
-  const run: RunShape = { whatsNewOnly, isLast }
+  const ctx: OnboardingCtx = {
+    version, setVersion, stepAside: () => setAside(true), returns,
+    requestCodexSession: () => { codexSessionRequested.current = true },
+  }
+  const run: RunShape = { whatsNewOnly, isLast, isFirst, whatsNewAnchor }
   return (
-    <OnboardingShell phase={step.phase} isNew={newIds.has(step.id)} showPhases={!whatsNewOnly}>
-      {step.render(nav, ctx, done, run)}
-    </OnboardingShell>
+    <>
+      <OnboardingShell phase={step.phase} isNew={newIds.has(step.id)} showPhases={!whatsNewOnly && !codexSetupOnly} hidden={aside}>
+        {step.render(nav, ctx, done, run)}
+      </OnboardingShell>
+      {aside && <BackToSetup onBack={() => { setAside(false); setReturns((n) => n + 1) }} />}
+    </>
+  )
+}
+
+/** While the harness has stepped aside for a terminal: the one way back. */
+function BackToSetup({ onBack }: { onBack: () => void }) {
+  return (
+    <div
+      className="fixed bottom-16 right-6 z-[100] flex items-center gap-3 rounded-xl border px-4 py-3 shadow-lg"
+      style={{ background: 'var(--surface-raised)', borderColor: 'var(--border-strong)' }}
+      role="status"
+      data-testid="onboarding-back-to-setup"
+    >
+      <span className="text-[12.5px]" style={{ color: 'var(--text-secondary)' }}>
+        Setup is waiting. The terminal tab stays open when you go back.
+      </span>
+      <button
+        type="button"
+        onClick={onBack}
+        className="rounded-lg px-3 py-1.5 text-[12.5px] font-semibold focus-ring"
+        style={{ background: 'var(--brand)', color: 'var(--text-on-brand)' }}
+        data-testid="onboarding-back-to-setup-button"
+      >
+        Back to setup
+      </button>
+    </div>
   )
 }

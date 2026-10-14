@@ -289,3 +289,88 @@ describe('#480 heuristic scan excludes conversations owned by others', () => {
     expect(binder.getExactResumeTarget('s2')).toBe(pathFor(UUID_X))
   })
 })
+
+// aicc_planning#104: main's session save needs the conversation a
+// session was last on after its bind is gone: endRun drops the bind when the
+// CLI exits or crashes (the tab stays open) and registerRun resets it at a
+// Restart. The last exact bind is kept across both, and dropped only when a
+// save no longer holds the session (retainLastExact: it was closed).
+describe('aicc_planning#104 the last exact bind outlives the run', () => {
+  const UUID_Z = '33333333-3333-4333-8333-333333333333'
+
+  it('is null before any bind, then follows each committed exact bind (a /clear rebind included)', () => {
+    const { binder, timers } = makeHarness()
+    expect(binder.getLastExactResumeTarget('s1')).toBeNull()
+    binder.notifyTranscriptPath('s1', pathFor(UUID_X))
+    timers.advance(100)
+    expect(binder.getLastExactResumeTarget('s1')).toBe(pathFor(UUID_X))
+    binder.notifyTranscriptPath('s1', pathFor(UUID_Y))
+    timers.advance(100)
+    expect(binder.getLastExactResumeTarget('s1')).toBe(pathFor(UUID_Y))
+  })
+
+  it('is kept when the run ends (endRun) while the live bind is gone', () => {
+    const { binder, timers } = makeHarness()
+    binder.notifyTranscriptPath('s1', pathFor(UUID_Y))
+    timers.advance(100)
+    binder.endRun('s1')
+    expect(binder.getExactResumeTarget('s1')).toBeNull()
+    expect(binder.getLastExactResumeTarget('s1')).toBe(pathFor(UUID_Y))
+  })
+
+  it('is kept when a Restart starts a new run (registerRun) before the new run binds', () => {
+    const { binder, timers } = makeHarness()
+    binder.registerRun('s1', '/proj', 1_000)
+    binder.notifyTranscriptPath('s1', pathFor(UUID_Y))
+    timers.advance(100)
+    binder.registerRun('s1', '/proj', 2_000)
+    expect(binder.getExactResumeTarget('s1')).toBeNull()
+    expect(binder.getLastExactResumeTarget('s1')).toBe(pathFor(UUID_Y))
+  })
+
+  it('is never a heuristic bind', () => {
+    const { hb } = makeScriptedHeuristic(() => ({ path: pathFor(UUID_X), confidence: 'heuristic' }))
+    const { binder, timers } = makeHarness({ heuristicBinder: hb })
+    binder.registerRun('s1', '/proj', 1_000)
+    timers.advance(20_000)
+    expect(binder.getLatestTranscriptPath('s1')).toBe(pathFor(UUID_X))
+    expect(binder.getLastExactResumeTarget('s1')).toBeNull()
+  })
+
+  it('is never a bind the ownership guard refused', () => {
+    const { binder, timers } = makeHarness()
+    binder.notifyTranscriptPath('a', pathFor(UUID_X))
+    timers.advance(100)
+    binder.notifyTranscriptPath('b', pathFor(UUID_Z))
+    timers.advance(100)
+    binder.notifyTranscriptPath('b', pathFor(UUID_X)) // a still owns X: refused
+    timers.advance(100)
+    expect(binder.getExactResumeTarget('b')).toBe(pathFor(UUID_Z))
+    expect(binder.getLastExactResumeTarget('b')).toBe(pathFor(UUID_Z))
+  })
+
+  it('retainLastExact drops only the sessions not in the open set', () => {
+    const { binder, timers } = makeHarness()
+    binder.notifyTranscriptPath('a', pathFor(UUID_X))
+    binder.notifyTranscriptPath('b', pathFor(UUID_Y))
+    timers.advance(100)
+    binder.endRun('a')
+    binder.endRun('b')
+    binder.retainLastExact(new Set(['a']))
+    expect(binder.getLastExactResumeTarget('a')).toBe(pathFor(UUID_X))
+    expect(binder.getLastExactResumeTarget('b')).toBeNull()
+    binder.retainLastExact(new Set())
+    expect(binder.getLastExactResumeTarget('a')).toBeNull()
+  })
+
+  it('a repeat of the bound path records it again after a retain dropped it', () => {
+    const { binder, timers } = makeHarness()
+    binder.notifyTranscriptPath('s1', pathFor(UUID_X))
+    timers.advance(100)
+    binder.retainLastExact(new Set())
+    expect(binder.getLastExactResumeTarget('s1')).toBeNull()
+    binder.notifyTranscriptPath('s1', pathFor(UUID_X)) // the next hook or status line tick
+    timers.advance(100)
+    expect(binder.getLastExactResumeTarget('s1')).toBe(pathFor(UUID_X))
+  })
+})

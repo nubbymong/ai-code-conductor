@@ -22,10 +22,9 @@
  * settings); the OSC sentinel path (pty-manager.ts:extractSshOscSentinels →
  * dispatchSSHStatuslineUpdate) is the SSH fallback for tunnel-less sessions.
  *
- * Provider-specific deploy/configure logic lives in providers/claude/statusline.ts.
- * The legacy deployStatuslineScript() / configureClaudeSettings() symbols are
- * re-exported below for backward compatibility, but new code should go through
- * the provider: getProvider('claude').deployStatuslineScript?.(resourcesDir).
+ * Provider-specific deploy/configure logic lives in providers/claude/statusline.ts
+ * and is reached through the registered provider only (WP2 PR 4: no deep import
+ * into the package): getProvider('claude').deployStatuslineScript?.(resourcesDir).
  */
 import { BrowserWindow } from 'electron'
 import * as fs from 'fs'
@@ -33,7 +32,7 @@ import * as path from 'path'
 
 import { getResourcesDirectory } from './ipc/setup-handlers'
 import { decorateStatuslineWithColour } from './account-color'
-import { notifyClaudeTelemetry } from './providers/claude/telemetry'
+import { getProvider, tryGetProvider } from './providers'
 import { sentinelObserve } from './sentinel/index'
 import { isBackgroundContext } from './background-context'
 import { logWarn } from './debug-logger'
@@ -43,9 +42,12 @@ import { sanitiseTranscriptPath } from './logging/transcript-discovery'
 export type { StatuslineData } from '../shared/types'
 import type { StatuslineData } from '../shared/types'
 
-// Backwards-compatible re-exports of the lifted Claude-specific helpers.
-// New callers should use getProvider('claude').deployStatuslineScript?.(...).
-export { deployClaudeStatuslineScript as deployStatuslineScript, healGlobalStatusline } from './providers/claude/statusline'
+/** The boot heal of a legacy global statusLine stanza, kept here for its boot
+ *  caller and done by the Claude package through the registry. Throws while
+ *  the package is not registered (the caller catches and warns). */
+export function healGlobalStatusline(): void {
+  getProvider('claude').healGlobalStatusline?.()
+}
 
 // Lazy-initialized: can't call getResourcesDirectory() at module load time
 let STATUS_DIR: string | null = null
@@ -75,8 +77,8 @@ export function setTranscriptPathSink(sink: (sessionId: string, path: string) =>
 // making its own redundant call. The figure is the buckets a live session's
 // statusline just delivered, so it is harvested HERE at the fan-out, through a
 // sink (like transcriptPathSink) so this module stays free of the account graph.
-let statuslineUsageSink: ((sessionId: string, buckets: unknown, hasCredits: boolean) => void) | null = null
-export function setStatuslineUsageSink(sink: (sessionId: string, buckets: unknown, hasCredits: boolean) => void): void {
+let statuslineUsageSink: ((sessionId: string, buckets: unknown, hasCredits: boolean, transcriptPath?: string) => void) | null = null
+export function setStatuslineUsageSink(sink: (sessionId: string, buckets: unknown, hasCredits: boolean, transcriptPath?: string) => void): void {
   statuslineUsageSink = sink
 }
 
@@ -114,7 +116,7 @@ function fanOutStatusline(data: StatuslineData, getWindow: (() => BrowserWindow 
       win.webContents.send('statusline:update', forDisplay)
     }
   }
-  notifyClaudeTelemetry(forDisplay)
+  tryGetProvider('claude')?.deliverStatusline?.(forDisplay)
   // Logs v2 (Task 8): forward the live transcript path to the binder (continuous,
   // exact discovery source). Guarded — the sink may not be registered yet (and
   // isn't in unit tests). A throw here must not break the statusline pipeline.
@@ -128,7 +130,9 @@ function fanOutStatusline(data: StatuslineData, getWindow: (() => BrowserWindow 
   // and stores nothing for an SSH or default-home session, and must never break
   // the fan-out.
   if (data.sessionId && Array.isArray(data.usageBuckets) && data.usageBuckets.length > 0 && statuslineUsageSink) {
-    try { statuslineUsageSink(data.sessionId, data.usageBuckets, data.rateLimitExtra != null) } catch { /* sink must not break fan-out */ }
+    // The transcript path goes with it: the sink files the figure under a
+    // profile only when the transcript lies in that profile's folder.
+    try { statuslineUsageSink(data.sessionId, data.usageBuckets, data.rateLimitExtra != null, data.transcriptPath) } catch { /* sink must not break fan-out */ }
   }
   // Sentinel Trigger A: observe the raw model id (modelId preferred; fall back to
   // model which may be a display name — the resolver handles both). Safe before
@@ -139,20 +143,47 @@ function fanOutStatusline(data: StatuslineData, getWindow: (() => BrowserWindow 
   }
 }
 
+/** Sessions a refused update has been logged for: one line per session, so
+ *  a stream of them cannot fill the log. Bounded; cleared when full. */
+const otherSessionLogged = new Set<string>()
+const OTHER_SESSION_LOGGED_MAX = 256
+
+/** A session id as a session is started with one (the pty:spawn rule,
+ *  ipc/pty-handlers.ts sessionIdSchema): a status file's name is read as a
+ *  session only when it is one. */
+const STATUS_FILE_SESSION_ID_RE = /^[A-Za-z0-9_-]{1,200}$/
+
+/** Whether a payload naming `named` is taken for the session `from` it
+ *  arrived from: only when they are the same session. Said once per session
+ *  in the log, with neither the payload nor the session it named. */
+function isOwnSession(named: unknown, from: string, via: string): boolean {
+  if (named === from) return true
+  if (!otherSessionLogged.has(from)) {
+    if (otherSessionLogged.size >= OTHER_SESSION_LOGGED_MAX) otherSessionLogged.clear()
+    otherSessionLogged.add(from)
+    logWarn(`[statusline-watcher] a status update from session ${from} (${via}) named another session; not taken`)
+  }
+  return false
+}
+
 /**
  * Dispatch a statusline payload that arrived as a STRING (not via the file
  * watcher) to the renderer. Two callers: the conductor MCP server's /status
  * ingest (the primary channel for BOTH local and SSH sessions since the
- * harmonise-remote unification — the name predates that) and pty-manager's
- * OSC sentinel parser (SSH fallback). Every payload passes the same shape
- * filter regardless of origin.
+ * harmonise-remote unification — the name predates that), which binds the
+ * payload to the session its credential was issued for before it gets here,
+ * and pty-manager's OSC sentinel parser (SSH fallback), which passes the
+ * session whose terminal the sentinel arrived on as `fromSessionId`: a
+ * payload naming any other session is not taken (never re-keyed to this
+ * one). Every payload passes the same shape filter regardless of origin.
  */
-export function dispatchSSHStatuslineUpdate(json: string): void {
+export function dispatchSSHStatuslineUpdate(json: string, fromSessionId?: string): void {
   if (!sshDispatchWindow) return
   try {
     const parsed: unknown = JSON.parse(json)
     const data = sanitiseSentinelPayload(parsed)
     if (!data) return
+    if (fromSessionId !== undefined && !isOwnSession(data.sessionId, fromSessionId, 'terminal')) return
     fanOutStatusline(data, sshDispatchWindow)
   } catch { /* ignore malformed sentinel payloads */ }
 }
@@ -352,6 +383,10 @@ export function startStatuslineWatcher(getWindow: () => BrowserWindow | null): (
   async function processFile(filename: string): Promise<void> {
     const win = getWindow()
     if (!win || win.isDestroyed()) return
+    // A status file is `<session id>.json`. A name that is not a session id
+    // is no session's file: it is not read, and nothing is logged for it.
+    const fileSessionId = filename.slice(0, -'.json'.length)
+    if (!STATUS_FILE_SESSION_ID_RE.test(fileSessionId)) return
 
     const filePath = path.join(statusDir, filename)
     try {
@@ -360,7 +395,15 @@ export function startStatuslineWatcher(getWindow: () => BrowserWindow | null): (
       lastMtime.set(filename, mtime)
 
       const content = await fs.promises.readFile(filePath, 'utf-8')
-      const data: StatuslineData = JSON.parse(content)
+      // The same shape filter every other delivery passes (the /status
+      // ingest and the terminal sentinel, dispatchSSHStatuslineUpdate): a
+      // status file is read from the resources folder, so what it holds is
+      // checked field by field before anything reads it.
+      const data = sanitiseSentinelPayload(JSON.parse(content))
+      if (!data) return
+      // A status file is `<session id>.json`, written for that session alone:
+      // a payload naming another session is not taken.
+      if (!isOwnSession(data.sessionId, fileSessionId, 'status file')) return
       fanOutStatusline(data, getWindow)
     } catch { /* ignore read errors during writes */ }
   }

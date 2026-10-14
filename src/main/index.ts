@@ -1,18 +1,21 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, session, shell, powerMonitor } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, session, shell, powerMonitor } from 'electron'
 import { join } from 'path'
 import { homedir } from 'os'
-import { writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs'
-import { randomBytes } from 'crypto'
+import { mkdirSync, realpathSync } from 'fs'
 import { registerPtyHandlers } from './ipc/pty-handlers'
-import { splashBuildQuery } from './splash-info'
+import { createSplashWindow, closeSplashWindow, SPLASH_MIN_MS, SPLASH_POST_READY_MS, splashShownAt } from './splash-window'
 import { registerUsageHandlers } from './ipc/usage-handlers'
 import { registerAccountWebHandlers } from './ipc/account-web-handlers'
 import { sweepAbandonedProfiles } from './account-web/sign-in'
-import { killAllPty, gracefulExitAllPty, resolveClaudeForPty, isSessionWritable, writePty } from './pty-manager'
-import { spawnClaudeHeadless } from './claude-headless'
-import { parseClaudeVersion } from './sentinel/sentinel-version'
+import { setSignInWindowsQuitting } from './account-web/in-app-sign-in'
+import { warnAboutOrphanedSharedPartitions } from './account-web/orphan-partitions'
+import { killAllPty, gracefulExitAllPty, isSessionWritable, writePty, writeSubmittedLine, writeCanvasMarkerLine, routeHookTranscriptPath, noteCodexHookEvent, isCodexPtySession, codexRolloutForSessionContext, applyLoggingSwitches } from './pty-manager'
 import { registerResumeHandlers } from './ipc/resume-handlers'
-import { registerLogs2Handlers } from './ipc/logs2-handlers'
+import { registerCliHandlers } from './ipc/cli-handlers'
+import { registerClipboardHandlers } from './ipc/clipboard-handlers'
+import { buildAndSetAppMenu } from './app-menu'
+import { registerLogs2Handlers, registerLogsWipeHandlers } from './ipc/logs2-handlers'
+import { initIndexingGaps, flushIndexingGaps } from './logging/indexing-gaps'
 import { registerCanvasHandlers } from './ipc/canvas-handlers'
 import {
   registerCccUxSchemePrivileges,
@@ -22,19 +25,25 @@ import {
 } from './canvas/ccc-ux-protocol'
 
 import { startStatuslineWatcher, setTranscriptPathSink, setStatuslineUsageSink, healGlobalStatusline } from './statusline-watcher'
-import { recordLiveUsageForSession } from './usage/account-usage'
-import { registerProvider, getProvider } from './providers'
-import { ClaudeProvider } from './providers/claude'
-import { CodexProvider } from './providers/codex'
-import { registerDebugHandlers } from './ipc/debug-handlers'
+import { recordLiveUsageForSession, setClaudeAccountDataAllowed, setLiveUsageTranscriptProfile } from './usage/account-usage'
+import { getProvider } from './providers'
+import { composeProviders, flushPendingProviderCliKills } from './providers/compose'
+import { initAccountRegistry, reconcileLegacyAccountStores, getConsumerLeases } from './provider-account-registry'
+import { initProviderAccounts, getAccountsService, runStartupProviderMigrations, followResourcesDirectory, discoverProvidersAtStart, providerOnNow } from './provider-accounts'
+import { probeClaudeCliVersion, setClaudeCliProbeAllowed } from './claude-cli-version'
+import { providerProbeRefusal } from './provider-launch-gate'
+import { providerUseWithoutLease } from './provider-in-use'
+import { registerDebugHandlers, registerAccountLogFolderHandlers } from './ipc/debug-handlers'
 import { disableDebugMode } from './debug-capture'
 import { registerUpdateHandlers } from './ipc/update-handlers'
 import { adoptRenamedRepoIfLive } from './github-update'
-import { registerSetupHandlers, getResourcesDirectory, getDataDirectory } from './ipc/setup-handlers'
+import { installClientCertificatePolicy } from './client-certificate'
+import { focusExistingWindow } from './second-instance'
+import { registerSetupHandlers, getResourcesDirectory, getDataDirectory, killCliSetupPty } from './ipc/setup-handlers'
 // Direct from data-paths, not the handlers barrel: this runs at module scope
 // before app-ready, so it must not pull the IPC registration side of that module
 // in ahead of time.
-import { devSessionDataDir } from './data-paths'
+import { devSessionDataDir, onResourcesDirectoryChanged } from './data-paths'
 import { ensureHelpWorkspace } from './help-workspace'
 import { registerScreenshotHandlers } from './ipc/screenshot-handlers'
 import { registerDiagnosticsHandlers } from './ipc/diagnostics-handlers'
@@ -43,24 +52,33 @@ import { closeAllWebviews } from './webview-manager'
 import { closeAllAccountPanes, closeAccountPanesForProfile } from './account-web/account-pane'
 import { onPartitionRevoked } from './account-web/partition-revocation'
 import { removeWebSession } from './account-web/session-store'
+// WP2 PR 4, P4.6 (row 58): a Codex account's chatgpt.com web session.
+import { wireCodexWebArchive, wireCodexWebSession } from './account-web/codex-web-wiring'
+import { wireClaudeWebSession } from './account-web/claude-web-wiring'
 import { registerInsightsHandlers } from './ipc/insights-handlers'
 import { registerNotesHandlers } from './ipc/notes-handlers'
 import { registerVisionHandlers } from './ipc/vision-handlers'
 import { registerConfigHandlers } from './ipc/config-handlers'
 import { registerAccountProfilesHandlers } from './ipc/account-profiles-handlers'
-import { migrateProfilesToHomeLayout, cleanupSessionHomes, syncPrimaryCredentialsWithGlobal, repairSharedProjectJunctions } from './account-profiles'
+import { migrateProfilesToHomeLayout, cleanupSessionHomes, syncPrimaryCredentialsWithGlobal, repairSharedProjectJunctions, startOwnerOnlyCredentialFolders, getProfilesRoot, getProfileConfigDir, isValidProfileId } from './account-profiles'
+import { secureOwnerOnlyFolders, secureScriptFoldersRule } from './owner-only-folders'
+import { secureScriptFolders, scriptFoldersDeployed } from './script-folders'
+import { startCodexHookFolders, codexHookFoldersSettingsChanged } from './codex-hook-folders'
+import { startCodexUserSkills, codexUserSkillsSettingsChanged } from './canvas/codex-user-skills'
 import { runFirstRunCapture } from './first-run-accounts'
 import { backupRealClaudeOnce } from './claude-backup'
 import { registerCloudAgentHandlers } from './ipc/cloud-agent-handlers'
 import { registerLegacyVersionHandlers } from './ipc/legacy-version-handlers'
 import { registerMemoryHandlers } from './ipc/memory-handlers'
-import { initTokenomics, shutdownTokenomics } from './tokenomics/tokenomics-service'
+import { initTokenomics, shutdownTokenomics, getTokenomicsSupervisor } from './tokenomics/tokenomics-service'
+import { createTranscriptAttribution, profileOfTranscript, type TkProfileFolders } from './tokenomics/tk-attribution'
+import { getClaudeProfileId, sessionsOnProfile } from './claude-account-identity'
 import { registerTokenomics2Handlers } from './ipc/tokenomics2-handlers'
 import { registerGitHubHandlers } from './ipc/github-handlers'
 import { registerHooksHandlers } from './ipc/hooks-handlers'
 import { registerServiceHealthHandlers, getMergedDiagnostics } from './ipc/service-health-handlers'
 import { PtyIntegrityMonitor, setPtyIntegrityMonitor, getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
-import { registerCodexHandlers } from './ipc/codex-handlers'
+import { registerProviderAccountsHandlers } from './ipc/provider-accounts-handlers'
 import { registerCodexReviewHandlers } from './ipc/codex-review-handlers'
 import { registerExeHandlers, stopAllCapturedRuns } from './ipc/exe-handlers'
 import { registerRegistryHandlers } from './ipc/registry-handlers'
@@ -74,33 +92,27 @@ import { startEffortTracker } from './effort-tracker'
 import { startCanvasMarkerQueue } from './canvas/canvas-marker-delivery'
 import { startAttentionSource } from './attention-source'
 import { startJankDetector } from './jank-detector'
-import { readClipboardImageWithRetry } from './clipboard-image'
-import { readClipboardTextWithRetry } from './clipboard-text'
-import { readClipboardImageFilePath, type PasteableImage } from './clipboard-file'
 import { HooksGateway } from './hooks/hooks-gateway'
-import { setGateway, getGateway, isExactBindSourceActive } from './hooks'
+import { setGateway, getGateway } from './hooks'
 import { ServiceSupervisor } from './services/service-supervisor'
 import { forkHooksChild } from './services/fork-hooks-child'
 import { start as startLoopStallMonitor, stop as stopLoopStallMonitor } from './services/loop-stall-monitor'
 import { initLogging, shutdownLogging, getTranscriptBinder } from './logging/logging-service'
-import { detectOldLogArtifacts, executeWipe } from './logging/logs-wipe'
 import { backfillCompanionDirsAsync, nodeFsCompanionDeps } from './logging/companion-dir'
 import { cleanupStaleHookEntries, cleanupStaleMcpConfigs } from './hooks/boot-cleanup'
 import { isSentinelEnabled } from '../shared/sentinel-enabled'
 import { resolveHooksPort } from './hooks/hooks-types'
 import { fetchModelPricing } from './tokenomics/tk-pricing'
-import { killAllAgents } from './cloud-agent-manager'
-import { startServiceStatusPoller, stopServiceStatusPoller, getLastServiceStatus } from './service-status'
+import { killAllAgents, stopBackgroundAgentRuns } from './cloud-agent-manager'
+import { startServiceStatusPoller, stopServiceStatusPoller, registerServiceStatusHandlers, refreshServiceStatus } from './service-status'
 import { initUpdateWatcher, stopUpdateWatcher, getProjectRootPath, isPackagedApp } from './update-watcher'
 import { startUpdateServer, stopUpdateServer } from './update-server'
-import { saveSessionState, loadSessionState, clearSessionState, hasSavedSessionState, SessionState } from './session-state'
-import { createSessionDurability } from './session-durability'
-import { resolveResumeTargetFromTranscript } from './logging/transcript-discovery'
-import { getConfigDir, snapshotConfig } from './config-manager'
+import { peekSessionState, hasSavedSessionState, SessionState } from './session-state'
+import { createAppSessionDurability } from './app-session-durability'
+import { getConfigDir, snapshotConfig, readConfig, readConfigChecked } from './config-manager'
 import { stopGlobalVision, killSpawnedBrowser, cleanupLegacyVisionMarkers } from './vision-manager'
 import { startConductorMcpServer, stopConductorMcpServer, startBrowserAtBoot } from './conductor-mcp-server'
-import { readConfig } from './config-manager'
-import { loadWindowState, saveWindowState, type WindowState } from './window-state'
+import { loadWindowState, clampToVisibleDisplay, saveWindowStateFor } from './window-state'
 import { registerCredentialHandlers } from './ipc/credentials-handlers'
 import { resolveConductorMcpPort } from '../shared/mcp-ports'
 import { IPC } from '../shared/ipc-channels'
@@ -108,7 +120,7 @@ import { safeExternalHttpsHref } from '../shared/safe-url'
 import { CSP_POLICY } from '../shared/csp-policy'
 
 import { migrateRegistryKeys } from './registry'
-import { installGlobalErrorHandlers, logInfo, logError, closeDebugLogger, setVerboseBaseline } from './debug-logger'
+import { installGlobalErrorHandlers, logInfo, logWarn, logError, closeDebugLogger, setVerboseBaseline } from './debug-logger'
 import { createCloseCoordinator, onAllWindowsClosed } from './window-close-coordinator'
 
 // Install global error handlers that log to file
@@ -119,23 +131,12 @@ installGlobalErrorHandlers()
 // saveEnriched — enriching each Claude session's exact resume target from the live
 // transcript binder — so EVERY persisted file is resumable, not only the graceful
 // close (Group 1), and the old autosave-clobber race dissolves. flushOnExit persists
-// the cached state on any non-graceful exit (Group 2); noteCleared drops the cache
-// on an intentional clear so the flush never resurrects a discarded set (F1). The
+// the cached state on any non-graceful exit (Group 2); `session:clear` goes through
+// the core's clear, which removes the saved file and drops the cache whatever the
+// removal did, so the flush never resurrects a discarded set (F1; fixer 11). The
 // binder is read lazily per call — it may init after this module loads.
-const sessionDurability = createSessionDurability({
-  enrichDeps: {
-    // #480: exact bind is the source of truth; the heuristic path is used only as
-    // the hooks-off fallback (gated by isExactBindSourceActive) so this main-side
-    // enrichment can never persist a cross-prone heuristic guess in the default
-    // (hooks-on) config — matching the resume-handlers IPC.
-    getExactResumeTarget: (id) => getTranscriptBinder()?.getExactResumeTarget(id) ?? null,
-    getLatestTranscriptPath: (id) => getTranscriptBinder()?.getLatestTranscriptPath(id) ?? null,
-    isExactBindSourceActive,
-    resolveResumeTargetFromTranscript,
-  },
-  save: saveSessionState,
-  log: logInfo,
-})
+// Composed from main's live sources in app-session-durability.ts (tested there).
+const sessionDurability = createAppSessionDurability()
 
 // Multi-instance (dev alongside prod): a dev build must NOT share prod's data
 // dir (CONFIG/sessions/transcripts/profiles). Point it at a dedicated dev root
@@ -174,41 +175,13 @@ if (devSessionDir) {
     // under a bare `npm run dev`. The failure mode here is invisible otherwise:
     // partitions just appear in the shared location and nothing says they did.
     logInfo(`[setup] Dev session data redirected to: ${devSessionDir}`)
-    warnAboutOrphanedSharedPartitions(devSessionDir)
+    // Both web-session partition prefixes (P4.6): account-web/orphan-partitions.ts.
+    warnAboutOrphanedSharedPartitions(() => app.getPath('userData'), devSessionDir)
   } catch (err) {
     // Not fatal: worst case partitions land in the default location, which is
     // exactly the pre-#261 behaviour. Say so rather than failing to boot.
     logError(`[setup] could not redirect dev sessionData to ${devSessionDir}: ${(err as Error)?.message ?? err}`)
   }
-}
-
-/**
- * Point out claude.ai partitions this dev instance left in the SHARED location
- * before the redirect existed (#261).
- *
- * WARN, NEVER DELETE. Those directories hold live `sessionKey` cookies and after
- * the redirect nothing references them: `ccc --clean` cannot reach them (wrong
- * root) and `sweepAbandonedProfiles` only walks `<dataDir>/account-web`. So they
- * would sit there forever, which is the very complaint the redirect is meant to
- * fix. But automatic removal is NOT safe: `ccc --seed-accounts` copies prod's
- * account profiles into dev, so a partition named for a dev profile id can be
- * the PROD install's live session. Deleting it would sign the user out of their
- * real account to tidy up a dev artifact. Naming the path and leaving the choice
- * to a human is the correct trade here.
- */
-function warnAboutOrphanedSharedPartitions(newLocation: string): void {
-  try {
-    const shared = join(app.getPath('userData'), 'Partitions')
-    if (shared === join(newLocation, 'Partitions') || !existsSync(shared)) return
-    const orphans = readdirSync(shared).filter((n) => n.startsWith('claude-web-'))
-    if (!orphans.length) return
-    logInfo(
-      `[setup] ${orphans.length} claude.ai web session partition(s) remain in the SHARED location `
-      + `and are no longer used by this dev instance: ${shared}. They hold live session cookies. `
-      + `Remove them by hand ONLY if you are sure they are not your production install's `
-      + `(see docs/dev-alongside-prod.md).`,
-    )
-  } catch { /* advisory only — never let a warning break boot */ }
 }
 
 // Migrate registry keys from old "Claude Conductor" → new "Claude Command Center"
@@ -218,19 +191,6 @@ migrateRegistryKeys()
 // honoured BEFORE app ready, so it lives here at module scope; the actual
 // protocol handler is installed inside whenReady, before any window exists.
 registerCccUxSchemePrivileges()
-
-/** Geometry lives in `window-state.ts` (#371) — it is a persister like the
- *  others and needed the same read-failure latch, plus a unit test. */
-function saveWindowStateFor(win: BrowserWindow): void {
-  const bounds = win.getBounds()
-  saveWindowState({
-    x: bounds.x,
-    y: bounds.y,
-    width: bounds.width,
-    height: bounds.height,
-    isMaximized: win.isMaximized()
-  })
-}
 
 let mainWindow: BrowserWindow | null = null
 // rc.14 review F2/F3: ONE decision for "may the app go away", shared by the
@@ -246,179 +206,9 @@ const closeCoordinator = createCloseCoordinator({
   quit: () => { app.quit() },
   teardown: () => { quitTeardown() },
 })
-let splashWindow: BrowserWindow | null = null
-// Unconditional backstop so the splash can never orphan. It is normally
-// closed by the main window's ready-to-show; if that never fires (renderer
-// crash, GPU wedge) or createWindow() throws, this timer force-closes it so
-// the user is never left with a frameless, alwaysOnTop, taskbar-less window
-// that also blocks app quit. Generous — well past the ~5s normal close.
-let splashBackstopTimer: ReturnType<typeof setTimeout> | null = null
-const SPLASH_MAX_MS = 15000
 let _hooksSupervisor: ServiceSupervisor | null = null
 function setHooksSupervisor(s: ServiceSupervisor): void { _hooksSupervisor = s }
 function getHooksSupervisor(): ServiceSupervisor | null { return _hooksSupervisor }
-
-// Minimum on-screen time before the splash may close: enough for the animation
-// (a 7 s authored timeline played at 2.0x in resources/splash/splash.js) to
-// reach the finished brand lockup (~3.3 s) so it is never cut off mid-form.
-const SPLASH_MIN_MS = 3600
-// After the main window is ready AND the lockup has formed, hold the finished
-// lockup this long before fading — so the brand mark is clearly seen on every
-// launch, even when the main window loads instantly.
-const SPLASH_POST_READY_MS = 1000
-// When the splash became visible (its ready-to-show), which is when its
-// animation clock actually starts — page load + module init put that a few
-// hundred ms after window creation. Initialised to "now" so the skip paths
-// (e2e, page missing) behave as if the splash showed instantly.
-let splashShownAt = Date.now()
-
-// Build-time defines (electron.vite.config.ts). Guarded with typeof so a
-// context without the defines (unit tests, a bare tsx run) degrades to
-// app.getVersion() + "dev" rather than a ReferenceError at boot.
-declare const __APP_VERSION__: string
-declare const __BUILD_SHA__: string
-declare const __BUILD_TIME__: string
-function getBuildIdentityInput(): { version: string; sha?: string; buildTime?: string } {
-  let version = ''
-  try { if (typeof __APP_VERSION__ === 'string' && __APP_VERSION__) version = __APP_VERSION__ } catch { /* undefined */ }
-  if (!version) version = app.getVersion()
-  let sha: string | undefined
-  try { if (typeof __BUILD_SHA__ === 'string') sha = __BUILD_SHA__ } catch { /* undefined */ }
-  let buildTime: string | undefined
-  try { if (typeof __BUILD_TIME__ === 'string') buildTime = __BUILD_TIME__ } catch { /* undefined */ }
-  return { version, sha, buildTime }
-}
-
-function createSplashWindow(): void {
-  // Playwright-driven runs (e2e + the training-screenshot capture) assume the
-  // first window is the main window; keep the splash out of them. The probe
-  // that visually verifies the splash sets CCC_FORCE_SPLASH=1 to override.
-  if (process.env.CCC_E2E_DATA_DIR && process.env.CCC_FORCE_SPLASH !== '1') {
-    logInfo('[splash] Skipped for e2e run')
-    return
-  }
-
-  // The animated splash is self-contained under resources/splash/ (packaged
-  // inside the asar via the `files` glob). Resolve it relative to __dirname
-  // (out/main/ in every launch mode): app.getAppPath() is the js file's
-  // directory when Electron is handed out/main/index.js directly, which made
-  // an appPath-based lookup miss. All assets are local — three.js and the
-  // Montserrat subset are vendored — so it renders with no network. The page
-  // carries its own <meta> CSP (script-src 'self', no 'unsafe-inline'): the
-  // app-wide onHeadersReceived CSP does not reach a file:// document, so the
-  // splash must police itself, which is why its script lives in a separate
-  // module file rather than inline.
-  const splashHtml = join(__dirname, '..', '..', 'resources', 'splash', 'index.html')
-  if (!existsSync(splashHtml)) {
-    logInfo('[splash] Animated splash page not found, skipping')
-    return
-  }
-
-  splashWindow = new BrowserWindow({
-    width: 720,
-    height: 430,
-    frame: false,
-    // Opaque + frameless so Windows 11 gives the window its native rounded
-    // corners (transparent windows lose them). The page paints #0b0e15.
-    transparent: false,
-    backgroundColor: '#0b0e15',
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: false,
-    center: true,
-    show: false,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  })
-
-  // If the splash page itself fails to load or its renderer dies, close it
-  // rather than show a blank always-on-top window.
-  splashWindow.webContents.on('did-fail-load', () => closeSplashWindow())
-  splashWindow.webContents.on('render-process-gone', () => closeSplashWindow())
-
-  // #384: the build identity ("v2.1.0-beta.17 · beta · build 3a1b2e2 ·
-  // 2026-08-22") rides the URL query — the page is static with a strict CSP
-  // (no inline script, no preload), so a query string read back by
-  // splash-info.js is the one channel that needs no new capability. Only
-  // main builds this URL; the page sets textContent, never markup.
-  splashWindow.loadFile(splashHtml, { query: splashBuildQuery(getBuildIdentityInput()) })
-  splashWindow.once('ready-to-show', () => {
-    splashShownAt = Date.now()
-    splashWindow?.show()
-  })
-
-  splashBackstopTimer = setTimeout(() => closeSplashWindow(), SPLASH_MAX_MS)
-}
-
-function closeSplashWindow(): void {
-  if (splashBackstopTimer) { clearTimeout(splashBackstopTimer); splashBackstopTimer = null }
-  if (!splashWindow || splashWindow.isDestroyed()) return
-  // Fade the whole window out (revealing the main window behind it), then
-  // destroy. setOpacity on the window itself gives a clean cross-fade: the
-  // splash is opaque (#0b0e15, for Win11 rounded corners), so fading the page
-  // body would only reveal that dark rectangle, not the app.
-  const win = splashWindow
-  splashWindow = null // re-entrancy guard — a second close() is a no-op
-  let op = 1
-  const fade = setInterval(() => {
-    if (win.isDestroyed()) { clearInterval(fade); return }
-    op -= 0.09
-    if (op <= 0) {
-      clearInterval(fade)
-      if (!win.isDestroyed()) win.destroy()
-      return
-    }
-    try { win.setOpacity(op) } catch { /* setOpacity unsupported → destroy next tick */ }
-  }, 28)
-}
-
-function clampToVisibleDisplay(state: WindowState): WindowState {
-  const { screen } = require('electron')
-  const displays = screen.getAllDisplays()
-  const primaryWorkArea = screen.getPrimaryDisplay().workArea
-
-  // Clamp size to primary display work area
-  const width = Math.min(state.width, primaryWorkArea.width)
-  const height = Math.min(state.height, primaryWorkArea.height)
-
-  // If no position saved, center on primary display
-  if (state.x === undefined || state.y === undefined) {
-    return {
-      ...state,
-      width,
-      height,
-      x: primaryWorkArea.x + Math.round((primaryWorkArea.width - width) / 2),
-      y: primaryWorkArea.y + Math.round((primaryWorkArea.height - height) / 2),
-    }
-  }
-
-  // Check if saved position is visible on any display
-  const isVisible = displays.some((display: Electron.Display) => {
-    const wa = display.workArea
-    return (
-      state.x! >= wa.x - 100 &&
-      state.y! >= wa.y - 100 &&
-      state.x! < wa.x + wa.width - 50 &&
-      state.y! < wa.y + wa.height - 50
-    )
-  })
-
-  if (isVisible) {
-    return { ...state, width, height }
-  }
-
-  // Off-screen: center on primary display
-  return {
-    ...state,
-    width,
-    height,
-    x: primaryWorkArea.x + Math.round((primaryWorkArea.width - width) / 2),
-    y: primaryWorkArea.y + Math.round((primaryWorkArea.height - height) / 2),
-  }
-}
 
 // rc.14 review F3 (aicc_planning#47): everything in here registers a
 // PROCESS-GLOBAL ipcMain listener. On macOS the app outlives its last window
@@ -472,74 +262,14 @@ function registerMainWindowIpc(): void {
     return result.filePaths[0]
   })
 
-  // Constrain to longest-edge max while preserving aspect ratio.
-  // Passing both width and height to nativeImage.resize() distorts non-square images.
-  const constrainToMaxDim = (img: Electron.NativeImage, maxDim: number) => {
-    const size = img.getSize()
-    if (size.width <= maxDim && size.height <= maxDim) return img
-    if (size.width >= size.height) {
-      return img.resize({ width: maxDim, quality: 'good' as const })
-    }
-    return img.resize({ height: maxDim, quality: 'good' as const })
-  }
-
-  // Clipboard TEXT read for the terminal paste keybinding (#145). Deliberately
-  // main-process: navigator.clipboard.readText() requires the document to be
-  // focused, which is exactly the condition that fails when an external tool
-  // (dictation, snippet expander) takes focus and synthesizes Ctrl+V. Retried
-  // for the same Windows delayed-render reason as the image path below.
-  ipcMain.handle(IPC.CLIPBOARD_READ_TEXT, async (): Promise<string> => {
-    return readClipboardTextWithRetry()
-  })
-
-  // Input diagnostics (#145). Opt-in via CCC_INPUT_DEBUG=1 so it costs nothing
-  // normally: the renderer asks once and only then attaches listeners. Lines land
-  // in the debug log (<dataDir>/debug/app.log) prefixed [input-diag].
-  // `on`, not `handle` — this is a fire-and-forget stream; a round trip per
-  // keystroke would itself perturb what we are trying to measure.
-  ipcMain.handle(IPC.DEBUG_INPUT_ENABLED, () => process.env.CCC_INPUT_DEBUG === '1')
-  ipcMain.on(IPC.DEBUG_LOG_INPUT, (_e, line: string) => {
-    if (process.env.CCC_INPUT_DEBUG !== '1') return
-    logInfo(`[input-diag] ${String(line).slice(0, 400)}`)
-  })
-
-  // Save clipboard image to a unique file in the host screenshots dir and return its
-  // bare filename so the renderer can use the conductor MCP fetch_host_screenshot tool.
-  // Returns { filename, path } so callers have both the bare name (for the MCP tool)
-  // and the absolute path (for local-only flows that bypass MCP).
-  ipcMain.handle('clipboard:saveImage', async (): Promise<PasteableImage> => {
-    const screenshotsDir = join(getResourcesDirectory(), 'screenshots')
-    // Retry the read so the FIRST Alt+V after copying an image reliably detects
-    // it -- Windows' delayed-render clipboard can return empty on the first read
-    // after the window gains focus, which was the "no image detected" miss.
-    const img = await readClipboardImageWithRetry()
-    if (img) {
-      // [perf] resize + JPEG encode is the suspected clipboard-paste freeze; time it
-      // with the source dimensions, since cost scales with input size.
-      const __t0 = Date.now()
-      const resized = constrainToMaxDim(img, 1920)
-      const jpeg = resized.toJPEG(85)
-      const __dt = Date.now() - __t0
-      if (__dt > 150) {
-        const s = img.getSize()
-        logInfo(`[perf] clipboard-image resize+encode took ${__dt}ms (${s.width}x${s.height})`)
-      }
-      if (!existsSync(screenshotsDir)) mkdirSync(screenshotsDir, { recursive: true })
-      const filename = `clipboard-${Date.now()}-${randomBytes(4).toString('hex')}.jpg`
-      const filePath = join(screenshotsDir, filename)
-      writeFileSync(filePath, jpeg)
-      return { path: filePath }
-    }
-    // No bitmap on the clipboard — fall back to a copied image FILE (BUG-8).
-    return readClipboardImageFilePath(screenshotsDir)
-  })
+  registerClipboardHandlers()
 
   // Encrypted credential storage using safeStorage. save/delete are keyed to the
   // app's own id shape (credentials-handlers.ts): a renderer can address the
   // SSH/sudo/argsecret/cmdsecret namespaces of a real config or command and
   // nothing else, so it cannot overwrite or delete an arbitrary key (private
   // advisory, 2026-08-22).
-  registerCredentialHandlers()
+  registerCredentialHandlers(() => mainWindow) // read per call: follows a re-created window, refused while there is none
 
   // No 'credentials:load' handler: a credential's value is injected into the
   // shell environment at spawn (pty-handlers) and never handed to the renderer.
@@ -550,17 +280,15 @@ function registerMainWindowIpc(): void {
   })
 
   ipcMain.handle('session:load', async () => {
-    return loadSessionState()
+    return sessionDurability.load()
   })
 
-  ipcMain.handle('session:clear', async () => {
-    const ok = clearSessionState()
-    // #397 F1: a successful clear is the user intentionally discarding the saved set
-    // (Don't-open / Close-without-saving). Drop the cache so the exit-time flush
-    // cannot resurrect it on the next launch.
-    if (ok) sessionDurability.noteCleared()
-    return ok
-  })
+  // #397 F1: a clear is the user intentionally discarding the saved set (Don't-open /
+  // Close-without-saving). The core removes the file and its .bak and drops its cache
+  // so the exit-time flush cannot resurrect the set on the next launch: whatever the
+  // removal did (fixer 11; before, a clear that failed kept the cache), and with
+  // nothing written in front of a copy of the set left on disk (fixer 10, ADR-009 C2).
+  ipcMain.handle('session:clear', async () => sessionDurability.clear())
 
   ipcMain.handle('session:hasSaved', async () => {
     return hasSavedSessionState()
@@ -572,69 +300,7 @@ function registerMainWindowIpc(): void {
     return true
   })
 
-  // CLI availability check - tests that claude CLI exists
-  // Windows: tries native .exe then npm .cmd via 'where'
-  // macOS/Linux: uses 'which' to find 'claude' in PATH
-  ipcMain.handle('cli:check', async () => {
-    // Async execFile (not execSync): this runs every 30s for the app's lifetime
-    // from BottomBar, so a synchronous probe would stall PTY data delivery to
-    // every terminal in lockstep. Same boolean result shape as before.
-    const { execFile } = require('child_process')
-    const { promisify } = require('util')
-    const execFileAsync = promisify(execFile)
-    try {
-      if (process.platform === 'win32') {
-        // windowsHide + piped stderr suppresses the "INFO: Could not find
-        // files..." line `where` writes to stderr on a miss; execFile pipes
-        // by default so the noise never reaches the parent's terminal between
-        // the .exe and .cmd probes.
-        const opts = { encoding: 'utf-8' as const, timeout: 5000, windowsHide: true }
-        try {
-          await execFileAsync('where', ['claude.exe'], opts)
-          return true
-        } catch { /* try .cmd */ }
-        await execFileAsync('where', ['claude.cmd'], opts)
-        return true
-      } else {
-        // Use login shell to pick up Homebrew/nvm PATH entries
-        const shell = process.env.SHELL || '/bin/zsh'
-        await execFileAsync(shell, ['-l', '-c', 'which claude'], { encoding: 'utf-8', timeout: 5000 })
-        return true
-      }
-    } catch {
-      return false
-    }
-  })
-
-  // Onboarding "Find Claude": the resolved claude binary path (no command run).
-  ipcMain.handle('cli:path', async () => {
-    try {
-      return resolveClaudeForPty()?.cmd ?? null
-    } catch {
-      return null
-    }
-  })
-
-  // Onboarding "Find Claude": run `claude --version` on demand (user-approved).
-  ipcMain.handle('cli:version', async () => {
-    try {
-      const res = await spawnClaudeHeadless(['--version'], 10000)
-      return parseClaudeVersion(res.stdout) ?? parseClaudeVersion(res.stderr) ?? null
-    } catch {
-      return null
-    }
-  })
-
-  // "Ask Command Center": stage (refresh) the help workspace and return its
-  // path; the renderer launches a normal Claude session with this cwd so the
-  // CLAUDE.md + app-knowledge.md docs prime the session.
-  ipcMain.handle('help:workspace', async () => {
-    try {
-      return ensureHelpWorkspace(getResourcesDirectory(), { appVersion: app.getVersion() })
-    } catch {
-      return null
-    }
-  })
+  registerCliHandlers()
 }
 
 function createWindow(): void {
@@ -703,7 +369,6 @@ function createWindow(): void {
     }
   })
 
-
   mainWindow.on('close', (e) => {
     if (mainWindow) saveWindowStateFor(mainWindow)
     // Ask-before-close lives in the coordinator, shared with before-quit so
@@ -759,12 +424,15 @@ if (!gotTheLock) {
 } else {
   if (!isDev) {
     app.on('second-instance', () => {
-      if (mainWindow) {
-        if (mainWindow.isMinimized()) mainWindow.restore()
-        mainWindow.focus()
-      }
+      // The window may be gone already (closed, the app still finishing):
+      // focusExistingWindow then does nothing rather than throw.
+      focusExistingWindow(mainWindow)
     })
   }
+
+  // No request the app makes, from a page or from the main process, presents a
+  // client certificate; see client-certificate.ts.
+  installClientCertificatePolicy(app)
 
   app.whenReady().then(() => {
     // Refresh the help workspace at boot (#586), not only on Ask launch: the
@@ -781,7 +449,12 @@ if (!gotTheLock) {
     // #397 Group 2: exit paths that skip app 'before-quit'. An OS shutdown/logoff
     // (powerMonitor; macOS/Linux) and SIGTERM (task-manager terminate / OS teardown)
     // can end the app without the window-close flow running. Persist sessions first.
-    powerMonitor.on('shutdown', () => sessionDurability.flushOnExit('powerMonitor shutdown'))
+    powerMonitor.on('shutdown', () => {
+      sessionDurability.flushOnExit('powerMonitor shutdown')
+      // P3.12 (K3): write only; this shutdown can be vetoed and the app run on,
+      // so it does not latch the windows open (quit and SIGTERM do).
+      try { flushIndexingGaps({ final: false }) } catch { /* best-effort */ }
+    })
     powerMonitor.on('suspend', () => sessionDurability.flushOnExit('powerMonitor suspend'))
     // Only SIGTERM. SIGINT is intentionally LEFT to Node's default so a console
     // Ctrl+C on a dev run still terminates in one press — a SIGINT handler here
@@ -790,66 +463,85 @@ if (!gotTheLock) {
     // vetoed by that same dialog, so a signal must not route through it.
     process.on('SIGTERM', () => {
       sessionDurability.flushOnExit('SIGTERM')
+      try { flushIndexingGaps() } catch { /* best-effort */ }
       app.exit(0)
     })
-
-    // Set up application menu with Edit roles so Ctrl+C/V/X/A work in frameless window
-    // On macOS, include the app name menu (About, Hide, Quit) and Window menu (macOS convention)
-    const menuTemplate: Electron.MenuItemConstructorOptions[] = []
-
-    if (process.platform === 'darwin') {
-      menuTemplate.push({
-        // app.name is the npm package name ('claude-conductor', frozen for the
-        // userData path) — hardcode the display name instead.
-        label: 'AI Code Conductor',
-        submenu: [
-          { role: 'about' },
-          { type: 'separator' },
-          { role: 'hide' },
-          { role: 'hideOthers' },
-          { role: 'unhide' },
-          { type: 'separator' },
-          { role: 'quit' }
-        ]
-      })
-    }
-
-    menuTemplate.push({
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' },
-      ],
-    })
-
-    if (process.platform === 'darwin') {
-      menuTemplate.push({
-        label: 'Window',
-        submenu: [
-          { role: 'minimize' },
-          { role: 'zoom' },
-          { type: 'separator' },
-          { role: 'front' }
-        ]
-      })
-    }
 
     // Expose dev/prod build mode to the renderer for DEV labeling (title + badge
     // + accent). Registered early so the renderer can read it on first paint.
     ipcMain.handle(IPC.APP_IS_DEV, () => !app.isPackaged)
 
-    const menu = Menu.buildFromTemplate(menuTemplate)
-    Menu.setApplicationMenu(menu)
+    buildAndSetAppMenu()
 
     // Register built-in providers first — must happen before any code calls
     // getProvider('claude'), including deployStatuslineScript below.
-    registerProvider(new ClaudeProvider())
-    registerProvider(new CodexProvider())
+    // Registration fails closed on a malformed provider declaration, which is
+    // a build-time defect the conformance suite catches; if one ever reaches a
+    // user, say so. Without this the app dies with no window and no message.
+    try {
+      composeProviders()
+    } catch (err) {
+      console.error('[main] composeProviders failed:', err)
+      dialog.showErrorBox('AI Code Conductor cannot start', `Provider registration failed:\n\n${String(err)}`)
+      app.exit(1)
+      return
+    }
+
+    // WP2: the provider account registry. Best-effort and after providers are
+    // composed: a registry problem leaves it in recovery mode and never blocks
+    // start-up; Claude keeps launching from profiles.json either way (A12).
+    try {
+      const rd = getResourcesDirectory()
+      if (rd) initAccountRegistry(rd)
+    } catch (err) {
+      logError('[main] account registry start failed:', err)
+    }
+    // The accounts service (WP2 commit 3) exists either way: without a
+    // registry it reports the account list as unavailable. The one-time
+    // adoption of a provider's own default sign-in runs after the legacy
+    // reconcile, outside the registry lock.
+    // P4.6 (row 58): an archive clears what the account holds outside its
+    // sign-in FIRST, and a clear that fails refuses the archive. Registered
+    // before the service exists, so no archive can run without it.
+    wireCodexWebArchive()
+    try {
+      // A switch-off is refused while any of the provider runs: its sessions,
+      // and (WP2) for Claude Code its cloud agents, Insights runs, Sentinel
+      // runs and accepted SSH "Launch Claude"s too (provider-in-use.ts).
+      initProviderAccounts({
+        unleasedSessions: (id) => providerUseWithoutLease(id),
+        // P3.2: a Claude profile a live session runs on is not made inactive
+        // or archived through the accounts service either (the sessions-only
+        // check the profile handlers' Make inactive makes).
+        legacyRecordInUse: (id, legacyId) => id === 'claude' && sessionsOnProfile(legacyId).length > 0,
+      })
+      // A resources directory chosen after start (first-run setup) moves the
+      // registry with it before anything reads or reconciles it.
+      onResourcesDirectoryChanged((dir) => { void followResourcesDirectory(dir) })
+      void reconcileLegacyAccountStores()
+        .then(() => runStartupProviderMigrations())
+        .catch((err) => logError('[main] account start-up work failed:', err))
+        // Then, whatever that did, look for each switched-on provider's CLI
+        // once, in the background (WP2 6g: the retired Codex store's boot
+        // refresh kept Codex's status current; this does, for every provider).
+        .then(() => discoverProvidersAtStart())
+    } catch (err) {
+      logError('[main] accounts service start failed:', err)
+    }
+
+    // Probe the Claude CLI version once, in the background. The managed-launch
+    // preflight needs it to say which side of the verified floor the user is
+    // on, and no launch waits for it: until it answers, the preflight reports
+    // the version as unverified rather than assuming it is fine. The probe
+    // itself skips while Claude Code is switched off (WP2), by main's launch
+    // rule, wired in here because that rule's graph imports the probe's
+    // importers (claude-cli-version.ts, setClaudeCliProbeAllowed).
+    setClaudeCliProbeAllowed(() => providerProbeRefusal('claude') === null)
+    void probeClaudeCliVersion()
+    // Usage track MP3, D5: the Account usage page reads nothing of Claude Code
+    // (no credential, refresh or request) while it is switched off, by the
+    // same rule. Set here, before the usage handlers are registered below.
+    setClaudeAccountDataAllowed(() => providerProbeRefusal('claude') === null)
 
     // Take a daily safety snapshot of the CONFIG directory BEFORE anything
     // writes to it (deploy/config below, window/handlers later, IPC saves
@@ -863,13 +555,50 @@ if (!gotTheLock) {
     // outside CCC gets its native line back. Best-effort, never blocks boot.
     try { healGlobalStatusline() } catch (err) { console.warn('[main] healGlobalStatusline failed:', err) }
 
-    // Deploy the statusline script to the resources dir (per-session command +
-    // SSH mounts). Fire-and-forget; no downstream consumers here.
+    // Make the resources folder's scripts folders this user's alone (the
+    // owner-only rule, asynchronously: script-folders.ts), then deploy into
+    // them the statusline script (per-session command), both resume pickers
+    // and the Codex hook forwarder; a launch takes a script from them only
+    // once all of that ran, and only from a folder the rule passed. Each step
+    // has its own catch, so one that fails cannot skip the steps after it (a
+    // failing Claude picker deploy never leaves the Codex scripts missing or
+    // stale).
     Promise.resolve()
+      .then(() => secureScriptFolders(getResourcesDirectory(), secureScriptFoldersRule))
+      .catch((err) => console.warn('[main] Failed to check the scripts folders:', err))
       .then(() => getProvider('claude').deployStatuslineScript?.(getResourcesDirectory()))
+      .catch((err) => console.warn('[main] Failed to deploy the statusline script:', err))
       .then(() => getProvider('claude').deployResumePickerScript?.(getResourcesDirectory()))
+      .catch((err) => console.warn('[main] Failed to deploy the Claude resume picker:', err))
       .then(() => getProvider('codex').deployResumePickerScript?.(getResourcesDirectory()))
-      .catch((err) => console.warn('[main] Failed to deploy provider scripts:', err))
+      .catch((err) => console.warn('[main] Failed to deploy the Codex resume picker and hook scripts:', err))
+      .then(() => scriptFoldersDeployed())
+      // P3.10 round 4 (P1): the folders the Codex hooks use, made this user's
+      // alone by the owner-only rule (one asynchronous call), only while Codex
+      // is on: after first paint, again when it is switched on, and before a
+      // local Codex launch (codex-hook-folders.ts).
+      .then(() => {
+        startCodexHookFolders({
+          providerOn: () => providerOnNow('codex'),
+          prepare: () => getProvider('codex').prepareHookFolders?.(getResourcesDirectory(), secureOwnerOnlyFolders) ?? Promise.resolve(false),
+          subscribe: (listener) => getAccountsService()?.subscribe(listener) ?? (() => {}),
+          log: (level, message) => (level === 'warn' ? logWarn(message) : logInfo(message)),
+        })
+        // WP2 PR 4 (section 10 question 5, answered C): the canvas skills the
+        // app copied into this computer's own Codex folder are removed when
+        // Codex or the built-in tools are turned off, and kept current while
+        // both are on (canvas/codex-user-skills.ts): once after first paint,
+        // then at every settings save and every change the accounts service
+        // announces. Settings that cannot be read do nothing.
+        startCodexUserSkills({
+          settings: () => {
+            const r = readConfigChecked<Record<string, unknown>>('settings', { quarantineUnparseable: false })
+            return r.outcome === 'ok' && r.value && typeof r.value === 'object' ? r.value : null
+          },
+          codexOn: () => providerOnNow('codex'),
+          subscribe: (listener) => getAccountsService()?.subscribe(listener) ?? (() => {}),
+        })
+      })
       // Resume-picker bug fix: backfill companion dirs so DIRECT-WORK
       // conversations (no subagent/workflow → no companion dir from the CLI) are
       // visible in the picker AND resumable via `claude --resume`. Idempotent,
@@ -943,36 +672,34 @@ if (!gotTheLock) {
     const getWindow = () => mainWindow
     registerPtyHandlers(getWindow)
     registerUsageHandlers()
-    registerAccountWebHandlers()
+    registerAccountWebHandlers(getWindow)
     // #439: when a partition is wiped (sign-out / delete / cancelled sign-in),
     // sign-in.ts emits a revocation through the decoupling seam; wire the owners
     // here so it never has to import their heavy graphs. Both run synchronously.
     onPartitionRevoked(removeWebSession)
     onPartitionRevoked(closeAccountPanesForProfile)
+    // Before a wipe of an account's claude.ai partition, its views and its
+    // artifacts window close; at start, a session that has no record is wiped
+    // (account-web/claude-web-wiring.ts).
+    wireClaudeWebSession()
+    // P4.6 (row 58): the same for a Codex account's chatgpt.com session: its
+    // own channels (the app window only, the registry checked; a pane only for
+    // a Codex session whose current launch is on the account, for as long as
+    // that launch lasts). Before its partition is wiped (sign-out, archive, an
+    // incomplete sign-in) its panes close, so nothing writes the session back;
+    // after the wipe its record goes (account-web/codex-web-wiring.ts).
+    wireCodexWebSession({ getWindow, isCodexPtySession, leases: getConsumerLeases })
     // #216: a crash or forced quit can leave a sign-in browser profile behind, and
     // each one holds a live claude.ai session. Sweep them at boot.
     try { sweepAbandonedProfiles(getDataDirectory()) } catch { /* best effort */ }
     registerResumeHandlers()
-    // Logs v2 — first-run warned wipe of the OLD log artifacts (orphaned ~21 GB
-    // logs.db + ~16 GB legacy logs/ tree + migration markers). The renderer drives
-    // a blocking confirm modal: it DETECTs at startup, and only on the user's
-    // confirm does CONFIRM actually delete. Detection-driven + idempotent (no
-    // marker file — once deleted nothing is detected). executeWipe NEVER touches
-    // ~/.claude / the safety backup / the logging settings (see logs-wipe.ts).
-    ipcMain.handle(IPC.LOGS2_WIPE_DETECT, async () => {
-      try {
-        return detectOldLogArtifacts()
-      } catch (err) {
-        logError(`[logs2] wipe detect failed: ${(err as Error)?.message ?? err}`)
-        return { present: false, totalBytes: 0, paths: [], settingsKeys: [] }
-      }
-    })
-    ipcMain.handle(IPC.LOGS2_WIPE_CONFIRM, async () => {
-      const res = executeWipe()
-      logInfo(`[logs2] wiped ${res.deletedPaths.length} old log artifact(s), freed ${res.freedBytes} bytes, cleared keys: ${res.clearedKeys.join(', ') || '(none)'}`)
-      return res
-    })
+    // Ahead of initLogging + the register*() run below on purpose: nothing
+    // between here and there may throw and skip the first-run wipe prompt.
+    registerLogsWipeHandlers(getWindow)
     registerDebugHandlers()
+    // WP2 PR 4, P4.4 (row 56): each account's own log folders, keyed by
+    // account id and folder kind; the folders come from the accounts service.
+    registerAccountLogFolderHandlers(getWindow, async () => (await getAccountsService()?.accountFolders()) ?? null)
     registerUpdateHandlers()
     // Pre-emptive repo-rename handling: if the app has been renamed on GitHub
     // (claude-command-center -> ai-code-conductor) adopt + persist the new repo
@@ -993,7 +720,30 @@ if (!gotTheLock) {
     }
     registerConfigHandlers({
       // #266 MAJOR-2: unticking the watchdog must tear down RUNNING watchers.
-      onSettingsSaved: () => getWatchdogManager()?.applySettings(),
+      // Each in its own try: a failure in one never skips the other.
+      onSettingsSaved: () => {
+        try { getWatchdogManager()?.applySettings() } catch (err) { logError('[main] watchdog settings apply failed:', err) }
+        // WP2 6d: a provider's saved on/off may have changed (the Providers
+        // switch, onboarding, Settings): the accounts snapshot says so now, and
+        // a provider the save turned on is looked for.
+        try { getAccountsService()?.settingsChanged() } catch (err) { logError('[main] accounts settings change failed:', err) }
+        // P3.4: a provider switched on has its status page read at once; one
+        // switched off leaves the title bar and is not read again.
+        void refreshServiceStatus().catch((err) => logError('[main] service status refresh failed:', err))
+        // P3.10 round 4 (P1): Codex switched on has its hook folders prepared.
+        try { codexHookFoldersSettingsChanged() } catch (err) { logError('[main] codex hook folders failed:', err) }
+        // Question 5, answered C: Codex or the built-in tools turned off takes
+        // the app's skills out of this computer's own Codex folder.
+        try { codexUserSkillsSettingsChanged() } catch (err) { logError('[main] codex user skills failed:', err) }
+        // P3.12 round 1 (V1): the logging switch turned off stops indexing the
+        // sessions already running, both assistants.
+        try { applyLoggingSwitches() } catch (err) { logError('[main] logging switches failed:', err) }
+      },
+      // P3.12 round 1 (V1): a config's own logging switch turned off stops
+      // indexing its running session.
+      onConfigsSaved: () => {
+        try { applyLoggingSwitches() } catch (err) { logError('[main] logging switches failed:', err) }
+      },
     })
     // Beta builds default to verbose logging (lightweight async DEBUG lines ->
     // app.log) so field issues are captured. NEVER on stable. This enables only
@@ -1004,7 +754,7 @@ if (!gotTheLock) {
       const ch = readConfig<{ updateChannel?: string }>('settings')?.updateChannel
       if (ch === 'beta') { setVerboseBaseline(true); logInfo('[boot] verbose logging enabled (beta channel)') }
     } catch { /* settings unreadable this early -- skip */ }
-    registerAccountProfilesHandlers()
+    registerAccountProfilesHandlers(getWindow)
     // SAFETY: snapshot the real Claude config before the multi-account feature
     // does anything, so the user's original login is always recoverable.
     try { backupRealClaudeOnce() } catch (e) { logInfo(`[backup] snapshot skipped: ${e}`) }
@@ -1019,43 +769,71 @@ if (!gotTheLock) {
     // recall and resume. Idempotent + best-effort; only touches per-profile shared
     // links + the shared store.
     try { repairSharedProjectJunctions() } catch (e) { logInfo(`[profiles] shared-junction repair skipped: ${e}`) }
-    // Capture the current global login into a protected "primary" profile so no
-    // session runs on the bare global ~/.claude (idempotent; best-effort).
-    try { runFirstRunCapture() } catch (e) { logInfo(`[profiles] first-run capture skipped: ${e}`) }
-    // Bug 2: migrate OFF the per-session-home model. Sessions of one account now
-    // share its profile home (one rotating-OAuth store); salvage the freshest live
-    // token out of any retired account-homes/<sessionId>/ into the profile home +
-    // canonical (so no re-auth after upgrade), then KEEP + re-point those homes at
-    // the shared store (UPGRADE GUARD -- a resumed pre-upgrade session may still
-    // name an account-homes path, so we never delete it). Idempotent; bounded set.
-    try { cleanupSessionHomes() } catch (e) { logInfo(`[profiles] session-home cleanup skipped: ${e}`) }
-    // Auth-outside-CCC fix: heal a stale real global ~/.claude/.credentials.json on
-    // launch (a prior session rotated the primary account's OAuth token, leaving
-    // external `claude -p` on a dead refresh token). Freshest-wins + email-guarded.
-    try { const r = syncPrimaryCredentialsWithGlobal(); if (r !== 'none') logInfo(`[profiles] primary<->global credential sync at launch: ${r}`) } catch (e) { logInfo(`[profiles] credential sync skipped: ${e}`) }
+    // Windows: every account's sign-in folders are made readable by this user
+    // alone and checked (asynchronously, once per folder this run) BEFORE the
+    // profile steps below write a sign-in; each write reads its folder's
+    // verdict, and a launch before then waits for its own profile's check.
+    // After the layout migration and the junction repair above, which write
+    // no sign-in, so the check never makes a config folder an old layout lacks.
+    void startOwnerOnlyCredentialFolders(() => {
+      // Capture the current global login into a protected "primary" profile so no
+      // session runs on the bare global ~/.claude (idempotent; best-effort).
+      try { runFirstRunCapture() } catch (e) { logInfo(`[profiles] first-run capture skipped: ${e}`) }
+      // Bug 2: migrate OFF the per-session-home model. Sessions of one account now
+      // share its profile home (one rotating-OAuth store); salvage the freshest live
+      // token out of any retired account-homes/<sessionId>/ into the profile home +
+      // canonical (so no re-auth after upgrade), then KEEP + re-point those homes at
+      // the shared store (UPGRADE GUARD -- a resumed pre-upgrade session may still
+      // name an account-homes path, so we never delete it). Idempotent; bounded set.
+      try { cleanupSessionHomes() } catch (e) { logInfo(`[profiles] session-home cleanup skipped: ${e}`) }
+      // Auth-outside-CCC fix: heal a stale real global ~/.claude/.credentials.json on
+      // launch (a prior session rotated the primary account's OAuth token, leaving
+      // external `claude -p` on a dead refresh token). Freshest-wins + email-guarded.
+      try { const r = syncPrimaryCredentialsWithGlobal(); if (r !== 'none') logInfo(`[profiles] primary<->global credential sync at launch: ${r}`) } catch (e) { logInfo(`[profiles] credential sync skipped: ${e}`) }
+    }).catch((e) => logInfo(`[profiles] start profile steps failed: ${e}`))
     registerScreenshotHandlers(getWindow)
     registerDiagnosticsHandlers(getWindow)
     registerWebviewHandlers(getWindow)
     registerInsightsHandlers(getWindow)
     registerNotesHandlers()
     registerVisionHandlers(getWindow)
-    registerCodexHandlers()
+    registerProviderAccountsHandlers(getWindow, getAccountsService)
     registerCodexReviewHandlers()
     registerExeHandlers()
     registerChannelHandlers()
     startRulesEngine()
     registerCloudAgentHandlers(getWindow)
     registerLegacyVersionHandlers(getWindow)
-    registerMemoryHandlers()
+    // WP2 PR 4, P4.4 (row 55): each account's own memories beside Claude's
+    // store, and every memory channel answering only the app window.
+    registerMemoryHandlers({ getWindow, accountFolders: async () => (await getAccountsService()?.accountFolders()) ?? null })
     // GitHub sidebar — reads/writes github-config.json + encrypted auth profiles
     // under the CONFIG dir alongside other app config. Session-level integration
     // state piggybacks on the existing session-state persistence helpers.
     registerGitHubHandlers({
       resourcesDir: getConfigDir(),
       getWindow,
-      loadSessions: async () => loadSessionState()?.sessions ?? [],
+      // PR 4: the sidebar's reads are pure reads (peekSessionState): they never
+      // set or reset the read-failure latch, so only session:load decides
+      // whether saves and clears are allowed. A read that fails gives the
+      // sidebar nothing, and a save whose read fails writes nothing.
+      loadSessions: async () => {
+        try {
+          return peekSessionState()?.sessions ?? []
+        } catch {
+          return []
+        }
+      },
+      // P3.12 (row 65): a Codex session's Session Context reads its own rollout.
+      codexRolloutFor: codexRolloutForSessionContext,
       saveSessions: async (sessions) => {
-        const existing = loadSessionState()
+        let existing: SessionState | null
+        try {
+          existing = peekSessionState()
+        } catch (err) {
+          logWarn(`[session-state] the GitHub sidebar's change was not saved: the saved sessions could not be read (${(err as Error)?.message ?? err})`)
+          return
+        }
         // Through the durability core, never saveSessionState directly: a
         // direct write leaves the exit-flush cache stale, so the flush on
         // quit would overwrite this very patch with the pre-patch state —
@@ -1094,11 +872,47 @@ if (!gotTheLock) {
     // (HOOKS_STATUS, HOOKS_EVENT, ...) the supervisor/gateway emit passes through.
     const emitWithMerge = (channel: string, payload: unknown) =>
       channel === IPC.SERVICE_HEALTH_UPDATE ? pushDiagnostics() : emitToWindow(channel, payload)
+    // Usage track MP10: the same live transcript paths attribute each local
+    // Claude session's usage to an account, for Tokenomics: the profile whose
+    // config folder holds the transcript (the path decides) names it through
+    // its registry link, when that is the profile the reporting session runs
+    // under now (captured at its latest spawn). Independent of the binder,
+    // so it works with logging off; the profiles root and the usage index are
+    // resolved lazily too.
+    // Where the profiles keep their transcripts: shared with the live usage
+    // recorder, which files a session's figure under a profile only when its
+    // transcript lies in that profile's folder (P3.2).
+    const profileFolders: TkProfileFolders = {
+      profilesRoot: () => { try { return getProfilesRoot() } catch { return null } },
+      isProfileId: (name) => isValidProfileId(name),
+      // The layout comes from where profile homes are built: <home>/.claude/projects.
+      projectsDirOf: (profileId) => join(getProfileConfigDir(profileId), '.claude', 'projects'),
+      realRoot: (root) => { try { return realpathSync.native(root) } catch { return null } },
+    }
+    setLiveUsageTranscriptProfile((path) => profileOfTranscript(profileFolders, path))
+    const attributeTranscript = createTranscriptAttribution({
+      launchProfile: (sessionId) => getClaudeProfileId(sessionId),
+      ...profileFolders,
+      accountOf: (profileId) => getAccountsService()?.accountIdForLegacy('claude', profileId, { ignoreCase: process.platform === 'win32' }) ?? null,
+      record: (sessionId, accountKey) => {
+        const tokenomics = getTokenomicsSupervisor()
+        if (!tokenomics) return false
+        tokenomics.setSessionAccount(sessionId, accountKey)
+        return true
+      },
+    })
     // Logs v2 (Task 8): route transcript paths the child gateway lifts from hook
     // POSTs into the binder. Resolved lazily — the binder is created later by
     // initLogging(), and is null when logging is disabled (then this is a no-op).
-    const routeTranscriptPath = (sessionId: string, path: string) =>
-      getTranscriptBinder()?.notifyTranscriptPath(sessionId, path)
+    const routeTranscriptPath = (sessionId: string, path: string) => {
+      // P3.10: a Codex session's hook names the rollout it is on -- the exact
+      // claim of its conversation -- and never reaches a Claude sink
+      // (pty-manager routeHookTranscriptPath, tested there; round 1, B5).
+      routeHookTranscriptPath(sessionId, path, {
+        attribute: attributeTranscript,
+        bind: (sid, p) => { getTranscriptBinder()?.notifyTranscriptPath(sid, p) },
+      })
+    }
     if (hooksEnabled) {
       // Supervised out-of-process gateway: a utilityProcess child runs the HooksGateway,
       // crash-isolated from the main thread, with restart/backoff + fail-open-to-in-process.
@@ -1119,6 +933,9 @@ if (!gotTheLock) {
     // TODO(logs2 Phase 5): wipe the orphaned old byte-capture DB
     // (<dataDir>/logs.db) when the old stack is deleted — it is no longer
     // written or read by the live app.
+    // P3.12 (W4, X1): the Codex conversations written while not indexed,
+    // kept whether or not logging is on this run.
+    try { initIndexingGaps(join(getDataDirectory(), 'logging-gaps.json')) } catch (err) { logError('[logs] indexing gaps failed:', err) }
     try {
       initLogging({ emit: emitWithMerge, dbPath: join(getDataDirectory(), 'transcripts.db') })
     } catch (err) {
@@ -1128,7 +945,7 @@ if (!gotTheLock) {
     // initLogging so the new-messages push can subscribe to the live supervisor;
     // the request/response handlers resolve the supervisor lazily per call and
     // reject cleanly when logging is disabled.
-    registerLogs2Handlers(getWindow)
+    registerLogs2Handlers(getWindow, isCodexPtySession)
     // Agent Canvas (2.2): renderer read surface + change push over the canvas
     // store. Serving itself is the ccc-ux:// protocol registered above.
     registerCanvasHandlers(getWindow)
@@ -1145,16 +962,32 @@ if (!gotTheLock) {
     // Both ends are injected here so the canvas IPC module needs no static
     // import of pty-manager or the gateway (see canvas-marker-delivery.ts).
     startCanvasMarkerQueue({
-      // The same submit shape every other programmatic line into the Claude TUI
-      // uses (the watchdog retry, the command buttons, the launch line).
-      write: (sessionId, line) => writePty(sessionId, line + '\r'),
+      // A Claude session's marker is held and typed only at Claude Code's
+      // ready, empty prompt, read from the session's own screen
+      // (writeCanvasMarkerLine). WP2 PR 4, P4.1: a Codex session's
+      // goes through the submit primitive, which answers later whether it was
+      // delivered.
+      write: (sessionId, line, canvasId) => writeCanvasMarkerLine(sessionId, line, canvasId),
+      // P4.1: a Codex marker the primitive did not deliver, a Claude marker
+      // dropped untyped (held past its bound, its run ended, or refused), or
+      // a marker the queue held when its session ended or restarted, is
+      // shown on the canvas, on the review it belongs to.
+      onUndelivered: (u) => {
+        const w = getWindow()
+        if (w && !w.isDestroyed()) w.webContents.send(IPC.CANVAS_AGENT_MARKER_UNDELIVERED, u)
+      },
       subscribe: (cb) => {
         const gw = getGateway()
         if (!gw) return
         gw.subscribe((e) => { if (e.sessionId) cb(e.sessionId, e.event) })
       },
     })
-    startAttentionSource()
+    // P3.10 (row 47): Codex sessions' own hook events map to attention too.
+    startAttentionSource({ isCodexSession: isCodexPtySession })
+    // P3.10 round 1 (B4): a conversation a Codex session's own Codex started
+    // (its SessionStart hook) proves another session's inferred claim of it
+    // wrong; the gateway hands the transcript path over before the event.
+    getGateway()?.subscribe((e) => { try { noteCodexHookEvent(e) } catch { /* a claim never breaks the feed */ } })
     startJankDetector()
     // Main-process event-loop jank monitor: feeds the "Jank m/c" main half on the
     // Conductor services pill (getMergedDiagnostics stamps stallsLastMin() onto
@@ -1174,8 +1007,11 @@ if (!gotTheLock) {
       getWindow,
       isSessionAlive: isSessionWritable,
       send: (sessionId, text) => {
-        writePty(sessionId, `${text}\r`)
+        writeSubmittedLine(sessionId, text)
       },
+      // P3.10: a Codex session's retry is typed, then submitted once the
+      // screen shows it (watchdog-manager submitCodex).
+      write: (sessionId, data) => writePty(sessionId, data),
       // Refresh the services view live when a watchdog state changes; routed
       // through the same merge so the push carries every source (#235).
       onHealthChange: () => pushDiagnostics(),
@@ -1264,13 +1100,19 @@ if (!gotTheLock) {
     setStatuslineUsageSink(recordLiveUsageForSession)
     startStatuslineWatcher(getWindow)
 
-    // Start polling Anthropic service status
-    startServiceStatusPoller(getWindow)
+    // Start polling each provider's public status page, only while it is on;
+    // a switch made in the accounts service (not a settings save) reaches it
+    // through the service's change subscription.
+    startServiceStatusPoller(getWindow, {
+      providerOn: providerOnNow,
+      subscribe: (listener) => getAccountsService()?.subscribe(listener) ?? (() => {}),
+    })
     // Let a freshly-mounted renderer pull the cached status immediately, rather
     // than waiting up to a full poll interval for the next push (the title-bar
     // status pills were blank until the next poll because the immediate poll
-    // fired before the renderer subscribed, behind the startup splash).
-    ipcMain.handle(IPC.SERVICE_STATUS_GET, () => getLastServiceStatus())
+    // fired before the renderer subscribed, behind the startup splash). The
+    // app's own window, top frame only (P3.4, trusted-sender.ts).
+    registerServiceStatusHandlers(getWindow)
   }).catch((err) => {
     // A throw anywhere in the boot sequence above abandons every subsequent
     // subsystem registration (handlers, logging, hooks gateway, statusline,
@@ -1293,10 +1135,17 @@ if (!gotTheLock) {
   // window is up, asks the renderer, and re-issues the quit once the close is
   // allowed; this body runs on THAT pass, exactly once.
   quitTeardown = () => {
+    // First: the quit now goes ahead, and Electron closes every window next, so
+    // a sign-in window must not hold its close (a held close cancels the quit).
+    setSignInWindowsQuitting(true)
     logInfo('App quitting...')
     // #397 Group 2: persist sessions BEFORE the logging teardown below tears the
     // transcript binder down — flushing after that would lose the resume targets.
     sessionDurability.flushOnExit('before-quit')
+    // P3.12 (X3, Z2): the conversations written while not indexed, written now;
+    // a window still open stays open (Codex's last records land after the
+    // quit), and the next start closes it.
+    try { flushIndexingGaps() } catch { /* best-effort */ }
     // S5: mark the supervisor shutting-down BEFORE killAllPty() so a hooks-child
     // exit during teardown does NOT trigger a restart (race-free shutdown).
     try { _hooksSupervisor?.shutdown() } catch { /* never started / hooks disabled */ }
@@ -1309,6 +1158,15 @@ try { getWatchdogManager()?.disposeAll() } catch { /* never init */ }
     // Kill any GUI-subsystem tool still being captured (#379). Its stdio is
     // piped to us, so leaving it running orphans a process nobody can see.
     try { stopAllCapturedRuns() } catch { /* never started */ }
+    // Usage track MP8: a fresh usage read under way is stopped first, so the
+    // flush below kills its helper too, and none starts again.
+    try { getAccountsService()?.stopUsageReads() } catch { /* no accounts service */ }
+    // WP2 PR 4, P4.5: a Codex cloud agent still running is stopped here too,
+    // so the flush below ends its whole tree (as killAllAgents a Claude agent).
+    try { stopBackgroundAgentRuns() } catch { /* none running */ }
+    // A headless CLI run stopped but still reading its process table would
+    // otherwise leave its chain below cmd.exe running once the app is gone.
+    try { flushPendingProviderCliKills() } catch { /* nothing pending */ }
     stopServiceStatusPoller()
     stopLoopStallMonitor()
     stopUpdateWatcher()
@@ -1321,6 +1179,12 @@ try { getWatchdogManager()?.disposeAll() } catch { /* never init */ }
     killSpawnedBrowser()
     stopConductorMcpServer()
     killAllAgents()
+    // The first-run Claude Code setup terminal is main's own, outside
+    // pty-manager, so killAllPty does not reach it. Only the setup screen's
+    // own ways out used to stop it; Alt+F4, the taskbar and Cmd+Q now do too.
+    // Safe when none runs, and after the screen already stopped it. It cannot
+    // throw, and runs before killAllPty so a throw there cannot skip it.
+    killCliSetupPty()
     killAllPty()
     closeAllWebviews()
     closeAllAccountPanes()
@@ -1338,8 +1202,14 @@ try { getWatchdogManager()?.disposeAll() } catch { /* never init */ }
   app.on('window-all-closed', () => {
     // On macOS, apps conventionally stay running when all windows are closed
     // (the user quits via Cmd+Q or the app menu) -- but not their PTYs: rc.15
-    // review R6, see onAllWindowsClosed.
-    onAllWindowsClosed({ platform: process.platform, quit: () => app.quit(), endStragglerPtys: killAllPty })
+    // review R6, see onAllWindowsClosed. The setup terminal is one of them
+    // (a setup screen closed with the red button), ended first so a throw in
+    // killAllPty cannot skip it.
+    onAllWindowsClosed({
+      platform: process.platform,
+      quit: () => app.quit(),
+      endStragglerPtys: () => { killCliSetupPty(); killAllPty() },
+    })
   })
 
   // On macOS, re-create the window when the dock icon is clicked and no windows exist

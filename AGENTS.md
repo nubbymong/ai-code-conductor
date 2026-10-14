@@ -26,6 +26,17 @@ worktree you own; `CCC_SESSION_GUARD=off` is the escape hatch. See
 
 ## Ticket creation & premise review — policy
 
+**Where tickets live (durable governance).** Internal tickets, work items, and
+plans are filed in the private planning workspace
+[`nubbymong/aicc_planning`](https://github.com/nubbymong/aicc_planning) (its
+Issues + Planning Project) — NOT in this repository's issue tracker, which is
+reserved for public error reporting (external/user-filed bugs) and public
+interfacing. Implementation still lands here (code, PRs, releases); a code PR
+references its governing `aicc_planning` ticket by URL (cross-repo — link it; it
+does not auto-close). This rule is durable and is mirrored in the planning
+repo's `AGENTS.md`. The premise-review policy below applies wherever the ticket
+is filed.
+
 **Every repo change starts from a GitHub issue, and every issue carries a premise
 review.** Two standing gates bracket a change: a *premise* review at creation, and
 an *adversarial* review before merge (ADR-009). This is the first one.
@@ -71,7 +82,7 @@ npm run test         # both
   rewrites the tree and can leave it looking fully installed while Electron's own
   binary is absent: `node_modules/electron/` exists, `package.json` is satisfied
   and `npm ls` is clean, but `path.txt` and `dist/electron.exe` are gone. The
-  repo's `postinstall` only rebuilds the two native addons, so nothing replaces
+  repo's `postinstall` only prepares the two native addons, so nothing replaces
   them. electron-vite then dies with an opaque `Error: Electron uninstall`, the
   launcher window closes instantly, and the real message is only in
   `dev-logs/ccc-dev-*.log`. `predev` (`scripts/preflight-electron.mjs`) now
@@ -129,10 +140,10 @@ RC-branch model (adopted with #89): `beta` is never frozen — features merge th
 - Commits/PR titles follow Conventional Commits, enforced by a Husky `commit-msg` hook and the `PR Title` workflow (`commitlint.config.js`)
 - **Security-sensitive changes need an adversarial-review PASS before merge is recommended** (ADR-009). Touching IPC/preload, the Conductor MCP server, PTY argv construction, credential/keychain code, the updater's verification path, Electron `webPreferences`, or bumping a *runtime* dependency's major version? Run `/adversarial-review` — independent attacker sub-agents, not a re-read of your own diff. The author never attacks their own change. Docs/styling/changelog-only work is exempt. Unsure → it's required (fail closed). Dismissing a CodeQL/Dependabot alert as a false positive goes through the same pass
 - **Required means run it, not offer it.** When the change touches one of those paths, dispatch the pass — do not stop and ask whether to. "It spawns several agents" and "I wrote it so I can't review it" are the reasons the skill exists, not reasons to defer; the author orchestrates and the sub-agents attack. The skill is model-tiered for cost: `fable` scopes the surface and runs a thesis-assertion check, then `opus`/`sonnet` attack only what that narrowed down. Writing security-sensitive code and leaving the gate unrun is the one outcome to avoid
-- **SSH statusline changes need the live SSH matrix before merge** — a path-triggered *manual* gate, sibling to the adversarial pass. It cannot be CI: it drives real SSH hosts with real credentials. Touching any of the blast radius — `src/main/pty-manager.ts` (SSH branch, sentinel parsers, statusline routing), `src/main/providers/claude/ssh-shim.ts`, `src/main/providers/claude/ui-detection.ts`, `src/main/ssh-tmux.ts`, `src/main/ssh-tmux-stage.ts`, `src/main/ssh-tmux-push.ts`, `src/main/ansi-strip.ts`, `src/main/statusline-watcher.ts`? Run `npm run test:live:ssh` (pack `tests/live/ssh-statusline.live.ts`; hosts in gitignored `tests/live/hosts.local.json`, seeded from `hosts.example.json`) one combo at a time (`-t "<regex>"`, 2–8 min each) and report the resulting matrix in the PR before merge. T7 (Windows remote) is a known upstream `claude` gap — report it as such, not as a failure. Unit tests do not substitute: the failure class is real ConPTY/ssh escape-sequence gluing that mocks don't reproduce (the RC9 root cause shipped through a fully green unit suite). Unsure whether your change is in the radius → run it (fail closed)
+- **SSH statusline changes need the live SSH matrix before merge** — a path-triggered *manual* gate, sibling to the adversarial pass. It cannot be CI: it drives real SSH hosts with real credentials. Touching any of the blast radius — `src/main/pty-manager.ts` (SSH branch, sentinel parsers, statusline routing), `src/main/providers/claude/ssh-shim.ts`, `src/main/providers/claude/ui-detection.ts`, `src/main/ssh-tmux.ts`, `src/main/ssh-tmux-stage.ts`, `src/main/ssh-tmux-push.ts`, `src/main/ansi-strip.ts`, `src/main/statusline-watcher.ts`? Run `npm run test:live:ssh` (pack `tests/live/ssh-statusline.live.ts`; hosts in gitignored `tests/live/hosts.local.json`, seeded from `hosts.example.json`) one combo at a time (`-t "<regex>"`, 2–8 min each) and report the resulting matrix in the PR before merge. T7 (Windows remote) passes since 2026-09-25 (PR #625, commit c8079555); it was earlier reported as a known upstream `claude` gap, and a T7 failure is now a failure to root-cause. Unit tests do not substitute: the failure class is real ConPTY/ssh escape-sequence gluing that mocks don't reproduce (the RC9 root cause shipped through a fully green unit suite). Unsure whether your change is in the radius → run it (fail closed)
 - Issue lifecycle: label an issue `in-beta` (don't close it) when its fix merges to `beta`. When an rc is cut, the milestone's open `in-beta` issues are relabeled `in-release` AUTOMATICALLY (the `roll-rc` job in `release.yml`, `scripts/roll-issues-into-release.mjs`) — the fix is in a cut release candidate, one step past beta. Closing on promotion to `main` is AUTOMATIC too (`.github/workflows/close-in-beta-on-promotion.yml`, #134) and keys off either lifecycle label — an unlabeled issue is never rolled or closed, so applying `in-beta` on the beta merge is the step that matters. See CONTRIBUTING.md ("Issue lifecycle")
-- Release-line labels: apply `release-2.1` to any issue/PR on the current 2.1 line — every `in-beta` issue should also carry it so "what ships in 2.1?" stays accurate; apply `release-2.2` to work deferred past 2.1. **Invariant: `in-beta` (or `in-release`) + `release-2.2` on the same issue is a contradiction** — either lifecycle label means the fix already ships in 2.1, so it can't also be deferred. See CONTRIBUTING.md ("Release-line labels")
-- Issue disposition — nothing in limbo (#437): every open issue carries exactly ONE disposition — a `release-<x.y>` line, or `backlog` / `triage` / `wontfix` / `duplicate` / `excluded`. When you touch an issue, leave it with a disposition (a new issue defaults to `triage`); once it is committed (`in-beta` / `in-release` / `loop-claimed` / `loop-in-progress` / `loop-done`) give it a release line. `.github/workflows/issue-disposition.yml` reconciles this on a schedule — it auto-adds `triage` and (for `in-beta`/`in-release`) the active line, and flags the rest for a human. See CONTRIBUTING.md ("Issue disposition")
+- Release-line labels: an issue/PR carries exactly one release label. Before a line's x.y.0 ships, that is the line label (`release-2.1`, every `in-beta` issue included, so "what ships in 2.1?" stays accurate); once x.y.0 has shipped, patch work carries the patch label (`release-2.1.1`, then `release-2.1.2`, ...) and NOT the line label — the reconciler reads a leftover `release-2.1` on an in-beta issue as the same line rather than a contradiction, but new labelling uses the patch label. Apply `release-2.2` to work deferred past 2.1. **Invariant: `in-beta` (or `in-release`) + `release-2.2` on the same issue is a contradiction** — either lifecycle label means the fix already ships in 2.1, so it can't also be deferred. See CONTRIBUTING.md ("Release-line labels")
+- Issue disposition — nothing in limbo (#437): every open issue carries exactly ONE disposition — a `release-<x.y>` line (or, once that line's x.y.0 has shipped, a `release-<x.y.z>` patch label), or `backlog` / `triage` / `wontfix` / `duplicate` / `excluded`. When you touch an issue, leave it with a disposition (a new issue defaults to `triage`); once it is committed (`in-beta` / `in-release` / `loop-claimed` / `loop-in-progress` / `loop-done`) give it a release label (the line label before x.y.0 ships, the patch label after). `.github/workflows/issue-disposition.yml` reconciles this on a schedule — it auto-adds `triage` and (for `in-beta`/`in-release`) the active release label (the line, or the next patch once x.y.0 has shipped), and flags the rest for a human. See CONTRIBUTING.md ("Issue disposition")
 - GitHub Actions builds Windows (.exe) + macOS (.dmg) + Linux (.AppImage, experimental) installers; the release job tags the exact built commit (`--target`) so the in-app updater orders releases correctly
 - Linux builds on ubuntu-latest → glibc 2.39 floor (Ubuntu 24.04+/Rocky 10+); older distros need a container build. Vision on Linux requires a deb/rpm Chrome/Chromium (snap confinement blocks the CDP profile dir)
 - Never commit secrets, .env files, or personal paths
@@ -166,6 +177,11 @@ tracked file; a fragment describing a live bug is a disclosure with a repro atta
 fragment written during an embargo may say *that* a finding exists and was routed
 privately — never the component, the mechanism, or the repro. The public record (fragment,
 changelog entry, advisory) is written **after** the fix ships, all at once.
+
+The squash-merge body is the second trap: GitHub pre-fills it with every commit subject on
+the branch, so a PR whose history ever named the mechanism publishes it at merge, after
+everything else was scrubbed, and a public merge commit cannot be amended (#616). Merge
+such a PR with a hand-written body (`gh pr merge --squash --body "..."`), never the default.
 
 ## Showing visual work — use the Agent Canvas
 

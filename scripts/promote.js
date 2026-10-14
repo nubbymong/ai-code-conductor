@@ -308,7 +308,7 @@ try {
     `This step needs repo-admin bypass: the promote PR requires a code-owner\n      ` +
     `approval its own author cannot give, and the ruleset allows squash only.\n      ` +
     `If gh refuses on a stale BLOCKED state, the REST call takes the same path:\n      ` +
-    `gh api -X PUT repos/nubbymong/claude-command-center/pulls/${prNumber}/merge -f merge_method=merge`
+    `gh api -X PUT repos/nubbymong/ai-code-conductor/pulls/${prNumber}/merge -f merge_method=merge`
   )
 }
 

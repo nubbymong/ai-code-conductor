@@ -32,6 +32,19 @@ vi.mock('../../../src/main/ipc/setup-handlers', () => {
   return { getResourcesDirectory: () => dir }
 })
 
+// The canvas records' signing key, fixed for this file. The real one comes
+// from the install secret, which the first canvas write creates in the config
+// folder, and on Windows that folder is then made owner-only by the system
+// ACL tool: real processes in this suite's setup that the files under test
+// never depend on. Here the setup starts no process.
+vi.mock('../../../src/main/install-secret', async (importOriginal) => {
+  const { createHmac } = await import('node:crypto')
+  return {
+    ...(await importOriginal<typeof import('../../../src/main/install-secret')>()),
+    deriveInstallKey: (purpose: string) => createHmac('sha256', 'canvas-readonly-boundary').update(`ccc:${purpose}`, 'utf8').digest(),
+  }
+})
+
 const handlers = new Map<string, (...a: unknown[]) => unknown>()
 const listeners = new Map<string, (...a: unknown[]) => unknown>()
 vi.mock('electron', () => ({
@@ -68,14 +81,16 @@ const OWNER = 'aaaa1111aaaa1111aaaa1111'
 const FOREIGN = 'bbbb2222bbbb2222bbbb2222'
 const PROJECT = path.join(getResourcesDirectory(), 'project')
 
-registerCanvasHandlers(
-  () => ({ isDestroyed: () => false, webContents: { send: () => {} } }) as never,
-)
+/** The app window and its main frame: the only sender these handlers answer. */
+const APP_FRAME = {}
+const APP_WIN = { isDestroyed: () => false, webContents: { mainFrame: APP_FRAME, send: () => {} } }
+const APP_EVENT = { sender: APP_WIN.webContents, senderFrame: APP_FRAME }
+registerCanvasHandlers(() => APP_WIN as never)
 
 const invoke = async (channel: string, args: unknown): Promise<unknown> => {
   const handler = handlers.get(channel)
   if (!handler) throw new Error(`no handler registered for ${channel}`)
-  return handler({ sender: {} } as never, args)
+  return handler(APP_EVENT as never, args)
 }
 
 let targetCanvasId: string
@@ -470,15 +485,27 @@ describe('the enumeration cannot rot', () => {
     IPC.CANVAS_REVIEW_GET_STATE,
     IPC.CANVAS_DESCRIBE_FORCE_CLOSURES,
     IPC.CANVAS_EVIDENCE_READ,
+    // WP2 PR 4 (P4.1): how a session's own launch delivered the canvas
+    // guidance, read from main's launch record. It names no canvas and writes
+    // nothing; its handler lands with P4.1 and is attacked there.
+    IPC.CANVAS_SESSION_GUIDANCE,
     // main -> renderer pushes. Not an ingress at all: nothing outside main can
     // invoke one.
     IPC.CANVAS_CHANGED,
     IPC.CANVAS_REVIEW_CHANGED,
     IPC.CANVAS_SNAPSHOT_REQUEST,
     IPC.CANVAS_FRAME_NAVIGATED,
+    IPC.CANVAS_AGENT_MARKER_UNDELIVERED,
+    IPC.CANVAS_CLAUDE_MARKER_ASK,
     // renderer -> main REPLY to a main-initiated request, correlated by an
     // id main minted. It names no canvas and mutates nothing.
     IPC.CANVAS_SNAPSHOT_RESULT,
+    // The same shape: the reply to one canvas:claudeMarkerAsk, correlated by
+    // the request id main minted (an unknown or late id is dropped). It names
+    // no canvas and mutates no canvas state; it only says whether a marker
+    // main already holds was read ready or typed. Taken from the app window's
+    // main frame only.
+    IPC.CANVAS_CLAUDE_MARKER_ANSWER,
   ])
 
   it('covers every CANVAS_* channel that a renderer can invoke', () => {
@@ -535,6 +562,7 @@ describe('the enumeration cannot rot', () => {
       expect(handlers.has(channel), `${channel} is not registered`).toBe(true)
     }
     expect(listeners.has(IPC.CANVAS_SNAPSHOT_RESULT)).toBe(true)
+    expect(listeners.has(IPC.CANVAS_CLAUDE_MARKER_ANSWER)).toBe(true)
   })
 })
 

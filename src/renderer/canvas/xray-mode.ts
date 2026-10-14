@@ -63,11 +63,11 @@ export function resolveCanvasXrayMode(value: unknown): CanvasXrayMode {
 /**
  * Does anything resolve the hovered element at all?
  *
- * This is the ONE fact the content frame is told (canvas-frame-rpc
- * `hoverReporting`): in `off` the bridge stops emitting `pointer` and
- * `contentClick`, so the page does no per-mousemove work whatsoever. The bridge
- * is page-controlled code and may ignore that, which is why the host gates on
- * the same predicate — see xrayHoverIsLive's use in AgentCanvasPane.
+ * In `off` the content frame is told to stop emitting `pointer` and
+ * `contentClick` (canvas-frame-rpc `hoverReporting`; see xrayFrameReporting for
+ * exactly what it is told), so the page does no per-mousemove work whatsoever.
+ * The bridge is page-controlled code and may ignore that, which is why the host
+ * gates on the same predicates (see their use in AgentCanvasPane).
  */
 export function xrayHoverIsLive(mode: CanvasXrayMode): boolean {
   return mode !== 'off'
@@ -119,4 +119,31 @@ export function xrayReadsOutInPanel(mode: CanvasXrayMode, opts?: { isPlan?: bool
  */
 export function xrayClickSelects(mode: CanvasXrayMode): boolean {
   return mode !== 'off'
+}
+
+/** What the content frame is asked to report: the two switches of the
+ *  `hoverReporting` request. */
+export interface CanvasFrameReporting {
+  /** The per-mousemove `pointer` stream. */
+  hover: boolean
+  /** `contentClick`, which click-to-lock selects from. */
+  clicks: boolean
+}
+
+/**
+ * The facts the content frame is told (aicc_planning#107).
+ *
+ * Two switches, because a PLAN needs one without the other. It resolves no
+ * hover (xrayHoverResolves), so its frame drops the pointer stream, but a click
+ * is how a plan section is chosen for a note (xrayClickSelects stays true in
+ * the stealth mode a plan is always given). With one switch for both, a plan
+ * click never reached the host. Each switch follows the predicate the host
+ * gates the same report on, so the frame is never asked for a report the host
+ * would throw away. One known gap the other way: a Testing surface records
+ * every click into its trail, even under x-ray Off, but under Off the frame is
+ * told to drop clicks, so that trail gets none, the same as when one switch
+ * covered both.
+ */
+export function xrayFrameReporting(mode: CanvasXrayMode, opts?: { isPlan?: boolean }): CanvasFrameReporting {
+  return { hover: xrayHoverResolves(mode, opts), clicks: xrayClickSelects(mode) }
 }

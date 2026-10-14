@@ -8,11 +8,14 @@
  * Three ways to talk to GitHub (cascading):
  *   1. Public GitHub API (anonymous) — works for public repos
  *   2. Authenticated API (gh auth token) — works for private repos if gh CLI is authed
- *   3. gh CLI (`gh release list`) — last resort fallback
+ *   3. gh CLI (`gh release list`, then `gh release view` for downloads) -- last resort fallback
  *
  * Once the repo is public, step 1 succeeds and steps 2-3 are never called.
  *
  * Downloads use direct HTTPS (follows redirects) and `gh release download` as a fallback.
+ *
+ * Every gh start goes through runGh: on Windows gh.exe by the full path found
+ * in the folders PATH names in full, never by name (github/gh-program.ts).
  */
 import { app } from 'electron'
 import * as https from 'https'
@@ -26,8 +29,28 @@ import { logInfo, logError } from './debug-logger'
 import { readConfig } from './config-manager'
 import { readRegistry, writeRegistry } from './registry'
 import { getDataDirectory } from './data-paths'
+import { ghStartCommand } from './github/gh-program'
+import macosFloorsJson from '../../resources/macos-release-floors.json'
 
 const execFileAsync = promisify(execFile)
+
+/** Runs the GitHub CLI with `args`, started as ghStartCommand says: on
+ *  Windows gh.exe by the full path found in the folders PATH names in full,
+ *  with the child's own lookup kept to them; elsewhere gh by name. With no gh
+ *  to start it rejects, as a missing gh always has, so each fallback below
+ *  reports "no gh" the way it did; nothing is started by a bare name on
+ *  Windows. */
+async function runGh(args: string[], timeout: number): Promise<{ stdout: string }> {
+  const start = await ghStartCommand(args)
+  if ('refused' in start) throw new Error(start.refused)
+  return execFileAsync(start.file, start.args, {
+    encoding: 'utf-8',
+    timeout,
+    windowsHide: true,
+    ...(start.env ? { env: start.env } : {}),
+    ...(start.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  })
+}
 
 /**
  * Installer asset extension per platform. Pure + exported for unit tests —
@@ -50,20 +73,12 @@ const INSTALLER_EXT = installerExtForPlatform(process.platform)
 const DEFAULT_REPO = 'nubbymong/claude-command-center'
 
 /**
- * Validate a GitHub `owner/repo` slug against a strict pattern.
- * Prevents shell/argument injection if the value comes from the registry.
- * Allowed: alphanumerics, dashes, underscores, dots; one slash separator.
+ * A syntax check on the GitHub `owner/repo` slug repoIsLive builds into its
+ * probe URL: alphanumerics, dashes, underscores, dots; one slash separator.
+ * The GitHubRepo setting is not checked here: it is matched exactly against
+ * ALLOWED_REPOS (allowedRepoSetting).
  */
 const REPO_PATTERN = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/
-
-function getRepo(): string {
-  const fromRegistry = readRegistry('GitHubRepo')
-  if (fromRegistry && REPO_PATTERN.test(fromRegistry)) return fromRegistry
-  if (fromRegistry) {
-    logError(`[github-update] Ignoring invalid GitHubRepo registry value: ${JSON.stringify(fromRegistry)}`)
-  }
-  return DEFAULT_REPO
-}
 
 /**
  * The repo the app will be RENAMED to after 2.1 ships
@@ -73,10 +88,32 @@ function getRepo(): string {
  */
 export const RENAMED_REPO = 'nubbymong/ai-code-conductor'
 
-// The repo the updater currently talks to. Resolved lazily from the registry
-// override (else DEFAULT_REPO) and cached; the startup probe may switch it to
-// the renamed repo and persist that. Every fetch/download reads this, so a
-// switch takes effect the same session, not only after a restart.
+/**
+ * The repositories the updater reads releases from: this project's own, under
+ * its current name and the name it is moving to. The GitHubRepo setting (the
+ * registry on Windows, platform-config.json elsewhere) chooses between these
+ * two, compared exactly, and nothing else.
+ */
+const ALLOWED_REPOS: ReadonlySet<string> = new Set([DEFAULT_REPO, RENAMED_REPO])
+
+/** `value` when it names one of ALLOWED_REPOS, else null. Any other non-empty
+ *  value is logged and then treated as if the setting were absent. */
+function allowedRepoSetting(value: string | null | undefined): string | null {
+  if (!value) return null
+  if (ALLOWED_REPOS.has(value)) return value
+  logError(`[github-update] Ignoring GitHubRepo setting ${JSON.stringify(value)}: the updater reads releases only from ${[...ALLOWED_REPOS].join(' or ')}`)
+  return null
+}
+
+function getRepo(): string {
+  return allowedRepoSetting(readRegistry('GitHubRepo')) ?? DEFAULT_REPO
+}
+
+// The repo the updater currently talks to. Resolved lazily from the GitHubRepo
+// setting when it names one of ALLOWED_REPOS (else DEFAULT_REPO) and cached;
+// the startup probe may switch it to the renamed repo and persist that. Every
+// fetch/download reads this, so a switch takes effect the same session, not
+// only after a restart.
 let activeRepoCache: string | null = null
 
 /** The GitHub `owner/repo` the updater currently uses. */
@@ -90,14 +127,25 @@ export function _resetActiveRepoForTest(): void {
   activeRepoCache = null
 }
 
-/** True iff the GitHub repo `slug` is reachable right now — a definite 2xx. A
- *  404 (not renamed yet) or ANY error/timeout returns false: never adopt on
- *  uncertainty. */
+/** How many of a repository's newest releases the renamed-repo probe reads.
+ *  More than one, so a newest release whose tag the updater does not offer
+ *  (a `-dev` build, for example) does not hide the releases behind it. */
+const PROBE_RELEASES_PAGE = 30
+
+/** True iff the GitHub repo `slug` is serving releases right now: a definite
+ *  2xx whose list of its newest PROBE_RELEASES_PAGE releases holds at least one
+ *  with a tag this updater understands (parseTag). No releases, none with a tag
+ *  it understands among them, a 404 (not renamed yet) or ANY error/timeout
+ *  returns false: never adopt on uncertainty. */
 async function repoIsLive(slug: string): Promise<boolean> {
   if (!REPO_PATTERN.test(slug)) return false
   try {
-    const { status, body } = await httpGetJson<unknown[]>(`https://api.github.com/repos/${slug}/releases?per_page=1`)
-    return status >= 200 && status < 300 && Array.isArray(body)
+    const { status, body } = await httpGetJson<unknown[]>(`https://api.github.com/repos/${slug}/releases?per_page=${PROBE_RELEASES_PAGE}`)
+    if (status < 200 || status >= 300 || !Array.isArray(body)) return false
+    return body.some((r) => {
+      const tag = (r as { tag_name?: unknown } | null)?.tag_name
+      return typeof tag === 'string' && parseTag(tag) !== null
+    })
   } catch {
     return false
   }
@@ -108,7 +156,8 @@ export interface AdoptRenamedDeps {
   readOverride: () => string | null
   /** Persist a GitHubRepo override; returns whether it stuck. */
   writeOverride: (slug: string) => boolean
-  /** Is this repo slug reachable right now? */
+  /** Is this repo slug serving releases the updater understands right now?
+   *  (repoIsLive in production.) */
   probe: (slug: string) => Promise<boolean>
 }
 
@@ -121,32 +170,41 @@ const nodeAdoptRenamedDeps: AdoptRenamedDeps = {
 /**
  * Pre-emptive repo-rename handling (built before the rename so a shipped build
  * follows it with no user action). Run once at startup:
- *   - a valid GitHubRepo override already set (a manual choice, or a prior
- *     adopt) WINS — we never second-guess an explicit selection;
+ *   - a GitHubRepo setting naming one of ALLOWED_REPOS (a prior adopt, or a
+ *     manual choice between the two) WINS and nothing is probed; any other
+ *     value is ignored (allowedRepoSetting logs it) and the steps below run as
+ *     if no setting existed;
  *   - otherwise probe RENAMED_REPO. GitHub 404s it until the rename happens; the
- *     moment it is live, persist the override and use it from now on;
+ *     moment it serves releases (repoIsLive), use it from now on and persist
+ *     the setting. A failed or throwing write keeps it for this session only;
  *   - any probe error/timeout leaves the app on DEFAULT_REPO (fail-safe).
- * This changes only WHICH same-owner repo releases come from — never how they
- * are verified (checksums/signature are enforced regardless), and the target is
- * a hardcoded slug, not anything a caller supplies (ADR-009: updater path).
+ * This changes only WHICH of the project's own repos releases come from, never
+ * how they are verified (checksums/signature are enforced regardless), and the
+ * target is a hardcoded slug, not anything a caller supplies (ADR-009: updater
+ * path).
  */
 export async function adoptRenamedRepoIfLive(deps: AdoptRenamedDeps = nodeAdoptRenamedDeps): Promise<string> {
-  const override = deps.readOverride()
-  if (override && REPO_PATTERN.test(override)) {
-    activeRepoCache = override
-    return override
+  const setting = allowedRepoSetting(deps.readOverride())
+  if (setting) {
+    activeRepoCache = setting
+    return setting
   }
+  let live = false
   try {
-    if (await deps.probe(RENAMED_REPO)) {
-      const persisted = deps.writeOverride(RENAMED_REPO)
-      activeRepoCache = RENAMED_REPO
-      logInfo(`[github-update] renamed repo ${RENAMED_REPO} is live -> adopting it for updates${persisted ? ' (persisted)' : ' (persist failed; this session only)'}`)
-      return RENAMED_REPO
-    }
+    live = (await deps.probe(RENAMED_REPO)) === true
   } catch (e) {
     logInfo(`[github-update] renamed-repo probe failed, staying on ${DEFAULT_REPO}: ${(e as Error)?.message ?? e}`)
   }
-  activeRepoCache = getRepo()
+  if (live) {
+    activeRepoCache = RENAMED_REPO
+    let persisted = false
+    try { persisted = deps.writeOverride(RENAMED_REPO) === true } catch { persisted = false }
+    logInfo(`[github-update] renamed repo ${RENAMED_REPO} is live -> adopting it for updates${persisted ? ' (persisted)' : ' (persist failed; this session only)'}`)
+    return RENAMED_REPO
+  }
+  // No usable setting (read above) and the renamed repo is not serving
+  // releases: the default, without reading the setting a second time.
+  activeRepoCache = DEFAULT_REPO
   return activeRepoCache
 }
 
@@ -296,6 +354,17 @@ function compareTagToCurrentVersion(tag: string, currentVersion: string): number
   return compareTags(tag, `v${currentVersion}`)
 }
 
+/** Could the update check offer the release tagged `tag`? Its tag is on the
+ *  user's channel, in a format parseTag understands, and strictly newer than
+ *  the running version. checkGitHubRelease and the gh fallback both ask this. */
+function isOfferableTag(tag: string, wanted: { channel: UpdateChannel; currentVersion: string }): boolean {
+  if (!tagMatchesChannel(tag, wanted.channel)) return false
+  // Filter out tags whose format we don't understand
+  if (!parseTag(tag)) return false
+  // Strictly newer than the currently running app
+  return compareTagToCurrentVersion(tag, wanted.currentVersion) > 0
+}
+
 // The authoritative running version. Baked from package.json at build time
 // (__APP_VERSION__) so it carries the FULL prerelease suffix (e.g.
 // "2.0.0-beta.1") regardless of whether electron-builder preserves it in
@@ -308,6 +377,123 @@ function getRunningVersion(): string {
     if (typeof __APP_VERSION__ === 'string' && __APP_VERSION__) return __APP_VERSION__
   } catch { /* not defined in this build/test context */ }
   return app.getVersion()
+}
+
+// -- macOS version floor ------------------------------------------------
+
+/**
+ * The oldest macOS a release needs, keyed by the first release tag that needs
+ * it (resources/macos-release-floors.json; the release gate reads the same
+ * file). Electron 44 (Chromium 152) dropped macOS 12, so every release from the
+ * one that moved to Electron 44 needs macOS 13, and its packaged app says so
+ * (package.json build.mac.minimumSystemVersion). A Mac below a release's floor
+ * is never offered that release: installed, it would not open. It is offered
+ * the newest release it CAN run, when that is newer than the one it runs.
+ * When a later Electron raises the floor again, add an entry to that file and
+ * raise minimumSystemVersion and the floor in build.mac.artifactName with it
+ * (tests/unit/main/update-macos-floor.test.ts).
+ */
+export const MACOS_RELEASE_FLOORS: ReadonlyArray<{ fromTag: string; major: number }> =
+  macosFloorsJson.floors.map((f) => ({ fromTag: f.fromTag, major: f.macosMajor }))
+
+/**
+ * The macOS major version the release `tag` needs; 0 when it has no floor. A
+ * bare `-beta` tag (no number) is what release.yml cuts from a final version
+ * on the beta channel (package.json 2.1.1 is tagged v2.1.1-beta), and it sorts
+ * below that version's numbered betas, so it also carries the final version's
+ * floor. scripts/release-gate.mjs holds a copy of this rule.
+ */
+export function macosFloorForTag(tag: string): number {
+  const bare = /^v(\d+\.\d+\.\d+)-beta$/.exec(tag)
+  const tags = bare ? [tag, `v${bare[1]}`] : [tag]
+  let floor = 0
+  for (const t of tags) {
+    for (const f of MACOS_RELEASE_FLOORS) {
+      if (compareTags(t, f.fromTag) >= 0 && f.major > floor) floor = f.major
+    }
+  }
+  return floor
+}
+
+/** The major number of an OS version string ('12.7.4' is 12); null when it does not parse. */
+export function osMajorVersion(version: string | null | undefined): number | null {
+  const m = typeof version === 'string' ? /^(\d+)(?:\.|$)/.exec(version.trim()) : null
+  return m ? parseInt(m[1], 10) : null
+}
+
+/**
+ * The macOS major version this Mac runs, as far as the updater can tell: the
+ * version Electron reports, and never less than `runningFloor`, the floor of
+ * the build that is running (macOS opens a build only at or above its
+ * LSMinimumSystemVersion, so a build that runs proves its floor). 0 when
+ * nothing is known, which runs no release that has a floor (fail closed).
+ */
+export function macosMajorAtLeast(systemVersion: string | null | undefined, runningFloor: number): number {
+  return Math.max(osMajorVersion(systemVersion) ?? 0, runningFloor)
+}
+
+/**
+ * Installer names. Every Windows and Linux installer, and every Mac download
+ * up to the last release before the macOS 13 floor, is named
+ * `ClaudeCommandCenter-*` or `AI-Code-Conductor-*`, and the updater in those
+ * earlier builds matches only those two prefixes; it has no floor check. A Mac
+ * download that needs macOS NN or later is named
+ * `AICodeConductor-<version>-macosNN.dmg` (package.json build.mac.artifactName),
+ * which those updaters never match, so a Mac on an earlier build is offered
+ * nothing from a release it might not open (not even an older release: that
+ * updater stops at the newest one). This updater matches both kinds.
+ */
+const INSTALLER_PREFIXES = ['ClaudeCommandCenter-', 'AI-Code-Conductor-']
+const MAC_FLOORED_DMG = /^AICodeConductor-[0-9A-Za-z.+-]+-macos(\d{1,3})\.dmg$/
+
+/**
+ * The Mac downloads of a release this updater accepts, each with the macOS it
+ * needs: one named with its floor needs the higher of that floor and the
+ * release tag's; one with an earlier name is accepted only for a release whose
+ * tag has no floor, since a release that needs a newer macOS ships under the
+ * floored name for the earlier builds' sake.
+ */
+export function macInstallers<A extends { name: string }>(assets: ReadonlyArray<A> | undefined, tag: string): Array<{ asset: A; floor: number }> {
+  const tagFloor = macosFloorForTag(tag)
+  const out: Array<{ asset: A; floor: number }> = []
+  for (const a of assets ?? []) {
+    const name = typeof a?.name === 'string' ? a.name : ''
+    const m = MAC_FLOORED_DMG.exec(name)
+    if (m) out.push({ asset: a, floor: Math.max(parseInt(m[1], 10), tagFloor) })
+    else if (tagFloor === 0 && name.endsWith('.dmg') && INSTALLER_PREFIXES.some((p) => name.startsWith(p))) out.push({ asset: a, floor: 0 })
+  }
+  return out
+}
+
+/** The macOS a Mac needs for this release: the lowest of its accepted Mac downloads' floors, or its tag's floor when it has none. */
+function macReleaseFloor(assets: ReadonlyArray<{ name: string }> | undefined, tag: string): number {
+  const dmgs = macInstallers(assets, tag)
+  return dmgs.length ? Math.min(...dmgs.map((d) => d.floor)) : macosFloorForTag(tag)
+}
+
+/**
+ * Can this machine open the release `tag`, whose downloads are `assets`? Off
+ * macOS, yes: no floor applies. On macOS, when its major version
+ * (macosMajorAtLeast) is at or above the release's floor (macReleaseFloor: the
+ * floor of the Mac downloads this updater accepts, or the tag's when it has
+ * none). A macOS version that cannot be read counts as the running build's
+ * own floor, and on a build with none as below every floor: a release with a
+ * floor above it is not offered, one without a floor still is. This is the
+ * one place checkGitHubRelease asks.
+ */
+export function releaseRunsOnThisOs(tag: string, platform: NodeJS.Platform, systemVersion: string | null | undefined, runningFloor = 0, assets?: ReadonlyArray<{ name: string }>): boolean {
+  if (platform !== 'darwin') return true
+  return macReleaseFloor(assets, tag) <= macosMajorAtLeast(systemVersion, runningFloor)
+}
+
+/** The running OS version (Electron's process.getSystemVersion), or null. */
+function readSystemVersion(): string | null {
+  try {
+    const v: unknown = (process as { getSystemVersion?: () => string }).getSystemVersion?.()
+    return typeof v === 'string' ? v : null
+  } catch {
+    return null
+  }
 }
 
 /** Read the update channel from user settings */
@@ -419,11 +605,7 @@ async function fetchReleasesPublic(limit = RELEASE_FETCH_LIMIT): Promise<PublicF
 /** Try to get a GitHub token from `gh auth token` */
 async function getGhToken(): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('gh', ['auth', 'token'], {
-      encoding: 'utf-8',
-      timeout: 5000,
-      windowsHide: true,
-    })
+    const { stdout } = await runGh(['auth', 'token'], 5000)
     const token = stdout.trim()
     return token.length > 0 ? token : null
   } catch {
@@ -458,26 +640,87 @@ async function fetchReleasesAuthenticated(limit = RELEASE_FETCH_LIMIT): Promise<
 
 // ── gh CLI fallback (for private repos during dev) ───────────────────────
 
-async function fetchReleasesGhCli(limit = RELEASE_FETCH_LIMIT): Promise<GitHubRelease[] | null> {
+/** The fields asked of `gh release list --json`. That command has no
+ *  `assets` field (its fields: createdAt, isDraft, isImmutable, isLatest,
+ *  isPrerelease, name, publishedAt, tagName), so the downloads come from
+ *  `gh release view`, which has one. */
+const GH_LIST_FIELDS = 'tagName,isPrerelease,isDraft'
+const GH_VIEW_FIELDS = 'tagName,isPrerelease,isDraft,assets'
+/** How many of the newest releases the check could offer the gh fallback
+ *  reads downloads for on macOS, where a release the Mac is too old for is
+ *  passed over for the next. Off macOS the check always picks the newest one,
+ *  so the fallback reads that release only (ghViewLimit). */
+const GH_VIEW_LIMIT_MAC = 3
+
+function ghViewLimit(platform: NodeJS.Platform): number {
+  return platform === 'darwin' ? GH_VIEW_LIMIT_MAC : 1
+}
+
+/** What the update check is looking for: releases on `channel` newer than
+ *  `currentVersion`. */
+interface ReleaseWanted {
+  channel: UpdateChannel
+  currentVersion: string
+}
+
+/**
+ * The gh fallback. Lists tags with `gh release list`, keeps the releases
+ * checkGitHubRelease could offer (isOfferableTag; drafts left out), newest
+ * first, and reads the downloads of the newest (on macOS up to
+ * GH_VIEW_LIMIT_MAC) with `gh release view <tag>`. Nothing to offer returns
+ * an empty list without a view. Every call names activeRepo(). FAILS CLOSED: a
+ * gh error, output that does not parse, or a view that answers for a different
+ * tag returns null, so no update is offered from this leg.
+ *
+ * The tag is passed as gh's positional argument only after isOfferableTag has
+ * accepted it (parseTag: an optional leading v, digits, dots and a beta/rc
+ * suffix), so it can never read as a flag.
+ */
+async function fetchReleasesGhCli(wanted: ReleaseWanted, limit = RELEASE_FETCH_LIMIT): Promise<GitHubRelease[] | null> {
   try {
-    const { stdout } = await execFileAsync(
-      'gh',
-      ['release', 'list', '--repo', activeRepo(), '--limit', String(limit), '--json', 'tagName,isPrerelease,isDraft,assets'],
-      { encoding: 'utf-8', timeout: 15000, windowsHide: true }
+    const repo = activeRepo()
+    const { stdout } = await runGh(
+      ['release', 'list', '--repo', repo, '--limit', String(limit), '--json', GH_LIST_FIELDS],
+      15000,
     )
-    const releases = JSON.parse(stdout) as Array<{
-      tagName: string
-      isPrerelease: boolean
-      isDraft: boolean
-      assets: Array<{ name: string; url: string; size: number }>
-    }>
-    return releases.map((r) => ({
-      tag_name: r.tagName,
-      tagName: r.tagName,
-      prerelease: r.isPrerelease,
-      draft: r.isDraft,
-      assets: r.assets.map((a) => ({ name: a.name, url: a.url, size: a.size })),
-    }))
+    const listed: unknown = JSON.parse(stdout)
+    if (!Array.isArray(listed)) throw new Error('gh release list did not print a list')
+    const tags = listed
+      .filter((r): r is { tagName: string; isDraft?: unknown } => typeof r?.tagName === 'string')
+      .filter((r) => r.isDraft !== true && isOfferableTag(r.tagName, wanted))
+      .map((r) => r.tagName)
+      .sort((a, b) => compareTags(b, a))
+      .slice(0, ghViewLimit(process.platform))
+    if (tags.length === 0) {
+      logInfo(`[github-update] gh fallback: no release newer than v${wanted.currentVersion} on the ${wanted.channel} channel`)
+      return []
+    }
+
+    const releases: GitHubRelease[] = []
+    for (const tag of tags) {
+      const { stdout: viewOut } = await runGh(
+        ['release', 'view', tag, '--repo', repo, '--json', GH_VIEW_FIELDS],
+        15000,
+      )
+      const r = JSON.parse(viewOut) as { tagName?: unknown; isPrerelease?: unknown; isDraft?: unknown; assets?: unknown } | null
+      if (!r || r.tagName !== tag || !Array.isArray(r.assets)) {
+        throw new Error(`gh release view ${tag} did not describe that release`)
+      }
+      releases.push({
+        tag_name: tag,
+        tagName: tag,
+        prerelease: r.isPrerelease === true,
+        draft: r.isDraft === true,
+        assets: (r.assets as Array<{ name?: unknown; url?: unknown; size?: unknown } | null>)
+          .filter((a): a is { name: string; url?: unknown; size?: unknown } => typeof a?.name === 'string')
+          .map((a) => ({
+            name: a.name,
+            url: typeof a.url === 'string' ? a.url : undefined,
+            size: typeof a.size === 'number' ? a.size : undefined,
+          })),
+      })
+    }
+    return releases
   } catch (err) {
     logInfo(`[github-update] gh CLI error: ${(err as Error).message}`)
     return null
@@ -488,11 +731,12 @@ async function fetchReleasesGhCli(limit = RELEASE_FETCH_LIMIT): Promise<GitHubRe
  * Cascading release fetch:
  *   1. Public API (anonymous) — works for public repos
  *   2. Authenticated API (gh auth token) — works for private repos if user has gh CLI auth
- *   3. gh CLI (`gh release list`) — last resort, may fail if gh isn't on PATH
+ *   3. gh CLI (`gh release list`, then `gh release view` for the downloads) --
+ *      last resort, may fail if gh isn't on PATH
  *
  * Rate-limited → give up (no fallback will help, user should wait)
  */
-async function fetchReleases(): Promise<GitHubRelease[] | null> {
+async function fetchReleases(wanted: ReleaseWanted): Promise<GitHubRelease[] | null> {
   const publicResult = await fetchReleasesPublic()
 
   if (publicResult.kind === 'ok') return publicResult.releases
@@ -504,7 +748,7 @@ async function fetchReleases(): Promise<GitHubRelease[] | null> {
   if (authed) return authed
 
   logInfo('[github-update] Falling back to gh CLI')
-  return fetchReleasesGhCli()
+  return fetchReleasesGhCli(wanted)
 }
 
 // ── Main API ─────────────────────────────────────────────────────────────
@@ -518,7 +762,8 @@ export async function checkGitHubRelease(): Promise<ReleaseInfo | null> {
   const channel = getUpdateChannel()
   logInfo(`[github-update] Checking for updates (current: v${currentVersion}, channel: ${channel})`)
 
-  const releases = await fetchReleases()
+  const wanted: ReleaseWanted = { channel, currentVersion }
+  const releases = await fetchReleases(wanted)
   if (!releases || releases.length === 0) {
     logInfo('[github-update] No releases fetched')
     return null
@@ -528,18 +773,29 @@ export async function checkGitHubRelease(): Promise<ReleaseInfo | null> {
   // Uses full-tag comparison so prereleases of the same base version order deterministically
   // (1.2.3-beta.2 > 1.2.3-beta.1 > 1.2.3-dev.5, and 1.2.3 > any 1.2.3-prerelease).
   let best: { release: GitHubRelease; tag: string; version: string; channel: UpdateChannel } | null = null
+  const platform = process.platform
+  const systemVersion = platform === 'darwin' ? readSystemVersion() : null
+  // On a Mac: the macOS this Mac runs, never less than the floor of the build
+  // that is running (macosMajorAtLeast), so an unreadable version does not stop
+  // updates that build's own macOS can open.
+  const runningFloor = macosFloorForTag(`v${currentVersion}`)
+  const macMajor = platform === 'darwin' ? macosMajorAtLeast(systemVersion, runningFloor) : 0
 
   for (const rel of releases) {
     if (rel.draft) continue
     const tag = rel.tag_name || rel.tagName
     if (!tag) continue
-    if (!tagMatchesChannel(tag, channel)) continue
+    // On the channel, a tag format we understand, and strictly newer than the
+    // running app.
+    if (!isOfferableTag(tag, wanted)) continue
 
-    // Filter out tags whose format we don't understand
-    if (!parseTag(tag)) continue
-
-    // Strictly newer than the currently running app
-    if (compareTagToCurrentVersion(tag, currentVersion) <= 0) continue
+    // Never a release this Mac's macOS is too old to open: its tag's floor
+    // (MACOS_RELEASE_FLOORS) or the floor its Mac download's name declares
+    // (releaseRunsOnThisOs decides).
+    if (!releaseRunsOnThisOs(tag, platform, systemVersion, runningFloor, rel.assets)) {
+      logInfo(`[github-update] Skipping ${tag}: it needs macOS ${macReleaseFloor(rel.assets, tag)} or later (this Mac: ${systemVersion ?? 'unknown'}, taken as ${macMajor})`)
+      continue
+    }
 
     if (!best || compareTags(tag, best.tag) > 0) {
       best = { release: rel, tag, version: parseVersion(tag), channel: classifyTag(tag)! }
@@ -551,19 +807,17 @@ export async function checkGitHubRelease(): Promise<ReleaseInfo | null> {
     return null
   }
 
-  // Accept either the legacy artifact prefix or the current brand one.
-  //
-  // Releases currently publish the SAME installer under both names: every client
-  // in the wild matches the legacy prefix literally, so dropping it would make
-  // them see "no matching asset" — which is indistinguishable from "up to date"
-  // and unfixable, because the fix would only ship in the build they can no
-  // longer see. Tolerating both here is what eventually lets the legacy name be
-  // retired: once installs predating this build are gone, releases can publish
-  // the brand name alone. Until then the legacy asset must keep being published.
-  const INSTALLER_PREFIXES = ['ClaudeCommandCenter-', 'AI-Code-Conductor-']
-  const installer = best.release.assets.find((a) =>
-    a.name.endsWith(INSTALLER_EXT) && INSTALLER_PREFIXES.some((p) => a.name.startsWith(p))
-  )
+  // Windows and Linux: an installer under either name prefix
+  // (INSTALLER_PREFIXES), as before. A Mac: a download this Mac can open
+  // (macInstallers), the one that needs the newest macOS first, since that is
+  // the build made for it.
+  const installer = platform === 'darwin'
+    ? macInstallers(best.release.assets, best.tag)
+      .filter((d) => d.floor <= macMajor)
+      .sort((a, b) => b.floor - a.floor)[0]?.asset
+    : best.release.assets.find((a) =>
+      a.name.endsWith(INSTALLER_EXT) && INSTALLER_PREFIXES.some((p) => a.name.startsWith(p))
+    )
 
   // If there's no installer for the current platform, don't offer the update.
   // Otherwise the user would see "update available" but clicking Install fails.
@@ -742,9 +996,11 @@ function httpsDownload(url: string, destPath: string, timeoutMs = 300000, maxByt
 // by the release workflow -- the client simply never read it.
 //
 // THREAT MODEL, stated narrowly so nobody over-trusts it. The manifest is
-// fetched from the SAME host and the SAME release as the installer, so this
-// does NOT defend against a tampered CDN edge, nor against anyone holding
-// GitHub release-write credentials -- either of those rewrites both files
+// fetched from the SAME host and the SAME release as the installer, and that
+// release is always in one of the project's own repositories (ALLOWED_REPOS;
+// the GitHubRepo setting chooses only between them). So this does NOT defend
+// against a tampered CDN edge, nor against anyone holding GitHub release-write
+// credentials on those repositories -- either of those rewrites both files
 // together. What it DOES defend against is corruption, truncation, an
 // interrupted or resumed download, and a partial compromise that replaces only
 // the installer asset. Closing the rest requires SIGNING the manifest
@@ -901,8 +1157,8 @@ function readManifest(filePath: string): string | null {
  * becomes `...App.exe#/x/CHECKSUMS.txt`, and since `https.get` drops the
  * fragment, that FETCHES THE INSTALLER as the manifest. GitHub always supplies
  * a clean path today, so this is not reachable in production -- but the
- * function is exported, the active repo is registry-overridable, and the guarantee is
- * stated unconditionally, so parse properly instead of pattern-matching.
+ * guarantee is stated unconditionally, so parse properly instead of
+ * pattern-matching.
  */
 function deriveManifestUrl(directUrl?: string | null): string | null {
   if (!directUrl) return null
@@ -955,10 +1211,9 @@ async function fetchChecksumManifest(tagName: string, stageDir: string, directUr
     //    the post-hoc shape the direct leg no longer uses. Acceptable: it takes
     //    release-write access to publish an oversized CHECKSUMS.txt, which the
     //    threat model already concedes.
-    await execFileAsync(
-      'gh',
+    await runGh(
       ['release', 'download', tagName, '--repo', activeRepo(), '--pattern', 'CHECKSUMS.txt', '--dir', stageDir, '--clobber'],
-      { encoding: 'utf-8', timeout: 60000, windowsHide: true }
+      60000,
     )
     if (fs.existsSync(tmpPath)) return readManifest(tmpPath)
   } catch (err) {
@@ -1331,10 +1586,9 @@ export async function downloadInstallerFile(tagName: string, assetName: string, 
 
   // 2. Fall back to gh CLI (works for private repo)
   try {
-    await execFileAsync(
-      'gh',
+    await runGh(
       ['release', 'download', tagName, '--repo', activeRepo(), '--pattern', safeName, '--dir', stageDir, '--clobber'],
-      { encoding: 'utf-8', timeout: 300000, windowsHide: true }
+      300000,
     )
     if (fs.existsSync(destPath)) {
       logInfo(`[github-update] Downloaded via gh CLI: ${destPath}`)

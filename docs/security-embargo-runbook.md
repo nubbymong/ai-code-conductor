@@ -110,9 +110,12 @@ same from here.
 
 The temporary private fork is a real repository named
 `<repo>-ghsa-xxxx-xxxx-xxxx`. Work there, never on a branch of the public repo.
+The repository was renamed to `ai-code-conductor` on 2026-10-12, so new forks are named
+`ai-code-conductor-ghsa-xxxx-xxxx-xxxx`; the fork of an advisory opened before the rename
+keeps its `claude-command-center-ghsa-xxxx-xxxx-xxxx` name.
 
 ```sh
-FORK=https://github.com/nubbymong/claude-command-center-ghsa-xxxx-xxxx-xxxx.git
+FORK=https://github.com/nubbymong/ai-code-conductor-ghsa-xxxx-xxxx-xxxx.git
 git push "$FORK" my-local-fix-branch:fix/short-description
 ```
 
@@ -127,7 +130,7 @@ Two things will look wrong and are not:
   so `beta` is there and is normally identical to the public head:
 
 ```sh
-gh pr create --repo nubbymong/claude-command-center-ghsa-xxxx-xxxx-xxxx \
+gh pr create --repo nubbymong/ai-code-conductor-ghsa-xxxx-xxxx-xxxx \
   --base beta --head fix/short-description \
   -t "fix(scope): what it does" -F prbody.md
 ```
@@ -155,6 +158,20 @@ fragments, ADRs, or the changelog.
 `CONTEXT.d/` is the one that catches people, because the running log feels like a private
 notebook and is a tracked file. A fragment for embargoed work may record *that* a finding
 exists and was routed privately — never the component, the mechanism, or the repro.
+
+**The squash-merge body is the second one.** GitHub pre-fills a squash commit's body with
+every commit subject on the branch. A PR whose intermediate commits name the mechanism
+publishes it at the moment of merge — after the PR body, the fragment and the changelog
+have all been scrubbed, and it cannot be amended afterwards (the merge commit is public
+and non-fast-forward). This happened on #616 (2.1.1). For any PR that carried embargoed
+material at any point in its history, hand-write the body:
+
+```sh
+gh pr merge <n> --squash --subject "fix(scope): what it does (#<n>)" --body "<the scrubbed text>"
+```
+
+Never take the default body on such a PR, and check `git log --format=%s beta..<branch>`
+before merging to see what the default would have said.
 
 Two practical habits:
 

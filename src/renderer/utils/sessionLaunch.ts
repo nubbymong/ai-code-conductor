@@ -4,14 +4,24 @@
 // the launch decisions are unit-testable (TerminalView itself is xterm-bound).
 import type { ProviderId } from '../../shared/types'
 
+/** How the partner terminal's strip names the assistant of the session it
+ *  sits beside: beside a Codex session it reads "not Codex", with the way
+ *  "Back to Codex". A session with no provider is Claude, and a Claude
+ *  session reads as it always has. */
+export function sessionAgentName(provider?: ProviderId): string {
+  return provider === 'codex' ? 'Codex' : 'Claude'
+}
+
 /**
  * Whether a session launch should pop the multi-account picker
  * (AccountLaunchGate) before spawning.
  *
- * Account isolation is a CLAUDE-only concept: each Claude account gets a
- * private `~/.claude` home via `withProfileHome`. Codex auth lives in
- * `~/.codex` and is NOT profile-scoped, and an SSH session runs under the
- * REMOTE host's own login, so neither must ever show the Claude account picker.
+ * This picker is the CLAUDE profile picker: each Claude account gets a
+ * private `~/.claude` home via `withProfileHome`. A Codex session runs on the
+ * Codex account its config names (or the Codex default), each in its own
+ * Codex home, resolved at launch by utils/launchAccount.ts, and an SSH
+ * session runs under the REMOTE host's own login, so neither must ever show
+ * the Claude account picker.
  * The old gate checked only `shellOnly` + a session record + `profileCount >= 2`
  * and so fired for Codex (BUG-1) and SSH (BUG-13) sessions whenever a second
  * Claude account profile existed. Provider- + SSH-gating fixes that.
@@ -30,14 +40,20 @@ export function shouldGateAccountChoice(opts: {
 /**
  * Whether the mid-session "Switch Account" control applies to a session (the
  * Sidebar context menu + the SessionStatusStrip pill). Same rule as the launch
- * gate minus the launch-only conditions: account profiles are LOCAL Claude only,
- * so Codex (own OpenAI login) and SSH (remote host's login) sessions can never
- * switch a local CCC profile even when 2+ profiles exist (BUG-13).
+ * gate minus the launch-only conditions: a LOCAL session with a real choice of
+ * its own provider's accounts. Claude's are its local profiles, so an SSH
+ * session (the remote host's login) never switches one (BUG-13). P3.6 (row
+ * 22): a Codex session switches among the Codex accounts (its registry
+ * accounts, archived ones left out: `providerAccountCount`), also local only
+ * in this release; Claude's profiles never count for it.
  */
 export function canSwitchAccountForSession(opts: {
   provider?: ProviderId
   isSsh?: boolean
   profileCount: number
+  /** How many accounts a Switch account would list for a session of a
+   *  provider other than Claude Code (utils/switchAccountItems). */
+  providerAccountCount?: number
   /** Shell-only panes (incl. the add-account /login shell, which is pinned to
    *  a brand-new profile) must never offer Switch Account: respawning the
    *  login shell under another profile redirects the /login into that
@@ -45,13 +61,17 @@ export function canSwitchAccountForSession(opts: {
   shellOnly?: boolean
 }): boolean {
   const provider = opts.provider ?? 'claude'
+  if (opts.shellOnly || opts.isSsh) return false
+  if (provider !== 'claude') return (opts.providerAccountCount ?? 0) >= 2
   // macOS: Claude Code keeps its live OAuth token in the login Keychain,
   // which per-profile HOME redirection cannot isolate — switching would
   // relabel the session while every API call kept using the shared token
   // (Mac readiness review 2026-07-02, confirmed blocker). Multi-account is
-  // Windows-only until a darwin Keychain-swap engine exists.
+  // Windows-only until a darwin Keychain-swap engine exists. (This rule is
+  // Claude Code's; a Codex session switches as it launches, in the account's
+  // own folder.)
   if (typeof window !== 'undefined' && window.electronPlatform === 'darwin') return false
-  return !opts.shellOnly && opts.profileCount >= 2 && provider === 'claude' && !opts.isSsh
+  return opts.profileCount >= 2
 }
 
 /**
@@ -105,8 +125,9 @@ export function sshMappedProfileId(
  * How a RESUMED session (an app-relaunch restore) chooses its account (#446).
  *   - 'auto-last' (default): continue silently under the account the session
  *     ran under — restored sessions are marked predetermined, no gate.
- *   - 'ask': the account picker opens per restored session (pre-selecting the
- *     last account), by NOT marking it predetermined.
+ *   - 'ask': the account picker opens per restored session (with the account
+ *     that session last ran on already chosen), by NOT marking it
+ *     predetermined.
  * Absent or unrecognised => 'auto-last', so no existing install changes on
  * upgrade. Resolver-based default (the settings enum convention here), not a
  * DEFAULT_SETTINGS entry.
@@ -124,6 +145,28 @@ export function resolveResumeAccountMode(value: unknown): 'ask' | 'auto-last' {
  */
 export function shouldPredetermineRestoredAccount(resumeAccountMode: unknown): boolean {
   return resolveResumeAccountMode(resumeAccountMode) === 'auto-last'
+}
+
+/**
+ * The account a RESUMED session last ran on (O9), as the account picker names
+ * it and as the launch decides whether a choice is new:
+ *   - its saved pin, while that account is still set up here;
+ *   - no pin: the primary, because main runs a pinless Claude session on the
+ *     primary profile (a no-primary install ran on the bare home, so there is
+ *     no account to name and `id` is undefined);
+ *   - a pin to a since-removed account: no account, and `gone` is true. The
+ *     primary is NOT put in its place: the session never ran on it.
+ */
+export function resumedSessionOwnAccount(
+  pinnedId: string | undefined,
+  profiles: ReadonlyArray<{ id: string; isPrimary?: boolean }>,
+): { id: string | undefined; gone: boolean } {
+  if (pinnedId) {
+    return profiles.some((p) => p.id === pinnedId)
+      ? { id: pinnedId, gone: false }
+      : { id: undefined, gone: true }
+  }
+  return { id: profiles.find((p) => p.isPrimary)?.id, gone: false }
 }
 
 /**

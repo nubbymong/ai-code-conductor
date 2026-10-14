@@ -17,7 +17,8 @@ here** — opus is for `StartLoop` execution, not planning.
 ## INPUT (scope)
 
 - `/LoopReady` with no argument → default scope is the open work for the current
-  release line: issues that are `release-2.1` AND NOT `in-beta`/`in-release` (an
+  release line: issues carrying the line label `release-2.1` OR one of its patch
+  labels (`release-2.1.1`, ...) AND NOT `in-beta`/`in-release` (an
   issue with either lifecycle label is already merged — on beta or in a cut rc;
   there is nothing to run). Confirm the current line from AGENTS.md "Release
   Process" — it may be `release-2.2` later.
@@ -28,11 +29,16 @@ here** — opus is for `StartLoop` execution, not planning.
 Resolve the set first and print it, so the scope is visible before any agent runs:
 
 ```
-gh issue list --repo nubbymong/claude-command-center --state open --limit 200 \
+gh issue list --repo nubbymong/ai-code-conductor --state open --limit 200 \
   --json number,title,labels
 ```
 Filter to the scope in code, exclude anything already carrying `loop-in-progress`
 or `loop-done` (another worker owns it), and list the numbers you will review.
+
+Since #551 the public tracker holds only public error reports (user-filed bugs);
+internal tickets live in the private `aicc_planning` workspace (AGENTS.md, "Where
+tickets live") and are outside this loop's scope. An empty public scope is the
+normal case, not a failure — say so and stop.
 
 ## EXECUTE. Do not ask which tickets — the scope rule decides.
 
@@ -66,7 +72,7 @@ Each agent returns this record (enforce it with a schema):
 
 The per-agent prompt (adapt, keep the spine):
 
-> You are doing a PREMISE REVIEW of GitHub issue #N in nubbymong/claude-command-center,
+> You are doing a PREMISE REVIEW of GitHub issue #N in nubbymong/ai-code-conductor,
 > to prepare it for possible autonomous execution. Read it
 > (`gh issue view N --repo … --json title,body,labels,comments`), then GROUND it in
 > the code with Grep/Glob/Read on the files and symbols it names — confirm the

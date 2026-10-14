@@ -63,4 +63,48 @@ describe('splash assets guard', () => {
     expect(html).not.toMatch(/script-src[^;"]*'unsafe-inline'/)
     expect(html).not.toMatch(/script-src[^;"]*'unsafe-eval'/)
   })
+
+  it('the splash BrowserWindow keeps its sandbox triple and loads only the bundled page', () => {
+    // splash-window.ts cannot be imported here (it needs a live BrowserWindow),
+    // so pin the shape: the isolation flags a mutation could flip with every
+    // other test staying green (adversarial pass, 2.1.1).
+    const src = readFileSync(join(repoRoot, 'src', 'main', 'splash-window.ts'), 'utf-8').replace(/\r\n/g, '\n')
+    expect(src).toMatch(/webPreferences:\s*\{\s*contextIsolation:\s*true,\s*nodeIntegration:\s*false,\s*sandbox:\s*true,?\s*\}/)
+    expect(src).toContain("join(__dirname, '..', '..', 'resources', 'splash', 'index.html')")
+    expect(src).not.toMatch(/\.loadURL\(/)
+    // ONE window in this module: the triple match above is first-match, so a
+    // second BrowserWindow carrying weaker webPreferences would pass it
+    // (re-attack, 2.1.1)...
+    // (whole-line // comments are dropped first, so a comment LINE naming the
+    // construct is not a red; a trailing or block comment still would be)
+    const code = src.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+    expect(code.match(/new BrowserWindow\(/g)).toHaveLength(1)
+    expect(code.match(/webPreferences:/g)).toHaveLength(1)
+    // ...and the bundled page must be what is LOADED, not merely mentioned:
+    // the loadFile argument is `splashHtml`, `splashHtml` IS the bundled path
+    // (not a same-named override of it), and it is loaded exactly once
+    // (re-attack round 2, 2.1.1).
+    expect(src).toMatch(/\.loadFile\(splashHtml, \{ query: splashBuildQuery\(/)
+    expect(src).toMatch(/const splashHtml = join\(\s*__dirname,\s*'\.\.',\s*'\.\.',\s*'resources',\s*'splash',\s*'index\.html'\s*\)/)
+    expect(code.match(/\.loadFile\(/g)).toHaveLength(1)
+  })
+
+  it('the splash module touches no process-wide state: no Chromium switch, no session, no permission handler', () => {
+    // The sandbox triple above is per-window. A module that appends
+    // `--no-sandbox` at import time, or installs a permissive handler on the
+    // DEFAULT session (shared with the main window), leaves the triple intact
+    // and every other test green (final adversarial pass, 2.1.1: mutants M3/M8).
+    const src = readFileSync(join(repoRoot, 'src', 'main', 'splash-window.ts'), 'utf-8').replace(/\r\n/g, '\n')
+    // Code only: block comments and whole-line // comments are dropped, so
+    // prose naming a construct is not a red.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+    expect(code).not.toMatch(/commandLine|appendSwitch|appendArgument/)
+    expect(code).not.toMatch(/setPermission(Request|Check)Handler|defaultSession|fromPartition|\.session\b/)
+    // `app` is used for read-only identity getters, never for anything that
+    // reaches the process or another window.
+    const READ_ONLY = new Set(['getVersion', 'getName', 'isPackaged', 'getAppPath', 'getPath'])
+    const appUses = [...code.matchAll(/\bapp\.(\w+)/g)].map((m) => m[1])
+    expect(appUses.length).toBeGreaterThan(0)
+    expect(appUses.filter((u) => !READ_ONLY.has(u))).toEqual([])
+  })
 })

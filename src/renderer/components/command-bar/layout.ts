@@ -153,7 +153,9 @@ export function clusterTitle(kind: ClusterKind, caps: SessionCapabilities): stri
   switch (kind) {
     case 'agent': return caps.mainRunsOn === 'remote' ? `These run in ${caps.agentName} on ${caps.remoteHost ?? 'the host'}` : `These run in ${caps.agentName}`
     case 'main-shell': return caps.mainRunsOn === 'remote' ? `These run in this shell on ${caps.remoteHost ?? 'the host'}` : 'These run in this shell'
-    case 'partner': return caps.panesOnDifferentMachines ? 'These run in the partner shell — on this PC, not the host' : 'These run in the partner shell'
+    // #86: the partner runs where the session runs; over SSH, on its host.
+    case 'partner': return caps.partnerRunsOn === 'remote' ? `These run in the partner shell on ${caps.remoteHost ?? 'the host'}`
+      : caps.panesOnDifferentMachines ? 'These run in the partner shell — on this PC, not the host' : 'These run in the partner shell'
     case 'page': return 'These open a page in the browser pane, from this PC'
   }
 }

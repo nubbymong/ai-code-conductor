@@ -12,13 +12,17 @@ export default defineConfig({
   },
   test: {
     globals: true,
-    include: ['tests/unit/**/*.test.ts', 'tests/unit/**/*.test.tsx', 'tests/integration/**/*.test.ts'],
+    include: ['tests/unit/**/*.test.ts', 'tests/unit/**/*.test.tsx', 'tests/integration/**/*.test.ts', 'tests/wp1/**/*.test.ts', 'tests/wp1/**/*.test.tsx'],
     // `*.native.test.ts` load better-sqlite3 (built for Electron's ABI) and run
     // under Electron-as-Node via `npm run test:unit:native` — excluded here so
     // this system-Node run never tries to dlopen an Electron-ABI binary.
     exclude: [...configDefaults.exclude, '**/*.native.test.{ts,tsx}'],
     environment: 'node',
-    setupFiles: ['tests/unit/setup.ts'],
+    // home-isolation FIRST: tests never act on a real home (tests/helpers/home-isolation.ts).
+    setupFiles: ['tests/helpers/home-isolation.ts', 'tests/unit/setup.ts'],
+    // Forks, not worker threads: a worker thread keeps its own copy of the environment,
+    // so the home redirect above would not reach os.homedir() (home-isolation.ts checks).
+    pool: 'forks',
     // Sweeps orphaned per-worker temp roots + a stray drive-root \mock (#559).
     globalSetup: ['tests/global-setup.ts'],
     // Integration tests (e.g. hooks synthetic path) spin up a real loopback

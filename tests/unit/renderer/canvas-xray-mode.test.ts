@@ -17,6 +17,7 @@ import {
   resolveCanvasXrayMode,
   xrayClickSelects,
   xrayDrawsOnPage,
+  xrayFrameReporting,
   xrayHoverIsLive,
   xrayHoverResolves,
   xrayReadsOutInPanel,
@@ -167,6 +168,32 @@ describe('a PLAN surface', () => {
         if (!xrayHoverResolves(mode, { isPlan })) {
           expect(xrayReadsOutInPanel(mode, { isPlan })).toBe(false)
         }
+      }
+    }
+  })
+})
+// -- What the content frame is asked to report (aicc_planning#107) ----------
+// Two switches, not one. A plan resolves no hover, so its frame drops the
+// pointer stream, but a click is how a plan section is chosen for a note, so
+// its frame keeps reporting clicks. beta.2 sent the hover answer alone and the
+// bridge silenced clicks with it, so plan clicks did nothing.
+describe('what the content frame is asked to report (aicc_planning#107)', () => {
+  it('a PLAN, in the stealth mode the pane always gives it, keeps clicks and drops the pointer stream', () => {
+    expect(xrayFrameReporting('stealth', { isPlan: true })).toEqual({ hover: false, clicks: true })
+  })
+
+  it('x-ray Off asks for neither; stealth and On ask for both', () => {
+    expect(xrayFrameReporting('off')).toEqual({ hover: false, clicks: false })
+    expect(xrayFrameReporting('stealth')).toEqual({ hover: true, clicks: true })
+    expect(xrayFrameReporting('on')).toEqual({ hover: true, clicks: true })
+  })
+
+  it('clicks are reported exactly where a click selects, and moves exactly where hover resolves', () => {
+    for (const mode of CANVAS_XRAY_MODES) {
+      for (const isPlan of [true, false]) {
+        const asked = xrayFrameReporting(mode, { isPlan })
+        expect(asked.clicks, `${mode} plan=${isPlan}`).toBe(xrayClickSelects(mode))
+        expect(asked.hover, `${mode} plan=${isPlan}`).toBe(xrayHoverResolves(mode, { isPlan }))
       }
     }
   })

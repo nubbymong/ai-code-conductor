@@ -8,10 +8,13 @@ import React, { useState, useEffect } from 'react'
 import { useAccountGateStore } from '../stores/accountGateStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import { middleTruncateEmail, resolveAccountName, resolveAccountColourKey } from '../../shared/account-chip-color'
+import { middleTruncateEmail, resolveAccountName } from '../../shared/account-chip-color'
+import { chipColourKeyForProfile } from '../utils/accountChip'
+import { useProviderAccountsStore } from '../stores/providerAccountsStore'
 import { useResolvedTheme } from '../hooks/useThemeController'
 import { resolveIdentityColor } from '../../shared/identity-colors'
 import { isAccountActive } from '../../shared/account-types'
+import { resumedSessionOwnAccount } from '../utils/sessionLaunch'
 import {
   DialogOverlay,
   DialogPanel,
@@ -47,6 +50,7 @@ export default function AccountLaunchGate({ suppressed = false }: { suppressed?:
   const profiles = useAccountProfilesStore((s) => s.profiles)
   const accountAliases = useSettingsStore((s) => s.settings.accountAliases)
   const accountColourOverrides = useSettingsStore((s) => s.settings.accountColourOverrides)
+  const accountsSnapshot = useProviderAccountsStore((s) => s.snapshot)
   const lastUsedAccountId = useSettingsStore((s) => s.settings.lastUsedAccountId)
   const theme = useResolvedTheme()
   // Only active accounts are selectable at launch: an inactive account has been
@@ -82,44 +86,60 @@ export default function AccountLaunchGate({ suppressed = false }: { suppressed?:
 
   const launch = () => resolveChoice(selected || undefined)
 
-  // "Last used" line: the account most recently launched, shown regardless of the
-  // dropdown value so a new session can adopt it in one click. Only shown when it
-  // resolves to a real, SELECTABLE profile — skipped on a first-ever launch, if
-  // that account was since deleted, or if it has since been PARKED (inactive): a
-  // parked account must not be launchable, and this one-click shortcut bypasses
-  // the dropdown, so it has to apply the same isSelectable gate the dropdown does
-  // (adversarial review — otherwise Use -> launches a parked account).
+  // The shortcut row above the dropdown, shown regardless of the dropdown value
+  // so its account can be (re)chosen in one click. Only shown when it resolves
+  // to a real, SELECTABLE profile: a parked account must not be launchable, and
+  // this one-click shortcut bypasses the dropdown, so it has to apply the same
+  // isSelectable gate the dropdown does (adversarial review: otherwise Use ->
+  // launches a parked account).
+  //
+  // O9: what the row names depends on the launch.
+  //   - A NEW session: "Most recent", the account most recently chosen for any
+  //     session (the global lastUsedAccountId). Skipped on a first-ever launch
+  //     or if that account was since deleted or parked.
+  //   - A RESUMED session: "This session's account", the account THAT session
+  //     last ran on (utils/sessionLaunch resumedSessionOwnAccount), never the
+  //     global one. A multi-session resume answers one picker per session in
+  //     turn, so the global value names the session answered just before. The
+  //     session's own pin always passes isSelectable, and the primary is always
+  //     active, so a parked pin still shows. A pin to a removed account shows
+  //     no row, only a notice, and the dropdown falls back as above.
+  const own = isRestore ? resumedSessionOwnAccount(pending.currentProfileId, profiles) : undefined
+  const ownProfile = own?.id ? profiles.find((p) => p.id === own.id && isSelectable(p)) : undefined
+  const ownIsPrimaryFallback = !!ownProfile && !pending.currentProfileId
+  const ownNotice = isRestore && !ownProfile
+    ? (own?.gone
+        ? 'The account this session last ran on is no longer set up here. Choose one to start it.'
+        : 'No account was saved with this session. Choose one to start it.')
+    : ''
   const lastUsedProfile = lastUsedAccountId
     ? profiles.find((p) => p.id === lastUsedAccountId && isSelectable(p))
     : undefined
-  const lastUsedLabel = lastUsedProfile
-    ? (lastUsedProfile.accountEmail
+  const shortcutProfile = isRestore ? ownProfile : lastUsedProfile
+  const shortcutLabel = shortcutProfile
+    ? (shortcutProfile.accountEmail
         ? (() => {
-            const r = resolveAccountName(lastUsedProfile.accountEmail, lastUsedProfile.name, accountAliases)
-            return r === lastUsedProfile.accountEmail ? middleTruncateEmail(lastUsedProfile.accountEmail) : r
+            const r = resolveAccountName(shortcutProfile.accountEmail, shortcutProfile.name, accountAliases)
+            return r === shortcutProfile.accountEmail ? middleTruncateEmail(shortcutProfile.accountEmail) : r
           })()
-        : (lastUsedProfile.name || 'New account'))
+        : (shortcutProfile.name || 'New account'))
     : ''
-  const lastUsedDot = lastUsedProfile
-    ? resolveIdentityColor(
-        resolveAccountColourKey(lastUsedProfile.accountEmail, accountColourOverrides, lastUsedProfile.colourKey),
-        theme,
-      )
+  // P3.6 (row 7): a profile's dot is its identity's colour when the account
+  // list mirrors it (utils/accountChip), else as before: the user override,
+  // else the profile's stored colourKey, else neutral mauve.
+  const shortcutDot = shortcutProfile
+    ? resolveIdentityColor(chipColourKeyForProfile(shortcutProfile, { snapshot: accountsSnapshot, overrides: accountColourOverrides }), theme)
     : ''
 
-  // Colour dot for the current selection: user override wins, else the profile's
-  // stored colourKey, else neutral mauve.
+  // Colour dot for the current selection, by the same rule.
   const selectedProfile = profiles.find((p) => p.id === selected)
-  const selectedDot = resolveIdentityColor(
-    resolveAccountColourKey(selectedProfile?.accountEmail, accountColourOverrides, selectedProfile?.colourKey),
-    theme,
-  )
+  const selectedDot = resolveIdentityColor(chipColourKeyForProfile(selectedProfile, { snapshot: accountsSnapshot, overrides: accountColourOverrides }), theme)
 
   return (
     <DialogOverlay z="z-[60]" dim={0.5}>
       <DialogPanel width="w-[420px]" ariaLabel="Choose account for this session">
         <DialogHeader
-          title="Start session"
+          title={isRestore ? 'Resume session' : 'Start session'}
           subtitle={<>
             Choose the account for{' '}
             <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{pending.sessionLabel || 'this session'}</span>
@@ -127,7 +147,7 @@ export default function AccountLaunchGate({ suppressed = false }: { suppressed?:
         />
 
         <DialogBody>
-          {lastUsedProfile && (
+          {shortcutProfile && (
             <div
               className="flex items-center gap-2 mb-4 rounded-md px-3 py-2"
               style={{
@@ -135,21 +155,25 @@ export default function AccountLaunchGate({ suppressed = false }: { suppressed?:
                 border: '1px solid var(--border-subtle)',
               }}
               data-testid="account-launch-lastused"
+              data-kind={isRestore ? 'own' : 'recent'}
+              title={ownIsPrimaryFallback ? 'No account was saved with this session, so it ran on your primary account.' : undefined}
             >
               <span
                 className="w-2.5 h-2.5 rounded-full shrink-0"
-                style={{ backgroundColor: lastUsedDot }}
+                style={{ backgroundColor: shortcutDot }}
                 aria-hidden
               />
-              <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }} title={lastUsedProfile.accountEmail || undefined}>
-                {lastUsedLabel}
+              <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }} title={shortcutProfile.accountEmail || undefined}>
+                {shortcutLabel}
               </span>
-              <span className="text-[10px] uppercase tracking-wide ml-1 shrink-0" style={{ color: 'var(--text-muted)' }}>Last used</span>
-              {selected === lastUsedProfile.id ? (
+              <span className="text-[10px] uppercase tracking-wide ml-1 shrink-0" style={{ color: 'var(--text-muted)' }}>
+                {isRestore ? "This session's account" : 'Most recent'}
+              </span>
+              {selected === shortcutProfile.id ? (
                 <span className="ml-auto text-xs shrink-0" style={{ color: 'var(--text-muted)' }}>selected</span>
               ) : (
                 <button
-                  onClick={() => setSelected(lastUsedProfile.id)}
+                  onClick={() => setSelected(shortcutProfile.id)}
                   data-testid="account-launch-lastused-use"
                   className="ml-auto text-xs text-[var(--brand)] hover:underline shrink-0 focus-ring rounded"
                 >
@@ -157,6 +181,11 @@ export default function AccountLaunchGate({ suppressed = false }: { suppressed?:
                 </button>
               )}
             </div>
+          )}
+          {ownNotice && (
+            <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }} data-testid="account-launch-own-notice">
+              {ownNotice}
+            </p>
           )}
 
           <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Account</label>
@@ -191,9 +220,12 @@ export default function AccountLaunchGate({ suppressed = false }: { suppressed?:
                 const label = p.accountEmail
                   ? (resolved === p.accountEmail ? middleTruncateEmail(p.accountEmail) : resolved)
                   : `${p.name || 'New account'} (setup incomplete)`
+                // O9: on a resume the session's own account keeps its cue
+                // once the list is open.
+                const ownMark = ownProfile?.id === p.id ? ' (this session)' : ''
                 return (
                   <option key={p.id} value={p.id} title={p.accountEmail || undefined}>
-                    {label}
+                    {label + ownMark}
                   </option>
                 )
               })}
@@ -206,11 +238,13 @@ export default function AccountLaunchGate({ suppressed = false }: { suppressed?:
             variant="secondary"
             onClick={cancelChoice}
             testId="account-launch-cancel"
-            title={isRestore
-              ? 'Keep this session and continue under its last account'
-              : "Don't launch; close this session tab"}
+            title={!isRestore
+              ? "Don't launch; close this session tab"
+              : own?.gone
+                ? 'Keep the tab without starting it. Its account is no longer set up here.'
+                : 'Start it on the account it last ran on'}
           >
-            {isRestore ? 'Keep last account' : 'Cancel'}
+            {!isRestore ? 'Cancel' : own?.gone ? 'Not now' : "Keep this session's account"}
           </DialogButton>
           <DialogButton
             variant="primary"

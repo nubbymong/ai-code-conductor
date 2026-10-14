@@ -1,15 +1,39 @@
 // Sentinel service singleton (spec §5/§6): state, Trigger A observe, Trigger B
 // startup check, and the user-action API consumed by IPC handlers.
+//
+// P3.9 (row 42): Codex as well, the same way. While Codex is on, the start-up
+// check and a Re-run check the installed Codex CLI's version against the range
+// the app supports (a finding when it is outside), compare the model registry
+// with the model list that CLI offers (read from it: row 39), and, when the
+// version is newer than the highest one checked (fixers 10 and 11: a lower
+// one is not analysed at start, isUpdateAtStart), analyse Codex's release notes against
+// the four surfaces the app relies on (its launch flags and its session files
+// among them). Each analysis runs on the provider that is on; with both on, on
+// the one Ask Conductor runs on (OD27 M4; Claude Code until that setting is
+// built). A provider that is off is never checked, probed or analysed.
+import * as fs from 'fs'
+import * as path from 'path'
+import { ownerOnlyThroughHandle, sweepStaleFolders } from '../stale-folder-sweep'
 import { SentinelState } from './sentinel-state'
 import { makeObserver, type Observation } from './sentinel-observe'
 import { parseClaudeVersion, minVersionFindings, type ManifestEntry } from './sentinel-version'
 import { fetchChangelog, sliceChangelog } from './sentinel-changelog'
-import { runAnalysis } from './sentinel-analysis'
+import { fetchCodexReleaseNotes } from './sentinel-codex-changelog'
+import { runAnalysis, CLAUDE_ANALYSIS_ENV, createClaudeRetryWatch, claudeAnalysisOutcome, claudeSettingsTransportEnv, type HeadlessRunner } from './sentinel-analysis'
 import { validateProposal } from './sentinel-apply'
-import { modelCoverageFindings, modelCheckFailedFinding, EXPECTED_MODEL_SET } from './sentinel-models'
+import {
+  modelCoverageFindings, modelCheckFailedFinding, EXPECTED_MODEL_SET, codexModelCoverageFindings, CODEX_EXPECTED_MODEL_SET, type CodexLiveModelList,
+  registryCoveredModelFindingIds, staleModelFindingIds, staleCodexModelFindingIds, CODEX_MODEL_CHECK_FAILED_ID,
+} from './sentinel-models'
+import { codexVersionFindings, type SupportedVersions } from './sentinel-codex'
 import { fetchArticleModelIds } from './sentinel-model-article'
 import { getRegistry, getBaseline, applyOverlayEntry, removeOverlayEntry, loadOverlay, setOverlay } from '../model-registry-service'
 import { reconcileOverlay } from '../../shared/model-registry'
+import { sentinelAnalysisProvider } from '../../shared/ask-conductor-provider'
+import { stripSpoofableText } from '../../shared/safe-text'
+import { compareVersions } from '../../shared/version-order'
+import type { SentinelFinding, SentinelProvider } from '../../shared/sentinel-types'
+import type { ProviderInstallationView } from '../../shared/providers'
 import manifestJson from '../../../resources/sentinel-assumption-manifest.json'
 import { logInfo } from '../debug-logger'
 
@@ -19,9 +43,13 @@ let observer: ((obs: Observation) => void) | null = null
 // The in-flight AI analysis, so a new run or a disable can abort it (kill tree).
 let currentAnalysis: AbortController | null = null
 
+/** Sentinel's own folder in the resources folder (its state file's). */
+let sentinelDir: string | null = null
+
 export function initSentinel(resourcesDir: string): SentinelState {
   state = new SentinelState(resourcesDir)
   observer = makeObserver(state, getRegistry)
+  sentinelDir = path.join(resourcesDir, 'sentinel')
   return state
 }
 export function getSentinelState(): SentinelState | null { return state }
@@ -45,6 +73,76 @@ async function headlessRunner(): Promise<typeof import('../claude-headless')> {
   return import('../claude-headless')
 }
 
+/** Sentinel's runs in flight, per provider, counted from the launch check to
+ *  the end: Claude Code's version check and the analysis that may follow it;
+ *  (P3.9) Codex's version check and model list read, and an analysis that
+ *  runs on Codex. */
+const runsInFlight = new Map<SentinelProvider, number>()
+const countRun = (provider: SentinelProvider, by: 1 | -1) => { runsInFlight.set(provider, (runsInFlight.get(provider) ?? 0) + by) }
+
+/** WP2: Sentinel's Claude runs in flight, which are Claude Code in use for
+ *  the switch-off rule (provider-in-use.ts). */
+export function sentinelClaudeRunsInFlight(): number {
+  return runsInFlight.get('claude') ?? 0
+}
+
+/** P3.9: Sentinel's Codex runs in flight, which are Codex in use for the
+ *  switch-off rule (provider-in-use.ts), as its Claude runs are Claude Code's. */
+export function sentinelCodexRunsInFlight(): number {
+  return runsInFlight.get('codex') ?? 0
+}
+
+/** WP2: main's one launch rule (provider-launch-gate.ts) for a Sentinel
+ *  run of a provider's CLI, and, when it may run, the run counted as that
+ *  provider in use in the same step, so a switch-off cannot slip between the
+ *  check and the count. `probe`: a check nobody asked for (the start-up
+ *  check), which is not logged when skipped. Lazy for the same reason as
+ *  headlessRunner (the accounts graph is heavy). */
+async function beginRun(provider: SentinelProvider, opts: { probe: boolean }): Promise<{ refused: string; gate: true } | { end: () => void }> {
+  const gate = await import('../provider-launch-gate')
+  const refusal = opts.probe ? gate.providerProbeRefusal(provider) : gate.providerLaunchRefusal(provider)
+  // `gate` (owner answers review): the launch rule refused it (the provider
+  // is off or not set up), a refusal and not a failed analysis.
+  if (refusal) return { refused: refusal.message, gate: true }
+  countRun(provider, 1)
+  let ended = false
+  return {
+    end: () => {
+      if (ended) return
+      ended = true
+      countRun(provider, -1)
+    },
+  }
+}
+
+/** The launch rule again, for a later step. A refusal is the reason, in
+ *  plain words; null means the provider may run. `quiet`: the probe form. */
+async function refusalOf(provider: SentinelProvider, quiet = false): Promise<string | null> {
+  const gate = await import('../provider-launch-gate')
+  return (quiet ? gate.providerProbeRefusal(provider) : gate.providerLaunchRefusal(provider))?.message ?? null
+}
+
+/** The accounts service, lazily (its graph is heavy); null before it is up. */
+async function accountsService(): Promise<ReturnType<typeof import('../provider-accounts')['getAccountsService']>> {
+  try {
+    const { getAccountsService } = await import('../provider-accounts')
+    return getAccountsService()
+  } catch {
+    return null
+  }
+}
+
+/** The saved settings, or null when they cannot be read. */
+async function savedSettings(): Promise<Record<string, unknown> | null> {
+  try {
+    const { readConfig } = await import('../config-manager')
+    const s = readConfig<Record<string, unknown>>('settings')
+    return s && typeof s === 'object' ? s : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Home for Sentinel's headless spawns, resolved FRESH per run so a Settings
  * change applies to the next analysis. User-selected analysis account
@@ -52,14 +150,25 @@ async function headlessRunner(): Promise<typeof import('../claude-headless')> {
  * installs). Never bare-global when profiles exist: the frozen global login
  * hangs at auth / carries stale rate-limit state (live repro: both analysis
  * attempts timed out at 180s on 2026-06-12).
+ *
+ * As a local launch does, it waits for the start's profile steps when they are
+ * still to run (they may be making the primary account from the user's own
+ * sign-in), and then for the chosen account's sign-in folders to have their
+ * owner-only verdict in this run, so the headless run reads a verdict instead
+ * of being refused for want of one. Each wait only when pending.
  */
 async function analysisHome(): Promise<{ home: string | null; accountLabel: string | null }> {
   try {
     const { readConfig } = await import('../config-manager')
-    const { resolveHeadlessProfileHome, listProfiles } = await import('../account-profiles')
+    const {
+      resolveHeadlessProfileHome, listProfiles,
+      startProfileStepsPending, startProfileStepsSettled, profileCredentialFoldersChecked, checkProfileCredentialFolders,
+    } = await import('../account-profiles')
+    if (startProfileStepsPending()) await startProfileStepsSettled()
     const settings = readConfig<{ sentinelAccountProfileId?: string | null }>('settings')
     const chosen = settings?.sentinelAccountProfileId ?? null
     const { home, profileId } = resolveHeadlessProfileHome(chosen)
+    if (profileId && !profileCredentialFoldersChecked(profileId)) await checkProfileCredentialFolders(profileId)
     // Name the account the analysis actually ran under, so a failure message can
     // say WHICH account to change (#430). When the chosen account no longer
     // resolves and we fell back to another, say so — otherwise the user sees a
@@ -93,15 +202,605 @@ async function analysisHome(): Promise<{ home: string | null; accountLabel: stri
 async function runModelCoverageCheck(): Promise<void> {
   if (!state) return
   try {
+    // O8: a notice for a model this build's registry now covers is closed
+    // before the article is read (up to 10 s), from the registry alone, so a
+    // start or a Re-run never shows it while the read is pending.
+    state.retireOpen(registryCoveredModelFindingIds(state.snapshot().findings, getRegistry()))
     const liveIds = await fetchArticleModelIds()
-    for (const f of modelCoverageFindings(getRegistry(), EXPECTED_MODEL_SET, Date.now(), liveIds)) {
-      state.upsertFinding(f)
-    }
+    const registry = getRegistry()
+    const current = modelCoverageFindings(registry, EXPECTED_MODEL_SET, Date.now(), liveIds)
+    for (const f of current) state.upsertFinding(f)
+    // The check completed: every other model finding it no longer stands
+    // behind is closed too (never on the failure path below).
+    state.retireOpen(staleModelFindingIds(state.snapshot().findings, registry, current, EXPECTED_MODEL_SET, liveIds))
   } catch (err) {
     const msg = (err as Error).message
     logInfo(`[sentinel] model coverage check failed: ${msg}`)
     state.upsertFinding(modelCheckFailedFinding(msg))
   }
+}
+
+/**
+ * The Codex half of the model coverage check (P3.8, row 39): the registry's
+ * Codex models against the list the installed Codex CLI offers when it could
+ * be read just now (P3.9), else the list shipped with this build. A throw is a
+ * finding of its own, as the Claude half's is.
+ */
+function runCodexModelCoverageCheck(live: CodexLiveModelList | null): void {
+  if (!state) return
+  try {
+    const registry = getRegistry()
+    const current = codexModelCoverageFindings(registry, CODEX_EXPECTED_MODEL_SET, Date.now(), live)
+    for (const f of current) state.upsertFinding(f)
+    // O8: the check completed, so the Codex model findings it no longer
+    // stands behind are closed (never on the failure path below).
+    state.retireOpen(staleCodexModelFindingIds(state.snapshot().findings, registry, current, CODEX_EXPECTED_MODEL_SET, live))
+  } catch (err) {
+    const msg = (err as Error).message
+    logInfo(`[sentinel] Codex model coverage check failed: ${msg}`)
+    state.upsertFinding({
+      id: CODEX_MODEL_CHECK_FAILED_ID,
+      kind: 'compat',
+      severity: 'warn',
+      title: 'The Codex model list could not be verified',
+      evidence: `The Codex model-registry check did not complete: ${msg}`,
+      badgeText: 'Codex model list unverified',
+      provider: 'codex',
+      status: 'open',
+      createdAt: Date.now(),
+    })
+  }
+}
+
+/** The range the Codex package says its managed flows support, or null. */
+async function codexSupportedVersions(): Promise<SupportedVersions | null> {
+  try {
+    const { tryGetProviderPackage } = await import('../providers/core')
+    const r = tryGetProviderPackage('codex')?.setup?.supportedVersions
+    return r && typeof r.minimum === 'string' && typeof r.maximumTested === 'string' ? { minimum: r.minimum, maximumTested: r.maximumTested } : null
+  } catch {
+    return null
+  }
+}
+
+/** Said when the installed Codex could not be checked on a Re-run. */
+export const CODEX_NOT_CHECKED = 'The installed Codex could not be checked, so its update was not analysed. Check it in Settings, Accounts, then use Re-run.'
+
+/** Codex's id, as the accounts service names its provider. */
+const CODEX_ID: SentinelProvider = 'codex'
+
+/** What the accounts service last found of the installed Codex, or null. */
+function codexInstallationNow(svc: Awaited<ReturnType<typeof accountsService>>): ProviderInstallationView | null {
+  try {
+    if (!svc || typeof svc.snapshot !== 'function') return null
+    return svc.snapshot().providers.find((p) => p.providerId === CODEX_ID) ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * P3.9 (rows 39, 42): the Codex checks, while Codex is on. Its version
+ * against the supported range, then the model registry against the list the
+ * installed CLI offers, read from it (no sign-in, no network, in no account's
+ * folder), else the shipped list. The version is the accounts service's
+ * discovery (a `codex --version` in an empty folder): `fresh`, a new check,
+ * as Claude's Re-run runs `claude --version` again; else (the start-up check,
+ * round 1) the look the app already took at start, joined while it runs and
+ * made only if none was (the model list read ensures it). Counted as Codex
+ * in use from the launch check to the end of the read. Refused (and not
+ * logged when `probe`) while Codex is off or not set up: then nothing about
+ * Codex runs or is said.
+ */
+async function runCodexChecks(opts: { probe: boolean; fresh: boolean }): Promise<{ refused: string } | { version: string | null }> {
+  const begun = await beginRun('codex', opts)
+  if ('refused' in begun) return begun
+  try {
+    const svc = await accountsService()
+    let installation: ProviderInstallationView | null = null
+    if (opts.fresh && svc && typeof svc.discover === 'function') {
+      try {
+        const d = await svc.discover('codex')
+        if (d && d.ok) installation = d.installation
+      } catch { /* not checked: said below */ }
+    }
+    let live: CodexLiveModelList | null = null
+    if (svc && typeof svc.readModelCatalogue === 'function') {
+      try {
+        // Runs nothing for a CLI not found or of a version the app cannot use.
+        const r = await svc.readModelCatalogue('codex')
+        if (r && r.ok && r.catalogue.ok) live = { version: r.catalogue.version, models: r.catalogue.models }
+        else logInfo(`[sentinel] the installed Codex's model list was not read (${r && r.ok ? (r.catalogue.ok ? 'ok' : r.catalogue.code) : r?.code ?? 'no answer'}); the list shipped with this build is used`)
+      } catch { /* the shipped list answers */ }
+    }
+    if (!installation) installation = codexInstallationNow(svc)
+    if (state) for (const f of codexVersionFindings(installation, await codexSupportedVersions(), Date.now())) state.upsertFinding(f)
+    runCodexModelCoverageCheck(live)
+    const version = installation && installation.discoveryState === 'found' && typeof installation.version === 'string' ? installation.version : null
+    if (!version) logInfo('[sentinel] the installed Codex could not be checked; skipping its update analysis (fail-open)')
+    return { version }
+  } finally {
+    begun.end()
+  }
+}
+
+/** One provider's update: the version last analysed (or seen) and the one
+ *  installed now. */
+interface Update { provider: SentinelProvider; last: string; version: string }
+
+/** What an analysis runs on: the runner, the account it runs as (for a
+ *  failure message), and the end of its run. */
+interface AnalysisRunner { run: HeadlessRunner; accountLabel: string | null; end: () => void }
+
+/** Claude Code as the analysis runner: `claude -p` in the analysis account's
+ *  home, counted as Claude Code in use while it runs. Round 2: in a fresh
+ *  empty folder of its own in Sentinel's runs folder (never the app's own
+ *  folder), with Claude Code's switches for the analysis
+ *  (CLAUDE_ANALYSIS_ENV), the folder removed after. PR 4 (owner answers
+ *  review): its stream is read as it arrives, and a run whose retries got no
+ *  answer from the service, CLAUDE_UNANSWERED_RETRIES_STOP in a row, is
+ *  stopped then (its tree, as a cancel) and said as unreachable. */
+async function claudeAnalysisRunner(signal: AbortSignal): Promise<AnalysisRunner | RunnerRefusal> {
+  const begun = await beginRun('claude', { probe: false })
+  if ('refused' in begun) return begun
+  let handedOver = false
+  try {
+    const { spawnClaudeHeadless } = await headlessRunner()
+    const { home, accountLabel } = await analysisHome()
+    const transportEnv = await claudeSettingsTransportEnv(home)
+    const parent = analysisParent()
+    let cwd: string
+    try {
+      if (!parent) throw new Error('no runs folder')
+      cwd = makeAnalysisFolder(parent, CLAUDE_ANALYSIS_DIR_PREFIX, false)
+    } catch {
+      return { refused: "Sentinel's analysis could not run on Claude Code: no empty folder could be made for it." }
+    }
+    handedOver = true
+    return {
+      run: async (args, t, stdin) => {
+        const watch = createClaudeRetryWatch()
+        const stop = new AbortController()
+        const res = await spawnClaudeHeadless(args, t, stdin, home, AbortSignal.any([signal, stop.signal]), {
+          cwd, env: CLAUDE_ANALYSIS_ENV, transportEnv, onStdout: (chunk) => { if (watch.push(chunk)) stop.abort() },
+        })
+        return claudeAnalysisOutcome(res, watch.stopped())
+      },
+      accountLabel,
+      end: () => {
+        // Only the folder this run made: its own prefix, in the runs folder,
+        // and only while the runs folder is still the one checked.
+        try { if (isAnalysisFolder(cwd, parent!, CLAUDE_ANALYSIS_DIR_PREFIX) && runsFolderHolds(parent!)) fs.rmSync(cwd, { recursive: true, force: true }) } catch { /* a leftover is swept by a later run */ }
+        begun.end()
+      },
+    }
+  } finally {
+    if (!handedOver) begun.end()
+  }
+}
+
+/** A Codex account's name for a message: its identity's name, else its
+ *  provider label; made prose-safe. */
+function codexAccountLabel(svc: NonNullable<Awaited<ReturnType<typeof accountsService>>>, accountId: string): string {
+  try {
+    const snap = svc.snapshot()
+    const a = snap.accounts.find((x) => x.id === accountId)
+    const name = snap.identities.find((i) => i.id === a?.identityId)?.friendlyName?.trim() || a?.providerLabel?.trim() || ''
+    const safe = stripSpoofableText(name, 80).trim()
+    return safe || 'your Codex account'
+  } catch {
+    return 'your Codex account'
+  }
+}
+
+let sentinelLaunchSeq = 0
+
+/** Said when the Codex account an analysis would run on needs a
+ *  confirmation at each launch (prepareLaunch answers
+ *  acknowledgement-required). Names the real Settings labels: the Sentinel
+ *  section's Analysis account (General tab), and Add Codex account in
+ *  Settings, Accounts. */
+export const CODEX_ANALYSIS_NEEDS_ACCOUNT = "Sentinel's analysis could not run on Codex: the Codex account it would use must be confirmed at each launch, and a background analysis has nobody to confirm it. Choose another Analysis account in Settings, General, Sentinel, or add a Codex account in Settings, Accounts with Add Codex account, then choose it as the Analysis account."
+
+/** The folder a Codex analysis runs in: made fresh for the run, with this
+ *  prefix, in Sentinel's own runs folder, and removed after it. */
+export const CODEX_ANALYSIS_DIR_PREFIX = 'ccc-sentinel-codex-'
+/** The folder a Claude Code analysis runs in (round 2), likewise. */
+export const CLAUDE_ANALYSIS_DIR_PREFIX = 'ccc-sentinel-claude-'
+/** Sentinel's runs folder, inside its own folder in the resources folder. */
+export const SENTINEL_RUNS_DIRNAME = 'runs'
+/** An analysis folder older than this is a leftover (a crash or a quit
+ *  mid-run; the longest run ends well inside it). */
+export const STALE_ANALYSIS_FOLDER_MS = 60 * 60 * 1000
+
+/** P3.9 round 1: the parent of every analysis folder, the app's own and this
+ *  user's: Sentinel's folder in the resources folder, its `runs` folder made
+ *  there, each a real folder (never a link) and, on POSIX, this user's and
+ *  writable by no one else, not a shared temp folder another user can write
+ *  into (runsFolderHolds). Sentinel's folder is readied first
+ *  (sentinelDirReady), made alone when it is not there yet and readied
+ *  again; then `runs` is made alone, and one made that does not hold is
+ *  removed again (it is empty). Null when it cannot be. */
+function analysisParent(): string | null {
+  if (!sentinelDir) return null
+  const parent = path.join(sentinelDir, SENTINEL_RUNS_DIRNAME)
+  try {
+    if (!sentinelDirReady(sentinelDir)) return null
+    makeFolderAlone(sentinelDir)
+    if (!sentinelDirReady(sentinelDir)) return null
+    const made = makeFolderAlone(parent)
+    if (runsFolderHolds(parent)) return parent
+    if (made) { try { fs.rmdirSync(parent) } catch { /* not empty, or gone: leave it */ } }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Makes `dir` alone (never its parents, never through what is at its
+ *  name), owner-only (0700): true when it made it, false when something is
+ *  there already. Throws on any other failure. */
+function makeFolderAlone(dir: string): boolean {
+  try {
+    fs.mkdirSync(dir, { mode: 0o700 })
+    return true
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === 'EEXIST') return false
+    throw e
+  }
+}
+
+/** Sentinel's own folder, readied for its runs folder: one not there yet is
+ *  left to the make after this (owner-only, 0700); a link, or not a folder,
+ *  or on POSIX another user's, is refused before anything is made through
+ *  it; on POSIX one of this user's that others can write to (made under a
+ *  group-writable umask) is first made owner-only through a handle on the
+ *  folder its lstat saw (ownerOnlyThroughHandle). runsFolderHolds checks the
+ *  result. Never throws. */
+function sentinelDirReady(dir: string): boolean {
+  let st: fs.BigIntStats
+  try { st = fs.lstatSync(dir, { bigint: true }) } catch (e) { return (e as NodeJS.ErrnoException)?.code === 'ENOENT' }
+  if (st.isSymbolicLink() || !st.isDirectory()) return false
+  if (typeof process.getuid === 'function') {
+    if (Number(st.uid) !== process.getuid()) return false
+    if ((Number(st.mode) & 0o022) !== 0) return ownerOnlyThroughHandle(dir, st)
+  }
+  return true
+}
+
+/** Whether `parent` is still Sentinel's runs folder as it was checked:
+ *  `sentinel` and `runs` real folders (never links), on POSIX both this
+ *  user's and both writable by no one else, and the real path of `runs`
+ *  `<real resources>/sentinel/runs`. Asked when the runs folder is chosen,
+ *  before the stale sweep lists it, before each folder that sweep removes,
+ *  and before a run's own folder is removed: nothing is swept or removed
+ *  through a runs folder that does not hold. Never throws. */
+function runsFolderHolds(parent: string): boolean {
+  try {
+    if (!sentinelDir) return false
+    if (!samePath(path.resolve(parent), path.resolve(sentinelDir, SENTINEL_RUNS_DIRNAME))) return false
+    const posix = typeof process.getuid === 'function'
+    for (const dir of [sentinelDir, parent]) {
+      const st = fs.lstatSync(dir)
+      if (st.isSymbolicLink() || !st.isDirectory()) return false
+      if (posix && st.uid !== process.getuid!()) return false
+      if (posix && (st.mode & 0o022) !== 0) return false
+    }
+    const expected = path.join(fs.realpathSync.native(path.dirname(sentinelDir)), path.basename(sentinelDir), SENTINEL_RUNS_DIRNAME)
+    return samePath(fs.realpathSync.native(parent), expected)
+  } catch {
+    return false
+  }
+}
+
+/** A folder this module made for an analysis, and nothing else: its name
+ *  carries the prefix and its parent is Sentinel's runs folder. */
+function isAnalysisFolder(dir: string, parent: string, prefix: string = CODEX_ANALYSIS_DIR_PREFIX): boolean {
+  return path.basename(dir).startsWith(prefix) && path.basename(dir).length > prefix.length && path.dirname(dir) === path.resolve(parent)
+}
+
+/** Real paths compared as the platform does (Windows: case-insensitive). */
+function samePath(a: string, b: string): boolean {
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/** A fresh, empty analysis folder. Leftovers of earlier runs go first.
+ *  Round 2: once made, its real path must be `<resources>/sentinel/runs/<it>`
+ *  under the resources folder's own real path, so neither `sentinel` nor
+ *  `runs` became a link between the check and the make; one that did is
+ *  removed (it is empty) and refused. `marker` (Codex): an empty `.git`
+ *  file makes the folder a project root of its own (a Codex project root;
+ *  git's own search, which an empty `.git` file ends at once with an
+ *  error). */
+function makeAnalysisFolder(parent: string, prefix: string = CODEX_ANALYSIS_DIR_PREFIX, marker = true): string {
+  sweepStaleFolders(parent, prefix, { maxAgeMs: STALE_ANALYSIS_FOLDER_MS, parentHolds: () => runsFolderHolds(parent) })
+  const dir = fs.mkdtempSync(path.join(parent, prefix))
+  let where: string | null = null
+  try {
+    const expected = path.join(fs.realpathSync.native(path.dirname(sentinelDir!)), path.basename(sentinelDir!), SENTINEL_RUNS_DIRNAME, path.basename(dir))
+    where = samePath(fs.realpathSync.native(dir), expected) ? dir : null
+  } catch { where = null }
+  if (!where) {
+    try { fs.rmdirSync(dir) } catch { /* not empty, or gone: leave it */ }
+    throw new Error('the runs folder is not where it was')
+  }
+  if (marker) fs.writeFileSync(path.join(dir, '.git'), '', { flag: 'wx' })
+  return dir
+}
+
+/**
+ * Codex as the analysis runner (P3.9): one non-interactive `codex exec`
+ * through the package's reviewer, as its text-only analysis (round 1: no
+ * tools, no user config, web search off, no project instructions, the
+ * working folder its own project root; cli-runner.ts, `analysis`), the
+ * prompt on stdin, never argv, from a launch the accounts service prepared
+ * (the account leased, the executable setup proved, the account's own folder
+ * with ambient credentials removed), in a fresh empty folder made for it in
+ * Sentinel's own runs folder (never a project) and removed after. The
+ * account is the one chosen for Sentinel in Settings, else the one Codex
+ * reviews run on, as Claude's analysis account falls back to the primary;
+ * a fallback is said in the account's label.
+ * Counted as Codex in use while it runs; the lease and the folder go once
+ * the run, and any kill still under way, has ended.
+ */
+async function codexAnalysisRunner(signal: AbortSignal): Promise<AnalysisRunner | RunnerRefusal> {
+  const begun = await beginRun('codex', { probe: false })
+  if ('refused' in begun) return begun
+  let handedOver = false
+  try {
+    const svc = await accountsService()
+    const { tryGetProviderPackage } = await import('../providers/core')
+    const review = tryGetProviderPackage('codex')?.review
+    if (!svc || typeof svc.prepareLaunch !== 'function' || !review) {
+      return { refused: 'Sentinel could not start its analysis on Codex: accounts are not ready yet. Use Re-run in a moment.' }
+    }
+    const saved = await savedSettings()
+    const chosenRaw = saved?.sentinelCodexAccountId
+    const chosen = typeof chosenRaw === 'string' && chosenRaw ? chosenRaw : null
+    const prepare = (accountId: string | null) => svc.prepareLaunch({
+      kind: 'review', providerId: 'codex', ownerId: `sentinel:${++sentinelLaunchSeq}`, remote: false,
+      ...(accountId ? { providerAccountId: accountId } : {}),
+    })
+    let prepared = await prepare(chosen)
+    let fellBack = false
+    if (!prepared.ok && chosen) {
+      fellBack = true
+      prepared = await prepare(null)
+    }
+    // An account that must be confirmed at each launch (one 2.1.1-beta.2
+    // registered for the Codex sign-in already on this computer, or an
+    // unverified one) is never confirmed here: an analysis has nobody there
+    // to confirm it, so the panel names the way forward instead of the
+    // confirm text. The acknowledgement rule itself is unchanged.
+    if (!prepared.ok) {
+      return { refused: prepared.code === 'acknowledgement-required' ? CODEX_ANALYSIS_NEEDS_ACCOUNT : `Sentinel's analysis could not run on Codex: ${prepared.message}` }
+    }
+    const launch = prepared
+    const parent = analysisParent()
+    let cwd: string
+    try {
+      if (!parent) throw new Error('no runs folder')
+      cwd = makeAnalysisFolder(parent)
+    } catch {
+      launch.lease.release()
+      return { refused: "Sentinel's analysis could not run on Codex: no empty folder could be made for it." }
+    }
+    const name = codexAccountLabel(svc, launch.binding.providerAccountId)
+    const accountLabel = fellBack ? `${name}; auto-picked, your chosen analysis account could not be used` : name
+    const kills: Promise<void>[] = []
+    handedOver = true
+    return {
+      accountLabel,
+      run: async (_args, timeoutMs, stdin) => {
+        // A text-only run (round 1): no tools, no instructions from any folder.
+        // Round 2: any git the CLI runs there stops at the runs folder, never
+        // prompts, and takes no optional lock.
+        const env = { ...launch.env, GIT_CEILING_DIRECTORIES: parent!, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
+        const out = await review.run({ executable: launch.executable, env, cwd, prompt: stdin ?? '', timeoutMs, signal, purpose: 'analysis' })
+        // Whatever the outcome: the lease and the folder are held until what
+        // is left of the run has ended (within the runner's worst case).
+        if (out.killSettled instanceof Promise) kills.push(out.killSettled)
+        if (out.ok) return { code: 0, stdout: out.text, stderr: '' }
+        if (out.code === 'timed-out') return { code: 1, stdout: '', stderr: `Timed out after ${Math.round(timeoutMs / 1000)}s` }
+        // The reviewer's own message (already redacted), read as Claude's
+        // error envelope is: a usage limit then stops the retry.
+        return { code: 1, stdout: JSON.stringify({ is_error: true, result: out.message }), stderr: '' }
+      },
+      end: () => {
+        const letGo = () => {
+          try { launch.lease.release() } catch { /* a release never throws the analysis away */ }
+          // Only the folder this run made: its own prefix, in the runs folder,
+          // and only while the runs folder is still the one checked.
+          try { if (isAnalysisFolder(cwd, parent!) && runsFolderHolds(parent!)) fs.rmSync(cwd, { recursive: true, force: true }) } catch { /* a leftover is swept by a later run */ }
+          begun.end()
+        }
+        if (kills.length) void Promise.all(kills).then(letGo, letGo)
+        else letGo()
+      },
+    }
+  } finally {
+    if (!handedOver) begun.end()
+  }
+}
+
+/** A runner that could not start: why, and (`gate`) whether the launch rule
+ *  refused it (the provider off or not set up) rather than a failure. */
+type RunnerRefusal = { refused: string; gate?: true }
+
+/** Each provider's analysis runner. */
+const RUNNERS: Record<SentinelProvider, (signal: AbortSignal) => Promise<AnalysisRunner | RunnerRefusal>> = {
+  claude: claudeAnalysisRunner, codex: codexAnalysisRunner,
+}
+
+/** The runner for an analysis: Claude Code or Codex, whichever is on; with
+ *  both on, the one Ask Conductor runs on (OD27 M4). */
+async function analysisRunner(signal: AbortSignal): Promise<AnalysisRunner | RunnerRefusal> {
+  const claudeOff = await refusalOf('claude', true)
+  const codexOff = await refusalOf('codex', true)
+  const provider = sentinelAnalysisProvider(!claudeOff, !codexOff, await savedSettings())
+  if (!provider) return { refused: claudeOff ?? codexOff ?? 'No assistant is on to run the analysis.', gate: true }
+  return RUNNERS[provider](signal)
+}
+
+const CLAUDE_CHANGELOG_UNAVAILABLE = 'Changelog unavailable (offline?). Use Re-run in the Sentinel panel.'
+const CODEX_NOTES_UNAVAILABLE = "Codex's release notes could not be read from GitHub. Use Re-run in the Sentinel panel."
+
+/** The notes an update's analysis reads, and what is said when not all of
+ *  them could be read in full. */
+interface UpdateNotes { text: string; cut: string | null }
+
+/** What an update's analysis reads and records, per provider: its changelog
+ *  (Claude Code's, the versions after the last one seen) or release notes
+ *  (Codex's, read version by version; round 1), what is said when they
+ *  cannot be read, and where the version analysed is kept. */
+interface UpdateSubject {
+  notes: (u: Update) => Promise<UpdateNotes | null>
+  unavailable: string
+  /** Fixer 12: `rerun`, the version was checked by a Re-run, the user's
+   *  own act: it becomes the highest version checked, down as well as up. */
+  recordSeen: (s: SentinelState, version: string, rerun: boolean) => void
+  /** Round 3: the assistant's name and its notes' name, for what is said. */
+  name: string
+  notesName: string
+}
+const CLAUDE_UPDATE: UpdateSubject = {
+  notes: async (u) => {
+    const md = await fetchChangelog()
+    return md ? { text: sliceChangelog(md, u.last, u.version), cut: null } : null
+  },
+  unavailable: CLAUDE_CHANGELOG_UNAVAILABLE,
+  recordSeen: (s, v, rerun) => s.setLastSeenCcVersion(v, { rerun }),
+  name: 'Claude Code',
+  notesName: 'changelog',
+}
+const CODEX_UPDATE: UpdateSubject = {
+  notes: async (u) => {
+    const n = await fetchCodexReleaseNotes(u.last, u.version)
+    return n ? { text: n.text, cut: n.cut } : null
+  },
+  unavailable: CODEX_NOTES_UNAVAILABLE,
+  recordSeen: (s, v, rerun) => s.setLastSeenCodexVersion(v, { rerun }),
+  name: 'Codex',
+  notesName: 'release notes',
+}
+const SUBJECTS: Record<SentinelProvider, UpdateSubject> = { claude: CLAUDE_UPDATE, codex: CODEX_UPDATE }
+
+/** One update's analysis: its changelog (Claude Code's) or release notes
+ *  (Codex's) between the last version and this one, checked against that
+ *  provider's surfaces on the runner that is on. `failed` (owner answers
+ *  review): the analysis was attempted and did not complete (its notes
+ *  unreadable, its runner unable to start for a reason other than the launch
+ *  rule, or the run failed); a provider that is off is a refusal. */
+async function analyzeOne(u: Update, signal: AbortSignal): Promise<{ ok: true; findings: SentinelFinding[]; unverified: number; note: string | null } | { ok: false; error: string; failed: boolean; note?: string | null }> {
+  const subject = SUBJECTS[u.provider]
+  const notes = await subject.notes(u)
+  // Analysis-unavailable is the degraded state, shown as a calm note -- not a
+  // finding. Findings are reserved for actual severe breaking changes now.
+  if (!notes) return { ok: false, error: subject.unavailable, failed: true }
+  if (signal.aborted) return { ok: false, error: '', failed: false }
+  // The update's own provider, switched off while its notes were fetched, is
+  // not analysed.
+  const off = await refusalOf(u.provider)
+  if (off) return { ok: false, error: off, failed: false }
+  const runner = await analysisRunner(signal)
+  if ('refused' in runner) return { ok: false, error: runner.refused, failed: runner.gate !== true }
+  try {
+    const r = await runAnalysis({
+      runner: runner.run,
+      changelog: notes.text,
+      from: u.last, to: u.version, accountLabel: runner.accountLabel, subject: u.provider,
+    })
+    // Round 2: what was cut is said whether or not the analysis completed.
+    return r.ok ? { ...r, note: notes.cut } : { ...r, failed: true, note: notes.cut }
+  } finally {
+    runner.end()
+  }
+}
+
+/** Said when some of an analysis's findings could not be matched to the
+ *  notes it was sent (round 3). Fixer 13 (fixer 12 quality NIT 1):
+ *  `onlyByRerun`, the analysis was a Re-run of a version no start analyses
+ *  (at or below the highest version checked): it says to Re-run again, as
+ *  the next check would not analyse it. */
+export function unverifiedMessage(u: Update, count: number, onlyByRerun = false): string {
+  const subject = SUBJECTS[u.provider]
+  const what = count === 1 ? 'One finding' : `${count} findings`
+  const lead = `${what} from the analysis of ${subject.name} ${u.version} could not be matched to its ${subject.notesName}, so ${count === 1 ? 'it is' : 'they are'} not shown`
+  return onlyByRerun
+    ? `${lead}. Use Re-run in the Sentinel panel to analyse it again.`
+    : `${lead} and the update will be analysed again at the next check.`
+}
+
+/** How many analyses of one update may find nothing they can match before
+ *  the update is recorded as checked anyway (round 4). */
+export const UNVERIFIED_MAX_TRIES = 3
+
+/** Said when an update is recorded as checked after UNVERIFIED_MAX_TRIES
+ *  analyses whose findings could not all be matched (round 4). */
+export function unverifiedRecordedMessage(u: Update, count: number, tries: number): string {
+  const subject = SUBJECTS[u.provider]
+  const what = count === 1 ? 'One finding' : `${count} findings`
+  return `${what} from the analysis of ${subject.name} ${u.version} could not be matched to its ${subject.notesName} after ${tries} analyses, so ${count === 1 ? 'it is' : 'they are'} not shown and the update is recorded as checked.`
+}
+
+/** Analyse each update in turn. A new run supersedes any in-flight one
+ *  (kills its process tree) so a stale analysis can't finish late and
+ *  clobber state or leave `analyzing` stuck. `carried`: problems met before
+ *  the analysis (a provider that could not be checked), said with its own.
+ *  Fixer 13 (X7): two callers, the start-up check (`rerun` unset) and
+ *  sentinelRerun (`rerun`: true). A start's update is always above the
+ *  highest version checked, so setting it there and raising it coincide;
+ *  a third caller that analyses a version at or below it must decide. */
+async function analyzeUpdates(updates: Update[], carried: string[] = [], opts: { rerun?: boolean } = {}): Promise<void> {
+  if (!state || updates.length === 0) return
+  currentAnalysis?.abort()
+  const ac = new AbortController()
+  currentAnalysis = ac
+  const errors = [...carried]
+  const notes: string[] = []
+  // Owner answers review: whether an analysis attempted here failed (the
+  // chip's "did not complete"), as against carried problems, refusals and
+  // unmatched findings.
+  let failed = false
+  for (const u of updates) {
+    if (ac.signal.aborted) break
+    state.setAnalyzing(true, null, u.provider)
+    const r = await analyzeOne(u, ac.signal)
+    if (ac.signal.aborted) break                      // superseded / cancelled: drop the result
+    if (r.note) notes.push(r.note)
+    if (r.ok) {
+      for (const f of r.findings) state.upsertFinding(f)
+      // Round 3: findings that could not be matched to the notes are not
+      // shown, so the update is not checked yet: it is analysed again at the
+      // next check, and the panel says why (never "no breaking changes").
+      // Round 4: at most UNVERIFIED_MAX_TRIES times, so a start never runs an
+      // analysis on the account for the same update forever: then the
+      // version is recorded as checked, with a note that says so.
+      const key = `${u.provider}:${u.version}`
+      if (r.unverified > 0) {
+        const tries = state.countUnverified(key)
+        if (tries >= UNVERIFIED_MAX_TRIES) {
+          SUBJECTS[u.provider].recordSeen(state, u.version, opts.rerun === true)
+          state.clearUnverified(key)
+          notes.push(unverifiedRecordedMessage(u, r.unverified, tries))
+        } else {
+          // Fixer 13: a Re-run of a version no start analyses says to Re-run
+          // again (the next check would not analyse it).
+          const checked = state.highestChecked(u.provider)
+          errors.push(unverifiedMessage(u, r.unverified, opts.rerun === true && (checked === null || !isUpdateAtStart(u.version, checked))))
+        }
+      } else {
+        SUBJECTS[u.provider].recordSeen(state, u.version, opts.rerun === true)
+        state.clearUnverified(key)
+      }
+    } else if (r.error) {
+      errors.push(r.error)
+      if (r.failed) failed = true
+    }
+  }
+  if (currentAnalysis === ac) currentAnalysis = null
+  if (ac.signal.aborted) return
+  state.setAnalyzing(false, errors.length ? errors.join(' ') : null, null, notes.length ? notes.join(' ') : null, failed)
 }
 
 /** Trigger B startup check (spec §5). Non-blocking — call fire-and-forget from bootstrap. */
@@ -112,73 +811,190 @@ export async function sentinelStartupCheck(): Promise<void> {
   // probe's fail-open return below. It reads the live article when the network
   // allows and falls back to the shipped snapshot when it does not (review S1).
   await runModelCoverageCheck()
+  let run: { end: () => void } | null = null
+  try {
+    // P3.9: the two providers' checks run side by side. Nothing the Codex
+    // half meets stops Claude Code's (its own failures end in the log,
+    // fail-open), and (round 2) a Claude Code check that fails is said
+    // while a Codex update is still analysed.
+    const [codexSettled, claudeSettled] = await Promise.allSettled([codexUpdateAtStart(), claudeUpdateAtStart()])
+    const codexUpdate = codexSettled.status === 'fulfilled' ? codexSettled.value : null
+    const carried: string[] = []
+    let claudeUpdate: Update | null = null
+    if (claudeSettled.status === 'fulfilled') {
+      run = claudeSettled.value.run
+      claudeUpdate = claudeSettled.value.update
+    } else {
+      carried.push(String((claudeSettled.reason as Error)?.message ?? claudeSettled.reason))
+    }
+    const updates = [claudeUpdate, codexUpdate].filter((u): u is Update => u !== null)
+    if (updates.length) await analyzeUpdates(updates, carried)
+    else if (carried.length) state.setAnalyzing(false, carried.join(' '))
+  } catch (err) {
+    // Polish pass (E-S8): an unexpected error is a failed check (the chip says so).
+    // A thrown value that is not an Error carries its own text (final nits, E-Q15).
+    state?.setAnalyzing(false, String((err as Error)?.message ?? err), null, null, true)         // fail-open, always
+  } finally {
+    run?.end()
+  }
+}
+
+/**
+ * Fixer 10 (gate 3 F9, ADR-009 C1 and D1, row 42): whether the version
+ * installed now is an update the start-up check analyses, for both
+ * providers: only one HIGHER than the highest version recorded as checked
+ * (fixer 11: kept apart from the version the panel names, and lowered by no
+ * start-up analysis, as fixer 13 words it; sentinel-state.ts). Fixer 12 (ADR-009 R3-1): a
+ * Re-run's record, the user's own act, sets it to the version the Re-run
+ * checked, so a highest stuck far ahead (a hand-edited file, a prerelease
+ * once installed) can be undone; after a Re-run of a lower version, a higher
+ * one taken in turn is an update again, at most UNVERIFIED_MAX_TRIES
+ * analyses at start, a cost that comes only from that Re-run.
+ *
+ * The downgrade case, decided by what the check is for: it analyses what
+ * changed since the last version checked, the changelog's entries after it
+ * up to the one installed (sliceChangelog) or, for Codex, the release notes
+ * of the versions since it. A lower version brings nothing past the highest
+ * one checked: Claude Code's slice is then empty and falls back to the newest
+ * sections, a fallback meant for a Re-run the user asked for (sentinelRerun),
+ * and Codex's read gives the installed version's own notes only, a release
+ * older than the one checked. So a downgrade, even to a version never seen,
+ * is not analysed at start; it counts as checked, so the panel names it
+ * (fixer 11, gate 3 F10), while the highest version checked stays where it
+ * is. What can break with it is still said at every start (a Codex version
+ * outside the supported range, Claude Code's minimum-version findings), and
+ * a Re-run still analyses it. It is also what keeps versions installed in
+ * turn (two installs, or two machines sharing one resources folder) within
+ * the cap: once the higher one is recorded the lower one is never an update,
+ * and a version's count of unmatched analyses is kept until a version at or
+ * above it is recorded (sentinel-state.ts, which states the file's bound on
+ * how many it keeps), so each is analysed at most UNVERIFIED_MAX_TRIES times
+ * at start, until a Re-run of a lower version (above). Before, any other
+ * version was an update at every start, and two installs taken
+ * in turn were each analysed again after the other was recorded, without end.
+ */
+function isUpdateAtStart(version: string, checked: string): boolean {
+  return compareVersions(version, checked) > 0
+}
+
+/** Fixer 11: the start-up decision for `provider` with `version` installed.
+ *  The first check is a baseline (recorded, no analysis); a version above
+ *  the highest one checked is an update, analysed from that one; any other
+ *  is checked already, so it is recorded for the panel to name, with no
+ *  analysis (the highest version checked does not go down). */
+function updateAtStart(s: SentinelState, provider: SentinelProvider, version: string): Update | null {
+  const checked = s.highestChecked(provider)
+  const record = SUBJECTS[provider].recordSeen
+  if (checked === null) { record(s, version, false); return null }
+  if (isUpdateAtStart(version, checked)) return { provider, last: checked, version }
+  if (s.shownVersion(provider) !== version) record(s, version, false)
+  return null
+}
+
+/** P3.9: Codex's version and model list at start, while Codex is on
+ *  (silently skipped when it is not), and its update when its version is
+ *  newer than the highest one checked (updateAtStart). The first check is a
+ *  baseline, as Claude Code's is. Never throws. */
+async function codexUpdateAtStart(): Promise<Update | null> {
+  try {
+    const codex = await runCodexChecks({ probe: true, fresh: false })
+    if ('refused' in codex || !codex.version || !state) return null
+    return updateAtStart(state, 'codex', codex.version)
+  } catch (err) {
+    logInfo(`[sentinel] the Codex check at start failed: ${(err as Error)?.message ?? err}`)
+    return null
+  }
+}
+
+/** Claude Code's version check at start and its update when its version is
+ *  newer than the highest one checked (updateAtStart, fixers 10 and 11;
+ *  before, any other version). The run it starts stays counted as Claude Code in use until the
+ *  caller ends it (after the analysis). Claude Code switched off: nothing
+ *  runs for it, not even the --version probe (no one asked for it, and a
+ *  probe never runs for a provider that is off). */
+async function claudeUpdateAtStart(): Promise<{ update: Update | null; run: { end: () => void } | null }> {
+  const begun = await beginRun('claude', { probe: true })
+  if ('refused' in begun) {
+    logInfo('[sentinel] Claude Code may not run now; skipping the version check')
+    return { update: null, run: null }
+  }
   try {
     const { spawnClaudeHeadless } = await headlessRunner()
     const res = await spawnClaudeHeadless(['--version'], 15000, undefined, (await analysisHome()).home)
     const version = res.code === 0 ? parseClaudeVersion(res.stdout) : null
-    if (!version) { logInfo('[sentinel] claude --version unavailable; skipping (fail-open)'); return }
+    if (!version || !state) {
+      logInfo('[sentinel] claude --version unavailable; skipping (fail-open)')
+      return { update: null, run: begun }
+    }
     for (const f of minVersionFindings(version, manifest)) state.upsertFinding(f)
-    const last = state.snapshot().lastSeenCcVersion
-    if (last === version) return
-    if (last === null) { state.setLastSeenCcVersion(version); return }   // first run: baseline, no analysis
-    await analyzeVersionChange(last, version)
+    return { update: updateAtStart(state, 'claude', version), run: begun }
   } catch (err) {
-    state?.setAnalyzing(false, (err as Error).message)         // fail-open, always
-  }
-}
-
-async function analyzeVersionChange(last: string, version: string): Promise<void> {
-  if (!state) return
-  // A new run supersedes any in-flight one (kills its process tree) so a stale
-  // analysis can't finish late and clobber state or leave `analyzing` stuck.
-  currentAnalysis?.abort()
-  const ac = new AbortController()
-  currentAnalysis = ac
-  state.setAnalyzing(true)
-  const md = await fetchChangelog()
-  if (!md) {
-    // Analysis-unavailable is the degraded state, shown as a calm note -- not a
-    // finding. Findings are reserved for actual severe breaking changes now.
-    if (currentAnalysis === ac) currentAnalysis = null
-    state.setAnalyzing(false, 'Changelog unavailable (offline?). Use Re-run in the Sentinel panel.')
-    return
-  }
-  const { spawnClaudeHeadless } = await headlessRunner()
-  const { home, accountLabel } = await analysisHome()
-  const result = await runAnalysis({
-    runner: (args, t, stdin) => spawnClaudeHeadless(args, t, stdin, home, ac.signal),
-    changelog: sliceChangelog(md, last, version),
-    from: last, to: version, accountLabel,
-  })
-  if (currentAnalysis === ac) currentAnalysis = null
-  if (ac.signal.aborted) return                        // superseded / cancelled: drop the result
-  if (result.ok) {
-    for (const f of result.findings) state.upsertFinding(f)
-    state.setLastSeenCcVersion(version)
-    state.setAnalyzing(false)
-  } else {
-    state.setAnalyzing(false, result.error)
+    begun.end()
+    throw err
   }
 }
 
 /**
  * Manual Re-run from the panel: re-analyze to the CURRENT version even if already seen.
- * When last === version (typical re-run on an unchanged install), analyzeVersionChange
+ * When last === version (typical re-run on an unchanged install), analyzeUpdates
  * calls sliceChangelog(md, version, version) which slices (v, v] = empty set → falls
  * back to the head-5 sections so the AI re-analyzes the most recent entries. Acceptable
  * UX: the user explicitly requested a fresh look.
+ *
+ * P3.9: each provider that is on is checked again and its update analysed;
+ * one that is off is skipped without a word (a provider that is off shows
+ * nothing). Only when neither may run does the panel say why, in Claude
+ * Code's words as before.
+ *
+ * O8: the model-registry check runs again too, as it does at start, so a
+ * Re-run pressed at a model notice whose cause is gone closes it (the Codex
+ * half already ran again, in runCodexChecks). It runs beside the rest, so an
+ * article read that hangs does not hold up the analysis; its registry-only
+ * close happens at once, and the Re-run ends when it has finished.
  */
 export async function sentinelRerun(): Promise<void> {
   if (!state) return
+  const models = runModelCoverageCheck()
+  let run: { end: () => void } | null = null
   try {
-    const { spawnClaudeHeadless } = await headlessRunner()
-    const res = await spawnClaudeHeadless(['--version'], 15000, undefined, (await analysisHome()).home)
-    const version = res.code === 0 ? parseClaudeVersion(res.stdout) : null
-    if (!version) { state.setAnalyzing(false, 'claude --version unavailable'); return }
-    const last = state.snapshot().lastSeenCcVersion ?? version
-    await analyzeVersionChange(last, version)
+    const claudeOn = !(await refusalOf('claude', true))
+    const codexOn = !(await refusalOf('codex', true))
+    if (!claudeOn && !codexOn) {
+      // Asked for by the user, and still refused while Claude Code is off: the
+      // panel says why (WP2, provider-launch-gate.ts).
+      state.setAnalyzing(false, await refusalOf('claude'))
+      return
+    }
+    const updates: Update[] = []
+    const problems: string[] = []
+    if (claudeOn) {
+      const begun = await beginRun('claude', { probe: false })
+      if ('refused' in begun) {
+        problems.push(begun.refused)
+      } else {
+        run = begun
+        const { spawnClaudeHeadless } = await headlessRunner()
+        const res = await spawnClaudeHeadless(['--version'], 15000, undefined, (await analysisHome()).home)
+        const version = res.code === 0 ? parseClaudeVersion(res.stdout) : null
+        if (!version) problems.push('claude --version unavailable')
+        else updates.push({ provider: 'claude', last: state.snapshot().lastSeenCcVersion ?? version, version })
+      }
+    }
+    if (codexOn) {
+      const codex = await runCodexChecks({ probe: false, fresh: true })
+      if ('refused' in codex) problems.push(codex.refused)
+      else if (!codex.version) problems.push(CODEX_NOT_CHECKED)
+      else updates.push({ provider: 'codex', last: state.snapshot().lastSeenCodexVersion ?? codex.version, version: codex.version })
+    }
+    if (updates.length === 0) { state.setAnalyzing(false, problems.join(' ') || null); return }
+    // Fixer 12 (ADR-009 R3-1): what this Re-run records becomes the highest
+    // version checked (the user's own act; sentinel-state.ts).
+    await analyzeUpdates(updates, problems, { rerun: true })
   } catch (err) {
-    state?.setAnalyzing(false, (err as Error).message)
+    state?.setAnalyzing(false, String((err as Error)?.message ?? err), null, null, true)   // a failed check (E-S8, E-Q15)
+  } finally {
+    run?.end()
+    await models                                     // never rejects: a throw is a finding of its own
   }
 }
 

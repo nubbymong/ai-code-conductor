@@ -66,6 +66,15 @@ export function findSavedConfig(configs: unknown, configId: string | undefined):
 
 const same = (a: string | undefined, b: string | undefined) => (a ?? '') === (b ?? '')
 
+/** How the bound block is used. */
+export interface SshBindingMode {
+  /** #86: the partner shell of an SSH session -- a PLAIN connection to the
+   *  config's own host: the same host, port, user and remote path are required,
+   *  but it runs no post-connect command and no container runtime, and never
+   *  persists (tmux off). Only ever takes things away from the saved block. */
+  plainShell?: boolean
+}
+
 /**
  * The SSH block a spawn may run with. When the request names a config, the
  * block must be that config's own (host, port, username, remotePath,
@@ -73,8 +82,13 @@ const same = (a: string | undefined, b: string | undefined) => (a ?? '') === (b 
  * renderer added rides along, with the renderer's runtime-only `reconnect`
  * kept. A request that names a config it does not match, a config that is not
  * SSH, or an id that does not exist is refused.
+ *
+ * A plain shell (`mode.plainShell`, the partner of an SSH session) is bound to
+ * the same saved host, port, user and remote path, and asks for no post-connect
+ * command (one that asks for any is refused): its block carries none, no
+ * runtime, no reconnect, and persistence off, whatever the saved config says.
  */
-export function bindSshToSavedConfig(requested: RequestedSsh, configId: string | undefined, configs: unknown): SshBinding {
+export function bindSshToSavedConfig(requested: RequestedSsh, configId: string | undefined, configs: unknown, mode: SshBindingMode = {}): SshBinding {
   const saved = findSavedConfig(configs, configId)
   if (!saved) return { ok: false, reason: `no saved config with id ${configId ?? '(none)'}` }
   if (saved.sessionType !== 'ssh' || !saved.sshConfig) return { ok: false, reason: `config ${saved.id} is not an SSH config` }
@@ -83,6 +97,20 @@ export function bindSshToSavedConfig(requested: RequestedSsh, configId: string |
   if (Number(requested.port) !== Number(s.port)) return { ok: false, reason: `port differs from the saved config` }
   if (!same(requested.username, s.username)) return { ok: false, reason: `username differs from the saved config` }
   if (!same(requested.remotePath, s.remotePath)) return { ok: false, reason: `remote path differs from the saved config` }
+  if (mode.plainShell === true) {
+    if ((requested.postCommand ?? '') !== '') return { ok: false, reason: `a plain shell runs no post-connect command` }
+    return {
+      ok: true,
+      ssh: {
+        host: s.host,
+        port: Number(s.port),
+        username: s.username,
+        remotePath: s.remotePath,
+        detachable: false,
+        ...(s.remoteOs !== undefined ? { remoteOs: s.remoteOs } : {}),
+      },
+    }
+  }
   if (!same(requested.postCommand, s.postCommand)) return { ok: false, reason: `post-connect command differs from the saved config` }
   return {
     ok: true,

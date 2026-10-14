@@ -20,6 +20,13 @@ import * as path from 'path'
 import * as os from 'os'
 
 import { SHIM_GATHER_JS, SHIM_STATUS_URL_JS } from './statusline-gather'
+import { buildStatuslineSetting } from './statusline-command'
+import { deployScriptFile, deployScriptBytes } from '../../script-deploy'
+import { checkDeployedScript } from '../../script-folders'
+import { logWarn } from '../../debug-logger'
+
+/** The status line script's name in `<resourcesDir>/scripts/`. */
+const STATUSLINE_SCRIPT = 'claude-multi-statusline.js'
 
 /**
  * Deploy the statusline script that Claude Code will invoke.
@@ -146,29 +153,52 @@ process.stdin.on('end', () => {
   // at the resources-dir copy below -- we no longer plant a script in ~/.claude
   // or write the global settings stanza. Boot-heal removes any legacy ones.
 
-  // Deploy to resources/scripts/ for the per-session command + SSH-mounted access
+  // Deploy to resources/scripts/ for the per-session command, by the rules
+  // every deployed script follows (deployScriptBytes: what is there read
+  // without following a link first, written only when its bytes changed, a
+  // failure logged by the file's name). A launch gives the command only while
+  // the copy passes the launch check (launchStatuslineSetting).
+  const resourcesScriptsDir = path.join(resourcesDir, 'scripts')
   try {
-    const resourcesScriptsDir = path.join(resourcesDir, 'scripts')
     if (!fs.existsSync(resourcesScriptsDir)) {
-      fs.mkdirSync(resourcesScriptsDir, { recursive: true })
+      fs.mkdirSync(resourcesScriptsDir, { recursive: true, mode: 0o700 })
     }
-    fs.writeFileSync(
-      path.join(resourcesScriptsDir, 'claude-multi-statusline.js'),
-      scriptContent,
-      { mode: 0o755 }
-    )
+  } catch (err) {
+    logWarn(`[statusline] the scripts folder in the resources folder could not be made (${(err as NodeJS.ErrnoException)?.code ?? 'unknown error'}), so ${STATUSLINE_SCRIPT} is not deployed`)
+    return
+  }
+  try {
+    deployScriptBytes(Buffer.from(scriptContent, 'utf8'), path.join(resourcesScriptsDir, STATUSLINE_SCRIPT))
+  } catch { /* said by deployScriptBytes; a launch then checks what is there */ }
 
-    // Resume-picker deploy is factored out into deployClaudeResumePickerScript
-    // and called from index.ts boot chain alongside deployStatuslineScript.
+  // Resume-picker deploy is factored out into deployClaudeResumePickerScript
+  // and called from index.ts boot chain alongside deployStatuslineScript.
 
-    // Clean up legacy vision scripts (replaced by MCP server)
-    for (const legacy of ['vision-cli.js', 'vision-prompt.txt']) {
-      const legacyPath = path.join(resourcesScriptsDir, legacy)
-      try { if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath) } catch { /* ignore */ }
-    }
+  // Clean up legacy vision scripts (replaced by MCP server)
+  for (const legacy of ['vision-cli.js', 'vision-prompt.txt']) {
+    const legacyPath = path.join(resourcesScriptsDir, legacy)
+    try { if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath) } catch { /* ignore */ }
+  }
+}
 
-  } catch { /* resources dir may not be configured yet */ }
-
+/**
+ * The `statusLine` value a local session's settings get (the provider's
+ * statuslineSetting): buildStatuslineSetting's command, given only while the
+ * deployed script is one a launch may run (script-folders.ts
+ * checkDeployedScript: a plain file with one name, in a scripts folder made
+ * this user's alone in this run). Otherwise undefined, said in one warning:
+ * the session starts without the app's status line, and a status line of the
+ * user's own, if set, stays. null exactly as buildStatuslineSetting's (a path
+ * the shell would read as more than a path; the caller says that).
+ */
+export function launchStatuslineSetting(resourcesDir: string, sessionId?: string, statusUrlFile?: string): { type: 'command'; command: string } | null | undefined {
+  const setting = buildStatuslineSetting(resourcesDir, sessionId, statusUrlFile)
+  if (!setting) return setting
+  const check = checkDeployedScript(path.join(resourcesDir, 'scripts', STATUSLINE_SCRIPT))
+  if (check.ok) return setting
+  const why = check.absent ? `${STATUSLINE_SCRIPT} is not deployed in the resources folder` : check.why
+  logWarn(`[statusline] session ${sessionId ?? 'unknown'}: ${why}; this session starts without the app's status line`)
+  return undefined
 }
 
 /**
@@ -196,7 +226,8 @@ export function healGlobalStatusline(claudeDir: string = path.join(os.homedir(),
 }
 
 /**
- * Copy `scripts/resume-picker.js` into `<resourcesDir>/scripts/`.
+ * Put `scripts/resume-picker.js` in `<resourcesDir>/scripts/` (deployScriptFile:
+ * written only when its bytes changed).
  *
  * electron-vite bundles all src/main/**\/*.ts into a single out/main/index.js,
  * so `__dirname` at runtime is always out/main/ regardless of original source
@@ -218,12 +249,12 @@ export function healGlobalStatusline(claudeDir: string = path.join(os.homedir(),
 export async function deployClaudeResumePickerScript(resourcesDir: string, sourceRoot?: string): Promise<void> {
   const resourcesScriptsDir = path.join(resourcesDir, 'scripts')
   if (!fs.existsSync(resourcesScriptsDir)) {
-    fs.mkdirSync(resourcesScriptsDir, { recursive: true })
+    fs.mkdirSync(resourcesScriptsDir, { recursive: true, mode: 0o700 })
   }
   const resumePickerSrc = sourceRoot
     ? path.join(sourceRoot, 'scripts/resume-picker.js')
     : path.join(__dirname, '../../scripts/resume-picker.js')
-  if (fs.existsSync(resumePickerSrc)) {
-    fs.copyFileSync(resumePickerSrc, path.join(resourcesScriptsDir, 'resume-picker.js'))
-  }
+  // F14: read and compared, written only when changed; never copyFileSync,
+  // which leaves a temporary file behind for a source inside app.asar.
+  deployScriptFile(resumePickerSrc, path.join(resourcesScriptsDir, 'resume-picker.js'))
 }

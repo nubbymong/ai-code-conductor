@@ -1,9 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, ptyDataChannel, ptyExitChannel } from '../shared/ipc-channels'
 import { randomId } from '../shared/id'
+import { isIpcStreamEnd, IPC_STREAM_END_WAIT_MS } from '../shared/ipc-stream'
 import type { HookEvent, HooksGatewayStatus } from '../shared/hook-types'
-import type { StatuslineData } from '../shared/types'
+import type { StatuslineData, SubmitTextResult, AskConductorNotice, CanvasMarkerUndelivered, ClaudeMarkerAsk, ClaudeMarkerAnswer, CanvasSessionGuidance, AccountLogFolders, AccountLogFolderKind, AccountLogFolderOpenResult } from '../shared/types'
 import type { WebviewNavState } from '../shared/browser-url'
+import type { AccountPaneStateView, CodexWebSessionView, CodexWebSignInState } from '../shared/account-web-session'
 import type { ModelRegistry } from '../shared/model-registry'
 import type { SentinelStateSnapshot } from '../shared/sentinel-types'
 import type {
@@ -31,6 +33,59 @@ import type {
   Rect,
   TrailEntry,
 } from '../shared/canvas'
+import type {
+  AccountsSnapshot, AccountsResult, ProviderInstallationView, InstallRecipeView, PathHintView, SignInOutputEvent, BeginSetupRequest, SignInRequest, SignInAgainRequest, SignInAgainResult,
+  CompleteSetupRequest, LogoutRequest, SetLifecycleRequest, UpdateIdentityRequest, SecretDeposit, KnownAuthState, ProviderId,
+  ResolveConflictRequest, SetReviewerDefaultRequest, ProviderAccountUsageView, ProviderUsageStreamResult,
+} from '../shared/providers'
+
+function onChannel<T>(channel: string, cb: (data: T) => void): () => void {
+  const handler = (_: unknown, data: T) => cb(data)
+  ipcRenderer.on(channel, handler)
+  return () => ipcRenderer.removeListener(channel, handler)
+}
+
+/**
+ * A stream on a private per-call channel (usage track MP8 round 2). Main
+ * sends the items with `webContents.send` and its result as the `invoke`
+ * reply, and Electron does not order the two routes against each other, so
+ * stopping at the reply dropped items still on their way (the VM lost 3 of 20
+ * Codex usage streams, 8 of 10 offline). Subscribed before the invoke; after
+ * a reply that says the stream ran (`streamed`), it keeps listening until
+ * main's end marker arrives on the same channel (after every item: one
+ * channel is delivered in order), or, failing that, IPC_STREAM_END_WAIT_MS.
+ * A reply that says it did not run, or a rejection, stops at once. The
+ * promise settles with the reply only once the listener is gone.
+ */
+function streamOnChannel<T, R>(channel: string, invoke: () => Promise<R>, onItem: (item: T) => void, streamed: (reply: R) => boolean): Promise<R> {
+  return new Promise<R>((resolve, reject) => {
+    let ended = false
+    let replied: { ok: true; value: R } | { ok: false; error: unknown } | null = null
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let done = false
+    const finish = (): void => {
+      if (done || !replied) return
+      done = true
+      ipcRenderer.removeListener(channel, handler)
+      if (timer) clearTimeout(timer)
+      if (replied.ok) resolve(replied.value)
+      else reject(replied.error)
+    }
+    const handler = (_e: unknown, message: unknown): void => {
+      if (done) return
+      if (isIpcStreamEnd(message)) { ended = true; finish(); return }
+      if (ended) return
+      try { onItem(message as T) } catch { /* a consumer never stops the stream */ }
+    }
+    ipcRenderer.on(channel, handler)
+    const onReply = (r: { ok: true; value: R } | { ok: false; error: unknown }): void => {
+      replied = r
+      if (ended || !r.ok || !streamed(r.value)) { finish(); return }
+      timer = setTimeout(finish, IPC_STREAM_END_WAIT_MS)
+    }
+    invoke().then((value) => onReply({ ok: true, value }), (error) => onReply({ ok: false, error }))
+  })
+}
 
 /** Mirrors src/main/watchdog/session-watchdog.ts's WatchdogPublicState — kept
  *  as a structural copy (not imported) so preload never pulls in main-only
@@ -48,6 +103,9 @@ export interface WatchdogPublicState {
   armed: boolean
   /** #605: which auto-retry checks are live for this session right now. */
   checks: WatchdogChecks
+  /** P3.10: checks this session's CLI has no patterns for (Codex: the
+   *  safeguard), off and not switchable; absent when there are none. */
+  unavailable?: Array<keyof WatchdogChecks>
   attempts: number
   overloadAttempts: number
   safeguardAttempts: number
@@ -73,8 +131,11 @@ export interface ElectronAPI {
     list: () => Promise<import('../shared/account-types').AccountProfile[]>
     create: (name?: string) => Promise<import('../shared/account-types').AccountProfile>
     rename: (id: string, name: string) => Promise<{ ok: boolean }>
-    setActive: (id: string, active: boolean) => Promise<{ ok: boolean; error?: string }>
-    delete: (id: string) => Promise<{ ok: boolean; error?: string }>
+    /** `code: 'in-use'`: a live session runs on the account; `sessions`
+     *  names them, `unnamed` counts other holders (P3.2). A removal refused
+     *  after its claude.ai sign-in was cleared says `in-use-cleared`. */
+    setActive: (id: string, active: boolean) => Promise<{ ok: boolean; error?: string; code?: 'in-use'; sessions?: string[] }>
+    delete: (id: string) => Promise<{ ok: boolean; error?: string; code?: 'in-use' | 'in-use-cleared'; sessions?: string[]; unnamed?: number }>
     refreshIdentity: (id: string) => Promise<{ ok: boolean; email: string | null; configDir?: string }>
     /** Credential generation (stat stamp + signed-in), never token contents. */
     credentialStamp: (id: string) => Promise<{ ok: boolean; stamp: string | null; signedIn: boolean }>
@@ -83,11 +144,18 @@ export interface ElectronAPI {
     globalEmail: () => Promise<string | null>
     captureDetected: (sessionId: string, name?: string) => Promise<import('../shared/account-types').AccountProfile | null>
     onAccountNewDetected: (cb: (data: { sessionId: string; profileId: string; email: string }) => void) => () => void
+    /** Managed-launch preflight reports, newest first. Names the variables and
+     *  settings keys the isolation hardening removed, and never a credential
+     *  value -- see the channel comment for how that is kept true. */
+    managedLaunchReports: (profileId: string) => Promise<Array<import('../shared/providers').ManagedLaunchReport>>
   }
   accountUsage: {
     fetchAll: () => Promise<import('../shared/usage-types').AccountUsage[]>
     fetchAllStream: (onResult: (usage: import('../shared/usage-types').AccountUsage) => void) => Promise<void>
     fetchOne: (id: string, opts?: { noRefresh?: boolean }) => Promise<import('../shared/usage-types').AccountUsage | null>
+    /** The bucket labels of the saved and live figures (Settings). Cached
+     *  data only: no network, no credential read. */
+    knownLabels: () => Promise<string[]>
   }
   window: {
     minimize: () => void
@@ -104,7 +172,9 @@ export interface ElectronAPI {
     openFolder: () => Promise<string | null>
   }
   clipboard: {
-    saveImage: () => Promise<{ path: string } | { error: 'no-image' | 'too-large' }>
+    /** PR-level ADR-009 round 1 (A1): off Windows, `posixShell` says whether
+     *  the shell a plain terminal runs is of the sh family ('sh') or not. */
+    saveImage: () => Promise<{ path: string; posixShell?: 'sh' | 'other' } | { error: 'no-image' | 'too-large' }>
     /** Focus-independent clipboard text read, retried for Windows delayed-render (#145). */
     readText: () => Promise<string>
   }
@@ -164,13 +234,22 @@ export interface ElectronAPI {
       provider?: 'claude' | 'codex'
       codexOptions?: {
         model?: string
-        reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
-        permissionsPreset: 'read-only' | 'standard' | 'auto' | 'unrestricted'
+        reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+        permissionsPreset: 'read-only' | 'standard' | 'auto' | 'unrestricted' | 'plan'
+        /** P3.11 (row 62): extra CLI arguments; main checks them. */
+        extraArgs?: string
       }
-    }) => Promise<void>
+      /** WP2: the Codex account the session runs under (an opaque registry
+       *  id). Absent = the provider default. */
+      providerAccountId?: string
+      /** WP2: THIS launch's acknowledgement of an unverified sign-in. */
+      acknowledgeRealmOnly?: boolean
+    }) => Promise<{ started: false } | ({ started: false } & import('../shared/providers').SpawnRefused) | { started: true; carry?: import('../shared/providers').ConversationCarryNotice; launched?: { codexPreset: 'read-only' | 'standard' | 'auto' | 'unrestricted' | 'plan' } } | void>
     write: (sessionId: string, data: string) => void
     resize: (sessionId: string, cols: number, rows: number) => void
-    kill: (sessionId: string) => void
+    /** P3.16a round 2 (Q5): `'restart'` when a Restart ends the process (its
+     *  next one follows), so its exit is not the session's end. */
+    kill: (sessionId: string, reason?: 'restart') => void
     onData: (sessionId: string, callback: (data: string) => void) => () => void
     onExit: (sessionId: string, callback: (exitCode: number) => void) => () => void
   }
@@ -180,8 +259,9 @@ export interface ElectronAPI {
   ssh: {
     /** Manually trigger the post-connect command stage. */
     runPostCommand: (sessionId: string) => Promise<void>
-    /** Manually trigger the Claude launch stage. */
-    launchClaude: (sessionId: string) => Promise<void>
+    /** Manually trigger the Claude launch stage. Answers a refusal while
+     *  Claude Code is off. */
+    launchClaude: (sessionId: string) => Promise<void | import('../shared/providers').ProviderLaunchRefused>
     /** User opts out of any further auto-writes; PTY is theirs to drive. */
     skip: (sessionId: string) => Promise<void>
     /** One-shot query of the current flow state, used to recover from
@@ -201,8 +281,9 @@ export interface ElectronAPI {
      *  main has no captured target for it, so it rebuilds the connection from
      *  the SAVED config named by `configId` (host/user/port + that config's own
      *  keychain secrets). Passing ids is the whole of the caller's power — the
-     *  host is never named here, and neither is the tmux session. */
-    endRemote: (target: string | { sessionId: string; configId?: string }) => Promise<void>
+     *  host is never named here, and neither is the tmux session. Resolves
+     *  with what End did once its exec finishes (SshEndRemoteResult). */
+    endRemote: (target: string | { sessionId: string; configId?: string }) => Promise<import('../shared/types').SshEndRemoteResult>
     /** SSH Persistent (resume liveness): ask main whether a config's detached
      *  `ccc-<sessionId>` tmux sessions are still alive on the host. */
     checkDetachedLive: (payload: { configId: string; sessionIds: string[] }) => Promise<import('../shared/types').DetachedRemoteLiveness>
@@ -246,6 +327,11 @@ export interface ElectronAPI {
     disable: () => Promise<boolean>
     isEnabled: () => Promise<boolean>
     openFolder: () => Promise<string>
+    /** WP2 PR 4 (P4.4): each provider account's log folders, by kind; never paths. */
+    accountLogFolders: () => Promise<AccountLogFolders[]>
+    /** WP2 PR 4 (P4.4): open one of them. Main resolves the folder from the
+     *  account id; the renderer never names a path. */
+    openAccountLogFolder: (args: { accountId: string; folder: AccountLogFolderKind }) => Promise<AccountLogFolderOpenResult>
   }
   usage: {
     getSessionUsage: (sessionId: string) => Promise<unknown>
@@ -312,9 +398,19 @@ export interface ElectronAPI {
     paneBounds: (args: { sessionId: string; bounds: { x: number; y: number; width: number; height: number } }) => Promise<{ ok: boolean }>
     paneVisible: (args: { sessionId: string; visible: boolean }) => Promise<{ ok: boolean }>
     paneReload: (sessionId: string) => Promise<{ ok: boolean }>
-    paneGetState: (sessionId: string) => Promise<{ ok: true; state: { sessionId: string; profileId: string; authed: boolean | null; email: string | null } | null } | { ok: false; error: string }>
-    onPaneState: (cb: (state: { sessionId: string; profileId: string; authed: boolean | null; email: string | null }) => void) => () => void
-    onPaneClosed: (cb: (e: { sessionId: string }) => void) => () => void
+    paneGetState: (sessionId: string) => Promise<{ ok: true; state: AccountPaneStateView | null } | { ok: false; error: string }>
+    onPaneState: (cb: (state: AccountPaneStateView) => void) => () => void
+    onPaneClosed: (cb: (e: { sessionId: string; reason?: string }) => void) => () => void
+  }
+  /** A Codex account's chatgpt.com web session (WP2 PR 4, P4.6), keyed by its
+   *  registry account id. The pane's other controls are accountWeb's. */
+  codexWeb: {
+    status: (accountId: string) => Promise<{ ok: true; web: CodexWebSessionView } | { ok: false; error: string }>
+    signIn: (accountId: string) => Promise<{ ok: true; state: CodexWebSignInState } | { ok: false; error: string }>
+    signInState: () => Promise<{ ok: true; state: CodexWebSignInState } | { ok: false; error: string }>
+    cancel: (accountId: string) => Promise<{ ok: true } | { ok: false; error: string }>
+    signOut: (accountId: string) => Promise<{ ok: true } | { ok: false; error: string }>
+    paneOpen: (args: { sessionId: string; accountId: string; bounds: { x: number; y: number; width: number; height: number } }) => Promise<{ ok: boolean; error?: string }>
   }
   canvas: {
     getState: (args: { sessionId: string }) => Promise<CanvasState | null>
@@ -413,6 +509,18 @@ export interface ElectronAPI {
     versionVerdict: (args: { sessionId: string; versionId?: string; state: 'approved' | 'rejected' | 'dismissed'; note?: string }) => Promise<CanvasState | { error: string }>
     /** #580: the chat line that tells the agent a verdict/review was filed. Queued while the agent's turn is open. */
     agentMarker: (args: { sessionId: string; canvasId: string; line: string }) => Promise<{ delivery: 'sent' | 'queued' | 'unwired' | 'refused'; reason?: string }>
+    /** WP2 PR 4 (P4.1): a queued marker the submit primitive could not deliver,
+     *  or a Claude Code marker main dropped untyped, for the review it belongs
+     *  to. */
+    onAgentMarkerUndelivered: (cb: (e: CanvasMarkerUndelivered) => void) => () => void
+    /** Main asks to read (probe) or type a canvas marker at a Claude Code
+     *  session's prompt; typed only at its ready, empty prompt. */
+    onClaudeMarkerAsk: (cb: (e: ClaudeMarkerAsk) => void) => () => void
+    /** The reply to one onClaudeMarkerAsk request. */
+    answerClaudeMarker: (answer: ClaudeMarkerAnswer) => void
+    /** WP2 PR 4 (P4.1): whether this session's launch carried the canvas and
+     *  vision skills' guidance with the tools, for the canvas page's one line. */
+    sessionGuidance: (args: { sessionId: string }) => Promise<CanvasSessionGuidance | null>
     /** C1: reopen a version for review; later ready versions become withdrawn.
      *  Wakes no ROUND — settled stays settled. */
     versionReopen: (args: { sessionId: string; versionId: string }) => Promise<CanvasState | { error: string }>
@@ -559,23 +667,53 @@ export interface ElectronAPI {
   shell: {
     openExternal: (url: string) => Promise<void>
   }
-  codex: {
-    status: () => Promise<{
-      installed: boolean
-      version: string | null
-      authMode: 'chatgpt' | 'api-key' | 'none'
-      planType?: string
-      accountId?: string
-      hasOpenAiApiKeyEnv: boolean
-    }>
-    login: (payload: { mode: 'chatgpt' | 'api-key' | 'device'; apiKey?: string }) => Promise<{
-      ok: boolean
-      browserUrl?: string
-      deviceCode?: string
-      error?: string
-    }>
-    logout: () => Promise<{ ok: boolean }>
-    testConnection: () => Promise<{ ok: boolean; message: string }>
+  /** WP2: the provider-neutral Accounts surface. Opaque ids in, views out;
+   *  an API key goes only through sendSecret, one way, bound to a handle. */
+  providerAccounts: {
+    snapshot: () => Promise<AccountsSnapshot | null>
+    onChanged: (cb: (snapshot: AccountsSnapshot) => void) => () => void
+    discover: (providerId: ProviderId) => Promise<AccountsResult<{ installation: ProviderInstallationView; pathHint?: PathHintView }>>
+    installRecipes: (providerId: ProviderId) => Promise<InstallRecipeView[] | AccountsResult>
+    /** Add it to PATH for me: main appends the provider's own install folder, which it computes. */
+    addToPath: (providerId: ProviderId) => Promise<AccountsResult<{ added: 'added' | 'already'; installation: ProviderInstallationView; pathHint?: PathHintView }>>
+    setEnabled: (providerId: ProviderId, enabled: boolean) => Promise<AccountsResult>
+    beginSetup: (req: BeginSetupRequest) => Promise<AccountsResult<{ accountId: string }>>
+    issueSecretHandle: (accountId: string) => Promise<AccountsResult<{ handle: string }>>
+    sendSecret: (deposit: SecretDeposit) => void
+    signIn: (req: SignInRequest) => Promise<AccountsResult<{ state: KnownAuthState }>>
+    /** Sign an existing managed account in again, in its own realm. */
+    signInAgain: (req: SignInAgainRequest) => Promise<AccountsResult<SignInAgainResult>>
+    onSignInOutput: (cb: (event: SignInOutputEvent) => void) => () => void
+    cancelSignIn: (accountId: string) => Promise<AccountsResult>
+    completeSetup: (req: CompleteSetupRequest) => Promise<AccountsResult<{ accountId: string }>>
+    abandonSetup: (accountId: string) => Promise<AccountsResult>
+    refreshStatus: (accountId: string) => Promise<AccountsResult<{ state: KnownAuthState }>>
+    logout: (req: LogoutRequest) => Promise<AccountsResult<{ state: KnownAuthState }>>
+    setLifecycle: (req: SetLifecycleRequest) => Promise<AccountsResult>
+    setDefault: (accountId: string) => Promise<AccountsResult>
+    updateIdentity: (req: UpdateIdentityRequest) => Promise<AccountsResult>
+    createGroup: (name: string) => Promise<AccountsResult<{ groupId: string }>>
+    renameGroup: (groupId: string, name: string) => Promise<AccountsResult>
+    deleteGroup: (groupId: string) => Promise<AccountsResult>
+    linkIdentity: (accountId: string, identityId: string) => Promise<AccountsResult>
+    unlinkIdentity: (accountId: string) => Promise<AccountsResult<{ identityId: string }>>
+    /** Retired in 2.1.1-beta.3 (owner decision 2026-10-11): this computer's own
+     *  sign-in of a provider is never taken in. Kept for its shape; main always
+     *  answers 'unsupported', and no surface calls it. */
+    adoptExternal: (providerId: ProviderId) => Promise<AccountsResult<{ accountId: string }>>
+    /** Retired in 2.1.1-beta.3 (owner decision 2026-10-11): this computer's own
+     *  sign-in of a provider is never taken in. Kept for its shape; main always
+     *  answers 'unsupported', and no surface calls it. */
+    probeExternal: (providerId: ProviderId) => Promise<AccountsResult<{ state: KnownAuthState }>>
+    /** "This is still my account": clears a blocked account after a fresh check. */
+    reconcileSignIn: (accountId: string) => Promise<AccountsResult<{ state: KnownAuthState }>>
+    resolveConflict: (req: ResolveConflictRequest) => Promise<AccountsResult>
+    setReviewerDefault: (req: SetReviewerDefaultRequest) => Promise<AccountsResult>
+    /** Usage track MP3: each listed account's allowance view as it is ready,
+     *  on a private per-call channel; nothing for a provider that is off. */
+    usageStream: (providerId: ProviderId, onResult: (view: ProviderAccountUsageView) => void, opts?: { read?: boolean }) => Promise<ProviderUsageStreamResult>
+    usageStreamStop: (providerId: ProviderId) => Promise<AccountsResult>
+    usageOne: (accountId: string, opts?: { read?: boolean }) => Promise<AccountsResult<{ usage: ProviderAccountUsageView }>>
   }
   github: GitHubBridge
   hooks: HooksBridge
@@ -617,13 +755,18 @@ export interface ElectronAPI {
     selectResourcesDir: () => Promise<string | null>
     setResourcesDir: (dir: string) => Promise<boolean>
     isCliReady: () => Promise<boolean>
-    probeCli: () => Promise<{ installed: boolean; path?: string; probe: string }>
-    spawnCliSetup: (cols: number, rows: number) => Promise<string>
+    probeCli: () => Promise<{ installed: boolean; path?: string; probe: string; pathHint?: PathHintView }>
+    /** null: closed, or asked for again, before it started (nothing started). */
+    spawnCliSetup: (cols: number, rows: number) => Promise<string | import('../shared/providers').ProviderLaunchRefused | null>
     killCliSetup: () => Promise<boolean>
   }
   insights: {
-    run: (opts?: { profileId?: string }) => Promise<string>
-    runAll: (opts?: { profileIds?: string[] }) => Promise<string>
+    /** `provider` (WP2 PR 4, P4.7): the assistant the run reports on; absent means Claude Code.
+     *  A Codex run names its Codex account in `profileId`, and `acknowledgeRealmOnly` is that
+     *  run's own confirmation for exactly that account (mockup D12). A request main does not
+     *  take is answered `{ rejected }` (not the app window, or not a request it reads). */
+    run: (opts?: { profileId?: string; provider?: ProviderId; acknowledgeRealmOnly?: true }) => Promise<string | import('../shared/providers').ProviderLaunchRefused | import('../shared/types').CloudAgentRequestRejected>
+    runAll: (opts?: { profileIds?: string[] }) => Promise<string | import('../shared/providers').ProviderLaunchRefused | import('../shared/types').CloudAgentRequestRejected>
     getCatalogue: () => Promise<import('../shared/types').InsightsCatalogue>
     getReport: (runId: string) => Promise<string | null>
     getKpis: (runId: string) => Promise<import('../shared/types').KpiData | null>
@@ -657,11 +800,15 @@ export interface ElectronAPI {
     onInstallProgress: (cb: (data: { version: string; message: string }) => void) => () => void
   }
   cloudAgent: {
-    dispatch: (agent: { name: string; description: string; projectPath: string; configId?: string; profileId?: string; legacyVersion?: { enabled: boolean; version: string }; skipPermissions?: boolean }) => Promise<import('../shared/types').CloudAgent>
+    /** `provider` (WP2 PR 4, P4.5): the assistant the agent runs on; absent
+     *  means Claude Code. Main holds the request to a strict schema: only that
+     *  provider's own fields (CloudAgentDispatchParams). */
+    dispatch: (agent: import('../shared/types').CloudAgentDispatchParams) => Promise<import('../shared/types').CloudAgent | import('../shared/providers').ProviderLaunchRefused | import('../shared/types').CloudAgentRequestRejected>
     cancel: (id: string) => Promise<boolean>
     /** #371: `ok:false` means the agent is STILL on disk — do not drop the row. */
     remove: (id: string) => Promise<{ ok: true; removed: boolean } | { ok: false; error: string }>
-    retry: (id: string) => Promise<import('../shared/types').CloudAgent | null>
+    /** `opts` (P4.5): this one retry may use the agent's unverified sign-in. */
+    retry: (id: string, opts?: import('../shared/types').CloudAgentRetryOptions) => Promise<import('../shared/types').CloudAgent | null | import('../shared/providers').ProviderLaunchRefused | import('../shared/types').CloudAgentRequestRejected>
     list: () => Promise<import('../shared/types').CloudAgent[]>
     getOutput: (id: string) => Promise<string>
     /** #371: `ok:false` means nothing was cleared — do not filter the list. */
@@ -681,16 +828,27 @@ export interface ElectronAPI {
   cli: {
     check: () => Promise<boolean>
     path: () => Promise<string | null>
-    version: () => Promise<string | null>
+    version: () => Promise<string | null | import('../shared/providers').ProviderLaunchRefused>
   }
   help: {
     workspace: () => Promise<string | null>
+  }
+  /** WP2 PR 4 (P4.3): Ask Conductor on a provider whose prompt takes a
+   *  question only as text typed at its ready composer. */
+  askConductor: {
+    /** Give a live Ask tab its next question through main's submit primitive
+     *  (never raw keystrokes and a carriage return). */
+    handOff: (args: { sessionId: string; question: string }) => Promise<SubmitTextResult>
+    /** Main's one-line notices for the dock: characters removed, or a question not delivered. */
+    onNotice: (cb: (notice: AskConductorNotice) => void) => () => void
   }
   tokenomics: {
     summary: (filter?: import('../shared/types').TkSummaryFilter) => Promise<import('../shared/types').TkSummary | null>
     sessions: (query?: import('../shared/types').TkSessionsQuery) => Promise<import('../shared/types').TkSessionsPage>
     sessionDetail: (sessionId: string) => Promise<import('../shared/types').TkSessionDetail | null>
     indexStatus: () => Promise<import('../shared/types').TkIndexStatus>
+    /** Usage track MP9: the providers and accounts the stored usage has. */
+    accounts: () => Promise<import('../shared/types').TkAccountPresent[]>
     onIndexStatus: (cb: (s: import('../shared/types').TkIndexStatus) => void) => () => void
     onIndexProgress: (cb: (p: import('../shared/types').TkIndexProgress) => void) => () => void
     onIndexComplete: (cb: (c: import('../shared/types').TkIndexCompleteEvent) => void) => () => void
@@ -813,25 +971,27 @@ const electronAPI: ElectronAPI = {
     authInfo: () => ipcRenderer.invoke(IPC.ACCOUNT_PROFILES_AUTH_INFO),
     globalEmail: () => ipcRenderer.invoke(IPC.ACCOUNT_GLOBAL_EMAIL_GET),
     captureDetected: (sessionId: string, name?: string) => ipcRenderer.invoke(IPC.ACCOUNT_PROFILES_CAPTURE_DETECTED, { sessionId, name }),
-    onAccountNewDetected: (cb: (data: { sessionId: string; profileId: string; email: string }) => void) => {
-      const handler = (_e: unknown, data: { sessionId: string; profileId: string; email: string }) => cb(data)
-      ipcRenderer.on(IPC.ACCOUNT_NEW_DETECTED, handler)
-      return () => ipcRenderer.removeListener(IPC.ACCOUNT_NEW_DETECTED, handler)
-    },
+    onAccountNewDetected: (cb: (data: { sessionId: string; profileId: string; email: string }) => void) =>
+      onChannel(IPC.ACCOUNT_NEW_DETECTED, cb),
+    managedLaunchReports: (profileId: string) => ipcRenderer.invoke(IPC.ACCOUNT_MANAGED_LAUNCH_REPORTS, profileId),
   },
   accountUsage: {
     fetchAll: () => ipcRenderer.invoke(IPC.ACCOUNT_USAGE_FETCH_ALL),
     // Streaming variant (plan P3): each account's usage arrives via `onResult` as
     // it resolves. A private per-call channel is subscribed before the invoke and
     // torn down when the stream completes, so overlapping calls never cross-talk.
-    fetchAllStream: (onResult: (usage: import('../shared/usage-types').AccountUsage) => void): Promise<void> => {
+    // MP8 round 2: the same end-of-stream rule as the Codex stream.
+    fetchAllStream: async (onResult: (usage: import('../shared/usage-types').AccountUsage) => void): Promise<void> => {
       const channel = `accountUsage:result:${randomId()}`
-      const handler = (_e: unknown, usage: import('../shared/usage-types').AccountUsage) => onResult(usage)
-      ipcRenderer.on(channel, handler)
-      return ipcRenderer.invoke(IPC.ACCOUNT_USAGE_FETCH_ALL_STREAM, { channel })
-        .finally(() => ipcRenderer.removeListener(channel, handler))
+      await streamOnChannel<import('../shared/usage-types').AccountUsage, unknown>(
+        channel,
+        () => ipcRenderer.invoke(IPC.ACCOUNT_USAGE_FETCH_ALL_STREAM, { channel }),
+        onResult,
+        (reply) => !!reply && typeof reply === 'object' && (reply as { ok?: unknown }).ok === true,
+      )
     },
     fetchOne: (id: string, opts?: { noRefresh?: boolean }) => ipcRenderer.invoke(IPC.ACCOUNT_USAGE_FETCH_ONE, { id, noRefresh: opts?.noRefresh }),
+    knownLabels: () => ipcRenderer.invoke(IPC.ACCOUNT_USAGE_KNOWN_LABELS),
   },
   window: {
     minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
@@ -841,11 +1001,7 @@ const electronAPI: ElectronAPI = {
     allowClose: () => ipcRenderer.send(IPC.WINDOW_ALLOW_CLOSE),
     cancelClose: () => ipcRenderer.send(IPC.WINDOW_CANCEL_CLOSE),
     isMaximized: () => ipcRenderer.invoke(IPC.WINDOW_IS_MAXIMIZED),
-    onMaximizedChanged: (callback) => {
-      const handler = (_: unknown, maximized: boolean) => callback(maximized)
-      ipcRenderer.on(IPC.WINDOW_MAXIMIZED_CHANGED, handler)
-      return () => ipcRenderer.removeListener(IPC.WINDOW_MAXIMIZED_CHANGED, handler)
-    },
+    onMaximizedChanged: (callback) => onChannel(IPC.WINDOW_MAXIMIZED_CHANGED, callback),
     onCloseRequested: (callback) => {
       const handler = () => callback()
       ipcRenderer.on(IPC.WINDOW_CLOSE_REQUESTED, handler)
@@ -877,19 +1033,9 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.send(IPC.PTY_WRITE, sessionId, data),
     resize: (sessionId, cols, rows) =>
       ipcRenderer.send(IPC.PTY_RESIZE, sessionId, cols, rows),
-    kill: (sessionId) => ipcRenderer.send(IPC.PTY_KILL, sessionId),
-    onData: (sessionId, callback) => {
-      const channel = ptyDataChannel(sessionId)
-      const handler = (_: unknown, data: string) => callback(data)
-      ipcRenderer.on(channel, handler)
-      return () => ipcRenderer.removeListener(channel, handler)
-    },
-    onExit: (sessionId, callback) => {
-      const channel = ptyExitChannel(sessionId)
-      const handler = (_: unknown, exitCode: number) => callback(exitCode)
-      ipcRenderer.on(channel, handler)
-      return () => ipcRenderer.removeListener(channel, handler)
-    }
+    kill: (sessionId, reason) => (reason === 'restart' ? ipcRenderer.send(IPC.PTY_KILL, sessionId, 'restart') : ipcRenderer.send(IPC.PTY_KILL, sessionId)),
+    onData: (sessionId, callback) => onChannel(ptyDataChannel(sessionId), callback),
+    onExit: (sessionId, callback) => onChannel(ptyExitChannel(sessionId), callback)
   },
   ptyIntegrity: {
     report: (report: import('../shared/service-health').PtyIntegrityReport) =>
@@ -904,53 +1050,29 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(IPC.SSH_FLOW_SKIP, sessionId),
     getState: (sessionId: string) =>
       ipcRenderer.invoke(IPC.SSH_FLOW_GET_STATE, sessionId),
-    onFlowState: (sessionId: string, callback: (msg: { state: string; info?: string }) => void) => {
-      const channel = `${IPC.SSH_FLOW_STATE}:${sessionId}`
-      const handler = (_: unknown, msg: { state: string; info?: string }) => callback(msg)
-      ipcRenderer.on(channel, handler)
-      return () => ipcRenderer.removeListener(channel, handler)
-    },
-    onSessionInfo: (sessionId: string, callback: (msg: { tmuxPersistent?: boolean; remoteAccount?: string }) => void) => {
-      const channel = `${IPC.SSH_SESSION_INFO}:${sessionId}`
-      const handler = (_: unknown, msg: { tmuxPersistent?: boolean; remoteAccount?: string }) => callback(msg)
-      ipcRenderer.on(channel, handler)
-      return () => ipcRenderer.removeListener(channel, handler)
-    },
+    onFlowState: (sessionId: string, callback: (msg: { state: string; info?: string }) => void) =>
+      onChannel(`${IPC.SSH_FLOW_STATE}:${sessionId}`, callback),
+    onSessionInfo: (sessionId: string, callback: (msg: { tmuxPersistent?: boolean; remoteAccount?: string }) => void) =>
+      onChannel(`${IPC.SSH_SESSION_INFO}:${sessionId}`, callback),
     endRemote: (target: string | { sessionId: string; configId?: string }) => ipcRenderer.invoke(IPC.SSH_END_REMOTE, target),
     checkDetachedLive: (payload: { configId: string; sessionIds: string[] }) =>
       ipcRenderer.invoke(IPC.SSH_CHECK_DETACHED_LIVE, payload),
     pingHost: (payload: { host: string }) => ipcRenderer.invoke(IPC.SSH_PING_HOST, payload),
   },
   statusline: {
-    onUpdate: (callback) => {
-      const handler = (_: unknown, data: unknown) => callback(data as any)
-      ipcRenderer.on(IPC.STATUSLINE_UPDATE, handler)
-      return () => ipcRenderer.removeListener(IPC.STATUSLINE_UPDATE, handler)
-    }
+    onUpdate: (callback) => onChannel(IPC.STATUSLINE_UPDATE, callback),
   },
   effort: {
-    onUpdate: (callback) => {
-      const handler = (_: unknown, data: unknown) => callback(data as { sessionId: string; effortLevel: string })
-      ipcRenderer.on(IPC.HOOKS_EFFORT_UPDATE, handler)
-      return () => ipcRenderer.removeListener(IPC.HOOKS_EFFORT_UPDATE, handler)
-    },
+    onUpdate: (callback) => onChannel(IPC.HOOKS_EFFORT_UPDATE, callback),
   },
   watchdog: {
     getStates: () => ipcRenderer.invoke(IPC.WATCHDOG_GET_STATES),
     setChecks: (sessionId, checks) => ipcRenderer.invoke(IPC.WATCHDOG_SET_CHECKS, sessionId, checks),
-    onUpdate: (callback) => {
-      const handler = (_: unknown, data: unknown) => callback(data as WatchdogPublicState)
-      ipcRenderer.on(IPC.WATCHDOG_STATE, handler)
-      return () => ipcRenderer.removeListener(IPC.WATCHDOG_STATE, handler)
-    },
+    onUpdate: (callback) => onChannel<WatchdogPublicState>(IPC.WATCHDOG_STATE, callback),
   },
   registry: {
     get: () => ipcRenderer.invoke(IPC.REGISTRY_GET),
-    onUpdate: (callback) => {
-      const handler = (_: unknown, reg: unknown) => callback(reg as ModelRegistry)
-      ipcRenderer.on(IPC.REGISTRY_UPDATE, handler)
-      return () => ipcRenderer.removeListener(IPC.REGISTRY_UPDATE, handler)
-    },
+    onUpdate: (callback) => onChannel<ModelRegistry>(IPC.REGISTRY_UPDATE, callback),
   },
   sentinel: {
     getState: () => ipcRenderer.invoke(IPC.SENTINEL_GET_STATE),
@@ -958,30 +1080,20 @@ const electronAPI: ElectronAPI = {
     revert: (findingId: string) => ipcRenderer.invoke(IPC.SENTINEL_REVERT, findingId),
     setStatus: (findingId: string, status: 'dismissed' | 'muted') => ipcRenderer.invoke(IPC.SENTINEL_SET_STATUS, findingId, status),
     rerun: () => ipcRenderer.invoke(IPC.SENTINEL_RERUN),
-    onUpdate: (callback) => {
-      const handler = (_: unknown, snap: unknown) => callback(snap as SentinelStateSnapshot)
-      ipcRenderer.on(IPC.SENTINEL_STATE_UPDATE, handler)
-      return () => ipcRenderer.removeListener(IPC.SENTINEL_STATE_UPDATE, handler)
-    },
+    onUpdate: (callback) => onChannel<SentinelStateSnapshot>(IPC.SENTINEL_STATE_UPDATE, callback),
   },
   accountIdentity: {
     get: (sessionId) => ipcRenderer.invoke(IPC.ACCOUNT_IDENTITY_GET, { sessionId }),
-    onUpdate: (callback) => {
-      const handler = (_: unknown, data: unknown) => callback(data as { sessionId: string; email: string; colourKey: string })
-      ipcRenderer.on(IPC.ACCOUNT_IDENTITY_UPDATE, handler)
-      return () => ipcRenderer.removeListener(IPC.ACCOUNT_IDENTITY_UPDATE, handler)
-    },
+    onUpdate: (callback) => onChannel<{ sessionId: string; email: string; colourKey: string }>(IPC.ACCOUNT_IDENTITY_UPDATE, callback),
   },
   debug: {
-    onDebug: (callback: (data: unknown) => void) => {
-      const handler = (_: unknown, data: unknown) => callback(data)
-      ipcRenderer.on(IPC.DEBUG_ON_DEBUG, handler)
-      return () => ipcRenderer.removeListener(IPC.DEBUG_ON_DEBUG, handler)
-    },
+    onDebug: (callback: (data: unknown) => void) => onChannel(IPC.DEBUG_ON_DEBUG, callback),
     enable: () => ipcRenderer.invoke(IPC.DEBUG_ENABLE),
     disable: () => ipcRenderer.invoke(IPC.DEBUG_DISABLE),
     isEnabled: () => ipcRenderer.invoke(IPC.DEBUG_IS_ENABLED),
-    openFolder: () => ipcRenderer.invoke(IPC.DEBUG_OPEN_FOLDER)
+    openFolder: () => ipcRenderer.invoke(IPC.DEBUG_OPEN_FOLDER),
+    accountLogFolders: () => ipcRenderer.invoke(IPC.DEBUG_ACCOUNT_LOG_FOLDERS),
+    openAccountLogFolder: (args: { accountId: string; folder: AccountLogFolderKind }) => ipcRenderer.invoke(IPC.DEBUG_OPEN_ACCOUNT_LOG_FOLDER, args)
   },
   usage: {
     getSessionUsage: (sessionId) =>
@@ -1017,11 +1129,8 @@ const electronAPI: ElectronAPI = {
     clearAll: () => ipcRenderer.invoke(IPC.LOGS2_CLEAR_ALL),
     ingestStatus: (args: { sessionId: string }) => ipcRenderer.invoke(IPC.LOGS2_INGEST_STATUS, args),
     sessionConfig: (args: { sessionId: string }) => ipcRenderer.invoke(IPC.LOGS2_SESSION_CONFIG, args),
-    onNewMessages: (cb: (e: { sessionId: string; configId: string | null; count: number }) => void) => {
-      const handler = (_e: unknown, e: { sessionId: string; configId: string | null; count: number }) => cb(e)
-      ipcRenderer.on(IPC.LOGS2_NEW_MESSAGES, handler)
-      return () => ipcRenderer.removeListener(IPC.LOGS2_NEW_MESSAGES, handler)
-    },
+    onNewMessages: (cb: (e: { sessionId: string; configId: string | null; count: number }) => void) =>
+      onChannel(IPC.LOGS2_NEW_MESSAGES, cb),
   },
   accountWeb: {
     status: (profileId) => ipcRenderer.invoke(IPC.ACCOUNT_WEB_STATUS, profileId),
@@ -1040,16 +1149,18 @@ const electronAPI: ElectronAPI = {
     paneVisible: (args) => ipcRenderer.invoke(IPC.ACCOUNT_WEB_PANE_VISIBLE, args),
     paneReload: (sessionId) => ipcRenderer.invoke(IPC.ACCOUNT_WEB_PANE_RELOAD, sessionId),
     paneGetState: (sessionId) => ipcRenderer.invoke(IPC.ACCOUNT_WEB_PANE_GET_STATE, sessionId),
-    onPaneState: (cb: (state: { sessionId: string; profileId: string; authed: boolean | null; email: string | null }) => void) => {
-      const handler = (_e: unknown, state: { sessionId: string; profileId: string; authed: boolean | null; email: string | null }) => cb(state)
-      ipcRenderer.on(IPC.ACCOUNT_WEB_PANE_STATE, handler)
-      return () => ipcRenderer.removeListener(IPC.ACCOUNT_WEB_PANE_STATE, handler)
-    },
-    onPaneClosed: (cb: (e: { sessionId: string }) => void) => {
-      const handler = (_e: unknown, payload: { sessionId: string }) => cb(payload)
-      ipcRenderer.on(IPC.ACCOUNT_WEB_PANE_CLOSED, handler)
-      return () => ipcRenderer.removeListener(IPC.ACCOUNT_WEB_PANE_CLOSED, handler)
-    },
+    onPaneState: (cb: (state: AccountPaneStateView) => void) =>
+      onChannel(IPC.ACCOUNT_WEB_PANE_STATE, cb),
+    onPaneClosed: (cb: (e: { sessionId: string; reason?: string }) => void) =>
+      onChannel(IPC.ACCOUNT_WEB_PANE_CLOSED, cb),
+  },
+  codexWeb: {
+    status: (accountId) => ipcRenderer.invoke(IPC.CODEX_WEB_STATUS, accountId),
+    signIn: (accountId) => ipcRenderer.invoke(IPC.CODEX_WEB_SIGN_IN, accountId),
+    signInState: () => ipcRenderer.invoke(IPC.CODEX_WEB_SIGN_IN_STATE),
+    cancel: (accountId) => ipcRenderer.invoke(IPC.CODEX_WEB_CANCEL, accountId),
+    signOut: (accountId) => ipcRenderer.invoke(IPC.CODEX_WEB_SIGN_OUT, accountId),
+    paneOpen: (args) => ipcRenderer.invoke(IPC.CODEX_WEB_PANE_OPEN, args),
   },
   // Agent Canvas — per-session review surface state + change push. Content
   // itself loads straight into the canvas iframe over ccc-ux://, not IPC.
@@ -1058,16 +1169,8 @@ const electronAPI: ElectronAPI = {
     render: (args: { sessionId: string; source: CanvasRenderSource }) => ipcRenderer.invoke(IPC.CANVAS_RENDER, args),
     setActiveVersion: (args: { sessionId: string; versionId: string }) =>
       ipcRenderer.invoke(IPC.CANVAS_SET_ACTIVE_VERSION, args),
-    onChanged: (cb: (e: CanvasChangedEvent) => void) => {
-      const handler = (_e: unknown, e: CanvasChangedEvent) => cb(e)
-      ipcRenderer.on(IPC.CANVAS_CHANGED, handler)
-      return () => ipcRenderer.removeListener(IPC.CANVAS_CHANGED, handler)
-    },
-    onSnapshotRequest: (cb: (e: CanvasSnapshotRequestEvent) => void) => {
-      const handler = (_e: unknown, e: CanvasSnapshotRequestEvent) => cb(e)
-      ipcRenderer.on(IPC.CANVAS_SNAPSHOT_REQUEST, handler)
-      return () => ipcRenderer.removeListener(IPC.CANVAS_SNAPSHOT_REQUEST, handler)
-    },
+    onChanged: (cb: (e: CanvasChangedEvent) => void) => onChannel(IPC.CANVAS_CHANGED, cb),
+    onSnapshotRequest: (cb: (e: CanvasSnapshotRequestEvent) => void) => onChannel(IPC.CANVAS_SNAPSHOT_REQUEST, cb),
     sendSnapshotResult: (reply: CanvasSnapshotReply) => ipcRenderer.send(IPC.CANVAS_SNAPSHOT_RESULT, reply),
     libraryList: (args: {
       sessionId: string
@@ -1104,6 +1207,10 @@ const electronAPI: ElectronAPI = {
     versionVerdict: (args: { sessionId: string; versionId?: string; state: 'approved' | 'rejected' | 'dismissed'; note?: string }) =>
       ipcRenderer.invoke(IPC.CANVAS_VERSION_VERDICT, args),
     agentMarker: (args: { sessionId: string; canvasId: string; line: string }) => ipcRenderer.invoke(IPC.CANVAS_AGENT_MARKER, args),
+    onAgentMarkerUndelivered: (cb: (e: CanvasMarkerUndelivered) => void) => onChannel(IPC.CANVAS_AGENT_MARKER_UNDELIVERED, cb),
+    onClaudeMarkerAsk: (cb: (e: ClaudeMarkerAsk) => void) => onChannel(IPC.CANVAS_CLAUDE_MARKER_ASK, cb),
+    answerClaudeMarker: (answer: ClaudeMarkerAnswer) => ipcRenderer.send(IPC.CANVAS_CLAUDE_MARKER_ANSWER, answer),
+    sessionGuidance: (args: { sessionId: string }) => ipcRenderer.invoke(IPC.CANVAS_SESSION_GUIDANCE, args),
     versionReopen: (args: { sessionId: string; versionId: string }) =>
       ipcRenderer.invoke(IPC.CANVAS_VERSION_REOPEN, args),
     annotationReopen: (args: { sessionId: string; annotationId: string }) =>
@@ -1136,16 +1243,9 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(IPC.CANVAS_EVIDENCE_READ, args),
     setPackName: (args: { sessionId: string; canvasId: string; versionId: string; name: string | null }) =>
       ipcRenderer.invoke(IPC.CANVAS_SET_PACK_NAME, args),
-    onFrameNavigated: (cb: (e: { sessionId: string; canvasId: string; route: string }) => void) => {
-      const handler = (_e: unknown, e: { sessionId: string; canvasId: string; route: string }) => cb(e)
-      ipcRenderer.on(IPC.CANVAS_FRAME_NAVIGATED, handler)
-      return () => ipcRenderer.removeListener(IPC.CANVAS_FRAME_NAVIGATED, handler)
-    },
-    onReviewChanged: (cb: (e: CanvasReviewChangedEvent) => void) => {
-      const handler = (_e: unknown, e: CanvasReviewChangedEvent) => cb(e)
-      ipcRenderer.on(IPC.CANVAS_REVIEW_CHANGED, handler)
-      return () => ipcRenderer.removeListener(IPC.CANVAS_REVIEW_CHANGED, handler)
-    },
+    onFrameNavigated: (cb: (e: { sessionId: string; canvasId: string; route: string }) => void) =>
+      onChannel(IPC.CANVAS_FRAME_NAVIGATED, cb),
+    onReviewChanged: (cb: (e: CanvasReviewChangedEvent) => void) => onChannel(IPC.CANVAS_REVIEW_CHANGED, cb),
   },
   update: {
     check: () => ipcRenderer.invoke(IPC.UPDATE_CHECK),
@@ -1160,16 +1260,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on(IPC.UPDATE_AVAILABLE, handler)
       return () => ipcRenderer.removeListener(IPC.UPDATE_AVAILABLE, handler)
     },
-    onSourceConfigured: (callback: (configured: boolean) => void) => {
-      const handler = (_: unknown, configured: boolean) => callback(configured)
-      ipcRenderer.on(IPC.UPDATE_SOURCE_CONFIGURED, handler)
-      return () => ipcRenderer.removeListener(IPC.UPDATE_SOURCE_CONFIGURED, handler)
-    },
-    onServerConnected: (callback: (connected: boolean) => void) => {
-      const handler = (_: unknown, connected: boolean) => callback(connected)
-      ipcRenderer.on(IPC.UPDATE_SERVER_CONNECTED, handler)
-      return () => ipcRenderer.removeListener(IPC.UPDATE_SERVER_CONNECTED, handler)
-    }
+    onSourceConfigured: (callback: (configured: boolean) => void) =>
+      onChannel(IPC.UPDATE_SOURCE_CONFIGURED, callback),
+    onServerConnected: (callback: (connected: boolean) => void) =>
+      onChannel(IPC.UPDATE_SERVER_CONNECTED, callback)
   },
   setup: {
     isComplete: () => ipcRenderer.invoke(IPC.SETUP_IS_COMPLETE),
@@ -1211,21 +1305,12 @@ const electronAPI: ElectronAPI = {
     navigate: (sessionId: string, url: string) => ipcRenderer.invoke(IPC.WEBVIEW_NAVIGATE, sessionId, url),
     openExternal: (url: string) => ipcRenderer.invoke(IPC.WEBVIEW_OPEN_EXTERNAL, url),
     closeAll: () => ipcRenderer.invoke(IPC.WEBVIEW_CLOSE_ALL),
-    onEscapePressed: (handler: (sessionId: string) => void) => {
-      const fn = (_e: unknown, sessionId: string) => handler(sessionId)
-      ipcRenderer.on(IPC.WEBVIEW_ESCAPE_PRESSED, fn)
-      return () => ipcRenderer.removeListener(IPC.WEBVIEW_ESCAPE_PRESSED, fn)
-    },
-    onNavigated: (handler: (state: WebviewNavState) => void) => {
-      const fn = (_e: unknown, state: WebviewNavState) => handler(state)
-      ipcRenderer.on(IPC.WEBVIEW_NAVIGATED, fn)
-      return () => ipcRenderer.removeListener(IPC.WEBVIEW_NAVIGATED, fn)
-    },
-    onAgentPush: (handler: (payload: { sessionId: string; url: string }) => void) => {
-      const fn = (_e: unknown, payload: { sessionId: string; url: string }) => handler(payload)
-      ipcRenderer.on(IPC.WEBVIEW_AGENT_PUSH, fn)
-      return () => ipcRenderer.removeListener(IPC.WEBVIEW_AGENT_PUSH, fn)
-    },
+    onEscapePressed: (handler: (sessionId: string) => void) =>
+      onChannel(IPC.WEBVIEW_ESCAPE_PRESSED, handler),
+    onNavigated: (handler: (state: WebviewNavState) => void) =>
+      onChannel(IPC.WEBVIEW_NAVIGATED, handler),
+    onAgentPush: (handler: (payload: { sessionId: string; url: string }) => void) =>
+      onChannel(IPC.WEBVIEW_AGENT_PUSH, handler),
   },
   session: {
     save: (state: unknown) => ipcRenderer.invoke(IPC.SESSION_SAVE, state),
@@ -1235,18 +1320,14 @@ const electronAPI: ElectronAPI = {
     gracefulExit: () => ipcRenderer.invoke(IPC.SESSION_GRACEFUL_EXIT)
   },
   insights: {
-    run: (opts?: { profileId?: string }) => ipcRenderer.invoke(IPC.INSIGHTS_RUN, opts),
+    run: (opts?: { profileId?: string; provider?: ProviderId; acknowledgeRealmOnly?: true }) => ipcRenderer.invoke(IPC.INSIGHTS_RUN, opts),
     runAll: (opts?: { profileIds?: string[] }) => ipcRenderer.invoke(IPC.INSIGHTS_RUN_ALL, opts),
     getCatalogue: () => ipcRenderer.invoke(IPC.INSIGHTS_GET_CATALOGUE),
     getReport: (runId: string) => ipcRenderer.invoke(IPC.INSIGHTS_GET_REPORT, runId),
     getKpis: (runId: string) => ipcRenderer.invoke(IPC.INSIGHTS_GET_KPIS, runId),
     getLatest: () => ipcRenderer.invoke(IPC.INSIGHTS_GET_LATEST),
     isRunning: () => ipcRenderer.invoke(IPC.INSIGHTS_IS_RUNNING),
-    onStatusChanged: (callback: (run: unknown) => void) => {
-      const handler = (_: unknown, run: unknown) => callback(run)
-      ipcRenderer.on(IPC.INSIGHTS_STATUS_CHANGED, handler)
-      return () => ipcRenderer.removeListener(IPC.INSIGHTS_STATUS_CHANGED, handler)
-    }
+    onStatusChanged: (callback: (run: unknown) => void) => onChannel(IPC.INSIGHTS_STATUS_CHANGED, callback)
   },
   notes: {
     list: () => ipcRenderer.invoke(IPC.NOTES_LIST),
@@ -1262,11 +1343,8 @@ const electronAPI: ElectronAPI = {
     install: (version: string) => ipcRenderer.invoke(IPC.LEGACY_INSTALL, version),
     remove: (version: string) => ipcRenderer.invoke(IPC.LEGACY_REMOVE, version),
     listInstalled: () => ipcRenderer.invoke(IPC.LEGACY_LIST_INSTALLED),
-    onInstallProgress: (cb: (data: { version: string; message: string }) => void) => {
-      const handler = (_: unknown, data: any) => cb(data)
-      ipcRenderer.on(IPC.LEGACY_INSTALL_PROGRESS, handler)
-      return () => ipcRenderer.removeListener(IPC.LEGACY_INSTALL_PROGRESS, handler)
-    },
+    onInstallProgress: (cb: (data: { version: string; message: string }) => void) =>
+      onChannel(IPC.LEGACY_INSTALL_PROGRESS, cb),
   },
   vision: {
     start: () => ipcRenderer.invoke(IPC.VISION_START),
@@ -1277,50 +1355,34 @@ const electronAPI: ElectronAPI = {
     saveConfig: (config: any, generation?: number) =>
       ipcRenderer.invoke(IPC.VISION_SAVE_CONFIG, config, generation),
     getConfig: () => ipcRenderer.invoke(IPC.VISION_GET_CONFIG),
-    onStatusChanged: (callback: (data: { connected: boolean; browser: string; mcpPort: number }) => void) => {
-      const handler = (_: unknown, data: any) => callback(data)
-      ipcRenderer.on(IPC.VISION_STATUS_CHANGED, handler)
-      return () => ipcRenderer.removeListener(IPC.VISION_STATUS_CHANGED, handler)
-    }
+    onStatusChanged: (callback: (data: { connected: boolean; browser: string; mcpPort: number }) => void) =>
+      onChannel(IPC.VISION_STATUS_CHANGED, callback)
   },
   cloudAgent: {
-    dispatch: (params: { name: string; description: string; projectPath: string; configId?: string; profileId?: string; legacyVersion?: { enabled: boolean; version: string }; skipPermissions?: boolean }) =>
+    dispatch: (params: import('../shared/types').CloudAgentDispatchParams) =>
       ipcRenderer.invoke(IPC.CLOUD_AGENT_DISPATCH, params),
     cancel: (id: string) => ipcRenderer.invoke(IPC.CLOUD_AGENT_CANCEL, id),
     remove: (id: string) => ipcRenderer.invoke(IPC.CLOUD_AGENT_REMOVE, id),
-    retry: (id: string) => ipcRenderer.invoke(IPC.CLOUD_AGENT_RETRY, id),
+    retry: (id: string, opts?: import('../shared/types').CloudAgentRetryOptions) =>
+      opts === undefined ? ipcRenderer.invoke(IPC.CLOUD_AGENT_RETRY, id) : ipcRenderer.invoke(IPC.CLOUD_AGENT_RETRY, id, opts),
     list: () => ipcRenderer.invoke(IPC.CLOUD_AGENT_LIST),
     getOutput: (id: string) => ipcRenderer.invoke(IPC.CLOUD_AGENT_GET_OUTPUT, id),
     clearCompleted: () => ipcRenderer.invoke(IPC.CLOUD_AGENT_CLEAR_COMPLETED),
-    onStatusChanged: (callback: (agent: any) => void) => {
-      const handler = (_: unknown, agent: any) => callback(agent)
-      ipcRenderer.on(IPC.CLOUD_AGENT_STATUS_CHANGED, handler)
-      return () => ipcRenderer.removeListener(IPC.CLOUD_AGENT_STATUS_CHANGED, handler)
-    },
-    onOutputChunk: (callback: (data: { id: string; chunk: string }) => void) => {
-      const handler = (_: unknown, data: any) => callback(data)
-      ipcRenderer.on(IPC.CLOUD_AGENT_OUTPUT_CHUNK, handler)
-      return () => ipcRenderer.removeListener(IPC.CLOUD_AGENT_OUTPUT_CHUNK, handler)
-    },
+    onStatusChanged: (callback: (agent: any) => void) => onChannel(IPC.CLOUD_AGENT_STATUS_CHANGED, callback),
+    onOutputChunk: (callback: (data: { id: string; chunk: string }) => void) =>
+      onChannel(IPC.CLOUD_AGENT_OUTPUT_CHUNK, callback),
   },
   serviceStatus: {
     get: () => ipcRenderer.invoke(IPC.SERVICE_STATUS_GET),
-    onUpdate: (callback: (data: any) => void) => {
-      const handler = (_: unknown, data: any) => callback(data)
-      ipcRenderer.on(IPC.SERVICE_STATUS, handler)
-      return () => ipcRenderer.removeListener(IPC.SERVICE_STATUS, handler)
-    }
+    onUpdate: (callback: (data: any) => void) => onChannel(IPC.SERVICE_STATUS, callback),
   },
   serviceHealth: {
     get: (): Promise<import('../shared/service-health').DiagnosticsSnapshot> =>
       ipcRenderer.invoke(IPC.SERVICE_HEALTH_GET),
     restart: (serviceId: string): Promise<{ ok: boolean; reason?: string }> =>
       ipcRenderer.invoke(IPC.SERVICE_RESTART, serviceId),
-    onUpdate: (callback: (snap: import('../shared/service-health').DiagnosticsSnapshot) => void) => {
-      const handler = (_: unknown, snap: import('../shared/service-health').DiagnosticsSnapshot) => callback(snap)
-      ipcRenderer.on(IPC.SERVICE_HEALTH_UPDATE, handler)
-      return () => ipcRenderer.removeListener(IPC.SERVICE_HEALTH_UPDATE, handler)
-    }
+    onUpdate: (callback: (snap: import('../shared/service-health').DiagnosticsSnapshot) => void) =>
+      onChannel(IPC.SERVICE_HEALTH_UPDATE, callback)
   },
   cli: {
     check: () => ipcRenderer.invoke(IPC.CLI_CHECK),
@@ -1330,31 +1392,92 @@ const electronAPI: ElectronAPI = {
   help: {
     workspace: () => ipcRenderer.invoke(IPC.HELP_WORKSPACE)
   },
+  askConductor: {
+    handOff: (args: { sessionId: string; question: string }) => ipcRenderer.invoke(IPC.ASK_CONDUCTOR_HAND_OFF, args),
+    onNotice: (cb: (notice: AskConductorNotice) => void) => onChannel(IPC.ASK_CONDUCTOR_NOTICE, cb),
+  },
   tokenomics: {
     summary: (filter?: import('../shared/types').TkSummaryFilter) => ipcRenderer.invoke(IPC.TOKENOMICS2_SUMMARY, filter ?? {}),
     sessions: (query?: import('../shared/types').TkSessionsQuery) => ipcRenderer.invoke(IPC.TOKENOMICS2_SESSIONS, query ?? {}),
     sessionDetail: (sessionId: string) => ipcRenderer.invoke(IPC.TOKENOMICS2_SESSION_DETAIL, { sessionId }),
     indexStatus: () => ipcRenderer.invoke(IPC.TOKENOMICS2_INDEX_STATUS),
-    onIndexStatus: (cb: (s: import('../shared/types').TkIndexStatus) => void) => { const h = (_: unknown, s: import('../shared/types').TkIndexStatus) => cb(s); ipcRenderer.on(IPC.TOKENOMICS2_INDEX_STATUS, h); return () => ipcRenderer.removeListener(IPC.TOKENOMICS2_INDEX_STATUS, h) },
-    onIndexProgress: (cb: (p: import('../shared/types').TkIndexProgress) => void) => { const h = (_: unknown, p: import('../shared/types').TkIndexProgress) => cb(p); ipcRenderer.on(IPC.TOKENOMICS2_INDEX_PROGRESS, h); return () => ipcRenderer.removeListener(IPC.TOKENOMICS2_INDEX_PROGRESS, h) },
-    onIndexComplete: (cb: (c: import('../shared/types').TkIndexCompleteEvent) => void) => { const h = (_: unknown, c: import('../shared/types').TkIndexCompleteEvent) => cb(c); ipcRenderer.on(IPC.TOKENOMICS2_INDEX_COMPLETE, h); return () => ipcRenderer.removeListener(IPC.TOKENOMICS2_INDEX_COMPLETE, h) },
+    accounts: () => ipcRenderer.invoke(IPC.TOKENOMICS2_ACCOUNTS, {}),
+    onIndexStatus: (cb: (s: import('../shared/types').TkIndexStatus) => void) =>
+      onChannel(IPC.TOKENOMICS2_INDEX_STATUS, cb),
+    onIndexProgress: (cb: (p: import('../shared/types').TkIndexProgress) => void) =>
+      onChannel(IPC.TOKENOMICS2_INDEX_PROGRESS, cb),
+    onIndexComplete: (cb: (c: import('../shared/types').TkIndexCompleteEvent) => void) =>
+      onChannel(IPC.TOKENOMICS2_INDEX_COMPLETE, cb),
   },
   memory: {
-    scan: () => ipcRenderer.invoke('memory:scan'),
-    read: (filePath: string) => ipcRenderer.invoke('memory:read', filePath),
-    delete: (filePath: string) => ipcRenderer.invoke('memory:delete', filePath),
+    scan: () => ipcRenderer.invoke(IPC.MEMORY_SCAN),
+    read: (filePath: string) => ipcRenderer.invoke(IPC.MEMORY_READ, filePath),
+    delete: (filePath: string) => ipcRenderer.invoke(IPC.MEMORY_DELETE, filePath),
     writeFrontmatter: (filePath: string, frontmatter: { name?: string; description?: string; type?: string }) =>
-      ipcRenderer.invoke('memory:writeFrontmatter', filePath, frontmatter),
+      ipcRenderer.invoke(IPC.MEMORY_WRITE_FRONTMATTER, filePath, frontmatter),
     recentSessions: (projectDir: string) => ipcRenderer.invoke(IPC.MEMORY_RECENT_SESSIONS, projectDir),
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   },
-  codex: {
-    status: () => ipcRenderer.invoke(IPC.CODEX_STATUS),
-    login: (payload) => ipcRenderer.invoke(IPC.CODEX_LOGIN, payload),
-    logout: () => ipcRenderer.invoke(IPC.CODEX_LOGOUT),
-    testConnection: () => ipcRenderer.invoke(IPC.CODEX_TEST_CONNECTION),
+  providerAccounts: {
+    snapshot: () => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_SNAPSHOT),
+    onChanged: (cb) => onChannel<AccountsSnapshot>(IPC.PROVIDER_ACCOUNTS_CHANGED, cb),
+    discover: (providerId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_DISCOVER, { providerId }),
+    installRecipes: (providerId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_INSTALL_RECIPES, { providerId }),
+    addToPath: (providerId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_ADD_TO_PATH, { providerId }),
+    setEnabled: (providerId, enabled) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_SET_ENABLED, { providerId, enabled }),
+    beginSetup: (req) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_BEGIN_SETUP, { providerId: req.providerId, method: req.method }),
+    issueSecretHandle: (accountId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_ISSUE_SECRET_HANDLE, { accountId }),
+    // One way and fire-and-forget: the key is never in a request or a reply,
+    // and nothing here keeps or logs it.
+    sendSecret: (deposit) => ipcRenderer.send(IPC.PROVIDER_ACCOUNTS_SECRET, { handle: deposit.handle, secret: deposit.secret }),
+    signIn: (req) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_SIGN_IN, req.secretHandle !== undefined
+      ? { accountId: req.accountId, method: req.method, secretHandle: req.secretHandle }
+      : { accountId: req.accountId, method: req.method }),
+    signInAgain: (req) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_SIGN_IN_AGAIN, {
+      accountId: req.accountId, method: req.method,
+      ...(req.secretHandle !== undefined ? { secretHandle: req.secretHandle } : {}),
+      sameAccount: req.sameAccount,
+      ...(req.acknowledgeExternal !== undefined ? { acknowledgeExternal: req.acknowledgeExternal } : {}),
+    }),
+    onSignInOutput: (cb) => onChannel<SignInOutputEvent>(IPC.PROVIDER_ACCOUNTS_SIGN_IN_OUTPUT, cb),
+    cancelSignIn: (accountId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_CANCEL_SIGN_IN, { accountId }),
+    completeSetup: (req) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_COMPLETE_SETUP, req),
+    abandonSetup: (accountId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_ABANDON_SETUP, { accountId }),
+    refreshStatus: (accountId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_REFRESH_STATUS, { accountId }),
+    logout: (req) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_LOGOUT, req),
+    setLifecycle: (req) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_SET_LIFECYCLE, req),
+    setDefault: (accountId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_SET_DEFAULT, { accountId }),
+    updateIdentity: (req) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_UPDATE_IDENTITY, req),
+    createGroup: (name) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_CREATE_GROUP, { name }),
+    renameGroup: (groupId, name) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_RENAME_GROUP, { groupId, name }),
+    deleteGroup: (groupId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_DELETE_GROUP, { groupId }),
+    linkIdentity: (accountId, identityId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_LINK_IDENTITY, { accountId, identityId }),
+    unlinkIdentity: (accountId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_UNLINK_IDENTITY, { accountId }),
+    adoptExternal: (providerId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_ADOPT_EXTERNAL, { providerId }),
+    probeExternal: (providerId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_PROBE_EXTERNAL, { providerId }),
+    reconcileSignIn: (accountId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_RECONCILE_SIGN_IN, { accountId }),
+    resolveConflict: (req) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_RESOLVE_CONFLICT, {
+      identityId: req.identityId, field: req.field, providerId: req.providerId, legacyId: req.legacyId, keep: req.keep,
+    }),
+    setReviewerDefault: (req) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_SET_REVIEWER_DEFAULT, { providerId: req.providerId, accountId: req.accountId }),
+    // A private per-call reply channel (main checks its exact shape,
+    // PROVIDER_USAGE_RESULT_RE), subscribed before the invoke and removed when
+    // the stream ends, so overlapping streams never cross.
+    // MP8 round 2: every view main sent arrives before the stream is done
+    // (streamOnChannel). `read` only for the page's own asks (ADR-022 bound 7).
+    usageStream: (providerId, onResult, opts) => {
+      const channel = `providerAccounts:usageResult:${randomId()}`
+      return streamOnChannel<ProviderAccountUsageView, ProviderUsageStreamResult>(
+        channel,
+        () => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_USAGE_STREAM, { providerId, channel, ...(opts?.read === true ? { read: true } : {}) }),
+        onResult,
+        (reply) => !!reply && typeof reply === 'object' && (reply as { ok?: unknown }).ok === true,
+      )
+    },
+    usageStreamStop: (providerId) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_USAGE_STREAM_STOP, { providerId }),
+    usageOne: (accountId, opts) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_USAGE_ONE, { accountId, ...(opts?.read === true ? { read: true } : {}) }),
   },
   github: {
     getConfig: () => ipcRenderer.invoke(IPC.GITHUB_CONFIG_GET),
@@ -1383,24 +1506,9 @@ const electronAPI: ElectronAPI = {
     getData: (slug) => ipcRenderer.invoke(IPC.GITHUB_DATA_GET, slug),
     getSessionContext: (sessionId) =>
       ipcRenderer.invoke(IPC.GITHUB_SESSION_CONTEXT_GET, sessionId),
-    onDataUpdate: (cb) => {
-      const l = (_e: Electron.IpcRendererEvent, p: unknown) =>
-        cb(p as Parameters<typeof cb>[0])
-      ipcRenderer.on(IPC.GITHUB_DATA_UPDATE, l)
-      return () => ipcRenderer.removeListener(IPC.GITHUB_DATA_UPDATE, l)
-    },
-    onSyncStateUpdate: (cb) => {
-      const l = (_e: Electron.IpcRendererEvent, p: unknown) =>
-        cb(p as Parameters<typeof cb>[0])
-      ipcRenderer.on(IPC.GITHUB_SYNC_STATE_UPDATE, l)
-      return () => ipcRenderer.removeListener(IPC.GITHUB_SYNC_STATE_UPDATE, l)
-    },
-    onNotificationsUpdate: (cb) => {
-      const l = (_e: Electron.IpcRendererEvent, p: unknown) =>
-        cb(p as Parameters<typeof cb>[0])
-      ipcRenderer.on(IPC.GITHUB_NOTIFICATIONS_UPDATE, l)
-      return () => ipcRenderer.removeListener(IPC.GITHUB_NOTIFICATIONS_UPDATE, l)
-    },
+    onDataUpdate: (cb) => onChannel(IPC.GITHUB_DATA_UPDATE, cb),
+    onSyncStateUpdate: (cb) => onChannel(IPC.GITHUB_SYNC_STATE_UPDATE, cb),
+    onNotificationsUpdate: (cb) => onChannel(IPC.GITHUB_NOTIFICATIONS_UPDATE, cb),
     rerunActionsRun: (slug, runId) =>
       ipcRenderer.invoke(IPC.GITHUB_ACTIONS_RERUN, slug, runId),
     mergePR: (slug, prNumber, method) =>
@@ -1411,62 +1519,32 @@ const electronAPI: ElectronAPI = {
     markNotifRead: (profileId, notifId) =>
       ipcRenderer.invoke(IPC.GITHUB_NOTIF_MARK_READ, profileId, notifId),
     getAiUsage: (force) => ipcRenderer.invoke(IPC.GITHUB_AI_USAGE_GET, force),
-    onAiUsageUpdate: (cb) => {
-      const l = (_e: Electron.IpcRendererEvent, p: unknown) =>
-        cb(p as Parameters<typeof cb>[0])
-      ipcRenderer.on(IPC.GITHUB_AI_USAGE_UPDATE, l)
-      return () => ipcRenderer.removeListener(IPC.GITHUB_AI_USAGE_UPDATE, l)
-    },
+    onAiUsageUpdate: (cb) => onChannel(IPC.GITHUB_AI_USAGE_UPDATE, cb),
   },
   hooks: {
     toggle: (enabled) => ipcRenderer.invoke(IPC.HOOKS_TOGGLE, { enabled }),
     getBuffer: (sessionId) => ipcRenderer.invoke(IPC.HOOKS_GET_BUFFER, { sessionId }),
     getStatus: () => ipcRenderer.invoke(IPC.HOOKS_GET_STATUS),
-    onEvent: (cb) => {
-      const handler = (_: unknown, e: HookEvent) => cb(e)
-      ipcRenderer.on(IPC.HOOKS_EVENT, handler)
-      return () => ipcRenderer.removeListener(IPC.HOOKS_EVENT, handler)
-    },
-    onSessionEnded: (cb) => {
-      const handler = (_: unknown, sid: string) => cb(sid)
-      ipcRenderer.on(IPC.HOOKS_SESSION_ENDED, handler)
-      return () => ipcRenderer.removeListener(IPC.HOOKS_SESSION_ENDED, handler)
-    },
-    onDropped: (cb) => {
-      const handler = (_: unknown, p: { sessionId: string }) => cb(p)
-      ipcRenderer.on(IPC.HOOKS_DROPPED, handler)
-      return () => ipcRenderer.removeListener(IPC.HOOKS_DROPPED, handler)
-    },
-    onStatus: (cb) => {
-      const handler = (_: unknown, s: HooksGatewayStatus) => cb(s)
-      ipcRenderer.on(IPC.HOOKS_STATUS, handler)
-      return () => ipcRenderer.removeListener(IPC.HOOKS_STATUS, handler)
-    },
+    onEvent: (cb) => onChannel<HookEvent>(IPC.HOOKS_EVENT, cb),
+    onSessionEnded: (cb) => onChannel<string>(IPC.HOOKS_SESSION_ENDED, cb),
+    onDropped: (cb) => onChannel<{ sessionId: string }>(IPC.HOOKS_DROPPED, cb),
+    onStatus: (cb) => onChannel<HooksGatewayStatus>(IPC.HOOKS_STATUS, cb),
   },
   codexReview: {
     getUsage: (sessionId: string) =>
       ipcRenderer.invoke(IPC.CODEX_REVIEW_USAGE_GET, sessionId),
-    onUsageUpdated: (callback) => {
-      const wrapped = (_e: Electron.IpcRendererEvent, payload: { sessionId: string; record: import('../shared/types').CodexReviewUsageRecord }) => callback(payload)
-      ipcRenderer.on(IPC.CODEX_REVIEW_USAGE_UPDATED, wrapped)
-      return () => ipcRenderer.removeListener(IPC.CODEX_REVIEW_USAGE_UPDATED, wrapped)
-    },
+    onUsageUpdated: (callback) =>
+      onChannel<{ sessionId: string; record: import('../shared/types').CodexReviewUsageRecord }>(IPC.CODEX_REVIEW_USAGE_UPDATED, callback),
   },
   exe: {
     probe: (req) => ipcRenderer.invoke(IPC.EXE_PROBE, req),
     runCaptured: (req) => ipcRenderer.invoke(IPC.EXE_RUN_START, req),
     releaseRun: (runId: string) => ipcRenderer.invoke(IPC.EXE_RUN_RELEASE, { runId }),
     cancelRun: (runId: string) => ipcRenderer.invoke(IPC.EXE_RUN_CANCEL, { runId }),
-    onRunData: (callback) => {
-      const wrapped = (_e: Electron.IpcRendererEvent, payload: import('../shared/gui-exe').CapturedRunChunk) => callback(payload)
-      ipcRenderer.on(IPC.EXE_RUN_DATA, wrapped)
-      return () => ipcRenderer.removeListener(IPC.EXE_RUN_DATA, wrapped)
-    },
-    onRunExit: (callback) => {
-      const wrapped = (_e: Electron.IpcRendererEvent, payload: import('../shared/gui-exe').CapturedRunExit) => callback(payload)
-      ipcRenderer.on(IPC.EXE_RUN_EXIT, wrapped)
-      return () => ipcRenderer.removeListener(IPC.EXE_RUN_EXIT, wrapped)
-    },
+    onRunData: (callback) =>
+      onChannel<import('../shared/gui-exe').CapturedRunChunk>(IPC.EXE_RUN_DATA, callback),
+    onRunExit: (callback) =>
+      onChannel<import('../shared/gui-exe').CapturedRunExit>(IPC.EXE_RUN_EXIT, callback),
   },
   channels: {
     send: (req: unknown) => ipcRenderer.invoke(IPC.CHANNELS_SEND, req),
@@ -1477,17 +1555,10 @@ const electronAPI: ElectronAPI = {
     capabilityDiagnostics: () => ipcRenderer.invoke(IPC.CHANNELS_CAPABILITY_DIAGNOSTICS),
     introDismissed: () => ipcRenderer.invoke(IPC.CHANNELS_INTRO_DISMISSED),
     killSwitch: (p: unknown) => ipcRenderer.invoke(IPC.CHANNELS_KILL_SWITCH, p),
-    onLedgerEvent: (cb: (r: unknown) => void) => {
-      const fn = (_e: unknown, r: unknown) => cb(r)
-      ipcRenderer.on(IPC.CHANNELS_LEDGER_EVENT, fn)
-      return () => ipcRenderer.removeListener(IPC.CHANNELS_LEDGER_EVENT, fn)
-    },
+    onLedgerEvent: (cb: (r: unknown) => void) => onChannel(IPC.CHANNELS_LEDGER_EVENT, cb),
     rendererReady: () => ipcRenderer.invoke(IPC.CHANNELS_RENDERER_READY),
-    onAttention: (cb: (p: { sessionId: string; needsAttention: boolean }) => void) => {
-      const fn = (_e: unknown, p: { sessionId: string; needsAttention: boolean }) => cb(p)
-      ipcRenderer.on(IPC.CHANNELS_ATTENTION, fn)
-      return () => ipcRenderer.removeListener(IPC.CHANNELS_ATTENTION, fn)
-    },
+    onAttention: (cb: (p: { sessionId: string; needsAttention: boolean }) => void) =>
+      onChannel(IPC.CHANNELS_ATTENTION, cb),
   },
 }
 

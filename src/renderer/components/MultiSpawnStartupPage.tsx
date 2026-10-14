@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from 'react'
 import { useConfigStore, type ConfigGroup, type TerminalConfig } from '../stores/configStore'
-import { useSessionStore } from '../stores/sessionStore'
 import { useDetachedRemotesStore } from '../stores/detachedRemotesStore'
 import { useDetachedLivenessStore } from '../stores/livenessStore'
 import { useHostReachabilityStore } from '../stores/hostReachability'
@@ -11,6 +10,7 @@ import {
   resolveStartupRowSave,
   resumingSessionCount,
   type MultiSpawnRowState,
+  type RestoreCopyTally,
 } from '../utils/multiSpawn'
 import { markMultiSpawnIntroSeen } from '../onboarding/multi-spawn-intro-gate'
 import { resolveIdentityColor, bucketLegacyColorToKey } from '../../shared/identity-colors'
@@ -18,10 +18,13 @@ import { useResolvedTheme } from '../hooks/useThemeController'
 import { SessionTypeBadge, SshReattachBadge, TransportBadge } from './sidebar/Badges'
 import { configIsPersistent, containerNameOf, resolveTransportBadge } from './sidebar/transportBadge'
 import { DialogOverlay, DialogPanel, DialogBody, DialogFooter, DialogButton, DialogCallout } from './ui/Dialog'
+import { WindowDragStrip, WINDOW_DRAG_STRIP_CLEARANCE } from './WindowControls'
 
 /**
  * The Allow Multi Spawn post-install page (phase 5) — a full-screen takeover
- * shown ONCE per upgrade, immediately after the release notes.
+ * shown once, on the first upgrade into Multi Spawn, immediately after the
+ * release notes. It never comes back on a later upgrade (see
+ * onboarding/multi-spawn-intro-gate.ts).
  *
  * Why a page and not a changelog line: phase 4 gave every saved config a limit
  * it never had (one copy at a time), and phase 4.1 gave the user a way to say
@@ -55,8 +58,9 @@ import { DialogOverlay, DialogPanel, DialogBody, DialogFooter, DialogButton, Dia
 
 /** The first-run takeover replaces the whole app, so the backdrop is the opaque
  *  app base rather than a scrim — there is nothing behind it to dim.
- *  (SetupDialog's OPAQUE_BACKDROP, same reasoning.) */
-const OPAQUE_BACKDROP: React.CSSProperties = { background: 'var(--surface-base)' }
+ *  (SetupDialog's OPAQUE_BACKDROP, same reasoning.) It covers the title bar
+ *  too, so it draws its own (WindowDragStrip) and keeps the page below it. */
+const OPAQUE_BACKDROP: React.CSSProperties = { background: 'var(--surface-base)', paddingTop: WINDOW_DRAG_STRIP_CLEARANCE }
 
 export interface StartupConfigGroup {
   /** The group's id, or null for the trailing "Ungrouped" bucket. */
@@ -192,24 +196,31 @@ function StartupConfigRow({ config, state, checked, onToggle }: RowProps) {
   )
 }
 
+const NONE: RestoreCopyTally['sessions'] = []
+const NONE_DETACHED: RestoreCopyTally['detached'] = []
+
 export interface MultiSpawnStartupPageProps {
   /** Configs the App-level migration turned on THIS START — the rows that get
    *  the green chip even though their stored value now reads a plain `true`. */
   autoEnabledIds?: string[]
+  /** What this start brought back, tallied once when the restore was decided
+   *  (App): every count on the page comes from it, as the migration's does.
+   *  Null until it is taken: nothing is resuming yet. */
+  tally: RestoreCopyTally | null
   /** Both buttons land here, after the page has done its own persisting and
    *  stamped the seen marker. The caller only has to close the gate. */
   onDone: () => void
 }
 
-export function MultiSpawnStartupPage({ autoEnabledIds = [], onDone }: MultiSpawnStartupPageProps) {
+export function MultiSpawnStartupPage({ autoEnabledIds = [], tally, onDone }: MultiSpawnStartupPageProps) {
   const configs = useConfigStore((s) => s.configs)
   const groups = useConfigStore((s) => s.groups)
-  const sessions = useSessionStore((s) => s.sessions)
-  const detached = useDetachedRemotesStore((s) => s.entries)
+  const sessions = tally?.sessions ?? NONE
+  const detached = tally?.detached ?? NONE_DETACHED
 
-  /** User flips only. Everything else is derived, so a session that finishes
-   *  restoring while the page is open updates the row it belongs to without
-   *  discarding a decision already made. */
+  /** User flips only. Everything else is derived, so a tally that arrives
+   *  while the page is open (a Resume taken after it showed) updates the rows
+   *  without discarding a decision already made. */
   const [overrides, setOverrides] = useState<Record<string, boolean>>({})
 
   const rowStates = useMemo(() => {
@@ -248,6 +259,11 @@ export function MultiSpawnStartupPage({ autoEnabledIds = [], onDone }: MultiSpaw
 
   return (
     <DialogOverlay style={OPAQUE_BACKDROP} testId="multi-spawn-startup">
+      {/* The page covers the title bar, and App makes the app behind it inert
+          (appCovered), so its drag regions are gone too: this bar drags the
+          window and carries its minimize, maximize and close on Windows and
+          Linux (aicc_planning #211, follow-up). */}
+      <WindowDragStrip />
       <div className="w-[560px] max-w-[94vw] max-h-full flex flex-col">
         {/* Hero — SetupDialog's first-run pattern: the `>_` brand mark, a real
             <h1> (this page IS the app at this moment, so it owns the h1) and a
@@ -258,7 +274,7 @@ export function MultiSpawnStartupPage({ autoEnabledIds = [], onDone }: MultiSpaw
             Enable Multi Spawn
           </h1>
           <p className="text-[13px] max-w-[440px] mx-auto" style={{ color: 'var(--text-muted)' }}>
-            New in this update: launch several copies of a saved config at once. It&apos;s{' '}
+            Launch several copies of a saved config at once. It&apos;s{' '}
             <b className="font-semibold" style={{ color: 'var(--text-secondary)' }}>off by default</b>{' '}
             so a stray double-launch can&apos;t happen — turn it on only where you want it. You can change this any
             time in a config&apos;s settings.

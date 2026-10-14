@@ -299,6 +299,9 @@ export function describeReviewReason(reason: CommandReviewReason): string {
     case 'secret-like-arg': return 'An argument looks like a token or password. Store it as a secret so it never reaches your shell history.'
     case 'prompt-inert-on-shell-configs': return 'This Global button sends a prompt, so it cannot run in your terminal-only sessions; it sits in their "more" list, greyed.'
     case 'section-dissolved': return 'Its section was named "Global" and has been merged into the Global band.'
-    case 'ssh-partner-is-local': return 'On an SSH config the partner shell runs on this PC, not on the host -- check this is the shell you meant.'
+    // #86 (2.1.1): the partner shell of an SSH session moved to the host. A
+    // button tagged for it was written when the partner ran on this PC; the
+    // id is stored, so it stays, and the words say what is true now.
+    case 'ssh-partner-is-local': return 'On an SSH config the partner shell now runs on the host, not on this PC -- check this button still runs where you meant.'
   }
 }

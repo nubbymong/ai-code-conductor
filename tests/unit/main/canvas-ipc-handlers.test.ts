@@ -50,7 +50,10 @@ const { requestCanvasSnapshot, _resetSnapshotBrokerForTest } = await import('../
 
 const SID = 'a1b2c3d4e5f6a7b8c9d0e1f2'
 const CID = 'c1c2c3c4c5c6c7c8c9c0d1d2'
-const invoke = (ch: string, args: unknown) => handlers.get(ch)!({} as never, args)
+/** The app window's main frame, and its webContents (rebuilt per test below). */
+const APP_FRAME = {}
+let appContents: object = {}
+const invoke = (ch: string, args: unknown) => handlers.get(ch)!({ sender: appContents, senderFrame: APP_FRAME } as never, args)
 
 let sent: Array<{ channel: string; payload: unknown }>
 let destroyed: boolean
@@ -65,8 +68,9 @@ beforeEach(() => {
   destroyed = false
   const fakeWindow = {
     isDestroyed: () => destroyed,
-    webContents: { send: (channel: string, payload: unknown) => sent.push({ channel, payload }) },
+    webContents: { mainFrame: APP_FRAME, send: (channel: string, payload: unknown) => sent.push({ channel, payload }) },
   }
+  appContents = fakeWindow.webContents
   registerCanvasHandlers(() => fakeWindow as never)
 })
 
@@ -97,7 +101,7 @@ describe('snapshot capture (main -> renderer request)', () => {
     const { requestId } = pushed!.payload as { requestId: string }
     expect(requestId).toMatch(/^[0-9a-f]{24}$/)
 
-    listeners.get(IPC.CANVAS_SNAPSHOT_RESULT)!({} as never, {
+    listeners.get(IPC.CANVAS_SNAPSHOT_RESULT)!({ sender: appContents, senderFrame: APP_FRAME } as never, {
       requestId,
       ok: true,
       result: { viewport: { width: 800, height: 600, dpr: 1 }, root: { ref: 'e0', role: 'document', name: 'ok', box: {}, children: [] } },
@@ -214,7 +218,7 @@ describe('canvas:agentMarker', () => {
     // the rest typed at the prompt.
     const spy = vi.spyOn(await import('../../../src/main/canvas/canvas-marker-delivery'), 'deliverCanvasMarker')
     await marker({ sessionId: SID, canvasId: CID, line: 'Review #3\r\nrm -rf something · canvas_review R3' })
-    expect(spy).toHaveBeenCalledWith(SID, 'Review #3 rm -rf something · canvas_review R3')
+    expect(spy).toHaveBeenCalledWith(SID, 'Review #3 rm -rf something · canvas_review R3', CID)
     spy.mockRestore()
   })
 

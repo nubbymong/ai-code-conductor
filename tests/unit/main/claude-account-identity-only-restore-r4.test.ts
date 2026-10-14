@@ -1,3 +1,4 @@
+// HOST QUARANTINE: changes ACLs on temp folders (through the app's own folder hardening). [CI] [VM] only -- never run on the owner's machine.
 // rc.15 review R4 (Codex, 2026-09-06; aicc_planning#50): the reviewer's own
 // characterization (evidence/accounts-rotation.review.test.ts, first case)
 // flipped into the desired behaviour, credit Codex rc.15 stability review; RED
@@ -123,11 +124,25 @@ function expectIdentityOnly(id: string): void {
   expect(JSON.stringify(restored)).not.toMatch(/synthetic-identity-token|synthetic-apikey|primaryApiKey|accessToken/)
 }
 
+
+// The app's own window, and an event from its top frame: the account-profile
+// handlers answer nothing else (P3.2, trusted-sender.ts). An event object is
+// stamped as coming from it (its sender becomes the window's webContents).
+const appFrame = { frame: 'app' }
+const appWindow: any = { isDestroyed: () => false, webContents: { mainFrame: appFrame } }
+const getAppWindow = () => appWindow
+function fromApp<T extends Record<string, any>>(ev: T = {} as T): T {
+  const wc = ev.sender ?? { mainFrame: appFrame }
+  if (!wc.mainFrame) wc.mainFrame = { frame: 'main' }
+  appWindow.webContents = wc
+  return Object.assign(ev, { sender: wc, senderFrame: wc.mainFrame })
+}
+
 describe('R4: rotation, then /login before the settled observation (Codex, flipped)', () => {
   it('Codex: the capture IPC puts A\'s IDENTITY back and nothing token-bearing -- both files sanitised, and A reads Sign in', async () => {
     const id = await rotateThenLoginBeforeSettle('rotation-one')
-    registerAccountProfilesHandlers()
-    const np = handlers.get(IPC.ACCOUNT_PROFILES_CAPTURE_DETECTED)!({}, { sessionId: 'rotation-one', name: 'Synthetic B' })
+    registerAccountProfilesHandlers(getAppWindow)
+    const np = handlers.get(IPC.ACCOUNT_PROFILES_CAPTURE_DETECTED)!(fromApp(), { sessionId: 'rotation-one', name: 'Synthetic B' })
     expect(np?.accountEmail).toBe('b@example.test')
     expect(home(np.id)).toBe('synthetic-b') // B keeps B's token in B's new profile
     expectIdentityOnly(id)
@@ -264,10 +279,10 @@ describe('R4: rotation, then /login before the settled observation (Codex, flipp
     identity.startWatchingAccountIdentity('no-detection', id)
     await identity.recheckAllAsync() // the home is still A: no /login, so no detection
     expect(identity.detectedNewAccountEmail(id)).toBeNull()
-    registerAccountProfilesHandlers()
+    registerAccountProfilesHandlers(getAppWindow)
     // 7ef62a2e+R4: getWatchedProfileId alone let this proceed -> captured A into a
     // new profile AND wiped A's credentials. The gate refuses it.
-    const np = handlers.get(IPC.ACCOUNT_PROFILES_CAPTURE_DETECTED)!({}, { sessionId: 'no-detection', name: 'X' })
+    const np = handlers.get(IPC.ACCOUNT_PROFILES_CAPTURE_DETECTED)!(fromApp(), { sessionId: 'no-detection', name: 'X' })
     expect(np).toBeNull()
     expect(home(id)).toBe('synthetic-a-old') // untouched: still signed in on its own token
     expect(readProfileCredentialStamp(id).signedIn).toBe(true)
