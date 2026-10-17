@@ -9,12 +9,15 @@
 // The runs are REAL: `sh -c claude` into a FAKE claude in a temp folder off
 // PATH. Their environment is built from nothing (env -i style): withProfileHome
 // is replaced by one that returns only a bare PATH and a fake HOME, so a run
-// never sees this process's HOME, PATH or credentials. The probe's login shell
-// is never started: execFile, the probe's only process, answers
+// never sees this process's HOME, PATH or credentials. The probe's processes
+// are never started: execFile, the probe's only process, answers
 // `/bin/zsh -lc 'command -v claude'` itself (found, a plain miss, ended by its
-// timeout, or never), and records the options it was handed. spawn, the run's,
-// is the real one, wrapped only to record what each start was handed. No real
-// Claude Code starts.
+// timeout, or never, as a child that ignores every signal but records it) and
+// `which claude` (a plain miss, or h.whichAnswer), and records the options it
+// was handed. spawn, the run's, is the real one, wrapped only to record what
+// each start was handed. No real Claude Code starts. A case that leaves a
+// probe hanging shortens the probe's own timeout and waits for it to settle,
+// so no probe settles during a later case.
 //
 // The real runs are POSIX only (skipped on Windows, where a run starts Claude
 // Code by the full path found in PATH's folders, with no shell). The cases
@@ -38,10 +41,14 @@ const h = vi.hoisted(() => ({
   /** How the login shell gives no answer: ended by its timeout (after
    *  delayMs), or never answering at all. */
   noAnswer: null as 'timeout' | 'hang' | null,
+  /** What `which claude` prints (null: a plain miss). */
+  whichAnswer: null as string | null,
   delayMs: 0,
   asked: [] as string[],
   /** The options each probe process was handed. */
   execOpts: [] as Array<Record<string, unknown>>,
+  /** The signals a login shell that never answers was sent. */
+  killed: [] as string[],
   /** What each run's start was handed (the real spawn starts it). */
   spawned: [] as Array<{ file: string; PATH: string | undefined }>,
   /** os.platform() while set (the Windows case's probe asks as on macOS). */
@@ -89,18 +96,18 @@ vi.mock('../../src/main/login-shell', async (importOriginal) => ({
   shFamilyLoginShell: () => '/bin/zsh',
 }))
 // execFile is only the probe's (claude-cli-probe.ts probeOnce): it answers
-// `command -v claude` with h.answer and `which claude` with a plain miss (a
-// non-zero exit, as execFile reports one), after h.delayMs, and starts no
-// process. h.noAnswer makes the login shell give no answer instead. spawn, the
-// run's, is the real one, recorded.
+// `command -v claude` with h.answer and `which claude` with h.whichAnswer
+// (none: a plain miss, a non-zero exit as execFile reports one), after
+// h.delayMs, and starts no process. h.noAnswer makes the login shell give no
+// answer instead. spawn, the run's, is the real one, recorded.
 vi.mock('child_process', async (importOriginal) => {
   const real = await importOriginal<typeof import('child_process')>()
   const execFile = (file: string, args: string[], opts: Record<string, unknown>, cb: (err: Error | null, stdout: string) => void): object => {
     h.asked.push([file, ...args].join(' '))
     h.execOpts.push(opts)
     const login = file === '/bin/zsh' && args[0] === '-lc' && args[1] === 'command -v claude'
-    if (login && h.noAnswer === 'hang') return {}
-    const answer = login ? h.answer : null
+    if (login && h.noAnswer === 'hang') return { kill: (signal: string) => { h.killed.push(signal); return true } }
+    const answer = login ? h.answer : file === 'which' ? h.whichAnswer : null
     setTimeout(() => {
       if (login && h.noAnswer === 'timeout') return cb(Object.assign(new Error('Command failed (ended by its timeout)'), { code: null, killed: true, signal: 'SIGTERM' }), '')
       return answer ? cb(null, answer + '\n') : cb(Object.assign(new Error('Command failed'), { code: 1, killed: false, signal: null }), '')
@@ -115,7 +122,7 @@ vi.mock('child_process', async (importOriginal) => {
 })
 
 const { spawnClaudeHeadless, withClaudeFolderOnPath, _setProbeWaitForTest } = await import('../../src/main/claude-headless')
-const { probeClaudeCli, claudeFoundByLastProbe, claudeProbeInFlight, _resetClaudeCliProbeForTest } = await import('../../src/main/claude-cli-probe')
+const { probeClaudeCli, claudeFoundByLastProbe, claudeProbeInFlight, _resetClaudeCliProbeForTest, _setProbeStepTimeoutForTest } = await import('../../src/main/claude-cli-probe')
 
 const IS_WIN = process.platform === 'win32'
 const PREFIX = 'ccc-headless-posix-path-'
@@ -129,6 +136,7 @@ let npmBin = ''
 const sh = (lines: string[]): string => lines.join('\n') + '\n'
 /** Never start a real Claude Code: a case that expects `claude: not found` runs only when the bare PATH has none. */
 const bareHasClaude = (): boolean => BARE.split(':').some((d) => fs.existsSync(path.join(d, 'claude')))
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 beforeAll(() => {
   if (IS_WIN) return
@@ -163,12 +171,15 @@ afterAll(() => {
 beforeEach(() => {
   _resetClaudeCliProbeForTest()
   _setProbeWaitForTest(null)
+  _setProbeStepTimeoutForTest(null)
   h.env = { PATH: BARE, HOME: home }
   h.answer = null
   h.noAnswer = null
+  h.whichAnswer = null
   h.delayMs = 0
   h.asked = []
   h.execOpts = []
+  h.killed = []
   h.spawned = []
   h.osPlatform = null
   h.winStarts = []
@@ -178,7 +189,7 @@ beforeEach(() => {
 
 const read = (f: string): string => fs.readFileSync(f, 'utf8')
 
-describe.skipIf(IS_WIN)('a headless run under launchd\'s bare PATH starts the Claude Code the CLI probe found (POSIX only)', () => {
+describe.skipIf(IS_WIN)('a headless run under the bare PATH launchd gives starts the Claude Code the CLI probe found (POSIX only)', () => {
   it('a Claude Code only the login shell finds: its folder first on PATH, nothing else from this process', async () => {
     h.answer = path.join(nativeBin, 'claude')
     expect((await probeClaudeCli()).path).toBe(h.answer)
@@ -236,6 +247,7 @@ describe.skipIf(IS_WIN)('the wait for a running probe has a bound and ends on an
     if (bareHasClaude()) ctx.skip()
     h.noAnswer = 'hang'
     _setProbeWaitForTest(300)
+    _setProbeStepTimeoutForTest(100)
     const probe = probeClaudeCli()
     const t0 = Date.now()
     const res = await spawnClaudeHeadless(['--version'], 30_000)
@@ -244,6 +256,7 @@ describe.skipIf(IS_WIN)('the wait for a running probe has a bound and ends on an
     expect(h.spawned).toEqual([{ file: 'claude', PATH: BARE }])
     // The probe goes on; only the run stopped waiting for it.
     expect(claudeProbeInFlight()).toBe(probe)
+    await probe
   }, 10_000)
 
   it('a probe that answers within the bound: the run uses its answer, and the wait clears its timer', async () => {
@@ -267,7 +280,7 @@ describe.skipIf(IS_WIN)('the wait for a running probe has a bound and ends on an
     }
   }, 60_000)
 
-  it('a run aborted while it waits answers at once, starts nothing, and leaves no listener on its signal', async () => {
+  it('a run aborted while it waits answers at once and starts nothing', async () => {
     h.answer = path.join(nativeBin, 'claude')
     h.delayMs = 3000
     const probe = probeClaudeCli()
@@ -277,12 +290,42 @@ describe.skipIf(IS_WIN)('the wait for a running probe has a bound and ends on an
     setTimeout(() => ac.abort(), 50)
     expect(await run).toEqual({ code: 1, stdout: '', stderr: '\nAborted' })
     expect(Date.now() - t0).toBeLessThan(1500)
-    expect(getEventListeners(ac.signal, 'abort')).toHaveLength(0)
     // Nothing starts once the probe answers either.
     expect((await probe).path).toBe(h.answer)
     expect(h.spawned).toEqual([])
     expect(fs.existsSync(path.join(nativeBin, 'path.txt'))).toBe(false)
   }, 15_000)
+
+  it('a run that waited and ended with no abort leaves no listener of the wait on its signal', async (ctx) => {
+    if (bareHasClaude()) ctx.skip()
+    // A run that never waits (a path is known): what the run itself leaves on its signal.
+    h.answer = path.join(nativeBin, 'claude')
+    await probeClaudeCli()
+    const plain = new AbortController()
+    expect((await spawnClaudeHeadless(['--version'], 30_000, undefined, null, plain.signal)).code).toBe(0)
+    const baseline = getEventListeners(plain.signal, 'abort').length
+
+    // Waited, and the probe answered.
+    _resetClaudeCliProbeForTest()
+    h.delayMs = 100
+    const answered = new AbortController()
+    const first = probeClaudeCli()
+    expect((await spawnClaudeHeadless(['--version'], 30_000, undefined, null, answered.signal)).code).toBe(0)
+    await first
+    expect(getEventListeners(answered.signal, 'abort')).toHaveLength(baseline)
+
+    // Waited, and the bound passed.
+    _resetClaudeCliProbeForTest()
+    h.noAnswer = 'hang'
+    _setProbeWaitForTest(200)
+    _setProbeStepTimeoutForTest(100)
+    const bounded = new AbortController()
+    const second = probeClaudeCli()
+    expect((await spawnClaudeHeadless(['--version'], 30_000, undefined, null, bounded.signal)).code).toBe(127)
+    expect(getEventListeners(bounded.signal, 'abort')).toHaveLength(baseline)
+    expect(answered.signal.aborted || bounded.signal.aborted).toBe(false)
+    await second
+  }, 30_000)
 })
 
 describe.skipIf(IS_WIN)('a probe with no answer to go by keeps the path found before it (POSIX only)', () => {
@@ -294,14 +337,14 @@ describe.skipIf(IS_WIN)('a probe with no answer to go by keeps the path found be
     h.noAnswer = 'timeout'
     expect((await probeClaudeCli()).installed).toBe(false)
     // The kept file's check runs after the probe settles.
-    await new Promise((r) => setTimeout(r, 100))
+    await sleep(100)
     expect(claudeFoundByLastProbe()).toBe(found)
     const res = await spawnClaudeHeadless(['--version'], 30_000)
     expect(res.code, res.stderr).toBe(0)
     expect(read(path.join(nativeBin, 'path.txt'))).toBe(`${nativeBin}:${BARE}`)
   }, 60_000)
 
-  it('a plain "not found" clears it, and so does no answer once the kept file is gone', async () => {
+  it('a plain not found clears it, and so does no answer once the kept file is gone', async () => {
     h.answer = path.join(nativeBin, 'claude')
     await probeClaudeCli()
     h.answer = null
@@ -321,9 +364,47 @@ describe.skipIf(IS_WIN)('a probe with no answer to go by keeps the path found be
     await probeClaudeCli()
     await vi.waitFor(() => expect(claudeFoundByLastProbe()).toBeNull())
   })
+
+  it('a login shell that never exits still settles after its timeout and a grace, is ended with SIGKILL, and keeps the kept path', async () => {
+    const found = path.join(nativeBin, 'claude')
+    h.answer = found
+    await probeClaudeCli()
+    h.answer = null
+    h.noAnswer = 'hang'
+    _setProbeStepTimeoutForTest(200)
+    const t0 = Date.now()
+    const second = await probeClaudeCli()
+    const took = Date.now() - t0
+    expect(second.installed).toBe(false)
+    expect(took).toBeGreaterThanOrEqual(1100)
+    expect(took).toBeLessThan(5000)
+    expect(h.killed).toEqual(['SIGKILL'])
+    // Settled: a later run does not join it and wait out its bound.
+    expect(claudeProbeInFlight()).toBeNull()
+    await sleep(100)
+    expect(claudeFoundByLastProbe()).toBe(found)
+  }, 10_000)
 })
 
-describe.skipIf(IS_WIN)('a probe answer that is not a file named claude (POSIX only)', () => {
+describe.skipIf(IS_WIN)('only a path a run may put on PATH is kept for a run (POSIX only)', () => {
+  it.each([
+    ['a stray line a login profile printed', '/usr/local/bin/brew'],
+    ['a path with a C1 control character in its folder', '/opt/a\x85b/claude'],
+    ['a name, not a path', 'claude'],
+  ])('%s keeps the good path found before it, and a run still starts that Claude Code', async (_label, stray) => {
+    const found = path.join(nativeBin, 'claude')
+    h.answer = found
+    await probeClaudeCli()
+    h.answer = stray
+    // The probe still reports what the login shell printed, for its other uses.
+    expect((await probeClaudeCli()).path).toBe(stray)
+    await sleep(100)
+    expect(claudeFoundByLastProbe()).toBe(found)
+    const res = await spawnClaudeHeadless(['--version'], 30_000)
+    expect(res.code, res.stderr).toBe(0)
+    expect(read(path.join(nativeBin, 'path.txt'))).toBe(`${nativeBin}:${BARE}`)
+  }, 60_000)
+
   it('a line a login profile printed first puts nothing on PATH, so a claude beside it never runs', async (ctx) => {
     if (bareHasClaude()) ctx.skip()
     const shared = path.join(dir, 'shared')
@@ -339,8 +420,39 @@ describe.skipIf(IS_WIN)('a probe answer that is not a file named claude (POSIX o
   }, 60_000)
 })
 
+describe.skipIf(IS_WIN)('an answer of which never feeds the PATH (POSIX only)', () => {
+  it('a claude only which names (another project) is reported, but never kept or put on PATH', async (ctx) => {
+    if (bareHasClaude()) ctx.skip()
+    const other = path.join(dir, 'other-project', 'node_modules', '.bin')
+    fs.mkdirSync(other, { recursive: true })
+    fs.writeFileSync(path.join(other, 'claude'), sh(['#!/bin/sh', 'echo other-project']), { mode: 0o755 })
+    h.whichAnswer = path.join(other, 'claude')
+    h.delayMs = 100
+    const probe = probeClaudeCli()
+    // The run waits for the probe: the login shell says not found, which names the other project.
+    const res = await spawnClaudeHeadless(['--version'], 30_000)
+    expect((await probe).path).toBe(h.whichAnswer)
+    expect(claudeFoundByLastProbe()).toBeNull()
+    expect(res.code).toBe(127)
+    expect(res.stdout).not.toContain('other-project')
+    expect(h.spawned).toEqual([{ file: 'claude', PATH: BARE }])
+  }, 60_000)
+
+  it('after a login shell with no answer, a which answer leaves the good kept path as it is', async () => {
+    const found = path.join(nativeBin, 'claude')
+    h.answer = found
+    await probeClaudeCli()
+    h.answer = null
+    h.noAnswer = 'timeout'
+    h.whichAnswer = path.join(dir, 'elsewhere', 'claude')
+    expect((await probeClaudeCli()).path).toBe(h.whichAnswer)
+    await sleep(100)
+    expect(claudeFoundByLastProbe()).toBe(found)
+  })
+})
+
 describe('the login-shell probe runs in the home folder (every OS; nothing starts)', () => {
-  it('hands the login shell the home folder as its working folder, never the app\'s', async () => {
+  it('hands the login shell the home folder as its working folder, never the folder the app runs in', async () => {
     h.answer = '/opt/homebrew/bin/claude'
     // The probe asks as on macOS (its POSIX branch), on every host.
     h.osPlatform = 'darwin'
@@ -405,7 +517,7 @@ describe('withClaudeFolderOnPath (the PATH a POSIX run starts with)', () => {
     ['an alias line (command -v of an alias)', { PATH: BARE }, "alias claude='/opt/x/claude'"],
     ['a folder with a colon (no PATH entry can name it)', { PATH: BARE }, '/opt/a:b/claude'],
     ['no PATH at all', {}, '/opt/homebrew/bin/claude'],
-    ['an empty PATH (an empty entry would mean the run\'s folder)', { PATH: '' }, '/opt/homebrew/bin/claude'],
+    ['an empty PATH (an empty entry would mean the folder the run starts in)', { PATH: '' }, '/opt/homebrew/bin/claude'],
     ['a file not named claude (a line a login profile printed)', { PATH: BARE }, '/etc/passwd'],
     ['a name that only begins with claude', { PATH: BARE }, '/opt/x/claude-old'],
     ['a folder with a NUL', { PATH: BARE }, '/opt/a\0b/claude'],
@@ -414,6 +526,10 @@ describe('withClaudeFolderOnPath (the PATH a POSIX run starts with)', () => {
     ['a folder with a carriage return', { PATH: BARE }, '/opt/a\rb/claude'],
     ['a folder with an escape (a terminal colour code)', { PATH: BARE }, '/opt/a\x1b[31mb/claude'],
     ['a folder with a DEL', { PATH: BARE }, '/opt/a\x7fb/claude'],
+    ['a folder with a C1 next line', { PATH: BARE }, '/opt/a\x85b/claude'],
+    ['a folder with a C1 control sequence introducer', { PATH: BARE }, '/opt/a\x9b31mb/claude'],
+    ['a folder with a Unicode line separator', { PATH: BARE }, '/opt/a\u2028b/claude'],
+    ['a folder with a Unicode paragraph separator', { PATH: BARE }, '/opt/a\u2029b/claude'],
   ] as Array<[string, Record<string, string>, string | null]>)('%s: the environment itself, unchanged', (_label, env, claudePath) => {
     const before = { ...env }
     expect(withClaudeFolderOnPath(env, claudePath)).toBe(env)

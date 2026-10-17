@@ -3,7 +3,7 @@
 import { spawn, spawnSync, type SpawnOptions } from 'child_process'
 import * as path from 'path'
 import { systemTool, windowsStartCommand } from './windows-programs'
-import { CLAUDE_NOT_ON_PATH, claudeFoundByLastProbe, claudeProbeInFlight, findClaudeOnWindowsAsync, recentClaudeOnWindows, type ClaudeCliProbe } from './claude-cli-probe'
+import { CLAUDE_NOT_ON_PATH, claudeFolderForPath, claudeFoundByLastProbe, claudeProbeInFlight, findClaudeOnWindowsAsync, recentClaudeOnWindows, type ClaudeCliProbe } from './claude-cli-probe'
 import { StringDecoder } from 'string_decoder'
 import { logInfo, logError } from './debug-logger'
 import { withProfileHome } from './pty-manager'
@@ -147,24 +147,24 @@ export function assertHeadlessOptions(opts: HeadlessSpawnOptions): void {
  *  folder goes first, so the run starts the Claude Code the login shell names
  *  (as an interactive session does), which can differ from the one the
  *  inherited PATH would find, and the programs the run starts by name are
- *  looked for in that folder first too. The folder is the one the probe
- *  named, not the link's target: an npm claude is a node script
- *  (`#!/usr/bin/env node`), and the node it needs sits in that same folder
- *  (Homebrew, nvm). `env` itself is returned, unchanged, for no path, a path
- *  that is not absolute (`command -v` names an alias or a function by its
- *  name), a path whose last part is not exactly `claude` (a line a login
- *  profile printed before `command -v` answered: its folder would decide
- *  which `claude` runs), a folder with a `:` (no PATH entry can name it) or
- *  any control character in it (a NUL makes the start throw; the rest have no
- *  place in a folder Claude Code is installed in), and no PATH or an empty
- *  one (an empty PATH entry would mean the run's folder). Exported for the
+ *  looked for in that folder first too. The same holds for a folder the
+ *  user's own PATH lists late (after /usr/bin, say): it goes first for the
+ *  run, so every program in it is found before the system's. Not changed:
+ *  for a folder only the user can write to it widens nothing, since whoever
+ *  can write there can replace the claude the run starts anyway; it does for
+ *  a claude kept directly in a folder other users may add files to. The folder
+ *  is the one the probe named, not the link's target: an npm claude is a
+ *  node script (`#!/usr/bin/env node`), and the node it needs sits in that
+ *  same folder (Homebrew, nvm). `env` itself is returned, unchanged, for a
+ *  path a run may not put on PATH (claude-cli-probe.ts claudeFolderForPath:
+ *  no path, not absolute, a last part that is not exactly `claude`, a folder
+ *  with a `:` or a control character in it), and for no PATH or an empty one
+ *  (an empty PATH entry would mean the run's folder). Exported for the
  *  test. */
 export function withClaudeFolderOnPath(env: Record<string, string>, claudePath: string | null): Record<string, string> {
-  if (!claudePath || !path.posix.isAbsolute(claudePath) || path.posix.basename(claudePath) !== 'claude') return env
-  const folder = path.posix.dirname(claudePath)
+  const folder = claudeFolderForPath(claudePath)
   const current = env.PATH
-  // eslint-disable-next-line no-control-regex
-  if (!current || /[:\x00-\x1f\x7f]/.test(folder) || current.split(':').includes(folder)) return env
+  if (!folder || !current || current.split(':').includes(folder)) return env
   return { ...env, PATH: `${folder}:${current}` }
 }
 
@@ -323,7 +323,8 @@ function spawnNow(
   // (withClaudeFolderOnPath). The path kept from the probes is read at once,
   // even while a later probe runs. With none known (no probe has found one
   // yet, or the last answer was a plain "not found"), the run waits for a
-  // probe still running and uses its answer, until that probe answers,
+  // probe still running and uses the path that probe keeps (only a login
+  // shell's answer, never `which`'s), until that probe settles,
   // PROBE_WAIT_MS passes (the run then starts without its answer), or the run
   // is aborted (it then starts nothing), whichever comes first. With none
   // known and none running it starts as before. A run with no profile home
@@ -353,14 +354,15 @@ type HeadlessResult = { code: number; stdout: string; stderr: string }
 
 /** How long a run off Windows with no Claude Code known waits for a CLI
  *  probe already running (spawnNow) before it starts without its answer.
- *  25 s, for two reasons. A probe that ends on its own timers answers within
- *  it: each process the probe asks is ended after 8 s, about 16 s for a
+ *  25 s, for two reasons. A probe whose processes end on their timeouts
+ *  answers within it: each is sent SIGTERM after 8 s, about 16 s for a
  *  sh-family login shell and then `which`, about 24 s when a fish or
  *  PowerShell login shell is asked for its PATH first, counted from the
- *  probe's start, which came before the run joined it. A probe can outlive
- *  those timers, which only send SIGTERM (a login shell can ignore it, and a
- *  stat in fish's PATH can hang), and without a bound it would hold the run
- *  for as long as it runs. And it keeps the whole start inside the consumer
+ *  probe's start, which came before the run joined it. A process that
+ *  ignores SIGTERM settles its step 1 s later (claude-cli-probe.ts
+ *  probeOnce), so such a probe can run a little longer, and a stat in fish's
+ *  PATH can hang with no timer at all: the bound keeps the run from waiting
+ *  on either. And it keeps the whole start inside the consumer
  *  ref's grace (HEADLESS_CONSUMER_GRACE_MS, 60 s; the ref is taken before
  *  every wait and lives for timeoutMs plus that grace): the refresh wait (its
  *  request's 10 s socket timeout), then the project gate (3 s), then this
@@ -376,12 +378,17 @@ export function _setProbeWaitForTest(ms: number | null): void {
 type ProbeWait = { aborted: true } | { aborted: false; claudePath: string | null }
 
 /** For a run off Windows with no Claude Code known (spawnNow), whichever
- *  comes first: the path the running CLI probe finds (null when it finds
- *  none or rejects); once probeWaitMs passes with no answer, the path kept
- *  from the probes (claudeFoundByLastProbe; with none, the run starts as it
- *  did before it read the probe); or `aborted` once the run's signal aborts
- *  (at once when it has). The timer and the abort listener are removed when
- *  it settles; the probe itself goes on. Never rejects. */
+ *  comes first: the running CLI probe settles, probeWaitMs passes, or the
+ *  run's signal aborts (`aborted`, at once when it has). Unless aborted, the
+ *  answer is the path kept from the probes (claudeFoundByLastProbe), never
+ *  the probe's own answer: by the time the probe settles it has updated
+ *  that path (claude-cli-probe.ts keepFoundPath), which only ever holds a
+ *  Claude Code its login shell named and a run may put on PATH, never a
+ *  `which` answer or a profile's stray line. With none, the run starts as it
+ *  did before it read the probe. When the bound passes first the probe has
+ *  not settled, so that read finds what was kept when the wait began. The
+ *  timer and the abort listener are removed when it settles; the probe
+ *  itself goes on. Never rejects. */
 function waitForClaudeProbe(probing: Promise<ClaudeCliProbe>, signal: AbortSignal | undefined): Promise<ProbeWait> {
   if (signal?.aborted) return Promise.resolve({ aborted: true })
   return new Promise((resolve) => {
@@ -399,10 +406,8 @@ function waitForClaudeProbe(probing: Promise<ClaudeCliProbe>, signal: AbortSigna
       settle({ aborted: false, claudePath: claudeFoundByLastProbe() })
     }, probeWaitMs)
     signal?.addEventListener('abort', onAbort, { once: true })
-    probing.then(
-      (r) => settle({ aborted: false, claudePath: r.installed && r.path ? r.path : null }),
-      () => settle({ aborted: false, claudePath: null }),
-    )
+    const kept = (): void => settle({ aborted: false, claudePath: claudeFoundByLastProbe() })
+    probing.then(kept, kept)
   })
 }
 
