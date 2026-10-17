@@ -238,15 +238,15 @@ export function changedLines(git: Git, base: string, paths: readonly string[]): 
   return n
 }
 
-/** Every added line longer than `max` characters between base and HEAD in
- *  these paths, as "<path>: an added line of N characters". It reads the
- *  patch git prints (no context, no renames, no external diff or textconv);
- *  only lines inside a hunk are content. No paths, no git call. */
-export function longAddedLines(git: Git, base: string, paths: readonly string[], max: number): string[] {
+/** Every line added between base and HEAD in these paths, with its file and
+ *  its text (a trailing CR left out). It reads the patch git prints (no
+ *  context, no renames, no external diff or textconv); only lines inside a
+ *  hunk are content. No paths, no git call. */
+export function addedLines(git: Git, base: string, paths: readonly string[]): Array<{ file: string; text: string }> {
   if (paths.length === 0) return []
   const r = git(['diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', `${base}..HEAD`, '--', ...paths])
   if (r.status !== 0) throw new Error(`git diff -U0 ${base}..HEAD exited ${r.status}: ${r.stderr ?? ''}`)
-  const out: string[] = []
+  const out: Array<{ file: string; text: string }> = []
   let file = ''
   let inHunk = false
   for (const raw of r.stdout.split('\n')) {
@@ -257,9 +257,22 @@ export function longAddedLines(git: Git, base: string, paths: readonly string[],
       else if (l.startsWith('@@')) inHunk = true
       continue
     }
-    if (l.startsWith('+') && l.length - 1 > max) out.push(`${file}: an added line of ${l.length - 1} characters`)
+    if (l.startsWith('+')) out.push({ file, text: l.slice(1) })
   }
   return out
+}
+
+/** Every added line longer than `max` characters between base and HEAD in
+ *  these paths, as "<path>: an added line of N characters" (addedLines). */
+export function longAddedLines(git: Git, base: string, paths: readonly string[], max: number): string[] {
+  return longOf(addedLines(git, base, paths), max)
+}
+const longOf = (lines: ReadonlyArray<{ file: string; text: string }>, max: number) =>
+  lines.filter((l) => l.text.length > max).map((l) => `${l.file}: an added line of ${l.text.length} characters`)
+
+/** The UTF-8 bytes of these added lines, each line end counted as one. */
+export function addedBytes(lines: ReadonlyArray<{ text: string }>): number {
+  return lines.reduce((n, l) => n + Buffer.byteLength(l.text, 'utf8') + 1, 0)
 }
 
 /** The carry-forward declaration as committed at HEAD, read from git and
@@ -393,6 +406,9 @@ export const CARRY_FORWARD_MAX_SHIPPED_LINES = 600
 /** The longest added line a counted path may carry: a line count alone does
  *  not bound size. Above the longest one-line changelog description. */
 export const CARRY_FORWARD_MAX_ADDED_LINE = 1000
+/** The most a carry-forward may add in counted paths, in UTF-8 bytes (64
+ *  KiB): the line caps alone still let 600 lines of 1000 characters through. */
+export const CARRY_FORWARD_MAX_ADDED_BYTES = 65536
 /** Trees that never ship: tests and workflows. */
 export const DEV_ONLY_TREES: readonly string[] = ['tests/', '.github/']
 /** Release tooling under scripts/ that is never packaged (not in package.json
@@ -762,12 +778,16 @@ export function carryForwardProblems(text: string, ctx: CarryForwardContext): st
     if (!same) out.push(`${p} changed more than its version since boundHead`)
   }
   // The size of what can ship (isCountedPath), since boundHead: lines added
-  // plus deleted, and no added line longer than CARRY_FORWARD_MAX_ADDED_LINE.
+  // plus deleted, no added line longer than CARRY_FORWARD_MAX_ADDED_LINE, and
+  // no more than CARRY_FORWARD_MAX_ADDED_BYTES added in all.
   const counted = [...exact].filter(isCountedPath)
   const lines = changedLines(ctx.git, ctx.boundHead, counted)
   if (lines === null) out.push('a counted declared file is binary, or git gave a line count that cannot be read')
   else if (lines > CARRY_FORWARD_MAX_SHIPPED_LINES) out.push(`${lines} lines changed in counted paths since boundHead; at most ${CARRY_FORWARD_MAX_SHIPPED_LINES} carry forward`)
-  for (const l of longAddedLines(ctx.git, ctx.boundHead, counted, CARRY_FORWARD_MAX_ADDED_LINE)) out.push(`${l}, over the ${CARRY_FORWARD_MAX_ADDED_LINE} a carry-forward allows`)
+  const added = addedLines(ctx.git, ctx.boundHead, counted)
+  for (const l of longOf(added, CARRY_FORWARD_MAX_ADDED_LINE)) out.push(`${l}, over the ${CARRY_FORWARD_MAX_ADDED_LINE} a carry-forward allows`)
+  const bytes = addedBytes(added)
+  if (bytes > CARRY_FORWARD_MAX_ADDED_BYTES) out.push(`${bytes} bytes added in counted paths since boundHead; at most ${CARRY_FORWARD_MAX_ADDED_BYTES} carry forward`)
   return out
 }
 
