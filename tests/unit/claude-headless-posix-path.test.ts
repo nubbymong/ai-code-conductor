@@ -247,7 +247,8 @@ describe.skipIf(IS_WIN)('the wait for a running probe has a bound and ends on an
     if (bareHasClaude()) ctx.skip()
     h.noAnswer = 'hang'
     _setProbeWaitForTest(300)
-    _setProbeStepTimeoutForTest(100)
+    // Long enough that the hung probe cannot settle before a slow runner's `sh` start returns.
+    _setProbeStepTimeoutForTest(2_000)
     const probe = probeClaudeCli()
     const t0 = Date.now()
     const res = await spawnClaudeHeadless(['--version'], 30_000)
