@@ -7,6 +7,7 @@
 // "decidable" means. A targeted stable patch may carry the previous stable's
 // evidence forward on a declared file list (carryForwardProblems, ADR-027).
 import { isDeepStrictEqual } from 'node:util'
+import { posix } from 'node:path'
 import { ancestry, SHA_RE } from '../../scripts/wp1/fetch-ledger-commit.mjs'
 // The committed-tree scan for the declaration is the gate's own, so the suite
 // and the gate read it the same way.
@@ -396,6 +397,7 @@ export function toolingPackagingProblems(build: Json, tooling: readonly string[]
   const b = typeof build === 'object' && build !== null ? build : {}
   const out: string[] = []
   if (b.directories?.app !== undefined) out.push('build.directories.app moves the packaged root, which this check cannot read')
+  if (b.extends !== undefined && b.extends !== null) out.push('build.extends pulls in a config this check cannot read')
   const list = (v: Json): Json[] => (v === undefined ? [] : Array.isArray(v) ? v : [v])
   const entries: Json[] = []
   for (const at of [b, b.win, b.mac, b.linux]) {
@@ -416,6 +418,64 @@ export function toolingPackagingProblems(build: Json, tooling: readonly string[]
     for (const p of patterns) if (within.some((w) => p.re.test(w))) out.push(`${t} is packaged by the build entry ${p.shown}`)
     if (imported.has(t)) out.push(`${t} is imported by the app's build config`)
     if (namedInSrc(t)) out.push(`${t} is named in a string under src/`)
+  }
+  return out
+}
+
+/** The files outside src/ that src/ code imports by a relative path: data
+ *  under resources/ the app reads, which ships with it (build.files) and
+ *  counts toward the caps, so importing it hides nothing. Any other relative
+ *  import that leaves src/ could pull code that is neither declared nor
+ *  counted (under tests/, say) into the bundle. */
+export const SRC_OUTSIDE_IMPORTS_ALLOWED: readonly string[] = [
+  'resources/claude-code-model-configuration.json', 'resources/codex-model-catalogue.json', 'resources/codex-pricing.json',
+  'resources/macos-release-floors.json', 'resources/model-registry.json', 'resources/sentinel-assumption-manifest.json',
+]
+/** A relative specifier in the ways a source file reaches another for the
+ *  build: import or export from, a side-effect import, import(), require(),
+ *  new URL() (an asset), import.meta.glob(), and an HTML src or href. */
+const SRC_SPECIFIER_RE = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+|\bnew\s+URL\s*\(\s*|\bimport\.meta\.glob\s*\(\s*\[?\s*|\b(?:src|href)\s*=\s*)(['"`])(\.{1,2}\/[^'"`]*)\1/g
+
+/** Every relative specifier in these src/ files that resolves outside src/
+ *  to a file `allowed` does not name. Bare package names are not relative and
+ *  are not looked at. The scan is static: a path built at run time is not
+ *  seen. */
+export function outOfSrcImports(files: ReadonlyArray<{ path: string; text: string }>, allowed: readonly string[] = SRC_OUTSIDE_IMPORTS_ALLOWED): string[] {
+  const out: string[] = []
+  for (const f of files) {
+    for (const m of f.text.matchAll(SRC_SPECIFIER_RE)) {
+      const target = posix.normalize(posix.join(posix.dirname(f.path), m[2]))
+      if (!target.startsWith('src/') && !allowed.includes(target)) out.push(`${f.path} reaches ${m[2]}, outside src/ (${target})`)
+    }
+  }
+  return out
+}
+
+/** The electron-builder override keys a build command may pass: the native
+ *  rebuild switch and the Windows signing thumbprint. Any other key (files,
+ *  extends, directories, extraResources) could change what is packaged. */
+export const BUILDER_OVERRIDES_ALLOWED: readonly string[] = ['npmRebuild', 'win.signtoolOptions.certificateSha1']
+
+/** Every way electron-builder could take a config other than package.json's
+ *  build field, which the packaging proof reads: a config file of its own at
+ *  the root (electron-builder.* or electron-builder.config.*), a --config or
+ *  -c that names a file (on a line that runs electron-builder), or a dotted
+ *  override (--config.<key> or -c.<key>, on any line, since an argument list
+ *  can be built apart from the command) of a key BUILDER_OVERRIDES_ALLOWED
+ *  does not name. `commands` are the texts that can run it (package.json
+ *  scripts, the workflows), by where they come from; comment lines are
+ *  skipped. */
+export function builderConfigProblems(tracked: readonly string[], commands: ReadonlyArray<{ where: string; text: string }>): string[] {
+  const out: string[] = []
+  for (const p of tracked) if (/^electron-builder(?:\.config)?\.[A-Za-z0-9]+$/i.test(p)) out.push(`${p} is an electron-builder config of its own, which the packaging proof does not read`)
+  for (const c of commands) {
+    for (const line of c.text.split(/\r?\n/)) {
+      if (/^\s*(?:#|\/\/)/.test(line)) continue
+      for (const m of line.matchAll(/(?<![\w.-])(?:--config|-c)\.([A-Za-z0-9_.]+)/g)) {
+        if (!BUILDER_OVERRIDES_ALLOWED.includes(m[1])) out.push(`${c.where}: an electron-builder override of ${m[1]}, which the packaging proof does not read`)
+      }
+      if (/\belectron-builder\b/.test(line) && /(?<![\w.-])(?:--config|-c)(?=[\s=]|$)/.test(line)) out.push(`${c.where}: electron-builder is given a config of its own, which the packaging proof does not read`)
+    }
   }
   return out
 }

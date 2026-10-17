@@ -18,7 +18,7 @@ import {
   CARRY_FORWARD_PATH, CARRY_FORWARD_SCHEMA, CARRY_FORWARD_MAX_PATHS, CARRY_FORWARD_MAX_SHIPPED_LINES, BINDING_NEUTRAL, NATIVE_TEST, RUNNABLE_TEST,
   CARRY_FORWARD_MAX_ADDED_LINE, CARRY_FORWARD_GATE_FILES, DEV_ONLY_TOOLING, DEV_ONLY_TREES,
   bindingVerdict, carryForwardProblems, changedLines, committedCarryForward, fileAt, isCarryForwardNeutralFile, isCountedPath, longAddedLines,
-  toolingPackagingProblems,
+  toolingPackagingProblems, outOfSrcImports, SRC_OUTSIDE_IMPORTS_ALLOWED, builderConfigProblems, BUILDER_OVERRIDES_ALLOWED,
 } from './binding'
 import { DEEPEN_STEPS, deepenUntilDecidable, invocation, readBoundHead } from '../../scripts/wp1/fetch-ledger-commit.mjs'
 
@@ -1013,11 +1013,51 @@ describe('WP1 traceability manifest', () => {
     expect(toolingPackagingProblems(real, T, none, (t) => t === T[1])).toEqual([`${T[1]} is named in a string under src/`])
   })
 
+  it('[host] carry-forward: shipped code cannot hide outside src, and electron-builder reads only the config the packaging proof reads', () => {
+    const at = (path: string, text: string) => ({ path, text })
+    // A relative specifier that leaves src/ refuses, in every form that reaches the build, unless its target is allowed data.
+    expect(outOfSrcImports([at('src/main/a.ts', "import x from './b'\nimport y from '../shared/c'\nimport z from 'node:fs'\nimport w from 'electron'")])).toEqual([])
+    expect(outOfSrcImports([at('src/main/a.ts', "import x from '../../tests/x'")])).toEqual(['src/main/a.ts reaches ../../tests/x, outside src/ (tests/x)'])
+    for (const spec of ["export * from '../../tests/x'", "import '../../tests/x'", "const x = await import('../../tests/x')", "const x = require('../../tests/x')",
+      "const u = new URL('../../tests/x.js', import.meta.url)", "const g = import.meta.glob('../../tests/*.ts')", 'import x from "../../scripts/release-gate.mjs"',
+      'import x from `../../tests/x`', "import raw from '../../tests/x.ts?raw'", "import y from '../../../package.json'"]) {
+      expect(outOfSrcImports([at('src/main/a.ts', spec)]), spec).toHaveLength(1)
+    }
+    expect(outOfSrcImports([at('src/renderer/index.html', '<script type="module" src="../../tests/x.js"></script>')])).toHaveLength(1)
+    expect(outOfSrcImports([at('src/renderer/index.html', '<script type="module" src="./main.tsx"></script>')])).toEqual([])
+    // The data under resources/ the app reads is allowed, by exact path only.
+    for (const t of SRC_OUTSIDE_IMPORTS_ALLOWED) expect(outOfSrcImports([at('src/main/a.ts', `import j from '../../${t}'`)]), t).toEqual([])
+    expect(outOfSrcImports([at('src/main/a.ts', "import j from '../../resources/other.json'")])).toEqual(['src/main/a.ts reaches ../../resources/other.json, outside src/ (resources/other.json)'])
+    expect(SRC_OUTSIDE_IMPORTS_ALLOWED.every((t) => /^resources\/[^/]+\.json$/.test(t))).toBe(true)
+    // electron-builder: a config file of its own, a config named on its command, or an override of a key but the two allowed, refuses.
+    const BUILDER_FILE = (p: string) => `${p} is an electron-builder config of its own, which the packaging proof does not read`
+    for (const p of ['electron-builder.yml', 'electron-builder.yaml', 'electron-builder.json', 'electron-builder.json5', 'electron-builder.toml', 'electron-builder.config.js', 'electron-builder.config.ts', 'Electron-Builder.YML']) {
+      expect(builderConfigProblems([p], []), p).toEqual([BUILDER_FILE(p)])
+    }
+    expect(builderConfigProblems(['package.json', 'docs/electron-builder.yml', 'electron.vite.config.ts'], [])).toEqual([])
+    const cmd = (text: string) => builderConfigProblems([], [{ where: 'w', text }])
+    for (const ok of ['npx electron-builder --mac', 'electron-vite build && electron-builder --win --config.npmRebuild=false', '$extra += "-c.win.signtoolOptions.certificateSha1=$env:SIGN_THUMBPRINT"',
+      'npx vitest run --config vitest.live.config.ts', 'git -c core.autocrlf=false status', '# short -c. treats the value as a config-file path', 'bash -c "echo"',
+      '    # npx electron-builder --config custom.yml -c.files=x (a comment)']) {
+      expect(cmd(ok), ok).toEqual([])
+    }
+    for (const bad of ['npx electron-builder --config electron-builder.prod.yml', 'npx electron-builder -c custom.yml --mac', 'npx electron-builder --config=custom.yml', 'npx electron-builder -c']) {
+      expect(cmd(bad), bad).toEqual(['w: electron-builder is given a config of its own, which the packaging proof does not read'])
+    }
+    for (const [bad, key] of [['npx electron-builder --config.files=scripts/**', 'files'], ['$extra += "-c.extends=./x.js"', 'extends'], ['npx electron-builder -c.directories.app=scripts', 'directories.app'], ['args="--config.extraResources=scripts"', 'extraResources']]) {
+      expect(cmd(bad), bad).toEqual([`w: an electron-builder override of ${key}, which the packaging proof does not read`])
+    }
+    expect([...BUILDER_OVERRIDES_ALLOWED]).toEqual(['npmRebuild', 'win.signtoolOptions.certificateSha1'])
+    // A build config that extends another one cannot be read here either.
+    expect(toolingPackagingProblems({ files: ['out/**/*'], extends: './base.yml' }, ['scripts/release-gate.mjs'], new Set(), () => false)).toEqual(['build.extends pulls in a config this check cannot read'])
+    expect(toolingPackagingProblems({ files: ['out/**/*'], extends: null }, ['scripts/release-gate.mjs'], new Set(), () => false)).toEqual([])
+  })
+
   // ADR-027: with a declaration in use, the size caps leave out only release
   // tooling this repository's packaging never ships, and the freeze covers
   // every file that decides how the suite runs. With none, packaging and the
   // test configs are not tied to this rule, so beta and dev CI stay free.
-  it('carry-forward: with a declaration in use, the tooling the caps leave out is never packaged, and the gate files list every vitest config and setup file', () => {
+  it('carry-forward: with a declaration in use, the tooling the caps leave out is never packaged, no src file reaches outside src but allowed data, and the gate files list every vitest config and setup file', () => {
     if (committedCarry.text === null) return
     const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')) as { build?: unknown }
     // What the app's build imports from outside src/: electron-vite's config, followed through relative imports.
@@ -1041,6 +1081,21 @@ describe('WP1 traceability manifest', () => {
     // Verify the verifier on the real config: a script that ships, and one the build imports, are seen.
     expect(toolingPackagingProblems(pkg.build, ['scripts/resume-picker.js'], imported, namedInSrc)).not.toEqual([])
     expect(imported.has('scripts/build-identity.mjs')).toBe(true)
+    // No src file reaches outside src/ but the allowed data, and every input electron-vite builds from is under src/.
+    const srcCode = srcFiles.filter((f) => /\.(?:[cm]?[jt]sx?|html)$/.test(f))
+    const reach = outOfSrcImports(srcCode.map((f) => ({ path: f, text: readFileSync(resolve(ROOT, f), 'utf8') })))
+    expect(reach, reach.join('\n')).toEqual([])
+    const viteConfig = readFileSync(resolve(ROOT, 'electron.vite.config.ts'), 'utf8')
+    const inputs = [...viteConfig.matchAll(/input\s*:\s*\{([^}]*)\}|root\s*:\s*(resolve\([^)]*\))/g)].flatMap((m) => [...(m[1] ?? m[2]).matchAll(/resolve\(__dirname,\s*'([^']+)'\)/g)].map((x) => x[1]))
+    expect(inputs.length, 'no build inputs found in electron.vite.config.ts').toBeGreaterThan(5)
+    for (const i of inputs) expect(i, 'an electron-vite build input outside src/').toMatch(/^src\//)
+    // electron-builder reads package.json's build field and nothing else: no config of its own, none on a command.
+    const tracked = execFileSync('git', ['-C', ROOT, 'ls-files', '-z'], { encoding: 'utf8', maxBuffer: 1 << 28 }).split('\0').filter(Boolean)
+    const scripts = Object.entries((JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {}).map(([k, v]) => ({ where: `package.json scripts.${k}`, text: v }))
+    const workflows = tracked.filter((f) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(f)).map((f) => ({ where: f, text: readFileSync(resolve(ROOT, f), 'utf8') }))
+    expect(workflows.length).toBeGreaterThan(1)
+    const builder = builderConfigProblems(tracked, [...scripts, ...workflows])
+    expect(builder, builder.join('\n')).toEqual([])
     // The freeze lists every vitest config, and every setup and global-setup file they name.
     const configs = execFileSync('git', ['-C', ROOT, 'ls-files', '-z', '--', 'vitest*.config.*'], { encoding: 'utf8' }).split('\0').filter(Boolean)
     expect(configs.length).toBeGreaterThan(0)
