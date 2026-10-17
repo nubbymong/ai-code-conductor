@@ -101,8 +101,10 @@ same message. With one, every rule fails closed:
     `build` extends no other config, and electron-builder reads no config but
     package.json's `build`: no `electron-builder.*` file, no `--config` or `-c`
     naming a file, and no `--config.<key>` or `-c.<key>` override but
-    `npmRebuild` and the Windows signing thumbprint; the case runs only when a
-    declaration is committed, so beta and dev packaging are not tied to it),
+    `npmRebuild` and the Windows signing thumbprint; the case runs only at the
+    candidate phase with a declaration committed, so beta and dev packaging
+    are not tied to it, even once the declaration is merged back to a gate0
+    beta),
     at most 600 lines added plus deleted since
     `boundHead`, no added line over 1000 characters, at most 64 KiB (65,536
     bytes of UTF-8, a line end counted as one) added, and no binary file; a
@@ -114,10 +116,12 @@ same message. With one, every rule fails closed:
     comments read through between the words and the quote, so the
     `/* @vite-ignore */` idiom hides nothing) but six data files under
     `resources/` it reads, which ship and are counted; every input electron-vite
-    builds from is under `src/`. These run with a declaration committed.
-    Nor may the committed tree hold a symbolic link or a submodule (mode
-    120000 or 160000) under `src/`, `resources/` or a declared path, since a
-    bundler follows a link (7 mutants, L01 to L07). The caps are constants in `binding.ts`, never fields of the
+    builds from is under `src/`. These run on the same condition
+    (`carryForwardRepoChecksRun`). Nor may the committed tree hold a symbolic
+    link or a submodule (mode 120000 or 160000) under `src/`, `resources/` or
+    a declared path, since a bundler follows a link (7 mutants, L01 to L07);
+    that check is part of the candidate case, so it too runs only at the
+    candidate phase. The caps are constants in `binding.ts`, never fields of the
     declaration, and count from `boundHead`, so chained patches add up until a
     qualification resets them.
 12. The approval is a dated owner-decisions record under `docs/wp1` whose own
@@ -161,8 +165,10 @@ and every other cut makes no new GitHub call. On the commit being released
   pass needs the marker posted again. A comment read that reaches its page
   limit refuses rather than drop the newest markers.
 - (c) The base tag is a published GitHub release, neither a draft nor a
-  prerelease, the repository's latest (`releases/latest` names it), and
-  points at `base.commit`, with an annotated tag dereferenced once.
+  prerelease, made by `release.yml` (its author is exactly
+  `github-actions[bot]`, the workflow's token, not a person), the
+  repository's latest (`releases/latest` names it), and points at
+  `base.commit`, with an annotated tag dereferenced once.
 
 A GitHub read error, or a caller that gives no reader, cannot be evaluated,
 which also refuses the cut. The `gate` job reads with `contents`, `issues`,
@@ -175,13 +181,16 @@ committed declaration carries, it reads the manifest's `boundHead` at the
 release commit and `git diff --name-only --no-renames -z boundHead..<commit>`,
 whatever the manifest's `phase` says (release.yml forces the candidate phase
 on a stable cut for the same reason). With a declaration for the version,
-every changed path that breaks the binding must be declared, every declared
-path must have changed, and under a neutral prefix only Markdown and the
-manifest may change. Without one, nothing that breaks the binding may have
-changed, the suite's rule before this ADR. A manifest it cannot read, one with
-no 40-hex `boundHead`, or a diff git cannot give cannot be evaluated. A beta,
-rc or dev cut makes no new git call and prints what it printed before, as does
-a qualified stable with only neutral changes. The `gate` job fetches the bound
+the manifest's `boundHead`, a neutral field, may not have moved: it must be
+the declaration's `base.boundHead`, and the manifest at `base.commit` (read
+from git there) must be bound to it too. Then every changed path that breaks
+the binding must be declared, every declared path must have changed, and
+under a neutral prefix only Markdown and the manifest may change. Without
+one, nothing that breaks the binding may have changed, the suite's rule
+before this ADR. A manifest it cannot read, at the release commit or the
+base, one with no 40-hex `boundHead`, or a diff git cannot give cannot be
+evaluated. A beta, rc or dev cut makes no binding read and prints what it
+printed before, as does a qualified stable with only neutral changes. The `gate` job fetches the bound
 commit first (`fetch-ledger-commit.mjs`), as the build jobs do.
 
 ## The readers of the declaration
@@ -190,7 +199,7 @@ commit first (`fetch-ledger-commit.mjs`), as the build jobs do.
 | --- | --- | --- |
 | `tests/wp1/traceability.test.ts` | the committed declaration, in the candidate case | the cases below |
 | `tests/wp1/binding.ts` | the committed declaration, given by the test | the rules above |
-| `scripts/release-gate.mjs` | the committed declaration: `targetVersion`, `adversarial.pr`, `base.tag`, `base.commit`, `paths[].path`; and the manifest's `boundHead` | check 5, the binding read |
+| `scripts/release-gate.mjs` | the committed declaration: `targetVersion`, `adversarial.pr`, `base.tag`, `base.commit`, `base.boundHead`, `paths[].path`; and the manifest's `boundHead` at the release commit and at `base.commit` | check 5, the binding read |
 | `tests/wp1/phase.ts`, `scripts/wp1/fetch-ledger-commit.mjs` | not the declaration | none |
 
 ## What it cannot do, and what it relies on
@@ -215,10 +224,19 @@ commit first (`fetch-ledger-commit.mjs`), as the build jobs do.
   setup file that blinded the suite would leave those unchecked. Such a file
   is a declared path in the PR the ADR-009 pass covers, and from the next
   carry-forward on rule 6 freezes every setup file.
+- On a stable cut with no declaration, the gate has no anchor for the
+  manifest's `boundHead` but the manifest itself, so a blinded suite plus a
+  neutral edit that moves it would leave the gate's read vacuous. The PR's
+  ADR-009 pass is the backstop there.
 - A writer can still publish a release on a fake base. It must then be the
-  repository's latest release, and rule (b) needs that base to be the tip
-  the PR merged onto, so the attack takes visible acts, but nothing here
-  refuses a writer who takes them.
+  repository's latest release and be published by `github-actions[bot]`,
+  which takes a workflow run that publishes it, and rule (b) needs that base
+  to be the tip the PR merged onto, so the attack takes visible acts, but
+  nothing here refuses a writer who takes them.
+- Once 2.1.2 is published it is the latest release, so dispatching
+  `release.yml` for 2.1.2 again (a rolling re-release) is refused by 5c.
+  Re-running only the failed jobs does not re-run the gate, and a draft is
+  never the latest, so the usual recovery paths still work.
 - The byte cap still lets 64 KiB of counted code through; 2.1.2 leaves about
   40 KiB of it.
 - Only `release.yml` and `ci.yml` of the `.github/` tree are frozen, and
@@ -321,5 +339,15 @@ commit first (`fetch-ledger-commit.mjs`), as the build jobs do.
   widened in two ways, the read at HEAD in place of the release commit), the
   latest release (3, C01 to C03) and the `gate` job's fetch step (Y01). Each
   turned a case red.
+- A last round mutated the phase condition of the repository-level checks
+  (3, P01 to P03: the phase ignored, the declaration ignored, any phase but
+  gate0), the `boundHead` anchors of the gate's read (6, D01 to D06: either
+  check off, the base manifest not read, not handed the declaration, read at
+  the release commit, or an unreadable one taken as bound) and the release
+  author (4, A01 to A04: off, any bot, case ignored, the constant changed).
+  Each turned a case red. On the real tree, with a declaration committed and
+  a planted `src/` file that reaches `tests/`, the repository-level case is
+  red at the candidate phase, green at gate0, and red at gate0 again once its
+  phase condition is removed.
 - The candidate case itself is the real proof: green on the release branch's
   three Test legs once the declaration is committed, and red until then.
