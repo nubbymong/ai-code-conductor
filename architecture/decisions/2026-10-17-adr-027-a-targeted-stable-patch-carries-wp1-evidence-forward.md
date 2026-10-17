@@ -209,8 +209,10 @@ commit first (`fetch-ledger-commit.mjs`), as the build jobs do.
   records describe at `boundHead`. Those records are carried, not retaken:
   they describe the runs before the fix. What is taken instead is the whole
   suite on three operating systems at HEAD (check 5a), which includes the fix's
-  POSIX regression cases on macOS and Linux, and the Mac runtime check of the
-  PR's build under a test user, the one packaged check taken. The packaged
+  POSIX regression cases on macOS and Linux. No packaged check is retaken: a
+  Mac runtime check of the PR's build under a test user was planned, and the
+  owner chose to skip it (CF1), so the first packaged run of the fix on a Mac
+  is the owner's own Dock launch of the released 2.1.2. The packaged
   evidence (packaged smoke) and the real-CLI evidence (the real-CLI matrix)
   are among the carried records, and the manual evidence (rollback) is not
   retaken either.

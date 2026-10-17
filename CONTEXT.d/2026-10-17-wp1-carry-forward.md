@@ -10,6 +10,6 @@
 
 **What's New.** Adding the 2.1.2 changelog entry broke two tests that read the real changelog (one assumed 2.1.1 is newest; the What's New drift guard required curated lines for the newest release). Both tests were changed, and 2.1.2 is named there as a fixes-only release (the coordinating agent's choice), rather than adding a curated What's New line, which would have needed 17 paths.
 
-**Not yet done.** The declaration file itself is committed after the PR is opened, when its number is known; until then the candidate case is red on the branch, as designed. The adversarial pass, the Mac runtime check under a test user, and CI on the PR and on the merge to main follow.
+**Since.** The declaration was committed for PR #648 once the PR was open; the candidate case was red on the branch until then, as designed. The ADR-009 pass is recorded on the PR, including a gap the owner accepted: the bypass lens's re-runs against the patched code did not execute. The planned Mac runtime check under a test user was skipped by the owner (CF1). CI on the PR and on the merge to main follow.
 
 **Next qualified stable.** The stale rule fails it until `tests/wp1/carry-forward.json` is deleted.
