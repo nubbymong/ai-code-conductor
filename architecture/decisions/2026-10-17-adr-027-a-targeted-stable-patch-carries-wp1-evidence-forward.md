@@ -20,10 +20,10 @@ taken at `boundHead`, and nothing but binding-neutral paths (the manifest,
 Then a macOS bug turned up. An app opened from the Dock or Finder gets
 launchd's PATH, so a headless Claude Code run (the setup version check,
 Insights, Sentinel's checks) exited 127 wherever Claude Code lived in a folder
-only the login shell names. The fix is about 370 lines in three files under
-`src/main/`. Under the binding as it stood, any such change breaks the second
-half, and the only honest way back is to requalify all 73 items, which takes
-days of Windows VM, Mac and Linux sittings.
+only the login shell names. The fix is in three files under `src/main/`.
+Under the binding as it stood, any such change breaks the second half, and the
+only honest way back is to requalify all 73 items, which takes days of
+Windows VM, Mac and Linux sittings.
 
 The options were:
 
@@ -45,45 +45,64 @@ confirms on GitHub what the suite cannot see. The declaration is a file of its
 own, never a field of the neutral manifest, so an edit to it is itself a
 change it must declare.
 
-**The candidate check** (`carryForwardProblems` and `bindingVerdict` in
-`binding.ts`) replaces only its final assertion. Everything before it runs as
-before: nothing planned, every record digest-bound and taken at `boundHead`,
-and `boundHead` an ancestor of HEAD. With no declaration the final assertion
-is the one before this ADR, with the same message. With one, every rule fails
-closed:
+**The candidate check** (`carryForwardProblems`, `committedCarryForward` and
+`bindingVerdict` in `binding.ts`) replaces only its final assertion.
+Everything before it runs as before: nothing planned, every record
+digest-bound and taken at `boundHead`, and `boundHead` an ancestor of HEAD.
+With no declaration the final assertion is the one before this ADR, with the
+same message. With one, every rule fails closed:
 
-1. A declaration that is not valid JSON of its schema fails; it is never read
-   as absent.
-2. Its `targetVersion` must be `package.json`'s version, or it is stale and
+1. The declaration is the one committed at HEAD, read with `git ls-tree` and
+   `git show`, never from the working tree. A working-tree copy HEAD does not
+   have (one written while the suite runs, by a setup file say), or one that
+   differs from HEAD's (line endings aside), refuses, as does a link or an
+   executable at the path, and any file in the tree with its name in another
+   case or folder. It must be one of the paths changed since `boundHead`.
+2. A declaration that is not valid JSON of its schema fails, naming the file;
+   it is never read as absent.
+3. Its `targetVersion` must be `package.json`'s version, or it is stale and
    must be deleted. This stops it lingering into the next qualified stable or
    being reused by editing one field.
-3. The target is a stable `x.y.z`, the next patch after a stable base of the
+4. The target is a stable `x.y.z`, the next patch after a stable base of the
    same major and minor, and `base.tag` is `v<base.version>`.
-4. `base.commit` is an ancestor of HEAD (undecidable in a shallow clone fails
+5. `base.commit` is an ancestor of HEAD (undecidable in a shallow clone fails
    with the fetch hint), its `package.json` is `base.version`, and its manifest
    is a candidate bound to this `boundHead`, which `base.boundHead` names too.
-5. The list is exact: every changed non-neutral path is declared, nothing else
+6. Once a base already has this rule (its `binding.ts` exports the check or
+   names the declaration path), the files that run and judge it may not change
+   between the base and HEAD: `tests/wp1/binding.ts`, `traceability.test.ts`,
+   `phase.ts`, `scripts/release-gate.mjs`, `scripts/wp1/fetch-ledger-commit.mjs`,
+   `release.yml`, `ci.yml`, every `vitest*.config.*` and every setup and
+   global-setup file they name (a case holds the list to the configs). 2.1.2's
+   base, v2.1.1, has no rule, so 2.1.2 may change them, once.
+7. The list is exact: every changed non-neutral path is declared, nothing else
    is, each by its exact repository path (no glob, pathspec, `..` or
    backslash), once, and no neutral path pads it.
-6. Each path names one or more tests vitest collects (not native, not e2e),
-   present and not empty, with no unconditional skip, todo or focus anywhere in
-   their code (`skipIf` and `runIf` are allowed), holding every named case as
-   the title of a bare `it(` or `test(` call. Titles are found in the code,
-   not in comments or strings.
-7. `package.json` and `package-lock.json` may change their version fields and
-   nothing else.
-8. At most 16 paths, and at most 600 lines added plus deleted outside `tests/`
-   since `boundHead`; a binary file fails. The caps are constants in
-   `binding.ts`, never fields of the declaration, and count from `boundHead`,
-   so chained patches add up until a qualification resets them. The line cap
-   was first proposed at 400; the coordinating agent set it to 600 when the
-   fix gained a bounded probe wait in review. With the review fixes after
-   that, 2.1.2 measures 587 lines (the fix 374, check 5 of the release gate
-   193, the version and changelog 20).
-9. The approval is a dated owner-decisions record under `docs/wp1` whose own
-   section names the version, says the evidence is carried forward, and names
-   every declared path, outside code fences and HTML comments.
-10. `adversarial.pr` always names the PR whose ADR-009 pass covers the diff,
+8. Under a binding-neutral prefix only Markdown and the manifest may change.
+   Any other file there (code under `docs/` that a counted line could import,
+   a JSON file, an image) refuses by name.
+9. Each path names one or more tests vitest collects (not native, not e2e),
+   present and not empty, holding every named case as the title of a bare
+   `it(` or `test(` call in the code, not in a comment or a string. The raw
+   text of each named file may hold no unconditional skip, todo or focus, not
+   even in a comment or a string (`skipIf` and `runIf` are allowed). Every
+   entry, test file and case is checked, not only the first.
+10. `package.json` and `package-lock.json` may change their version fields and
+    nothing else.
+11. At most 16 paths. In counted paths (declared paths outside `tests/` and
+    `.github/`, and outside `DEV_ONLY_TOOLING`, two release scripts a case
+    proves are never packaged), at most 600 lines added plus deleted since
+    `boundHead`, no added line over 1000 characters, and no binary file; a
+    line count git gives that cannot be read fails. Scripts that ship stay
+    counted. The caps are constants in `binding.ts`, never fields of the
+    declaration, and count from `boundHead`, so chained patches add up until a
+    qualification resets them.
+12. The approval is a dated owner-decisions record under `docs/wp1` whose own
+    section names the version, says the evidence is "carried forward" or "carry
+    forward" (spaced: the hyphen form is the declaration's own path, which every
+    section names), and names every declared path, outside code fences and HTML
+    comments.
+13. `adversarial.pr` always names the PR whose ADR-009 pass covers the diff,
     whether or not a path is on the adversarial-review path table. A
     carry-forward swaps 73 items of independent evidence for an author-written
     list, which is the self-review ADR-009 exists to prevent, and the first one
@@ -93,84 +112,119 @@ closed:
 `BINDING_NEUTRAL` by value. The declaration has no field that feeds the neutral
 rules, item statuses or `UNAVAILABLE_ELIGIBLE`.
 
-**The release gate** adds check 5 (`evaluateCarryForward`). It applies only
-when the declaration's `targetVersion` is the version being cut, and every
-other cut makes no new call. On the commit being released (`GITHUB_SHA`) it
-requires:
+**The release gate** adds check 5 (`evaluateCarryForward`). It reads the
+declaration as committed at HEAD too: a file with its name in another case or
+folder, a link at the path, or text that is not JSON cannot be evaluated, and
+the error names the file. Check 5 applies only when the declaration's
+`targetVersion` is the version being cut, and every other cut makes no new
+call. On the commit being released (`GITHUB_SHA`, else HEAD) it requires:
 
-- (a) CI's `Test (<os>)` runs from GitHub Actions on Windows, macOS and Linux,
-  each completed and green. The release workflow itself blocks on the Windows
-  leg only (the Linux leg is non-blocking and the Mac job runs no tests), and
-  the fix's own regression cases skip on Windows, so this check is what makes
-  "green on all three" a precondition.
-- (b) The declared PR merged as that commit, and the latest ADR-009 verdict
-  marker an owner, member or collaborator posted on it is a PASS at the PR's
-  final head. A push after the pass needs the marker posted again.
-- (c) The base tag points at `base.commit`, with an annotated tag dereferenced
-  once. The suite only proves that `base.commit` looks like the previous
-  candidate; this ties it to the tag.
+- (a) ci.yml's newest push run on that commit is completed and green, and its
+  Test jobs include Windows, macOS and Linux, each completed and green. The
+  release workflow itself blocks on the Windows leg only (the Linux leg is
+  non-blocking and the Mac job runs no tests), and the fix's own regression
+  cases skip on Windows, so this check is what makes "green on all three" a
+  precondition. Listings GitHub counts are read to exactly their
+  `total_count`.
+- (b) The declared PR merged as that commit, the commit is a merge with
+  exactly two parents (the base commit, then the PR's final head), and the
+  latest ADR-009 verdict marker an owner, member or collaborator posted on it,
+  naming the PR by its exact number, is a PASS at that head. A push after the
+  pass needs the marker posted again. A comment read that reaches its page
+  limit refuses rather than drop the newest markers.
+- (c) The base tag is a published GitHub release, neither a draft nor a
+  prerelease, and points at `base.commit`, with an annotated tag dereferenced
+  once.
 
 A GitHub read error, or a caller that gives no reader, cannot be evaluated,
-which also refuses the cut. The `gate` job gains `checks: read` and
-`pull-requests: read`.
+which also refuses the cut. The `gate` job reads with `contents`, `issues`,
+`pull-requests` and `actions`, and nothing else.
 
 ## The readers of the declaration
 
 | Reader | What it reads | Change |
 | --- | --- | --- |
-| `tests/wp1/traceability.test.ts` | the whole declaration, in the candidate case | the cases below |
-| `tests/wp1/binding.ts` | the declaration, given by the test | the rules above |
-| `scripts/release-gate.mjs` | `targetVersion`, `adversarial.pr`, `base.tag`, `base.commit` | check 5 |
+| `tests/wp1/traceability.test.ts` | the committed declaration, in the candidate case | the cases below |
+| `tests/wp1/binding.ts` | the committed declaration, given by the test | the rules above |
+| `scripts/release-gate.mjs` | the committed declaration: `targetVersion`, `adversarial.pr`, `base.tag`, `base.commit` | check 5 |
 | `tests/wp1/phase.ts`, `scripts/wp1/fetch-ledger-commit.mjs` | not the declaration | none |
 
 ## What it cannot do, and what it relies on
 
-- It re-proves every automated item on three operating systems at HEAD,
-  because the whole suite runs. It does not retake real-CLI, packaged or
-  manual evidence (packaged smoke, the real-CLI matrix, rollback). Each path's
-  `why`, and the owner's decision, say why the change does not touch them. The
-  Mac runtime check of the PR's build under a test user is the one packaged
-  check taken.
+- The fix changes the headless Claude Code runs (the setup version check,
+  Insights and Sentinel's checks) that the carried real-CLI and packaged
+  records describe at `boundHead`. Those records are carried, not retaken:
+  they describe the runs before the fix. What is taken instead is the whole
+  suite on three operating systems at HEAD (check 5a), which includes the fix's
+  POSIX regression cases on macOS and Linux, and the Mac runtime check of the
+  PR's build under a test user, the one packaged check taken. Manual evidence
+  (packaged smoke, the real-CLI matrix, rollback) is not retaken either.
 - Named cases are proven to exist, not to have run, and conditional skips are
   allowed. "Ran and passed" rests on check 5(a) (the macOS leg) and on the
   ADR-009 pass showing each regression case red without the fix.
 - The first carry-forward lands the gate code that judges it, so it certifies
   itself. That is mitigated by the PASS on the PR that holds both, by the
-  owner-listed paths, and by the mutants below.
+  owner-listed paths and by the mutants below; and from the next carry-forward
+  on, rule 6 freezes those files.
 - The gate checks the shape of the approval, not its meaning, as ADR-026 does.
-- The caps are cumulative from `boundHead`. 2.1.2 uses 15 of the 16 paths and
-  587 of the 600 lines, measured from `boundHead`, so a further patch on the
-  same binding has one path and 13 lines, and then the next stable
-  requalifies. That is intended.
+- The caps are cumulative from `boundHead`, so a further patch on the same
+  binding has what 2.1.2 leaves, and then the next stable requalifies. That is
+  intended. At the 2.1.2 cut: 15 of 16 paths, 394 of 600 counted lines (the
+  fix 374, the changelog 14, the package files 6), and a longest added line of
+  890 characters, a one-line changelog description.
 - The declaration is a standing exception while it exists. The stale rule makes
   the next qualified stable fail until `tests/wp1/carry-forward.json` is
   deleted; the next qualification's checklist must say so.
+- A beta-channel cut of the bare 2.1.2 version from the release branch carries
+  forward in the suite (the manifest is a candidate), but check 5 does not run
+  for it (its milestone is `2.1.2-beta`). The stable cut is the one check 5
+  guards.
 - The test-title scanner reads enough of JavaScript's lexical grammar to tell
-  code from comments and strings. Where it guesses (a `/` after a closing
-  bracket is read as division) it can only miss a case, never invent one.
+  code from comments and strings in an ordinary test file; it is not a parser.
+  It guesses whether a `/` starts a regular expression, and a wrong guess can
+  desynchronise it, so in a hostile layout it can miss a case or read one that
+  is not there. Skips are found in the raw text for that reason, and hostile
+  test files are the ADR-009 pass's to catch.
+- `COLLABORATOR` includes read-only collaborators, and the PR author can post
+  their own PASS; agents post as the owner's account, so author and reviewer
+  cannot be told apart here.
+- Stable releases are not restricted to `main` by the workflow. The parents
+  rule (b) ties the release commit to the base and the reviewed PR head, so
+  the commit is exactly the base plus that PR.
+
+## Consequences
+
+- A targeted patch costs one PR into `main` and one squash merge-back into
+  beta, not a qualification.
+- The candidate run's log names the carried paths (a `console.info` in the
+  candidate case), so the stable run's record lists what was carried.
+- The owner's decision section is public, so it states scope only, never a
+  finding under embargo.
+- The next qualified stable must delete the declaration, and it cannot ship
+  until it does.
+- From the next carry-forward on, the gate files are frozen, so a change to
+  the rule itself needs a qualified stable or a new owner decision and ADR.
 
 ## Verification
 
-- The eight [host] cases in `traceability.test.ts` were written first. On the
-  previous `binding.ts` the file does not load, and with the new exports
-  present but no rule (mutant M00) seven of the eight are red. All pass with
-  the rule.
-- Each guard rail of the candidate rule was mutated in turn (51 mutants, M00 to
-  M50) and each turned a case red: the schema and invalid JSON; the stale
-  rule; the patch, line, prerelease and tag rules; `base.boundHead`, ancestry,
-  undecidable ancestry, the base `package.json` and the base manifest's phase
-  and `boundHead`; the reason; undeclared, padded and neutral paths, the exact
-  path rule, duplicates and both list bounds; `why`, a missing test, a file
-  vitest does not collect, a native test, a test path with `..`, an empty test
-  file, an unconditional skip, the skip rule read over comments, a missing
-  case, the title format and titles read from raw text; the version-only rule
-  (removed, and loosened to drop dependencies); the line cap (by rule, by
-  constant, binaries and tests counted); the approval's version, phrase, paths,
-  whole-path match, section and format; `adversarial.pr` at 0 and as a string;
-  the declaration made neutral; the absent case; and an empty file read as
-  absent.
-- Check 5 was mutated in turn (33 mutants, G00 to G32) and each turned a case
-  of `tests/unit/scripts/release-gate.test.ts` red, as did removing either new
-  permission from the `gate` job (2 mutants).
+- The eight first [host] cases in `traceability.test.ts` were written before
+  the rule. On the previous `binding.ts` the file does not load, and with the
+  exports present but no rule (mutant M00) seven of the eight are red. All pass
+  with the rule.
+- Each guard rail of the candidate rule was mutated in turn, and each turned a
+  case red: 50 mutants of the first rule (M00 to M50 less one superseded) and
+  29 of the review and attack fixes (R01 to R29: the spaced phrase, the numstat
+  parse, the counted paths in both directions, the line-length check and its
+  constant and parser, the neutral allowlist in both directions, the committed
+  read in four ways, the case-variant and plain-file checks, the gate-file
+  freeze and its detection and list, the raw-text skip search, the three
+  branches of the scanner's regular-expression guess, a change of major alone,
+  and the second entry, file and case).
+- Check 5 was mutated in turn (55 mutants, G00 to G54, covering the ci.yml run
+  and jobs, the paging, the parents, the exact marker number, the comment
+  limit, the published release, the committed read and the `main()` wiring),
+  and each turned a case of `tests/unit/scripts/release-gate.test.ts` red, as
+  did removing either needed permission from the `gate` job or adding
+  `checks: read` back (3 mutants).
 - The candidate case itself is the real proof: green on the release branch's
   three Test legs once the declaration is committed, and red until then.
