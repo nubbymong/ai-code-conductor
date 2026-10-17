@@ -452,8 +452,20 @@ export const SRC_OUTSIDE_IMPORTS_ALLOWED: readonly string[] = [
 ]
 /** A relative specifier in the ways a source file reaches another for the
  *  build: import or export from, a side-effect import, import(), require(),
- *  new URL() (an asset), import.meta.glob(), and an HTML src or href. */
-const SRC_SPECIFIER_RE = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+|\bnew\s+URL\s*\(\s*|\bimport\.meta\.glob\s*\(\s*\[?\s*|\b(?:src|href)\s*=\s*)(['"`])(\.{1,2}\/[^'"`]*)\1/g
+ *  new URL() (an asset), import.meta.glob(), and an HTML src or href. Between
+ *  the words and the quote it reads through whitespace and comments, block
+ *  (one at a time: never past its own end) and line, so a comment such as
+ *  `import(/* @vite-ignore *\/ '../x')` does not hide the specifier. */
+const SRC_GAP = '(?:\\s|/\\*(?:[^*]|\\*(?!/))*\\*/|//[^\\n]*(?:\\n|$))*'
+const SRC_SPECIFIER_RE = new RegExp(`(?:${[
+  `\\bfrom${SRC_GAP}`,
+  `\\bimport${SRC_GAP}\\(${SRC_GAP}`,
+  `\\brequire${SRC_GAP}\\(${SRC_GAP}`,
+  `\\bimport${SRC_GAP}`,
+  `\\bnew${SRC_GAP}URL${SRC_GAP}\\(${SRC_GAP}`,
+  `\\bimport${SRC_GAP}\\.${SRC_GAP}meta${SRC_GAP}\\.${SRC_GAP}glob${SRC_GAP}\\(${SRC_GAP}\\[?${SRC_GAP}`,
+  '\\b(?:src|href)\\s*=\\s*',
+].join('|')})(['"\`])(\\.{1,2}\\/[^'"\`]*)\\1`, 'g')
 
 /** Every relative specifier in these src/ files that resolves outside src/
  *  to a file `allowed` does not name. Bare package names are not relative and

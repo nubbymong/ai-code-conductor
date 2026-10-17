@@ -1041,6 +1041,17 @@ describe('WP1 traceability manifest', () => {
       'import x from `../../tests/x`', "import raw from '../../tests/x.ts?raw'", "import y from '../../../package.json'"]) {
       expect(outOfSrcImports([at('src/main/a.ts', spec)]), spec).toHaveLength(1)
     }
+    // A comment between the words and the quote hides nothing: a block comment (the @vite-ignore idiom), several, or a line comment.
+    for (const spec of ["const x = await import(/* @vite-ignore */ '../../tests/x.js')", "const x = require(/* x */ '../../tests/x')", "const x = import(\n  // why\n  '../../tests/x.js')",
+      "const x = import(/* a */ /* b */ '../../tests/x.js')", "const x = require /* x */ ('../../tests/x')", "export * from /* x */ '../../tests/x'", "import/* x */'../../tests/x'", "import'../../tests/x'",
+      "const g = import.meta.glob(/* x */ ['../../tests/*.ts'])", "const u = new /* x */ URL(/* x */ '../../tests/x.js', import.meta.url)"]) {
+      expect(outOfSrcImports([at('src/main/a.ts', spec)]), spec).toHaveLength(1)
+    }
+    // The idiom of src/main/canvas/bridge/analysis-loader.ts stays accepted: a variable, or a target inside src/ or a package; and a block comment never runs past its own end.
+    for (const spec of ['const m = await import(/* @vite-ignore */ specifier)', "const m = await import(/* @vite-ignore */ './analysis.js')", "const m = await import(/* @vite-ignore */ '../../shared/x.js')",
+      "const m = await import(/* @vite-ignore */ 'some-package')", "const m = [import(/* @vite-ignore */ specifier), /* a path */ '../../../../tests/y']"]) {
+      expect(outOfSrcImports([at('src/main/canvas/bridge/analysis-loader.ts', spec)]), spec).toEqual([])
+    }
     expect(outOfSrcImports([at('src/renderer/index.html', '<script type="module" src="../../tests/x.js"></script>')])).toHaveLength(1)
     expect(outOfSrcImports([at('src/renderer/index.html', '<script type="module" src="./main.tsx"></script>')])).toEqual([])
     // The data under resources/ the app reads is allowed, by exact path only.
