@@ -16,7 +16,8 @@ import {
   ITEM_STATUSES, MANIFEST_PATH, RELEASE_WP1_PHASE, SHA_RE, UNAVAILABLE_ELIGIBLE, ancestry, bindingBreaks, changedPaths, evidenceProblems, incompleteItems, staleRecords,
   suiteSteps, unavailableIds, unavailableProblems, type EvidenceRecord, type Git, type ItemStatus, type Unavailable,
   CARRY_FORWARD_PATH, CARRY_FORWARD_SCHEMA, CARRY_FORWARD_MAX_PATHS, CARRY_FORWARD_MAX_SHIPPED_LINES, BINDING_NEUTRAL, NATIVE_TEST, RUNNABLE_TEST,
-  bindingVerdict, carryForwardProblems, changedLines, fileAt,
+  CARRY_FORWARD_MAX_ADDED_LINE, CARRY_FORWARD_GATE_FILES, DEV_ONLY_TOOLING, DEV_ONLY_TREES,
+  bindingVerdict, carryForwardProblems, changedLines, committedCarryForward, fileAt, isCarryForwardNeutralFile, isCountedPath, longAddedLines,
 } from './binding'
 import { DEEPEN_STEPS, deepenUntilDecidable, invocation, readBoundHead } from '../../scripts/wp1/fetch-ledger-commit.mjs'
 
@@ -35,7 +36,9 @@ const ledger = JSON.parse(readFileSync(resolve(__dirname, 'legacy-codex-ledger.j
 // The version being cut, and the carry-forward declaration (ADR-027), null
 // when there is none: read once, so the candidate case judges what is here.
 const pkgVersion = (JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')) as { version: string }).version
-const carryText = existsSync(resolve(ROOT, CARRY_FORWARD_PATH)) ? readFileSync(resolve(ROOT, CARRY_FORWARD_PATH), 'utf8') : null
+// The working-tree copy is read only to compare it with HEAD's: the
+// declaration that counts is the committed one (committedCarryForward).
+const workingCarryText = existsSync(resolve(ROOT, CARRY_FORWARD_PATH)) ? readFileSync(resolve(ROOT, CARRY_FORWARD_PATH), 'utf8') : null
 const { phase, reason } = resolvePhaseDetailed(undefined, { eager: false })
 const KINDS = new Set(['automated', 'manual-gate', 'packaged', 'real-cli', 'document', 'ci'])
 // What vitest collects is RUNNABLE_TEST and not NATIVE_TEST (./binding.ts).
@@ -58,6 +61,10 @@ const git: Git = (args) => {
   const r = spawnSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', maxBuffer: 1 << 28 })
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
 }
+// The committed declaration, read once from HEAD's tree; a git failure is a problem, not an absence.
+const committedCarry = (() => {
+  try { return committedCarryForward(git, workingCarryText) } catch (e) { return { text: null, problems: [`could not read the committed declaration: ${String(e)}`] } }
+})()
 
 // A linear history of `total` commits, HEAD first, holding boundHead at index
 // `at` (Infinity: not in HEAD's history) with `depth` commits present. It
@@ -574,7 +581,12 @@ describe('WP1 traceability manifest', () => {
   // evidence forward on a declared file list (tests/wp1/carry-forward.json),
   // which replaces only the final assertion of the candidate case. Git and
   // files are injected; nothing is read or spawned. A declaration that holds,
-  // then each rule broken on its own.
+  // then each rule broken on its own. This file builds each skip, todo and
+  // focus call it tests at run time, so its own text names none: the rule
+  // searches the raw text of every named test file, this one included.
+  const call = (who: string, how: string) => [who, how].join('.')
+  const X = 'x'
+  const CF = CARRY_FORWARD_PATH
   const CF_BASE = '9'.repeat(40)
   const CF_BOUND = 'd'.repeat(40)
   const CF_OD = 'docs/wp1/owner-decisions-2099-02-01.md'
@@ -582,20 +594,24 @@ describe('WP1 traceability manifest', () => {
   const CF_TEST = 'tests/unit/fix.test.ts'
   const CF_OTHER = 'tests/unit/other.test.ts'
   const CF_CASES = ['finds the folder the probe found', 'leaves a PATH that names it alone']
+  const CF_ALL = [CF_FIX, 'package.json', 'package-lock.json', CF]
+  const CF_NEUTRAL = [CF_OD, 'CHANGELOG.md', MANIFEST_PATH, 'CONTEXT.d/2099-02-01-fix.md']
   const cfPkg = (version: string, dep = '1.0.0') => JSON.stringify({ name: 'app', version, dependencies: { x: dep } }, null, 2)
   const cfLock = (version: string, dep = '1.0.0', resolved = dep) =>
     JSON.stringify({ name: 'app', version, lockfileVersion: 3, packages: { '': { name: 'app', version, dependencies: { x: dep } }, 'node_modules/x': { version: resolved } } }, null, 2)
   const CF_SAYS = '2.1.2 ships as a stable patch: the 2.1.1 evidence is carried forward, for'
+  const tick = (ps: string[]) => ps.map((p) => `\`${p}\``).join(', ')
   const cfOdText = (extra: string[] = []) => [
     '# Owner decisions, 2099-02-01', '',
-    '## CF1. Sound', '', CF_SAYS, [CF_FIX, 'package.json', 'package-lock.json', ...extra].map((p) => `\`${p}\``).join(', '), '',
-    '## CF2. Another version', '', CF_SAYS.replace('2.1.2', '2.1.20'), `\`${CF_FIX}\`, \`package.json\`, \`package-lock.json\``, '',
-    '## CF3. Not carried', '', '2.1.2 ships as a stable patch, for', `\`${CF_FIX}\`, \`package.json\`, \`package-lock.json\``, '',
-    '## CF4. A path left out', '', CF_SAYS, `\`${CF_FIX}\`, \`package.json\``, '',
-    '## CF5. A path only in a code fence', '', CF_SAYS, '`package.json`, `package-lock.json`', '', '```', CF_FIX, '```', '',
-    '## CF6. A path only in a comment', '', CF_SAYS, '`package.json`, `package-lock.json`', `<!-- ${CF_FIX} -->`, '',
-    '## CF7. A tag', '', CF_SAYS.replace('2.1.2', 'v2.1.2'), `\`${CF_FIX}\`, \`package.json\`, \`package-lock.json\``, '',
-    '## CF8. A longer name', '', CF_SAYS, `\`${CF_FIX}x\`, \`tests/package.json\`, \`package-lock.json.bak\``, '',
+    '## CF1. Sound', '', CF_SAYS, tick([...CF_ALL, ...extra]), '',
+    '## CF2. Another version', '', CF_SAYS.replace('2.1.2', '2.1.20'), tick(CF_ALL), '',
+    // It names the declaration, whose path holds carry-forward, but never says the phrase.
+    '## CF3. Not carried', '', '2.1.2 ships as a stable patch, for', tick(CF_ALL), '',
+    '## CF4. A path left out', '', CF_SAYS, tick([CF_FIX, 'package.json', CF]), '',
+    '## CF5. A path only in a code fence', '', CF_SAYS, tick(['package.json', 'package-lock.json', CF]), '', '```', CF_FIX, '```', '',
+    '## CF6. A path only in a comment', '', CF_SAYS, tick(['package.json', 'package-lock.json', CF]), `<!-- ${CF_FIX} -->`, '',
+    '## CF7. A tag', '', CF_SAYS.replace('2.1.2', 'v2.1.2'), tick(CF_ALL), '',
+    '## CF8. A longer name', '', CF_SAYS, tick([`${CF_FIX}x`, 'tests/package.json', 'package-lock.json.bak', `${CF}.bak`]), '',
   ].join('\n')
   const CF_TEST_TEXT = [
     "import { describe, it, test } from 'vitest'", '',
@@ -604,17 +620,17 @@ describe('WP1 traceability manifest', () => {
     `  test("${CF_CASES[1]}", (ctx) => { if (!ctx) ctx.skip() })`,
     '})', '',
   ].join('\n')
-  const cfEntry = (path: string, cases = [CF_CASES[0]], file = CF_TEST) => ({ path, why: `changed for the fix: ${path}`, tests: [{ file, cases }] })
+  const cfEntry = (path: string, cases = [CF_CASES[0]], file = CF_TEST) => ({ path, why: `changed for the fix: ${path}`, tests: [{ file, cases: [...cases] }] })
   const cfDecl = () => ({
     schema: CARRY_FORWARD_SCHEMA, targetVersion: '2.1.2',
     base: { tag: 'v2.1.1', version: '2.1.1', commit: CF_BASE, boundHead: CF_BOUND },
     reason: 'A headless run on a Mac opened from the Dock found no claude on its PATH.',
     approval: `${CF_OD}#CF1`, adversarial: { pr: 650 },
-    paths: [cfEntry(CF_FIX, CF_CASES), cfEntry('package.json'), cfEntry('package-lock.json')],
+    paths: [cfEntry(CF_FIX, CF_CASES), cfEntry('package.json'), cfEntry('package-lock.json'), cfEntry(CF)],
   })
   type CfOptions = {
-    breaks?: string[]; files?: Record<string, string | null>; show?: Record<string, string | null>
-    numstat?: Record<string, string>; mergeBase?: number; shallow?: boolean; version?: string
+    breaks?: string[]; changed?: string[]; files?: Record<string, string | null>; show?: Record<string, string | null>
+    numstat?: Record<string, string>; patch?: Record<string, string[]>; gateTouched?: string[]; mergeBase?: number; shallow?: boolean; version?: string
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function cfRun(edit: (d: any) => void = () => {}, o: CfOptions = {}) {
@@ -626,6 +642,7 @@ describe('WP1 traceability manifest', () => {
       [`${CF_BOUND}:package.json`]: cfPkg('2.1.1'), [`${CF_BOUND}:package-lock.json`]: cfLock('2.1.1'), ...o.show,
     }
     const numstat: Record<string, string> = { [CF_FIX]: '40\t8', 'package.json': '1\t1', 'package-lock.json': '2\t2', ...o.numstat }
+    const after = (args: string[]) => args.slice(args.indexOf('--') + 1)
     const calls: string[][] = []
     const git: Git = (args) => {
       calls.push(args)
@@ -635,26 +652,32 @@ describe('WP1 traceability manifest', () => {
         const v = show[args[1]]
         return typeof v === 'string' ? { status: 0, stdout: v } : { status: 128, stdout: '', stderr: `fatal: invalid object name ${args[1]}` }
       }
-      if (args[0] === 'diff' && args[1] === '--numstat') {
-        return { status: 0, stdout: args.slice(args.indexOf('--') + 1).filter((p) => p in numstat).map((p) => `${numstat[p]}\t${p}\0`).join('') }
+      if (args[0] === 'diff' && args[1] === '--numstat') return { status: 0, stdout: after(args).filter((p) => p in numstat).map((p) => `${numstat[p]}\t${p}\0`).join('') }
+      if (args[0] === 'diff' && args[1] === '-U0') {
+        const patch = (p: string) => [`diff --git a/${p} b/${p}`, `--- a/${p}`, `+++ b/${p}`, '@@ -1,0 +1,1 @@', ...(o.patch?.[p] ?? ['a short line']).map((l) => `+${l}`)]
+        return { status: 0, stdout: `${after(args).flatMap(patch).join('\n')}\n` }
       }
+      if (args[0] === 'diff' && args[1] === '--name-only') return { status: 0, stdout: (o.gateTouched ?? []).filter((p) => after(args).includes(p)).map((p) => `${p}\0`).join('') }
       throw new Error(`unexpected git ${args.join(' ')}`)
     }
-    const ctx = { git, boundHead: CF_BOUND, version: o.version ?? '2.1.2', breaks: o.breaks ?? [CF_FIX, 'package.json', 'package-lock.json'], textOf: (p: string) => (p in files ? files[p] : null) }
+    const breaks = o.breaks ?? CF_ALL
+    const ctx = { git, boundHead: CF_BOUND, version: o.version ?? '2.1.2', breaks, changed: o.changed ?? [...breaks, ...CF_NEUTRAL], textOf: (p: string) => (p in files ? files[p] : null) }
     const text = JSON.stringify(d)
     return { problems: carryForwardProblems(text, ctx), calls, ctx, text }
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cf = (edit?: (d: any) => void, o?: CfOptions) => cfRun(edit, o).problems
+  const COUNTED = [CF_FIX, 'package.json', 'package-lock.json']
 
   it('[host] carry-forward: a sound declaration holds, and with no declaration the binding is judged exactly as before', () => {
     const r = cfRun()
     expect(r.problems).toEqual([])
-    // The size is read from boundHead for the declared paths outside tests/, NUL-separated, renames unpaired.
-    expect(r.calls).toContainEqual(['diff', '--numstat', '--no-renames', '-z', `${CF_BOUND}..HEAD`, '--', CF_FIX, 'package.json', 'package-lock.json'])
+    // The size is read from boundHead for the counted declared paths: NUL-separated counts, renames unpaired, and the patch itself.
+    expect(r.calls).toContainEqual(['diff', '--numstat', '--no-renames', '-z', `${CF_BOUND}..HEAD`, '--', ...COUNTED])
+    expect(r.calls).toContainEqual(['diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', `${CF_BOUND}..HEAD`, '--', ...COUNTED])
     expect(bindingVerdict(r.ctx.breaks, r.text, r.ctx)).toEqual({ problems: [], message: 'the carry-forward declaration does not hold (ADR-027):\n', carried: true })
     // No declaration: the rule and the message of the binding before ADR-027, and nothing else is asked.
-    const none = { git: (() => { throw new Error('git must not be asked') }) as Git, boundHead: CF_BOUND, version: '2.1.2', textOf: (): string | null => { throw new Error('no file may be read') } }
+    const none = { git: (() => { throw new Error('git must not be asked') }) as Git, boundHead: CF_BOUND, version: '2.1.2', changed: [], textOf: (): string | null => { throw new Error('no file may be read') } }
     expect(bindingVerdict([], null, none)).toEqual({ problems: [], message: 'changed after evidence collection; regenerate the affected records:\n', carried: false })
     expect(bindingVerdict(['src/x.ts'], null, none)).toEqual({ problems: ['src/x.ts'], message: 'changed after evidence collection; regenerate the affected records:\nsrc/x.ts', carried: false })
     // A declaration that is there is judged by its own rules, never read as absent.
@@ -664,12 +687,18 @@ describe('WP1 traceability manifest', () => {
       expect(v.carried).toBe(false)
       expect(v.message).toMatch(/^the carry-forward declaration does not hold \(ADR-027\):\ntests\/wp1\/carry-forward\.json is not valid JSON/)
     }
-    expect(bindingVerdict([], r.text, r.ctx).problems).toEqual([`${CF_FIX} is declared but not changed after boundHead`, 'package.json is declared but not changed after boundHead', 'package-lock.json is declared but not changed after boundHead'])
+    // The declaration is itself one of the paths changed since boundHead.
+    expect(bindingVerdict([], r.text, r.ctx).problems).toEqual([`${CF} is not among the paths changed since boundHead`, ...CF_ALL.map((p) => `${p} is declared but not changed after boundHead`)])
   })
 
   it('[host] carry-forward: valid JSON of its schema, for the version package.json names, the patch after a stable base of the same line', () => {
     const { ctx } = cfRun()
-    expect(carryForwardProblems('{', ctx)).toEqual([expect.stringMatching(/^tests\/wp1\/carry-forward\.json is not valid JSON: /)])
+    const INVALID = expect.stringMatching(/^tests\/wp1\/carry-forward\.json is not valid JSON: /)
+    expect(carryForwardProblems('{', ctx)).toEqual([INVALID])
+    // A byte order mark, or merge conflict markers, are not JSON either, and the problem names the file.
+    for (const text of [`${String.fromCharCode(0xfeff)}${JSON.stringify(cfDecl())}`, `<<<<<<< HEAD\n${JSON.stringify(cfDecl())}\n=======\n{}\n>>>>>>> beta\n`]) {
+      expect(carryForwardProblems(text, ctx), text.slice(0, 12)).toEqual([INVALID])
+    }
     for (const text of ['null', '[]', '"x"', '7', '{}', JSON.stringify({ ...cfDecl(), schema: 'wp1-carry-forward/2' })]) {
       expect(carryForwardProblems(text, ctx), text).toEqual([`${CARRY_FORWARD_PATH}: schema must be ${CARRY_FORWARD_SCHEMA}`])
     }
@@ -677,8 +706,8 @@ describe('WP1 traceability manifest', () => {
     for (const version of ['2.2.0', '2.1.3', '2.1.2-beta.1']) {
       expect(cf(undefined, { version }), version).toEqual([`${CARRY_FORWARD_PATH} carries forward to 2.1.2, but package.json is ${version}: it is stale, delete it`])
     }
-    // A minor or a major bump, a skipped patch, no bump at all.
-    for (const t of ['2.2.0', '3.0.0', '2.1.3', '2.1.1', '2.0.2']) expect(cf((d) => { d.targetVersion = t }, { version: t }), t).toContainEqual(`${t} is not the patch after 2.1.1`)
+    // A minor or a major bump (a major alone too), a skipped patch, no bump at all.
+    for (const t of ['2.2.0', '3.0.0', '3.1.2', '2.1.3', '2.1.1', '2.0.2']) expect(cf((d) => { d.targetVersion = t }, { version: t }), t).toContainEqual(`${t} is not the patch after 2.1.1`)
     expect(cf((d) => { d.base.version = '2.0.1'; d.base.tag = 'v2.0.1' })).toContainEqual('2.1.2 is not the patch after 2.0.1')
     // A prerelease, at either end.
     expect(cf((d) => { d.targetVersion = '2.1.2-rc.1' }, { version: '2.1.2-rc.1' })).toContainEqual('targetVersion and base.version must be stable x.y.z versions, not 2.1.2-rc.1 and 2.1.1')
@@ -710,35 +739,109 @@ describe('WP1 traceability manifest', () => {
   })
 
   it('[host] carry-forward: the list is exact, every changed path declared and nothing else, each an exact path that breaks the binding, at most 16', () => {
-    const all = [CF_FIX, 'package.json', 'package-lock.json']
     // An undeclared path, and a padded one.
-    expect(cf(undefined, { breaks: [...all, 'src/main/pty-manager.ts'] })).toEqual(['src/main/pty-manager.ts changed after boundHead and is not declared'])
+    expect(cf(undefined, { breaks: [...CF_ALL, 'src/main/pty-manager.ts'] })).toEqual(['src/main/pty-manager.ts changed after boundHead and is not declared'])
     expect(cf((d) => { d.paths.push(cfEntry('src/main/index.ts')) }, { files: { [CF_OD]: cfOdText(['src/main/index.ts']) } })).toEqual(['src/main/index.ts is declared but not changed after boundHead'])
     // A neutral path cannot pad the list, even one the list of changed paths names.
     for (const p of ['docs/x.md', 'CONTEXT.d/x.md', 'README.md', MANIFEST_PATH]) {
-      expect(cf((d) => { d.paths.push(cfEntry(p)) }, { breaks: [...all, p], files: { [CF_OD]: cfOdText([p]) } }), p).toEqual([`${p} is binding-neutral; declare only paths that break the binding`])
+      expect(cf((d) => { d.paths.push(cfEntry(p)) }, { breaks: [...CF_ALL, p], files: { [CF_OD]: cfOdText([p]) } }), p).toEqual([`${p} is binding-neutral; declare only paths that break the binding`])
     }
     // Only an exact repository path, each once.
     for (const p of ['src/*.ts', 'src/main/fix.ts?', 'src/[a]/x.ts', 'src/../x.ts', './src/main/fix.ts', 'src/./x.ts', 'src\\main\\fix.ts', '/src/main/fix.ts', 'src/main/fix.ts ', ':(glob)src', '', 7, null]) {
-      expect(cf((d) => { d.paths.push(cfEntry(p as string)) }, { breaks: [...all, String(p)] }), String(p)).toContainEqual(`${String(p)}: not an exact repository path`)
+      expect(cf((d) => { d.paths.push(cfEntry(p as string)) }, { breaks: [...CF_ALL, String(p)] }), String(p)).toContainEqual(`${String(p)}: not an exact repository path`)
     }
     expect(cf((d) => { d.paths.push(cfEntry(CF_FIX)) })).toEqual(['paths lists a file twice'])
-    // At most 16, and at least one.
+    // At most 16, the declaration included, and at least one.
     const many = (n: number) => Array.from({ length: n }, (_, i) => `src/main/f${i}.ts`)
-    expect(cf((d) => { d.paths = many(16).map((p) => cfEntry(p)) }, { breaks: many(16), files: { [CF_OD]: cfOdText(many(16)) } })).toEqual([])
-    expect(cf((d) => { d.paths = many(17).map((p) => cfEntry(p)) }, { breaks: many(17), files: { [CF_OD]: cfOdText(many(17)) } })).toEqual([`paths must list 1 to ${CARRY_FORWARD_MAX_PATHS} files`])
-    for (const paths of [[], undefined, 'src/main/fix.ts', {}]) expect(cf((d) => { d.paths = paths }, { breaks: [] }), JSON.stringify(paths)).toEqual([`paths must list 1 to ${CARRY_FORWARD_MAX_PATHS} files`])
+    const withSelf = (n: number) => [...many(n - 1), CF]
+    expect(cf((d) => { d.paths = withSelf(16).map((p) => cfEntry(p)) }, { breaks: withSelf(16), files: { [CF_OD]: cfOdText(many(15)) } })).toEqual([])
+    expect(cf((d) => { d.paths = withSelf(17).map((p) => cfEntry(p)) }, { breaks: withSelf(17), files: { [CF_OD]: cfOdText(many(16)) } })).toEqual([`paths must list 1 to ${CARRY_FORWARD_MAX_PATHS} files`])
+    for (const paths of [[], undefined, 'src/main/fix.ts', {}]) {
+      expect(cf((d) => { d.paths = paths }, { breaks: [CF] }), JSON.stringify(paths)).toEqual([`paths must list 1 to ${CARRY_FORWARD_MAX_PATHS} files`, `${CF} changed after boundHead and is not declared`])
+    }
+  })
+
+  it('[host] carry-forward: under a binding-neutral path only Markdown and the manifest may change, so no code hides there', () => {
+    const NOT_MD = (p: string) => `${p} changed since boundHead under a binding-neutral path but is not Markdown: a carry-forward allows only Markdown and ${MANIFEST_PATH} there`
+    const prose = ['README.md', 'docs/wp1/evidence/x.md', 'architecture/decisions/2099-02-01-adr-999-x.md']
+    expect(cf(undefined, { changed: [...CF_ALL, ...CF_NEUTRAL, ...prose] })).toEqual([])
+    // The attack: code under docs/ that a counted line imports, and other files that are not prose.
+    const payload = ['docs/wp1/payload.js', 'docs/wp1/payload.d.ts', 'docs/wp1/evidence/x.json', 'CONTEXT.d/x.txt', 'docs/NOTES.MD', 'docs/x.md.js', 'docs/img.png']
+    expect(bindingBreaks(payload), 'each is under a neutral prefix').toEqual([])
+    expect(cf(undefined, { changed: [...CF_ALL, ...CF_NEUTRAL, ...payload] })).toEqual(payload.map(NOT_MD))
+    for (const p of payload) expect(isCarryForwardNeutralFile(p), p).toBe(false)
+    for (const p of [MANIFEST_PATH, ...prose, ...CF_NEUTRAL]) expect(isCarryForwardNeutralFile(p), p).toBe(true)
+  })
+
+  it('[host] carry-forward: the declaration is read only from the commit, never from the working tree, and a name in another case refuses', () => {
+    const BLOB = 'b'.repeat(40)
+    const DECL = '{\n  "schema": "wp1-carry-forward/1"\n}\n'
+    const tree = (entries: Array<[string, string]>) => {
+      const calls: string[][] = []
+      const g: Git = (args) => {
+        calls.push(args)
+        if (args[0] === 'ls-tree') return { status: 0, stdout: entries.map(([mode, p]) => `${mode} ${mode === '160000' ? 'commit' : 'blob'} ${BLOB}\t${p}\0`).join('') }
+        if (args[0] === 'show') return { status: 0, stdout: DECL }
+        throw new Error(`unexpected git ${args.join(' ')}`)
+      }
+      return { g, calls }
+    }
+    const SRC: [string, string] = ['100644', CF_FIX]
+    const HERE: [string, string] = ['100644', CF]
+    // No declaration at HEAD and none in the working tree: none, and the binding is judged as before.
+    expect(committedCarryForward(tree([SRC]).g, null)).toEqual({ text: null, problems: [] })
+    // A declaration written while the suite runs (by a setup file, say) is not committed: refused.
+    expect(committedCarryForward(tree([SRC]).g, DECL)).toEqual({ text: null, problems: [`${CF} is in the working tree but not committed at HEAD: the suite reads only the committed declaration`] })
+    // Committed: HEAD's text, read from git; the working copy must be the same, line endings aside.
+    const t = tree([SRC, HERE])
+    expect(committedCarryForward(t.g, DECL.replace(/\n/g, '\r\n'))).toEqual({ text: DECL, problems: [] })
+    expect(t.calls).toEqual([['ls-tree', '-r', '-z', '--full-tree', 'HEAD'], ['show', `HEAD:${CF}`]])
+    const DIFFERS = `${CF} in the working tree is not the one committed at HEAD`
+    expect(committedCarryForward(tree([SRC, HERE]).g, DECL.replace('wp1', 'wp2'))).toEqual({ text: DECL, problems: [DIFFERS] })
+    expect(committedCarryForward(tree([SRC, HERE]).g, null)).toEqual({ text: DECL, problems: [DIFFERS] })
+    // Its name in another case, or in another folder, refuses, with or without the exact path beside it.
+    for (const v of ['tests/wp1/Carry-Forward.json', 'tests/WP1/carry-forward.json', 'docs/carry-forward.json', 'CARRY-FORWARD.JSON']) {
+      const VARIANT = `${v} at HEAD has the name of ${CF} in another case or folder: remove or rename it`
+      expect(committedCarryForward(tree([SRC, ['100644', v]]).g, null).problems, v).toEqual([VARIANT])
+      expect(committedCarryForward(tree([HERE, ['100644', v]]).g, DECL).problems, v).toEqual([VARIANT])
+    }
+    // Only a plain file: a link, an executable or a submodule at the path refuses.
+    for (const mode of ['120000', '100755', '160000']) {
+      expect(committedCarryForward(tree([[mode, CF]]).g, DECL), mode).toEqual({ text: null, problems: [`${CF} at HEAD is not a plain file (mode ${mode})`] })
+    }
+    // A git that cannot list the tree is an error, never an absence.
+    expect(() => committedCarryForward(() => ({ status: 128, stdout: '', stderr: 'fatal: not a git repository' }), null)).toThrow(/exited 128/)
+  })
+
+  it('[host] carry-forward: once the base has the rule its gate files are frozen, and a base without it may change them once', () => {
+    const at = (text: string) => ({ [`${CF_BASE}:tests/wp1/binding.ts`]: text })
+    const RULE = at('export function carryForwardProblems(text: string, ctx: CarryForwardContext): string[] {')
+    const FROZEN = (ps: string[]) => `the base ${CF_BASE} already has the carry-forward rule, so its gate files may not change: ${ps.join(', ')}`
+    // 2.1.2: the base (v2.1.1) has no rule, so the gate files may change, this once.
+    expect(cf(undefined, { gateTouched: [...CARRY_FORWARD_GATE_FILES] })).toEqual([])
+    expect(cf(undefined, { show: at('export function bindingBreaks(changed: readonly string[]): string[] {'), gateTouched: ['tests/wp1/binding.ts'] })).toEqual([])
+    // A later patch whose base has the rule: any gate file changed refuses, by name.
+    expect(cf(undefined, { show: RULE })).toEqual([])
+    expect(cf(undefined, { show: RULE, gateTouched: ['tests/wp1/binding.ts', 'vitest.config.ts', 'tests/global-setup.ts'] })).toEqual([FROZEN(['tests/wp1/binding.ts', 'vitest.config.ts', 'tests/global-setup.ts'])])
+    for (const f of CARRY_FORWARD_GATE_FILES) expect(cf(undefined, { show: RULE, gateTouched: [f] }), f).toEqual([FROZEN([f])])
+    // The rule is found by its export, or by the declaration path it reads.
+    expect(cf(undefined, { show: at(`export const CARRY_FORWARD_PATH = '${CF}'`), gateTouched: ['scripts/release-gate.mjs'] })).toEqual([FROZEN(['scripts/release-gate.mjs'])])
+    // The freeze reads exactly these files, from the base to HEAD.
+    expect(cfRun(undefined, { show: RULE }).calls).toContainEqual(['diff', '--name-only', '--no-renames', '-z', `${CF_BASE}..HEAD`, '--', ...CARRY_FORWARD_GATE_FILES])
   })
 
   it('[host] carry-forward: each declared path names a regression test vitest collects, and case titles found in its code', () => {
     const other = (content: string, cases = [CF_CASES[0]], file = CF_OTHER) => cf((d) => { d.paths[0].tests = [{ file, cases }] }, { files: { [file]: content } })
     const NO_CASE = (c = CF_CASES[0], file = CF_OTHER) => `${CF_FIX}: ${file} has no it( or test( case titled "${c}"`
-    const SKIPS = `${CF_FIX}: ${CF_OTHER} skips, todos or focuses a case unconditionally`
+    const SKIPS = `${CF_FIX}: ${CF_OTHER} skips, todos or focuses a case unconditionally, or names such a call in its text`
     expect(cf((d) => { d.paths[0].why = 'the fix' })).toEqual([`${CF_FIX}: why must say in 10 characters or more why it changed`])
     expect(cf((d) => { d.paths[0].why = `   ${'x'.repeat(9)}   ` })).toEqual([`${CF_FIX}: why must say in 10 characters or more why it changed`])
     for (const tests of [[], undefined, 'tests/unit/fix.test.ts']) expect(cf((d) => { d.paths[0].tests = tests }), JSON.stringify(tests)).toEqual([`${CF_FIX}: names no regression test`])
+    // The second entry, the second test file and the second case are held to the rules of the first.
+    expect(cf((d) => { d.paths[1].why = 'short' })).toEqual(['package.json: why must say in 10 characters or more why it changed'])
+    expect(cf((d) => { d.paths[0].tests.push({ file: 'tests/unit/missing.test.ts', cases: [CF_CASES[0]] }) })).toEqual([`${CF_FIX}: tests/unit/missing.test.ts is missing or empty`])
+    expect(cf((d) => { d.paths[0].tests[0].cases.push('a case that is not there') })).toEqual([NO_CASE('a case that is not there', CF_TEST)])
     // A file vitest collects, there and not empty.
-    expect(other('', undefined, 'tests/unit/missing.test.ts').length).toBe(1)
     expect(cf((d) => { d.paths[0].tests = [{ file: 'tests/unit/missing.test.ts', cases: [CF_CASES[0]] }] })).toEqual([`${CF_FIX}: tests/unit/missing.test.ts is missing or empty`])
     expect(other(' \n\n')).toEqual([`${CF_FIX}: ${CF_OTHER} is missing or empty`])
     for (const file of ['tests/e2e/fix.spec.ts', 'tests/unit/fix.native.test.ts', 'tests/integration/fix.test.tsx', 'tests/unit/../../x.test.ts', 'tests/unit/fix.ts', CF_FIX, 'tests\\unit\\fix.test.ts']) {
@@ -753,14 +856,18 @@ describe('WP1 traceability manifest', () => {
       expect(other([real, hidden, ''].join('\n')), hidden).toEqual([NO_CASE()])
     }
     for (const shown of [`it('${CF_CASES[0]}', () => {})`, `test("${CF_CASES[0]}", () => {})`, `it(\`${CF_CASES[0]}\`, () => {})`, `it (\n  '${CF_CASES[0]}', () => {})`,
-      `const re = /['"\`]/\nit('${CF_CASES[0]}', () => {})`, `const s = \`\${'x'}\`\nit('${CF_CASES[0]}', () => {})`, `// it.skip(\nit('${CF_CASES[0]}', () => {})`,
-      `describe.runIf(true)('x', () => { it.skipIf(false)('y', () => {}) })\nit('${CF_CASES[0]}', () => {})`]) {
+      `const re = /['"\`]/\nit('${CF_CASES[0]}', () => {})`, `const s = \`\${'x'}\`\nit('${CF_CASES[0]}', () => {})`,
+      `describe.runIf(true)('x', () => { it.skipIf(false)('y', () => {}) })\nit('${CF_CASES[0]}', () => {})`,
+      // The lexer's regular expression branch: a backtick in a regex, a division on the same line as a case, a / inside a character class.
+      `const re = /\`/\nit('${CF_CASES[0]}', () => {})`, `const q = a / b; it('${CF_CASES[0]}', () => {})`, `const re = /[/]\`/\nit('${CF_CASES[0]}', () => {})`]) {
       expect(other(shown), shown).toEqual([])
     }
-    // No unconditional skip, todo or focus anywhere in the code of the file.
-    expect(other(`it.skip('${CF_CASES[0]}', () => {})`)).toEqual([SKIPS, NO_CASE()])
-    for (const skip of ["describe.skip('x', () => {})", "it.only('x', () => {})", "test.todo('x')", "xit('x', () => {})", "xdescribe('x', () => {})",
-      "it.skip.each([1])('x', () => {})", "describe.concurrent.skip('x', () => {})", "test.only.each([1])('x', () => {})"]) {
+    // No unconditional skip, todo or focus anywhere in the raw text of the file: in code, in a comment, in a string, or behind a / the lexer misreads.
+    expect(other(`${call('it', 'skip')}('${CF_CASES[0]}', () => {})`)).toEqual([SKIPS, NO_CASE()])
+    for (const skip of [`${call('describe', 'skip')}('x', () => {})`, `${call('it', 'only')}('x', () => {})`, `${call('test', 'todo')}('x')`, `${call('suite', 'skip')}('x', () => {})`,
+      `${X}it('x', () => {})`, `${X}describe('x', () => {})`, `${X}test('x', () => {})`,
+      `${call(call('it', 'skip'), 'each')}([1])('x', () => {})`, `${call(call('describe', 'concurrent'), 'skip')}('x', () => {})`, `${call(call('test', 'only'), 'each')}([1])('x', () => {})`,
+      `// ${call('it', 'skip')}(`, `const s = '${call('it', 'only')}('`, `const n = {} / 1; ${call('describe', 'skip')}('x', () => {`]) {
       expect(other(`${skip}\nit('${CF_CASES[0]}', () => {})`), skip).toEqual([SKIPS])
     }
     // A title is plain text: 8 characters or more, no quote, backtick, backslash or newline.
@@ -769,7 +876,7 @@ describe('WP1 traceability manifest', () => {
     }
   })
 
-  it('[host] carry-forward: package files may change only their version, and at most 600 lines outside tests carry forward', () => {
+  it('[host] carry-forward: package files change only their version, and counted paths carry at most 600 lines and no line over 1000 characters', () => {
     expect(cf(undefined, { files: { 'package.json': cfPkg('2.1.2', '2.0.0') } })).toEqual(['package.json changed more than its version since boundHead'])
     expect(cf(undefined, { files: { 'package-lock.json': cfLock('2.1.2', '1.0.0', '1.0.1') } })).toEqual(['package-lock.json changed more than its version since boundHead'])
     expect(cf(undefined, { files: { 'package-lock.json': cfLock('2.1.2', '^1.0.0') } })).toEqual(['package-lock.json changed more than its version since boundHead'])
@@ -777,14 +884,29 @@ describe('WP1 traceability manifest', () => {
     for (const before of [null, '{']) expect(cf(undefined, { show: { [`${CF_BOUND}:package-lock.json`]: before } }), String(before)).toEqual(['package-lock.json changed more than its version since boundHead'])
     // The version-only rule compares whole documents: key order does not matter, every other field does.
     expect(cf(undefined, { files: { 'package.json': JSON.stringify({ dependencies: { x: '1.0.0' }, version: '2.1.2', name: 'app' }) } })).toEqual([])
-    // Lines added and deleted outside tests/, since boundHead: 600 carry forward, 601 do not.
+    // Lines added and deleted in counted paths, since boundHead: 600 carry forward, 601 do not.
+    const OVER = (n: number) => `${n} lines changed in counted paths since boundHead; at most ${CARRY_FORWARD_MAX_SHIPPED_LINES} carry forward`
     expect(cf(undefined, { numstat: { [CF_FIX]: '590\t4' } })).toEqual([])
-    expect(cf(undefined, { numstat: { [CF_FIX]: '590\t5' } })).toEqual([`601 lines changed outside tests/ since boundHead; at most ${CARRY_FORWARD_MAX_SHIPPED_LINES} carry forward`])
-    expect(cf(undefined, { numstat: { [CF_FIX]: '-\t-' } })).toEqual(['a declared file outside tests/ is binary'])
-    // Tests are not shipped: 10,000 lines under tests/ count for nothing.
-    const r = cfRun((d) => { d.paths.push(cfEntry(CF_TEST)) }, { breaks: [CF_FIX, 'package.json', 'package-lock.json', CF_TEST], numstat: { [CF_TEST]: '9000\t1000' }, files: { [CF_OD]: cfOdText([CF_TEST]) } })
-    expect(r.problems).toEqual([])
-    expect(r.calls).toContainEqual(['diff', '--numstat', '--no-renames', '-z', `${CF_BOUND}..HEAD`, '--', CF_FIX, 'package.json', 'package-lock.json'])
+    expect(cf(undefined, { numstat: { [CF_FIX]: '590\t5' } })).toEqual([OVER(601)])
+    // A count git gives that cannot be read, or a binary file, is a problem, never zero.
+    for (const rec of ['-\t-', 'x\t4', '3', '3\t', '-1\t2', '3.5\t1']) {
+      expect(cf(undefined, { numstat: { [CF_FIX]: rec } }), rec).toEqual(['a counted declared file is binary, or git gave a line count that cannot be read'])
+    }
+    // Only what can ship counts: tests/, .github/ and the named release tooling do not; src/, a script that ships, resources and build do.
+    const big = (p: string) => cfRun((d) => { d.paths.push(cfEntry(p)) }, { breaks: [...CF_ALL, p], numstat: { [p]: '9000\t1000' }, patch: { [p]: ['y'.repeat(5000)] }, files: { [CF_OD]: cfOdText([p]) } })
+    for (const p of [CF_TEST, '.github/workflows/x.yml', ...DEV_ONLY_TOOLING]) {
+      const r = big(p)
+      expect(r.problems, p).toEqual([])
+      expect(r.calls.filter((c) => c[0] === 'diff').some((c) => c.includes(p)), p).toBe(false)
+    }
+    for (const p of ['src/main/other.ts', 'scripts/resume-picker.js', 'resources/x.json', 'build/installer.nsh']) {
+      expect(big(p).problems, p).toEqual([OVER(10054), `${p}: an added line of 5000 characters, over the ${CARRY_FORWARD_MAX_ADDED_LINE} a carry-forward allows`])
+    }
+    // No added line over 1000 characters in a counted path: the 169 KB one-line payload is refused; 1000 is not.
+    const LONG = (n: number) => `${CF_FIX}: an added line of ${n} characters, over the ${CARRY_FORWARD_MAX_ADDED_LINE} a carry-forward allows`
+    expect(cf(undefined, { patch: { [CF_FIX]: ['x'.repeat(1000)] } })).toEqual([])
+    expect(cf(undefined, { patch: { [CF_FIX]: ['x'.repeat(1001)] } })).toEqual([LONG(1001)])
+    expect(cf(undefined, { patch: { [CF_FIX]: ['short', 'x'.repeat(168930)] } })).toEqual([LONG(168930)])
   })
 
   it('[host] carry-forward: a reason, an owner decision that names the version, says carry forward and names every declared path, and an ADR-009 PR', () => {
@@ -797,12 +919,13 @@ describe('WP1 traceability manifest', () => {
     expect(cf((d) => { d.approval = `${CF_OD}#CF9` })).toEqual([`${CF_OD} has no "## CF9" heading`])
     expect(cf((d) => { d.approval = `${CF_OD}#CF` })).toEqual([`${CF_OD} has no "## CF" heading`])
     expect(cf((d) => { d.approval = `${CF_OD}#CF2` })).toEqual([`section CF2 of ${CF_OD} does not name 2.1.2`])
+    // The phrase is spaced: the declaration's own path holds carry-forward, which is not the phrase.
     expect(cf((d) => { d.approval = `${CF_OD}#CF3` })).toEqual([`section CF3 of ${CF_OD} does not say the evidence is carried forward`])
     expect(cf((d) => { d.approval = `${CF_OD}#CF4` })).toEqual([`section CF4 of ${CF_OD} does not name package-lock.json`])
     expect(cf((d) => { d.approval = `${CF_OD}#CF5` })).toEqual([`section CF5 of ${CF_OD} does not name ${CF_FIX}`])
     expect(cf((d) => { d.approval = `${CF_OD}#CF6` })).toEqual([`section CF6 of ${CF_OD} does not name ${CF_FIX}`])
     expect(cf((d) => { d.approval = `${CF_OD}#CF7` })).toEqual([])
-    expect(cf((d) => { d.approval = `${CF_OD}#CF8` })).toEqual([`section CF8 of ${CF_OD} does not name ${CF_FIX}`, `section CF8 of ${CF_OD} does not name package.json`, `section CF8 of ${CF_OD} does not name package-lock.json`])
+    expect(cf((d) => { d.approval = `${CF_OD}#CF8` })).toEqual(CF_ALL.map((p) => `section CF8 of ${CF_OD} does not name ${p}`))
     // A CRLF file reads the same.
     expect(cf(undefined, { files: { [CF_OD]: cfOdText().replace(/\n/g, '\r\n') } })).toEqual([])
     // Every carry-forward names the PR whose ADR-009 pass covers it.
@@ -816,22 +939,92 @@ describe('WP1 traceability manifest', () => {
     expect(CARRY_FORWARD_SCHEMA).toBe('wp1-carry-forward/1')
     expect(CARRY_FORWARD_MAX_PATHS).toBe(16)
     expect(CARRY_FORWARD_MAX_SHIPPED_LINES).toBe(600)
+    expect(CARRY_FORWARD_MAX_ADDED_LINE).toBe(1000)
+    expect([...DEV_ONLY_TREES]).toEqual(['tests/', '.github/'])
+    expect([...DEV_ONLY_TOOLING]).toEqual(['scripts/release-gate.mjs', 'scripts/wp1/fetch-ledger-commit.mjs'])
+    for (const p of ['tests/x.ts', '.github/workflows/ci.yml', ...DEV_ONLY_TOOLING]) expect(isCountedPath(p), p).toBe(false)
+    for (const p of ['src/main/x.ts', 'scripts/resume-picker.js', 'scripts/wp1/other.mjs', 'scripts/release-gate.mjs.bak', 'package.json', '.githubx/y', 'testsx/y']) expect(isCountedPath(p), p).toBe(true)
     expect(bindingBreaks([CARRY_FORWARD_PATH])).toEqual([CARRY_FORWARD_PATH])
     // The neutral rules are the ones before ADR-027: the declaration widens nothing.
     expect(BINDING_NEUTRAL.map(String)).toEqual(['/^tests\\/wp1\\/traceability\\.json$/', '/^docs\\//', '/^CONTEXT\\.d\\//', '/^architecture\\/decisions\\/[^/]+\\.md$/', '/^[^/]+\\.md$/'])
     expect(String(RUNNABLE_TEST)).toBe(String(/^tests\/(unit|wp1)\/.+\.test\.tsx?$|^tests\/integration\/.+\.test\.ts$/))
     expect(String(NATIVE_TEST)).toBe(String(/\.native\.test\.tsx?$/))
-    // changedLines: nothing asked for no paths; a binary entry is null; a failed diff throws.
+    // changedLines: nothing asked for no paths; a binary entry, or one it cannot read, is null; a failed diff throws.
     expect(changedLines(() => { throw new Error('git must not be asked') }, CF_BOUND, [])).toBe(0)
     expect(changedLines(() => ({ status: 0, stdout: ['3\t4\ta.ts', '0\t9\tc.ts', ''].join('\0') }), CF_BOUND, ['a.ts', 'c.ts'])).toBe(16)
-    expect(changedLines(() => ({ status: 0, stdout: ['3\t4\ta.ts', '-\t-\tb.png', ''].join('\0') }), CF_BOUND, ['a.ts', 'b.png'])).toBeNull()
+    for (const bad of ['-\t-\tb.png', 'x\t4\ta.ts', '3\t4', '3\t4\t', '3 4\ta.ts']) {
+      expect(changedLines(() => ({ status: 0, stdout: ['3\t4\ta.ts', bad, ''].join('\0') }), CF_BOUND, ['a.ts']), bad).toBeNull()
+    }
     expect(() => changedLines(() => ({ status: 128, stdout: '', stderr: 'fatal: bad revision' }), CF_BOUND, ['a.ts'])).toThrow(/exited 128/)
+    // longAddedLines: only added lines inside a hunk, with a trailing CR not counted; nothing asked for no paths; a failed diff throws.
+    const patch = ['diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts', '@@ -0,0 +1,3 @@', `+++ ${'y'.repeat(20)}`, '+short', `-${'z'.repeat(50)}`,
+      'diff --git a/b.ts b/b.ts', 'new file mode 100644', '--- /dev/null', '+++ b/b.ts', '@@ -0,0 +1 @@', `+${'w'.repeat(30)}\r`, ''].join('\n')
+    const asked: string[][] = []
+    expect(longAddedLines((a) => { asked.push(a); return { status: 0, stdout: patch } }, CF_BOUND, ['a.ts', 'b.ts'], 20)).toEqual(['a.ts: an added line of 23 characters', 'b.ts: an added line of 30 characters'])
+    expect(asked).toEqual([['diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', `${CF_BOUND}..HEAD`, '--', 'a.ts', 'b.ts']])
+    expect(longAddedLines(() => { throw new Error('git must not be asked') }, CF_BOUND, [], 20)).toEqual([])
+    expect(() => longAddedLines(() => ({ status: 128, stdout: '' }), CF_BOUND, ['a.ts'], 20)).toThrow(/exited 128/)
+    // changedPaths reads only the named files when asked to.
+    const named: string[][] = []
+    expect(changedPaths((a) => { named.push(a); return { status: 0, stdout: 'x\0' } }, CF_BOUND, ['x', 'y'])).toEqual(['x'])
+    expect(named).toEqual([['diff', '--name-only', '--no-renames', '-z', `${CF_BOUND}..HEAD`, '--', 'x', 'y']])
     // fileAt: a file at a commit, null when it is not there, and only for a 40-hex commit id.
     const shown: string[][] = []
     expect(fileAt((a) => { shown.push(a); return { status: 0, stdout: 'x' } }, CF_BOUND, 'package.json')).toBe('x')
     expect(shown).toEqual([['show', `${CF_BOUND}:package.json`]])
     expect(fileAt(() => ({ status: 128, stdout: '' }), CF_BOUND, 'package.json')).toBeNull()
     for (const sha of ['HEAD', '--output=x', `${CF_BOUND}:x`]) expect(() => fileAt(() => ({ status: 0, stdout: '' }), sha, 'a'), sha).toThrow(/40-hex/)
+  })
+
+  // ADR-027: the size caps leave out only release tooling the packaging
+  // config never ships, and the freeze covers every file that decides how the
+  // suite runs. Read from this repository.
+  it('carry-forward: the release tooling the size caps leave out is never packaged, and the gate files list every vitest config and setup file', () => {
+    const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')) as { build?: Record<string, unknown> }
+    const build = pkg.build ?? {}
+    expect((build.directories as { app?: unknown } | undefined)?.app, 'build.directories.app would move the packaged root').toBeUndefined()
+    const files = build.files as unknown[]
+    expect(Array.isArray(files) && files.length > 0, 'build.files must be an explicit list').toBe(true)
+    // Each pattern is an exact path or a folder's whole tree, so it is read here without a glob engine; any other pattern fails this case.
+    for (const f of files) expect(typeof f === 'string' && /^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+(?:\/\*\*\/\*)?$/.test(f), `build.files entry ${JSON.stringify(f)} cannot be read here`).toBe(true)
+    const packaged = (p: string) => (files as string[]).some((f) => f === p || (f.endsWith('/**/*') && p.startsWith(f.slice(0, -4))))
+    const extra = ['extraResources', 'extraFiles'].flatMap((k) => (build[k] as unknown[] | undefined) ?? [])
+    const extraFrom = extra.map((e) => (typeof e === 'string' ? e : (e as { from?: unknown }).from))
+    for (const from of extraFrom) expect(typeof from === 'string' && !/[*?{}[\]!]/.test(from), `extra resource ${JSON.stringify(from)} cannot be read here`).toBe(true)
+    for (const os of ['win', 'mac', 'linux']) for (const k of ['files', 'extraResources', 'extraFiles']) expect((build[os] as Record<string, unknown> | undefined)?.[k], `build.${os}.${k}`).toBeUndefined()
+    for (const u of (build.asarUnpack as string[] | undefined) ?? []) expect(u, 'asarUnpack unpacks native modules only').toMatch(/^\*\*\/node_modules\//)
+    // What the app's build imports from outside src/: electron-vite's config, followed through relative imports.
+    const imported = new Set<string>()
+    const follow = (file: string) => {
+      for (const m of readFileSync(resolve(ROOT, file), 'utf8').matchAll(/(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)) {
+        const p = join(file, '..', m[1]).replace(/\\/g, '/')
+        if (!imported.has(p) && existsSync(resolve(ROOT, p))) { imported.add(p); if (/\.[cm]?[jt]s$/.test(p)) follow(p) }
+      }
+    }
+    follow('electron.vite.config.ts')
+    const srcFiles = execFileSync('git', ['-C', ROOT, 'ls-files', '-z', '--', 'src'], { encoding: 'utf8' }).split('\0').filter(Boolean)
+    for (const t of DEV_ONLY_TOOLING) {
+      expect(existsSync(resolve(ROOT, t)), `${t} is not there`).toBe(true)
+      expect(packaged(t), `${t} is matched by build.files`).toBe(false)
+      expect(extraFrom.some((f) => f === t || t.startsWith(`${String(f)}/`)), `${t} is an extra resource`).toBe(false)
+      expect(imported.has(t), `${t} is imported by electron.vite.config.ts`).toBe(false)
+      const name = t.slice(t.lastIndexOf('/') + 1).replace(/\.[cm]?js$/, '').replace(/[.-]/g, '\\$&')
+      const importers = srcFiles.filter((f) => new RegExp(`['"][^'"\\n]*${name}(?:\\.[cm]?js)?['"]`).test(readFileSync(resolve(ROOT, f), 'utf8')))
+      expect(importers, `${t} is named in a string under src/`).toEqual([])
+    }
+    // Verify the verifier: a script that ships, and one the build imports, are seen.
+    expect(packaged('scripts/resume-picker.js')).toBe(true)
+    expect(imported.has('scripts/build-identity.mjs')).toBe(true)
+    // The freeze lists every vitest config, and every setup and global-setup file they name.
+    const configs = execFileSync('git', ['-C', ROOT, 'ls-files', '-z', '--', 'vitest*.config.*'], { encoding: 'utf8' }).split('\0').filter(Boolean)
+    expect(configs.length).toBeGreaterThan(0)
+    for (const c of configs) {
+      expect(CARRY_FORWARD_GATE_FILES, c).toContain(c)
+      for (const m of readFileSync(resolve(ROOT, c), 'utf8').matchAll(/(?:setupFiles|globalSetup)\s*:\s*\[([^\]]*)\]/g)) {
+        for (const s of m[1].matchAll(/['"]([^'"]+)['"]/g)) expect(CARRY_FORWARD_GATE_FILES, `${c}: ${s[1]}`).toContain(s[1])
+      }
+    }
+    for (const f of CARRY_FORWARD_GATE_FILES) expect(existsSync(resolve(ROOT, f)), f).toBe(true)
   })
 
   it('every \'unavailable\' item in the manifest keeps the rules of ADR-026, in every phase', () => {
@@ -844,7 +1037,7 @@ describe('WP1 traceability manifest', () => {
   // passing case's title only when the case is slow), so the stable run's log
   // lists them at go. The title names them as well, for a failing run.
   const unavailable = unavailableIds(manifest.items)
-  it(`candidate phase: nothing is still planned (unavailable on a recorded owner decision: ${unavailable.join(', ') || 'none'}), every evidence record was taken at boundHead, and boundHead is an ancestor of HEAD with only neutral paths changed since (phase ${phase}: ${reason}; carry-forward: ${carryText === null ? 'none' : CARRY_FORWARD_PATH})`, () => {
+  it(`candidate phase: nothing is still planned (unavailable on a recorded owner decision: ${unavailable.join(', ') || 'none'}), every evidence record was taken at boundHead, and boundHead is an ancestor of HEAD with only neutral paths changed since (phase ${phase}: ${reason}; carry-forward: ${committedCarry.text === null ? 'none' : CARRY_FORWARD_PATH})`, () => {
     if (phase !== 'candidate') return
     console.info(`WP1 candidate: unavailable on a recorded owner decision: ${unavailable.join(', ') || 'none'}`)
     const planned = incompleteItems(manifest.items)
@@ -859,9 +1052,12 @@ describe('WP1 traceability manifest', () => {
     // With no declaration, nothing but neutral paths may have changed since
     // boundHead; with one, it must hold (ADR-027). Only this assertion is
     // replaced: everything above runs as before.
-    const breaks = bindingBreaks(changedPaths(git, bound))
+    // The declaration is the one committed at HEAD, never a working-tree file.
+    expect(committedCarry.problems, `the carry-forward declaration cannot be read from HEAD (ADR-027):\n${committedCarry.problems.join('\n')}`).toEqual([])
+    const changed = changedPaths(git, bound)
+    const breaks = bindingBreaks(changed)
     const textOf = (p: string) => (existsSync(resolve(ROOT, p)) ? readFileSync(resolve(ROOT, p), 'utf8') : null)
-    const binding = bindingVerdict(breaks, carryText, { git, boundHead: bound, version: pkgVersion, textOf })
+    const binding = bindingVerdict(breaks, committedCarry.text, { git, boundHead: bound, version: pkgVersion, changed, textOf })
     expect(binding.problems, binding.message).toEqual([])
     if (binding.carried) console.info(`WP1 candidate: evidence carried forward from boundHead ${bound} by ${CARRY_FORWARD_PATH}: ${breaks.join(', ')}`)
   })

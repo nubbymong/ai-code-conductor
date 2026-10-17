@@ -211,25 +211,82 @@ export const NATIVE_TEST = /\.native\.test\.tsx?$/
 /** Every path changed between base and HEAD: NUL-separated (no quoting of
  *  unusual names) and without rename pairing (a file moved out of src still
  *  lists its old path). */
-export function changedPaths(git: Git, base: string): string[] {
-  const r = git(['diff', '--name-only', '--no-renames', '-z', `${base}..HEAD`])
+export function changedPaths(git: Git, base: string, only?: readonly string[]): string[] {
+  const r = git(['diff', '--name-only', '--no-renames', '-z', `${base}..HEAD`, ...(only ? ['--', ...only] : [])])
   if (r.status !== 0) throw new Error(`git diff ${base}..HEAD exited ${r.status}: ${r.stderr ?? ''}`)
   return r.stdout.split('\0').filter(Boolean)
 }
 
 /** Lines added plus deleted between base and HEAD in these paths; null when
- *  one of them is binary. No paths, no git call. */
+ *  one of them is binary, or a record is not two counts and a path (fail
+ *  closed: a count it cannot read is never taken as zero). No paths, no git
+ *  call. */
 export function changedLines(git: Git, base: string, paths: readonly string[]): number | null {
   if (paths.length === 0) return 0
   const r = git(['diff', '--numstat', '--no-renames', '-z', `${base}..HEAD`, '--', ...paths])
   if (r.status !== 0) throw new Error(`git diff --numstat ${base}..HEAD exited ${r.status}: ${r.stderr ?? ''}`)
   let n = 0
   for (const rec of r.stdout.split('\0').filter(Boolean)) {
-    const [a, d] = rec.split('\t')
-    if (a === '-' || d === '-') return null
-    n += Number(a) + Number(d)
+    const m = /^(\d+)\t(\d+)\t[^\t]+$/.exec(rec)
+    if (!m) return null
+    n += Number(m[1]) + Number(m[2])
   }
   return n
+}
+
+/** Every added line longer than `max` characters between base and HEAD in
+ *  these paths, as "<path>: an added line of N characters". It reads the
+ *  patch git prints (no context, no renames, no external diff or textconv);
+ *  only lines inside a hunk are content. No paths, no git call. */
+export function longAddedLines(git: Git, base: string, paths: readonly string[], max: number): string[] {
+  if (paths.length === 0) return []
+  const r = git(['diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', `${base}..HEAD`, '--', ...paths])
+  if (r.status !== 0) throw new Error(`git diff -U0 ${base}..HEAD exited ${r.status}: ${r.stderr ?? ''}`)
+  const out: string[] = []
+  let file = ''
+  let inHunk = false
+  for (const raw of r.stdout.split('\n')) {
+    const l = raw.replace(/\r$/, '')
+    if (l.startsWith('diff --git ')) { inHunk = false; file = ''; continue }
+    if (!inHunk) {
+      if (l.startsWith('+++ ')) file = l.startsWith('+++ b/') ? l.slice(6) : l.slice(4)
+      else if (l.startsWith('@@')) inHunk = true
+      continue
+    }
+    if (l.startsWith('+') && l.length - 1 > max) out.push(`${file}: an added line of ${l.length - 1} characters`)
+  }
+  return out
+}
+
+/** The carry-forward declaration as committed at HEAD, read from git and
+ *  never from the working tree (ADR-027): its text, or null when HEAD has
+ *  none. A problem: any other file in the tree with its name in another case
+ *  (or in another folder), the entry not a plain file, a working-tree copy
+ *  that differs from HEAD's (line endings aside), or a working-tree copy HEAD
+ *  does not have. `workingText` is the working-tree file, null when absent. */
+export function committedCarryForward(git: Git, workingText: string | null): { text: string | null; problems: string[] } {
+  const r = git(['ls-tree', '-r', '-z', '--full-tree', 'HEAD'])
+  if (r.status !== 0) throw new Error(`git ls-tree HEAD exited ${r.status}: ${r.stderr ?? ''}`)
+  const problems: string[] = []
+  const name = CARRY_FORWARD_PATH.slice(CARRY_FORWARD_PATH.lastIndexOf('/') + 1).toLowerCase()
+  let entry: { mode: string; type: string } | null = null
+  for (const rec of r.stdout.split('\0').filter(Boolean)) {
+    const tab = rec.indexOf('\t')
+    const [mode, type] = rec.slice(0, tab).split(' ')
+    const p = rec.slice(tab + 1)
+    if (p === CARRY_FORWARD_PATH) entry = { mode, type }
+    else if (p.slice(p.lastIndexOf('/') + 1).toLowerCase() === name) problems.push(`${p} at HEAD has the name of ${CARRY_FORWARD_PATH} in another case or folder: remove or rename it`)
+  }
+  if (entry === null) {
+    if (workingText !== null) problems.push(`${CARRY_FORWARD_PATH} is in the working tree but not committed at HEAD: the suite reads only the committed declaration`)
+    return { text: null, problems }
+  }
+  if (entry.mode !== '100644' || entry.type !== 'blob') return { text: null, problems: [...problems, `${CARRY_FORWARD_PATH} at HEAD is not a plain file (mode ${entry.mode})`] }
+  const s = git(['show', `HEAD:${CARRY_FORWARD_PATH}`])
+  if (s.status !== 0) throw new Error(`git show HEAD:${CARRY_FORWARD_PATH} exited ${s.status}: ${s.stderr ?? ''}`)
+  const lf = (t: string) => t.replace(/\r\n/g, '\n')
+  if (workingText === null || lf(workingText) !== lf(s.stdout)) problems.push(`${CARRY_FORWARD_PATH} in the working tree is not the one committed at HEAD`)
+  return { text: s.stdout, problems }
 }
 
 /** A file's text at a commit; null when the commit or the path is not
@@ -312,22 +369,49 @@ export function staleRecords(
 // candidate case's final assertion (bindingVerdict); every other rule above
 // still runs. The caps are constants here, never fields of the declaration,
 // and count from boundHead, so chained patches add up until a qualification.
-// The line cap is sized to the first carry-forward: 2.1.2 ships 587 lines
-// outside tests/ since boundHead (the headless PATH fix with its bounded
-// probe wait and review fixes 374, the release gate's check 5 193, the
-// version and changelog 20). 600 holds that and leaves 13, so the next
-// change on this binding requalifies. Raising it is a reviewed, non-neutral
-// edit to this file.
+// The size caps count only what can ship in the app (isCountedPath): declared
+// paths outside DEV_ONLY_TREES and DEV_ONLY_TOOLING, the release tooling a
+// traceability case proves is not packaged. Raising a cap is a reviewed,
+// non-neutral edit to this file.
 export const CARRY_FORWARD_PATH = 'tests/wp1/carry-forward.json'
 export const CARRY_FORWARD_SCHEMA = 'wp1-carry-forward/1'
 export const CARRY_FORWARD_MAX_PATHS = 16
 export const CARRY_FORWARD_MAX_SHIPPED_LINES = 600
+/** The longest added line a counted path may carry: a line count alone does
+ *  not bound size. Above the longest one-line changelog description. */
+export const CARRY_FORWARD_MAX_ADDED_LINE = 1000
+/** Trees that never ship: tests and workflows. */
+export const DEV_ONLY_TREES: readonly string[] = ['tests/', '.github/']
+/** Release tooling under scripts/ that is never packaged (not in package.json
+ *  build.files or extraResources, imported by no src/ file and by no vite
+ *  config); a traceability case proves each from the packaging config. Every
+ *  other scripts/ file is counted, because several ship. */
+export const DEV_ONLY_TOOLING: readonly string[] = ['scripts/release-gate.mjs', 'scripts/wp1/fetch-ledger-commit.mjs']
+/** Whether a path's lines count toward the size caps. */
+export const isCountedPath = (p: string) => !DEV_ONLY_TREES.some((t) => p.startsWith(t)) && !DEV_ONLY_TOOLING.includes(p)
+/** The only binding-neutral paths a carry-forward lets change: Markdown, and
+ *  the manifest. Any other file under a neutral prefix could be code nothing
+ *  declares or counts. */
+export const isCarryForwardNeutralFile = (p: string) => p === MANIFEST_PATH || /\.md$/.test(p)
+/** The files that decide how the suite and the gate run. Once a base already
+ *  has this rule, a carry-forward may change none of them, so a later patch
+ *  cannot rewrite the check that judges it. */
+export const CARRY_FORWARD_GATE_FILES: readonly string[] = [
+  'tests/wp1/binding.ts', 'tests/wp1/traceability.test.ts', 'tests/wp1/phase.ts',
+  'scripts/release-gate.mjs', 'scripts/wp1/fetch-ledger-commit.mjs',
+  '.github/workflows/release.yml', '.github/workflows/ci.yml',
+  'vitest.config.ts', 'vitest.native.config.ts', 'vitest.live.config.ts',
+  'tests/global-setup.ts', 'tests/helpers/home-isolation.ts', 'tests/unit/setup.ts',
+]
 const STABLE_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 /** An exact repository path: no leading /, no . or .. segment, and no glob,
  *  pathspec, quoting or space character, so git reads it as itself. */
 const EXACT_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._@+\-/]+$/
 const CASE_RE = /^[^'"`\\\n\r]{8,}$/
-/** In code, an unconditional skip, todo or focus (skipIf and runIf are conditional, and allowed). */
+/** An unconditional skip, todo or focus (skipIf and runIf are conditional,
+ *  and allowed). Searched for in the RAW text of a test file, comments and
+ *  strings included, so no layout that misleads the lexer below can hide one
+ *  (fail closed: a test file that only mentions one is refused too). */
 const STATIC_SKIP_RE = /(?<![\w$.])(?:describe|suite|it|test)(?:\s*\.\s*[A-Za-z_$][\w$]*)*?\s*\.\s*(?:skip|todo|only)(?![\w$])|(?<![\w$.])x(?:describe|it|test)\s*\(/
 /** A bare it( or test( call, up to its first argument. */
 const TEST_CALL_RE = /(?<![\w$.])(?:it|test)\s*\(\s*/g
@@ -353,9 +437,13 @@ const parsedOrNull = (text: string | null): Json => {
 /** A test file's code: every comment, and the inside of every string,
  *  template and regular expression literal, blanked (newlines kept), with the
  *  text of each plain string or template (no escape, no ${}) by where it
- *  starts. Enough of the lexical grammar to tell code from text; it is not a
- *  parser, and where it guesses (a / after a closing bracket is division) a
- *  case can only be missed, never invented. */
+ *  starts. Enough of the lexical grammar to tell code from text in an
+ *  ordinary test file; it is not a parser. It guesses whether a / starts a
+ *  regular expression (after a closing bracket it reads division), and a
+ *  wrong guess can desynchronise it, so in a hostile layout it can miss a
+ *  case or read one that is not there. It is used only to find case titles;
+ *  skips are found in the raw text, and hostile test files are the ADR-009
+ *  pass's to catch. */
 function codeOf(text: string): { code: string; literals: Map<number, string> } {
   const out = text.split('')
   const literals = new Map<number, string>()
@@ -437,15 +525,17 @@ function approvalProblems(approval: unknown, version: string, paths: readonly un
   if (section === null) return [`${file} has no "## ${id}" heading`]
   const out: string[] = []
   if (!namesVersion(section, version)) out.push(`section ${id} of ${file} does not name ${version}`)
-  if (!/\bcarr(?:y|ied)[ -]forward\b/i.test(section)) out.push(`section ${id} of ${file} does not say the evidence is carried forward`)
+  // Spaced only: the hyphen form is the declaration's own path, which every section must name.
+  if (!/\bcarr(?:y|ied) forward\b/i.test(section)) out.push(`section ${id} of ${file} does not say the evidence is carried forward`)
   for (const p of paths) if (typeof p === 'string' && p !== '' && !namesPath(section, p)) out.push(`section ${id} of ${file} does not name ${p}`)
   return out
 }
 
 /** A declared path's regression tests: a reason it changed, and one or more
  *  files vitest collects, each there, with no unconditional skip, todo or
- *  focus in its code, holding every named case as the title of a bare it( or
- *  test( call. A case is proven to exist, not to have run (ADR-027). */
+ *  focus anywhere in its text, holding every named case as the title of a
+ *  bare it( or test( call. A case is proven to exist, not to have run
+ *  (ADR-027). */
 function namedTestProblems(entry: Json, textOf: (path: string) => string | null): string[] {
   const p = String(entry?.path)
   const out: string[] = []
@@ -457,8 +547,8 @@ function namedTestProblems(entry: Json, textOf: (path: string) => string | null)
     if (typeof file !== 'string' || !EXACT_PATH_RE.test(file) || !RUNNABLE_TEST.test(file) || NATIVE_TEST.test(file)) { out.push(`${p}: ${String(file)} is not a test vitest collects`); continue }
     const text = textOf(file)
     if (text === null || text.trim() === '') { out.push(`${p}: ${file} is missing or empty`); continue }
-    const { code, titles } = testsOf(text)
-    if (STATIC_SKIP_RE.test(code)) out.push(`${p}: ${file} skips, todos or focuses a case unconditionally`)
+    const { titles } = testsOf(text)
+    if (STATIC_SKIP_RE.test(text)) out.push(`${p}: ${file} skips, todos or focuses a case unconditionally, or names such a call in its text`)
     const cases: Json[] = Array.isArray(t.cases) ? t.cases : []
     if (cases.length === 0) out.push(`${p}: ${file} names no case`)
     for (const c of cases) {
@@ -471,13 +561,15 @@ function namedTestProblems(entry: Json, textOf: (path: string) => string | null)
 
 export type CarryForwardContext = {
   git: Git; boundHead: string; version: string; breaks: readonly string[]
+  /** Every path changed since boundHead, neutral ones included. */
+  changed: readonly string[]
   /** A repository file in the working tree; null when it is not there. */
   textOf: (path: string) => string | null
 }
 
 /** Every way a carry-forward declaration fails (ADR-027); [] when the
  *  binding holds by carry-forward. `version` is package.json's, `breaks`
- *  the non-neutral paths changed since boundHead. */
+ *  the non-neutral paths changed since boundHead, `changed` all of them. */
 export function carryForwardProblems(text: string, ctx: CarryForwardContext): string[] {
   let d: Json
   try { d = JSON.parse(text) } catch (e) { return [`${CARRY_FORWARD_PATH} is not valid JSON: ${String(e)}`] }
@@ -504,6 +596,18 @@ export function carryForwardProblems(text: string, ctx: CarryForwardContext): st
     if (typeof base.version !== 'string' || pkg?.version !== base.version) out.push(`package.json at ${base.commit} is not version ${base.version}`)
     const m = parsedOrNull(fileAt(ctx.git, base.commit, MANIFEST_PATH))
     if (m?.phase !== 'candidate' || m.boundHead !== ctx.boundHead) out.push(`${MANIFEST_PATH} at ${base.commit} is not a candidate bound to ${ctx.boundHead}`)
+    // Once the base already has this rule, the files that run and judge it are frozen.
+    const rule = fileAt(ctx.git, base.commit, 'tests/wp1/binding.ts') ?? ''
+    if (/export function carryForwardProblems\(|['"]tests\/wp1\/carry-forward\.json['"]/.test(rule)) {
+      const touched = changedPaths(ctx.git, base.commit, CARRY_FORWARD_GATE_FILES)
+      if (touched.length > 0) out.push(`the base ${base.commit} already has the carry-forward rule, so its gate files may not change: ${touched.join(', ')}`)
+    }
+  }
+  // The declaration is committed after boundHead, so it is one of the breaks.
+  if (!ctx.breaks.includes(CARRY_FORWARD_PATH)) out.push(`${CARRY_FORWARD_PATH} is not among the paths changed since boundHead`)
+  // Under a neutral prefix, only Markdown and the manifest may change.
+  for (const p of ctx.changed) {
+    if (bindingBreaks([p]).length === 0 && !isCarryForwardNeutralFile(p)) out.push(`${p} changed since boundHead under a binding-neutral path but is not Markdown: a carry-forward allows only Markdown and ${MANIFEST_PATH} there`)
   }
   // Why, who approved it, and the ADR-009 pass that covers it (always).
   if (typeof d.reason !== 'string' || d.reason.trim().length < 40) out.push('reason must be 40 characters or more')
@@ -534,10 +638,13 @@ export function carryForwardProblems(text: string, ctx: CarryForwardContext): st
     const same = typeof before === 'object' && before !== null && typeof after === 'object' && after !== null && isDeepStrictEqual(strip(before), strip(after))
     if (!same) out.push(`${p} changed more than its version since boundHead`)
   }
-  // The size of what ships: lines added plus deleted outside tests/, since boundHead.
-  const lines = changedLines(ctx.git, ctx.boundHead, [...exact].filter((p) => !p.startsWith('tests/')))
-  if (lines === null) out.push('a declared file outside tests/ is binary')
-  else if (lines > CARRY_FORWARD_MAX_SHIPPED_LINES) out.push(`${lines} lines changed outside tests/ since boundHead; at most ${CARRY_FORWARD_MAX_SHIPPED_LINES} carry forward`)
+  // The size of what can ship (isCountedPath), since boundHead: lines added
+  // plus deleted, and no added line longer than CARRY_FORWARD_MAX_ADDED_LINE.
+  const counted = [...exact].filter(isCountedPath)
+  const lines = changedLines(ctx.git, ctx.boundHead, counted)
+  if (lines === null) out.push('a counted declared file is binary, or git gave a line count that cannot be read')
+  else if (lines > CARRY_FORWARD_MAX_SHIPPED_LINES) out.push(`${lines} lines changed in counted paths since boundHead; at most ${CARRY_FORWARD_MAX_SHIPPED_LINES} carry forward`)
+  for (const l of longAddedLines(ctx.git, ctx.boundHead, counted, CARRY_FORWARD_MAX_ADDED_LINE)) out.push(`${l}, over the ${CARRY_FORWARD_MAX_ADDED_LINE} a carry-forward allows`)
   return out
 }
 
