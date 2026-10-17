@@ -111,7 +111,10 @@ same message. With one, every rule fails closed:
     export, a side-effect import, `import()`, `require()`, `new URL()`,
     `import.meta.glob()`, an HTML `src` or `href`) but six data files under
     `resources/` it reads, which ship and are counted; every input electron-vite
-    builds from is under `src/`. These run with a declaration committed. The caps are constants in `binding.ts`, never fields of the
+    builds from is under `src/`. These run with a declaration committed.
+    Nor may the committed tree hold a symbolic link or a submodule (mode
+    120000 or 160000) under `src/`, `resources/` or a declared path, since a
+    bundler follows a link (7 mutants, L01 to L07). The caps are constants in `binding.ts`, never fields of the
     declaration, and count from `boundHead`, so chained patches add up until a
     qualification resets them.
 12. The approval is a dated owner-decisions record under `docs/wp1` whose own
