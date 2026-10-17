@@ -1124,7 +1124,7 @@ describe('WP1 traceability manifest', () => {
     const srcFiles = execFileSync('git', ['-C', ROOT, 'ls-files', '-z', '--', 'src'], { encoding: 'utf8' }).split('\0').filter(Boolean)
     const srcText = srcFiles.map((f) => readFileSync(resolve(ROOT, f), 'utf8'))
     const namedInSrc = (t: string) => {
-      const name = t.slice(t.lastIndexOf('/') + 1).replace(/\.[cm]?js$/, '').replace(/[.-]/g, '\\$&')
+      const name = t.slice(t.lastIndexOf('/') + 1).replace(/\.[cm]?js$/, '').replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')
       return srcText.some((s) => new RegExp(`['"][^'"\\n]*${name}(?:\\.[cm]?js)?['"]`).test(s))
     }
     for (const t of DEV_ONLY_TOOLING) expect(existsSync(resolve(ROOT, t)), `${t} is not there`).toBe(true)
