@@ -8,6 +8,9 @@
 // evidence forward on a declared file list (carryForwardProblems, ADR-027).
 import { isDeepStrictEqual } from 'node:util'
 import { ancestry, SHA_RE } from '../../scripts/wp1/fetch-ledger-commit.mjs'
+// The committed-tree scan for the declaration is the gate's own, so the suite
+// and the gate read it the same way.
+import { CARRY_FORWARD_PATH as GATE_CARRY_FORWARD_PATH, scanCommittedCarryForward } from '../../scripts/release-gate.mjs'
 
 export { ancestry, SHA_RE }
 
@@ -260,33 +263,23 @@ export function longAddedLines(git: Git, base: string, paths: readonly string[],
 
 /** The carry-forward declaration as committed at HEAD, read from git and
  *  never from the working tree (ADR-027): its text, or null when HEAD has
- *  none. A problem: any other file in the tree with its name in another case
- *  (or in another folder), the entry not a plain file, a working-tree copy
- *  that differs from HEAD's (line endings aside), or a working-tree copy HEAD
- *  does not have. `workingText` is the working-tree file, null when absent. */
+ *  none. The tree scan is the gate's (scanCommittedCarryForward): the
+ *  declaration's path in another case, or an entry at the path that is not a
+ *  plain file, is a problem, and a file of that name in another folder is
+ *  ignored. Besides those, a working-tree copy that differs from HEAD's (line
+ *  endings aside), or one HEAD does not have, is a problem. `workingText` is
+ *  the working-tree file, null when absent. */
 export function committedCarryForward(git: Git, workingText: string | null): { text: string | null; problems: string[] } {
-  const r = git(['ls-tree', '-r', '-z', '--full-tree', 'HEAD'])
-  if (r.status !== 0) throw new Error(`git ls-tree HEAD exited ${r.status}: ${r.stderr ?? ''}`)
-  const problems: string[] = []
-  const name = CARRY_FORWARD_PATH.slice(CARRY_FORWARD_PATH.lastIndexOf('/') + 1).toLowerCase()
-  let entry: { mode: string; type: string } | null = null
-  for (const rec of r.stdout.split('\0').filter(Boolean)) {
-    const tab = rec.indexOf('\t')
-    const [mode, type] = rec.slice(0, tab).split(' ')
-    const p = rec.slice(tab + 1)
-    if (p === CARRY_FORWARD_PATH) entry = { mode, type }
-    else if (p.slice(p.lastIndexOf('/') + 1).toLowerCase() === name) problems.push(`${p} at HEAD has the name of ${CARRY_FORWARD_PATH} in another case or folder: remove or rename it`)
-  }
-  if (entry === null) {
+  const scan = scanCommittedCarryForward(git)
+  const problems = [...scan.problems]
+  if (!scan.present) {
     if (workingText !== null) problems.push(`${CARRY_FORWARD_PATH} is in the working tree but not committed at HEAD: the suite reads only the committed declaration`)
     return { text: null, problems }
   }
-  if (entry.mode !== '100644' || entry.type !== 'blob') return { text: null, problems: [...problems, `${CARRY_FORWARD_PATH} at HEAD is not a plain file (mode ${entry.mode})`] }
-  const s = git(['show', `HEAD:${CARRY_FORWARD_PATH}`])
-  if (s.status !== 0) throw new Error(`git show HEAD:${CARRY_FORWARD_PATH} exited ${s.status}: ${s.stderr ?? ''}`)
+  if (scan.text === null) return { text: null, problems }
   const lf = (t: string) => t.replace(/\r\n/g, '\n')
-  if (workingText === null || lf(workingText) !== lf(s.stdout)) problems.push(`${CARRY_FORWARD_PATH} in the working tree is not the one committed at HEAD`)
-  return { text: s.stdout, problems }
+  if (workingText === null || lf(workingText) !== lf(scan.text)) problems.push(`${CARRY_FORWARD_PATH} in the working tree is not the one committed at HEAD`)
+  return { text: scan.text, problems }
 }
 
 /** A file's text at a commit; null when the commit or the path is not
@@ -373,7 +366,7 @@ export function staleRecords(
 // paths outside DEV_ONLY_TREES and DEV_ONLY_TOOLING, the release tooling a
 // traceability case proves is not packaged. Raising a cap is a reviewed,
 // non-neutral edit to this file.
-export const CARRY_FORWARD_PATH = 'tests/wp1/carry-forward.json'
+export const CARRY_FORWARD_PATH: string = GATE_CARRY_FORWARD_PATH
 export const CARRY_FORWARD_SCHEMA = 'wp1-carry-forward/1'
 export const CARRY_FORWARD_MAX_PATHS = 16
 export const CARRY_FORWARD_MAX_SHIPPED_LINES = 600
@@ -389,6 +382,43 @@ export const DEV_ONLY_TREES: readonly string[] = ['tests/', '.github/']
 export const DEV_ONLY_TOOLING: readonly string[] = ['scripts/release-gate.mjs', 'scripts/wp1/fetch-ledger-commit.mjs']
 /** Whether a path's lines count toward the size caps. */
 export const isCountedPath = (p: string) => !DEV_ONLY_TREES.some((t) => p.startsWith(t)) && !DEV_ONLY_TOOLING.includes(p)
+
+/** Every way the packaging config could ship one of `tooling`, which the
+ *  size caps leave out only while it never ships. `build` is package.json's
+ *  `build` field; `imported` holds what the app's build config imports from
+ *  outside src/; `namedInSrc` says whether a src/ file names a path. An entry
+ *  of `files`, `extraResources` or `extraFiles` (per platform too) ships what
+ *  it matches and everything under a folder it matches, a bare folder
+ *  included; an entry that starts with ! only excludes, so it ships nothing.
+ *  An entry this check cannot read (a brace or bracket glob, a file set with
+ *  a filter) and a moved app root are problems themselves. */
+export function toolingPackagingProblems(build: Json, tooling: readonly string[], imported: ReadonlySet<string>, namedInSrc: (path: string) => boolean): string[] {
+  const b = typeof build === 'object' && build !== null ? build : {}
+  const out: string[] = []
+  if (b.directories?.app !== undefined) out.push('build.directories.app moves the packaged root, which this check cannot read')
+  const list = (v: Json): Json[] => (v === undefined ? [] : Array.isArray(v) ? v : [v])
+  const entries: Json[] = []
+  for (const at of [b, b.win, b.mac, b.linux]) {
+    if (typeof at !== 'object' || at === null) continue
+    for (const k of ['files', 'extraResources', 'extraFiles']) entries.push(...list(at[k]))
+  }
+  const globRe = (g: string) => new RegExp(`^${g.split(/(\*\*\/|\*\*|\*|\?)/).map((s) => (s === '**/' ? '(?:.*/)?' : s === '**' ? '.*' : s === '*' ? '[^/]*' : s === '?' ? '[^/]' : escapeRe(s))).join('')}$`)
+  const patterns: Array<{ shown: string; re: RegExp }> = []
+  for (const e of entries) {
+    const shown = typeof e === 'string' ? e : JSON.stringify(e)
+    const from = typeof e === 'string' ? e : typeof e === 'object' && e !== null && e.filter === undefined && typeof e.from === 'string' ? e.from : null
+    if (from === null || /[{}[\]]/.test(from)) { out.push(`the build entry ${shown} cannot be read here`); continue }
+    if (from.startsWith('!')) continue
+    patterns.push({ shown, re: globRe(from.replace(/\/+$/, '')) })
+  }
+  for (const t of tooling) {
+    const within = t.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/'))
+    for (const p of patterns) if (within.some((w) => p.re.test(w))) out.push(`${t} is packaged by the build entry ${p.shown}`)
+    if (imported.has(t)) out.push(`${t} is imported by the app's build config`)
+    if (namedInSrc(t)) out.push(`${t} is named in a string under src/`)
+  }
+  return out
+}
 /** The only binding-neutral paths a carry-forward lets change: Markdown, and
  *  the manifest. Any other file under a neutral prefix could be code nothing
  *  declares or counts. */

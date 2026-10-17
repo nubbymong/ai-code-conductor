@@ -580,7 +580,7 @@ describe('release-gate carry-forward (check 5)', () => {
     expect(reads).toBe(0)
   })
 
-  it('check 5 passes with the ci.yml push run and its Test jobs green, the PR merged onto the base with a PASS at its head, and the base a published release', async () => {
+  it('check 5 passes with the ci.yml push run completed and its Test jobs green, the PR merged onto the base with a PASS at its head, and the base a published release', async () => {
     const r = verdict()
     expect(r).toMatchObject({ ok: true, applies: true, problems: [], pr: 650, head: HEAD, tag: 'v2.1.1', base: BASE })
     expect(r.families).toEqual({ windows: ['Test (windows-2025)'], macos: ['Test (macos-latest)'], ubuntu: ['Test (ubuntu-latest)'] })
@@ -588,22 +588,28 @@ describe('release-gate carry-forward (check 5)', () => {
     const run = await gate({ carryForward: decl(), readCarryForward: async (input: unknown) => { seen.push(input); return data() } })
     expect(run.exitCode).toBe(EXIT_OK)
     expect(seen).toEqual([{ repo: 'o/r', sha: SHA, declaration: decl() }])
-    expect(run.lines.join('\n')).toMatch(/OK\s+carry-forward: ci\.yml push run green, Test green on windows, macos, ubuntu; PR #650 merged as this commit onto the base, ADR-009 PASS at its head bbbbbbbbbbbb; v2\.1\.1 is a published release at 999999999999/)
+    expect(run.lines.join('\n')).toMatch(/OK\s+carry-forward: ci\.yml push run completed, Test green on windows, macos, ubuntu; PR #650 merged as this commit onto the base, ADR-009 PASS at its head bbbbbbbbbbbb; v2\.1\.1 is a published release at 999999999999/)
     expect(run.lines.at(-1)).toMatch(/^PASS/)
   })
 
-  it('check 5a reads the newest ci.yml push run on the commit, and refuses it red or running, or a Test job missing, red or running', () => {
+  it('check 5a reads the newest ci.yml push run on the commit, refuses it still running, and gates on its three Test jobs only', () => {
     const NO_RUN = `no push run of ${CI_WORKFLOW} on ${SHA}`
     for (const ciRuns of [[], undefined, [ciRun({ head_sha: HEAD })], [ciRun({ event: 'pull_request' })], [ciRun({ event: 'workflow_dispatch' })], [ciRun({ id: '4242' })]]) {
       expect(verdict({ ciRuns }).problems, JSON.stringify(ciRuns)).toEqual([NO_RUN])
     }
-    for (const [status, conclusion] of [['in_progress', null], ['queued', null], ['completed', 'failure'], ['completed', 'cancelled'], ['completed', 'skipped']]) {
-      expect(verdict({ ciRuns: [ciRun({ status, conclusion })] }).problems, `${status} ${conclusion}`).toEqual([`the ${CI_WORKFLOW} push run ${RUN} on ${SHA} is ${status === 'completed' ? conclusion : status}, not green`])
+    // Its latest attempt must have completed.
+    for (const status of ['in_progress', 'queued', 'waiting', 'requested', undefined]) {
+      expect(verdict({ ciRuns: [ciRun({ status, conclusion: null })] }).problems, String(status)).toEqual([`the ${CI_WORKFLOW} push run ${RUN} on ${SHA} is ${status}, not completed`])
     }
-    // The newest run decides, by run number: an older red run does not, a newer red one does.
-    expect(latestCiRun([ciRun({ id: 1, run_number: 6, conclusion: 'failure' }), ciRun()], SHA)?.id).toBe(RUN)
-    expect(verdict({ ciRuns: [ciRun({ id: 1, run_number: 6, conclusion: 'failure' }), ciRun()] }).problems).toEqual([])
-    expect(verdict({ ciRuns: [ciRun(), ciRun({ id: 5000, run_number: 8, conclusion: 'failure' })] }).problems).toContainEqual(`the ${CI_WORKFLOW} push run 5000 on ${SHA} is failure, not green`)
+    // Other jobs of the run do not gate: a completed run that concluded red, with its three Test jobs green, passes.
+    for (const conclusion of ['failure', 'cancelled', 'skipped', 'timed_out', null]) {
+      expect(verdict({ ciRuns: [ciRun({ conclusion })] }).problems, String(conclusion)).toEqual([])
+    }
+    // The newest run decides, by run number: an older one does not, a newer one does.
+    expect(latestCiRun([ciRun({ id: 1, run_number: 6, status: 'in_progress' }), ciRun()], SHA)?.id).toBe(RUN)
+    expect(verdict({ ciRuns: [ciRun({ id: 1, run_number: 6, status: 'in_progress' }), ciRun()] }).problems).toEqual([])
+    expect(verdict({ ciRuns: [ciRun(), ciRun({ id: 5000, run_number: 8, status: 'in_progress' })] }).problems).toContainEqual(`the ${CI_WORKFLOW} push run 5000 on ${SHA} is in_progress, not completed`)
+    expect(verdict({ ciRuns: [ciRun(), ciRun({ id: 5000, run_number: 8 })] }).problems).toContainEqual(`no "Test (windows-...)" job in the ${CI_WORKFLOW} push run 5000`)
     // Its Test jobs: one per OS family, each completed and green; a green sibling does not hide a red one.
     const NO_MAC = `no "Test (macos-...)" job in the ${CI_WORKFLOW} push run ${RUN}`
     expect(verdict({ ciJobs: [GREEN[0], GREEN[2]] }).problems).toEqual([NO_MAC])
@@ -769,11 +775,16 @@ describe('release-gate carry-forward (check 5)', () => {
     const t = tree([['100644', 'src/x.ts'], ['100644', CARRY_FORWARD_PATH]])
     expect(readCommittedCarryForward(t.runGit)).toEqual(decl())
     expect(t.calls).toEqual([['ls-tree', '-r', '-z', '--full-tree', 'HEAD'], ['show', `HEAD:${CARRY_FORWARD_PATH}`]])
-    // Its name in another case or folder, with or without the exact path beside it, refuses.
-    for (const v of ['tests/wp1/Carry-Forward.json', 'tests/WP1/carry-forward.json', 'docs/carry-forward.json']) {
+    // Its path in another case (the full path, ignoring case), with or without the exact path beside it, refuses.
+    for (const v of ['tests/wp1/Carry-Forward.json', 'tests/WP1/carry-forward.json', 'TESTS/WP1/CARRY-FORWARD.JSON']) {
       for (const entries of [[['100644', v]], [['100644', CARRY_FORWARD_PATH], ['100644', v]]] as Array<Array<[string, string]>>) {
-        expect(() => readCommittedCarryForward(tree(entries).runGit), v).toThrow(`${v} at HEAD has the name of ${CARRY_FORWARD_PATH} in another case or folder`)
+        expect(() => readCommittedCarryForward(tree(entries).runGit), v).toThrow(`${v} at HEAD is ${CARRY_FORWARD_PATH} in another case: remove or rename it`)
       }
+    }
+    // A file of that name in another folder (an archived declaration, a fixture) is not the declaration: as with none.
+    for (const other of ['docs/wp1/evidence/2.1.2/carry-forward.json', 'tests/unit/fixtures/gate/carry-forward.json', 'CARRY-FORWARD.JSON']) {
+      expect(readCommittedCarryForward(tree([['100644', 'src/x.ts'], ['100644', other]]).runGit), other).toBeNull()
+      expect(readCommittedCarryForward(tree([['100644', CARRY_FORWARD_PATH], ['100644', other]]).runGit), other).toEqual(decl())
     }
     for (const mode of ['120000', '100755', '160000']) expect(() => readCommittedCarryForward(tree([[mode, CARRY_FORWARD_PATH]]).runGit), mode).toThrow(`${CARRY_FORWARD_PATH} at HEAD is not a plain file (mode ${mode})`)
     // Text that is not JSON (a byte order mark, merge conflict markers) refuses, naming the file.

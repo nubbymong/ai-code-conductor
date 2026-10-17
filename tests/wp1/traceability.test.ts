@@ -18,6 +18,7 @@ import {
   CARRY_FORWARD_PATH, CARRY_FORWARD_SCHEMA, CARRY_FORWARD_MAX_PATHS, CARRY_FORWARD_MAX_SHIPPED_LINES, BINDING_NEUTRAL, NATIVE_TEST, RUNNABLE_TEST,
   CARRY_FORWARD_MAX_ADDED_LINE, CARRY_FORWARD_GATE_FILES, DEV_ONLY_TOOLING, DEV_ONLY_TREES,
   bindingVerdict, carryForwardProblems, changedLines, committedCarryForward, fileAt, isCarryForwardNeutralFile, isCountedPath, longAddedLines,
+  toolingPackagingProblems,
 } from './binding'
 import { DEEPEN_STEPS, deepenUntilDecidable, invocation, readBoundHead } from '../../scripts/wp1/fetch-ledger-commit.mjs'
 
@@ -799,11 +800,16 @@ describe('WP1 traceability manifest', () => {
     const DIFFERS = `${CF} in the working tree is not the one committed at HEAD`
     expect(committedCarryForward(tree([SRC, HERE]).g, DECL.replace('wp1', 'wp2'))).toEqual({ text: DECL, problems: [DIFFERS] })
     expect(committedCarryForward(tree([SRC, HERE]).g, null)).toEqual({ text: DECL, problems: [DIFFERS] })
-    // Its name in another case, or in another folder, refuses, with or without the exact path beside it.
-    for (const v of ['tests/wp1/Carry-Forward.json', 'tests/WP1/carry-forward.json', 'docs/carry-forward.json', 'CARRY-FORWARD.JSON']) {
-      const VARIANT = `${v} at HEAD has the name of ${CF} in another case or folder: remove or rename it`
+    // Its path in another case (the full path, ignoring case) refuses, with or without the exact path beside it.
+    for (const v of ['tests/wp1/Carry-Forward.json', 'tests/WP1/carry-forward.json', 'TESTS/WP1/CARRY-FORWARD.JSON']) {
+      const VARIANT = `${v} at HEAD is ${CF} in another case: remove or rename it`
       expect(committedCarryForward(tree([SRC, ['100644', v]]).g, null).problems, v).toEqual([VARIANT])
       expect(committedCarryForward(tree([HERE, ['100644', v]]).g, DECL).problems, v).toEqual([VARIANT])
+    }
+    // A file of that name in another folder (an archived declaration, a fixture) is not the declaration: as with none.
+    for (const other of ['docs/wp1/evidence/2.1.2/carry-forward.json', 'tests/unit/fixtures/gate/carry-forward.json', 'CARRY-FORWARD.JSON', 'tests/wp1/carry-forward.json.bak']) {
+      expect(committedCarryForward(tree([SRC, ['100644', other]]).g, null), other).toEqual({ text: null, problems: [] })
+      expect(committedCarryForward(tree([HERE, ['100644', other]]).g, DECL), other).toEqual({ text: DECL, problems: [] })
     }
     // Only a plain file: a link, an executable or a submodule at the path refuses.
     for (const mode of ['120000', '100755', '160000']) {
@@ -976,23 +982,44 @@ describe('WP1 traceability manifest', () => {
     for (const sha of ['HEAD', '--output=x', `${CF_BOUND}:x`]) expect(() => fileAt(() => ({ status: 0, stdout: '' }), sha, 'a'), sha).toThrow(/40-hex/)
   })
 
-  // ADR-027: the size caps leave out only release tooling the packaging
-  // config never ships, and the freeze covers every file that decides how the
-  // suite runs. Read from this repository.
-  it('carry-forward: the release tooling the size caps leave out is never packaged, and the gate files list every vitest config and setup file', () => {
-    const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')) as { build?: Record<string, unknown> }
-    const build = pkg.build ?? {}
-    expect((build.directories as { app?: unknown } | undefined)?.app, 'build.directories.app would move the packaged root').toBeUndefined()
-    const files = build.files as unknown[]
-    expect(Array.isArray(files) && files.length > 0, 'build.files must be an explicit list').toBe(true)
-    // Each pattern is an exact path or a folder's whole tree, so it is read here without a glob engine; any other pattern fails this case.
-    for (const f of files) expect(typeof f === 'string' && /^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+(?:\/\*\*\/\*)?$/.test(f), `build.files entry ${JSON.stringify(f)} cannot be read here`).toBe(true)
-    const packaged = (p: string) => (files as string[]).some((f) => f === p || (f.endsWith('/**/*') && p.startsWith(f.slice(0, -4))))
-    const extra = ['extraResources', 'extraFiles'].flatMap((k) => (build[k] as unknown[] | undefined) ?? [])
-    const extraFrom = extra.map((e) => (typeof e === 'string' ? e : (e as { from?: unknown }).from))
-    for (const from of extraFrom) expect(typeof from === 'string' && !/[*?{}[\]!]/.test(from), `extra resource ${JSON.stringify(from)} cannot be read here`).toBe(true)
-    for (const os of ['win', 'mac', 'linux']) for (const k of ['files', 'extraResources', 'extraFiles']) expect((build[os] as Record<string, unknown> | undefined)?.[k], `build.${os}.${k}`).toBeUndefined()
-    for (const u of (build.asarUnpack as string[] | undefined) ?? []) expect(u, 'asarUnpack unpacks native modules only').toMatch(/^\*\*\/node_modules\//)
+  it('[host] carry-forward: tooling left out of the caps must never be packaged: a bare folder, a glob or an extra resource refuses, an exclusion does not', () => {
+    const T = ['scripts/release-gate.mjs', 'scripts/wp1/fetch-ledger-commit.mjs']
+    const none = new Set<string>()
+    const no = () => false
+    const SHIPS = (t: string, f: string) => `${t} is packaged by the build entry ${f}`
+    const real = { files: ['out/**/*', 'resources/**/*', 'scripts/resume-picker.js', 'NOTICE'], extraResources: [{ from: 'build/config-template.json', to: 'config-template.json' }], asarUnpack: ['**/node_modules/x/**'] }
+    expect(toolingPackagingProblems(real, T, none, no)).toEqual([])
+    // An exclusion only removes files, so it cannot ship the tooling.
+    expect(toolingPackagingProblems({ ...real, files: [...real.files, '!**/*.map', '!scripts/**/*'] }, T, none, no)).toEqual([])
+    // A bare folder ships everything under it, and so do globs that reach the tooling.
+    expect(toolingPackagingProblems({ ...real, files: [...real.files, 'scripts'] }, T, none, no)).toEqual(T.map((t) => SHIPS(t, 'scripts')))
+    expect(toolingPackagingProblems({ ...real, files: [...real.files, 'scripts/wp1'] }, T, none, no)).toEqual([SHIPS(T[1], 'scripts/wp1')])
+    for (const f of ['scripts/**/*', '**/*', 'scripts/*.mjs', 'scrip*', 'scripts/release-gate.mjs', 'scripts/', 'scripts/release-gate.?js']) {
+      expect(toolingPackagingProblems({ ...real, files: [f] }, T, none, no), f).toContainEqual(SHIPS(T[0], f))
+    }
+    for (const f of ['out/**/*', 'scripts/*.js', 'scripts/resume-picker.js', 'scripts/wp1x', 'script']) expect(toolingPackagingProblems({ ...real, files: [f] }, [T[0]], none, no), f).toEqual([])
+    // One * stays within a folder.
+    expect(toolingPackagingProblems({ ...real, files: ['scripts/*.mjs'] }, [T[1]], none, no)).toEqual([])
+    // Per platform too, and as an extra resource or an extra file.
+    expect(toolingPackagingProblems({ ...real, mac: { files: ['scripts'] } }, T, none, no)).toEqual(T.map((t) => SHIPS(t, 'scripts')))
+    expect(toolingPackagingProblems({ ...real, extraResources: [{ from: 'scripts', to: 's' }] }, T, none, no)).toEqual(T.map((t) => SHIPS(t, '{"from":"scripts","to":"s"}')))
+    expect(toolingPackagingProblems({ ...real, extraFiles: 'scripts/wp1/fetch-ledger-commit.mjs' }, T, none, no)).toEqual([SHIPS(T[1], 'scripts/wp1/fetch-ledger-commit.mjs')])
+    // What cannot be read here refuses: brace and bracket globs, a file set with a filter, a moved app root.
+    for (const f of ['scripts/{a,b}.mjs', 'scripts/[r]*.mjs']) expect(toolingPackagingProblems({ ...real, files: [f] }, T, none, no), f).toEqual([`the build entry ${f} cannot be read here`])
+    expect(toolingPackagingProblems({ ...real, files: [{ from: 'scripts', filter: ['**/*'] }] }, T, none, no)).toEqual(['the build entry {"from":"scripts","filter":["**/*"]} cannot be read here'])
+    expect(toolingPackagingProblems({ ...real, directories: { app: 'app' } }, T, none, no)).toEqual(['build.directories.app moves the packaged root, which this check cannot read'])
+    // Imported by the app's build config, or named in src/.
+    expect(toolingPackagingProblems(real, T, new Set([T[0]]), no)).toEqual([`${T[0]} is imported by the app's build config`])
+    expect(toolingPackagingProblems(real, T, none, (t) => t === T[1])).toEqual([`${T[1]} is named in a string under src/`])
+  })
+
+  // ADR-027: with a declaration in use, the size caps leave out only release
+  // tooling this repository's packaging never ships, and the freeze covers
+  // every file that decides how the suite runs. With none, packaging and the
+  // test configs are not tied to this rule, so beta and dev CI stay free.
+  it('carry-forward: with a declaration in use, the tooling the caps leave out is never packaged, and the gate files list every vitest config and setup file', () => {
+    if (committedCarry.text === null) return
+    const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')) as { build?: unknown }
     // What the app's build imports from outside src/: electron-vite's config, followed through relative imports.
     const imported = new Set<string>()
     const follow = (file: string) => {
@@ -1003,17 +1030,16 @@ describe('WP1 traceability manifest', () => {
     }
     follow('electron.vite.config.ts')
     const srcFiles = execFileSync('git', ['-C', ROOT, 'ls-files', '-z', '--', 'src'], { encoding: 'utf8' }).split('\0').filter(Boolean)
-    for (const t of DEV_ONLY_TOOLING) {
-      expect(existsSync(resolve(ROOT, t)), `${t} is not there`).toBe(true)
-      expect(packaged(t), `${t} is matched by build.files`).toBe(false)
-      expect(extraFrom.some((f) => f === t || t.startsWith(`${String(f)}/`)), `${t} is an extra resource`).toBe(false)
-      expect(imported.has(t), `${t} is imported by electron.vite.config.ts`).toBe(false)
+    const srcText = srcFiles.map((f) => readFileSync(resolve(ROOT, f), 'utf8'))
+    const namedInSrc = (t: string) => {
       const name = t.slice(t.lastIndexOf('/') + 1).replace(/\.[cm]?js$/, '').replace(/[.-]/g, '\\$&')
-      const importers = srcFiles.filter((f) => new RegExp(`['"][^'"\\n]*${name}(?:\\.[cm]?js)?['"]`).test(readFileSync(resolve(ROOT, f), 'utf8')))
-      expect(importers, `${t} is named in a string under src/`).toEqual([])
+      return srcText.some((s) => new RegExp(`['"][^'"\\n]*${name}(?:\\.[cm]?js)?['"]`).test(s))
     }
-    // Verify the verifier: a script that ships, and one the build imports, are seen.
-    expect(packaged('scripts/resume-picker.js')).toBe(true)
+    for (const t of DEV_ONLY_TOOLING) expect(existsSync(resolve(ROOT, t)), `${t} is not there`).toBe(true)
+    const problems = toolingPackagingProblems(pkg.build, DEV_ONLY_TOOLING, imported, namedInSrc)
+    expect(problems, problems.join('\n')).toEqual([])
+    // Verify the verifier on the real config: a script that ships, and one the build imports, are seen.
+    expect(toolingPackagingProblems(pkg.build, ['scripts/resume-picker.js'], imported, namedInSrc)).not.toEqual([])
     expect(imported.has('scripts/build-identity.mjs')).toBe(true)
     // The freeze lists every vitest config, and every setup and global-setup file they name.
     const configs = execFileSync('git', ['-C', ROOT, 'ls-files', '-z', '--', 'vitest*.config.*'], { encoding: 'utf8' }).split('\0').filter(Boolean)

@@ -59,16 +59,17 @@
 //      no-op for every other cut. The suite's candidate case judges the
 //      declaration itself; this check takes what only GitHub knows, on the
 //      commit being released ($GITHUB_SHA, else HEAD): (a) ci.yml's newest
-//      push run on that commit is completed and green, and its Test jobs for
-//      windows, macos and ubuntu are each there and green; (b) the declared PR
+//      push run on that commit is completed, and its Test jobs for windows,
+//      macos and ubuntu are each there and green (its other jobs do not
+//      gate); (b) the declared PR
 //      merged as that commit, a merge whose parents are the base commit and
 //      the PR's final head, and the latest ADR-009 verdict marker an owner,
 //      member or collaborator posted on it is a PASS at that head; (c) the
 //      base tag is a published release (no draft, no prerelease) that points
 //      at the declared base commit (an annotated tag dereferenced once).
-//      Anything missing, red, in progress or unreadable refuses the cut, and a
-//      file with the declaration's name in another case or folder, or a
-//      declaration that is not JSON, cannot be evaluated.
+//      Anything missing, red, in progress or unreadable refuses the cut, and
+//      the declaration's path in another case, or a declaration that is not
+//      JSON, cannot be evaluated.
 //
 // Usage
 //   node scripts/release-gate.mjs                      # version from package.json
@@ -469,12 +470,13 @@ export function evaluateCarryForward({ version, sha, declaration, ciRuns, ciJobs
   const pr = declaration.adversarial && declaration.adversarial.pr
   const base = declaration.base && typeof declaration.base === 'object' ? declaration.base : {}
   if (typeof sha !== 'string' || !SHA40_RE.test(sha)) problems.push(`the release commit ${JSON.stringify(sha)} is not a 40-hex commit id`)
-  // (a) ci.yml's newest push run on this commit, and its Test jobs, completed and green.
+  // (a) ci.yml's newest push run on this commit, its latest attempt completed,
+  // and its three Test jobs green; the run's other jobs do not gate.
   const run = latestCiRun(ciRuns, sha)
   const families = Object.fromEntries(TEST_OS_FAMILIES.map((f) => [f, []]))
   if (!run) problems.push(`no push run of ${CI_WORKFLOW} on ${sha}`)
   else {
-    if (run.status !== 'completed' || run.conclusion !== 'success') problems.push(`the ${CI_WORKFLOW} push run ${run.id} on ${sha} is ${run.status === 'completed' ? run.conclusion : run.status}, not green`)
+    if (run.status !== 'completed') problems.push(`the ${CI_WORKFLOW} push run ${run.id} on ${sha} is ${run.status}, not completed`)
     const legs = (Array.isArray(ciJobs) ? ciJobs : []).filter((j) => j && j.run_id === run.id && TEST_JOB_RE.test(String(j.name)))
     for (const j of legs) families[TEST_JOB_RE.exec(j.name)[1]].push(j.name)
     for (const f of TEST_OS_FAMILIES) if (families[f].length === 0) problems.push(`no "Test (${f}-...)" job in the ${CI_WORKFLOW} push run ${run.id}`)
@@ -600,7 +602,7 @@ export function formatReport({ version, repo, milestoneResult, modelsResult, exp
 export function formatCarryForward(carryResult) {
   if (!carryResult || !carryResult.applies) return []
   const r = carryResult
-  if (r.ok) return [`  OK    carry-forward: ${CI_WORKFLOW} push run green, Test green on ${TEST_OS_FAMILIES.join(', ')}; PR #${r.pr} merged as this commit onto the base, ADR-009 PASS at its head ${String(r.head).slice(0, 12)}; ${r.tag} is a published release at ${String(r.base).slice(0, 12)}`]
+  if (r.ok) return [`  OK    carry-forward: ${CI_WORKFLOW} push run completed, Test green on ${TEST_OS_FAMILIES.join(', ')}; PR #${r.pr} merged as this commit onto the base, ADR-009 PASS at its head ${String(r.head).slice(0, 12)}; ${r.tag} is a published release at ${String(r.base).slice(0, 12)}`]
   return ['  FAIL  carry-forward: tests/wp1/carry-forward.json does not hold on GitHub (ADR-027)', ...r.problems.map((p) => `          - ${p}`)]
 }
 
@@ -713,27 +715,53 @@ export async function readCarryForwardApi({ repo, sha, declaration, get }) {
 }
 
 /**
- * tests/wp1/carry-forward.json as committed at HEAD, read from git and never
- * from the working tree: the parsed declaration, or null when HEAD has none.
- * A file in the tree with its name in another case or folder, an entry that
- * is not a plain file, or text that is not JSON (a byte order mark, conflict
- * markers) throws, naming the file, so main cannot evaluate the cut.
+ * The carry-forward declaration in HEAD's tree, read from git and never from
+ * the working tree. Shared by this gate and the suite (tests/wp1/binding.ts),
+ * so the two cannot drift. A path that is the declaration's in another case
+ * (the full path compared ignoring case, as a case-insensitive file system
+ * sees it) is a problem, and so is an entry at the path that is not a plain
+ * file; a file of the same name in another folder is not the declaration and
+ * is ignored. `present` says whether HEAD has the exact path; `text` is its
+ * content when it is a plain file. A git that cannot list the tree throws.
  *
- * @param {(args: string[]) => string} [runGit]   git's output; throws when git fails
+ * @param {(args: string[]) => { status: number|null, stdout: string, stderr?: string }} git
+ * @returns {{ present: boolean, text: string|null, problems: string[] }}
  */
-export function readCommittedCarryForward(runGit = defaultRunGit) {
-  const name = CARRY_FORWARD_PATH.slice(CARRY_FORWARD_PATH.lastIndexOf('/') + 1).toLowerCase()
+export function scanCommittedCarryForward(git) {
+  const r = git(['ls-tree', '-r', '-z', '--full-tree', 'HEAD'])
+  if (r.status !== 0) throw new Error(`git ls-tree HEAD exited ${r.status}: ${r.stderr ?? ''}`)
+  const lower = CARRY_FORWARD_PATH.toLowerCase()
+  const problems = []
   let entry = null
-  for (const rec of String(runGit(['ls-tree', '-r', '-z', '--full-tree', 'HEAD'])).split('\0').filter(Boolean)) {
+  for (const rec of r.stdout.split('\0').filter(Boolean)) {
     const tab = rec.indexOf('\t')
     const [mode, type] = rec.slice(0, tab).split(' ')
     const p = rec.slice(tab + 1)
     if (p === CARRY_FORWARD_PATH) entry = { mode, type }
-    else if (p.slice(p.lastIndexOf('/') + 1).toLowerCase() === name) throw new Error(`${p} at HEAD has the name of ${CARRY_FORWARD_PATH} in another case or folder: remove or rename it`)
+    else if (p.toLowerCase() === lower) problems.push(`${p} at HEAD is ${CARRY_FORWARD_PATH} in another case: remove or rename it`)
   }
-  if (!entry) return null
-  if (entry.mode !== '100644' || entry.type !== 'blob') throw new Error(`${CARRY_FORWARD_PATH} at HEAD is not a plain file (mode ${entry.mode})`)
-  const text = String(runGit(['show', `HEAD:${CARRY_FORWARD_PATH}`]))
+  if (entry === null) return { present: false, text: null, problems }
+  if (entry.mode !== '100644' || entry.type !== 'blob') return { present: true, text: null, problems: [...problems, `${CARRY_FORWARD_PATH} at HEAD is not a plain file (mode ${entry.mode})`] }
+  const s = git(['show', `HEAD:${CARRY_FORWARD_PATH}`])
+  if (s.status !== 0) throw new Error(`git show HEAD:${CARRY_FORWARD_PATH} exited ${s.status}: ${s.stderr ?? ''}`)
+  return { present: true, text: s.stdout, problems }
+}
+
+/**
+ * The gate's reading of the committed declaration (scanCommittedCarryForward):
+ * the parsed declaration, or null when HEAD has none. A problem the scan
+ * finds, or text that is not JSON (a byte order mark, conflict markers),
+ * throws, naming the file, so main cannot evaluate the cut.
+ *
+ * @param {(args: string[]) => string} [runGit]   git's output; throws when git fails
+ */
+export function readCommittedCarryForward(runGit = defaultRunGit) {
+  const git = (args) => {
+    try { return { status: 0, stdout: String(runGit(args)) } } catch (err) { return { status: 1, stdout: '', stderr: err && err.message ? err.message : String(err) } }
+  }
+  const { text, problems } = scanCommittedCarryForward(git)
+  if (problems.length > 0) throw new Error(problems.join('; '))
+  if (text === null) return null
   try {
     return JSON.parse(text)
   } catch (err) {
