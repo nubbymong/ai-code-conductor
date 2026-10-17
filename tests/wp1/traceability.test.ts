@@ -18,7 +18,7 @@ import {
   CARRY_FORWARD_PATH, CARRY_FORWARD_SCHEMA, CARRY_FORWARD_MAX_PATHS, CARRY_FORWARD_MAX_SHIPPED_LINES, BINDING_NEUTRAL, NATIVE_TEST, RUNNABLE_TEST,
   CARRY_FORWARD_MAX_ADDED_LINE, CARRY_FORWARD_GATE_FILES, DEV_ONLY_TOOLING, DEV_ONLY_TREES,
   bindingVerdict, carryForwardProblems, changedLines, committedCarryForward, fileAt, isCarryForwardNeutralFile, isCountedPath, longAddedLines,
-  toolingPackagingProblems, outOfSrcImports, SRC_OUTSIDE_IMPORTS_ALLOWED, builderConfigProblems, BUILDER_OVERRIDES_ALLOWED,
+  toolingPackagingProblems, outOfSrcImports, SRC_OUTSIDE_IMPORTS_ALLOWED, builderConfigProblems, BUILDER_OVERRIDES_ALLOWED, linkEntryProblems,
 } from './binding'
 import { DEEPEN_STEPS, deepenUntilDecidable, invocation, readBoundHead } from '../../scripts/wp1/fetch-ledger-commit.mjs'
 
@@ -632,6 +632,7 @@ describe('WP1 traceability manifest', () => {
   type CfOptions = {
     breaks?: string[]; changed?: string[]; files?: Record<string, string | null>; show?: Record<string, string | null>
     numstat?: Record<string, string>; patch?: Record<string, string[]>; gateTouched?: string[]; mergeBase?: number; shallow?: boolean; version?: string
+    tree?: Array<[string, string]>
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function cfRun(edit: (d: any) => void = () => {}, o: CfOptions = {}) {
@@ -659,6 +660,9 @@ describe('WP1 traceability manifest', () => {
         return { status: 0, stdout: `${after(args).flatMap(patch).join('\n')}\n` }
       }
       if (args[0] === 'diff' && args[1] === '--name-only') return { status: 0, stdout: (o.gateTouched ?? []).filter((p) => after(args).includes(p)).map((p) => `${p}\0`).join('') }
+      if (args[0] === 'ls-tree') {
+        return { status: 0, stdout: (o.tree ?? CF_ALL.map((p): [string, string] => ['100644', p])).map(([m, p]) => `${m} ${m === '160000' ? 'commit' : 'blob'} ${'b'.repeat(40)}\t${p}\0`).join('') }
+      }
       throw new Error(`unexpected git ${args.join(' ')}`)
     }
     const breaks = o.breaks ?? CF_ALL
@@ -1011,6 +1015,20 @@ describe('WP1 traceability manifest', () => {
     // Imported by the app's build config, or named in src/.
     expect(toolingPackagingProblems(real, T, new Set([T[0]]), no)).toEqual([`${T[0]} is imported by the app's build config`])
     expect(toolingPackagingProblems(real, T, none, (t) => t === T[1])).toEqual([`${T[1]} is named in a string under src/`])
+  })
+
+  it('[host] carry-forward: no symbolic link or submodule under src, resources or a declared path, read from the commit', () => {
+    const LINK = (p: string, mode: string) => `${p} at HEAD is a ${mode === '120000' ? 'symbolic link' : 'submodule'} (mode ${mode}) under src/, resources/ or a declared path: a carry-forward allows none`
+    // Elsewhere a link or a submodule is not this rule's business, and an executable file is not a link.
+    expect(cf(undefined, { tree: [['100644', CF_FIX], ['100755', 'scripts/x.sh'], ['120000', 'docs/link'], ['160000', 'vendor/sub'], ['120000', '.github/workflows/x.yml']] })).toEqual([])
+    // Under src/ or resources/, or at a declared path (package.json is one, outside both), each refuses.
+    for (const p of ['src/main/evil.ts', 'src/renderer/assets', 'resources/x.json', CF_FIX, 'package.json']) {
+      for (const mode of ['120000', '160000']) expect(cf(undefined, { tree: [['100644', 'README.md'], [mode, p]] }), `${mode} ${p}`).toEqual([LINK(p, mode)])
+    }
+    expect(linkEntryProblems(() => ({ status: 0, stdout: `120000 blob ${'b'.repeat(40)}\tbuild/x/y\0` }), ['build/x'])).toEqual([LINK('build/x/y', '120000')])
+    // Read from the commit's tree, and a git that cannot list it is an error.
+    expect(cfRun().calls).toContainEqual(['ls-tree', '-r', '-z', '--full-tree', 'HEAD'])
+    expect(() => linkEntryProblems(() => ({ status: 128, stdout: '', stderr: 'fatal' }), [])).toThrow(/exited 128/)
   })
 
   it('[host] carry-forward: shipped code cannot hide outside src, and electron-builder reads only the config the packaging proof reads', () => {

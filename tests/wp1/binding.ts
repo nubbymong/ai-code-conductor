@@ -283,6 +283,25 @@ export function committedCarryForward(git: Git, workingText: string | null): { t
   return { text: scan.text, problems }
 }
 
+/** The entries of HEAD's tree that are a symbolic link (mode 120000) or a
+ *  submodule (mode 160000) under src/, under resources/, or at or under one
+ *  of `declared`. A bundler or a packager follows a link, so one could bring
+ *  in code that nothing declares or counts, at the size of one line. */
+export function linkEntryProblems(git: Git, declared: readonly string[]): string[] {
+  const r = git(['ls-tree', '-r', '-z', '--full-tree', 'HEAD'])
+  if (r.status !== 0) throw new Error(`git ls-tree HEAD exited ${r.status}: ${r.stderr ?? ''}`)
+  const out: string[] = []
+  for (const rec of r.stdout.split('\0').filter(Boolean)) {
+    const mode = rec.slice(0, rec.indexOf(' '))
+    const p = rec.slice(rec.indexOf('\t') + 1)
+    if (mode !== '120000' && mode !== '160000') continue
+    if (['src/', 'resources/'].some((t) => p.startsWith(t)) || declared.some((d) => p === d || p.startsWith(`${d}/`))) {
+      out.push(`${p} at HEAD is a ${mode === '120000' ? 'symbolic link' : 'submodule'} (mode ${mode}) under src/, resources/ or a declared path: a carry-forward allows none`)
+    }
+  }
+  return out
+}
+
 /** A file's text at a commit; null when the commit or the path is not
  *  there. The commit must be a 40-hex id, so nothing else reaches git. */
 export function fileAt(git: Git, sha: string, path: string): string | null {
@@ -717,6 +736,8 @@ export function carryForwardProblems(text: string, ctx: CarryForwardContext): st
   if (new Set(paths).size !== paths.length) out.push('paths lists a file twice')
   for (const p of ctx.breaks) if (!paths.includes(p)) out.push(`${p} changed after boundHead and is not declared`)
   for (const p of paths) if (!ctx.breaks.includes(p as string)) out.push(`${String(p)} is declared but not changed after boundHead`)
+  // No link or submodule under src/, resources/ or a declared path, in the commit.
+  out.push(...linkEntryProblems(ctx.git, paths.filter((p): p is string => typeof p === 'string' && p !== '')))
   // The named regression tests.
   for (const e of entries) out.push(...namedTestProblems(e, ctx.textOf))
   // A package file may change its version and nothing else.
