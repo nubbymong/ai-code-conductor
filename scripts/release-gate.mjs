@@ -65,15 +65,16 @@
 //      merged as that commit, a merge whose parents are the base commit and
 //      the PR's final head, and the latest ADR-009 verdict marker an owner,
 //      member or collaborator posted on it is a PASS at that head; (c) the
-//      base tag is a published release (no draft, no prerelease), the
-//      repository's latest, that points at the declared base commit (an
-//      annotated tag dereferenced once). Apart from GitHub, on every stable
-//      cut and every carried one, the gate reads the WP1 binding from git on
-//      its own (outside the suite, which a test setup file could blind):
-//      with a declaration, the manifest's boundHead must be the declared one
-//      and the base manifest's, and the paths changed since it exactly the
-//      declared ones, plus Markdown and the manifest; without one, no
-//      path that breaks the binding may have changed.
+//      base tag is a published release (no draft, no prerelease) that
+//      release.yml made (author github-actions[bot]), the repository's
+//      latest, that points at the declared base commit (an annotated tag
+//      dereferenced once). Apart from GitHub, on every stable cut and every
+//      carried one, the gate reads the WP1 binding from git on its own
+//      (outside the suite, which a test setup file could blind): with a
+//      declaration, the manifest's boundHead must be the declared one and the
+//      base manifest's, and the paths changed since it exactly the declared
+//      ones, plus Markdown and the manifest; without one, no path that breaks
+//      the binding may have changed.
 //      Anything missing, red, in progress or unreadable refuses the cut, and
 //      the declaration's path in another case, or a declaration that is not
 //      JSON, cannot be evaluated.
@@ -141,6 +142,10 @@ export const TEST_JOB_RE = /^Test \((windows|macos|ubuntu)-[A-Za-z0-9.-]+\)$/
 export const TEST_OS_FAMILIES = ['windows', 'macos', 'ubuntu']
 /** Who may post an ADR-009 verdict marker that counts. */
 export const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR']
+/** Who publishes a release release.yml makes: the workflow's GITHUB_TOKEN.
+ *  A release published by hand or through the API with a person's token has
+ *  that person as its author, and is not a base a carry-forward accepts. */
+export const RELEASE_AUTHOR = 'github-actions[bot]'
 /** The first line of an ADR-009 verdict comment (.claude/skills/adversarial-review/adv-marker.sh); the PR number exactly, no leading zero. */
 export const MARKER_RE = /^ADVERSARIAL-REVIEW v1 \| (PASS|FINDINGS) \| pr=#([1-9][0-9]*) \| head=([0-9a-f]{40}) \| content=[0-9a-f]{64} \|/
 const SHA40_RE = /^[0-9a-f]{40}$/
@@ -638,11 +643,14 @@ export function evaluateCarryForward({ version, sha, declaration, ciRuns, ciJobs
     else if (latest.m[1] !== 'PASS') problems.push(`the latest ADR-009 verdict on PR #${pr} is ${latest.m[1]}`)
     else if (latest.m[3] !== head) problems.push(`the ADR-009 PASS on PR #${pr} is for ${latest.m[3]}, not its final head ${head}`)
   }
-  // (c) the base tag is a published release, the repository's latest (so a
-  // release published on a fake base is not one unless it is the newest), and
-  // it is the base commit.
+  // (c) the base tag is a published release that release.yml made (its
+  // author is the workflow's token, not a person), the repository's latest
+  // (so a release published on a fake base is not one unless it is the
+  // newest), and it is the base commit.
   if (!release || release.tag_name !== base.tag || release.draft !== false || release.prerelease !== false) {
     problems.push(`${base.tag} is not a published release (a GitHub release of that tag that is neither a draft nor a prerelease)`)
+  } else if (!release.author || typeof release.author !== 'object' || release.author.login !== RELEASE_AUTHOR) {
+    problems.push(`${base.tag}'s release was not published by the release workflow (its author is ${release.author && release.author.login ? release.author.login : 'unknown'}, not ${RELEASE_AUTHOR})`)
   }
   if (!latestRelease || latestRelease.tag_name !== base.tag) {
     problems.push(`${base.tag} is not the repository's latest release (that is ${latestRelease && latestRelease.tag_name ? latestRelease.tag_name : 'unknown'})`)
