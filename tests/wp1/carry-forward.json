@@ -1,0 +1,303 @@
+{
+  "schema": "wp1-carry-forward/1",
+  "targetVersion": "2.1.2",
+  "base": {
+    "tag": "v2.1.1",
+    "version": "2.1.1",
+    "commit": "9ca0f0e0f4231ff3d83402dc1a39036c5200ac00",
+    "boundHead": "d1525759a7a42d941beeff601af3415fddd8afdd"
+  },
+  "reason": "A headless Claude Code run on a Mac opened from the Dock found no claude on the PATH launchd gives it (exit 127); the fix puts the folder the CLI probe found first on that run's PATH.",
+  "approval": "docs/wp1/owner-decisions-2026-10-17.md#CF1",
+  "adversarial": {
+    "pr": 648
+  },
+  "paths": [
+    {
+      "path": "src/main/claude-headless.ts",
+      "why": "POSIX headless start: the folder of a validated Claude Code the probe found goes first on PATH, and the wait for a running probe is bounded and ends on an abort",
+      "tests": [
+        {
+          "file": "tests/unit/claude-headless-posix-path.test.ts",
+          "cases": [
+            "a Claude Code only the login shell finds: its folder first on PATH, nothing else from this process",
+            "an npm Claude Code (#!/usr/bin/env node) finds the node in its own folder",
+            "a PATH that already names the folder is left exactly as it is",
+            "nothing found and no probe running: the run starts as before (claude by name in the bare PATH)",
+            "a probe that never answers: once the bound passes the run starts without its answer, as before the fix",
+            "a probe that answers within the bound: the run uses its answer, and the wait clears its timer",
+            "a run aborted while it waits answers at once and starts nothing",
+            "a run that waited and ended with no abort leaves no listener of the wait on its signal",
+            "a line a login profile printed first puts nothing on PATH, so a claude beside it never runs",
+            "a claude only which names (another project) is reported, but never kept or put on PATH",
+            "does not wait on a running probe, does not use its last answer, and hands the Windows start PATH unchanged",
+            "puts the folder the probe named first, keeps the rest, and leaves its input as it was"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "src/main/claude-cli-probe.ts",
+      "why": "keeps only a validated path the last probe found, kept through a probe that times out or hangs, shows a probe still running, and asks the login shell from the home folder",
+      "tests": [
+        {
+          "file": "tests/unit/claude-headless-posix-path.test.ts",
+          "cases": [
+            "a run that starts while the probe is still asking (Sentinel at start) waits for its answer",
+            "nothing found and no probe running: the run starts as before (claude by name in the bare PATH)",
+            "a probe that never answers: once the bound passes the run starts without its answer, as before the fix",
+            "a probe that answers within the bound: the run uses its answer, and the wait clears its timer",
+            "a login shell ended by its timeout keeps the kept path, and a run still starts that Claude Code",
+            "a plain not found clears it, and so does no answer once the kept file is gone",
+            "a login shell that never exits still settles after its timeout and a grace, is ended with SIGKILL, and keeps the kept path",
+            "a line a login profile printed first puts nothing on PATH, so a claude beside it never runs",
+            "a claude only which names (another project) is reported, but never kept or put on PATH",
+            "after a login shell with no answer, a which answer leaves the good kept path as it is",
+            "hands the login shell the home folder as its working folder, never the folder the app runs in",
+            "does not wait on a running probe, does not use its last answer, and hands the Windows start PATH unchanged"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "src/main/claude-cli-version.ts",
+      "why": "comments only: the probe now keeps its last answer between calls",
+      "tests": [
+        {
+          "file": "tests/unit/claude-headless-posix-path.test.ts",
+          "cases": [
+            "a run that starts while the probe is still asking (Sentinel at start) waits for its answer"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "tests/unit/claude-headless-posix-path.test.ts",
+      "why": "the regression cases of the fix itself",
+      "tests": [
+        {
+          "file": "tests/unit/claude-headless-posix-path.test.ts",
+          "cases": [
+            "a Claude Code only the login shell finds: its folder first on PATH, nothing else from this process",
+            "an npm Claude Code (#!/usr/bin/env node) finds the node in its own folder",
+            "a run that starts while the probe is still asking (Sentinel at start) waits for its answer",
+            "a PATH that already names the folder is left exactly as it is",
+            "nothing found and no probe running: the run starts as before (claude by name in the bare PATH)",
+            "a probe that never answers: once the bound passes the run starts without its answer, as before the fix",
+            "a probe that answers within the bound: the run uses its answer, and the wait clears its timer",
+            "a run aborted while it waits answers at once and starts nothing",
+            "a run that waited and ended with no abort leaves no listener of the wait on its signal",
+            "a login shell ended by its timeout keeps the kept path, and a run still starts that Claude Code",
+            "a plain not found clears it, and so does no answer once the kept file is gone",
+            "a login shell that never exits still settles after its timeout and a grace, is ended with SIGKILL, and keeps the kept path",
+            "a line a login profile printed first puts nothing on PATH, so a claude beside it never runs",
+            "a claude only which names (another project) is reported, but never kept or put on PATH",
+            "after a login shell with no answer, a which answer leaves the good kept path as it is",
+            "hands the login shell the home folder as its working folder, never the folder the app runs in",
+            "does not wait on a running probe, does not use its last answer, and hands the Windows start PATH unchanged",
+            "puts the folder the probe named first, keeps the rest, and leaves its input as it was"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "src/renderer/changelog.ts",
+      "why": "the 2.1.2 entry, and the 2.1.1 security lines already published on beta",
+      "tests": [
+        {
+          "file": "tests/unit/renderer/whats-new-range.test.tsx",
+          "cases": [
+            "shows just the newest entry when only one release was missed"
+          ]
+        },
+        {
+          "file": "tests/unit/shared/app-knowledge.test.ts",
+          "cases": [
+            "uses no em dashes",
+            "is the newest entry of the 2.1.1 line, under the bare version, and still leaves every 2.1.1 beta entry in place"
+          ]
+        },
+        {
+          "file": "tests/unit/renderer/whatsnew-showcase.test.tsx",
+          "cases": [
+            "DRIFT GUARD: the newest changelog release has curated lines for upgraders, or is a fixes-only release named here",
+            "a fixes-only update gets ONE line from the changelog, never an older set, and no pages"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "package.json",
+      "why": "the version, 2.1.1 to 2.1.2, and nothing else",
+      "tests": [
+        {
+          "file": "tests/wp1/traceability.test.ts",
+          "cases": [
+            "[host] carry-forward: package files change only their version, and counted paths carry at most 600 lines, no line over 1000 characters and at most 64 KiB added"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "package-lock.json",
+      "why": "the version fields, 2.1.1 to 2.1.2, and nothing else",
+      "tests": [
+        {
+          "file": "tests/wp1/traceability.test.ts",
+          "cases": [
+            "[host] carry-forward: package files change only their version, and counted paths carry at most 600 lines, no line over 1000 characters and at most 64 KiB added"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "tests/unit/shared/app-knowledge.test.ts",
+      "why": "the 2.1.1 entry is checked as the newest of its own line, not of the whole changelog",
+      "tests": [
+        {
+          "file": "tests/unit/shared/app-knowledge.test.ts",
+          "cases": [
+            "is the newest entry of the 2.1.1 line, under the bare version, and still leaves every 2.1.1 beta entry in place"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "tests/unit/renderer/whatsnew-showcase.test.tsx",
+      "why": "the drift guard accepts 2.1.2, named as a fixes-only release",
+      "tests": [
+        {
+          "file": "tests/unit/renderer/whatsnew-showcase.test.tsx",
+          "cases": [
+            "DRIFT GUARD: the newest changelog release has curated lines for upgraders, or is a fixes-only release named here",
+            "a fixes-only update gets ONE line from the changelog, never an older set, and no pages"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "tests/wp1/binding.ts",
+      "why": "the carry-forward rule of ADR-027",
+      "tests": [
+        {
+          "file": "tests/wp1/traceability.test.ts",
+          "cases": [
+            "[host] carry-forward: a sound declaration holds, and with no declaration the binding is judged exactly as before",
+            "[host] carry-forward: valid JSON of its schema, for the version package.json names, the patch after a stable base of the same line",
+            "[host] carry-forward: the base is the previous stable, an ancestor of HEAD, bound to the same boundHead",
+            "[host] carry-forward: the list is exact, every changed path declared and nothing else, each an exact path that breaks the binding, at most 16",
+            "[host] carry-forward: under a binding-neutral path only Markdown and the manifest may change, so no code hides there",
+            "[host] carry-forward: the declaration is read only from the commit, never from the working tree, and a name in another case refuses",
+            "[host] carry-forward: once the base has the rule its gate files are frozen, and a base without it may change them once",
+            "[host] carry-forward: each declared path names a regression test vitest collects, and case titles found in its code",
+            "[host] carry-forward: package files change only their version, and counted paths carry at most 600 lines, no line over 1000 characters and at most 64 KiB added",
+            "[host] carry-forward: a reason, an owner decision that names the version, says carry forward and names every declared path, and an ADR-009 PR",
+            "[host] carry-forward: its constants and git helpers are pinned, and the declaration itself is never neutral",
+            "[host] carry-forward: tooling left out of the caps must never be packaged: a bare folder, a glob or an extra resource refuses, an exclusion does not",
+            "[host] carry-forward: no symbolic link or submodule under src, resources or a declared path, read from the commit",
+            "[host] carry-forward: shipped code cannot hide outside src, and electron-builder reads only the config the packaging proof reads",
+            "[host] carry-forward: the repository-level checks run only at the candidate phase with a declaration committed, so one merged back to a gate0 beta does nothing there",
+            "carry-forward: with a declaration in use at the candidate phase, the tooling the caps leave out is never packaged, no src file reaches outside src but allowed data, and the gate files list every vitest config and setup file"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "tests/wp1/traceability.test.ts",
+      "why": "the candidate case judges the declaration, and the [host] cases of the rule",
+      "tests": [
+        {
+          "file": "tests/wp1/traceability.test.ts",
+          "cases": [
+            "[host] carry-forward: a sound declaration holds, and with no declaration the binding is judged exactly as before",
+            "[host] carry-forward: valid JSON of its schema, for the version package.json names, the patch after a stable base of the same line",
+            "[host] carry-forward: the base is the previous stable, an ancestor of HEAD, bound to the same boundHead",
+            "[host] carry-forward: the list is exact, every changed path declared and nothing else, each an exact path that breaks the binding, at most 16",
+            "[host] carry-forward: under a binding-neutral path only Markdown and the manifest may change, so no code hides there",
+            "[host] carry-forward: the declaration is read only from the commit, never from the working tree, and a name in another case refuses",
+            "[host] carry-forward: once the base has the rule its gate files are frozen, and a base without it may change them once",
+            "[host] carry-forward: each declared path names a regression test vitest collects, and case titles found in its code",
+            "[host] carry-forward: package files change only their version, and counted paths carry at most 600 lines, no line over 1000 characters and at most 64 KiB added",
+            "[host] carry-forward: a reason, an owner decision that names the version, says carry forward and names every declared path, and an ADR-009 PR",
+            "[host] carry-forward: its constants and git helpers are pinned, and the declaration itself is never neutral",
+            "[host] carry-forward: tooling left out of the caps must never be packaged: a bare folder, a glob or an extra resource refuses, an exclusion does not",
+            "[host] carry-forward: no symbolic link or submodule under src, resources or a declared path, read from the commit",
+            "[host] carry-forward: shipped code cannot hide outside src, and electron-builder reads only the config the packaging proof reads",
+            "[host] carry-forward: the repository-level checks run only at the candidate phase with a declaration committed, so one merged back to a gate0 beta does nothing there",
+            "carry-forward: with a declaration in use at the candidate phase, the tooling the caps leave out is never packaged, no src file reaches outside src but allowed data, and the gate files list every vitest config and setup file"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "tests/wp1/carry-forward.json",
+      "why": "this declaration, which is never binding-neutral",
+      "tests": [
+        {
+          "file": "tests/wp1/traceability.test.ts",
+          "cases": [
+            "[host] carry-forward: a sound declaration holds, and with no declaration the binding is judged exactly as before",
+            "[host] carry-forward: the declaration is read only from the commit, never from the working tree, and a name in another case refuses",
+            "[host] carry-forward: its constants and git helpers are pinned, and the declaration itself is never neutral"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/release-gate.mjs",
+      "why": "check 5: green Test legs on all three OSes, the ADR-009 PASS and the base tag, on GitHub",
+      "tests": [
+        {
+          "file": "tests/unit/scripts/release-gate.test.ts",
+          "cases": [
+            "check 5 is a no-op with no declaration, or one for another version, and reads nothing from GitHub",
+            "check 5 passes with the ci.yml push run completed and its Test jobs green, the PR merged onto the base with a PASS at its head, and the base a published release",
+            "check 5a reads the newest ci.yml push run on the commit, refuses it still running, and gates on its three Test jobs only",
+            "check 5b refuses a PR not merged as this commit onto the base, and a latest trusted verdict that is not a PASS at the final head",
+            "check 5c refuses a base tag that is not a published release, not one the release workflow made, not the latest release, or not the base commit, and dereferences an annotated tag once",
+            "check 5 cannot be evaluated on a GitHub error, a missing release or no reader, and asks GitHub only for well-formed values",
+            "check 5 refuses the cut with a FAIL line per unmet requirement, and the gate reads the declaration only as committed",
+            "main hands the gate the committed declaration, the release commit and a GitHub reader, and cannot evaluate a declaration it cannot read",
+            "check 5 matches the Test jobs ci.yml runs on a push and the marker adv-marker.sh prints, and the gate job may read them, with no more, and fetches the bound commit before the gate runs",
+            "the gate reads the WP1 binding on its own: with a declaration the boundHead is the one it and its base name and the changed paths are exactly the declared ones, and without one nothing that breaks the binding changed",
+            "main reads the WP1 binding from git only for a stable or carried cut, at the release commit, and cannot evaluate one it cannot read"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "tests/unit/scripts/release-gate.test.ts",
+      "why": "the cases of check 5",
+      "tests": [
+        {
+          "file": "tests/unit/scripts/release-gate.test.ts",
+          "cases": [
+            "check 5 is a no-op with no declaration, or one for another version, and reads nothing from GitHub",
+            "check 5 passes with the ci.yml push run completed and its Test jobs green, the PR merged onto the base with a PASS at its head, and the base a published release",
+            "check 5a reads the newest ci.yml push run on the commit, refuses it still running, and gates on its three Test jobs only",
+            "check 5b refuses a PR not merged as this commit onto the base, and a latest trusted verdict that is not a PASS at the final head",
+            "check 5c refuses a base tag that is not a published release, not one the release workflow made, not the latest release, or not the base commit, and dereferences an annotated tag once",
+            "check 5 cannot be evaluated on a GitHub error, a missing release or no reader, and asks GitHub only for well-formed values",
+            "check 5 refuses the cut with a FAIL line per unmet requirement, and the gate reads the declaration only as committed",
+            "main hands the gate the committed declaration, the release commit and a GitHub reader, and cannot evaluate a declaration it cannot read",
+            "check 5 matches the Test jobs ci.yml runs on a push and the marker adv-marker.sh prints, and the gate job may read them, with no more, and fetches the bound commit before the gate runs",
+            "the gate reads the WP1 binding on its own: with a declaration the boundHead is the one it and its base name and the changed paths are exactly the declared ones, and without one nothing that breaks the binding changed",
+            "main reads the WP1 binding from git only for a stable or carried cut, at the release commit, and cannot evaluate one it cannot read"
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "why": "the gate job may read Actions runs and pull requests for check 5, and fetches the bound commit before the gate runs",
+      "tests": [
+        {
+          "file": "tests/unit/scripts/release-gate.test.ts",
+          "cases": [
+            "check 5 matches the Test jobs ci.yml runs on a push and the marker adv-marker.sh prints, and the gate job may read them, with no more, and fetches the bound commit before the gate runs"
+          ]
+        }
+      ]
+    }
+  ]
+}
