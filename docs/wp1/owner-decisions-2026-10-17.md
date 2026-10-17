@@ -48,6 +48,12 @@ manifest is edited.
   proposed at 400 and set to 600 when the fix grew in review. No added line
   in a counted path may be over 1000 characters; that number is the
   implementing agent's, set above the longest one-line changelog description.
+  Nor may more than 64 KiB (65,536 bytes) be added in counted paths; that cap
+  was added in review, since the line caps alone let 600 lines of 1000
+  characters through.
+- The base tag must also be the repository's latest release, and the release
+  gate reads the paths changed since boundHead from git on its own, outside
+  the test suite; both were added in review.
 - The 2.1.1 security record (the commit that published it on beta) is carried
   onto the 2.1.2 branch, so the 2.1.1 entry in 2.1.2's changelog, and so its
   What's New history, carries those security lines. The changelog file is
@@ -67,7 +73,7 @@ manifest is edited.
 so a later patch on the same binding has what is left): 15 of 16 declared
 files; 394 of 600 counted lines (the fix 374, the changelog 14, the package
 files 6); a longest added line of 890 characters, a one-line changelog
-description.
+description; 24,600 of 65,536 bytes added in counted paths.
 
 **The files carried forward** (every file 2.1.2 changes outside the
 binding-neutral paths, each with its regression tests in the declaration):
