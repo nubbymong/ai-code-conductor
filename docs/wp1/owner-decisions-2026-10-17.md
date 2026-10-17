@@ -24,20 +24,30 @@ carries forward when the only code changes are a declared small file list with
 named regression tests and green CI on all 3 OSes. Needs an ADR and an
 adversarial pass on the gate change."
 
-**What that decides.** 2.1.2 is cut from 2.1.1 (`v2.1.1`, commit
-9ca0f0e0f4231ff3d83402dc1a39036c5200ac00) as a stable release, with no beta.
-The WP1 evidence 2.1.1 shipped on, bound at boundHead
-d1525759a7a42d941beeff601af3415fddd8afdd, is carried forward to 2.1.2 under
-ADR-027: the candidate check holds it on the declaration in
+**What that decides.** 2.1.2 ships as a stable release, with no beta. The
+WP1 evidence 2.1.1 shipped on, bound at boundHead
+d1525759a7a42d941beeff601af3415fddd8afdd, is carried forward to 2.1.2 under a
+recorded rule, ADR-027: the candidate check holds it on the declaration in
 `tests/wp1/carry-forward.json`, which names each changed file and its
-regression tests; the release gate requires CI's Test run green on Windows,
-macOS and Linux on the released commit, and an ADR-009 PASS on the PR that
-merges it. Nothing in the evidence files or the manifest is edited, and no
-evidence is retaken for 2.1.2 beyond the automated suite and the Mac runtime
-check on the PR's build.
+regression tests, and the release gate requires CI green on Windows, macOS
+and Linux on the released commit. Nothing in the evidence files or the
+manifest is edited.
 
 **The coordinating agent's choices, not the owner's.**
 
+- 2.1.2 is cut from `main` at `v2.1.1` (commit
+  9ca0f0e0f4231ff3d83402dc1a39036c5200ac00), not from beta, which is already
+  past the binding.
+- The ADR-009 PASS is required on the whole diff the PR merges (the fix, the
+  rule and the release text), which is wider than the owner's "an adversarial
+  pass on the gate change", and the release commit must be the merge of that
+  PR's head onto the base.
+- The caps: 16 declared files, and 600 lines added plus deleted in counted
+  paths (declared paths outside `tests/` and `.github/`, and outside two
+  release scripts a case proves are never packaged). The line cap was first
+  proposed at 400 and set to 600 when the fix grew in review. No added line
+  in a counted path may be over 1000 characters; that number is the
+  implementing agent's, set above the longest one-line changelog description.
 - The 2.1.1 security record (the commit that published it on beta) is carried
   onto the 2.1.2 branch, so the 2.1.1 entry in 2.1.2's changelog, and so its
   What's New history, carries those security lines. The changelog file is
@@ -52,11 +62,12 @@ check on the PR's build.
   the cap of 16). 2.1.2 is named there as a fixes-only release, so its What's
   New page shows the fixes line, as the existing fixes-only cases already
   expected for 2.1.2.
-- The line cap is 600, not the 400 first proposed. The fix gained a bounded
-  probe wait and further review fixes, and 2.1.2 ships 587 lines outside
-  `tests/`, measured from boundHead. The cap counts cumulatively from
-  boundHead, so a later patch on the same binding has the 13 lines that are
-  left.
+
+**Measured at the 2.1.2 cut**, from boundHead (the caps count cumulatively,
+so a later patch on the same binding has what is left): 15 of 16 declared
+files; 394 of 600 counted lines (the fix 374, the changelog 14, the package
+files 6); a longest added line of 890 characters, a one-line changelog
+description.
 
 **The files carried forward** (every file 2.1.2 changes outside the
 binding-neutral paths, each with its regression tests in the declaration):
@@ -77,7 +88,10 @@ binding-neutral paths, each with its regression tests in the declaration):
 - `tests/unit/scripts/release-gate.test.ts`
 - `.github/workflows/release.yml`
 
-**Scope only.** This section is public and names scope, not findings. The
-packaged, real-CLI and manual evidence is carried, not retaken (ADR-027,
-"Limits"); the one packaged check taken for 2.1.2 is the Mac runtime check of
-the PR's build under a test user.
+**Scope only.** This section is public and names scope, not findings. The fix
+changes the headless runs (the setup version check, Insights and Sentinel's
+checks) that the carried real-CLI and packaged records describe; those
+records are carried, not retaken, and neither is the manual evidence (ADR-027,
+"What it cannot do"). What is taken instead is the whole suite on three
+operating systems, the fix's POSIX regression cases included, and the Mac
+runtime check of the PR's build under a test user.
