@@ -16,7 +16,7 @@ import {
   ITEM_STATUSES, MANIFEST_PATH, RELEASE_WP1_PHASE, SHA_RE, UNAVAILABLE_ELIGIBLE, ancestry, bindingBreaks, changedPaths, evidenceProblems, incompleteItems, staleRecords,
   suiteSteps, unavailableIds, unavailableProblems, type EvidenceRecord, type Git, type ItemStatus, type Unavailable,
   CARRY_FORWARD_PATH, CARRY_FORWARD_SCHEMA, CARRY_FORWARD_MAX_PATHS, CARRY_FORWARD_MAX_SHIPPED_LINES, BINDING_NEUTRAL, NATIVE_TEST, RUNNABLE_TEST,
-  CARRY_FORWARD_MAX_ADDED_LINE, CARRY_FORWARD_GATE_FILES, DEV_ONLY_TOOLING, DEV_ONLY_TREES,
+  CARRY_FORWARD_MAX_ADDED_LINE, CARRY_FORWARD_MAX_ADDED_BYTES, CARRY_FORWARD_GATE_FILES, DEV_ONLY_TOOLING, DEV_ONLY_TREES, addedBytes, addedLines,
   bindingVerdict, carryForwardProblems, changedLines, committedCarryForward, fileAt, isCarryForwardNeutralFile, isCountedPath, longAddedLines,
   toolingPackagingProblems, outOfSrcImports, SRC_OUTSIDE_IMPORTS_ALLOWED, builderConfigProblems, BUILDER_OVERRIDES_ALLOWED, linkEntryProblems,
 } from './binding'
@@ -886,7 +886,7 @@ describe('WP1 traceability manifest', () => {
     }
   })
 
-  it('[host] carry-forward: package files change only their version, and counted paths carry at most 600 lines and no line over 1000 characters', () => {
+  it('[host] carry-forward: package files change only their version, and counted paths carry at most 600 lines, no line over 1000 characters and at most 64 KiB added', () => {
     expect(cf(undefined, { files: { 'package.json': cfPkg('2.1.2', '2.0.0') } })).toEqual(['package.json changed more than its version since boundHead'])
     expect(cf(undefined, { files: { 'package-lock.json': cfLock('2.1.2', '1.0.0', '1.0.1') } })).toEqual(['package-lock.json changed more than its version since boundHead'])
     expect(cf(undefined, { files: { 'package-lock.json': cfLock('2.1.2', '^1.0.0') } })).toEqual(['package-lock.json changed more than its version since boundHead'])
@@ -916,7 +916,17 @@ describe('WP1 traceability manifest', () => {
     const LONG = (n: number) => `${CF_FIX}: an added line of ${n} characters, over the ${CARRY_FORWARD_MAX_ADDED_LINE} a carry-forward allows`
     expect(cf(undefined, { patch: { [CF_FIX]: ['x'.repeat(1000)] } })).toEqual([])
     expect(cf(undefined, { patch: { [CF_FIX]: ['x'.repeat(1001)] } })).toEqual([LONG(1001)])
-    expect(cf(undefined, { patch: { [CF_FIX]: ['short', 'x'.repeat(168930)] } })).toEqual([LONG(168930)])
+    // The fixture adds one short line to each package file: 'a short line' and its line end, twice.
+    const PKG_BYTES = 2 * 13
+    const BYTES = (n: number) => `${n} bytes added in counted paths since boundHead; at most ${CARRY_FORWARD_MAX_ADDED_BYTES} carry forward`
+    expect(cf(undefined, { patch: { [CF_FIX]: ['short', 'x'.repeat(168930)] } })).toEqual([LONG(168930), BYTES(6 + 168931 + PKG_BYTES)])
+    // At most 64 KiB added in counted paths: many lines of 999 characters, under the line count and the line length, are refused.
+    const rows = (n: number, last?: number) => [...Array.from({ length: n }, () => 'p'.repeat(999)), ...(last === undefined ? [] : ['p'.repeat(last)])]
+    expect(cf(undefined, { numstat: { [CF_FIX]: '590\t0' }, patch: { [CF_FIX]: rows(590) } })).toEqual([BYTES(590 * 1000 + PKG_BYTES)])
+    expect(cf(undefined, { numstat: { [CF_FIX]: '66\t0' }, patch: { [CF_FIX]: rows(65, 509) } }), '65536 bytes').toEqual([])
+    expect(cf(undefined, { numstat: { [CF_FIX]: '66\t0' }, patch: { [CF_FIX]: rows(65, 510) } }), '65537 bytes').toEqual([BYTES(65537)])
+    // Bytes, not characters: 33 lines of 999 two-byte characters.
+    expect(cf(undefined, { numstat: { [CF_FIX]: '33\t0' }, patch: { [CF_FIX]: Array.from({ length: 33 }, () => String.fromCharCode(0xe9).repeat(999)) } })).toEqual([BYTES(33 * 1999 + PKG_BYTES)])
   })
 
   it('[host] carry-forward: a reason, an owner decision that names the version, says carry forward and names every declared path, and an ADR-009 PR', () => {
@@ -950,6 +960,7 @@ describe('WP1 traceability manifest', () => {
     expect(CARRY_FORWARD_MAX_PATHS).toBe(16)
     expect(CARRY_FORWARD_MAX_SHIPPED_LINES).toBe(600)
     expect(CARRY_FORWARD_MAX_ADDED_LINE).toBe(1000)
+    expect(CARRY_FORWARD_MAX_ADDED_BYTES).toBe(65536)
     expect([...DEV_ONLY_TREES]).toEqual(['tests/', '.github/'])
     expect([...DEV_ONLY_TOOLING]).toEqual(['scripts/release-gate.mjs', 'scripts/wp1/fetch-ledger-commit.mjs'])
     for (const p of ['tests/x.ts', '.github/workflows/ci.yml', ...DEV_ONLY_TOOLING]) expect(isCountedPath(p), p).toBe(false)
@@ -972,6 +983,9 @@ describe('WP1 traceability manifest', () => {
     const asked: string[][] = []
     expect(longAddedLines((a) => { asked.push(a); return { status: 0, stdout: patch } }, CF_BOUND, ['a.ts', 'b.ts'], 20)).toEqual(['a.ts: an added line of 23 characters', 'b.ts: an added line of 30 characters'])
     expect(asked).toEqual([['diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', `${CF_BOUND}..HEAD`, '--', 'a.ts', 'b.ts']])
+    // addedBytes: each added line's UTF-8 bytes and its line end, the CR left out.
+    expect(addedBytes(addedLines(() => ({ status: 0, stdout: patch }), CF_BOUND, ['a.ts', 'b.ts']))).toBe(24 + 6 + 31)
+    expect(addedBytes([{ text: String.fromCharCode(0xe9) }, { text: '' }])).toBe((2 + 1) + (0 + 1))
     expect(longAddedLines(() => { throw new Error('git must not be asked') }, CF_BOUND, [], 20)).toEqual([])
     expect(() => longAddedLines(() => ({ status: 128, stdout: '' }), CF_BOUND, ['a.ts'], 20)).toThrow(/exited 128/)
     // changedPaths reads only the named files when asked to.
