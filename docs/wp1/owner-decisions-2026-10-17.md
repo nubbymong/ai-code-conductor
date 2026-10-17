@@ -44,13 +44,18 @@ check on the PR's build.
   declared below in any case.
 - The declared list is whatever the final diff since boundHead is, file by
   file, rather than a list fixed in advance.
-- Adding the 2.1.2 changelog entry broke two tests that read the real
+- 2.1.2 is a fixes-only release on the What's New page, with no curated
+  line. Adding the 2.1.2 changelog entry broke two tests that read the real
   changelog: one assumed 2.1.1 is the newest entry, and one required curated
-  What's New lines for the newest release. The implementing agent changed both
-  tests rather than add a curated What's New line, which would have meant two
-  more declared files (17, over the cap of 16). 2.1.2 is named there as a
-  fixes-only release, so its What's New page shows the fixes line, as the
-  existing fixes-only cases already expected for 2.1.2.
+  What's New lines for the newest release. Both tests were changed rather than
+  add a curated line, which would have meant two more declared files (17, over
+  the cap of 16). 2.1.2 is named there as a fixes-only release, so its What's
+  New page shows the fixes line, as the existing fixes-only cases already
+  expected for 2.1.2.
+- The line cap is 600, not the 400 first proposed. The fix gained a bounded
+  probe wait after review, and 2.1.2 ships 484 lines outside `tests/`,
+  measured from boundHead. The cap counts cumulatively from boundHead, so a
+  later patch on the same binding has the 116 lines that are left.
 
 **The files carried forward** (every file 2.1.2 changes outside the
 binding-neutral paths, each with its regression tests in the declaration):
