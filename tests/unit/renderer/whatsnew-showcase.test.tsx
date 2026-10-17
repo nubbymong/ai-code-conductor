@@ -704,13 +704,26 @@ describe('since tags: pinned, parseable, and curated for the newest release', ()
     for (const t of [...Object.values(LINE_TAGS), ...Object.values(PAGE_TAGS)]) expect(finalRelease(t), t).not.toBeNull()
   })
 
-  it('DRIFT GUARD: the newest changelog release has curated lines for upgraders', () => {
+  // A release that is fixes only is named here, frozen like the tags above:
+  // its page shows the fixes line (the fixes-only cases above) and no
+  // curated set, on purpose rather than by accident.
+  const FIXES_ONLY_RELEASES: readonly string[] = ['2.1.2']
+
+  it('DRIFT GUARD: the newest changelog release has curated lines for upgraders, or is a fixes-only release named here', () => {
     // A release cannot ship with the page falling back to the fixes line by
     // accident, the way the "Changelog in sync" check guards the changelog.
     // Writing the next release's changelog entry fails this until its lines
-    // (tagged with its first build) are added here.
+    // (tagged with its first build) are added here, or, for a release whose
+    // every change is a fix, until it is named in FIXES_ONLY_RELEASES.
     const release = finalRelease(changelog[0].version)
     const curated = ALL_SECTIONS.flatMap((s) => s.items).filter((it: any) => !it.freshOnly && finalRelease(it.since) === release)
+    if (FIXES_ONLY_RELEASES.includes(String(release))) {
+      expect(curated, `${release} is named fixes only, so it has no curated lines`).toEqual([])
+      const changes = changelog.filter((e) => finalRelease(e.version) === release).flatMap((e) => e.changes)
+      expect(changes.length, `${release} has no changelog lines`).toBeGreaterThan(0)
+      expect(changes.filter((c) => c.type !== 'fix'), `${release} is named fixes only`).toEqual([])
+      return
+    }
     expect(curated.length, `no What's New lines for ${release}`).toBeGreaterThan(0)
   })
 })
