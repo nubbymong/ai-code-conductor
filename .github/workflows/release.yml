@@ -53,6 +53,13 @@ jobs:
         with:
           node-version: '20'
 
+      # The gate reads the WP1 binding on its own (ADR-027): the paths changed
+      # since the manifest's boundHead, which a depth-1 checkout does not carry
+      # (same step as the build jobs; nothing to fetch when no binding is set).
+      - name: Fetch the WP1 ledger's bound commit
+        continue-on-error: ${{ inputs.dry_run }}
+        run: node scripts/wp1/fetch-ledger-commit.mjs
+
       # The milestone the gate checks is the one for the tag actually being cut,
       # not the bare package.json version. Same tag logic as the build job's
       # "Determine version" step, so on a rolling re-release (bare version +

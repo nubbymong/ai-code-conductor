@@ -44,6 +44,13 @@ import {
   main,
   readCarryForwardApi,
   readCommittedCarryForward,
+  BINDING_NEUTRAL,
+  MANIFEST_PATH,
+  bindingBreaksOf,
+  evaluateBinding,
+  formatBinding,
+  isCarryForwardNeutralFile,
+  readBinding,
 } from '../../../scripts/release-gate.mjs'
 
 type Issue = { number: number; title: string; labels?: Array<{ name: string } | string>; pull_request?: object; state?: string }
@@ -564,6 +571,10 @@ describe('release-gate carry-forward (check 5)', () => {
   const gh = () => fakeGitHub([{ number: 9, title: '2.1.2' }], { 9: [] })
   const gate = (o: Record<string, unknown>) => runGate({ version: '2.1.2', repo: 'o/r', listAll: gh().listAll, registry: REGISTRY_OK, expected: EXPECTED, codexExpected: CODEX_EXPECTED, ...MAC_OK, sha: SHA, log: silent, ...o })
   const page = (p: string) => new URL(`https://x${p}`).searchParams.get('page') ?? ''
+  // Every cut here is a stable one, so the gate also reads the WP1 binding: by default nothing changed since boundHead.
+  const BOUND = 'd'.repeat(40)
+  const CLEAN = { phase: 'candidate', boundHead: BOUND, changed: [] as string[] }
+  const cut = (o: Record<string, unknown>) => gate({ binding: CLEAN, ...o })
 
   it('check 5 is a no-op with no declaration, or one for another version, and reads nothing from GitHub', async () => {
     expect(evaluateCarryForward({ version: '2.1.2', sha: SHA, declaration: null })).toEqual({ ok: true, applies: false, problems: [] })
@@ -572,10 +583,10 @@ describe('release-gate carry-forward (check 5)', () => {
     for (const d of [null, undefined, 'x', [], {}]) expect(carryForwardApplies('2.1.2', d), JSON.stringify(d)).toBe(false)
     let reads = 0
     const readCarryForward = async () => { reads++; return data() }
-    const none = await gate({ carryForward: null, readCarryForward })
+    const none = await cut({ carryForward: null, readCarryForward })
     expect(none.exitCode).toBe(EXIT_OK)
     expect(none.lines.join('\n')).not.toMatch(/carry-forward/)
-    const other = await gate({ carryForward: decl({ targetVersion: '2.1.3' }), readCarryForward })
+    const other = await cut({ carryForward: decl({ targetVersion: '2.1.3' }), readCarryForward })
     expect(other.exitCode).toBe(EXIT_OK)
     expect(reads).toBe(0)
   })
@@ -585,7 +596,7 @@ describe('release-gate carry-forward (check 5)', () => {
     expect(r).toMatchObject({ ok: true, applies: true, problems: [], pr: 650, head: HEAD, tag: 'v2.1.1', base: BASE })
     expect(r.families).toEqual({ windows: ['Test (windows-2025)'], macos: ['Test (macos-latest)'], ubuntu: ['Test (ubuntu-latest)'] })
     const seen: unknown[] = []
-    const run = await gate({ carryForward: decl(), readCarryForward: async (input: unknown) => { seen.push(input); return data() } })
+    const run = await cut({ carryForward: decl(), readCarryForward: async (input: unknown) => { seen.push(input); return data() } })
     expect(run.exitCode).toBe(EXIT_OK)
     expect(seen).toEqual([{ repo: 'o/r', sha: SHA, declaration: decl() }])
     expect(run.lines.join('\n')).toMatch(/OK\s+carry-forward: ci\.yml push run completed, Test green on windows, macos, ubuntu; PR #650 merged as this commit onto the base, ADR-009 PASS at its head bbbbbbbbbbbb; v2\.1\.1 is the latest published release, at 999999999999/)
@@ -691,10 +702,10 @@ describe('release-gate carry-forward (check 5)', () => {
   })
 
   it('check 5 cannot be evaluated on a GitHub error, a missing release or no reader, and asks GitHub only for well-formed values', async () => {
-    const failed = await gate({ carryForward: decl(), readCarryForward: async () => { throw new Error('GitHub API 403 for /repos/o/r/pulls/650') } })
+    const failed = await cut({ carryForward: decl(), readCarryForward: async () => { throw new Error('GitHub API 403 for /repos/o/r/pulls/650') } })
     expect(failed.exitCode).toBe(EXIT_CANNOT_EVALUATE)
     expect(failed.lines[0]).toMatch(/CANNOT EVALUATE .*could not read the carry-forward evidence from GitHub: GitHub API 403/)
-    expect((await gate({ carryForward: decl() })).exitCode).toBe(EXIT_CANNOT_EVALUATE)
+    expect((await cut({ carryForward: decl() })).exitCode).toBe(EXIT_CANNOT_EVALUATE)
     // What the reader asks for, in order.
     const T = 'f'.repeat(40)
     const asked: string[] = []
@@ -724,11 +735,11 @@ describe('release-gate carry-forward (check 5)', () => {
     await readCarryForwardApi({ repo: 'o/r', sha: SHA, declaration: decl(), get: async (p: string) => { asked.push(p); return answers(p, { '/workflows/': { total_count: 0, workflow_runs: [] } }) } })
     expect(asked.some((p) => p.includes('/jobs'))).toBe(false)
     // A missing release (GitHub answers 404) cannot be evaluated.
-    const missing = await gate({ carryForward: decl(), readCarryForward: (input: { repo: string; sha: string; declaration: unknown }) => readCarryForwardApi({ ...input, get: async (p: string) => { if (p.includes('/releases/')) throw new Error(`GitHub API 404 for ${p}`); return answers(p) } }) })
+    const missing = await cut({ carryForward: decl(), readCarryForward: (input: { repo: string; sha: string; declaration: unknown }) => readCarryForwardApi({ ...input, get: async (p: string) => { if (p.includes('/releases/')) throw new Error(`GitHub API 404 for ${p}`); return answers(p) } }) })
     expect(missing.exitCode).toBe(EXIT_CANNOT_EVALUATE)
     expect(missing.lines[0]).toMatch(/GitHub API 404 for \/repos\/o\/r\/releases\/tags\/v2\.1\.1/)
     // No latest release (GitHub answers 404 when the repository has none) cannot be evaluated either.
-    const noLatest = await gate({ carryForward: decl(), readCarryForward: (input: { repo: string; sha: string; declaration: unknown }) => readCarryForwardApi({ ...input, get: async (p: string) => { if (p.endsWith('/releases/latest')) throw new Error(`GitHub API 404 for ${p}`); return answers(p) } }) })
+    const noLatest = await cut({ carryForward: decl(), readCarryForward: (input: { repo: string; sha: string; declaration: unknown }) => readCarryForwardApi({ ...input, get: async (p: string) => { if (p.endsWith('/releases/latest')) throw new Error(`GitHub API 404 for ${p}`); return answers(p) } }) })
     expect(noLatest.exitCode).toBe(EXIT_CANNOT_EVALUATE)
     expect(noLatest.lines[0]).toMatch(/GitHub API 404 for \/repos\/o\/r\/releases\/latest/)
     // A value in the wrong shape never reaches a URL.
@@ -760,7 +771,7 @@ describe('release-gate carry-forward (check 5)', () => {
   })
 
   it('check 5 refuses the cut with a FAIL line per unmet requirement, and the gate reads the declaration only as committed', async () => {
-    const run = await gate({ carryForward: decl(), readCarryForward: async () => data({ ciJobs: [GREEN[0], GREEN[2]], pull: { ...PULL, merged: false } }) })
+    const run = await cut({ carryForward: decl(), readCarryForward: async () => data({ ciJobs: [GREEN[0], GREEN[2]], pull: { ...PULL, merged: false } }) })
     expect(run.exitCode).toBe(EXIT_REFUSED)
     const text = run.lines.join('\n')
     expect(text).toMatch(/OK\s+milestone/)
@@ -809,7 +820,9 @@ describe('release-gate carry-forward (check 5)', () => {
       const runGit = (args: string[]) => {
         calls.push(args)
         if (args[0] === 'ls-tree') return entries.map(([mode, p]) => `${mode} blob ${'b'.repeat(40)}\t${p}\0`).join('')
+        if (args[0] === 'show' && args[1].endsWith(`:${MANIFEST_PATH}`)) return JSON.stringify({ phase: 'candidate', boundHead: BOUND })
         if (args[0] === 'show') return text
+        if (args[0] === 'diff') return ''
         if (args[0] === 'rev-parse') return `${HEAD}\n`
         throw new Error(`unexpected git ${args.join(' ')}`)
       }
@@ -831,7 +844,7 @@ describe('release-gate carry-forward (check 5)', () => {
       return { ok: body !== null, status: body === null ? 404 : 200, json: async () => body }
     }
     expect(await main(args, env, { runGit: tree([SELF]).runGit, run, fetchImpl: fetchImpl as unknown as typeof fetch })).toBe(EXIT_OK)
-    expect(seen[0]).toMatchObject({ version: '2.1.2', repo: 'o/r', carryForward: decl(), sha: SHA })
+    expect(seen[0]).toMatchObject({ version: '2.1.2', repo: 'o/r', carryForward: decl(), sha: SHA, binding: CLEAN })
     const read = await seen[0].readCarryForward({ repo: 'o/r', sha: SHA, declaration: decl() })
     expect(evaluateCarryForward({ version: '2.1.2', sha: SHA, declaration: decl(), ...read }).problems).toEqual([])
     expect(urls).toHaveLength(8)
@@ -862,7 +875,7 @@ describe('release-gate carry-forward (check 5)', () => {
     for (const e of errors) expect(e).toMatch(/^Release gate: CANNOT EVALUATE .*tests\/wp1\/(carry-forward|Carry-Forward)\.json/)
   })
 
-  it('check 5 matches the Test jobs ci.yml runs on a push and the marker adv-marker.sh prints, and the gate job may read them, with no more', () => {
+  it('check 5 matches the Test jobs ci.yml runs on a push and the marker adv-marker.sh prints, and the gate job may read them, with no more, and fetches the bound commit before the gate runs', () => {
     const ciText = readFileSync(resolve(__dirname, `../../../.github/workflows/${CI_WORKFLOW}`), 'utf-8').replace(/\r\n/g, '\n')
     expect(ciText, `${CI_WORKFLOW} runs on a push to main`).toMatch(/^on:\n[\s\S]*?^ {2}push:\n {4}branches: \[main\]$/m)
     const ci = ciText.split('\n')
@@ -884,6 +897,134 @@ describe('release-gate carry-forward (check 5)', () => {
     const at = jobLines.indexOf('    permissions:')
     const perms = jobLines.slice(at + 1).filter((l, i, all) => all.slice(0, i + 1).every((x) => /^ {6}\S/.test(x))).map((l) => l.trim())
     expect(perms.sort()).toEqual(['actions: read', 'contents: read', 'issues: read', 'pull-requests: read'])
+    // The gate reads the WP1 binding, so the job fetches the bound commit a depth-1 checkout lacks before the gate runs.
+    expect(jobLines.map((l) => l.trim()).filter((l) => l.startsWith('run: node scripts/'))).toEqual(['run: node scripts/wp1/fetch-ledger-commit.mjs', 'run: node scripts/release-gate.mjs --version ${{ steps.version.outputs.milestone }}'])
+  })
+
+  it('the gate reads the WP1 binding on its own: with a declaration the changed paths are exactly the declared ones, and without one nothing that breaks the binding changed', async () => {
+    const at = (changed: string[]) => ({ phase: 'candidate', boundHead: BOUND, changed })
+    const FIX = 'src/main/fix.ts'
+    const D = (paths: unknown[]) => decl({ paths: paths.map((path) => ({ path, tests: [] })) })
+    // The neutral rules are the suite's own (tests/wp1/binding.ts imports these): the ones before ADR-027, and under them only Markdown and the manifest for a carry-forward.
+    expect(MANIFEST_PATH).toBe('tests/wp1/traceability.json')
+    expect(BINDING_NEUTRAL.map(String)).toEqual(['/^tests\\/wp1\\/traceability\\.json$/', '/^docs\\//', '/^CONTEXT\\.d\\//', '/^architecture\\/decisions\\/[^/]+\\.md$/', '/^[^/]+\\.md$/'])
+    expect(bindingBreaksOf(['docs/x.js', 'README.md', 'src/x.ts', MANIFEST_PATH, 'CONTEXT.d/y.md', 'architecture/decisions/a.md', 'architecture/decisions/x/a.md'])).toEqual(['src/x.ts', 'architecture/decisions/x/a.md'])
+    for (const p of [MANIFEST_PATH, 'docs/a.md', 'README.md']) expect(isCarryForwardNeutralFile(p), p).toBe(true)
+    for (const p of ['docs/a.js', 'docs/a.md.js', 'docs/a.MD', 'docs/wp1/payload.d.ts']) expect(isCarryForwardNeutralFile(p), p).toBe(false)
+    // With a declaration for this version: every path that breaks the binding is declared, every declared one changed, and under a neutral path only Markdown and the manifest.
+    expect(evaluateBinding({ version: '2.1.2', declaration: D([FIX, CARRY_FORWARD_PATH]), binding: at([FIX, CARRY_FORWARD_PATH, 'docs/x.md', MANIFEST_PATH]) })).toEqual({ applies: true, ok: true, carried: true, problems: [] })
+    const carried = (paths: unknown[], changed: string[]) => evaluateBinding({ version: '2.1.2', declaration: D(paths), binding: at(changed) }).problems
+    expect(carried([FIX, CARRY_FORWARD_PATH], [FIX, CARRY_FORWARD_PATH, 'src/other.ts'])).toEqual(['src/other.ts changed since boundHead and is not declared'])
+    expect(carried([FIX], [FIX, CARRY_FORWARD_PATH])).toEqual([`${CARRY_FORWARD_PATH} changed since boundHead and is not declared`])
+    expect(carried([FIX, CARRY_FORWARD_PATH, 'src/never.ts'], [FIX, CARRY_FORWARD_PATH])).toEqual(['src/never.ts is declared but did not change since boundHead'])
+    expect(carried([FIX, CARRY_FORWARD_PATH, 'docs/x.md'], [FIX, CARRY_FORWARD_PATH, 'docs/x.md'])).toEqual(['docs/x.md is declared but is binding-neutral'])
+    for (const p of ['docs/wp1/payload.js', 'docs/wp1/payload.d.ts', 'CONTEXT.d/x.txt']) {
+      expect(carried([FIX, CARRY_FORWARD_PATH], [FIX, CARRY_FORWARD_PATH, p]), p).toEqual([`${p} changed under a binding-neutral path but is not Markdown or the manifest`])
+    }
+    expect(evaluateBinding({ version: '2.1.2', declaration: decl(), binding: at([FIX]) }).problems, 'paths missing').toEqual([`${FIX} changed since boundHead and is not declared`])
+    // Without one, on a stable cut: nothing that breaks the binding changed; neutral files may, as before ADR-027. A declaration for another version is none.
+    expect(evaluateBinding({ version: '2.1.2', declaration: null, binding: at(['docs/x.json', 'README.md', MANIFEST_PATH]) })).toEqual({ applies: true, ok: true, carried: false, problems: [] })
+    const BREAKS = (n: number, list: string) => `${n} path(s) that break the WP1 binding changed since boundHead ${BOUND}, and no carry-forward declaration for this version is committed: ${list}`
+    expect(evaluateBinding({ version: '2.1.2', declaration: null, binding: at(['src/x.ts', 'docs/x.md', 'package.json']) }).problems).toEqual([BREAKS(2, 'src/x.ts, package.json')])
+    expect(evaluateBinding({ version: '2.1.2', declaration: decl({ targetVersion: '2.1.3' }), binding: at(['src/x.ts']) }).problems).toEqual([BREAKS(1, 'src/x.ts')])
+    // A binding it was not given, or not as a list, refuses: never a pass.
+    for (const binding of [null, undefined, { boundHead: BOUND }, { boundHead: BOUND, changed: 'src/x.ts' }]) {
+      expect(evaluateBinding({ version: '2.1.2', declaration: null, binding }), JSON.stringify(binding)).toEqual({ applies: true, ok: false, carried: false, problems: ['the paths changed since the WP1 boundHead were not read'] })
+    }
+    // An ordinary cut (beta, rc, dev) is not judged, whatever changed and whatever was read.
+    for (const version of ['2.1.2-beta', '2.1.2-beta.3', '2.1.0-rc.9', '2.1.2-dev', '', undefined]) {
+      for (const binding of [null, at([]), at(['src/x.ts'])]) {
+        expect(evaluateBinding({ version, declaration: null, binding } as never), `${version} ${JSON.stringify(binding)}`).toEqual({ applies: false, ok: true, carried: false, problems: [] })
+      }
+    }
+    // runGate: a FAIL line refuses a cut every other check passes.
+    const broken = await cut({ carryForward: null, binding: at(['src/x.ts']) })
+    expect(broken.exitCode).toBe(EXIT_REFUSED)
+    expect(broken.lines.join('\n')).toMatch(/OK\s+milestone/)
+    expect(broken.lines).toContain('  FAIL  binding: the paths changed since the WP1 boundHead do not hold (ADR-027)')
+    expect(broken.lines).toContain(`          - ${BREAKS(1, 'src/x.ts')}`)
+    expect(broken.lines.at(-1)).toMatch(/^REFUSED/)
+    expect((await cut({ carryForward: null, binding: null })).exitCode).toBe(EXIT_REFUSED)
+    const undeclared = await cut({ carryForward: D([FIX, CARRY_FORWARD_PATH]), binding: at([FIX, CARRY_FORWARD_PATH, 'src/other.ts']), readCarryForward: async () => data() })
+    expect(undeclared.exitCode).toBe(EXIT_REFUSED)
+    expect(undeclared.lines).toContain('          - src/other.ts changed since boundHead and is not declared')
+    const held = await cut({ carryForward: D([FIX, CARRY_FORWARD_PATH]), binding: at([FIX, CARRY_FORWARD_PATH]), readCarryForward: async () => data() })
+    expect(held.exitCode).toBe(EXIT_OK)
+    expect(held.lines).toContain('  OK    binding: every path that breaks the WP1 binding since boundHead is declared, and nothing else changed but Markdown and the manifest')
+    // Parity: a qualified stable, or an ordinary cut, prints what it printed before, with no binding line.
+    const clean = await cut({ carryForward: null })
+    expect(clean.exitCode).toBe(EXIT_OK)
+    expect((await cut({ carryForward: null, binding: at(['docs/x.md', 'docs/x.json', MANIFEST_PATH]) })).lines).toEqual(clean.lines)
+    expect(clean.lines.join('\n')).not.toMatch(/binding/)
+    for (const version of ['2.1.2-beta', '2.1.2-beta.1', '2.1.2-rc.1', '2.1.2-dev']) {
+      const ordinary = (binding: unknown) => gate({ version, listAll: fakeGitHub([{ number: 9, title: version }], { 9: [] }).listAll, carryForward: null, binding })
+      const none = await ordinary(null)
+      expect(none.exitCode, version).toBe(EXIT_OK)
+      expect(none.lines.join('\n'), version).not.toMatch(/binding/)
+      for (const binding of [at([]), at(['src/x.ts'])]) expect((await ordinary(binding)).lines, version).toEqual(none.lines)
+    }
+  })
+
+  it('main reads the WP1 binding from git only for a stable or carried cut, at the release commit, and cannot evaluate one it cannot read', async () => {
+    const MAN = JSON.stringify({ phase: 'candidate', boundHead: BOUND })
+    const git = (manifest: string | Error, changed: string | Error = '') => {
+      const calls: string[][] = []
+      const runGit = (args: string[]) => {
+        calls.push(args)
+        if (args[0] === 'ls-tree') return ''
+        if (args[0] === 'show') { if (manifest instanceof Error) throw manifest; return manifest }
+        if (args[0] === 'diff') { if (changed instanceof Error) throw changed; return changed }
+        throw new Error(`unexpected git ${args.join(' ')}`)
+      }
+      return { runGit, calls }
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const seen: any[] = []
+    const run = async (input: unknown) => { seen.push(input); return { exitCode: EXIT_OK } }
+    const env = { GITHUB_TOKEN: 't0k', GITHUB_SHA: SHA }
+    const argsFor = (version: string) => ['--version', version, '--repo', 'o/r']
+    // An ordinary cut asks git for nothing more than before, and hands the gate no binding.
+    for (const version of ['2.1.2-beta', '2.1.2-beta.1', '2.1.2-rc.1', '2.1.2-dev']) {
+      const g = git(MAN)
+      seen.length = 0
+      expect(await main(argsFor(version), env, { runGit: g.runGit, run }), version).toBe(EXIT_OK)
+      expect(g.calls, version).toEqual([['ls-tree', '-r', '-z', '--full-tree', 'HEAD']])
+      expect(seen[0].binding, version).toBeNull()
+    }
+    // A stable cut reads the manifest at the release commit, then every path changed since its boundHead, NUL-separated.
+    const g = git(MAN, 'src/x.ts\0docs/a b.md\0')
+    seen.length = 0
+    expect(await main(argsFor('2.1.2'), env, { runGit: g.runGit, run })).toBe(EXIT_OK)
+    expect(g.calls.slice(1)).toEqual([['show', `${SHA}:${MANIFEST_PATH}`], ['diff', '--name-only', '--no-renames', '-z', `${BOUND}..${SHA}`]])
+    expect(seen[0].binding).toEqual({ phase: 'candidate', boundHead: BOUND, changed: ['src/x.ts', 'docs/a b.md'] })
+    // readBinding: a commit that is not 40-hex reads HEAD.
+    const h = git(MAN)
+    expect(readBinding(h.runGit, 'main')).toEqual({ phase: 'candidate', boundHead: BOUND, changed: [] })
+    expect(h.calls).toEqual([['show', `HEAD:${MANIFEST_PATH}`], ['diff', '--name-only', '--no-renames', '-z', `${BOUND}..HEAD`]])
+    // A manifest it cannot read, one with no 40-hex boundHead, or a diff git cannot give: cannot evaluate, and the gate does not run.
+    const errors: string[] = []
+    const realError = console.error
+    console.error = (s: unknown) => { errors.push(String(s)) }
+    seen.length = 0
+    try {
+      const bad: Array<[string | Error, string | Error, RegExp]> = [
+        [new Error('fatal: invalid object name'), '', /tests\/wp1\/traceability\.json at a{40} cannot be read \(fatal: invalid object name\)/],
+        ['{ not json', '', /tests\/wp1\/traceability\.json at a{40} cannot be read/],
+        [JSON.stringify({ phase: 'gate0', boundHead: null }), '', /names no 40-hex boundHead/],
+        [JSON.stringify({ phase: 'candidate', boundHead: 'HEAD' }), '', /names no 40-hex boundHead/],
+        [MAN, new Error(`fatal: bad object ${BOUND}`), /the paths changed since the WP1 boundHead d{40} cannot be read; run node scripts\/wp1\/fetch-ledger-commit\.mjs first \(fatal: bad object d{40}\)/],
+      ]
+      for (const [manifest, changed, why] of bad) {
+        errors.length = 0
+        expect(await main(argsFor('2.1.2'), env, { runGit: git(manifest, changed).runGit, run }), String(why)).toBe(EXIT_CANNOT_EVALUATE)
+        expect(errors, String(why)).toHaveLength(1)
+        expect(errors[0], String(why)).toMatch(/^Release gate: CANNOT EVALUATE/)
+        expect(errors[0], String(why)).toMatch(why)
+      }
+    } finally {
+      console.error = realError
+    }
+    expect(seen).toEqual([])
   })
 })
 
