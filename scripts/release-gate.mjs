@@ -65,8 +65,9 @@
 //      merged as that commit, a merge whose parents are the base commit and
 //      the PR's final head, and the latest ADR-009 verdict marker an owner,
 //      member or collaborator posted on it is a PASS at that head; (c) the
-//      base tag is a published release (no draft, no prerelease) that points
-//      at the declared base commit (an annotated tag dereferenced once).
+//      base tag is a published release (no draft, no prerelease), the
+//      repository's latest, that points at the declared base commit (an
+//      annotated tag dereferenced once).
 //      Anything missing, red, in progress or unreadable refuses the cut, and
 //      the declaration's path in another case, or a declaration that is not
 //      JSON, cannot be evaluated.
@@ -462,9 +463,10 @@ export function latestCiRun(runs, sha) {
  * @param {any} [input.tagRef]             git/ref/tags/{base.tag}
  * @param {any} [input.tagObject]          git/tags/{sha}, when that tag is annotated
  * @param {any} [input.release]            releases/tags/{base.tag}
+ * @param {any} [input.latestRelease]      releases/latest
  * @returns {CarryForwardVerdict}
  */
-export function evaluateCarryForward({ version, sha, declaration, ciRuns, ciJobs, releaseCommit, pull, comments, tagRef, tagObject, release }) {
+export function evaluateCarryForward({ version, sha, declaration, ciRuns, ciJobs, releaseCommit, pull, comments, tagRef, tagObject, release, latestRelease }) {
   if (!carryForwardApplies(version, declaration)) return { ok: true, applies: false, problems: [] }
   const problems = []
   const pr = declaration.adversarial && declaration.adversarial.pr
@@ -502,9 +504,14 @@ export function evaluateCarryForward({ version, sha, declaration, ciRuns, ciJobs
     else if (latest.m[1] !== 'PASS') problems.push(`the latest ADR-009 verdict on PR #${pr} is ${latest.m[1]}`)
     else if (latest.m[3] !== head) problems.push(`the ADR-009 PASS on PR #${pr} is for ${latest.m[3]}, not its final head ${head}`)
   }
-  // (c) the base tag is a published release, and it is the base commit.
+  // (c) the base tag is a published release, the repository's latest (so a
+  // release published on a fake base is not one unless it is the newest), and
+  // it is the base commit.
   if (!release || release.tag_name !== base.tag || release.draft !== false || release.prerelease !== false) {
     problems.push(`${base.tag} is not a published release (a GitHub release of that tag that is neither a draft nor a prerelease)`)
+  }
+  if (!latestRelease || latestRelease.tag_name !== base.tag) {
+    problems.push(`${base.tag} is not the repository's latest release (that is ${latestRelease && latestRelease.tag_name ? latestRelease.tag_name : 'unknown'})`)
   }
   const obj = tagRef && tagRef.ref === `refs/tags/${base.tag}` ? tagRef.object : null
   const commit = !obj ? null
@@ -602,7 +609,7 @@ export function formatReport({ version, repo, milestoneResult, modelsResult, exp
 export function formatCarryForward(carryResult) {
   if (!carryResult || !carryResult.applies) return []
   const r = carryResult
-  if (r.ok) return [`  OK    carry-forward: ${CI_WORKFLOW} push run completed, Test green on ${TEST_OS_FAMILIES.join(', ')}; PR #${r.pr} merged as this commit onto the base, ADR-009 PASS at its head ${String(r.head).slice(0, 12)}; ${r.tag} is a published release at ${String(r.base).slice(0, 12)}`]
+  if (r.ok) return [`  OK    carry-forward: ${CI_WORKFLOW} push run completed, Test green on ${TEST_OS_FAMILIES.join(', ')}; PR #${r.pr} merged as this commit onto the base, ADR-009 PASS at its head ${String(r.head).slice(0, 12)}; ${r.tag} is the latest published release, at ${String(r.base).slice(0, 12)}`]
   return ['  FAIL  carry-forward: tests/wp1/carry-forward.json does not hold on GitHub (ADR-027)', ...r.problems.map((p) => `          - ${p}`)]
 }
 
@@ -710,6 +717,7 @@ export async function readCarryForwardApi({ repo, sha, declaration, get }) {
     const o = out.tagRef && out.tagRef.object
     if (o && o.type === 'tag' && SHA40_RE.test(String(o.sha))) out.tagObject = await get(`/repos/${repo}/git/tags/${o.sha}`)
     out.release = await get(`/repos/${repo}/releases/tags/${tag}`)
+    out.latestRelease = await get(`/repos/${repo}/releases/latest`)
   }
   return out
 }
