@@ -141,7 +141,8 @@ beforeEach(() => {
   h.asked = []
   h.osPlatform = null
   h.winStarts = []
-  for (const f of [path.join(nativeBin, 'path.txt'), path.join(nativeBin, 'home.txt'), path.join(npmBin, 'node-used.txt')]) fs.rmSync(f, { force: true })
+  // TEST CLEANUP GUARD: on Windows the folders are never made, and these joins would name files in the cwd.
+  if (dir) for (const f of [path.join(nativeBin, 'path.txt'), path.join(nativeBin, 'home.txt'), path.join(npmBin, 'node-used.txt')]) fs.rmSync(f, { force: true })
 })
 
 const read = (f: string): string => fs.readFileSync(f, 'utf8')
