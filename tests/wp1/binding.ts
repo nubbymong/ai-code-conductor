@@ -11,7 +11,10 @@ import { posix } from 'node:path'
 import { ancestry, SHA_RE } from '../../scripts/wp1/fetch-ledger-commit.mjs'
 // The committed-tree scan for the declaration is the gate's own, so the suite
 // and the gate read it the same way.
-import { CARRY_FORWARD_PATH as GATE_CARRY_FORWARD_PATH, scanCommittedCarryForward } from '../../scripts/release-gate.mjs'
+import {
+  CARRY_FORWARD_PATH as GATE_CARRY_FORWARD_PATH, scanCommittedCarryForward,
+  BINDING_NEUTRAL as GATE_BINDING_NEUTRAL, MANIFEST_PATH as GATE_MANIFEST_PATH, bindingBreaksOf, isCarryForwardNeutralFile as gateIsCarryForwardNeutralFile,
+} from '../../scripts/release-gate.mjs'
 
 export { ancestry, SHA_RE }
 
@@ -22,7 +25,8 @@ export type EvidenceRecord = {
   artifact: string; sha256: string; head: string; actor: string; at: string; commands: string[]; runId?: string
 }
 
-export const MANIFEST_PATH = 'tests/wp1/traceability.json'
+/** The manifest's path, shared with the release gate (scripts/release-gate.mjs). */
+export const MANIFEST_PATH: string = GATE_MANIFEST_PATH
 
 /** An item's status (ADR-026). `planned`: not recorded yet. `evidenced`:
  *  every part recorded; there is no "evidenced with limits" (ADR-026, settled
@@ -192,18 +196,13 @@ export function unavailableProblems(
 // top-level Markdown. Everything else breaks it: src, tests, scripts,
 // resources, build, the workflows, package.json and its lockfile, every
 // config, and any path added later, so a new kind of file is covered without
-// anyone widening a list.
-export const BINDING_NEUTRAL: readonly RegExp[] = [
-  /^tests\/wp1\/traceability\.json$/,
-  /^docs\//,
-  /^CONTEXT\.d\//,
-  /^architecture\/decisions\/[^/]+\.md$/,
-  /^[^/]+\.md$/,
-]
+// anyone widening a list. The list lives in scripts/release-gate.mjs, so the
+// gate, which reads the binding on its own outside the suite, uses this one.
+export const BINDING_NEUTRAL: readonly RegExp[] = GATE_BINDING_NEUTRAL
 
 /** The changed paths that break the evidence binding. */
 export function bindingBreaks(changed: readonly string[]): string[] {
-  return changed.filter((p) => !BINDING_NEUTRAL.some((re) => re.test(p)))
+  return bindingBreaksOf([...changed])
 }
 
 /** Exactly what vitest.config.ts collects (tests/integration has no .tsx
@@ -528,8 +527,8 @@ export function builderConfigProblems(tracked: readonly string[], commands: Read
 }
 /** The only binding-neutral paths a carry-forward lets change: Markdown, and
  *  the manifest. Any other file under a neutral prefix could be code nothing
- *  declares or counts. */
-export const isCarryForwardNeutralFile = (p: string) => p === MANIFEST_PATH || /\.md$/.test(p)
+ *  declares or counts. Shared with the release gate. */
+export const isCarryForwardNeutralFile: (p: string) => boolean = gateIsCarryForwardNeutralFile
 /** The files that decide how the suite and the gate run. Once a base already
  *  has this rule, a carry-forward may change none of them, so a later patch
  *  cannot rewrite the check that judges it. */

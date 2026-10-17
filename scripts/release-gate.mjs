@@ -67,7 +67,12 @@
 //      member or collaborator posted on it is a PASS at that head; (c) the
 //      base tag is a published release (no draft, no prerelease), the
 //      repository's latest, that points at the declared base commit (an
-//      annotated tag dereferenced once).
+//      annotated tag dereferenced once). Apart from GitHub, on every stable
+//      cut and every carried one, the gate reads the WP1 binding from git on
+//      its own (outside the suite, which a test setup file could blind):
+//      with a declaration, the paths changed since boundHead must be exactly
+//      the declared ones, plus Markdown and the manifest; without one, no
+//      path that breaks the binding may have changed.
 //      Anything missing, red, in progress or unreadable refuses the cut, and
 //      the declaration's path in another case, or a declaration that is not
 //      JSON, cannot be evaluated.
@@ -433,6 +438,38 @@ export function evaluateMacosFloor({ version, electronVersion, floors }) {
   }
 }
 
+// -- the WP1 binding's neutral paths (shared with tests/wp1/binding.ts) --
+
+/** The WP1 traceability manifest. */
+export const MANIFEST_PATH = 'tests/wp1/traceability.json'
+
+// What may change after the WP1 binding without breaking it: the manifest
+// (the commit that records boundHead edits it), and text that nothing in the
+// app, its build or its packaged files reads: docs/ (the evidence files there
+// are pinned again by each record's sha256), the running log, the ADRs and the
+// top-level Markdown. Everything else breaks it: src, tests, scripts,
+// resources, build, the workflows, package.json and its lockfile, every
+// config, and any path added later, so a new kind of file is covered without
+// anyone widening a list. The suite (tests/wp1/binding.ts) and this gate use
+// this one list.
+export const BINDING_NEUTRAL = [
+  /^tests\/wp1\/traceability\.json$/,
+  /^docs\//,
+  /^CONTEXT\.d\//,
+  /^architecture\/decisions\/[^/]+\.md$/,
+  /^[^/]+\.md$/,
+]
+
+/** The changed paths that break the WP1 evidence binding. */
+export function bindingBreaksOf(changed) {
+  return changed.filter((p) => !BINDING_NEUTRAL.some((re) => re.test(p)))
+}
+
+/** The only binding-neutral paths a carry-forward lets change: Markdown, and
+ *  the manifest. Any other file under a neutral prefix could be code nothing
+ *  declares or counts. */
+export const isCarryForwardNeutralFile = (p) => p === MANIFEST_PATH || /\.md$/.test(p)
+
 // -- the carry-forward (check 5, ADR-027) --
 
 /** @typedef {{ ok: boolean, applies: boolean, problems: string[], pr?: unknown, families?: Record<string, string[]>, head?: unknown, tag?: unknown, base?: unknown }} CarryForwardVerdict */
@@ -440,6 +477,76 @@ export function evaluateMacosFloor({ version, electronVersion, floors }) {
 /** Check 5 applies only when the declaration carries forward to the version being cut. */
 export function carryForwardApplies(version, declaration) {
   return !!declaration && typeof declaration === 'object' && declaration.targetVersion === version
+}
+
+/** A stable x.y.z version: the cuts the WP1 binding guards. */
+const STABLE_VERSION_RE = /^\d+\.\d+\.\d+$/
+
+/**
+ * The WP1 binding as the gate reads it on its own, outside the suite, so a
+ * test setup file cannot blind both (ADR-027). It applies to a stable cut, and
+ * to any cut a committed declaration carries forward to. With that
+ * declaration, every path that breaks the binding since boundHead must be
+ * declared, every declared path must have changed, and under a neutral path
+ * only Markdown and the manifest may change. Without one, nothing that breaks
+ * the binding may have changed. `binding` is what main read from git: the
+ * manifest's phase and boundHead, and the paths changed since boundHead.
+ *
+ * @param {{ version: string, declaration: any, binding?: { phase?: unknown, boundHead: string, changed: string[] } | null }} input
+ * @returns {{ applies: boolean, ok: boolean, carried: boolean, problems: string[] }}
+ */
+export function evaluateBinding({ version, declaration, binding }) {
+  const carried = carryForwardApplies(version, declaration)
+  if (!carried && !STABLE_VERSION_RE.test(String(version))) return { applies: false, ok: true, carried, problems: [] }
+  if (!binding || !Array.isArray(binding.changed)) return { applies: true, ok: false, carried, problems: ['the paths changed since the WP1 boundHead were not read'] }
+  const breaks = bindingBreaksOf(binding.changed)
+  const problems = []
+  if (!carried) {
+    if (breaks.length > 0) problems.push(`${breaks.length} path(s) that break the WP1 binding changed since boundHead ${binding.boundHead}, and no carry-forward declaration for this version is committed: ${breaks.join(', ')}`)
+  } else {
+    const declared = (Array.isArray(declaration.paths) ? declaration.paths : []).map((e) => (e && typeof e === 'object' ? e.path : undefined))
+    for (const p of breaks) if (!declared.includes(p)) problems.push(`${p} changed since boundHead and is not declared`)
+    for (const p of declared) if (!breaks.includes(p)) problems.push(binding.changed.includes(p) ? `${p} is declared but is binding-neutral` : `${String(p)} is declared but did not change since boundHead`)
+    for (const p of binding.changed) if (!breaks.includes(p) && !isCarryForwardNeutralFile(p)) problems.push(`${p} changed under a binding-neutral path but is not Markdown or the manifest`)
+  }
+  return { applies: true, ok: problems.length === 0, carried, problems }
+}
+
+/** The lines the binding check prints: a FAIL when it does not hold, an OK
+ *  only for a carry-forward, and nothing for a cut it does not apply to or a
+ *  qualified stable it passes, so those reports stay as they were. */
+export function formatBinding(r) {
+  if (!r || !r.applies) return []
+  if (r.ok) return r.carried ? ['  OK    binding: every path that breaks the WP1 binding since boundHead is declared, and nothing else changed but Markdown and the manifest'] : []
+  return ['  FAIL  binding: the paths changed since the WP1 boundHead do not hold (ADR-027)', ...r.problems.map((p) => `          - ${p}`)]
+}
+
+/**
+ * What evaluateBinding needs, read from git at the commit being released:
+ * the manifest's phase and boundHead, and every path changed since boundHead
+ * (NUL-separated, renames unpaired). A manifest that cannot be read or names
+ * no 40-hex boundHead, or a diff git cannot give, throws (cannot evaluate).
+ *
+ * @param {(args: string[]) => string} runGit   git's output; throws when git fails
+ * @param {string|null} sha
+ */
+export function readBinding(runGit, sha) {
+  const at = typeof sha === 'string' && SHA40_RE.test(sha) ? sha : 'HEAD'
+  let manifest
+  try {
+    manifest = JSON.parse(String(runGit(['show', `${at}:${MANIFEST_PATH}`])))
+  } catch (err) {
+    throw new Error(`${MANIFEST_PATH} at ${at} cannot be read (${err && err.message ? err.message : err})`)
+  }
+  const boundHead = manifest && manifest.boundHead
+  if (typeof boundHead !== 'string' || !SHA40_RE.test(boundHead)) throw new Error(`${MANIFEST_PATH} at ${at} names no 40-hex boundHead, so the WP1 binding cannot be read`)
+  let diff
+  try {
+    diff = String(runGit(['diff', '--name-only', '--no-renames', '-z', `${boundHead}..${at}`]))
+  } catch (err) {
+    throw new Error(`the paths changed since the WP1 boundHead ${boundHead} cannot be read; run node scripts/wp1/fetch-ledger-commit.mjs first (${err && err.message ? err.message : err})`)
+  }
+  return { phase: manifest.phase, boundHead, changed: diff.split('\0').filter(Boolean) }
 }
 
 /** The newest push run of ci.yml on this commit (by run number, then id), or null. */
@@ -825,6 +932,7 @@ export function repoFromGitRemote(runGit = (args) => execFileSync('git', args, {
  * @param {any} [input.carryForward]        tests/wp1/carry-forward.json, or null
  * @param {string|null} [input.sha]         the commit being released
  * @param {(input: { repo: string, sha: string|null, declaration: any }) => Promise<object>} [input.readCarryForward]
+ * @param {{ phase?: unknown, boundHead: string, changed: string[] }|null} [input.binding]   readBinding's answer, for evaluateBinding
  * @param {(line: string) => void} [input.log]
  * @returns {Promise<{ exitCode: number, lines: string[], milestoneResult: MilestoneVerdict|null, modelsResult: ModelsVerdict|null, codexResult: ModelsVerdict|null, macosResult: MacosVerdict|null }>}
  */
@@ -840,8 +948,10 @@ export async function runGate({
   carryForward = null,
   sha = null,
   readCarryForward,
+  binding = null,
   log = (s) => console.log(s),
 } = {}) {
+  const bindingResult = evaluateBinding({ version, declaration: carryForward, binding })
   const lines = []
   let milestoneResult = null
   let modelsResult = null
@@ -892,7 +1002,8 @@ export async function runGate({
 
   lines.push(...formatReport({ version, repo, milestoneResult, modelsResult, expectedMeta: expected, codexResult, codexMeta: codexExpected, macosResult }))
   lines.push(...formatCarryForward(carryResult))
-  const ok = milestoneResult.ok && modelsResult.ok && codexResult.ok && macosResult.ok && (carryResult === null || carryResult.ok)
+  lines.push(...formatBinding(bindingResult))
+  const ok = milestoneResult.ok && modelsResult.ok && codexResult.ok && macosResult.ok && (carryResult === null || carryResult.ok) && bindingResult.ok
   lines.push('')
   lines.push(ok ? `PASS  v${version} may be cut.` : `REFUSED  v${version} must not be cut until the FAIL lines above are cleared.`)
   for (const l of lines) log(l)
@@ -939,8 +1050,20 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
   const get = (p) => githubGet(p, { token, fetchImpl })
   let sha = env.GITHUB_SHA || null
   if (!sha) try { sha = String(runGit(['rev-parse', 'HEAD'])).trim() } catch { sha = null }
+  // The WP1 binding, read from git on its own, only for the cuts it applies
+  // to (a stable cut, or one a declaration carries): every other cut makes no
+  // new call.
+  let binding = null
+  if (evaluateBinding({ version, declaration: carryForward, binding: null }).applies) {
+    try {
+      binding = readBinding(runGit, sha)
+    } catch (err) {
+      console.error(`Release gate: CANNOT EVALUATE — ${err.message}`)
+      return EXIT_CANNOT_EVALUATE
+    }
+  }
   const readCarryForward = (input) => readCarryForwardApi({ ...input, get })
-  const { exitCode } = await run({ version, repo, listAll, registry, expected, codexExpected, electronVersion: readElectronVersion(), macosFloors, carryForward, sha, readCarryForward })
+  const { exitCode } = await run({ version, repo, listAll, registry, expected, codexExpected, electronVersion: readElectronVersion(), macosFloors, carryForward, sha, readCarryForward, binding })
   return exitCode
 }
 
