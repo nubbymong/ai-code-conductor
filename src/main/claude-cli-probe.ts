@@ -1,5 +1,6 @@
 import { execFile } from 'child_process'
 import * as os from 'os'
+import { isAbsolute } from 'path'
 import { logInfo } from './debug-logger'
 import { findOnPosixPath, findOnPosixPathAsync, loginShellPathAsync, loginShellPathSync, loginShellWithOwnPath, shFamilyLoginShell } from './login-shell'
 import { findOnWindowsPathAsync, findWithPowerShellProfile, isRegularFileAsync, windowsEnvValue, windowsPathRefreshCount, type PowerShellProfileLookup } from './windows-programs'
@@ -64,26 +65,60 @@ function firstLine(out: string | Buffer): string | null {
   return line || null
 }
 
+/** One probe candidate's answer: its first output line, or null; `miss` true
+ *  only for a plain "not found" (it ran to its end and exited non-zero, the
+ *  `command -v`/`which` miss), false when there is no answer to go by. */
+interface ProbeStep { line: string | null; miss: boolean }
+
+/** An execFile error that is a plain miss: the process ended on its own with
+ *  a non-zero exit code. Not one ended by the timeout or a signal (`killed`,
+ *  `signal`), nor one that could not start (its code is a name such as
+ *  ENOENT). */
+function isPlainMiss(err: unknown): boolean {
+  const e = err as { code?: unknown; killed?: unknown; signal?: unknown } | null
+  return !!e && typeof e.code === 'number' && e.code !== 0 && !e.killed && !e.signal
+}
+
+/** The folder the login-shell probe runs in: the home folder, as the login
+ *  shell's own PATH question runs (login-shell.ts loginShellPathRun), never
+ *  the app's working folder. A login shell in POSIX mode answers `command -v`
+ *  for a relative PATH entry (`node_modules/.bin`, `.`) with an absolute path
+ *  under the folder it runs in, so a probe started in a terminal's project
+ *  folder could name a claude in that project, and every later headless run,
+ *  in any folder, would put that folder first on PATH. `/` when there is no
+ *  absolute home folder to name. */
+function probeCwd(): string {
+  try {
+    const home = os.homedir()
+    if (home && isAbsolute(home)) return home
+  } catch { /* no home folder */ }
+  return '/'
+}
+
 /**
- * Run one probe candidate and resolve its first output line, or null.
+ * Run one probe candidate and resolve its first output line, or null, and
+ * whether a null is a plain miss (ProbeStep).
  *
  * Never rejects: a non-zero exit (the `where`/`command -v` miss), a missing
  * binary, a timeout kill and a synchronous spawn throw are all the same answer
- * to this function's question — "no". stderr is captured by execFile rather than
- * inherited, so a probe miss cannot leak "INFO: Could not find files..." into
- * whatever terminal launched the app (the job the old `stdio` option did).
+ * to the question "did it find claude" — "no". Only the first is a plain
+ * "not found"; the rest give no answer to go by. stderr is captured by
+ * execFile rather than inherited, so a probe miss cannot leak "INFO: Could not
+ * find files..." into whatever terminal launched the app (the job the old
+ * `stdio` option did). `cwd`, when given, is the folder it runs in (else the
+ * app's own).
  */
-function probeOnce(bin: string, args: string[]): Promise<string | null> {
+function probeOnce(bin: string, args: string[], cwd?: string): Promise<ProbeStep> {
   return new Promise((resolve) => {
     try {
       execFile(
         bin,
         args,
-        { encoding: 'utf-8', timeout: 8000, windowsHide: true },
-        (err, stdout) => resolve(err ? null : firstLine(stdout ?? '')),
+        { encoding: 'utf-8', timeout: 8000, windowsHide: true, ...(cwd ? { cwd } : {}) },
+        (err, stdout) => resolve(err ? { line: null, miss: isPlainMiss(err) } : { line: firstLine(stdout ?? ''), miss: false }),
       )
     } catch {
-      resolve(null)
+      resolve({ line: null, miss: false })
     }
   })
 }
@@ -372,21 +407,32 @@ async function runProbe(): Promise<ClaudeCliProbe> {
     return { installed: true, path: own.claude, probe: 'login shell PATH' }
   }
   const shell = shFamilyLoginShell(process.env, os.platform())
-  const viaLoginShell = await probeOnce(shell, ['-lc', 'command -v claude'])
-  if (viaLoginShell) {
-    logInfo(`[setup] Claude CLI found: ${viaLoginShell} (${shell} -lc "command -v claude")`)
-    return { installed: true, path: viaLoginShell, probe: `${shell} -lc 'command -v claude'` }
+  const viaLoginShell = await probeOnce(shell, ['-lc', 'command -v claude'], probeCwd())
+  if (viaLoginShell.line) {
+    logInfo(`[setup] Claude CLI found: ${viaLoginShell.line} (${shell} -lc "command -v claude")`)
+    return { installed: true, path: viaLoginShell.line, probe: `${shell} -lc 'command -v claude'` }
   }
 
   const viaWhich = await probeOnce('which', ['claude'])
-  if (viaWhich) {
-    logInfo(`[setup] Claude CLI found: ${viaWhich} (which claude)`)
-    return { installed: true, path: viaWhich, probe: 'which claude' }
+  if (viaWhich.line) {
+    logInfo(`[setup] Claude CLI found: ${viaWhich.line} (which claude)`)
+    return { installed: true, path: viaWhich.line, probe: 'which claude' }
   }
 
   logInfo('[setup] Claude CLI NOT found (login shell and `which` both missed)')
-  return { installed: false, probe: 'command -v claude' }
+  const none: ClaudeCliProbe = { installed: false, probe: 'command -v claude' }
+  // The login shell's own answer decides whether this is a plain "not found":
+  // `which` asks with the app's PATH, which is the PATH that lacks it.
+  if (!viaLoginShell.miss) unanswered.add(none)
+  return none
 }
+
+/** runProbe's answers off Windows that found no Claude Code because the
+ *  login shell gave no answer to go by (ended by its timeout or a signal,
+ *  could not start, or printed nothing usable), not because its
+ *  `command -v` said no. probeClaudeCli keeps the path found before for
+ *  these (keepFoundPath). */
+const unanswered = new WeakSet<ClaudeCliProbe>()
 
 /**
  * The single probe a set of overlapping callers share.
@@ -397,33 +443,53 @@ async function runProbe(): Promise<ClaudeCliProbe> {
  * change between two calls a millisecond apart. Cleared on settle, so the NEXT
  * call after an install genuinely re-probes. This coalesces concurrent work:
  * probeClaudeCli never answers from an earlier probe. The one thing kept
- * between calls is the path the last probe found (lastFound below), which only
- * a headless run off Windows reads.
+ * between calls is the path a probe found (lastFound below), which only a
+ * headless run off Windows reads.
  */
 let inFlight: Promise<ClaudeCliProbe> | null = null
 
-/** The path the last probe that answered found; null when it found none, or
- *  before any probe has answered. Read by a headless run off Windows
+/** The path a probe found (keepFoundPath): set by a probe that finds one,
+ *  cleared by one that says plainly "not found" (or runs on Windows and finds
+ *  none), and kept through one with no answer to go by (a login shell that
+ *  timed out, for example) while a file is still there. Null before any
+ *  probe has found one. Read by a headless run off Windows
  *  (claudeFoundByLastProbe). */
 let lastFound: string | null = null
 
 export function probeClaudeCli(): Promise<ClaudeCliProbe> {
   if (inFlight) return inFlight
   const run = runProbe().then(
-    (result) => { inFlight = null; lastFound = result.installed && result.path ? result.path : null; return result },
+    (result) => { inFlight = null; keepFoundPath(result); return result },
+    // A probe that rejects leaves the kept path as it is.
     (err) => { inFlight = null; throw err },
   )
   inFlight = run
   return run
 }
 
+/** lastFound after a probe's answer. Found: that path. A plain "not found"
+ *  (any answer runProbe did not mark `unanswered`, so every Windows answer
+ *  that found none): null. No answer to go by: the path found before, while
+ *  a file is still there. That check runs after the probe has settled and
+ *  holds nothing (a stat that hangs leaves the path as it is); an error
+ *  other than "no such file" keeps it. Never throws. */
+function keepFoundPath(result: ClaudeCliProbe): void {
+  if (result.installed && result.path) { lastFound = result.path; return }
+  if (!unanswered.has(result)) { lastFound = null; return }
+  const kept = lastFound
+  if (!kept) return
+  try {
+    isRegularFileAsync(kept).then((still) => { if (!still && lastFound === kept) lastFound = null }, () => { /* kept */ })
+  } catch { /* kept */ }
+}
+
 /** For a headless run off Windows (claude-headless.ts), which starts `claude`
- *  by name through sh: the Claude Code the last probe that answered found
- *  (null when it found none, or before any probe has answered), and the probe
- *  still running, if any. A run that finds no path here joins the probe still
- *  running: before the first answer (Sentinel's check at start runs while the
- *  start-up version probe is still asking), or after an answer that found
- *  none, while a later probe runs. Synchronous; starts nothing. */
+ *  by name through sh: the Claude Code a probe found and that is still kept
+ *  (lastFound: null when none has found one, or the last answer was a plain
+ *  "not found"). A run that finds no path here joins the probe still running
+ *  (claudeProbeInFlight): before any probe has found one (Sentinel's check at
+ *  start runs while the start-up version probe is still asking), or after a
+ *  plain "not found", while a later probe runs. Synchronous; starts nothing. */
 export function claudeFoundByLastProbe(): string | null {
   return lastFound
 }
