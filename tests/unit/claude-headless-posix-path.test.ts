@@ -13,10 +13,13 @@
 // is never started: execFile, the probe's only process, answers
 // `/bin/zsh -lc 'command -v claude'` itself. No real Claude Code starts.
 //
-// POSIX only (skipped on Windows, where a run starts Claude Code by the full
-// path found in PATH's folders, with no shell): on the owner's workstation this
-// file starts nothing.
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
+// The real runs are POSIX only (skipped on Windows, where a run starts Claude
+// Code by the full path found in PATH's folders, with no shell). One case runs
+// on every OS and proves a Windows run is untouched by the fix: it forces
+// win32, the Windows lookup names a fake claude.exe, and the Windows start
+// command only records what it was handed and refuses. So on the owner's
+// workstation this file starts nothing.
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -28,8 +31,38 @@ const h = vi.hoisted(() => ({
   answer: null as string | null,
   delayMs: 0,
   asked: [] as string[],
+  /** os.platform() while set (the Windows case's probe asks as on macOS). */
+  osPlatform: null as NodeJS.Platform | null,
+  winBin: 'C:\\Users\\A\\.local\\bin\\claude.exe',
+  winRefused: 'test: the Windows start is recorded here, never run',
+  /** What each Windows start command was handed. */
+  winStarts: [] as Array<{ program: string; PATH: string | undefined }>,
 }))
 
+// os.platform() picks the probe's branch (claude-cli-probe.ts runProbe). The
+// Windows case asks it as on macOS, so the probe's last answer is a POSIX path
+// on every host. Everything else in os is the real one.
+vi.mock('os', async (importOriginal) => {
+  const real = await importOriginal<typeof import('os')>()
+  const platform = (): NodeJS.Platform => h.osPlatform ?? real.platform()
+  return { ...real, platform, default: { ...real, platform } }
+})
+// The Windows lookup names a fake claude.exe. The probe and its last answer
+// are the real ones.
+vi.mock('../../src/main/claude-cli-probe', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/claude-cli-probe')>()),
+  recentClaudeOnWindows: () => null,
+  findClaudeOnWindowsAsync: async () => h.winBin,
+}))
+// The Windows start command records the environment it was handed and
+// refuses, so a Windows run here starts nothing.
+vi.mock('../../src/main/windows-programs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/windows-programs')>()),
+  windowsStartCommand: (program: string, _args: readonly string[], env: Record<string, string | undefined>) => {
+    h.winStarts.push({ program, PATH: env.PATH })
+    return { refused: h.winRefused }
+  },
+}))
 vi.mock('../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn(), logDebug: vi.fn() }))
 // env -i: the run's environment is h.env alone, never this process's.
 vi.mock('../../src/main/pty-manager', () => ({ withProfileHome: () => ({ ...h.env }) }))
@@ -57,7 +90,7 @@ vi.mock('child_process', async (importOriginal) => {
 })
 
 const { spawnClaudeHeadless, withClaudeFolderOnPath } = await import('../../src/main/claude-headless')
-const { probeClaudeCli, _resetClaudeCliProbeForTest } = await import('../../src/main/claude-cli-probe')
+const { probeClaudeCli, claudeFoundByLastProbe, claudeProbeInFlight, _resetClaudeCliProbeForTest } = await import('../../src/main/claude-cli-probe')
 
 const IS_WIN = process.platform === 'win32'
 const PREFIX = 'ccc-headless-posix-path-'
@@ -106,6 +139,8 @@ beforeEach(() => {
   h.answer = null
   h.delayMs = 0
   h.asked = []
+  h.osPlatform = null
+  h.winStarts = []
   for (const f of [path.join(nativeBin, 'path.txt'), path.join(nativeBin, 'home.txt'), path.join(npmBin, 'node-used.txt')]) fs.rmSync(f, { force: true })
 })
 
@@ -162,6 +197,43 @@ describe.skipIf(IS_WIN)('a headless run under launchd\'s bare PATH starts the Cl
     expect(fs.existsSync(path.join(nativeBin, 'path.txt'))).toBe(false)
     expect(h.asked).toEqual(['/bin/zsh -lc command -v claude', 'which claude'])
   }, 60_000)
+})
+
+// Every OS: the platform is forced to win32 and nothing is started (see the header).
+describe('a headless run on Windows is untouched by the POSIX PATH fix (every OS)', () => {
+  const hostPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  afterEach(() => { Object.defineProperty(process, 'platform', hostPlatform) })
+
+  it('does not wait on a running probe, does not use its last answer, and hands the Windows start PATH unchanged', async () => {
+    const WIN_PATH = 'C:\\Windows\\System32;C:\\Users\\A\\AppData\\Roaming\\npm'
+    const MAC_CLAUDE = '/opt/homebrew/bin/claude'
+    h.env = { PATH: WIN_PATH, SystemRoot: 'C:\\Windows' }
+    h.answer = MAC_CLAUDE
+    h.delayMs = 300
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    // The probe asks as on macOS, so its answer is the folder a POSIX run would put first.
+    const probeAsOnMac = (): ReturnType<typeof probeClaudeCli> => {
+      h.osPlatform = 'darwin'
+      try { return probeClaudeCli() } finally { h.osPlatform = null }
+    }
+    const refused = { code: 1, stdout: '', stderr: h.winRefused }
+
+    // (a) Nothing known and a probe still asking: a POSIX run would wait for it.
+    const probe = probeAsOnMac()
+    const first = await Promise.race([spawnClaudeHeadless(['--version'], 10_000), new Promise((r) => setTimeout(() => r('still waiting'), 20))])
+    expect(first).toEqual(refused)
+    expect(claudeProbeInFlight()).toBe(probe)
+    expect((await probe).path).toBe(MAC_CLAUDE)
+
+    // (b) A remembered answer: a POSIX run would put /opt/homebrew/bin first.
+    expect(claudeFoundByLastProbe()).toBe(MAC_CLAUDE)
+    expect(await spawnClaudeHeadless(['--version'], 10_000)).toEqual(refused)
+
+    // (c) Both Windows starts were handed the run's PATH as it was, and
+    // neither run asked a probe of its own.
+    expect(h.winStarts).toEqual([{ program: h.winBin, PATH: WIN_PATH }, { program: h.winBin, PATH: WIN_PATH }])
+    expect(h.asked).toEqual(['/bin/zsh -lc command -v claude'])
+  })
 })
 
 describe('withClaudeFolderOnPath (the PATH a POSIX run starts with)', () => {

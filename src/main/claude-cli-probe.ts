@@ -395,8 +395,10 @@ async function runProbe(): Promise<ClaudeCliProbe> {
  * from an effect that can re-fire), so without this a user — or a renderer loop —
  * multiplies the process count by the call count for an answer that cannot
  * change between two calls a millisecond apart. Cleared on settle, so the NEXT
- * call after an install genuinely re-probes; this coalesces concurrent work, it
- * does not cache a result.
+ * call after an install genuinely re-probes. This coalesces concurrent work:
+ * probeClaudeCli never answers from an earlier probe. The one thing kept
+ * between calls is the path the last probe found (lastFound below), which only
+ * a headless run off Windows reads.
  */
 let inFlight: Promise<ClaudeCliProbe> | null = null
 
@@ -418,9 +420,10 @@ export function probeClaudeCli(): Promise<ClaudeCliProbe> {
 /** For a headless run off Windows (claude-headless.ts), which starts `claude`
  *  by name through sh: the Claude Code the last probe that answered found
  *  (null when it found none, or before any probe has answered), and the probe
- *  still running, if any. A run that starts before the first answer joins it
- *  (Sentinel's check at start runs while the start-up version probe is still
- *  asking). Synchronous; starts nothing. */
+ *  still running, if any. A run that finds no path here joins the probe still
+ *  running: before the first answer (Sentinel's check at start runs while the
+ *  start-up version probe is still asking), or after an answer that found
+ *  none, while a later probe runs. Synchronous; starts nothing. */
 export function claudeFoundByLastProbe(): string | null {
   return lastFound
 }
