@@ -51,6 +51,7 @@ import {
   formatBinding,
   isCarryForwardNeutralFile,
   readBinding,
+  RELEASE_AUTHOR,
 } from '../../../scripts/release-gate.mjs'
 
 type Issue = { number: number; title: string; labels?: Array<{ name: string } | string>; pull_request?: object; state?: string }
@@ -560,7 +561,7 @@ describe('release-gate carry-forward (check 5)', () => {
   const ciRun = (over: Record<string, unknown> = {}) => ({ id: RUN, run_number: 7, head_sha: SHA, event: 'push', status: 'completed', conclusion: 'success', ...over })
   const PULL = { number: 650, merged: true, merge_commit_sha: SHA, head: { sha: HEAD } }
   const MERGE = { sha: SHA, parents: [{ sha: BASE }, { sha: HEAD }] }
-  const RELEASE = { tag_name: 'v2.1.1', draft: false, prerelease: false }
+  const RELEASE = { tag_name: 'v2.1.1', draft: false, prerelease: false, author: { login: 'github-actions[bot]', type: 'Bot' } }
   const marker = (verdict: string, head = HEAD, pr = 650) => `ADVERSARIAL-REVIEW v1 | ${verdict} | pr=#${pr} | head=${head} | content=${'c'.repeat(64)} | 0 blockers, 0 majors open`
   const comment = (body: string, over: Record<string, unknown> = {}) => ({ id: 1, created_at: '2026-10-17T10:00:00Z', author_association: 'OWNER', body, ...over })
   const TAG = { ref: 'refs/tags/v2.1.1', object: { type: 'commit', sha: BASE } }
@@ -678,7 +679,7 @@ describe('release-gate carry-forward (check 5)', () => {
     }
   })
 
-  it('check 5c refuses a base tag that is not a published release, not the latest release, or not the base commit, and dereferences an annotated tag once', () => {
+  it('check 5c refuses a base tag that is not a published release, not one the release workflow made, not the latest release, or not the base commit, and dereferences an annotated tag once', () => {
     const T = 'f'.repeat(40)
     const NOT_BASE = (is: string) => `v2.1.1 is ${is}, not the declared base ${BASE}`
     const UNPUBLISHED = 'v2.1.1 is not a published release (a GitHub release of that tag that is neither a draft nor a prerelease)'
@@ -689,6 +690,13 @@ describe('release-gate carry-forward (check 5)', () => {
     // And the repository's latest release: a release published later on another tag, or on a fake base, is not the base.
     for (const [latestRelease, is] of [[{ tag_name: 'v2.1.0' }, 'v2.1.0'], [{ ...RELEASE, tag_name: 'v2.2.0' }, 'v2.2.0'], [{}, 'unknown'], [null, 'unknown'], [undefined, 'unknown']] as Array<[unknown, string]>) {
       expect(verdict({ latestRelease }).problems, JSON.stringify(latestRelease)).toEqual([`v2.1.1 is not the repository's latest release (that is ${is})`])
+    }
+    // And one release.yml made: its author is the workflow's token, exactly; a person, another bot or none refuses.
+    expect(RELEASE_AUTHOR).toBe('github-actions[bot]')
+    const BY = (who: string) => `v2.1.1's release was not published by the release workflow (its author is ${who}, not github-actions[bot])`
+    for (const [author, who] of [[{ login: 'nubbymong', type: 'User' }, 'nubbymong'], [{ login: 'dependabot[bot]', type: 'Bot' }, 'dependabot[bot]'], [{ login: 'github-actions', type: 'User' }, 'github-actions'],
+      [{ login: 'GitHub-Actions[bot]', type: 'Bot' }, 'GitHub-Actions[bot]'], [{ type: 'Bot' }, 'unknown'], [null, 'unknown'], [undefined, 'unknown'], ['github-actions[bot]', 'unknown']] as Array<[unknown, string]>) {
+      expect(verdict({ release: { ...RELEASE, author }, latestRelease: { ...RELEASE, author } }).problems, JSON.stringify(author)).toEqual([BY(who)])
     }
     expect(verdict({ tagRef: { ...TAG, object: { type: 'commit', sha: HEAD } } }).problems).toEqual([NOT_BASE(HEAD)])
     expect(verdict({ tagRef: { ref: 'refs/tags/v2.1.1', object: { type: 'tag', sha: T } }, tagObject: { sha: T, object: { type: 'commit', sha: BASE } } }).problems).toEqual([])
