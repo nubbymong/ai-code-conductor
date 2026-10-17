@@ -104,16 +104,20 @@ from git at HEAD, never the working tree) declares every non-neutral file
 changed since the WP1 `boundHead`, with named regression tests, an owner
 decision and an ADR-009 PR. The suite's candidate check judges it: at most 16
 files, and in counted paths (outside `tests/`, `.github/` and two release
-scripts proven never packaged) at most 600 lines and no added line over 1000
-characters, all counted cumulatively from `boundHead`; only Markdown and the
-manifest may change under the neutral paths. Only when that file names the
-version being cut, the gate adds check 5: ci.yml's newest push run on the
-released commit completed and its three Test jobs (Windows, macOS, Linux)
-green, the
-declared PR merged as that commit (a merge of its final head onto the base)
-with an ADR-009 PASS at that head, and the base tag a published release on the
-declared base commit. Delete the file before the next qualified stable; the
-suite fails until it is gone.
+scripts proven never packaged) at most 600 lines, no added line over 1000
+characters and at most 64 KiB added, all counted cumulatively from
+`boundHead`; only Markdown and the manifest may change under the neutral
+paths. Only when that file names the version being cut, the gate adds check
+5: ci.yml's newest push run on the released commit completed and its three
+Test jobs (Windows, macOS, Linux) green, the declared PR merged as that commit
+(a merge of its final head onto the base) with an ADR-009 PASS at that head,
+and the base tag the repository's latest published release, on the declared
+base commit. On every stable cut, and every carried one, the gate also reads
+the paths changed since `boundHead` from git on its own, outside the test
+suite: with the file, they must be exactly the declared ones (plus Markdown
+and the manifest); without it, nothing outside the neutral paths may have
+changed. Delete the file before the next qualified stable; the suite fails
+until it is gone.
 
 Run it by hand at any time: `node scripts/release-gate.mjs [--version X]`
 (exit 0 pass, 1 refused, 2 could not evaluate — also a refusal).
