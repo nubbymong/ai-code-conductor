@@ -70,8 +70,9 @@
 //      annotated tag dereferenced once). Apart from GitHub, on every stable
 //      cut and every carried one, the gate reads the WP1 binding from git on
 //      its own (outside the suite, which a test setup file could blind):
-//      with a declaration, the paths changed since boundHead must be exactly
-//      the declared ones, plus Markdown and the manifest; without one, no
+//      with a declaration, the manifest's boundHead must be the declared one
+//      and the base manifest's, and the paths changed since it exactly the
+//      declared ones, plus Markdown and the manifest; without one, no
 //      path that breaks the binding may have changed.
 //      Anything missing, red, in progress or unreadable refuses the cut, and
 //      the declaration's path in another case, or a declaration that is not
@@ -486,13 +487,14 @@ const STABLE_VERSION_RE = /^\d+\.\d+\.\d+$/
  * The WP1 binding as the gate reads it on its own, outside the suite, so a
  * test setup file cannot blind both (ADR-027). It applies to a stable cut, and
  * to any cut a committed declaration carries forward to. With that
- * declaration, every path that breaks the binding since boundHead must be
- * declared, every declared path must have changed, and under a neutral path
- * only Markdown and the manifest may change. Without one, nothing that breaks
- * the binding may have changed. `binding` is what main read from git: the
- * manifest's phase and boundHead, and the paths changed since boundHead.
+ * declaration, the manifest's boundHead must be the declaration's
+ * base.boundHead and the one the base's own manifest is bound to, every path
+ * that breaks the binding since boundHead must be declared, every declared
+ * path must have changed, and under a neutral path only Markdown and the
+ * manifest may change. Without one, nothing that breaks the binding may have
+ * changed. `binding` is what main read from git (readBinding).
  *
- * @param {{ version: string, declaration: any, binding?: { phase?: unknown, boundHead: string, changed: string[] } | null }} input
+ * @param {{ version: string, declaration: any, binding?: { phase?: unknown, boundHead: string, changed: string[], baseBoundHead?: string|null } | null }} input
  * @returns {{ applies: boolean, ok: boolean, carried: boolean, problems: string[] }}
  */
 export function evaluateBinding({ version, declaration, binding }) {
@@ -504,6 +506,12 @@ export function evaluateBinding({ version, declaration, binding }) {
   if (!carried) {
     if (breaks.length > 0) problems.push(`${breaks.length} path(s) that break the WP1 binding changed since boundHead ${binding.boundHead}, and no carry-forward declaration for this version is committed: ${breaks.join(', ')}`)
   } else {
+    // The manifest's boundHead is a neutral field, so on its own it could be
+    // moved to just before the declaration: it must be the one the
+    // declaration names, and the one the base's own manifest is bound to.
+    const base = declaration.base && typeof declaration.base === 'object' ? declaration.base : {}
+    if (binding.boundHead !== base.boundHead) problems.push(`the manifest's boundHead ${binding.boundHead} is not the declaration's base.boundHead ${String(base.boundHead)}`)
+    if (binding.baseBoundHead !== binding.boundHead) problems.push(`the manifest at the base ${String(base.commit)} is bound to ${binding.baseBoundHead || 'nothing'}, not ${binding.boundHead}`)
     const declared = (Array.isArray(declaration.paths) ? declaration.paths : []).map((e) => (e && typeof e === 'object' ? e.path : undefined))
     for (const p of breaks) if (!declared.includes(p)) problems.push(`${p} changed since boundHead and is not declared`)
     for (const p of declared) if (!breaks.includes(p)) problems.push(binding.changed.includes(p) ? `${p} is declared but is binding-neutral` : `${String(p)} is declared but did not change since boundHead`)
@@ -524,13 +532,16 @@ export function formatBinding(r) {
 /**
  * What evaluateBinding needs, read from git at the commit being released:
  * the manifest's phase and boundHead, and every path changed since boundHead
- * (NUL-separated, renames unpaired). A manifest that cannot be read or names
- * no 40-hex boundHead, or a diff git cannot give, throws (cannot evaluate).
+ * (NUL-separated, renames unpaired); and, given the carried declaration, the
+ * boundHead of the manifest at its base commit. A manifest that cannot be
+ * read or names no 40-hex boundHead, or a diff git cannot give, throws
+ * (cannot evaluate).
  *
  * @param {(args: string[]) => string} runGit   git's output; throws when git fails
  * @param {string|null} sha
+ * @param {any} [declaration]   the committed declaration, when it carries this cut
  */
-export function readBinding(runGit, sha) {
+export function readBinding(runGit, sha, declaration = null) {
   const at = typeof sha === 'string' && SHA40_RE.test(sha) ? sha : 'HEAD'
   let manifest
   try {
@@ -546,7 +557,23 @@ export function readBinding(runGit, sha) {
   } catch (err) {
     throw new Error(`the paths changed since the WP1 boundHead ${boundHead} cannot be read; run node scripts/wp1/fetch-ledger-commit.mjs first (${err && err.message ? err.message : err})`)
   }
-  return { phase: manifest.phase, boundHead, changed: diff.split('\0').filter(Boolean) }
+  const out = { phase: manifest.phase, boundHead, changed: diff.split('\0').filter(Boolean) }
+  // For a carried cut, the boundHead the base's own manifest is bound to (null
+  // when the declaration names no 40-hex base commit, or that manifest none).
+  if (declaration) {
+    const baseCommit = declaration.base && typeof declaration.base === 'object' ? declaration.base.commit : undefined
+    if (typeof baseCommit !== 'string' || !SHA40_RE.test(baseCommit)) out.baseBoundHead = null
+    else {
+      let baseManifest
+      try {
+        baseManifest = JSON.parse(String(runGit(['show', `${baseCommit}:${MANIFEST_PATH}`])))
+      } catch (err) {
+        throw new Error(`${MANIFEST_PATH} at the base ${baseCommit} cannot be read (${err && err.message ? err.message : err})`)
+      }
+      out.baseBoundHead = baseManifest && typeof baseManifest.boundHead === 'string' ? baseManifest.boundHead : null
+    }
+  }
+  return out
 }
 
 /** The newest push run of ci.yml on this commit (by run number, then id), or null. */
@@ -1056,7 +1083,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
   let binding = null
   if (evaluateBinding({ version, declaration: carryForward, binding: null }).applies) {
     try {
-      binding = readBinding(runGit, sha)
+      binding = readBinding(runGit, sha, carryForwardApplies(version, carryForward) ? carryForward : null)
     } catch (err) {
       console.error(`Release gate: CANNOT EVALUATE — ${err.message}`)
       return EXIT_CANNOT_EVALUATE

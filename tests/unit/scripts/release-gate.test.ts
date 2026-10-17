@@ -573,7 +573,7 @@ describe('release-gate carry-forward (check 5)', () => {
   const page = (p: string) => new URL(`https://x${p}`).searchParams.get('page') ?? ''
   // Every cut here is a stable one, so the gate also reads the WP1 binding: by default nothing changed since boundHead.
   const BOUND = 'd'.repeat(40)
-  const CLEAN = { phase: 'candidate', boundHead: BOUND, changed: [] as string[] }
+  const CLEAN = { phase: 'candidate', boundHead: BOUND, changed: [] as string[], baseBoundHead: BOUND }
   const cut = (o: Record<string, unknown>) => gate({ binding: CLEAN, ...o })
 
   it('check 5 is a no-op with no declaration, or one for another version, and reads nothing from GitHub', async () => {
@@ -901,8 +901,8 @@ describe('release-gate carry-forward (check 5)', () => {
     expect(jobLines.map((l) => l.trim()).filter((l) => l.startsWith('run: node scripts/'))).toEqual(['run: node scripts/wp1/fetch-ledger-commit.mjs', 'run: node scripts/release-gate.mjs --version ${{ steps.version.outputs.milestone }}'])
   })
 
-  it('the gate reads the WP1 binding on its own: with a declaration the changed paths are exactly the declared ones, and without one nothing that breaks the binding changed', async () => {
-    const at = (changed: string[]) => ({ phase: 'candidate', boundHead: BOUND, changed })
+  it('the gate reads the WP1 binding on its own: with a declaration the boundHead is the one it and its base name and the changed paths are exactly the declared ones, and without one nothing that breaks the binding changed', async () => {
+    const at = (changed: string[], over: Record<string, unknown> = {}) => ({ phase: 'candidate', boundHead: BOUND, changed, baseBoundHead: BOUND, ...over })
     const FIX = 'src/main/fix.ts'
     const D = (paths: unknown[]) => decl({ paths: paths.map((path) => ({ path, tests: [] })) })
     // The neutral rules are the suite's own (tests/wp1/binding.ts imports these): the ones before ADR-027, and under them only Markdown and the manifest for a carry-forward.
@@ -922,6 +922,18 @@ describe('release-gate carry-forward (check 5)', () => {
       expect(carried([FIX, CARRY_FORWARD_PATH], [FIX, CARRY_FORWARD_PATH, p]), p).toEqual([`${p} changed under a binding-neutral path but is not Markdown or the manifest`])
     }
     expect(evaluateBinding({ version: '2.1.2', declaration: decl(), binding: at([FIX]) }).problems, 'paths missing').toEqual([`${FIX} changed since boundHead and is not declared`])
+    // A moved boundHead: the manifest's must be the declaration's base.boundHead, and the base's own manifest must be bound to it.
+    const E = 'e'.repeat(40)
+    const moved = (over: Record<string, unknown>) => evaluateBinding({ version: '2.1.2', declaration: D([CARRY_FORWARD_PATH]), binding: at([CARRY_FORWARD_PATH], over) }).problems
+    expect(moved({ boundHead: E, baseBoundHead: E })).toEqual([`the manifest's boundHead ${E} is not the declaration's base.boundHead ${BOUND}`])
+    expect(moved({ baseBoundHead: E })).toEqual([`the manifest at the base ${BASE} is bound to ${E}, not ${BOUND}`])
+    for (const baseBoundHead of [null, undefined]) expect(moved({ baseBoundHead }), String(baseBoundHead)).toEqual([`the manifest at the base ${BASE} is bound to nothing, not ${BOUND}`])
+    expect(moved({ boundHead: E })).toEqual([`the manifest's boundHead ${E} is not the declaration's base.boundHead ${BOUND}`, `the manifest at the base ${BASE} is bound to ${BOUND}, not ${E}`])
+    expect(evaluateBinding({ version: '2.1.2', declaration: decl({ base: undefined, paths: [{ path: CARRY_FORWARD_PATH }] }), binding: at([CARRY_FORWARD_PATH], { baseBoundHead: null }) }).problems).toEqual([
+      `the manifest's boundHead ${BOUND} is not the declaration's base.boundHead undefined`, `the manifest at the base undefined is bound to nothing, not ${BOUND}`,
+    ])
+    // Without a declaration the base is not read and not judged.
+    expect(evaluateBinding({ version: '2.1.2', declaration: null, binding: at([], { baseBoundHead: undefined }) }).ok).toBe(true)
     // Without one, on a stable cut: nothing that breaks the binding changed; neutral files may, as before ADR-027. A declaration for another version is none.
     expect(evaluateBinding({ version: '2.1.2', declaration: null, binding: at(['docs/x.json', 'README.md', MANIFEST_PATH]) })).toEqual({ applies: true, ok: true, carried: false, problems: [] })
     const BREAKS = (n: number, list: string) => `${n} path(s) that break the WP1 binding changed since boundHead ${BOUND}, and no carry-forward declaration for this version is committed: ${list}`
@@ -1001,6 +1013,31 @@ describe('release-gate carry-forward (check 5)', () => {
     const h = git(MAN)
     expect(readBinding(h.runGit, 'main')).toEqual({ phase: 'candidate', boundHead: BOUND, changed: [] })
     expect(h.calls).toEqual([['show', `HEAD:${MANIFEST_PATH}`], ['diff', '--name-only', '--no-renames', '-z', `${BOUND}..HEAD`]])
+    // A carried cut also reads the manifest at the declaration's base commit, and hands its boundHead to the gate.
+    const E = 'e'.repeat(40)
+    const carriedGit = (baseManifest: string | Error) => {
+      const calls: string[][] = []
+      const runGit = (args: string[]) => {
+        calls.push(args)
+        if (args[0] === 'ls-tree') return `100644 blob ${'b'.repeat(40)}\t${CARRY_FORWARD_PATH}\0`
+        if (args[0] === 'show' && args[1] === `HEAD:${CARRY_FORWARD_PATH}`) return JSON.stringify(decl())
+        if (args[0] === 'show' && args[1] === `${BASE}:${MANIFEST_PATH}`) { if (baseManifest instanceof Error) throw baseManifest; return baseManifest }
+        if (args[0] === 'show') return MAN
+        if (args[0] === 'diff') return ''
+        throw new Error(`unexpected git ${args.join(' ')}`)
+      }
+      return { runGit, calls }
+    }
+    const c = carriedGit(JSON.stringify({ phase: 'candidate', boundHead: E }))
+    seen.length = 0
+    expect(await main(argsFor('2.1.2'), env, { runGit: c.runGit, run })).toBe(EXIT_OK)
+    expect(c.calls.slice(2)).toEqual([['show', `${SHA}:${MANIFEST_PATH}`], ['diff', '--name-only', '--no-renames', '-z', `${BOUND}..${SHA}`], ['show', `${BASE}:${MANIFEST_PATH}`]])
+    expect(seen[0].binding).toEqual({ phase: 'candidate', boundHead: BOUND, changed: [], baseBoundHead: E })
+    // A base the declaration does not name as a 40-hex commit, or a base manifest with no boundHead, gives none (which the gate refuses); nothing more is read.
+    const odd = git(MAN)
+    expect(readBinding(odd.runGit, SHA, decl({ base: { tag: 'v2.1.1', commit: 'HEAD' } }))).toEqual({ phase: 'candidate', boundHead: BOUND, changed: [], baseBoundHead: null })
+    expect(odd.calls).toHaveLength(2)
+    expect(readBinding(carriedGit(JSON.stringify({ phase: 'gate0', boundHead: null })).runGit, SHA, decl()).baseBoundHead).toBeNull()
     // A manifest it cannot read, one with no 40-hex boundHead, or a diff git cannot give: cannot evaluate, and the gate does not run.
     const errors: string[] = []
     const realError = console.error
@@ -1021,6 +1058,12 @@ describe('release-gate carry-forward (check 5)', () => {
         expect(errors[0], String(why)).toMatch(/^Release gate: CANNOT EVALUATE/)
         expect(errors[0], String(why)).toMatch(why)
       }
+      // Nor can a carried cut whose base manifest git cannot give.
+      errors.length = 0
+      expect(await main(argsFor('2.1.2'), env, { runGit: carriedGit(new Error('fatal: bad object')).runGit, run })).toBe(EXIT_CANNOT_EVALUATE)
+      expect(errors).toHaveLength(1)
+      expect(errors[0]).toMatch(/^Release gate: CANNOT EVALUATE/)
+      expect(errors[0].endsWith(`${MANIFEST_PATH} at the base ${BASE} cannot be read (fatal: bad object)`), errors[0]).toBe(true)
     } finally {
       console.error = realError
     }
