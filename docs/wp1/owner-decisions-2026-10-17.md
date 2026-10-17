@@ -51,9 +51,11 @@ manifest is edited.
   Nor may more than 64 KiB (65,536 bytes) be added in counted paths; that cap
   was added in review, since the line caps alone let 600 lines of 1000
   characters through.
-- The base tag must also be the repository's latest release, and the release
+- The base tag must also be the repository's latest release, published by
+  the release workflow (its author `github-actions[bot]`), and the release
   gate reads the paths changed since boundHead from git on its own, outside
-  the test suite; both were added in review.
+  the test suite, with a boundHead that must match the declaration's and the
+  base's manifest; all were added in review.
 - The 2.1.1 security record (the commit that published it on beta) is carried
   onto the 2.1.2 branch, so the 2.1.1 entry in 2.1.2's changelog, and so its
   What's New history, carries those security lines. The changelog file is

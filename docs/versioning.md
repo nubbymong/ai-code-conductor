@@ -111,12 +111,16 @@ paths. Only when that file names the version being cut, the gate adds check
 5: ci.yml's newest push run on the released commit completed and its three
 Test jobs (Windows, macOS, Linux) green, the declared PR merged as that commit
 (a merge of its final head onto the base) with an ADR-009 PASS at that head,
-and the base tag the repository's latest published release, on the declared
-base commit. On every stable cut, and every carried one, the gate also reads
-the paths changed since `boundHead` from git on its own, outside the test
-suite: with the file, they must be exactly the declared ones (plus Markdown
-and the manifest); without it, nothing outside the neutral paths may have
-changed. Delete the file before the next qualified stable; the suite fails
+and the base tag the repository's latest published release, made by
+release.yml (author `github-actions[bot]`), on the declared base commit. On
+every stable cut, and every carried one, the gate also reads the paths
+changed since `boundHead` from git on its own, outside the test suite: with
+the file, `boundHead` must be the one it and its base's manifest name, and
+the paths exactly the declared ones (plus Markdown and the manifest);
+without it, nothing outside the neutral paths may have changed. The suite's
+repository-wide checks (packaging, `src/` reach, builder config) run only at
+the candidate phase, so a declaration merged back to beta does nothing
+there. Delete the file before the next qualified stable; the suite fails
 until it is gone.
 
 Run it by hand at any time: `node scripts/release-gate.mjs [--version X]`
