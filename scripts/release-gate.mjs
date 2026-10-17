@@ -53,6 +53,17 @@
 //      entry). A tag no updater offers (a dev cut) is not held to it. A
 //      missing or empty table, an entry it cannot read, or an Electron version
 //      that is not an exact one, FAILs (fail closed).
+//   5. CARRY-FORWARD  (ADR-027) Only when tests/wp1/carry-forward.json
+//      carries the previous stable's WP1 evidence forward to the version being
+//      cut; a no-op for every other cut. The suite's candidate case judges the
+//      declaration itself; this check takes what only GitHub knows, on the
+//      commit being released ($GITHUB_SHA, else HEAD): (a) CI's Test run on
+//      each of windows, macos and ubuntu is completed and green there; (b) the
+//      declared PR merged as that commit, and the latest ADR-009 verdict marker
+//      an owner, member or collaborator posted on it is a PASS at its final
+//      head; (c) the base tag points at the declared base commit (an annotated
+//      tag dereferenced once). Anything missing, red, in progress or
+//      unreadable refuses the cut.
 //
 // Usage
 //   node scripts/release-gate.mjs                      # version from package.json
@@ -107,6 +118,16 @@ export const DEFAULT_MACOS_FLOORS_PATH = path.join(ROOT, 'resources', 'macos-rel
 // The lock file, which names the exact Electron version the build installs
 // (check 4); it is tracked, so it is there before `npm ci`.
 export const DEFAULT_LOCK_PATH = path.join(ROOT, 'package-lock.json')
+// The carry-forward declaration (check 5); tests/wp1/binding.ts judges its shape.
+export const DEFAULT_CARRY_FORWARD_PATH = path.join(ROOT, 'tests', 'wp1', 'carry-forward.json')
+/** ci.yml's Test legs (`Test (${{ matrix.os }})`), by OS family. */
+export const TEST_CHECK_RE = /^Test \((windows|macos|ubuntu)-[A-Za-z0-9.-]+\)$/
+export const TEST_OS_FAMILIES = ['windows', 'macos', 'ubuntu']
+/** Who may post an ADR-009 verdict marker that counts. */
+export const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR']
+/** The first line of an ADR-009 verdict comment (.claude/skills/adversarial-review/adv-marker.sh). */
+export const MARKER_RE = /^ADVERSARIAL-REVIEW v1 \| (PASS|FINDINGS) \| pr=#(\d+) \| head=([0-9a-f]{40}) \| content=[0-9a-f]{64} \|/
+const SHA40_RE = /^[0-9a-f]{40}$/
 /** The registry family whose models Codex sessions run (familyProvider in
  *  src/shared/model-registry.ts). */
 export const CODEX_FAMILY = 'codex'
@@ -402,6 +423,65 @@ export function evaluateMacosFloor({ version, electronVersion, floors }) {
   }
 }
 
+// -- the carry-forward (check 5, ADR-027) --
+
+/** @typedef {{ ok: boolean, applies: boolean, problems: string[], pr?: unknown, families?: Record<string, string[]>, head?: unknown, tag?: unknown, base?: unknown }} CarryForwardVerdict */
+
+/** Check 5 applies only when the declaration carries forward to the version being cut. */
+export function carryForwardApplies(version, declaration) {
+  return !!declaration && typeof declaration === 'object' && declaration.targetVersion === version
+}
+
+/**
+ * The carry-forward verdict, over what GitHub answered (readCarryForwardApi).
+ *
+ * @param {object} input
+ * @param {string} input.version
+ * @param {string|null} input.sha          the commit being released
+ * @param {any} input.declaration          tests/wp1/carry-forward.json, or null
+ * @param {any[]} [input.checkRuns]        commits/{sha}/check-runs?filter=latest, every page
+ * @param {any} [input.pull]               pulls/{adversarial.pr}
+ * @param {any[]} [input.comments]         issues/{adversarial.pr}/comments, every page
+ * @param {any} [input.tagRef]             git/ref/tags/{base.tag}
+ * @param {any} [input.tagObject]          git/tags/{sha}, when that tag is annotated
+ * @returns {CarryForwardVerdict}
+ */
+export function evaluateCarryForward({ version, sha, declaration, checkRuns, pull, comments, tagRef, tagObject }) {
+  if (!carryForwardApplies(version, declaration)) return { ok: true, applies: false, problems: [] }
+  const problems = []
+  const pr = declaration.adversarial && declaration.adversarial.pr
+  const base = declaration.base && typeof declaration.base === 'object' ? declaration.base : {}
+  if (typeof sha !== 'string' || !SHA40_RE.test(sha)) problems.push(`the release commit ${JSON.stringify(sha)} is not a 40-hex commit id`)
+  // (a) the Test legs, from GitHub Actions, completed and green on this commit.
+  const legs = (Array.isArray(checkRuns) ? checkRuns : []).filter((r) => r && r.app && r.app.slug === 'github-actions'
+    && r.head_sha === sha && TEST_CHECK_RE.test(String(r.name)))
+  const families = Object.fromEntries(TEST_OS_FAMILIES.map((f) => [f, legs.filter((r) => TEST_CHECK_RE.exec(r.name)[1] === f).map((r) => r.name)]))
+  for (const f of TEST_OS_FAMILIES) if (families[f].length === 0) problems.push(`no "Test (${f}-...)" run from GitHub Actions on ${sha}`)
+  for (const r of legs) if (r.status !== 'completed' || r.conclusion !== 'success') problems.push(`${r.name} on ${sha} is ${r.status === 'completed' ? r.conclusion : r.status}, not green`)
+  // (b) the declared PR merged as this commit, with a PASS at its final head.
+  const head = pull && pull.head ? pull.head.sha : undefined
+  if (!Number.isInteger(pr) || pr <= 0) problems.push('the declaration names no ADR-009 PR (adversarial.pr)')
+  else {
+    if (!pull || pull.number !== pr || pull.merged !== true || pull.merge_commit_sha !== sha) problems.push(`PR #${pr} is not merged as ${sha}`)
+    const markers = (Array.isArray(comments) ? comments : [])
+      .filter((c) => c && TRUSTED_ASSOCIATIONS.includes(c.author_association))
+      .map((c) => ({ c, m: MARKER_RE.exec(String(c.body ?? '').split(/\r?\n/)[0]) }))
+      .filter(({ m }) => m && Number(m[2]) === pr)
+      .sort((a, b) => (Date.parse(a.c.created_at) - Date.parse(b.c.created_at)) || (a.c.id - b.c.id))
+    const latest = markers.at(-1)
+    if (!latest) problems.push(`PR #${pr} has no ADR-009 verdict marker from an owner, member or collaborator`)
+    else if (latest.m[1] !== 'PASS') problems.push(`the latest ADR-009 verdict on PR #${pr} is ${latest.m[1]}`)
+    else if (latest.m[3] !== head) problems.push(`the ADR-009 PASS on PR #${pr} is for ${latest.m[3]}, not its final head ${head}`)
+  }
+  // (c) the base tag is the base commit.
+  const obj = tagRef && tagRef.ref === `refs/tags/${base.tag}` ? tagRef.object : null
+  const commit = !obj ? null
+    : obj.type === 'commit' ? obj.sha
+      : obj.type === 'tag' && tagObject && tagObject.sha === obj.sha && tagObject.object && tagObject.object.type === 'commit' ? tagObject.object.sha : null
+  if (typeof base.commit !== 'string' || !SHA40_RE.test(base.commit) || commit !== base.commit) problems.push(`${base.tag} is ${commit || 'not a tag of a commit'}, not the declared base ${base.commit}`)
+  return { ok: problems.length === 0, applies: true, problems, pr, families, head, tag: base.tag, base: base.commit }
+}
+
 /**
  * Render the verdicts as the lines the gate prints; a verdict left out prints nothing.
  *
@@ -481,6 +561,19 @@ export function formatReport({ version, repo, milestoneResult, modelsResult, exp
   return out
 }
 
+/**
+ * The lines check 5 prints after the others; nothing when it does not apply.
+ *
+ * @param {CarryForwardVerdict|null} carryResult
+ * @returns {string[]}
+ */
+export function formatCarryForward(carryResult) {
+  if (!carryResult || !carryResult.applies) return []
+  const r = carryResult
+  if (r.ok) return [`  OK    carry-forward: Test green on ${TEST_OS_FAMILIES.join(', ')}; PR #${r.pr} merged as this commit, ADR-009 PASS at its head ${String(r.head).slice(0, 12)}; ${r.tag} is ${String(r.base).slice(0, 12)}`]
+  return ['  FAIL  carry-forward: tests/wp1/carry-forward.json does not hold on GitHub (ADR-027)', ...r.problems.map((p) => `          - ${p}`)]
+}
+
 // ── GitHub access ───────────────────────────────────────────────────
 
 export function resolveToken(env = process.env, runGh = (args) => execFileSync('gh', args, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] })) {
@@ -500,17 +593,67 @@ export async function githubListAll(pathAndQuery, { token, fetchImpl = globalThi
   const all = []
   for (let page = 1; page <= maxPages; page++) {
     const sep = pathAndQuery.includes('?') ? '&' : '?'
-    const url = `https://api.github.com${pathAndQuery}${sep}per_page=${perPage}&page=${page}`
-    const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'ccc-release-gate', 'X-GitHub-Api-Version': '2022-11-28' }
-    if (token) headers.Authorization = `Bearer ${token}`
-    const res = await fetchImpl(url, { headers })
-    if (!res.ok) throw new Error(`GitHub API ${res.status} for ${pathAndQuery}`)
-    const chunk = await res.json()
+    const chunk = await githubGet(`${pathAndQuery}${sep}per_page=${perPage}&page=${page}`, { token, fetchImpl })
     if (!Array.isArray(chunk)) throw new Error(`GitHub API returned a non-array for ${pathAndQuery}`)
     all.push(...chunk)
     if (chunk.length < perPage) break
   }
   return all
+}
+
+/**
+ * One GET against api.github.com, parsed. Throws on non-2xx.
+ *
+ * @param {string} pathAndQuery
+ * @param {{ token?: string|null, fetchImpl?: typeof fetch }} [options]
+ * @returns {Promise<any>}
+ */
+export async function githubGet(pathAndQuery, { token, fetchImpl = globalThis.fetch } = {}) {
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'ccc-release-gate', 'X-GitHub-Api-Version': '2022-11-28' }
+  if (token) headers.Authorization = `Bearer ${token}`
+  const res = await fetchImpl(`https://api.github.com${pathAndQuery}`, { headers })
+  if (!res.ok) throw new Error(`GitHub API ${res.status} for ${pathAndQuery.replace(/[?&]per_page=.*$/, '')}`)
+  return res.json()
+}
+
+/** Every check run of a commits/{sha}/check-runs listing (an object, paged by total_count). */
+export async function listCheckRuns(get, pathAndQuery, { perPage = 100, maxPages = 10 } = {}) {
+  const runs = []
+  for (let page = 1; page <= maxPages; page++) {
+    const r = await get(`${pathAndQuery}${pathAndQuery.includes('?') ? '&' : '?'}per_page=${perPage}&page=${page}`)
+    if (!r || !Array.isArray(r.check_runs) || !Number.isInteger(r.total_count)) throw new Error(`GitHub API returned no check-run list for ${pathAndQuery}`)
+    runs.push(...r.check_runs)
+    if (runs.length >= r.total_count || r.check_runs.length < perPage) return runs
+  }
+  throw new Error(`more than ${perPage * maxPages} check runs for ${pathAndQuery}`)
+}
+
+/**
+ * What check 5 reads from GitHub, for evaluateCarryForward. A value the
+ * declaration gives in the wrong shape is never sent; the verdict refuses it.
+ *
+ * @param {{ repo: string, sha: string|null, declaration: any, get: (p: string) => Promise<any>, listAll: (p: string) => Promise<any[]> }} input
+ */
+export async function readCarryForwardApi({ repo, sha, declaration, get, listAll }) {
+  const pr = declaration && declaration.adversarial && declaration.adversarial.pr
+  const tag = declaration && declaration.base && declaration.base.tag
+  const out = {}
+  if (typeof sha === 'string' && SHA40_RE.test(sha)) out.checkRuns = await listCheckRuns(get, `/repos/${repo}/commits/${sha}/check-runs?filter=latest`)
+  if (Number.isInteger(pr) && pr > 0) {
+    out.pull = await get(`/repos/${repo}/pulls/${pr}`)
+    out.comments = await listAll(`/repos/${repo}/issues/${pr}/comments`)
+  }
+  if (typeof tag === 'string' && /^v\d+\.\d+\.\d+$/.test(tag)) {
+    out.tagRef = await get(`/repos/${repo}/git/ref/tags/${tag}`)
+    const o = out.tagRef && out.tagRef.object
+    if (o && o.type === 'tag' && SHA40_RE.test(String(o.sha))) out.tagObject = await get(`/repos/${repo}/git/tags/${o.sha}`)
+  }
+  return out
+}
+
+/** tests/wp1/carry-forward.json: null when there is none; one that cannot be read throws. */
+export function readCarryForwardFile(p = DEFAULT_CARRY_FORWARD_PATH) {
+  return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf-8')) : null
 }
 
 /** `owner/name` from a GitHub URL (https, ssh, or git+https), else null. */
@@ -539,7 +682,11 @@ export function repoFromGitRemote(runGit = (args) => execFileSync('git', args, {
  * refused, as an empty list is (fail closed). `electronVersion` (the exact
  * version package-lock.json resolves) and `macosFloors`
  * (resources/macos-release-floors.json) feed the macOS floor check; a caller
- * that leaves either out is refused too.
+ * that leaves either out is refused too. `carryForward` (the declaration, or
+ * null) decides whether check 5 applies; when it does, `readCarryForward`
+ * reads GitHub for the commit `sha`, and a caller that gives no reader
+ * cannot be evaluated (fail closed). Its verdict is printed after the others
+ * and decides the exit code with them.
  *
  * @param {object} [input]
  * @param {string} [input.version]          the milestone title, e.g. "2.1.0-beta.17"
@@ -550,6 +697,9 @@ export function repoFromGitRemote(runGit = (args) => execFileSync('git', args, {
  * @param {object|null} [input.codexExpected]   resources/codex-model-catalogue.json
  * @param {string} [input.electronVersion]
  * @param {unknown} [input.macosFloors]     resources/macos-release-floors.json
+ * @param {any} [input.carryForward]        tests/wp1/carry-forward.json, or null
+ * @param {string|null} [input.sha]         the commit being released
+ * @param {(input: { repo: string, sha: string|null, declaration: any }) => Promise<object>} [input.readCarryForward]
  * @param {(line: string) => void} [input.log]
  * @returns {Promise<{ exitCode: number, lines: string[], milestoneResult: MilestoneVerdict|null, modelsResult: ModelsVerdict|null, codexResult: ModelsVerdict|null, macosResult: MacosVerdict|null }>}
  */
@@ -562,6 +712,9 @@ export async function runGate({
   codexExpected,
   electronVersion,
   macosFloors,
+  carryForward = null,
+  sha = null,
+  readCarryForward,
   log = (s) => console.log(s),
 } = {}) {
   const lines = []
@@ -569,6 +722,7 @@ export async function runGate({
   let modelsResult = null
   let codexResult = null
   let macosResult = null
+  let carryResult = null
   let cannotEvaluate = null
 
   if (!version) cannotEvaluate = 'no version given and none readable from package.json'
@@ -595,6 +749,15 @@ export async function runGate({
     }
   }
 
+  if (!cannotEvaluate && carryForwardApplies(version, carryForward)) {
+    try {
+      if (typeof readCarryForward !== 'function') throw new Error('no GitHub reader was given')
+      carryResult = evaluateCarryForward({ version, sha, declaration: carryForward, ...(await readCarryForward({ repo, sha, declaration: carryForward })) })
+    } catch (err) {
+      cannotEvaluate = `could not read the carry-forward evidence from GitHub: ${err && err.message ? err.message : err}`
+    }
+  }
+
   if (cannotEvaluate) {
     lines.push(`Release gate for v${version || '?'}: CANNOT EVALUATE — ${cannotEvaluate}`)
     lines.push('An unevaluated gate is a refused gate. Fix the cause and re-run.')
@@ -603,7 +766,8 @@ export async function runGate({
   }
 
   lines.push(...formatReport({ version, repo, milestoneResult, modelsResult, expectedMeta: expected, codexResult, codexMeta: codexExpected, macosResult }))
-  const ok = milestoneResult.ok && modelsResult.ok && codexResult.ok && macosResult.ok
+  lines.push(...formatCarryForward(carryResult))
+  const ok = milestoneResult.ok && modelsResult.ok && codexResult.ok && macosResult.ok && (carryResult === null || carryResult.ok)
   lines.push('')
   lines.push(ok ? `PASS  v${version} may be cut.` : `REFUSED  v${version} must not be cut until the FAIL lines above are cleared.`)
   for (const l of lines) log(l)
@@ -627,12 +791,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const expectedPath = argValue(argv, '--expected') || DEFAULT_EXPECTED_PATH
   const codexExpectedPath = argValue(argv, '--codex-expected') || DEFAULT_CODEX_EXPECTED_PATH
 
-  let registry, expected, codexExpected, macosFloors
+  let registry, expected, codexExpected, macosFloors, carryForward
   try {
     registry = readJson(registryPath)
     expected = readJson(expectedPath)
     codexExpected = readJson(codexExpectedPath)
     macosFloors = readJson(DEFAULT_MACOS_FLOORS_PATH)
+    carryForward = readCarryForwardFile()
   } catch (err) {
     console.error(`Release gate: CANNOT EVALUATE — ${err.message}`)
     return EXIT_CANNOT_EVALUATE
@@ -641,7 +806,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const token = resolveToken(env)
   if (!token) console.error('Release gate: no GITHUB_TOKEN/GH_TOKEN and `gh auth token` gave nothing — trying unauthenticated (public repo, rate-limited)')
   const listAll = (p) => githubListAll(p, { token })
-  const { exitCode } = await runGate({ version, repo, listAll, registry, expected, codexExpected, electronVersion: readElectronVersion(), macosFloors })
+  const get = (p) => githubGet(p, { token })
+  let sha = env.GITHUB_SHA || null
+  if (!sha) try { sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() } catch { sha = null }
+  const readCarryForward = (input) => readCarryForwardApi({ ...input, get, listAll })
+  const { exitCode } = await runGate({ version, repo, listAll, registry, expected, codexExpected, electronVersion: readElectronVersion(), macosFloors, carryForward, sha, readCarryForward })
   return exitCode
 }
 
