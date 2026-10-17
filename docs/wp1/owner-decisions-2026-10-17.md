@@ -101,5 +101,11 @@ changes the headless runs (the setup version check, Insights and Sentinel's
 checks) that the carried real-CLI and packaged records describe; those
 records are carried, not retaken, and neither is the manual evidence (ADR-027,
 "What it cannot do"). What is taken instead is the whole suite on three
-operating systems, the fix's POSIX regression cases included, and the Mac
-runtime check of the PR's build under a test user.
+operating systems, the fix's POSIX regression cases included.
+
+**Mac runtime check skipped (owner, 2026-10-17).** A runtime check of the PR's
+build on a Mac, under a test user, was planned; it needed a one-time admin step
+on the Mac first. Offered the choice between that step and skipping the check,
+with the CI suite on macOS and the owner's own Dock launch of the released
+2.1.2 as what remains, the owner answered: "Lets just skip it". No packaged
+check is retaken for 2.1.2.
