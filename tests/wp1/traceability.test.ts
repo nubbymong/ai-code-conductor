@@ -18,7 +18,7 @@ import {
   CARRY_FORWARD_PATH, CARRY_FORWARD_SCHEMA, CARRY_FORWARD_MAX_PATHS, CARRY_FORWARD_MAX_SHIPPED_LINES, BINDING_NEUTRAL, NATIVE_TEST, RUNNABLE_TEST,
   CARRY_FORWARD_MAX_ADDED_LINE, CARRY_FORWARD_MAX_ADDED_BYTES, CARRY_FORWARD_GATE_FILES, DEV_ONLY_TOOLING, DEV_ONLY_TREES, addedBytes, addedLines,
   bindingVerdict, carryForwardProblems, changedLines, committedCarryForward, fileAt, isCarryForwardNeutralFile, isCountedPath, longAddedLines,
-  toolingPackagingProblems, outOfSrcImports, SRC_OUTSIDE_IMPORTS_ALLOWED, builderConfigProblems, BUILDER_OVERRIDES_ALLOWED, linkEntryProblems,
+  toolingPackagingProblems, outOfSrcImports, SRC_OUTSIDE_IMPORTS_ALLOWED, builderConfigProblems, BUILDER_OVERRIDES_ALLOWED, linkEntryProblems, carryForwardRepoChecksRun,
 } from './binding'
 import { DEEPEN_STEPS, deepenUntilDecidable, invocation, readBoundHead } from '../../scripts/wp1/fetch-ledger-commit.mjs'
 
@@ -1096,12 +1096,21 @@ describe('WP1 traceability manifest', () => {
     expect(toolingPackagingProblems({ files: ['out/**/*'], extends: null }, ['scripts/release-gate.mjs'], new Set(), () => false)).toEqual([])
   })
 
+  it('[host] carry-forward: the repository-level checks run only at the candidate phase with a declaration committed, so one merged back to a gate0 beta does nothing there', () => {
+    const text = JSON.stringify(cfDecl())
+    expect(carryForwardRepoChecksRun('candidate', text)).toBe(true)
+    for (const [p, t] of [['gate0', text], ['candidate', null], ['gate0', null], ['Candidate', text], ['', text]] as Array<[string, string | null]>) {
+      expect(carryForwardRepoChecksRun(p, t), `${p} ${t === null ? 'none' : 'declared'}`).toBe(false)
+    }
+  })
+
   // ADR-027: with a declaration in use, the size caps leave out only release
   // tooling this repository's packaging never ships, and the freeze covers
-  // every file that decides how the suite runs. With none, packaging and the
-  // test configs are not tied to this rule, so beta and dev CI stay free.
-  it('carry-forward: with a declaration in use, the tooling the caps leave out is never packaged, no src file reaches outside src but allowed data, and the gate files list every vitest config and setup file', () => {
-    if (committedCarry.text === null) return
+  // every file that decides how the suite runs. With none, or at gate0 (a
+  // declaration merged back to beta), packaging and the test configs are not
+  // tied to this rule, so beta and dev CI stay free.
+  it('carry-forward: with a declaration in use at the candidate phase, the tooling the caps leave out is never packaged, no src file reaches outside src but allowed data, and the gate files list every vitest config and setup file', () => {
+    if (!carryForwardRepoChecksRun(phase, committedCarry.text)) return
     const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')) as { build?: unknown }
     // What the app's build imports from outside src/: electron-vite's config, followed through relative imports.
     const imported = new Set<string>()

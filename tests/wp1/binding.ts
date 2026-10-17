@@ -529,6 +529,16 @@ export function builderConfigProblems(tracked: readonly string[], commands: Read
  *  the manifest. Any other file under a neutral prefix could be code nothing
  *  declares or counts. Shared with the release gate. */
 export const isCarryForwardNeutralFile: (p: string) => boolean = gateIsCarryForwardNeutralFile
+/** Whether the repository-level carry-forward checks run (the packaging
+ *  proof, the src reach scan, the electron-builder config, the gate-file list
+ *  against the vitest configs): only at the candidate phase, with a
+ *  declaration committed. A declaration merged back to beta, whose phase is
+ *  gate0, does nothing there, so beta and dev CI are not tied to it. (The
+ *  link and submodule check is part of carryForwardProblems, which only the
+ *  candidate case runs.) */
+export function carryForwardRepoChecksRun(phase: string, carryText: string | null): boolean {
+  return phase === 'candidate' && carryText !== null
+}
 /** The files that decide how the suite and the gate run. Once a base already
  *  has this rule, a carry-forward may change none of them, so a later patch
  *  cannot rewrite the check that judges it. */
