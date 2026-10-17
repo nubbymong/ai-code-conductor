@@ -53,6 +53,31 @@
 //      entry). A tag no updater offers (a dev cut) is not held to it. A
 //      missing or empty table, an entry it cannot read, or an Electron version
 //      that is not an exact one, FAILs (fail closed).
+//   5. CARRY-FORWARD  (ADR-027) Only when tests/wp1/carry-forward.json, as
+//      committed at HEAD (read from git, never the working tree), carries the
+//      previous stable's WP1 evidence forward to the version being cut; a
+//      no-op for every other cut. The suite's candidate case judges the
+//      declaration itself; this check takes what only GitHub knows, on the
+//      commit being released ($GITHUB_SHA, else HEAD): (a) ci.yml's newest
+//      push run on that commit is completed, and its Test jobs for windows,
+//      macos and ubuntu are each there and green (its other jobs do not
+//      gate); (b) the declared PR
+//      merged as that commit, a merge whose parents are the base commit and
+//      the PR's final head, and the latest ADR-009 verdict marker an owner,
+//      member or collaborator posted on it is a PASS at that head; (c) the
+//      base tag is a published release (no draft, no prerelease) that
+//      release.yml made (author github-actions[bot]), the repository's
+//      latest, that points at the declared base commit (an annotated tag
+//      dereferenced once). Apart from GitHub, on every stable cut and every
+//      carried one, the gate reads the WP1 binding from git on its own
+//      (outside the suite, which a test setup file could blind): with a
+//      declaration, the manifest's boundHead must be the declared one and the
+//      base manifest's, and the paths changed since it exactly the declared
+//      ones, plus Markdown and the manifest; without one, no path that breaks
+//      the binding may have changed.
+//      Anything missing, red, in progress or unreadable refuses the cut, and
+//      the declaration's path in another case, or a declaration that is not
+//      JSON, cannot be evaluated.
 //
 // Usage
 //   node scripts/release-gate.mjs                      # version from package.json
@@ -107,6 +132,23 @@ export const DEFAULT_MACOS_FLOORS_PATH = path.join(ROOT, 'resources', 'macos-rel
 // The lock file, which names the exact Electron version the build installs
 // (check 4); it is tracked, so it is there before `npm ci`.
 export const DEFAULT_LOCK_PATH = path.join(ROOT, 'package-lock.json')
+// The carry-forward declaration (check 5), read as committed at HEAD;
+// tests/wp1/binding.ts judges its shape.
+export const CARRY_FORWARD_PATH = 'tests/wp1/carry-forward.json'
+/** The workflow whose push run on the release commit check 5 reads. */
+export const CI_WORKFLOW = 'ci.yml'
+/** ci.yml's Test jobs (`Test (${{ matrix.os }})`), by OS family. */
+export const TEST_JOB_RE = /^Test \((windows|macos|ubuntu)-[A-Za-z0-9.-]+\)$/
+export const TEST_OS_FAMILIES = ['windows', 'macos', 'ubuntu']
+/** Who may post an ADR-009 verdict marker that counts. */
+export const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR']
+/** Who publishes a release release.yml makes: the workflow's GITHUB_TOKEN.
+ *  A release published by hand or through the API with a person's token has
+ *  that person as its author, and is not a base a carry-forward accepts. */
+export const RELEASE_AUTHOR = 'github-actions[bot]'
+/** The first line of an ADR-009 verdict comment (.claude/skills/adversarial-review/adv-marker.sh); the PR number exactly, no leading zero. */
+export const MARKER_RE = /^ADVERSARIAL-REVIEW v1 \| (PASS|FINDINGS) \| pr=#([1-9][0-9]*) \| head=([0-9a-f]{40}) \| content=[0-9a-f]{64} \|/
+const SHA40_RE = /^[0-9a-f]{40}$/
 /** The registry family whose models Codex sessions run (familyProvider in
  *  src/shared/model-registry.ts). */
 export const CODEX_FAMILY = 'codex'
@@ -402,6 +444,225 @@ export function evaluateMacosFloor({ version, electronVersion, floors }) {
   }
 }
 
+// -- the WP1 binding's neutral paths (shared with tests/wp1/binding.ts) --
+
+/** The WP1 traceability manifest. */
+export const MANIFEST_PATH = 'tests/wp1/traceability.json'
+
+// What may change after the WP1 binding without breaking it: the manifest
+// (the commit that records boundHead edits it), and text that nothing in the
+// app, its build or its packaged files reads: docs/ (the evidence files there
+// are pinned again by each record's sha256), the running log, the ADRs and the
+// top-level Markdown. Everything else breaks it: src, tests, scripts,
+// resources, build, the workflows, package.json and its lockfile, every
+// config, and any path added later, so a new kind of file is covered without
+// anyone widening a list. The suite (tests/wp1/binding.ts) and this gate use
+// this one list.
+export const BINDING_NEUTRAL = [
+  /^tests\/wp1\/traceability\.json$/,
+  /^docs\//,
+  /^CONTEXT\.d\//,
+  /^architecture\/decisions\/[^/]+\.md$/,
+  /^[^/]+\.md$/,
+]
+
+/** The changed paths that break the WP1 evidence binding. */
+export function bindingBreaksOf(changed) {
+  return changed.filter((p) => !BINDING_NEUTRAL.some((re) => re.test(p)))
+}
+
+/** The only binding-neutral paths a carry-forward lets change: Markdown, and
+ *  the manifest. Any other file under a neutral prefix could be code nothing
+ *  declares or counts. */
+export const isCarryForwardNeutralFile = (p) => p === MANIFEST_PATH || /\.md$/.test(p)
+
+// -- the carry-forward (check 5, ADR-027) --
+
+/** @typedef {{ ok: boolean, applies: boolean, problems: string[], pr?: unknown, families?: Record<string, string[]>, head?: unknown, tag?: unknown, base?: unknown }} CarryForwardVerdict */
+
+/** Check 5 applies only when the declaration carries forward to the version being cut. */
+export function carryForwardApplies(version, declaration) {
+  return !!declaration && typeof declaration === 'object' && declaration.targetVersion === version
+}
+
+/** A stable x.y.z version: the cuts the WP1 binding guards. */
+const STABLE_VERSION_RE = /^\d+\.\d+\.\d+$/
+
+/**
+ * The WP1 binding as the gate reads it on its own, outside the suite, so a
+ * test setup file cannot blind both (ADR-027). It applies to a stable cut, and
+ * to any cut a committed declaration carries forward to. With that
+ * declaration, the manifest's boundHead must be the declaration's
+ * base.boundHead and the one the base's own manifest is bound to, every path
+ * that breaks the binding since boundHead must be declared, every declared
+ * path must have changed, and under a neutral path only Markdown and the
+ * manifest may change. Without one, nothing that breaks the binding may have
+ * changed. `binding` is what main read from git (readBinding).
+ *
+ * @param {{ version: string, declaration: any, binding?: { phase?: unknown, boundHead: string, changed: string[], baseBoundHead?: string|null } | null }} input
+ * @returns {{ applies: boolean, ok: boolean, carried: boolean, problems: string[] }}
+ */
+export function evaluateBinding({ version, declaration, binding }) {
+  const carried = carryForwardApplies(version, declaration)
+  if (!carried && !STABLE_VERSION_RE.test(String(version))) return { applies: false, ok: true, carried, problems: [] }
+  if (!binding || !Array.isArray(binding.changed)) return { applies: true, ok: false, carried, problems: ['the paths changed since the WP1 boundHead were not read'] }
+  const breaks = bindingBreaksOf(binding.changed)
+  const problems = []
+  if (!carried) {
+    if (breaks.length > 0) problems.push(`${breaks.length} path(s) that break the WP1 binding changed since boundHead ${binding.boundHead}, and no carry-forward declaration for this version is committed: ${breaks.join(', ')}`)
+  } else {
+    // The manifest's boundHead is a neutral field, so on its own it could be
+    // moved to just before the declaration: it must be the one the
+    // declaration names, and the one the base's own manifest is bound to.
+    const base = declaration.base && typeof declaration.base === 'object' ? declaration.base : {}
+    if (binding.boundHead !== base.boundHead) problems.push(`the manifest's boundHead ${binding.boundHead} is not the declaration's base.boundHead ${String(base.boundHead)}`)
+    if (binding.baseBoundHead !== binding.boundHead) problems.push(`the manifest at the base ${String(base.commit)} is bound to ${binding.baseBoundHead || 'nothing'}, not ${binding.boundHead}`)
+    const declared = (Array.isArray(declaration.paths) ? declaration.paths : []).map((e) => (e && typeof e === 'object' ? e.path : undefined))
+    for (const p of breaks) if (!declared.includes(p)) problems.push(`${p} changed since boundHead and is not declared`)
+    for (const p of declared) if (!breaks.includes(p)) problems.push(binding.changed.includes(p) ? `${p} is declared but is binding-neutral` : `${String(p)} is declared but did not change since boundHead`)
+    for (const p of binding.changed) if (!breaks.includes(p) && !isCarryForwardNeutralFile(p)) problems.push(`${p} changed under a binding-neutral path but is not Markdown or the manifest`)
+  }
+  return { applies: true, ok: problems.length === 0, carried, problems }
+}
+
+/** The lines the binding check prints: a FAIL when it does not hold, an OK
+ *  only for a carry-forward, and nothing for a cut it does not apply to or a
+ *  qualified stable it passes, so those reports stay as they were. */
+export function formatBinding(r) {
+  if (!r || !r.applies) return []
+  if (r.ok) return r.carried ? ['  OK    binding: every path that breaks the WP1 binding since boundHead is declared, and nothing else changed but Markdown and the manifest'] : []
+  return ['  FAIL  binding: the paths changed since the WP1 boundHead do not hold (ADR-027)', ...r.problems.map((p) => `          - ${p}`)]
+}
+
+/**
+ * What evaluateBinding needs, read from git at the commit being released:
+ * the manifest's phase and boundHead, and every path changed since boundHead
+ * (NUL-separated, renames unpaired); and, given the carried declaration, the
+ * boundHead of the manifest at its base commit. A manifest that cannot be
+ * read or names no 40-hex boundHead, or a diff git cannot give, throws
+ * (cannot evaluate).
+ *
+ * @param {(args: string[]) => string} runGit   git's output; throws when git fails
+ * @param {string|null} sha
+ * @param {any} [declaration]   the committed declaration, when it carries this cut
+ */
+export function readBinding(runGit, sha, declaration = null) {
+  const at = typeof sha === 'string' && SHA40_RE.test(sha) ? sha : 'HEAD'
+  let manifest
+  try {
+    manifest = JSON.parse(String(runGit(['show', `${at}:${MANIFEST_PATH}`])))
+  } catch (err) {
+    throw new Error(`${MANIFEST_PATH} at ${at} cannot be read (${err && err.message ? err.message : err})`)
+  }
+  const boundHead = manifest && manifest.boundHead
+  if (typeof boundHead !== 'string' || !SHA40_RE.test(boundHead)) throw new Error(`${MANIFEST_PATH} at ${at} names no 40-hex boundHead, so the WP1 binding cannot be read`)
+  let diff
+  try {
+    diff = String(runGit(['diff', '--name-only', '--no-renames', '-z', `${boundHead}..${at}`]))
+  } catch (err) {
+    throw new Error(`the paths changed since the WP1 boundHead ${boundHead} cannot be read; run node scripts/wp1/fetch-ledger-commit.mjs first (${err && err.message ? err.message : err})`)
+  }
+  const out = { phase: manifest.phase, boundHead, changed: diff.split('\0').filter(Boolean) }
+  // For a carried cut, the boundHead the base's own manifest is bound to (null
+  // when the declaration names no 40-hex base commit, or that manifest none).
+  if (declaration) {
+    const baseCommit = declaration.base && typeof declaration.base === 'object' ? declaration.base.commit : undefined
+    if (typeof baseCommit !== 'string' || !SHA40_RE.test(baseCommit)) out.baseBoundHead = null
+    else {
+      let baseManifest
+      try {
+        baseManifest = JSON.parse(String(runGit(['show', `${baseCommit}:${MANIFEST_PATH}`])))
+      } catch (err) {
+        throw new Error(`${MANIFEST_PATH} at the base ${baseCommit} cannot be read (${err && err.message ? err.message : err})`)
+      }
+      out.baseBoundHead = baseManifest && typeof baseManifest.boundHead === 'string' ? baseManifest.boundHead : null
+    }
+  }
+  return out
+}
+
+/** The newest push run of ci.yml on this commit (by run number, then id), or null. */
+export function latestCiRun(runs, sha) {
+  const mine = (Array.isArray(runs) ? runs : []).filter((r) => r && r.head_sha === sha && r.event === 'push' && Number.isInteger(r.id))
+  return mine.sort((a, b) => (a.run_number - b.run_number) || (a.id - b.id)).at(-1) ?? null
+}
+
+/**
+ * The carry-forward verdict, over what GitHub answered (readCarryForwardApi).
+ *
+ * @param {object} input
+ * @param {string} input.version
+ * @param {string|null} input.sha          the commit being released
+ * @param {any} input.declaration          tests/wp1/carry-forward.json as committed, or null
+ * @param {any[]} [input.ciRuns]           actions/workflows/ci.yml/runs?head_sha={sha}&event=push, every page
+ * @param {any[]} [input.ciJobs]           actions/runs/{newest run}/jobs?filter=latest, every page
+ * @param {any} [input.releaseCommit]      git/commits/{sha}
+ * @param {any} [input.pull]               pulls/{adversarial.pr}
+ * @param {any[]} [input.comments]         issues/{adversarial.pr}/comments, every page
+ * @param {any} [input.tagRef]             git/ref/tags/{base.tag}
+ * @param {any} [input.tagObject]          git/tags/{sha}, when that tag is annotated
+ * @param {any} [input.release]            releases/tags/{base.tag}
+ * @param {any} [input.latestRelease]      releases/latest
+ * @returns {CarryForwardVerdict}
+ */
+export function evaluateCarryForward({ version, sha, declaration, ciRuns, ciJobs, releaseCommit, pull, comments, tagRef, tagObject, release, latestRelease }) {
+  if (!carryForwardApplies(version, declaration)) return { ok: true, applies: false, problems: [] }
+  const problems = []
+  const pr = declaration.adversarial && declaration.adversarial.pr
+  const base = declaration.base && typeof declaration.base === 'object' ? declaration.base : {}
+  if (typeof sha !== 'string' || !SHA40_RE.test(sha)) problems.push(`the release commit ${JSON.stringify(sha)} is not a 40-hex commit id`)
+  // (a) ci.yml's newest push run on this commit, its latest attempt completed,
+  // and its three Test jobs green; the run's other jobs do not gate.
+  const run = latestCiRun(ciRuns, sha)
+  const families = Object.fromEntries(TEST_OS_FAMILIES.map((f) => [f, []]))
+  if (!run) problems.push(`no push run of ${CI_WORKFLOW} on ${sha}`)
+  else {
+    if (run.status !== 'completed') problems.push(`the ${CI_WORKFLOW} push run ${run.id} on ${sha} is ${run.status}, not completed`)
+    const legs = (Array.isArray(ciJobs) ? ciJobs : []).filter((j) => j && j.run_id === run.id && TEST_JOB_RE.test(String(j.name)))
+    for (const j of legs) families[TEST_JOB_RE.exec(j.name)[1]].push(j.name)
+    for (const f of TEST_OS_FAMILIES) if (families[f].length === 0) problems.push(`no "Test (${f}-...)" job in the ${CI_WORKFLOW} push run ${run.id}`)
+    for (const j of legs) if (j.status !== 'completed' || j.conclusion !== 'success') problems.push(`${j.name} in the ${CI_WORKFLOW} push run ${run.id} is ${j.status === 'completed' ? j.conclusion : j.status}, not green`)
+  }
+  // (b) the declared PR merged as this commit, a merge of its final head onto
+  // the base, with a PASS at that head.
+  const head = pull && pull.head ? pull.head.sha : undefined
+  if (!Number.isInteger(pr) || pr <= 0) problems.push('the declaration names no ADR-009 PR (adversarial.pr)')
+  else {
+    if (!pull || pull.number !== pr || pull.merged !== true || pull.merge_commit_sha !== sha) problems.push(`PR #${pr} is not merged as ${sha}`)
+    const parents = releaseCommit && releaseCommit.sha === sha && Array.isArray(releaseCommit.parents) ? releaseCommit.parents.map((p) => p && p.sha) : null
+    if (!parents || parents.length !== 2 || parents[0] !== base.commit || typeof head !== 'string' || parents[1] !== head) {
+      problems.push(`the release commit ${sha} is not a merge of PR #${pr}'s head ${head} onto the base ${base.commit}: its parents are ${parents ? parents.join(', ') || 'none' : 'unknown'}`)
+    }
+    const markers = (Array.isArray(comments) ? comments : [])
+      .filter((c) => c && TRUSTED_ASSOCIATIONS.includes(c.author_association))
+      .map((c) => ({ c, m: MARKER_RE.exec(String(c.body ?? '').split(/\r?\n/)[0]) }))
+      .filter(({ m }) => m && m[2] === String(pr))
+      .sort((a, b) => (Date.parse(a.c.created_at) - Date.parse(b.c.created_at)) || (a.c.id - b.c.id))
+    const latest = markers.at(-1)
+    if (!latest) problems.push(`PR #${pr} has no ADR-009 verdict marker from an owner, member or collaborator`)
+    else if (latest.m[1] !== 'PASS') problems.push(`the latest ADR-009 verdict on PR #${pr} is ${latest.m[1]}`)
+    else if (latest.m[3] !== head) problems.push(`the ADR-009 PASS on PR #${pr} is for ${latest.m[3]}, not its final head ${head}`)
+  }
+  // (c) the base tag is a published release that release.yml made (its
+  // author is the workflow's token, not a person), the repository's latest
+  // (so a release published on a fake base is not one unless it is the
+  // newest), and it is the base commit.
+  if (!release || release.tag_name !== base.tag || release.draft !== false || release.prerelease !== false) {
+    problems.push(`${base.tag} is not a published release (a GitHub release of that tag that is neither a draft nor a prerelease)`)
+  } else if (!release.author || typeof release.author !== 'object' || release.author.login !== RELEASE_AUTHOR) {
+    problems.push(`${base.tag}'s release was not published by the release workflow (its author is ${release.author && release.author.login ? release.author.login : 'unknown'}, not ${RELEASE_AUTHOR})`)
+  }
+  if (!latestRelease || latestRelease.tag_name !== base.tag) {
+    problems.push(`${base.tag} is not the repository's latest release (that is ${latestRelease && latestRelease.tag_name ? latestRelease.tag_name : 'unknown'})`)
+  }
+  const obj = tagRef && tagRef.ref === `refs/tags/${base.tag}` ? tagRef.object : null
+  const commit = !obj ? null
+    : obj.type === 'commit' ? obj.sha
+      : obj.type === 'tag' && tagObject && tagObject.sha === obj.sha && tagObject.object && tagObject.object.type === 'commit' ? tagObject.object.sha : null
+  if (typeof base.commit !== 'string' || !SHA40_RE.test(base.commit) || commit !== base.commit) problems.push(`${base.tag} is ${commit || 'not a tag of a commit'}, not the declared base ${base.commit}`)
+  return { ok: problems.length === 0, applies: true, problems, pr, families, head, tag: base.tag, base: base.commit }
+}
+
 /**
  * Render the verdicts as the lines the gate prints; a verdict left out prints nothing.
  *
@@ -481,6 +742,19 @@ export function formatReport({ version, repo, milestoneResult, modelsResult, exp
   return out
 }
 
+/**
+ * The lines check 5 prints after the others; nothing when it does not apply.
+ *
+ * @param {CarryForwardVerdict|null} carryResult
+ * @returns {string[]}
+ */
+export function formatCarryForward(carryResult) {
+  if (!carryResult || !carryResult.applies) return []
+  const r = carryResult
+  if (r.ok) return [`  OK    carry-forward: ${CI_WORKFLOW} push run completed, Test green on ${TEST_OS_FAMILIES.join(', ')}; PR #${r.pr} merged as this commit onto the base, ADR-009 PASS at its head ${String(r.head).slice(0, 12)}; ${r.tag} is the latest published release, at ${String(r.base).slice(0, 12)}`]
+  return ['  FAIL  carry-forward: tests/wp1/carry-forward.json does not hold on GitHub (ADR-027)', ...r.problems.map((p) => `          - ${p}`)]
+}
+
 // ── GitHub access ───────────────────────────────────────────────────
 
 export function resolveToken(env = process.env, runGh = (args) => execFileSync('gh', args, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] })) {
@@ -500,17 +774,153 @@ export async function githubListAll(pathAndQuery, { token, fetchImpl = globalThi
   const all = []
   for (let page = 1; page <= maxPages; page++) {
     const sep = pathAndQuery.includes('?') ? '&' : '?'
-    const url = `https://api.github.com${pathAndQuery}${sep}per_page=${perPage}&page=${page}`
-    const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'ccc-release-gate', 'X-GitHub-Api-Version': '2022-11-28' }
-    if (token) headers.Authorization = `Bearer ${token}`
-    const res = await fetchImpl(url, { headers })
-    if (!res.ok) throw new Error(`GitHub API ${res.status} for ${pathAndQuery}`)
-    const chunk = await res.json()
+    const chunk = await githubGet(`${pathAndQuery}${sep}per_page=${perPage}&page=${page}`, { token, fetchImpl })
     if (!Array.isArray(chunk)) throw new Error(`GitHub API returned a non-array for ${pathAndQuery}`)
     all.push(...chunk)
     if (chunk.length < perPage) break
   }
   return all
+}
+
+/**
+ * One GET against api.github.com, parsed. Throws on non-2xx.
+ *
+ * @param {string} pathAndQuery
+ * @param {{ token?: string|null, fetchImpl?: typeof fetch }} [options]
+ * @returns {Promise<any>}
+ */
+export async function githubGet(pathAndQuery, { token, fetchImpl = globalThis.fetch } = {}) {
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'ccc-release-gate', 'X-GitHub-Api-Version': '2022-11-28' }
+  if (token) headers.Authorization = `Bearer ${token}`
+  const res = await fetchImpl(`https://api.github.com${pathAndQuery}`, { headers })
+  if (!res.ok) throw new Error(`GitHub API ${res.status} for ${pathAndQuery.replace(/[?&]per_page=.*$/, '')}`)
+  return res.json()
+}
+
+/**
+ * Every item of a listing that GitHub pages with a total_count (workflow runs,
+ * jobs): pages are read until exactly total_count items are in hand. A short
+ * or empty page before that, more items than the count, a count that changes
+ * between pages, or more pages than maxPages, throws (cannot evaluate).
+ */
+export async function listCounted(get, pathAndQuery, key, { perPage = 100, maxPages = 10 } = {}) {
+  const items = []
+  let total = null
+  for (let page = 1; page <= maxPages; page++) {
+    const r = await get(`${pathAndQuery}${pathAndQuery.includes('?') ? '&' : '?'}per_page=${perPage}&page=${page}`)
+    if (!r || !Array.isArray(r[key]) || !Number.isInteger(r.total_count)) throw new Error(`GitHub API returned no ${key} list for ${pathAndQuery}`)
+    if (total === null) total = r.total_count
+    else if (r.total_count !== total) throw new Error(`GitHub API changed the ${key} total_count of ${pathAndQuery} between pages`)
+    items.push(...r[key])
+    if (items.length === total) return items
+    if (items.length > total || r[key].length < perPage) throw new Error(`GitHub API listed ${items.length} ${key} for ${pathAndQuery}, but its total_count is ${total}`)
+  }
+  throw new Error(`more than ${perPage * maxPages} ${key} for ${pathAndQuery}`)
+}
+
+/**
+ * Every item of a plain paged listing (an array per page, oldest first, such
+ * as a PR's comments), until a short page. More than maxPages full pages
+ * throws: the newest items could be missing, so the list is not read.
+ */
+export async function listPages(get, pathAndQuery, { perPage = 100, maxPages = 20 } = {}) {
+  const all = []
+  for (let page = 1; page <= maxPages; page++) {
+    const chunk = await get(`${pathAndQuery}${pathAndQuery.includes('?') ? '&' : '?'}per_page=${perPage}&page=${page}`)
+    if (!Array.isArray(chunk)) throw new Error(`GitHub API returned a non-array for ${pathAndQuery}`)
+    all.push(...chunk)
+    if (chunk.length < perPage) return all
+  }
+  throw new Error(`more than ${perPage * maxPages} items for ${pathAndQuery}: the newest could be missing, so the list is not read`)
+}
+
+/**
+ * What check 5 reads from GitHub, for evaluateCarryForward. A value the
+ * declaration gives in the wrong shape is never sent; the verdict refuses it.
+ *
+ * @param {{ repo: string, sha: string|null, declaration: any, get: (p: string) => Promise<any> }} input
+ */
+export async function readCarryForwardApi({ repo, sha, declaration, get }) {
+  const pr = declaration && declaration.adversarial && declaration.adversarial.pr
+  const tag = declaration && declaration.base && declaration.base.tag
+  const out = {}
+  if (typeof sha === 'string' && SHA40_RE.test(sha)) {
+    out.ciRuns = await listCounted(get, `/repos/${repo}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${sha}&event=push`, 'workflow_runs')
+    const run = latestCiRun(out.ciRuns, sha)
+    if (run) out.ciJobs = await listCounted(get, `/repos/${repo}/actions/runs/${run.id}/jobs?filter=latest`, 'jobs')
+    out.releaseCommit = await get(`/repos/${repo}/git/commits/${sha}`)
+  }
+  if (Number.isInteger(pr) && pr > 0) {
+    out.pull = await get(`/repos/${repo}/pulls/${pr}`)
+    out.comments = await listPages(get, `/repos/${repo}/issues/${pr}/comments`)
+  }
+  if (typeof tag === 'string' && /^v\d+\.\d+\.\d+$/.test(tag)) {
+    out.tagRef = await get(`/repos/${repo}/git/ref/tags/${tag}`)
+    const o = out.tagRef && out.tagRef.object
+    if (o && o.type === 'tag' && SHA40_RE.test(String(o.sha))) out.tagObject = await get(`/repos/${repo}/git/tags/${o.sha}`)
+    out.release = await get(`/repos/${repo}/releases/tags/${tag}`)
+    out.latestRelease = await get(`/repos/${repo}/releases/latest`)
+  }
+  return out
+}
+
+/**
+ * The carry-forward declaration in HEAD's tree, read from git and never from
+ * the working tree. Shared by this gate and the suite (tests/wp1/binding.ts),
+ * so the two cannot drift. A path that is the declaration's in another case
+ * (the full path compared ignoring case, as a case-insensitive file system
+ * sees it) is a problem, and so is an entry at the path that is not a plain
+ * file; a file of the same name in another folder is not the declaration and
+ * is ignored. `present` says whether HEAD has the exact path; `text` is its
+ * content when it is a plain file. A git that cannot list the tree throws.
+ *
+ * @param {(args: string[]) => { status: number|null, stdout: string, stderr?: string }} git
+ * @returns {{ present: boolean, text: string|null, problems: string[] }}
+ */
+export function scanCommittedCarryForward(git) {
+  const r = git(['ls-tree', '-r', '-z', '--full-tree', 'HEAD'])
+  if (r.status !== 0) throw new Error(`git ls-tree HEAD exited ${r.status}: ${r.stderr ?? ''}`)
+  const lower = CARRY_FORWARD_PATH.toLowerCase()
+  const problems = []
+  let entry = null
+  for (const rec of r.stdout.split('\0').filter(Boolean)) {
+    const tab = rec.indexOf('\t')
+    const [mode, type] = rec.slice(0, tab).split(' ')
+    const p = rec.slice(tab + 1)
+    if (p === CARRY_FORWARD_PATH) entry = { mode, type }
+    else if (p.toLowerCase() === lower) problems.push(`${p} at HEAD is ${CARRY_FORWARD_PATH} in another case: remove or rename it`)
+  }
+  if (entry === null) return { present: false, text: null, problems }
+  if (entry.mode !== '100644' || entry.type !== 'blob') return { present: true, text: null, problems: [...problems, `${CARRY_FORWARD_PATH} at HEAD is not a plain file (mode ${entry.mode})`] }
+  const s = git(['show', `HEAD:${CARRY_FORWARD_PATH}`])
+  if (s.status !== 0) throw new Error(`git show HEAD:${CARRY_FORWARD_PATH} exited ${s.status}: ${s.stderr ?? ''}`)
+  return { present: true, text: s.stdout, problems }
+}
+
+/**
+ * The gate's reading of the committed declaration (scanCommittedCarryForward):
+ * the parsed declaration, or null when HEAD has none. A problem the scan
+ * finds, or text that is not JSON (a byte order mark, conflict markers),
+ * throws, naming the file, so main cannot evaluate the cut.
+ *
+ * @param {(args: string[]) => string} [runGit]   git's output; throws when git fails
+ */
+export function readCommittedCarryForward(runGit = defaultRunGit) {
+  const git = (args) => {
+    try { return { status: 0, stdout: String(runGit(args)) } } catch (err) { return { status: 1, stdout: '', stderr: err && err.message ? err.message : String(err) } }
+  }
+  const { text, problems } = scanCommittedCarryForward(git)
+  if (problems.length > 0) throw new Error(problems.join('; '))
+  if (text === null) return null
+  try {
+    return JSON.parse(text)
+  } catch (err) {
+    throw new Error(`${CARRY_FORWARD_PATH} at HEAD is not valid JSON (${err && err.message ? err.message : err}): fix it, or delete a declaration left from an earlier release`)
+  }
+}
+
+function defaultRunGit(args) {
+  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1 << 28 })
 }
 
 /** `owner/name` from a GitHub URL (https, ssh, or git+https), else null. */
@@ -539,7 +949,11 @@ export function repoFromGitRemote(runGit = (args) => execFileSync('git', args, {
  * refused, as an empty list is (fail closed). `electronVersion` (the exact
  * version package-lock.json resolves) and `macosFloors`
  * (resources/macos-release-floors.json) feed the macOS floor check; a caller
- * that leaves either out is refused too.
+ * that leaves either out is refused too. `carryForward` (the declaration, or
+ * null) decides whether check 5 applies; when it does, `readCarryForward`
+ * reads GitHub for the commit `sha`, and a caller that gives no reader
+ * cannot be evaluated (fail closed). Its verdict is printed after the others
+ * and decides the exit code with them.
  *
  * @param {object} [input]
  * @param {string} [input.version]          the milestone title, e.g. "2.1.0-beta.17"
@@ -550,6 +964,10 @@ export function repoFromGitRemote(runGit = (args) => execFileSync('git', args, {
  * @param {object|null} [input.codexExpected]   resources/codex-model-catalogue.json
  * @param {string} [input.electronVersion]
  * @param {unknown} [input.macosFloors]     resources/macos-release-floors.json
+ * @param {any} [input.carryForward]        tests/wp1/carry-forward.json, or null
+ * @param {string|null} [input.sha]         the commit being released
+ * @param {(input: { repo: string, sha: string|null, declaration: any }) => Promise<object>} [input.readCarryForward]
+ * @param {{ phase?: unknown, boundHead: string, changed: string[] }|null} [input.binding]   readBinding's answer, for evaluateBinding
  * @param {(line: string) => void} [input.log]
  * @returns {Promise<{ exitCode: number, lines: string[], milestoneResult: MilestoneVerdict|null, modelsResult: ModelsVerdict|null, codexResult: ModelsVerdict|null, macosResult: MacosVerdict|null }>}
  */
@@ -562,13 +980,19 @@ export async function runGate({
   codexExpected,
   electronVersion,
   macosFloors,
+  carryForward = null,
+  sha = null,
+  readCarryForward,
+  binding = null,
   log = (s) => console.log(s),
 } = {}) {
+  const bindingResult = evaluateBinding({ version, declaration: carryForward, binding })
   const lines = []
   let milestoneResult = null
   let modelsResult = null
   let codexResult = null
   let macosResult = null
+  let carryResult = null
   let cannotEvaluate = null
 
   if (!version) cannotEvaluate = 'no version given and none readable from package.json'
@@ -595,6 +1019,15 @@ export async function runGate({
     }
   }
 
+  if (!cannotEvaluate && carryForwardApplies(version, carryForward)) {
+    try {
+      if (typeof readCarryForward !== 'function') throw new Error('no GitHub reader was given')
+      carryResult = evaluateCarryForward({ version, sha, declaration: carryForward, ...(await readCarryForward({ repo, sha, declaration: carryForward })) })
+    } catch (err) {
+      cannotEvaluate = `could not read the carry-forward evidence from GitHub: ${err && err.message ? err.message : err}`
+    }
+  }
+
   if (cannotEvaluate) {
     lines.push(`Release gate for v${version || '?'}: CANNOT EVALUATE — ${cannotEvaluate}`)
     lines.push('An unevaluated gate is a refused gate. Fix the cause and re-run.')
@@ -603,7 +1036,9 @@ export async function runGate({
   }
 
   lines.push(...formatReport({ version, repo, milestoneResult, modelsResult, expectedMeta: expected, codexResult, codexMeta: codexExpected, macosResult }))
-  const ok = milestoneResult.ok && modelsResult.ok && codexResult.ok && macosResult.ok
+  lines.push(...formatCarryForward(carryResult))
+  lines.push(...formatBinding(bindingResult))
+  const ok = milestoneResult.ok && modelsResult.ok && codexResult.ok && macosResult.ok && (carryResult === null || carryResult.ok) && bindingResult.ok
   lines.push('')
   lines.push(ok ? `PASS  v${version} may be cut.` : `REFUSED  v${version} must not be cut until the FAIL lines above are cleared.`)
   for (const l of lines) log(l)
@@ -619,7 +1054,12 @@ function argValue(argv, flag) {
 
 function readJson(p) { return JSON.parse(fs.readFileSync(p, 'utf-8')) }
 
-export async function main(argv = process.argv.slice(2), env = process.env) {
+/**
+ * The CLI. `io` is for tests: `runGit` (git's output, throwing on failure),
+ * `run` (runGate) and `fetchImpl` (GitHub); each defaults to the real one.
+ */
+export async function main(argv = process.argv.slice(2), env = process.env, io = {}) {
+  const { runGit = defaultRunGit, run = runGate, fetchImpl = globalThis.fetch } = io
   const pkg = readJson(path.join(ROOT, 'package.json'))
   const version = argValue(argv, '--version') || pkg.version
   const repo = argValue(argv, '--repo') || env.GITHUB_REPOSITORY || repoFromPackageJson(pkg) || repoFromGitRemote()
@@ -627,12 +1067,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const expectedPath = argValue(argv, '--expected') || DEFAULT_EXPECTED_PATH
   const codexExpectedPath = argValue(argv, '--codex-expected') || DEFAULT_CODEX_EXPECTED_PATH
 
-  let registry, expected, codexExpected, macosFloors
+  let registry, expected, codexExpected, macosFloors, carryForward
   try {
     registry = readJson(registryPath)
     expected = readJson(expectedPath)
     codexExpected = readJson(codexExpectedPath)
     macosFloors = readJson(DEFAULT_MACOS_FLOORS_PATH)
+    carryForward = readCommittedCarryForward(runGit)
   } catch (err) {
     console.error(`Release gate: CANNOT EVALUATE — ${err.message}`)
     return EXIT_CANNOT_EVALUATE
@@ -640,8 +1081,24 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
   const token = resolveToken(env)
   if (!token) console.error('Release gate: no GITHUB_TOKEN/GH_TOKEN and `gh auth token` gave nothing — trying unauthenticated (public repo, rate-limited)')
-  const listAll = (p) => githubListAll(p, { token })
-  const { exitCode } = await runGate({ version, repo, listAll, registry, expected, codexExpected, electronVersion: readElectronVersion(), macosFloors })
+  const listAll = (p) => githubListAll(p, { token, fetchImpl })
+  const get = (p) => githubGet(p, { token, fetchImpl })
+  let sha = env.GITHUB_SHA || null
+  if (!sha) try { sha = String(runGit(['rev-parse', 'HEAD'])).trim() } catch { sha = null }
+  // The WP1 binding, read from git on its own, only for the cuts it applies
+  // to (a stable cut, or one a declaration carries): every other cut makes no
+  // new call.
+  let binding = null
+  if (evaluateBinding({ version, declaration: carryForward, binding: null }).applies) {
+    try {
+      binding = readBinding(runGit, sha, carryForwardApplies(version, carryForward) ? carryForward : null)
+    } catch (err) {
+      console.error(`Release gate: CANNOT EVALUATE — ${err.message}`)
+      return EXIT_CANNOT_EVALUATE
+    }
+  }
+  const readCarryForward = (input) => readCarryForwardApi({ ...input, get })
+  const { exitCode } = await run({ version, repo, listAll, registry, expected, codexExpected, electronVersion: readElectronVersion(), macosFloors, carryForward, sha, readCarryForward, binding })
   return exitCode
 }
 

@@ -21,6 +21,14 @@ export interface ChangelogEntry {
 // a backtick in a comment opens a phantom string and the parse fails.
 export const changelog: ChangelogEntry[] = [
   {
+    version: '2.1.2',
+    date: '2026-10-17',
+    highlights: 'A fix for Macs. When the app is opened from the Dock or Finder, it now finds Claude Code for the setup version check, Insights and Sentinel, which failed before.',
+    changes: [
+      { type: 'fix', description: 'On a Mac, opening the app from the Dock or Finder now finds Claude Code for the setup version check, Insights and Sentinel. They failed before when Claude Code was installed in a folder that only your login shell adds to PATH, such as the folders Homebrew and the Claude Code installer use, and setup could say Claude Code was installed and, on the same page, that its version could not be read. These runs now use the Claude Code that setup found. Windows is unchanged.' },
+    ],
+  },
+  {
     version: '2.1.1',
     date: '2026-10-13',
     highlights: 'Everything new since 2.1.0. Codex is now a full assistant beside Claude Code, with Codex accounts of its own that you add in the app, and its sessions, reviews, usage and tools work as Claude\'s do. GPT-6-Sol and GPT-6-Luna join the Codex model picker. After an update, What\'s New shows what is new since the version you came from. First-run setup, the Windows installer and SSH sessions get many fixes, and new sessions start on a computer without Node.js. On a Mac, 2.1.1 needs macOS 13 or later; on macOS 12, stay on 2.1.0. The project now lives at github.com/nubbymong/ai-code-conductor. The lines that start with Known issue or Notice say what to do; Known issues and workarounds in the Feature Guide has the full list, and the notes for 2.1.1-beta.1, beta.2 and beta.3 list each change in full.',
