@@ -558,7 +558,7 @@ describe('release-gate carry-forward (check 5)', () => {
   const comment = (body: string, over: Record<string, unknown> = {}) => ({ id: 1, created_at: '2026-10-17T10:00:00Z', author_association: 'OWNER', body, ...over })
   const TAG = { ref: 'refs/tags/v2.1.1', object: { type: 'commit', sha: BASE } }
   const data = (over: Record<string, unknown> = {}) => ({
-    ciRuns: [ciRun()], ciJobs: GREEN, releaseCommit: MERGE, pull: PULL, comments: [comment(`${marker('PASS')}\n\nNo findings open.`)], tagRef: TAG, release: RELEASE, ...over,
+    ciRuns: [ciRun()], ciJobs: GREEN, releaseCommit: MERGE, pull: PULL, comments: [comment(`${marker('PASS')}\n\nNo findings open.`)], tagRef: TAG, release: RELEASE, latestRelease: RELEASE, ...over,
   })
   const verdict = (over: Record<string, unknown> = {}, declaration: unknown = decl()) => evaluateCarryForward({ version: '2.1.2', sha: SHA, declaration, ...data(over) })
   const gh = () => fakeGitHub([{ number: 9, title: '2.1.2' }], { 9: [] })
@@ -588,7 +588,7 @@ describe('release-gate carry-forward (check 5)', () => {
     const run = await gate({ carryForward: decl(), readCarryForward: async (input: unknown) => { seen.push(input); return data() } })
     expect(run.exitCode).toBe(EXIT_OK)
     expect(seen).toEqual([{ repo: 'o/r', sha: SHA, declaration: decl() }])
-    expect(run.lines.join('\n')).toMatch(/OK\s+carry-forward: ci\.yml push run completed, Test green on windows, macos, ubuntu; PR #650 merged as this commit onto the base, ADR-009 PASS at its head bbbbbbbbbbbb; v2\.1\.1 is a published release at 999999999999/)
+    expect(run.lines.join('\n')).toMatch(/OK\s+carry-forward: ci\.yml push run completed, Test green on windows, macos, ubuntu; PR #650 merged as this commit onto the base, ADR-009 PASS at its head bbbbbbbbbbbb; v2\.1\.1 is the latest published release, at 999999999999/)
     expect(run.lines.at(-1)).toMatch(/^PASS/)
   })
 
@@ -667,13 +667,17 @@ describe('release-gate carry-forward (check 5)', () => {
     }
   })
 
-  it('check 5c refuses a base tag that is not a published release, or not the base commit, and dereferences an annotated tag once', () => {
+  it('check 5c refuses a base tag that is not a published release, not the latest release, or not the base commit, and dereferences an annotated tag once', () => {
     const T = 'f'.repeat(40)
     const NOT_BASE = (is: string) => `v2.1.1 is ${is}, not the declared base ${BASE}`
     const UNPUBLISHED = 'v2.1.1 is not a published release (a GitHub release of that tag that is neither a draft nor a prerelease)'
     // A published release of the tag: not missing, not a draft, not a prerelease, and of this tag.
     for (const release of [null, undefined, { ...RELEASE, draft: true }, { ...RELEASE, prerelease: true }, { ...RELEASE, tag_name: 'v2.1.0' }, { tag_name: 'v2.1.1' }, { ...RELEASE, draft: 'false' }]) {
       expect(verdict({ release }).problems, JSON.stringify(release)).toEqual([UNPUBLISHED])
+    }
+    // And the repository's latest release: a release published later on another tag, or on a fake base, is not the base.
+    for (const [latestRelease, is] of [[{ tag_name: 'v2.1.0' }, 'v2.1.0'], [{ ...RELEASE, tag_name: 'v2.2.0' }, 'v2.2.0'], [{}, 'unknown'], [null, 'unknown'], [undefined, 'unknown']] as Array<[unknown, string]>) {
+      expect(verdict({ latestRelease }).problems, JSON.stringify(latestRelease)).toEqual([`v2.1.1 is not the repository's latest release (that is ${is})`])
     }
     expect(verdict({ tagRef: { ...TAG, object: { type: 'commit', sha: HEAD } } }).problems).toEqual([NOT_BASE(HEAD)])
     expect(verdict({ tagRef: { ref: 'refs/tags/v2.1.1', object: { type: 'tag', sha: T } }, tagObject: { sha: T, object: { type: 'commit', sha: BASE } } }).problems).toEqual([])
@@ -704,6 +708,7 @@ describe('release-gate carry-forward (check 5)', () => {
       if (p.endsWith('/git/ref/tags/v2.1.1')) return { ref: 'refs/tags/v2.1.1', object: { type: 'tag', sha: T } }
       if (p.endsWith(`/git/tags/${T}`)) return { sha: T, object: { type: 'commit', sha: BASE } }
       if (p.endsWith('/releases/tags/v2.1.1')) return RELEASE
+      if (p.endsWith('/releases/latest')) return RELEASE
       return PULL
     }
     const get = async (p: string) => { asked.push(p); return answers(p) }
@@ -711,7 +716,7 @@ describe('release-gate carry-forward (check 5)', () => {
     expect(asked).toEqual([
       `/repos/o/r/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${SHA}&event=push&per_page=100&page=1`, `/repos/o/r/actions/runs/${RUN}/jobs?filter=latest&per_page=100&page=1`,
       `/repos/o/r/git/commits/${SHA}`, '/repos/o/r/pulls/650', '/repos/o/r/issues/650/comments?per_page=100&page=1',
-      '/repos/o/r/git/ref/tags/v2.1.1', `/repos/o/r/git/tags/${T}`, '/repos/o/r/releases/tags/v2.1.1',
+      '/repos/o/r/git/ref/tags/v2.1.1', `/repos/o/r/git/tags/${T}`, '/repos/o/r/releases/tags/v2.1.1', '/repos/o/r/releases/latest',
     ])
     expect(evaluateCarryForward({ version: '2.1.2', sha: SHA, declaration: decl(), ...read }).problems).toEqual([])
     // No push run: no jobs are asked for.
@@ -722,6 +727,10 @@ describe('release-gate carry-forward (check 5)', () => {
     const missing = await gate({ carryForward: decl(), readCarryForward: (input: { repo: string; sha: string; declaration: unknown }) => readCarryForwardApi({ ...input, get: async (p: string) => { if (p.includes('/releases/')) throw new Error(`GitHub API 404 for ${p}`); return answers(p) } }) })
     expect(missing.exitCode).toBe(EXIT_CANNOT_EVALUATE)
     expect(missing.lines[0]).toMatch(/GitHub API 404 for \/repos\/o\/r\/releases\/tags\/v2\.1\.1/)
+    // No latest release (GitHub answers 404 when the repository has none) cannot be evaluated either.
+    const noLatest = await gate({ carryForward: decl(), readCarryForward: (input: { repo: string; sha: string; declaration: unknown }) => readCarryForwardApi({ ...input, get: async (p: string) => { if (p.endsWith('/releases/latest')) throw new Error(`GitHub API 404 for ${p}`); return answers(p) } }) })
+    expect(noLatest.exitCode).toBe(EXIT_CANNOT_EVALUATE)
+    expect(noLatest.lines[0]).toMatch(/GitHub API 404 for \/repos\/o\/r\/releases\/latest/)
     // A value in the wrong shape never reaches a URL.
     asked.length = 0
     const odd = await readCarryForwardApi({ repo: 'o/r', sha: 'HEAD', declaration: decl({ adversarial: { pr: '650/../../x' }, base: { tag: '../../x', commit: BASE } }), get })
@@ -818,14 +827,14 @@ describe('release-gate carry-forward (check 5)', () => {
       const p = new URL(url).pathname
       const body = p.endsWith('/runs') ? { total_count: 1, workflow_runs: [ciRun()] } : p.endsWith('/jobs') ? { total_count: 3, jobs: GREEN }
         : p.includes('/git/commits/') ? MERGE : p.endsWith('/pulls/650') ? PULL : p.endsWith('/comments') ? [comment(marker('PASS'))]
-          : p.includes('/git/ref/tags/') ? TAG : p.includes('/releases/tags/') ? RELEASE : null
+          : p.includes('/git/ref/tags/') ? TAG : p.includes('/releases/tags/') || p.endsWith('/releases/latest') ? RELEASE : null
       return { ok: body !== null, status: body === null ? 404 : 200, json: async () => body }
     }
     expect(await main(args, env, { runGit: tree([SELF]).runGit, run, fetchImpl: fetchImpl as unknown as typeof fetch })).toBe(EXIT_OK)
     expect(seen[0]).toMatchObject({ version: '2.1.2', repo: 'o/r', carryForward: decl(), sha: SHA })
     const read = await seen[0].readCarryForward({ repo: 'o/r', sha: SHA, declaration: decl() })
     expect(evaluateCarryForward({ version: '2.1.2', sha: SHA, declaration: decl(), ...read }).problems).toEqual([])
-    expect(urls).toHaveLength(7)
+    expect(urls).toHaveLength(8)
     for (const u of urls) expect(u).toMatch(/^Bearer t0k https:\/\/api\.github\.com\/repos\/o\/r\//)
     // With no GITHUB_SHA the commit is HEAD; with no declaration at HEAD there is none.
     seen.length = 0
