@@ -31,19 +31,21 @@ jobs:
   # issue is done for this release; a missing milestone fails closed), and
   # resources/model-registry.json must cover every model in Anthropic's Claude
   # Code model configuration article (scripts/fixtures/ holds the expected set).
-  # Every build job `needs` this one. Read-only: GITHUB_TOKEN with issues:read.
+  # Every build job `needs` this one. Read-only: GITHUB_TOKEN with contents,
+  # issues, pull-requests and actions read, and nothing else.
   # No `npm ci` here on purpose — the script is dependency-free plain node, so
   # the verdict arrives in seconds, not after a native toolchain install.
   # A dry run is not a release, so it sees the verdict but is not blocked by it.
-  # Check 5 (ADR-027), only when tests/wp1/carry-forward.json names this version,
-  # reads the commit's check runs, the declared PR and its comments, and the base tag.
+  # Check 5 (ADR-027), only when the committed tests/wp1/carry-forward.json names
+  # this version, reads ci.yml's push run and jobs on this commit (actions), the
+  # commit's parents, the declared PR and its comments, and the base tag's release.
   gate:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: read
-      checks: read
       pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
 
