@@ -769,7 +769,7 @@ describe('WP1 traceability manifest', () => {
     }
   })
 
-  it('[host] carry-forward: package files may change only their version, and at most 400 lines outside tests carry forward', () => {
+  it('[host] carry-forward: package files may change only their version, and at most 600 lines outside tests carry forward', () => {
     expect(cf(undefined, { files: { 'package.json': cfPkg('2.1.2', '2.0.0') } })).toEqual(['package.json changed more than its version since boundHead'])
     expect(cf(undefined, { files: { 'package-lock.json': cfLock('2.1.2', '1.0.0', '1.0.1') } })).toEqual(['package-lock.json changed more than its version since boundHead'])
     expect(cf(undefined, { files: { 'package-lock.json': cfLock('2.1.2', '^1.0.0') } })).toEqual(['package-lock.json changed more than its version since boundHead'])
@@ -777,9 +777,9 @@ describe('WP1 traceability manifest', () => {
     for (const before of [null, '{']) expect(cf(undefined, { show: { [`${CF_BOUND}:package-lock.json`]: before } }), String(before)).toEqual(['package-lock.json changed more than its version since boundHead'])
     // The version-only rule compares whole documents: key order does not matter, every other field does.
     expect(cf(undefined, { files: { 'package.json': JSON.stringify({ dependencies: { x: '1.0.0' }, version: '2.1.2', name: 'app' }) } })).toEqual([])
-    // Lines added and deleted outside tests/, since boundHead.
-    expect(cf(undefined, { numstat: { [CF_FIX]: '390\t4' } })).toEqual([])
-    expect(cf(undefined, { numstat: { [CF_FIX]: '390\t5' } })).toEqual([`401 lines changed outside tests/ since boundHead; at most ${CARRY_FORWARD_MAX_SHIPPED_LINES} carry forward`])
+    // Lines added and deleted outside tests/, since boundHead: 600 carry forward, 601 do not.
+    expect(cf(undefined, { numstat: { [CF_FIX]: '590\t4' } })).toEqual([])
+    expect(cf(undefined, { numstat: { [CF_FIX]: '590\t5' } })).toEqual([`601 lines changed outside tests/ since boundHead; at most ${CARRY_FORWARD_MAX_SHIPPED_LINES} carry forward`])
     expect(cf(undefined, { numstat: { [CF_FIX]: '-\t-' } })).toEqual(['a declared file outside tests/ is binary'])
     // Tests are not shipped: 10,000 lines under tests/ count for nothing.
     const r = cfRun((d) => { d.paths.push(cfEntry(CF_TEST)) }, { breaks: [CF_FIX, 'package.json', 'package-lock.json', CF_TEST], numstat: { [CF_TEST]: '9000\t1000' }, files: { [CF_OD]: cfOdText([CF_TEST]) } })
@@ -815,7 +815,7 @@ describe('WP1 traceability manifest', () => {
     expect(CARRY_FORWARD_PATH).toBe('tests/wp1/carry-forward.json')
     expect(CARRY_FORWARD_SCHEMA).toBe('wp1-carry-forward/1')
     expect(CARRY_FORWARD_MAX_PATHS).toBe(16)
-    expect(CARRY_FORWARD_MAX_SHIPPED_LINES).toBe(400)
+    expect(CARRY_FORWARD_MAX_SHIPPED_LINES).toBe(600)
     expect(bindingBreaks([CARRY_FORWARD_PATH])).toEqual([CARRY_FORWARD_PATH])
     // The neutral rules are the ones before ADR-027: the declaration widens nothing.
     expect(BINDING_NEUTRAL.map(String)).toEqual(['/^tests\\/wp1\\/traceability\\.json$/', '/^docs\\//', '/^CONTEXT\\.d\\//', '/^architecture\\/decisions\\/[^/]+\\.md$/', '/^[^/]+\\.md$/'])

@@ -20,7 +20,7 @@ taken at `boundHead`, and nothing but binding-neutral paths (the manifest,
 Then a macOS bug turned up. An app opened from the Dock or Finder gets
 launchd's PATH, so a headless Claude Code run (the setup version check,
 Insights, Sentinel's checks) exited 127 wherever Claude Code lived in a folder
-only the login shell names. The fix is about 100 lines in three files under
+only the login shell names. The fix is about 270 lines in three files under
 `src/main/`. Under the binding as it stood, any such change breaks the second
 half, and the only honest way back is to requalify all 73 items, which takes
 days of Windows VM, Mac and Linux sittings.
@@ -72,10 +72,14 @@ closed:
    not in comments or strings.
 7. `package.json` and `package-lock.json` may change their version fields and
    nothing else.
-8. At most 16 paths, and at most 400 lines added plus deleted outside `tests/`
+8. At most 16 paths, and at most 600 lines added plus deleted outside `tests/`
    since `boundHead`; a binary file fails. The caps are constants in
    `binding.ts`, never fields of the declaration, and count from `boundHead`,
-   so chained patches add up until a qualification resets them.
+   so chained patches add up until a qualification resets them. The line cap
+   was first proposed at 400; the coordinating agent set it to 600 when the
+   fix gained a bounded probe wait in review, which took 2.1.2 to 484 lines
+   (the fix 271, check 5 of the release gate 193, the version and changelog
+   20).
 9. The approval is a dated owner-decisions record under `docs/wp1` whose own
    section names the version, says the evidence is carried forward, and names
    every declared path, outside code fences and HTML comments.
@@ -135,8 +139,9 @@ which also refuses the cut. The `gate` job gains `checks: read` and
   owner-listed paths, and by the mutants below.
 - The gate checks the shape of the approval, not its meaning, as ADR-026 does.
 - The caps are cumulative from `boundHead`. 2.1.2 uses 15 of the 16 paths and
-  315 of the 400 lines, so a further patch on the same binding has room for
-  very little, and then the next stable requalifies. That is intended.
+  484 of the 600 lines, measured from `boundHead`, so a further patch on the
+  same binding has one path and 116 lines, and then the next stable
+  requalifies. That is intended.
 - The declaration is a standing exception while it exists. The stale rule makes
   the next qualified stable fail until `tests/wp1/carry-forward.json` is
   deleted; the next qualification's checklist must say so.

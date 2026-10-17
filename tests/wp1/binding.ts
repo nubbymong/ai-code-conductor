@@ -312,10 +312,15 @@ export function staleRecords(
 // candidate case's final assertion (bindingVerdict); every other rule above
 // still runs. The caps are constants here, never fields of the declaration,
 // and count from boundHead, so chained patches add up until a qualification.
+// The line cap is sized to the first carry-forward: 2.1.2 ships 484 lines
+// outside tests/ since boundHead (the headless PATH fix with its bounded
+// probe wait 271, the release gate's check 5 193, the version and changelog
+// 20). 600 holds that with room for one more small fix, then the next stable
+// requalifies. Raising it is a reviewed, non-neutral edit to this file.
 export const CARRY_FORWARD_PATH = 'tests/wp1/carry-forward.json'
 export const CARRY_FORWARD_SCHEMA = 'wp1-carry-forward/1'
 export const CARRY_FORWARD_MAX_PATHS = 16
-export const CARRY_FORWARD_MAX_SHIPPED_LINES = 400
+export const CARRY_FORWARD_MAX_SHIPPED_LINES = 600
 const STABLE_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 /** An exact repository path: no leading /, no . or .. segment, and no glob,
  *  pathspec, quoting or space character, so git reads it as itself. */
