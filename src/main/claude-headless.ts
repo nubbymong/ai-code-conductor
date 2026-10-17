@@ -200,13 +200,19 @@ export function spawnClaudeHeadless(
   // refresh for this profile, and on Windows behind a PATH walk with no
   // recent answer, and behind the first-start warm-up of a claude.exe started
   // directly (spawnNow; ADR-025), and off Windows behind a CLI probe still
-  // running before its first answer (spawnNow).
+  // running while no Claude Code is known: before the first probe answers, or
+  // after one that found none, while a later probe runs (spawnNow).
   //
   // The hold is taken BEFORE the wait (adversarial pass on #598): it is what
   // stops a new rotation from starting, and acquiring only after the in-flight
   // one settled left a microtask in which a fresh refresh could begin and
   // rotate the token this run is about to read. The wait itself is bounded by
-  // the refresh's own socket timeout, well inside the ref's grace.
+  // the refresh's own socket timeout, well inside the ref's grace. The wait
+  // for a CLI probe off Windows is bounded by that probe's own timeouts (each
+  // process it asks is ended after 8 s: about 16 s for a sh-family login
+  // shell, about 24 s when a fish or PowerShell login shell is asked for its
+  // PATH first), counted from when the probe started, before this run joined
+  // it, so it stays inside the ref's grace too.
   //
   // The project gate rides the same rule. The run inherits this process's
   // working directory, whose own settings files are gated like any other; a
@@ -305,10 +311,11 @@ function spawnNow(
   // POSIX: `claude` by name through sh, as before, with the folder of the
   // Claude Code the CLI probe found (claude-cli-probe.ts probeClaudeCli: the
   // login shell's `command -v claude`) put first on PATH when PATH lacks it
-  // (withClaudeFolderOnPath). The last answer is read at once; before the
-  // first one, the run waits for the probe still running; with no answer and
-  // none running it starts exactly as before. A run never starts a login
-  // shell of its own.
+  // (withClaudeFolderOnPath). A path the last probe found is read at once,
+  // even while a later probe runs. With none known (before the first answer,
+  // or after one that found none), the run waits for a probe still running
+  // and uses its answer; with none known and none running it starts exactly
+  // as before. A run never starts a login shell of its own.
   const startPosix = (claudePath: string | null): Promise<HeadlessResult> => {
     const runEnv = withClaudeFolderOnPath(env, claudePath)
     if (runEnv !== env) logInfo(`[claude-headless] Claude Code's folder put first on PATH: ${path.posix.dirname(claudePath as string)}`)

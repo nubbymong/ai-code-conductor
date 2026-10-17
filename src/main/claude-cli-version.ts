@@ -68,8 +68,10 @@ export function claudeCliProbeAllowed(): boolean {
 
 /** How long after a FAILED probe `ensureClaudeCliVersion` declines to try again.
  *
- *  `probeClaudeCli()` coalesces only while a probe is in flight; it caches
- *  nothing between calls. Without a floor, a user with no resolvable CLI would
+ *  `probeClaudeCli()` coalesces only while a probe is in flight, and every
+ *  other call runs a fresh probe: the path it keeps between calls for a
+ *  headless run (claude-cli-probe.ts claudeFoundByLastProbe) is never an
+ *  answer to it. Without a floor, a user with no resolvable CLI would
  *  start a fresh resolution chain on every managed spawn -- and on POSIX that
  *  chain spawns a LOGIN SHELL (`$SHELL -lc 'command -v claude'`, 8s timeout).
  *  It is bounded by user-initiated spawns and never blocks a launch, so this is
