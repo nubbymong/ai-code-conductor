@@ -1,0 +1,9 @@
+## 2026-10-17 -- Headless Claude Code runs find Claude Code when macOS opens the app from the Dock
+
+**Problem.** A macOS app opened from the Dock or Finder gets launchd's PATH (`/usr/bin:/bin:/usr/sbin:/sbin`). Off Windows, a headless run (the setup version check, Insights, Sentinel's checks) started `sh -c claude ...` with the app's own PATH, so it exited 127 when Claude Code lived in `/opt/homebrew/bin` or `~/.local/bin`. The CLI probe found it all along, because it asks the login shell (`<shell> -lc 'command -v claude'`), so setup said "installed" and "couldn't read the version" on the same page.
+
+**Change.** `src/main/claude-cli-probe.ts` keeps the path the last probe that answered found, and lets a caller see the probe still running. `src/main/claude-headless.ts` puts that path's folder first on the run's PATH when PATH does not already name it (`withClaudeFolderOnPath`). Before the first answer, a run waits for the probe already running: Sentinel's check at start runs while the start-up version probe is still asking. With no answer and none running, a run starts exactly as before. A run never starts a login shell of its own.
+
+**Kept as it was.** `shell: true`, the argv refusals (`assertSafeArgv`), the Windows start, interactive sessions, and every other provider. The folder is the one the probe named, not the link's target, so an npm install (`#!/usr/bin/env node`) finds the node beside it.
+
+**Tests.** `tests/unit/claude-headless-posix-path.test.ts` starts a real `sh -c claude` into a fake Claude Code under a bare PATH and an environment built from nothing (POSIX only; skipped on Windows). Its three start cases fail on the code before this change with `claude: not found` (exit 127), and the case for a run that waits for the probe also fails when only that wait is removed.
