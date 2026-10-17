@@ -1822,8 +1822,9 @@ describe('2.1.1: the stable entry and its known issues', () => {
   const knownIssues = () => APP_KNOWLEDGE_SECTIONS.find((s) => s.id === 'known-issues')!.body
   const paraStarting = (start: string) => knownIssues().split('\n').find((p) => p.startsWith(start))
 
-  it('is the newest entry, under the bare version, and still leaves every 2.1.1 beta entry in place', () => {
-    expect(changelog[0]).toBe(stable())
+  it('is the newest entry of the 2.1.1 line, under the bare version, and still leaves every 2.1.1 beta entry in place', () => {
+    // Later releases (2.1.2 on) sit above it; no 2.1.1 prerelease does.
+    expect(changelog.find((e) => e.version === '2.1.1' || e.version.startsWith('2.1.1-'))).toBe(stable())
     for (const v of ['2.1.1-beta.3', '2.1.1-beta.2', '2.1.1-beta.1', '2.1.0']) expect(changelog.some((e) => e.version === v), v).toBe(true)
   })
 
