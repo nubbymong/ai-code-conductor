@@ -53,9 +53,10 @@ check on the PR's build.
   New page shows the fixes line, as the existing fixes-only cases already
   expected for 2.1.2.
 - The line cap is 600, not the 400 first proposed. The fix gained a bounded
-  probe wait after review, and 2.1.2 ships 484 lines outside `tests/`,
-  measured from boundHead. The cap counts cumulatively from boundHead, so a
-  later patch on the same binding has the 116 lines that are left.
+  probe wait and further review fixes, and 2.1.2 ships 587 lines outside
+  `tests/`, measured from boundHead. The cap counts cumulatively from
+  boundHead, so a later patch on the same binding has the 13 lines that are
+  left.
 
 **The files carried forward** (every file 2.1.2 changes outside the
 binding-neutral paths, each with its regression tests in the declaration):

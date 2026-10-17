@@ -103,7 +103,7 @@ stable's WP1 evidence when `tests/wp1/carry-forward.json` declares every
 non-neutral file changed since the WP1 `boundHead`, with named regression
 tests, an owner decision and an ADR-009 PR (the suite's candidate check judges
 it; at most 16 files and 600 shipped lines, counted cumulatively from
-`boundHead`, of which 2.1.2 uses 15 and 484). Only
+`boundHead`, of which 2.1.2 uses 15 and 587). Only
 when that file names the version being cut, the gate adds check 5: CI's Test
 runs green on Windows, macOS and Linux on the released commit, the declared PR
 merged as that commit with an ADR-009 PASS at its final head, and the base tag
