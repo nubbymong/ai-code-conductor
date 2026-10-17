@@ -400,19 +400,39 @@ async function runProbe(): Promise<ClaudeCliProbe> {
  */
 let inFlight: Promise<ClaudeCliProbe> | null = null
 
+/** The path the last probe that answered found; null when it found none, or
+ *  before any probe has answered. Read by a headless run off Windows
+ *  (claudeFoundByLastProbe). */
+let lastFound: string | null = null
+
 export function probeClaudeCli(): Promise<ClaudeCliProbe> {
   if (inFlight) return inFlight
   const run = runProbe().then(
-    (result) => { inFlight = null; return result },
+    (result) => { inFlight = null; lastFound = result.installed && result.path ? result.path : null; return result },
     (err) => { inFlight = null; throw err },
   )
   inFlight = run
   return run
 }
 
-/** Test seam: drop a probe still in flight so cases cannot bleed into each other. */
+/** For a headless run off Windows (claude-headless.ts), which starts `claude`
+ *  by name through sh: the Claude Code the last probe that answered found
+ *  (null when it found none, or before any probe has answered), and the probe
+ *  still running, if any. A run that starts before the first answer joins it
+ *  (Sentinel's check at start runs while the start-up version probe is still
+ *  asking). Synchronous; starts nothing. */
+export function claudeFoundByLastProbe(): string | null {
+  return lastFound
+}
+
+export function claudeProbeInFlight(): Promise<ClaudeCliProbe> | null {
+  return inFlight
+}
+
+/** Test seam: drop a probe still in flight, and the last answer, so cases cannot bleed into each other. */
 export function _resetClaudeCliProbeForTest(): void {
   inFlight = null
+  lastFound = null
 }
 
 /** Off Windows, for a user whose login shell is not of the sh family (fish

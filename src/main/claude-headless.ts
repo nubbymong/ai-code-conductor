@@ -3,7 +3,7 @@
 import { spawn, spawnSync, type SpawnOptions } from 'child_process'
 import * as path from 'path'
 import { systemTool, windowsStartCommand } from './windows-programs'
-import { CLAUDE_NOT_ON_PATH, findClaudeOnWindowsAsync, recentClaudeOnWindows } from './claude-cli-probe'
+import { CLAUDE_NOT_ON_PATH, claudeFoundByLastProbe, claudeProbeInFlight, findClaudeOnWindowsAsync, recentClaudeOnWindows } from './claude-cli-probe'
 import { StringDecoder } from 'string_decoder'
 import { logInfo, logError } from './debug-logger'
 import { withProfileHome } from './pty-manager'
@@ -136,11 +136,33 @@ export function assertHeadlessOptions(opts: HeadlessSpawnOptions): void {
   }
 }
 
+/** Off Windows: `env` with the folder of the Claude Code the CLI probe found
+ *  (`claudePath`) put first on PATH, when PATH does not already name that
+ *  folder. A macOS app opened from the Dock or Finder gets launchd's PATH
+ *  (/usr/bin:/bin:/usr/sbin:/sbin), which has neither Homebrew nor
+ *  ~/.local/bin, so `sh -c claude` found nothing there (exit 127) while the
+ *  probe, which asks the login shell, found it. The folder is the one the
+ *  probe named, not the link's target: an npm claude is a node script
+ *  (`#!/usr/bin/env node`), and the node it needs sits in that same folder
+ *  (Homebrew, nvm). `env` itself is returned, unchanged, for no path, a path
+ *  that is not absolute (`command -v` names an alias or a function by its
+ *  name), a folder with a `:` or a NUL in it (no PATH entry can name it), and
+ *  no PATH or an empty one (an empty PATH entry would mean the run's folder).
+ *  Exported for the test. */
+export function withClaudeFolderOnPath(env: Record<string, string>, claudePath: string | null): Record<string, string> {
+  if (!claudePath || !path.posix.isAbsolute(claudePath)) return env
+  const folder = path.posix.dirname(claudePath)
+  const current = env.PATH
+  if (!current || /[:\0]/.test(folder) || current.split(':').includes(folder)) return env
+  return { ...env, PATH: `${folder}:${current}` }
+}
+
 /**
  * Spawn `claude` as a headless child process: on Windows by the full path found
  * in PATH's folders, with no shell (an npm claude.cmd through the system
- * cmd.exe); elsewhere through `sh` (shell:true), as before. Returns
- * stdout/stderr and the exit code.
+ * cmd.exe); elsewhere through `sh` (shell:true), as before, with the folder
+ * of the Claude Code the CLI probe found first on PATH
+ * (withClaudeFolderOnPath). Returns stdout/stderr and the exit code.
  *
  * Throws synchronously on an unsafe argv (see assertSafeArgv) — that is a
  * programming error, not a runtime condition, so it fails loudly in dev and in
@@ -177,7 +199,8 @@ export function spawnClaudeHeadless(
   // what the timeout tests drive); it defers only behind a real in-flight
   // refresh for this profile, and on Windows behind a PATH walk with no
   // recent answer, and behind the first-start warm-up of a claude.exe started
-  // directly (spawnNow; ADR-025).
+  // directly (spawnNow; ADR-025), and off Windows behind a CLI probe still
+  // running before its first answer (spawnNow).
   //
   // The hold is taken BEFORE the wait (adversarial pass on #598): it is what
   // stops a new rotation from starting, and acquiring only after the in-flight
@@ -244,7 +267,7 @@ function spawnNow(
   // walk never runs on the event loop: a recent answer of it (the CLI check
   // asks every 30 s) starts the run at once, as a cached gate verdict does;
   // without one the walk runs one stat at a time and the run starts after it,
-  // unless it was cancelled meanwhile. POSIX: unchanged.
+  // unless it was cancelled meanwhile. POSIX: see below.
   if (process.platform === 'win32') {
     const startWith = (bin: string | null): Promise<HeadlessResult> => {
       const how = bin ? windowsStartCommand(bin, args, env) : { refused: CLAUDE_NOT_ON_PATH }
@@ -279,7 +302,28 @@ function spawnNow(
       return startWith(bin)
     })
   }
-  return runHeadless({ file: 'claude', args, opts: { shell: true, windowsHide: true, env, cwd } }, args, timeoutMs, stdinData, home, signal, onStdout)
+  // POSIX: `claude` by name through sh, as before, with the folder of the
+  // Claude Code the CLI probe found (claude-cli-probe.ts probeClaudeCli: the
+  // login shell's `command -v claude`) put first on PATH when PATH lacks it
+  // (withClaudeFolderOnPath). The last answer is read at once; before the
+  // first one, the run waits for the probe still running; with no answer and
+  // none running it starts exactly as before. A run never starts a login
+  // shell of its own.
+  const startPosix = (claudePath: string | null): Promise<HeadlessResult> => {
+    const runEnv = withClaudeFolderOnPath(env, claudePath)
+    if (runEnv !== env) logInfo(`[claude-headless] Claude Code's folder put first on PATH: ${path.posix.dirname(claudePath as string)}`)
+    return runHeadless({ file: 'claude', args, opts: { shell: true, windowsHide: true, env: runEnv, cwd } }, args, timeoutMs, stdinData, home, signal, onStdout)
+  }
+  const found = claudeFoundByLastProbe()
+  const probing = found ? null : claudeProbeInFlight()
+  if (!probing) return startPosix(found)
+  return probing.then((r) => (r.installed && r.path ? r.path : null), () => null).then((claudePath) => {
+    if (signal?.aborted) {
+      logInfo('[claude-headless] Aborted before it started')
+      return { code: 1, stdout: '', stderr: '\nAborted' }
+    }
+    return startPosix(claudePath)
+  })
 }
 
 type HeadlessResult = { code: number; stdout: string; stderr: string }
