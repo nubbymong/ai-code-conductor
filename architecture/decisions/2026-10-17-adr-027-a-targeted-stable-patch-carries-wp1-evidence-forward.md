@@ -97,12 +97,21 @@ same message. With one, every rule fails closed:
 11. At most 16 paths. In counted paths (declared paths outside `tests/` and
     `.github/`, and outside `DEV_ONLY_TOOLING`, two release scripts a case
     proves are never packaged: no `files`, `extraResources` or `extraFiles`
-    entry, per platform too, reaches them, a bare folder or a glob included;
-    the case runs only when a declaration is committed, so beta and dev
-    packaging are not tied to it), at most 600 lines added plus deleted since
+    entry, per platform too, reaches them, a bare folder or a glob included,
+    `build` extends no other config, and electron-builder reads no config but
+    package.json's `build`: no `electron-builder.*` file, no `--config` or `-c`
+    naming a file, and no `--config.<key>` or `-c.<key>` override but
+    `npmRebuild` and the Windows signing thumbprint; the case runs only when a
+    declaration is committed, so beta and dev packaging are not tied to it),
+    at most 600 lines added plus deleted since
     `boundHead`, no added line over 1000 characters, and no binary file; a
     line count git gives that cannot be read fails. Scripts that ship stay
-    counted. The caps are constants in `binding.ts`, never fields of the
+    counted. So that code the caps leave out cannot reach the bundle, no
+    `src/` file at HEAD may reach a relative path outside `src/` (an import or
+    export, a side-effect import, `import()`, `require()`, `new URL()`,
+    `import.meta.glob()`, an HTML `src` or `href`) but six data files under
+    `resources/` it reads, which ship and are counted; every input electron-vite
+    builds from is under `src/`. These run with a declaration committed. The caps are constants in `binding.ts`, never fields of the
     declaration, and count from `boundHead`, so chained patches add up until a
     qualification resets them.
 12. The approval is a dated owner-decisions record under `docs/wp1` whose own
@@ -171,6 +180,11 @@ which also refuses the cut. The `gate` job reads with `contents`, `issues`,
   evidence (packaged smoke) and the real-CLI evidence (the real-CLI matrix)
   are among the carried records, and the manual evidence (rollback) is not
   retaken either.
+- The checks that tie code to `src/` are static. The scan of `src/` for
+  relative paths, and the search of `src/` for the names of the two release
+  scripts, read the text: a path built at run time (a computed `require()`)
+  is not seen. The two scripts are kept out of the package by the build
+  config regardless, which the packaging proof reads.
 - Only `release.yml` and `ci.yml` of the `.github/` tree are frozen, and
   nothing under `.github/` counts toward the caps. That holds while only
   `release.yml` builds and there is no `.github/actions/`.
@@ -245,6 +259,12 @@ which also refuses the cut. The `gate` job reads with `contents`, `issues`,
   again, a run still in progress accepted). Each turned a case red; X01 to X03
   and X07 turned both the suite's and the gate's tests red, which shows the
   scan is shared. They supersede G05 and G45 to G47 below.
+- A third round mutated the `src/` reach check and the electron-builder
+  config check (15 mutants, Q01 to Q15: the check off, any `resources/` file
+  allowed, each of seven reach forms unseen, a config file of its own, a
+  config named on the command, any override key, overrides read only on
+  electron-builder lines, comment lines read as commands, and `extends` in
+  both directions). Each turned a case red.
 - Check 5 was mutated in turn (55 mutants, G00 to G54, covering the ci.yml run
   and jobs, the paging, the parents, the exact marker number, the comment
   limit, the published release, the committed read and the `main()` wiring),
