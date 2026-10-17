@@ -108,7 +108,8 @@ scripts proven never packaged) at most 600 lines and no added line over 1000
 characters, all counted cumulatively from `boundHead`; only Markdown and the
 manifest may change under the neutral paths. Only when that file names the
 version being cut, the gate adds check 5: ci.yml's newest push run on the
-released commit and its Test jobs on Windows, macOS and Linux green, the
+released commit completed and its three Test jobs (Windows, macOS, Linux)
+green, the
 declared PR merged as that commit (a merge of its final head onto the base)
 with an ADR-009 PASS at that head, and the base tag a published release on the
 declared base commit. Delete the file before the next qualified stable; the

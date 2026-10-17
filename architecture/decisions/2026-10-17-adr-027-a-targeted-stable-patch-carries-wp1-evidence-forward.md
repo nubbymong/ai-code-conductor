@@ -53,11 +53,16 @@ With no declaration the final assertion is the one before this ADR, with the
 same message. With one, every rule fails closed:
 
 1. The declaration is the one committed at HEAD, read with `git ls-tree` and
-   `git show`, never from the working tree. A working-tree copy HEAD does not
-   have (one written while the suite runs, by a setup file say), or one that
-   differs from HEAD's (line endings aside), refuses, as does a link or an
-   executable at the path, and any file in the tree with its name in another
-   case or folder. It must be one of the paths changed since `boundHead`.
+   `git show`, never from the working tree; the suite and the gate share that
+   scan (`scanCommittedCarryForward` in `release-gate.mjs`). The declaration's
+   path in another case (the full path, compared ignoring case, as a
+   case-insensitive file system sees it) refuses, as does a link or an
+   executable at the path; a file of the same name in another folder, such as
+   an archived declaration, is not the declaration and is ignored. A
+   working-tree copy HEAD does not have (one written while the suite runs, by a
+   setup file say), or one that differs from HEAD's (line endings aside), also
+   refuses. These refusals apply in every candidate run, with or without a
+   declaration. It must be one of the paths changed since `boundHead`.
 2. A declaration that is not valid JSON of its schema fails, naming the file;
    it is never read as absent.
 3. Its `targetVersion` must be `package.json`'s version, or it is stale and
@@ -91,7 +96,10 @@ same message. With one, every rule fails closed:
     nothing else.
 11. At most 16 paths. In counted paths (declared paths outside `tests/` and
     `.github/`, and outside `DEV_ONLY_TOOLING`, two release scripts a case
-    proves are never packaged), at most 600 lines added plus deleted since
+    proves are never packaged: no `files`, `extraResources` or `extraFiles`
+    entry, per platform too, reaches them, a bare folder or a glob included;
+    the case runs only when a declaration is committed, so beta and dev
+    packaging are not tied to it), at most 600 lines added plus deleted since
     `boundHead`, no added line over 1000 characters, and no binary file; a
     line count git gives that cannot be read fails. Scripts that ship stay
     counted. The caps are constants in `binding.ts`, never fields of the
@@ -113,14 +121,16 @@ same message. With one, every rule fails closed:
 rules, item statuses or `UNAVAILABLE_ELIGIBLE`.
 
 **The release gate** adds check 5 (`evaluateCarryForward`). It reads the
-declaration as committed at HEAD too: a file with its name in another case or
-folder, a link at the path, or text that is not JSON cannot be evaluated, and
-the error names the file. Check 5 applies only when the declaration's
-`targetVersion` is the version being cut, and every other cut makes no new
-call. On the commit being released (`GITHUB_SHA`, else HEAD) it requires:
+declaration as committed at HEAD too, with the same scan, on every cut (a local
+git call): the declaration's path in another case, a link at the path, or text
+that is not JSON cannot be evaluated, and the error names the file. Check 5
+applies only when the declaration's `targetVersion` is the version being cut,
+and every other cut makes no new GitHub call. On the commit being released
+(`GITHUB_SHA`, else HEAD) it requires:
 
-- (a) ci.yml's newest push run on that commit is completed and green, and its
-  Test jobs include Windows, macOS and Linux, each completed and green. The
+- (a) ci.yml's newest push run on that commit has completed (its latest
+  attempt), and its three Test jobs, for Windows, macOS and Linux, are each
+  there and green; the run's other jobs do not gate. The
   release workflow itself blocks on the Windows leg only (the Linux leg is
   non-blocking and the Mac job runs no tests), and the fix's own regression
   cases skip on Windows, so this check is what makes "green on all three" a
@@ -157,8 +167,13 @@ which also refuses the cut. The `gate` job reads with `contents`, `issues`,
   they describe the runs before the fix. What is taken instead is the whole
   suite on three operating systems at HEAD (check 5a), which includes the fix's
   POSIX regression cases on macOS and Linux, and the Mac runtime check of the
-  PR's build under a test user, the one packaged check taken. Manual evidence
-  (packaged smoke, the real-CLI matrix, rollback) is not retaken either.
+  PR's build under a test user, the one packaged check taken. The packaged
+  evidence (packaged smoke) and the real-CLI evidence (the real-CLI matrix)
+  are among the carried records, and the manual evidence (rollback) is not
+  retaken either.
+- Only `release.yml` and `ci.yml` of the `.github/` tree are frozen, and
+  nothing under `.github/` counts toward the caps. That holds while only
+  `release.yml` builds and there is no `.github/actions/`.
 - Named cases are proven to exist, not to have run, and conditional skips are
   allowed. "Ran and passed" rests on check 5(a) (the macOS leg) and on the
   ADR-009 pass showing each regression case red without the fix.
@@ -220,6 +235,16 @@ which also refuses the cut. The `gate` job reads with `contents`, `issues`,
   freeze and its detection and list, the raw-text skip search, the three
   branches of the scanner's regular-expression guess, a change of major alone,
   and the second entry, file and case).
+- A second round mutated the packaging proof's helper (9 mutants, P01 to P09:
+  a bare folder, an exclusion read as an inclusion, a `*` across folders,
+  extra resources, per-platform entries, an unreadable glob, a moved app root,
+  an import by the build config, a reference from `src/`) and the shared scan
+  and 5a (7 mutants, X01 to X07: a same-named file in another folder refused
+  again, a case variant accepted or matched case-sensitively, a missing
+  declaration reported present, a link accepted, the run conclusion gating
+  again, a run still in progress accepted). Each turned a case red; X01 to X03
+  and X07 turned both the suite's and the gate's tests red, which shows the
+  scan is shared. They supersede G05 and G45 to G47 below.
 - Check 5 was mutated in turn (55 mutants, G00 to G54, covering the ci.yml run
   and jobs, the paging, the parents, the exact marker number, the comment
   limit, the published release, the committed read and the `main()` wiring),
