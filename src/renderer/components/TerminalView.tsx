@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { decorateTerminalLinks, createLinkHoverControl, type LinkHoverControl } from './terminal/terminalLinks'
 import { installWebglWithRecovery, createAtlasResync, type WebglHandle } from './terminal/terminalWebgl'
+import { createHiddenOutputQueue, type HiddenOutputQueue } from './terminal/hiddenOutputQueue'
 import { atlasCoordinator } from './terminal/atlasCoordinator'
 import {
   createStaleGlyphRepainter,
@@ -175,6 +176,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
   // captured prop there would go stale on tab switches. See the paste handler.
   const isActiveRef = useRef(isActive)
   isActiveRef.current = isActive
+  // #303: the mounted terminal's output queue (hiddenOutputQueue).
+  const hiddenOutputRef = useRef<HiddenOutputQueue | null>(null)
   // Whether #145 input diagnostics are on, readable from the init effect's
   // long-lived onData closure.
   const inputDiagRef = useRef(false)
@@ -414,6 +417,12 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
    * would have it doing model-clearing work on behalf of an atlas it is not
    * drawing from.
    */
+  // #303: a terminal shown again writes what it queued while hidden, before
+  // anything else this activation does (WebGL, fit, focus) reads its buffer.
+  useEffect(() => {
+    if (isActive) hiddenOutputRef.current?.flush()
+  }, [isActive])
+
   useEffect(() => {
     const term = terminalRef.current
     if (!terminalReady || !term) return
@@ -603,6 +612,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     // spawn CLEARS that buffer before it fills it. So the write is not delayed,
     // it is lost. clearSpawned too, so a remount is allowed to respawn this id.
     const markExited = (line: string | null) => {
+      // #303: queued output comes before the line that ends the session.
+      hiddenOutputRef.current?.flush()
       if (line) term?.writeln(`\r\n\x1b[90m${line}\x1b[0m`)
       useSessionStore.getState().updateSession(sessionId, { ptyExited: true })
       clearSpawned(sessionId)
@@ -1230,6 +1241,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
                 // Same rule as above for a torn-down view.
                 if (disposed) { endSpawnElsewhere(spawnToken, line); return }
                 console.error('[TerminalView] pty.spawn failed', err)
+                hiddenOutputRef.current?.flush()
                 term?.writeln(line)
                 markNeverStarted()
                 // No PTY came of this spawn: an exit held meanwhile ends the
@@ -1480,6 +1492,10 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         } catch { /* terminal may be disposed */ }
       })
 
+      // #303: this terminal's output queue (hidden: batched; visible: at once).
+      const hiddenOutput = createHiddenOutputQueue({ write: writeOutput, isVisible: () => isActiveRef.current })
+      hiddenOutputRef.current = hiddenOutput
+
       // Receive PTY output. Pass through with minimal mutation —
       // Claude Code's TUI in alternate-screen mode (CLAUDE_CODE_NO_FLICKER=1)
       // handles its own cursor visibility / repaint; xterm renders
@@ -1500,6 +1516,63 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         // onData chunks run atomically, so viewportY is the user's current
         // position. Keeps the scrolled-up latch (the scroll-to-bottom button)
         // in sync with where the user actually is, every chunk.
+        // #303: a hidden terminal takes its output in batches (one write per
+        // second, and at once when shown); the visible one writes every chunk.
+        hiddenOutput.push(filtered)
+
+        // Post-resume settle nudge: every chunk re-arms the timer; it fires only
+        // once a burst has gone quiet for 600ms, and only while shots remain.
+        // Suppressed right after our own nudge so its repaint can't chain-fire
+        // the next shot. See the declaration comment for the full picture.
+        if (resumeNudgesLeft > 0 && Date.now() >= resumeNudgeSuppressUntil) {
+          resumeNudgeBurstBytes += data.length
+          if (resumeNudgeTimer) clearTimeout(resumeNudgeTimer)
+          resumeNudgeTimer = setTimeout(() => {
+            resumeNudgeTimer = null
+            if (disposed || !term || resumeNudgesLeft <= 0) return
+            const burst = resumeNudgeBurstBytes
+            resumeNudgeBurstBytes = 0
+            // Picker sessions settle repeatedly before the replay (UI paint,
+            // arrow-key echo) — only a replay-sized burst is worth a shot. 32KB
+            // is far above a one-screen repaint and far below any real replay;
+            // a tiny transcript may slip under it, but tiny replays are also the
+            // least corruption-prone.
+            if (resumeNudgeGated && burst < 32_768) return
+            hiddenOutput.flush()
+            resumeNudgesLeft -= 1
+            resumeNudgeSuppressUntil = Date.now() + 1500
+            const c = term.cols, r = term.rows
+            if (c > 0 && r > 2) {
+              ptyResizeCount += 2
+              resumeNudgeShrunk = true
+              window.electronAPI.pty.resize(sessionId, c, r - 1)
+              resumeNudgeRestoreTimer = setTimeout(() => {
+                resumeNudgeRestoreTimer = null
+                resumeNudgeShrunk = false
+                if (disposed || !term) return
+                // Re-read geometry AT FIRE TIME: a real user resize can land inside
+                // the 60ms shrink window, and restoring the stale capture would
+                // stomp it — PTY and xterm would disagree until the next resize.
+                const c2 = term.cols, r2 = term.rows
+                window.electronAPI.pty.resize(sessionId, c2, r2)
+                lastSentCols = c2
+                lastSentRows = r2
+                try { term.refresh(0, r2 - 1) } catch { /* disposed mid-nudge */ }
+                reportIntegrity()
+              }, 60)
+            }
+          }, 600)
+        }
+
+        reportIntegrity()
+        pendingParseData += data
+        scheduleParse()
+      })
+
+      // Writes one chunk of PTY output: the follow decision, the write, and
+      // the repaint scheduling. Called per chunk for the visible terminal and
+      // per batch for a hidden one (hiddenOutputQueue, #303).
+      function writeOutput(filtered: string): void {
         const preWriteBuf = term?.buffer.active
         const follow = decideFollow({
           viewportY: preWriteBuf?.viewportY ?? 0,
@@ -1554,54 +1627,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             repainter.strongIfStale()
           }
         }
-
-        // Post-resume settle nudge: every chunk re-arms the timer; it fires only
-        // once a burst has gone quiet for 600ms, and only while shots remain.
-        // Suppressed right after our own nudge so its repaint can't chain-fire
-        // the next shot. See the declaration comment for the full picture.
-        if (resumeNudgesLeft > 0 && Date.now() >= resumeNudgeSuppressUntil) {
-          resumeNudgeBurstBytes += data.length
-          if (resumeNudgeTimer) clearTimeout(resumeNudgeTimer)
-          resumeNudgeTimer = setTimeout(() => {
-            resumeNudgeTimer = null
-            if (disposed || !term || resumeNudgesLeft <= 0) return
-            const burst = resumeNudgeBurstBytes
-            resumeNudgeBurstBytes = 0
-            // Picker sessions settle repeatedly before the replay (UI paint,
-            // arrow-key echo) — only a replay-sized burst is worth a shot. 32KB
-            // is far above a one-screen repaint and far below any real replay;
-            // a tiny transcript may slip under it, but tiny replays are also the
-            // least corruption-prone.
-            if (resumeNudgeGated && burst < 32_768) return
-            resumeNudgesLeft -= 1
-            resumeNudgeSuppressUntil = Date.now() + 1500
-            const c = term.cols, r = term.rows
-            if (c > 0 && r > 2) {
-              ptyResizeCount += 2
-              resumeNudgeShrunk = true
-              window.electronAPI.pty.resize(sessionId, c, r - 1)
-              resumeNudgeRestoreTimer = setTimeout(() => {
-                resumeNudgeRestoreTimer = null
-                resumeNudgeShrunk = false
-                if (disposed || !term) return
-                // Re-read geometry AT FIRE TIME: a real user resize can land inside
-                // the 60ms shrink window, and restoring the stale capture would
-                // stomp it — PTY and xterm would disagree until the next resize.
-                const c2 = term.cols, r2 = term.rows
-                window.electronAPI.pty.resize(sessionId, c2, r2)
-                lastSentCols = c2
-                lastSentRows = r2
-                try { term.refresh(0, r2 - 1) } catch { /* disposed mid-nudge */ }
-                reportIntegrity()
-              }, 60)
-            }
-          }, 600)
-        }
-
-        reportIntegrity()
-        pendingParseData += data
-        scheduleParse()
-      })
+      }
 
       // Whether THIS view will start the session's PTY, decided as it starts
       // listening: a view that remounts onto a PTY that is already running
@@ -1612,6 +1638,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // down view saw end with nothing started: say it here, and end the session.
       unsubSpawnEnd = listenForSpawnEnd(sessionId, (line) => {
         adoptedStartEnded = true
+        hiddenOutputRef.current?.flush()
         if (line) term?.writeln(line)
         markExited(null)
       })
@@ -1801,6 +1828,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       if (repainterRef.current === repainter) repainterRef.current = null
       resizeObserver?.disconnect()
       unsubData?.()
+      hiddenOutputRef.current?.dispose()
+      hiddenOutputRef.current = null
       unsubExit?.()
       unsubSpawnEnd?.()
       // DON'T kill PTY here - it survives HMR remounts.
