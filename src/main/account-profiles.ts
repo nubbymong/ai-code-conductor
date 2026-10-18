@@ -670,6 +670,36 @@ export function _resetAclStateForTest(): void {
   unremovableAclPrincipals.clear()
   learnAttemptsLeft = LEARN_ATTEMPT_MAX
   fallbackUnprovenLogged.clear()
+  verifiedOwnerOnly.clear()
+  aclNow = Date.now
+}
+
+/**
+ * aicc_planning#301: folders this run has already proven owner-only, so a
+ * config or state write does not start icacls -- synchronously, on the main
+ * thread -- for a folder it checked a moment ago. With 25 sessions those reads
+ * ran many times a minute and froze the window for seconds under Defender.
+ *
+ * Keyed by the folder's resolved path, and valid only while the folder is the
+ * SAME folder: its volume, file id and creation time (a `stat`, no process).
+ * A folder deleted and made again is a new identity and is hardened again.
+ * An entry is trusted for ACL_RECHECK_MS, then the next write reads the DACL
+ * again, so a DACL widened from outside during a run is still repaired. Only
+ * a call that answered true is remembered; a folder with no file id (some
+ * network shares) is never remembered.
+ */
+export const ACL_RECHECK_MS = 10 * 60_000
+const verifiedOwnerOnly = new Map<string, { id: string; at: number }>()
+let aclNow: () => number = Date.now
+/** Test seam: the clock the re-check interval is measured with. */
+export function _setAclClockForTest(now: () => number): void { aclNow = now }
+
+function aclDirIdentity(dir: string): string | null {
+  try {
+    const st = fs.statSync(dir, { bigint: true })
+    if (st.ino === 0n) return null
+    return `${st.dev}:${st.ino}:${st.birthtimeNs}`
+  } catch { return null }
 }
 
 /**
@@ -807,6 +837,19 @@ function strandedPrincipals(entries: string[], removals: string[], granted: Read
  */
 export function hardenDirAclWindows(dir: string): boolean {
   if (!IS_WINDOWS) return false
+  // #301: a folder proven owner-only this run, still the same folder, and
+  // checked within ACL_RECHECK_MS, starts no icacls.
+  const key = path.resolve(dir).toLowerCase()
+  const id = aclDirIdentity(dir)
+  const seen = id === null ? undefined : verifiedOwnerOnly.get(key)
+  if (seen && seen.id === id && aclNow() - seen.at < ACL_RECHECK_MS) return true
+  const ok = hardenDirAclWindowsUncached(dir)
+  if (ok && id !== null) verifiedOwnerOnly.set(key, { id, at: aclNow() })
+  else verifiedOwnerOnly.delete(key)
+  return ok
+}
+
+function hardenDirAclWindowsUncached(dir: string): boolean {
   const spellings = windowsAclPrincipals()
   if (spellings.length === 0) return false
 
