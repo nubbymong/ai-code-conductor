@@ -699,6 +699,20 @@ const verifiedOwnerOnly = new Map<string, { id: string; at: number }>()
 let aclNow: () => number = () => performance.now()
 /** Test seam: the clock the re-check interval is measured with. */
 export function _setAclClockForTest(now: () => number): void { aclNow = now }
+/** At most this many folders are remembered (one per session's settings
+ *  folder, among others, in an app left running for days). */
+const ACL_MEMO_MAX = 256
+function rememberOwnerOnly(key: string, id: string): void {
+  const at = aclNow()
+  verifiedOwnerOnly.delete(key)
+  if (verifiedOwnerOnly.size >= ACL_MEMO_MAX) {
+    for (const [k, v] of verifiedOwnerOnly) if (at - v.at >= ACL_RECHECK_MS || at - v.at < 0) verifiedOwnerOnly.delete(k)
+    while (verifiedOwnerOnly.size >= ACL_MEMO_MAX) verifiedOwnerOnly.delete(verifiedOwnerOnly.keys().next().value as string)
+  }
+  verifiedOwnerOnly.set(key, { id, at })
+}
+/** Test seam: how many folders are remembered. */
+export function _aclMemoSizeForTest(): number { return verifiedOwnerOnly.size }
 /** Test seam: forget the folders proven owner-only, and nothing else. */
 export function _clearAclMemoForTest(): void { verifiedOwnerOnly.clear() }
 /** Set by hardenDirAclWindowsUncached: whether its answer came from a read
@@ -859,7 +873,7 @@ export function hardenDirAclWindows(dir: string): boolean {
   }
   lastAnswerProvedOwnerOnly = false
   const ok = hardenDirAclWindowsUncached(dir)
-  if (ok && lastAnswerProvedOwnerOnly && id !== null && aclDirIdentity(dir) === id) verifiedOwnerOnly.set(key, { id, at: aclNow() })
+  if (ok && lastAnswerProvedOwnerOnly && id !== null && aclDirIdentity(dir) === id) rememberOwnerOnly(key, id)
   else verifiedOwnerOnly.delete(key)
   return ok
 }

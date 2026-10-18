@@ -39,7 +39,7 @@ vi.spyOn(fs, 'statSync').mockImplementation(((p: unknown, o?: unknown) => {
   return (realStat as (a: unknown, b?: unknown) => unknown)(p, o)
 }) as never)
 
-const { hardenDirAclWindows, _resetAclStateForTest, _setAclClockForTest, ACL_RECHECK_MS } = await import('../../../src/main/account-profiles')
+const { hardenDirAclWindows, _resetAclStateForTest, _setAclClockForTest, _aclMemoSizeForTest, ACL_RECHECK_MS } = await import('../../../src/main/account-profiles')
 
 let now = 1_000_000
 
@@ -78,9 +78,9 @@ describe('hardenDirAclWindows remembers a folder a read proved owner-only (#301)
     expect(calls.length).toBeGreaterThan(0)
   })
 
-  it('a write whose read failed is not remembered either', () => {
+  it('a write whose read failed is not remembered either (the pair already learned)', () => {
     settle()
-    _resetAclStateForTest(); _setAclClockForTest(() => now)
+    now += ACL_RECHECK_MS // the entry is due: the next call goes to icacls
     failReads = true
     expect(hardenDirAclWindows(DIR)).toBe(true) // grants landed; the DACL was never read
     failReads = false
@@ -153,6 +153,16 @@ describe('hardenDirAclWindows remembers a folder a read proved owner-only (#301)
     identity.ino = 0n
     settle()
     hardenDirAclWindows(DIR)
+    expect(calls.length).toBeGreaterThan(0)
+  })
+
+  it('remembers at most 256 folders, dropping the expired, then the oldest', () => {
+    for (let i = 0; i < 300; i++) settle(`${DIR}\\f${i}`)
+    expect(_aclMemoSizeForTest()).toBe(256)
+    // the newest is still remembered; the first was dropped
+    expect(hardenDirAclWindows(`${DIR}\\f299`)).toBe(true)
+    expect(calls).toEqual([])
+    hardenDirAclWindows(`${DIR}\\f0`)
     expect(calls.length).toBeGreaterThan(0)
   })
 
