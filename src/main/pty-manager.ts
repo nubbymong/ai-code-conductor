@@ -5,6 +5,7 @@ import { runChunkedWrite, WRITE_CHUNK_SIZE } from './pty-chunked-write'
 import { buildTmuxLaunchCommand, buildSshClaudeFlags } from './ssh-tmux'
 import { buildTmuxListCommand, parseTmuxLivenessOutput, computeLiveSessionIds, TMUX_LIVENESS_END } from './ssh-liveness'
 import { stripAnsiForSentinel } from './ansi-strip'
+import { resumeUnlessFresh } from './fresh-conversation'
 import { parseTmuxSentinel, parseSetupAccountSentinel, parseTmuxStageSentinel } from './ssh-sentinel-parsers'
 import { resolveTmuxArchive } from './tmux-archive-cache'
 export { _setTmuxArchiveResolverForTest, _downloadAndCacheTmuxArchiveForTest } from './tmux-archive-cache'
@@ -2159,7 +2160,8 @@ const describePathForLog = (p: string): string => stripSpoofableText(p, 300)
 function managedLaunchGateDirs(sessionId: string, resolvedCwd: string, options: SpawnPtyOptions | undefined): string[] {
   const dirs = [resolvedCwd]
   if (options?.shellOnly || options?.ssh || (options?.provider ?? 'claude') !== 'claude') return dirs
-  const target = options?.resume ?? getLastResumeTarget(sessionId)
+  // #117: a fresh conversation resumes nothing, so no target folder is gated.
+  const target = resumeUnlessFresh(options, options?.resume ?? getLastResumeTarget(sessionId))
   if (!target?.cwd) return dirs
   if (!options?.resume && !getTranscriptBinder()) return dirs
   const resumeCwd = expandResumeTargetCwd(target.cwd, os.homedir())
@@ -5718,7 +5720,7 @@ function spawnPtyResolved(
       // was not certain resumes none (`freshConversation`, main only).
       // #117: `options.freshConversation` (the config always starts a new
       // conversation) resumes none, a restored tab's included.
-      let resumeTarget = options?.freshConversation === true ? undefined : options?.resume ?? (options?.useResumePicker || launch.freshConversation === true ? undefined : keptCodexConversations.get(sessionId))
+      let resumeTarget = resumeUnlessFresh(options, options?.resume ?? (options?.useResumePicker || launch.freshConversation === true ? undefined : keptCodexConversations.get(sessionId)))
       // P4.3 review RASK-1: an Ask launch resumes only a conversation of the
       // help folder it starts in, and starts the CLI there (askLaunchFolderHolds).
       if (options?.isAsk === true && resumeTarget) {
@@ -6392,7 +6394,7 @@ function spawnPtyResolved(
       const selfCapturedTarget = getLastResumeTarget(sessionId)
       clearLastResumeTarget(sessionId)
       // #117: a config set to always start a new conversation resumes none.
-      const effectiveTarget = options?.freshConversation === true ? undefined : persistedTarget ?? selfCapturedTarget
+      const effectiveTarget = resumeUnlessFresh(options, persistedTarget ?? selfCapturedTarget)
       // FIX 3: `discoveryOn` (binder present == logging on) gates ONLY the
       // self-captured path — that path's target ORIGINATES from the binder, so
       // without it there is nothing to capture. The app-relaunch path uses the

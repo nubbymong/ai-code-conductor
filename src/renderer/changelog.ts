@@ -25,7 +25,7 @@ export const changelog: ChangelogEntry[] = [
     date: '2026-10-17',
     highlights: 'A saved config can now start a new conversation every time, with no resume question.',
     changes: [
-      { type: 'feature', description: 'Always start a new conversation: a new option in a local Claude Code or Codex config, under Allow Multi Spawn. Its sessions skip the resume list and start a new conversation every time: when you launch them, several at once included, when the app reopens them, and when you Restart them. It is off by default, so existing configs behave as before. To go back to an earlier conversation anyway, use the /resume command inside Claude Code, or, in a Codex session, Restart and pick a conversation.' },
+      { type: 'feature', description: 'Always start a new conversation: a new option in a local Claude Code or Codex config, under Allow Multi Spawn. Its sessions skip the resume list and start a new conversation every time: when you launch them, several at once included, when the app reopens them, and when you Restart them. It is off by default, so existing configs behave as before. Switch Account still moves the conversation you are in to the new account. To go back to an earlier conversation anyway, use the /resume command inside Claude Code, or, in a Codex session, Restart and pick a conversation.' },
     ],
   },
   {

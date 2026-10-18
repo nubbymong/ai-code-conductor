@@ -30,7 +30,7 @@ import { sessionProviderAccount } from '../utils/accountChip'
 import { switchOrigin, forgetSwitchOrigin } from '../utils/switchOrigin'
 import SshFlowOverlay from './SshFlowOverlay'
 import { shouldUseResumePicker } from '../utils/resumePicker'
-import { configStartsNewConversation } from '../utils/alwaysNewConversation'
+import { configStartsNewConversation, consumeKeepsConversation, spawnStartsNewConversation } from '../utils/alwaysNewConversation'
 import { shouldGateAccountChoice, resumedSessionOwnAccount } from '../utils/sessionLaunch'
 import { resolveLaunchAccount, launchStep, accountsSnapshotWhenLoaded, describeLaunchFailure, providerOffForLaunch, switchTarget, configRepointPatch, type LaunchAccountFields, type LaunchAccountPlan, type LaunchFailureContext, type LaunchStep } from '../utils/launchAccount'
 import { createSpawnExitHold, processExitLine, type SpawnExitHold, type SpawnOutcome } from '../utils/spawnExitHold'
@@ -978,8 +978,15 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           // #117: a config set to always start a new conversation carries none
           // over -- not a restored tab's exact target, not the one a Restart
           // would resume (main, `freshConversation`). An explicit "Restart and
-          // pick a conversation" marked the picker, and that still applies.
-          const freshConversation = !shellOnly && !useResumePicker && configStartsNewConversation(useConfigStore.getState().configs, configId)
+          // pick a conversation" marked the picker, and that still applies, as
+          // does a Switch account's keep (consumed on every spawn, so it never
+          // lingers into a later one).
+          const freshConversation = spawnStartsNewConversation({
+            shellOnly,
+            pickerArmed: useResumePicker,
+            keepsConversation: consumeKeepsConversation(sessionId),
+            configStartsNew: configStartsNewConversation(useConfigStore.getState().configs, configId),
+          })
           // P3.6: the account a launch ran on, by the footer's label rule,
           // for the line a Switch account's respawn may say.
           const launchAccountName = (accountId: string | undefined): string => {
@@ -1128,8 +1135,13 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
               !shellOnly && !freshConversation && session?.resumeUuid && session?.resumeCwd
                 ? { uuid: session.resumeUuid, cwd: session.resumeCwd }
                 : undefined
-            // #117: the dropped target is spent too, so it never comes back.
-            if (freshConversation && session?.resumeUuid) updateSession(sessionId, { resumeUuid: undefined, resumeCwd: undefined })
+            // #117: the dropped target is spent by a spawn that starts, as
+            // `resume` is; a refused one puts it back below, as for `resume`.
+            const droppedResume =
+              freshConversation && session?.resumeUuid && session?.resumeCwd
+                ? { uuid: session.resumeUuid, cwd: session.resumeCwd }
+                : undefined
+            if (droppedResume) updateSession(sessionId, { resumeUuid: undefined, resumeCwd: undefined })
             // Ask Conductor's opening question. Read off the session record for
             // the same reason `resume` is: it is one-shot launch state, not
             // configuration. Consumed immediately below so a later in-session
@@ -1179,8 +1191,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
                 // Spawn. If the screen says it is (a save that did not land), the toggle
                 // is made the saved one, so the tab's words are true beside it.
                 if (refusal?.code === 'already-running') void reconcileRefusedMultiSpawn(configId)
-                if (refusal && resume && (!disposed || isCurrentSpawn(sessionId, spawnToken))) {
-                  updateSession(sessionId, { resumeUuid: resume.uuid, resumeCwd: resume.cwd })
+                const keptTarget = resume ?? droppedResume
+                if (refusal && keptTarget && (!disposed || isCurrentSpawn(sessionId, spawnToken))) {
+                  updateSession(sessionId, { resumeUuid: keptTarget.uuid, resumeCwd: keptTarget.cwd })
                 }
                 const endText = refusal ? refusedTabText(refusal) : CANCELLED_TEXT
                 if (refusal && !disposed) setLaunchRefused(true)

@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import { Session, useSessionStore } from '../stores/sessionStore'
 import { killSessionPty, clearSpawned } from '../ptyTracker'
 import { markSessionForResumePicker } from '../utils/resumePicker'
-import { configStartsNewConversation } from '../utils/alwaysNewConversation'
+import { configStartsNewConversation, markSessionKeepsConversation } from '../utils/alwaysNewConversation'
 import { restartPicksConversation } from '../utils/launchAccount'
 import { useAccountGateStore } from '../stores/accountGateStore'
 import { spentCommand } from '../utils/commandTerminal'
@@ -22,6 +22,10 @@ export interface RestartOptions {
    *  others offer a plain "Restart" that carries on with the conversation
    *  the tab is on (main resumes it; P3.5). */
   pickConversation?: boolean
+  /** #117: this restart carries on with the conversation the tab is on even
+   *  when its config always starts a new one -- a Switch account moves the
+   *  running conversation, it does not start the session anew. */
+  keepConversation?: boolean
 }
 
 /** A tab whose launch started nothing is not its config's running copy, so
@@ -166,7 +170,9 @@ export function useRestartSession(
     // Restart that did not starts a new conversation.
     // #117: a config that always starts a new conversation does not open the
     // picker on a plain Restart; only the explicit "pick a conversation" does.
-    const alwaysNew = configStartsNewConversation(useConfigStore.getState().configs, session.configId)
+    // A keepConversation restart (Switch account) behaves as it always has.
+    const alwaysNew = !options?.keepConversation && configStartsNewConversation(useConfigStore.getState().configs, session.configId)
+    if (options?.keepConversation) markSessionKeepsConversation(session.id)
     const pick = options?.pickConversation ?? (alwaysNew ? false : restartPicksConversation(session.provider))
     if (session.sessionType === 'local' && !session.shellOnly && pick) {
       markSessionForResumePicker(session.id)

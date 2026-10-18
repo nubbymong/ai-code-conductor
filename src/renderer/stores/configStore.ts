@@ -64,7 +64,7 @@ export interface TerminalConfig {
    * this config -- launch, relaunch restore, Restart, Recover -- begins a new
    * conversation with no resume question. Absent/false = today's behaviour
    * (the resume picker on a fresh launch). Local Claude/Codex only; see
-   * utils/resumePicker.ts configStartsNewConversation.
+   * utils/alwaysNewConversation.ts.
    */
   alwaysNewConversation?: boolean
   machineName?: string // Identifies which machine this session runs on

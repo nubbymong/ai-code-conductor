@@ -24,7 +24,7 @@ vi.mock('../../../src/renderer/utils/resumePicker', () => ({
   shouldUseResumePicker: vi.fn(() => false),
 }))
 
-const { configStartsNewConversation } = await import('../../../src/renderer/utils/alwaysNewConversation')
+const { configStartsNewConversation, consumeKeepsConversation, markSessionKeepsConversation, spawnStartsNewConversation } = await import('../../../src/renderer/utils/alwaysNewConversation')
 const { useLaunchSessionAction } = await import('../../../src/renderer/hooks/useLaunchConfig')
 const { useRestartSession } = await import('../../../src/renderer/hooks/useRestartSession')
 const { useSessionStore } = await import('../../../src/renderer/stores/sessionStore')
@@ -75,6 +75,45 @@ describe('configStartsNewConversation', () => {
   })
 })
 
+describe('spawnStartsNewConversation (TerminalView freshConversation)', () => {
+  const on = { pickerArmed: false, keepsConversation: false, configStartsNew: true }
+  it('is true only for a flagged config with no picker and no keep', () => {
+    expect(spawnStartsNewConversation(on)).toBe(true)
+    expect(spawnStartsNewConversation({ ...on, configStartsNew: false })).toBe(false)
+    expect(spawnStartsNewConversation({ ...on, pickerArmed: true })).toBe(false)
+    expect(spawnStartsNewConversation({ ...on, keepsConversation: true })).toBe(false)
+    expect(spawnStartsNewConversation({ ...on, shellOnly: true })).toBe(false)
+  })
+
+  it('the keep mark is one-shot', () => {
+    expect(consumeKeepsConversation('k1')).toBe(false)
+    markSessionKeepsConversation('k1')
+    expect(consumeKeepsConversation('k1')).toBe(true)
+    expect(consumeKeepsConversation('k1')).toBe(false)
+  })
+})
+
+describe('wiring (read from the source: TerminalView and the switch are not mounted here)', () => {
+  const fs = require('node:fs') as typeof import('node:fs')
+  const path = require('node:path') as typeof import('node:path')
+  const code = (rel: string) => fs.readFileSync(path.join(__dirname, '..', '..', '..', rel), 'utf8').replace(/\r\n/g, '\n').replace(/^[ \t]*\/\/.*$/gm, '')
+
+  it('TerminalView decides by spawnStartsNewConversation, consuming the keep on every spawn', () => {
+    const tv = code('src/renderer/components/TerminalView.tsx')
+    expect(tv).toMatch(/const freshConversation = spawnStartsNewConversation\(\{\s*shellOnly,\s*pickerArmed: useResumePicker,\s*keepsConversation: consumeKeepsConversation\(sessionId\),/)
+    // a fresh spawn sends no restored target, sends the flag, and gives a refused one its target back
+    expect(tv).toContain('!shellOnly && !freshConversation && session?.resumeUuid && session?.resumeCwd')
+    expect(tv).toContain('...(freshConversation ? { freshConversation: true } : {})')
+    expect(tv).toContain('const keptTarget = resume ?? droppedResume')
+  })
+
+  it('both Switch account paths restart with keepConversation', () => {
+    const sw = code('src/renderer/hooks/useSwitchAccount.ts')
+    expect(sw).toContain('restart({ profileId: newProfileId }, { keepConversation: true })')
+    expect(sw).toContain('restart({ providerAccountId: target.id }, { keepConversation: true })')
+  })
+})
+
 describe('launch', () => {
   it('a config with the flag launches without arming the resume picker', () => {
     let id = ''
@@ -120,6 +159,15 @@ describe('restart and recover', () => {
     useConfigStore.setState({ configs: [cfg()] })
     restartOf(session(), (r) => { r.restart() })
     expect(markSessionForResumePicker).toHaveBeenCalledWith('s1')
+  })
+
+  it('a Switch account restart (keepConversation) on a flagged session behaves as before and marks the keep', () => {
+    useConfigStore.setState({ configs: [cfg({ alwaysNewConversation: true })] })
+    restartOf(session(), (r) => { r.restart({ profileId: 'p2' }, { keepConversation: true }) })
+    // a Claude restart arms the picker by default, as it always has
+    expect(markSessionForResumePicker).toHaveBeenCalledWith('s1')
+    expect(consumeKeepsConversation('s1')).toBe(true)
+    expect(consumeKeepsConversation('s1')).toBe(false)
   })
 
   it('Recover arms it only without the flag', () => {

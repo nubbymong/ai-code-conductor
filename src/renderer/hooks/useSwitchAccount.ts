@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { Session, useSessionStore } from '../stores/sessionStore'
 import { persistLastUsedAccount, persistSessionProviderAccount } from '../session-persistence'
-import { useRestartSession } from './useRestartSession'
+import { useRestartSession, type RestartOptions } from './useRestartSession'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { isAccountActive } from '../../shared/account-types'
 import { useProviderAccountsStore } from '../stores/providerAccountsStore'
@@ -101,7 +101,7 @@ export function useSwitchAccount(
       }
       // 3. Respawn via the existing Restart path, forcing the new profileId so
       //    the remount reads the new account; resume is inherited from Restart.
-      restart({ profileId: newProfileId })
+      restart({ profileId: newProfileId }, { keepConversation: true })
     },
     [session, restart],
   )
@@ -118,7 +118,7 @@ export function useSwitchAccount(
 function switchProviderAccount(
   session: Session,
   nextId: string | undefined,
-  restart: (overrides?: Partial<Session>) => boolean,
+  restart: (overrides?: Partial<Session>, options?: RestartOptions) => boolean,
 ): void {
   const provider = session.provider ?? 'claude'
   const snapshot = useProviderAccountsStore.getState().snapshot
@@ -145,7 +145,7 @@ function switchProviderAccount(
       //    once the old process has ended, then resumes it by id (P3.5). A
       //    launch there that asks and is declined takes the tab back (VM
       //    finding V3; utils/switchOrigin).
-      if (restart({ providerAccountId: target.id })) {
+      if (restart({ providerAccountId: target.id }, { keepConversation: true })) {
         noteSwitchOrigin(sessionId, from, target.id)
       } else {
         // Refused (the Multi Spawn rule): nothing moved, so the pin goes
