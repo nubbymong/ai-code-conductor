@@ -99,6 +99,9 @@ export function useRestartSession(
         // this is the second fence, because forceRemount merges the CAPTURED
         // session on top of nothing when the store read races.
         askPrompt: undefined,
+        // #305: the new run may be a new conversation; its name comes with its
+        // own statusline.
+        claudeSessionName: undefined,
         linesAdded: undefined,
         linesRemoved: undefined,
         inputTokens: undefined,

@@ -104,6 +104,9 @@ export interface Session {
   /** Nothing will report this session's allowance (D3; Codex: no rollout was
    *  claimed): the footer says so instead of a placeholder. */
   usageUnavailable?: 'no-reading'
+  /** aicc_planning#305: Claude Code's own name for the session (statusline
+   *  `session_name`), shown as a header pill. Live state, never persisted. */
+  claudeSessionName?: string
   /** Active-account email from the statusline bridge. Drives the coloured email chip.
    *  v1.5.9: no longer read by the renderer (the chip was removed). Field is kept so
    *  older saved state still hydrates without errors. */
