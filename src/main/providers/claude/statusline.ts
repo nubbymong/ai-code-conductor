@@ -103,6 +103,11 @@ process.stdin.on('end', () => {
       // Logs v2 (Task 8): forward Claude Code's transcript_path so the watcher
       // fan-out can bind it (continuous, exact discovery source).
       transcriptPath: typeof data.transcript_path === 'string' ? data.transcript_path : undefined,
+      // #305: Claude Code's own session name (custom, else AI title), as
+      // text: control characters dropped, at most 200 characters.
+      sessionName: typeof data.session_name === 'string'
+        ? (data.session_name.split('').filter((c) => { const n = c.charCodeAt(0); return n >= 32 && (n < 127 || n > 159); }).join('').trim().slice(0, 200) || undefined)
+        : undefined,
       timestamp: Date.now()
     };
     // stdin rate_limits win; the gather's applyUsage below only fills gaps

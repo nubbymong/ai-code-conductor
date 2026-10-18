@@ -43,6 +43,8 @@ export function useStatuslineSubscription(sessionId: string) {
       // Usage track MP5: that nothing will report the allowance (D3), for the
       // multi-account footer and the strip.
       if (data.usageUnavailable) updates.usageUnavailable = data.usageUnavailable
+      // #305: Claude Code's own session name, once it has one.
+      if (typeof data.sessionName === 'string' && data.sessionName) updates.claudeSessionName = data.sessionName
       // v1.5.9: do NOT copy accountEmail / accountColour into the session
       // store FOR LOCAL SESSIONS. The local bridge reads
       // ~/.claude.json:oauthAccount which is a GLOBAL field -- every
