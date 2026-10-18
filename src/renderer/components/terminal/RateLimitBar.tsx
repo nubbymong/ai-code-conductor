@@ -79,7 +79,7 @@ export function RateLimitBarNoReading({ label, resetsAt, compact }: { label: str
   )
 }
 
-export default function RateLimitBar({ label, pct, resets, showReset, compact }: { label: string; pct: number; resets?: string; showReset?: boolean; compact?: boolean }) {
+function RateLimitBar({ label, pct, resets, showReset, compact }: { label: string; pct: number; resets?: string; showReset?: boolean; compact?: boolean }) {
   const clamped = Math.min(100, Math.max(0, pct))
   // Drive from theme tokens so the bar adapts to light/dark — hard-
   // coded Catppuccin Mocha hex didn't repaint when the user flipped
@@ -129,3 +129,7 @@ export default function RateLimitBar({ label, pct, resets, showReset, compact }:
     </span>
   )
 }
+
+// #304: every footer and strip bar re-rendered on any session's statusline
+// tick; its props are primitives, so a bar whose figures did not change skips.
+export default React.memo(RateLimitBar)

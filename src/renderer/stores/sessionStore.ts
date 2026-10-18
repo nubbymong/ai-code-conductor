@@ -253,6 +253,33 @@ interface SessionState {
   renameSession: (id: string, name: string) => void
 }
 
+/**
+ * aicc_planning#304: equality for updateSession's no-op guard. A statusline
+ * tick carries `usageBuckets` and `rateLimitExtra` as objects deserialised
+ * afresh from IPC, so `!==` called every tick a change and replaced the
+ * sessions array -- re-rendering every usage bar in the window, from every
+ * session's ticks. Plain arrays and objects are compared by value; anything
+ * else (functions, class instances, Dates) only by identity, as before.
+ */
+export function sameStatusValue(a: unknown, b: unknown, depth = 0): boolean {
+  if (a === b) return true
+  if (depth > 6 || a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) if (!sameStatusValue(a[i], b[i], depth + 1)) return false
+    return true
+  }
+  const plain = (o: object) => Object.getPrototypeOf(o) === Object.prototype || Object.getPrototypeOf(o) === null
+  if (!plain(a) || !plain(b)) return false
+  const ak = Object.keys(a), bk = Object.keys(b)
+  if (ak.length !== bk.length) return false
+  for (const k of ak) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) return false
+    if (!sameStatusValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], depth + 1)) return false
+  }
+  return true
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
@@ -296,7 +323,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const current = state.sessions[idx]
       let changed = false
       for (const k in updates) {
-        if ((current as unknown as Record<string, unknown>)[k] !== (updates as unknown as Record<string, unknown>)[k]) {
+        if (!sameStatusValue((current as unknown as Record<string, unknown>)[k], (updates as unknown as Record<string, unknown>)[k])) {
           changed = true
           break
         }
