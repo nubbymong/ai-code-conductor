@@ -100,7 +100,9 @@ describe('wiring (read from the source: TerminalView and the switch are not moun
 
   it('TerminalView decides by spawnStartsNewConversation, consuming the keep on every spawn', () => {
     const tv = code('src/renderer/components/TerminalView.tsx')
-    expect(tv).toMatch(/const freshConversation = spawnStartsNewConversation\(\{\s*shellOnly,\s*pickerArmed: useResumePicker,\s*keepsConversation: consumeKeepsConversation\(sessionId\),/)
+    expect(tv).toMatch(/const freshConversation = spawnStartsNewConversation\(\{\s*shellOnly,\s*pickerArmed: useResumePicker,\s*keepsConversation: sessionKeepsConversation\(sessionId\),/)
+    // the keep is spent by the spawn that starts, not by the decision
+    expect(tv).toMatch(/const spawnToken = markSpawned\(sessionId\)\s*consumeKeepsConversation\(sessionId\)/)
     // a fresh spawn sends no restored target, sends the flag, and gives a refused one its target back
     expect(tv).toContain('!shellOnly && !freshConversation && session?.resumeUuid && session?.resumeCwd')
     expect(tv).toContain('...(freshConversation ? { freshConversation: true } : {})')
@@ -167,6 +169,16 @@ describe('restart and recover', () => {
     // a Claude restart arms the picker by default, as it always has
     expect(markSessionForResumePicker).toHaveBeenCalledWith('s1')
     expect(consumeKeepsConversation('s1')).toBe(true)
+    expect(consumeKeepsConversation('s1')).toBe(false)
+  })
+
+  it('a plain Restart or Recover clears a keep a torn-down view never spent', () => {
+    useConfigStore.setState({ configs: [cfg({ alwaysNewConversation: true })] })
+    markSessionKeepsConversation('s1')
+    restartOf(session(), (r) => { r.restart() })
+    expect(consumeKeepsConversation('s1')).toBe(false)
+    markSessionKeepsConversation('s1')
+    restartOf(session(), (r) => { r.recover() })
     expect(consumeKeepsConversation('s1')).toBe(false)
   })
 

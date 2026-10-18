@@ -20,6 +20,12 @@ export function markSessionKeepsConversation(sessionId: string): void {
   keepConversationSessionIds.add(sessionId)
 }
 
+/** Reads the mark without spending it: a launch that waits (a Codex confirm)
+ *  and is torn down leaves it for the view that asks again. */
+export function sessionKeepsConversation(sessionId: string): boolean {
+  return keepConversationSessionIds.has(sessionId)
+}
+
 /** Consumes the mark: true once after markSessionKeepsConversation. */
 export function consumeKeepsConversation(sessionId: string): boolean {
   return keepConversationSessionIds.delete(sessionId)

@@ -30,7 +30,7 @@ import { sessionProviderAccount } from '../utils/accountChip'
 import { switchOrigin, forgetSwitchOrigin } from '../utils/switchOrigin'
 import SshFlowOverlay from './SshFlowOverlay'
 import { shouldUseResumePicker } from '../utils/resumePicker'
-import { configStartsNewConversation, consumeKeepsConversation, spawnStartsNewConversation } from '../utils/alwaysNewConversation'
+import { configStartsNewConversation, consumeKeepsConversation, sessionKeepsConversation, spawnStartsNewConversation } from '../utils/alwaysNewConversation'
 import { shouldGateAccountChoice, resumedSessionOwnAccount } from '../utils/sessionLaunch'
 import { resolveLaunchAccount, launchStep, accountsSnapshotWhenLoaded, describeLaunchFailure, providerOffForLaunch, switchTarget, configRepointPatch, type LaunchAccountFields, type LaunchAccountPlan, type LaunchFailureContext, type LaunchStep } from '../utils/launchAccount'
 import { createSpawnExitHold, processExitLine, type SpawnExitHold, type SpawnOutcome } from '../utils/spawnExitHold'
@@ -979,12 +979,12 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           // over -- not a restored tab's exact target, not the one a Restart
           // would resume (main, `freshConversation`). An explicit "Restart and
           // pick a conversation" marked the picker, and that still applies, as
-          // does a Switch account's keep (consumed on every spawn, so it never
-          // lingers into a later one).
+          // does a Switch account's keep (read here, spent by the spawn that
+          // starts -- startSpawn -- so a Codex confirm torn down keeps it).
           const freshConversation = spawnStartsNewConversation({
             shellOnly,
             pickerArmed: useResumePicker,
-            keepsConversation: consumeKeepsConversation(sessionId),
+            keepsConversation: sessionKeepsConversation(sessionId),
             configStartsNew: configStartsNewConversation(useConfigStore.getState().configs, configId),
           })
           // P3.6: the account a launch ran on, by the footer's label rule,
@@ -1124,6 +1124,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           // account gate leaves the session unspawned and re-gates on remount.
           const startSpawn = (resolvedProfileId: string | undefined, account: LaunchAccountFields, failure: LaunchFailureContext) => {
             const spawnToken = markSpawned(sessionId)
+            consumeKeepsConversation(sessionId)
             // T8b (bug #5): app-relaunch ONLY. A restored session carries the
             // persisted exact-conversation target; pass it as `resume` so the
             // first spawn resumes THAT conversation (cwd-overridden in main).
