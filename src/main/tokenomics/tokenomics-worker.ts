@@ -47,6 +47,9 @@ const MAX_TICK_BYTES = 16 * 1024 * 1024
  *  ~40, and a sweep over an 80 GB tree stays under a minute. */
 const CODEX_TICK_BYTES = 64 * 1024 * 1024
 const YIELD_EVERY = 16 // files between event-loop yields during a sweep
+/** #302: the longest between two full walks of the transcript folders; the
+ *  watcher's reports are read every 5 s in between. */
+export const TK_FULL_SWEEP_MS = 5 * 60_000
 
 /** What one bounded pass over a file's byte range saw. */
 export interface StreamResult {
@@ -196,6 +199,19 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
   /** Note how far a file was read, so the sweep knows whether work remains. */
   const noteScanned = (scannedTo: number, size: number): void => { if (scannedTo < size) sweepPending = true }
   let firstSweepDone = false
+  /**
+   * aicc_planning#302: Claude transcripts the watcher reported as written
+   * since the last sweep. Every change event and a 5 s timer used to re-walk
+   * all of ~/.claude/projects (thousands of files) and re-check each one;
+   * with many working sessions that kept a core busy. An incremental sweep
+   * now reads just these, and a full walk runs when it is due: at start, on
+   * an explicit re-index, on an event that names no transcript (a folder, no
+   * file name, a Codex folder), when a file still has bytes to read, and
+   * every TK_FULL_SWEEP_MS as the safety net for anything the watcher missed.
+   */
+  const dirtyClaude = new Set<string>()
+  let fullSweepDue = true
+  let lastFullSweepAt = 0
   let lastProgress = { filesDone: 0, filesTotal: 0, eventsIngested: 0 }
   const watchers: Array<{ close(): void }> = []
   /** Watchers of the Codex accounts' folders, by folder: the set changes. */
@@ -631,9 +647,14 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
 
   async function ingestAll(phase: 'initial' | 'incremental'): Promise<void> {
     if (!db || sweeping) return
+    if (phase === 'incremental' && !fullSweepDue) { await ingestDirty(); return }
     sweeping = true
     sweepPending = false
     sweepFailed = 0
+    // #302: this walk covers every file, the reported ones included.
+    fullSweepDue = false
+    lastFullSweepAt = Date.now()
+    dirtyClaude.clear()
     try {
       // What this sweep's list was made with (defect 4): the account folders
       // as named when it began, and whether they had been named at all.
@@ -716,6 +737,33 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     }
   }
 
+  /** #302: read just the Claude transcripts the watcher reported. A file
+   *  left with bytes to read makes the next sweep a full one (the per-tick
+   *  byte budget is tracked per sweep, not per file). Says it is complete,
+   *  as a full sweep does, so the Usage page refreshes. */
+  async function ingestDirty(): Promise<void> {
+    if (!db || sweeping || dirtyClaude.size === 0) return
+    sweeping = true
+    sweepPending = false
+    sweepFailed = 0
+    try {
+      const files = [...dirtyClaude]
+      dirtyClaude.clear()
+      let done = 0
+      for (const f of files) {
+        ingestClaudeFile(f)
+        if (++done % YIELD_EVERY === 0) { await new Promise<void>((r) => setImmediate(r)); if (!db) return }
+      }
+      if (!db) return
+      if (sweepPending) fullSweepDue = true
+      post({ type: 'index-complete', firstIndex: false, drained: firstSweepDone && !sweepPending, filesFailed: sweepFailed, eventsTotal: db.eventCount() })
+    } catch (err) { logw('error', `ingestDirty failed: ${String(err)}`) }
+    finally {
+      sweeping = false
+      if (sweepAfter && db) { sweepAfter = false; scheduleIncremental() }
+    }
+  }
+
   /** Usage track MP9: finish the Codex re-read, then rebuild the rollups
    *  when they are dirty, in steps with progress. Never throws: a failed
    *  rebuild leaves them dirty for the next drained sweep. */
@@ -778,10 +826,24 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     ;(watchTimer as unknown as { unref?: () => void }).unref?.()
   }
 
-  function watchDir(dir: string): { close(): void } | null {
+  /** #302: what a watcher event means for the next sweep. A Claude transcript
+   *  that exists (written, or just made) is read on its own; anything else --
+   *  no file name, a folder, a deleted file, any Codex folder event -- makes
+   *  the next sweep a full one, as every event did before. */
+  function noteWatchEvent(dir: string, kind: 'claude' | 'codex', filename: unknown): void {
+    if (kind === 'claude' && typeof filename === 'string' && filename.endsWith('.jsonl')) {
+      const full = path.join(dir, filename)
+      let isFile = false
+      try { isFile = fs.statSync(full).isFile() } catch { isFile = false }
+      if (isFile) { dirtyClaude.add(full); return }
+    }
+    fullSweepDue = true
+  }
+
+  function watchDir(dir: string, kind: 'claude' | 'codex'): { close(): void } | null {
     try {
       if (!fs.existsSync(dir)) return null
-      const wch = fs.watch(dir, { recursive: true }, () => scheduleIncremental())
+      const wch = fs.watch(dir, { recursive: true }, (_event: unknown, filename: unknown) => { noteWatchEvent(dir, kind, filename); scheduleIncremental() })
       // An FSWatcher 'error' with no listener throws -> uncaughtException -> the
       // worker dies and burns a restart toward permanent degrade. Log + close the
       // broken watcher; the 5s tailTimer sweep below keeps indexing alive.
@@ -818,7 +880,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     }
     for (const dir of nextDirs) {
       if (realmWatchers.has(dir)) continue
-      const wch = watchDir(dir)
+      const wch = watchDir(dir, 'codex')
       if (wch) realmWatchers.set(dir, wch)
     }
   }
@@ -834,13 +896,18 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
   }
 
   function startWatching(): void {
-    for (const dir of [claudeDir, codexDirs[0]?.dir]) {
-      const wch = dir ? watchDir(dir) : null
-      if (wch) watchers.push(wch)
-    }
+    const claudeWatch = claudeDir ? watchDir(claudeDir, 'claude') : null
+    if (claudeWatch) watchers.push(claudeWatch)
+    const codexWatch = codexDirs[0]?.dir ? watchDir(codexDirs[0].dir, 'codex') : null
+    if (codexWatch) watchers.push(codexWatch)
     // Safety tail: recursive watch can miss newly-created nested session files on
-    // some platforms; a slow periodic incremental sweep guarantees eventual pickup.
-    tailTimer = setInterval(() => { if (!sweeping) void ingestAll('incremental') }, 5000)
+    // some platforms. Every 5 s it reads what the watcher reported, and a full
+    // walk once TK_FULL_SWEEP_MS has passed since the last (#302).
+    tailTimer = setInterval(() => {
+      if (sweeping) return
+      if (Date.now() - lastFullSweepAt >= TK_FULL_SWEEP_MS) fullSweepDue = true
+      if (fullSweepDue || dirtyClaude.size > 0) void ingestAll('incremental')
+    }, 5000)
     ;(tailTimer as unknown as { unref?: () => void }).unref?.()
   }
 
@@ -879,11 +946,12 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
         realmDirsKnown = true
         realmDirsSeq++
         // A sweep running now listed its files without these: one follows it.
+        fullSweepDue = true
         if (sweeping) sweepAfter = true
         scheduleIncremental()
         return
       case 'set-session-account': setSessionAccount(msg); return
-      case 'reindex': void ingestAll('incremental'); return
+      case 'reindex': fullSweepDue = true; void ingestAll('incremental'); return
       case 'query': handleQuery(msg.id, msg.kind, msg.args); return
       default: { const _x: never = msg; void _x }
     }
@@ -896,7 +964,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     }
   })
 
-  function tickNow(): void { void ingestAll('incremental') }
+  function tickNow(): void { fullSweepDue = true; void ingestAll('incremental') }
   function healthNow(): void {
     if (!db) return
     const filesTracked = (db.raw.prepare('SELECT COUNT(*) AS n FROM tk_files').get() as { n: number }).n
