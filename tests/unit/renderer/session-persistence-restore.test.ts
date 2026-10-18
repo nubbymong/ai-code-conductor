@@ -165,6 +165,18 @@ describe('restoreSavedSessions -- the restore lands', () => {
     expect(useSessionStore.getState().getSession('pick-exact')?.resumeUuid).toBe('u')
   })
 
+  it('aicc_planning#117: a session of an always-new config is not marked for the picker', async () => {
+    const { useConfigStore } = await import('../../../src/renderer/stores/configStore')
+    useConfigStore.setState({ configs: [
+      { id: 'cfg-new', label: 'n', workingDirectory: 'C:/work', color: '#fff', sessionType: 'local', alwaysNewConversation: true },
+      { id: 'cfg-ask', label: 'a', workingDirectory: 'C:/work', color: '#fff', sessionType: 'local' },
+    ] as never })
+    await restoreSavedSessions(state([saved({ id: 'new-1', configId: 'cfg-new' }), saved({ id: 'ask-1', configId: 'cfg-ask' })]), ref(), deps())
+    expect(shouldUseResumePicker('new-1')).toBe(false)
+    expect(shouldUseResumePicker('ask-1')).toBe(true)
+    useConfigStore.setState({ configs: [] })
+  })
+
   it('reads Claude fields from claudeOptions and carries the provider-shape fields (#397 Group 4)', async () => {
     await restoreSavedSessions(
       state([saved({ id: 'a', kind: 'ask', claudeOptions: { model: 'opus', permissionMode: 'plan', extraArgs: '--verbose', loggingEnabled: false } })]),

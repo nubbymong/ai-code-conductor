@@ -131,8 +131,7 @@ const SECTIONS_21: WhatsNewSection[] = [
       { since: '2.1.0-beta.16', title: 'Partner terminal.', desc: 'A plain shell beside your session, labelled so you always know which is which.' },
       { since: '2.1.0-rc.1', title: 'One row.', desc: 'The tools and your command buttons sit in a single row under the terminal.', seeIt: 'oneRow' },
       { since: '2.1.0-rc.3', title: 'Two-mode panel.', desc: 'Saved configs and Running sessions each get a tab, with Quick Start pins — and the panel resizes.', seeIt: 'panel' },
-      { since: '2.1.0-rc.12', title: 'Multi Spawn.', desc: 'Mark a config to run several copies at once; everything else is safe from a stray double launch.', seeIt: 'multiSpawn' },
-      { since: '2.1.0-rc.12', title: 'Remote Resumable.', desc: 'A persistent SSH session you left running waits at the foot of Running, one click from where you were.', seeIt: 'remoteResume', needsClaude: true },
+      { since: '2.1.0-rc.12', title: 'Multi Spawn.', desc: 'Mark a config to run several copies at once; everything else is safe from a stray double launch.', seeIt: 'multiSpawn' },      { since: '2.1.0-rc.12', title: 'Remote Resumable.', desc: 'A persistent SSH session you left running waits at the foot of Running, one click from where you were.', seeIt: 'remoteResume', needsClaude: true },
       { since: '2.1.0-rc.12', title: 'Marks you can read.', desc: 'SSH, SSH Persistent and container sessions each wear their own mark, everywhere they appear.', seeIt: 'sidebarMarks' },
     ],
   },
@@ -220,8 +219,19 @@ const SECTIONS_211: WhatsNewSection[] = [
   },
 ]
 
+// 2.1.3 (aicc_planning#117). "Sessions" shares the 2.1 heading on purpose, as
+// "Accounts & usage" does above: an older upgrader sees one merged section.
+const SECTIONS_213: WhatsNewSection[] = [
+  {
+    heading: 'Sessions',
+    items: [
+      { since: '2.1.3', title: 'Always a new conversation.', desc: 'Tick it in a config and its sessions skip the resume list and start fresh, every time.' },
+    ],
+  },
+]
+
 /** Every curated set, oldest first. */
-export const WHATS_NEW_SECTIONS: readonly WhatsNewSection[] = [...SECTIONS_20, ...SECTIONS_21, ...SECTIONS_211]
+export const WHATS_NEW_SECTIONS: readonly WhatsNewSection[] = [...SECTIONS_20, ...SECTIONS_21, ...SECTIONS_211, ...SECTIONS_213]
 
 /**
  * The curated lines that are new to someone whose anchor is `anchor`

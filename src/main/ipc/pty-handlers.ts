@@ -332,6 +332,8 @@ export const spawnOptionsSchema = z.object({
   // Task 9: per-config logging opt-out (DEFAULT-TRUE; only false disables).
   loggingEnabled: z.boolean().optional(),
   useResumePicker: z.boolean().optional(),
+  // #117: a config set to always start a new conversation (no resume).
+  freshConversation: z.boolean().optional(),
   legacyVersion: z.object({
     enabled: z.boolean(),
     version: z.string(),
@@ -763,6 +765,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     isAsk?: boolean
     loggingEnabled?: boolean
     useResumePicker?: boolean
+    /** #117: start a new conversation; resume none (no exact or kept target). */
+    freshConversation?: boolean
     legacyVersion?: { enabled: boolean; version: string }
     agentsConfig?: Array<{ name: string; description: string; prompt: string; model?: string; tools?: string[] }>
     // Widened to string — the Zod schema's charset guard is the real contract.
@@ -1030,7 +1034,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
         // launch resumes the kept conversation (pty-manager's rule): one
         // that names its own (a restored tab) or opens the picker has none
         // to carry.
-        if (!options?.resume && !options?.useResumePicker) carry = await carryForRespawn(sessionId, prepared.lease.accountId, service, () => !preparation || preparation.current)
+        // #117: nor does one that starts a new conversation (freshConversation).
+        if (!options?.resume && !options?.useResumePicker && !options?.freshConversation) carry = await carryForRespawn(sessionId, prepared.lease.accountId, service, () => !preparation || preparation.current)
         if (carry?.fresh) resolvedOptions = { ...resolvedOptions, codexLaunch: { ...resolvedOptions!.codexLaunch!, freshConversation: true } }
         // P3.10 round 4 (P1): a local launch waits, bounded, for the hook
         // folders (prepared asynchronously; a no-op while ready), so a tab

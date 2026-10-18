@@ -169,6 +169,9 @@ export default function SessionDialog({ onConfirm, onCancel, initial, liveSessio
   // STORED field is tri-state (see resolveAllowMultiSpawnOnSave); the checkbox
   // only needs the two visible states.
   const [allowMultiSpawn, setAllowMultiSpawn] = useState(initial?.allowMultiSpawn === true)
+  // #117: "Always start a new conversation" -- no resume question, nothing
+  // carried over. Opt-in; only true is stored.
+  const [alwaysNewConversation, setAlwaysNewConversation] = useState(initial?.alwaysNewConversation === true)
   // SSH tmux enhancement (item 1): "Detachable" (persistent remote session).
   // DEFAULT ON -- only an explicit false disables it, so a config saved before
   // this field existed (undefined) opens ticked.
@@ -626,6 +629,8 @@ export default function SessionDialog({ onConfirm, onCancel, initial, liveSessio
       // (the field-by-field rebuild below the sshConfig spread is exactly how
       // detachable and loggingEnabled were silently dropped before).
       multiSpawnCount: initial?.multiSpawnCount,
+      // #117: local agent sessions only (the resume picker is local-only).
+      alwaysNewConversation: alwaysNewConversation && sessionType === 'local' && uiProvider !== 'terminal' ? true : undefined,
       machineName: sessionType === 'ssh' && machineName.trim() ? machineName.trim() : undefined,
       // Account is no longer a config field -- it's chosen at launch by the
       // pre-spawn account gate. Preserve any pre-existing value on edit so older
@@ -896,6 +901,23 @@ export default function SessionDialog({ onConfirm, onCancel, initial, liveSessio
                   <span className="block text-[10px] text-[var(--text-muted)] mt-0.5">Launch several copies of this config at once</span>
                 </span>
               </label>
+              {/* #117: skip the "resume a previous conversation?" question.
+                  The resume picker runs only for local agent sessions. */}
+              {sessionType === 'local' && uiProvider !== 'terminal' && (
+                <label className="flex items-start gap-2 mt-2.5 cursor-pointer" data-testid="always-new-conversation-field">
+                  <input
+                    type="checkbox"
+                    checked={alwaysNewConversation}
+                    onChange={(e) => setAlwaysNewConversation(e.target.checked)}
+                    className="mt-0.5 rounded border-[var(--border-subtle)] accent-[var(--brand)]"
+                    data-testid="always-new-conversation"
+                  />
+                  <span className="block">
+                    <span className="block text-sm text-[var(--text-secondary)]">Always start a new conversation</span>
+                    <span className="block text-[10px] text-[var(--text-muted)] mt-0.5">Skip the resume question on launch, relaunch and Restart</span>
+                  </span>
+                </label>
+              )}
             </>
           )}
 

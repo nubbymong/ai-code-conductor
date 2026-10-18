@@ -59,6 +59,14 @@ export interface TerminalConfig {
    * hundred sessions.
    */
   multiSpawnCount?: number
+  /**
+   * #117: "Always start a new conversation". Every start of a session from
+   * this config -- launch, relaunch restore, Restart, Recover -- begins a new
+   * conversation with no resume question. Absent/false = today's behaviour
+   * (the resume picker on a fresh launch). Local Claude/Codex only; see
+   * utils/alwaysNewConversation.ts.
+   */
+  alwaysNewConversation?: boolean
   machineName?: string // Identifies which machine this session runs on
   /** v1.5.19: account profile a session spawned from this config runs under
    *  (drives CLAUDE_CONFIG_DIR at PTY spawn). Absent = the bare default account. */

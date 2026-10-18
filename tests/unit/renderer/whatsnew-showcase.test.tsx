@@ -60,7 +60,7 @@ const { SHOWCASES_21, showcasesFor } = S
 const { ShowcaseVignette } = await import('../../../src/renderer/onboarding/ShowcaseVignette')
 const { changelog } = await import('../../../src/renderer/changelog')
 const { whatsNewAnchorFor, seenVersionFor } = await import('../../../src/renderer/onboarding/upgrade-flow')
-const { finalRelease } = await import('../../../src/shared/version-order')
+const { finalRelease, compareVersions } = await import('../../../src/shared/version-order')
 
 type Page = (typeof SHOWCASES_21)[number]
 const SHOWCASES: readonly Page[] = (S as any).SHOWCASES ?? SHOWCASES_21
@@ -498,15 +498,18 @@ describe('O1/O2: the summary and showcase diff from the anchor', () => {
   })
 
   it('a fixes-only update gets ONE line from the changelog, never an older set, and no pages', () => {
-    ;(globalThis as any).__APP_VERSION__ = '2.1.2'
-    render({ anchor: '2.1.1' })
-    expect(q('whatsnew-heading')!.textContent).toBe("What's new since 2.1.1")
-    expect(q('whatsnew-sub')!.textContent).toBe('This update is fixes and polish.')
-    expect(container.querySelectorAll('.wn-item').length).toBe(1)
-    expect(container.textContent).toContain('Fixes and polish.')
-    expect(container.textContent).not.toContain('Codex, no longer Beta.')
-    expect(container.textContent).not.toContain('Agent Canvas.')
-    expect(q('whatsnew-dots')).toBeNull()
+    // 2.1.1 -> 2.1.2, on the curated lines the 2.1.2 build shipped: the
+    // sources now also hold later releases' lines (2.1.3 on), which a 2.1.2
+    // build never carried, so they are left out of its history here.
+    const upTo212 = ALL_SECTIONS
+      .map((s: any) => ({ ...s, items: s.items.filter((it: any) => compareVersions(String(finalRelease(it.since)), '2.1.2') <= 0) }))
+      .filter((s: any) => s.items.length > 0)
+    const view = { anchor: '2.1.1', fresh: false, withClaude: true, withCodex: false }
+    const out = (W as any).summaryContent(view, changelog, '2.1.2', upTo212)
+    expect(out.fixesOnly).toBe(true)
+    expect(out.showcases).toEqual([])
+    expect(out.sections).toHaveLength(1)
+    expect(out.sections[0].items.map((it: any) => it.title)).toEqual(['Fixes and polish.'])
   })
 
   it('fixesAndPolish counts the changelog entries since the anchor; fixesEntries falls back to the running build\'s own', () => {
@@ -659,6 +662,7 @@ describe('since tags: pinned, parseable, and curated for the newest release', ()
     'Sessions / Multi Spawn.': '2.1.0-rc.12',
     'Sessions / Remote Resumable.': '2.1.0-rc.12',
     'Sessions / Marks you can read.': '2.1.0-rc.12',
+    'Sessions / Always a new conversation.': '2.1.3',
     'Working with Claude / Agent Canvas.': '2.1.0-beta.16',
     'Working with Claude / Session Watchdog.': '2.1.0-rc.1',
     'Working with Claude / Ask Conductor.': '2.1.0-beta.16',

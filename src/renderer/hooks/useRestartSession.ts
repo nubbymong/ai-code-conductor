@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { Session, useSessionStore } from '../stores/sessionStore'
 import { killSessionPty, clearSpawned } from '../ptyTracker'
 import { markSessionForResumePicker } from '../utils/resumePicker'
+import { configStartsNewConversation, markSessionKeepsConversation, consumeKeepsConversation } from '../utils/alwaysNewConversation'
 import { restartPicksConversation } from '../utils/launchAccount'
 import { useAccountGateStore } from '../stores/accountGateStore'
 import { spentCommand } from '../utils/commandTerminal'
@@ -21,6 +22,10 @@ export interface RestartOptions {
    *  others offer a plain "Restart" that carries on with the conversation
    *  the tab is on (main resumes it; P3.5). */
   pickConversation?: boolean
+  /** #117: this restart carries on with the conversation the tab is on even
+   *  when its config always starts a new one -- a Switch account moves the
+   *  running conversation, it does not start the session anew. */
+  keepConversation?: boolean
 }
 
 /** A tab whose launch started nothing is not its config's running copy, so
@@ -163,7 +168,14 @@ export function useRestartSession(
     // never over an explicit "Restart and pick a conversation" (P3.5); with
     // none known, a Restart that marked the picker shows it, and a plain
     // Restart that did not starts a new conversation.
-    const pick = options?.pickConversation ?? restartPicksConversation(session.provider)
+    // #117: a config that always starts a new conversation does not open the
+    // picker on a plain Restart; only the explicit "pick a conversation" does.
+    // A keepConversation restart (Switch account) behaves as it always has.
+    const alwaysNew = !options?.keepConversation && configStartsNewConversation(useConfigStore.getState().configs, session.configId)
+    // Any other restart clears a keep a torn-down view never spent.
+    if (options?.keepConversation) markSessionKeepsConversation(session.id)
+    else consumeKeepsConversation(session.id)
+    const pick = options?.pickConversation ?? (alwaysNew ? false : restartPicksConversation(session.provider))
     if (session.sessionType === 'local' && !session.shellOnly && pick) {
       markSessionForResumePicker(session.id)
     }
@@ -185,8 +197,9 @@ export function useRestartSession(
     window.electronAPI.pty.kill(partnerPtyId, 'restart')
     clearSpawned(session.id)
     clearSpawned(partnerPtyId)
-    // Show resume picker for Claude sessions
-    if (session.sessionType === 'local' && !session.shellOnly) {
+    consumeKeepsConversation(session.id)
+    // Show resume picker for Claude sessions (not for an always-new config, #117)
+    if (session.sessionType === 'local' && !session.shellOnly && !configStartsNewConversation(useConfigStore.getState().configs, session.configId)) {
       markSessionForResumePicker(session.id)
     }
     // Recover preserves the current account -- skip the pre-spawn gate.
