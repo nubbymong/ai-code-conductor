@@ -2602,6 +2602,8 @@ function spawnPtyResolved(
      */
     loggingEnabled?: boolean
     useResumePicker?: boolean
+    /** #117: start a new conversation; resume none (no exact or kept target). */
+    freshConversation?: boolean
     legacyVersion?: { enabled: boolean; version: string }
     agentsConfig?: Array<{ name: string; description: string; prompt: string; model?: string; tools?: string[] }>
     // Widened to string — the IPC schema's charset guard (/^[a-zA-Z0-9_-]+$/) is the real contract.
@@ -5714,7 +5716,9 @@ function spawnPtyResolved(
       // realm, checks the id again, and says where the CLI starts.
       // P3.6: a respawn onto another account from a conversation whose claim
       // was not certain resumes none (`freshConversation`, main only).
-      let resumeTarget = options?.resume ?? (options?.useResumePicker || launch.freshConversation === true ? undefined : keptCodexConversations.get(sessionId))
+      // #117: `options.freshConversation` (the config always starts a new
+      // conversation) resumes none, a restored tab's included.
+      let resumeTarget = options?.freshConversation === true ? undefined : options?.resume ?? (options?.useResumePicker || launch.freshConversation === true ? undefined : keptCodexConversations.get(sessionId))
       // P4.3 review RASK-1: an Ask launch resumes only a conversation of the
       // help folder it starts in, and starts the CLI there (askLaunchFolderHolds).
       if (options?.isAsk === true && resumeTarget) {
@@ -6387,7 +6391,8 @@ function spawnPtyResolved(
       const persistedTarget = options?.resume
       const selfCapturedTarget = getLastResumeTarget(sessionId)
       clearLastResumeTarget(sessionId)
-      const effectiveTarget = persistedTarget ?? selfCapturedTarget
+      // #117: a config set to always start a new conversation resumes none.
+      const effectiveTarget = options?.freshConversation === true ? undefined : persistedTarget ?? selfCapturedTarget
       // FIX 3: `discoveryOn` (binder present == logging on) gates ONLY the
       // self-captured path — that path's target ORIGINATES from the binder, so
       // without it there is nothing to capture. The app-relaunch path uses the

@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { Session, useSessionStore } from '../stores/sessionStore'
 import { killSessionPty, clearSpawned } from '../ptyTracker'
 import { markSessionForResumePicker } from '../utils/resumePicker'
+import { configStartsNewConversation } from '../utils/alwaysNewConversation'
 import { restartPicksConversation } from '../utils/launchAccount'
 import { useAccountGateStore } from '../stores/accountGateStore'
 import { spentCommand } from '../utils/commandTerminal'
@@ -163,7 +164,10 @@ export function useRestartSession(
     // never over an explicit "Restart and pick a conversation" (P3.5); with
     // none known, a Restart that marked the picker shows it, and a plain
     // Restart that did not starts a new conversation.
-    const pick = options?.pickConversation ?? restartPicksConversation(session.provider)
+    // #117: a config that always starts a new conversation does not open the
+    // picker on a plain Restart; only the explicit "pick a conversation" does.
+    const alwaysNew = configStartsNewConversation(useConfigStore.getState().configs, session.configId)
+    const pick = options?.pickConversation ?? (alwaysNew ? false : restartPicksConversation(session.provider))
     if (session.sessionType === 'local' && !session.shellOnly && pick) {
       markSessionForResumePicker(session.id)
     }
@@ -185,8 +189,8 @@ export function useRestartSession(
     window.electronAPI.pty.kill(partnerPtyId, 'restart')
     clearSpawned(session.id)
     clearSpawned(partnerPtyId)
-    // Show resume picker for Claude sessions
-    if (session.sessionType === 'local' && !session.shellOnly) {
+    // Show resume picker for Claude sessions (not for an always-new config, #117)
+    if (session.sessionType === 'local' && !session.shellOnly && !configStartsNewConversation(useConfigStore.getState().configs, session.configId)) {
       markSessionForResumePicker(session.id)
     }
     // Recover preserves the current account -- skip the pre-spawn gate.

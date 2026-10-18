@@ -271,8 +271,9 @@ export function useLaunchSessionAction(): (config: TerminalConfig, opts?: Launch
     const session = buildLaunchSession(config, opts)
     if (!session) return ''
     // Resume-picker only for a FRESH local Claude session — never a reattach
-    // (which reuses an id and is SSH, so this is inert there anyway).
-    if (!opts?.sessionId && !session.shellOnly && session.sessionType === 'local') {
+    // (which reuses an id and is SSH, so this is inert there anyway), and
+    // never for a config set to always start a new conversation (#117).
+    if (!opts?.sessionId && !session.shellOnly && session.sessionType === 'local' && config.alwaysNewConversation !== true) {
       markSessionForResumePicker(session.id)
     }
     addSession(session)

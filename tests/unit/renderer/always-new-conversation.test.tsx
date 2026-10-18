@@ -1,0 +1,133 @@
+// @vitest-environment jsdom
+/**
+ * aicc_planning#117: a config set to "Always start a new conversation" never
+ * asks to resume. A fresh launch and a plain Restart / Recover of its session
+ * do not arm the resume picker; an explicit "Restart and pick a conversation"
+ * still does. A config without the flag behaves exactly as before.
+ */
+import React from 'react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createRoot, type Root } from 'react-dom/client'
+import { act } from 'react'
+
+;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+
+vi.mock('../../../src/renderer/ptyTracker', () => ({
+  killSessionPty: vi.fn(),
+  clearSpawned: vi.fn(),
+  hasSpawned: vi.fn(() => false),
+  markSpawned: vi.fn(),
+}))
+const markSessionForResumePicker = vi.fn()
+vi.mock('../../../src/renderer/utils/resumePicker', () => ({
+  markSessionForResumePicker: (...a: unknown[]) => markSessionForResumePicker(...a),
+  shouldUseResumePicker: vi.fn(() => false),
+}))
+
+const { configStartsNewConversation } = await import('../../../src/renderer/utils/alwaysNewConversation')
+const { useLaunchSessionAction } = await import('../../../src/renderer/hooks/useLaunchConfig')
+const { useRestartSession } = await import('../../../src/renderer/hooks/useRestartSession')
+const { useSessionStore } = await import('../../../src/renderer/stores/sessionStore')
+const { useConfigStore } = await import('../../../src/renderer/stores/configStore')
+const { useSettingsStore, DEFAULT_SETTINGS } = await import('../../../src/renderer/stores/settingsStore')
+import type { Session } from '../../../src/renderer/stores/sessionStore'
+
+const cfg = (over: Record<string, unknown> = {}): any => ({
+  id: 'cfg-1', label: 'worker', workingDirectory: 'C:/proj', color: '#fff',
+  sessionType: 'local', provider: 'claude', allowMultiSpawn: true, ...over,
+})
+const session = (over: Partial<Session> = {}): Session => ({
+  id: 's1', label: 'worker', workingDirectory: 'C:/proj', model: '', color: '#fff', status: 'idle',
+  createdAt: 1, sessionType: 'local', provider: 'claude', configId: 'cfg-1', ...over,
+} as Session)
+
+function runHook<T>(hook: () => T, use: (value: T) => void): void {
+  function Harness() {
+    const value = hook()
+    React.useEffect(() => { use(value) }, [])
+    return null
+  }
+  const root: Root = createRoot(document.createElement('div'))
+  act(() => { root.render(React.createElement(Harness)) })
+  act(() => { root.unmount() })
+}
+
+beforeEach(() => {
+  markSessionForResumePicker.mockReset()
+  useSessionStore.setState({ sessions: [], activeSessionId: null, isRestoring: false })
+  useConfigStore.setState({ configs: [] })
+  useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, codexEnabled: true } })
+  ;(globalThis as any).window.electronAPI = { pty: { kill: vi.fn() } }
+})
+
+describe('configStartsNewConversation', () => {
+  it('is true only for a config whose flag is true', () => {
+    const configs = [cfg({ id: 'a', alwaysNewConversation: true }), cfg({ id: 'b', alwaysNewConversation: false }), cfg({ id: 'c' })]
+    expect(configStartsNewConversation(configs, 'a')).toBe(true)
+    expect(configStartsNewConversation(configs, 'b')).toBe(false)
+    expect(configStartsNewConversation(configs, 'c')).toBe(false)
+  })
+
+  it('is false for a missing config or no config id (today\'s behaviour)', () => {
+    expect(configStartsNewConversation([cfg({ alwaysNewConversation: true })], 'gone')).toBe(false)
+    expect(configStartsNewConversation([cfg({ alwaysNewConversation: true })], undefined)).toBe(false)
+    expect(configStartsNewConversation(undefined, 'cfg-1')).toBe(false)
+  })
+})
+
+describe('launch', () => {
+  it('a config with the flag launches without arming the resume picker', () => {
+    let id = ''
+    runHook(useLaunchSessionAction, (launch) => { id = launch(cfg({ alwaysNewConversation: true })) })
+    expect(id).toBeTruthy()
+    expect(useSessionStore.getState().getSession(id)).toBeDefined()
+    expect(markSessionForResumePicker).not.toHaveBeenCalled()
+  })
+
+  it('a config without the flag still arms it (unchanged)', () => {
+    let id = ''
+    runHook(useLaunchSessionAction, (launch) => { id = launch(cfg()) })
+    expect(markSessionForResumePicker).toHaveBeenCalledWith(id)
+  })
+
+  it('several launches of a flagged config arm nothing', () => {
+    const ids: string[] = []
+    runHook(useLaunchSessionAction, (launch) => { for (let i = 0; i < 3; i++) ids.push(launch(cfg({ alwaysNewConversation: true }))) })
+    expect(ids.filter(Boolean)).toHaveLength(3)
+    expect(markSessionForResumePicker).not.toHaveBeenCalled()
+  })
+})
+
+describe('restart and recover', () => {
+  function restartOf(s: Session, use: (r: ReturnType<typeof useRestartSession>) => void) {
+    useSessionStore.setState({ sessions: [s], activeSessionId: s.id })
+    runHook(() => useRestartSession(s), use)
+  }
+
+  it('a plain Restart of a flagged Claude session does not arm the picker', () => {
+    useConfigStore.setState({ configs: [cfg({ alwaysNewConversation: true })] })
+    restartOf(session(), (r) => { expect(r.restart()).toBe(true) })
+    expect(markSessionForResumePicker).not.toHaveBeenCalled()
+  })
+
+  it('"Restart and pick a conversation" still arms it on a flagged session', () => {
+    useConfigStore.setState({ configs: [cfg({ alwaysNewConversation: true })] })
+    restartOf(session(), (r) => { r.restart(undefined, { pickConversation: true }) })
+    expect(markSessionForResumePicker).toHaveBeenCalledWith('s1')
+  })
+
+  it('a plain Restart of an unflagged Claude session arms it (unchanged)', () => {
+    useConfigStore.setState({ configs: [cfg()] })
+    restartOf(session(), (r) => { r.restart() })
+    expect(markSessionForResumePicker).toHaveBeenCalledWith('s1')
+  })
+
+  it('Recover arms it only without the flag', () => {
+    useConfigStore.setState({ configs: [cfg({ alwaysNewConversation: true })] })
+    restartOf(session(), (r) => { r.recover() })
+    expect(markSessionForResumePicker).not.toHaveBeenCalled()
+    useConfigStore.setState({ configs: [cfg()] })
+    restartOf(session(), (r) => { r.recover() })
+    expect(markSessionForResumePicker).toHaveBeenCalledWith('s1')
+  })
+})

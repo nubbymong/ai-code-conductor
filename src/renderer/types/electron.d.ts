@@ -245,6 +245,8 @@ export interface ElectronAPI {
       configLabel?: string
       loggingEnabled?: boolean
       useResumePicker?: boolean
+      /** #117: start a new conversation; resume none (no exact or kept target). */
+      freshConversation?: boolean
       legacyVersion?: {
         enabled: boolean
         version: string

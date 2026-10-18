@@ -213,6 +213,8 @@ export interface ElectronAPI {
       configLabel?: string
       loggingEnabled?: boolean
       useResumePicker?: boolean
+      /** #117: start a new conversation; resume none (no exact or kept target). */
+      freshConversation?: boolean
       agentsConfig?: Array<{
         name: string; description: string; prompt: string
         model?: string; tools?: string[]

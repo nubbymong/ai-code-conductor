@@ -30,6 +30,7 @@ import { sessionProviderAccount } from '../utils/accountChip'
 import { switchOrigin, forgetSwitchOrigin } from '../utils/switchOrigin'
 import SshFlowOverlay from './SshFlowOverlay'
 import { shouldUseResumePicker } from '../utils/resumePicker'
+import { configStartsNewConversation } from '../utils/alwaysNewConversation'
 import { shouldGateAccountChoice, resumedSessionOwnAccount } from '../utils/sessionLaunch'
 import { resolveLaunchAccount, launchStep, accountsSnapshotWhenLoaded, describeLaunchFailure, providerOffForLaunch, switchTarget, configRepointPatch, type LaunchAccountFields, type LaunchAccountPlan, type LaunchFailureContext, type LaunchStep } from '../utils/launchAccount'
 import { createSpawnExitHold, processExitLine, type SpawnExitHold, type SpawnOutcome } from '../utils/spawnExitHold'
@@ -974,6 +975,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           // carries the name from its first run (#119 rename → logs durability).
           const configLabel = session?.customName?.trim() || session?.label || 'default'
           const useResumePicker = shouldUseResumePicker(sessionId)
+          // #117: a config set to always start a new conversation carries none
+          // over -- not a restored tab's exact target, not the one a Restart
+          // would resume (main, `freshConversation`). An explicit "Restart and
+          // pick a conversation" marked the picker, and that still applies.
+          const freshConversation = !shellOnly && !useResumePicker && configStartsNewConversation(useConfigStore.getState().configs, configId)
           // P3.6: the account a launch ran on, by the footer's label rule,
           // for the line a Switch account's respawn may say.
           const launchAccountName = (accountId: string | undefined): string => {
@@ -1036,7 +1042,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             // confirm then says: the exact resume looks only in the picked
             // account's conversations, and a launch carries none over (a
             // running session's Switch account does).
-            const resumesConversation = !shellOnly && !!session?.resumeUuid && !!session?.resumeCwd
+            const resumesConversation = !shellOnly && !freshConversation && !!session?.resumeUuid && !!session?.resumeCwd
             let reply: LaunchAckAnswer
             try {
               reply = await acks.requestChoice({ sessionId, sessionLabel: configLabel, ...step.question, ...(offerSwitch ? { accountId: plan.accountId, offerSwitch: true, ...(resumesConversation ? { resumesConversation: true } : {}) } : {}) })
@@ -1119,9 +1125,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             // after this spawn so a later in-session restart doesn't re-send a
             // stale relaunch uuid that would shadow main's self-capture.
             const resume =
-              !shellOnly && session?.resumeUuid && session?.resumeCwd
+              !shellOnly && !freshConversation && session?.resumeUuid && session?.resumeCwd
                 ? { uuid: session.resumeUuid, cwd: session.resumeCwd }
                 : undefined
+            // #117: the dropped target is spent too, so it never comes back.
+            if (freshConversation && session?.resumeUuid) updateSession(sessionId, { resumeUuid: undefined, resumeCwd: undefined })
             // Ask Conductor's opening question. Read off the session record for
             // the same reason `resume` is: it is one-shot launch state, not
             // configuration. Consumed immediately below so a later in-session
@@ -1156,7 +1164,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             const sshWithReconnect = ssh ? { ...ssh, reconnect: !!session?.sshReachedClaudeRunning } : ssh
             exitHold.begin()
             window.electronAPI.pty
-              .spawn(sessionId, { cwd, cols, rows, ssh: sshWithReconnect, shellOnly, elevated, terminalOptions, configId, configLabel, useResumePicker, legacyVersion, effortLevel, permissionMode, extraArgs, disableAutoMemory, enableCodexReview, loggingEnabled, model, provider, codexOptions, profileId: resolvedProfileId, resume, askPrompt, isAsk: session?.kind === 'ask', ...account })
+              .spawn(sessionId, { cwd, cols, rows, ssh: sshWithReconnect, shellOnly, elevated, terminalOptions, configId, configLabel, useResumePicker, ...(freshConversation ? { freshConversation: true } : {}), legacyVersion, effortLevel, permissionMode, extraArgs, disableAutoMemory, enableCodexReview, loggingEnabled, model, provider, codexOptions, profileId: resolvedProfileId, resume, askPrompt, isAsk: session?.kind === 'ask', ...account })
               .then((result) => {
                 const nothingStarted = !!result && typeof result === 'object' && result.started === false
                 // WP2: main refused the launch because its provider is off

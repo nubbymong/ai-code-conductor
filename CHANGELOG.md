@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3] - 2026-10-17
+
+> A saved config can now start a new conversation every time, with no resume question.
+
+### Added
+- Always start a new conversation: a new option in a local Claude Code or Codex config, under Allow Multi Spawn. Its sessions skip the resume list and start a new conversation every time: when you launch them, several at once included, when the app reopens them, and when you Restart them. It is off by default, so existing configs behave as before. To go back to an earlier conversation anyway, use the /resume command inside Claude Code, or, in a Codex session, Restart and pick a conversation.
+
 ## [2.1.2] - 2026-10-17
 
 > A fix for Macs. When the app is opened from the Dock or Finder, it now finds Claude Code for the setup version check, Insights and Sentinel, which failed before.
@@ -1858,6 +1865,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3
 [2.1.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.2
 [2.1.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.1
 [2.1.1-beta.3]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.1-beta.3

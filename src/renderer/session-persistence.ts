@@ -6,6 +6,8 @@ import { useCommandBarStore } from './stores/commandBarStore'
 import type { SessionState, SavedSession } from './types/electron'
 import { migrateColorRecords } from './utils/migrateIdentityColors'
 import { markSessionForResumePicker } from './utils/resumePicker'
+import { configStartsNewConversation } from './utils/alwaysNewConversation'
+import { useConfigStore } from './stores/configStore'
 import { shouldPredetermineRestoredAccount } from './utils/sessionLaunch'
 import { isConfigLaunchBlocked } from './hooks/useLaunchConfig'
 // Type-only: livenessStore imports persistSessionState from THIS module, so a
@@ -501,7 +503,10 @@ export async function restoreSavedSessions(
       // spawn resumes THAT conversation directly (cwd-overridden) -- so the
       // resume PICKER is only the fallback for sessions WITHOUT a persisted uuid.
       const hasExactResume = !!(session.resumeUuid && session.resumeCwd)
-      if (!session.shellOnly && session.sessionType === 'local' && !hasExactResume) {
+      // #117: a config that always starts a new conversation restores into a
+      // new one -- no picker here, and TerminalView drops the exact target.
+      const alwaysNew = configStartsNewConversation(useConfigStore.getState().configs, session.configId)
+      if (!session.shellOnly && session.sessionType === 'local' && !hasExactResume && !alwaysNew) {
         markSessionForResumePicker(session.id)
       }
     }
