@@ -31,6 +31,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  _clearAclMemoForTest,
   _icaclsCallsForTest,
   _resetAclStateForTest,
   aclRemovalProvesUnnameable,
@@ -543,8 +544,11 @@ describe.runIf(IS_WINDOWS)('hardenCredentialDir on Windows applies a real DACL',
       // attempts rather than requiring the first to win the race. A module that
       // never learns — the bug this exists for — never settles, whatever the
       // budget, so this does not soften the assertion.
+      // aicc_planning#301: a folder proven owner-only is remembered for a while,
+      // and a remembered one costs nothing; measure the un-remembered cost.
       let cost = 0
       for (let attempt = 0; attempt < 3 && cost !== 1; attempt++) {
+        _clearAclMemoForTest()
         const before = _icaclsCallsForTest()
         expect(hardenCredentialDir(dir)).toBe(true)
         cost = _icaclsCallsForTest() - before
@@ -554,6 +558,10 @@ describe.runIf(IS_WINDOWS)('hardenCredentialDir on Windows applies a real DACL',
         `a settled directory should cost ONE read and no writes; it carries ${stuck.length} un-nameable principal(s): ${stuck.join(', ') || 'none'}`,
       ).toBe(1)
       expect(aces(dir), 'and a settled call must not change the DACL').toEqual(settled)
+      // #301: that read proved it owner-only, so the next call starts no icacls.
+      const beforeMemo = _icaclsCallsForTest()
+      expect(hardenCredentialDir(dir)).toBe(true)
+      expect(_icaclsCallsForTest() - beforeMemo, 'a folder just proven owner-only costs no icacls').toBe(0)
 
       // A negative control on the same real entries: the settled DACL is NOT
       // recognised against another machine's pair, so the skip is an equality

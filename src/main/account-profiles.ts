@@ -671,7 +671,7 @@ export function _resetAclStateForTest(): void {
   learnAttemptsLeft = LEARN_ATTEMPT_MAX
   fallbackUnprovenLogged.clear()
   verifiedOwnerOnly.clear()
-  aclNow = Date.now
+  aclNow = () => performance.now()
 }
 
 /**
@@ -683,16 +683,27 @@ export function _resetAclStateForTest(): void {
  * Keyed by the folder's resolved path, and valid only while the folder is the
  * SAME folder: its volume, file id and creation time (a `stat`, no process).
  * A folder deleted and made again is a new identity and is hardened again.
- * An entry is trusted for ACL_RECHECK_MS, then the next write reads the DACL
- * again, so a DACL widened from outside during a run is still repaired. Only
- * a call that answered true is remembered; a folder with no file id (some
- * network shares) is never remembered.
+ *
+ * Only a READ that showed the DACL owner-only puts a folder here -- never a
+ * write, which answers true once its grants landed whatever else the DACL
+ * still holds. So a folder is remembered from its second call on: the write,
+ * then the read that proves it. The identity is read before and after that
+ * read and must not change in between. An entry is trusted for
+ * ACL_RECHECK_MS on a monotonic clock, then the next write reads the DACL
+ * again: a DACL widened from outside during a run is repaired within that
+ * interval rather than on the very next write. A folder with no file id
+ * (some network shares) is never remembered.
  */
 export const ACL_RECHECK_MS = 10 * 60_000
 const verifiedOwnerOnly = new Map<string, { id: string; at: number }>()
-let aclNow: () => number = Date.now
+let aclNow: () => number = () => performance.now()
 /** Test seam: the clock the re-check interval is measured with. */
 export function _setAclClockForTest(now: () => number): void { aclNow = now }
+/** Test seam: forget the folders proven owner-only, and nothing else. */
+export function _clearAclMemoForTest(): void { verifiedOwnerOnly.clear() }
+/** Set by hardenDirAclWindowsUncached: whether its answer came from a read
+ *  that showed the DACL owner-only (the only answer the memo may keep). */
+let lastAnswerProvedOwnerOnly = false
 
 function aclDirIdentity(dir: string): string | null {
   try {
@@ -842,9 +853,13 @@ export function hardenDirAclWindows(dir: string): boolean {
   const key = path.resolve(dir).toLowerCase()
   const id = aclDirIdentity(dir)
   const seen = id === null ? undefined : verifiedOwnerOnly.get(key)
-  if (seen && seen.id === id && aclNow() - seen.at < ACL_RECHECK_MS) return true
+  if (seen && seen.id === id) {
+    const age = aclNow() - seen.at
+    if (age >= 0 && age < ACL_RECHECK_MS) return true
+  }
+  lastAnswerProvedOwnerOnly = false
   const ok = hardenDirAclWindowsUncached(dir)
-  if (ok && id !== null) verifiedOwnerOnly.set(key, { id, at: aclNow() })
+  if (ok && lastAnswerProvedOwnerOnly && id !== null && aclDirIdentity(dir) === id) verifiedOwnerOnly.set(key, { id, at: aclNow() })
   else verifiedOwnerOnly.delete(key)
   return ok
 }
@@ -854,7 +869,10 @@ function hardenDirAclWindowsUncached(dir: string): boolean {
   if (spellings.length === 0) return false
 
   const entries = windowsAclEntries(dir)
-  if (windowsAclIsOwnerOnly(entries, hardenedPrincipals, unremovableAclPrincipals)) return true
+  if (windowsAclIsOwnerOnly(entries, hardenedPrincipals, unremovableAclPrincipals)) {
+    lastAnswerProvedOwnerOnly = true
+    return true
+  }
 
   for (const principal of spellings) {
     const grants = ['/inheritance:r', '/grant:r', `${principal}:(OI)(CI)F`, `${SYSTEM_SID}:(OI)(CI)F`]
