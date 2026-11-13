@@ -32,7 +32,7 @@ import { initAccountRegistry, reconcileLegacyAccountStores, getConsumerLeases } 
 import { initProviderAccounts, getAccountsService, runStartupProviderMigrations, followResourcesDirectory, discoverProvidersAtStart, providerOnNow } from './provider-accounts'
 import { probeClaudeCliVersion, setClaudeCliProbeAllowed, claudeCliProbeAllowed } from './claude-cli-version'
 import { startClaudeLookup, claudeStartLookupSettled } from './claude-start-lookup'
-import { findClaudeOnWindowsAsync } from './claude-cli-probe'
+import { findClaudeOnWindowsAsync, claudeOnWindowsPathNow } from './claude-cli-probe'
 import { refreshWindowsPath } from './windows-path-refresh'
 import { providerProbeRefusal } from './provider-launch-gate'
 import { providerUseWithoutLease } from './provider-in-use'
@@ -527,10 +527,12 @@ if (!gotTheLock) {
         // Then, whatever that did, look for each switched-on provider's CLI
         // once, in the background (WP2 6g: the retired Codex store's boot
         // refresh kept Codex's status current; this does, for every provider).
-        // On Windows it reads PATH, so it comes after the start's PATH
-        // refresh and first Claude Code lookup (claude-start-lookup.ts,
-        // started below, in this same turn): a look on the PATH from before
-        // would say "missing" until Check again for a CLI the refresh adds.
+        // On Windows it reads PATH, so when the start brings PATH up to date
+        // and looks for Claude Code (claude-start-lookup.ts, started below,
+        // in this same turn) it comes after those two: a look on the PATH
+        // from before would say "missing" until Check again for a CLI the
+        // refresh adds. That wait is bounded (the module's own bound), so no
+        // provider's status waits on a slow start for longer.
         .then(() => claudeStartLookupSettled())
         .then(() => discoverProvidersAtStart())
     } catch (err) {
@@ -539,22 +541,26 @@ if (!gotTheLock) {
 
     // Probe the Claude CLI version once, in the background. The managed-launch
     // preflight needs it to say which side of the verified floor the user is
-    // on, and no launch waits for it: until it answers, the preflight reports
+    // on, and no launch waits for it (but for the ones the start holds on
+    // Windows, below): until it answers, the preflight reports
     // the version as unverified rather than assuming it is fine. The probe
     // itself skips while Claude Code is switched off (WP2), by main's launch
     // rule, wired in here because that rule's graph imports the probe's
     // importers (claude-cli-version.ts, setClaudeCliProbeAllowed).
     setClaudeCliProbeAllowed(() => providerProbeRefusal('claude') === null)
-    // On Windows the probe comes after this process's PATH is brought up to
-    // date from the registry and Claude Code is looked for once; a launch
-    // asked for meanwhile (a tab restored at start) waits for those two,
-    // bounded (claude-start-lookup.ts). Elsewhere the probe runs at once.
-    // The refresh is for every provider; Claude Code itself is not looked
-    // for while it is switched off (the same rule as the probe).
+    // On Windows, PATH is first walked for Claude Code as a launch walks it.
+    // Found: the probe runs at once and nothing waits, as elsewhere. Not
+    // found: this process's PATH is brought up to date from the registry,
+    // Claude Code is looked for once, then the probe runs; a launch asked
+    // for meanwhile (a tab restored at start) waits for all three, bounded
+    // (claude-start-lookup.ts). The refresh is for every provider; Claude
+    // Code itself is not looked for, by the walk or the lookup, while it is
+    // switched off (the same rule as the probe).
     startClaudeLookup({
+      onPathNow: () => claudeCliProbeAllowed() && claudeOnWindowsPathNow(process.env) !== null,
       refreshPath: refreshWindowsPath,
       lookup: () => (claudeCliProbeAllowed() ? findClaudeOnWindowsAsync(process.env) : Promise.resolve(null)),
-      versionProbe: () => { void probeClaudeCliVersion() },
+      versionProbe: () => probeClaudeCliVersion(),
     })
     // Usage track MP3, D5: the Account usage page reads nothing of Claude Code
     // (no credential, refresh or request) while it is switched off, by the

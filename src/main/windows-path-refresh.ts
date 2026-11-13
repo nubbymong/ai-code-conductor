@@ -7,7 +7,8 @@
 // programs started afterwards read, so the running app would not find the
 // tool it just installed. (Anthropic's native Claude Code installer writes
 // no PATH at all: install-folder-path.ts finds that case and offers to add
-// its folder.) Once at start (claude-start-lookup.ts) and before a check the
+// its folder.) Once at start when Claude Code is in no folder PATH names
+// (claude-start-lookup.ts) and before a check the
 // user asked for (Check again on the setup screen, Check again in Settings
 // and the CLI help, the check after an install ends) main therefore reads
 // the two values Windows builds a new program's PATH from, the system one

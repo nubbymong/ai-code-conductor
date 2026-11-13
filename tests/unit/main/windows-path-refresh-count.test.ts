@@ -109,8 +109,9 @@ describe('each PATH refresh is counted (the one at start, a check the user asks 
     expect(h.profileCalls).toBe(2)
   })
 
-  // The refresh also runs at start now (claude-start-lookup.ts, regression
-  // since #638), while other lookups run. A profile question asked while the
+  // The refresh also runs at start now, when Claude Code is in no folder
+  // PATH names (claude-start-lookup.ts, regression since #638), and a check
+  // the user asks for runs while other lookups run. A profile question asked while the
   // registry is read starts PowerShell on the PATH from before, so its miss
   // says nothing about the PATH the refresh then builds.
   // Mutation to prove this can fail: count the call only, not the folders added.

@@ -1,12 +1,14 @@
 /**
- * On Windows, while the start's PATH refresh and first Claude Code lookup
- * still run (claude-start-lookup.ts), pty:spawn holds a local Claude Code
+ * On Windows, while the start's PATH refresh, first Claude Code lookup and
+ * version probe still run (claude-start-lookup.ts: only when the start found
+ * Claude Code in no folder PATH names), pty:spawn holds a local Claude Code
  * launch as a prepared spawn and starts it only once they have answered (or
  * the wait's bound passed), so a tab restored at start finds the Claude Code
  * they find instead of saying "not found" until Check again (regression since
  * #638). A close of the tab while it waits starts nothing. A launch over SSH,
  * a terminal-only one and a Codex one are not held by this, and nothing is
- * held once the start has answered (off Windows it is never pending).
+ * held once the start has answered (off Windows, and when Claude Code was on
+ * PATH at start, it is never pending).
  *
  * Driven through the REAL pty:spawn and pty:kill handlers on a fake ipcMain;
  * the start lookup's pending/wait pair is answered here (held on a gate the
@@ -47,7 +49,7 @@ vi.mock('../../../src/main/pty-manager', () => ({
 // bound is the module's own CLAUDE_START_LOOKUP_WAIT_MS.
 const lookup = vi.hoisted(() => ({ pending: false, settled: Promise.resolve() as Promise<void>, open: () => {}, waits: [] as unknown[][] }))
 vi.mock('../../../src/main/claude-start-lookup', () => ({
-  CLAUDE_START_LOOKUP_WAIT_MS: 5000,
+  CLAUDE_START_LOOKUP_WAIT_MS: 15_000,
   claudeStartLookupPending: () => lookup.pending,
   awaitClaudeStartLookup: (...passed: unknown[]) => { lookup.waits.push(passed); return lookup.settled },
 }))

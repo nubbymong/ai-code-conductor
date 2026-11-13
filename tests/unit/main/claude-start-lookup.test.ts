@@ -2,16 +2,21 @@
 // full path or starts nothing, and it cannot wait. A tab restored at start was
 // launched before this process's PATH was brought up to date and before the
 // PowerShell profile had answered, so it said "not found" until Check again.
-// At start main now brings PATH up to date from the registry once, then looks
-// for Claude Code once (claude-start-lookup.ts); a launch asked for meanwhile
-// waits for both, bounded, then resolves as any launch does. Off Windows
-// nothing is refreshed and nothing waits.
 //
-// Host-safe: the registry read, the PATH walk's file test and the PowerShell
-// profile question are stand-ins answered here. Nothing is started, no file of
-// this computer is read, and PATH is put back after each case. A read or a
-// question a case left held is answered after it, so one failing case never
-// leaves the next one joined to a read that does not end.
+// At start main walks PATH for Claude Code once, as a launch does
+// (claude-start-lookup.ts). Found: nothing is held and nothing refreshed, and
+// the version probe starts at once, as before the fix. Not found: main brings
+// PATH up to date from the registry, looks for Claude Code, then runs the
+// version probe; a launch asked for meanwhile waits for all three, bounded,
+// then resolves as any launch does. Off Windows nothing is walked, refreshed
+// or waited for.
+//
+// Host-safe: the registry read, the PATH walks' file test, the PowerShell
+// profile question and the version probe are stand-ins answered here. Nothing
+// is started, no file of this computer is read, and PATH is put back after
+// each case. A read, a question or a probe a case left held is answered after
+// it, so one failing case never leaves the next one joined to one that does
+// not end.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -29,8 +34,13 @@ const h = vi.hoisted(() => ({
   profileCalls: 0,
   profileAnswer: null as string | null,
   profileRelease: [] as Array<() => void>,
-  /** The walks of PATH the lookup made. */
+  /** The walks of PATH the lookup made (off the event loop), and the ones
+   *  made in place (the walk at start, and a launch's). */
   walks: 0,
+  walksInPlace: 0,
+  /** The version probe: held until released when `holdProbe`. */
+  holdProbe: false,
+  probeRelease: [] as Array<() => void>,
   /** What was logged. */
   log: [] as string[],
 }))
@@ -52,8 +62,10 @@ vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
   type Lookup = import('../../../src/main/windows-programs').PowerShellProfileLookup
   return {
     ...real,
-    findOnWindowsPath: (names: readonly string[], env: NodeJS.ProcessEnv, _stat?: unknown, order?: 'folder' | 'name') =>
-      real.findOnWindowsPath(names, env, (p) => h.present.has(p.toLowerCase()), order),
+    findOnWindowsPath: (names: readonly string[], env: NodeJS.ProcessEnv, _stat?: unknown, order?: 'folder' | 'name') => {
+      h.walksInPlace += 1
+      return real.findOnWindowsPath(names, env, (p) => h.present.has(p.toLowerCase()), order)
+    },
     findOnWindowsPathAsync: (names: readonly string[], env: NodeJS.ProcessEnv, _stat?: unknown, order?: 'folder' | 'name') => {
       h.walks += 1
       return real.findOnWindowsPathAsync(names, env, async (p) => h.present.has(p.toLowerCase()), order)
@@ -76,12 +88,14 @@ const { startClaudeLookup, claudeStartLookupPending, awaitClaudeStartLookup, cla
   await import('../../../src/main/claude-start-lookup')
 const { claudeCliProbeAllowed, setClaudeCliProbeAllowed, _resetClaudeCliVersionForTest } = await import('../../../src/main/claude-cli-version')
 const { refreshWindowsPath } = await import('../../../src/main/windows-path-refresh')
-const { findClaudeOnWindowsAsync, setClaudeProfileLookupAllowed, CLAUDE_NOT_ON_PATH, _resetClaudeCliProbeForTest, _resetClaudeWindowsLookupForTest, _resetClaudeLoginShellLookupForTest } =
+const { POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS } = await import('../../../src/main/windows-programs')
+const { findClaudeOnWindowsAsync, claudeOnWindowsPathNow, setClaudeProfileLookupAllowed, CLAUDE_NOT_ON_PATH, _resetClaudeCliProbeForTest, _resetClaudeWindowsLookupForTest, _resetClaudeLoginShellLookupForTest } =
   await import('../../../src/main/claude-cli-probe')
 const { ClaudeProvider } = await import('../../../src/main/providers/claude')
 
 const SYSTEM = 'C:\\Windows\\System32'
 const LOCAL_BIN = 'C:\\Users\\me\\.local\\bin'
+const NPM = 'C:\\Users\\me\\AppData\\Roaming\\npm'
 const FNM = 'C:\\Users\\me\\AppData\\Local\\fnm_multishells\\1234_1700000000\\claude.cmd'
 const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform')!
 const saved = { path: process.env.PATH, shell: process.env.SHELL }
@@ -90,11 +104,18 @@ function restore(name: 'PATH' | 'SHELL', value: string | undefined): void {
   else process.env[name] = value
 }
 const settle = async (): Promise<void> => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)) }
+/** The same, while the timers are stand-ins (setImmediate is one then). */
+const flush = async (): Promise<void> => { for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0) }
 
 /** What main hands the start (index.ts, pinned below), the version probe a stand-in. */
 const order: string[] = []
-const versionProbe = vi.fn(() => { order.push(`version probe on ${process.env.PATH}`) })
+const versionProbe = vi.fn((): Promise<void> => {
+  order.push(`version probe on ${process.env.PATH}`)
+  if (!h.holdProbe) return Promise.resolve()
+  return new Promise<void>((resolve) => { h.probeRelease.push(() => { order.push('version probe answered'); resolve() }) })
+})
 const steps = () => ({
+  onPathNow: () => claudeCliProbeAllowed() && claudeOnWindowsPathNow(process.env) !== null,
   refreshPath: refreshWindowsPath,
   lookup: () => {
     order.push(`lookup on ${process.env.PATH}`)
@@ -104,6 +125,8 @@ const steps = () => ({
 })
 /** The start's own log lines (the PATH refresh and the lookups log theirs). */
 const startLog = (): string[] => h.log.filter((l) => l.includes('[start]'))
+const LAUNCH_GAVE_UP = `info: [start] Still looking for Claude Code after ${CLAUDE_START_LOOKUP_WAIT_MS / 1000} s (PATH from the registry, the first lookup, the version probe); a launch waits no longer and resolves on what is known`
+const DISCOVERY_GAVE_UP = `info: [start] PATH from the registry and the first Claude Code lookup still running after ${CLAUDE_START_LOOKUP_WAIT_MS / 1000} s; each provider's CLI is looked for on the PATH there is`
 /** The launch: what a session's start names (providers/claude/spawn.ts resolveClaudeBinary). */
 const launch = (): { cmd: string; args: string[] } | null => new ClaudeProvider().resolveBinary()
 
@@ -118,6 +141,9 @@ beforeEach(() => {
   h.profileAnswer = null
   h.profileRelease = []
   h.walks = 0
+  h.walksInPlace = 0
+  h.holdProbe = false
+  h.probeRelease = []
   h.log = []
   order.length = 0
   versionProbe.mockClear()
@@ -133,13 +159,69 @@ afterEach(async () => {
   // Whatever a case left held is answered, so the next case starts its own.
   for (const r of h.registryRelease.splice(0)) r()
   for (const r of h.profileRelease.splice(0)) r()
+  for (const r of h.probeRelease.splice(0)) r()
   await settle()
   Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM)
   restore('PATH', saved.path)
   restore('SHELL', saved.shell)
 })
 
-describe('on Windows, at start: PATH from the registry, then the first Claude Code lookup', () => {
+describe('on Windows, at start, with Claude Code in a folder PATH already names: as before the fix', () => {
+  // Mutation to prove this can fail: hold and refresh whatever the walk finds.
+  it('nothing is held and PATH is not refreshed; the version probe starts in the same tick, and no launch waits for its answer', async () => {
+    process.env.PATH = `${SYSTEM};${NPM}`
+    h.registryUser = LOCAL_BIN
+    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
+    h.holdProbe = true
+    setClaudeProfileLookupAllowed(() => true)
+    startClaudeLookup(steps())
+    expect(claudeStartLookupPending(), 'no launch is held').toBe(false)
+    // In the same tick, as `void probeClaudeCliVersion()` ran before the fix.
+    expect(versionProbe).toHaveBeenCalledTimes(1)
+    vi.useFakeTimers()
+    const done: string[] = []
+    void awaitClaudeStartLookup().then(() => { done.push('launch') })
+    void claudeStartLookupSettled().then(() => { done.push('look for each CLI') })
+    await flush()
+    expect(done, 'while the version probe has not answered').toEqual(['launch', 'look for each CLI'])
+    expect(vi.getTimerCount()).toBe(0)
+    expect(h.registryReads, 'the registry is not read').toBe(0)
+    expect(process.env.PATH).toBe(`${SYSTEM};${NPM}`)
+    expect(order, 'no lookup beside the walk').toEqual([`version probe on ${SYSTEM};${NPM}`])
+    expect(h.walks).toBe(0)
+    expect(h.profileCalls).toBe(0)
+    expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
+    expect(h.walksInPlace, 'the launch reads the answer of the walk at start').toBe(1)
+    expect(startLog()).toEqual([])
+  })
+
+  // Mutation to prove this can fail: let a rejected probe go unhandled.
+  it('a version probe that fails then is logged, thrown or rejected, and nothing else follows', async () => {
+    process.env.PATH = `${SYSTEM};${NPM}`
+    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
+    startClaudeLookup({ ...steps(), versionProbe: () => { throw new Error('no probe') } })
+    startClaudeLookup({ ...steps(), versionProbe: () => Promise.reject(new Error('no answer')) })
+    await settle()
+    expect(claudeStartLookupPending()).toBe(false)
+    expect(h.registryReads).toBe(0)
+    expect(startLog()).toEqual([
+      'warn: [start] The Claude Code version probe failed (no probe); the version stays unknown',
+      'warn: [start] The Claude Code version probe failed (no answer); the version stays unknown',
+    ])
+  })
+
+  // Mutation to prove this can fail: take a walk that throws for "found".
+  it('a walk that throws counts as not found: the start refreshes PATH and looks, and it is logged', async () => {
+    process.env.PATH = SYSTEM
+    startClaudeLookup({ ...steps(), onPathNow: () => { throw new Error('no walk') } })
+    expect(claudeStartLookupPending()).toBe(true)
+    await awaitClaudeStartLookup()
+    expect(h.registryReads).toBe(1)
+    expect(startLog()).toEqual(['warn: [start] The walk of PATH for Claude Code failed (no walk); PATH is brought up to date and Claude Code looked for'])
+  })
+})
+
+describe('on Windows, at start, with Claude Code in no folder PATH names: PATH from the registry, then the first lookup, then the version probe', () => {
   // Mutation to prove this can fail: start the lookup without the refresh.
   it('brings PATH up to date once, before the lookup; a launch that waited names the claude.exe in the folder it added', async () => {
     process.env.PATH = SYSTEM
@@ -161,6 +243,20 @@ describe('on Windows, at start: PATH from the registry, then the first Claude Co
     expect(h.profileCalls, 'found on PATH: the profile is not asked').toBe(0)
   })
 
+  // Mutation to prove this can fail: walk at start as a launch does, profile included.
+  it('the walk at start asks the PowerShell profile nothing: that question waits for the PATH the refresh leaves', async () => {
+    process.env.PATH = SYSTEM
+    h.holdRegistry = true
+    setClaudeProfileLookupAllowed(() => true)
+    startClaudeLookup(steps())
+    await settle()
+    expect(h.walksInPlace).toBe(1)
+    expect(h.profileCalls, 'not while the registry is read').toBe(0)
+    for (const r of h.registryRelease.splice(0)) r()
+    await settle()
+    expect(h.profileCalls).toBe(1)
+  })
+
   // Mutation to prove this can fail: end the wait when the PATH refresh ends.
   it('a launch waits for the PowerShell profile\'s first answer too, and names the path it gave', async () => {
     process.env.PATH = SYSTEM
@@ -180,10 +276,30 @@ describe('on Windows, at start: PATH from the registry, then the first Claude Co
     expect(versionProbe).toHaveBeenCalledTimes(1)
   })
 
+  // Mutation to prove this can fail: release the launches when the lookup
+  // ends, before the version probe has answered.
+  it('a launch is released only once the version probe has answered, so it never reports the version as not yet verified because it was held', async () => {
+    process.env.PATH = SYSTEM
+    h.registryUser = LOCAL_BIN
+    h.present = new Set([`${LOCAL_BIN}\\claude.exe`.toLowerCase()])
+    h.holdProbe = true
+    startClaudeLookup(steps())
+    void awaitClaudeStartLookup().then(() => { order.push('launch released') })
+    await settle()
+    expect(order, 'the probe runs, the launch still waits').toEqual([`lookup on ${SYSTEM};${LOCAL_BIN}`, `version probe on ${SYSTEM};${LOCAL_BIN}`])
+    expect(claudeStartLookupPending()).toBe(true)
+    for (const r of h.probeRelease.splice(0)) r()
+    await settle()
+    expect(order).toEqual([`lookup on ${SYSTEM};${LOCAL_BIN}`, `version probe on ${SYSTEM};${LOCAL_BIN}`, 'version probe answered', 'launch released'])
+    expect(claudeStartLookupPending()).toBe(false)
+  })
+
   // Mutation to prove this can fail: wait without a bound.
-  it('the wait is bounded by a few seconds; past it the launch is refused exactly as before, never by a bare name', async () => {
-    expect(CLAUDE_START_LOOKUP_WAIT_MS).toBeGreaterThanOrEqual(2000)
-    expect(CLAUDE_START_LOOKUP_WAIT_MS).toBeLessThanOrEqual(10_000)
+  it('the wait is bounded, by more than the profile question may take; past it the launch is refused exactly as before, never by a bare name', async () => {
+    // A registry read, a profile question (POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS
+    // at most) and the version probe have to fit.
+    expect(CLAUDE_START_LOOKUP_WAIT_MS).toBeGreaterThanOrEqual(POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS + 2000)
+    expect(CLAUDE_START_LOOKUP_WAIT_MS).toBeLessThanOrEqual(20_000)
     process.env.PATH = SYSTEM
     setClaudeProfileLookupAllowed(() => true)
     startClaudeLookup(steps())
@@ -241,8 +357,9 @@ describe('on Windows, at start: PATH from the registry, then the first Claude Co
     expect(startLog()).toEqual([])
   })
 
-  // Mutation to prove this can fail: start a new wait for every launch (drop the flag the bound sets).
-  it('once one launch has waited out the bound, later launches do not wait again while the start still runs; it is logged once', async () => {
+  // Mutations to prove this can fail: let the launches after one that waited
+  // out the bound go at once; log each wait the bound ends.
+  it('every launch during a slow start waits, each by its own bound, a retry of a refused tab too; the bound is logged once', async () => {
     process.env.PATH = SYSTEM
     setClaudeProfileLookupAllowed(() => true)
     startClaudeLookup(steps())
@@ -254,26 +371,31 @@ describe('on Windows, at start: PATH from the registry, then the first Claude Co
     await vi.advanceTimersByTimeAsync(CLAUDE_START_LOOKUP_WAIT_MS)
     expect(done).toEqual(['first', 'second'])
     expect(claudeStartLookupPending(), 'the profile has still not answered').toBe(true)
-    // A retry of the refused tab, and any launch after it.
+    // A retry of the refused tab waits again, its own bound.
     void awaitClaudeStartLookup().then(() => { done.push('retry') })
-    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(CLAUDE_START_LOOKUP_WAIT_MS - 1)
+    expect(done, 'not at once, and not before its bound').toEqual(['first', 'second'])
+    await vi.advanceTimersByTimeAsync(1)
     expect(done).toEqual(['first', 'second', 'retry'])
-    expect(vi.getTimerCount()).toBe(0)
-    expect(startLog()).toEqual([
-      `info: [start] Claude Code lookup still running after ${CLAUDE_START_LOOKUP_WAIT_MS / 1000} s; launching on what is known, and later launches do not wait for it`,
-    ])
-    // The answer, when it comes, is the one the next launch names.
+    expect(startLog(), 'three waits ended by the bound, one line').toEqual([LAUNCH_GAVE_UP])
+    // One more, and the answer comes while it waits: it starts on that answer.
+    void awaitClaudeStartLookup().then(() => { done.push('in time') })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(done).toEqual(['first', 'second', 'retry'])
     h.profileAnswer = FNM
     for (const r of h.profileRelease.splice(0)) r()
-    await vi.advanceTimersByTimeAsync(0)
+    await flush()
+    expect(done).toEqual(['first', 'second', 'retry', 'in time'])
     expect(claudeStartLookupPending()).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
     expect(launch()).toEqual({ cmd: FNM, args: [] })
+    expect(startLog()).toEqual([LAUNCH_GAVE_UP])
   })
 
   // Mutation to prove this can fail: let a failed refresh skip the lookup (drop the catch after it).
   it('a refresh that fails does not stop the lookup, and is logged', async () => {
     const lookup = vi.fn(() => Promise.resolve(null))
-    startClaudeLookup({ refreshPath: () => Promise.reject(new Error('no registry')), lookup, versionProbe })
+    startClaudeLookup({ onPathNow: () => false, refreshPath: () => Promise.reject(new Error('no registry')), lookup, versionProbe })
     expect(claudeStartLookupPending()).toBe(true)
     await awaitClaudeStartLookup()
     expect(lookup).toHaveBeenCalledTimes(1)
@@ -283,10 +405,10 @@ describe('on Windows, at start: PATH from the registry, then the first Claude Co
   })
 
   // Mutation to prove this can fail: log nothing in the catches.
-  it('a refresh and a lookup that both fail still let launches go and the version probe run; each is logged, and so is a version probe that throws', async () => {
+  it('a refresh, a lookup and a version probe that all fail still let launches go; each is logged', async () => {
     const lookup = vi.fn(() => Promise.reject(new Error('no walk')))
-    const throwing = vi.fn(() => { throw new Error('no probe') })
-    startClaudeLookup({ refreshPath: () => Promise.reject(new Error('no registry')), lookup, versionProbe: throwing })
+    const throwing = vi.fn((): Promise<void> => { throw new Error('no probe') })
+    startClaudeLookup({ onPathNow: () => false, refreshPath: () => Promise.reject(new Error('no registry')), lookup, versionProbe: throwing })
     expect(claudeStartLookupPending()).toBe(true)
     await awaitClaudeStartLookup()
     await settle()
@@ -296,19 +418,21 @@ describe('on Windows, at start: PATH from the registry, then the first Claude Co
     expect(startLog()).toEqual([
       'warn: [start] PATH was not brought up to date from the registry (no registry); Claude Code is looked for on the PATH there is',
       'warn: [start] The first Claude Code lookup failed (no walk); a launch looks for itself',
-      'warn: [start] The Claude Code version probe did not start (no probe); the version stays unknown',
+      'warn: [start] The Claude Code version probe failed (no probe); the version stays unknown',
     ])
   })
 
   // Mutation to prove this can fail: walk PATH whatever the launch rule says.
   it('while Claude Code is switched off PATH is still brought up to date, but nothing looks for Claude Code', async () => {
-    process.env.PATH = SYSTEM
+    process.env.PATH = `${SYSTEM};${NPM}`
     h.registryUser = LOCAL_BIN
+    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
     setClaudeCliProbeAllowed(() => false)
     startClaudeLookup(steps())
     await awaitClaudeStartLookup()
-    expect(process.env.PATH).toBe(`${SYSTEM};${LOCAL_BIN}`)
-    expect(h.walks).toBe(0)
+    expect(process.env.PATH).toBe(`${SYSTEM};${NPM};${LOCAL_BIN}`)
+    expect(h.walksInPlace, 'not the walk at start').toBe(0)
+    expect(h.walks, 'nor the lookup').toBe(0)
     expect(h.profileCalls).toBe(0)
     expect(claudeStartLookupPending()).toBe(false)
     expect(versionProbe).toHaveBeenCalledTimes(1)
@@ -328,8 +452,32 @@ describe('on Windows, at start: PATH from the registry, then the first Claude Co
 })
 
 describe('what at start reads PATH and nothing waits for (the look for each provider\'s CLI)', () => {
-  // Mutation to prove this can fail: answer at once, or after the launch's bound.
-  it('runs after the start\'s PATH refresh and first lookup however long they take, on the PATH they leave', async () => {
+  // Mutations to prove this can fail: answer at once; answer at once when a
+  // launch has already waited out its bound.
+  it('runs after the start\'s PATH refresh and first lookup, on the PATH they leave, also when a launch gave up before it asked', async () => {
+    process.env.PATH = SYSTEM
+    h.registryUser = LOCAL_BIN
+    h.holdRegistry = true
+    startClaudeLookup(steps())
+    await settle()
+    vi.useFakeTimers()
+    let launchGaveUp = false
+    void awaitClaudeStartLookup().then(() => { launchGaveUp = true })
+    await vi.advanceTimersByTimeAsync(CLAUDE_START_LOOKUP_WAIT_MS)
+    expect(launchGaveUp).toBe(true)
+    let discoveredOn: string | undefined
+    void claudeStartLookupSettled().then(() => { discoveredOn = process.env.PATH })
+    await vi.advanceTimersByTimeAsync(CLAUDE_START_LOOKUP_WAIT_MS - 1)
+    expect(discoveredOn, 'not while the registry is read: a launch that gave up does not end its wait').toBeUndefined()
+    for (const r of h.registryRelease.splice(0)) r()
+    await flush()
+    expect(discoveredOn).toBe(`${SYSTEM};${LOCAL_BIN}`)
+    expect(vi.getTimerCount(), 'its own timer is cleared').toBe(0)
+    expect(startLog(), 'only the launch gave up').toEqual([LAUNCH_GAVE_UP])
+  })
+
+  // Mutation to prove this can fail: wait without a bound.
+  it('its wait has the same bound as a launch\'s: past it the look runs on the PATH there is, so no provider stays "not checked yet" for longer, and it is logged', async () => {
     process.env.PATH = SYSTEM
     h.registryUser = LOCAL_BIN
     h.holdRegistry = true
@@ -338,13 +486,26 @@ describe('what at start reads PATH and nothing waits for (the look for each prov
     vi.useFakeTimers()
     let discoveredOn: string | undefined
     void claudeStartLookupSettled().then(() => { discoveredOn = process.env.PATH })
-    await vi.advanceTimersByTimeAsync(CLAUDE_START_LOOKUP_WAIT_MS * 10)
-    expect(discoveredOn, 'not while the registry is read, however long that takes').toBeUndefined()
-    expect(vi.getTimerCount(), 'it has no bound of its own').toBe(0)
-    for (const r of h.registryRelease.splice(0)) r()
-    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(CLAUDE_START_LOOKUP_WAIT_MS - 1)
+    expect(discoveredOn).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(discoveredOn, 'the registry is still being read').toBe(SYSTEM)
+    expect(claudeStartLookupPending()).toBe(true)
+    expect(startLog()).toEqual([DISCOVERY_GAVE_UP])
+  })
+
+  // Mutation to prove this can fail: release it with the launches, after the version probe.
+  it('it does not wait for the version probe, which only a launch waits for', async () => {
+    process.env.PATH = SYSTEM
+    h.registryUser = LOCAL_BIN
+    h.holdProbe = true
+    startClaudeLookup(steps())
+    let discoveredOn: string | undefined
+    void claudeStartLookupSettled().then(() => { discoveredOn = process.env.PATH })
+    await settle()
     expect(discoveredOn).toBe(`${SYSTEM};${LOCAL_BIN}`)
-    expect(startLog(), 'and it is no launch that gave up').toEqual([])
+    expect(order).toEqual([`lookup on ${SYSTEM};${LOCAL_BIN}`, `version probe on ${SYSTEM};${LOCAL_BIN}`])
+    expect(claudeStartLookupPending(), 'the probe has not answered: launches are still held').toBe(true)
   })
 
   it('at once when the start has answered, when nothing started it, and off Windows', async () => {
@@ -367,7 +528,7 @@ describe('what at start reads PATH and nothing waits for (the look for each prov
 })
 
 describe('off Windows nothing changes', () => {
-  it('no registry read, no lookup, nothing to wait for; the version probe runs at once and a launch names "claude"', async () => {
+  it('no walk at start, no registry read, no lookup, nothing to wait for; the version probe runs at once and a launch names "claude"', async () => {
     h.platform = 'linux'
     Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
     process.env.SHELL = '/bin/bash'
@@ -379,6 +540,7 @@ describe('off Windows nothing changes', () => {
     expect(claudeStartLookupPending()).toBe(false)
     await awaitClaudeStartLookup()
     await settle()
+    expect(h.walksInPlace).toBe(0)
     expect(h.registryReads).toBe(0)
     expect(order.filter((o) => o.startsWith('lookup'))).toEqual([])
     expect(versionProbe).toHaveBeenCalledTimes(1)
@@ -395,9 +557,11 @@ describe('main runs it at start (index.ts)', () => {
     .map((l) => l.replace(/(^|[^:])\/\/.*$/, '$1'))
     .join('\n')
 
-  // Mutation to prove this can fail: put `void probeClaudeCliVersion()` back in its place.
-  it('with the registry PATH refresh, the PATH walk and profile lookup, and the version probe; once, after the launch rule is set and before a window exists', () => {
-    expect(code).toMatch(/startClaudeLookup\(\{\s*refreshPath: refreshWindowsPath,\s*lookup: \(\) => \(claudeCliProbeAllowed\(\) \? findClaudeOnWindowsAsync\(process\.env\) : Promise\.resolve\(null\)\),\s*versionProbe: \(\) => \{ void probeClaudeCliVersion\(\) \},\s*\}\)/)
+  // Mutations to prove this can fail: put `void probeClaudeCliVersion()` back
+  // in its place; hand it a version probe that returns nothing to wait for;
+  // walk at start while Claude Code is switched off.
+  it('with the walk of PATH, the registry PATH refresh, the PATH walk and profile lookup, and the version probe it can wait for; once, after the launch rule is set and before a window exists', () => {
+    expect(code).toMatch(/startClaudeLookup\(\{\s*onPathNow: \(\) => claudeCliProbeAllowed\(\) && claudeOnWindowsPathNow\(process\.env\) !== null,\s*refreshPath: refreshWindowsPath,\s*lookup: \(\) => \(claudeCliProbeAllowed\(\) \? findClaudeOnWindowsAsync\(process\.env\) : Promise\.resolve\(null\)\),\s*versionProbe: \(\) => probeClaudeCliVersion\(\),\s*\}\)/)
     expect(code.split('startClaudeLookup(').length).toBe(2)
     expect(code.split('probeClaudeCliVersion()').length, 'the version probe runs only through it').toBe(2)
     const ruleSet = code.indexOf("setClaudeCliProbeAllowed(() => providerProbeRefusal('claude') === null)")
@@ -411,7 +575,7 @@ describe('main runs it at start (index.ts)', () => {
   })
 
   // Mutation to prove this can fail: call discoverProvidersAtStart straight after the accounts start-up work.
-  it('and the look for each provider\'s CLI at start comes after it, in the same turn that starts it', () => {
+  it('and the look for each provider\'s CLI at start comes after it, by the module\'s own bound, in the same turn that starts it', () => {
     expect(code).toMatch(/\.then\(\(\) => claudeStartLookupSettled\(\)\)\s*\.then\(\(\) => discoverProvidersAtStart\(\)\)/)
     expect(code.split('discoverProvidersAtStart()').length, 'nothing else starts it').toBe(2)
     // Nothing between the chain and the start waits, so the start is under
@@ -423,5 +587,20 @@ describe('main runs it at start (index.ts)', () => {
     expect(chained).toBeGreaterThan(ready)
     expect(started).toBeGreaterThan(chained)
     expect(code.slice(chained, started)).not.toMatch(/\bawait\b/)
+  })
+})
+
+describe('the walk of PATH at start (claude-cli-probe.ts claudeOnWindowsPathNow)', () => {
+  // Mutation to prove this can fail: walk folder by folder (a claude.cmd in an earlier folder wins).
+  it('names what a launch names (claude.exe in any folder before claude.cmd), keeps its answer for the launch, and asks the profile nothing', () => {
+    process.env.PATH = `${NPM};${LOCAL_BIN}`
+    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase(), `${LOCAL_BIN}\\claude.exe`.toLowerCase()])
+    setClaudeProfileLookupAllowed(() => true)
+    expect(claudeOnWindowsPathNow(process.env)).toBe(`${LOCAL_BIN}\\claude.exe`)
+    expect(launch()).toEqual({ cmd: `${LOCAL_BIN}\\claude.exe`, args: [] })
+    expect(h.walksInPlace, 'the launch did not walk again').toBe(1)
+    process.env.PATH = SYSTEM
+    expect(claudeOnWindowsPathNow(process.env)).toBeNull()
+    expect(h.profileCalls).toBe(0)
   })
 })
