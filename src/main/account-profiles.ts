@@ -1252,6 +1252,17 @@ const credentialFolderVerdicts = new Map<string, { id: string; ok: boolean }>()
 const credentialFolderChecks = new Map<string, Promise<void>>()
 /** Homes whose last check gave no read for some folder: a home's key. */
 const credentialChecksUnanswered = new Set<string>()
+/** Profile homes removed this run: a home's key, recorded before the folder
+ *  goes (removeProfileFolder). A check that began before the removal has the
+ *  rule make the missing home again, and the folder it makes can report the
+ *  file identity of the one removed (ext4 gives a freed inode number to the
+ *  next folder made), so a removal is recorded here, never inferred from the
+ *  identity alone. A key leaves when makeProfileHome makes a home there: a
+ *  home just made is a new account's, not the removed one's (an id is new
+ *  each time, so in practice none leaves). One short string per account
+ *  removed this run; a listed account's home is never dropped whatever is
+ *  recorded here (profileRemoved). */
+const removedProfileHomes = new Set<string>()
 let readyHomeCheck: Promise<void> | null = null
 /** The start's profile steps while they are still to run. */
 let startStepsPending: Promise<void> | null = null
@@ -1367,6 +1378,7 @@ export function _setCredentialFolderRuleForTest(rule: CredentialFolderRule | nul
   credentialFolderVerdicts.clear()
   credentialFolderChecks.clear()
   credentialChecksUnanswered.clear()
+  removedProfileHomes.clear()
   readyHomeCheck = null
   startStepsPending = null
 }
@@ -1574,10 +1586,11 @@ function profileRemoved(home: string): boolean {
   })
 }
 
-/** An account removed while its folders were checked: the folder now in its
- *  home's place, made after the check began (by the check, as the account's
- *  own was removed), goes -- links as links, never followed -- and nothing
- *  there keeps a verdict. */
+/** An account removed while its folders were checked (its removal recorded
+ *  in removedProfileHomes, or its home another folder or none now): the folder
+ *  now in its home's place, made after the check began (by the check, as the
+ *  account's own was removed), goes -- links as links, never followed -- and
+ *  nothing there keeps a verdict. */
 function dropRemovedProfileHome(home: string): void {
   for (const dir of signInFoldersOf(home)) credentialFolderVerdicts.delete(folderKey(dir))
   credentialChecksUnanswered.delete(folderKey(home))
@@ -1644,9 +1657,11 @@ async function checkFolders(homes: readonly string[], rule: CredentialFolderRule
   const answers = await askRule(rule, ask)
   const again: string[] = []
   for (const { home, homeId, set } of checks) {
-    // The home is another folder (or none) now and its account was removed
-    // meanwhile: what is in its place was made after the check began.
-    if (realFolderId(home) !== homeId && profileRemoved(home)) { dropRemovedProfileHome(home); continue }
+    // The home was removed this run (recorded: the folder made in its place
+    // can report the removed one's file identity) or is another folder (or
+    // none) now, and its account is not listed: what is in its place was made
+    // after the check began.
+    if ((removedProfileHomes.has(folderKey(home)) || realFolderId(home) !== homeId) && profileRemoved(home)) { dropRemovedProfileHome(home); continue }
     await askAgainWhereInsideFailed(rule, set, answers)
     for (const dir of set) {
       if (!isProfileHome(dir)) { await settleOne(dir, answers, rule, refused, unanswered); continue }
@@ -2100,6 +2115,9 @@ export function resolveHeadlessProfileHome(preferredProfileId?: string | null): 
  *  record is not on the list yet: the caller writes it. */
 function makeProfileHome(name?: string): AccountProfile {
   const id = `profile-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`
+  // The home made here is a new account's, whatever was removed at its path
+  // this run: a check never drops it as a removed one (removedProfileHomes).
+  removedProfileHomes.delete(folderKey(getProfileConfigDir(id)))
   // Windows: a new profile takes the home kept ready, made and checked
   // owner-only, so its first sign-in can be written at once; without one its
   // folders are checked now (a write before that ends is refused as pending).
@@ -2899,8 +2917,11 @@ function profileDirForTeardown(id: string): string {
 }
 
 /** Remove an account's folder (junction links only, never their targets).
- *  The list is not touched. */
+ *  The list is not touched. The removal is recorded first, so a check of the
+ *  folder that is running now drops whatever it makes in its place
+ *  (removedProfileHomes). */
 function removeProfileFolder(dir: string): void {
+  removedProfileHomes.add(folderKey(dir))
   if (!fs.existsSync(dir)) return
   // Never recurse a reparse point AS THE ROOT (would walk into a junction target).
   if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('refusing teardown: profile dir is a reparse point')
