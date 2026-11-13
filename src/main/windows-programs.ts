@@ -329,14 +329,16 @@ export function withFullyQualifiedProgramLookup<T extends Record<string, string 
 // A program only the user's PowerShell profile puts on PATH
 // ---------------------------------------------------------------------------
 
-/** How many times a check the user asked for has brought this process's PATH
+/** The PATH refresh count. It moves each time this process's PATH is brought
  *  up to date (windows-path-refresh.ts refreshWindowsPath calls
- *  noteWindowsPathRefresh for each one, for any provider: Check again on the
+ *  noteWindowsPathRefresh): for the refresh at start (claude-start-lookup.ts),
+ *  for each check the user asked for, for any provider (Check again on the
  *  setup screen or in Settings, a provider's setup page, the check after an
- *  install ends), the refresh at start counted too, and one more for each
- *  refresh that added folders. A lookup that keeps its answer for the run
- *  (claude-cli-probe.ts keeps the PowerShell profile's) asks again once this
- *  count has moved, and never because of a check the app runs by itself. */
+ *  install ends), and once more when such a refresh ends having added
+ *  folders. A lookup that keeps its answer for the run (claude-cli-probe.ts
+ *  keeps the PowerShell profile's) asks again once this count has moved. No
+ *  check the app runs by itself during the run (the CLI check every 30 s, a
+ *  launch) moves it. */
 let pathRefreshes = 0
 
 export function noteWindowsPathRefresh(): void {

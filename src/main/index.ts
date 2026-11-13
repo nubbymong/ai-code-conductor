@@ -30,8 +30,8 @@ import { getProvider } from './providers'
 import { composeProviders, flushPendingProviderCliKills } from './providers/compose'
 import { initAccountRegistry, reconcileLegacyAccountStores, getConsumerLeases } from './provider-account-registry'
 import { initProviderAccounts, getAccountsService, runStartupProviderMigrations, followResourcesDirectory, discoverProvidersAtStart, providerOnNow } from './provider-accounts'
-import { probeClaudeCliVersion, setClaudeCliProbeAllowed } from './claude-cli-version'
-import { startClaudeLookup } from './claude-start-lookup'
+import { probeClaudeCliVersion, setClaudeCliProbeAllowed, claudeCliProbeAllowed } from './claude-cli-version'
+import { startClaudeLookup, claudeStartLookupSettled } from './claude-start-lookup'
 import { findClaudeOnWindowsAsync } from './claude-cli-probe'
 import { refreshWindowsPath } from './windows-path-refresh'
 import { providerProbeRefusal } from './provider-launch-gate'
@@ -527,6 +527,11 @@ if (!gotTheLock) {
         // Then, whatever that did, look for each switched-on provider's CLI
         // once, in the background (WP2 6g: the retired Codex store's boot
         // refresh kept Codex's status current; this does, for every provider).
+        // On Windows it reads PATH, so it comes after the start's PATH
+        // refresh and first Claude Code lookup (claude-start-lookup.ts,
+        // started below, in this same turn): a look on the PATH from before
+        // would say "missing" until Check again for a CLI the refresh adds.
+        .then(() => claudeStartLookupSettled())
         .then(() => discoverProvidersAtStart())
     } catch (err) {
       logError('[main] accounts service start failed:', err)
@@ -544,9 +549,11 @@ if (!gotTheLock) {
     // date from the registry and Claude Code is looked for once; a launch
     // asked for meanwhile (a tab restored at start) waits for those two,
     // bounded (claude-start-lookup.ts). Elsewhere the probe runs at once.
+    // The refresh is for every provider; Claude Code itself is not looked
+    // for while it is switched off (the same rule as the probe).
     startClaudeLookup({
       refreshPath: refreshWindowsPath,
-      lookup: () => findClaudeOnWindowsAsync(process.env),
+      lookup: () => (claudeCliProbeAllowed() ? findClaudeOnWindowsAsync(process.env) : Promise.resolve(null)),
       versionProbe: () => { void probeClaudeCliVersion() },
     })
     // Usage track MP3, D5: the Account usage page reads nothing of Claude Code

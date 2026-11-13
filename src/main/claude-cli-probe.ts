@@ -27,7 +27,8 @@ import { findOnWindowsPathAsync, findWithPowerShellProfile, isRegularFileAsync, 
  *     is there, Windows PowerShell is asked with the user's profile, which a
  *     Claude session's PowerShell also runs (claudeFromPowerShellProfile: a
  *     version manager such as fnm puts its folder on PATH only there); its
- *     answer, found or not, is kept until a check the user asks for.
+ *     answer, found or not, is kept until PATH is next brought up to date
+ *     (the refresh at start, or a check the user asks for).
  *   - POSIX: what a Claude session's launcher will run. A login shell outside
  *     the sh family (written for fish and PowerShell 7.3 or later) is asked
  *     for the PATH it builds, and Claude Code is looked for in that PATH's
@@ -269,12 +270,16 @@ export function recentClaudeOnWindows(env: NodeJS.ProcessEnv, now: () => number 
 // answer to go by (it timed out, for example while Windows is still signing
 // in) is not an answer: it may be asked once more,
 // PROFILE_RETRY_AFTER_FAILURE_MS later, and keeps the path an earlier
-// question named. The kept answer becomes stale after a check the user asked
-// for (Check again on the setup screen or in Settings, a provider's setup
-// page, the check after an install ends: each brings PATH up to date first,
-// windows-programs.ts windowsPathRefreshCount): the next lookup asks again,
-// and a check that started after it never takes the answer of a question
-// that started before it. Stale is not wrong: until the new answer arrives a
+// question named. The kept answer becomes stale each time this process's
+// PATH is brought up to date (windows-programs.ts windowsPathRefreshCount):
+// by the refresh at start (claude-start-lookup.ts), by each check the user
+// asked for (Check again on the setup screen or in Settings, a provider's
+// setup page, the check after an install ends: each brings PATH up to date
+// first), and once more when such a refresh ends having added folders (an
+// answer of a question asked while it ran is for the PATH from before). The
+// next lookup then asks again, and a check that started after it never takes
+// the answer of a question that started before it. The CLI check every 30 s
+// and a launch never move it. Stale is not wrong: until the new answer arrives a
 // start keeps using the path last named, so it is never refused because of a
 // check about another provider. It is also asked again when a path it gave
 // is no longer a file. Never while Claude Code is switched off, nor before
@@ -305,14 +310,15 @@ function profileLookupMayRun(): boolean {
   try { return profileLookupAllowed() === true } catch { return false }
 }
 
-/** The profile's last answer: `found` null for none; `refreshes` the count of
- *  checks the user asked for when it was asked (windowsPathRefreshCount);
- *  `failed` when there was no answer to go by (`found` is then the path an
- *  earlier question named, if any), and `retryAt` when it may be asked once
- *  more for the same count. */
+/** The profile's last answer: `found` null for none; `refreshes` the PATH
+ *  refresh count when it was asked (windowsPathRefreshCount: the refresh at
+ *  start, each check the user asked for, and once more for a refresh that
+ *  added folders); `failed` when there was no answer to go by (`found` is
+ *  then the path an earlier question named, if any), and `retryAt` when it
+ *  may be asked once more for the same count. */
 interface ProfileAnswer { found: string | null; refreshes: number; failed: boolean; retryAt: number | null }
 let profileKept: ProfileAnswer | null = null
-/** The question running, and the count of checks when it started. */
+/** The question running, and that count when it started. */
 let profileInFlight: { run: Promise<string | null>; refreshes: number } | null = null
 /** Moved by the test seam, so a question still running from an earlier case keeps nothing. */
 let profileEpoch = 0
@@ -345,9 +351,11 @@ function askProfile(): Promise<string | null> {
 }
 
 /** The profile's answer while it is current: the path, null when it found
- *  none, undefined when there is none to read (never asked, a check the user
- *  asked for came after it, or a question with no answer may now be asked
- *  once more). Synchronous; reads no file, starts nothing. */
+ *  none, undefined when there is none to read (never asked, the PATH refresh
+ *  count moved after it: the refresh at start, a check the user asked for,
+ *  or a refresh that ended having added folders; or a question with no
+ *  answer may now be asked once more). Synchronous; reads no file, starts
+ *  nothing. */
 export function keptClaudeFromPowerShellProfile(): string | null | undefined {
   const kept = profileKept
   if (!kept || kept.refreshes !== windowsPathRefreshCount()) return undefined
@@ -364,10 +372,12 @@ function joinOrAsk(): Promise<string | null> {
   return kept !== undefined ? Promise.resolve(kept) : askProfile()
 }
 
-/** The answer for a lookup now. A question that started before a check the
- *  user asked for may answer for a profile or a PATH that check changed, so
- *  it is waited for and the profile asked once more (still one question at
- *  a time: the lookups waiting on it share the next one). */
+/** The answer for a lookup now. A question that started before the PATH
+ *  refresh count last moved (the refresh at start, a check the user asked
+ *  for, a refresh that ended having added folders) may answer for a profile
+ *  or a PATH that has changed since, so it is waited for and the profile
+ *  asked once more (still one question at a time: the lookups waiting on it
+ *  share the next one). */
 function profileQuestionForNow(): Promise<string | null> {
   const running = profileInFlight
   if (running && running.refreshes !== windowsPathRefreshCount()) return running.run.then(joinOrAsk, joinOrAsk)
@@ -395,8 +405,8 @@ export async function claudeFromPowerShellProfile(stat: (p: string) => Promise<b
 
 /** For a start, which cannot wait: ask the PowerShell profile in the
  *  background when there is no current answer and no question running for
- *  this count of checks (and Claude Code is on). Never waits; the next start
- *  reads the answer. */
+ *  this PATH refresh count (and Claude Code is on). Never waits; the next
+ *  start reads the answer. */
 export function startClaudeProfileLookup(): void {
   if (!profileLookupMayRun() || keptClaudeFromPowerShellProfile() !== undefined) return
   if (profileInFlight && profileInFlight.refreshes === windowsPathRefreshCount()) return
@@ -404,8 +414,9 @@ export function startClaudeProfileLookup(): void {
 }
 
 /** For a start, which cannot wait: the Claude Code the PowerShell profile
- *  last named, also when a check the user asked for has made that answer
- *  stale (stale is not wrong, so the start is not refused for it); null when
+ *  last named, also when a PATH refresh (the one at start, or a check the
+ *  user asked for) has made that answer stale (stale is not wrong, so the
+ *  start is not refused for it); null when
  *  it named none, was never asked, or Claude Code is switched off. Without a
  *  current answer the question starts in the background
  *  (startClaudeProfileLookup) for the next start. Synchronous; reads no

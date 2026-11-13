@@ -12,7 +12,7 @@
  * the start lookup's pending/wait pair is answered here (held on a gate the
  * test opens) and pty-manager is faked, so nothing spawns.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const handlers = new Map<string, (...a: unknown[]) => unknown>()
 vi.mock('electron', () => ({
@@ -43,11 +43,13 @@ vi.mock('../../../src/main/pty-manager', () => ({
   codexLaunchLeaseTaken: () => false,
 }))
 // The start's PATH refresh and first lookup: pending until the test opens the gate.
-const lookup = vi.hoisted(() => ({ pending: false, settled: Promise.resolve() as Promise<void>, open: () => {}, waits: 0 }))
+// Each wait is recorded with what the handler passed it: nothing, so the
+// bound is the module's own CLAUDE_START_LOOKUP_WAIT_MS.
+const lookup = vi.hoisted(() => ({ pending: false, settled: Promise.resolve() as Promise<void>, open: () => {}, waits: [] as unknown[][] }))
 vi.mock('../../../src/main/claude-start-lookup', () => ({
   CLAUDE_START_LOOKUP_WAIT_MS: 5000,
   claudeStartLookupPending: () => lookup.pending,
-  awaitClaudeStartLookup: () => { lookup.waits++; return lookup.settled },
+  awaitClaudeStartLookup: (...passed: unknown[]) => { lookup.waits.push(passed); return lookup.settled },
 }))
 vi.mock('../../../src/main/script-folders', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/script-folders')>()),
@@ -98,6 +100,9 @@ const outcome = async (p: unknown): Promise<string> => {
 }
 /** Let every promise the handler is waiting on, other than the gate, settle. */
 const settleAllButTheGate = async (): Promise<void> => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)) }
+/** The outcome of a spawn nothing holds: 'started', or 'still waiting' when
+ *  the handler is held on the gate (said at once, not by the test's timeout). */
+const unheld = (p: unknown): Promise<string> => Promise.race([outcome(p), settleAllButTheGate().then(() => 'still waiting')])
 /** Hold the start's lookup: pending, settled only when the test opens the gate. */
 function holdTheLookup(): void {
   lookup.pending = true
@@ -112,18 +117,26 @@ beforeEach(() => {
   lookup.pending = false
   lookup.settled = Promise.resolve()
   lookup.open = () => {}
-  lookup.waits = 0
+  lookup.waits = []
 })
+// A case that failed while a launch was held leaves nothing waiting on the gate.
+afterEach(() => { lookup.open() })
 
 describe('a local Claude Code launch while the start\'s PATH refresh and first Claude Code lookup still run', () => {
-  // Mutation to prove this can fail: decide the hold false (or drop the wait).
-  it('is held as a prepared spawn and starts only once they have answered', async () => {
+  // Mutations to prove this can fail: decide the hold false (or drop the
+  // wait); hold only a launch that names no account profile; pass the wait a
+  // bound of the handler's own.
+  it.each([
+    ['one that names no account profile', { cwd: 'C:/w' }],
+    ['one that names an account profile', { cwd: 'C:/w', profileId: 'p1' }],
+    ['an Ask Conductor one', { cwd: 'C:/w', isAsk: true }],
+  ])('%s is held as a prepared spawn and starts only once they have answered', async (_which, options) => {
     holdTheLookup()
-    const started = outcome(spawn({}, S, { cwd: 'C:/w' }))
+    const started = outcome(spawn({}, S, options))
     await settleAllButTheGate()
     expect(spawnPty).not.toHaveBeenCalled()
     expect(beginSpawnPreparation).toHaveBeenCalledTimes(1)
-    expect(lookup.waits).toBe(1)
+    expect(lookup.waits, 'one wait, with the module\'s own bound').toEqual([[]])
     expect(pending.has(S)).toBe(true)
     lookup.open()
     expect(await started).toBe('started')
@@ -154,17 +167,16 @@ describe('what the start\'s Claude Code lookup does not hold', () => {
     ]
     for (const [i, options] of shapes.entries()) {
       const sid = `d${i}d2e3f4a5b6c1d2e3f4a5b6`
-      expect(await outcome(spawn({}, sid, options)), JSON.stringify(options)).toBe('started')
+      expect(await unheld(spawn({}, sid, options)), JSON.stringify(options)).toBe('started')
       expect(live.has(sid)).toBe(true)
     }
-    expect(lookup.waits).toBe(0)
-    lookup.open()
+    expect(lookup.waits).toEqual([])
   })
 
   it('once it has answered (and always off Windows), a local launch starts at once, unheld', async () => {
-    expect(await outcome(spawn({}, S, { cwd: 'C:/w' }))).toBe('started')
+    expect(await unheld(spawn({}, S, { cwd: 'C:/w' }))).toBe('started')
     expect(spawnPty).toHaveBeenCalledTimes(1)
     expect(beginSpawnPreparation).not.toHaveBeenCalled()
-    expect(lookup.waits).toBe(0)
+    expect(lookup.waits).toEqual([])
   })
 })

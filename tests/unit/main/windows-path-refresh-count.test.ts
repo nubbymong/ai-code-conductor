@@ -1,7 +1,9 @@
 // 2.1.1-beta.3 (F26): every check the user asks
 // for brings this process's PATH up to date first (windows-path-refresh.ts
 // refreshWindowsPath), and each such call is counted
-// (windows-programs.ts noteWindowsPathRefresh). That count is the only signal
+// (windows-programs.ts noteWindowsPathRefresh), as is the one at start
+// (claude-start-lookup.ts), and a refresh that ends having added folders is
+// counted once more. That count is the only signal
 // that makes the PowerShell profile's kept answer (claude-cli-probe.ts) be
 // asked again, so Check again after a profile edit finds the change without
 // a restart, while the 30 s CLI check never runs the profile by itself.
@@ -71,7 +73,7 @@ afterEach(() => {
   else process.env.PATH = savedPath
 })
 
-describe('a check the user asks for is counted, and only that makes the PowerShell profile be asked again', () => {
+describe('each PATH refresh is counted (the one at start, a check the user asks for, once more when it added folders), and only that count makes the PowerShell profile be asked again', () => {
   // Mutation to prove this can fail: drop the noteWindowsPathRefresh() call
   // from refreshWindowsPath.
   it('each refreshWindowsPath call counts once: one that joins a refresh already running too, and off Windows too', async () => {
