@@ -37,6 +37,7 @@ vi.mock('../../src/main/account-profiles', async () => {
     mkdirSecure: (dir: string) => fs.mkdirSync(dir, { recursive: true }),
     hardenCredentialDir: vi.fn(),
     hardenCredentialFile: vi.fn(),
+    forgetHardenedDir: vi.fn(),
   }
 })
 
@@ -51,6 +52,7 @@ vi.mock('../../src/main/debug-logger', () => ({
 
 import * as fs from 'fs'
 import { logError } from '../../src/main/debug-logger'
+import { forgetHardenedDir } from '../../src/main/account-profiles'
 
 // Now import config-manager — its deps are mocked
 const configManagerModule = await import('../../src/main/config-manager')
@@ -165,6 +167,29 @@ describe('config-manager', () => {
       mockedFs.writeFileSync.mockImplementation(() => { throw new Error('disk full') })
       const result = writeConfig('settings', {})
       expect(result).toBe(false)
+    })
+
+    // aicc_planning #301: CONFIG's owner-only verdict is remembered for a few
+    // minutes so a config write starts no program; a write into it that failed
+    // drops that memory, so the next write checks the folder again.
+    it('a failed write forgets what was remembered about CONFIG, and a write that succeeds forgets nothing (#301)', () => {
+      mockedFs.existsSync.mockReturnValue(true)
+      mockedFs.writeFileSync.mockImplementation(() => undefined)
+      expect(writeConfig('settings', { x: 1 })).toBe(true)
+      expect(forgetHardenedDir).not.toHaveBeenCalled()
+
+      mockedFs.writeFileSync.mockImplementation(() => { throw new Error('EPERM: operation not permitted') })
+      expect(writeConfig('settings', { x: 2 })).toBe(false)
+      expect(forgetHardenedDir).toHaveBeenCalledTimes(1)
+      expect(forgetHardenedDir).toHaveBeenCalledWith(getConfigDir())
+    })
+
+    it('a failed write still answers false when forgetting throws: nothing in its failure path may throw (#301)', () => {
+      mockedFs.existsSync.mockReturnValue(true)
+      mockedFs.writeFileSync.mockImplementation(() => { throw new Error('disk full') })
+      vi.mocked(forgetHardenedDir).mockImplementationOnce(() => { throw new Error('no such export') })
+      expect(writeConfig('settings', {})).toBe(false)
+      expect(logError).toHaveBeenCalledWith(expect.stringContaining('Failed to write settings'))
     })
 
     it('writes the excalidraw key to excalidraw.json (regression: key was absent from CONFIG_FILES, so every draw-mode autosave failed)', () => {

@@ -34,6 +34,7 @@ import {
   _icaclsCallsForTest,
   _resetAclStateForTest,
   aclRemovalProvesUnnameable,
+  forgetHardenedDir,
   hardenCredentialDir,
   hardenDirAclWindows,
   windowsAclEntries,
@@ -543,8 +544,13 @@ describe.runIf(IS_WINDOWS)('hardenCredentialDir on Windows applies a real DACL',
       // attempts rather than requiring the first to win the race. A module that
       // never learns — the bug this exists for — never settles, whatever the
       // budget, so this does not soften the assertion.
+      //
+      // The read-first skip is what this measures, so what the step remembers
+      // about the folder (aicc_planning #301: a folder proven owner-only is not
+      // read again for ten minutes) is dropped before each attempt.
       let cost = 0
       for (let attempt = 0; attempt < 3 && cost !== 1; attempt++) {
+        forgetHardenedDir(dir)
         const before = _icaclsCallsForTest()
         expect(hardenCredentialDir(dir)).toBe(true)
         cost = _icaclsCallsForTest() - before
@@ -555,6 +561,16 @@ describe.runIf(IS_WINDOWS)('hardenCredentialDir on Windows applies a real DACL',
       ).toBe(1)
       expect(aces(dir), 'and a settled call must not change the DACL').toEqual(settled)
 
+      // That one read proved the folder owner-only, so the calls after it start
+      // no icacls at all (aicc_planning #301), by the same folder under another
+      // letter case and a trailing separator too. This is the cost
+      // ensureConfigDir pays on a config write now: none.
+      const beforeRemembered = _icaclsCallsForTest()
+      expect(hardenCredentialDir(dir)).toBe(true)
+      expect(hardenCredentialDir(dir.toUpperCase() + path.sep)).toBe(true)
+      expect(_icaclsCallsForTest() - beforeRemembered, 'a folder proven owner-only starts no icacls').toBe(0)
+      expect(aces(dir), 'and a remembered call must not change the DACL').toEqual(settled)
+
       // A negative control on the same real entries: the settled DACL is NOT
       // recognised against another machine's pair, so the skip is an equality
       // against what THIS machine observed and not a shape.
@@ -564,8 +580,10 @@ describe.runIf(IS_WINDOWS)('hardenCredentialDir on Windows applies a real DACL',
 
   it('re-hardens a directory that was recreated under a permissive parent', () => {
     // `ensureCanvasPlugin` deletes and recreates its tree, which puts the new
-    // directory back on its parent's ACL. The skip asks the filesystem rather
-    // than remembering, so this is repaired rather than reported done.
+    // directory back on its parent's ACL. What the step remembers about a
+    // folder (aicc_planning #301) is tied to the folder's file identity, not
+    // to its path alone, so the recreated one is read again and repaired
+    // rather than reported done.
     const { dir, broadPrincipal } = dirWithBroadGrant('inherited')
     hardenCredentialDir(dir)
     fs.rmdirSync(dir)
