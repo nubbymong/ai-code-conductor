@@ -31,6 +31,9 @@ import { composeProviders, flushPendingProviderCliKills } from './providers/comp
 import { initAccountRegistry, reconcileLegacyAccountStores, getConsumerLeases } from './provider-account-registry'
 import { initProviderAccounts, getAccountsService, runStartupProviderMigrations, followResourcesDirectory, discoverProvidersAtStart, providerOnNow } from './provider-accounts'
 import { probeClaudeCliVersion, setClaudeCliProbeAllowed } from './claude-cli-version'
+import { startClaudeLookup } from './claude-start-lookup'
+import { findClaudeOnWindowsAsync } from './claude-cli-probe'
+import { refreshWindowsPath } from './windows-path-refresh'
 import { providerProbeRefusal } from './provider-launch-gate'
 import { providerUseWithoutLease } from './provider-in-use'
 import { registerDebugHandlers, registerAccountLogFolderHandlers } from './ipc/debug-handlers'
@@ -537,7 +540,15 @@ if (!gotTheLock) {
     // rule, wired in here because that rule's graph imports the probe's
     // importers (claude-cli-version.ts, setClaudeCliProbeAllowed).
     setClaudeCliProbeAllowed(() => providerProbeRefusal('claude') === null)
-    void probeClaudeCliVersion()
+    // On Windows the probe comes after this process's PATH is brought up to
+    // date from the registry and Claude Code is looked for once; a launch
+    // asked for meanwhile (a tab restored at start) waits for those two,
+    // bounded (claude-start-lookup.ts). Elsewhere the probe runs at once.
+    startClaudeLookup({
+      refreshPath: refreshWindowsPath,
+      lookup: () => findClaudeOnWindowsAsync(process.env),
+      versionProbe: () => { void probeClaudeCliVersion() },
+    })
     // Usage track MP3, D5: the Account usage page reads nothing of Claude Code
     // (no credential, refresh or request) while it is switched off, by the
     // same rule. Set here, before the usage handlers are registered below.

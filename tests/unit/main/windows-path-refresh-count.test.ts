@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   holdRegistry: false,
   registryReads: 0,
   registryRelease: [] as Array<() => void>,
+  /** The user PATH the registry holds when the read answers, or null for none. */
+  registryUser: null as string | null,
   profileCalls: 0,
   profileAnswer: null as string | null,
 }))
@@ -23,9 +25,9 @@ vi.mock('../../../src/main/windows-registry-path', async (importOriginal) => {
     ...(await importOriginal<typeof import('../../../src/main/windows-registry-path')>()),
     readRegistryPaths: (): Promise<Values> => {
       h.registryReads += 1
-      const none: Values = { machine: null, user: null }
-      if (!h.holdRegistry) return Promise.resolve(none)
-      return new Promise<Values>((resolve) => { h.registryRelease.push(() => resolve(none)) })
+      const values = (): Values => ({ machine: null, user: h.registryUser ? { kind: 'String', data: h.registryUser } : null })
+      if (!h.holdRegistry) return Promise.resolve(values())
+      return new Promise<Values>((resolve) => { h.registryRelease.push(() => resolve(values())) })
     },
   }
 })
@@ -45,7 +47,7 @@ vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: (
 
 const { refreshWindowsPath, afterPathRefresh } = await import('../../../src/main/windows-path-refresh')
 const { windowsPathRefreshCount } = await import('../../../src/main/windows-programs')
-const { probeClaudeCli, findClaudeOnWindowsAsync, setClaudeProfileLookupAllowed, _resetClaudeCliProbeForTest, _resetClaudeWindowsLookupForTest } =
+const { probeClaudeCli, findClaudeOnWindowsAsync, keptClaudeFromPowerShellProfile, setClaudeProfileLookupAllowed, _resetClaudeCliProbeForTest, _resetClaudeWindowsLookupForTest } =
   await import('../../../src/main/claude-cli-probe')
 
 const FNM = 'C:\\Users\\me\\AppData\\Local\\fnm_multishells\\1234_1700000000\\claude.cmd'
@@ -56,6 +58,7 @@ beforeEach(() => {
   h.holdRegistry = false
   h.registryReads = 0
   h.registryRelease = []
+  h.registryUser = null
   h.profileCalls = 0
   h.profileAnswer = null
   _resetClaudeCliProbeForTest()
@@ -102,5 +105,36 @@ describe('a check the user asks for is counted, and only that makes the PowerShe
     h.profileAnswer = FNM
     expect(await afterPathRefresh(probeClaudeCli)).toMatchObject({ installed: true, path: FNM })
     expect(h.profileCalls).toBe(2)
+  })
+
+  // The refresh also runs at start now (claude-start-lookup.ts, regression
+  // since #638), while other lookups run. A profile question asked while the
+  // registry is read starts PowerShell on the PATH from before, so its miss
+  // says nothing about the PATH the refresh then builds.
+  // Mutation to prove this can fail: count the call only, not the folders added.
+  it('a miss kept from a question asked while a refresh ran is asked again once that refresh added folders; one that added none keeps it', async () => {
+    const LOCAL_BIN = 'C:\\Users\\me\\.local\\bin'
+    setClaudeProfileLookupAllowed(() => true)
+    process.env.PATH = 'C:\\Windows\\System32'
+    h.holdRegistry = true
+    const refresh = refreshWindowsPath()
+    expect(await findClaudeOnWindowsAsync(process.env)).toBeNull()
+    expect(h.profileCalls).toBe(1)
+    expect(keptClaudeFromPowerShellProfile(), 'the miss is kept while the refresh runs').toBeNull()
+    h.registryUser = LOCAL_BIN
+    for (const r of h.registryRelease.splice(0)) r()
+    expect(await refresh).toEqual([LOCAL_BIN])
+    expect(keptClaudeFromPowerShellProfile(), 'not reused: the next lookup asks again').toBeUndefined()
+    h.profileAnswer = FNM
+    expect(await findClaudeOnWindowsAsync(process.env)).toBe(FNM)
+    expect(h.profileCalls).toBe(2)
+    // A later refresh that adds nothing: the answer of a question asked while it ran stays.
+    const second = refreshWindowsPath()
+    expect(keptClaudeFromPowerShellProfile(), 'the call itself makes the kept answer stale').toBeUndefined()
+    expect(await findClaudeOnWindowsAsync(process.env)).toBe(FNM)
+    expect(h.profileCalls).toBe(3)
+    for (const r of h.registryRelease.splice(0)) r()
+    expect(await second).toEqual([])
+    expect(keptClaudeFromPowerShellProfile()).toBe(FNM)
   })
 })

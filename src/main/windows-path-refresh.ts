@@ -7,10 +7,11 @@
 // programs started afterwards read, so the running app would not find the
 // tool it just installed. (Anthropic's native Claude Code installer writes
 // no PATH at all: install-folder-path.ts finds that case and offers to add
-// its folder.) Before a check the user asked for (Check again on the setup
-// screen, Check again in Settings and the CLI help, the check after an
-// install ends) main therefore reads the two values Windows builds a new
-// program's PATH from, the system one and then the user's
+// its folder.) Once at start (claude-start-lookup.ts) and before a check the
+// user asked for (Check again on the setup screen, Check again in Settings
+// and the CLI help, the check after an install ends) main therefore reads
+// the two values Windows builds a new program's PATH from, the system one
+// and then the user's
 // (windows-registry-path.ts: Windows PowerShell by its full path, every
 // character intact), expands their %VARIABLES% against this process's
 // environment, and APPENDS to this process's PATH each folder it does not
@@ -125,16 +126,21 @@ let inFlight: Promise<string[]> | null = null
 /** This process's PATH brought up to date with the registry's (Windows only;
  *  never throws). Callers that ask while a refresh runs share it. One log
  *  line when folders were added, and one when the registry could not be read.
- *  Every call is a check the user asked for, and is counted
- *  (noteWindowsPathRefresh), so a lookup that keeps its answer for the run
- *  (claude-cli-probe.ts, the PowerShell profile's) asks again after it. */
+ *  Every call is the one at start or a check the user asked for, and is
+ *  counted (noteWindowsPathRefresh), so a lookup that keeps its answer for
+ *  the run (claude-cli-probe.ts, the PowerShell profile's) asks again after
+ *  it. A refresh that added folders is counted once more when it ends: an
+ *  answer of a question asked while it ran is for the PATH from before. */
 export function refreshWindowsPath(): Promise<string[]> {
   noteWindowsPathRefresh()
   if (process.platform !== 'win32') return Promise.resolve([])
   if (inFlight) return inFlight
   const run = refreshWindowsPathWith(refreshWindowsPathDeps())
     .then((added) => {
-      if (added.length > 0) logInfo(`[path] Added to PATH from the registry: ${added.join(';')}`)
+      if (added.length > 0) {
+        noteWindowsPathRefresh()
+        logInfo(`[path] Added to PATH from the registry: ${added.join(';')}`)
+      }
       return added
     }, () => [] as string[])
     .finally(() => { inFlight = null })

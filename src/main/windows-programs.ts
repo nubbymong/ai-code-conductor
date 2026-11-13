@@ -333,7 +333,8 @@ export function withFullyQualifiedProgramLookup<T extends Record<string, string 
  *  up to date (windows-path-refresh.ts refreshWindowsPath calls
  *  noteWindowsPathRefresh for each one, for any provider: Check again on the
  *  setup screen or in Settings, a provider's setup page, the check after an
- *  install ends). A lookup that keeps its answer for the run
+ *  install ends), the refresh at start counted too, and one more for each
+ *  refresh that added folders. A lookup that keeps its answer for the run
  *  (claude-cli-probe.ts keeps the PowerShell profile's) asks again once this
  *  count has moved, and never because of a check the app runs by itself. */
 let pathRefreshes = 0
