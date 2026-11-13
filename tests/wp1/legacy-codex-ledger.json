@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "93cfc8339d5ecc7c6188601dddf25cc588ad2eee5ea9bbe4fcbdf80e51309bf5",
-  "manifestHead": "d7848570d9020e17473600eb32fbfc0bb984a203",
+  "manifestPathDigest": "459305e1bdee8a965adbf48efa5ad57df00a11ab11f5bff3740bb8726ca41647",
+  "manifestHead": "229289e8c9b48ab50f85b1a86d22efecefcf0e6c",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -6943,6 +6943,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 PR-level ADR-009 round 1 (B1, row 72) test (tests/unit/main/pty-spawn-restart-pending.test.ts): through the real pty:spawn and pty:kill handlers and the real one-at-a-time rule, with preparations superseded as pty-manager supersedes them, ten Restarts of a Codex tab during a slow account preparation start the session and none is refused as already running; a spawn cancelled by a close counts for nothing (WP1.60, WP1.68)",
       "note": "created by WP2 PR 3 PR-level ADR-009 round 1 (B1); fake ipcMain, pty-manager faked, nothing spawns"
+    },
+    {
+      "path": "tests/unit/main/pty-spawn-waits-for-claude-start-lookup.test.ts",
+      "predicates": [
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new test for the Windows start-up fix (tests/unit/main/pty-spawn-waits-for-claude-start-lookup.test.ts): while the start's PATH refresh and first Claude Code lookup still run, a local Claude Code launch is held as a prepared spawn and starts once they have answered; a close while it waits starts nothing; a launch over SSH, a terminal-only one and a Codex one are not held by it (WP1.68); tests/unit/main/pty-spawn-waits-for-claude-start-lookup.test.ts",
+      "note": "created by the Windows start-up Claude Code lookup fix (regression since #638); its Codex mentions are the launch shape it shows is NOT held, and the accounts stand-in that launch needs"
     },
     {
       "path": "tests/unit/main/pty-spawn-waits-for-refresh.test.ts",
