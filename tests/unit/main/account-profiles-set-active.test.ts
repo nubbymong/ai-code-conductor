@@ -14,6 +14,8 @@ vi.mock('electron', () => ({
 let store: AccountProfile[] = []
 vi.mock('../../../src/main/account-profiles', () => ({
   listProfiles: () => store.map((p) => ({ ...p })),
+  // The read the edits use: the same list, read strictly.
+  readProfilesStrict: () => store.map((p) => ({ ...p })),
   upsertProfile: (p: AccountProfile) => {
     const i = store.findIndex((x) => x.id === p.id)
     if (i >= 0) store[i] = p

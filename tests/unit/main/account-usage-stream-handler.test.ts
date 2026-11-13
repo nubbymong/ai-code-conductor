@@ -56,7 +56,7 @@ vi.mock('../../../src/main/usage/account-usage', () => ({
   fetchAllAccountsUsageStreaming: (cb: (u: AccountUsage) => void, opts?: { shouldContinue?: () => boolean }) => fetchAllAccountsUsageStreaming(cb, opts),
 }))
 vi.mock('../../../src/main/account-profiles', () => ({
-  listProfiles: () => [], upsertProfile: vi.fn(),
+  listProfiles: () => [], readProfilesStrict: () => [], upsertProfile: vi.fn(),
   isValidProfileId: (id: unknown) => typeof id === 'string' && id.length > 0 && id.length <= 128 && /^[a-z0-9][a-z0-9-]*$/.test(id),
   safeTeardownProfile: h.safeTeardownProfile, readProfileAccountEmail: vi.fn(), getProfileConfigDir: vi.fn(),
   createProfile: vi.fn(), captureDetectedAccount: vi.fn(), backupProfileHomeToCanonical: vi.fn(),

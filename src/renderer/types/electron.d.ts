@@ -152,7 +152,8 @@ export interface ElectronAPI {
   }
   accountProfiles: {
     list: () => Promise<import('../../shared/account-types').AccountProfile[]>
-    rename: (id: string, name: string) => Promise<{ ok: boolean }>
+    /** `error`: why nothing was renamed, in words the row can show. */
+    rename: (id: string, name: string) => Promise<{ ok: boolean; error?: string }>
     /** `code: 'in-use'`: a live session runs on the account; `sessions`
      *  names them, `unnamed` counts other holders (P3.2). A removal refused
      *  after its claude.ai sign-in was cleared says `in-use-cleared`. */

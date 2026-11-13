@@ -27,7 +27,7 @@ import { decodeSettingsText } from './settings-text'
 import { realmEnvForProvider, ambientAuthVariablesForProvider, sanitizeManagedSettingsFor } from './providers'
 import { canonicaliseEmail } from '../shared/account-chip-color'
 import { lowerAsciiLetters } from '../shared/profile-id'
-import type { AccountProfile, AccountProfilesConfig } from '../shared/account-types'
+import type { AccountProfile } from '../shared/account-types'
 import type { ProjectGateResult } from '../shared/providers'
 
 // Shared-directory names junctioned from a profile back to the shared root.
@@ -1949,122 +1949,105 @@ function takeReadyHome(home: string): boolean {
 
 function profilesMetaFile(): string { return path.join(getProfilesRoot(), 'profiles.json') }
 
-/** The saved accounts, for callers that only READ: any failure to read or
- *  parse the file is an empty list here. Its result must never be written
- *  back (aicc_planning B1); the writers below read the file strictly. */
-export function listProfiles(): AccountProfile[] {
-  try {
-    const raw = fs.readFileSync(profilesMetaFile(), 'utf8')
-    return (JSON.parse(raw) as AccountProfilesConfig)?.profiles ?? []
-  } catch { return [] }
-}
+/** What the user is told when the accounts list did not read: the file's
+ *  name, never its path. */
+export const PROFILES_UNREADABLE = 'The accounts list (profiles.json) could not be read, so nothing was changed.'
 
 /**
  * profiles.json is there but did not read completely (it could not be opened,
- * is not JSON, or holds no profiles list), so a writer wrote nothing
- * (aicc_planning B1).
+ * is not JSON, or holds no profiles list), so nothing was written.
  *
  * `listProfiles` answers such a read with an empty list, and the three writers
  * (upsertProfile, deleteProfileMeta, setPrimaryProfile) used to save what it
  * gave them: one read that failed while another program held the file, and
  * the next account edit replaced every saved account with the one being
- * edited. A caller the user started lets this reach the window; a start-up or
- * background caller logs it and goes on.
+ * edited. The account handlers answer a user's action with its sentence; a
+ * start-up step skips its work for that start and logs it.
  */
 export class ProfilesUnreadableError extends Error {
-  readonly code = 'PROFILES_UNREADABLE'
-  constructor() {
-    super('The saved accounts list (profiles.json) could not be read, so it was left as it is and this change was not saved.')
-    this.name = 'ProfilesUnreadableError'
-  }
+  constructor() { super(PROFILES_UNREADABLE) }
 }
 
 const isProfileRecord = (v: unknown): v is AccountProfile => !!v && typeof v === 'object' && !Array.isArray(v)
 
-/** profiles.json's whole top level, for a writer: no file is an empty list
- *  (the first write makes the file); anything else that is not a complete
- *  read -- unreadable, not JSON, no profiles list -- is null, never an empty
- *  list. */
-function readProfilesFileForEdit(): Record<string, unknown> | null {
+/** profiles.json's top level as it parsed: the list, and every other key. */
+type ProfilesFile = Record<string, unknown> & { profiles: unknown[] }
+
+/**
+ * The one read of profiles.json, which every reader and writer below goes
+ * through: its whole top level, or null when it did not read completely
+ * (unreadable, not JSON, no profiles list). No file reads as `whenMissing`,
+ * an empty list unless the caller says otherwise (the first write makes the
+ * file). A byte-order mark an editor put before the text is passed over. An
+ * entry of the list may be anything; only the list itself is checked.
+ */
+function readProfilesFile(whenMissing: ProfilesFile | null = { profiles: [] }): ProfilesFile | null {
   let raw: string
   try { raw = fs.readFileSync(profilesMetaFile(), 'utf8') } catch (e) {
-    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? { profiles: [] } : null
+    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? whenMissing : null
   }
   try {
-    const parsed = JSON.parse(raw) as unknown
+    const parsed = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray((parsed as { profiles?: unknown }).profiles)) return null
-    return parsed as Record<string, unknown>
+    return parsed as ProfilesFile
   } catch { return null }
 }
 
-/** Throws ProfilesUnreadableError when a writer would refuse the list as it
- *  is now: for a caller to ask BEFORE a step it could not take back (making
- *  an account's folder, removing one). */
-function assertProfilesWritable(): void {
-  if (readProfilesFileForEdit() === null) throw new ProfilesUnreadableError()
+/** The saved accounts, for callers that only READ: a file that did not read
+ *  completely is an empty list here. A writer never saves this list back; it
+ *  edits the file as `readProfilesFile` gave it. */
+export function listProfiles(): AccountProfile[] {
+  return (readProfilesFile()?.profiles ?? []) as AccountProfile[]
 }
 
-/** The one write the three writers share (aicc_planning B1): the list is
- *  edited only when the file read completely (or is not there yet), every
- *  other top-level key and every entry that is not a profile object goes back
- *  exactly as it was, and a file that did not read is left untouched
- *  (ProfilesUnreadableError). */
-function rewriteProfiles(edit: (entries: unknown[]) => unknown[]): void {
-  const top = readProfilesFileForEdit()
+/** The file as a write would use it, or ProfilesUnreadableError. A caller
+ *  with a step it could not take back (making an account's folder, removing
+ *  one) asks this first and hands the answer to its write, so the list is
+ *  read once and nothing can stop reading between the step and the write. */
+function assertProfilesReadable(): ProfilesFile {
+  const top = readProfilesFile()
   if (!top) throw new ProfilesUnreadableError()
+  return top
+}
+
+/** The one write every edit of the list shares: the list is edited only when
+ *  the file read completely (or is not there yet), every other top-level key
+ *  and every entry that is not a profile object goes back exactly as it was,
+ *  and a file that did not read is left untouched (ProfilesUnreadableError).
+ *  `top` is the file a caller already read; the file as written is returned,
+ *  for a caller with another edit to make from it. */
+function rewriteProfiles(edit: (entries: unknown[]) => unknown[], top: ProfilesFile = assertProfilesReadable()): ProfilesFile {
+  const next = { ...top, profiles: edit(top.profiles) }
   const file = profilesMetaFile()
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  atomicWriteSecure(file, JSON.stringify({ ...top, profiles: edit(top.profiles as unknown[]) }, null, 2))
+  atomicWriteSecure(file, JSON.stringify(next, null, 2))
+  return next
 }
 
-/** A start-up or background step's answer to a writer that refused: an
- *  unreadable list is logged here and the step goes on without that write
- *  (true); any other error is the caller's, as before (false). */
-function loggedProfilesUnreadable(e: unknown, step: string): boolean {
-  if (!(e instanceof ProfilesUnreadableError)) return false
-  logWarn(`[profiles] ${step}: ${e.message}`)
-  return true
-}
+const withProfile = (p: AccountProfile) => (all: unknown[]): unknown[] => [...all.filter((x) => !(isProfileRecord(x) && x.id === p.id)), p]
+const withoutProfile = (id: string) => (all: unknown[]): unknown[] => all.filter((x) => !(isProfileRecord(x) && x.id === id))
 
-export function upsertProfile(p: AccountProfile): void {
-  rewriteProfiles((all) => [...all.filter((x) => !(isProfileRecord(x) && x.id === p.id)), p])
-}
-export function deleteProfileMeta(id: string): void {
-  rewriteProfiles((all) => all.filter((x) => !(isProfileRecord(x) && x.id === id)))
-}
+export function upsertProfile(p: AccountProfile): void { rewriteProfiles(withProfile(p)) }
+export function deleteProfileMeta(id: string): void { rewriteProfiles(withoutProfile(id)) }
 
-/** profiles.json read strictly, for the provider account registry (WP2): no
- *  file is an empty list, and ANY other failure -- unreadable, not JSON, no
- *  profiles array -- is null. Never the `[]` listProfiles returns, which the
- *  registry would read as "every account was removed". */
+/** profiles.json read strictly: no file is an empty list, and a file that did
+ *  not read completely is null. Never the `[]` listProfiles returns, which a
+ *  caller would read as "every account was removed". */
 export function readProfilesStrict(): AccountProfile[] | null {
-  let raw: string
-  try { raw = fs.readFileSync(profilesMetaFile(), 'utf8') } catch (e) {
-    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? [] : null
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<AccountProfilesConfig> | null
-    return Array.isArray(parsed?.profiles) ? parsed.profiles : null
-  } catch { return null }
+  return (readProfilesFile()?.profiles as AccountProfile[] | undefined) ?? null
 }
 
 /** Edit profiles.json in place, and only when it read completely. `edit`
  *  gets copies of the profile OBJECTS and returns whether it changed any;
  *  anything else in the list, and every other key of the file, is written
- *  back exactly as it was. Returns false when the file could not be read
- *  (nothing is written then). */
+ *  back exactly as it was. Returns false when there is no file or it could
+ *  not be read (nothing is written then). */
 export function updateProfilesStrict(edit: (profiles: AccountProfile[]) => boolean): boolean {
-  const file = profilesMetaFile()
-  let top: Record<string, unknown>
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray((parsed as { profiles?: unknown }).profiles)) return false
-    top = parsed as Record<string, unknown>
-  } catch { return false }
-  const isRecord = (v: unknown): v is AccountProfile => !!v && typeof v === 'object' && !Array.isArray(v)
-  const entries = (top.profiles as unknown[]).map((v) => (isRecord(v) ? { ...v } : v))
-  if (!edit(entries.filter(isRecord))) return true
-  atomicWriteSecure(file, JSON.stringify({ ...top, profiles: entries }, null, 2))
+  const top = readProfilesFile(null)
+  if (!top) return false
+  const entries = top.profiles.map((v) => (isProfileRecord(v) ? { ...v } : v))
+  if (!edit(entries.filter(isProfileRecord))) return true
+  atomicWriteSecure(profilesMetaFile(), JSON.stringify({ ...top, profiles: entries }, null, 2))
   return true
 }
 
@@ -2119,14 +2102,9 @@ export function resolveHeadlessProfileHome(preferredProfileId?: string | null): 
   return { home: getProfileConfigDir(id), profileId: id }
 }
 
-/** Create a fresh, EMPTY profile dir + shared junctions + metadata. The account
- *  email is filled in later by readProfileAccountEmail once the user runs /login
- *  under this profile's CLAUDE_CONFIG_DIR. Never copies credentials; never
- *  touches the default ~/.claude. */
-export function createProfile(name?: string): AccountProfile {
-  // Asked first (aicc_planning B1): with a list that cannot be read the new
-  // account could not be saved, so no folder is made for it either.
-  assertProfilesWritable()
+/** A new account's folder and shared junctions, and the record for it. The
+ *  record is not on the list yet: the caller writes it. */
+function makeProfileHome(name?: string): AccountProfile {
   const id = `profile-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`
   // Windows: a new profile takes the home kept ready, made and checked
   // owner-only, so its first sign-in can be written at once; without one its
@@ -2140,7 +2118,7 @@ export function createProfile(name?: string): AccountProfile {
     void prepareReadyHome(rule)
   }
   const trimmed = name?.trim()
-  const profile: AccountProfile = {
+  return {
     id,
     // No auto-name: an account is identified by its email once /login resolves
     // it; the friendly name stays blank until the user sets one (user request
@@ -2149,7 +2127,18 @@ export function createProfile(name?: string): AccountProfile {
     accountEmail: '',
     createdAt: Date.now(),
   }
-  upsertProfile(profile)
+}
+
+/** Create a fresh, EMPTY profile dir + shared junctions + metadata. The account
+ *  email is filled in later by readProfileAccountEmail once the user runs /login
+ *  under this profile's CLAUDE_CONFIG_DIR. Never copies credentials; never
+ *  touches the default ~/.claude. */
+export function createProfile(name?: string): AccountProfile {
+  // The list is read before anything is made, and the write uses that read:
+  // with a list that cannot be read no folder is made for the account.
+  const top = assertProfilesReadable()
+  const profile = makeProfileHome(name)
+  rewriteProfiles(withProfile(profile), top)
   return profile
 }
 
@@ -2863,8 +2852,17 @@ export function resyncProfileSettings(id: string): void {
  * re-runs /login once. Only ever touches files UNDER the profile dir.
  */
 export function migrateProfilesToHomeLayout(): void {
-  for (const p of listProfiles()) {
-    if (!isValidProfileId(p.id)) continue
+  // The list is read once, before any sign-in file is removed, and every
+  // email reset below is written from that read. With a list that cannot be
+  // read nothing is migrated: every profile keeps its old layout for this
+  // start and the next start migrates it.
+  let top = readProfilesFile()
+  if (!top) {
+    logWarn(`[profiles] home-layout migration skipped: ${PROFILES_UNREADABLE}`)
+    return
+  }
+  for (const p of top.profiles as AccountProfile[]) {
+    if (!isValidProfileId(p?.id)) continue // also an entry that is not a profile object
     const home = getProfileConfigDir(p.id)
     if (!fs.existsSync(home)) continue
     if (fs.existsSync(path.join(home, '.claude'))) continue // already new layout
@@ -2873,9 +2871,7 @@ export function migrateProfilesToHomeLayout(): void {
       try { fs.unlinkSync(path.join(home, f)) } catch { /* absent */ }
     }
     try { setupProfileLinks(p.id) } catch { /* best-effort; leaves it setup-incomplete */ }
-    // A start-up step: a list that cannot be read just now is logged, and the
-    // rest of the profiles are still migrated.
-    try { upsertProfile({ ...p, accountEmail: '' }) } catch (e) { if (!loggedProfilesUnreadable(e, 'home-layout migration')) throw e }
+    top = rewriteProfiles(withProfile({ ...p, accountEmail: '' }), top)
   }
 }
 
@@ -2896,7 +2892,8 @@ function safeTeardown(dir: string): void {
   fs.rmdirSync(dir)
 }
 
-export function safeTeardownProfile(id: string): void {
+/** One account's folder, checked: exactly <profilesRoot>/<id>, or a throw. */
+function profileDirForTeardown(id: string): string {
   if (!isValidProfileId(id)) throw new Error(`refusing teardown: invalid profile id ${JSON.stringify(id)}`)
   const dir = getProfileConfigDir(id)
   // Defense-in-depth: the dir MUST be exactly <profilesRoot>/<id>. A validated
@@ -2904,16 +2901,26 @@ export function safeTeardownProfile(id: string): void {
   if (path.resolve(dir) !== path.resolve(getProfilesRoot(), id)) {
     throw new Error('refusing teardown: path escapes the profiles root')
   }
-  // Asked first (aicc_planning B1): with a list that cannot be read the
-  // account could not be taken off it, so its folder is not removed either
-  // and the account stays whole, to be removed again.
-  assertProfilesWritable()
-  if (fs.existsSync(dir)) {
-    // Never recurse a reparse point AS THE ROOT (would walk into a junction target).
-    if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('refusing teardown: profile dir is a reparse point')
-    safeTeardown(dir)
-  }
-  deleteProfileMeta(id)
+  return dir
+}
+
+/** Remove an account's folder (junction links only, never their targets).
+ *  The list is not touched. */
+function removeProfileFolder(dir: string): void {
+  if (!fs.existsSync(dir)) return
+  // Never recurse a reparse point AS THE ROOT (would walk into a junction target).
+  if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('refusing teardown: profile dir is a reparse point')
+  safeTeardown(dir)
+}
+
+export function safeTeardownProfile(id: string): void {
+  const dir = profileDirForTeardown(id)
+  // The list is read before the folder is removed, and the write uses that
+  // read: with a list that cannot be read the account stays whole, folder and
+  // entry, to be removed again.
+  const top = assertProfilesReadable()
+  removeProfileFolder(dir)
+  rewriteProfiles(withoutProfile(id), top)
 }
 
 // ---------------------------------------------------------------------------
@@ -3086,7 +3093,11 @@ export function captureGlobalLogin(name?: string): AccountProfile | null {
   let credentials: string | undefined
   try { credentials = fs.readFileSync(path.join(sharedRoot(), '.credentials.json'), 'utf8') } catch { credentials = undefined }
 
-  const profile = createProfile(name)
+  // The folder and the copies first, the list once at the end, written from
+  // the read made here. A list that cannot be read throws before anything is
+  // made (ProfilesUnreadableError).
+  const top = assertProfilesReadable()
+  const profile = makeProfileHome(name)
   try {
     writeCanonicalIdentity(profile.id, { claudeJson, credentials })
     // Also seed the per-account-home layout the spawn reads (USERPROFILE=<profileDir>):
@@ -3099,13 +3110,12 @@ export function captureGlobalLogin(name?: string): AccountProfile | null {
       writeCredentialFile(path.join(claudeDir, '.credentials.json'), credentials)
     }
     const updated: AccountProfile = { ...profile, accountEmail: email, name: name?.trim() || '' }
-    upsertProfile(updated)
+    rewriteProfiles(withProfile(updated), top)
     return updated
-  } catch (e) {
-    // A start-up step: an accounts list that stopped reading is said in the log.
-    loggedProfilesUnreadable(e, 'capturing the global sign-in')
-    // capture failed mid-write: don't leave a dangling empty profile
-    try { safeTeardownProfile(profile.id) } catch { /* best-effort */ }
+  } catch {
+    // The account never reached the list, so only the folder made above (and
+    // the copy of the sign-in in it) is removed.
+    try { removeProfileFolder(profileDirForTeardown(profile.id)) } catch { /* best-effort */ }
     return null
   }
 }
@@ -3115,7 +3125,7 @@ export function captureGlobalLogin(name?: string): AccountProfile | null {
  *  files only; never touches the real home. */
 export function migrateProfilesToCanonicalLayout(): void {
   for (const p of listProfiles()) {
-    if (!isValidProfileId(p.id)) continue
+    if (!isValidProfileId(p?.id)) continue // also an entry that is not a profile object
     const idDir = getAccountIdentityDir(p.id)
     if (fs.existsSync(path.join(idDir, '.claude.json'))) continue // already migrated
     const home = getProfileConfigDir(p.id)
@@ -3134,11 +3144,12 @@ export function migrateProfilesToCanonicalLayout(): void {
  *  should display its email instead. Clears that placeholder on profiles that
  *  have a real account email (an in-progress add-account with no email keeps it). */
 export function healPlaceholderNames(): void {
-  for (const p of listProfiles()) {
-    if (!(p.accountEmail && p.name === 'New account')) continue
-    // A start-up step: a list that cannot be read just now is logged, and the
-    // name is healed at a later start.
-    try { upsertProfile({ ...p, name: '' }) } catch (e) { if (!loggedProfilesUnreadable(e, 'placeholder-name heal')) throw e }
+  // Read once, and each heal is written from that read. A list that cannot
+  // be read is left alone; a later start heals the names.
+  let top = readProfilesFile()
+  if (!top) return
+  for (const p of top.profiles as AccountProfile[]) {
+    if (p?.accountEmail && p.name === 'New account') top = rewriteProfiles(withProfile({ ...p, name: '' }), top)
   }
 }
 
@@ -3465,7 +3476,9 @@ export function captureDetectedAccount(profileId: string, name?: string): Accoun
   if (!email) return null
   let credentials: string | undefined
   try { credentials = fs.readFileSync(path.join(home, '.claude', '.credentials.json'), 'utf8') } catch { credentials = undefined }
-  const np = createProfile(name)
+  // As captureGlobalLogin: folder and copies first, the list once at the end.
+  const top = assertProfilesReadable()
+  const np = makeProfileHome(name)
   try {
     writeCanonicalIdentity(np.id, { claudeJson, credentials })
     const npHome = getProfileConfigDir(np.id)
@@ -3476,13 +3489,11 @@ export function captureDetectedAccount(profileId: string, name?: string): Accoun
       writeCredentialFile(path.join(cd, '.credentials.json'), credentials)
     }
     const updated: AccountProfile = { ...np, accountEmail: email }
-    upsertProfile(updated)
+    rewriteProfiles(withProfile(updated), top)
     return updated
-  } catch (e) {
-    // The answer stays "nothing captured"; an accounts list that stopped
-    // reading is said in the log.
-    loggedProfilesUnreadable(e, 'capturing the detected account')
-    try { safeTeardownProfile(np.id) } catch { /* best-effort */ }
+  } catch {
+    // Never listed, so only the folder made above is removed.
+    try { removeProfileFolder(profileDirForTeardown(np.id)) } catch { /* best-effort */ }
     return null
   }
 }

@@ -1,12 +1,14 @@
-// [host] aicc_planning B1 (from #307): profiles.json is never written back from
-// a failed read. The three writers of the saved accounts list (upsertProfile,
+// [host] profiles.json is never written back from a failed read. The three
+// writers of the saved accounts list (upsertProfile,
 // deleteProfileMeta, setPrimaryProfile) used to read it through listProfiles,
 // which answers ANY failure with an empty list, and then saved what they were
 // given: one read that failed while another program held the file, and the
 // next account edit replaced every saved account with the one being edited.
 // They now read strictly: no file is an empty list (the file is made), a file
 // that did not read completely is left byte for byte as it is and the writer
-// throws ProfilesUnreadableError, and every other top-level key is kept.
+// throws ProfilesUnreadableError, and every other top-level key is kept. A
+// caller with a step it cannot take back reads the list once, before the step,
+// and writes from that read, so nothing can stop reading in between.
 //
 // Host-safe: the writers only read and write profiles.json, here in a temp
 // folder of the test's own. Every program start is refused, no link is made
@@ -30,10 +32,12 @@ vi.mock('../../../src/main/debug-logger', async (importOriginal) => {
 })
 
 import {
-  _setRootsForTest, getProfilesRoot, getProfileConfigDir, listProfiles, readProfilesStrict,
-  upsertProfile, deleteProfileMeta, setPrimaryProfile, createProfile, safeTeardownProfile,
-  healPlaceholderNames, ProfilesUnreadableError,
+  _setRootsForTest, getProfilesRoot, getProfileConfigDir, listProfiles, readProfilesStrict, updateProfilesStrict,
+  upsertProfile, deleteProfileMeta, setPrimaryProfile, createProfile, safeTeardownProfile, captureGlobalLogin,
+  healPlaceholderNames, migrateProfilesToHomeLayout, migrateProfilesToCanonicalLayout,
+  ProfilesUnreadableError, PROFILES_UNREADABLE,
 } from '../../../src/main/account-profiles'
+import { seedProfiles, failProfileReads } from './profiles-file-helpers'
 import type { AccountProfile } from '../../../src/shared/account-types'
 
 const A: AccountProfile = { id: 'profile-a1', name: 'Home', accountEmail: 'a@example.com', createdAt: 1, isPrimary: true }
@@ -60,24 +64,8 @@ afterEach(() => {
   tmp = ''
 })
 
-/** profiles.json with `text` in it, and those bytes. */
-function seed(text: string): Buffer {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, text)
-  return realRead(file)
-}
-
-/** Every read of profiles.json from now on fails as a file another program
- *  holds; every other read is the real one. `passFirst` reads still succeed. */
-function failReadsOfProfiles(code: string, passFirst = 0): void {
-  let passed = 0
-  vi.spyOn(fs, 'readFileSync').mockImplementation(((p: unknown, ...rest: unknown[]) => {
-    if (typeof p === 'string' && path.resolve(p) === path.resolve(file) && passed++ >= passFirst) {
-      throw Object.assign(new Error(`${code}: simulated, open '${p}'`), { code })
-    }
-    return (realRead as (...a: unknown[]) => unknown)(p, ...rest)
-  }) as typeof fs.readFileSync)
-}
+const seed = (text: string): Buffer => seedProfiles(file, text)
+const failReadsOfProfiles = (code: string, after: 'now' | 'after-one-read' = 'now'): void => failProfileReads(file, code, after)
 
 /** The file is exactly `before`, and nothing was left beside it. */
 function expectUntouched(before: Buffer): void {
@@ -98,12 +86,12 @@ const WRITERS: Array<[string, () => void]> = [
   ['setPrimaryProfile', () => setPrimaryProfile(B.id)],
 ]
 
-describe.each(WRITERS)('%s never writes profiles.json back from a failed read (B1)', (_name, write) => {
+describe.each(WRITERS)('%s never writes profiles.json back from a failed read', (_name, write) => {
   it.each(['EBUSY', 'EPERM', 'EACCES'])('a read that fails with %s: the named error, and the two saved accounts stay byte for byte', (code) => {
     const before = seed(TWO)
     failReadsOfProfiles(code)
     const thrown = caughtFrom(write)
-    // The file first: this is the loss the ticket is about.
+    // The file first: losing the saved accounts is what this guards.
     expectUntouched(before)
     expect(listProfiles().map((p) => p.id)).toEqual([A.id, B.id])
     expect(thrown).toBeInstanceOf(ProfilesUnreadableError)
@@ -122,20 +110,51 @@ describe.each(WRITERS)('%s never writes profiles.json back from a failed read (B
     expect(thrown).toBeInstanceOf(ProfilesUnreadableError)
   })
 
-  it('the error names itself and says the change was not saved', () => {
+  it('the error is one fixed sentence: it names the file, never its path, and says nothing was changed', () => {
     seed('{ not json')
-    let caught: unknown
-    try { write() } catch (e) { caught = e }
+    const caught = caughtFrom(write)
     expect(caught).toBeInstanceOf(ProfilesUnreadableError)
     expect(caught).toBeInstanceOf(Error)
-    expect((caught as ProfilesUnreadableError).name).toBe('ProfilesUnreadableError')
-    expect((caught as ProfilesUnreadableError).code).toBe('PROFILES_UNREADABLE')
-    expect((caught as Error).message).toMatch(/could not be read/)
-    expect((caught as Error).message).toMatch(/not saved/)
+    expect((caught as Error).message).toBe(PROFILES_UNREADABLE)
+    expect(PROFILES_UNREADABLE).toBe('The accounts list (profiles.json) could not be read, so nothing was changed.')
+    expect(PROFILES_UNREADABLE).not.toContain(tmp)
   })
 })
 
-describe('the three writers on a file that reads (B1)', () => {
+describe('one parser for every reader and writer of the list', () => {
+  const BOM = String.fromCharCode(0xfeff)
+
+  it('a byte-order mark before the text is passed over: the list reads, and a writer edits it', () => {
+    seed(BOM + TWO)
+    expect(listProfiles().map((p) => p.id)).toEqual([A.id, B.id])
+    expect(readProfilesStrict()?.map((p) => p.id)).toEqual([A.id, B.id])
+    upsertProfile(C)
+    expect(updateProfilesStrict((all) => { all[0].name = 'Edited'; return true })).toBe(true)
+    expect(listProfiles().map((p) => `${p.id}:${p.name}`)).toEqual([`${A.id}:Edited`, `${B.id}:Work`, `${C.id}:New`])
+  })
+
+  it.each([
+    ['cut short', TWO.slice(0, TWO.length - 40)],
+    ['empty', ''],
+    ['not an object', '[]'],
+    ['with a profiles key that is not a list', JSON.stringify({ profiles: { [A.id]: A } })],
+  ])('a file that is %s: an empty list to a reader, null to the strict read, false to the strict edit, untouched', (_what, text) => {
+    const before = seed(text)
+    expect(listProfiles()).toEqual([])
+    expect(readProfilesStrict()).toBeNull()
+    expect(updateProfilesStrict(() => true)).toBe(false)
+    expectUntouched(before)
+  })
+
+  it('no file: an empty list to both reads, and the strict edit answers false without making one', () => {
+    expect(listProfiles()).toEqual([])
+    expect(readProfilesStrict()).toEqual([])
+    expect(updateProfilesStrict(() => true)).toBe(false)
+    expect(fs.existsSync(file)).toBe(false)
+  })
+})
+
+describe('the three writers on a file that reads', () => {
   it('no file yet is an empty list: upsertProfile makes it, with the one account', () => {
     expect(fs.existsSync(file)).toBe(false)
     upsertProfile(C)
@@ -192,7 +211,7 @@ describe('the three writers on a file that reads (B1)', () => {
   })
 })
 
-describe('callers of the writers, with a list that cannot be read (B1)', () => {
+describe('callers of the writers, with a list that cannot be read', () => {
   it('createProfile throws the named error before it makes anything: no folder, no link, the file untouched', () => {
     const before = seed('{ "profiles": [ {"id": "profile-a1"')
     expect(() => createProfile('Another')).toThrow(ProfilesUnreadableError)
@@ -220,17 +239,40 @@ describe('callers of the writers, with a list that cannot be read (B1)', () => {
     expect(readProfilesStrict()?.map((p) => p.id)).toEqual([A.id])
   })
 
-  it('a start-up step (healPlaceholderNames) logs it once per write and goes on: nothing thrown, nothing written', () => {
-    const before = seed(JSON.stringify({ profiles: [{ ...A, name: 'New account' }, { ...B, name: 'New account' }] }, null, 2))
-    // Its own read of the list succeeds; each writer's read after that fails.
-    failReadsOfProfiles('EBUSY', 1)
+  it('safeTeardownProfile reads the list once: a list that stops reading after that read cannot stop the removal half-way', () => {
+    seed(TWO)
+    const home = getProfileConfigDir(B.id)
+    fs.mkdirSync(home, { recursive: true })
+    fs.writeFileSync(path.join(home, 'gone.txt'), 'x')
+    failReadsOfProfiles('EBUSY', 'after-one-read')
+    safeTeardownProfile(B.id)
+    vi.mocked(fs.readFileSync).mockRestore()
+    expect(fs.existsSync(home)).toBe(false)
+    expect(readProfilesStrict()?.map((p) => p.id)).toEqual([A.id])
+  })
+
+  it('captureGlobalLogin throws the named error before it makes anything: no account folder, the file untouched', () => {
+    const before = seed('{ "profiles": [ {"id": "profile-a1"')
+    // A global sign-in to capture, beside the shared folder.
+    fs.mkdirSync(path.join(tmp, 'shared'), { recursive: true })
+    fs.writeFileSync(path.join(tmp, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'me@example.com' } }))
+    expect(() => captureGlobalLogin()).toThrow(ProfilesUnreadableError)
+    expectUntouched(before)
+    expect(vi.mocked(fs.symlinkSync)).not.toHaveBeenCalled()
+  })
+
+  it('healPlaceholderNames with a list that cannot be read: nothing thrown, nothing written', () => {
+    const before = seed(JSON.stringify({ profiles: [{ ...A, name: 'New account' }] }).slice(0, -3))
     expect(() => healPlaceholderNames()).not.toThrow()
     expectUntouched(before)
-    expect(logs.warn).toHaveLength(2)
-    for (const line of logs.warn) {
-      expect(line).toMatch(/^\[profiles\] placeholder-name heal: /)
-      expect(line).toMatch(/could not be read/)
-    }
+  })
+
+  it('healPlaceholderNames reads the list once: every name is healed although the list stops reading after that read', () => {
+    seed(JSON.stringify({ profiles: [{ ...A, name: 'New account' }, { ...B, name: 'New account' }] }, null, 2))
+    failReadsOfProfiles('EBUSY', 'after-one-read')
+    expect(() => healPlaceholderNames()).not.toThrow()
+    vi.mocked(fs.readFileSync).mockRestore()
+    expect(listProfiles().map((p) => `${p.id}:${p.name}`)).toEqual([`${A.id}:`, `${B.id}:`])
   })
 
   it('healPlaceholderNames still heals when the list reads, and an error that is not this one is still the caller\'s', () => {
@@ -242,5 +284,56 @@ describe('callers of the writers, with a list that cannot be read (B1)', () => {
     seed(JSON.stringify({ profiles: [{ ...A, name: 'New account' }] }))
     vi.spyOn(fs, 'mkdirSync').mockImplementation(() => { throw Object.assign(new Error('ENOSPC: simulated'), { code: 'ENOSPC' }) })
     expect(() => healPlaceholderNames()).toThrow(/ENOSPC/)
+  })
+})
+
+describe('the home-layout migration and the accounts list', () => {
+  /** An account on the old layout: a home holding its sign-in files and no .claude folder. */
+  function oldLayoutHome(id: string): string {
+    const home = getProfileConfigDir(id)
+    fs.mkdirSync(home, { recursive: true })
+    fs.writeFileSync(path.join(home, '.claude.json'), '{}')
+    fs.writeFileSync(path.join(home, '.credentials.json'), '{}')
+    return home
+  }
+  const signInFiles = (home: string) => ['.claude.json', '.credentials.json'].filter((f) => fs.existsSync(path.join(home, f)))
+
+  it.each([
+    ['a read that fails', (text: string) => { const b = seed(text); failReadsOfProfiles('EBUSY'); return b }],
+    ['a file cut short', (text: string) => seed(text.slice(0, -5))],
+  ])('%s: nothing is migrated for this start, no sign-in file is removed, and the log says so once', (_what, arrange) => {
+    const homes = [oldLayoutHome(A.id), oldLayoutHome(B.id)]
+    const before = arrange(TWO)
+    expect(() => migrateProfilesToHomeLayout()).not.toThrow()
+    expect(realRead(file).equals(before)).toBe(true)
+    for (const home of homes) {
+      expect(signInFiles(home)).toEqual(['.claude.json', '.credentials.json'])
+      expect(fs.existsSync(path.join(home, '.claude'))).toBe(false)
+    }
+    expect(logs.warn).toEqual([`[profiles] home-layout migration skipped: ${PROFILES_UNREADABLE}`])
+  })
+
+  it('reads the list once: every email reset is saved although the list stops reading after that read', () => {
+    const homes = [oldLayoutHome(A.id), oldLayoutHome(B.id)]
+    seed(TWO)
+    // The links are best-effort in this step; none is made here.
+    vi.spyOn(fs, 'linkSync').mockImplementation(() => { throw new Error('no link in this test') })
+    failReadsOfProfiles('EBUSY', 'after-one-read')
+    expect(() => migrateProfilesToHomeLayout()).not.toThrow()
+    vi.mocked(fs.readFileSync).mockRestore()
+    for (const home of homes) expect(signInFiles(home)).toEqual([])
+    expect(listProfiles().map((p) => `${p.id}:${p.accountEmail}`).sort()).toEqual([`${A.id}:`, `${B.id}:`])
+    expect(logs.warn).toEqual([])
+  })
+})
+
+describe('an entry of the list that is not a profile object is passed over by the start-up steps', () => {
+  it('the two migrations and the name heal do not throw on a null or a stray string, and still do their work', () => {
+    seed(JSON.stringify({ profiles: [null, 'stray', 7, { ...A, name: 'New account' }] }))
+    expect(() => migrateProfilesToCanonicalLayout()).not.toThrow()
+    expect(() => migrateProfilesToHomeLayout()).not.toThrow()
+    expect(() => healPlaceholderNames()).not.toThrow()
+    const list = (JSON.parse(realRead(file, 'utf8')) as { profiles: unknown[] }).profiles
+    expect(list).toEqual([null, 'stray', 7, { ...A, name: '' }])
   })
 })
