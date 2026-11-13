@@ -1815,6 +1815,9 @@ function takeReadyHome(home: string): boolean {
 
 function profilesMetaFile(): string { return path.join(getProfilesRoot(), 'profiles.json') }
 
+/** The saved accounts, for callers that only READ: any failure to read or
+ *  parse the file is an empty list here. Its result must never be written
+ *  back (aicc_planning B1); the writers below read the file strictly. */
 export function listProfiles(): AccountProfile[] {
   try {
     const raw = fs.readFileSync(profilesMetaFile(), 'utf8')
@@ -1822,18 +1825,78 @@ export function listProfiles(): AccountProfile[] {
   } catch { return [] }
 }
 
-function saveProfiles(profiles: AccountProfile[]): void {
+/**
+ * profiles.json is there but did not read completely (it could not be opened,
+ * is not JSON, or holds no profiles list), so a writer wrote nothing
+ * (aicc_planning B1).
+ *
+ * `listProfiles` answers such a read with an empty list, and the three writers
+ * (upsertProfile, deleteProfileMeta, setPrimaryProfile) used to save what it
+ * gave them: one read that failed while another program held the file, and
+ * the next account edit replaced every saved account with the one being
+ * edited. A caller the user started lets this reach the window; a start-up or
+ * background caller logs it and goes on.
+ */
+export class ProfilesUnreadableError extends Error {
+  readonly code = 'PROFILES_UNREADABLE'
+  constructor() {
+    super('The saved accounts list (profiles.json) could not be read, so it was left as it is and this change was not saved.')
+    this.name = 'ProfilesUnreadableError'
+  }
+}
+
+const isProfileRecord = (v: unknown): v is AccountProfile => !!v && typeof v === 'object' && !Array.isArray(v)
+
+/** profiles.json's whole top level, for a writer: no file is an empty list
+ *  (the first write makes the file); anything else that is not a complete
+ *  read -- unreadable, not JSON, no profiles list -- is null, never an empty
+ *  list. */
+function readProfilesFileForEdit(): Record<string, unknown> | null {
+  let raw: string
+  try { raw = fs.readFileSync(profilesMetaFile(), 'utf8') } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? { profiles: [] } : null
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray((parsed as { profiles?: unknown }).profiles)) return null
+    return parsed as Record<string, unknown>
+  } catch { return null }
+}
+
+/** Throws ProfilesUnreadableError when a writer would refuse the list as it
+ *  is now: for a caller to ask BEFORE a step it could not take back (making
+ *  an account's folder, removing one). */
+function assertProfilesWritable(): void {
+  if (readProfilesFileForEdit() === null) throw new ProfilesUnreadableError()
+}
+
+/** The one write the three writers share (aicc_planning B1): the list is
+ *  edited only when the file read completely (or is not there yet), every
+ *  other top-level key and every entry that is not a profile object goes back
+ *  exactly as it was, and a file that did not read is left untouched
+ *  (ProfilesUnreadableError). */
+function rewriteProfiles(edit: (entries: unknown[]) => unknown[]): void {
+  const top = readProfilesFileForEdit()
+  if (!top) throw new ProfilesUnreadableError()
   const file = profilesMetaFile()
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  atomicWriteSecure(file, JSON.stringify({ profiles } satisfies AccountProfilesConfig, null, 2))
+  atomicWriteSecure(file, JSON.stringify({ ...top, profiles: edit(top.profiles as unknown[]) }, null, 2))
 }
+
+/** A start-up or background step's answer to a writer that refused: an
+ *  unreadable list is logged here and the step goes on without that write
+ *  (true); any other error is the caller's, as before (false). */
+function loggedProfilesUnreadable(e: unknown, step: string): boolean {
+  if (!(e instanceof ProfilesUnreadableError)) return false
+  logWarn(`[profiles] ${step}: ${e.message}`)
+  return true
+}
+
 export function upsertProfile(p: AccountProfile): void {
-  const all = listProfiles().filter((x) => x.id !== p.id)
-  all.push(p)
-  saveProfiles(all)
+  rewriteProfiles((all) => [...all.filter((x) => !(isProfileRecord(x) && x.id === p.id)), p])
 }
 export function deleteProfileMeta(id: string): void {
-  saveProfiles(listProfiles().filter((x) => x.id !== id))
+  rewriteProfiles((all) => all.filter((x) => !(isProfileRecord(x) && x.id === id)))
 }
 
 /** profiles.json read strictly, for the provider account registry (WP2): no
@@ -1878,8 +1941,7 @@ export function getPrimaryProfileId(): string | null {
 
 /** Mark exactly one profile as primary (clears the flag on all others). */
 export function setPrimaryProfile(id: string): void {
-  const all = listProfiles().map((p) => ({ ...p, isPrimary: p.id === id }))
-  saveProfiles(all)
+  rewriteProfiles((all) => all.map((x) => (isProfileRecord(x) ? { ...x, isPrimary: x.id === id } : x)))
 }
 
 /**
@@ -1928,6 +1990,9 @@ export function resolveHeadlessProfileHome(preferredProfileId?: string | null): 
  *  under this profile's CLAUDE_CONFIG_DIR. Never copies credentials; never
  *  touches the default ~/.claude. */
 export function createProfile(name?: string): AccountProfile {
+  // Asked first (aicc_planning B1): with a list that cannot be read the new
+  // account could not be saved, so no folder is made for it either.
+  assertProfilesWritable()
   const id = `profile-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`
   // Windows: a new profile takes the home kept ready, made and checked
   // owner-only, so its first sign-in can be written at once; without one its
@@ -2674,7 +2739,9 @@ export function migrateProfilesToHomeLayout(): void {
       try { fs.unlinkSync(path.join(home, f)) } catch { /* absent */ }
     }
     try { setupProfileLinks(p.id) } catch { /* best-effort; leaves it setup-incomplete */ }
-    upsertProfile({ ...p, accountEmail: '' })
+    // A start-up step: a list that cannot be read just now is logged, and the
+    // rest of the profiles are still migrated.
+    try { upsertProfile({ ...p, accountEmail: '' }) } catch (e) { if (!loggedProfilesUnreadable(e, 'home-layout migration')) throw e }
   }
 }
 
@@ -2703,6 +2770,10 @@ export function safeTeardownProfile(id: string): void {
   if (path.resolve(dir) !== path.resolve(getProfilesRoot(), id)) {
     throw new Error('refusing teardown: path escapes the profiles root')
   }
+  // Asked first (aicc_planning B1): with a list that cannot be read the
+  // account could not be taken off it, so its folder is not removed either
+  // and the account stays whole, to be removed again.
+  assertProfilesWritable()
   if (fs.existsSync(dir)) {
     // Never recurse a reparse point AS THE ROOT (would walk into a junction target).
     if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('refusing teardown: profile dir is a reparse point')
@@ -2896,7 +2967,9 @@ export function captureGlobalLogin(name?: string): AccountProfile | null {
     const updated: AccountProfile = { ...profile, accountEmail: email, name: name?.trim() || '' }
     upsertProfile(updated)
     return updated
-  } catch {
+  } catch (e) {
+    // A start-up step: an accounts list that stopped reading is said in the log.
+    loggedProfilesUnreadable(e, 'capturing the global sign-in')
     // capture failed mid-write: don't leave a dangling empty profile
     try { safeTeardownProfile(profile.id) } catch { /* best-effort */ }
     return null
@@ -2928,7 +3001,10 @@ export function migrateProfilesToCanonicalLayout(): void {
  *  have a real account email (an in-progress add-account with no email keeps it). */
 export function healPlaceholderNames(): void {
   for (const p of listProfiles()) {
-    if (p.accountEmail && p.name === 'New account') upsertProfile({ ...p, name: '' })
+    if (!(p.accountEmail && p.name === 'New account')) continue
+    // A start-up step: a list that cannot be read just now is logged, and the
+    // name is healed at a later start.
+    try { upsertProfile({ ...p, name: '' }) } catch (e) { if (!loggedProfilesUnreadable(e, 'placeholder-name heal')) throw e }
   }
 }
 
@@ -3268,7 +3344,10 @@ export function captureDetectedAccount(profileId: string, name?: string): Accoun
     const updated: AccountProfile = { ...np, accountEmail: email }
     upsertProfile(updated)
     return updated
-  } catch {
+  } catch (e) {
+    // The answer stays "nothing captured"; an accounts list that stopped
+    // reading is said in the log.
+    loggedProfilesUnreadable(e, 'capturing the detected account')
     try { safeTeardownProfile(np.id) } catch { /* best-effort */ }
     return null
   }

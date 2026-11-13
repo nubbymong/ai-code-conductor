@@ -3,7 +3,7 @@ import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { IPC } from '../../shared/ipc-channels'
 import { ipcStreamEnd } from '../../shared/ipc-stream'
 import {
-  listProfiles, upsertProfile, safeTeardownProfile,
+  listProfiles, upsertProfile, safeTeardownProfile, ProfilesUnreadableError,
   readProfileAccountEmail, getProfileConfigDir, isValidProfileId, createProfile,
   captureDetectedAccount, backupProfileHomeToCanonical, restoreProfileIdentityFromCanonical,
   readProfileCredentialStamp, startProfileStepsSettled,
@@ -266,7 +266,16 @@ export function registerAccountProfilesHandlers(getWindow: () => BrowserWindow |
     const email = readProfileAccountEmail(p.id)
     if (email) {
       const prof = listProfiles().find((x) => x.id === p.id)
-      if (prof) upsertProfile({ ...prof, accountEmail: email })
+      // A poll asks this every few seconds while a sign-in is open, so it is a
+      // background caller (aicc_planning B1): an accounts list that cannot be
+      // read just now is logged, the email found is still answered, and the
+      // next ask saves it. Any other error is the caller's, as before.
+      if (prof) {
+        try { upsertProfile({ ...prof, accountEmail: email }) } catch (err) {
+          if (!(err instanceof ProfilesUnreadableError)) throw err
+          logWarn(`[account-profiles] refreshIdentity for ${p.id}: ${err.message}`)
+        }
+      }
       // Ensure a canonical backup exists now (not just after the next restart),
       // so a later capture/restore always has a source to restore from.
       backupProfileHomeToCanonical(p.id)
