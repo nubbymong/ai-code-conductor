@@ -19,7 +19,7 @@
     },
     {
       "path": "tests/unit/main/harden-dir-acl-proven-memo.test.ts",
-      "reason": "Names icacls only as the program its fake execFileSync answers from an in-memory access list; every other child_process call refuses. Its folders are plain temp folders of its own, made so the step can read their file identity. No process starts, no ACL is read or changed and no link is made."
+      "reason": "Names icacls only as the program its fake execFileSync answers from an in-memory access list; every other child_process call refuses. Its folders are plain temp folders of its own, made so the step can read their file identity, and its writer cases write config files into one of them; a link is simulated by what lstat is made to report. No process starts, no ACL is read or changed and no link is made."
     },
     {
       "path": "tests/unit/main/owner-only-folders-read.test.ts",

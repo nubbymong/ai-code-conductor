@@ -9,6 +9,7 @@ import { readFileSync, existsSync, unlinkSync, renameSync, copyFileSync, lstatSy
 import { getConfigDir, ensureConfigDir, migrateConfigToProviderShape } from './config-manager'
 import { logInfo, logError } from './debug-logger'
 import { atomicWriteFileSync } from './atomic-write'
+import { forgetHardenedDir } from './account-profiles'
 import type { DetachedRemote, SavedSession, SessionState } from '../shared/types'
 
 export type { SavedSession, SessionState }
@@ -353,6 +354,8 @@ export function saveSessionState(state: SessionState): boolean {
     return true
   } catch (err) {
     console.error('[session-state] Failed to save:', err)
+    // A failed write into CONFIG: its access list is read again before the next write.
+    forgetHardenedDir(getConfigDir())
     return false
   }
 }

@@ -1,31 +1,38 @@
-// [host] aicc_planning #301: the Windows folder-rights step (hardenDirAclWindows,
-// which is hardenCredentialDir on Windows) started icacls on every call, and
-// it is called on every config write, at every session start and for each
-// session's settings, MCP config and hooks. Each start is a program start on
-// the main thread; under scanner load one can take seconds, which froze the
-// window. A folder this run has PROVEN owner-only is now remembered for ten
-// minutes: the next calls for it start nothing.
+// [host] The Windows folder-rights step (hardenDirAclWindows, which is
+// hardenCredentialDir on Windows) started icacls on every call, and it is
+// called on every config write, at every session start and for each session's
+// settings, MCP config and hooks. Each start is a program start on the main
+// thread; under scanner load one can take seconds, which froze the window. A
+// folder this run has PROVEN owner-only is now remembered for ten minutes: the
+// next calls for it start nothing.
 //
 // What these cases hold it to:
-//   - only proof is remembered: a read that showed the owner-only list, or a
-//     write whose read-back did. A failed step, the fallback's "not proven"
-//     answer and a write that was not read back are not remembered;
+//   - one way in: an icacls read that showed the owner-only list. A write is
+//     never remembered, read back or not, nor a failed step or the fallback's
+//     "not proven" answer; a folder that needed hardening costs a read and a
+//     write, then one read, then nothing;
 //   - the folder is the same one by path, in any letter case and with or
 //     without a trailing separator;
-//   - after ten minutes the next call reads again;
+//   - after ten minutes the next call reads again, and the ten minutes are
+//     counted on a clock that only moves forward, whatever the system clock
+//     is set to;
 //   - a folder removed and made again under the same name is another folder
-//     and is read again (the canvas plugin's tree is rebuilt that way);
-//   - forgetHardenedDir drops one folder at once;
-//   - an icacls run is named to the jank detector while it holds the thread.
+//     and is read again (the canvas plugin's tree is rebuilt that way), also
+//     when that happens during the very read that would have proven it;
+//   - a link, or anything that is not a folder, is never remembered;
+//   - a write into the folder that fails forgets it at once, whichever writer
+//     it was;
+//   - a call that starts icacls is named to the jank detector, once.
 //
 // Host-safe: icacls is a fake in memory (`node:child_process` is mocked, and
 // every other program start throws). The folders are plain temp folders of
 // the test's own, made so the step can read their file identity; no access
-// list on this machine is read or written and no link is made. The step only
-// runs its Windows half on Windows, so the cases run there (this machine and
-// the Windows legs of CI). The real-ACL twin is
-// tests/unit/harden-dir-acl-windows.test.ts (VM and CI only).
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+// list on this machine is read or written and no link is made (a link is
+// simulated by what lstat is made to report). The step only runs its Windows
+// half on Windows, so the cases run there (this machine and the Windows legs
+// of CI). The real-ACL twin is tests/unit/harden-dir-acl-windows.test.ts (VM
+// and CI only).
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -51,6 +58,8 @@ const h = vi.hoisted(() => ({
   calls: [] as string[][],
   /** Runs inside each invocation, before it answers. */
   onCall: null as null | (() => void),
+  /** The app's resources folder for the config writers: a temp folder of this file's own. */
+  resources: '',
 }))
 
 const DOMAIN = 'TESTDOM'
@@ -89,27 +98,32 @@ vi.mock('node:child_process', async (importOriginal) => {
     f.entries = ownerOnly()
     return ''
   })
-  const execFile = vi.fn(no)
-  const spawn = vi.fn(no)
-  const spawnSync = vi.fn(no)
-  const execSync = vi.fn(no)
-  return { ...real, execFileSync, execFile, spawn, spawnSync, execSync, default: { ...real, execFileSync, execFile, spawn, spawnSync, execSync } }
+  const stubs = { execFileSync, execFile: vi.fn(no), spawn: vi.fn(no), spawnSync: vi.fn(no), execSync: vi.fn(no), exec: vi.fn(no), fork: vi.fn(no) }
+  return { ...real, ...stubs, default: { ...real, ...stubs } }
 })
 
 vi.mock('../../../src/main/debug-logger', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../../src/main/debug-logger')>()
   return { ...real, logWarn: () => {}, logInfo: () => {}, logError: () => {} }
 })
+// The config writers below write under a temp folder, never the app's own.
+vi.mock('../../../src/main/ipc/setup-handlers', () => ({
+  getResourcesDirectory: () => h.resources,
+  registerSetupHandlers: () => {},
+}))
 
 import {
-  hardenDirAclWindows, hardenCredentialDir, forgetHardenedDir,
-  _icaclsCallsForTest, _resetAclStateForTest, _setHardenedDirClockForTest,
+  hardenDirAclWindows, hardenCredentialDir, forgetHardenedDir, atomicWriteSecure, copyCredentialFile,
+  _icaclsCallsForTest, _resetAclStateForTest,
 } from '../../../src/main/account-profiles'
-import { mainThreadOpSince, _setMainThreadClockForTest, _resetMainThreadOpsForTest } from '../../../src/main/main-thread-ops'
+import { writeConfig, ensureConfigDir, getConfigDir } from '../../../src/main/config-manager'
+import { saveSessionState } from '../../../src/main/session-state'
+import { mainThreadOpSince, noteMainThreadOp, _setMainThreadClockForTest, _resetMainThreadOpsForTest } from '../../../src/main/main-thread-ops'
 
 const USER = (() => { try { return os.userInfo().username } catch { return '' } })()
 const ME = `${DOMAIN}\\${USER}`
 const TEN_MINUTES = 10 * 60 * 1000
+const OP = 'icacls.exe on one folder'
 
 /** The list the step writes: the user and SYSTEM, full control, passed down. */
 function ownerOnly(): string[] { return [`${ME}:(OI)(CI)(F)`, `${SYSTEM}:(OI)(CI)(F)`] }
@@ -117,7 +131,8 @@ function ownerOnly(): string[] { return [`${ME}:(OI)(CI)(F)`, `${SYSTEM}:(OI)(CI
 function inherited(): string[] { return [`${USERS}:(I)(OI)(CI)(RX)`, `${AUTH_USERS}:(I)(OI)(CI)(M)`] }
 
 let root = ''
-let now = 0
+h.resources = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-acl-memo-res-'))
+const inTemp = (p: string) => !!p && path.resolve(p).startsWith(path.resolve(os.tmpdir()) + path.sep)
 
 /** A real, empty temp folder, and what the fake prints for it. */
 function folder(name: string, entries: string[], over: Partial<Folder> = {}): { dir: string; f: Folder } {
@@ -145,6 +160,14 @@ function learnPair(): void {
   expect(hardenDirAclWindows(dir)).toBe(true)
 }
 
+/** A folder already remembered: read once, and the next call starts nothing. */
+function remembered(name: string): { dir: string; f: Folder } {
+  const made = folder(name, ownerOnly())
+  expect(started(() => expect(hardenDirAclWindows(made.dir)).toBe(true))).toBe(1)
+  expect(started(() => hardenDirAclWindows(made.dir))).toBe(0)
+  return made
+}
+
 const savedDomain = process.env.USERDOMAIN
 beforeEach(() => {
   process.env.USERDOMAIN = DOMAIN
@@ -152,28 +175,37 @@ beforeEach(() => {
   h.calls.length = 0
   h.onCall = null
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-acl-memo-'))
-  now = 1_000_000
+  // The ten minutes are counted on performance.now(); the system clock (Date)
+  // is faked beside it so a case can set it apart from the time that passed.
+  vi.useFakeTimers({ toFake: ['performance', 'Date'] })
   _resetAclStateForTest()
-  _setHardenedDirClockForTest(() => now)
 })
 afterEach(() => {
   if (savedDomain === undefined) delete process.env.USERDOMAIN
   else process.env.USERDOMAIN = savedDomain
-  _setHardenedDirClockForTest(null)
+  vi.useRealTimers()
+  vi.restoreAllMocks()
   _resetMainThreadOpsForTest()
-  if (root && path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)) fs.rmSync(root, { recursive: true, force: true })
+  if (inTemp(root)) fs.rmSync(root, { recursive: true, force: true })
   root = ''
 })
+afterAll(() => {
+  if (inTemp(h.resources)) fs.rmSync(h.resources, { recursive: true, force: true })
+})
 
-describe.runIf(process.platform === 'win32')('a folder proven owner-only is not read again for ten minutes (aicc_planning #301)', () => {
-  it('after the first harden of a folder, later calls for it start no icacls: the same path, another letter case, a trailing separator', () => {
+describe.runIf(process.platform === 'win32')('a folder proven owner-only is not read again for ten minutes', () => {
+  it('the first folder of a run: read, write and the read-back that learns the pair, then one read, then no icacls: the same path, another letter case, a trailing separator', () => {
     expect(USER, 'this test needs the account name').not.toBe('')
     const { dir, f } = folder('config', inherited())
 
-    // The first call hardens it as it always did: read, write, read back.
+    // The first call hardens it as it always did: read, write, read back. The
+    // read-back teaches the module its pair; it does not make the folder
+    // remembered, and neither does the write.
     expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(3)
     expect(f.writes).toBe(1)
     expect(f.entries).toEqual(ownerOnly())
+    // The next call's read is the proof.
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true)), 'the call after the write').toBe(1)
 
     const spellings = [dir, dir.toUpperCase(), dir.toLowerCase(), dir + path.sep, dir + path.sep + path.sep, path.join(dir, 'x', '..'), dir.replace(/\\/g, '/')]
     const n = started(() => {
@@ -183,7 +215,7 @@ describe.runIf(process.platform === 'win32')('a folder proven owner-only is not 
       }
     })
     expect(n, 'a proven folder starts no icacls').toBe(0)
-    expect(f.reads).toBe(2)
+    expect(f.reads).toBe(3)
     expect(f.writes).toBe(1)
   })
 
@@ -195,21 +227,32 @@ describe.runIf(process.platform === 'win32')('a folder proven owner-only is not 
     expect(started(() => { for (let i = 0; i < 5; i++) expect(hardenDirAclWindows(dir)).toBe(true) })).toBe(0)
   })
 
+  it('a folder that needed hardening costs a read and a write, then one read, then nothing', () => {
+    learnPair()
+    const { dir, f } = folder('written', inherited())
+    // The pair is known, so this call reads and writes and reads nothing back.
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(2)
+    expect(f.writes).toBe(1)
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true)), 'the call after the write').toBe(1)
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true)), 'the call after that read').toBe(0)
+    expect(f.writes).toBe(1)
+  })
+
   it('after ten minutes the next call reads again, and that read is remembered in its turn', () => {
     learnPair()
     const { dir, f } = folder('expiring', ownerOnly())
     expect(started(() => hardenDirAclWindows(dir))).toBe(1)
 
-    now += TEN_MINUTES - 1
+    vi.advanceTimersByTime(TEN_MINUTES - 1)
     expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true)), 'one millisecond short of ten minutes').toBe(0)
 
-    now += 1
+    vi.advanceTimersByTime(1)
     expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true)), 'ten minutes on').toBe(1)
     expect(f.writes).toBe(0)
     // Counted from that read, not from the first.
-    now += TEN_MINUTES - 1
+    vi.advanceTimersByTime(TEN_MINUTES - 1)
     expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(0)
-    now += 1
+    vi.advanceTimersByTime(1)
     expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(1)
   })
 
@@ -218,18 +261,27 @@ describe.runIf(process.platform === 'win32')('a folder proven owner-only is not 
     const { dir, f } = folder('changed', ownerOnly())
     hardenDirAclWindows(dir)
     f.entries = [...ownerOnly(), `${AUTH_USERS}:(OI)(CI)(F)`]
-    now += TEN_MINUTES
+    vi.advanceTimersByTime(TEN_MINUTES)
     expect(hardenDirAclWindows(dir)).toBe(true)
     expect(f.writes).toBe(1)
     expect(f.entries).toEqual(ownerOnly())
   })
 
-  it('a clock set back is read as expired, never as fresh for longer', () => {
+  it('the system clock set back with no call in between, then run forward: the folder is still read again after ten minutes of real time', () => {
     learnPair()
-    const { dir } = folder('clock', ownerOnly())
-    hardenDirAclWindows(dir)
-    now -= 60 * 60 * 1000
+    const { dir } = remembered('clock-back')
+    // Set back an hour (a time sync after resume, a corrected clock). Then 69
+    // minutes pass: the system clock reads nine minutes after the proof.
+    vi.setSystemTime(Date.now() - 60 * 60 * 1000)
+    vi.advanceTimersByTime(69 * 60 * 1000)
     expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(1)
+  })
+
+  it('the system clock set forward does not expire a folder early', () => {
+    learnPair()
+    const { dir } = remembered('clock-forward')
+    vi.setSystemTime(Date.now() + 60 * 60 * 1000)
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(0)
   })
 
   it('a step that fails is not remembered: every call starts icacls again until one succeeds', () => {
@@ -255,22 +307,9 @@ describe.runIf(process.platform === 'win32')('a folder proven owner-only is not 
     expect(f.entries).toEqual(inherited())
   })
 
-  it('a write that was not read back is not proof: the next call reads once, and that read is remembered', () => {
-    learnPair()
-    const { dir, f } = folder('written', inherited())
-    // The pair is known, so this call reads and writes and reads nothing back.
-    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(2)
-    expect(f.writes).toBe(1)
-    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true)), 'the call after the write').toBe(1)
-    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true)), 'the call after that read').toBe(0)
-    expect(f.writes).toBe(1)
-  })
-
   it('forgetHardenedDir forces the next call to read again, by the same path rules', () => {
     learnPair()
-    const { dir, f } = folder('forgotten', ownerOnly())
-    hardenDirAclWindows(dir)
-    expect(started(() => hardenDirAclWindows(dir))).toBe(0)
+    const { dir, f } = remembered('forgotten')
 
     forgetHardenedDir(dir.toUpperCase() + path.sep)
     expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(1)
@@ -300,9 +339,7 @@ describe.runIf(process.platform === 'win32')('a folder proven owner-only is not 
     // back on its parent's list. A memo keyed by the path alone would call it
     // done.
     learnPair()
-    const { dir, f } = folder('rebuilt', ownerOnly())
-    hardenDirAclWindows(dir)
-    expect(started(() => hardenDirAclWindows(dir))).toBe(0)
+    const { dir, f } = remembered('rebuilt')
 
     fs.rmdirSync(dir)
     fs.mkdirSync(dir)
@@ -313,6 +350,19 @@ describe.runIf(process.platform === 'win32')('a folder proven owner-only is not 
     expect(f.entries).toEqual(ownerOnly())
   })
 
+  it('a folder swapped in during the read that would prove it is not remembered: the next call reads the new folder and repairs it', () => {
+    learnPair()
+    const { dir, f } = folder('swapped', ownerOnly())
+    // While icacls reads the folder, another program removes it and makes it
+    // again. The read still prints the old folder's owner-only list.
+    h.onCall = () => { h.onCall = null; fs.rmdirSync(dir); fs.mkdirSync(dir) }
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(1)
+    // The folder now at the path is on its parent's list, and was never read.
+    f.entries = inherited()
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true)), 'the new folder is read, not answered from memory').toBe(2)
+    expect(f.entries).toEqual(ownerOnly())
+  })
+
   it('a folder that is not there is never remembered, whatever icacls says of its name', () => {
     learnPair()
     const ghost = path.join(root, 'not-made')
@@ -320,6 +370,39 @@ describe.runIf(process.platform === 'win32')('a folder proven owner-only is not 
     for (let i = 0; i < 3; i++) {
       expect(started(() => expect(hardenDirAclWindows(ghost)).toBe(true)), `call ${i + 1}`).toBe(1)
     }
+  })
+
+  /** lstat reports `dir` as `kind` from now on; no link is made. */
+  function lstatReports(dir: string, kind: { link: boolean; folder: boolean }): void {
+    const realLstat = fs.lstatSync
+    vi.spyOn(fs, 'lstatSync').mockImplementation(((p: unknown, ...rest: unknown[]) => {
+      const st = (realLstat as (...a: unknown[]) => fs.Stats)(p, ...rest)
+      if (typeof p === 'string' && keyOf(p) === keyOf(dir)) {
+        st.isSymbolicLink = () => kind.link
+        st.isDirectory = () => kind.folder
+      }
+      return st
+    }) as typeof fs.lstatSync)
+  }
+
+  it.each([
+    ['a link', { link: true, folder: false }],
+    ['not a folder', { link: false, folder: false }],
+  ])('%s at the path is never remembered: every call reads, whatever the read shows', (_what, kind) => {
+    learnPair()
+    const { dir } = folder('linked', ownerOnly())
+    lstatReports(dir, kind)
+    for (let i = 0; i < 3; i++) {
+      expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true)), `call ${i + 1}`).toBe(1)
+    }
+  })
+
+  it('a remembered folder that becomes a link is read again, every call', () => {
+    learnPair()
+    const { dir } = remembered('relinked')
+    lstatReports(dir, { link: true, folder: false })
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(1)
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(1)
   })
 
   it('holds a bounded number of folders: past it the one remembered longest ago is read again', () => {
@@ -339,8 +422,65 @@ describe.runIf(process.platform === 'win32')('a folder proven owner-only is not 
   })
 })
 
-describe.runIf(process.platform === 'win32')('an icacls run is named to the jank detector (aicc_planning #301)', () => {
-  it('a stall during a run names it; a remembered folder notes nothing', () => {
+describe.runIf(process.platform === 'win32')('a write into a remembered folder that fails forgets the folder', () => {
+  /** A name in `dir` that no file can be written over: a folder holds it. */
+  function taken(dir: string, name: string): string {
+    const p = path.join(dir, name)
+    fs.mkdirSync(p, { recursive: true })
+    return p
+  }
+
+  it('atomicWriteSecure: a write that succeeds forgets nothing, one that fails makes the next call read again', () => {
+    learnPair()
+    const { dir } = remembered('written-into')
+    atomicWriteSecure(path.join(dir, 'ok.json'), '{}')
+    expect(started(() => hardenDirAclWindows(dir)), 'after a write that succeeded').toBe(0)
+
+    expect(() => atomicWriteSecure(taken(dir, 'taken.json'), '{}')).toThrow()
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true)), 'after a write that failed').toBe(1)
+  })
+
+  it('a credential file copy that fails forgets its folder', () => {
+    learnPair()
+    const { dir } = remembered('credentials')
+    const src = path.join(root, 'source.json')
+    fs.writeFileSync(src, '{}')
+    expect(() => copyCredentialFile(src, taken(dir, '.credentials.json'))).toThrow()
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(1)
+  })
+
+  /** The app's CONFIG folder, made and remembered as owner-only. */
+  function rememberedConfig(): string {
+    learnPair()
+    const dir = getConfigDir()
+    h.folders.set(keyOf(dir), { entries: ownerOnly(), reads: 0, writes: 0 })
+    expect(started(() => ensureConfigDir())).toBe(1)
+    expect(started(() => ensureConfigDir()), 'CONFIG is remembered').toBe(0)
+    return dir
+  }
+
+  it('writeConfig: a config write that fails answers false and CONFIG is read again before the next write', () => {
+    const dir = rememberedConfig()
+    expect(writeConfig('settings', { ok: true })).toBe(true)
+    expect(started(() => ensureConfigDir()), 'after a config write that succeeded').toBe(0)
+
+    taken(dir, 'commands.json')
+    expect(writeConfig('commands', { no: true })).toBe(false)
+    expect(started(() => ensureConfigDir()), 'after a config write that failed').toBe(1)
+  })
+
+  it('saveSessionState: a session-state save that fails answers false and CONFIG is read again before the next write', () => {
+    const dir = rememberedConfig()
+    taken(dir, 'session-state.json')
+    const noise = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(saveSessionState({ sessions: [], savedAt: 1 } as unknown as Parameters<typeof saveSessionState>[0])).toBe(false)
+    expect(noise).toHaveBeenCalled()
+    expect(started(() => ensureConfigDir()), 'after a save that failed').toBe(1)
+  })
+})
+
+describe.runIf(process.platform === 'win32')('a call that starts icacls is named to the jank detector', () => {
+  it('a stall during a call names it; a remembered folder notes nothing', () => {
     let t = 5_000
     _setMainThreadClockForTest(() => t)
     learnPair()
@@ -353,8 +493,8 @@ describe.runIf(process.platform === 'win32')('an icacls run is named to the jank
     h.onCall = () => { t += 1_800 }
     expect(hardenDirAclWindows(dir)).toBe(true)
     h.onCall = null
-    expect(mainThreadOpSince(since)).toBe('a run of icacls.exe')
-    // It ended with the run: a stall that begins after it is not its. (Time
+    expect(mainThreadOpSince(since)).toBe(OP)
+    // It ended with the call: a stall that begins after it is not its. (Time
     // moves on first: an operation never ended would still be in flight.)
     const ended = t
     t += 10_000
@@ -367,7 +507,7 @@ describe.runIf(process.platform === 'win32')('an icacls run is named to the jank
     expect(mainThreadOpSince(0)).toBeNull()
   })
 
-  it('a run that fails still ends its operation', () => {
+  it('a call that fails still ends its operation', () => {
     let t = 9_000
     _setMainThreadClockForTest(() => t)
     const { dir } = folder('failing', inherited(), { unreadable: true, refuseWrites: true })
@@ -378,7 +518,28 @@ describe.runIf(process.platform === 'win32')('an icacls run is named to the jank
     const ended = t
     t += 10_000
     expect(mainThreadOpSince(ended + 1)).toBeNull()
-    expect(mainThreadOpSince(ended - 1)).toBe('a run of icacls.exe')
+    expect(mainThreadOpSince(ended - 1)).toBe(OP)
+  })
+
+  it('one operation per call, however many runs it takes: hardening eight folders does not push a slow program start out of the detector\'s list', () => {
+    let t = 1_000
+    _setMainThreadClockForTest(() => t)
+    learnPair()
+    _resetMainThreadOpsForTest()
+    _setMainThreadClockForTest(() => t)
+
+    const since = t
+    const end = noteMainThreadOp('start of other.exe')
+    t += 1_900
+    end()
+    // Eight new folders, a read and a write each: sixteen icacls runs.
+    h.onCall = () => { t += 20 }
+    for (let i = 0; i < 8; i++) {
+      const { dir } = folder(`session-${i}`, inherited())
+      expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(2)
+    }
+    h.onCall = null
+    expect(mainThreadOpSince(since), 'the 1.9 s start is still the longest operation the detector knows').toBe('start of other.exe')
   })
 })
 

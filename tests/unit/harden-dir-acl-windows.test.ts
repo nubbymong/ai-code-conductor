@@ -546,8 +546,8 @@ describe.runIf(IS_WINDOWS)('hardenCredentialDir on Windows applies a real DACL',
       // budget, so this does not soften the assertion.
       //
       // The read-first skip is what this measures, so what the step remembers
-      // about the folder (aicc_planning #301: a folder proven owner-only is not
-      // read again for ten minutes) is dropped before each attempt.
+      // about the folder (a folder proven owner-only is not read again for ten
+      // minutes) is dropped before each attempt.
       let cost = 0
       for (let attempt = 0; attempt < 3 && cost !== 1; attempt++) {
         forgetHardenedDir(dir)
@@ -562,9 +562,9 @@ describe.runIf(IS_WINDOWS)('hardenCredentialDir on Windows applies a real DACL',
       expect(aces(dir), 'and a settled call must not change the DACL').toEqual(settled)
 
       // That one read proved the folder owner-only, so the calls after it start
-      // no icacls at all (aicc_planning #301), by the same folder under another
-      // letter case and a trailing separator too. This is the cost
-      // ensureConfigDir pays on a config write now: none.
+      // no icacls at all, by the same folder under another letter case and a
+      // trailing separator too. This is the cost ensureConfigDir pays on a
+      // config write now: none.
       const beforeRemembered = _icaclsCallsForTest()
       expect(hardenCredentialDir(dir)).toBe(true)
       expect(hardenCredentialDir(dir.toUpperCase() + path.sep)).toBe(true)
@@ -581,16 +581,31 @@ describe.runIf(IS_WINDOWS)('hardenCredentialDir on Windows applies a real DACL',
   it('re-hardens a directory that was recreated under a permissive parent', () => {
     // `ensureCanvasPlugin` deletes and recreates its tree, which puts the new
     // directory back on its parent's ACL. What the step remembers about a
-    // folder (aicc_planning #301) is tied to the folder's file identity, not
-    // to its path alone, so the recreated one is read again and repaired
-    // rather than reported done.
+    // folder is tied to the folder's file identity, not to its path alone, so
+    // the recreated one is read again and repaired rather than reported done.
     const { dir, broadPrincipal } = dirWithBroadGrant('inherited')
-    hardenCredentialDir(dir)
+
+    // The folder has to BE remembered before it is recreated, or a memo keyed
+    // by the path alone would pass this too. A write is never remembered, only
+    // the read after it, so harden until a call starts no icacls. Bounded, as
+    // the warm-up above is: any single icacls call can be lost to the time cap
+    // under load.
+    let cost = -1
+    for (let attempt = 0; attempt < 4 && cost !== 0; attempt++) {
+      expect(hardenCredentialDir(dir)).toBe(true)
+      const before = _icaclsCallsForTest()
+      expect(hardenCredentialDir(dir)).toBe(true)
+      cost = _icaclsCallsForTest() - before
+    }
+    expect(cost, 'the folder is remembered before it is recreated: a call for it starts no icacls').toBe(0)
+
     fs.rmdirSync(dir)
     fs.mkdirSync(dir)
     expect(aces(dir).map(principalOf)).toContain(broadPrincipal)
 
+    const before = _icaclsCallsForTest()
     expect(hardenCredentialDir(dir)).toBe(true)
+    expect(_icaclsCallsForTest() - before, 'the recreated folder is read again, not answered from memory').toBeGreaterThan(0)
     expect(aces(dir).map(principalOf)).not.toContain(broadPrincipal)
   })
 
@@ -656,7 +671,12 @@ describe.runIf(IS_WINDOWS)('hardenDirAclWindows on a folder this user does not o
     expect(before.every((a) => a.includes('(I)')), 'fixture: every entry inherited').toBe(true)
 
     for (const round of ['first', 'next']) {
+      // Each round is to run icacls, so nothing remembered about the folder
+      // may answer for it.
+      forgetHardenedDir(dir)
+      const runsBefore = _icaclsCallsForTest()
       expect(hardenDirAclWindows(dir), `${round} call`).toBe(true)
+      expect(_icaclsCallsForTest() - runsBefore, `${round} call: icacls ran`).toBeGreaterThan(0)
 
       // Still readable and writable by the user who ran it, and SYSTEM keeps
       // its full control (SY in SDDL, whatever the display language).
@@ -770,7 +790,12 @@ describe.runIf(IS_WINDOWS)('hardenDirAclWindows where the user\'s only write rig
 
     _resetAclStateForTest()
     for (const round of ['first', 'next']) {
+      // Each round is to run icacls, so nothing remembered about the folder
+      // may answer for it.
+      forgetHardenedDir(dir)
+      const runsBefore = _icaclsCallsForTest()
       expect(hardenDirAclWindows(dir), `${round} call`).toBe(true)
+      expect(_icaclsCallsForTest() - runsBefore, `${round} call: icacls ran`).toBeGreaterThan(0)
 
       const after = aces(dir)
       expect(after.length, `${round} call: the folder has an empty access list`).toBeGreaterThan(0)

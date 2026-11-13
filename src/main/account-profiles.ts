@@ -99,9 +99,19 @@ const CRED_DIR_MODE = 0o700
  * Kept as a named export because the config/hooks credential writers and
  * `usage/account-usage.ts` import it, and because the name states the intent at
  * a credential call site.
+ *
+ * A write that fails forgets what was remembered about its folder's access
+ * list (`forgetHardenedDir`), so the folder is read again before the next
+ * write into it. Every writer that goes through here gets that; the error
+ * goes on to the caller unchanged.
  */
 export function atomicWriteSecure(file: string, data: string | Uint8Array, mode?: number): void {
-  atomicWriteFileSync(file, data, mode != null ? { mode } : undefined)
+  try {
+    atomicWriteFileSync(file, data, mode != null ? { mode } : undefined)
+  } catch (e) {
+    forgetHardenedDir(path.dirname(file))
+    throw e
+  }
 }
 
 /** chmod a just-written/copied credential FILE to 0o600 on POSIX (no-op on Win). */
@@ -213,17 +223,18 @@ export function hardenCredentialFile(file: string): void {
 // directory, and an owner can re-grant themselves the instant any write of ours
 // returns. Hardening is not a defence against the owner of the directory.
 //
-// The read itself is remembered, narrowly (aicc_planning #301). The read-first
-// skip still started icacls on every call, and under scanner load one start
-// can take seconds: on `ensureConfigDir` that froze the window 1-5s at a time.
-// So a folder a read PROVED owner-only is not read again for ten minutes (see
+// The read itself is remembered, narrowly. The read-first skip still started
+// icacls on every call, and under scanner load one start can take seconds: on
+// `ensureConfigDir` that froze the window 1-5s at a time. So a folder a read
+// PROVED owner-only is not read again for ten minutes (see
 // `provenOwnerOnlyDirs`). A plain path-keyed memo would be wrong:
 // `ensureCanvasPlugin` deletes and recreates its tree, so a recreated
 // directory is back on its parent's ACL while the memo still calls it done.
 // This one is tied to the folder's file identity, so a recreated directory is
-// another folder, reads as unhardened and is repaired; only proof enters it,
-// never a write that was not read back or a failure; and it expires, so a
-// list changed from outside is found again within those minutes.
+// another folder, reads as unhardened and is repaired; only a read that
+// showed the owner-only list enters it, never a write or a failure; it
+// expires, so a list changed from outside is found again within those
+// minutes; and a failed write into the folder drops it at once.
 //   * Children need no pass of their own. Windows resolves inheritance live, so
 //     existing and future subdirectories/files reflect the new DACL at once.
 const IS_WINDOWS = process.platform === 'win32'
@@ -245,21 +256,12 @@ const ICACLS_TIMEOUT_MS = 5000
  */
 let icaclsCallsMade = 0
 export function _icaclsCallsForTest(): number { return icaclsCallsMade }
-/** What the `[jank]` line calls an icacls run in flight (main-thread-ops.ts):
- *  the program, never the folder. */
-const ICACLS_OP_LABEL = 'a run of icacls.exe'
-/**
- * One icacls run, start to end, noted as the main-thread operation in flight
- * (aicc_planning #301). `execFileSync` holds the main thread for the whole
- * run, and under scanner load one run can take seconds; noted here, a stall
- * during one is named by the jank detector instead of reading as "no tracked
- * app operation in flight". `timedStart` is not used: it times a program
- * START and logs it in those words, and this is a whole run.
- */
-function icaclsRun<T>(run: () => T): T {
-  const end = noteMainThreadOp(ICACLS_OP_LABEL)
-  try { return run() } finally { end() }
-}
+/** What the `[jank]` line calls a folder being made owner-only
+ *  (main-thread-ops.ts): the program, never the folder. One operation per
+ *  `hardenDirAclWindows` call that starts icacls, however many runs it
+ *  takes, so a session start that hardens several folders does not push the
+ *  other tracked operations out of the detector's short list. */
+const ICACLS_OP_LABEL = 'icacls.exe on one folder'
 /** Characters that would change what icacls PARSES rather than merely fail to
  *  resolve: `:` and `()` are grant syntax, `,`/`;` separate entries, `/` starts
  *  an option, `*` marks a literal SID, `\` splits domain from account, and
@@ -318,9 +320,9 @@ export function windowsAclEntries(target: string): string[] {
   try {
     // stdout captured, stderr discarded: an unreadable directory is a normal
     // outcome here (it falls back), not something to print on every config write.
-    out = icaclsRun(() => execFileSync(ICACLS, [target], {
+    out = execFileSync(ICACLS, [target], {
       encoding: 'utf8', windowsHide: true, timeout: ICACLS_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'ignore'],
-    }))
+    })
   } catch { return [] }
   return out
     .split(/\r?\n/)
@@ -491,7 +493,7 @@ export function windowsAclIsOwnerOnly(
 function icaclsStatus(args: string[]): number | null {
   icaclsCallsMade++
   try {
-    icaclsRun(() => execFileSync(ICACLS, args, { stdio: 'ignore', windowsHide: true, timeout: ICACLS_TIMEOUT_MS }))
+    execFileSync(ICACLS, args, { stdio: 'ignore', windowsHide: true, timeout: ICACLS_TIMEOUT_MS })
     return 0
   } catch (err) {
     // `status` is a number only for a process that exited on its own; a timeout
@@ -670,22 +672,15 @@ let learnAttemptsLeft = LEARN_ATTEMPT_MAX
  * observing safe: an unhardened DACL is never a template, so the shape-matching
  * this replaced -- which read `[Everyone:(OI)(CI)(F), <user>:(OI)(CI)(F)]` as
  * hardened -- cannot come back through here.
- *
- * Returns whether THIS call read `dir` back and the read-back was the
- * owner-only list (it became the template). That is the one write outcome
- * that is also proof for `provenOwnerOnlyDirs`; a call that read nothing
- * back (the pair already learned, the budget spent) answers false.
  */
-function learnHardenedPrincipals(dir: string): boolean {
-  if (hardenedPrincipals || learnAttemptsLeft <= 0) return false
+function learnHardenedPrincipals(dir: string): void {
+  if (hardenedPrincipals || learnAttemptsLeft <= 0) return
   learnAttemptsLeft--
   const entries = windowsAclEntries(dir).filter((e) => !unremovableAclPrincipals.has(aclEntryPrincipal(e)))
-  if (entries.length < 1 || entries.length > 2) return false
-  if (!entries.every((e) => !e.includes('(I)') && e.endsWith(':(OI)(CI)(F)'))) return false
+  if (entries.length < 1 || entries.length > 2) return
+  if (!entries.every((e) => !e.includes('(I)') && e.endsWith(':(OI)(CI)(F)'))) return
   const principals = new Set(entries.map(aclEntryPrincipal))
-  if (principals.size !== entries.length) return false
-  hardenedPrincipals = principals
-  return true
+  if (principals.size === entries.length) hardenedPrincipals = principals
 }
 
 /** Test seam: the learned pair, the un-removable memo and the learn budget are
@@ -700,9 +695,15 @@ export function _resetAclStateForTest(): void {
   provenOwnerOnlyDirs.clear()
 }
 
+/** How long a folder stays remembered as owner-only (`provenOwnerOnlyDirs`). */
+const HARDENED_DIR_TTL_MS = 10 * 60 * 1000
+/** Past this many folders the one remembered longest ago goes: a long run
+ *  hardens a few folders per session, and none of them needs to stay. */
+const HARDENED_DIR_MEMO_MAX = 512
 /**
  * Folders this run has PROVEN owner-only, so the next call for one of them
- * starts no icacls at all (aicc_planning #301).
+ * starts no icacls at all: a folder's key (`folderKey`) -> its file identity
+ * when it was proven, and when that was.
  *
  * `hardenCredentialDir` runs on every config write (`ensureConfigDir`), at
  * every session start and for each session's settings, MCP config and hooks,
@@ -711,42 +712,32 @@ export function _resetAclStateForTest(): void {
  * busy, which froze the window for 1-5s at a time.
  *
  * What may enter, and how it leaves:
- *   * Only proof enters. A read that showed the owner-only list, or a write
- *     whose read-back did (the read-back that learns the pair). A write that
- *     was not read back, a `false` and every fallback outcome are not proof
- *     and are never remembered: the next call reads, exactly as before.
+ *   * One way in: an icacls read of the folder that showed the owner-only
+ *     list. A write is never remembered, read back or not, nor a `false` or
+ *     any fallback outcome: the next call reads, and that read decides. So a
+ *     folder that needed hardening costs a read and a write, then one read,
+ *     then nothing.
  *   * Keyed by the resolved path, compared as the file system compares names
- *     (`folderKey`), and tied to the folder's file identity at that moment. A
- *     folder removed and made again under the same name (`ensureCanvasPlugin`
- *     does that on every rebuild) is another folder, back on its parent's
- *     list: its identity differs, so it is read again and repaired. Checking
- *     the identity is one lstat, never a program start. A folder with no
- *     identity to read (a link, or not there) is never remembered.
- *   * For ten minutes. After that the next call reads again, so a list
- *     changed from outside is found within that time. Until then it is not
- *     seen; changing it takes the right to write the folder's list, which is
- *     its owner's or an administrator's, and this hardening is no defence
- *     against either (see the note on the skip above).
- *   * `forgetHardenedDir` drops one folder at once, for a caller whose write
- *     into a hardened folder just failed.
+ *     (`folderKey`), and tied to the folder's file identity (`realFolderId`,
+ *     taken BEFORE the read that proves it and checked again after, so a
+ *     folder swapped in during the read is not remembered). A folder removed
+ *     and made again under the same name (`ensureCanvasPlugin` does that on
+ *     every rebuild) is another folder, back on its parent's list: its file
+ *     id differs, so it is read again and repaired. Checking the identity is
+ *     one lstat, never a program start. A folder with no identity to read (a
+ *     link, not a folder, or not there) is never remembered.
+ *   * For ten minutes, counted on a clock that only moves forward
+ *     (`performance.now()`), so a system clock set back cannot keep an entry
+ *     longer. After that the next call reads again, so a list changed from
+ *     outside is found within that time. Until then it is not seen; changing
+ *     it takes the right to write the folder's list, which is its owner's or
+ *     an administrator's, and this hardening is no defence against either
+ *     (see the note on the skip above).
+ *   * `forgetHardenedDir` drops one folder at once. `atomicWriteSecure` calls
+ *     it for a write that failed, as do the two config writers that do not go
+ *     through it (the session state and the saved price lists).
  */
-const HARDENED_DIR_TTL_MS = 10 * 60 * 1000
-/** Past this many folders the one remembered longest ago goes: a long run
- *  hardens a few folders per session, and none of them needs to stay. */
-const HARDENED_DIR_MEMO_MAX = 512
-/** A folder's key (`folderKey`) -> its file identity when it was proven, and when that was. */
 const provenOwnerOnlyDirs = new Map<string, { id: string; at: number }>()
-let hardenedDirClock: () => number = () => Date.now()
-
-/** A real folder's identity for `provenOwnerOnlyDirs`: its volume, file id
- *  and creation time. Null for a link, for anything that is not a folder and
- *  for one that is not there. */
-function hardenedDirIdentity(dir: string): string | null {
-  try {
-    const st = fs.lstatSync(dir, { bigint: true })
-    return !st.isSymbolicLink() && st.isDirectory() ? `${st.dev}:${st.ino}:${st.birthtimeNs}` : null
-  } catch { return null }
-}
 
 /** Whether `dir` was proven owner-only within the last ten minutes and is
  *  still the same folder. Anything else forgets it. Never throws. */
@@ -755,43 +746,38 @@ function isProvenOwnerOnly(dir: string): boolean {
   try { key = folderKey(dir) } catch { return false }
   const known = provenOwnerOnlyDirs.get(key)
   if (!known) return false
-  const age = hardenedDirClock() - known.at
-  // A clock set back reads as expired, never as fresh for longer.
-  if (age >= 0 && age < HARDENED_DIR_TTL_MS && hardenedDirIdentity(dir) === known.id) return true
+  const age = performance.now() - known.at
+  if (age >= 0 && age < HARDENED_DIR_TTL_MS && realFolderId(dir) === known.id) return true
   provenOwnerOnlyDirs.delete(key)
   return false
 }
 
 /** Remember `dir` as proven owner-only now. Called only where an icacls read
- *  of it has just shown the owner-only list. Never throws. */
-function noteProvenOwnerOnly(dir: string): void {
+ *  of it has just shown the owner-only list; `idBefore` is its identity as
+ *  taken before that read, and nothing is remembered unless the folder has
+ *  one and still has the same one. Never throws. */
+function noteProvenOwnerOnly(dir: string, idBefore: string | null): void {
   let key: string
   try { key = folderKey(dir) } catch { return }
   provenOwnerOnlyDirs.delete(key)
-  const id = hardenedDirIdentity(dir)
-  if (id === null) return
+  if (idBefore === null || realFolderId(dir) !== idBefore) return
   if (provenOwnerOnlyDirs.size >= HARDENED_DIR_MEMO_MAX) {
     const oldest = provenOwnerOnlyDirs.keys().next()
     if (!oldest.done) provenOwnerOnlyDirs.delete(oldest.value)
   }
-  provenOwnerOnlyDirs.set(key, { id, at: hardenedDirClock() })
+  provenOwnerOnlyDirs.set(key, { id: idBefore, at: performance.now() })
 }
 
 /**
  * Forget that `dir` was proven owner-only this run, so the next
  * `hardenCredentialDir` / `hardenDirAclWindows` call for it reads its access
- * list again (aicc_planning #301). For a caller whose write INTO a hardened
- * folder just failed: whatever was proven about the folder, it is not
- * serving the app now. The path is taken as the hardening takes it (resolved,
- * compared as the file system compares names). Never throws.
+ * list again. For a write INTO a hardened folder that just failed: whatever
+ * was proven about the folder, it is not serving the app now. The path is
+ * taken as the hardening takes it (resolved, compared as the file system
+ * compares names). Never throws.
  */
 export function forgetHardenedDir(dir: string): void {
   try { provenOwnerOnlyDirs.delete(folderKey(dir)) } catch { /* not a path: nothing was remembered for it */ }
-}
-
-/** Test seam: the clock the ten minutes are counted on; null restores the real one. */
-export function _setHardenedDirClockForTest(now: (() => number) | null): void {
-  hardenedDirClock = now ?? (() => Date.now())
 }
 
 /**
@@ -925,9 +911,10 @@ function strandedPrincipals(entries: string[], removals: string[], granted: Read
  *
  * A folder this run has already proven owner-only, the same folder still and
  * within the last ten minutes, is answered true with no icacls started at all
- * (aicc_planning #301; `provenOwnerOnlyDirs` says what counts as proof). The
- * first call for a folder, and every call that is not such a hit, runs
- * exactly the sequence above.
+ * (`provenOwnerOnlyDirs` says what counts as proof). The first call for a
+ * folder, and every call that is not such a hit, runs exactly the sequence
+ * above, noted as one main-thread operation for the jank detector
+ * (`execFileSync` holds the thread for every run of it).
  *
  * Never throws. Every caller sits on a session-spawn or config-write path where
  * a permissions failure must not be fatal -- including the case where a mocked
@@ -938,10 +925,18 @@ export function hardenDirAclWindows(dir: string): boolean {
   const spellings = windowsAclPrincipals()
   if (spellings.length === 0) return false
   if (isProvenOwnerOnly(dir)) return true
+  const end = noteMainThreadOp(ICACLS_OP_LABEL)
+  try { return readThenHardenDirAcl(dir, spellings) } finally { end() }
+}
 
+/** `hardenDirAclWindows` past its remembered-folder answer: the read, and the
+ *  writes when the read does not show the owner-only list. */
+function readThenHardenDirAcl(dir: string, spellings: string[]): boolean {
+  // Before the read, so what is remembered is the folder the read saw.
+  const idBefore = realFolderId(dir)
   const entries = windowsAclEntries(dir)
   if (windowsAclIsOwnerOnly(entries, hardenedPrincipals, unremovableAclPrincipals)) {
-    noteProvenOwnerOnly(dir)
+    noteProvenOwnerOnly(dir, idBefore)
     return true
   }
 
@@ -959,9 +954,7 @@ export function hardenDirAclWindows(dir: string): boolean {
     // granted principal's allow entry that `/grant:r` leaves in place is taken
     // here too (`/remove:g`), ahead of the grant that writes its entry again.
     if (removals.length > 0 && icacls([dir, ...removals, ...grants])) {
-      // A read-back that shows the owner-only list is proof (#301); a write
-      // that is not read back is not, and the next call's read decides.
-      if (strandedAtStart === 0 && learnHardenedPrincipals(dir)) noteProvenOwnerOnly(dir)
+      if (strandedAtStart === 0) learnHardenedPrincipals(dir)
       return true
     }
 
@@ -976,7 +969,7 @@ export function hardenDirAclWindows(dir: string): boolean {
     // the grants do, so they add no way for this write to fail.
     if (!icacls([dir, ...stripAndGrantRemovals(entries, principal), ...grants])) continue
     if (removals.length === 0) {
-      if (strandedAtStart === 0 && learnHardenedPrincipals(dir)) noteProvenOwnerOnly(dir)
+      if (strandedAtStart === 0) learnHardenedPrincipals(dir)
       return true
     }
 
@@ -1044,7 +1037,7 @@ export function hardenDirAclWindows(dir: string): boolean {
     const regranted = icacls([dir, ...grants])
     // A principal still on the DACL that the memo does not discount makes the
     // read-back unable to match, so it is not paid for.
-    if (regranted && stranded === 0 && learnHardenedPrincipals(dir)) noteProvenOwnerOnly(dir)
+    if (regranted && stranded === 0) learnHardenedPrincipals(dir)
     return regranted
   }
   return false

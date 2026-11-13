@@ -8,7 +8,7 @@ import { join, parse } from 'path'
 import { readFileSync, existsSync, readdirSync, copyFileSync, rmSync, statSync, renameSync } from 'fs'
 import { getResourcesDirectory } from './ipc/setup-handlers'
 import { logInfo, logError, logWarn } from './debug-logger'
-import { atomicWriteSecure, mkdirSecure, hardenCredentialDir, hardenCredentialFile, forgetHardenedDir } from './account-profiles'
+import { atomicWriteSecure, mkdirSecure, hardenCredentialDir, hardenCredentialFile } from './account-profiles'
 
 // All config file names
 const CONFIG_FILES = {
@@ -391,12 +391,6 @@ export function writeConfig(key: ConfigKey, data: unknown): boolean {
     // Windows rename failure is now retried instead of silently dropping the
     // save (#233), and the staging file can no longer be a planted link.
     logError(`[config-manager] Failed to write ${key}: ${err}`)
-    // aicc_planning #301: CONFIG's owner-only verdict is remembered for a few
-    // minutes so a config write starts no program. A write into it that
-    // failed drops that memory: the next write reads the folder's access list
-    // again instead of trusting it. Guarded, because nothing in this catch
-    // may throw (the contract above).
-    try { forgetHardenedDir(getConfigDir()) } catch { /* forgetting never changes a failed write's answer */ }
     return false
   }
 }

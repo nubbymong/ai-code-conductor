@@ -12,6 +12,7 @@ import * as fs from 'fs'
 import * as https from 'https'
 import * as path from 'path'
 import { getConfigDir, ensureConfigDir } from '../config-manager'
+import { forgetHardenedDir } from '../account-profiles'
 import { logInfo } from '../debug-logger'
 import { tryGetProviderPackage } from '../providers/core'
 import { isPlainPriceId, checkedPer1M, listPricePer1M, isFreshCopy, isPriceRecord } from './price-checks'
@@ -121,7 +122,11 @@ function saveCopy(file: string, value: unknown): void {
   try {
     ensureConfigDir()
     fs.writeFileSync(path.join(getConfigDir(), file), JSON.stringify(value, null, 2))
-  } catch { /* ignore */ }
+  } catch {
+    // The copy is best-effort, but a failed write into CONFIG still has the
+    // folder's access list read again before the next write.
+    forgetHardenedDir(getConfigDir())
+  }
 }
 
 /** The fetch in flight, shared by every call made while it runs (the app
