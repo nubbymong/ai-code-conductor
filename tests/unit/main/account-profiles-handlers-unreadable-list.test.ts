@@ -4,9 +4,11 @@
 // sentence, which the Accounts row shows, and nothing is touched: remove asks
 // before it closes or clears anything. Add rejects with the same sentence,
 // which Settings shows. The identity refresh, which a poll asks every few
-// seconds while a sign-in is open, answers no email for a save that was
-// refused, so the poll asks again. Everything below the handlers is a fake:
-// nothing is read or written, and nothing is started.
+// seconds while a sign-in is open, answers no email while the list cannot be
+// read (at its own read, or at the save), so the poll asks again. A removal
+// whose list stops reading during the awaited clear says what did happen: the
+// claude.ai sign-in was cleared and the account kept. Everything below the
+// handlers is a fake: nothing is read or written, and nothing is started.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { IPC } from '../../../src/shared/ipc-channels'
 import type { AccountProfile } from '../../../src/shared/account-types'
@@ -43,7 +45,7 @@ vi.mock('../../../src/main/account-profiles', async () => {
     readProfileAccountEmail: () => 'me@example.com',
     getProfileConfigDir: (id: string) => `/profiles/${id}`,
     backupProfileHomeToCanonical: (id: string) => { h.backups.push(id) },
-    safeTeardownProfile: (id: string) => { h.removal.push(`teardown:${id}`) },
+    safeTeardownProfile: (id: string) => { if (h.refuse) throw h.refuse; h.removal.push(`teardown:${id}`) },
     captureDetectedAccount: vi.fn(),
     restoreProfileIdentityFromCanonical: vi.fn(),
     readProfileCredentialStamp: vi.fn(),
@@ -91,6 +93,15 @@ beforeEach(() => {
 describe('the identity refresh (asked by a poll) with a list that cannot be read', () => {
   it('a save that was refused answers no email, so the poll asks again; it is logged and the backup is still made', () => {
     h.refuse = new ProfilesUnreadableError()
+    expect(invoke(IPC.ACCOUNT_PROFILES_REFRESH_IDENTITY, { id: 'work' })).toEqual({ ok: true, email: null, configDir: '/profiles/work' })
+    expect(h.upserts).toEqual([])
+    expect(h.backups).toEqual(['work'])
+    expect(h.warn).toHaveLength(1)
+    expect(h.warn[0]).toMatch(/^\[account-profiles\] refreshIdentity for work: .*could not be read/)
+  })
+
+  it('the list does not read at the read the handler makes: no email either, nothing saved, logged once, the backup still made', () => {
+    h.unreadable = true
     expect(invoke(IPC.ACCOUNT_PROFILES_REFRESH_IDENTITY, { id: 'work' })).toEqual({ ok: true, email: null, configDir: '/profiles/work' })
     expect(h.upserts).toEqual([])
     expect(h.backups).toEqual(['work'])
@@ -149,6 +160,21 @@ describe('an edit the user made, with a list that cannot be read', () => {
   it('remove still goes through, in its order, when the list reads', async () => {
     expect(await invoke(IPC.ACCOUNT_PROFILES_DELETE, { id: 'work' })).toEqual({ ok: true })
     expect(h.removal).toEqual(['artifacts:work', 'panes:work', 'clear:work', 'record:work', 'teardown:work'])
+  })
+
+  it('remove, the list stops reading during the awaited clear: the answer says the sign-in was cleared and the account kept', async () => {
+    // The check before anything is closed passes; the removal's own read does not.
+    h.refuse = new ProfilesUnreadableError()
+    const res = await invoke(IPC.ACCOUNT_PROFILES_DELETE, { id: 'work' })
+    expect(res).toEqual({ ok: false, error: 'The accounts list (profiles.json) could not be read, so the account was kept. Its claude.ai sign-in was cleared; try again.' })
+    expect(res.error).not.toMatch(/nothing was changed/)
+    expect(res.error).not.toMatch(/[\\/]/)
+    expect(h.removal).toEqual(['artifacts:work', 'panes:work', 'clear:work', 'record:work'])
+  })
+
+  it('remove, any other failure of the removal: its own words, as before', async () => {
+    h.refuse = new Error('EBUSY: resource busy or locked')
+    expect(await invoke(IPC.ACCOUNT_PROFILES_DELETE, { id: 'work' })).toEqual({ ok: false, error: 'EBUSY: resource busy or locked' })
   })
 
   it('add rejects with the sentence, which Settings shows', () => {

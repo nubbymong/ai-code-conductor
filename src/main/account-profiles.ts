@@ -1986,11 +1986,12 @@ function readProfilesFile(whenMissing: ProfilesFile | null = { profiles: [] }): 
   } catch { return null }
 }
 
-/** The saved accounts, for callers that only READ: a file that did not read
- *  completely is an empty list here. A writer never saves this list back; it
- *  edits the file as `readProfilesFile` gave it. */
+/** The saved accounts, for callers that only READ: the entries of the list
+ *  that are profile objects, and a file that did not read completely is an
+ *  empty list here. A writer never saves this list back; it edits the file as
+ *  `readProfilesFile` gave it, every other entry included. */
 export function listProfiles(): AccountProfile[] {
-  return (readProfilesFile()?.profiles ?? []) as AccountProfile[]
+  return (readProfilesFile()?.profiles ?? []).filter(isProfileRecord)
 }
 
 /** The file as a write would use it, or ProfilesUnreadableError. A caller
@@ -3118,7 +3119,7 @@ export function captureGlobalLogin(name?: string): AccountProfile | null {
  *  files only; never touches the real home. */
 export function migrateProfilesToCanonicalLayout(): void {
   for (const p of listProfiles()) {
-    if (!isValidProfileId(p?.id)) continue // also an entry that is not a profile object
+    if (!isValidProfileId(p.id)) continue
     const idDir = getAccountIdentityDir(p.id)
     if (fs.existsSync(path.join(idDir, '.claude.json'))) continue // already migrated
     const home = getProfileConfigDir(p.id)

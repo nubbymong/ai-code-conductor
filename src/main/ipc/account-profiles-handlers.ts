@@ -28,9 +28,9 @@ function unreadable(): { ok: false; error: string } {
   return { ok: false, error: PROFILES_UNREADABLE }
 }
 
-/** The saved accounts for an edit the user asked for, read strictly (the
- *  entries that are profiles); a list that did not read is the error
- *  `refusingUnreadable` answers. */
+/** The saved accounts for an edit, read strictly (the entries that are
+ *  profiles); a list that did not read is ProfilesUnreadableError, which
+ *  `refusingUnreadable` answers for an edit the user asked for. */
 function profilesForEdit(): AccountProfile[] {
   const all = readProfilesStrict()
   if (all === null) throw new ProfilesUnreadableError()
@@ -285,6 +285,12 @@ export function registerAccountProfilesHandlers(getWindow: () => BrowserWindow |
       safeTeardownProfile(p.id)
     } catch (err) {
       logError(`[account-profiles] delete failed for ${p.id}:`, err)
+      // The list stopped reading during the awaited clear. The removal reads
+      // it before it removes anything, so the account is whole; its claude.ai
+      // sign-in is not, and the answer says both.
+      if (err instanceof ProfilesUnreadableError) {
+        return { ok: false, error: 'The accounts list (profiles.json) could not be read, so the account was kept. Its claude.ai sign-in was cleared; try again.' }
+      }
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
     return { ok: true }
@@ -295,18 +301,18 @@ export function registerAccountProfilesHandlers(getWindow: () => BrowserWindow |
     const email = readProfileAccountEmail(p.id)
     let saved = true
     if (email) {
-      const prof = listProfiles().find((x) => x.id === p.id)
       // A poll asks this every few seconds while a sign-in is open, and it
       // stops at the first email it is given. So when the accounts list cannot
-      // be read just now and the email is not saved, no email is answered
-      // either: the poll asks again and that ask saves it. Any other error is
-      // the caller's, as before.
-      if (prof) {
-        try { upsertProfile({ ...prof, accountEmail: email }) } catch (err) {
-          if (!(err instanceof ProfilesUnreadableError)) throw err
-          logWarn(`[account-profiles] refreshIdentity for ${p.id}: ${err.message}`)
-          saved = false
-        }
+      // be read just now, at the read here or at the write, the email is not
+      // saved and no email is answered either: the poll asks again and that
+      // ask saves it. Any other error is the caller's, as before.
+      try {
+        const prof = profilesForEdit().find((x) => x.id === p.id)
+        if (prof) upsertProfile({ ...prof, accountEmail: email })
+      } catch (err) {
+        if (!(err instanceof ProfilesUnreadableError)) throw err
+        logWarn(`[account-profiles] refreshIdentity for ${p.id}: ${err.message}`)
+        saved = false
       }
       // Ensure a canonical backup exists now (not just after the next restart),
       // so a later capture/restore always has a source to restore from.

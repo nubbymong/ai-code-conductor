@@ -17,20 +17,28 @@ vi.mock('electron', () => ({
 }))
 const steps = vi.hoisted(() => ({ settled: Promise.resolve() as Promise<void>, open: () => {} }))
 const listed = vi.hoisted(() => ({ reads: 0 }))
-vi.mock('../../../src/main/account-profiles', () => ({
-  listProfiles: () => { listed.reads++; return [{ id: 'primary', name: '', createdAt: 0, isPrimary: true }] },
-  startProfileStepsSettled: () => steps.settled,
-  upsertProfile: vi.fn(),
-  isValidProfileId: (id: unknown) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(id),
-  safeTeardownProfile: vi.fn(),
-  readProfileAccountEmail: vi.fn(),
-  getProfileConfigDir: vi.fn(),
-  createProfile: vi.fn(),
-  captureDetectedAccount: vi.fn(),
-  backupProfileHomeToCanonical: vi.fn(),
-  restoreProfileIdentityFromCanonical: vi.fn(),
-  readProfileCredentialStamp: vi.fn(),
-}))
+vi.mock('../../../src/main/account-profiles', async () => {
+  // The real error class and sentence, which the handlers compare against.
+  const real = await vi.importActual<typeof import('../../../src/main/account-profiles')>('../../../src/main/account-profiles')
+  return {
+    ProfilesUnreadableError: real.ProfilesUnreadableError,
+    PROFILES_UNREADABLE: real.PROFILES_UNREADABLE,
+    listProfiles: () => { listed.reads++; return [{ id: 'primary', name: '', createdAt: 0, isPrimary: true }] },
+    // The read the edits and the removal use (not the read the window waits for).
+    readProfilesStrict: () => [{ id: 'primary', name: '', createdAt: 0, isPrimary: true }],
+    startProfileStepsSettled: () => steps.settled,
+    upsertProfile: vi.fn(),
+    isValidProfileId: (id: unknown) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(id),
+    safeTeardownProfile: vi.fn(),
+    readProfileAccountEmail: vi.fn(),
+    getProfileConfigDir: vi.fn(),
+    createProfile: vi.fn(),
+    captureDetectedAccount: vi.fn(),
+    backupProfileHomeToCanonical: vi.fn(),
+    restoreProfileIdentityFromCanonical: vi.fn(),
+    readProfileCredentialStamp: vi.fn(),
+  }
+})
 vi.mock('../../../src/main/claude-account-identity', () => ({
   getAccountIdentity: vi.fn(), getDefaultAccountEmail: vi.fn(), detectedNewAccountEmail: vi.fn(),
   getWatchedProfileId: vi.fn(), isProfileInUseByLiveSession: vi.fn(() => false), sessionsOnProfile: vi.fn(() => [] as string[]),

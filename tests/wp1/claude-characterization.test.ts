@@ -348,14 +348,23 @@ describe('C5: accountProfiles handlers sequencing on the base', () => {
   beforeEach(async () => {
     order.length = 0; state.inUse = []; state.clearThrows = false; state.teardownThrows = false
     store = [{ id: 'primary', name: '', createdAt: 0, isPrimary: true }, { id: 'work', name: 'Work', createdAt: 0 }]
-    vi.doMock('../../src/main/account-profiles', () => ({
-      listProfiles: () => store.map((p) => ({ ...p })),
-      upsertProfile: (p: Record<string, unknown>) => { const i = store.findIndex((x) => x.id === p.id); if (i >= 0) store[i] = p; else store.push(p) },
-      isValidProfileId: (id: unknown) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(id),
-      safeTeardownProfile: (id: string) => { order.push(`teardown:${id}`); if (state.teardownThrows) throw new Error('file locked') },
-      readProfileAccountEmail: vi.fn(), getProfileConfigDir: vi.fn(), createProfile: vi.fn(), captureDetectedAccount: vi.fn(),
-      backupProfileHomeToCanonical: vi.fn(), restoreProfileIdentityFromCanonical: vi.fn(), readProfileCredentialStamp: vi.fn(),
-    }))
+    vi.doMock('../../src/main/account-profiles', async () => {
+      // The real error class and sentence: the handlers tell a list that did
+      // not read from any other failure by them.
+      const real = await vi.importActual<typeof import('../../src/main/account-profiles')>('../../src/main/account-profiles')
+      return {
+        ProfilesUnreadableError: real.ProfilesUnreadableError,
+        PROFILES_UNREADABLE: real.PROFILES_UNREADABLE,
+        listProfiles: () => store.map((p) => ({ ...p })),
+        // The read the edits and the removal use: the same list, read strictly.
+        readProfilesStrict: () => store.map((p) => ({ ...p })),
+        upsertProfile: (p: Record<string, unknown>) => { const i = store.findIndex((x) => x.id === p.id); if (i >= 0) store[i] = p; else store.push(p) },
+        isValidProfileId: (id: unknown) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(id),
+        safeTeardownProfile: (id: string) => { order.push(`teardown:${id}`); if (state.teardownThrows) throw new Error('file locked') },
+        readProfileAccountEmail: vi.fn(), getProfileConfigDir: vi.fn(), createProfile: vi.fn(), captureDetectedAccount: vi.fn(),
+        backupProfileHomeToCanonical: vi.fn(), restoreProfileIdentityFromCanonical: vi.fn(), readProfileCredentialStamp: vi.fn(),
+      }
+    })
     vi.doMock('../../src/main/claude-account-identity', () => ({
       getAccountIdentity: vi.fn(), getDefaultAccountEmail: vi.fn(), getWatchedProfileId: vi.fn(), detectedNewAccountEmail: vi.fn(),
       isProfileInUseByLiveSession: () => { const v = state.inUse.shift() ?? false; order.push(`inUse:${v}`); return v },

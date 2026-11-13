@@ -12,7 +12,8 @@
 //
 // Host-safe: the writers only read and write profiles.json, here in a temp
 // folder of the test's own. Every program start is refused, no link is made
-// (a link call is refused too) and no access list is read or changed.
+// (a link call is refused, or does nothing in the cases that make an account
+// folder) and no access list is read or changed.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -33,7 +34,8 @@ vi.mock('../../../src/main/debug-logger', async (importOriginal) => {
 
 import {
   _setRootsForTest, getProfilesRoot, getProfileConfigDir, listProfiles, readProfilesStrict, updateProfilesStrict,
-  upsertProfile, deleteProfileMeta, setPrimaryProfile, createProfile, safeTeardownProfile, captureGlobalLogin,
+  upsertProfile, deleteProfileMeta, setPrimaryProfile, getPrimaryProfileId, createProfile, safeTeardownProfile,
+  captureGlobalLogin, captureDetectedAccount,
   healPlaceholderNames, migrateProfilesToHomeLayout, migrateProfilesToCanonicalLayout,
   ProfilesUnreadableError, PROFILES_UNREADABLE,
 } from '../../../src/main/account-profiles'
@@ -50,7 +52,7 @@ let file = ''
 const realRead = fs.readFileSync
 
 beforeEach(() => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-b1-'))
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-accounts-list-'))
   _setRootsForTest({ resourcesDir: path.join(tmp, 'resources'), sharedRoot: path.join(tmp, 'shared') })
   file = path.join(getProfilesRoot(), 'profiles.json')
   logs.warn.length = 0
@@ -287,6 +289,65 @@ describe('callers of the writers, with a list that cannot be read', () => {
   })
 })
 
+describe('making an account: the list is read once, and an account that never reached it leaves no folder', () => {
+  const IDENTITY = JSON.stringify({ oauthAccount: { emailAddress: 'me@example.com' } })
+  const CAPTURES: Array<[string, () => AccountProfile | null]> = [
+    ['captureGlobalLogin', () => captureGlobalLogin('Mine')],
+    ['captureDetectedAccount', () => captureDetectedAccount(B.id, 'Mine')],
+  ]
+
+  /** The two saved accounts, a sign-in for each capture path to copy (the
+   *  global one beside the shared folder, and one in the second account's
+   *  home), and link calls that do nothing: making an account folder gets
+   *  past them and no link is made. */
+  function arrange(): Buffer {
+    const before = seed(TWO)
+    fs.mkdirSync(path.join(tmp, 'shared'), { recursive: true })
+    fs.writeFileSync(path.join(tmp, '.claude.json'), IDENTITY)
+    fs.mkdirSync(getProfileConfigDir(B.id), { recursive: true })
+    fs.writeFileSync(path.join(getProfileConfigDir(B.id), '.claude.json'), IDENTITY)
+    vi.mocked(fs.symlinkSync).mockImplementation(() => {})
+    vi.spyOn(fs, 'linkSync').mockImplementation(() => {})
+    return before
+  }
+  /** What is in the accounts folder: the list, and one folder per account home. */
+  const inProfilesRoot = () => fs.readdirSync(getProfilesRoot()).sort()
+
+  it('createProfile reads the list once: the account is listed although the list stops reading after that read', () => {
+    arrange()
+    failReadsOfProfiles('EBUSY', 'after-one-read')
+    const made = createProfile('Another')
+    vi.mocked(fs.readFileSync).mockRestore()
+    expect(listProfiles().map((p) => `${p.id}:${p.name}`)).toEqual([`${A.id}:Home`, `${B.id}:Work`, `${made.id}:Another`])
+    expect(inProfilesRoot()).toEqual([B.id, made.id, 'profiles.json'].sort())
+  })
+
+  it.each(CAPTURES)('%s reads the list once: the captured account is listed with its email although the list stops reading after that read', (_name, capture) => {
+    arrange()
+    failReadsOfProfiles('EBUSY', 'after-one-read')
+    const made = capture()
+    vi.mocked(fs.readFileSync).mockRestore()
+    expect(made).toMatchObject({ accountEmail: 'me@example.com', name: 'Mine' })
+    expect(listProfiles().map((p) => `${p.id}:${p.accountEmail}`)).toEqual([`${A.id}:a@example.com`, `${B.id}:b@example.com`, `${made!.id}:me@example.com`])
+    expect(realRead(path.join(getProfileConfigDir(made!.id), '.claude.json'), 'utf8')).toBe(IDENTITY)
+  })
+
+  it.each(CAPTURES)('%s, the write of the list fails at the end: null is answered, the folder it made is gone and the file is untouched', (_name, capture) => {
+    const before = arrange()
+    // Only the write of the list: it makes sure of the list's own folder
+    // first, and that is the one call refused here.
+    const realMkdir = fs.mkdirSync
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(((p: unknown, ...rest: unknown[]) => {
+      if (typeof p === 'string' && path.resolve(p) === path.resolve(getProfilesRoot())) throw Object.assign(new Error('ENOSPC: simulated'), { code: 'ENOSPC' })
+      return (realMkdir as (...a: unknown[]) => unknown)(p, ...rest)
+    }) as typeof fs.mkdirSync)
+    expect(capture()).toBeNull()
+    expect(realRead(file).equals(before), 'profiles.json changed').toBe(true)
+    // The second account's home was there before; no other folder is left.
+    expect(inProfilesRoot()).toEqual([B.id, 'profiles.json'])
+  })
+})
+
 describe('the home-layout migration and the accounts list', () => {
   /** An account on the old layout: a home holding its sign-in files and no .claude folder. */
   function oldLayoutHome(id: string): string {
@@ -327,12 +388,16 @@ describe('the home-layout migration and the accounts list', () => {
   })
 })
 
-describe('an entry of the list that is not a profile object is passed over by the start-up steps', () => {
-  it('the two migrations and the name heal do not throw on a null or a stray string, and still do their work', () => {
+describe('an entry of the list that is not a profile object is passed over by every reader', () => {
+  it('the two migrations, the name heal and the primary lookup do not throw on a null or a stray string, and still do their work', () => {
     seed(JSON.stringify({ profiles: [null, 'stray', 7, { ...A, name: 'New account' }] }))
     expect(() => migrateProfilesToCanonicalLayout()).not.toThrow()
     expect(() => migrateProfilesToHomeLayout()).not.toThrow()
     expect(() => healPlaceholderNames()).not.toThrow()
+    // The primary is the entry after the three that are not profiles.
+    expect(getPrimaryProfileId()).toBe(A.id)
+    // A reader is handed the profile objects only; the file keeps every entry.
+    expect(listProfiles()).toEqual([{ ...A, name: '' }])
     const list = (JSON.parse(realRead(file, 'utf8')) as { profiles: unknown[] }).profiles
     expect(list).toEqual([null, 'stray', 7, { ...A, name: '' }])
   })

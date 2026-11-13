@@ -55,13 +55,18 @@ vi.mock('../../../src/main/usage/account-usage', () => ({
   claudeAccountDataAllowed: () => h.claudeOn(),
   fetchAllAccountsUsageStreaming: (cb: (u: AccountUsage) => void, opts?: { shouldContinue?: () => boolean }) => fetchAllAccountsUsageStreaming(cb, opts),
 }))
-vi.mock('../../../src/main/account-profiles', () => ({
-  listProfiles: () => [], readProfilesStrict: () => [], upsertProfile: vi.fn(),
-  isValidProfileId: (id: unknown) => typeof id === 'string' && id.length > 0 && id.length <= 128 && /^[a-z0-9][a-z0-9-]*$/.test(id),
-  safeTeardownProfile: h.safeTeardownProfile, readProfileAccountEmail: vi.fn(), getProfileConfigDir: vi.fn(),
-  createProfile: vi.fn(), captureDetectedAccount: vi.fn(), backupProfileHomeToCanonical: vi.fn(),
-  restoreProfileHomeFromCanonical: vi.fn(), readProfileCredentialStamp: h.readProfileCredentialStamp,
-}))
+vi.mock('../../../src/main/account-profiles', async () => {
+  // The real error class and sentence, which the handlers compare against.
+  const real = await vi.importActual<typeof import('../../../src/main/account-profiles')>('../../../src/main/account-profiles')
+  return {
+    ProfilesUnreadableError: real.ProfilesUnreadableError, PROFILES_UNREADABLE: real.PROFILES_UNREADABLE,
+    listProfiles: () => [], readProfilesStrict: () => [], upsertProfile: vi.fn(),
+    isValidProfileId: (id: unknown) => typeof id === 'string' && id.length > 0 && id.length <= 128 && /^[a-z0-9][a-z0-9-]*$/.test(id),
+    safeTeardownProfile: h.safeTeardownProfile, readProfileAccountEmail: vi.fn(), getProfileConfigDir: vi.fn(),
+    createProfile: vi.fn(), captureDetectedAccount: vi.fn(), backupProfileHomeToCanonical: vi.fn(),
+    restoreProfileHomeFromCanonical: vi.fn(), readProfileCredentialStamp: h.readProfileCredentialStamp,
+  }
+})
 vi.mock('../../../src/main/claude-account-identity', () => ({
   getAccountIdentity: vi.fn(), getDefaultAccountEmail: vi.fn(),
   getWatchedProfileId: vi.fn(), isProfileInUseByLiveSession: (id: string) => h.inUse(id), sessionsOnProfile: () => [],

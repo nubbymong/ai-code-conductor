@@ -63,7 +63,7 @@ let file = ''
 const realRead = fs.readFileSync
 
 beforeEach(() => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-b1-firstrun-'))
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-accounts-firstrun-'))
   _setRootsForTest({ resourcesDir: path.join(tmp, 'resources'), sharedRoot: path.join(tmp, 'home', '.claude') })
   file = path.join(getProfilesRoot(), 'profiles.json')
   h.captured.length = 0

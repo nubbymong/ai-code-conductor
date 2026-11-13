@@ -363,6 +363,26 @@ describe.runIf(process.platform === 'win32')('a folder proven owner-only is not 
     expect(f.entries).toEqual(ownerOnly())
   })
 
+  it('a folder moved away during the read, with another made in its place, is not remembered: put back afterwards, it is read again', () => {
+    learnPair()
+    const { dir, f } = folder('moved', ownerOnly())
+    const aside = path.join(root, 'moved-aside')
+    // While icacls reads the folder, another program moves it away and makes
+    // another at the path. The read prints the first folder's owner-only
+    // list, and the folder at the path when the read ends is the other one.
+    h.onCall = () => { h.onCall = null; fs.renameSync(dir, aside); fs.mkdirSync(dir) }
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true))).toBe(1)
+    // The first folder is put back. It is the one whose identity was taken
+    // before the read, but the read did not end on it, so nothing was
+    // remembered for the path: this call reads.
+    fs.rmdirSync(dir)
+    fs.renameSync(aside, dir)
+    expect(started(() => expect(hardenDirAclWindows(dir)).toBe(true)), 'read again, not answered from memory').toBe(1)
+    expect(f.writes).toBe(0)
+    // That read began and ended on the same folder, and is remembered.
+    expect(started(() => hardenDirAclWindows(dir))).toBe(0)
+  })
+
   it('a folder that is not there is never remembered, whatever icacls says of its name', () => {
     learnPair()
     const ghost = path.join(root, 'not-made')
