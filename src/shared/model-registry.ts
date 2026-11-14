@@ -259,6 +259,8 @@ function matchByPrefixOrPattern(
   let bestReach = NO_PATTERN_HIT
   for (const m of models) {
     // Past the first match, only its own family and origin are looked at.
+    // (A shipped entry's family is the bundled file's, whatever a fetched
+    // model file gives it: mergeModelData, main.)
     if (best && (m.family !== best.family || isOverlaySourced(m) !== isOverlaySourced(best))) continue
     const reach = patternReach(m, lower)
     if (reach > bestReach) { best = m; bestReach = reach }

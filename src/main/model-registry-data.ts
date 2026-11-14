@@ -25,8 +25,8 @@
 //    entry stands for, and cannot have them (the next rule), so it is a
 //    mistake in the file and the log says so;
 //  - THE RULE: a file never changes what a name the build already places
-//    resolves to. A shipped model's patterns and aliases are always the
-//    bundled file's (the file's are left out; its label, prices and other
+//    resolves to. A shipped model's patterns, aliases and family are always
+//    the bundled file's (the file's are left out; its label, prices and other
 //    fields are used), and a name is tried against the shipped entries, in
 //    the bundled file's order, before a model only the file has
 //    (mergeModelData here, matchEntry in model-registry.ts). So a model the
@@ -260,7 +260,9 @@ export function validateModelData(value: unknown, bundled: ModelRegistry): Model
     const levels = effortsOf[familyProvider(m.family)]
     if ((m.efforts ?? []).some((e) => !levels.has(e))) return refuse(`models: ${m.id} lists an effort that is not one of its levels`)
     // Which assistant a shipped model belongs to is the code's, never a
-    // file's (as mergeRegistry holds an overlay to).
+    // file's (as mergeRegistry holds an overlay to). Another family of the
+    // same assistant is not refused: mergeModelData leaves it out, as it
+    // does a shipped model's patterns.
     const base = shipped.get(m.id)
     if (base && familyProvider(base.family) !== familyProvider(m.family)) return refuse(`models: ${m.id} is moved to the other assistant`)
     // An entry that is only the start of a name would take the label and the
@@ -326,7 +328,11 @@ function joinByValue<T extends { value: string }>(file: readonly T[], bundled: r
  *    the file gives it (an entry the bundled file gives no aliases has
  *    none). They are left out, not refused: a file edited for a later
  *    build may well have other patterns on a model this build ships, and
- *    refusing it would lock this build out of every later file. And the
+ *    refusing it would lock this build out of every later file. Its family
+ *    is the bundled file's in the same way: a name placed by a pattern goes
+ *    to an entry of the family its first match is in (matchByPrefixOrPattern),
+ *    so a shipped model given another family would be passed over there, and
+ *    the names its own pattern places would go to another entry. And the
  *    result carries the bundled file's own order (`shippedOrder`, in memory
  *    only), which a name is placed by, a model only the file has being
  *    tried last (matchEntry). The order of `models`, which is the pickers',
@@ -353,7 +359,7 @@ export function mergeModelData(bundled: ModelRegistry, data: ModelRegistry | nul
   const corrected = (m: ModelEntry, base: ModelEntry): ModelEntry => {
     const { pickable: _theirs, aliases: _names, ...rest } = m
     void _theirs; void _names
-    const kept: ModelEntry = { ...rest, patterns: base.patterns }
+    const kept: ModelEntry = { ...rest, patterns: base.patterns, family: base.family }
     if (base.aliases !== undefined) kept.aliases = base.aliases
     return base.pickable === undefined ? kept : { ...kept, pickable: base.pickable }
   }
