@@ -220,3 +220,64 @@ describe('a notice whose model the registry does not cover (O8)', () => {
     expect(openIds(s)).toEqual([])
   })
 })
+
+// 2.1.3-beta.1: model definitions are data. The model file read at start-up
+// can carry a model this build's own file does not, and the notice for that
+// model goes once the file has it, with no release and no restart. The read
+// is a stand-in: no request leaves this suite.
+describe('the model data read at start-up carries the model (2.1.3-beta.1)', () => {
+  const NEW = 'claude-fable-6'
+  const fileWith = async (id: string) => {
+    const bundled = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'resources', 'model-registry.json'), 'utf8'))
+    bundled.models.unshift({ id, patterns: ['fable-6'], family: 'fable', label: 'Fable 6' })
+    return JSON.stringify(bundled)
+  }
+  const refresh = async (text: string) => {
+    const { refreshModelRegistry } = await import('../../../src/main/model-registry-service')
+    return refreshModelRegistry({ fetchText: async () => ({ ok: true, text }) })
+  }
+
+  it('the notice for a model the fetched file now has is closed as soon as the file is in use, and the file agrees', async () => {
+    const s = await sentinel([notice(NEW), notice('claude-fable-7')])
+    expect(openIds(s)).toEqual([`models:missing:${NEW}`, 'models:missing:claude-fable-7'])
+    expect(await refresh(await fileWith(NEW))).toBe(true)
+    s.sentinelModelDataChanged()
+    // The one the file carries is closed; the one it does not carry stays.
+    expect(openIds(s)).toEqual(['models:missing:claude-fable-7'])
+    expect(savedIds()).toEqual(['models:missing:claude-fable-7=open'])
+  })
+
+  it('a read that brings nothing new closes nothing', async () => {
+    const s = await sentinel([notice(NEW)])
+    const { refreshModelRegistry } = await import('../../../src/main/model-registry-service')
+    expect(await refreshModelRegistry({ fetchText: async () => ({ ok: false, reason: 'HTTP 404' }) })).toBe(false)
+    s.sentinelModelDataChanged()
+    expect(openIds(s)).toEqual([`models:missing:${NEW}`])
+  })
+
+  it('the next check, with the article listing the model, raises nothing about it: not missing, and not "possibly retired"', async () => {
+    const s = await sentinel([notice(NEW)])
+    await refresh(await fileWith(NEW))
+    s.sentinelModelDataChanged()
+    article.ids = [...liveIds, NEW]
+    await s.sentinelStartupCheck()
+    expect(snap(s).findings.filter((f) => f.status === 'open' && f.id.includes(NEW))).toEqual([])
+    // Offline (the shipped list, which cannot name it): still nothing.
+    article.ids = null
+    await s.sentinelStartupCheck()
+    expect(snap(s).findings.filter((f) => f.status === 'open' && f.id.includes(NEW))).toEqual([])
+  })
+
+  it('a muted notice stays muted', async () => {
+    const s = await sentinel([notice(NEW, 'muted')])
+    await refresh(await fileWith(NEW))
+    s.sentinelModelDataChanged()
+    expect(savedIds()).toContain(`models:missing:${NEW}=muted`)
+  })
+
+  it('before Sentinel is started, the call does nothing and does not throw', async () => {
+    vi.resetModules()
+    const mod = await import('../../../src/main/sentinel/index')
+    expect(() => mod.sentinelModelDataChanged()).not.toThrow()
+  })
+})

@@ -32,7 +32,11 @@ export interface ModelEntry {
 }
 
 export interface OverlayProvenance {
-  addedBy: 'sentinel' | 'user'
+  /** `model-data` (2.1.3-beta.1): not an overlay entry at all, but a model the
+   *  fetched model file carries and this build's own file does not
+   *  (mergeModelData, main). It is marked the same way because the same thing
+   *  is true of it: the lists shipped with this build cannot name it. */
+  addedBy: 'sentinel' | 'user' | 'model-data'
   date: string
   ccVersion?: string
   cccVersion?: string
@@ -142,6 +146,25 @@ export function hashUnknownModelColor(modelId: string): string {
 
 export type ModelMatchKind = 'exact' | 'alias' | 'prefix' | 'pattern'
 
+/** A pattern that is plain text: lower-case letters, digits, dots and
+ *  hyphens, at most 64 of them, with an optional leading `^` meaning "the
+ *  name starts with this". */
+const LITERAL_PATTERN_RE = /^(\^?)([a-z0-9][a-z0-9.-]{0,63})$/
+
+/**
+ * A pattern as plain text, or null when it is not one (2.1.3-beta.1).
+ *
+ * One rule, two readers, so they cannot drift apart: the check on a fetched
+ * model file admits only patterns this returns non-null for
+ * (model-registry-data.ts), and matchEntry matches every such pattern as
+ * text. So nothing from a fetched file is ever compiled into a regular
+ * expression. Every pattern in the bundled file is of this form too.
+ */
+export function literalPattern(p: unknown): { text: string; atStart: boolean } | null {
+  const m = typeof p === 'string' ? LITERAL_PATTERN_RE.exec(p) : null
+  return m ? { text: m[2], atStart: m[1] === '^' } : null
+}
+
 /**
  * Entries this matcher will consider: those with a usable string `id`.
  *
@@ -190,11 +213,20 @@ function matchEntry(
     for (const p of patterns) {
       if (typeof p !== 'string' || !p) continue
       let hit = false
-      try {
-        hit = p.startsWith('^') || p.endsWith('$')
-          ? new RegExp(p, 'i').test(lower)
-          : lower.includes(p.toLowerCase())
-      } catch { /* malformed pattern in a hand-edited overlay: skip, never crash a render */ }
+      // A plain pattern is matched as text and never compiled: the only kind
+      // a fetched model file may carry (literalPattern). Anything else can
+      // only come from the user's own hand-edited overlay, and is read as it
+      // always was.
+      const literal = literalPattern(p)
+      if (literal) {
+        hit = literal.atStart ? lower.startsWith(literal.text) : lower.includes(literal.text)
+      } else {
+        try {
+          hit = p.startsWith('^') || p.endsWith('$')
+            ? new RegExp(p, 'i').test(lower)
+            : lower.includes(p.toLowerCase())
+        } catch { /* malformed pattern in a hand-edited overlay: skip, never crash a render */ }
+      }
       if (hit) return { entry: m, kind: 'pattern' }
     }
   }

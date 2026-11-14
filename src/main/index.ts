@@ -85,7 +85,8 @@ import { registerProviderAccountsHandlers } from './ipc/provider-accounts-handle
 import { registerCodexReviewHandlers } from './ipc/codex-review-handlers'
 import { registerExeHandlers, stopAllCapturedRuns } from './ipc/exe-handlers'
 import { registerRegistryHandlers } from './ipc/registry-handlers'
-import { initSentinel, reconcileOnUpdate, sentinelStartupCheck } from './sentinel/index'
+import { initSentinel, reconcileOnUpdate, sentinelStartupCheck, sentinelModelDataChanged } from './sentinel/index'
+import { refreshModelRegistry } from './model-registry-service'
 import { registerSentinelHandlers } from './ipc/sentinel-handlers'
 import { registerChannelHandlers } from './ipc/channel-handlers'
 import { registerWatchdogHandlers } from './ipc/watchdog-handlers'
@@ -732,6 +733,11 @@ if (!gotTheLock) {
     void adoptRenamedRepoIfLive()
     registerSetupHandlers()
     registerRegistryHandlers(getResourcesDirectory())
+    // Model definitions are data (2.1.3-beta.1): the model file is read once,
+    // in the background (5 s at most), so a new model needs no release.
+    // Nothing waits for it: start-up and the window use the last good copy,
+    // else the bundled file, and a good read is pushed as a registry reload.
+    void refreshModelRegistry().then((changed) => { if (changed) sentinelModelDataChanged() })
     // Sentinel (spec 2026-06-11): optional service; OFF = no init, dot hidden, zero impact.
     // readConfig('settings') is available here (same pattern as the beta-channel read below).
     {

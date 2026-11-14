@@ -67,6 +67,21 @@ export function reconcileOnUpdate(): void {
   if (r.autoRetired.length) setOverlay(r.overlay)
 }
 
+/** The model data read at start-up changed the registry (2.1.3-beta.1): a
+ *  model it now carries is in the picker, so its "not in the model picker"
+ *  notice is closed at once, from the registry alone (not at the next start),
+ *  and an overlay entry Sentinel added for it is retired, as after an update.
+ *  Nothing is raised here: the checks do that. Safe before initSentinel. */
+export function sentinelModelDataChanged(): void {
+  if (!state) return
+  try {
+    reconcileOnUpdate()
+    state.retireOpen(registryCoveredModelFindingIds(state.snapshot().findings, getRegistry()))
+  } catch (err) {
+    logInfo(`[sentinel] closing model notices after the model data changed failed: ${(err as Error)?.message ?? err}`)
+  }
+}
+
 // Lazy: claude-headless imports the pty-manager graph (which reaches electron.app
 // via update-watcher). Trigger A consumers (effort-tracker, statusline-watcher)
 // import THIS module at load — keep their import chains free of that weight.
