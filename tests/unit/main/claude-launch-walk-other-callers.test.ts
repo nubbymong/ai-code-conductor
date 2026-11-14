@@ -6,11 +6,14 @@
 // answer, found or not, and PATH is not walked again in place.
 //
 // So both wait first for the walk a session's launch waits for
-// (claude-launch-walk.ts): off the event loop, each folder bounded. Without
-// that wait a Claude Code installed in the last minute, into a folder PATH
-// already names, was seen by neither for up to a minute, while the check
-// beside the path (IPC.CLI_CHECK, which walks every time) said it was
-// installed; and with no answer kept at all, both walked PATH in place.
+// (claude-launch-walk.ts): off the event loop, for at most the walk's one
+// deadline. Without that wait a Claude Code installed in the last minute,
+// into a folder PATH already names, was seen by neither for up to a minute,
+// while the check beside the path (IPC.CLI_CHECK, which walks every time)
+// said it was installed; and with no answer kept at all, both walked PATH in
+// place. PATH's order holds for them as for a launch: with a folder that has
+// not answered by the deadline, the step shows no path and the terminal is
+// refused, saying so. Never a later folder's Claude Code.
 //
 // The REAL handlers, the real launch walk, the real kept answers and the real
 // resolution. Host-safe: every file test, node-pty, the first-start warm-up
@@ -63,8 +66,8 @@ vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
   }
   return {
     ...real,
-    // The real bound, over the stand-in file test.
-    fileTestWithin: (waitMs?: number) => real.fileTestWithin(waitMs, stat),
+    // The real rule (one file test at a time in a folder), over the stand-in file test.
+    folderFileTest: () => real.folderFileTest(stat),
     findOnWindowsPath: (names: readonly string[], env: NodeJS.ProcessEnv, _stat?: unknown, order?: 'folder' | 'name') => {
       h.walksInPlace.push(names.join(','))
       // A walk in place cannot be given up: a folder that does not answer
@@ -111,8 +114,8 @@ vi.mock('../../../src/main/data-paths', () => ({
 }))
 
 const { armClaudeLaunchWalk, _resetClaudeLaunchWalkForTest } = await import('../../../src/main/claude-launch-walk')
-const { WINDOWS_PATH_FILE_TEST_WAIT_MS, _resetFileTestWithinForTest } = await import('../../../src/main/windows-programs')
-const { claudeOnWindowsPathAsync, recordClaudeOnWindows, CLAUDE_NOT_ON_PATH, _resetClaudeWindowsLookupForTest } = await import('../../../src/main/claude-cli-probe')
+const { WINDOWS_PATH_WALK_WAIT_MS, _resetFolderFileTestForTest } = await import('../../../src/main/windows-programs')
+const { claudeOnWindowsPathAsync, recordClaudeOnWindows, CLAUDE_NOT_ON_PATH, CLAUDE_PATH_NOT_ANSWERING, _resetClaudeWindowsLookupForTest } = await import('../../../src/main/claude-cli-probe')
 const { registerCliHandlers } = await import('../../../src/main/ipc/cli-handlers')
 const { IPC } = await import('../../../src/shared/ipc-channels')
 // The shared test setup replaces setup-handlers with a stub; this suite drives the real one.
@@ -122,7 +125,7 @@ const GONE = 'S:\\gone'
 const TOOLS = 'C:\\Tools'
 const CLAUDE = `${TOOLS}\\claude.exe`
 const CLAUDE_NAMES = 'claude.exe,claude.cmd,claude.bat'
-const WAIT = WINDOWS_PATH_FILE_TEST_WAIT_MS
+const DEADLINE = WINDOWS_PATH_WALK_WAIT_MS
 const OFF = { code: 'provider-off', providerId: 'claude', message: 'Claude Code is off. Turn it on in Settings, Accounts.' }
 const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform')!
 const savedPath = process.env.PATH
@@ -147,20 +150,21 @@ beforeEach(() => {
   h.refused = null
   _resetClaudeLaunchWalkForTest()
   _resetClaudeWindowsLookupForTest()
-  _resetFileTestWithinForTest()
+  _resetFolderFileTestForTest()
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
   h.handlers.clear()
   registerCliHandlers()
   setup.registerSetupHandlers()
 })
 afterEach(async () => {
+  h.hung = new Set()
   release()
   // A setup terminal a case started is ended, so the next starts with none.
   await killCliSetup()
   vi.useRealTimers()
   _resetClaudeLaunchWalkForTest()
   _resetClaudeWindowsLookupForTest()
-  _resetFileTestWithinForTest()
+  _resetFolderFileTestForTest()
   Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM)
   if (savedPath === undefined) delete process.env.PATH
   else process.env.PATH = savedPath
@@ -179,8 +183,10 @@ describe('the path the Find Claude step shows (IPC.CLI_PATH)', () => {
     expect(h.walksInPlace, 'nothing was walked in place').toEqual([])
   })
 
-  // Mutation to prove this can fail: walk in place when no answer is kept.
-  it('with no answer kept and a PATH folder that does not answer: it waits for the walk off the event loop, the folder given its bounded time, and walks nothing in place', async () => {
+  // Mutations to prove this can fail: walk in place when no answer is kept;
+  // go past the folder that has not answered and show the later folder's
+  // Claude Code.
+  it('with no answer kept and a PATH folder that does not answer: it waits for the walk off the event loop until the walk\'s deadline, then shows no path, never the later folder\'s; nothing is walked in place, and the path is shown once the folder has answered', async () => {
     vi.useFakeTimers()
     process.env.PATH = `${GONE};${TOOLS}`
     h.hung = new Set([GONE.toLowerCase()])
@@ -188,13 +194,20 @@ describe('the path the Find Claude step shows (IPC.CLI_PATH)', () => {
     armClaudeLaunchWalk()
     let shown: unknown = 'not answered yet'
     void cliPath().then((p) => { shown = p })
-    await vi.advanceTimersByTimeAsync(WAIT - 1)
-    expect(shown, 'not before the folder\'s bound').toBe('not answered yet')
+    await vi.advanceTimersByTimeAsync(DEADLINE - 1)
+    expect(shown, 'not before the walk\'s deadline').toBe('not answered yet')
     expect(h.walksInPlace).toEqual([])
     await vi.advanceTimersByTimeAsync(1)
     await vi.advanceTimersByTimeAsync(0)
-    expect(shown).toBe(CLAUDE)
+    expect(shown, 'which Claude Code PATH names first is not known').toBeNull()
     expect(h.walks).toEqual([CLAUDE_NAMES])
+    expect(h.walksInPlace).toEqual([])
+    // The share is back (it holds no Claude Code): the walk ends, and its answer is shown.
+    h.hung = new Set()
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await cliPath()).toBe(CLAUDE)
+    expect(h.walks, 'the one walk').toEqual([CLAUDE_NAMES])
     expect(h.walksInPlace).toEqual([])
   })
 
@@ -236,6 +249,33 @@ describe('the first-run setup terminal (setup:spawnCliSetup)', () => {
     await expect(spawnCliSetup()).rejects.toThrow(CLAUDE_NOT_ON_PATH)
     expect(h.order).toEqual([])
     expect(h.walksInPlace).toEqual([])
+  })
+
+  // Mutations to prove this can fail: refuse with the not-found message;
+  // start the later folder's Claude Code; walk in place after the wait.
+  it('with a PATH folder that has not answered by the walk\'s deadline it is refused, saying so: not the not-found message, never the later folder\'s Claude Code, nothing warmed up and nothing walked in place', async () => {
+    vi.useFakeTimers()
+    process.env.PATH = `${GONE};${TOOLS}`
+    h.hung = new Set([GONE.toLowerCase()])
+    install()
+    armClaudeLaunchWalk()
+    const outcome = spawnCliSetup().then(() => 'started', (e: Error) => e.message)
+    await vi.advanceTimersByTimeAsync(DEADLINE)
+    expect(await outcome).toBe(CLAUDE_PATH_NOT_ANSWERING)
+    expect(h.order).toEqual([])
+    expect(h.walksInPlace).toEqual([])
+  })
+
+  it('off Windows nothing is walked or waited for, though main has started: the user\'s login shell finds Claude Code by name, as before', async () => {
+    h.platform = 'linux'
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    process.env.PATH = `${GONE};${TOOLS}`
+    h.hung = new Set([GONE.toLowerCase()])
+    armClaudeLaunchWalk()
+    expect(await spawnCliSetup()).toBe('__cli_setup__')
+    expect(h.walks).toEqual([])
+    expect(h.walksInPlace).toEqual([])
+    expect(h.order.filter((step) => step.startsWith('warm'))).toEqual([])
   })
 
   it('with a recent answer kept nothing is waited for: no walk, and the terminal starts what the answer names', async () => {

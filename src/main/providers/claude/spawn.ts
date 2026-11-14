@@ -2,7 +2,7 @@ import * as os from 'os'
 import { commandSecretEnvName } from '../../../shared/command-secret'
 import { AGENTS_ENV, askPromptEnvValue } from '../../terminal-launch-line'
 import { findOnWindowsPath, windowsEnvValue, withFullyQualifiedProgramLookup } from '../../windows-programs'
-import { CLAUDE_NOT_ON_PATH, CLAUDE_WINDOWS_NAMES, claudeFromPowerShellProfileForLaunch, claudeInLoginShellPathForLaunch, claudeOnWindowsPathWalkedRecently, recentClaudeInLoginShellPath, recentClaudeOnWindows, recordClaudeOnWindows } from '../../claude-cli-probe'
+import { CLAUDE_NOT_ON_PATH, CLAUDE_PATH_NOT_ANSWERING, CLAUDE_WINDOWS_NAMES, claudeFromPowerShellProfileForLaunch, claudeInLoginShellPathForLaunch, claudeOnWindowsPathUnanswered, claudeOnWindowsPathWalkedRecently, recentClaudeInLoginShellPath, recentClaudeOnWindows, recordClaudeOnWindows } from '../../claude-cli-probe'
 import { LEGACY_PIN_NOT_USED } from '../../../shared/legacy-version'
 import { logInfo } from '../../debug-logger'
 import { localSessionShell, shFamilyLoginShell } from '../../login-shell'
@@ -35,7 +35,15 @@ export { CLAUDE_NOT_ON_PATH }
  *  start or a check the user asked for, has made it stale); without a
  *  current answer that question starts in the
  *  background for the next launch, and with none kept at all this one gets
- *  null. Null is never a bare name. */
+ *  null. Null is never a bare name.
+ *
+ *  Null too, with nothing walked here and the profile not read, while the
+ *  walk of this PATH off the event loop has passed its deadline with a
+ *  folder still unanswered (claude-cli-probe.ts
+ *  claudeOnWindowsPathUnanswered): which Claude Code PATH names first is not
+ *  known then, a walk in place would wait on that same folder, and the
+ *  profile's Claude Code comes only after every folder of PATH has said it
+ *  holds none. resolveClaudeBinary says which of the two it was. */
 export function findClaudeOnWindows(env: NodeJS.ProcessEnv = process.env, stat?: (p: string) => boolean): string | null {
   const recent = recentClaudeOnWindows(env)
   if (recent) return recent
@@ -47,6 +55,9 @@ export function findClaudeOnWindows(env: NodeJS.ProcessEnv = process.env, stat?:
   // the Find Claude step shows, the setup terminal and the /insights
   // terminal. So a Claude Code installed since is still seen at once.
   if (claudeOnWindowsPathWalkedRecently(env)) return null
+  // The walk of this PATH off the event loop is past its deadline, a folder
+  // still unanswered: no answer, and none is made here.
+  if (claudeOnWindowsPathUnanswered(env)) return null
   const found = findOnWindowsPath(CLAUDE_WINDOWS_NAMES, env, stat, 'name')
   recordClaudeOnWindows(windowsEnvValue(env, 'PATH') ?? '', found, Date.now())
   if (found) return found
@@ -55,7 +66,10 @@ export function findClaudeOnWindows(env: NodeJS.ProcessEnv = process.env, stat?:
 
 /** The Claude Code a launch runs: on Windows, the full path
  *  findClaudeOnWindows finds in `env` (or that the PowerShell profile gave),
- *  and when there is none this THROWS (CLAUDE_NOT_ON_PATH) so the launch starts nothing. Elsewhere: for a user
+ *  and when there is none this THROWS (CLAUDE_NOT_ON_PATH) so the launch starts nothing. It THROWS
+ *  CLAUDE_PATH_NOT_ANSWERING instead when there is no answer because a
+ *  folder PATH names has not answered the walk in time: never the not-found
+ *  message for that, and never a later folder's Claude Code. Elsewhere: for a user
  *  whose login shell is not of the sh family, the Claude Code found in the
  *  PATH that shell builds, by its full path, once the launch has that answer
  *  (claude-cli-probe.ts recentClaudeInLoginShellPath; buildClaudeLocalSpawn
@@ -74,8 +88,11 @@ export function resolveClaudeBinary(legacyVersion?: LegacyVersion, env: NodeJS.P
 
   const found = findClaudeOnWindows(env)
   if (found) return { cmd: found, args: [] }
-  logInfo(`[claude-provider] ${CLAUDE_NOT_ON_PATH}`)
-  throw new Error(CLAUDE_NOT_ON_PATH)
+  // No walk of this PATH under a minute old says "none", and the one under
+  // way is past its deadline: not known, which is not "not installed".
+  const why = !claudeOnWindowsPathWalkedRecently(env) && claudeOnWindowsPathUnanswered(env) ? CLAUDE_PATH_NOT_ANSWERING : CLAUDE_NOT_ON_PATH
+  logInfo(`[claude-provider] ${why}`)
+  throw new Error(why)
 }
 
 /**

@@ -67,7 +67,7 @@ export function registerCliHandlers(): void {
   // Onboarding "Find Claude": the resolved claude binary path (no command run).
   // On Windows, when no Claude Code is known for this PATH right now (no walk
   // of it in the last minute found one), PATH is walked first, off the event
-  // loop and each folder bounded, the walk a session's launch waits for
+  // loop, the walk a session's launch waits for and for as long
   // (claude-launch-walk.ts). So a Claude Code installed a moment ago is shown
   // at once, as the check beside this one shows it, and the resolution below
   // reads that walk's answer instead of walking PATH in place. At once when

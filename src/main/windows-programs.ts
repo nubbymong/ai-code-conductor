@@ -146,66 +146,124 @@ export async function isRegularFileAsync(p: string): Promise<boolean> {
   }
 }
 
-/** How long a PATH walk that something waits for (a launch) gives one folder
- *  to answer a file test (fileTestWithin). A folder on this computer answers
- *  in well under a millisecond and a share that is up in a fraction of a
- *  second; one on a share that is down can hold the test for tens of
- *  seconds. */
-export const WINDOWS_PATH_FILE_TEST_WAIT_MS = 2_000
-
-/** The folders with a file test of fileTestWithin still unanswered after its
- *  wait, as Windows compares them (lower case), and how many such tests. */
-const foldersNotAnswering = new Map<string, number>()
-
-/** A file test for findOnWindowsPathAsync that waits at most `waitMs` for
- *  each answer of `stat` (isRegularFileAsync by default). A test that has not
- *  answered by then REJECTS, which the walk reads as "this folder cannot be
- *  reached": the program is not found in that folder, the walk does not ask
- *  it again for another name, and it goes on to the next folder. Never a
- *  guess: an answer that comes too late is not used.
+/** How long anything waits for one walk of PATH made off the event loop (a
+ *  launch waits for the walk for Claude Code, and for the look for node.exe
+ *  when it opens the resume list). Counted from the walk's own start, for the
+ *  walk as a whole, never for one file test: a test that waits its turn for
+ *  a free thread is not a folder that is down.
  *
- *  The test left unanswered still runs to its own end, on one of the few
- *  threads file tests share. So until it has ended, the same folder is not
- *  asked again by any walk through this function (it rejects at once): a
- *  share that is down does not take one more of those threads for every
- *  launch that walks PATH meanwhile, and is asked again once it has
- *  answered. */
-export function fileTestWithin(
-  waitMs: number = WINDOWS_PATH_FILE_TEST_WAIT_MS,
-  stat: (p: string) => Promise<boolean> = isRegularFileAsync,
-): (p: string) => Promise<boolean> {
-  return (p: string): Promise<boolean> => {
-    const folder = path.win32.dirname(p).toLowerCase()
-    if (foldersNotAnswering.has(folder)) return Promise.reject(new Error('the folder has not answered an earlier file test'))
-    return new Promise<boolean>((resolve, reject) => {
-      let late = false
-      const timer = setTimeout(() => {
-        late = true
-        foldersNotAnswering.set(folder, (foldersNotAnswering.get(folder) ?? 0) + 1)
-        reject(new Error(`the folder did not answer a file test within ${waitMs} ms`))
-      }, waitMs)
-      ;(timer as { unref?: () => void }).unref?.()
-      /** The test has ended: in time (true), or after its wait. */
-      const ended = (): boolean => {
-        if (!late) { clearTimeout(timer); return true }
-        const left = (foldersNotAnswering.get(folder) ?? 1) - 1
-        if (left > 0) foldersNotAnswering.set(folder, left)
-        else foldersNotAnswering.delete(folder)
-        return false
-      }
-      // The test starts in this turn; one that throws before it has anything
-      // to wait for is a test that failed.
-      new Promise<boolean>((answer) => { answer(stat(p)) }).then(
-        (isFile) => { if (ended()) resolve(isFile) },
-        (e: unknown) => { if (ended()) reject(e) },
-      )
-    })
+ *  Twenty seconds: a folder on this computer answers in well under a
+ *  millisecond and a share that is up in a fraction of a second, so a walk
+ *  still unanswered by then is waiting on a folder that is down, not a slow
+ *  one; and a launch held for the start's own wait first
+ *  (claude-start-lookup.ts, 15 s) is still let go in about half a minute. It
+ *  bounds the wait only. The walk itself runs on to its own end and keeps
+ *  its answer then, so a value too short costs one refused launch, never a
+ *  wrong program. Not timed against a real share that is down. */
+export const WINDOWS_PATH_WALK_WAIT_MS = 20_000
+
+/** The file test outstanding in a folder, and the file it is for (both as
+ *  Windows compares them: lower case). */
+interface FolderTest { file: string; test: Promise<boolean> }
+
+/** The folders with a file test of folderFileTest outstanding, for each
+ *  underlying file test (the real one, or a stand-in). */
+let folderTests = new WeakMap<(p: string) => Promise<boolean>, Map<string, FolderTest>>()
+
+/** A file test for findOnWindowsPathAsync that keeps to ONE test at a time
+ *  in each folder, across every walk that asks through it (the walk for
+ *  Claude Code, the look for node.exe, a walk of another PATH value that
+ *  names the same folder). `stat` answers (isRegularFileAsync by default).
+ *
+ *  A file test on a share that is down holds one of the few threads file
+ *  tests share until it ends, tens of seconds later. So while a folder has a
+ *  test outstanding, no other is started there: a walk that asks for the
+ *  same file gets that test's own answer, and one that asks for another file
+ *  waits for it to end first. When it ends by failing, the folder has said
+ *  it cannot be reached, and that is the answer for the test that waited
+ *  too (it is not asked again, for one more such wait); when it ends with an
+ *  answer, the test that waited is made. A share that is down then holds one
+ *  thread, however many walks name it.
+ *
+ *  It has no timer and never gives a folder up: a folder that has not
+ *  answered is not a folder without the program. How long a caller waits
+ *  for the walk as a whole is its own to bound (withPathWalkDeadline). */
+export function folderFileTest(stat: (p: string) => Promise<boolean> = isRegularFileAsync): (p: string) => Promise<boolean> {
+  let outstanding = folderTests.get(stat)
+  if (!outstanding) {
+    outstanding = new Map<string, FolderTest>()
+    folderTests.set(stat, outstanding)
   }
+  const tests = outstanding
+  const ask = (p: string): Promise<boolean> => {
+    const folder = path.win32.dirname(p).toLowerCase()
+    const file = p.toLowerCase()
+    const held = tests.get(folder)
+    if (held) return held.file === file ? held.test : held.test.then(() => ask(p))
+    // The test starts in this turn; one that throws before it has anything
+    // to wait for is a test that failed.
+    const test = new Promise<boolean>((answer) => { answer(stat(p)) })
+    const mine: FolderTest = { file, test }
+    tests.set(folder, mine)
+    const ended = (): void => { if (tests.get(folder) === mine) tests.delete(folder) }
+    test.then(ended, ended)
+    return test
+  }
+  return ask
 }
 
-/** Test seam: no folder is waited for. */
-export function _resetFileTestWithinForTest(): void {
-  foldersNotAnswering.clear()
+/** Test seam: no folder has a test outstanding. */
+export function _resetFolderFileTestForTest(): void {
+  folderTests = new WeakMap()
+}
+
+/** A walk of PATH off the event loop that something waits for, with the
+ *  deadline of that wait (withPathWalkDeadline). */
+export interface PathWalkInFlight<T> {
+  /** The walk itself. It ends when every folder it asks has answered, however
+   *  long that takes. */
+  readonly run: Promise<T>
+  /** True once the walk has ended; false once its deadline has passed with
+   *  the walk still not ended, whichever comes first. Never rejects. */
+  readonly answered: Promise<boolean>
+  /** The deadline has passed and the walk has still not ended: a folder PATH
+   *  names has not answered in time. False again once it ends. */
+  readonly overdue: boolean
+  /** Drop the deadline's timer, and let whoever waits go on with no answer
+   *  (a walk forgotten by a test seam). */
+  forget(): void
+}
+
+/** `run`, a walk of PATH under way, with a deadline `waitMs` from now for
+ *  whoever waits for it. The deadline ends the WAIT, never the walk: nothing
+ *  is skipped and no answer is made up when it passes. A caller that finds
+ *  the walk `overdue` has no answer and says so; the walk's own answer is
+ *  kept by whoever started it, when it ends. One timer for the walk, however
+ *  many wait, cleared when the walk ends. */
+export function withPathWalkDeadline<T>(run: Promise<T>, waitMs: number = WINDOWS_PATH_WALK_WAIT_MS): PathWalkInFlight<T> {
+  let overdue = false
+  let ended = false
+  let settle: (inTime: boolean) => void = () => {}
+  const answered = new Promise<boolean>((resolve) => { settle = resolve })
+  const timer = setTimeout(() => {
+    if (ended) return
+    overdue = true
+    settle(false)
+  }, waitMs)
+  ;(timer as { unref?: () => void }).unref?.()
+  const end = (): void => {
+    ended = true
+    overdue = false
+    clearTimeout(timer)
+    settle(true)
+  }
+  run.then(end, end)
+  return {
+    run,
+    answered,
+    get overdue() { return overdue },
+    forget: () => { clearTimeout(timer); settle(false) },
+  }
 }
 
 /** The full path of the first of `names` found IN-PROCESS in the folders

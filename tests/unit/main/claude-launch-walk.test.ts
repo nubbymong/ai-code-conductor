@@ -6,12 +6,16 @@
 // start's own walk was moved off that thread before).
 //
 // Now a launch with no answer to read waits (pty:spawn holds it as a prepared
-// spawn) for a walk made off the event loop, each folder given a bounded time
-// (claude-launch-walk.ts). The launch then reads the answer that walk kept:
-// the full path found, or the same refusal as before. It walks nothing in
-// place, and it never names a bare `claude`.
+// spawn) for a walk made off the event loop (claude-launch-walk.ts), the one
+// walk every caller shares. PATH's order holds: the walk waits for every
+// folder in turn and never passes one that has not answered, so it names what
+// a walk in place would name. The launch waits for it until the walk's one
+// deadline; past it the launch is refused, saying a PATH folder did not
+// answer in time. Never a later folder's Claude Code, never a bare `claude`,
+// and nothing walked in place.
 //
-// Host-safe: the PATH walks' file tests, the look for node.exe and the
+// The real launch walk, the real kept answers, the real resolution and the
+// real look for node.exe. Host-safe: the PATH walks' file tests and the
 // PowerShell profile question are stand-ins answered here. Nothing is
 // started, no file of this computer is read, and PATH is put back after each
 // case. A file test a case left held is answered after it.
@@ -23,22 +27,32 @@ const h = vi.hoisted(() => ({
   present: new Set<string>(),
   /** Folders whose file tests do not answer (a share that is down), lower-cased. */
   hung: new Set<string>(),
-  /** The file tests held there; `release()` answers them all. */
-  held: [] as Array<() => void>,
-  /** The file tests asked off the event loop, and the walks they belong to. */
+  /** The file tests held there: `release()` answers them all, `fail()` ends
+   *  them as a share that is down ends a file test at last. */
+  held: [] as Array<{ answer: () => void; fail: () => void }>,
+  /** The file tests asked off the event loop, and the walks they belong to
+   *  (by the names each walk was for). */
   asked: [] as string[],
-  walks: 0,
+  walks: [] as string[],
+  /** A walk off the event loop fails as it begins. */
+  walkThrows: false,
+  /** Called as each walk off the event loop begins. */
+  onWalk: null as null | (() => void),
   /** Walks of PATH made in place, on the caller's own turn (what a launch
    *  did), and which names they were for. */
   walksInPlace: [] as string[],
-  /** The look for node.exe: whether an answer is kept, and the looks made. */
-  nodeKept: true,
-  nodeLooks: 0,
-  nodeLookKeeps: true,
+  /** The PowerShell profile question: how often it was asked, and its answer. */
+  profileAsks: 0,
+  profileAnswer: null as string | null,
 }))
-const release = (): void => { for (const answer of h.held.splice(0)) answer() }
+const release = (): void => { for (const t of h.held.splice(0)) t.answer() }
+const fail = (): void => { for (const t of h.held.splice(0)) t.fail() }
 
 vi.mock('os', async (importOriginal) => ({ ...(await importOriginal<typeof import('os')>()), platform: () => h.platform }))
+vi.mock('../../../src/main/debug-logger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/debug-logger')>()),
+  logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn(),
+}))
 vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../../src/main/windows-programs')>()
   /** The stand-in file test: held for a folder that does not answer. */
@@ -46,12 +60,14 @@ vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
     h.asked.push(p)
     const folder = p.slice(0, p.lastIndexOf('\\')).toLowerCase()
     if (!h.hung.has(folder)) return Promise.resolve(h.present.has(p.toLowerCase()))
-    return new Promise<boolean>((resolve) => { h.held.push(() => resolve(h.present.has(p.toLowerCase()))) })
+    return new Promise<boolean>((resolve, reject) => {
+      h.held.push({ answer: () => resolve(h.present.has(p.toLowerCase())), fail: () => reject(new Error('the network path was not found')) })
+    })
   }
   return {
     ...real,
-    // The real bound, over the stand-in file test.
-    fileTestWithin: (waitMs?: number) => real.fileTestWithin(waitMs, stat),
+    // The real rule (one file test at a time in a folder), over the stand-in file test.
+    folderFileTest: () => real.folderFileTest(stat),
     findOnWindowsPath: (names: readonly string[], env: NodeJS.ProcessEnv, _stat?: unknown, order?: 'folder' | 'name') => {
       h.walksInPlace.push(names.join(','))
       // A walk in place cannot be given up: a folder that does not answer
@@ -62,37 +78,46 @@ vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
       }, order)
     },
     findOnWindowsPathAsync: (names: readonly string[], env: NodeJS.ProcessEnv, test?: (p: string) => Promise<boolean>, order?: 'folder' | 'name') => {
-      h.walks += 1
+      h.walks.push(names.join(','))
+      h.onWalk?.()
+      if (h.walkThrows) throw new Error('the walk failed')
       return real.findOnWindowsPathAsync(names, env, test ?? stat, order)
     },
-    findWithPowerShellProfile: () => Promise.resolve({ outcome: 'none' as const }),
+    findWithPowerShellProfile: () => {
+      h.profileAsks += 1
+      return Promise.resolve(h.profileAnswer ? { outcome: 'found' as const, path: h.profileAnswer } : { outcome: 'none' as const })
+    },
   }
 })
-vi.mock('../../../src/main/spawn-claude-command', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../src/main/spawn-claude-command')>()),
-  pickerNodeAnswerKept: () => h.nodeKept,
-  warmPickerNodeOnWindows: () => {
-    h.nodeLooks += 1
-    if (h.nodeLookKeeps) h.nodeKept = true
-    return Promise.resolve()
-  },
-}))
 
 const { armClaudeLaunchWalk, claudeLaunchWalkPending, awaitClaudeLaunchWalk, _resetClaudeLaunchWalkForTest } = await import('../../../src/main/claude-launch-walk')
 const { startClaudeAtBoot, _resetClaudeStartLookupForTest } = await import('../../../src/main/claude-start-lookup')
-const { WINDOWS_PATH_FILE_TEST_WAIT_MS, _resetFileTestWithinForTest } = await import('../../../src/main/windows-programs')
-const { claudeOnWindowsPathAsync, recordClaudeOnWindows, CLAUDE_NOT_ON_PATH, CLAUDE_LOOKUP_REUSE_MS, _resetClaudeWindowsLookupForTest } = await import('../../../src/main/claude-cli-probe')
+const { WINDOWS_PATH_WALK_WAIT_MS, _resetFolderFileTestForTest } = await import('../../../src/main/windows-programs')
+const {
+  claudeOnWindowsPathAsync, findClaudeOnWindowsAsync, recordClaudeOnWindows, recentClaudeOnWindows, claudeOnWindowsPathWalkedRecently, setClaudeProfileLookupAllowed,
+  CLAUDE_NOT_ON_PATH, CLAUDE_PATH_NOT_ANSWERING, CLAUDE_LOOKUP_REUSE_MS, _resetClaudeWindowsLookupForTest,
+} = await import('../../../src/main/claude-cli-probe')
+const {
+  buildClaudeLaunchCommand, launchStartsPicker, pickerNodeAnswerKept, warmPickerNodeOnWindows,
+  CLAUDE_RESUME_LIST_SKIPPED_PATH_NOT_ANSWERING, PICKER_NODE_REUSE_MS, _resetPickerNodeFoundForTest,
+} = await import('../../../src/main/spawn-claude-command')
 const { ClaudeProvider } = await import('../../../src/main/providers/claude')
+const { logInfo } = await import('../../../src/main/debug-logger')
 
 const GONE = 'S:\\gone'
 const TOOLS = 'C:\\Tools'
 const NPM = 'C:\\Users\\me\\AppData\\Roaming\\npm'
-const WAIT = WINDOWS_PATH_FILE_TEST_WAIT_MS
+const NODEJS = 'C:\\nodejs'
+const PICKER = 'C:\\ccc\\scripts\\resume-picker.js'
+const CLAUDE_NAMES = 'claude.exe,claude.cmd,claude.bat'
+const DEADLINE = WINDOWS_PATH_WALK_WAIT_MS
 const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform')!
 const savedPath = process.env.PATH
 
 /** The launch: what a session's start names (providers/claude/spawn.ts resolveClaudeBinary). */
 const launch = (): { cmd: string; args: string[] } | null => new ClaudeProvider().resolveBinary()
+/** Whether a launch line that asks for the resume list starts it (with the node.exe the app found). */
+const opensList = (): boolean => launchStartsPicker({ useResumePicker: true, pickerScript: PICKER, platform: 'win32' })
 /** Let every promise that has nothing to wait for settle (the timers are stand-ins). */
 const flush = async (): Promise<void> => { for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0) }
 /** Whether a wait has ended by now. */
@@ -102,6 +127,14 @@ const ended = async (p: Promise<void>): Promise<boolean> => {
   await flush()
   return done
 }
+const files = (...paths: string[]): Set<string> => new Set(paths.map((p) => p.toLowerCase()))
+const reset = (): void => {
+  _resetClaudeLaunchWalkForTest()
+  _resetClaudeStartLookupForTest()
+  _resetClaudeWindowsLookupForTest()
+  _resetPickerNodeFoundForTest()
+  _resetFolderFileTestForTest()
+}
 
 beforeEach(() => {
   h.platform = 'win32'
@@ -109,112 +142,158 @@ beforeEach(() => {
   h.hung = new Set()
   h.held = []
   h.asked = []
-  h.walks = 0
+  h.walks = []
+  h.walkThrows = false
+  h.onWalk = null
   h.walksInPlace = []
-  h.nodeKept = true
-  h.nodeLooks = 0
-  h.nodeLookKeeps = true
-  _resetClaudeLaunchWalkForTest()
-  _resetClaudeStartLookupForTest()
-  _resetClaudeWindowsLookupForTest()
-  _resetFileTestWithinForTest()
+  h.profileAsks = 0
+  h.profileAnswer = null
+  vi.mocked(logInfo).mockClear()
+  reset()
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
   vi.useFakeTimers()
 })
 afterEach(async () => {
+  h.onWalk = null
+  h.hung = new Set()
   release()
   await flush()
   vi.useRealTimers()
-  _resetClaudeLaunchWalkForTest()
-  _resetClaudeStartLookupForTest()
-  _resetClaudeWindowsLookupForTest()
-  _resetFileTestWithinForTest()
+  reset()
   Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM)
   if (savedPath === undefined) delete process.env.PATH
   else process.env.PATH = savedPath
 })
 
-describe('a launch with no answer about Claude Code to read, with a PATH folder that does not answer', () => {
-  // Mutations to prove this can fail: walk in place; wait for the folder
-  // without a bound; let the launch walk again after the walk it waited for.
-  it('waits for a walk off the event loop that gives the folder its bounded time, then names the Claude Code in the next folder: nothing is walked in place', async () => {
+describe('PATH\'s order holds: a launch with no answer to read, and a PATH folder that does not answer', () => {
+  // Mutations to prove this can fail: give the folder a time of its own and
+  // go on to the next (the later folder's Claude Code is named); refuse with
+  // the not-found message; walk in place once the wait has ended.
+  it('waits for the walk until its deadline, not before; then it is refused, saying a PATH folder did not answer: never the later folder\'s Claude Code, no answer kept, nothing walked in place', async () => {
     process.env.PATH = `${GONE};${NPM}`
     h.hung = new Set([GONE.toLowerCase()])
-    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
+    // The folder that does not answer holds Claude Code too: a walk in place names that one.
+    h.present = files(`${GONE}\\claude.exe`, `${NPM}\\claude.cmd`)
     armClaudeLaunchWalk()
     expect(claudeLaunchWalkPending(false), 'the launch is held').toBe(true)
     const walked = awaitClaudeLaunchWalk(false)
     expect(h.walksInPlace, 'no file test on the caller\'s turn').toEqual([])
-    await vi.advanceTimersByTimeAsync(WAIT - 1)
-    expect(await ended(walked), 'not before the folder\'s bound').toBe(false)
+    await vi.advanceTimersByTimeAsync(DEADLINE - 1)
+    expect(await ended(walked), 'not before the walk\'s deadline').toBe(false)
     await vi.advanceTimersByTimeAsync(1)
     expect(await ended(walked)).toBe(true)
-    // The folder that did not answer was asked once, not once a name.
-    expect(h.asked.filter((p) => p.startsWith(GONE))).toEqual([`${GONE}\\claude.exe`])
-    expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
-    expect(h.walksInPlace, 'the launch read the answer the walk kept').toEqual([])
-    expect(h.walks).toBe(1)
-    expect(claudeLaunchWalkPending(false), 'the next launch has an answer to read').toBe(false)
+    expect(() => launch()).toThrow(CLAUDE_PATH_NOT_ANSWERING)
+    expect(CLAUDE_PATH_NOT_ANSWERING, 'not the not-installed text').not.toContain('not found')
+    expect(h.asked, 'the later folder was not asked: the earlier one has not answered').toEqual([`${GONE}\\claude.exe`])
+    expect(recentClaudeOnWindows(process.env), 'no answer is kept').toBeNull()
+    expect(claudeOnWindowsPathWalkedRecently(process.env)).toBe(false)
+    expect(h.walksInPlace).toEqual([])
+    // The folder answers at last: the walk ends, and names what PATH names first.
+    release()
+    await flush()
+    expect(launch()).toEqual({ cmd: `${GONE}\\claude.exe`, args: [] })
+    expect(h.walks, 'one walk in all').toEqual([CLAUDE_NAMES])
+    expect(h.walksInPlace).toEqual([])
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  // Mutations to prove this can fail: fall back to the name `claude` when the
-  // walk found none; walk in place when the kept answer is "none".
-  it('with Claude Code in no folder that answers, the launch is refused as before: never a bare name, and still nothing walked in place', async () => {
-    process.env.PATH = `${GONE};${TOOLS}`
-    h.hung = new Set([GONE.toLowerCase()])
-    // It is there, on the share that does not answer: that is not known, so it is not found.
-    h.present = new Set([`${GONE}\\claude.exe`.toLowerCase()])
-    armClaudeLaunchWalk()
-    const walked = awaitClaudeLaunchWalk(false)
-    await vi.advanceTimersByTimeAsync(WAIT)
-    expect(await ended(walked)).toBe(true)
-    expect(() => launch()).toThrow(CLAUDE_NOT_ON_PATH)
-    expect(h.walksInPlace).toEqual([])
-    // An answer that comes late changes nothing for this launch.
-    release()
-    await flush()
-    expect(() => launch()).toThrow(CLAUDE_NOT_ON_PATH)
-    expect(h.walksInPlace).toEqual([])
-  })
-
-  it('the next launch asks again, off the event loop, and does not wait for the folder while its earlier test is still held', async () => {
-    process.env.PATH = `${GONE};${TOOLS}`
-    h.hung = new Set([GONE.toLowerCase()])
-    armClaudeLaunchWalk()
-    await vi.advanceTimersByTimeAsync(0)
-    const first = awaitClaudeLaunchWalk(false)
-    await vi.advanceTimersByTimeAsync(WAIT)
-    expect(await ended(first)).toBe(true)
-    expect(() => launch()).toThrow(CLAUDE_NOT_ON_PATH)
-    // Claude Code is installed meanwhile, in a folder PATH already names.
-    h.present = new Set([`${TOOLS}\\claude.exe`.toLowerCase()])
-    expect(claudeLaunchWalkPending(false), 'a "none" kept is asked again').toBe(true)
-    h.asked = []
-    expect(await ended(awaitClaudeLaunchWalk(false)), 'no bound passes').toBe(true)
-    expect(h.asked.filter((p) => p.startsWith(GONE)), 'the folder is not asked again yet').toEqual([])
-    expect(launch()).toEqual({ cmd: `${TOOLS}\\claude.exe`, args: [] })
-    expect(h.walks).toBe(2)
-    expect(h.walksInPlace).toEqual([])
-  })
-
-  it('launches asked for together (tabs restored after a wake) wait for one walk', async () => {
+  // A file test on a share that is down ends by FAILING. Mutation to prove
+  // this can fail: keep nothing, or never free the walk, when the test ends
+  // by failing after the deadline.
+  it('the folder says at last, after the deadline, that it cannot be reached: the walk goes on past it, as a walk in place does, keeps its answer, and the next launch reads it; a later walk asks the folder again', async () => {
     process.env.PATH = `${GONE};${NPM}`
     h.hung = new Set([GONE.toLowerCase()])
-    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
+    h.present = files(`${NPM}\\claude.cmd`)
     armClaudeLaunchWalk()
+    const walked = awaitClaudeLaunchWalk(false)
+    await vi.advanceTimersByTimeAsync(DEADLINE)
+    expect(await ended(walked)).toBe(true)
+    expect(() => launch()).toThrow(CLAUDE_PATH_NOT_ANSWERING)
+    // A launch asked for now joins the walk past its deadline: it does not wait again.
+    expect(await ended(awaitClaudeLaunchWalk(false)), 'no further wait').toBe(true)
+    expect(() => launch()).toThrow(CLAUDE_PATH_NOT_ANSWERING)
+    expect(h.walks, 'and it started no walk of its own').toEqual([CLAUDE_NAMES])
+    await vi.advanceTimersByTimeAsync(25_000)
+    fail()
+    await flush()
+    expect(claudeLaunchWalkPending(false), 'the next launch has an answer to read').toBe(false)
+    expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
+    // The folder that cannot be reached was asked once, not once a name.
+    expect(h.asked.filter((p) => p.startsWith(GONE))).toEqual([`${GONE}\\claude.exe`])
+    expect(h.walksInPlace).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+    // A minute on, that answer is not one to read, and the folder is asked again.
+    await vi.advanceTimersByTimeAsync(CLAUDE_LOOKUP_REUSE_MS)
+    h.asked = []
+    void awaitClaudeLaunchWalk(false)
+    await flush()
+    expect(h.asked).toEqual([`${GONE}\\claude.exe`])
+  })
+
+  it('a folder that answers before the deadline, however slowly, is waited for: the launch names what the walk found', async () => {
+    process.env.PATH = `${GONE};${NPM}`
+    h.hung = new Set([GONE.toLowerCase()])
+    h.present = files(`${NPM}\\claude.cmd`)
+    armClaudeLaunchWalk()
+    const walked = awaitClaudeLaunchWalk(false)
+    await vi.advanceTimersByTimeAsync(DEADLINE - 1)
+    expect(await ended(walked)).toBe(false)
+    // The share is back: it holds no Claude Code.
+    h.hung = new Set()
+    release()
+    expect(await ended(walked)).toBe(true)
+    expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
+    expect(h.walksInPlace).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  // Mutation to prove this can fail: a walk of its own for each launch, or
+  // for the launch beside the CLI check's.
+  it('launches asked for together (tabs restored after a wake) and the CLI check\'s own walk are one walk: the folder is asked once, and the check goes on waiting past the launches\' deadline', async () => {
+    process.env.PATH = `${GONE};${NPM}`
+    h.hung = new Set([GONE.toLowerCase()])
+    h.present = files(`${NPM}\\claude.cmd`)
+    armClaudeLaunchWalk()
+    let checked: string | null = 'not answered yet'
+    void claudeOnWindowsPathAsync(process.env).then((found) => { checked = found })
     const waits = [awaitClaudeLaunchWalk(false), awaitClaudeLaunchWalk(false), awaitClaudeLaunchWalk(false)]
-    await vi.advanceTimersByTimeAsync(WAIT)
+    await vi.advanceTimersByTimeAsync(DEADLINE)
     for (const w of waits) expect(await ended(w)).toBe(true)
-    expect(h.walks).toBe(1)
-    expect(h.asked.filter((p) => p.startsWith(GONE))).toHaveLength(1)
+    expect(h.walks).toEqual([CLAUDE_NAMES])
+    expect(h.asked).toEqual([`${GONE}\\claude.exe`])
+    expect(checked, 'the check has no deadline').toBe('not answered yet')
+    h.hung = new Set()
+    release()
+    await flush()
+    expect(checked).toBe(`${NPM}\\claude.cmd`)
+  })
+
+  // Mutation to prove this can fail: record "none" (or anything) for a walk
+  // that has not ended.
+  it('a walk past its deadline overwrites nothing: an answer kept from a walk that ended is still the answer while it is recent, and is still there afterwards', async () => {
+    process.env.PATH = `${GONE};${TOOLS}`
+    h.present = files(`${TOOLS}\\claude.exe`)
+    armClaudeLaunchWalk()
+    expect(await claudeOnWindowsPathAsync(process.env), 'a walk that ended').toBe(`${TOOLS}\\claude.exe`)
+    const keptAt = Date.now()
+    // The share goes down; the CLI check's next walk does not end.
+    h.hung = new Set([GONE.toLowerCase()])
+    void claudeOnWindowsPathAsync(process.env)
+    await vi.advanceTimersByTimeAsync(DEADLINE)
+    expect(claudeLaunchWalkPending(false), 'an answer is kept: nothing to wait for').toBe(false)
+    expect(launch(), 'the kept answer, not a refusal').toEqual({ cmd: `${TOOLS}\\claude.exe`, args: [] })
+    // Once it is a minute old there is no answer to read, and the walk under way has none.
+    await vi.advanceTimersByTimeAsync(CLAUDE_LOOKUP_REUSE_MS - DEADLINE)
+    expect(() => launch()).toThrow(CLAUDE_PATH_NOT_ANSWERING)
+    expect(recentClaudeOnWindows(process.env, () => keptAt + 1), 'the kept answer was not replaced').toBe(`${TOOLS}\\claude.exe`)
+    expect(h.walksInPlace).toEqual([])
   })
 })
 
 describe('a launch on a PATH whose folders all answer', () => {
-  it('with no answer to read: the walk ends with no bound passing, and the launch names what it found', async () => {
+  it('with no answer to read: the walk ends with no deadline passing, and the launch names what it found', async () => {
     process.env.PATH = `${TOOLS};${NPM}`
-    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase(), `${TOOLS}\\claude.bat`.toLowerCase()])
+    h.present = files(`${NPM}\\claude.cmd`, `${TOOLS}\\claude.bat`)
     armClaudeLaunchWalk()
     expect(claudeLaunchWalkPending(false)).toBe(true)
     expect(await ended(awaitClaudeLaunchWalk(false))).toBe(true)
@@ -224,30 +303,84 @@ describe('a launch on a PATH whose folders all answer', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  // Mutations to prove this can fail: fall back to the name `claude` when the
+  // walk found none; walk in place when the kept answer is "none".
+  it('with Claude Code in no folder, the launch is refused as before, with the not-found message: never a bare name, and nothing walked in place', async () => {
+    process.env.PATH = `${TOOLS};${NPM}`
+    armClaudeLaunchWalk()
+    expect(await ended(awaitClaudeLaunchWalk(false))).toBe(true)
+    expect(() => launch()).toThrow(CLAUDE_NOT_ON_PATH)
+    expect(h.walksInPlace).toEqual([])
+  })
+
+  it('a "none" kept is asked again, off the event loop, by the next launch: a Claude Code installed meanwhile is seen at once', async () => {
+    process.env.PATH = `${TOOLS};${NPM}`
+    armClaudeLaunchWalk()
+    expect(await ended(awaitClaudeLaunchWalk(false))).toBe(true)
+    expect(() => launch()).toThrow(CLAUDE_NOT_ON_PATH)
+    h.present = files(`${TOOLS}\\claude.exe`)
+    expect(claudeLaunchWalkPending(false)).toBe(true)
+    expect(await ended(awaitClaudeLaunchWalk(false))).toBe(true)
+    expect(launch()).toEqual({ cmd: `${TOOLS}\\claude.exe`, args: [] })
+    expect(h.walks).toEqual([CLAUDE_NAMES, CLAUDE_NAMES])
+    expect(h.walksInPlace).toEqual([])
+  })
+
   // Mutation to prove this can fail: hold every launch, whatever is kept.
   it('with a recent answer kept (the usual case, the CLI check\'s): nothing is held and nothing walked', async () => {
     process.env.PATH = `${TOOLS};${NPM}`
-    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
+    h.present = files(`${NPM}\\claude.cmd`)
     armClaudeLaunchWalk()
     expect(await claudeOnWindowsPathAsync(process.env)).toBe(`${NPM}\\claude.cmd`)
-    h.walks = 0
+    h.walks = []
     expect(claudeLaunchWalkPending(false)).toBe(false)
     expect(await ended(awaitClaudeLaunchWalk(false))).toBe(true)
-    expect(h.walks).toBe(0)
+    expect(h.walks).toEqual([])
     expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
     expect(h.walksInPlace).toEqual([])
   })
 
-  it('an answer older than a minute is not one to read: the launch is held and walks again', async () => {
+  it('an answer a minute old is not one to read: the launch is held and walks again', async () => {
     process.env.PATH = `${TOOLS};${NPM}`
-    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
+    h.present = files(`${NPM}\\claude.cmd`)
     armClaudeLaunchWalk()
+    recordClaudeOnWindows(process.env.PATH, `${NPM}\\claude.cmd`, Date.now() - (CLAUDE_LOOKUP_REUSE_MS - 1))
+    expect(claudeLaunchWalkPending(false), 'a millisecond short of a minute: still read').toBe(false)
     recordClaudeOnWindows(process.env.PATH, `${NPM}\\claude.cmd`, Date.now() - CLAUDE_LOOKUP_REUSE_MS)
     expect(claudeLaunchWalkPending(false)).toBe(true)
     expect(await ended(awaitClaudeLaunchWalk(false))).toBe(true)
-    expect(h.walks).toBe(1)
+    expect(h.walks).toEqual([CLAUDE_NAMES])
     expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
     expect(h.walksInPlace).toEqual([])
+  })
+})
+
+describe('deciding whether a launch is held', () => {
+  // Mutation to prove this can fail: decide by the lookup a launch reads,
+  // which starts the PowerShell profile question when it has no answer.
+  it('starts nothing: with a "none" kept and no answer from the PowerShell profile yet, the profile is not asked for the decision', async () => {
+    process.env.PATH = TOOLS
+    setClaudeProfileLookupAllowed(() => true)
+    armClaudeLaunchWalk()
+    expect(await claudeOnWindowsPathAsync(process.env)).toBeNull()
+    expect(claudeLaunchWalkPending(false)).toBe(true)
+    await flush()
+    expect(h.profileAsks, 'the decision asked the profile nothing').toBe(0)
+    // The launch itself still starts that question in the background, as before.
+    expect(() => launch()).toThrow(CLAUDE_NOT_ON_PATH)
+    await flush()
+    expect(h.profileAsks).toBe(1)
+  })
+
+  it('a Claude Code the PowerShell profile named, kept, is a Claude Code that is known: nothing is held', async () => {
+    const FNM = 'C:\\Users\\me\\fnm\\claude.cmd'
+    process.env.PATH = TOOLS
+    h.profileAnswer = FNM
+    setClaudeProfileLookupAllowed(() => true)
+    armClaudeLaunchWalk()
+    expect(await findClaudeOnWindowsAsync(process.env)).toBe(FNM)
+    expect(claudeLaunchWalkPending(false)).toBe(false)
+    expect(launch()).toEqual({ cmd: FNM, args: [] })
   })
 })
 
@@ -256,22 +389,86 @@ describe('what a launch that waited for no walk still does', () => {
   // at all (nothing held it) still finds Claude Code, in place, as before.
   it('with no walk of this PATH at all, it walks in place, as before', () => {
     process.env.PATH = `${TOOLS};${NPM}`
-    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
+    h.present = files(`${NPM}\\claude.cmd`)
     expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
-    expect(h.walksInPlace).toEqual(['claude.exe,claude.cmd,claude.bat'])
+    expect(h.walksInPlace).toEqual([CLAUDE_NAMES])
   })
 
   // Mutation to prove this can fail: walk in place whenever no Claude Code is known.
-  it('with a walk of this PATH less than a minute ago that found none, it does not walk again in place', async () => {
+  it('with a walk of this PATH less than a minute ago that found none, it does not walk again in place; under another PATH it does', async () => {
     process.env.PATH = `${TOOLS};${NPM}`
     expect(await claudeOnWindowsPathAsync(process.env)).toBeNull()
-    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
+    h.present = files(`${NPM}\\claude.cmd`)
     expect(() => launch()).toThrow(CLAUDE_NOT_ON_PATH)
     expect(h.walksInPlace).toEqual([])
-    // Once that answer is a minute old, or PATH reads differently, it does.
     process.env.PATH = `${NPM};${TOOLS}`
     expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
     expect(h.walksInPlace).toHaveLength(1)
+  })
+
+  // Mutation to prove this can fail: take a "none" as the answer whatever its age.
+  it('a "none" is the answer for a minute less a millisecond; a minute old, or dated after now, it is not, and the last resort runs', () => {
+    process.env.PATH = `${TOOLS};${NPM}`
+    h.present = files(`${NPM}\\claude.cmd`)
+    const now = Date.now()
+    recordClaudeOnWindows(process.env.PATH, null, now - (CLAUDE_LOOKUP_REUSE_MS - 1))
+    expect(claudeOnWindowsPathWalkedRecently(process.env)).toBe(true)
+    expect(() => launch()).toThrow(CLAUDE_NOT_ON_PATH)
+    expect(h.walksInPlace).toEqual([])
+    recordClaudeOnWindows(process.env.PATH, null, now + 5_000)
+    expect(claudeOnWindowsPathWalkedRecently(process.env), 'an answer dated after now').toBe(false)
+    recordClaudeOnWindows(process.env.PATH, null, now - CLAUDE_LOOKUP_REUSE_MS)
+    expect(claudeOnWindowsPathWalkedRecently(process.env)).toBe(false)
+    expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
+    expect(h.walksInPlace).toEqual([CLAUDE_NAMES])
+  })
+})
+
+describe('the wait itself (awaitClaudeLaunchWalk)', () => {
+  // Mutation to prove this can fail: let a failed walk reject the wait.
+  it('never rejects: a walk that fails keeps no answer, and the launch then resolves as it did before', async () => {
+    process.env.PATH = `${TOOLS};${NPM}`
+    h.present = files(`${NPM}\\claude.cmd`)
+    h.walkThrows = true
+    armClaudeLaunchWalk()
+    await expect(awaitClaudeLaunchWalk(true)).resolves.toBeUndefined()
+    expect(h.walks.sort()).toEqual([CLAUDE_NAMES, 'node.exe'])
+    expect(recentClaudeOnWindows(process.env)).toBeNull()
+    expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
+    expect(h.walksInPlace).toEqual([CLAUDE_NAMES])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  // PATH is brought up to date while the app runs (the refresh at start, a
+  // check the user asks for), and a walk keeps its answer for the PATH it
+  // walked. Mutation to prove this can fail: end the wait when the walks
+  // end, whatever PATH reads by then (the launch then walks the new PATH in
+  // place).
+  it('PATH brought up to date while a file test is still unanswered: the wait looks again, off the event loop, at the PATH there is by then, and the launch walks nothing in place', async () => {
+    process.env.PATH = `${GONE};${TOOLS}`
+    h.hung = new Set([GONE.toLowerCase()])
+    h.present = files(`${NPM}\\claude.cmd`)
+    armClaudeLaunchWalk()
+    const walked = awaitClaudeLaunchWalk(false)
+    await flush()
+    expect(h.held).toHaveLength(1)
+    // The refresh adds a folder, and the share comes back.
+    process.env.PATH = `${GONE};${TOOLS};${NPM}`
+    h.hung = new Set()
+    release()
+    expect(await ended(walked)).toBe(true)
+    expect(h.walks, 'the PATH from before, then the PATH of now').toEqual([CLAUDE_NAMES, CLAUDE_NAMES])
+    expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
+    expect(h.walksInPlace).toEqual([])
+  })
+
+  it('a PATH that reads differently after every walk is looked at three times, and no more', async () => {
+    let n = 0
+    process.env.PATH = 'C:\\p0'
+    h.onWalk = () => { process.env.PATH = `C:\\p${++n}` }
+    armClaudeLaunchWalk()
+    expect(await ended(awaitClaudeLaunchWalk(false))).toBe(true)
+    expect(h.walks).toEqual([CLAUDE_NAMES, CLAUDE_NAMES, CLAUDE_NAMES])
   })
 })
 
@@ -281,8 +478,7 @@ describe('when a launch is held for the walk', () => {
     h.hung = new Set([GONE.toLowerCase()])
     expect(claudeLaunchWalkPending(true)).toBe(false)
     expect(await ended(awaitClaudeLaunchWalk(true))).toBe(true)
-    expect(h.walks).toBe(0)
-    expect(h.nodeLooks).toBe(0)
+    expect(h.walks).toEqual([])
   })
 
   // Mutation to prove this can fail: do not arm it at start.
@@ -308,52 +504,114 @@ describe('when a launch is held for the walk', () => {
       expect(claudeLaunchWalkPending(true, process.env, platform)).toBe(false)
       expect(await ended(awaitClaudeLaunchWalk(true, process.env, platform))).toBe(true)
     }
-    expect(h.walks).toBe(0)
-    expect(h.nodeLooks).toBe(0)
+    expect(h.walks).toEqual([])
   })
 })
 
 describe('a launch that opens the resume list (it starts node.exe, found the same way)', () => {
-  // Mutation to prove this can fail: leave node.exe to the launch's walk in place.
-  it('with no answer about node.exe kept, it is held and waits for that look too, though Claude Code is known', async () => {
-    process.env.PATH = `${TOOLS};${NPM}`
-    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
+  /** Claude Code is known for the PATH of now. */
+  const claudeKnown = (): void => recordClaudeOnWindows(process.env.PATH ?? '', `${TOOLS}\\claude.exe`, Date.now())
+
+  // Mutations to prove this can fail: leave node.exe to the launch's walk in
+  // place; answer "kept" whatever is kept, or never.
+  it('with no answer about node.exe kept, it is held and waits for that look too, though Claude Code is known; the answer is then kept, for that PATH and for a minute', async () => {
+    process.env.PATH = `${TOOLS};${NODEJS}`
+    h.present = files(`${NODEJS}\\node.exe`)
     armClaudeLaunchWalk()
-    await claudeOnWindowsPathAsync(process.env)
-    h.walks = 0
-    h.nodeKept = false
+    claudeKnown()
+    expect(pickerNodeAnswerKept(), 'no look yet').toBe(false)
     expect(claudeLaunchWalkPending(true)).toBe(true)
     expect(claudeLaunchWalkPending(false), 'a launch that opens no resume list is not held for it').toBe(false)
     expect(await ended(awaitClaudeLaunchWalk(true))).toBe(true)
-    expect(h.nodeLooks).toBe(1)
-    expect(h.walks, 'Claude Code was not walked for again').toBe(0)
+    expect(h.walks, 'Claude Code was not walked for again').toEqual(['node.exe'])
+    expect(pickerNodeAnswerKept()).toBe(true)
     expect(claudeLaunchWalkPending(true)).toBe(false)
+    expect(opensList()).toBe(true)
+    expect(h.walksInPlace, 'the launch read the answer the look kept').toEqual([])
+    expect(pickerNodeAnswerKept({ PATH: NODEJS }), 'not an answer for another PATH').toBe(false)
+    await vi.advanceTimersByTimeAsync(PICKER_NODE_REUSE_MS - 1)
+    expect(pickerNodeAnswerKept()).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(pickerNodeAnswerKept(), 'a minute old').toBe(false)
   })
 
-  it('a look that ended with no answer for this PATH (one in flight from before a refresh) is made once more, and no more than that', async () => {
-    process.env.PATH = `${TOOLS};${NPM}`
-    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
+  it('a "none" about node.exe is an answer kept too: the launch is not held again, and starts Claude Code directly', async () => {
+    process.env.PATH = TOOLS
     armClaudeLaunchWalk()
-    await claudeOnWindowsPathAsync(process.env)
-    h.nodeKept = false
-    h.nodeLookKeeps = false
+    claudeKnown()
     expect(await ended(awaitClaudeLaunchWalk(true))).toBe(true)
-    expect(h.nodeLooks).toBe(2)
+    expect(pickerNodeAnswerKept()).toBe(true)
+    expect(claudeLaunchWalkPending(true)).toBe(false)
+    expect(opensList()).toBe(false)
+    expect(h.walksInPlace).toEqual([])
   })
 
-  it('with both to look for, both looks are made, and the launch waits for both', async () => {
+  // Mutations to prove this can fail: give the folder a time of its own and
+  // go on (a later folder's node.exe runs the list); walk in place when the
+  // look has no answer.
+  it('PATH\'s order holds for node.exe too: past the look\'s deadline the resume list is left out and the log says why, never a later folder\'s node.exe, and nothing is walked in place', async () => {
+    process.env.PATH = `${GONE};${NODEJS}`
+    h.hung = new Set([GONE.toLowerCase()])
+    h.present = files(`${NODEJS}\\node.exe`)
+    armClaudeLaunchWalk()
+    claudeKnown()
+    const walked = awaitClaudeLaunchWalk(true)
+    await vi.advanceTimersByTimeAsync(DEADLINE - 1)
+    expect(await ended(walked), 'not before the look\'s deadline').toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await ended(walked)).toBe(true)
+    expect(opensList()).toBe(false)
+    const line = buildClaudeLaunchCommand({ platform: 'win32', cwd: 'C:\\work', claudeBin: `${TOOLS}\\claude.exe`, extraFlags: '', agentsFlag: '', useResumePicker: true, pickerScript: PICKER })
+    expect(line).toContain(`& '${TOOLS}\\claude.exe'`)
+    expect(line).not.toContain('node.exe')
+    expect(vi.mocked(logInfo)).toHaveBeenCalledWith(`[spawn-claude] ${CLAUDE_RESUME_LIST_SKIPPED_PATH_NOT_ANSWERING}`)
+    expect(h.asked, 'the later folder was not asked').toEqual([`${GONE}\\node.exe`])
+    expect(h.walksInPlace).toEqual([])
+    // The folder answers at last (it holds no node.exe): the look ends, and the next launch opens the list.
+    h.hung = new Set()
+    release()
+    await flush()
+    expect(opensList()).toBe(true)
+    expect(h.walksInPlace).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  // Mutation to prove this can fail: a file test of its own for each look
+  // (one share that is down then holds two of the few threads).
+  it('with both to look for, both looks are made and the launch waits for both, with one file test at a time in the folder that does not answer', async () => {
     process.env.PATH = `${GONE};${NPM}`
     h.hung = new Set([GONE.toLowerCase()])
-    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
-    h.nodeKept = false
+    h.present = files(`${NPM}\\claude.cmd`, `${NPM}\\node.exe`)
     armClaudeLaunchWalk()
     const walked = awaitClaudeLaunchWalk(true)
     await flush()
-    expect(h.nodeLooks).toBe(1)
-    expect(await ended(walked), 'the walk for Claude Code has not ended').toBe(false)
-    await vi.advanceTimersByTimeAsync(WAIT)
+    expect(h.walks.sort()).toEqual([CLAUDE_NAMES, 'node.exe'])
+    expect(h.asked, 'one test outstanding there, for both looks').toEqual([`${GONE}\\claude.exe`])
+    expect(await ended(walked)).toBe(false)
+    await vi.advanceTimersByTimeAsync(5_000)
+    fail()
     expect(await ended(walked)).toBe(true)
+    expect(h.asked.filter((p) => p.startsWith(GONE)), 'asked once in all').toEqual([`${GONE}\\claude.exe`])
     expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
+    expect(opensList()).toBe(true)
+    expect(h.walksInPlace).toEqual([])
+  })
+
+  it('a look that ended with no answer for this PATH (one under way from before a refresh) is made once more, and no more than that', async () => {
+    h.hung = new Set([GONE.toLowerCase()])
+    void warmPickerNodeOnWindows({ PATH: GONE })
+    process.env.PATH = `${TOOLS};${NODEJS}`
+    h.present = files(`${NODEJS}\\node.exe`)
+    armClaudeLaunchWalk()
+    claudeKnown()
+    const walked = awaitClaudeLaunchWalk(true)
+    await flush()
+    expect(h.walks, 'it joined the look under way').toEqual(['node.exe'])
+    release()
+    expect(await ended(walked)).toBe(true)
+    expect(h.walks).toEqual(['node.exe', 'node.exe'])
+    expect(pickerNodeAnswerKept()).toBe(true)
+    expect(opensList()).toBe(true)
     expect(h.walksInPlace).toEqual([])
   })
 })

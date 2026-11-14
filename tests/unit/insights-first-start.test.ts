@@ -7,11 +7,12 @@
 // warm-up; nothing is started.
 //
 // Before it resolves Claude Code, the run waits for the walk of PATH a
-// session's launch waits for (claude-launch-walk.ts; the last case). On
+// session's launch waits for (claude-launch-walk.ts; the last two cases). On
 // Windows the resolution takes a walk under a minute old as the answer, found
-// or not, and that walk is made off the event loop, each folder bounded: so
-// a Claude Code installed a moment ago is found, and PATH is not walked in
-// place. The walk is a stand-in here; its own tests are
+// or not, and that walk is made off the event loop and waited for no longer
+// than its deadline: so a Claude Code installed a moment ago is found, and
+// PATH is not walked in place. Claude Code switched off during that wait
+// starts nothing. The walk is a stand-in here; its own tests are
 // tests/unit/main/claude-launch-walk.test.ts.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 // Claude Code on unless a case switches it off (h.refusal).
@@ -164,5 +165,24 @@ describe('the /insights terminal (ADR-025)', () => {
     await run
     await vi.waitFor(() => expect(h.order).toEqual([`warm ${RESOLVED}`, `pty ${RESOLVED}`]))
     expect(h.steps).toEqual(['walk asked (resume list: false)', 'walk ended', 'resolved'])
+  })
+
+  // That wait can take seconds (a PATH folder that does not answer), and the
+  // warm-up after it starts Claude Code once. Mutation to prove this can
+  // fail: go on to the warm-up after the walk without asking again.
+  it('Claude Code switched off while PATH is walked: nothing of it is warmed up or started, and the run fails with the reason', async () => {
+    let release!: () => void
+    h.walkGate = new Promise<void>((r) => { release = r })
+    const run = runInsights(() => null, { profileId: 'a' })
+    await vi.waitFor(() => expect(h.steps).toEqual(['walk asked (resume list: false)']))
+    h.refusal = { code: 'provider-off', providerId: 'claude', message: 'Claude Code is off. Turn it on in Settings, Accounts.' }
+    release()
+    const id = await run as string
+    await new Promise((r) => setTimeout(r, 20))
+    expect(h.warm, 'no warm-up: it would start Claude Code').toEqual([])
+    expect(h.order).toEqual([])
+    const saved = getCatalogue().runs.find((r) => r.id === id)!
+    expect(saved.status).toBe('failed')
+    expect(saved.error).toBe('Claude Code is off. Turn it on in Settings, Accounts.')
   })
 })

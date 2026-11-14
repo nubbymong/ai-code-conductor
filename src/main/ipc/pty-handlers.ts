@@ -897,11 +897,18 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     // resume list, about node.exe) would walk PATH for it in place, where a
     // folder on a share that does not answer holds the whole main process.
     // It waits instead, as a prepared spawn, for that walk made off the
-    // event loop, each folder bounded, then names what the walk found or is
-    // refused as before. With a recent answer kept, the usual case, nothing
-    // is held.
-    const opensResumeList = options?.useResumePicker === true && !options.resume
-    const holdForClaudeLookup = launchProvider === 'claude' && !options?.ssh && (claudeStartLookupPending() || claudeLaunchWalkPending(opensResumeList))
+    // event loop, at most until the walk's deadline, then names what the
+    // walk found or is refused: as before when Claude Code is in no folder,
+    // and saying so when a PATH folder did not answer in time. With a recent
+    // answer kept, the usual case, nothing is held.
+    //
+    // Whenever the resume list is asked for, whether or not a conversation
+    // to resume is named too: a named one whose transcript or folder is
+    // gone is dropped by the PTY manager, and the launch then opens the
+    // list after all (a restored tab asks for both).
+    const localClaudeLaunch = launchProvider === 'claude' && !options?.ssh
+    const opensResumeList = options?.useResumePicker === true
+    const holdForClaudeLookup = localClaudeLaunch && (claudeStartLookupPending() || claudeLaunchWalkPending(opensResumeList))
     const preparation = codexSession || askSpawn || holdForStartSteps || holdForScripts || holdForClaudeLookup ? beginSpawnPreparation(win, sessionId, options?.shellOnly ? null : (options?.provider ?? 'claude')) : null
     // PR-level ADR-009 round 1 (B1): once that preparation is cancelled or
     // superseded, this spawn's ticket stops counting as one under way.
@@ -1067,9 +1074,14 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
       // PATH refresh, first lookup and version probe (holdForClaudeLookup
       // above).
       if (holdForClaudeLookup) await awaitClaudeStartLookup()
-      // Then the launch's own walk of PATH, when it still has one to make:
+      // Then the launch's own walk of PATH, when it has one to make by now:
       // an answer the start kept meanwhile is read, and nothing is walked.
-      if (holdForClaudeLookup) await awaitClaudeLaunchWalk(opensResumeList)
+      // Asked again here, after every wait above, for any launch held for
+      // any of them: an answer that was recent when the hold was decided
+      // can have run out while the launch waited for something else. One
+      // wait after the other, never side by side: the start's own first,
+      // then this.
+      if (preparation && localClaudeLaunch) await awaitClaudeLaunchWalk(opensResumeList)
 
       // Closed, swept or superseded while it was prepared: start nothing, and
       // SAY so. The renderer holds any pty:exit that arrives while its own
