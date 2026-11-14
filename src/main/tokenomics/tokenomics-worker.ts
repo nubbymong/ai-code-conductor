@@ -790,7 +790,14 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       if (!db) return
       if (sweepPending) fullSweepDue = true
       post({ type: 'index-complete', firstIndex: false, drained: firstSweepDone && !sweepPending, filesFailed: sweepFailed.size, eventsTotal: db.eventCount() })
-    } catch (err) { logw('error', `ingestDirty failed: ${String(err)}`) }
+    } catch (err) {
+      // The reported files were taken out of the set before the sweep failed,
+      // so the ones it did not reach would wait for their next report or the
+      // next timed walk. A full walk is due instead; the 5 s timer runs it,
+      // never at once.
+      fullSweepDue = true
+      logw('error', `ingestDirty failed: ${String(err)}`)
+    }
     finally {
       sweeping = false
       if (sweepAfter && db) { sweepAfter = false; scheduleIncremental() }

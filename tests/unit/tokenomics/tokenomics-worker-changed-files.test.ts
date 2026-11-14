@@ -3,8 +3,9 @@
  * transcripts the folder watcher reported. The whole tree is listed at start,
  * on a re-index, on an event that names no transcript, and as a safety net
  * every TK_FULL_SWEEP_MS. A full walk that leaves work behind runs again
- * until every file is read, and a reported transcript that is a link is left
- * alone, as the full walk leaves it.
+ * until every file is read, a changed-files sweep that fails makes the next
+ * sweep a full one, and a reported transcript that is a link is left alone,
+ * as the full walk leaves it.
  *
  * Host-safe: the real worker and real transcript files in a temp folder, a
  * wrapped fs that counts folder listings and file reads and hands the
@@ -24,13 +25,18 @@ const db = vi.hoisted(() => ({
   meta: new Map<string, string>(),
   /** Rows stored. Nothing is deduplicated here, so bytes read twice show up. */
   events: 0,
-  /** The next setMeta throws, once: a sweep that fails part-way. */
+  /** The next setMeta throws, once: a full sweep that fails part-way. */
   failNextSetMeta: false,
+  /** The next getFileCursor throws, once: a sweep that fails before it reads a file. */
+  failNextGetCursor: false,
 }))
 vi.mock('../../../src/main/tokenomics/tk-db', () => ({
   TK_REBUILD_PAGE: 5000,
   openTkDb: () => ({
-    getFileCursor: (p: string) => db.cursors.get(p) ?? null,
+    getFileCursor: (p: string) => {
+      if (db.failNextGetCursor) { db.failNextGetCursor = false; throw new Error('simulated read failure') }
+      return db.cursors.get(p) ?? null
+    },
     setFileCursor: (c: Cursor) => { db.cursors.set(c.path, c) },
     insertEvents: (b: unknown[]) => { db.events += b.length; return b.length },
     insertEventsWithCursor: (b: unknown[], c: Cursor) => { db.events += b.length; db.cursors.set(c.path, c); return b.length },
@@ -178,7 +184,7 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
     realFs.mkdirSync(path.join(claudeDir, 'F--proj'), { recursive: true })
     realFs.mkdirSync(codexDir, { recursive: true })
     for (let i = 0; i < 5; i++) realFs.writeFileSync(transcript(`s${i}`), line(`init-${i}`))
-    db.cursors.clear(); db.meta.clear(); db.events = 0; db.failNextSetMeta = false
+    db.cursors.clear(); db.meta.clear(); db.events = 0; db.failNextSetMeta = false; db.failNextGetCursor = false
     clearCounts()
     completes = []; failed = []; waiters = []
     watchCbs.clear()
@@ -378,6 +384,31 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       await again
       expect(walks).toBe(2)
       expect(completes).toEqual([{ firstIndex: true, drained: true }])
+    })
+  })
+
+  describe('a changed-files sweep that fails part-way', () => {
+    it('makes the next sweep a full one, run by the 5 s timer and not at once', async () => {
+      fakeTheTimer()
+      await start()
+      // Two reported transcripts: the sweep fails on the first and never
+      // reaches the second, and both are out of the set by then.
+      realFs.appendFileSync(transcript('s1'), line('more-1'))
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      clearCounts()
+      db.failNextGetCursor = true
+      const failure = waitFor('the failed sweep', (m) => m.type === 'log' && m.entry.level === 'error')
+      fire(claudeDir, 'change', path.join('F--proj', 's1.jsonl'))
+      fire(claudeDir, 'change', path.join('F--proj', 's2.jsonl'))
+      await failure
+      await settle()
+      expect({ walks, opened, events: db.events }).toEqual({ walks: 0, opened: [], events: 5 })
+      const full = nextSweep('the full sweep after the failure')
+      vi.advanceTimersByTime(TAIL_MS)
+      await full
+      expect(walks).toBe(1)
+      expect([...opened].sort()).toEqual([transcript('s1'), transcript('s2')].sort())
+      expect(db.events).toBe(7)
     })
   })
 
