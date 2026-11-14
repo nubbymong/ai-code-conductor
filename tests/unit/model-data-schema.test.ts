@@ -291,6 +291,43 @@ describe('a fetched file is held to a strict shape', () => {
     expect(validateModelData(file((f) => { f.models.unshift({ ...NEW_MODEL, patterns: ['fabl'] }) }), bundled).ok).toBe(true)
   })
 
+  // Review finding: a model the build does not ship could carry a pattern
+  // the bundled file has on one of its own entries ('opus', which Opus 5.5
+  // holds for every Opus name not listed). The file's models come first in
+  // the joined list, so every such name was read, and priced, as the new one.
+  const NEW_OPUS = { id: 'claude-opus-6', patterns: ['opus-6'], family: 'opus', label: 'Opus 6', fallbackPricing: { input: 99, output: 99, cacheRead: 99, cacheWrite: 99 } }
+  it.each([
+    ['its family\'s own', { ...NEW_OPUS, patterns: ['opus-6', 'opus'] }, 'claude-opus-5-5'],
+    ['the same text, held to the start of the name', { ...NEW_OPUS, patterns: ['^opus'] }, 'claude-opus-5-5'],
+    ['another family\'s', { ...NEW_MODEL, patterns: ['fable-6', 'sonnet'] }, 'claude-sonnet-5-5'],
+    ['a listed version\'s', { ...NEW_MODEL, patterns: ['fable-5-1'] }, 'claude-fable-5-1'],
+    ['the other assistant\'s, without its hold on the start', { id: 'gpt-7', patterns: ['gpt-'], family: 'codex', label: 'GPT-7' }, 'codex-family'],
+  ])('a new model with a pattern the build already has on another entry (%s) is refused, and the reason names that entry', (_what, model, keeper) => {
+    expect(reasonOf(file((f) => { f.models.unshift(model) }))).toBe(`models: ${model.id} has a pattern the build already has on ${keeper}`)
+  })
+
+  it('when the build has the pattern on two entries, the reason names the first: the one a name reaches', () => {
+    const twice = file((f) => { f.models.find((m: Loose) => m.id === 'claude-opus-4-5').patterns.push('opus') }) as unknown as ModelRegistry
+    const r = validateModelData(file((f) => { f.models.unshift({ ...NEW_OPUS, patterns: ['opus'] }) }), twice)
+    expect(r).toEqual({ ok: false, reason: 'models: claude-opus-6 has a pattern the build already has on claude-opus-5-5' })
+  })
+
+  it('a new model with a pattern of its own is taken, and a name no entry lists stays with the build\'s entry and its price', () => {
+    const r = validateModelData(file((f) => { f.models.unshift(NEW_OPUS) }), bundled)
+    expect(r.ok ? 'ok' : r.reason).toBe('ok')
+    const merged = mergeModelData(bundled, r.ok ? r.data : null, '2026-11-14')
+    expect(resolveModelInfo(merged, 'claude-opus-6-20270101')).toMatchObject({ id: 'claude-opus-6', matchKind: 'prefix' })
+    expect(resolveModelInfo(merged, 'anthropic.claude-opus-6-v1:0')).toMatchObject({ id: 'claude-opus-6', matchKind: 'pattern' })
+    const shippedPrice = bundled.models.find((m) => m.id === 'claude-opus-5-5')?.fallbackPricing
+    for (const name of ['anthropic.claude-opus-9-v1:0', 'Opus 9 (1M context)']) {
+      const info = resolveModelInfo(merged, name)
+      expect(info, name).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern' })
+      expect(info.fallbackPricing, name).toEqual(shippedPrice)
+    }
+    // A shipped model keeps every pattern the bundled file gives it.
+    expect(validateModelData(file(), bundled).ok).toBe(true)
+  })
+
   it('a price that is not a finite number is refused', () => {
     // JSON has no way to write these, so they are given as values.
     for (const price of [Number.NaN, Number.POSITIVE_INFINITY]) reasonOf(file((f) => { f.models[0].fallbackPricing.output = price }))

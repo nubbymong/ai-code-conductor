@@ -20,6 +20,9 @@
 //  - a model the build does not ship has a full name (its family and a
 //    version), and a new pattern is at least four characters: an entry that
 //    is only the start of a name would match every model not listed yet;
+//  - a model the build does not ship has no pattern the bundled file already
+//    has on one of its own entries (`opus`): the file's models are matched
+//    first, so it would take every name that entry stands for;
 //  - a pattern is plain text (literalPattern), matched as text. Nothing in
 //    the file is ever compiled into a regular expression.
 //
@@ -154,6 +157,14 @@ export function validateModelData(value: unknown, bundled: ModelRegistry): Model
     codex: new Set(otherLevels.map((l) => l.value)),
   }
   const shipped = new Map(bundled.models.map((m) => [m.id, m]))
+  // Each pattern the bundled file has, by its text, and the entry it is on.
+  const keptOn = new Map<string, string>()
+  for (const b of bundled.models) {
+    for (const p of b.patterns ?? []) {
+      const kept = literalPattern(p)?.text
+      if (kept && !keptOn.has(kept)) keptOn.set(kept, b.id)
+    }
+  }
   const seen = new Set<string>()
   for (const m of file.models) {
     if (seen.has(m.id)) return refuse(`models: ${m.id} is listed more than once`)
@@ -176,7 +187,14 @@ export function validateModelData(value: unknown, bundled: ModelRegistry): Model
     if (!base && !isFullModelName(m.id, m.family)) return refuse(`models: ${m.id} is not a full model name of its family`)
     const had = new Set(base?.patterns ?? [])
     for (const p of m.patterns) {
-      if (!had.has(p) && (literalPattern(p)?.text.length ?? 0) < MODEL_DATA_MIN_PATTERN) return refuse(`models: ${m.id} has a pattern too short to add`)
+      const patternText = literalPattern(p)?.text ?? ''
+      if (!had.has(p) && patternText.length < MODEL_DATA_MIN_PATTERN) return refuse(`models: ${m.id} has a pattern too short to add`)
+      // The file's models are matched first. A model the build does not ship
+      // that carried a pattern the build has on one of its own entries (the
+      // family's `opus`, with or without `^`) would take the label and the
+      // price of every name that entry stands for.
+      const keeper = base ? undefined : keptOn.get(patternText)
+      if (keeper) return refuse(`models: ${m.id} has a pattern the build already has on ${keeper}`)
     }
   }
   return { ok: true, data: file as ModelRegistry, revision: fileRevision }
