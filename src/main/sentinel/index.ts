@@ -20,6 +20,7 @@ import { parseClaudeVersion, minVersionFindings, type ManifestEntry } from './se
 import { fetchChangelog, sliceChangelog } from './sentinel-changelog'
 import { fetchCodexReleaseNotes } from './sentinel-codex-changelog'
 import { runAnalysis, CLAUDE_ANALYSIS_ENV, createClaudeRetryWatch, claudeAnalysisOutcome, claudeSettingsTransportEnv, type HeadlessRunner } from './sentinel-analysis'
+import { claudeAnalysisAccountLabel, codexAnalysisAccountLabel } from './sentinel-account'
 import { validateProposal } from './sentinel-apply'
 import {
   modelCoverageFindings, modelCheckFailedFinding, EXPECTED_MODEL_SET, codexModelCoverageFindings, CODEX_EXPECTED_MODEL_SET, type CodexLiveModelList,
@@ -33,7 +34,7 @@ import { sentinelAnalysisProvider } from '../../shared/ask-conductor-provider'
 import { stripSpoofableText } from '../../shared/safe-text'
 import { compareVersions } from '../../shared/version-order'
 import type { SentinelFinding, SentinelProvider } from '../../shared/sentinel-types'
-import type { ProviderInstallationView } from '../../shared/providers'
+import { sentinelCodexAccountOffered, type ProviderInstallationView } from '../../shared/providers'
 import manifestJson from '../../../resources/sentinel-assumption-manifest.json'
 import { logInfo } from '../debug-logger'
 
@@ -169,22 +170,13 @@ async function analysisHome(): Promise<{ home: string | null; accountLabel: stri
     const chosen = settings?.sentinelAccountProfileId ?? null
     const { home, profileId } = resolveHeadlessProfileHome(chosen)
     if (profileId && !profileCredentialFoldersChecked(profileId)) await checkProfileCredentialFolders(profileId)
-    // Name the account the analysis actually ran under, so a failure message can
-    // say WHICH account to change (#430). When the chosen account no longer
-    // resolves and we fell back to another, say so — otherwise the user sees a
-    // limit on an account they never picked and has no idea why.
-    let accountLabel: string | null = null
-    if (profileId) {
-      // `|| null`, not `?? null`: a not-yet-signed-in profile has accountEmail
-      // '' (account-profiles), and an empty string must fall back to the
-      // profileId — otherwise the fallback label reads "; auto-picked …" with
-      // no identifier, defeating the "which account to change" goal.
-      const email = listProfiles().find((p) => p.id === profileId)?.accountEmail || null
-      const fellBack = !!chosen && chosen !== profileId
-      accountLabel = fellBack
-        ? `${email ?? profileId}; auto-picked — your chosen analysis account is no longer available`
-        : email ?? profileId
-    }
+    // Name the account the analysis actually ran under, and why it was that
+    // one, so a failure message can say WHICH account to change (#430).
+    // 2.1.3-beta.1: "auto-picked, your chosen analysis account is no longer
+    // available" is said only when an account still chosen in Settings could
+    // not be used; a saved choice whose account is gone shows as the default
+    // there, and is the default here (sentinel-account.ts).
+    const accountLabel = profileId ? claudeAnalysisAccountLabel({ chosen, used: profileId, profiles: listProfiles() }) : null
     return { home, accountLabel }
   } catch {
     return { home: null, accountLabel: null } // fail-open: bare global is still better than no analysis
@@ -393,6 +385,16 @@ function codexAccountLabel(svc: NonNullable<Awaited<ReturnType<typeof accountsSe
   }
 }
 
+/** Whether Settings offers this Codex account for the analysis (the rule its
+ *  select lists by); false when the accounts cannot be read. */
+function codexChoiceOffered(svc: NonNullable<Awaited<ReturnType<typeof accountsService>>>, accountId: string): boolean {
+  try {
+    return svc.snapshot().accounts.some((a) => a.id === accountId && sentinelCodexAccountOffered(a))
+  } catch {
+    return false
+  }
+}
+
 let sentinelLaunchSeq = 0
 
 /** Said when the Codex account an analysis would run on needs a
@@ -556,7 +558,11 @@ async function codexAnalysisRunner(signal: AbortSignal): Promise<AnalysisRunner 
     }
     const saved = await savedSettings()
     const chosenRaw = saved?.sentinelCodexAccountId
-    const chosen = typeof chosenRaw === 'string' && chosenRaw ? chosenRaw : null
+    // 2.1.3-beta.1: a saved choice counts only while Settings still offers
+    // its account. One that is gone, archived or no longer able to run a
+    // review unattended shows as the default there, so it is not tried here
+    // and nothing is said about a chosen account that could not be used.
+    const chosen = typeof chosenRaw === 'string' && chosenRaw && codexChoiceOffered(svc, chosenRaw) ? chosenRaw : null
     const prepare = (accountId: string | null) => svc.prepareLaunch({
       kind: 'review', providerId: 'codex', ownerId: `sentinel:${++sentinelLaunchSeq}`, remote: false,
       ...(accountId ? { providerAccountId: accountId } : {}),
@@ -585,8 +591,7 @@ async function codexAnalysisRunner(signal: AbortSignal): Promise<AnalysisRunner 
       launch.lease.release()
       return { refused: "Sentinel's analysis could not run on Codex: no empty folder could be made for it." }
     }
-    const name = codexAccountLabel(svc, launch.binding.providerAccountId)
-    const accountLabel = fellBack ? `${name}; auto-picked, your chosen analysis account could not be used` : name
+    const accountLabel = codexAnalysisAccountLabel(codexAccountLabel(svc, launch.binding.providerAccountId), fellBack ? 'fell-back' : chosen ? 'chosen' : 'default')
     const kills: Promise<void>[] = []
     handedOver = true
     return {
@@ -794,7 +799,11 @@ async function analyzeUpdates(updates: Update[], carried: string[] = [], opts: {
         state.clearUnverified(key)
       }
     } else if (r.error) {
-      errors.push(r.error)
+      // 2.1.3-beta.1: said once per run. Every update of a run is analysed
+      // on the same account, so one that is signed out or at its limit
+      // fails each of them with the same words (Claude Code's update and
+      // Codex's gave the panel the whole message twice).
+      if (!errors.includes(r.error)) errors.push(r.error)
       if (r.failed) failed = true
     }
   }

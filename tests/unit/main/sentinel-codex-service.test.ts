@@ -50,7 +50,14 @@ const svc = vi.hoisted(() => ({
   prepareAnswer: null as null | ((input: Record<string, unknown>) => Record<string, unknown> | null),
   released: 0,
   poisoned: false,
+  // The Codex accounts listed (each one Settings offers for the analysis unless a case says otherwise).
+  accounts: [] as Array<Record<string, unknown>>,
 }))
+const codexAccount = (id: string, extra: Record<string, unknown> = {}) => ({
+  id, providerId: 'codex', lifecycle: 'active', operationalState: 'ready', unverified: false, external: false, identityId: 'id-1', providerLabel: 'work@example.com', ...extra,
+})
+/** Claude's own accounts as the analysis sees them: the one its runs use, and the list. */
+const claudeAccounts = vi.hoisted(() => ({ used: null as string | null, list: [] as Array<{ id: string; accountEmail: string; isPrimary?: boolean }> }))
 const review = vi.hoisted(() => ({
   runs: [] as Array<{ executable: string; env: Record<string, string>; cwd: string; prompt: string; timeoutMs: number; purpose?: string; listing: string[]; markerEmptyFile: boolean }>,
   answer: null as null | (() => Record<string, unknown>),
@@ -93,7 +100,7 @@ vi.mock('../../../src/main/provider-accounts', () => ({
     },
     snapshot: () => ({
       providers: [installationOf('codex')],
-      accounts: [{ id: 'acct-work', identityId: 'id-1', providerLabel: 'work@example.com' }],
+      accounts: svc.accounts,
       identities: [{ id: 'id-1', friendlyName: 'Work' }],
     }),
   }),
@@ -119,13 +126,13 @@ vi.mock('../../../src/main/config-manager', () => ({
   readConfigChecked: () => ({ value: settings.value, outcome: settings.value ? 'ok' : 'absent' }),
 }))
 vi.mock('../../../src/main/account-profiles', () => ({
-  resolveHeadlessProfileHome: () => ({ home: null, profileId: null }),
+  resolveHeadlessProfileHome: () => ({ home: null, profileId: claudeAccounts.used }),
   // No start steps pending and every sign-in folder checked (the waits a launch makes first).
   startProfileStepsPending: () => false,
   startProfileStepsSettled: async () => {},
   profileCredentialFoldersChecked: () => true,
   checkProfileCredentialFolders: async () => {},
-  listProfiles: () => [],
+  listProfiles: () => claudeAccounts.list,
   // Round 3: the default account's Claude folder is this suite's own.
   sharedRoot: () => path.join(dir, 'shared-claude'),
 }))
@@ -185,6 +192,9 @@ beforeEach(() => {
   svc.prepareAnswer = null
   svc.released = 0
   svc.poisoned = false
+  svc.accounts = [codexAccount('acct-work')]
+  claudeAccounts.used = null
+  claudeAccounts.list = []
   review.runs = []
   review.answer = null
   review.hold = null
@@ -441,12 +451,13 @@ describe("the analysis of a Codex update, on the provider that is on (row 42; OD
 
   it("the chosen analysis account is used; one that cannot run falls back to Codex's review default, said in the label; neither is ever acknowledged", async () => {
     svc.pref.claude = 'off'
-    settings.value = { sentinelCodexAccountId: 'acct-gone' }
-    svc.prepareAnswer = (input) => input.providerAccountId === 'acct-gone' ? { ok: false, code: 'not-found', message: 'That account is not available.' } : null
+    svc.accounts = [codexAccount('acct-work'), codexAccount('acct-chosen')]
+    settings.value = { sentinelCodexAccountId: 'acct-chosen' }
+    svc.prepareAnswer = (input) => input.providerAccountId === 'acct-chosen' ? { ok: false, code: 'not-found', message: 'That account is not available.' } : null
     review.answer = () => ({ ok: false, code: 'failed', message: "Codex exited with code 1: You've hit your usage limit." })
     const s = await sentinel({ lastSeenCodexVersion: '0.153.4' })
     await s.sentinelStartupCheck()
-    expect(svc.prepares.map((p) => p.providerAccountId)).toEqual(['acct-gone', undefined])
+    expect(svc.prepares.map((p) => p.providerAccountId)).toEqual(['acct-chosen', undefined])
     expect(svc.prepares.map((p) => p.acknowledgeRealmOnly)).toEqual([undefined, undefined])
     // A usage limit stops after one attempt, and names the account that ran.
     expect(review.runs).toHaveLength(1)
@@ -477,13 +488,14 @@ describe("the analysis of a Codex update, on the provider that is on (row 42; OD
 
   it("the chosen account cannot run and Codex's review default must be confirmed at each launch (the reviewer fallback): the way forward, not the confirm text", async () => {
     svc.pref.claude = 'off'
-    settings.value = { sentinelCodexAccountId: 'acct-gone' }
-    svc.prepareAnswer = (input) => input.providerAccountId === 'acct-gone'
+    svc.accounts = [codexAccount('acct-work'), codexAccount('acct-chosen')]
+    settings.value = { sentinelCodexAccountId: 'acct-chosen' }
+    svc.prepareAnswer = (input) => input.providerAccountId === 'acct-chosen'
       ? { ok: false, code: 'not-found', message: 'That account is not available.' }
       : { ok: false, code: 'acknowledgement-required', message: CONFIRM_TEXT }
     const s = await sentinel({ lastSeenCodexVersion: '0.153.4' })
     await s.sentinelStartupCheck()
-    expect(svc.prepares.map((p) => p.providerAccountId)).toEqual(['acct-gone', undefined])
+    expect(svc.prepares.map((p) => p.providerAccountId)).toEqual(['acct-chosen', undefined])
     expect(svc.prepares.map((p) => p.acknowledgeRealmOnly)).toEqual([undefined, undefined])
     expect(review.runs).toHaveLength(0)
     expect(s.getSentinelState()!.snapshot().lastAnalysisError).toBe(NEEDS_ACCOUNT)
@@ -1078,5 +1090,115 @@ describe('stale Codex model findings close (O8)', () => {
     await s.sentinelRerun()
     expect(svc.catalogueReads).toBe(0)
     expect(openModelIds(s)).toEqual(['models:codex-missing:gpt-5.5'])
+  })
+})
+
+// Owner report, 2.1.3-beta.1: what the panel says when the analysis account
+// fails. The pure rules are in sentinel-account-message.test.ts; these run
+// the REAL service. ACCOUNT stands in for an account address.
+describe('the analysis account message (owner report, 2.1.3-beta.1)', () => {
+  const EXPIRED_LOGIN = 'Failed to authenticate: this login reached its time limit and cannot be renewed. Run claude auth login to sign in again, or use claude setup-token and set CLAUDE_CODE_OAUTH_TOKEN for a long-lived login.'
+  const times = (text: string, part: string) => text.split(part).length - 1
+  const bothUpdates = { lastSeenCcVersion: '2.1.299', lastSeenCodexVersion: '0.153.4' }
+  const withClaudeNotes = () => fetchChangelog.mockImplementation(async () => '## 2.1.300\n- A change to the hooks.\n\n## 2.1.299\n- An older change.\n')
+
+  it('both updates fail on the same expired login: said once per run, as a sign-in problem, with the remedy whole', async () => {
+    withClaudeNotes()
+    claude.failWith = EXPIRED_LOGIN
+    claudeAccounts.used = 'profile-a'
+    claudeAccounts.list = [{ id: 'profile-a', accountEmail: 'ACCOUNT', isPrimary: true }]
+    const s = await sentinel(bothUpdates)
+    await s.sentinelStartupCheck()
+    // Each update was tried, once (an expired login is not retried).
+    expect(claudeAnalyses()).toHaveLength(2)
+    const err = s.getSentinelState()!.snapshot().lastAnalysisError!
+    expect(times(err, 'The Sentinel analysis account')).toBe(1)
+    expect(times(err, 'The deterministic checks still ran.')).toBe(1)
+    expect(err).toMatch(/signed out/)
+    expect(err).not.toMatch(/usage limit/)
+    expect(err).not.toContain('(cut short)')
+    expect(err).not.toContain('claude auth login')
+    expect(err).toContain('(ACCOUNT, the primary account)')
+    expect(err.endsWith('The deterministic checks still ran.')).toBe(true)
+    expect(s.getSentinelState()!.snapshot().lastAnalysisFailed).toBe(true)
+  })
+
+  it('a Re-run that fails the same way for both updates says it once too', async () => {
+    withClaudeNotes()
+    claude.failWith = "You've hit your weekly limit · resets 4am"
+    const s = await sentinel(bothUpdates)
+    await s.sentinelRerun()
+    const err = s.getSentinelState()!.snapshot().lastAnalysisError!
+    expect(times(err, 'has hit its usage limit')).toBe(1)
+    expect(err).toContain('resets 4am')
+  })
+
+  it('two different problems in one run are both still said', async () => {
+    // Claude Code's changelog cannot be read; the Codex update's analysis fails.
+    claude.failWith = EXPIRED_LOGIN
+    const s = await sentinel(bothUpdates)
+    await s.sentinelStartupCheck()
+    const err = s.getSentinelState()!.snapshot().lastAnalysisError!
+    expect(err).toContain('Changelog unavailable')
+    expect(times(err, 'The Sentinel analysis account')).toBe(1)
+  })
+
+  it('the owner\'s case: a saved choice whose account was removed runs on the primary account and says so, never "auto-picked"', async () => {
+    claude.failWith = EXPIRED_LOGIN
+    settings.value = { sentinelAccountProfileId: 'profile-removed' }
+    claudeAccounts.used = 'profile-a'
+    claudeAccounts.list = [{ id: 'profile-a', accountEmail: 'ACCOUNT', isPrimary: true }]
+    const s = await sentinel({ lastSeenCcVersion: '2.1.300', lastSeenCodexVersion: '0.153.4' })
+    await s.sentinelStartupCheck()
+    const err = s.getSentinelState()!.snapshot().lastAnalysisError!
+    expect(err).toContain('(ACCOUNT, the primary account)')
+    expect(err).not.toMatch(/auto-picked|no longer available/)
+  })
+
+  it('a chosen account that is still listed but cannot be used: auto-picked, said as that', async () => {
+    claude.failWith = EXPIRED_LOGIN
+    settings.value = { sentinelAccountProfileId: 'profile-b' }
+    claudeAccounts.used = 'profile-a'
+    claudeAccounts.list = [{ id: 'profile-a', accountEmail: 'ACCOUNT', isPrimary: true }, { id: 'profile-b', accountEmail: 'OTHER' }]
+    const s = await sentinel({ lastSeenCcVersion: '2.1.300', lastSeenCodexVersion: '0.153.4' })
+    await s.sentinelStartupCheck()
+    expect(s.getSentinelState()!.snapshot().lastAnalysisError).toContain('(ACCOUNT; auto-picked — your chosen analysis account is no longer available)')
+  })
+
+  it('Codex: a saved choice Settings no longer offers is the default there, so the review account runs it and is named as that', async () => {
+    svc.pref.claude = 'off'
+    settings.value = { sentinelCodexAccountId: 'acct-gone' }
+    review.answer = () => ({ ok: false, code: 'failed', message: "Codex exited with code 1: You've hit your usage limit." })
+    const s = await sentinel({ lastSeenCodexVersion: '0.153.4' })
+    await s.sentinelStartupCheck()
+    // The removed account is not tried: Settings shows the default.
+    expect(svc.prepares.map((p) => p.providerAccountId)).toEqual([undefined])
+    const err = s.getSentinelState()!.snapshot().lastAnalysisError!
+    expect(err).toContain('(Work, the Codex review account)')
+    expect(err).not.toMatch(/auto-picked/)
+  })
+
+  it('Codex: an account that is listed but not offered (archived) is not a choice either', async () => {
+    svc.pref.claude = 'off'
+    svc.accounts = [codexAccount('acct-work'), codexAccount('acct-old', { lifecycle: 'archived' })]
+    settings.value = { sentinelCodexAccountId: 'acct-old' }
+    review.answer = () => ({ ok: false, code: 'failed', message: "Codex exited with code 1: You've hit your usage limit." })
+    const s = await sentinel({ lastSeenCodexVersion: '0.153.4' })
+    await s.sentinelStartupCheck()
+    expect(svc.prepares.map((p) => p.providerAccountId)).toEqual([undefined])
+    expect(s.getSentinelState()!.snapshot().lastAnalysisError).toContain('(Work, the Codex review account)')
+  })
+
+  it('Codex: the chosen account, used, is said as chosen', async () => {
+    svc.pref.claude = 'off'
+    settings.value = { sentinelCodexAccountId: 'acct-work' }
+    review.answer = () => ({ ok: false, code: 'failed', message: 'Codex exited with code 1: unexpected status 401 Unauthorized' })
+    const s = await sentinel({ lastSeenCodexVersion: '0.153.4' })
+    await s.sentinelStartupCheck()
+    expect(svc.prepares.map((p) => p.providerAccountId)).toEqual(['acct-work'])
+    const err = s.getSentinelState()!.snapshot().lastAnalysisError!
+    expect(err).toContain('(Work, the account chosen in Settings)')
+    expect(err).toMatch(/signed out/)
+    expect(review.runs).toHaveLength(1)
   })
 })
