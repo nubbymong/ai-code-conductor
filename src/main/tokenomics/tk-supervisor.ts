@@ -1,4 +1,14 @@
+/**
+ * tk-supervisor.ts — the usage-index (tokenomics) service.
+ *
+ * The worker's lifecycle (fork, exit, backoff, restart budget and its recovery,
+ * shutdown) is the one Supervisor's (src/main/services/supervisor.ts), shared
+ * with the hooks and logging services. What is kept here is this service's
+ * own: the worker's messages, the query layer, the index status, and what is
+ * held for a worker that is not listening yet.
+ */
 import { logError, logWarn, logInfo } from '../debug-logger'
+import { Supervisor } from '../services/supervisor'
 import type { ForkedTkWorker } from './fork-tokenomics-worker'
 import type { ToTkWorker, FromTkWorker } from './tk-worker-transport'
 import type { TkConfigDim, TkPricing, TkIndexStatus, TkSessionsRoot, TkAccountReread, TkAccountKey } from './tk-types'
@@ -17,13 +27,14 @@ export interface TokenomicsSupervisorOptions {
   emit: (channel: string, payload: unknown) => void
   now?: () => number
   maxRestarts?: number
+  /** A worker ready and running this long gives the restart budget back (default 5 min). */
+  stableResetMs?: number
   queryTimeoutMs?: number
 }
 
 export interface TkIndexProgress { filesDone: number; filesTotal: number; eventsIngested: number; phase: string; accountReread?: TkAccountReread | null }
 export interface TkIndexCompleteEvent { firstIndex: boolean; drained: boolean; filesFailed: number; eventsTotal: number }
 
-const BACKOFFS = [250, 1000, 4000, 4000, 4000]
 /** Session attributions kept for the next worker that is ready (MP10),
  *  oldest dropped. */
 const SESSION_ACCOUNTS_KEPT = 4096
@@ -32,13 +43,14 @@ const DEFAULT_QUERY_TIMEOUT_MS = 15_000
 export class TokenomicsSupervisor {
   private worker: ForkedTkWorker | null = null
   private listening = false
-  private shuttingDown = false
-  private degraded = false
-  private restarts = 0
-  private backoffIdx = 0
-  private restartTimer: ReturnType<typeof setTimeout> | null = null
+  private sup: Supervisor<ForkedTkWorker>
   private pending = new Map<number, { resolve: (r: unknown[]) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
   private nextId = 1
+  /** What a worker that is not listening yet is sent once it is: the latest
+   *  message of each kind, in the order of their newest arrival. Bounded by the
+   *  number of kinds (B9): each kind replaces the worker's whole state for it
+   *  (or, for `reindex`, asks once for what one sweep does), so an older one
+   *  of the same kind adds nothing. */
   private buffer: ToTkWorker[] = []
   private progressSubs = new Set<(p: TkIndexProgress) => void>()
   private completeSubs = new Set<(c: TkIndexCompleteEvent) => void>()
@@ -66,23 +78,36 @@ export class TokenomicsSupervisor {
 
   constructor(private opts: TokenomicsSupervisorOptions) {
     this.realmDirsKnown = Array.isArray(opts.codexRealmSessionsDirs)
+    this.sup = new Supervisor<ForkedTkWorker>({
+      forkChild: () => this.opts.forkChild(),
+      maxRestarts: opts.maxRestarts,
+      stableResetMs: opts.stableResetMs,
+      // This service's rule, kept: a ready worker starts the backoff over at once.
+      resetBackoffOnUp: true,
+      onSpawn: (w) => this.onSpawned(w),
+      onExit: () => this.onExit(),
+      // Out of budget: no fallback and no manual restart, so the index is
+      // degraded for the run (queries reject with degraded=true).
+      onExhausted: () => {},
+      onBudgetRestored: () => { logInfo('[tokenomics] worker stable; restart budget restored') },
+    })
   }
   private now(): number { return this.opts.now ? this.opts.now() : Date.now() }
+  /** Out of restarts: the index is down for the run. */
+  private get degraded(): boolean { return this.sup.isExhausted() }
 
   start(): void {
-    if (this.worker || this.shuttingDown) return
-    this.spawn()
+    if (this.worker || this.sup.isShuttingDown()) return
+    this.sup.start()
   }
 
-  private spawn(): void {
+  private onSpawned(w: ForkedTkWorker): void {
     // Fresh worker, clean slate: a fatal error from a previous worker must not
     // keep the renderer's error banner latched after a successful restart.
     this.lastError = null
-    const w = this.opts.forkChild()
     this.worker = w
     this.listening = false
     w.transport.onMessage((m) => this.onMessage(m))
-    w.onExit(() => this.onExit())
     // MP10: the attributions kept are sent when this worker is ready (below).
     w.transport.post({
       type: 'open', dbPath: this.opts.dbPath, pricing: this.opts.pricing, configs: this.opts.configs,
@@ -96,7 +121,7 @@ export class TokenomicsSupervisor {
     switch (m.type) {
       case 'ready': {
         this.listening = true
-        this.backoffIdx = 0
+        this.sup.markUp()
         // The DB's own record of a completed first index. Without this the
         // page said "Indexing usage data" on EVERY launch until a fresh sweep
         // completed - and stayed there for hours when the sweep wedged on the
@@ -162,7 +187,7 @@ export class TokenomicsSupervisor {
   }
 
   query(kind: string, args: Record<string, unknown>): Promise<unknown[]> {
-    if (this.shuttingDown) return Promise.reject(new Error('tokenomics supervisor shutting down'))
+    if (this.sup.isShuttingDown()) return Promise.reject(new Error('tokenomics supervisor shutting down'))
     if (!this.listening || !this.worker) return Promise.reject(new Error(`tokenomics worker not ready (degraded=${this.degraded})`))
     const id = this.nextId++
     return new Promise<unknown[]>((resolve, reject) => {
@@ -175,8 +200,10 @@ export class TokenomicsSupervisor {
   }
 
   private sendOrBuffer(msg: ToTkWorker): void {
-    if (this.listening && this.worker) this.worker.transport.post(msg)
-    else this.buffer.push(msg)
+    if (this.listening && this.worker) { this.worker.transport.post(msg); return }
+    const held = this.buffer.findIndex((m) => m.type === msg.type)
+    if (held !== -1) this.buffer.splice(held, 1)
+    this.buffer.push(msg)
   }
 
   setPricing(pricing: Record<string, TkPricing>): void { this.opts.pricing = pricing; this.sendOrBuffer({ type: 'set-pricing', pricing }) }
@@ -195,7 +222,7 @@ export class TokenomicsSupervisor {
    *  a worker that listens; otherwise only kept (the latest per session,
    *  within the bound) for the next ready to send. */
   setSessionAccount(sessionId: string, accountKey: TkAccountKey): void {
-    if (this.shuttingDown || !tkSessionUuidOk(sessionId) || !tkClaudeAccountKeyOk(accountKey)) return
+    if (this.sup.isShuttingDown() || !tkSessionUuidOk(sessionId) || !tkClaudeAccountKeyOk(accountKey)) return
     if (this.sessionAccounts.get(sessionId) === accountKey) return
     this.sessionAccounts.delete(sessionId)
     this.sessionAccounts.set(sessionId, accountKey)
@@ -230,21 +257,15 @@ export class TokenomicsSupervisor {
   }
 
   private onExit(): void {
-    if (this.shuttingDown || this.degraded) return
     this.listening = false
     for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(new Error('tokenomics worker exited')) }
     this.pending.clear()
     this.worker = null
-    if (this.restarts >= (this.opts.maxRestarts ?? 5)) { this.degraded = true; return }
-    const delay = BACKOFFS[Math.min(this.backoffIdx, BACKOFFS.length - 1)]
-    this.backoffIdx++
-    this.restartTimer = setTimeout(() => { if (this.shuttingDown) return; this.restarts++; this.spawn() }, delay)
-    ;(this.restartTimer as unknown as { unref?: () => void }).unref?.()
+    // The supervisor forks the next worker after the backoff, or stops for the run.
   }
 
   shutdown(): void {
-    this.shuttingDown = true
-    if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null }
+    this.sup.shutdown()
     for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(new Error('tokenomics supervisor shut down')) }
     this.pending.clear()
     try { this.worker?.transport.post({ type: 'shutdown' }) } catch { /* ignore */ }

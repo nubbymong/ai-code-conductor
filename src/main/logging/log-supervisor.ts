@@ -2,18 +2,22 @@
  * log-supervisor.ts — owns the logging utilityProcess worker (Logs v2: the
  * transcript-indexing worker, transcripts-worker.ts).
  *
- * Mirrors src/main/services/service-supervisor.ts (the hooks supervisor):
- * injectable forkChild + clock, backoff [250,1000,4000,...], restart/maxRestarts,
- * createInitialHealth, appendLog, pushHealth via emit(SERVICE_HEALTH_UPDATE).
+ * The worker's lifecycle (fork, exit, backoff, restart budget and its recovery,
+ * manual restart, shutdown) is the one Supervisor's
+ * (src/main/services/supervisor.ts), shared with the hooks and usage-index
+ * services. What is kept here is the logging service's own: its health row and
+ * log ring (createInitialHealth, appendLog, pushHealth via
+ * emit(SERVICE_HEALTH_UPDATE)), the worker's messages, the query layer and the
+ * while-down buffer.
  *
- * KEY DIFFERENCE from the hooks supervisor: there is NO in-process DB fallback.
+ * KEY DIFFERENCE from the hooks service: there is NO in-process DB fallback.
  * better-sqlite3 lives ONLY in the forked worker (out/main/transcripts-worker.js);
  * main must never load it. So after maxRestarts the logging service degrades
  * permanently (a visible log) rather than failing open. To keep the worker
  * module (and better-sqlite3) out of main's bundle this file imports the worker
  * ONLY by the transport types — never `./transcripts-worker` or `./transcripts-db`.
  *
- * Two robustness layers on top of the base supervisor:
+ * Two robustness layers on top of the supervisor:
  *  - an id-keyed query() promise layer that rejects on error/worker-exit/timeout
  *    (a pending query never hangs);
  *  - a bounded, ORDERED while-down buffer for run-start/run-end/run-account/
@@ -29,6 +33,7 @@
  */
 import { createInitialHealth, computeThroughput } from '../../shared/service-health'
 import { IPC } from '../../shared/ipc-channels'
+import { Supervisor } from '../services/supervisor'
 import type { ServiceHealth, ServiceLogEntry, DiagnosticsSnapshot, ThroughputSample } from '../../shared/service-health'
 import type { ForkedTranscriptsWorker } from './fork-transcripts-worker'
 import type { ToTranscriptsWorker, FromTranscriptsWorker } from './log-worker-transport'
@@ -42,6 +47,7 @@ export interface LogSupervisorOptions {
   emit: (channel: string, payload: unknown) => void
   now?: () => number          // injectable clock for tests
   maxRestarts?: number        // permanent degrade after this many failed restarts (default 5)
+  stableResetMs?: number      // a worker ready and running this long gives the restart budget back (default 5 min)
   bufferCapBytes?: number     // while-down buffer cap (default ~8 MB)
   queryTimeoutMs?: number     // safety timeout per query so it can never hang (default 15 s)
 }
@@ -91,17 +97,7 @@ export class LogSupervisor {
   private prevThroughput: ThroughputSample | null = null
   private log: ServiceLogEntry[] = []
   private worker: ForkedTranscriptsWorker | null = null
-  private shuttingDown = false
-  // Set once we degrade permanently (maxRestarts exhausted). Like the hooks
-  // supervisor's fellOpen guard: stops a late/self-kill exit from re-entering the
-  // restart path. There is NO fallback engine — this is a terminal state.
-  private degradedPermanently = false
-  private restarts = 0
-  // backoffIdx only advances (never reset on a healthy ready) — same conservative
-  // choice as the hooks supervisor: slower escalation beats restart thrash.
-  private backoffIdx = 0
-  private restartTimer: ReturnType<typeof setTimeout> | null = null
-  private static BACKOFFS = [250, 1000, 4000, 4000, 4000]
+  private sup: Supervisor<ForkedTranscriptsWorker>
 
   // Ordered while-down buffer + its running byte total.
   private buffer: QueuedItem[] = []
@@ -117,6 +113,22 @@ export class LogSupervisor {
   constructor(opts: LogSupervisorOptions) {
     this.opts = opts
     this.now = opts.now ?? (() => Date.now())
+    this.sup = new Supervisor<ForkedTranscriptsWorker>({
+      forkChild: () => this.opts.forkChild(),
+      maxRestarts: opts.maxRestarts,
+      stableResetMs: opts.stableResetMs,
+      onSpawn: (w) => this.onWorkerSpawned(w),
+      onExit: () => this.onWorkerExit(),
+      // Out of budget (maxRestarts exhausted). The supervisor has latched that
+      // BEFORE this runs, so a late/self-kill exit cannot re-enter the restart
+      // path. There is NO fallback engine: terminal until a manual restart.
+      onExhausted: () => this.degradePermanently(),
+      onRestartCount: (restarts) => { this.health = { ...this.health, restartCount: restarts } },
+      onBudgetRestored: () => {
+        this.appendLog('info', 'budget-restored', 'logging worker stable; restart budget restored')
+        this.pushHealth()
+      },
+    })
   }
 
   getDiagnosticsSnapshot(): DiagnosticsSnapshot {
@@ -144,11 +156,10 @@ export class LogSupervisor {
   // -------------------------------------------------------------------------
 
   start(): void {
-    this.spawnWorker()
+    this.sup.start()
   }
 
-  private spawnWorker(): void {
-    const w = this.opts.forkChild()
+  private onWorkerSpawned(w: ForkedTranscriptsWorker): void {
     this.worker = w
     w.transport.onMessage((m) => this.onWorkerMessage(m))
     // Fresh worker = fresh messagesTotal counter; forget the prior throughput
@@ -160,9 +171,9 @@ export class LogSupervisor {
     this.health = {
       ...this.health,
       pid: w.pid,
-      state: this.restarts > 0 ? 'restarting' : 'starting',
+      state: this.sup.getRestarts() > 0 ? 'restarting' : 'starting',
     }
-    this.appendLog('info', 'worker-up', `logging worker forked (restart ${this.restarts})`)
+    this.appendLog('info', 'worker-up', `logging worker forked (restart ${this.sup.getRestarts()})`)
     // Tell the fresh worker to open (re-open) the DB. The worker closes dangling
     // runs + resumes tails itself, then posts `ready`; only then do we replay
     // the while-down buffer.
@@ -171,7 +182,6 @@ export class LogSupervisor {
     const windows = this.opts.notIndexedSnapshot?.()
     if (windows) w.transport.post({ type: 'not-indexed-windows', ...windows, replace: true })
     this.pushHealth()
-    w.onExit(() => { if (this.worker === w) this.onWorkerExit() })
   }
 
   // -------------------------------------------------------------------------
@@ -182,9 +192,10 @@ export class LogSupervisor {
     // Once shutting down or permanently degraded the worker is dead/irrelevant;
     // ignore any messages still draining out of the pipe so a stale `ready`/`health`
     // can't flip the pill back to listening and clobber the degraded state.
-    if (this.shuttingDown || this.degradedPermanently) return
+    if (this.sup.isShuttingDown() || this.sup.isExhausted()) return
     switch (m.type) {
       case 'ready': {
+        this.sup.markUp()
         this.health = {
           ...this.health,
           state: 'listening',
@@ -374,7 +385,7 @@ export class LogSupervisor {
   query(kind: string, args: Record<string, unknown>): Promise<unknown[]> {
     // A query while the worker is unavailable rejects quickly rather than
     // hanging — the caller can retry once the pill shows listening again.
-    if (this.shuttingDown) return Promise.reject(new Error('log supervisor is shutting down'))
+    if (this.sup.isShuttingDown()) return Promise.reject(new Error('log supervisor is shutting down'))
     if (!this.isListening() || !this.worker) {
       return Promise.reject(new Error(`logging worker not available (state=${this.health.state})`))
     }
@@ -407,24 +418,13 @@ export class LogSupervisor {
   // -------------------------------------------------------------------------
 
   private onWorkerExit(): void {
-    // Ignore exits once shutting down OR once permanently degraded (the latter so
-    // a degrade-time kill can't re-enter and re-run the restart logic).
-    if (this.shuttingDown || this.degradedPermanently) return
     this.health = { ...this.health, state: 'crashed', lastError: { message: 'worker exited', ts: this.now() } }
     this.appendLog('error', 'crashed', 'logging worker exited unexpectedly')
     // Reject every in-flight query so no caller hangs on a dead worker.
     this.rejectAllPending('logging worker exited')
     this.pushHealth()
-    if (this.restarts >= (this.opts.maxRestarts ?? 5)) { this.degradePermanently(); return }
-    const delay = LogSupervisor.BACKOFFS[Math.min(this.backoffIdx, LogSupervisor.BACKOFFS.length - 1)]
-    this.backoffIdx++
-    this.restartTimer = setTimeout(() => {
-      this.restartTimer = null
-      if (this.shuttingDown) return   // shutdown() raced the backoff — do not resurrect
-      this.restarts++
-      this.health = { ...this.health, restartCount: this.restarts }
-      this.spawnWorker()   // re-sends {type:'open'} so the worker reopens the DB
-    }, delay)
+    // The supervisor restarts it after the backoff (the spawn re-sends
+    // {type:'open'} so the worker reopens the DB), or degrades it for good.
   }
 
   /** Terminal state: no in-process DB fallback exists, so logging just degrades
@@ -433,10 +433,9 @@ export class LogSupervisor {
    *  the worker is dead. Keeping utility-process means the renderer pill shows
    *  the honest label "Degraded" rather than the misleading "Fallback". */
   private degradePermanently(): void {
-    this.degradedPermanently = true
     this.appendLog('error', 'degraded',
-      `logging worker failed to recover after ${this.restarts} restarts; logging degraded (runs will not be recorded)`)
-    this.health = { ...this.health, host: 'utility-process', state: 'degraded', restartCount: this.restarts }
+      `logging worker failed to recover after ${this.sup.getRestarts()} restarts; logging degraded (runs will not be recorded)`)
+    this.health = { ...this.health, host: 'utility-process', state: 'degraded', restartCount: this.sup.getRestarts() }
     // Free the dead worker; there is nothing to fall back to.
     try { this.worker?.kill() } catch { /* best-effort */ }
     this.pushHealth()
@@ -446,26 +445,18 @@ export class LogSupervisor {
   // Manual restart — recovery from permanent degrade
   // -------------------------------------------------------------------------
 
-  /** User-requested restart of the logging worker. Unlike the hooks supervisor
+  /** User-requested restart of the logging worker. Unlike the hooks service
    *  there is NO in-process fallback, so once `degradePermanently` fires a manual
-   *  restart is the ONLY way back: clear the terminal `degradedPermanently` flag,
-   *  reset the restart/backoff counters, free any dead worker, and respawn (which
-   *  re-sends `open` so the worker reopens the DB + resumes tails). Mirrors
-   *  ServiceSupervisor.manualRestart. Declines during shutdown. */
+   *  restart is the ONLY way back: the supervisor forgives the spent budget,
+   *  resets the restart/backoff counters, frees any lingering (dead/degraded)
+   *  worker, and respawns (which re-sends `open` so the worker reopens the DB +
+   *  resumes tails). The old worker's late exit is ignored (it is no longer the
+   *  current child). Declines during shutdown. */
   manualRestart(serviceId: string): { ok: boolean; reason?: string } {
     if (serviceId !== SERVICE_ID) return { ok: false, reason: 'unknown-service' }
-    if (this.shuttingDown) return { ok: false, reason: 'shutting-down' }
+    if (this.sup.isShuttingDown()) return { ok: false, reason: 'shutting-down' }
     this.appendLog('info', 'manual-restart', 'manual restart requested')
-    if (this.restartTimer !== null) { clearTimeout(this.restartTimer); this.restartTimer = null }
-    this.restarts = 0
-    this.backoffIdx = 0
-    this.degradedPermanently = false
-    this.health = { ...this.health, restartCount: 0 }
-    // Free any lingering (dead/degraded) worker before respawning. The old worker's
-    // late exit is ignored by spawnWorker's onExit guard (`this.worker === w`).
-    try { this.worker?.kill() } catch { /* best-effort */ }
-    this.worker = null
-    this.spawnWorker()
+    this.sup.restart()
     this.pushHealth()
     return { ok: true }
   }
@@ -475,8 +466,7 @@ export class LogSupervisor {
   // -------------------------------------------------------------------------
 
   shutdown(): void {
-    this.shuttingDown = true
-    if (this.restartTimer !== null) { clearTimeout(this.restartTimer); this.restartTimer = null }
+    this.sup.shutdown()
     // best-effort graceful close, then kill.
     try { this.worker?.transport.post({ type: 'shutdown' }) } catch { /* worker gone */ }
     try { this.worker?.kill() } catch { /* already dead */ }
