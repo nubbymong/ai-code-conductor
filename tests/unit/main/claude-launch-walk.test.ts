@@ -96,11 +96,12 @@ const { armClaudeLaunchWalk, claudeLaunchWalkPending, awaitClaudeLaunchWalk, _re
 const { startClaudeAtBoot, _resetClaudeStartLookupForTest } = await import('../../../src/main/claude-start-lookup')
 const { WINDOWS_PATH_WALK_WAIT_MS, _resetFolderFileTestForTest } = await import('../../../src/main/windows-programs')
 const {
-  claudeOnWindowsPathAsync, findClaudeOnWindowsAsync, recordClaudeOnWindows, recentClaudeOnWindows, claudeOnWindowsPathWalkedRecently, setClaudeProfileLookupAllowed,
+  claudeOnWindowsPathAsync, findClaudeOnWindowsAsync, recordClaudeOnWindows, recentClaudeOnWindows, claudeOnWindowsPathWalkedRecently, claudeOnWindowsPathUnanswered,
+  setClaudeProfileLookupAllowed, startClaudeProfileLookup,
   CLAUDE_NOT_ON_PATH, CLAUDE_PATH_NOT_ANSWERING, CLAUDE_LOOKUP_REUSE_MS, _resetClaudeWindowsLookupForTest,
 } = await import('../../../src/main/claude-cli-probe')
 const {
-  buildClaudeLaunchCommand, launchStartsPicker, pickerNodeAnswerKept, warmPickerNodeOnWindows,
+  buildClaudeLaunchCommand, launchStartsPicker, pickerNodeAnswerKept, pickerNodeLookAnswered, warmPickerNodeOnWindows,
   CLAUDE_RESUME_LIST_SKIPPED_PATH_NOT_ANSWERING, PICKER_NODE_REUSE_MS, _resetPickerNodeFoundForTest,
 } = await import('../../../src/main/spawn-claude-command')
 const { ClaudeProvider } = await import('../../../src/main/providers/claude')
@@ -378,6 +379,48 @@ describe('what a launch is told, and what it never starts, when the walk it wait
     release()
     await flush()
     expect(refusal()).toBe(`started ${FNM}`)
+  })
+
+  // The other side of that rule, pinned as intended. With NO answer kept the
+  // profile's Claude Code is never named past the deadline (above). With a
+  // "none" under a minute old kept, a walk of this PATH has ended and found
+  // Claude Code in no folder, so that walk IS the answer about PATH: the
+  // profile's Claude Code is what a launch names, also while a newer walk is
+  // past its deadline, as it is for any launch in that minute. Once the
+  // "none" is a minute old it is no answer, and the launch is refused again.
+  // Mutation to prove this can fail: ask whether the walk under way is past
+  // its deadline before reading the kept answer (providers/claude/spawn.ts
+  // findClaudeOnWindows).
+  it('with a "none" under a minute old kept and the PowerShell profile\'s Claude Code kept: the launch names the profile\'s, also while the new walk is past its deadline, and walks nothing in place; the "none" a minute old, it is refused again', async () => {
+    const FNM = 'C:\\Users\\me\\fnm\\claude.cmd'
+    process.env.PATH = `${GONE};${TOOLS}`
+    h.profileAnswer = FNM
+    setClaudeProfileLookupAllowed(() => true)
+    armClaudeLaunchWalk()
+    expect(await claudeOnWindowsPathAsync(process.env), 'a walk that ended: none').toBeNull()
+    await vi.advanceTimersByTimeAsync(30_000)
+    // The share goes down. The profile has not answered, so the launch is held for a new walk.
+    h.hung = new Set([GONE.toLowerCase()])
+    expect(claudeLaunchWalkPending(false), 'held for a new walk').toBe(true)
+    const walked = awaitClaudeLaunchWalk(false)
+    // The profile is asked in the background meanwhile (the start does, and so does a launch), and answers.
+    startClaudeProfileLookup()
+    await flush()
+    expect(h.profileAsks).toBe(1)
+    expect(claudeLaunchWalkPending(false), 'the profile\'s Claude Code is kept: known now').toBe(false)
+    // The new walk goes past its deadline, 50 s after the "none".
+    await vi.advanceTimersByTimeAsync(DEADLINE)
+    expect(await ended(walked)).toBe(true)
+    expect(claudeOnWindowsPathUnanswered(process.env), 'the new walk is past its deadline').toBe(true)
+    expect(claudeOnWindowsPathWalkedRecently(process.env), 'the "none" is 50 s old').toBe(true)
+    expect(refusal(), 'the profile\'s Claude Code, the answer about PATH being "none"').toBe(`started ${FNM}`)
+    expect(h.walksInPlace).toEqual([])
+    // A minute after the "none": no answer is kept, and the new walk has not said.
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(claudeOnWindowsPathWalkedRecently(process.env), 'the "none" is a minute old').toBe(false)
+    expect(refusal(), 'not the profile\'s Claude Code').toBe(CLAUDE_PATH_NOT_ANSWERING)
+    expect(h.walksInPlace).toEqual([])
+    expect(h.walks, 'one walk since the "none"').toEqual([CLAUDE_NAMES, CLAUDE_NAMES])
   })
 })
 
@@ -765,6 +808,49 @@ describe('a launch that opens the resume list (it starts node.exe, found the sam
     expect(h.asked, 'the later folder was not asked').toEqual([`${GONE}\\node.exe`])
     expect(h.walksInPlace).toEqual([])
     // The folder answers at last (it holds no node.exe): the look ends, and the next launch opens the list.
+    h.hung = new Set()
+    release()
+    await flush()
+    expect(opensList()).toBe(true)
+    expect(h.walksInPlace).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  // With a share that takes 40 s or more to fail this is the CLI check's
+  // steady state: an answer is used for a minute, the check starts the next
+  // look 30 s after it, and that look is past its deadline 20 s later, with
+  // the older answer still kept. The newer look not having said does not take
+  // back an answer that is kept. Mutation to prove this can fail: call a look
+  // past its deadline unanswered whatever is kept (spawn-claude-command.ts
+  // pickerNodeLookUnanswered, without its recentPickerNodeAnswer clause).
+  it('a newer look for node.exe past its deadline does not discard the answer still kept: the resume list opens with the kept node.exe, and nothing is walked in place', async () => {
+    process.env.PATH = `${GONE};${NODEJS}`
+    h.present = files(`${NODEJS}\\node.exe`)
+    // A look that ended and kept node.exe.
+    await warmPickerNodeOnWindows()
+    expect(pickerNodeAnswerKept()).toBe(true)
+    await vi.advanceTimersByTimeAsync(30_000)
+    // The share goes down, and the CLI check's next look begins.
+    h.hung = new Set([GONE.toLowerCase()])
+    h.asked = []
+    void warmPickerNodeOnWindows()
+    let inTime: boolean | null = null
+    void pickerNodeLookAnswered().then((answered) => { inTime = answered })
+    await vi.advanceTimersByTimeAsync(DEADLINE - 1)
+    expect(inTime, 'not past its deadline yet').toBeNull()
+    // Past that look's deadline by a millisecond: the kept answer is 50 s old.
+    await vi.advanceTimersByTimeAsync(2)
+    await flush()
+    expect(inTime, 'the new look is past its deadline, a folder unanswered').toBe(false)
+    expect(h.asked, 'it is waiting on the folder that does not answer').toEqual([`${GONE}\\node.exe`])
+    expect(pickerNodeAnswerKept(), 'the answer is still kept').toBe(true)
+    vi.mocked(logInfo).mockClear()
+    expect(opensList(), 'the resume list opens').toBe(true)
+    const line = buildClaudeLaunchCommand({ platform: 'win32', cwd: 'C:\\work', claudeBin: `${TOOLS}\\claude.exe`, extraFlags: '', agentsFlag: '', useResumePicker: true, pickerScript: PICKER })
+    expect(line, 'with the node.exe that was kept').toContain(`${NODEJS}\\node.exe`)
+    expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith(`[spawn-claude] ${CLAUDE_RESUME_LIST_SKIPPED_PATH_NOT_ANSWERING}`)
+    expect(h.walksInPlace).toEqual([])
+    // The share answers at last (no node.exe in it): the look ends and keeps the same node.exe.
     h.hung = new Set()
     release()
     await flush()
