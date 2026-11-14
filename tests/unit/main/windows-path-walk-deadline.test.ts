@@ -16,6 +16,11 @@
 // deadline, no longer: then it asks the folder itself, at most two tests
 // outstanding there.
 //
+// The walk reads its OWN test's failure by the same rule: a failure that says
+// the folder cannot be reached passes the folder, and it is asked for no other
+// name; any other failure passes that one file, and the file beside it in the
+// same folder is still asked for.
+//
 // Host-safe: every file test is a stand-in answered here. No file of this
 // computer is read, nothing is started, and the timers are stand-ins.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -44,10 +49,18 @@ const fail = (code: string | null = 'ETIMEDOUT'): void => { for (const t of held
 const FOLDER_DOWN = ['ETIMEDOUT', 'ENETDOWN', 'ENETUNREACH', 'ENONET', 'EHOSTDOWN', 'EHOSTUNREACH', 'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ENOTCONN']
 /** Reasons that may be about the one file asked for (null: no code at all). */
 const ONE_FILE = ['EPERM', 'EACCES', 'EBUSY', 'ELOOP', 'EINVAL', 'EIO', 'UNKNOWN', 'ENOENT', null]
+/** Files whose own test fails at once (lower-cased), each with the error
+ *  code it fails with (null: an error with no code): a file that cannot be
+ *  read, in a folder that answers. */
+let locked = new Map<string, string | null>()
 /** The stand-in file test. */
 const stat = (p: string): Promise<boolean> => {
   asked.push(p)
   const folder = p.slice(0, p.lastIndexOf('\\')).toLowerCase()
+  if (locked.has(p.toLowerCase())) {
+    const code = locked.get(p.toLowerCase())
+    return Promise.reject(Object.assign(new Error('the file test failed'), code == null ? {} : { code }))
+  }
   if (!hung.has(folder)) return Promise.resolve(present.has(p.toLowerCase()))
   return new Promise<boolean>((resolve, reject) => {
     held.push({
@@ -70,6 +83,7 @@ beforeEach(() => {
   asked.length = 0
   present = new Set()
   hung = new Set()
+  locked = new Map()
   held = []
   _resetFolderFileTestForTest()
   vi.useFakeTimers()
@@ -513,6 +527,39 @@ describe('the walk of PATH with that file test (findOnWindowsPathAsync)', () => 
     fail('EBUSY')
     expect(await state(claude)).toBe(`resolved: ${TOOLS}\\claude.exe`)
     expect(await state(node)).toBe(`resolved: ${GONE}\\node.exe`)
+  })
+
+  // The walk's own test fails for one file (claude.exe is being replaced by an
+  // update, or access to it is denied) in a folder that answers. Mutation to
+  // prove this can fail: pass the whole folder for any failed test (the walk
+  // then names the later folder's Claude Code, or none at all).
+  it.each(['EPERM', 'EACCES', 'EBUSY', 'EIO', 'UNKNOWN', null])('claude.exe in a folder cannot be read (%s): the claude.cmd beside it is still found, never a later folder\'s', async (code) => {
+    const LATER = 'D:\\Later'
+    locked = new Map([[`${TOOLS}\\claude.exe`.toLowerCase(), code]])
+    present = new Set([`${TOOLS}\\claude.cmd`.toLowerCase(), `${LATER}\\claude.cmd`.toLowerCase()])
+    expect(await state(walk(`${TOOLS};${LATER}`))).toBe(`resolved: ${TOOLS}\\claude.cmd`)
+    expect(asked).toEqual([`${TOOLS}\\claude.exe`, `${LATER}\\claude.exe`, `${TOOLS}\\claude.cmd`])
+    // With no later folder at all: found, where the walk said there was none.
+    asked.length = 0
+    expect(await state(walk(TOOLS))).toBe(`resolved: ${TOOLS}\\claude.cmd`)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a file that cannot be read is never named itself: with nothing else there, the walk goes on to the later folder', async () => {
+    const LATER = 'D:\\Later'
+    locked = new Map([[`${TOOLS}\\claude.exe`.toLowerCase(), 'EPERM']])
+    present = new Set([`${LATER}\\claude.cmd`.toLowerCase()])
+    expect(await state(walk(`${TOOLS};${LATER}`))).toBe(`resolved: ${LATER}\\claude.cmd`)
+    expect(asked.filter((p) => p.startsWith(TOOLS)), 'every name was asked for in the folder that answers').toEqual([`${TOOLS}\\claude.exe`, `${TOOLS}\\claude.cmd`])
+  })
+
+  // Mutation to prove this can fail: read no failure as the folder's (a share
+  // that is down is then waited for once for every name).
+  it.each(FOLDER_DOWN)('a folder whose test fails because it cannot be reached (%s) is still passed once: it is asked for no other name', async (code) => {
+    locked = new Map([[`${GONE}\\claude.exe`.toLowerCase(), code]])
+    present = new Set([`${GONE}\\claude.cmd`.toLowerCase(), `${TOOLS}\\claude.cmd`.toLowerCase()])
+    expect(await state(walk(`${GONE};${TOOLS}`))).toBe(`resolved: ${TOOLS}\\claude.cmd`)
+    expect(asked.filter((p) => p.startsWith(GONE))).toEqual([`${GONE}\\claude.exe`])
   })
 
   // Mutations to prove this can fail: wait behind the old test however long

@@ -42,19 +42,32 @@ import {
 } from '../../../src/main/windows-programs'
 import { windowsPathFolderIsFullyQualified } from '../../../src/main/providers/windows-path-names'
 
-/** A file test that answers from a set, recording every path it was asked. */
-function files(present: string[], unreachable: string[] = []) {
+/** A file test that answers from a set, recording every path it was asked.
+ *  A file under an `unreachable` folder fails as a host that is down fails a
+ *  file test (`downCode`). A file in `locked` fails for itself alone, with
+ *  the code given there (null: an error with no code). */
+function files(present: string[], unreachable: string[] = [], locked: Record<string, string | null> = {}, downCode = 'EHOSTUNREACH') {
   const asked: string[] = []
   const set = new Set(present.map((p) => p.toLowerCase()))
   const dead = unreachable.map((d) => d.toLowerCase())
+  const held = new Map(Object.entries(locked).map(([p, code]) => [p.toLowerCase(), code]))
   const stat = (p: string): boolean => {
     asked.push(p)
-    if (dead.some((d) => p.toLowerCase().startsWith(d + '\\'))) throw Object.assign(new Error('unreachable'), { code: 'EACCES' })
+    if (dead.some((d) => p.toLowerCase().startsWith(d + '\\'))) throw Object.assign(new Error('unreachable'), { code: downCode })
+    if (held.has(p.toLowerCase())) {
+      const code = held.get(p.toLowerCase())
+      throw Object.assign(new Error('this file cannot be read'), code == null ? {} : { code })
+    }
     return set.has(p.toLowerCase())
   }
   const statAsync = async (p: string): Promise<boolean> => stat(p)
   return { asked, stat, statAsync }
 }
+
+/** The reasons a file test fails with that say the folder cannot be reached. */
+const FOLDER_DOWN = ['ETIMEDOUT', 'ENETDOWN', 'ENETUNREACH', 'ENONET', 'EHOSTDOWN', 'EHOSTUNREACH', 'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ENOTCONN']
+/** Reasons that may be about the one file asked for (null: no code at all). */
+const ONE_FILE = ['EPERM', 'EACCES', 'EBUSY', 'ELOOP', 'EINVAL', 'EIO', 'UNKNOWN', null]
 
 describe('helper tools start from the system folder', () => {
   it('names the tool below <SystemRoot>\\System32 by its full path', () => {
@@ -132,6 +145,59 @@ describe('programs are found only in PATH\'s absolute folders', () => {
     const g = files(['D:\\B\\x.cmd'], ['C:\\dead'])
     expect(findOnWindowsPath(['x.exe', 'x.cmd'], { PATH: 'C:\\dead;D:\\B' }, g.stat)).toBe('D:\\B\\x.cmd')
     expect(g.asked.filter((p) => p.startsWith('C:\\dead'))).toEqual(['C:\\dead\\x.exe'])
+  })
+
+  it.each(FOLDER_DOWN)('a folder that cannot be reached (%s) is passed once, in both walks, and the later folder\'s program is named', async (code) => {
+    const f = files(['D:\\B\\claude.cmd'], ['\\\\dead\\share'], {}, code)
+    expect(findOnWindowsPath(['claude.exe', 'claude.cmd', 'claude.bat'], { PATH: '\\\\dead\\share;D:\\B' }, f.stat, 'name')).toBe('D:\\B\\claude.cmd')
+    expect(f.asked.filter((p) => p.startsWith('\\\\dead'))).toEqual(['\\\\dead\\share\\claude.exe'])
+    const g = files(['D:\\B\\claude.cmd'], ['\\\\dead\\share'], {}, code)
+    expect(await findOnWindowsPathAsync(['claude.exe', 'claude.cmd', 'claude.bat'], { PATH: '\\\\dead\\share;D:\\B' }, g.statAsync)).toBe('D:\\B\\claude.cmd')
+    expect(g.asked.filter((p) => p.startsWith('\\\\dead'))).toEqual(['\\\\dead\\share\\claude.exe'])
+  })
+
+  // One program file that cannot be read (access denied, in use while it is
+  // being updated) says nothing about the file beside it. Marking the whole
+  // folder made a launch pass claude.cmd beside a locked claude.exe, and run a
+  // later folder's Claude Code or say there was none.
+  describe.each(ONE_FILE)('one file in a folder cannot be read (%s)', (code) => {
+    const LOCKED = { 'C:\\A\\claude.exe': code }
+    const NAMES = ['claude.exe', 'claude.cmd', 'claude.bat']
+
+    it('the file beside it is still found, ahead of a later folder\'s (the launch\'s order)', () => {
+      const f = files(['C:\\A\\claude.cmd', 'D:\\B\\claude.cmd'], [], LOCKED)
+      expect(findOnWindowsPath(NAMES, { PATH: 'C:\\A;D:\\B' }, f.stat, 'name')).toBe('C:\\A\\claude.cmd')
+      expect(f.asked).toEqual(['C:\\A\\claude.exe', 'D:\\B\\claude.exe', 'C:\\A\\claude.cmd'])
+    })
+
+    it('the file beside it is still found, ahead of a later folder\'s (folder order)', () => {
+      const f = files(['C:\\A\\claude.cmd', 'D:\\B\\claude.exe'], [], LOCKED)
+      expect(findOnWindowsPath(NAMES, { PATH: 'C:\\A;D:\\B' }, f.stat)).toBe('C:\\A\\claude.cmd')
+      expect(f.asked).toEqual(['C:\\A\\claude.exe', 'C:\\A\\claude.cmd'])
+    })
+
+    it('with no later copy it is found too, where the walk said there was none', () => {
+      const f = files(['C:\\A\\claude.cmd'], [], LOCKED)
+      expect(findOnWindowsPath(NAMES, { PATH: 'C:\\A' }, f.stat, 'name')).toBe('C:\\A\\claude.cmd')
+    })
+
+    it('the file that cannot be read is itself never named, and the walk goes on to the next folder', () => {
+      const f = files(['D:\\B\\claude.exe'], [], LOCKED)
+      expect(findOnWindowsPath(NAMES, { PATH: 'C:\\A;D:\\B' }, f.stat, 'name')).toBe('D:\\B\\claude.exe')
+      const none = files([], [], LOCKED)
+      expect(findOnWindowsPath(NAMES, { PATH: 'C:\\A' }, none.stat, 'name')).toBeNull()
+      expect(none.asked).toEqual(['C:\\A\\claude.exe', 'C:\\A\\claude.cmd', 'C:\\A\\claude.bat'])
+    })
+
+    it('the walk off the event loop keeps the same rule, in both orders', async () => {
+      const f = files(['C:\\A\\claude.cmd', 'D:\\B\\claude.cmd'], [], LOCKED)
+      expect(await findOnWindowsPathAsync(NAMES, { PATH: 'C:\\A;D:\\B' }, f.statAsync, 'name')).toBe('C:\\A\\claude.cmd')
+      expect(f.asked).toEqual(['C:\\A\\claude.exe', 'D:\\B\\claude.exe', 'C:\\A\\claude.cmd'])
+      const g = files(['C:\\A\\claude.cmd', 'D:\\B\\claude.exe'], [], LOCKED)
+      expect(await findOnWindowsPathAsync(NAMES, { PATH: 'C:\\A;D:\\B' }, g.statAsync)).toBe('C:\\A\\claude.cmd')
+      const only = files(['C:\\A\\claude.cmd'], [], LOCKED)
+      expect(await findOnWindowsPathAsync(NAMES, { PATH: 'C:\\A' }, only.statAsync, 'name')).toBe('C:\\A\\claude.cmd')
+    })
   })
 
   it('reads PATH in any case and names a folder as Windows runs from it', () => {

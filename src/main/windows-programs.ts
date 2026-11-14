@@ -122,8 +122,10 @@ function candidates(dirs: string[], names: readonly string[], order: WindowsPath
 }
 
 /** A regular file? `false` for an answer that says it is not there (or is not
- *  a file); THROWS for anything else (a share that did not answer, a denied
- *  folder), which the walk reads as "this folder cannot be reached". */
+ *  a file); THROWS for anything else (a share that did not answer, a file
+ *  that cannot be read). The walk reads the error: only one that says the
+ *  folder cannot be reached (folderCannotBeReached) passes the folder; any
+ *  other passes that one file. */
 function isRegularFileSync(p: string): boolean {
   try {
     return fs.statSync(p).isFile()
@@ -229,7 +231,13 @@ const FOLDER_TESTS_AT_ONCE = 2
 /** The reasons a file test fails with that say the FOLDER cannot be reached,
  *  whatever file was asked for: the network, the host or the connection to
  *  it is down, or it did not answer in time. Only these are passed on to a
- *  test that waited for ANOTHER file in the same folder (folderFileTest).
+ *  test that waited for ANOTHER file in the same folder (folderFileTest),
+ *  and only these make a walk pass the folder and ask it for no other name
+ *  (findOnWindowsPath, findOnWindowsPathAsync, and the walks that keep a
+ *  loop of their own: the Claude Code version probe in
+ *  claude-cli-version.ts, the other provider's program lookup, and the
+ *  resume list's copy of this rule in scripts/resume-picker.js, which a
+ *  parity test holds to this one).
  *
  *  Every other reason may be about the one file that was asked for: access
  *  denied on it or a file being deleted (EPERM, EACCES), a file in use
@@ -237,9 +245,11 @@ const FOLDER_TESTS_AT_ONCE = 2
  *  Windows names that Node.js has no code for (UNKNOWN: a file its cloud
  *  provider cannot fetch is one such, and so are some reasons a share is
  *  down). An error with no code at all is not in the set either. For those
- *  the test that waited is made itself, which is what a walk in place does;
- *  the cost, when the folder was down after all, is one more wait there for
- *  that test, one at a time, never another folder's program. */
+ *  the test that waited is made itself, and a walk goes on to the next name
+ *  in the same folder: a program file that cannot be read (access denied, or
+ *  in use while an update replaces it) must not hide the one beside it. The
+ *  cost, when the folder was down after all, is one more wait there for each
+ *  further name, one at a time, never another folder's program. */
 const FOLDER_UNREACHABLE_CODES: ReadonlySet<string> = new Set([
   'ETIMEDOUT', 'ENETDOWN', 'ENETUNREACH', 'ENONET', 'EHOSTDOWN', 'EHOSTUNREACH',
   'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ENOTCONN',
@@ -247,7 +257,7 @@ const FOLDER_UNREACHABLE_CODES: ReadonlySet<string> = new Set([
 
 /** Whether a failed file test says its folder cannot be reached
  *  (FOLDER_UNREACHABLE_CODES), not something about the one file. */
-function folderCannotBeReached(error: unknown): boolean {
+export function folderCannotBeReached(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | null | undefined)?.code
   return typeof code === 'string' && FOLDER_UNREACHABLE_CODES.has(code)
 }
@@ -422,9 +432,13 @@ export function withPathWalkDeadline<T>(run: Promise<T>, deadline: PathWalkDeadl
 
 /** The full path of the first of `names` found IN-PROCESS in the folders
  *  PATH names (windowsPathFolders), in `order`; null when none is. `stat`
- *  answers whether a candidate is a file; a stat that THROWS marks that
- *  folder unreachable, and the walk does not ask it again for another name.
- *  Starts no process; never answers a bare name. */
+ *  answers whether a candidate is a file. A stat that THROWS because the
+ *  folder cannot be reached (folderCannotBeReached) marks that folder
+ *  unreachable, and the walk does not ask it again for another name. A stat
+ *  that throws for any other reason passes that one file only: a program
+ *  file that cannot be read (access denied, or in use while an update
+ *  replaces it) says nothing about the one beside it, which is still asked
+ *  for. Starts no process; never answers a bare name. */
 export function findOnWindowsPath(
   names: readonly string[],
   env: NodeJS.ProcessEnv,
@@ -437,8 +451,8 @@ export function findOnWindowsPath(
     if (unreachable.has(dir)) continue
     try {
       if (stat(file) === true) return file
-    } catch {
-      unreachable.add(dir)
+    } catch (error) {
+      if (folderCannotBeReached(error)) unreachable.add(dir)
     }
   }
   return null
@@ -446,7 +460,9 @@ export function findOnWindowsPath(
 
 /** findOnWindowsPath, one stat at a time off the event loop: a PATH entry on
  *  a dead share can hold a stat for tens of seconds, which must not be the
- *  main process's. A rejected stat marks that folder unreachable. */
+ *  main process's. A rejected stat is read by the same rule: the folder is
+ *  marked unreachable only when the reason says the folder cannot be reached;
+ *  any other reason passes that one file. */
 export async function findOnWindowsPathAsync(
   names: readonly string[],
   env: NodeJS.ProcessEnv,
@@ -459,8 +475,8 @@ export async function findOnWindowsPathAsync(
     if (unreachable.has(dir)) continue
     try {
       if ((await stat(file)) === true) return file
-    } catch {
-      unreachable.add(dir)
+    } catch (error) {
+      if (folderCannotBeReached(error)) unreachable.add(dir)
     }
   }
   return null

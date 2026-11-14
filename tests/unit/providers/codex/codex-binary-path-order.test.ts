@@ -23,6 +23,27 @@ vi.mock('child_process', async (importOriginal) => {
 })
 vi.mock('../../../../src/main/ipc/setup-handlers', () => ({ getResourcesDirectory: () => '', getDataDirectory: () => '' }))
 vi.mock('../../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => 0, issueMcpSessionToken: () => 'tok' }))
+// The disk, for the cases at the end that use the lookup's OWN file test: a
+// file under the made-up folder `madeUp.root` answers from `madeUp.files`
+// (`true`: a regular file; a string: the error code its test fails with; not
+// listed: not there). Any other path is the real call.
+const madeUp = vi.hoisted(() => ({
+  root: 'C:\\ccc-test-locked-file-5b1f\\',
+  files: new Map<string, true | string>(),
+  asked: [] as string[],
+}))
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>()
+  const statSync = (p: unknown, o?: unknown): unknown => {
+    if (typeof p !== 'string' || !p.startsWith(madeUp.root)) return (actual.statSync as (p: unknown, o?: unknown) => unknown)(p, o)
+    madeUp.asked.push(p)
+    const answer = madeUp.files.get(p)
+    if (answer === true) return { isFile: () => true }
+    throw Object.assign(new Error('the file test failed'), { code: answer ?? 'ENOENT' })
+  }
+  const patched = { ...actual, statSync }
+  return { ...patched, default: patched }
+})
 
 const { execSync } = await import('child_process')
 const { resolveCodexBinary } = await import('../../../../src/main/providers/codex/spawn')
@@ -172,5 +193,47 @@ describe('the protections the lookup keeps', () => {
   it('[host] only codex.exe and codex.cmd are looked for: no other PATHEXT form, and no extensionless file', () => {
     expect(resolve({ PATH: 'C:\\npm', PATHEXT: DEFAULT_PATHEXT }, 'C:\\npm\\codex', 'C:\\npm\\codex.bat', 'C:\\npm\\codex.com', 'C:\\npm\\codex.ps1')).toBeNull()
     expect(asked.map((p) => p.toLowerCase()).sort()).toEqual(['c:\\npm\\codex.cmd', 'c:\\npm\\codex.exe'])
+  })
+})
+
+// The lookup's own file test (no stand-in passed in). One program file that
+// cannot be read (access to it is denied, or it is in use while an update
+// replaces it) says nothing about the file beside it: only a failure that
+// says the folder itself cannot be reached passes the folder, the same rule
+// as the Claude walk (windows-programs.ts folderCannotBeReached).
+describe('one program file that cannot be read does not hide the one beside it', () => {
+  const FIRST = `${madeUp.root}first`
+  const LATER = `${madeUp.root}later`
+  const lookUp = (pathValue: string = `${FIRST};${LATER}`) => resolveCodexBinary({ platform: 'win32', env: { PATH: pathValue, PATHEXT: DEFAULT_PATHEXT } })
+
+  beforeEach(() => {
+    madeUp.files.clear()
+    madeUp.asked.length = 0
+  })
+
+  // Mutation to prove this can fail: answer `unreachable` for every failed
+  // file test (the folder is then passed, and the later folder's is found).
+  it.each(['EPERM', 'EACCES', 'EBUSY', 'UNKNOWN'])('[host] the .exe cannot be read (%s): the .cmd beside it is found, not a later folder\'s .exe', (code) => {
+    madeUp.files.set(`${FIRST}\\codex.exe`, code).set(`${FIRST}\\codex.cmd`, true).set(`${LATER}\\codex.exe`, true)
+    expect(lookUp()?.cmd).toBe(`${FIRST}\\codex.cmd`)
+    expect(madeUp.asked).toEqual([`${FIRST}\\codex.exe`, `${FIRST}\\codex.cmd`])
+  })
+
+  it('[host] with no later copy the .cmd beside it is found too, where the lookup found none', () => {
+    madeUp.files.set(`${FIRST}\\codex.exe`, 'EPERM').set(`${FIRST}\\codex.cmd`, true)
+    expect(lookUp(FIRST)?.cmd).toBe(`${FIRST}\\codex.cmd`)
+  })
+
+  it('[host] the file that cannot be read is never the answer itself', () => {
+    madeUp.files.set(`${FIRST}\\codex.exe`, 'EBUSY')
+    expect(lookUp(FIRST)).toBeNull()
+  })
+
+  // Mutation to prove this can fail: read no failure as the folder's (a share
+  // that is down is then waited for once for every form).
+  it.each(['EHOSTUNREACH', 'ETIMEDOUT', 'ENETUNREACH'])('[host] a folder that cannot be reached (%s) is still passed once: it is asked for no other form', (code) => {
+    madeUp.files.set(`${FIRST}\\codex.exe`, code).set(`${FIRST}\\codex.cmd`, true).set(`${LATER}\\codex.exe`, true)
+    expect(lookUp()?.cmd).toBe(`${LATER}\\codex.exe`)
+    expect(madeUp.asked.filter((p) => p.startsWith(FIRST))).toEqual([`${FIRST}\\codex.exe`])
   })
 })
