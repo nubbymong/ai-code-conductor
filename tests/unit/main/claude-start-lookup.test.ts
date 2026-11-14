@@ -9,8 +9,9 @@
 // and the version probe starts at once. Not found: main brings PATH up to
 // date from the registry, looks for Claude Code, then runs the version probe;
 // a launch asked for meanwhile waits for all three, bounded, then resolves as
-// any launch does. One deadline ends the whole start. While Claude Code is
-// switched off, and off Windows, nothing is walked, refreshed or waited for.
+// any launch does. One deadline ends the whole start, and starts the version
+// probe when no step has yet. While Claude Code is switched off, and off
+// Windows, nothing is walked, refreshed or waited for.
 //
 // Host-safe: the registry read, the PATH walks' file test, the PowerShell
 // profile question and the version probe are stand-ins answered here. Nothing
@@ -505,9 +506,10 @@ describe('on Windows, at start, with Claude Code in no folder PATH names: PATH f
     expect(startLog()).toEqual(['warn: [start] PATH was not brought up to date from the registry (no registry); Claude Code is looked for on the PATH there is'])
   })
 
-  // Mutation to prove this can fail: log nothing in the catches.
-  it('a refresh, a lookup and a version probe that all fail still let launches go; each is logged', async () => {
-    const lookup = vi.fn(() => Promise.reject(new Error('no walk')))
+  // Mutations to prove this can fail: log nothing in the catches; log no
+  // reason for a failure that is not an Error.
+  it('a refresh, a lookup and a version probe that all fail still let launches go; each is logged, with its reason also when that is a plain string and not an Error', async () => {
+    const lookup = vi.fn(() => Promise.reject('no walk, said as a plain string'))
     const throwing = vi.fn((): Promise<void> => { throw new Error('no probe') })
     startClaudeLookup(stepsNotFound({ refreshPath: () => Promise.reject(new Error('no registry')), lookup, versionProbe: throwing }))
     expect(claudeStartLookupPending()).toBe(true)
@@ -518,7 +520,7 @@ describe('on Windows, at start, with Claude Code in no folder PATH names: PATH f
     expect(throwing).toHaveBeenCalledTimes(1)
     expect(startLog()).toEqual([
       'warn: [start] PATH was not brought up to date from the registry (no registry); Claude Code is looked for on the PATH there is',
-      'warn: [start] The first Claude Code lookup failed (no walk); a launch looks for itself',
+      'warn: [start] The first Claude Code lookup failed (no walk, said as a plain string); a launch looks for itself',
       'warn: [start] The Claude Code version probe failed (no probe); the version stays unknown',
     ])
   })
@@ -558,8 +560,10 @@ describe('on Windows, at start, with Claude Code in no folder PATH names: PATH f
 
 describe('one deadline for the whole start', () => {
   // Mutations to prove this can fail: no deadline; a deadline that leaves the
-  // start pending; one that releases the launches only; another length.
-  it('when it passes nothing is held any longer: every wait ends, it is logged once, and a launch after it does not wait, though a step still runs', async () => {
+  // start pending; one that releases the launches only; another length; a
+  // deadline that starts no version probe; steps that start the probe again
+  // when they end after it.
+  it('when it passes nothing is held any longer: every wait ends, it is logged once, and a launch after it does not wait, though a step still runs; the version probe, not yet started, is started then, once', async () => {
     expect(CLAUDE_START_DEADLINE_MS).toBe(2 * CLAUDE_START_LOOKUP_WAIT_MS)
     process.env.PATH = SYSTEM
     h.registryUser = LOCAL_BIN
@@ -575,10 +579,15 @@ describe('one deadline for the whole start', () => {
     await vi.advanceTimersByTimeAsync(CLAUDE_START_DEADLINE_MS - 20_000 - 1)
     expect(done).toEqual([])
     expect(claudeStartLookupPending()).toBe(true)
+    expect(versionProbe, 'not before the deadline: the steps come first').not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
     expect(done).toEqual(['launch', 'look for each CLI'])
     expect(claudeStartLookupPending(), 'no longer pending').toBe(false)
     expect(startLog()).toEqual([START_GAVE_UP])
+    // The registry is still being read, and no lookup was skipped ahead to:
+    // the version probe alone is started, on the PATH there is.
+    expect(versionProbe).toHaveBeenCalledTimes(1)
+    expect(order).toEqual([`version probe on ${SYSTEM}`])
     expect(vi.getTimerCount(), 'the two waits\' own timers are cleared').toBe(0)
     // Later ones do not wait again, and set no timer.
     void awaitClaudeStartLookup().then(() => { done.push('later launch') })
@@ -586,15 +595,118 @@ describe('one deadline for the whole start', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(done).toEqual(['launch', 'look for each CLI', 'later launch', 'later look'])
     expect(vi.getTimerCount()).toBe(0)
-    expect(order, 'nothing was skipped ahead: the registry is still being read').toEqual([])
-    // The step that was slow answers at last: the rest still runs, nothing
-    // is held again and nothing more is said.
+    expect(order, 'still only the probe').toEqual([`version probe on ${SYSTEM}`])
+    // The step that was slow answers at last: the lookup still runs, the
+    // version probe is not started a second time, nothing is held again and
+    // nothing more is said.
     for (const r of h.registryRelease.splice(0)) r()
     await flush()
-    expect(order).toEqual([`lookup on ${SYSTEM};${LOCAL_BIN}`, `version probe on ${SYSTEM};${LOCAL_BIN}`])
+    expect(order).toEqual([`version probe on ${SYSTEM}`, `lookup on ${SYSTEM};${LOCAL_BIN}`])
+    expect(versionProbe).toHaveBeenCalledTimes(1)
     expect(claudeStartLookupPending()).toBe(false)
     expect(vi.getTimerCount()).toBe(0)
     expect(startLog()).toEqual([START_GAVE_UP])
+  })
+
+  // The MINOR of the confirmation pass on 3f070062: the steps come one after
+  // another, so a walk that does not answer kept the version probe from ever
+  // starting, and the version stayed "not yet verified" until the walk ended.
+  // Mutations to prove this can fail: a deadline that starts no version
+  // probe; a walk that ends after it and starts the probe again; a start
+  // that ends only once the probe its deadline started has answered.
+  it('a walk that has not answered by the deadline (a PATH folder on a share that is down): the version probe is started at the deadline, once, with nothing held for its answer, and the walk finding Claude Code afterwards does not start it again', async () => {
+    process.env.PATH = `${SYSTEM};${NPM}`
+    h.registryUser = LOCAL_BIN
+    h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
+    h.holdProbe = true
+    holdTheWalk()
+    vi.useFakeTimers()
+    startClaudeAtBoot(boot())
+    await vi.advanceTimersByTimeAsync(CLAUDE_START_DEADLINE_MS - 1)
+    expect(versionProbe, 'not before the deadline').not.toHaveBeenCalled()
+    expect(claudeStartLookupPending()).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(versionProbe).toHaveBeenCalledTimes(1)
+    expect(claudeStartLookupPending(), 'the start has ended, though the probe it started has not answered').toBe(false)
+    expect(startLog()).toEqual([START_GAVE_UP])
+    // The walk answers at last, and finds Claude Code: the start had ended,
+    // the probe had started, and neither happens again.
+    h.openWalk()
+    await flush()
+    expect(versionProbe, 'not started a second time').toHaveBeenCalledTimes(1)
+    expect(order).toEqual([`version probe on ${SYSTEM};${NPM}`])
+    expect(h.registryReads, 'found: the registry is not read').toBe(0)
+    expect(claudeStartLookupPending()).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(startLog()).toEqual([START_GAVE_UP])
+  })
+
+  // The other order: the steps had started the probe, and it is the probe
+  // that has not answered when the deadline passes (the first-start warm-up
+  // comes before it, which makes it the likeliest slow step).
+  // Mutations to prove this can fail: end the start at the deadline only
+  // while the walk, the refresh or the lookup still runs; start the version
+  // probe at the deadline whether or not the steps had started it.
+  it('when it passes while only the version probe has not answered, the start ends all the same: the launch held is let go, later ones are not held, and the probe the steps started is not started again', async () => {
+    process.env.PATH = SYSTEM
+    h.registryUser = LOCAL_BIN
+    h.present = new Set([`${LOCAL_BIN}\\claude.exe`.toLowerCase()])
+    h.holdRegistry = true
+    h.holdProbe = true
+    vi.useFakeTimers()
+    startClaudeAtBoot(boot())
+    await flush()
+    const done: string[] = []
+    // Asked for while the registry is read: let go when the lookup ends.
+    void claudeStartLookupSettled().then(() => { done.push('look for each CLI') })
+    for (const r of h.registryRelease.splice(0)) r()
+    await flush()
+    expect(done, 'the lookup has ended').toEqual(['look for each CLI'])
+    expect(order, 'and the steps started the probe, which does not answer').toEqual([`lookup on ${SYSTEM};${LOCAL_BIN}`, `version probe on ${SYSTEM};${LOCAL_BIN}`])
+    expect(claudeStartLookupPending(), 'launches are held for the probe').toBe(true)
+    // Asked for 20 s in: by its own bound this one would wait until 35 s.
+    await vi.advanceTimersByTimeAsync(20_000)
+    void awaitClaudeStartLookup().then(() => { done.push('launch') })
+    await vi.advanceTimersByTimeAsync(CLAUDE_START_DEADLINE_MS - 20_000 - 1)
+    expect(done).toEqual(['look for each CLI'])
+    expect(claudeStartLookupPending()).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(done, 'the launch held is let go').toEqual(['look for each CLI', 'launch'])
+    expect(claudeStartLookupPending(), 'no longer pending, though the probe has not answered').toBe(false)
+    expect(vi.getTimerCount(), 'the launch\'s own timer is cleared').toBe(0)
+    expect(startLog()).toEqual([START_GAVE_UP])
+    expect(versionProbe, 'the deadline does not start it a second time').toHaveBeenCalledTimes(1)
+    // Later ones are not held, and set no timer.
+    void awaitClaudeStartLookup().then(() => { done.push('later launch') })
+    void claudeStartLookupSettled().then(() => { done.push('later look') })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(done).toEqual(['look for each CLI', 'launch', 'later launch', 'later look'])
+    expect(vi.getTimerCount()).toBe(0)
+    // The probe answers at last: nothing is held again, nothing more is said.
+    for (const r of h.probeRelease.splice(0)) r()
+    await flush()
+    expect(order).toEqual([`lookup on ${SYSTEM};${LOCAL_BIN}`, `version probe on ${SYSTEM};${LOCAL_BIN}`, 'version probe answered'])
+    expect(versionProbe).toHaveBeenCalledTimes(1)
+    expect(claudeStartLookupPending()).toBe(false)
+    expect(startLog()).toEqual([START_GAVE_UP])
+  })
+
+  // Mutation to prove this can fail: start the probe at the deadline unguarded.
+  it.each([
+    ['throws', (): Promise<void> => { throw new Error('no probe') }],
+    ['rejects', (): Promise<void> => Promise.reject(new Error('no probe'))],
+  ])('a version probe started at the deadline that %s is logged, and the start has ended all the same', async (_how, probe) => {
+    const failing = vi.fn(probe)
+    vi.useFakeTimers()
+    startClaudeLookup(stepsNotFound({ onPath: () => new Promise<boolean>(() => {}), versionProbe: failing }))
+    let waited = false
+    void awaitClaudeStartLookup(CLAUDE_START_DEADLINE_MS * 2).then(() => { waited = true })
+    await vi.advanceTimersByTimeAsync(CLAUDE_START_DEADLINE_MS)
+    expect(failing).toHaveBeenCalledTimes(1)
+    expect(waited, 'the launch held is let go').toBe(true)
+    expect(claudeStartLookupPending()).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(startLog()).toEqual([START_GAVE_UP, 'warn: [start] The Claude Code version probe failed (no probe); the version stays unknown'])
   })
 
   // Mutation to prove this can fail: keep the app running for a timer.
@@ -754,7 +866,7 @@ describe('what at start reads PATH and nothing waits for (the look for each prov
   })
 
   // Mutation to prove this can fail: wait without a bound.
-  it('its wait has the same bound as a launch\'s: past it the look runs on the PATH there is, so no provider stays "not checked yet" for longer, and it is logged', async () => {
+  it('its wait has the same bound as a launch\'s: past it the look runs on the PATH there is, so the start adds at most that bound to the look, beyond the accounts work it comes after; it is logged', async () => {
     process.env.PATH = SYSTEM
     h.registryUser = LOCAL_BIN
     h.holdRegistry = true
@@ -805,9 +917,11 @@ describe('what at start reads PATH and nothing waits for (the look for each prov
 })
 
 describe('off Windows nothing changes', () => {
-  it('no walk at start, no registry read, no lookup, nothing to wait for; the version probe runs at once and a launch names "claude"', async () => {
-    h.platform = 'linux'
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+  // Mutation to prove this can fail: name the platforms left alone (Linux
+  // only) instead of the one the start is for.
+  it.each(['linux', 'darwin'] as const)('on %s: no walk at start, no registry read, no lookup, nothing to wait for; the version probe runs at once and a launch names "claude"', async (platform) => {
+    h.platform = platform
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true })
     process.env.SHELL = '/bin/bash'
     const pathBefore = process.env.PATH
     startClaudeAtBoot(boot())
@@ -882,6 +996,32 @@ describe('main runs it at start (startClaudeAtBoot)', () => {
     accountsDone()
     await settle()
     expect(discover).toHaveBeenCalledTimes(1)
+  })
+
+  // The order at a real start when the accounts work is the slower one and
+  // the version probe slower still: the look is asked for with the lookup
+  // over and the launches still held.
+  // Mutation to prove this can fail: hold the look for each CLI for as long
+  // as the start is pending, not only while its lookup runs.
+  it('when the accounts work ends after the start\'s lookup has, the look for each provider\'s CLI runs at once, while the version probe is still unanswered', async () => {
+    process.env.PATH = SYSTEM
+    h.registryUser = LOCAL_BIN
+    h.holdProbe = true
+    let accountsDone = (): void => {}
+    const accountsWork = new Promise<void>((resolve) => { accountsDone = resolve })
+    vi.useFakeTimers()
+    startClaudeAtBoot(boot({ accountsWork }))
+    await flush()
+    expect(order, 'the lookup has ended and the probe runs').toEqual([`lookup on ${SYSTEM};${LOCAL_BIN}`, `version probe on ${SYSTEM};${LOCAL_BIN}`])
+    expect(claudeStartLookupPending(), 'the probe has not answered: launches are held').toBe(true)
+    expect(discover, 'not before the accounts work').not.toHaveBeenCalled()
+    accountsDone()
+    await flush()
+    expect(discover).toHaveBeenCalledTimes(1)
+    expect(order).toEqual([`lookup on ${SYSTEM};${LOCAL_BIN}`, `version probe on ${SYSTEM};${LOCAL_BIN}`, `look for each CLI on ${SYSTEM};${LOCAL_BIN}`])
+    expect(claudeStartLookupPending(), 'the probe is still unanswered').toBe(true)
+    expect(vi.getTimerCount(), 'the deadline only: the look set no wait of its own').toBe(1)
+    expect(startLog()).toEqual([])
   })
 
   // Mutation to prove this can fail: wait for the start with no bound of its own.

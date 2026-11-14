@@ -27,7 +27,11 @@
 // (ipc/pty-handlers.ts), at most CLAUDE_START_LOOKUP_WAIT_MS, and then
 // resolves as any launch does: a full path, or the same refusal as before.
 // The start as a whole ends at CLAUDE_START_DEADLINE_MS at the latest: from
-// then on nothing is held, whatever step still runs.
+// then on nothing is held, whatever step still runs. The steps come one
+// after another, so a walk or a registry read that has not answered by then
+// would keep the version probe from starting until it did: the deadline
+// starts the probe when no step has yet, and it is started once for a start,
+// by whichever comes first.
 //
 // While Claude Code is switched off (or its settings cannot be read), and
 // off Windows, nothing is walked, refreshed or waited for: the version probe
@@ -38,6 +42,8 @@
 // before: a miss there is not asked about again by a launch for a minute
 // (claude-cli-version.ts), and its question to the PowerShell profile is one
 // the lookup has to wait out and ask again when the refresh adds folders.
+// (The probe the deadline starts runs on the PATH there is: by then nothing
+// waits for the steps, and it asks only for the version.)
 // The held launches are released once the probe has answered, not before:
 // a launch reads the version as it starts (managed-launch-diagnostics.ts),
 // and one let go earlier would report it as not yet verified only because it
@@ -49,8 +55,8 @@
 // (claudeStartLookupSettled): its answer is then one for the PATH they
 // leave, and it asks the profile nothing while the registry is read. It does
 // not wait for the version probe, and its wait has the same bound as a
-// launch's, so no provider's status stays "not checked yet" for longer than
-// that.
+// launch's: the look waits at most that bound beyond the accounts work it
+// comes after, and never past the start's deadline.
 
 import { logInfo, logWarn } from './debug-logger'
 
@@ -68,7 +74,8 @@ export const CLAUDE_START_LOOKUP_WAIT_MS = 15_000
 /** How long the start as a whole may hold anything. When it passes while a
  *  step still runs, the start is no longer pending: every wait ends, and a
  *  launch asked for later does not wait at all. The steps themselves run on
- *  to their own ends. */
+ *  to their own ends, and the version probe, when none of them has started
+ *  it yet, is started then. */
 export const CLAUDE_START_DEADLINE_MS = 2 * CLAUDE_START_LOOKUP_WAIT_MS
 
 /** The start's steps (startClaudeAtBoot makes them from what main hands it). */
@@ -119,9 +126,9 @@ function claudeIsOn(steps: ClaudeStartLookupSteps): boolean {
 }
 
 /** Start the version probe now, in this turn; nothing waits for it. */
-function probeNow(steps: ClaudeStartLookupSteps): void {
+function probeNow(probe: () => unknown): void {
   try {
-    void Promise.resolve(steps.versionProbe()).catch(probeFailed)
+    void Promise.resolve(probe()).catch(probeFailed)
   } catch (e) {
     probeFailed(e)
   }
@@ -160,9 +167,18 @@ function startEnded(start: number): void {
 export function startClaudeLookup(steps: ClaudeStartLookupSteps, platform: string = process.platform): void {
   const start = ++starts
   clear()
+  // The version probe is started once for a start: by its steps, or by its
+  // deadline when that passes before they have. Whichever comes second
+  // starts nothing.
+  let probeStarted = false
+  const probe = (): unknown => {
+    if (probeStarted) return undefined
+    probeStarted = true
+    return steps.versionProbe()
+  }
   if (platform !== 'win32' || !claudeIsOn(steps)) {
     // As before the fix: the probe at once, in this turn, nothing waiting.
-    probeNow(steps)
+    probeNow(probe)
     return
   }
   pending = true
@@ -170,6 +186,9 @@ export function startClaudeLookup(steps: ClaudeStartLookupSteps, platform: strin
   deadline = setTimeout(() => {
     say(logInfo, `[start] The look for Claude Code at start has not ended after ${CLAUDE_START_DEADLINE_MS / 1000} s; no launch is held for it any longer, and each resolves on what is known`)
     startEnded(start)
+    // A step that still runs has kept the probe from starting (a walk on a
+    // share that does not answer): it starts now, on the PATH there is.
+    probeNow(probe)
   }, CLAUDE_START_DEADLINE_MS)
   ;(deadline as { unref?: () => void }).unref?.()
   // The walk begins in this turn and is waited for off it; one that throws
@@ -184,7 +203,7 @@ export function startClaudeLookup(steps: ClaudeStartLookupSteps, platform: strin
         // Claude Code is where a launch looks: nothing to refresh, nothing
         // more to wait for, and the probe at once.
         startEnded(start)
-        probeNow(steps)
+        probeNow(probe)
         return undefined
       }
       return Promise.resolve()
@@ -194,7 +213,7 @@ export function startClaudeLookup(steps: ClaudeStartLookupSteps, platform: strin
         .catch((e: unknown) => { say(logWarn, `[start] The first Claude Code lookup failed (${why(e)}); a launch looks for itself`) })
         .then(() => {
           lookupEnded(start)
-          return steps.versionProbe()
+          return probe()
         })
         .catch(probeFailed)
         .then(() => { startEnded(start) })
