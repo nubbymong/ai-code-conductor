@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "459305e1bdee8a965adbf48efa5ad57df00a11ab11f5bff3740bb8726ca41647",
-  "manifestHead": "229289e8c9b48ab50f85b1a86d22efecefcf0e6c",
+  "manifestPathDigest": "0a7d7bd151d0570be539a58b32121f9ecf9ed57141549373916b36c8c5cc27f3",
+  "manifestHead": "157ac7d71fadbb0dc3042312d5d651ce02513f42",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -6897,6 +6897,16 @@
       "disposition": "retain",
       "evidence": "retained: its cases and assertions are unchanged since the WP1 base; its mock of src/main/conductor-mcp-server.ts gained registerClaudeReviewSession (WP2 commit 5b), which it does not test; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP2 PR 4 fix pass 13 (cdde4930): its mock of the Conductor MCP server names releaseMcpSessionProvider; no Codex text changed",
       "note": ""
+    },
+    {
+      "path": "tests/unit/main/pty-spawn-claude-start-lookup-bound.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new test for the Windows start-up fix (tests/unit/main/pty-spawn-claude-start-lookup-bound.test.ts): with the real start module (src/main/claude-start-lookup.ts) behind the real pty:spawn handler, a local Claude Code launch held while the start still looks for Claude Code starts when the module's own bound has passed; a newer spawn of the same session id supersedes the one held; the start answering ends the hold before the bound; once the start's deadline has passed nothing is held (WP1.68); tests/unit/main/pty-spawn-claude-start-lookup-bound.test.ts",
+      "note": "created by the Windows start-up Claude Code lookup fix, round 3 (regression since #638); every launch it makes is a Claude Code one, and its Codex mentions are only the names the pty-manager stand-in has to export for the handler to load"
     },
     {
       "path": "tests/unit/main/pty-spawn-one-at-a-time-rights.test.ts",
