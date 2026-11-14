@@ -16,7 +16,7 @@
  * model's own id (claude-fable-5-3-20270101 and claude-fable-5-3[1m] are its
  * own names; claude-opus-latest-x on claude-opus-6 is not) or when the shipped
  * entry's id starts with the model's own id too (claude-opus-4 does not own
- * claude-opus-4-7[1m]). And a dated (-YYYYMMDD) or [1m] form of a shipped
+ * claude-opus-4-7[1m]). And a dated (-YYYYMMDD) or [1m] form of ANY shipped
  * entry's id is refused for the id and for every alias, however it is
  * placed: claude-opus-4-5-20260101 is claude-opus-4-5's, never a new model's.
  * A file with a refused name is refused whole.
@@ -162,15 +162,27 @@ const HOSTILE: [string, (f: Loose) => void, string?][] = [
   ['a new model whose id is a longer form of a shipped id, but not a dated or [1m] one', (f) => {
     f.models.unshift({ id: 'claude-opus-5-5-2', patterns: [], family: 'opus', label: 'Opus 5.5.2', fallbackPricing: HIGH })
   }],
-  // A model only the file has whose id is a dated or [1m] form of a shipped id:
-  // the bundled file places it by an id-prefix, but it is the shipped model's
-  // name, and the file's model would win it. Refused.
+  // A model only the file has whose id is a dated or [1m] form of a shipped id
+  // (of ANY shipped id, not only the one the matcher places it on): the bundled
+  // file places it by an id-prefix, but it is the shipped model's name, and the
+  // file's model would win it. Refused.
   ['a new model whose id is a shipped model\'s dated id', (f) => {
     f.models.unshift({ id: 'claude-opus-4-5-20260101', patterns: [], family: 'opus', label: 'Opus 4.5 (dated)', fallbackPricing: HIGH })
   }, 'models: claude-opus-4-5-20260101 has a name the build already places on claude-opus-4-5'],
   ['a new Codex model whose id is a shipped id\'s dated id', (f) => {
     f.models.unshift({ id: 'gpt-5.5-20260101', patterns: [], family: 'codex', label: 'GPT-5.5 (dated)' })
   }, 'models: gpt-5.5-20260101 has a name the build already places on gpt-5.5'],
+  // The matcher places these on claude-fable-5-2 by id-prefix (they start with
+  // 'claude-fable-5-2'), but each is the dated form of the shipped claude-fable-5.
+  ['a new model whose id is the dated id of claude-fable-5, placed on claude-fable-5-2 by id-prefix', (f) => {
+    f.models.unshift({ id: 'claude-fable-5-20260101', patterns: [], family: 'fable', label: 'Fable 5 (dated)', fallbackPricing: HIGH })
+  }, 'models: claude-fable-5-20260101 has a name the build already places on claude-fable-5'],
+  ['a new model whose id is another dated id of claude-fable-5', (f) => {
+    f.models.unshift({ id: 'claude-fable-5-20251001', patterns: [], family: 'fable', label: 'Fable 5 (dated)', fallbackPricing: HIGH })
+  }, 'models: claude-fable-5-20251001 has a name the build already places on claude-fable-5'],
+  ['a new model (claude-fable-5-20) with the dated id of claude-fable-5 as an alias, that starts with the new id', (f) => {
+    f.models.unshift({ id: 'claude-fable-5-20', patterns: [], aliases: ['claude-fable-5-20260101'], family: 'fable', label: 'Fable 5.20', fallbackPricing: HIGH })
+  }, 'models: claude-fable-5-20 has a name the build already places on claude-fable-5'],
 ]
 
 /** The validated file, as the service would put it to use. */
@@ -227,12 +239,13 @@ const placed = (registry: ModelRegistry, name: string) => resolveModelInfo(regis
  *  the shipped entry's id (the id or the alias). A name the bundled file gives to a shipped entry by an exact id or
  *  an alias is never the file's own. */
 const isFilesOwn = (name: string, kind: 'exact' | 'alias', modelId: string): boolean => {
+  // A dated or [1m] form of a shipped id is that model's name, never the file's.
+  // (Of ANY shipped id, not only the one the matcher placed it on.)
+  const isForm = (shipped: string) => name.startsWith(shipped) && /^(-\d{8}|\[)/.test(name.slice(shipped.length))
+  if (bundled.models.some((m) => isForm(m.id))) return false
   const at = placed(bundled, name)
   if (!at.known) return true
   if (at.matchKind === 'exact' || at.matchKind === 'alias') return false
-  // A dated or [1m] form of a shipped id is that model's name, never the file's.
-  const rest = name.startsWith(at.id) ? name.slice(at.id.length) : null
-  if (rest !== null && (/^-\d{8}/.test(rest) || rest.startsWith('['))) return false
   return kind === 'exact' || (name.startsWith(modelId) && !at.id.startsWith(modelId))
 }
 
@@ -289,7 +302,7 @@ describe('a fetched model file never changes what a name the build already place
 
   it('the files that are refused are the ones after a shipped id or alias, or an alias the build places and the new id does not start; the others are in use', () => {
     const refused = HOSTILE.filter(([, , refusedFor]) => refusedFor !== undefined)
-    expect(refused).toHaveLength(11)
+    expect(refused).toHaveLength(14)
     expect(HOSTILE.length - refused.length).toBe(18)
     for (const [what, change] of HOSTILE) expect(fetched(change).data === null, what).toBe(refused.some(([w]) => w === what))
   })

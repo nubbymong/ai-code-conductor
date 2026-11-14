@@ -171,17 +171,28 @@ function placedBy(bundled: ModelRegistry, name: string): { id: string; kind: Mod
 function isDatedOrBracketedForm(name: string, shipped: string): boolean {
   if (!name.startsWith(shipped)) return false
   const rest = name.slice(shipped.length)
+  // The '[' branch is defence in depth: the picker rule may already refuse such a name.
   return /^-\d{8}/.test(rest) || rest.startsWith('[')
 }
 
+/** The shipped id `name` is a dated or bracketed form of, whichever entry the
+ *  matcher placed it on: `claude-fable-5-20260101` is `claude-fable-5`'s, though
+ *  the matcher puts it on `claude-fable-5-2` by id-prefix. */
+function formOfShipped(bundled: ModelRegistry, name: string): string | undefined {
+  return bundled.models.find((m) => isDatedOrBracketedForm(name, m.id))?.id
+}
+
 /** The shipped entry that has `id` as its exact id or one of its aliases, or
- *  whose id `id` is a dated or bracketed form of. An id the bundled file only
+ *  whose id `id` is a dated or bracketed form of (of ANY shipped id, not only the
+ *  one the matcher placed it on). An id the bundled file only
  *  reaches by an id-prefix or a pattern (`claude-fable-5-3` is reached through
  *  `claude-fable-5`) is a new model's own name. */
 function idHeldBy(bundled: ModelRegistry, id: string): string | undefined {
+  const form = formOfShipped(bundled, id)
+  if (form) return form
   const at = placedBy(bundled, id)
   if (!at) return undefined
-  return at.kind === 'exact' || at.kind === 'alias' || isDatedOrBracketedForm(id, at.id) ? at.id : undefined
+  return at.kind === 'exact' || at.kind === 'alias' ? at.id : undefined
 }
 
 /** The shipped entry that stops `alias` being the alias of the model `own`: one
@@ -193,9 +204,11 @@ function idHeldBy(bundled: ModelRegistry, id: string): string | undefined {
  *  (`claude-fable-5-3-20270101`, `claude-fable-5-3[1m]`) is that model's own
  *  name; one nothing places is free. */
 function aliasHeldBy(bundled: ModelRegistry, alias: string, own: string): string | undefined {
+  const form = formOfShipped(bundled, alias)
+  if (form) return form
   const at = placedBy(bundled, alias)
   if (!at) return undefined
-  if (at.kind === 'exact' || at.kind === 'alias' || isDatedOrBracketedForm(alias, at.id)) return at.id
+  if (at.kind === 'exact' || at.kind === 'alias') return at.id
   return alias.startsWith(own) && !at.id.startsWith(own) ? undefined : at.id
 }
 

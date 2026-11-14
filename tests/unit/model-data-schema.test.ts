@@ -364,6 +364,7 @@ describe('a fetched file is held to a strict shape', () => {
     ['a shipped [1m] name that starts with the new id', { id: 'claude-opus-4', patterns: ['opus-4'], aliases: ['claude-opus-4-7[1m]'], family: 'opus', label: 'Opus 4' }, 'claude-opus-4-7'],
     ['another shipped dated id that starts with the new id', { id: 'claude-haiku-4', patterns: ['haiku-4'], aliases: ['claude-haiku-4-5-20251001'], family: 'haiku', label: 'Haiku 4' }, 'claude-haiku-4-5'],
     ['a shipped dated id, though the new id is longer than the shipped one and the alias starts with it', { id: 'claude-opus-5-5-2', patterns: [], aliases: ['claude-opus-5-5-20260101'], family: 'opus', label: 'Opus 5.5.2' }, 'claude-opus-5-5'],
+    ['a dated form of a shipped id that the matcher places on another shipped entry, though the alias starts with the new id', { id: 'claude-fable-5-20', patterns: [], aliases: ['claude-fable-5-20260101'], family: 'fable', label: 'Fable 5.20' }, 'claude-fable-5'],
     ['a name the build reaches by an id-prefix that starts with the new id and the shipped id', { id: 'claude-opus-4', patterns: ['opus-4'], aliases: ['claude-opus-4-7-latest'], family: 'opus', label: 'Opus 4' }, 'claude-opus-4-7'],
   ])('a new model with an alias that is not its own (%s) refuses the file, and the reason names the shipped entry', (_what, model, holder) => {
     expect(reasonOf(file((f) => { f.models.unshift(model) }))).toBe(`models: ${model.id} has a name the build already places on ${holder}`)
@@ -372,6 +373,10 @@ describe('a fetched file is held to a strict shape', () => {
   it.each([
     ['a Claude model whose id is a shipped id with a date', { id: 'claude-opus-4-5-20260101', patterns: [], family: 'opus', label: 'Opus 4.5 (dated)' }, 'claude-opus-4-5'],
     ['a Codex model whose id is a shipped id with a date', { id: 'gpt-5.5-20260101', patterns: [], family: 'codex', label: 'GPT-5.5 (dated)' }, 'gpt-5.5'],
+    // The matcher puts these on claude-fable-5-2 by id-prefix (they start with
+    // 'claude-fable-5-2'), but each is the dated form of the shipped claude-fable-5.
+    ['a dated form of claude-fable-5 that the matcher places on claude-fable-5-2', { id: 'claude-fable-5-20260101', patterns: [], family: 'fable', label: 'Fable 5 (dated)' }, 'claude-fable-5'],
+    ['another dated form of claude-fable-5 that the matcher places on claude-fable-5-2', { id: 'claude-fable-5-20251001', patterns: [], family: 'fable', label: 'Fable 5 (dated)' }, 'claude-fable-5'],
   ])('a new model whose id is a dated form of a shipped id (%s) refuses the file, and the reason names the shipped entry', (_what, model, holder) => {
     expect(reasonOf(file((f) => { f.models.unshift(model) }))).toBe(`models: ${model.id} has a name the build already places on ${holder}`)
   })
