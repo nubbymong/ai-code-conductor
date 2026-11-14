@@ -3,7 +3,7 @@
  * what a name the build already places resolves to.
  *
  * The rule (model-registry-data.ts, matchEntry in model-registry.ts): a
- * shipped model's patterns and aliases are the bundled file's, and every
+ * shipped model's patterns, aliases and family are the bundled file's, and every
  * entry that is not the fetched file's own addition is tried, shipped ones in
  * the bundled file's order, before a model only the fetched file has. So such
  * a model is reached by its exact id or one of its aliases, and beyond that
@@ -109,6 +109,25 @@ const HOSTILE: [string, (f: Loose) => void, string?][] = [
   }],
   ['every shipped alias taken away', (f) => {
     for (const m of f.models) delete m.aliases
+  }],
+  // A shipped model's family is the bundled file's as well: a name placed by
+  // a pattern goes to an entry of the family its first match is in, so an
+  // entry given another family would be passed over.
+  ['a shipped older model given another family', (f) => {
+    find(f, 'claude-opus-5').family = 'sonnet'
+  }],
+  ['the newest shipped model of a family given another family, listed first', (f) => {
+    const m = find(f, 'claude-opus-5-5')
+    m.family = 'sonnet'
+    f.models = [m, ...f.models.filter((x: Loose) => x !== m)]
+  }],
+  ['a shipped model given a family only the file defines', (f) => {
+    f.families.zeta = { label: 'zeta', color: '#336699' }
+    find(f, 'claude-haiku-4-5').family = 'zeta'
+  }],
+  ['every shipped model of the four families given the next family', (f) => {
+    const next: Record<string, string> = { fable: 'opus', opus: 'sonnet', sonnet: 'haiku', haiku: 'fable' }
+    for (const m of f.models) m.family = next[m.family] ?? m.family
   }],
   // A model only the file has, with a name the build already gives to a
   // shipped entry by an id or an alias: the file is refused.
@@ -303,7 +322,7 @@ describe('a fetched model file never changes what a name the build already place
   it('the files that are refused are the ones after a shipped id or alias, or an alias the build places and the new id does not start; the others are in use', () => {
     const refused = HOSTILE.filter(([, , refusedFor]) => refusedFor !== undefined)
     expect(refused).toHaveLength(14)
-    expect(HOSTILE.length - refused.length).toBe(18)
+    expect(HOSTILE.length - refused.length).toBe(22)
     for (const [what, change] of HOSTILE) expect(fetched(change).data === null, what).toBe(refused.some(([w]) => w === what))
   })
 
@@ -317,13 +336,14 @@ describe('a fetched model file never changes what a name the build already place
     expect(placed(registry, 'claude-thinking-7')).toMatchObject({ id: 'claude-opus-9', matchKind: 'pattern' })
   })
 
-  it('a shipped model\'s patterns and aliases are the bundled file\'s, whatever the fetched file gives it', () => {
+  it('a shipped model\'s patterns, aliases and family are the bundled file\'s, whatever the fetched file gives it', () => {
     for (const [what, change] of HOSTILE) {
       const merged = inUse(fetched(change).data)
       for (const b of bundled.models) {
         const m = merged.models.find((x) => x.id === b.id)
         expect(m?.patterns, `${what}: ${b.id}`).toEqual(b.patterns)
         expect(m?.aliases, `${what}: ${b.id}`).toEqual(b.aliases)
+        expect(m?.family, `${what}: ${b.id}`).toBe(b.family)
         // An entry the bundled file gives no aliases has no such field at all.
         expect(Object.keys(m ?? {}).includes('aliases'), `${what}: ${b.id}`).toBe(Object.keys(b).includes('aliases'))
       }
@@ -335,6 +355,40 @@ describe('a fetched model file never changes what a name the build already place
     }))
     expect(resolveModelInfo(merged, 'claude-opus-4-5')).toMatchObject({ label: 'Opus 4.5!', fallbackPricing: { input: 7 } })
     expect(resolveModelInfo(merged, 'opus')).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'alias', label: 'Opus 5.5!', fallbackPricing: { input: 9 } })
+  })
+
+  // Review finding: a fetched file could give a shipped model another family
+  // of the same assistant, and the merge kept it. A name placed by a pattern
+  // goes to an entry of the family its first match is in, so Opus 5 as
+  // `sonnet` was passed over and a partner platform's id of it became Opus 5.5.
+  it('a fetched file that changes only a shipped model\'s family moves no name: the family is left out', () => {
+    const data = checked((f) => { find(f, 'claude-opus-5').family = 'sonnet' })
+    // The file is in use and does carry the change; the merge leaves it out.
+    expect(data.models.find((m) => m.id === 'claude-opus-5')?.family).toBe('sonnet')
+    const merged = inUse(data)
+    expect(merged.models.find((m) => m.id === 'claude-opus-5')?.family).toBe('opus')
+    for (const name of ['us.anthropic.claude-opus-5-v1:0', 'vertex_ai/claude-opus-5@20260101']) {
+      expect(placed(bundled, name), name).toMatchObject({ id: 'claude-opus-5', family: 'opus', label: 'Opus 5', matchKind: 'pattern' })
+      expect(placed(merged, name), name).toEqual(placed(bundled, name))
+    }
+    // By its id and a dated id too, and it is still an Opus there.
+    for (const name of ['claude-opus-5', 'claude-opus-5-20260101']) expect(placed(merged, name), name).toEqual(placed(bundled, name))
+    // Another older model's partner id stays on its own entry as well.
+    expect(placed(merged, 'us.anthropic.claude-opus-4-7-v1:0')).toMatchObject({ id: 'claude-opus-4-7', family: 'opus', matchKind: 'pattern' })
+
+    // The newest entry of a family carries the family's plain pattern, so it
+    // is the first match: given another family, every older model's partner
+    // id would have stayed on it.
+    const newest = inUse(checked((f) => { find(f, 'claude-opus-5-5').family = 'sonnet' }))
+    expect(newest.models.find((m) => m.id === 'claude-opus-5-5')?.family).toBe('opus')
+    for (const name of ['us.anthropic.claude-opus-4-7-v1:0', 'us.anthropic.claude-opus-5-v1:0', 'anthropic.claude-opus-5-5-v1:0']) {
+      expect(placed(newest, name), name).toEqual(placed(bundled, name))
+    }
+    expect(placed(newest, 'us.anthropic.claude-opus-4-7-v1:0')).toMatchObject({ id: 'claude-opus-4-7', family: 'opus' })
+
+    // The fields a file may correct are still corrected on the same entry.
+    const both = inUse(checked((f) => { const m = find(f, 'claude-opus-5'); m.family = 'sonnet'; m.label = 'Opus 5!'; m.fallbackPricing.input = 7 }))
+    expect(placed(both, 'us.anthropic.claude-opus-5-v1:0')).toMatchObject({ id: 'claude-opus-5', family: 'opus', label: 'Opus 5!', fallbackPricing: { input: 7 }, matchKind: 'pattern' })
   })
 
   it('the picker order is still the fetched file\'s: the models are not put in another order', () => {
