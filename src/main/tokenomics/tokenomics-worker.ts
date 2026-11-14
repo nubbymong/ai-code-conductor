@@ -826,12 +826,13 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     ;(watchTimer as unknown as { unref?: () => void }).unref?.()
   }
 
-  /** #302: what a watcher event means for the next sweep. A Claude transcript
-   *  that exists (written, or just made) is read on its own; anything else --
-   *  no file name, a folder, a deleted file, any Codex folder event -- makes
-   *  the next sweep a full one, as every event did before. */
-  function noteWatchEvent(dir: string, kind: 'claude' | 'codex', filename: unknown): void {
-    if (kind === 'claude' && typeof filename === 'string' && filename.endsWith('.jsonl')) {
+  /** #302: what a watcher event means for the next sweep. `perFile` is the
+   *  Claude projects folder, where a transcript that exists (written, or just
+   *  made) is read on its own; anything else -- no file name, a folder, a
+   *  deleted file, any Codex folder event -- makes the next sweep a full one,
+   *  as every event did before. */
+  function noteWatchEvent(dir: string, perFile: boolean, filename: unknown): void {
+    if (perFile && typeof filename === 'string' && filename.endsWith('.jsonl')) {
       const full = path.join(dir, filename)
       let isFile = false
       try { isFile = fs.statSync(full).isFile() } catch { isFile = false }
@@ -840,10 +841,10 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     fullSweepDue = true
   }
 
-  function watchDir(dir: string, kind: 'claude' | 'codex'): { close(): void } | null {
+  function watchDir(dir: string, perFile: boolean): { close(): void } | null {
     try {
       if (!fs.existsSync(dir)) return null
-      const wch = fs.watch(dir, { recursive: true }, (_event: unknown, filename: unknown) => { noteWatchEvent(dir, kind, filename); scheduleIncremental() })
+      const wch = fs.watch(dir, { recursive: true }, (_event: unknown, filename: unknown) => { noteWatchEvent(dir, perFile, filename); scheduleIncremental() })
       // An FSWatcher 'error' with no listener throws -> uncaughtException -> the
       // worker dies and burns a restart toward permanent degrade. Log + close the
       // broken watcher; the 5s tailTimer sweep below keeps indexing alive.
@@ -880,7 +881,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     }
     for (const dir of nextDirs) {
       if (realmWatchers.has(dir)) continue
-      const wch = watchDir(dir, 'codex')
+      const wch = watchDir(dir, false)
       if (wch) realmWatchers.set(dir, wch)
     }
   }
@@ -896,9 +897,9 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
   }
 
   function startWatching(): void {
-    const claudeWatch = claudeDir ? watchDir(claudeDir, 'claude') : null
+    const claudeWatch = claudeDir ? watchDir(claudeDir, true) : null
     if (claudeWatch) watchers.push(claudeWatch)
-    const codexWatch = codexDirs[0]?.dir ? watchDir(codexDirs[0].dir, 'codex') : null
+    const codexWatch = codexDirs[0]?.dir ? watchDir(codexDirs[0].dir, false) : null
     if (codexWatch) watchers.push(codexWatch)
     // Safety tail: recursive watch can miss newly-created nested session files on
     // some platforms. Every 5 s it reads what the watcher reported, and a full
