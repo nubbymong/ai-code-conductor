@@ -3,7 +3,7 @@ import * as os from 'os'
 import { isAbsolute, posix } from 'path'
 import { logInfo } from './debug-logger'
 import { findOnPosixPath, findOnPosixPathAsync, loginShellPathAsync, loginShellPathSync, loginShellWithOwnPath, shFamilyLoginShell } from './login-shell'
-import { findOnWindowsPath, findOnWindowsPathAsync, findWithPowerShellProfile, isRegularFileAsync, windowsEnvValue, windowsPathRefreshCount, type PowerShellProfileLookup } from './windows-programs'
+import { findOnWindowsPathAsync, findWithPowerShellProfile, isRegularFileAsync, windowsEnvValue, windowsPathRefreshCount, type PowerShellProfileLookup } from './windows-programs'
 
 /**
  * Is the `claude` CLI actually INSTALLED on this machine?
@@ -203,9 +203,7 @@ async function findClaudeOnWindowsWithSource(
   stat: ((p: string) => Promise<boolean>) | undefined,
   now: () => number,
 ): Promise<{ found: string | null; viaProfile: boolean; profileConsulted: boolean }> {
-  const pathValue = windowsEnvValue(env, 'PATH') ?? ''
-  const found = await findOnWindowsPathAsync(CLAUDE_WINDOWS_NAMES, env, stat, 'name')
-  recordClaudeOnWindows(pathValue, found, now())
+  const found = await claudeOnWindowsPathAsync(env, stat, now)
   if (found) return { found, viaProfile: false, profileConsulted: false }
   if (!profileLookupMayRun()) return { found: null, viaProfile: false, profileConsulted: false }
   const viaProfile = await claudeFromPowerShellProfile(stat ?? isRegularFileAsync)
@@ -226,17 +224,26 @@ export async function findClaudeOnWindowsAsync(
   return (await findClaudeOnWindowsWithSource(env, stat, now)).found
 }
 
-/** Claude Code in the folders PATH names (`env`), by the walk a launch
- *  makes: in place (it reads the folders on the caller's turn), in
- *  CLAUDE_WINDOWS_NAMES order, a full path or null. For the start
- *  (claude-start-lookup.ts), which decides by it whether a launch has
- *  anything to wait for. The PowerShell profile is not read and not asked:
- *  at start that question waits for the PATH the refresh leaves. The answer
- *  is kept for recentClaudeOnWindows, so a launch soon after does not walk
- *  again. */
-export function claudeOnWindowsPathNow(env: NodeJS.ProcessEnv, stat?: (p: string) => boolean, now: () => number = Date.now): string | null {
-  const found = findOnWindowsPath(CLAUDE_WINDOWS_NAMES, env, stat, 'name')
-  recordClaudeOnWindows(windowsEnvValue(env, 'PATH') ?? '', found, now())
+/** Claude Code in the folders PATH names (`env`): the walk alone, in a
+ *  launch's order (CLAUDE_WINDOWS_NAMES, claude.exe in any folder before
+ *  claude.cmd in any), one stat at a time off the event loop
+ *  (windows-programs.ts findOnWindowsPathAsync), a full path or null. The
+ *  PowerShell profile is not read and not asked. The answer is kept for
+ *  recentClaudeOnWindows under the PATH value that was walked, so a launch
+ *  soon after on that PATH does not walk again, in place. The first step of
+ *  every lookup (findClaudeOnWindowsAsync), and by itself what the start
+ *  decides by (claude-start-lookup.ts): there the profile's question waits
+ *  for the PATH the refresh leaves, and the walk is never made in place,
+ *  because a PATH folder on a share that does not answer can hold one file
+ *  test for tens of seconds. */
+export async function claudeOnWindowsPathAsync(
+  env: NodeJS.ProcessEnv,
+  stat?: (p: string) => Promise<boolean>,
+  now: () => number = Date.now,
+): Promise<string | null> {
+  const pathValue = windowsEnvValue(env, 'PATH') ?? ''
+  const found = await findOnWindowsPathAsync(CLAUDE_WINDOWS_NAMES, env, stat, 'name')
+  recordClaudeOnWindows(pathValue, found, now())
   return found
 }
 

@@ -1,18 +1,20 @@
 /**
- * On Windows, while the start's PATH refresh, first Claude Code lookup and
- * version probe still run (claude-start-lookup.ts: only when the start found
- * Claude Code in no folder PATH names), pty:spawn holds a local Claude Code
- * launch as a prepared spawn and starts it only once they have answered (or
- * the wait's bound passed), so a tab restored at start finds the Claude Code
- * they find instead of saying "not found" until Check again (regression since
- * #638). A close of the tab while it waits starts nothing. A launch over SSH,
- * a terminal-only one and a Codex one are not held by this, and nothing is
- * held once the start has answered (off Windows, and when Claude Code was on
- * PATH at start, it is never pending).
+ * On Windows, while the start still looks for Claude Code
+ * (claude-start-lookup.ts: its walk of PATH and, when that finds none, the
+ * PATH refresh, the first Claude Code lookup and the version probe),
+ * pty:spawn holds a local Claude Code launch as a prepared spawn and starts
+ * it only once they have answered (or the wait's bound passed), so a tab
+ * restored at start finds the Claude Code they find instead of saying "not
+ * found" until Check again (regression since #638). A close of the tab while
+ * it waits starts nothing. A launch over SSH, a terminal-only one and a Codex
+ * one are not held by this, and nothing is held once the start has answered
+ * (off Windows, and while Claude Code is switched off, it is never pending).
  *
  * Driven through the REAL pty:spawn and pty:kill handlers on a fake ipcMain;
  * the start lookup's pending/wait pair is answered here (held on a gate the
- * test opens) and pty-manager is faked, so nothing spawns.
+ * test opens) and pty-manager is faked, so nothing spawns. The same handler
+ * with the real start module behind it, and its bound:
+ * pty-spawn-claude-start-lookup-bound.test.ts.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -44,7 +46,8 @@ vi.mock('../../../src/main/pty-manager', () => ({
   holdsCodexLaunchLease: () => false,
   codexLaunchLeaseTaken: () => false,
 }))
-// The start's PATH refresh and first lookup: pending until the test opens the gate.
+// The start's PATH refresh, first lookup and version probe: pending until the
+// test opens the gate.
 // Each wait is recorded with what the handler passed it: nothing, so the
 // bound is the module's own CLAUDE_START_LOOKUP_WAIT_MS.
 const lookup = vi.hoisted(() => ({ pending: false, settled: Promise.resolve() as Promise<void>, open: () => {}, waits: [] as unknown[][] }))
@@ -124,7 +127,7 @@ beforeEach(() => {
 // A case that failed while a launch was held leaves nothing waiting on the gate.
 afterEach(() => { lookup.open() })
 
-describe('a local Claude Code launch while the start\'s PATH refresh and first Claude Code lookup still run', () => {
+describe('a local Claude Code launch while the start\'s PATH refresh, first Claude Code lookup and version probe still run', () => {
   // Mutations to prove this can fail: decide the hold false (or drop the
   // wait); hold only a launch that names no account profile; pass the wait a
   // bound of the handler's own.

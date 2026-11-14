@@ -31,8 +31,8 @@ import { composeProviders, flushPendingProviderCliKills } from './providers/comp
 import { initAccountRegistry, reconcileLegacyAccountStores, getConsumerLeases } from './provider-account-registry'
 import { initProviderAccounts, getAccountsService, runStartupProviderMigrations, followResourcesDirectory, discoverProvidersAtStart, providerOnNow } from './provider-accounts'
 import { probeClaudeCliVersion, setClaudeCliProbeAllowed, claudeCliProbeAllowed } from './claude-cli-version'
-import { startClaudeLookup, claudeStartLookupSettled } from './claude-start-lookup'
-import { findClaudeOnWindowsAsync, claudeOnWindowsPathNow } from './claude-cli-probe'
+import { startClaudeAtBoot } from './claude-start-lookup'
+import { findClaudeOnWindowsAsync, claudeOnWindowsPathAsync } from './claude-cli-probe'
 import { refreshWindowsPath } from './windows-path-refresh'
 import { providerProbeRefusal } from './provider-launch-gate'
 import { providerUseWithoutLease } from './provider-in-use'
@@ -507,6 +507,9 @@ if (!gotTheLock) {
     // sign-in FIRST, and a clear that fails refuses the archive. Registered
     // before the service exists, so no archive can run without it.
     wireCodexWebArchive()
+    // The accounts start-up work, when the service started: what the look
+    // for each provider's CLI comes after (startClaudeAtBoot, below).
+    let accountsWork: Promise<unknown> | null = null
     try {
       // A switch-off is refused while any of the provider runs: its sessions,
       // and (WP2) for Claude Code its cloud agents, Insights runs, Sentinel
@@ -521,20 +524,9 @@ if (!gotTheLock) {
       // A resources directory chosen after start (first-run setup) moves the
       // registry with it before anything reads or reconciles it.
       onResourcesDirectoryChanged((dir) => { void followResourcesDirectory(dir) })
-      void reconcileLegacyAccountStores()
+      accountsWork = reconcileLegacyAccountStores()
         .then(() => runStartupProviderMigrations())
         .catch((err) => logError('[main] account start-up work failed:', err))
-        // Then, whatever that did, look for each switched-on provider's CLI
-        // once, in the background (WP2 6g: the retired Codex store's boot
-        // refresh kept Codex's status current; this does, for every provider).
-        // On Windows it reads PATH, so when the start brings PATH up to date
-        // and looks for Claude Code (claude-start-lookup.ts, started below,
-        // in this same turn) it comes after those two: a look on the PATH
-        // from before would say "missing" until Check again for a CLI the
-        // refresh adds. That wait is bounded (the module's own bound), so no
-        // provider's status waits on a slow start for longer.
-        .then(() => claudeStartLookupSettled())
-        .then(() => discoverProvidersAtStart())
     } catch (err) {
       logError('[main] accounts service start failed:', err)
     }
@@ -548,19 +540,28 @@ if (!gotTheLock) {
     // rule, wired in here because that rule's graph imports the probe's
     // importers (claude-cli-version.ts, setClaudeCliProbeAllowed).
     setClaudeCliProbeAllowed(() => providerProbeRefusal('claude') === null)
-    // On Windows, PATH is first walked for Claude Code as a launch walks it.
-    // Found: the probe runs at once and nothing waits, as elsewhere. Not
-    // found: this process's PATH is brought up to date from the registry,
-    // Claude Code is looked for once, then the probe runs; a launch asked
-    // for meanwhile (a tab restored at start) waits for all three, bounded
-    // (claude-start-lookup.ts). The refresh is for every provider; Claude
-    // Code itself is not looked for, by the walk or the lookup, while it is
-    // switched off (the same rule as the probe).
-    startClaudeLookup({
-      onPathNow: () => claudeCliProbeAllowed() && claudeOnWindowsPathNow(process.env) !== null,
+    // The start (claude-start-lookup.ts startClaudeAtBoot, which says what is
+    // done with what it is handed here). On Windows, with Claude Code
+    // switched on, the start is pending from this call on and PATH is walked
+    // for Claude Code off this turn. Found: the probe runs at once and
+    // nothing more waits. Not found: this process's PATH is brought up to
+    // date from the registry, Claude Code is looked for once, then the probe
+    // runs; a launch asked for meanwhile (a tab restored at start) waits,
+    // bounded. While Claude Code is switched off, and off Windows, the probe
+    // is handed over at once and nothing is walked, refreshed or held.
+    // Then, whatever the accounts work did, it looks for each switched-on
+    // provider's CLI once, in the background (WP2 6g: the retired Codex
+    // store's boot refresh kept Codex's status current; this does, for every
+    // provider), after the walk, the refresh and the first lookup, bounded.
+    startClaudeAtBoot({
+      claudeOn: claudeCliProbeAllowed,
+      env: process.env,
+      walkPath: claudeOnWindowsPathAsync,
       refreshPath: refreshWindowsPath,
-      lookup: () => (claudeCliProbeAllowed() ? findClaudeOnWindowsAsync(process.env) : Promise.resolve(null)),
+      findClaude: findClaudeOnWindowsAsync,
       versionProbe: () => probeClaudeCliVersion(),
+      accountsWork,
+      discover: discoverProvidersAtStart,
     })
     // Usage track MP3, D5: the Account usage page reads nothing of Claude Code
     // (no credential, refresh or request) while it is switched off, by the

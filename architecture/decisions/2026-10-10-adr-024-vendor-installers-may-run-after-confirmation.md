@@ -96,8 +96,11 @@ Three mechanisms come with it:
   UTF-16 text in base64), expands them against its own environment, and
   appends to its own PATH each fully qualified folder it does not have. It
   never drops, reorders or rewrites an entry already there. A failed read
-  adds nothing and is logged. Sessions started afterwards inherit it. On
-  macOS and Linux the checks already read the login shell's PATH each time.
+  adds nothing and is logged. The same read also runs once at start, when
+  Claude Code is switched on and is in no folder PATH names; the append-only
+  and fully qualified rules are unchanged. Sessions started afterwards
+  inherit it. On macOS and Linux the checks already read the login shell's
+  PATH each time.
 - **A tool its publisher's installer left off PATH is said as such, and on
   Windows the app may add that one folder** (the PATH finding of the
   first-run test, 2026-10-10). Anthropic's native installer puts claude.exe
