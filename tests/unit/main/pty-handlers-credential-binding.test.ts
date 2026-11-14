@@ -35,6 +35,9 @@ vi.mock('../../../src/main/credential-store', () => ({ loadCredential: (k: strin
 // Every provider is on here: main's launch rule has its own suite
 // (pty-spawn-provider-off.test.ts); these tests are about the credentials.
 vi.mock('../../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal: () => null, providerProbeRefusal: () => null }))
+// And its sessions run on another machine: pty:spawn asks that of every
+// provider an SSH spawn names (its own suite: pty-spawn-remote-capability.test.ts).
+vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => ({ remoteLaunchRefusal: () => null }) }))
 
 const { registerPtyHandlers } = await import('../../../src/main/ipc/pty-handlers')
 registerPtyHandlers(() => ({} as never))
