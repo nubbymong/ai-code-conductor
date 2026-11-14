@@ -37,6 +37,8 @@ vi.mock('../../../src/main/github/github-config-store', () => ({
   GitHubConfigStore: class {
     async read() { return null }
     async readState() { return { config: null, readFailed: false } }
+    async lookupState() { return { config: null, readFailed: false } }
+    endFailedReadHold() {}
     async readForWrite() { return null }
     async write() {}
   },

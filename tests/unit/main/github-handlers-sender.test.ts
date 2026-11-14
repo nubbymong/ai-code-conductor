@@ -58,6 +58,8 @@ vi.mock('../../../src/main/github/github-config-store', () => ({
   GitHubConfigStore: class {
     read = h.rec('config.read', async () => h.config)
     readState = h.rec('config.readState', async () => ({ config: h.config, readFailed: false }))
+    lookupState = h.rec('config.lookupState', async () => ({ config: h.config, readFailed: false }))
+    endFailedReadHold = h.rec('config.endFailedReadHold')
     readForWrite = h.rec('config.readForWrite', async () => h.config)
     write = h.rec('config.write', async () => {})
   },

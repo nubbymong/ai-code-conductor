@@ -34,6 +34,14 @@ const OWNER_ONLY_MODE = 0o600
 const NOTHING_IN_IT = /^[\s\0]*$/
 
 /**
+ * How long a read that failed stands in for the lookups that follow it
+ * (`lookupState`). Long enough that a file which stays unreadable is not read
+ * on every tick of every timer, short enough that the saved accounts are back
+ * within half a minute of the file reading again without anyone asking.
+ */
+export const FAILED_READ_HOLD_MS = 30_000
+
+/**
  * github-config.json is there but did not read (it could not be opened, is
  * not JSON, or is from a version this build does not know), so nothing was
  * written.
@@ -65,9 +73,10 @@ export class GitHubConfigWriteError extends Error {
  * What the log says about a read that failed: the kind of failure, never the
  * error's own text. A JSON error's text quotes the characters around the place
  * the parse stopped, which in this file can be a token's ciphertext, and a
- * file error's text carries the full path.
+ * file error's text carries the full path. The kind is also what tells one
+ * failure from the next for the once-per-kind log (warnOnce).
  */
-function readFailure(err: unknown): string {
+function failureKind(err: unknown): string {
   if (err instanceof SyntaxError) return 'not valid JSON'
   const e = err as { name?: unknown; code?: unknown } | null
   // An error's name and errno code are short words (Error, EBUSY); anything
@@ -96,6 +105,11 @@ export class GitHubConfigStore {
   /** The unknown-schema file text this store last backed up (see
    *  backupUnknownSchemaFile). */
   private backedUp: string | null = null
+  /** When the last read failed, or null once a read has succeeded since (see
+   *  lookupState). */
+  private failedAt: number | null = null
+  /** The kinds of failure logged since the file last read (see warnOnce). */
+  private warned = new Set<string>()
 
   constructor(private dir: string) {}
   private get filePath() {
@@ -113,6 +127,10 @@ export class GitHubConfigStore {
    * is nothing a refusal would protect, and a write cut off by a power loss
    * can leave one: the first write replaces it. A file with text in it that is
    * cut short stays 'unreadable'.
+   *
+   * Neither "no file" nor "nothing in it" is taken from one look: each is
+   * asked once more (reallyMissing, reallyEmpty), and an answer the second
+   * look does not confirm is a read that failed.
    */
   private async load(): Promise<GitHubConfig | 'missing' | 'unreadable'> {
     let raw: string
@@ -120,25 +138,54 @@ export class GitHubConfigStore {
       raw = await fs.readFile(this.filePath, 'utf8')
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        if (await this.reallyMissing()) return 'missing'
-        console.warn('[github-config] read failed: the file was reported missing, and a second look did not confirm it')
-        return 'unreadable'
+        if (await this.reallyMissing()) return this.didRead('missing')
+        return this.didNotRead('the file was reported missing, and a second look did not confirm it')
       }
-      console.warn('[github-config] read failed:', readFailure(err))
-      return 'unreadable'
+      return this.didNotRead(failureKind(err))
     }
-    if (NOTHING_IN_IT.test(raw)) return 'missing'
+    if (NOTHING_IN_IT.test(raw)) {
+      if (await this.reallyEmpty(raw)) return this.didRead('missing')
+      return this.didNotRead('the file read as empty, and a second look did not confirm it')
+    }
     try {
       const parsed = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw)
       if (parsed.schemaVersion !== GITHUB_CONFIG_SCHEMA_VERSION) {
+        // What the log says about this one is the backup's line.
         await this.backupUnknownSchemaFile(raw, parsed.schemaVersion)
-        return 'unreadable'
+        return this.didNotRead(null)
       }
-      return parsed as GitHubConfig
+      return this.didRead(parsed as GitHubConfig)
     } catch (err) {
-      console.warn('[github-config] read failed:', readFailure(err))
-      return 'unreadable'
+      return this.didNotRead(failureKind(err))
     }
+  }
+
+  /** A read gave an answer (the config, or "no file"): no failed read is held
+   *  any longer, and the next failure of any kind is logged again. */
+  private didRead<T>(answer: T): T {
+    this.failedAt = null
+    this.warned.clear()
+    return answer
+  }
+
+  /** A read failed. `kind` is what the log says about it (null: the caller
+   *  logged it), once per kind until a read succeeds. */
+  private didNotRead(kind: string | null): 'unreadable' {
+    this.failedAt = Date.now()
+    if (kind) this.warnOnce(`read failed: ${kind}`, '[github-config] read failed:', kind)
+    return 'unreadable'
+  }
+
+  /**
+   * One log line per kind of failure until a read succeeds. A file that stays
+   * unreadable is read again and again (after each hold, at each save the
+   * user tries, at each token lookup), and the first line of a kind says all
+   * the later ones would.
+   */
+  private warnOnce(kind: string, ...line: unknown[]): void {
+    if (this.warned.has(kind)) return
+    this.warned.add(kind)
+    console.warn(...line)
   }
 
   /**
@@ -158,6 +205,23 @@ export class GitHubConfigStore {
   }
 
   /**
+   * Whether the file has nothing in it, asked once more after a read gave
+   * `first`, as reallyMissing asks again about "no such file". One empty read
+   * is not taken as proof (a file another program is part way through writing
+   * can read as nothing for a moment): the file is read again, and only the
+   * same nothing a second time is "nothing in it". Text that is there after
+   * all, a different length, or a second read that fails, is a read that
+   * failed.
+   */
+  private async reallyEmpty(first: string): Promise<boolean> {
+    try {
+      return (await fs.readFile(this.filePath, 'utf8')) === first
+    } catch {
+      return false
+    }
+  }
+
+  /**
    * The config for a caller that only READS it: null when there is no file,
    * and null when the file did not read, so the panel still renders. Never
    * save a config built from this null: a writer reads with `readForWrite()`.
@@ -171,7 +235,8 @@ export class GitHubConfigStore {
    * that has to tell "no file yet" from "could not read it": the settings
    * pages (which must not offer defaults as if they were the saved settings)
    * and the sync's cache (which must not remember a failed read as "no
-   * accounts").
+   * accounts"; its timers ask with `lookupState()`). This one always reads
+   * the file.
    */
   async readState(): Promise<GitHubConfigReadState> {
     // On the same mutex as write(), so reads and writes take turns.
@@ -179,12 +244,51 @@ export class GitHubConfigStore {
     // serialize against other reads. That's acceptable here: a read is
     // made O(1)-ish per feature event (app start, profile list, after a
     // push), not on a hot path.
+    return this.mutex.run(() => this.loadState())
+  }
+
+  /**
+   * readState for a caller that asks often and can wait: the timers of the
+   * sync, the notifications and the AI-usage meter. After a read that failed
+   * (this one's or any other caller's), the file is not read again for
+   * FAILED_READ_HOLD_MS: the failed answer stands in until then, so a file
+   * that stays unreadable costs one read per hold and not one per lookup.
+   *
+   * The failed answer is never kept past the hold, and never as "no file".
+   * Any read that succeeds in the meantime (a settings page, a writer, the
+   * next lookup after the hold) ends the hold at once, and so does
+   * endFailedReadHold().
+   */
+  async lookupState(): Promise<GitHubConfigReadState> {
+    // Asked under the lock, so lookups that arrive together wait for the one
+    // read and then see what it found.
     return this.mutex.run(async () => {
-      const got = await this.load()
-      return typeof got === 'string'
-        ? { config: null, readFailed: got === 'unreadable' }
-        : { config: got, readFailed: false }
+      if (this.holdingFailedRead()) return { config: null, readFailed: true }
+      return this.loadState()
     })
+  }
+
+  /**
+   * Ends the hold a failed read left, so the next lookup reads the file now.
+   * For something the user asked for by pressing a button, which does not
+   * wait out a hold that is there for the timers.
+   */
+  endFailedReadHold(): void {
+    this.failedAt = null
+  }
+
+  private holdingFailedRead(): boolean {
+    if (this.failedAt === null) return false
+    // A clock that was set back gives a negative age: read, do not wait.
+    const age = Date.now() - this.failedAt
+    return age >= 0 && age < FAILED_READ_HOLD_MS
+  }
+
+  private async loadState(): Promise<GitHubConfigReadState> {
+    const got = await this.load()
+    return typeof got === 'string'
+      ? { config: null, readFailed: got === 'unreadable' }
+      : { config: got, readFailed: false }
   }
 
   /**
@@ -259,7 +363,13 @@ export class GitHubConfigStore {
       )
       await this.pruneBackups()
     } catch (err) {
-      console.warn('[github-config] backup failed:', redactTokens(String(err)))
+      // Tried again at every read while the file stays, so one line per kind
+      // of failure (the text itself names a new backup file each time).
+      this.warnOnce(
+        `backup failed: ${failureKind(err)}`,
+        '[github-config] backup failed:',
+        redactTokens(String(err)),
+      )
     }
   }
 

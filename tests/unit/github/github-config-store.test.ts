@@ -4,8 +4,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 // Off, every call is the real one.
 //   - replaceFault / stageFault: the step that puts new bytes in place of the
 //     file fails, or the staged copy beside it cannot be written;
-//   - readCodes: the next reads of the file fail with these errno codes, in order;
+//   - readTexts: the next reads of the file answer these texts, in order,
+//     whatever is on disk;
+//   - readCodes: the reads after those fail with these errno codes, in order;
+//   - reads: every read of the file that was tried;
 //   - lstat: looking at the file (not reading it) fails with this errno code;
+//   - backupFault: the copy kept of an unknown-schema file cannot be written;
 //   - renameCodes: the next renames onto the file fail with these codes, in
 //     order, and `renames` counts every rename that was tried;
 //   - staged / backups: the options each staged copy and each backup copy was
@@ -14,8 +18,11 @@ const h = vi.hoisted(() => {
   const state = {
     replaceFault: false,
     stageFault: false,
+    readTexts: [] as string[],
     readCodes: [] as string[],
+    reads: 0,
     lstat: null as string | null,
+    backupFault: false,
     renameCodes: [] as string[],
     renames: 0,
     staged: [] as Array<{ mode?: number; flag?: string } | undefined>,
@@ -32,7 +39,11 @@ const h = vi.hoisted(() => {
     const promises = {
       ...real.promises,
       readFile: async (p: unknown, o: unknown) => {
-        if (isConfig(p) && state.readCodes.length > 0) throw errno(state.readCodes.shift()!, p)
+        if (isConfig(p)) {
+          state.reads++
+          if (state.readTexts.length > 0) return state.readTexts.shift()!
+          if (state.readCodes.length > 0) throw errno(state.readCodes.shift()!, p)
+        }
         return real.promises.readFile(p as string, o as BufferEncoding)
       },
       lstat: async (p: unknown) => {
@@ -54,6 +65,7 @@ const h = vi.hoisted(() => {
       },
       writeFile: async (p: unknown, d: unknown, o: unknown) => {
         if (isBackup(p)) state.backups.push(o as { mode?: number; flag?: string } | string | undefined)
+        if (state.backupFault && isBackup(p)) throw errno('EACCES', p)
         if (state.stageFault && isStaged(p)) throw errno('ENOSPC', p)
         return real.promises.writeFile(p as string, d as string, o as BufferEncoding)
       },
@@ -91,6 +103,7 @@ import {
   GitHubConfigWriteError,
   GITHUB_CONFIG_UNREADABLE,
   GITHUB_CONFIG_NOT_SAVED,
+  FAILED_READ_HOLD_MS,
 } from '../../../src/main/github/github-config-store'
 import {
   GITHUB_CONFIG_SCHEMA_VERSION,
@@ -113,19 +126,23 @@ function sample() {
 function resetFaults(): void {
   h.state.replaceFault = false
   h.state.stageFault = false
+  h.state.readTexts = []
   h.state.readCodes = []
+  h.state.reads = 0
   h.state.lstat = null
+  h.state.backupFault = false
   h.state.renameCodes = []
   h.state.renames = 0
   h.state.staged = []
   h.state.backups = []
 }
 
-/** Everything console.warn was given, as one text. */
-const warned = (): string =>
+/** Each thing console.warn was given, as one line. */
+const warnLines = (): string[] =>
   (console.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls
     .map((args) => args.map(String).join(' '))
-    .join(' | ')
+/** Everything console.warn was given, as one text. */
+const warned = (): string => warnLines().join(' | ')
 
 describe('GitHubConfigStore', () => {
   let tmp: string
@@ -393,6 +410,293 @@ describe('GitHubConfigStore', () => {
       await expect(store.readForWrite()).rejects.toBeInstanceOf(GitHubConfigUnreadableError)
       expect(await store.readState()).toEqual({ config: null, readFailed: true })
       expect(await fs.readdir(tmp)).toEqual([])
+    })
+  })
+
+  // One read that gives nothing is not taken as proof that the file has
+  // nothing in it either (another program can be part way through writing
+  // it): the file is read once more, and only the same nothing a second time
+  // is "no file".
+  describe('a read that says the file has nothing in it', () => {
+    const configPath = () => path.join(tmp, 'github-config.json')
+    const UNCONFIRMED = '[github-config] read failed: the file read as empty, and a second look did not confirm it'
+
+    it.each([
+      ['no bytes', ''],
+      ['NUL characters', '\0\0\0\0'],
+    ])('and says the same again (%s): it is "no file", from two reads', async (_what, nothing) => {
+      await store.write(sample())
+      h.state.reads = 0
+      h.state.readTexts = [nothing, nothing]
+      expect(await store.readState()).toEqual({ config: null, readFailed: false })
+      expect(h.state.reads).toBe(2)
+      h.state.readTexts = [nothing, nothing]
+      expect(await store.readForWrite()).toBeNull()
+      expect(warned()).toBe('')
+    })
+
+    it.each([
+      ['the text is there after all', '', () => JSON.stringify(sample(), null, 2)],
+      ['there is text that is not JSON', '', () => 'not json'],
+      ['the nothing has grown', '', () => ' '],
+      ['the nothing has shrunk', '\0\0\0\0', () => '\0\0'],
+    ] as Array<[string, string, () => string]>)(
+      'and on the second look %s: the read failed, it is not "no file"',
+      async (_what, first, second) => {
+        await store.write(sample())
+        h.state.readTexts = [first, second()]
+        await expect(store.readForWrite()).rejects.toBeInstanceOf(GitHubConfigUnreadableError)
+        h.state.readTexts = [first, second()]
+        expect(await store.readState()).toEqual({ config: null, readFailed: true })
+        h.state.readTexts = [first, second()]
+        expect(await store.read()).toBeNull()
+        expect(h.state.readTexts).toEqual([])
+        expect(warned()).toBe(UNCONFIRMED)
+        // The file was not touched, and reads again once the fault is gone.
+        expect(await store.readForWrite()).toEqual(sample())
+      },
+    )
+
+    it.each(['EBUSY', 'ENOENT'])('and the second read fails (%s): the read failed', async (code) => {
+      await store.write(sample())
+      h.state.readTexts = ['']
+      h.state.readCodes = [code]
+      await expect(store.readForWrite()).rejects.toBeInstanceOf(GitHubConfigUnreadableError)
+      h.state.readTexts = ['']
+      h.state.readCodes = [code]
+      expect(await store.readState()).toEqual({ config: null, readFailed: true })
+      expect(h.state.readCodes).toEqual([])
+      expect(warned()).toBe(UNCONFIRMED)
+      expect(await fs.readdir(tmp)).toEqual(['github-config.json'])
+      expect(await store.readForWrite()).toEqual(sample())
+    })
+  })
+
+  // The timers of the sync, the notifications and the AI-usage meter ask with
+  // lookupState. After a read that failed, the failed answer stands in for
+  // FAILED_READ_HOLD_MS, so a file that stays unreadable is read once per
+  // hold for all of them and not once per lookup. It is never kept longer,
+  // and any read that succeeds ends the hold at once.
+  describe('lookupState: a read that failed is held for a short while', () => {
+    const configPath = () => path.join(tmp, 'github-config.json')
+    const FAILED = { config: null, readFailed: true }
+    const READ = { config: sample(), readFailed: false }
+    let now: number
+
+    beforeEach(async () => {
+      now = 1_700_000_000_000
+      vi.spyOn(Date, 'now').mockImplementation(() => now)
+      await store.write(sample())
+      h.state.reads = 0
+    })
+
+    /** From here on the file does not read. */
+    const unreadable = (code = 'EBUSY'): void => {
+      h.state.readCodes = Array.from({ length: 200 }, () => code)
+    }
+    /** From here on it reads again. */
+    const readable = (): void => {
+      h.state.readCodes = []
+    }
+    const many = (n: number) => Promise.all(Array.from({ length: n }, () => store.lookupState()))
+
+    it('the hold is half a minute', () => {
+      expect(FAILED_READ_HOLD_MS).toBe(30_000)
+    })
+
+    it('a file that reads is read at every lookup: nothing is held', async () => {
+      for (let i = 0; i < 3; i++) expect(await store.lookupState()).toEqual(READ)
+      expect(h.state.reads).toBe(3)
+    })
+
+    it('many lookups inside the hold, one after another and at once, read the file once', async () => {
+      unreadable()
+      for (let i = 0; i < 10; i++) expect(await store.lookupState()).toEqual(FAILED)
+      expect(await many(10)).toEqual(Array.from({ length: 10 }, () => FAILED))
+      now += FAILED_READ_HOLD_MS - 1
+      expect(await store.lookupState()).toEqual(FAILED)
+      expect(h.state.reads).toBe(1)
+    })
+
+    it('lookups that arrive together, before anything was read, wait for the one read', async () => {
+      unreadable()
+      expect(await many(10)).toEqual(Array.from({ length: 10 }, () => FAILED))
+      expect(h.state.reads).toBe(1)
+    })
+
+    it('after the hold the file is read again, once per hold', async () => {
+      unreadable()
+      await store.lookupState()
+      now += FAILED_READ_HOLD_MS
+      for (let i = 0; i < 5; i++) expect(await store.lookupState()).toEqual(FAILED)
+      expect(await many(5)).toEqual(Array.from({ length: 5 }, () => FAILED))
+      expect(h.state.reads).toBe(2)
+      now += FAILED_READ_HOLD_MS
+      expect(await store.lookupState()).toEqual(FAILED)
+      expect(h.state.reads).toBe(3)
+    })
+
+    it('a file that reads again is answered at the first lookup after the hold, and nothing is held', async () => {
+      unreadable()
+      await store.lookupState()
+      readable()
+      // Inside the hold the failed answer still stands in: the file is not read.
+      expect(await store.lookupState()).toEqual(FAILED)
+      expect(h.state.reads).toBe(1)
+      now += FAILED_READ_HOLD_MS
+      expect(await store.lookupState()).toEqual(READ)
+      expect(await store.lookupState()).toEqual(READ)
+      expect(h.state.reads).toBe(3)
+    })
+
+    it.each([
+      ['a settings page reads it (readState)', () => store.readState()],
+      ['a writer reads it (readForWrite)', () => store.readForWrite()],
+      ['a reader reads it (read)', () => store.read()],
+    ] as Array<[string, () => Promise<unknown>]>)(
+      'a read that succeeds inside the hold ends it at once: %s',
+      async (_what, readIt) => {
+        unreadable()
+        expect(await store.lookupState()).toEqual(FAILED)
+        readable()
+        expect(await store.lookupState()).toEqual(FAILED)
+        await readIt()
+        expect(await store.lookupState()).toEqual(READ)
+      },
+    )
+
+    it('a read that failed for any caller starts the hold', async () => {
+      unreadable()
+      await expect(store.readForWrite()).rejects.toBeInstanceOf(GitHubConfigUnreadableError)
+      expect(await store.lookupState()).toEqual(FAILED)
+      expect(h.state.reads).toBe(1)
+    })
+
+    it('readState, read and readForWrite are never held: each one reads the file', async () => {
+      unreadable()
+      await store.lookupState()
+      expect(await store.readState()).toEqual(FAILED)
+      expect(await store.read()).toBeNull()
+      await expect(store.readForWrite()).rejects.toBeInstanceOf(GitHubConfigUnreadableError)
+      expect(h.state.reads).toBe(4)
+      readable()
+      expect(await store.readState()).toEqual(READ)
+    })
+
+    it('"no file" is an answer that was read, never one that is held', async () => {
+      await fs.rm(configPath())
+      h.state.reads = 0
+      for (let i = 0; i < 3; i++) expect(await store.lookupState()).toEqual({ config: null, readFailed: false })
+      expect(h.state.reads).toBe(3)
+      await store.write(sample())
+      expect(await store.lookupState()).toEqual(READ)
+    })
+
+    it('endFailedReadHold: the next lookup reads the file now', async () => {
+      unreadable()
+      await store.lookupState()
+      readable()
+      expect(await store.lookupState()).toEqual(FAILED)
+      store.endFailedReadHold()
+      expect(await store.lookupState()).toEqual(READ)
+      expect(h.state.reads).toBe(2)
+    })
+
+    it('endFailedReadHold on a file that still does not read: one more read, and the hold starts again', async () => {
+      unreadable()
+      await store.lookupState()
+      store.endFailedReadHold()
+      for (let i = 0; i < 5; i++) expect(await store.lookupState()).toEqual(FAILED)
+      expect(h.state.reads).toBe(2)
+    })
+
+    it('a clock that was set back does not lengthen the hold: the file is read', async () => {
+      unreadable()
+      await store.lookupState()
+      now -= 60 * 60 * 1000
+      expect(await store.lookupState()).toEqual(FAILED)
+      expect(h.state.reads).toBe(2)
+    })
+  })
+
+  // A file that stays unreadable is read again and again: after each hold,
+  // at each save the user tries, at each token lookup. The log says so once
+  // per kind of failure, and starts over when a read succeeds.
+  describe('a read that keeps failing is logged once per kind of failure, until a read succeeds', () => {
+    const configPath = () => path.join(tmp, 'github-config.json')
+    const readFailedLines = (): string[] => warnLines().filter((l) => l.includes('read failed'))
+    /** One read of each sort, each of which fails. */
+    async function readEachWay(): Promise<void> {
+      expect(await store.read()).toBeNull()
+      expect(await store.readState()).toEqual({ config: null, readFailed: true })
+      await expect(store.readForWrite()).rejects.toBeInstanceOf(GitHubConfigUnreadableError)
+    }
+
+    it('the same failure, however often and by whichever read: one line', async () => {
+      await store.write(sample())
+      h.state.readCodes = Array.from({ length: 6 }, () => 'EBUSY')
+      await readEachWay()
+      await readEachWay()
+      expect(h.state.readCodes).toEqual([])
+      expect(readFailedLines()).toEqual(['[github-config] read failed: Error EBUSY'])
+    })
+
+    it('each kind of failure has its own line, once', async () => {
+      await store.write(sample())
+      h.state.readCodes = ['EBUSY', 'EPERM', 'EBUSY', 'EPERM', 'ENOENT', 'ENOENT', 'EBUSY']
+      for (let i = 0; i < 7; i++) expect(await store.read()).toBeNull()
+      await fs.writeFile(configPath(), 'not json', 'utf8')
+      for (let i = 0; i < 3; i++) expect(await store.read()).toBeNull()
+      expect(readFailedLines()).toEqual([
+        '[github-config] read failed: Error EBUSY',
+        '[github-config] read failed: Error EPERM',
+        '[github-config] read failed: the file was reported missing, and a second look did not confirm it',
+        '[github-config] read failed: not valid JSON',
+      ])
+    })
+
+    it.each([
+      ['the config', async () => {}],
+      ['"no file"', async () => { await fs.rm(configPath()) }],
+    ] as Array<[string, () => Promise<void>]>)(
+      'a read that succeeds (%s) starts over: the same failure after it is logged again',
+      async (_what, arrange) => {
+        await store.write(sample())
+        h.state.readCodes = ['EBUSY', 'EBUSY']
+        for (let i = 0; i < 2; i++) expect(await store.read()).toBeNull()
+        await arrange()
+        await store.readState()
+        await store.write(sample())
+        h.state.readCodes = ['EBUSY', 'EBUSY']
+        for (let i = 0; i < 2; i++) expect(await store.read()).toBeNull()
+        expect(readFailedLines()).toEqual([
+          '[github-config] read failed: Error EBUSY',
+          '[github-config] read failed: Error EBUSY',
+        ])
+      },
+    )
+
+    it('lookups inside the hold add no line', async () => {
+      await store.write(sample())
+      h.state.readCodes = Array.from({ length: 50 }, () => 'EBUSY')
+      for (let i = 0; i < 20; i++) await store.lookupState()
+      expect(readFailedLines()).toEqual(['[github-config] read failed: Error EBUSY'])
+    })
+
+    it('a copy of an unknown-schema file that cannot be made is logged once, and made once it can be', async () => {
+      await fs.writeFile(configPath(), JSON.stringify({ schemaVersion: 9999, mine: 'data' }), 'utf8')
+      h.state.backupFault = true
+      for (let i = 0; i < 4; i++) expect(await store.read()).toBeNull()
+      // Tried at every read, said once.
+      expect(h.state.backups).toHaveLength(4)
+      const lines = warnLines().filter((l) => l.includes('backup failed'))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('[github-config] backup failed: Error: EACCES')
+      expect((await fs.readdir(tmp)).filter((e) => e.endsWith('.bak'))).toEqual([])
+
+      h.state.backupFault = false
+      for (let i = 0; i < 2; i++) expect(await store.read()).toBeNull()
+      expect((await fs.readdir(tmp)).filter((e) => e.endsWith('.bak'))).toHaveLength(1)
     })
   })
 

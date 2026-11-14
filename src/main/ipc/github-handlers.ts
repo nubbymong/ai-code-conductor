@@ -238,16 +238,27 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
   // from the CONFIG_UPDATE handler below on every write.
   //
   // Only an answer that was READ is kept: the config, or "no file yet". A
-  // file that is there but did not read is answered null for this one call
-  // and read again at the next, so the sync, the notifications and a
-  // re-authorization see the saved accounts as soon as the file reads.
+  // file that is there but did not read is answered null and never kept as
+  // "no accounts". The store holds that failed answer for a short while
+  // (lookupState, FAILED_READ_HOLD_MS), so the timers that ask here (every
+  // sync tick of every session, the notifications, the AI-usage meter, the
+  // session-context panel's poll) do not read a file that stays unreadable
+  // each time they ask; then it is read again. Any read that succeeds in
+  // between, by a settings page or a save, ends the hold at once, so the
+  // saved accounts are back as soon as something has read the file.
   let cachedConfig: GitHubConfig | null | undefined
   async function getCachedConfig(): Promise<GitHubConfig | null> {
     if (cachedConfig !== undefined) return cachedConfig
-    const { config, readFailed } = await configStore.readState()
+    const { config, readFailed } = await configStore.lookupState()
     if (!readFailed) cachedConfig = config
     return config
   }
+
+  // A button the user pressed (re-authorize, merge, re-run, mark ready, reply,
+  // sync now, refresh the meter, GitHub turned on for a session) does not
+  // wait out that hold, which is there for the timers: what it looks up next
+  // is read from the file now.
+  const pressed = (): void => configStore.endFailedReadHold()
 
   // Profile-scoped notifications poller. Registered lazily as profiles with
   // the 'notifications' capability appear; unregistered on profile removal.
@@ -392,6 +403,7 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     // alongside the report so the renderer can render accurate empty/action
     // states (scope-missing / no-auth) rather than a generic "no data".
     if (force || !aiUsageScheduler.getLatest()) {
+      if (force) pressed()
       aiUsageScheduler.start()
       await aiUsageScheduler.refresh()
     }
@@ -725,6 +737,7 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
 
   ipcMain.handle(IPC.GITHUB_REAUTH_PROFILE, async (e, profileId: string): Promise<ReauthResult> => {
     if (!trusted(e)) return refused('reauth', NOT_APP_WINDOW)
+    pressed()
     const cfg = await getCachedConfig()
     const profile = cfg?.authProfiles?.[profileId]
     if (!profile) return { ok: false, error: 'not-found' }
@@ -793,6 +806,9 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
         if (sessions[idx].workingDirectory) {
           cwdBySession.set(sessionId, sessions[idx].workingDirectory)
         }
+        // Registering starts the session's first sync at once, and that sync
+        // is what the user just asked for.
+        pressed()
         orchestrator.registerSession({
           sessionId,
           slug: merged.repoSlug,
@@ -853,6 +869,7 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
         orchestrator.setFocus(sessionId, true)
       }
     }
+    pressed()
     await orchestrator.syncNow(sessionId)
     return { ok: true }
   })
@@ -881,6 +898,7 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     })
     bindGitHubMeta(id, integration.repoSlug, branch)
     orchestrator.setFocus(id, true)
+    pressed()
     await orchestrator.syncNow(id)
     return { ok: true }
   })
@@ -990,12 +1008,14 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
   // Helper: resolve a token for an action IPC. Every action needs a token
   // scoped to SOMETHING — the focused session for merge / rerun / reply, or
   // a specific profile id for notification mark-read. Missing token falls
-  // back to error:'no-token' so the renderer surfaces the auth gap.
+  // back to error:'no-token' so the renderer surfaces the auth gap. Each of
+  // these is a button the user pressed, so the session's token is looked up
+  // from the file now (pressed), not from a failed read that is being held.
   function tokenFnForSession(sessionId: string) {
+    const tokenFn = makeTokenFn(sessionId)
     return async () => {
-      const t = await getTokenForSession(sessionId)
-      if (!t) throw new Error('no-token')
-      return t
+      pressed()
+      return tokenFn()
     }
   }
 

@@ -18,11 +18,15 @@
  *     changes that key only;
  *   - a device sign-in for a saved account is one write;
  *   - the settings pages, through the renderer's own store, never save
- *     defaults that stood in for settings that were not read.
+ *     defaults that stood in for settings that were not read;
+ *   - the timers (the sync, the notifications, the AI-usage meter) read a
+ *     file that stays unreadable once per hold and not once per lookup, and a
+ *     button the user pressed does not wait for that hold.
  *
  * Only the file calls on github-config.json are intercepted, to fail a read or
  * a replace on demand. Everything that would reach the network or start a
- * program is an inert fake.
+ * program is an inert fake: a request to GitHub asks for its token, as a real
+ * one does, and is answered an empty success.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import os from 'node:os'
@@ -41,6 +45,18 @@ const h = vi.hoisted(() => {
     replaceFault: false,
     /** true: the copy staged beside github-config.json cannot be written. */
     stageFault: false,
+    /** What main gave the sync, the notifications and the AI-usage meter to ask
+     *  with: the lookups their timers make. */
+    sync: null as null | {
+      getConfig: () => Promise<{ authProfiles: Record<string, unknown> } | null>
+      fetchers: { pr: (ctx: { sessionId: string; slug: string; branch: string }) => Promise<unknown> }
+    },
+    poller: null as null | { getConfig: () => Promise<{ authProfiles: Record<string, unknown> } | null> },
+    usage: null as null | { resolve: () => Promise<{ login: string } | null> },
+    /** The token each faked request to GitHub was made with. */
+    tokens: [] as string[],
+    /** The account each refresh of the AI-usage meter found (null: none). */
+    usageTargets: [] as Array<string | null>,
   }
   const isConfig = (p: unknown): boolean => typeof p === 'string' && p.endsWith('github-config.json')
   const isStaged = (p: unknown): boolean => typeof p === 'string' && /github-config\.json\..*\.tmp$/.test(p)
@@ -131,14 +147,49 @@ vi.mock('../../../src/main/github/auth/pat-verifier', () => ({
 vi.mock('../../../src/main/github/cache/cache-store', () => ({
   CacheStore: class { async load() { return { repos: {} } } async save() {} },
 }))
+// A request to GitHub: asks for its token, as a real one does, and is answered
+// an empty success. Nothing leaves the process.
+vi.mock('../../../src/main/github/client/github-fetch', () => ({
+  githubFetch: async (_path: string, opts: { tokenFn: () => Promise<string> }) => {
+    h.state.tokens.push(await opts.tokenFn())
+    return { ok: true, status: 200, json: async () => ({ node_id: 'node-1' }) }
+  },
+}))
+vi.mock('../../../src/main/github/client/rest-fallback', () => ({
+  fetchPRByBranch: async (_slug: string, _branch: string, opts: { tokenFn: () => Promise<string> }) => {
+    h.state.tokens.push(await opts.tokenFn())
+    return null
+  },
+  fetchPRReviews: async () => [],
+  fetchWorkflowRuns: async () => [],
+}))
+// The sync, the notifications and the AI-usage meter keep what main gave them
+// to ask with, so a test can ask as their timers do. A sync asks its fetcher,
+// and a refresh of the meter asks which account to use.
 vi.mock('../../../src/main/github/session/sync-orchestrator', () => ({
-  SyncOrchestrator: class { registerSession() {} unregisterSession() {} setFocus() {} resume() {} pause() {} },
+  SyncOrchestrator: class {
+    constructor(deps: never) { h.state.sync = deps }
+    registerSession() {} unregisterSession() {} setFocus() {} resume() {} pause() {}
+    async syncNow(sessionId: string) {
+      await h.state.sync!.fetchers.pr({ sessionId, slug: 'octo/repo', branch: 'main' })
+    }
+  },
 }))
 vi.mock('../../../src/main/github/session/notifications-poller', () => ({
-  NotificationsPoller: class { syncTo() {} resume() {} pause() {} },
+  NotificationsPoller: class {
+    constructor(deps: never) { h.state.poller = deps }
+    syncTo() {} resume() {} pause() {}
+  },
 }))
 vi.mock('../../../src/main/github/copilot-usage', () => ({
-  AiUsageScheduler: class { start() {} getLatest() { return null } async refresh() { return null } },
+  AiUsageScheduler: class {
+    constructor(deps: never) { h.state.usage = deps }
+    start() {} getLatest() { return null } getStatus() { return 'ok' } getLatestCycle() { return null }
+    async refresh() {
+      h.state.usageTargets.push((await h.state.usage!.resolve())?.login ?? null)
+      return null
+    }
+  },
 }))
 
 const real = await vi.importActual<typeof import('node:fs')>('node:fs')
@@ -150,6 +201,7 @@ const {
   GITHUB_CONFIG_SCHEMA_VERSION,
 } = await import('../../../src/shared/github-constants')
 const { useGitHubStore } = await import('../../../src/renderer/stores/githubStore')
+const { FAILED_READ_HOLD_MS } = await import('../../../src/main/github/github-config-store')
 
 /** What a refused change says when the file did not read: the file's name and
  *  what to do next, never its folder's path. */
@@ -204,6 +256,8 @@ const APP = { sender: webContents, senderFrame: mainFrame }
 
 let dir: string
 let file: string
+/** What registering the handlers gave back (the app sets the focused session through it). */
+let app: ReturnType<typeof registerGitHubHandlers>
 
 function call(channel: string, ...args: unknown[]): Promise<any> {
   const fn = h.state.handlers.get(channel)
@@ -214,7 +268,7 @@ function call(channel: string, ...args: unknown[]): Promise<any> {
 /** Registers the handlers on the test folder, as a start of the app does. */
 function start(sessions?: { loadSessions: () => Promise<any[]>; saveSessions: (s: any[]) => Promise<void> }): void {
   h.state.handlers.clear()
-  registerGitHubHandlers({
+  app = registerGitHubHandlers({
     resourcesDir: dir,
     getWindow: () => win as never,
     loadSessions: sessions?.loadSessions ?? (async () => []),
@@ -230,13 +284,19 @@ async function settled(): Promise<void> {
   }
 }
 
+/** Lets what a start of the app does in the background finish, without reading the file. */
+async function idle(): Promise<void> {
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 5))
+}
+
 const onDisk = (): string => real.readFileSync(file, 'utf8')
 const saved = () => JSON.parse(onDisk())
-/** Everything console.warn was given, as one text. */
-const warned = (): string =>
+/** Each thing console.warn was given, as one line. */
+const warnLines = (): string[] =>
   (console.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls
     .map((args) => args.map(String).join(' '))
-    .join(' | ')
+/** Everything console.warn was given, as one text. */
+const warned = (): string => warnLines().join(' | ')
 
 /** Each way the file can fail to read; `arrange` runs with the seed on disk. */
 const UNREADABLE_FILES: Array<[string, () => void]> = [
@@ -273,6 +333,8 @@ function resetFaults(): void {
   h.state.reads = 0
   h.state.replaceFault = false
   h.state.stageFault = false
+  h.state.tokens = []
+  h.state.usageTargets = []
 }
 
 beforeEach(() => {
@@ -742,6 +804,164 @@ describe('removing an account, and the sessions bound to it', () => {
     const written = saveSessions.mock.calls[0][0]
     expect(written[0].githubIntegration.authProfileId).toBeUndefined()
     expect(written[1].githubIntegration.authProfileId).toBe('p-b')
+  })
+})
+
+// The sync, the notifications and the AI-usage meter ask for the config on
+// their timers: every tick of every session, every poll. A file that stays
+// unreadable is not read at each of those. The failed answer stands in for a
+// short hold, is never kept past it or as "no accounts", and is dropped at
+// once when anything reads the file. A button the user pressed does not wait
+// for the hold: it is there for the timers.
+describe('a file that does not read, and the lookups the timers make', () => {
+  const TOKEN = 'not-a-real-token-value'
+  const READ_FAILED = '[github-config] read failed: Error EBUSY'
+  const readFailedLines = (): string[] => warnLines().filter((l) => l.includes('read failed'))
+  /** One session with GitHub on, bound to no account: its token is the first account's that has one. */
+  const oneSession = () => ({
+    loadSessions: async () => [
+      { id: 's-1', githubIntegration: { enabled: true, repoSlug: 'octo/repo', autoDetected: false } },
+    ],
+    saveSessions: async () => {},
+  })
+  /** The clock, moved on by `ahead` so a hold can run out without waiting for it. */
+  let ahead: number
+  const passTheHold = (): void => { ahead += FAILED_READ_HOLD_MS }
+
+  beforeEach(() => {
+    ahead = 0
+    const clock = Date.now.bind(Date)
+    vi.spyOn(Date, 'now').mockImplementation(() => clock() + ahead)
+  })
+
+  /** The app starts while another program holds the file; the session is the focused one. */
+  async function startedOnAFileThatDoesNotRead(): Promise<void> {
+    real.writeFileSync(file, SEED_TEXT, 'utf8')
+    h.state.readFault = 'EBUSY'
+    start(oneSession())
+    app.setFocusedSessionResolver(() => 's-1')
+    await idle()
+    h.state.reads = 0
+  }
+
+  /** Each timer asks once: the sync and the notifications for the config, the meter for its account. */
+  async function timersAsk(): Promise<[unknown, unknown, unknown]> {
+    return [await h.state.sync!.getConfig(), await h.state.poller!.getConfig(), await h.state.usage!.resolve()]
+  }
+  const NOTHING = [null, null, null]
+
+  it('inside the hold, however often they ask, the file is not read again and the log has its one line', async () => {
+    await startedOnAFileThatDoesNotRead()
+    for (let i = 0; i < 20; i++) expect(await timersAsk()).toEqual(NOTHING)
+    const together = await Promise.all(Array.from({ length: 20 }, () => h.state.sync!.getConfig()))
+    expect(together).toEqual(Array.from({ length: 20 }, () => null))
+    expect(h.state.reads).toBe(0)
+    expect(readFailedLines()).toEqual([READ_FAILED])
+    expect(onDisk()).toBe(SEED_TEXT)
+  })
+
+  it('after the hold the file is read again: once for all of them, and once per hold after that', async () => {
+    await startedOnAFileThatDoesNotRead()
+    passTheHold()
+    for (let i = 0; i < 20; i++) expect(await timersAsk()).toEqual(NOTHING)
+    expect(h.state.reads).toBe(1)
+    passTheHold()
+    for (let i = 0; i < 20; i++) expect(await timersAsk()).toEqual(NOTHING)
+    expect(h.state.reads).toBe(2)
+    // The same failure, read three times over: still one line.
+    expect(readFailedLines()).toEqual([READ_FAILED])
+  })
+
+  it('a failed answer is never kept past the hold: once the file reads, the accounts are back and kept', async () => {
+    await startedOnAFileThatDoesNotRead()
+    h.state.readFault = null
+    // Still inside the hold: nothing has read the file since it failed.
+    expect(await timersAsk()).toEqual(NOTHING)
+    expect(h.state.reads).toBe(0)
+
+    passTheHold()
+    const [forSync, forPoller, forMeter] = await timersAsk()
+    expect(Object.keys((forSync as { authProfiles: object }).authProfiles).sort()).toEqual(['p-a', 'p-b'])
+    expect(forPoller).toEqual(forSync)
+    expect((forMeter as { login: string }).login).toBe('octo-b')
+    // Read once, and that answer is the one kept.
+    const reads = h.state.reads
+    for (let i = 0; i < 5; i++) expect(await h.state.sync!.getConfig()).toEqual(forSync)
+    expect(h.state.reads).toBe(reads)
+  })
+
+  it.each([
+    ['a settings page reads the file', () => call(IPC.GITHUB_CONFIG_GET, { readState: true })],
+    ['a save reads the file', () => call(IPC.GITHUB_PROFILE_RENAME, 'p-a', 'renamed')],
+  ] as Array<[string, () => Promise<unknown>]>)(
+    'a read that succeeds inside the hold ends it at once (%s): the next lookup has the accounts',
+    async (_what, readIt) => {
+      await startedOnAFileThatDoesNotRead()
+      h.state.readFault = null
+      expect(await h.state.sync!.getConfig()).toBeNull()
+      await readIt()
+      const cfg = await h.state.sync!.getConfig()
+      expect(Object.keys(cfg!.authProfiles).sort()).toEqual(['p-a', 'p-b'])
+    },
+  )
+
+  // What the user asked for by pressing a button is looked up from the file
+  // now. Each of these is pressed inside the hold, right after the file
+  // started reading again, and finds the saved account's token.
+  const PRESSED: Array<[string, () => Promise<unknown>]> = [
+    ['merging a pull request', () => call(IPC.GITHUB_PR_MERGE, 'octo/repo', 7, 'squash')],
+    ['re-running a workflow', () => call(IPC.GITHUB_ACTIONS_RERUN, 'octo/repo', 42)],
+    ['marking a pull request ready', () => call(IPC.GITHUB_PR_READY, 'octo/repo', 7)],
+    ['replying to a review', () => call(IPC.GITHUB_REVIEW_REPLY, 'octo/repo', '123', 'thanks')],
+    ['Sync now on the session', () => call(IPC.GITHUB_SYNC_NOW, 's-1')],
+    ['Sync now on the settings page', () => call(IPC.GITHUB_SYNC_FOCUSED_NOW)],
+  ]
+
+  it.each(PRESSED)('%s does not wait for the hold: the file is read now', async (_what, press) => {
+    await startedOnAFileThatDoesNotRead()
+    h.state.readFault = null
+    // A timer asking at this moment still gets the held answer, and no token.
+    await expect(h.state.sync!.fetchers.pr({ sessionId: 's-1', slug: 'octo/repo', branch: 'main' })).rejects.toThrow('no-token')
+    expect(h.state.reads).toBe(0)
+
+    expect(await press()).toEqual({ ok: true })
+    // Every request it made carried the saved account's token.
+    expect(h.state.tokens.length).toBeGreaterThan(0)
+    expect([...new Set(h.state.tokens)]).toEqual([TOKEN])
+    // And what it read is there for the timers too.
+    expect(await h.state.sync!.getConfig()).not.toBeNull()
+  })
+
+  it('Refresh on the AI-usage meter does not wait for the hold; the meter asking by itself does', async () => {
+    await startedOnAFileThatDoesNotRead()
+    h.state.readFault = null
+    await call(IPC.GITHUB_AI_USAGE_GET, false)
+    expect(h.state.usageTargets).toEqual([null])
+    expect(h.state.reads).toBe(0)
+    await call(IPC.GITHUB_AI_USAGE_GET, true)
+    expect(h.state.usageTargets).toEqual([null, 'octo-b'])
+  })
+
+  it('turning GitHub on for a session does not wait for the hold: its first sync finds the token', async () => {
+    await startedOnAFileThatDoesNotRead()
+    h.state.readFault = null
+    expect(await call(IPC.GITHUB_SESSION_CONFIG_UPDATE, 's-1', { enabled: true })).toEqual({ ok: true })
+    // Registering the session starts its first sync at once, which asks for the session's token.
+    await h.state.sync!.fetchers.pr({ sessionId: 's-1', slug: 'octo/repo', branch: 'main' })
+    expect(h.state.tokens).toEqual([TOKEN])
+  })
+
+  it.each(PRESSED)('%s while the file still does not read: one read, no token, and the file is left as it is', async (_what, press) => {
+    await startedOnAFileThatDoesNotRead()
+    const answer = await press().then((a) => a, (err: Error) => ({ ok: false, error: err.message }))
+    expect(answer).toEqual({ ok: false, error: 'no-token' })
+    expect(h.state.tokens).toEqual([])
+    expect(h.state.reads).toBe(1)
+    // The hold starts again from that read.
+    expect(await timersAsk()).toEqual(NOTHING)
+    expect(h.state.reads).toBe(1)
+    expect(readFailedLines()).toEqual([READ_FAILED])
+    expect(onDisk()).toBe(SEED_TEXT)
   })
 })
 
