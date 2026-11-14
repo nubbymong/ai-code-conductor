@@ -137,6 +137,17 @@ export interface AccountView {
   reviewRefusal?: ReviewRefusalView
 }
 
+const SENTINEL_CODEX: ProviderId = 'codex'
+
+/** Whether Settings offers a Codex account for Sentinel's analysis (P3.9):
+ *  one a review could run on unattended (active, not blocked, vouched for,
+ *  nothing stopping reviews on this platform). One rule for the Settings
+ *  select and for the main process: a saved choice that is not offered shows
+ *  as the default in Settings, so the analysis treats it as no choice. */
+export function sentinelCodexAccountOffered(a: AccountView): boolean {
+  return a.providerId === SENTINEL_CODEX && a.lifecycle === 'active' && a.operationalState !== 'blocked' && !a.unverified && !a.external && !a.reviewRefusal
+}
+
 export interface ReviewRefusalView {
   reason: 'platform' | 'unknown'
   message: string

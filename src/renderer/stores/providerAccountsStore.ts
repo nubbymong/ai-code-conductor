@@ -13,7 +13,7 @@ import type {
   BeginSetupRequest, SignInRequest, SignInAgainRequest, SignInAgainResult, CompleteSetupRequest, LogoutRequest, SetLifecycleRequest, ResolveConflictRequest,
   SetReviewerDefaultRequest, KnownAuthState, SignInMethod, InstallRecipeView, PathHintView, UpdateIdentityRequest, IdentityView, SignInPhase,
 } from '../../shared/providers'
-import { SIGN_IN_METHODS } from '../../shared/providers'
+import { SIGN_IN_METHODS, sentinelCodexAccountOffered } from '../../shared/providers'
 import { useSettingsStore } from './settingsStore'
 
 interface ProviderAccountsState {
@@ -428,7 +428,7 @@ export function confirmEachLaunchWhy(account: Pick<AccountView, 'external'>): st
  *  (active, not blocked, vouched for, nothing stopping reviews on this
  *  platform), in the list's order. */
 export function sentinelCodexAccountChoices(snapshot: AccountsSnapshot | null): AccountView[] {
-  return selectProviderAccounts(snapshot, 'codex').filter((a) => a.lifecycle === 'active' && a.operationalState !== 'blocked' && !a.unverified && !a.external && !a.reviewRefusal)
+  return selectProviderAccounts(snapshot, 'codex').filter(sentinelCodexAccountOffered)
 }
 
 /** Whether an account may be offered "Sign in again": not archived and not

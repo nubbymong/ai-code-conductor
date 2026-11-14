@@ -398,6 +398,23 @@ interface HeadlessEnvelope {
   result?: unknown
 }
 
+/** What a failed run's envelope says went wrong (envelopeError). */
+export interface EnvelopeFailure { rateLimited: boolean; unreachable: boolean; signIn: boolean; reason: string }
+
+/** How much of a failure's text the checks that classify it read. */
+const CLASSIFY_MAX = 2000
+
+/** A usage or rate limit, in the CLIs' words ("You've hit your weekly limit",
+ *  "Usage limit reached", "Rate limit reached"). A "time limit" is not one:
+ *  it is how long something may run or last, never how much may be used. */
+const USAGE_LIMIT_REASON = /(?<!\btime[ -])\blimit\b/i
+
+/** A sign-in that failed, in the CLIs' words: Claude Code's "Failed to
+ *  authenticate", "OAuth token has expired", "Invalid API key", "Not logged
+ *  in", "Please run /login", the API's authentication_error; Codex's "sign in
+ *  again", a token that could not be refreshed, "401 Unauthorized". */
+const SIGN_IN_REASON = /\bfailed to authenticate\b|\bauthentication[_ ]error\b|\bnot (?:logged|signed) in\b|\b(?:log|sign) in again\b|\bclaude auth login\b|\brun \/login\b|\b(?:oauth|access|refresh|auth|authentication) token\b[^.]{0,80}\b(?:expired|revoked|invalid|could not be refreshed)\b|\binvalid (?:api key|x-api-key|bearer token)\b|\b401 unauthorized\b|\blogin\b[^.]{0,60}\b(?:expired|cannot be renewed)\b/i
+
 /** Longest envelope `result` we echo. The CLI's error strings are short; the cap
  *  bounds what a surprising payload can put in front of the user. */
 const ENVELOPE_REASON_MAX = 160
@@ -412,8 +429,14 @@ const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g
  * ("You've hit your weekly limit · resets 4am") was shown as the vague "could
  * not complete" with no hint that it was a usage limit or that Re-run was futile
  * until reset (#430).
+ *
+ * 2.1.3-beta.1 (owner report): `signIn`, the account's login is what failed
+ * (expired, revoked, signed out). It was read as a usage limit before,
+ * because the CLI's text for a login that ran out says it "reached its time
+ * limit" and any "limit" counted; the panel then told the user to wait for a
+ * reset that would never come. At most one of the three is true.
  */
-export function envelopeError(stdout: string): { rateLimited: boolean; unreachable: boolean; reason: string } | null {
+export function envelopeError(stdout: string): EnvelopeFailure | null {
   // Parse the RAW top-level envelope — NOT unwrapPayload, which peels `.result`,
   // and on an error envelope `.result` is the human string ("You've hit your
   // weekly limit …"), not nested JSON. The error envelope's is_error /
@@ -436,12 +459,30 @@ export function envelopeError(stdout: string): { rateLimited: boolean; unreachab
   // unredacted line, exactly as before.
   const text = typeof env.result === 'string' ? env.result : ''
   const fallback = status !== null ? `the account returned HTTP ${status}` : 'the account could not be reached'
-  const raw = (text ? plainErrorReason(text) : '') || fallback
-  const reason = (text ? plainErrorReason(redactHead(text, redactFailure)) : '') || fallback
-  const rateLimited = status === 429 || /\blimit\b/i.test(raw)
+  const raw = ((text ? plainLine(text) : '') || fallback).slice(0, CLASSIFY_MAX)
+  // A 401 is the service refusing the sign-in, whatever the text says; a 429
+  // is a limit, whatever the text says.
+  const signInSaid = status === 401 || SIGN_IN_REASON.test(raw)
+  const rateLimited = status === 429 || (!signInSaid && USAGE_LIMIT_REASON.test(raw))
   // An HTTP status is an answer from the service, so it never counts as unreachable.
   const unreachable = status === null && !rateLimited && UNREACHABLE_REASON.test(raw)
-  return { rateLimited, unreachable, reason }
+  // A sign-in that could not even reach the service is said as unreachable:
+  // signing in again would not help until the network does.
+  const signIn = signInSaid && !rateLimited && !unreachable
+  const shown = text ? plainLine(redactHead(text, redactFailure)) : ''
+  // A sign-in failure keeps only what went wrong: what follows in the CLI's
+  // text is its own remedy, for its own sign-in in the user's home folder,
+  // never this app's account (analysisFailureMessage gives this app's).
+  const reason = capReason(signIn ? firstClause(shown) : shown) || fallback
+  return { rateLimited, unreachable, signIn, reason }
+}
+
+/** The first sentence of a plain line, or its part before Claude Code's
+ *  " · " (which sets a remedy off from what went wrong); the whole line when
+ *  it has neither. No closing full stop, as plainLine leaves none. */
+function firstClause(line: string): string {
+  const end = /[.!?](?=\s+\S)|\s+·\s+/.exec(line)
+  return end ? line.slice(0, end.index).replace(/[\s.]+$/, '') : line
 }
 
 /** Text matched as itself in a regular expression (owner answers review):
@@ -476,9 +517,30 @@ function jsonErrorMessage(body: string): string | null {
 /** P3.9 round 3 (J2): a failure's reason as one plain line: a JSON error
  *  body replaced by the message it carries (never the JSON itself), control
  *  characters and runs of space collapsed, no closing full stop (the
- *  sentence around it adds one), and cut at a word, said so, past
- *  ENVELOPE_REASON_MAX characters. Exported for the test. */
+ *  sentence around it adds one), and cut, said so, past ENVELOPE_REASON_MAX
+ *  characters (capReason). Exported for the test. */
 export function plainErrorReason(text: string): string {
+  return capReason(plainLine(text))
+}
+
+/** A plain line cut to ENVELOPE_REASON_MAX characters, and said so. The
+ *  whole sentences that fit are kept and the one that does not is dropped
+ *  whole (2.1.3-beta.1: a remedy was shown cut off in the middle, "...or use
+ *  claude setup-token and set"); a line with no sentence end inside the cap
+ *  is cut at a word, as before. */
+function capReason(t: string): string {
+  if (t.length <= ENVELOPE_REASON_MAX) return t
+  const cut = t.slice(0, ENVELOPE_REASON_MAX)
+  // A sentence end: its mark followed by a space. A dot inside a version or
+  // a host name is followed by neither, so it is not one.
+  let sentenceEnd = -1
+  for (const m of t.slice(0, ENVELOPE_REASON_MAX + 1).matchAll(/[.!?](?=\s)/g)) sentenceEnd = m.index
+  const kept = sentenceEnd > 0 ? cut.slice(0, sentenceEnd) : cut.replace(/\s+\S*$/, '').replace(/[\s.,;:]+$/, '') || cut
+  return `${kept} (cut short)`
+}
+
+/** A failure's text as one plain line (plainErrorReason, before its cut). */
+function plainLine(text: string): string {
   let t = String(text).replace(CONTROL_CHARS, ' ')
   const brace = t.indexOf('{')
   if (brace >= 0) {
@@ -486,12 +548,7 @@ export function plainErrorReason(text: string): string {
     const lead = t.slice(0, brace).replace(/[\s:]+$/, '')
     t = message ? (lead ? `${lead}: ${message}` : message) : lead
   }
-  t = t.replace(/\s+/g, ' ').trim().replace(/[\s.]+$/, '')
-  if (t.length > ENVELOPE_REASON_MAX) {
-    const cut = t.slice(0, ENVELOPE_REASON_MAX)
-    t = `${cut.replace(/\s+\S*$/, '').replace(/[\s.,;:]+$/, '') || cut} (cut short)`
-  }
-  return t
+  return t.replace(/\s+/g, ' ').trim().replace(/[\s.]+$/, '')
 }
 
 // Graceful-degrade copy for a failed AI pass. The deterministic backstop runs
@@ -503,11 +560,19 @@ export function plainErrorReason(text: string): string {
 // the fix is in Settings, not Re-run.
 export function analysisFailureMessage(
   stderr: string,
-  envErr?: { rateLimited: boolean; unreachable?: boolean; reason: string } | null,
+  envErr?: { rateLimited: boolean; unreachable?: boolean; signIn?: boolean; reason: string } | null,
   accountLabel?: string | null,
 ): string {
   const who = accountLabel ? ` (${accountLabel})` : ''
   if (envErr) {
+    // 2.1.3-beta.1: a login that expired or cannot be renewed is a sign-in
+    // problem, with this app's own remedy (the account's card on the Usage
+    // page signs it in again inside the account's own folder; the CLI's
+    // "claude auth login" would sign in the user's home folder instead).
+    // Never a usage limit: waiting for a reset does not bring a login back.
+    if (envErr.signIn) {
+      return `The Sentinel analysis account${who} is signed out, so the AI analysis could not run: ${envErr.reason}. Sign that account in again from its card on the Usage page, or pick a different account in Settings → Sentinel, then use Re-run. The deterministic checks still ran.`
+    }
     if (envErr.rateLimited) {
       return `The Sentinel analysis account${who} has hit its usage limit — ${envErr.reason}. Pick a different account in Settings → Sentinel, or Re-run once it resets. The deterministic checks still ran.`
     }
@@ -537,7 +602,7 @@ export async function runAnalysis(opts: {
   if (prompt === null) return { ok: false, error: ANALYSIS_UNFENCED }
   const args = [...CLAUDE_ANALYSIS_ARGS]
   let lastStderr = ''
-  let lastEnvErr: { rateLimited: boolean; unreachable: boolean; reason: string } | null = null
+  let lastEnvErr: EnvelopeFailure | null = null
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await opts.runner(args, 180000, prompt)          // 3-minute cap
     lastStderr = res.stderr
@@ -549,8 +614,9 @@ export async function runAnalysis(opts: {
       lastEnvErr = envelopeError(res.stdout)
       // A usage limit will not clear on an immediate retry — stop and report it
       // rather than burning the second attempt on the same wall. PR 4: nor will
-      // a service that could not be reached (the CLI has already retried it).
-      if (lastEnvErr?.rateLimited || lastEnvErr?.unreachable) break
+      // a service that could not be reached (the CLI has already retried it),
+      // nor (2.1.3-beta.1) a login that has expired.
+      if (lastEnvErr?.rateLimited || lastEnvErr?.unreachable || lastEnvErr?.signIn) break
     }
   }
   return { ok: false, error: analysisFailureMessage(lastStderr, lastEnvErr, opts.accountLabel) }

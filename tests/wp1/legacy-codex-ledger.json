@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "0a7d7bd151d0570be539a58b32121f9ecf9ed57141549373916b36c8c5cc27f3",
-  "manifestHead": "157ac7d71fadbb0dc3042312d5d651ce02513f42",
+  "manifestPathDigest": "b5e0b0c487d33488f99ebe5ba25ffbe139ce337560553ab862c880b20c3b2688",
+  "manifestHead": "05656d3f0781d45e4998f04aa997a9f4a7aba617",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -2069,6 +2069,16 @@
       "disposition": "replace",
       "evidence": "WP2 PR 3 P3.8 (row 39): the start-up model coverage check runs the Codex half after Claude's, only while Codex is on (the launch rule's silent form), CLI-free, a throw raising its own finding (WP1.60, WP1.68); tests/unit/main/sentinel-and-cli-setup-provider-off.test.ts; WP2 PR 3 P3.9 (rows 39, 42): while Codex is on, the start-up check and a Re-run check the installed Codex version against the supported range, compare the registry with the model list that CLI offers (read live, else the shipped list), and analyse a changed Codex version's release notes; each analysis runs on the provider that is on (both on: the Ask Conductor choice, Claude Code by default), Codex as a prepared reviewer launch in a fresh temp folder; Codex off or not set up runs and says nothing; Sentinel's Codex runs count as Codex in use (WP1.60, WP1.68); tests/unit/main/sentinel-codex-service.test.ts, tests/unit/main/sentinel-and-cli-setup-provider-off.test.ts; WP2 PR 3 P3.9 round 1: the Codex analysis is a text-only reviewer run in a fresh folder, marked as its own project root, in Sentinel's own runs folder (a real folder, never a link), leftovers swept; the start-up check uses the look the app took at start and runs beside Claude Code's, and nothing in the Codex half stops Claude Code's; a Re-run looks afresh; notes read only in part are said (WP1.60, WP1.68); tests/unit/main/sentinel-codex-service.test.ts; WP2 PR 3 P3.9 round 2: Claude Code's analysis runs in a fresh empty folder of its own in Sentinel's runs folder with Claude Code's switches for it; each run's folder is checked by real path once made; git in the Codex run stops at the runs folder and never prompts; a Claude Code check that fails no longer drops a Codex update; a cut is said whether or not the analysis completed (WP1.60, WP1.68); tests/unit/main/sentinel-codex-service.test.ts; WP2 PR 3 P3.9 round 3: findings the quote check cannot match keep the version unchecked and are said in the panel; the Claude analysis gets its account's transport settings (WP1.60, WP1.68); tests/unit/main/sentinel-codex-service.test.ts; WP2 PR 3 P3.9 round 4: an update whose findings cannot be matched is analysed at most three times in all, then recorded as checked with a note (WP1.68); tests/unit/main/sentinel-codex-service.test.ts; WP2 PR 3 fixer 10 (gate 3 F9, ADR-009 C1 and D1, row 42): a start analyses only a version higher than the last one recorded, for both providers; a downgrade, even to a version never seen, is not analysed or recorded at start (its version findings still come; a Re-run still analyses it), so two versions installed in turn are each analysed at most three times (WP1.68); tests/unit/main/sentinel-codex-service.test.ts; WP2 PR 3 fixer 11 (gate 3 F10, ADR-009 D1 round 2 and R2-1, row 42): the start-up rule goes by the highest version checked (updateAtStart, both providers); a version at or below it is recorded for the panel to name, with no analysis; an update is analysed from the highest version checked (WP1.68); tests/unit/main/sentinel-codex-service.test.ts; WP2 PR 3 fixer 12 (ADR-009 R3-1, row 42): what a Re-run records becomes the highest version checked (analyzeUpdates' rerun mark, recordSeen); no start-up analysis sets it down (WP1.68); tests/unit/main/sentinel-codex-service.test.ts; WP2 PR 3 fixer 13 (fixer 12 quality NIT 1 and X7 comment, ADR-009 lens D round 3 MINOR 1, gate 3 F17, row 42): an unmatched Re-run of a version no start analyses (at or below the highest version checked, or none checked yet) says to use Re-run again rather than the next check; analyzeUpdates names its two callers and why setting and raising the highest checked coincide for a start; the Re-run mark holds with both providers analysed and with a problem carried (WP1.68); tests/unit/main/sentinel-codex-service.test.ts; WP2 PR 4 owner answers review fix pass (9a3fd42f): Sentinel's Claude Code runner reads the analysis stream through the headless spawner's optional stdout callback and stops the run through its own abort and tree kill when the retry watch says the service gave no answer (WP1.68); tests/unit/main/sentinel-unreachable-timing.test.ts, tests/unit/claude-headless-stdout-hook.test.ts; WP2 PR 4 owner answers review round 2 (2cb791d4): an analysis is marked failed only for unreadable notes, a runner that could not start for a reason other than the launch rule, or a failed run (WP1.68); tests/unit/main/sentinel-codex-service.test.ts; WP2 PR 4 polish (10c6f431): an unexpected error in the start-up check or a Re-run marks the analysis failed (WP1.68); tests/unit/main/sentinel-codex-service.test.ts; WP2 PR 4 final review nits (E-Q15): a check that fails with a thrown value that is not an Error keeps that value's text, so the chip says it did not complete (WP1.68); tests/unit/main/sentinel-codex-service.test.ts; WP2 PR 4 P4.7 fix pass 4 (750d272c): the analysis takes its transport settings through the one reader it shares with the Insights roll-up's written analysis (claudeSettingsTransportEnv) (WP1.68); tests/unit/main/sentinel-codex-service.test.ts",
       "note": "Claude's version check and analysis are unchanged"
+    },
+    {
+      "path": "src/main/sentinel/sentinel-account.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "MODELS-PRICING",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.1 module (src/main/sentinel/sentinel-account.ts): the words that name the account Sentinel's analysis ran on and why (chosen in Settings, the primary account, Codex's review account, or auto-picked), for Claude Code and for Codex; a saved choice Settings no longer offers is the default, so it is never reported as a chosen account that could not be used (WP1.68); tests/unit/sentinel-account-message.test.ts; tests/unit/main/sentinel-codex-service.test.ts",
+      "note": "created by the 2.1.3-beta.1 Sentinel account message fix; pure, main process only"
     },
     {
       "path": "src/main/sentinel/sentinel-analysis.ts",
@@ -10032,6 +10042,16 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: WP2 PR 3 P3.8 round 1 (row 39) passes the Codex list to runGate and adds the Codex check's cases (missing refuses, extra warns, a missing or empty list fails closed, only the codex family counts); the existing cases are unchanged; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 2 added the duplicate and malformed-list cases; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 4 fix pass 10 (eeb09462) passes the Electron version and the floors to runGate (an Electron with no floor for the existing cases, which are otherwise unchanged) and adds the macOS floor cases; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 4 fix pass 11 (5789b728) adds the resolved-version, exact-version and unreadable-entry cases and reads codexResult null-safely; tests/unit/scripts/release-gate.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 round 1 (was retain)"
+    },
+    {
+      "path": "tests/unit/sentinel-account-message.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.1 test (tests/unit/sentinel-account-message.test.ts): a login that expired is a sign-in problem and never a usage limit, usage limits stay usage limits, a long reason is never left half a sentence, the account label for Claude Code and for Codex, and the rule for which Codex accounts Settings offers for the analysis (WP1.68)",
+      "note": "created by the 2.1.3-beta.1 Sentinel account message fix; no process, no network"
     },
     {
       "path": "tests/unit/sentinel-analysis.test.ts",

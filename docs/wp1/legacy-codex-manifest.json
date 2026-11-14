@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-14T03:46:34.700Z",
-  "head": "157ac7d71fadbb0dc3042312d5d651ce02513f42",
-  "tree": "930e4efecf415db417a04a67a12cd7925bb071c2",
+  "generatedAt": "2026-11-14T04:20:44.251Z",
+  "head": "05656d3f0781d45e4998f04aa997a9f4a7aba617",
+  "tree": "a3daee375ccdfc5144d3ab2ecc86af2dd983a912",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3144,
-  "excludedFileCount": 458,
-  "scannedFileCount": 2686,
+  "trackedFileCount": 3152,
+  "excludedFileCount": 460,
+  "scannedFileCount": 2692,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 892,
-  "pathDigest": "0a7d7bd151d0570be539a58b32121f9ecf9ed57141549373916b36c8c5cc27f3",
+  "matchedPathCount": 894,
+  "pathDigest": "b5e0b0c487d33488f99ebe5ba25ffbe139ce337560553ab862c880b20c3b2688",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1396,7 +1396,14 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 112
+      "lineCount": 119
+    },
+    {
+      "path": "src/main/sentinel/sentinel-account.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 6
     },
     {
       "path": "src/main/sentinel/sentinel-analysis.ts",
@@ -1404,7 +1411,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 21
+      "lineCount": 22
     },
     {
       "path": "src/main/sentinel/sentinel-codex-changelog.ts",
@@ -2526,7 +2533,7 @@
         "P05",
         "P11"
       ],
-      "lineCount": 31
+      "lineCount": 32
     },
     {
       "path": "src/renderer/stores/sessionStore.ts",
@@ -2757,7 +2764,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 12
+      "lineCount": 16
     },
     {
       "path": "src/shared/providers/capabilities.ts",
@@ -4919,7 +4926,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 212
+      "lineCount": 237
     },
     {
       "path": "tests/unit/main/sentinel-runs-folder-checked.test.ts",
@@ -7064,6 +7071,13 @@
       "lineCount": 52
     },
     {
+      "path": "tests/unit/sentinel-account-message.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 14
+    },
+    {
       "path": "tests/unit/sentinel-analysis.test.ts",
       "predicates": [
         "P04",
@@ -7204,7 +7218,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 20
+      "lineCount": 24
     },
     {
       "path": "tests/unit/tokenomics/tk-worker-transport.test.ts",
