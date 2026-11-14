@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "3d3b8b10fc2d6f68c2e4ddc657b23e2a9b983a0b1b261ad7c4b795922535a14d",
-  "manifestHead": "6a45533b5fafb2be1233d20072d8249cabb4e2c0",
+  "manifestPathDigest": "03d23ba2d6d02792aeb297b936df2967ba1b3e0ae8d9a0213fc88f2a4402ff05",
+  "manifestHead": "e9eb48959f3345cc14d851906d86075077b17fe3",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -7413,6 +7413,16 @@
       "note": "created by WP2 usage track MP10"
     },
     {
+      "path": "tests/unit/native/tokenomics-dirty-sweep.native.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.3 test (tests/unit/native/tokenomics-dirty-sweep.native.test.ts; CI native suite): the usage worker reads a Claude transcript the watcher reports on its own and lists no folder, walks the whole tree at start, on a re-index and on an event that names no transcript, and the totals after single-file reads equal a full re-index of the same data (WP1.2)",
+      "note": "created by the 2.1.3-beta.3 changed-transcripts usage sweep (planning 302); the only mention is the sessions folder the worker is opened with, a temp folder that is never made; no behaviour of the other assistant is exercised"
+    },
+    {
       "path": "tests/unit/native/tokenomics-reindex-307.native.test.ts",
       "predicates": [
         "P13"
@@ -10333,6 +10343,16 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.3 (review round 3, C5) test: the real Tokenomics worker reads a Codex rollout from an account's old folder, then the same rollout carried into its new folder by a sign in again (a hard link and a byte copy), and every turn it offers the second time is already stored: one count (WP1.52); tests/unit/tokenomics/tokenomics-carried-history-once.test.ts",
       "note": "created by WP2 PR 3 P3.3 review round 3"
+    },
+    {
+      "path": "tests/unit/tokenomics/tokenomics-worker-changed-files.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.3 test (tests/unit/tokenomics/tokenomics-worker-changed-files.test.ts): between full walks the usage worker reads only the Claude transcripts the watcher reports; any event in a Codex sessions folder still starts a full walk, so a rollout is found as before; a full walk that leaves bytes unread runs again until every file is read, for a Claude transcript and for the Codex account re-read, which is settled only by the walk that drains; a reported transcript that is a link is left alone (WP1.2)",
+      "note": "created by the 2.1.3-beta.3 changed-transcripts usage sweep (planning 302 and 306); the real worker over temp folders with an in-memory stand-in for the index database; no process starts and no real watcher runs"
     },
     {
       "path": "tests/unit/tokenomics/tokenomics-worker-reread-order.test.ts",
