@@ -14,9 +14,16 @@
  * found written, the 200 read last, are asked their size by the 5 s timer and
  * read when they grew, for the writes the watcher does not report (on
  * Windows, the ones made through a handle that stays open), however long ago
- * they were read. Rollups a walk left dirty (an attribution between two pages
+ * they were read. Of more than 200 the ones modified last are kept, and a
+ * transcript the walk at start finds as the index has it is asked about too
+ * (review round 3). Rollups a walk left dirty (an attribution between two pages
  * of their rebuild, a rebuild that failed) are rebuilt at the next 5 s tick
  * with no walk.
+ *
+ * A file deleted and made again at the path of one already read is read from
+ * its first byte, whatever its size: the index keeps a mark of its first
+ * bytes and of the bytes just before where it stopped reading (review round
+ * 3).
  *
  * Host-safe: the real worker and real transcript files in a temp folder, a
  * wrapped fs that counts folder listings and file reads and hands the
@@ -33,7 +40,7 @@ import * as realFs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-type Cursor = { path: string; size: number; mtime: number; lastOffset: number; scannedTo?: number }
+type Cursor = { path: string; size: number; mtime: number; lastOffset: number; scannedTo?: number; readMark?: string; codexSessionId?: string; codexTurns?: number }
 const db = vi.hoisted(() => ({
   cursors: new Map<string, Cursor>(),
   meta: new Map<string, string>(),
@@ -149,6 +156,8 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   /** Files the worker asked the size of, and files it opened to read. */
   let statted: string[] = []
   let opened: string[] = []
+  /** Bytes the worker read from files. */
+  let bytesRead = 0
   /** Every path the worker asked about without following a link: one per
    *  watcher event that names a path, and one per transcript the 5 s timer
    *  checks. */
@@ -183,6 +192,10 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   /** A file that cannot be opened. */
   let denied = ''
   const stuckFds = new Set<number>()
+  /** Files some of whose reads fail (EIO): which ones, counted from 0 on
+   *  each open. */
+  const readFails = new Map<string, (nth: number) => boolean>()
+  const readsOf = new Map<number, { fails: (nth: number) => boolean; done: number }>()
 
   const follow = (p: unknown): string => (linkAt && String(p) === linkAt ? linkTarget : String(p))
   const LINK = { isSymbolicLink: () => true, isFile: () => false, isDirectory: () => false }
@@ -217,10 +230,18 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
           opened.push(String(p))
           const fd = realFs.openSync(follow(p), flags)
           if (stuck && String(p) === stuck) stuckFds.add(fd)
+          const fails = readFails.get(String(p))
+          if (fails) readsOf.set(fd, { fails, done: 0 })
           return fd
         }
-        case 'readSync': return (fd: number, ...rest: unknown[]) => (stuckFds.has(fd) ? 0 : (realFs.readSync as (fd: number, ...r: unknown[]) => number)(fd, ...rest))
-        case 'closeSync': return (fd: number) => { stuckFds.delete(fd); realFs.closeSync(fd) }
+        case 'readSync': return (fd: number, ...rest: unknown[]) => {
+          const reads = readsOf.get(fd)
+          if (reads && reads.fails(reads.done++)) throw Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' })
+          const n = stuckFds.has(fd) ? 0 : (realFs.readSync as (fd: number, ...r: unknown[]) => number)(fd, ...rest)
+          bytesRead += n
+          return n
+        }
+        case 'closeSync': return (fd: number) => { stuckFds.delete(fd); readsOf.delete(fd); realFs.closeSync(fd) }
         default: return (target as unknown as Record<PropertyKey, unknown>)[prop]
       }
     },
@@ -242,7 +263,7 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   }
   const nextSweep = (what: string): Promise<void> => waitFor(what, (m) => m.type === 'index-complete')
   const drainedSweep = (what: string): Promise<void> => waitFor(what, (m) => m.type === 'index-complete' && m.drained)
-  const clearCounts = (): void => { listings = 0; walks = 0; statted = []; opened = []; lstatted = [] }
+  const clearCounts = (): void => { listings = 0; walks = 0; statted = []; opened = []; lstatted = []; bytesRead = 0 }
   const transcript = (name: string): string => path.join(claudeDir, 'F--proj', `${name}.jsonl`)
   /** The five transcripts every test starts with. */
   const five = (): string[] => [0, 1, 2, 3, 4].map((i) => transcript(`s${i}`))
@@ -276,6 +297,27 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
     if (first) await first
   }
 
+  /** Stop the worker and start another on the same index: the app started
+   *  again, or the supervisor started the worker again. The counts start
+   *  again with it. */
+  async function restart(): Promise<void> {
+    stopWorker?.()
+    stopWorker = null
+    clearCounts()
+    await start()
+  }
+  /** More transcripts than the 5 s timer asks about, each with its own time
+   *  of last writing: the first of them is the one written last, and the five
+   *  every test starts with are the oldest of all. A listing by name finds
+   *  the ones written last first. */
+  function manyByAge(): string[] {
+    const ago = (minutes: number): Date => new Date(Date.now() - minutes * 60_000)
+    const made = Array.from({ length: TK_ACTIVE_MAX + 15 }, (_, i) => transcript(`m${String(i).padStart(3, '0')}`))
+    made.forEach((f, i) => { realFs.writeFileSync(f, line(path.basename(f))); realFs.utimesSync(f, ago(i + 1), ago(i + 1)) })
+    for (const f of five()) realFs.utimesSync(f, ago(10_000), ago(10_000))
+    return made
+  }
+
   beforeEach(() => {
     tmp = realFs.mkdtempSync(path.join(os.tmpdir(), 'tkchanged-'))
     claudeDir = path.join(tmp, 'claude')
@@ -291,6 +333,7 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
     onWorkerMessage = null; transport = null
     watchCbs.clear(); watchErrs.clear(); unwatchable.clear(); lstatFails.clear()
     linkAt = ''; linkTarget = ''; stuck = ''; stuckFds.clear(); denied = ''
+    readFails.clear(); readsOf.clear()
   })
   afterEach(() => {
     try { stopWorker?.() } catch { /* stopped */ }
@@ -808,11 +851,11 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       expect([...lstatted].sort()).toEqual([path.join(claudeDir, 'F--proj'), ...five()].sort())
     })
 
-    it('at most TK_ACTIVE_MAX are asked about, the ones read longest ago dropped', async () => {
+    it('at most TK_ACTIVE_MAX are asked about, the ones modified longest ago dropped', async () => {
       fakeTheTimer()
       await start()
-      // The transcript read first at start is read again, so of the five it
-      // is now the one read last.
+      // The transcript read first at start is written again, so of the five
+      // it is now the one modified last.
       const first = opened[0]
       realFs.appendFileSync(first, line('again'))
       let read = nextSweep('the changed-files sweep')
@@ -832,6 +875,42 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       expect(lstatted).toHaveLength(TK_ACTIVE_MAX)
       expect(new Set(lstatted)).toEqual(new Set([first, ...made]))
       expect(listings).toBe(0)
+    })
+
+    // A walk finds transcripts in the order the folders list them, which says
+    // nothing of which are being written. As first written the 200 the walk
+    // read last were kept, so a first index dropped a transcript being
+    // written for an old one listed after it.
+    it('a first index of more transcripts than TK_ACTIVE_MAX leaves the ones modified last asked about, wherever the walk found them', async () => {
+      fakeTheTimer()
+      const made = manyByAge()
+      await start()
+      expect(db.events).toBe(5 + made.length)
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS)
+      await settle()
+      expect(lstatted).toHaveLength(TK_ACTIVE_MAX)
+      expect(new Set(lstatted)).toEqual(new Set(made.slice(0, TK_ACTIVE_MAX)))
+      expect(listings).toBe(0)
+    })
+
+    // A file system may keep times no finer than a second or two, so many
+    // transcripts can share one.
+    it('of transcripts modified at the same instant, the ones noted last are kept', async () => {
+      fakeTheTimer()
+      const made = Array.from({ length: TK_ACTIVE_MAX - 1 }, (_, i) => transcript(`e${i}`))
+      for (const f of made) realFs.writeFileSync(f, line(path.basename(f)))
+      const same = new Date(Date.now() - 60_000)
+      for (const f of [...five(), ...made]) realFs.utimesSync(f, same, same)
+      await start()
+      // The walk notes them in the order it reads them: four more than are kept.
+      expect(opened).toHaveLength(TK_ACTIVE_MAX + 4)
+      const kept = opened.slice(-TK_ACTIVE_MAX)
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS)
+      await settle()
+      expect(lstatted).toHaveLength(TK_ACTIVE_MAX)
+      expect(new Set(lstatted)).toEqual(new Set(kept))
     })
 
     it('one that was deleted is asked about once more and then forgotten, with no walk', async () => {
@@ -927,6 +1006,375 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       expect(opened).toEqual([transcript('s2')])
       expect(db.events).toBe(6)
       expect(listings).toBe(0)
+    })
+  })
+
+  describe('a transcript the index already holds in full when the worker starts', () => {
+    // An app that starts again, or a worker the supervisor starts again,
+    // finds most transcripts as the index has them and reads none of them.
+    // As first written only a transcript that was read counted as found
+    // written, so one written afterwards through a handle that stays open
+    // waited for the next timed walk.
+    it('written afterwards with no report, is read at the next 5 s tick, and no folder is listed', async () => {
+      fakeTheTimer()
+      await start()
+      await restart()
+      // Nothing to read: every transcript is as the index has it.
+      expect(opened).toEqual([])
+      expect(db.events).toBe(5)
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      clearCounts()
+      const read = nextSweep('the sweep at the next tick')
+      vi.advanceTimersByTime(TAIL_MS)
+      await read
+      expect(listings).toBe(0)
+      expect(opened).toEqual([transcript('s2')])
+      expect(db.events).toBe(6)
+      // One size check for each transcript the walk at start found, and no other.
+      expect([...lstatted].sort()).toEqual(five().sort())
+    })
+
+    it('of more than TK_ACTIVE_MAX of them, the ones modified last are asked about, wherever the walk finds them', async () => {
+      fakeTheTimer()
+      const made = manyByAge()
+      await start()
+      await restart()
+      expect(opened).toEqual([])
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS)
+      await settle()
+      expect(lstatted).toHaveLength(TK_ACTIVE_MAX)
+      expect(new Set(lstatted)).toEqual(new Set(made.slice(0, TK_ACTIVE_MAX)))
+      expect(listings).toBe(0)
+      // The one modified last of those left out, written with no report, waits
+      // for the timed walk; one of those kept is read at the next tick.
+      realFs.appendFileSync(made[TK_ACTIVE_MAX], line('left-out'))
+      realFs.appendFileSync(made[TK_ACTIVE_MAX - 1], line('kept'))
+      clearCounts()
+      const read = nextSweep('the sweep at the next tick')
+      vi.advanceTimersByTime(TAIL_MS)
+      await read
+      expect(opened).toEqual([made[TK_ACTIVE_MAX - 1]])
+      expect(listings).toBe(0)
+    })
+  })
+
+  describe('a file that is no longer the one the index read', () => {
+    // The index keeps how far each file was read, and reads on from there. A
+    // file deleted and made again at the same path was told from the one
+    // read only by being shorter than that. Made again longer, its first
+    // lines were skipped, or the first of them read from its middle, and
+    // their usage was never counted. The index now keeps a mark of the
+    // file's first bytes and of the bytes just before where it stopped, and
+    // reads the file from its first byte when they are no longer there.
+    // Nothing is deduplicated in this stand-in, so a line read twice shows
+    // as well as one never read.
+    const report = async (file: string, event = 'rename'): Promise<void> => {
+      const read = nextSweep('the changed-files sweep')
+      fire(claudeDir, event, path.relative(claudeDir, file))
+      await read
+    }
+    /** Delete a file and make it again at once, at the same path. */
+    const makeAgain = (file: string, content: string): void => { realFs.rmSync(file); realFs.writeFileSync(file, content) }
+
+    // 'anew-0' is as long as 'init-2', so the old offset is the end of the
+    // new file's first line; 'another-0' is longer, so it is inside it.
+    for (const [what, id] of [['its lines as long as the old one', 'anew'], ['its lines longer than the old one', 'another']] as const) {
+      it(`a transcript deleted and made again larger, ${what}, is read from its first byte: every line once`, async () => {
+        await start()
+        const f = transcript('s2')
+        makeAgain(f, [0, 1, 2].map((i) => line(`${id}-${i}`)).join(''))
+        clearCounts()
+        await report(f)
+        expect(db.events).toBe(5 + 3)
+        expect(db.cursors.get(f)!.lastOffset).toBe(realFs.statSync(f).size)
+        expect(opened).toEqual([f])
+        expect(listings).toBe(0)
+      })
+    }
+
+    it('one made again with exactly as many bytes as were read of the old one is read too', async () => {
+      await start()
+      const f = transcript('s2')
+      makeAgain(f, line('anew-2'))
+      expect(realFs.statSync(f).size).toBe(db.cursors.get(f)!.lastOffset)
+      // Its time differs from the old file's, however fast it was made again.
+      const later = new Date(Date.now() + 5000)
+      realFs.utimesSync(f, later, later)
+      await report(f)
+      expect(db.events).toBe(5 + 1)
+    })
+
+    // The first bytes alone do not tell it: a file can start as the old one
+    // did and go on otherwise. The bytes just before the old offset do.
+    it('one made again with the first line the old one had and other lines after it is read from its first byte', async () => {
+      const f = transcript('s2')
+      realFs.writeFileSync(f, line('init-2') + line('next-2'))
+      await start()
+      expect(db.events).toBe(4 + 2)
+      makeAgain(f, line('init-2') + [0, 1, 2].map((i) => line(`other-${i}`)).join(''))
+      await report(f)
+      expect(db.events).toBe(4 + 2 + 4)
+      expect(db.cursors.get(f)!.lastOffset).toBe(realFs.statSync(f).size)
+    })
+
+    it('one found by the walk at start, made again larger while the worker was not running, is read from its first byte', async () => {
+      await start()
+      stopWorker!()
+      stopWorker = null
+      const f = transcript('s2')
+      makeAgain(f, [0, 1, 2].map((i) => line(`anew-${i}`)).join(''))
+      clearCounts()
+      await start()
+      expect(opened).toEqual([f])
+      expect(db.events).toBe(5 + 3)
+    })
+
+    it('a transcript that only grew is read on from where it stopped: the new bytes and the few of the mark, never the file again', async () => {
+      const big = transcript('big')
+      realFs.writeFileSync(big, Array.from({ length: 200 }, (_, i) => line(`big-${i}`)).join(''))
+      await start()
+      expect(db.events).toBe(5 + 200)
+      expect(realFs.statSync(big).size).toBeGreaterThan(30_000)
+      for (const n of [1, 2]) {
+        realFs.appendFileSync(big, line(`more-${n}`))
+        clearCounts()
+        await report(big, 'change')
+        expect(db.events).toBe(5 + 200 + n)
+        expect(opened).toEqual([big])
+        // The new line, the bytes checked before the old offset and the ones
+        // marked before the new one.
+        expect(bytesRead).toBeLessThan(2048)
+        const c = db.cursors.get(big)!
+        expect(c.lastOffset).toBe(realFs.statSync(big).size)
+        // The mark is of the bytes that end where reading stopped.
+        expect(c.readMark).toMatch(new RegExp(`^${c.lastOffset}:\\d+:\\d+:[0-9a-f]+$`))
+      }
+    })
+
+    it('a transcript whose time changed and nothing else is not read again, and keeps its mark', async () => {
+      await start()
+      const f = transcript('s2')
+      const mark = db.cursors.get(f)!.readMark
+      expect(mark).toBeTruthy()
+      const later = new Date(Date.now() + 5000)
+      realFs.utimesSync(f, later, later)
+      clearCounts()
+      await report(f, 'change')
+      expect(db.events).toBe(5)
+      expect(db.cursors.get(f)).toMatchObject({ mtime: realFs.statSync(f).mtimeMs, readMark: mark })
+      // Looked at, to see that it is the file that was read: a few bytes.
+      expect(bytesRead).toBeLessThan(512)
+    })
+
+    it('one whose bytes cannot be read to check them is counted as not read, its cursor left as it was, and read once they can be', async () => {
+      await start()
+      const f = transcript('s2')
+      const before = { ...db.cursors.get(f)! }
+      realFs.appendFileSync(f, line('more-2'))
+      // The first read of the open is the check's; the ones after it would
+      // succeed, so nothing is read on a guess of which file this is.
+      readFails.set(f, (nth) => nth === 0)
+      await report(f, 'change')
+      expect(failed.at(-1)).toBe(1)
+      expect(db.events).toBe(5)
+      expect(db.cursors.get(f)).toEqual(before)
+      expect(warnings.filter((w) => w.includes('read failed'))).toHaveLength(1)
+      expect(errors).toEqual([])
+      readFails.clear()
+      await report(f, 'change')
+      expect(failed.at(-1)).toBe(0)
+      expect(db.events).toBe(6)
+    })
+
+    it('a mark that cannot be read once the lines are leaves the cursor with none: the lines stay counted, and the file is read on', async () => {
+      await start()
+      const f = transcript('fresh')
+      realFs.writeFileSync(f, line('fresh-0'))
+      // The read of its lines succeeds; the reads for the mark fail.
+      readFails.set(f, (nth) => nth >= 1)
+      await report(f)
+      expect(db.events).toBe(6)
+      expect(failed.at(-1)).toBe(0)
+      expect(errors).toEqual([])
+      expect(db.cursors.get(f)).toMatchObject({ lastOffset: realFs.statSync(f).size, readMark: '' })
+      readFails.clear()
+      realFs.appendFileSync(f, line('fresh-1'))
+      await report(f, 'change')
+      expect(db.events).toBe(7)
+      expect(db.cursors.get(f)!.readMark).toBeTruthy()
+    })
+
+    // A database from before the mark was kept has none on any cursor, and
+    // one that cannot be read is as none.
+    const legacy: Array<[string, (c: Cursor) => void]> = [
+      ['no mark', (c) => { delete c.readMark }],
+      ['an empty mark', (c) => { c.readMark = '' }],
+      ['a mark that cannot be read', (c) => { c.readMark = 'not-a-mark' }],
+      ['a mark of more bytes than any mark has', (c) => { c.readMark = `${c.lastOffset}:9999:9999:${'0'.repeat(32)}` }],
+    ]
+    for (const [what, strip] of legacy) {
+      it(`a cursor with ${what} reads on from where it was, and is marked as it is read`, async () => {
+        await start()
+        stopWorker!()
+        stopWorker = null
+        for (const c of db.cursors.values()) strip(c)
+        const f = transcript('s2')
+        realFs.appendFileSync(f, line('more-2'))
+        clearCounts()
+        await start()
+        // Only the new line: the file is not read again from its first byte.
+        expect(opened).toEqual([f])
+        expect(db.events).toBe(6)
+        const c = db.cursors.get(f)!
+        expect(c.readMark).toMatch(new RegExp(`^${c.lastOffset}:\\d+:\\d+:[0-9a-f]+$`))
+        // Marked now: made again larger, it is read from its first byte.
+        makeAgain(f, [0, 1, 2].map((i) => line(`anew-${i}`)).join(''))
+        await report(f)
+        expect(db.events).toBe(6 + 3)
+      })
+    }
+
+    // After a downgrade an older build reads on and moves the offset, and
+    // leaves the mark as it was: of an earlier offset in the same file.
+    it('a cursor an older build moved on, its mark still of the earlier offset, reads on from where it is', async () => {
+      await start()
+      const f = transcript('s2')
+      const before = { ...db.cursors.get(f)! }
+      realFs.appendFileSync(f, line('older-build'))
+      const st = realFs.statSync(f)
+      db.cursors.set(f, { ...before, size: st.size, mtime: st.mtimeMs, lastOffset: st.size, scannedTo: st.size })
+      db.events++
+      realFs.appendFileSync(f, line('more-2'))
+      clearCounts()
+      await report(f, 'change')
+      expect(db.events).toBe(5 + 1 + 1)
+      const c = db.cursors.get(f)!
+      expect(c.readMark).toMatch(new RegExp(`^${c.lastOffset}:`))
+      expect(c.readMark).not.toBe(before.readMark)
+    })
+
+    // The older build read a file made again shorter from its first byte, so
+    // the mark is of an offset past the end of what is there now. What it
+    // read cannot be checked, so the file is read from its first byte.
+    it('a mark of an offset the file no longer reaches means another file: read from its first byte', async () => {
+      const f = transcript('s2')
+      realFs.writeFileSync(f, [0, 1, 2, 3].map((i) => line(`init-${i}`)).join(''))
+      await start()
+      expect(db.events).toBe(4 + 4)
+      const before = { ...db.cursors.get(f)! }
+      makeAgain(f, [0, 1].map((i) => line(`anew-${i}`)).join(''))
+      const one = line('anew-0').length
+      const st = realFs.statSync(f)
+      // As the older build left it: the first line read, the mark untouched.
+      db.cursors.set(f, { ...before, size: one, mtime: st.mtimeMs - 1, lastOffset: one, scannedTo: one })
+      const events = db.events
+      await report(f, 'change')
+      expect(db.events).toBe(events + 2)
+    })
+
+    // Its turns are the same bytes whichever session they are in (as these
+    // are written here), so only the header tells the two rollouts apart: the
+    // file's first bytes. One read while it held no turn yet is marked too.
+    for (const turns of [2, 0]) {
+      it(`a Codex rollout of ${turns} turns deleted and made again larger is read from its first byte, as the session it now holds`, async () => {
+        const day = path.join(codexDir, '2026', '08', '01')
+        realFs.mkdirSync(day, { recursive: true })
+        const name = 'rollout-2026-08-01T00-00-00-a.jsonl'
+        const file = path.join(day, name)
+        realFs.writeFileSync(file, rollout('cx-a', turns))
+        await start()
+        expect(db.events).toBe(5 + turns)
+        expect(db.cursors.get(file)).toMatchObject({ codexSessionId: 'cx-a', codexTurns: turns })
+        makeAgain(file, rollout('cx-b', 5))
+        const full = nextSweep('the full sweep')
+        fire(codexDir, 'rename', path.join('2026', '08', '01', name))
+        await full
+        expect(db.events).toBe(5 + turns + 5)
+        expect(db.cursors.get(file)).toMatchObject({ codexSessionId: 'cx-b', codexTurns: 5, lastOffset: realFs.statSync(file).size })
+      })
+    }
+
+    it('a Codex rollout made again with exactly as many bytes as were read of the old one is read too, as the session it now holds', async () => {
+      const day = path.join(codexDir, '2026', '08', '01')
+      realFs.mkdirSync(day, { recursive: true })
+      const name = 'rollout-2026-08-01T00-00-00-a.jsonl'
+      const file = path.join(day, name)
+      realFs.writeFileSync(file, rollout('cx-a', 2))
+      await start()
+      expect(db.events).toBe(5 + 2)
+      makeAgain(file, rollout('cx-b', 2))
+      expect(realFs.statSync(file).size).toBe(db.cursors.get(file)!.lastOffset)
+      const later = new Date(Date.now() + 5000)
+      realFs.utimesSync(file, later, later)
+      const full = nextSweep('the full sweep')
+      fire(codexDir, 'rename', path.join('2026', '08', '01', name))
+      await full
+      expect(db.events).toBe(5 + 2 + 2)
+      expect(db.cursors.get(file)).toMatchObject({ codexSessionId: 'cx-b', codexTurns: 2 })
+    })
+
+    it('a Codex rollout that only grew is read on from where it stopped', async () => {
+      const day = path.join(codexDir, '2026', '08', '01')
+      realFs.mkdirSync(day, { recursive: true })
+      const name = 'rollout-2026-08-01T00-00-00-a.jsonl'
+      const file = path.join(day, name)
+      realFs.writeFileSync(file, rollout('cx-a', 2))
+      await start()
+      expect(db.events).toBe(5 + 2)
+      // One more turn: the last line of a rollout of three.
+      realFs.appendFileSync(file, rollout('cx-a', 3).split('\n').slice(-2).join('\n'))
+      const full = nextSweep('the full sweep')
+      fire(codexDir, 'change', path.join('2026', '08', '01', name))
+      await full
+      expect(db.events).toBe(5 + 2 + 1)
+      const c = db.cursors.get(file)!
+      expect(c).toMatchObject({ codexSessionId: 'cx-a', codexTurns: 3, lastOffset: realFs.statSync(file).size })
+      expect(c.readMark).toMatch(new RegExp(`^${c.lastOffset}:`))
+    })
+
+    it('a Codex rollout whose bytes cannot be read to check them is counted as not read, its cursor left as it was, and read once they can be', async () => {
+      const day = path.join(codexDir, '2026', '08', '01')
+      realFs.mkdirSync(day, { recursive: true })
+      const name = 'rollout-2026-08-01T00-00-00-a.jsonl'
+      const file = path.join(day, name)
+      realFs.writeFileSync(file, rollout('cx-a', 2))
+      await start()
+      const before = { ...db.cursors.get(file)! }
+      realFs.appendFileSync(file, rollout('cx-a', 3).split('\n').slice(-2).join('\n'))
+      // The first read of the open is the check's; the ones after it would succeed.
+      readFails.set(file, (nth) => nth === 0)
+      let full = nextSweep('the full sweep')
+      fire(codexDir, 'change', path.join('2026', '08', '01', name))
+      await full
+      expect(failed.at(-1)).toBe(1)
+      expect(db.events).toBe(5 + 2)
+      expect(db.cursors.get(file)).toEqual(before)
+      expect(errors).toEqual([])
+      readFails.clear()
+      full = nextSweep('the full sweep')
+      fire(codexDir, 'change', path.join('2026', '08', '01', name))
+      await full
+      expect(failed.at(-1)).toBe(0)
+      expect(db.events).toBe(5 + 2 + 1)
+    })
+
+    it('a Codex rollout whose time changed and nothing else is not read again, and keeps its mark and its session', async () => {
+      const day = path.join(codexDir, '2026', '08', '01')
+      realFs.mkdirSync(day, { recursive: true })
+      const name = 'rollout-2026-08-01T00-00-00-a.jsonl'
+      const file = path.join(day, name)
+      realFs.writeFileSync(file, rollout('cx-a', 2))
+      await start()
+      const mark = db.cursors.get(file)!.readMark
+      expect(mark).toBeTruthy()
+      const later = new Date(Date.now() + 5000)
+      realFs.utimesSync(file, later, later)
+      const full = nextSweep('the full sweep')
+      fire(codexDir, 'change', path.join('2026', '08', '01', name))
+      await full
+      expect(db.events).toBe(5 + 2)
+      expect(db.cursors.get(file)).toMatchObject({ mtime: realFs.statSync(file).mtimeMs, readMark: mark, codexSessionId: 'cx-a', codexTurns: 2 })
     })
   })
 

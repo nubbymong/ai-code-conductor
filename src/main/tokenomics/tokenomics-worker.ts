@@ -1,5 +1,6 @@
 import * as nodeFs from 'fs'
 import * as path from 'path'
+import { createHash } from 'crypto'
 import { openTkDb, TK_REBUILD_PAGE, type TkDb, type TkFileCursor } from './tk-db'
 import { parseClaudeUsageLine, extractCwdFromLine, codexEventsFromRollout, type CodexRolloutSeed } from './tk-parse'
 import { findConfigForCwd, isJunkCwd } from './tk-config-match'
@@ -51,8 +52,13 @@ const YIELD_EVERY = 16 // files between event-loop yields during a sweep
  *  watcher's reports are read every 5 s in between. */
 export const TK_FULL_SWEEP_MS = 5 * 60_000
 /** #302: how many Claude transcripts the 5 s timer asks the size of at most:
- *  the ones a sweep found written last. */
+ *  the ones modified last, of those a sweep looked at. */
 export const TK_ACTIVE_MAX = 200
+/** How many of a file's first bytes, and how many of the bytes before the
+ *  offset, its cursor keeps a mark of. */
+const MARK_BYTES = 256
+/** The longest run of bytes a cursor's mark is trusted to name. */
+const MARK_BYTES_MAX = 4096
 
 /** What one bounded pass over a file's byte range saw. */
 export interface StreamResult {
@@ -124,6 +130,75 @@ export function streamLines(
     }
   }
   return { pos, pendingLen: runLen, pendingDropped: dropped }
+}
+
+/**
+ * A mark of an open file as it was read up to `at`: a hash of its first bytes
+ * and of the bytes that end at `at`, with where and how many, as
+ * `<at>:<first>:<last>:<hash>`. '' when nothing was read (`at` is 0) or the
+ * file ends before `at`.
+ *
+ * A file's cursor keeps the mark of where reading stopped, and the next read
+ * checks it before it reads on from there. The offset alone cannot tell a
+ * file from another made at its path: only one shorter than the offset was
+ * read again from its first byte, so a file deleted and made again LONGER was
+ * read on from the old offset, its first lines skipped or the first of them
+ * read from its middle, and their usage never counted.
+ *
+ * Both runs are needed. The first bytes say whose file it is (a transcript's
+ * first line, a rollout's header: each carries its own ids), and the bytes
+ * before the offset are the end of the last line read, so they say that
+ * reading can go on from exactly there. A writer that appends rewrites
+ * neither. A file put back with the same bytes (a copy, a sync) is the same
+ * file here, and is read on.
+ *
+ * It is the file's own bytes and nothing the file system says of it, so it
+ * tells the same on every platform. Measured on Windows 11 (NTFS, Node 24):
+ * a file deleted and made again at once at the same path has the creation
+ * time of the one deleted, and only its file id differs. Not measured
+ * elsewhere: a file id may be given again to the next file made, and Node
+ * documents that the creation time may hold the change time where the file
+ * system keeps none, which moves with every write.
+ *
+ * The hash is kept, not the bytes: they are part of a conversation, and the
+ * index holds none of it.
+ */
+function readMarkAt(fsx: typeof nodeFs, fd: number, at: number, first: number = Math.min(MARK_BYTES, at), last: number = Math.min(MARK_BYTES, at)): string {
+  if (!(at > 0)) return ''
+  const hash = createHash('sha256')
+  for (const [from, bytes] of [[0, first], [at - last, last]]) {
+    const buf = Buffer.alloc(bytes)
+    let got = 0
+    while (got < bytes) {
+      const n = fsx.readSync(fd, buf, got, bytes - got, from + got)
+      if (n <= 0) return '' // the file ends before `at`
+      got += n
+    }
+    hash.update(buf)
+  }
+  return `${at}:${first}:${last}:${hash.digest('hex').slice(0, 32)}`
+}
+
+/**
+ * Whether an open file is no longer the one its cursor was written for: the
+ * bytes the cursor's mark names are not there now.
+ *
+ * The mark says where its bytes end, so it is checked there and not at the
+ * cursor's offset. After a downgrade an older build reads on, moves the
+ * offset and leaves the mark alone: the mark is then of an earlier offset in
+ * the same file, and still tells it from another. A file that ends before the
+ * mark is another file too (that build read one made again shorter).
+ *
+ * False for a cursor with no mark, or one that is not a mark this build
+ * writes: a database from before the mark was kept, or nothing read yet. Such
+ * a file is read on from its offset, as it always was, and marked then.
+ */
+function replacedSince(fsx: typeof nodeFs, fd: number, cursor: TkFileCursor): boolean {
+  const m = /^(\d{1,15}):(\d{1,4}):(\d{1,4}):[0-9a-f]{32}$/.exec(cursor.readMark ?? '')
+  if (!m) return false
+  const [at, first, last] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  for (const bytes of [first, last]) if (bytes < 1 || bytes > MARK_BYTES_MAX || bytes > at) return false
+  return readMarkAt(fsx, fd, at, first, last) !== cursor.readMark
 }
 
 /**
@@ -231,29 +306,51 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
    */
   const dirtyClaude = new Set<string>()
   /**
-   * #302: the Claude transcripts a sweep found written, the one found
-   * longest ago first. The watcher does not report every write: on Windows
-   * one made through a handle that stays open raises no event for the file
-   * until the handle closes (measured: five writes 500 ms apart reported
-   * nothing, then one 'change' at the close). The 5 s walk used to find
-   * those. The 5 s timer now asks the size of just these and reads the ones
-   * that moved, as if the watcher had reported them: one size check each and
-   * no folder listed. At most TK_ACTIVE_MAX are kept, and a transcript found
-   * written again goes back to the end, so a first index that reads
-   * thousands of old transcripts leaves the timer that many to ask about,
-   * not thousands, and the ones being written push the old ones out.
+   * #302: the Claude transcripts the 5 s timer asks the size of, each with
+   * the time it was last modified as the sweep that looked at it last found
+   * it. The watcher does not report every write: on Windows one made through
+   * a handle that stays open raises no event for the file until the handle
+   * closes (measured: five writes 500 ms apart reported nothing, then one
+   * 'change' at the close). The 5 s walk used to find those. The 5 s timer
+   * now asks the size of just these and reads the ones that moved, as if the
+   * watcher had reported them: one size check each and no folder listed.
    *
-   * None is dropped for how long ago it was found. A session that pauses
+   * Every transcript a sweep looks at is noted: one it read, and one it
+   * found as the index has it (review round 3). A worker that starts, in an
+   * app started again or started again by the supervisor, finds most
+   * transcripts like that; as first written only a transcript that was read
+   * was noted, so a session that then wrote through the handle it kept was
+   * found only by the next timed walk.
+   *
+   * At most TK_ACTIVE_MAX are kept: the ones modified last, so a walk over
+   * thousands of old transcripts leaves the timer that many to ask about,
+   * not thousands, and the ones being written are among them wherever the
+   * walk finds them. As first written the ones found last were kept, and a
+   * walk finds them in the order the folders list them. A write through a
+   * handle that stays open moves the time as it is asked from outside
+   * (measured on Windows 11, NTFS, Node 24: each write, at once).
+   *
+   * None is dropped for how long ago it was modified. A session that pauses
    * and then writes again through the handle it kept has no other report
    * (the folder reported as changed, at most, which names no file), so one
    * dropped after ten minutes, as first written, was then found only by the
    * next timed walk.
    */
-  const activeClaude = new Set<string>()
-  const noteActive = (file: string): void => {
-    activeClaude.delete(file) // back in at the end: the Set keeps the order they were found in
-    activeClaude.add(file)
-    if (activeClaude.size > TK_ACTIVE_MAX) activeClaude.delete(activeClaude.values().next().value as string)
+  const activeClaude = new Map<string, number>()
+  const noteActive = (file: string, modifiedAt: number): void => {
+    activeClaude.delete(file) // back in at the end: of two modified at the same time, the one noted longer ago goes first
+    activeClaude.set(file, modifiedAt)
+    if (activeClaude.size <= TK_ACTIVE_MAX) return
+    let drop = file
+    let oldest = Infinity
+    for (const [f, at] of activeClaude) if (at < oldest) { oldest = at; drop = f }
+    activeClaude.delete(drop)
+  }
+  /** The mark of where reading stopped, for the file's cursor. None when it
+   *  cannot be read: the next read then has nothing to check, as with a
+   *  cursor from before the mark was kept. */
+  const markOf = (fd: number, at: number): string => {
+    try { return readMarkAt(fs, fd, at) } catch { return '' }
   }
   let fullSweepDue = true
   let lastFullSweepAt = 0
@@ -398,12 +495,21 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     const cursor = db!.getFileCursor(file)
     let offset = cursor ? cursor.lastOffset : 0
     if (cursor && st.size < cursor.lastOffset) offset = 0 // truncated/rotated -> re-read
-    if (unchangedAndFullyScanned(cursor, st, offset)) return 0
+    // #302 (review round 3): as the index has it, so not read, and asked
+    // about all the same: it may be written next with no report.
+    if (unchangedAndFullyScanned(cursor, st, offset)) { noteActive(file, st.mtimeMs); return 0 }
+    // What was read can be checked: something was, and its cursor has a
+    // mark (one from before the mark was kept has none).
+    const marked = offset > 0 && !!cursor?.readMark
     // #302: changed with nothing to read yet (a transcript just made is
     // empty) is written lately too: its first lines may come with no report.
-    if (st.size <= offset) { db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: offset, lastIngestedAt: Date.now(), scannedTo: st.size }); noteActive(file); return 0 }
+    const nothingToRead = (): number => {
+      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: offset, lastIngestedAt: Date.now(), scannedTo: st.size, readMark: offset > 0 ? cursor?.readMark : '' })
+      noteActive(file, st.mtimeMs)
+      return 0
+    }
+    if (st.size <= offset && !marked) return nothingToRead()
 
-    const end = Math.min(st.size, offset + maxTickBytes)
     let fd: number
     // A file we could not read is work still outstanding, not work done. It
     // writes no cursor row, so nothing else can notice it — and an index that
@@ -413,6 +519,19 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     let inserted = 0
     let fileCwd = ''
     try {
+      // Another file than the one read, made at its path: read from its
+      // first byte, whatever its size (see readMarkAt). Its lines are new
+      // rows; any it shares with the file that was read are stored already
+      // and are not stored twice.
+      if (marked) {
+        try { if (replacedSince(fs, fd, cursor!)) offset = 0 } catch (err) {
+          sweepFailed.add(file)
+          logw('warn', `read failed for ${file}: ${String(err)}`)
+          return 0
+        }
+      }
+      if (st.size <= offset) return nothingToRead()
+      const end = Math.min(st.size, offset + maxTickBytes)
       let batch: Array<TkEvent & { configId?: string | null }> = []
       let consumed = offset
       const flush = (): void => { if (batch.length) { inserted += db!.insertEvents(batch); batch = [] } }
@@ -452,10 +571,10 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       else if (res.pendingLen > 0 && consumed === offset && res.pos - offset >= maxTickBytes) consumed = res.pos
       flush()
       noteScanned(res.pos, st.size, consumed > offset)
-      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos })
-      // #302: read just now, so written lately. One that could not be read
+      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos, readMark: markOf(fd, consumed) })
+      // #302: read, so asked about from now on. One that could not be read
       // is not noted: it waits for its next report or the next walk.
-      noteActive(file)
+      noteActive(file, st.mtimeMs)
     } finally { try { fs.closeSync(fd) } catch { /* ignore */ } }
     return inserted
   }
@@ -500,28 +619,45 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     let offset = cursor ? cursor.lastOffset : 0
     let turnBase = cursor?.codexTurns ?? 0
     let seed: CodexRolloutSeed = { sessionId: cursor?.codexSessionId || undefined, cwd: cursor?.codexCwd || undefined, model: cursor?.codexModel || undefined }
-    if (cursor && st.size < cursor.lastOffset) {
-      // Truncated or rotated: the file we counted is not this one. Re-read from
-      // the top with the ordinal base back at zero, so the stored rows dedup
-      // against their own keys instead of being re-inserted beside them.
+    // The file we counted is not this one. Re-read from the top with the
+    // ordinal base back at zero, so the stored rows dedup against their own
+    // keys instead of being re-inserted beside them.
+    const fromTheTop = (): void => {
       offset = 0
       turnBase = 0
       seed = { sessionId: undefined, cwd: undefined, model: undefined }
     }
+    // Truncated or rotated: shorter than what was read of it.
+    if (cursor && st.size < cursor.lastOffset) fromTheTop()
     if (unchangedAndFullyScanned(cursor, st, offset)) return 0
-    if (st.size <= offset) {
-      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: offset, lastIngestedAt: Date.now(), scannedTo: st.size, codexSessionId: seed.sessionId ?? '', codexModel: seed.model ?? '', codexCwd: seed.cwd ?? '', codexTurns: turnBase, accountKey })
+    // As for a Claude transcript: what was read can be checked.
+    const marked = offset > 0 && !!cursor?.readMark
+    const nothingToRead = (): number => {
+      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: offset, lastIngestedAt: Date.now(), scannedTo: st.size, codexSessionId: seed.sessionId ?? '', codexModel: seed.model ?? '', codexCwd: seed.cwd ?? '', codexTurns: turnBase, accountKey, readMark: offset > 0 ? cursor?.readMark : '' })
       return 0
     }
+    if (st.size <= offset && !marked) return nothingToRead()
 
     // `!== undefined`, not truthiness: a caller asking for a 0-byte tick meant
     // it, and silently handing back 64 MB instead is not a kindness.
     const tickBytes = deps.maxTickBytes !== undefined ? maxTickBytes : CODEX_TICK_BYTES
-    const end = Math.min(st.size, offset + tickBytes)
     let fd: number
     try { fd = fs.openSync(file, 'r') } catch (err) { sweepFailed.add(file); logw('warn', `open failed for ${file}: ${String(err)}`); return 0 }
     let inserted = 0
     try {
+      // Deleted and made again at this path, as long as what was read of the
+      // old one or longer (see readMarkAt): from the top, as one that is
+      // shorter. Read on from the old offset, its first turns were never
+      // counted and the rest were stored as the old session's.
+      if (marked) {
+        try { if (replacedSince(fs, fd, cursor!)) fromTheTop() } catch (err) {
+          sweepFailed.add(file)
+          logw('warn', `read failed for ${file}: ${String(err)}`)
+          return 0
+        }
+      }
+      if (st.size <= offset) return nothingToRead()
+      const end = Math.min(st.size, offset + tickBytes)
       let consumed = offset
       // The rollout header sits at the top of the file. On a resumed read we
       // start past it, so re-read the head for those lines - bounded and cheap.
@@ -610,7 +746,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
             logw('warn', `codex rollout ${file}: dropped ${keyed.length - fresh.length} turn(s) with an unusable timestamp`)
           }
           turnBase = offset === 0 ? Math.max(turnBase, probe.length) : turnBase + probe.length
-          inserted = db!.insertEventsWithCursor(fresh, { path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos, codexSessionId: nextSeed.sessionId ?? '', codexModel: nextSeed.model ?? '', codexCwd: nextSeed.cwd ?? '', codexTurns: turnBase, accountKey })
+          inserted = db!.insertEventsWithCursor(fresh, { path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos, codexSessionId: nextSeed.sessionId ?? '', codexModel: nextSeed.model ?? '', codexCwd: nextSeed.cwd ?? '', codexTurns: turnBase, accountKey, readMark: markOf(fd, consumed) })
           return inserted
         }
         if (offset > 0 && !nextSeed.sessionId) {
@@ -620,7 +756,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
           logw('warn', `codex rollout ${file}: no session identity for ${kept.length} line(s) at offset ${offset}`)
         }
       }
-      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos, codexSessionId: nextSeed.sessionId ?? '', codexModel: nextSeed.model ?? '', codexCwd: nextSeed.cwd ?? '', codexTurns: turnBase, accountKey })
+      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos, codexSessionId: nextSeed.sessionId ?? '', codexModel: nextSeed.model ?? '', codexCwd: nextSeed.cwd ?? '', codexTurns: turnBase, accountKey, readMark: markOf(fd, consumed) })
     } finally { try { fs.closeSync(fd) } catch { /* ignore */ } }
     return inserted
   }
@@ -1031,7 +1167,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
   }
 
   /**
-   * #302: ask the size of each transcript found written (activeClaude) and
+   * #302: ask the size of each transcript noted (activeClaude) and
    * hand the ones that moved to the next sweep, as if the watcher had
    * reported them. One lstat each, no folder listed. Skipped: a transcript
    * already reported, and one that could not be read when last tried (it
@@ -1051,7 +1187,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
    */
   function noteActiveGrowth(): void {
     if (!db) return
-    for (const file of activeClaude) {
+    for (const file of activeClaude.keys()) {
       if (dirtyClaude.has(file) || sweepFailed.has(file)) continue
       let st: nodeFs.Stats
       try { st = fs.lstatSync(file) } catch (err) {
