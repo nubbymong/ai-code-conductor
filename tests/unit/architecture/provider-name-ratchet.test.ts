@@ -134,6 +134,9 @@ function codeOf(text: string): string {
     for (let k = from; k < to && k < n; k++) if (out[k] !== '\n' && out[k] !== '\r') out[k] = ' '
   }
   const isName = (s: string): boolean => (PROVIDER_IDS as readonly string[]).includes(s)
+  /** How far a backslash at `at` reaches: over the one character it escapes,
+   *  or over a whole line break, so a checkout with either kind reads alike. */
+  const escaped = (at: number): number => (text[at + 1] === '\r' && text[at + 2] === '\n' ? 3 : 2)
   /** One entry for each `${` that is open: how many `{` are open inside it. */
   const braces: number[] = []
   /** The last piece of code passed: a word, a punctuation mark, or `value`
@@ -147,7 +150,7 @@ function codeOf(text: string): string {
     const from = i
     while (i < n) {
       const c = text[i]
-      if (c === '\\') { i += 2; continue }
+      if (c === '\\') { i += escaped(i); continue }
       if (c === '`') {
         if (!(opened && isName(text.slice(from, i)))) blank(from, i)
         i++
@@ -195,7 +198,7 @@ function codeOf(text: string): string {
     }
     if (c === '\'' || c === '"') {
       const from = ++i
-      while (i < n && text[i] !== c && text[i] !== '\n') i += text[i] === '\\' ? 2 : 1
+      while (i < n && text[i] !== c && text[i] !== '\n') i += text[i] === '\\' ? escaped(i) : 1
       if (!isName(text.slice(from, i))) blank(from, i)
       if (text[i] === c) i++
       last = 'value'
@@ -536,6 +539,8 @@ describe('what the count sees, spelling by spelling', () => {
     ['a comparison written inside a template literal', `const script = \`if (p === '${first}') {}\``],
     ['a comparison written inside a template literal, beside its braces', `const script = \`\${indent}if (p === "${second}") {}\${end}\``],
     ['a comment written inside a string, and nothing after it', `const u = '// p === x'`],
+    ['a comparison on the second line of a string carried over a line break', `log('one \\\nif (p === "${first}") {}')`],
+    ['the same in a file whose lines end in a return and a line feed', `log('one \\\r\nif (p === "${second}") {}')`],
     ['a conditional over two different things', `const a = cond ? id : '${first}'`],
     ['a conditional that asks the type', `const a = typeof id === 'string' ? id : '${second}'`],
     ['a conditional that asks about a call', `const a = pick() ? pick() : '${first}'`],
@@ -567,6 +572,12 @@ describe('what is matched is code alone', () => {
   it('a string that is a provider name stays, in any of the three quotes; the text of any other is blanked', () => {
     expect(codeOf(`['${first}', "${second}", \`${first}\`]`)).toBe(`['${first}', "${second}", \`${first}\`]`)
     expect(codeOf(`f('x ${first}', "it's", \`\${a}-${second}\`)`)).toBe(`f('${' '.repeat(first.length + 2)}', "    ", \`\${a}${' '.repeat(second.length + 1)}\`)`)
+  })
+
+  it('a string carried over a line break by a backslash is one string, whichever way the line ends', () => {
+    for (const eol of ['\n', '\r\n']) {
+      expect(codeOf(`const s = 'a \\${eol}p === x'; q() // r`), JSON.stringify(eol)).toBe(`const s = '   ${eol}       '; q()     `)
+    }
   })
 
   it('a template literal inside the braces of another is stepped through, and the code after both is code', () => {
