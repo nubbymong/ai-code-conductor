@@ -316,10 +316,13 @@ describe('a fetched file is held to a strict shape', () => {
     const r = validateModelData(file((f) => { f.models.unshift(NEW_OPUS) }), bundled)
     expect(r.ok ? 'ok' : r.reason).toBe('ok')
     const merged = mergeModelData(bundled, r.ok ? r.data : null, '2026-11-14')
-    expect(resolveModelInfo(merged, 'claude-opus-6-20270101')).toMatchObject({ id: 'claude-opus-6', matchKind: 'prefix' })
-    expect(resolveModelInfo(merged, 'anthropic.claude-opus-6-v1:0')).toMatchObject({ id: 'claude-opus-6', matchKind: 'pattern' })
+    expect(resolveModelInfo(merged, 'claude-opus-6')).toMatchObject({ id: 'claude-opus-6', matchKind: 'exact', label: 'Opus 6' })
+    // The new model is its exact id (and its aliases). A name the build
+    // already places, a dated or a partner platform's form of the new id
+    // among them, stays where the build has it: the file never moves one
+    // (tests/unit/model-data-resolution-rule.test.ts).
     const shippedPrice = bundled.models.find((m) => m.id === 'claude-opus-5-5')?.fallbackPricing
-    for (const name of ['anthropic.claude-opus-9-v1:0', 'Opus 9 (1M context)']) {
+    for (const name of ['claude-opus-6-20270101', 'anthropic.claude-opus-6-v1:0', 'anthropic.claude-opus-9-v1:0', 'Opus 9 (1M context)']) {
       const info = resolveModelInfo(merged, name)
       expect(info, name).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern' })
       expect(info.fallbackPricing, name).toEqual(shippedPrice)
@@ -372,7 +375,7 @@ describe('how a fetched file joins the bundled one', () => {
     const merged = mergeModelData(bundled, fetched((f) => { f.models.unshift(NEW_MODEL) }), '2026-11-14')
     expect(merged.models[0].id).toBe('claude-fable-6')
     expect(buildModelPickerRows(merged).some((r) => r.value === 'claude-fable-6')).toBe(true)
-    expect(resolveModelInfo(merged, 'claude-fable-6-20270101')).toMatchObject({ known: true, label: 'Fable 6' })
+    expect(resolveModelInfo(merged, 'claude-fable-6')).toMatchObject({ known: true, label: 'Fable 6', matchKind: 'exact' })
     expect(resolveModelInfo(merged, 'claude-fable-6').fallbackPricing).toEqual(NEW_MODEL.fallbackPricing)
   })
 
@@ -478,17 +481,18 @@ describe('a pattern is plain text, never compiled', () => {
 
   it('resolving a name against the bundled and fetched patterns never builds a regular expression', () => {
     const merged = mergeModelData(bundled, (() => {
-      const r = validateModelData(file((f) => { f.models.unshift({ ...NEW_MODEL, patterns: ['^fable-six', 'six.fable'] }) }), bundled)
+      const r = validateModelData(file((f) => { f.models.unshift({ ...NEW_MODEL, patterns: ['^zeta-six', 'six.zeta'] }) }), bundled)
       if (!r.ok) throw new Error(r.reason)
       return r.data
     })(), '2026-11-14')
     const built = vi.spyOn(globalThis, 'RegExp')
     // Reached by a start-anchored pattern, by a plain one, and not at all.
-    expect(resolveModelInfo(merged, 'fable-six-preview').id).toBe('claude-fable-6')
-    expect(resolveModelInfo(merged, 'my-fable-six').id).not.toBe('claude-fable-6')
-    expect(resolveModelInfo(merged, 'a-six.fable-b').id).toBe('claude-fable-6')
+    // (Names no shipped entry places: a fetched model takes only those.)
+    expect(resolveModelInfo(merged, 'zeta-six-preview').id).toBe('claude-fable-6')
+    expect(resolveModelInfo(merged, 'my-zeta-six').id).not.toBe('claude-fable-6')
+    expect(resolveModelInfo(merged, 'a-six.zeta-b').id).toBe('claude-fable-6')
     // A dot is a dot, not "any character".
-    expect(resolveModelInfo(merged, 'a-sixxfable-b').id).not.toBe('claude-fable-6')
+    expect(resolveModelInfo(merged, 'a-sixxzeta-b').id).not.toBe('claude-fable-6')
     expect(resolveModelInfo(merged, 'gpt-9-nova')).toMatchObject({ known: true, id: 'codex-family', matchKind: 'pattern' })
     expect(resolveModelInfo(merged, 'o9-mini').id).toBe('codex-family')
     expect(resolveModelInfo(merged, 'no-such-model').known).toBe(false)

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "6d250e8fb1c8afb394ef95f2eb3514c3f892402b12b242f7bb045e8128cf4190",
-  "manifestHead": "bfbe669335749688e75c5b55e2daf40c5c399d37",
+  "manifestPathDigest": "3d3b8b10fc2d6f68c2e4ddc657b23e2a9b983a0b1b261ad7c4b795922535a14d",
+  "manifestHead": "6a45533b5fafb2be1233d20072d8249cabb4e2c0",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -7316,6 +7316,17 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: WP2 PR 3 P3.8 round 1 (row 39) added the Codex half's parity cases (the release gate against evaluateCodexModelCoverage); the Claude cases are unchanged; tests/unit/model-coverage-parity.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 2 added the duplicate, picker-id and non-list cases; tests/unit/model-coverage-parity.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 round 1 (was retain)"
+    },
+    {
+      "path": "tests/unit/model-data-resolution-rule.test.ts",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.1 test (tests/unit/model-data-resolution-rule.test.ts): a fetched model file never changes what a name the build already places resolves to, for Claude Code's names and for Codex's (a fixed list of names against fetched files that pass every check and try to take names), and the user's own overlay keeps its place (WP1.68)",
+      "note": "created by the 2.1.3-beta.1 model definitions as data change; the P05 hit picks the Claude Code models of the bundled file by family for the list of names, not a provider gate; no file, no network"
     },
     {
       "path": "tests/unit/model-data-schema.test.ts",

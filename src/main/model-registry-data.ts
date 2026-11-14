@@ -21,8 +21,16 @@
 //    version), and a new pattern is at least four characters: an entry that
 //    is only the start of a name would match every model not listed yet;
 //  - a model the build does not ship has no pattern the bundled file already
-//    has on one of its own entries (`opus`): the file's models are matched
-//    first, so it would take every name that entry stands for;
+//    has on one of its own entries (`opus`): it is after the names that
+//    entry stands for, and cannot have them (the next rule), so it is a
+//    mistake in the file and the log says so;
+//  - THE RULE: a file never changes what a name the build already places
+//    resolves to. A shipped model's patterns are always the bundled file's
+//    (the file's are left out; its label, prices and other fields are used),
+//    and a name is tried against the shipped entries, in the bundled file's
+//    order, before a model only the file has (mergeModelData here, matchEntry
+//    in model-registry.ts). So a model the file adds is its exact id and its
+//    aliases, and beyond those only a name nothing shipped places;
 //  - a pattern is plain text (literalPattern), matched as text. Nothing in
 //    the file is ever compiled into a regular expression.
 //
@@ -189,10 +197,11 @@ export function validateModelData(value: unknown, bundled: ModelRegistry): Model
     for (const p of m.patterns) {
       const patternText = literalPattern(p)?.text ?? ''
       if (!had.has(p) && patternText.length < MODEL_DATA_MIN_PATTERN) return refuse(`models: ${m.id} has a pattern too short to add`)
-      // The file's models are matched first. A model the build does not ship
-      // that carried a pattern the build has on one of its own entries (the
-      // family's `opus`, with or without `^`) would take the label and the
-      // price of every name that entry stands for.
+      // A model the build does not ship that carries a pattern the build has
+      // on one of its own entries (the family's `opus`, with or without `^`)
+      // is after the label and the price of every name that entry stands
+      // for. It could not have them (a shipped entry is tried first, see
+      // mergeModelData), so it is a mistake in the file, and it is said.
       const keeper = base ? undefined : keptOn.get(patternText)
       if (keeper) return refuse(`models: ${m.id} has a pattern the build already has on ${keeper}`)
     }
@@ -226,6 +235,15 @@ function joinByValue<T extends { value: string }>(file: readonly T[], bundled: r
  *  - The file's models come first, in its order, and win for an id both
  *    carry; a model only the bundled file carries stays, after them. So the
  *    file can add a model and correct one, and can never take one away.
+ *  - A file never changes what a name the build already places resolves to.
+ *    A shipped model's patterns are the bundled file's, whatever the file
+ *    gives it. They are left out, not refused: a file edited for a later
+ *    build may well have other patterns on a model this build ships, and
+ *    refusing it would lock this build out of every later file. And the
+ *    result carries the bundled file's own order (`shippedOrder`, in memory
+ *    only), which a name is placed by, a model only the file has being
+ *    tried last (matchEntry). The order of `models`, which is the pickers',
+ *    is still the file's.
  *  - Whether a model the bundled file carries is offered in a picker is the
  *    bundled file's to say (`pickable`), so the file cannot hide one, nor
  *    offer the catch-all entry that is not a model.
@@ -248,7 +266,8 @@ export function mergeModelData(bundled: ModelRegistry, data: ModelRegistry | nul
   const corrected = (m: ModelEntry, base: ModelEntry): ModelEntry => {
     const { pickable: _theirs, ...rest } = m
     void _theirs
-    return base.pickable === undefined ? rest : { ...rest, pickable: base.pickable }
+    const kept: ModelEntry = { ...rest, patterns: base.patterns }
+    return base.pickable === undefined ? kept : { ...kept, pickable: base.pickable }
   }
   const otherLevels: Record<string, EffortLevelSpec[]> = { ...(bundled.providerEffortLevels ?? {}) }
   for (const [provider, levels] of Object.entries(data.providerEffortLevels ?? {})) {
@@ -263,5 +282,6 @@ export function mergeModelData(bundled: ModelRegistry, data: ModelRegistry | nul
     effortLevels: joinByValue(data.effortLevels, bundled.effortLevels),
     providerEffortLevels: otherLevels,
     dropdown: joinByValue(data.dropdown, bundled.dropdown),
+    shippedOrder: bundled.models.map((m) => m.id),
   }
 }

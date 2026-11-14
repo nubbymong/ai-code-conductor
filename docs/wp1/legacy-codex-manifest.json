@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-14T05:06:03.858Z",
-  "head": "bfbe669335749688e75c5b55e2daf40c5c399d37",
-  "tree": "f6b796ba9c7f294ef46c14b479f970c4f88c924a",
+  "generatedAt": "2026-11-14T05:06:08.523Z",
+  "head": "6a45533b5fafb2be1233d20072d8249cabb4e2c0",
+  "tree": "bd07729a69d03314e869f6bc558ff34fb428cd2b",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3159,
-  "excludedFileCount": 462,
-  "scannedFileCount": 2697,
+  "trackedFileCount": 3161,
+  "excludedFileCount": 463,
+  "scannedFileCount": 2698,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 896,
-  "pathDigest": "6d250e8fb1c8afb394ef95f2eb3514c3f892402b12b242f7bb045e8128cf4190",
+  "matchedPathCount": 897,
+  "pathDigest": "3d3b8b10fc2d6f68c2e4ddc657b23e2a9b983a0b1b261ad7c4b795922535a14d",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -968,7 +968,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 3
+      "lineCount": 4
     },
     {
       "path": "src/main/model-registry-service.ts",
@@ -5103,12 +5103,20 @@
       "lineCount": 34
     },
     {
+      "path": "tests/unit/model-data-resolution-rule.test.ts",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "lineCount": 6
+    },
+    {
       "path": "tests/unit/model-data-schema.test.ts",
       "predicates": [
         "P04",
         "P13"
       ],
-      "lineCount": 10
+      "lineCount": 28
     },
     {
       "path": "tests/unit/model-picker-rows.test.ts",

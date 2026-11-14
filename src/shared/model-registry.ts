@@ -60,6 +60,12 @@ export interface ModelRegistry {
    *  DERIVED from `models` by buildModelPickerRows() (#385) so a Sentinel or
    *  user overlay entry reaches both pickers without a code change. */
   dropdown: DropdownOptionSpec[]
+  /** The ids of the models the build ships, in the bundled file's order
+   *  (2.1.3-beta.1). Set in memory by mergeModelData (main) when model data
+   *  is in use, and never part of a file: `models` is then in the fetched
+   *  file's order, which is the pickers', and matchEntry places a name by this
+   *  order instead, so a fetched file cannot change it. */
+  shippedOrder?: string[]
 }
 
 export interface RegistryOverlay {
@@ -183,6 +189,34 @@ function usableEntries(registry: ModelRegistry): ModelEntry[] {
   )
 }
 
+/** A model only the fetched model file has: mergeModelData (main) marks it. */
+function isModelDataEntry(m: ModelEntry): boolean {
+  return (m as Partial<OverlayModelEntry>).provenance?.addedBy === 'model-data'
+}
+
+/**
+ * The entries a name is tried against when it is no entry's id or alias, as
+ * two lists: the first is tried in full before the second (2.1.3-beta.1).
+ *
+ * The rule: a fetched model file never changes what a name the build already
+ * places resolves to. So the second list is the models only the fetched file
+ * has, and the first is every other entry: the shipped ones in the bundled
+ * file's order (`shippedOrder`; the fetched file's own order is the pickers',
+ * not this one's), then the user's and Sentinel's own additions in list
+ * order, which is where they stand without model data. With no model data in
+ * use the first list is `models` as it is (no order is given, and the sort
+ * below is stable, so it moves nothing).
+ */
+function entriesByStanding(registry: ModelRegistry, models: ModelEntry[]): [ModelEntry[], ModelEntry[]] {
+  const order = Array.isArray(registry?.shippedOrder) ? registry.shippedOrder : []
+  const rank = new Map<string, number>(order.map((id, i) => [id, i]))
+  // An entry the order does not name comes after every one it names; entries
+  // of the same rank keep list order (Array.prototype.sort is stable).
+  const at = (m: ModelEntry): number => rank.get(m.id) ?? rank.size
+  const standing = models.filter((m) => !isModelDataEntry(m)).sort((a, b) => at(a) - at(b))
+  return [standing, models.filter(isModelDataEntry)]
+}
+
 function matchEntry(
   registry: ModelRegistry,
   modelId: string,
@@ -198,13 +232,23 @@ function matchEntry(
   //    a bare STRING would otherwise substring-match via String.prototype.includes.
   const alias = models.find((m) => Array.isArray(m.aliases) && m.aliases.includes(raw))
   if (alias) return { entry: alias, kind: 'alias' }
+  // 3 and 4, first over every entry that is not the fetched model file's own
+  // addition; such an addition only places a name none of those does.
+  const [standing, added] = entriesByStanding(registry, models)
+  return matchByPrefixOrPattern(standing, raw) ?? matchByPrefixOrPattern(added, raw)
+}
+
+function matchByPrefixOrPattern(
+  models: ModelEntry[],
+  raw: string,
+): { entry: ModelEntry; kind: ModelMatchKind } | null {
   // 3. longest id-prefix (date-suffixed ids: claude-opus-4-7-20260101)
   let prefix: ModelEntry | null = null
   for (const m of models) {
     if (raw.startsWith(m.id) && (!prefix || m.id.length > prefix.id.length)) prefix = m
   }
   if (prefix) return { entry: prefix, kind: 'prefix' }
-  // 4. first pattern match in registry order (substring unless anchored regex).
+  // 4. first pattern match in the order given (substring unless anchored regex).
   //    A missing/!Array `patterns` degrades this entry to "unmatchable by
   //    pattern" — it stays reachable by id, alias and prefix above.
   const lower = raw.toLowerCase()
