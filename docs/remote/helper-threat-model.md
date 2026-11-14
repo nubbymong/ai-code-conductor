@@ -8,8 +8,8 @@ only.
 ## 1 Assets
 
 - **The local machine and the app:** the Conductor tools (browser, canvas,
-  file transfer), local files, and the secrets in the OS keychain (ssh
-  passwords, sudo passwords, keys the user's ssh agent holds).
+  screenshots, file transfer), local files, and the secrets in the OS keychain
+  (ssh passwords, saved sudo passwords, keys the user's ssh agent holds).
 - **The user's account on the remote host:** its files, and the CLI's own
   credentials there, which the helper never reads.
 - **Session content:** code, prompts, statusline data, uploaded screenshots.
@@ -25,18 +25,19 @@ only.
 | The ssh transport (the system OpenSSH, with a pinned host key) | Trusted for privacy and integrity once the host key is pinned. |
 | The remote host | Untrusted input. The user has agreed to run the helper there, but nothing the host sends is believed without checks. |
 | Other users on the remote host | Untrusted. They must not reach the user's helper, files or sessions. |
-| The remote CLI | Partly trusted. It is the user's own agent, but it acts on model output and may be steered by content it reads, so what it can reach is limited to its session. |
+| The remote CLI | Partly trusted. It is the user's own agent, but it acts on model output and may be steered by content it reads. It reaches the local machine only through its session's Conductor tools (3.5). Like any process of that user, it can also reach the user's other sessions on the same device (accepted boundary below). |
 
 **Accepted boundary.** Another process running as the same user on the host
-can reach that user's session socket and files. That is the same reach the
-user's own shell has, and no design that runs as the user can do better
-without root. It is recorded here as accepted.
+can reach that user's session sockets and files, on that device. That is the
+same reach the user's own shell has, and no design that runs as the user can
+do better without root. It is recorded here as accepted.
 
 **Out of scope.** A host already controlled by root, or by the same user, can
 do anything that user can, including answering the hash check falsely. The
 design does not claim to defend the remote account against such a host. It
-does claim that such a host still cannot make the app run code, read local
-files, or reach another session.
+does claim that such a host cannot run a program on the local machine, or read
+or write local files, except through the Conductor tools its sessions are
+allowed to call (3.5), and cannot reach a session on another device.
 
 ## 3 Threats and mitigations
 
@@ -48,9 +49,10 @@ files, or reach another session.
   (folders 0700, the binary 0700). The helper refuses to run if its folder or
   any parent under `~/.aicc` is writable by another user or owned by another
   user.
-- Before every session the installed binary is hashed and compared with the
-  manifest. A mismatch stops the session and offers re-provisioning.
-- The Windows and macOS helpers are signed with the app's certificates.
+- Every side-channel start hashes the installed binary and compares it with
+  the manifest. A mismatch stops the session and offers re-provisioning.
+- The macOS helper (and the Windows helper at R13) is signed with the app's
+  certificates. Linux helpers rely on the hash manifest.
 
 ### 3.2 Downgrade
 
@@ -68,14 +70,15 @@ files, or reach another session.
   kind; JSON depth limited; no compression, so no expansion attacks.
 - A strict schema per message type: unknown types and fields refused, strings
   bounded, ids from small alphabets. A bad frame closes the connection.
-- No message makes the app run a program, open a URL in the system browser,
-  read a local file, or write a local file at a path the host chose.
+- Apart from `mcp` messages, which reach the Conductor tools (3.5), no message
+  makes the app run a program, open a URL, read a local file, or write a local
+  file at a path the host chose.
 - Paths from the host are only compared with the expected path and pasted
   into the session's own terminal.
 - Host text is shown as plain text with control characters removed.
 - Rate limits on `status` and `event`; a flood is dropped and counted.
-- Identity is the channel. A message cannot name another session, and the app
-  routes each side channel to the one session it opened it for.
+- A message cannot name a session. The app routes each side channel to the
+  one session it opened it for.
 - The terminal connection is not parsed. Its bytes go to the terminal view as
   any ssh terminal's do.
 
@@ -85,20 +88,30 @@ files, or reach another session.
 - `~/.aicc` and every folder under it are 0700; files are 0600 (the binary
   0700). The helper sets a umask of 077 at start and checks ownership and mode
   before it uses a folder.
-- The session socket sits in the 0700 session folder. The holder checks the
-  peer's user id on every connection and refuses any other user.
+- The session socket sits in the 0700 session folder. The socket's owner
+  checks the peer's user id on every connection and refuses any other user.
 - Nothing is written to a shared temporary folder.
 
-### 3.5 Conductor tools exposed to the remote CLI
+### 3.5 Conductor tools reached from the host
 
-- The remote CLI reaches the Conductor tools only through `aicc-helper mcp`
-  and the side channel. There is no token on the host and no forwarded port.
-- The session is known from the channel. A remote session gets the same tools,
-  the same per-session tool switches and the same authorisation a local
-  session has. Nothing more.
-- A tool call cannot address another session or another device.
-- A per-device switch for which tools a device may call is queued after the
-  freeze; until then the per-session switches apply.
+- The caller is the host, not only the CLI. `mcp` messages are sent by the
+  helper on the host, so any process that can reach the session socket (the
+  CLI, or a compromised host) can call the session's tools. There is no token
+  on the host and no forwarded port.
+- Tools that return local data: screenshots from the app's screenshots
+  folder; page text, page source and screenshots from the session's browser;
+  the canvas and its review notes. Tools that act locally: driving that
+  browser (open a page, click, type, scroll), which reaches any site the
+  browser can; rendering on the canvas. Every result is sent to the host.
+- A remote session gets the same tools, the same per-session tool switches
+  and the same authorisation a local session has, nothing more. Until the
+  per-device switch lands (queued after the freeze), the per-session switches
+  are the only control.
+- A message cannot name another session, and a side channel serves one
+  session only. But a process on the host running as the user can open
+  another live session's socket on the same device and call tools under that
+  session's switches (the accepted boundary in section 2). No session on
+  another device can be reached.
 
 ### 3.6 Uploaded files
 
@@ -108,41 +121,62 @@ files, or reach another session.
 - Files go only to the session's `paste/` folder, 20 MiB each, 100 MiB per
   session, and are checked against the hash the app sent.
 - A partial upload is removed. The `paste/` folder is removed when the session
-  ends and when the device is removed.
+  ends, by the clean-up rule in 3.9, and when the device is removed.
 - The user is told that a pasted image stays on the host until the session
   ends.
 
 ### 3.7 sudo answers
 
-- sudo is answered through `SUDO_ASKPASS` set to `aicc-helper askpass`, which
-  asks the app over the side channel. Nothing is typed into a terminal.
-- The app shows which device and which container target is asking. Only one
-  question may be open per session, and only for a configured container
-  target.
+- sudo is answered through `SUDO_ASKPASS`, set to the session's `askpass`
+  wrapper, which asks the app over the side channel. Nothing is typed into a
+  terminal.
+- The app accepts `sudo.ask` only while it waits on a container launch it
+  started for that session, and only for that container target. At any other
+  time it refuses with `denied` and logs it. Only one question may be open per
+  session.
+- The app shows which device and which container target is asking. A sudo
+  password the user saved is released without a click only under the rule
+  above, once per launch. A host compromised at the user's level can collect
+  it at that moment, as it could collect a password typed into sudo there. A
+  user who does not accept that does not save it and answers each time.
 - The answer travels once, in one `sudo.answer` message. The helper passes it
-  to sudo and clears it from memory. It is never written to disk and never
-  logged on either side.
+  to sudo and clears it from memory. It is never written to disk on the host
+  and never logged on either side. Locally it is held only in the OS keychain,
+  and only when the user saves it.
 - Whether this works without a terminal is pending probe P5.
 
 ### 3.8 ssh passwords and host keys
 
 - ssh passwords stay in the OS keychain and reach ssh only through the app's
-  askpass program. They never reach the host as data. (Pending probe P2 on
-  Windows.)
-- The host key is shown and pinned when the device is added, in a
-  `known_hosts` file the app owns. A changed key stops every session on that
-  device until the user verifies it again.
+  askpass program. They are never typed into the terminal and never passed to
+  the helper. With password authentication the host's ssh server receives the
+  password, as with any ssh login. (Pending probe P2 on Windows.)
+- The host key is shown as a fingerprint and pinned when the user agrees to
+  the consent screen (3.9), in a `known_hosts` file the app owns. A changed key
+  stops every session on that device until the user verifies it again.
 
-### 3.9 Consent and removal
+### 3.9 Consent, removal and clean-up
 
-- The helper is installed only when the user adds a device and agrees, after
-  a screen that lists what will be placed on the host and where.
+- R2 and R3 place no helper and no program. R2 writes only pasted images under
+  `~/.aicc/sessions/<sid>/paste/`; R3 writes only the files the setup already
+  writes.
+- The helper is placed only after the user agrees on a screen that lists what
+  will be placed on the host and where, including container targets. On the
+  Devices page (R4) that screen is part of adding a device. A device made from
+  a saved SSH config at R3 gets the same screen as a one-time dialog at its
+  first connect from R6, and has no helper and no pinned key until then.
 - Updates of a provisioned device are automatic, with a one-line notice.
-- Remove device runs `aicc-helper uninstall`, which deletes `~/.aicc`, then
-  checks with a separate exec that it is gone. It also removes the pinned host
-  key and the keychain entries for that device.
+- `uninstall` refuses with `busy` while `list` shows a live session. The app
+  then offers to end those sessions, ends each with `session.end`, and runs it
+  again. It deletes `~/.aicc` and the copies in running containers; a separate
+  exec checks the folder is gone. The app also removes the pinned host key and
+  the keychain entries for that device.
 - If the host cannot be reached, the device is marked as removed here, and the
   app shows the folder that may remain on the host.
+- On every side-channel start the app sends `session.list` and ends every
+  session it no longer knows and every `stale` one (after offering the CLI's
+  resume). So pasted images, spools and logs left by a crash or a host reboot
+  do not stay.
 - The helper changes nothing outside `~/.aicc` except the named edits a
   provider declares (for example the CLI's folder-trust entry), each listed in
   the device report.
@@ -152,12 +186,15 @@ files, or reach another session.
 - A pinned toolchain (`rust-toolchain.toml`) and a committed `Cargo.lock`;
   every build uses `--locked`.
 - `cargo-deny` and `cargo-audit` in CI, with a short allow-list of crates.
-- A check that the helper has no network code: a lint forbids `std::net` and
-  every crate on a network deny-list, and a second check reads the built
-  binary's imported symbols for name resolution and network connect calls.
+- No network code, checked two ways. A lint forbids `std::net`, raw socket
+  calls and every crate on a network deny-list, except in one local-socket
+  module that may create only Unix-domain sockets. A CI run of the real helper
+  (self-test and the message fixtures) under a system-call trace fails on any
+  socket of an internet family or any name lookup. Both checks are shown to
+  fail on a planted change before they are trusted.
 - Built in CI from the tagged commit, on the runners that build the app. The
-  Linux builds are built twice and the hashes compared; the macOS and Windows
-  builds are compared before signing.
+  Linux builds are built twice and the hashes compared; the macOS builds are
+  compared before signing.
 - Fuzzing of the frame and message decoder on both sides.
 - The helper's source, build and manifest join the ADR-009 path table at R5.
   Rust is reviewed by a separate agent with a Rust brief.

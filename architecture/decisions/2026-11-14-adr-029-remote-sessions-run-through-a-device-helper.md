@@ -38,13 +38,18 @@ That shape has a cost:
    device. A session picks a device, a target on it (the host or a named
    container) and a folder.
 2. **A small helper, written in Rust, is bundled with the app** and uploaded
-   once per device, with the user's consent, when the device is added. It is
-   installed under the user's home in a folder named by version and content
-   hash. It is hash-checked before every session and self-tested after every
-   upload. The host never downloads anything.
-3. **One helper process per session, and no daemon.** Nothing runs on the host
-   between sessions. No service, no autostart, no listening network port, no
-   root install, nothing on `PATH`. The helper has no network code at all.
+   once per device, after the user agrees on a screen that lists what is
+   placed where: when the device is added on the Devices page (R4), or, for a
+   device made from a saved SSH config, in a one-time dialog at its first
+   connect from R6. It is installed under the user's home in a folder named by
+   version and content hash, hash-checked at every side-channel start and
+   self-tested after every upload. The host never downloads anything.
+3. **One long-lived helper process per session, and no daemon.** From R9 one
+   holder per session is the only helper process that outlives a connection.
+   Relays live while their ssh connection is open, the MCP process as long as
+   the CLI, and the rest for one call. Nothing runs on the host between
+   sessions: no service, no autostart, no listening network port, no root
+   install, nothing on `PATH`. The helper has no network code at all.
 4. **No Claude token is copied to the host.** The app writes no app secret
    there. The helper never reads the host's own CLI credentials.
 5. **A second ssh connection per session carries structured messages** (the
@@ -103,10 +108,13 @@ step instead of going in one change.
 
 - A new toolchain (Rust) and its dependencies enter the release pipeline.
   Signing and cross-building times on the existing runners are not yet known.
-- A new signed binary is uploaded to other machines. Antivirus on a host may
-  flag it. (This matters most for Windows hosts at R13.)
-- Two connections per session. On a Windows app machine, where ssh connection
-  sharing is not available, a one-time code is asked for twice.
+- A new binary (signed on macOS, and on Windows at R13) is uploaded to other
+  machines. Antivirus on a host may flag it, most of all on Windows hosts.
+- Two connections per session (side channel and terminal), three for a
+  container that needs sudo. On a Windows app machine, where ssh connection
+  sharing is not available, a one-time-code host asks for a code once per
+  connection: at every session start and every reconnect, at provisioning,
+  and at R2 for each image upload until R7.
 - Replaying output into a terminal of a different size can garble the first
   screen after a reattach. The holder replays at the recorded size, then the
   resize makes the CLI redraw.
@@ -189,10 +197,10 @@ The order is the build order. Each line is one step; most are two betas.
 - **R12** Gate reset and cleanup: the live gate becomes about 8 rows per helper
   release, `AGENTS.md` is rewritten to match, help texts are swept, the
   user-facing surface sweep is recorded.
-- **R13** (queued, after the freeze) Windows hosts: a Windows helper build with
-  signing and a named-pipe side channel.
-- **R14** (queued, after the freeze) Codex over SSH, using the host's own Codex
-  login.
+- **R14** (feature queue, starts when the owner says) Codex over SSH, using
+  the host's own Codex login.
+- **R13** (feature queue, starts when the owner says) Windows hosts: a Windows
+  helper build with signing and a named-pipe side channel.
 
 ## R1 probes
 
@@ -210,6 +218,8 @@ shows the missing statusline, and permission to probe hosts).**
   mechanism and the result is recorded against them.
 - No-go: the local session is missing its statusline too. The cause is outside
   the remote path and gets its own small beta before R2.
+- No cause found, and the local session is fine: recorded as unproven. R3 and
+  R6 still replace the mechanism.
 - Host role: the host that shows the fault (owner to name), plus the local
   machine.
 
@@ -241,7 +251,8 @@ shows the missing statusline, and permission to probe hosts).**
 
 **P5 sudo answered without a terminal.**
 - Proves: a container engine command that needs sudo can be answered through
-  an askpass program from a non-terminal exec, once, with nothing echoed.
+  an askpass program from a non-terminal exec, once, with nothing echoed; and
+  the container has `/bin/sh` and a writable home for its user.
 - Go: the command runs with the answer given once, and nothing is written to
   disk.
 - No-go: sudo for that host role stays on the old path until another design;
