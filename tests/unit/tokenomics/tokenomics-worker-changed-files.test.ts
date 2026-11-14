@@ -8,18 +8,25 @@
  * its watcher failed) is tried again by the 5 s timer, and a reported
  * transcript that is a link is left alone, as the full walk leaves it.
  *
- * A folder reported as changed (Windows reports it beside every write to a
- * file in it) and a file that is not a transcript start no walk. A transcript
- * read in the last ten minutes is asked its size by the 5 s timer and read
- * when it grew, for the writes the watcher does not report (on Windows, the
- * ones made through a handle that stays open).
+ * A folder reported as changed starts no walk on Windows (which reports it
+ * beside every write to a file in it) and makes one due everywhere else. A
+ * file that is not a transcript starts none anywhere. The transcripts a sweep
+ * found written, the 200 read last, are asked their size by the 5 s timer and
+ * read when they grew, for the writes the watcher does not report (on
+ * Windows, the ones made through a handle that stays open), however long ago
+ * they were read. Rollups a walk left dirty (an attribution between two pages
+ * of their rebuild, a rebuild that failed) are rebuilt at the next 5 s tick
+ * with no walk.
  *
  * Host-safe: the real worker and real transcript files in a temp folder, a
  * wrapped fs that counts folder listings and file reads and hands the
  * watcher's callback to the test, and an in-memory stand-in for the index
  * database (better-sqlite3 is built for Electron; the totals are covered with
  * the real database in tests/unit/native/tokenomics-dirty-sweep.native.test.ts).
- * No process starts, no real watcher runs and no link is planted.
+ * No process starts, no real watcher runs and no link is planted. Events are
+ * reported as on Windows unless a case says otherwise (process.platform reads
+ * as that platform while the worker handles the event), so every case runs
+ * the same wherever the suite runs.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as realFs from 'fs'
@@ -36,6 +43,20 @@ const db = vi.hoisted(() => ({
   failNextSetMeta: false,
   /** The next getFileCursor throws, once: a sweep that fails before it reads a file. */
   failNextGetCursor: false,
+  /** Rollup rebuilds started, and how many steps each takes (the worker
+   *  yields between two steps). */
+  rebuilds: 0,
+  rebuildSteps: 1,
+  /** The rebuild that is running: the steps it has left, and how often a
+   *  stored row had been stamped when it began. */
+  rebuild: null as { left: number; epoch: number } | null,
+  dirtyEpoch: 0,
+  /** Session attributions received. */
+  attributions: 0,
+  /** The next rebuild step throws, once: a rebuild that fails. */
+  failNextRebuildStep: false,
+  /** The next rollupsDirty throws, once. */
+  failNextRollupsDirty: false,
 }))
 vi.mock('../../../src/main/tokenomics/tk-db', () => ({
   TK_REBUILD_PAGE: 5000,
@@ -50,9 +71,22 @@ vi.mock('../../../src/main/tokenomics/tk-db', () => ({
     getSessionCwd: () => '',
     accountRereadPending: () => db.meta.get('accountReread') === 'pending',
     finishAccountReread: () => { db.meta.set('accountReread', 'done') },
-    rollupsDirty: () => false,
-    beginRollupRebuild: () => {},
-    stepRollupRebuild: () => ({ done: 0, total: 0, finished: true }),
+    rollupsDirty: () => {
+      if (db.failNextRollupsDirty) { db.failNextRollupsDirty = false; throw new Error('simulated read failure') }
+      return db.meta.get('rollupsDirty') === '1'
+    },
+    beginRollupRebuild: () => { db.rebuilds++; db.rebuild = { left: db.rebuildSteps, epoch: db.dirtyEpoch } },
+    // As the database: the step that reaches the end swaps the rebuilt
+    // rollups in, and they stay dirty when a row was stamped meanwhile.
+    stepRollupRebuild: () => {
+      if (db.failNextRebuildStep) { db.failNextRebuildStep = false; throw new Error('simulated rebuild failure') }
+      const r = db.rebuild
+      if (!r) return { done: 0, total: 0, finished: true }
+      if (--r.left > 0) return { done: db.rebuildSteps - r.left, total: db.rebuildSteps, finished: false }
+      if (db.dirtyEpoch === r.epoch) db.meta.set('rollupsDirty', '0')
+      db.rebuild = null
+      return { done: db.rebuildSteps, total: db.rebuildSteps, finished: true }
+    },
     getMeta: (k: string) => db.meta.get(k),
     setMeta: (k: string, v: string) => {
       if (db.failNextSetMeta) { db.failNextSetMeta = false; throw new Error('simulated write failure') }
@@ -60,13 +94,20 @@ vi.mock('../../../src/main/tokenomics/tk-db', () => ({
     },
     eventCount: () => db.events,
     upsertConfigs: () => {},
-    setSessionAccount: () => {},
+    // As the database: an attribution while the rollups are dirty or being
+    // rebuilt stamps the stored rows and leaves the rollups dirty, for
+    // another rebuild.
+    setSessionAccount: () => {
+      db.attributions++
+      if (db.rebuild !== null || db.meta.get('rollupsDirty') === '1') { db.dirtyEpoch++; db.meta.set('rollupsDirty', '1') }
+      return { recorded: true, stamped: 1 }
+    },
     queryAccounts: () => [],
     close: () => {},
   }),
 }))
 
-import { createTokenomicsWorker, TK_FULL_SWEEP_MS, TK_ACTIVE_MS, TK_ACTIVE_MAX } from '../../../src/main/tokenomics/tokenomics-worker'
+import { createTokenomicsWorker, TK_FULL_SWEEP_MS, TK_ACTIVE_MAX } from '../../../src/main/tokenomics/tokenomics-worker'
 import { FakeTkWorkerTransport } from '../../../src/main/tokenomics/tk-worker-transport'
 import type { FromTkWorker } from '../../../src/main/tokenomics/tk-worker-transport'
 
@@ -89,12 +130,19 @@ const settle = (ms = 150): Promise<void> => new Promise((r) => setTimeout(r, ms)
 
 type WatchCb = (event: string, filename: string | null) => void
 type Complete = { firstIndex: boolean; drained: boolean }
+/** A Claude session id, as a transcript file names it. */
+const SESSION = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+/** The ten minutes after which a transcript was no longer asked about, as
+ *  first written. */
+const OLD_ACTIVE_MS = 10 * 60_000
 
 describe('tokenomics worker: changed-files sweep (#302)', () => {
   let tmp = ''
   let claudeDir = ''
   let codexDir = ''
   let stopWorker: (() => void) | null = null
+  /** The app's side of the worker's channel. */
+  let transport: FakeTkWorkerTransport | null = null
   /** Folder listings, and how many were of the transcript root: one per full walk. */
   let listings = 0
   let walks = 0
@@ -108,6 +156,10 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   let completes: Complete[] = []
   /** How many files each finished sweep said it could not read. */
   let failed: number[] = []
+  /** How many rollup rebuilds had started as each sweep finished. */
+  let rebuildsAt: number[] = []
+  /** Told of every message from the worker, as it is posted. */
+  let onWorkerMessage: ((m: FromTkWorker) => void) | null = null
   let waiters: Array<(m: FromTkWorker) => boolean> = []
   const bounds = new Set<ReturnType<typeof setTimeout>>()
   /** The live watchers, by folder: what the worker handed each to be told of
@@ -116,8 +168,12 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   const watchErrs = new Map<string, (err: unknown) => void>()
   /** Folders whose watcher cannot be started. */
   const unwatchable = new Set<string>()
-  /** What the worker logged as a warning. */
+  /** What the worker logged as a warning, and as an error. */
   let warnings: string[] = []
+  let errors: string[] = []
+  /** Paths whose size cannot be asked without following a link: the error
+   *  code each fails with. */
+  const lstatFails = new Map<string, string>()
   /** A path the wrapped fs shows as a link to `linkTarget`: lstat says link,
    *  stat and open follow it. Nothing is on disk at the path itself. */
   let linkAt = ''
@@ -152,6 +208,8 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
         }
         case 'lstatSync': return (p: string, o?: unknown) => {
           lstatted.push(String(p))
+          const code = lstatFails.get(String(p))
+          if (code) throw Object.assign(new Error(`${code}: simulated`), { code })
           return linkAt && String(p) === linkAt ? LINK : (realFs.lstatSync as (p: string, o?: unknown) => unknown)(p, o)
         }
         case 'openSync': return (p: string, flags: string) => {
@@ -188,23 +246,33 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   const transcript = (name: string): string => path.join(claudeDir, 'F--proj', `${name}.jsonl`)
   /** The five transcripts every test starts with. */
   const five = (): string[] => [0, 1, 2, 3, 4].map((i) => transcript(`s${i}`))
-  const fire = (dir: string, event: string, filename: string | null): void => watchCbs.get(dir)!(event, filename)
+  /** Report an event as the watcher of `dir` would on `platform`:
+   *  process.platform reads as it while the worker handles the event, and
+   *  no longer. */
+  const fire = (dir: string, event: string, filename: string | null, platform: NodeJS.Platform = 'win32'): void => {
+    const host = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...host, value: platform })
+    try { watchCbs.get(dir)!(event, filename) } finally { Object.defineProperty(process, 'platform', host) }
+  }
   /** Only the periodic timer and the clock are faked: sweeps still run on real
    *  timers, so the test decides when 5 s (or 5 min) has passed. */
   const fakeTheTimer = (): void => { vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] }) }
 
   /** Start the worker on the temp tree; by default wait for its first sweep. */
-  async function start(opts: { maxTickBytes?: number; waitFirst?: boolean; watchDebounceMs?: number } = {}): Promise<void> {
+  async function start(opts: { maxTickBytes?: number; waitFirst?: boolean; watchDebounceMs?: number; realmDirsKnown?: boolean } = {}): Promise<void> {
     const fake = new FakeTkWorkerTransport()
+    transport = fake
     fake.onMessage((m) => {
-      if (m.type === 'index-complete') { completes.push({ firstIndex: m.firstIndex, drained: m.drained }); failed.push(m.filesFailed) }
+      if (m.type === 'index-complete') { completes.push({ firstIndex: m.firstIndex, drained: m.drained }); failed.push(m.filesFailed); rebuildsAt.push(db.rebuilds) }
       if (m.type === 'log' && m.entry.level === 'warn') warnings.push(m.entry.message)
+      if (m.type === 'log' && m.entry.level === 'error') errors.push(m.entry.message)
+      onWorkerMessage?.(m)
       waiters = waiters.filter((w) => !w(m))
     })
     const first = opts.waitFirst === false ? null : nextSweep('the first sweep')
     const w = createTokenomicsWorker(fake.asWorkerSide(), { fs: wrapped, watchDebounceMs: opts.watchDebounceMs ?? 5, maxTickBytes: opts.maxTickBytes })
     stopWorker = () => w.stop()
-    fake.post({ type: 'open', dbPath: path.join(tmp, 'tk.db'), pricing: PRICING, configs: [], claudeProjectsDir: claudeDir, codexSessionsDir: codexDir })
+    fake.post({ type: 'open', dbPath: path.join(tmp, 'tk.db'), pricing: PRICING, configs: [], claudeProjectsDir: claudeDir, codexSessionsDir: codexDir, codexRealmDirsKnown: opts.realmDirsKnown })
     if (first) await first
   }
 
@@ -216,9 +284,12 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
     realFs.mkdirSync(codexDir, { recursive: true })
     for (let i = 0; i < 5; i++) realFs.writeFileSync(transcript(`s${i}`), line(`init-${i}`))
     db.cursors.clear(); db.meta.clear(); db.events = 0; db.failNextSetMeta = false; db.failNextGetCursor = false
+    db.rebuilds = 0; db.rebuildSteps = 1; db.rebuild = null; db.dirtyEpoch = 0; db.attributions = 0
+    db.failNextRebuildStep = false; db.failNextRollupsDirty = false
     clearCounts()
-    completes = []; failed = []; waiters = []; warnings = []
-    watchCbs.clear(); watchErrs.clear(); unwatchable.clear()
+    completes = []; failed = []; rebuildsAt = []; waiters = []; warnings = []; errors = []
+    onWorkerMessage = null; transport = null
+    watchCbs.clear(); watchErrs.clear(); unwatchable.clear(); lstatFails.clear()
     linkAt = ''; linkTarget = ''; stuck = ''; stuckFds.clear(); denied = ''
   })
   afterEach(() => {
@@ -331,6 +402,38 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       expect(db.events).toBe(5)
     })
 
+    // Only on Windows is a folder's 'change' known to come beside a file's
+    // own event. Elsewhere it may be all the watcher says of what happened
+    // below the folder (on macOS, events it dropped), so a walk stays due.
+    for (const platform of ['darwin', 'linux'] as const) {
+      it(`a folder reported as changed makes the next sweep a full one on ${platform}`, async () => {
+        await start()
+        // Written and not reported: only a walk can find it.
+        realFs.writeFileSync(transcript('unseen'), line('unseen'))
+        clearCounts()
+        const full = nextSweep('the full sweep')
+        fire(claudeDir, 'change', 'F--proj', platform)
+        // The event itself lists nothing: the walk runs later, off the timer.
+        expect(listings).toBe(0)
+        await full
+        expect(walks).toBe(1)
+        expect(opened).toEqual([transcript('unseen')])
+        expect(db.events).toBe(6)
+      })
+
+      it(`a file that is not a transcript starts no sweep on ${platform} either`, async () => {
+        await start()
+        realFs.writeFileSync(transcript('unseen'), line('unseen'))
+        realFs.writeFileSync(path.join(claudeDir, 'F--proj', 'notes.txt'), 'not a transcript')
+        clearCounts()
+        fire(claudeDir, 'rename', path.join('F--proj', 'notes.txt'), platform)
+        fire(claudeDir, 'change', path.join('F--proj', 'notes.txt'), platform)
+        await settle()
+        expect({ listings, statted, opened, sweeps: completes.length }).toEqual({ listings: 0, statted: [], opened: [], sweeps: 1 })
+        expect(db.events).toBe(5)
+      })
+    }
+
     // Claude Code writes more than transcripts under the projects folder
     // (tool results, memory files, a subagent's .meta.json). The walk reads
     // none of them, so a report of one starts none.
@@ -385,6 +488,9 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
     const noTranscript: Array<[string, 'claude' | 'codex', string, string | null]> = [
       ['no file name', 'claude', 'rename', null],
       ['no file name, as a change', 'claude', 'change', null],
+      // Not the projects folder itself, reported as changed (which starts
+      // nothing on Windows, as these events are reported here).
+      ['an empty file name', 'claude', 'change', ''],
       ['a folder that was made or moved', 'claude', 'rename', 'F--proj'],
       ['a deleted transcript', 'claude', 'rename', path.join('F--proj', 'gone.jsonl')],
       ['a deleted file that is not a transcript', 'claude', 'rename', path.join('F--proj', 'gone.txt')],
@@ -446,7 +552,7 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       await settle()
       expect({ listings, statted, opened }).toEqual({ listings: 0, statted: [], opened: [] })
       // All it asks is the size of the five transcripts read at start, once
-      // each per tick, while they were read in the last ten minutes.
+      // each per tick.
       expect(lstatted).toHaveLength(ticks * 5)
       expect(new Set(lstatted)).toEqual(new Set(five()))
       expect(completes).toHaveLength(1)
@@ -630,11 +736,11 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
 
   describe('a transcript written with no report from the watcher', () => {
     // On Windows a write through a handle that stays open raises no watcher
-    // event until the handle closes (measured: five writes 500 ms apart
-    // reported nothing, then one 'change' at the close). The 5 s walk used to
-    // find those; now the 5 s timer asks the size of the transcripts read in
-    // the last ten minutes, and reads the ones that moved.
-    it('is read at the next 5 s tick while it was read in the last ten minutes, and no folder is listed', async () => {
+    // event for the file until the handle closes (measured: five writes
+    // 500 ms apart reported nothing, then one 'change' at the close). The 5 s
+    // walk used to find those; now the 5 s timer asks the size of the
+    // transcripts a sweep found written, and reads the ones that moved.
+    it('is read at the next 5 s tick, and no folder is listed', async () => {
       fakeTheTimer()
       await start()
       realFs.appendFileSync(transcript('s2'), line('more-2'))
@@ -670,52 +776,36 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       expect(db.events).toBe(6)
     })
 
-    it('a read renews its ten minutes: the others age out and it is still asked about', async () => {
+    // A session that pauses and then writes again through the handle it kept
+    // has no other report: Windows reports its folder as changed at most,
+    // which names no file and starts nothing. As first written a transcript
+    // was no longer asked about ten minutes after it was read, and such a
+    // write then waited for the next timed walk.
+    it('one read longer ago than ten minutes, then written with only its folder reported as changed, is read at the next tick', async () => {
       fakeTheTimer()
       await start()
-      // To 9 min, past the timed walk at 5 min (which reads nothing).
+      // Eleven minutes with nothing written: the timed walks at 5 and 10 min
+      // read nothing.
       vi.advanceTimersByTime(TK_FULL_SWEEP_MS)
       await settle()
-      vi.advanceTimersByTime(TK_ACTIVE_MS - TK_FULL_SWEEP_MS - 60_000)
+      vi.advanceTimersByTime(OLD_ACTIVE_MS - TK_FULL_SWEEP_MS)
       await settle()
+      vi.advanceTimersByTime(60_000)
+      await settle()
+      expect(walks).toBe(3)
+      expect(db.events).toBe(5)
       realFs.appendFileSync(transcript('s2'), line('more-2'))
+      clearCounts()
+      fire(claudeDir, 'change', 'F--proj')
       const read = nextSweep('the sweep at the next tick')
       vi.advanceTimersByTime(TAIL_MS)
       await read
-      expect(db.events).toBe(6)
-      // To 10 min, the next timed walk, and on to 12 min.
-      vi.advanceTimersByTime(60_000 - TAIL_MS)
-      await settle()
-      vi.advanceTimersByTime(2 * 60_000 - TAIL_MS)
-      await settle()
-      clearCounts()
-      vi.advanceTimersByTime(TAIL_MS)
-      await settle()
-      // Twelve minutes after start: the four read only then are forgotten.
-      expect(lstatted).toEqual([transcript('s2')])
       expect(listings).toBe(0)
-    })
-
-    it('is not asked about once ten minutes have passed since it was read; the timed walk reads it', async () => {
-      fakeTheTimer()
-      await start()
-      // The timed walks at 5 and 10 min read nothing: no transcript changed.
-      vi.advanceTimersByTime(TK_FULL_SWEEP_MS)
-      await settle()
-      vi.advanceTimersByTime(TK_ACTIVE_MS - TK_FULL_SWEEP_MS)
-      await settle()
-      expect(walks).toBe(3)
-      realFs.appendFileSync(transcript('s2'), line('more-2'))
-      clearCounts()
-      vi.advanceTimersByTime(TAIL_MS * 3)
-      await settle()
-      expect({ listings, lstatted, statted, opened }).toEqual({ listings: 0, lstatted: [], statted: [], opened: [] })
-      expect(db.events).toBe(5)
-      const found = nextSweep('the timed walk')
-      vi.advanceTimersByTime(TK_FULL_SWEEP_MS - TAIL_MS * 3)
-      await found
-      expect(walks).toBe(1)
+      expect(opened).toEqual([transcript('s2')])
       expect(db.events).toBe(6)
+      // The folder's event asked about the folder; the tick asked about each
+      // transcript read at start, eleven minutes ago.
+      expect([...lstatted].sort()).toEqual([path.join(claudeDir, 'F--proj'), ...five()].sort())
     })
 
     it('at most TK_ACTIVE_MAX are asked about, the ones read longest ago dropped', async () => {
@@ -748,6 +838,45 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       fakeTheTimer()
       await start()
       realFs.rmSync(transcript('s4'))
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS)
+      await settle()
+      expect(lstatted).toContain(transcript('s4'))
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS)
+      await settle()
+      expect(lstatted).toHaveLength(4)
+      expect(lstatted).not.toContain(transcript('s4'))
+      expect(listings).toBe(0)
+    })
+
+    // A size check can fail for a file that is still there (in use, a drive
+    // that does not answer). As first written any failure forgot the
+    // transcript, and its later writes waited for the next timed walk.
+    it('one whose size cannot be asked for a tick is kept: written since with no report, it is read at a later tick', async () => {
+      fakeTheTimer()
+      await start()
+      lstatFails.set(transcript('s2'), 'EBUSY')
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS)
+      await settle()
+      expect(lstatted).toContain(transcript('s2'))
+      expect(completes).toHaveLength(1)
+      lstatFails.clear()
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      clearCounts()
+      const read = nextSweep('the sweep at a later tick')
+      vi.advanceTimersByTime(TAIL_MS)
+      await read
+      expect(listings).toBe(0)
+      expect(opened).toEqual([transcript('s2')])
+      expect(db.events).toBe(6)
+    })
+
+    it('one whose path no longer leads to a file (ENOTDIR) is asked about once more and then forgotten, as a deleted one', async () => {
+      fakeTheTimer()
+      await start()
+      lstatFails.set(transcript('s4'), 'ENOTDIR')
       clearCounts()
       vi.advanceTimersByTime(TAIL_MS)
       await settle()
@@ -797,6 +926,146 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       await read
       expect(opened).toEqual([transcript('s2')])
       expect(db.events).toBe(6)
+      expect(listings).toBe(0)
+    })
+  })
+
+  describe('rollups a walk left dirty', () => {
+    // A drained walk rebuilds the rollups when they are dirty. They can be
+    // dirty with no walk due: a session attribution that arrives between two
+    // pages of the rebuild leaves them dirty for another one, a rebuild can
+    // fail, and an attribution the rollups cannot follow leaves them dirty
+    // at any time. The 5 s walk used to rebuild them; as first written the
+    // changed-files sweep never did, so the totals by account waited for the
+    // next timed walk.
+    it('an attribution that arrives between two pages of the rebuild is settled at the next 5 s tick, with no walk', async () => {
+      fakeTheTimer()
+      db.meta.set('rollupsDirty', '1')
+      db.rebuildSteps = 3
+      let sent = false
+      onWorkerMessage = (m) => {
+        if (sent || m.type !== 'index-progress' || m.accountReread?.stage !== 'rebuild') return
+        sent = true
+        transport!.post({ type: 'set-session-account', sessionId: SESSION, accountKey: 'claude:acct-a' })
+      }
+      await start()
+      expect({ sent, attributions: db.attributions, rebuilds: db.rebuilds }).toEqual({ sent: true, attributions: 1, rebuilds: 1 })
+      // The rebuild ran to its end and the rollups are still dirty.
+      expect(db.rebuild).toBeNull()
+      expect(db.meta.get('rollupsDirty')).toBe('1')
+      clearCounts()
+      const settled = nextSweep('the sweep that settles the accounts')
+      vi.advanceTimersByTime(TAIL_MS)
+      await settled
+      expect(db.rebuilds).toBe(2)
+      expect(db.meta.get('rollupsDirty')).toBe('0')
+      expect({ listings, statted, opened }).toEqual({ listings: 0, statted: [], opened: [] })
+      // Settled: the ticks that follow start nothing.
+      const sweeps = completes.length
+      vi.advanceTimersByTime(TAIL_MS * 3)
+      await settle()
+      expect(completes).toHaveLength(sweeps)
+      expect(db.rebuilds).toBe(2)
+    })
+
+    it('a rebuild that fails is tried again at the next 5 s tick, with no walk', async () => {
+      fakeTheTimer()
+      db.meta.set('rollupsDirty', '1')
+      db.failNextRebuildStep = true
+      await start()
+      expect(errors.filter((e) => e.includes('account attribution failed'))).toHaveLength(1)
+      expect(db.rebuilds).toBe(1)
+      expect(db.meta.get('rollupsDirty')).toBe('1')
+      clearCounts()
+      const settled = nextSweep('the sweep that settles the accounts')
+      vi.advanceTimersByTime(TAIL_MS)
+      await settled
+      expect(db.rebuilds).toBe(2)
+      expect(db.meta.get('rollupsDirty')).toBe('0')
+      expect({ listings, statted, opened }).toEqual({ listings: 0, statted: [], opened: [] })
+      expect(errors).toHaveLength(1)
+    })
+
+    it('a changed-files sweep rebuilds them once it has read what was reported', async () => {
+      await start()
+      // Left dirty with no sweep running, as by an attribution the rollups
+      // could not follow.
+      db.meta.set('rollupsDirty', '1')
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      clearCounts()
+      const read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', path.join('F--proj', 's2.jsonl'))
+      await read
+      expect(opened).toEqual([transcript('s2')])
+      expect(db.events).toBe(6)
+      expect(db.rebuilds).toBe(1)
+      expect(db.meta.get('rollupsDirty')).toBe('0')
+      expect(listings).toBe(0)
+      expect(completes.at(-1)).toEqual({ firstIndex: false, drained: true })
+    })
+
+    // As a walk: nothing is settled before the account folders are named
+    // (the Codex history is re-read once they are, and the rollups would be
+    // rebuilt twice).
+    it('nothing is rebuilt until the account folders are named; the walk that follows the naming rebuilds', async () => {
+      fakeTheTimer()
+      db.meta.set('rollupsDirty', '1')
+      await start({ realmDirsKnown: false })
+      expect(db.rebuilds).toBe(0)
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS * 3)
+      await settle()
+      expect({ rebuilds: db.rebuilds, listings, sweeps: completes.length }).toEqual({ rebuilds: 0, listings: 0, sweeps: 1 })
+      // Not by a changed-files sweep either.
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      const read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', path.join('F--proj', 's2.jsonl'))
+      await read
+      expect({ rebuilds: db.rebuilds, listings, events: db.events }).toEqual({ rebuilds: 0, listings: 0, events: 6 })
+      const walked = nextSweep('the walk after the naming')
+      transport!.post({ type: 'set-codex-realm-dirs', dirs: [] })
+      await walked
+      expect(walks).toBe(1)
+      expect(db.rebuilds).toBe(1)
+      expect(db.meta.get('rollupsDirty')).toBe('0')
+    })
+
+    // As a walk: only once every byte is read.
+    it('a changed-files sweep that leaves bytes to read rebuilds nothing; the walk that reads them to the end does', async () => {
+      fakeTheTimer()
+      // Each pass reads at most 512 bytes of a file: two of its lines.
+      await start({ maxTickBytes: 512 })
+      db.meta.set('rollupsDirty', '1')
+      realFs.appendFileSync(transcript('s2'), Array.from({ length: 12 }, (_, i) => line(`more-${i}`)).join(''))
+      const sweeps = completes.length
+      const read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', path.join('F--proj', 's2.jsonl'))
+      await read
+      expect(completes.at(-1)).toEqual({ firstIndex: false, drained: false })
+      expect(db.rebuilds).toBe(0)
+      // The walk the 5 s timer runs, and the ones that follow it at once.
+      const drained = drainedSweep('the walk that reads it to its end')
+      vi.advanceTimersByTime(TAIL_MS)
+      await drained
+      expect(db.events).toBe(5 + 12)
+      const since = rebuildsAt.slice(sweeps)
+      expect(since.length).toBeGreaterThan(2)
+      expect(since.slice(0, -1).every((r) => r === 0)).toBe(true)
+      expect(since.at(-1)).toBe(1)
+      expect(db.meta.get('rollupsDirty')).toBe('0')
+    })
+
+    it('a check of the rollups that fails does not stop the timer: the sweep is asked to settle them', async () => {
+      fakeTheTimer()
+      await start()
+      db.meta.set('rollupsDirty', '1')
+      db.failNextRollupsDirty = true
+      clearCounts()
+      const settled = nextSweep('the sweep that settles the accounts')
+      expect(() => vi.advanceTimersByTime(TAIL_MS)).not.toThrow()
+      await settled
+      expect(db.rebuilds).toBe(1)
+      expect(db.meta.get('rollupsDirty')).toBe('0')
       expect(listings).toBe(0)
     })
   })
