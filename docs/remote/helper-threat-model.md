@@ -14,9 +14,9 @@ only. Section numbers like "protocol 13" point into the protocol.
 - **The user's account on the remote host:** its files, and the CLI's own
   credentials there. The helper opens no CLI file except the one named edit
   (protocol 8), and never sends, logs or keeps a credential.
-- **Session content:** code, prompts, statusline data, uploaded screenshots.
-- **The helper binary's integrity** on every device it is installed on.
-- **The user's consent:** what is installed on a host, and when.
+- **Also:** session content (code, prompts, statusline data, uploaded
+  screenshots), the helper binary's integrity on every device, and the user's
+  consent (what is installed on a host, and when).
 
 ## 2 Trust boundaries
 
@@ -47,26 +47,23 @@ the two share one home folder (3.4). Each claim holds from its step in 2.1.
 | Guarantee | Enforced by | True from |
 | --- | --- | --- |
 | Host folders per device id; clean-up and removal only behind this install's marker; `unmanaged`, `elsewhere` and `unknown` sessions never ended or removed by the app | fixed scripts, app | R2; states R6 |
-| Fixed ssh options, minimal environment and per-connection pins on one-shot execs and the side channel | app | R2 (execs), R6 (side channel) |
-| Terminal ssh: `-e none` and the minimal environment; the rest of the fixed options | app | R2; R10 |
+| Fixed ssh options, minimal environment and per-connection pins; on a terminal `-e none` and the environment first, the rest later | app | R2 (execs), R6 (side channel); terminal R2, R10 |
 | Saved ssh passwords only through askpass, under its release rules | app | R2 (execs), R10 (terminal) |
 | Host home recorded once; the only pasted host text is a checked upload path; remote terminal: no clipboard read or write, links `http` or `https` only, on a click | app | R2 |
 | Remote allow-list: tools list filtered, argument rules, no local render roots, inline canvas content under the egress-confined policy, remote-session flag | app (Conductor server) | R2 (route before R8), R8 (side channel) |
 | Browser tools for a remote session: `http` and `https` only, filtering proxy, throwaway context | app | R8 (refused before) |
 | Device records under a MAC, the only store of host-key pins; consent re-checked against pin and hash | app | R2 (pins), R3 (records) |
+| Budgets per connection; consent per target with a hash of the agreed list | app, helper | R6 |
 | Payloads filtered; host paths and CLI session ids typed remote-only; remote resume runs on the host | app | R6 (status), R7 (events) |
 | A session's identity comes from its connection alone | app | R6, kept through R8 and after |
-| Budgets per connection; consent per target with a hash of the agreed list | app, helper | R6 |
-| One closed named edit outside `~/.aicc` | helper | R7 |
-| No CLI token or app secret on the host; no forwarded port | app | R8 |
+| One closed named edit outside `~/.aicc`; no CLI token or app secret on the host and no forwarded port | helper; app | R7; R8 |
 | The helper opens no TCP or UDP socket | dependency review; build checks; seccomp on Linux | R5 (checks, helper dark), R6 (shipped roles), R9 (holder) |
-| Nothing typed into a shell | app | R3 (setup), R10 (launch), R11 (sudo) |
-| No tmux; the terminal is not parsed | app | R9; R11 |
+| Nothing typed into a shell; no tmux; the terminal is not parsed | app | R3 (setup), R9 (no tmux), R10 (launch), R11 (sudo, no parsing) |
 | sudo release rules (3.7); shared homes found from the host side (3.4) | app, helper | R11 |
 
-Between R2 and R11 the old path runs beside the new parts; each step's
-adversarial pass covers both, a rollback returns to the earlier beta's rows,
-and every row has a negative test in its step.
+Until R12 the old path runs beside the new; each step's adversarial pass covers
+both, a rollback returns to the earlier beta's rows, and every row has a
+negative test in its step.
 
 ## 3 Threats and mitigations
 
@@ -74,18 +71,17 @@ and every row has a negative test in its step.
 
 - The helper ships inside the signed app with a compiled-in manifest of every
   released helper's hash; the host never downloads it. The launcher execs only
-  on a hash match, which the app checks again. This
-  catches corruption, partial uploads, wrong files and changes by other users
-  past the folder modes; not root or the same user (section 2). `emit`, `mcp`
-  and `askpass` are not hash-checked. The macOS helper (and Windows at R13) is
-  signed; Linux helpers rely on the manifest.
+  on a hash match, which the app checks again. This catches corruption, wrong
+  files and changes by other users past the folder modes; not root or the same
+  user (section 2). `emit`, `mcp` and `askpass` are not hash-checked. macOS
+  helpers are signed (Windows at R13); Linux relies on the manifest.
 
 ### 3.2 Downgrade
 
 - New sessions start only on the bundled helper; the hello's `helper` field is
   information only. A live session keeps the helper its spec names, if the
   manifest knows its hash (protocol 7). A hello offering only older protocols
-  is refused. Re-placement happens at most once per target per app run, with a
+  is refused. Re-placement is at most once per target per app run, with a
   notice, never because of a host's version list.
 
 ### 3.3 A malicious or compromised host sending crafted messages
@@ -107,8 +103,7 @@ and every row has a negative test in its step.
   cleans window titles. Links open only on a click, only `http` or `https`
   after normalisation, through the main process's one checked open path,
   showing the real target when an OSC 8 link's text differs (a test uses a
-  `file:` and a UNC link). The only host text typed into a terminal is a
-  checked upload path, under `-e none`.
+  `file:` and a UNC link).
 
 ### 3.4 Other users, shared homes and containers
 
@@ -123,19 +118,22 @@ and every row has a negative test in its step.
   listing and removal never cross devices or installs.
 - **Containers.** The facts come from the host's fixed script running the
   engine's inspect (protocol 14), never from the container, whose own report
-  can only add "shared". A bind from the host home, the runtime folder or an
-  ancestor, a host PID or IPC namespace, or privileged mode counts as shared;
-  so does a target whose detection has not answered (it never needs a saved
-  sudo password). On shared, the consent screen says so, no saved sudo
-  password is released automatically, and the sudo wrapper sits outside every
-  mount source.
-- **Machines sharing a home.** Each spec names its machine identity and boot
-  (protocol 1); cloned machines with one machine id are told apart by host
-  name. The app never ends or removes a session on another or an unknown
-  machine; the removal script refuses while one exists, naming the host to use
-  (for an unknown one, unless the user confirms no other machine shares the
-  home). Before R9 a folder with no holder is `unmanaged`: kept, never resumed
-  over, never removed (protocol 7).
+  can only add "shared". A target is **shared** if it has: a bind whose source
+  is the host home, the runtime folder or an ancestor of either, lies under the
+  runtime folder or `~/.aicc`, is an engine socket, or is `/proc`, `/sys` or
+  `/dev` or below one; a host PID, IPC, user, network, UTS or cgroup
+  namespace; privileged mode; `CapAdd` of SYS_ADMIN, SYS_PTRACE or SYS_MODULE;
+  unconfined `SecurityOpt`; or any device. Facts are read again at every
+  placement and user-started launch; a changed mount list, a missing field, a
+  failed parse or a detection that has not answered (it never needs a saved
+  sudo password) counts as shared. On shared, the consent screen says so and
+  no saved sudo password is released automatically (3.7).
+- **Machines sharing a home.** Each spec names its machine identity (machine
+  id, host name, node id) and boot (protocol 1). The app never ends or removes
+  a session on another or an unknown machine; the removal script refuses while
+  one exists, naming the host to use, with the exits in protocol 13. Clones
+  identical in all three parts are not told apart. An `unmanaged` folder is
+  kept until a new boot or a confirmed `end` makes it `stale` (protocol 7).
 
 ### 3.5 Conductor tools reached from the host
 
@@ -144,21 +142,19 @@ and every row has a negative test in its step.
   accepted boundary), can call the session's tools under its allow-list.
 - **Default deny, from R2.** The Conductor server marks every SSH session
   remote, and a remote session gets only the tools on the remote allow-list,
-  one list on every route (before R8 and on the side channel). Others are
-  neither listed nor run. Per-session switches apply on top. A new tool joins
-  only with argument rules and an adversarial pass. From R8 the session comes
-  from the side channel alone; a message that names one is refused.
-- **The rule.** No tool returns data from the local machine or the local
-  network unless the list allows it, with argument rules per tool. Version 1:
+  one list on every route (before R8 and on the side channel). The list is a
+  fixture file naming each tool, its class and its argument rule; a registered
+  tool not in it is neither listed nor run. Per-session switches apply on top.
+  A new tool joins only with a fixture row, argument rules and an adversarial
+  pass. From R8 the session comes from the side channel alone; a message that
+  names one is refused. No tool returns local-machine or local-network data
+  unless the list allows it. Version 1 classes:
 
 | Class of tool | For a remote session |
 | --- | --- |
-| Reading the app's screenshot or other local folders | not allowed (remote images arrive by upload, R2 and R7) |
-| Script evaluation in a browser | not allowed |
+| Reading the app's screenshot or other local folders; script evaluation in a browser; local accounts, other sessions, local files or settings | not allowed (remote images arrive by upload, R2 and R7) |
 | Opening, reading or driving a page (every navigate or open tool, the in-app browser's included) | from R8 only, in that session's own browser context, through the filtering proxy below. After URL normalisation the scheme is `http` or `https` only; any other (`file`, `chrome`, `view-source`, `data`, `javascript`, `blob`, `filesystem`, `about` other than `about:blank`) is refused before the browser sees it, and page-initiated navigations to them are refused in the remote context |
-| Showing on the canvas | inline content only: no local path, no local URL, no local render root; served only under the egress-confined design policy (connections only to the app, WebRTC blocked, DNS prefetch off, resource hints stripped, including ones a script adds) |
-| Canvas review notes | that session's own canvas only |
-| Local accounts, other sessions, local files or settings | not allowed |
+| Showing on the canvas; its review notes | inline content only: no local path, no local URL, no local render root; served only under the egress-confined design policy (connections only to the app, WebRTC blocked, DNS prefetch off, resource hints stripped, including ones a script adds); review notes on that session's own canvas only |
 
 - **The browser.** All of a remote session's browser traffic goes through an
   app-run filtering proxy that resolves each name itself, connects to the
@@ -175,8 +171,9 @@ and every row has a negative test in its step.
 - **Context.** Each remote session gets an isolated, throwaway, empty browser
   context, shared with no local session or signed-in partition, or the call is
   refused. Downloads, file choosers, permissions and other windows are refused.
-- **Tests.** R2: a remote tools list holds only the allow-list; a canvas
-  render naming a local path registers no render root. R8: a remote canvas
+- **Tests.** R2: every registered tool is in the fixture or refused, and a
+  remote tools list holds only the fixture's tools; a canvas render naming a
+  local path registers no render root. R8: a remote canvas
   render registers no render root and takes its identity from the side
   channel; a script-added resource hint makes no connection; and each of these
   is refused: a call naming another session; `file:`, `view-source:file:`,
@@ -194,11 +191,11 @@ and every row has a negative test in its step.
 
 ### 3.7 sudo answers
 
-- sudo asks through `SUDO_ASKPASS`, the session's `askpass` wrapper, which asks
-  the app over the side channel. The app accepts `sudo.ask` only while a
-  container launch it started for that session waits, for that target, one at
-  a time; otherwise `denied`. The helper also checks, best effort, that the
-  asker descends from the sudo it started.
+- sudo asks through `SUDO_ASKPASS`, the session's `askpass` wrapper (outside
+  every mount source, protocol 14), which asks the app over the side channel.
+  The app accepts `sudo.ask` only while a container launch it started for that
+  session waits, for that target, one at a time; otherwise `denied`. The helper
+  also checks, best effort, that the asker descends from the sudo it started.
 - **A saved sudo password** is released without a click only on a launch the
   user started (opening the session, or Retry), once for that action, counted
   when sent; never on an automatic reconnect, a second question in the same
@@ -218,14 +215,14 @@ and every row has a negative test in its step.
   variable, config `SetEnv` or askpass variable reaches the host. A user's
   `ProxyCommand` gets only the device's extra variables, none secret-named.
 - Saved passwords go only through askpass, under its release rules (protocol
-  3); keyboard-interactive prompts (macOS hosts included) and all other host
-  text go to the user, never during an automatic reconnect. Passwords are
-  saved only in a real secret store (pending probe P2 on Windows).
+  3), kept only in a real secret store (pending probe P2 on Windows);
+  keyboard-interactive prompts and all other host text go to the user, never
+  during an automatic reconnect.
 - The MAC-checked device record is the only store of a host-key pin; each ssh
   gets a per-connection known-hosts file written from it and deleted after, so
   a planted line is never trusted. The first connection asks the user and
-  releases nothing; jump hops are pinned too; a changed key stops the device.
-  Authentication failures stop automatic reconnects.
+  releases nothing; jump hops are pinned too; a changed key stops the device,
+  an authentication failure its automatic reconnects.
 
 ### 3.9 Consent, removal and clean-up
 
@@ -235,20 +232,19 @@ and every row has a negative test in its step.
 - The helper is placed only after the user agrees (ADR decision 2) on a screen
   that also names the folder-trust edit in plain words. Consent is per target;
   the record keeps a hash of the agreed list, and a change asks again.
-- **Clean-up.** `session.list` covers this device id only. For a `stale`
-  session the app offers remote resume, then removes the folder only if its
-  own record holds it. `unmanaged`, `elsewhere` and `unknown` sessions are
-  never ended or removed by the app; a live one it has no record of appears in
-  the device report and ends only on a user action. A detached session ends at
-  its maximum lifetime (7 days by default, per device). From R4 the Devices
-  page lists `~/.aicc` folders of other installs and removes one on a confirm.
+- **Clean-up.** The app itself acts only on `stale` sessions (protocol 7): it
+  offers remote resume, then removes the folder only if its own record holds
+  it. A live session it has no record of appears in the device report and ends
+  only on a user action. A detached session ends at its maximum lifetime (7
+  days by default, per device). From R4 the Devices page lists `~/.aicc`
+  folders of other installs and removes one on a confirm.
 - **Remove device** (from R4; R3 and R6 ship with the consent screen's by-hand
   removal steps) ends the sessions the user chose, restores each named edit
   (at the floor it shows the edit to undo), puts back R3's backups and removes
-  R3's files, runs the removal script (protocol 13) and checks the folder is
-  gone. It removes copies in running containers, the device record with its
-  pins, and the device's saved secrets, any copy under an older key included.
-  An unreachable host is marked removed, with the command to clean it by hand.
+  R3's files, runs the removal script (protocol 13), checks the folder is gone,
+  and removes copies in running containers, the device record with its pins
+  and the device's saved secrets, any copy under an older key included. An
+  unreachable host is marked removed, with the command to clean it by hand.
 
 ### 3.10 Supply chain of the Rust build
 
@@ -268,21 +264,24 @@ and every row has a negative test in its step.
   file (`cargo-vet` style); any `Cargo.lock` or `deny.toml` change is an
   ADR-009 trigger. A name allow-list cannot stop a bad new version of an
   allowed crate, and run-time checks cannot stop code that runs before them.
-- **No TCP or UDP sockets: defence in depth against an exploited helper.**
-  Linux: a seccomp filter (no-new-privileges, audit architecture checked)
-  allows `socket` and `socketpair` only for Unix-domain sockets and denies the
-  three `io_uring` calls, `socketcall` where it exists, and `ptrace`. Children
-  inherit it for good, so every process not on the path that starts the CLI
-  installs it first in `main` (`serve`, `attach`, `emit`, `mcp`, `askpass`,
-  the one-shot commands); on that path the spawner installs none and reads one
-  byte, and the holder installs it right after starting the CLI, before
-  reading any socket (protocol 5). An R9 test asserts the CLI child can open an
-  internet socket and run sudo while `serve` cannot. macOS: no run-time
-  enforcement in version 1. Every OS: a source lint (no `std::net`, raw sockets
-  or name lookups outside one local-socket module), a symbol check and a CI
-  system-call trace of every role; two canaries (a plain internet socket, and a
-  raw-syscall one from a pre-`main` initialiser, also through io_uring) must
-  turn them red on every run. Programs the helper starts are not covered.
+- **No TCP or UDP sockets: defence in depth against a helper that opens a
+  socket itself.** Linux: a seccomp filter (no-new-privileges, audit
+  architecture checked) allows `socket` and `socketpair` only for Unix-domain
+  sockets and denies the three `io_uring` calls, `socketcall` where it exists,
+  and `ptrace`. Children inherit it for good, so every process not on the path
+  that starts the CLI installs it first in `main` (`serve`, `attach`, `emit`,
+  `mcp`, `askpass`, the one-shot commands); on that path the spawner installs
+  none and reads one byte, and the holder installs it right after starting the
+  CLI, before reading any socket (protocol 5). An R9 test asserts the CLI child
+  can open an internet socket and run sudo while `serve` cannot. The filter
+  does not stop code in `serve` that makes the unfiltered spawner start a
+  holder, which runs its spec's `argv` before its own filter; source review is
+  the control there. macOS: no run-time enforcement in version 1. Every OS: a
+  source lint (no `std::net`, raw sockets or name lookups outside one
+  local-socket module), a symbol check and a CI system-call trace of every
+  role; two canaries (a plain internet socket, and a raw-syscall one from a
+  pre-`main` initialiser, also through io_uring) must turn them red on every
+  run. Programs the helper starts are not covered.
 - Reproducible builds: Linux built twice and compared; macOS compared before
   signing, with the post-signing hash in the manifest. Decoders are fuzzed on
   both sides. Rust gets a separate reviewer with a Rust brief.
@@ -291,7 +290,8 @@ and every row has a negative test in its step.
 
 - The helper log sits in the session folder, owner-only, capped at 1 MiB and
   removed with the session. Neither side logs secrets, file bytes, MCP or
-  statusline payloads; logs carry types, sizes, ids and reason codes.
+  statusline payloads; logs carry types, sizes, ids and reason codes, at most
+  100 deduplicated lines a minute per connection.
 - **Recordings (R5.1)** keep an allow-list of fields per message type; secrets,
   raw frames, MCP bodies and payload strings become typed placeholders, and an
   unknown type stops the recorder. They are written outside the repository and
@@ -301,14 +301,14 @@ and every row has a negative test in its step.
 ### 3.12 Device records on the local machine
 
 - Device records (target, pinned host keys, home, consent and install state,
-  the probe report) live under the app's resources folder, trusted as far as
-  the OS user is: protected only against a lower-privilege process planting or
+  the probe report) live under the app's resources folder, trusted to the OS
+  user and protected only against a lower-privilege process planting or
   changing them. Each carries a MAC under a purpose-bound subkey of a
   per-install secret, kept per OS user and machine in the OS secret store,
   never in the resources folder (which may be synced). With no real secret
   store, records live in an owner-only credential-style file in the per-user
-  data folder, and passwords are not saved. A record whose MAC fails is
-  treated as absent until the user checks the device.
+  data folder and passwords are not saved. A record whose MAC fails is treated
+  as absent until the user checks the device.
 - A stored consent flag is never trusted alone: before placing or starting
   anything, the app confirms it covers the pinned key, helper hash and
   placement list in use, or asks again. No field the app treats as a local
@@ -318,5 +318,5 @@ and every row has a negative test in its step.
 
 - Every R step that ships code takes the ADR-009 adversarial pass, scoped to
   the old and new parts live in that beta (2.1).
-- Design-stage adversarial pass: three fix rounds; the final result, with
+- Design-stage adversarial pass: four fix rounds; the final result, with
   disputed and deferred items, is recorded in the PR.

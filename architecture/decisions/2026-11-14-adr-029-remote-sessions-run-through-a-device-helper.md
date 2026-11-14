@@ -1,8 +1,7 @@
 # ADR-029: Remote sessions run through a small helper on a device you add once
 
-- Status: Accepted (owner approved the remote shape on the Agent Canvas, scope
-  of 2.1.3-beta.2, 2026-11-14). The six R1 probes below have not run yet; each
-  one can still stop or reshape the step it guards.
+- Status: Accepted (owner approved on the Agent Canvas, scope of 2.1.3-beta.2).
+  The six R1 probes below have not run; each can still stop or reshape its step.
 - Date: 2026-11-14
 - Related: ADR-009 (adversarial review), ADR-028 (beta cadence),
   `docs/remote/helper-protocol.md` (protocol version 1),
@@ -23,8 +22,6 @@ That shape has a cost:
   about half of `src/main/pty-manager.ts` (7,882 lines) is the SSH branch.
 - The SSH statusline has been fixed at least four times and is missing again;
   each fix passed the unit suite, and the failures only show on real hosts.
-- Every change there pays the full CI run, the live SSH matrix and an
-  adversarial pass, and still ships regressions.
 - The owner decided (2026-11-13) that SSH failures drive a rethink of the
   remote path, not more fixes on it, and that a helper binary, devices added
   first and Rust are all allowed.
@@ -59,10 +56,10 @@ That shape has a cost:
    the CLI, and the rest for one call. Nothing runs on the host between
    sessions: no service, no autostart, no listening network port, no root
    install, nothing on `PATH`. The helper opens no TCP or UDP socket, only its
-   session's Unix-domain socket. The control for that against a hostile
-   dependency is source review of every `Cargo.lock` change. seccomp on Linux
-   and the build checks are defence in depth against an exploited helper; macOS
-   has no run-time enforcement in version 1 (threat model 3.10).
+   session's Unix-domain socket. The control against a hostile dependency is
+   source review of every `Cargo.lock` change; seccomp on Linux and the build
+   checks are defence in depth against a helper that opens a socket itself
+   (none at run time on macOS in version 1; threat model 3.10).
 4. **No Claude token is copied to the host.** From R8 the app writes no app
    secret there. The helper opens no CLI file except one named edit (the
    folder-trust key, from R7) and never sends, logs or keeps a CLI credential.
@@ -86,17 +83,16 @@ That shape has a cost:
 11. **The app fixes its own ssh options and environment.** Every ssh it starts
     turns off agent, X11 and port forwarding, credential delegation, config
     `SetEnv`, escape sequences, local commands and shared connections, puts
-    `--` before a checked target, and trusts only the device record's pins,
-    jump hops included, through a per-connection known-hosts file. Every ssh,
-    askpass and `ProxyCommand` child gets an environment from a short
-    allow-list plus the device's named extra variables, never the app's own.
-    Saved passwords go only through askpass, under release rules bound to the
+    `--` before a checked target, and trusts only the device record's pins
+    (jump hops included) through a per-connection known-hosts file. It and its
+    askpass and `ProxyCommand` children get a short allow-listed environment
+    plus the device's named extra variables, never the app's own. Saved
+    passwords go only through askpass, under release rules bound to the
     connection (protocol 2 and 3).
 12. **Remote sessions get a default-deny tool list, from R2.** A remote session
     reaches only the Conductor tools on the remote allow-list, with argument
-    rules per tool; nothing returns local-machine or local-network data unless
-    the list allows it. Its browser tools open `http` and `https` only, through
-    an app-run filtering proxy in a throwaway context (threat model 3.5).
+    rules per tool. Its browser tools open `http` and `https` only, through an
+    app-run filtering proxy in a throwaway context (threat model 3.5).
 
 ## Consequences
 
@@ -134,8 +130,7 @@ That shape has a cost:
 **Old beside new.** Old per-session SSH fields are still read until R12, so a
 rollback to an earlier beta keeps working. Each saved secret is stored once,
 under a key both generations read; Remove device deletes it and any copy under
-an older key. The old SSH branch shrinks at each step instead of going in one
-change. Each guarantee holds from the step threat model 2.1 names.
+an older key. Each guarantee holds from the step threat model 2.1 names.
 
 **Risks.**
 
@@ -158,13 +153,14 @@ change. Each guarantee holds from the step threat model 2.1 names.
 - A reattach into a terminal of another size can garble the first screen; the
   holder replays at the recorded size, then the resize makes the CLI redraw.
 - A host reboot ends a session. The next connection sees it as `stale` (same
-  machine, new boot) and offers the CLI's own resume, run on the host by
-  conversation id. Before R9 a session folder with no holder is `unmanaged` and
-  left alone. Hosts with no helper build drop to the plain terminal.
+  machine, new boot, which beats `unmanaged`) and offers the CLI's own resume,
+  run on the host by conversation id. A folder on the old path (same boot, not
+  ended, no holder) stays `unmanaged` and is left alone. Hosts with no helper
+  build drop to the plain terminal.
 
-**What still needs real hosts.** The live matrix, the R1 probes, and about 24
-hours of real-host time across R1 to R12; local helper tests and the CI sshd
-job do not replace it.
+**What still needs real hosts.** The live matrix, the R1 probes and about 24
+hours of real-host time across R1 to R12; local tests and the CI sshd job do
+not replace it.
 
 **Review gates.**
 
@@ -173,7 +169,7 @@ job do not replace it.
   new shipped binary. The helper's source, its build and its hash manifest join
   the ADR-009 path table when they land (R5), and so does any change to the
   helper's `Cargo.lock` or `deny.toml`, of any size.
-- Design-stage adversarial pass: three fix rounds; the final result, with
+- Design-stage adversarial pass: four fix rounds; the final result, with
   disputed and deferred items, is recorded in the PR.
 - The SSH statusline live-matrix gate in `AGENTS.md` stays in force, unchanged,
   for every step that touches its blast radius. From R6 the new remote files
@@ -187,39 +183,40 @@ The remote design study scored three shapes out of 40.
 
 - **A per-user daemon that also carries the terminal (31 of 40).** Not chosen:
   it bets everything at once, on one shared process per user that every upgrade
-  must replace under live sessions. In the chosen design each session keeps the
-  helper version that started it for its whole life, and the app keeps the
-  previous protocol until no such session can be left (protocol 7), so an
-  upgrade strands nothing. The daemon's frame format is kept, so the terminal
-  can move onto the side channel later if Windows hosts need it.
+  must replace under live sessions. Here each session keeps the helper version
+  that started it, and the app keeps the previous protocol until no such
+  session can be left (protocol 7), so an upgrade strands nothing. The daemon's
+  frame format is kept, so the terminal can move onto the side channel later
+  if Windows hosts need it.
 - **Nothing installed on the host (26 of 40).** Not chosen: it keeps tmux, the
   reverse tunnel and the remote usage fetch, the parts the owner asked to
   rethink. Its ordering (image paste first) and resume by conversation id are
   kept.
-- **Keep patching today's path.** Not chosen: the owner decided against it;
-  each fix pays the same cost and leaves the same shared stream in place.
+- **Keep patching today's path.** Not chosen: the owner decided against it.
 - **An in-process SSH library.** Not chosen: it loses the user's ssh config,
-  agent and jump hosts. It stays the fallback if probe P2 fails. (**Go**
-  instead of Rust was not chosen either: the owner chose Rust.)
+  agent and jump hosts; it stays the fallback if probe P2 fails. (**Go** instead
+  of Rust was not chosen either: the owner chose Rust.)
 
 ## Step plan
 
 The order is the build order. Each line is one step; most are two betas.
 
 - **R1** Design gate and statusline diagnosis: this ADR, the protocol spec, the
-  threat model and the six probes. Docs only. A statusline cause outside the
-  remote path gets its own small beta before R2.
+  threat model and the six probes. Docs only (probe P1 says where a cause
+  outside the remote path goes).
 - **R2** Image paste and Snap over SSH by file upload, before any helper: a
   one-shot ssh exec with exit code and error text, the fixed ssh options and
   minimal environment, the host key pinned at the first upload, the home
   recorded once, the device-id folder and its marker, saved passwords through
   askpass, per-device extra variables, pins only in the device record, a CI
-  sshd job (every app OS) with a hostile config and environment canaries. Every
-  terminal ssh the app starts gets `-e none` and the minimal environment. **The
-  remote allow-list ships here** for SSH sessions on the route they use before
-  R8: the Conductor server marks each SSH session remote, lists only
-  allow-listed tools, applies the argument rules, and registers no local render
-  roots for it.
+  sshd job (every app OS) with a hostile config, environment canaries and a
+  known-hosts path with a space and a non-ASCII character. Every terminal ssh
+  the app starts gets `-e none` and the minimal environment. **The remote
+  allow-list ships here** for SSH sessions on the route they use before R8: a
+  fixture file names each tool, its class and its argument rule; the Conductor
+  server marks each SSH session remote, lists and runs only fixture tools,
+  applies the argument rules, and registers no local render roots for it. A
+  test: every registered tool is in the fixture or refused.
 - **R3** Probe the host and run setup over exec with a real result per file
   (protocol 13), backing up any user file it replaces. Device records are made
   from saved SSH configs, with the key pinned at the probe. The typed setup
@@ -235,7 +232,9 @@ The order is the build order. Each line is one step; most are two betas.
   outside the repository and viewed by a human before commit; CI replays them.
 - **R6** The helper ships; the statusline moves to the side channel. It is
   bundled, uploaded with consent, hash-checked and self-tested. Folders the old
-  path still runs are `unmanaged` and survive a reconnect (tested).
+  path still runs are `unmanaged` and survive a reconnect with folder, spool
+  and `seq` kept; a host reboot makes one `stale` (both tested). Removal test:
+  two nodes on one home, Remove on B refuses and names A.
 - **R4** The Devices page (add, check, re-provision, report, remove, host key
   shown and pinned, leftover `~/.aicc` folders of other installs), then the
   session dialog picks a device. Mockup approved on the Agent Canvas first; it
@@ -250,13 +249,16 @@ The order is the build order. Each line is one step; most are two betas.
   and a throwaway context per session. Tests cover each (threat model 3.5). The
   reverse port forward goes.
 - **R9** The helper replaces tmux on Linux and macOS hosts: the CLI survives a
-  dropped link or an app restart, and missed output is replayed. A test shows
-  the CLI keeps its network and sudo while `serve` has neither (protocol 5).
+  dropped link or an app restart, and missed output is replayed. Tests: the CLI
+  keeps its network and sudo while `serve` has neither (protocol 5); two
+  concurrent starts leave one CLI; a live R8-era session survives the update,
+  a reconnect and a rollback, folder, spool and `seq` kept, no resume offered.
 - **R10** Host sessions launch by exec, with the helper as the terminal's
   command. Passwords go only through askpass. The riskiest step.
 - **R11** Containers and sudo on the helper, with shared-home detection read
-  from the host side (the engine's inspect); the SSH branch leaves
-  `pty-manager.ts`.
+  from the host side (the engine's inspect) at every launch; the SSH branch
+  leaves `pty-manager.ts`. A test: a container with no machine id keeps its
+  node id over an engine restart.
 - **R12** Gate reset and cleanup: the live gate becomes about 8 rows per helper
   release, `AGENTS.md` is rewritten to match, help texts are swept, the
   user-facing surface sweep is recorded.
@@ -266,30 +268,28 @@ The order is the build order. Each line is one step; most are two betas.
 
 ## R1 probes
 
-Each probe runs on a real host before the step it guards is built. None needs
-code from this plan; each is a short manual check whose result is recorded
-here. Status for all six: **not run (waiting for the owner, Q2: which host
-shows the missing statusline, and permission to probe hosts).**
+Each probe is a short manual check on a real host, run before the step it
+guards is built; its result is recorded here. Status for all six: **not run
+(owner, Q2: which host shows the fault, and permission to probe hosts).**
 
 **P1 The cause of the missing statusline.**
 - Proves: where the status stops on its way from the remote CLI to the app.
-- How: on the host where the statusline is missing, read the statusline shim's
-  own trace log (`~/.claude/conductor-shim.log`) for the session's lines. On
-  the same app build, start a local session and check its statusline.
+- How: on the host where the statusline is missing (owner to name), read the
+  shim's own trace log (`~/.claude/conductor-shim.log`) for the session's
+  lines; on the same app build, check a local session's statusline.
 - Go: a cause is named. If it is in the remote path, R3 and R6 replace that
   mechanism and the result is recorded against them.
 - No-go: the local session is missing its statusline too. The cause is outside
   the remote path and gets its own small beta before R2.
 - No cause found, local session fine: recorded as unproven; R3 and R6 still
   replace the mechanism.
-- Host role: the host that shows the fault (owner to name), and the local one.
 
 **P2 Saved passwords through askpass with Windows `ssh.exe`.**
 - Proves: the ssh program the app runs (named in the result, with its version)
   calls an app-supplied askpass program for a password and a one-time code,
-  with no console prompt, from an install path with a space and a non-ASCII
-  user name, and through the app's own `ProxyCommand`. Also recorded: what a
-  macOS host's sshd sends (keyboard-interactive goes to the user).
+  with no console prompt, from an install and a known-hosts path with a space
+  and a non-ASCII user name, and through the app's own `ProxyCommand`. Also
+  recorded: what a macOS sshd sends (keyboard-interactive goes to the user).
 - Go: both are answered from a non-interactive start and the connection opens;
   a keyboard-interactive prompt with other text, a confirm prompt and a
   jump-host prompt each reach the user and release nothing.
@@ -313,10 +313,9 @@ shows the missing statusline, and permission to probe hosts).**
   Claude Code session makes it an image attachment. Also records the file and
   key where the CLI keeps folder trust, or a supported flag that replaces the
   named edit.
-- Go: the image is attached on the host (guards R2) and inside a container
-  (guards R11).
+- Go: the image is attached on a Linux host with tmux (guards R2) and inside a
+  container (guards R11).
 - No-go: R2 is rescoped before it is built.
-- Host role: a Linux host with tmux, a container host.
 
 **P5 sudo answered without a terminal.**
 - Proves: a container engine command that needs sudo can be answered through an
@@ -325,11 +324,12 @@ shows the missing statusline, and permission to probe hosts).**
   has `/bin/sh` and a writable home for its user. Also tried: a wrong answer
   and sudo's retry, `requiretty`, `!visiblepw`, a container that shares the
   host's home, distrobox and toolbox defaults, and a container that lies in its
-  own report (the host-side inspect must still say shared).
+  own report (the host-side inspect must still say shared). Each reads shared:
+  an engine-socket bind, `SYS_ADMIN`, a device, host networking, a recreated
+  container with a changed mount list, a home reached through a symlink.
 - Go: the command runs with the answer given once; nothing is written to disk.
-- No-go: sudo for that host role stays on the old path until another design;
-  R11 is rescoped.
-- Host role: a container host where the engine needs sudo.
+- No-go: sudo on a container host whose engine needs it stays on the old path
+  until another design; R11 is rescoped.
 
 **P6 A launch by exec gets the same PATH as an interactive login.**
 - Proves: a command run by exec over ssh finds the same CLI paths and the same
@@ -340,6 +340,6 @@ shows the missing statusline, and permission to probe hosts).**
   scripts through; a home mounted `noexec` is detected.
 - No-go: the probe records absolute CLI paths through one login run by exec
   (`$SHELL -ilc`) when the device is added, and R10 is sized again. Either way
-  the comparison is repeated per device at provisioning, falling back to
-  recorded paths or the floor.
+  the comparison is repeated per device at provisioning, else recorded paths
+  or the floor.
 - Host role: a Linux host with tmux, a macOS host, a password-auth host.
