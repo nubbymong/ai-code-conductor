@@ -2763,6 +2763,19 @@ export class AccountsService {
     return failure('unsupported', `${p.displayName} runs on this computer only in this release; it is not available in SSH sessions.`)
   }
 
+  /** Why a session of this provider cannot start on this computer, or null
+   *  when it can: its `session.launch` capability, never its name, resolved
+   *  as every other capability is here (this platform, and the experimental
+   *  declarations the owner enabled for this provider). The same answer
+   *  prepareLaunch and reviewReady act on, so the PTY manager, which asks
+   *  before it starts a local session, cannot decide differently. */
+  localLaunchRefusal(providerId: ProviderId): AccountsFailure | null {
+    const p = this.pkg(providerId)
+    if (!p) return failure('unsupported')
+    if (this.capability(p, 'session.launch').enabled) return null
+    return failure('capability-disabled')
+  }
+
   /** Whether a reviewer invocation of this provider can be prepared now: a
    *  review tool is offered only then (commit 5b, decision 3). The package
    *  reviews and prepares reviews here, the provider is on, and the account a

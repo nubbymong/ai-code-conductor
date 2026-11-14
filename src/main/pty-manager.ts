@@ -94,6 +94,7 @@ import type { ProjectGateResult } from '../shared/providers'
 import { captureClaudeAccount, clearClaudeAccount, getAccountIdentity, pushAccountIdentity, startWatchingAccountIdentity, stopWatchingAccountIdentity, getWatchedProfileId } from './claude-account-identity'
 import { acquireProfileConsumer, pendingProfileRefresh } from './profile-consumers'
 import { providerLaunchRefusal } from './provider-launch-gate'
+import { getAccountsService } from './provider-accounts'
 import { updateSessionMeta, clearSessionMeta, markPtySessionAlive, markPtySessionGone, isPtySessionLive } from './session-registry'
 import { readConfig, getConfigDir } from './config-manager'
 import { getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
@@ -2373,20 +2374,71 @@ function assertGatedDirectory(
 }
 
 /**
- * How spawnPty starts each provider's local session: `direct` runs the
- * provider's CLI as the PTY's own program (it owns its screen), `shell` opens
- * a shell and types the launch line into it. One row per provider id: an id
- * added to the list without a row here does not compile, and an id with no
- * row at run time is refused (localLaunchOf), never started the way another
- * provider is.
+ * How spawnPty starts a provider's local session.
+ *
+ * `direct` runs the provider's CLI as the PTY's own program (it owns its
+ * screen), from the launch pty:spawn prepared for it.
+ *
+ * `claude-shell` is Claude Code's own launch and no other provider's: a shell
+ * is opened and Claude Code's launch line is typed into it, by code that is
+ * Claude Code's throughout (its accounts, its resume rules, its resume list).
+ * The name says so, and a row of this style under any other id is not a way
+ * to start that id (launchStyleOf).
  */
-const LOCAL_LAUNCH_STYLE: Readonly<Record<ProviderId, 'direct' | 'shell'>> = { claude: 'shell', codex: 'direct' }
+export type LocalLaunchStyle = 'direct' | 'claude-shell'
+
+/** The one provider `claude-shell` starts. */
+const CLAUDE_SHELL_PROVIDER: ProviderId = 'claude'
+
+/**
+ * Each provider's row. One per provider id: an id added to the list without
+ * a row here does not compile, and an id with no row at run time is refused
+ * (localLaunchOf), never started the way another provider is.
+ */
+export const LOCAL_LAUNCH_STYLE: Readonly<Record<ProviderId, LocalLaunchStyle>> = Object.freeze({ claude: 'claude-shell', codex: 'direct' })
+
+let localLaunchStyles: Readonly<Record<string, LocalLaunchStyle>> = LOCAL_LAUNCH_STYLE
+/** Test-only: the rows launches are looked up in (null restores the app's own). */
+export function _setLocalLaunchStylesForTest(rows: Readonly<Record<string, LocalLaunchStyle>> | null): void {
+  localLaunchStyles = rows ?? LOCAL_LAUNCH_STYLE
+}
+
+/**
+ * How `id` is started on this computer by the rows in `rows` (the app's own
+ * when absent), or undefined when they hold no way to start it: no row of its
+ * own, a row that is not a style, or the `claude-shell` row under an id that
+ * is not Claude Code's. Pure.
+ */
+export function launchStyleOf(id: unknown, rows: Readonly<Record<string, LocalLaunchStyle>> = localLaunchStyles): LocalLaunchStyle | undefined {
+  if (typeof id !== 'string' || !Object.hasOwn(rows, id)) return undefined
+  const style: unknown = rows[id]
+  if (style === 'claude-shell') return id === CLAUDE_SHELL_PROVIDER ? style : undefined
+  return style === 'direct' ? style : undefined
+}
+
+/**
+ * Whether `id`'s sessions start on this computer: its `session.launch`
+ * capability as the accounts service resolves it (localLaunchRefusal: this
+ * platform, and the experimental declarations the owner enabled), so the PTY
+ * manager and the service give one answer. With no accounts service to ask,
+ * the registry's own declaration answers, with nothing experimental enabled.
+ */
+function startsSessionsHere(id: ProviderId): boolean {
+  const service = getAccountsService()
+  return service ? service.localLaunchRefusal(id) === null : providerCapability(id, 'session.launch').enabled
+}
+
+/** What a launch naming an assistant this app has no way to start is told.
+ *  The id is shown as it may be: it reaches a terminal and the log. */
+function notStartable(requested: unknown): Error {
+  return new Error(`This session's assistant ("${stripSpoofableText(String(requested), 60)}") is not one this app can start. Nothing was started.`)
+}
 
 /** The provider a local launch starts, and how spawnPty starts it. */
 interface LocalLaunch {
   id: ProviderId
   provider: SessionProvider
-  style: 'direct' | 'shell'
+  style: LocalLaunchStyle
 }
 
 /**
@@ -2395,22 +2447,20 @@ interface LocalLaunch {
  * or a terminal tab, which start no provider here.
  *
  * Throws when the id is not one this app knows, when no provider is
- * registered for it, when the registered one does not declare session
- * launches (its `session.launch` capability), or when spawnPty has no way to
- * start it. The throw is the spawn's own failure path: pty:spawn rejects with
- * the sentence, and a launch that was held writes it to the terminal. Nothing
- * starts for a refused launch, and never another provider in its place.
+ * registered for it, when spawnPty has no way to start it (launchStyleOf), or
+ * when its sessions do not start on this computer (startsSessionsHere: its
+ * `session.launch` capability). The throw is the spawn's own failure path:
+ * pty:spawn rejects with the sentence, and a launch that was held writes it
+ * to the terminal. Nothing starts for a refused launch, and never another
+ * provider in its place.
  */
 function localLaunchOf(requested: unknown): LocalLaunch {
-  // The id as it may be shown: it reaches a terminal and the log.
-  const asked = stripSpoofableText(String(requested), 60)
-  const notKnown = (): Error => new Error(`This session's assistant ("${asked}") is not one this app can start. Nothing was started.`)
-  if (!isProviderId(requested)) throw notKnown()
+  if (!isProviderId(requested)) throw notStartable(requested)
   let provider: SessionProvider
-  try { provider = getProvider(requested) } catch { throw notKnown() }
-  const style = Object.hasOwn(LOCAL_LAUNCH_STYLE, requested) ? LOCAL_LAUNCH_STYLE[requested] : undefined
-  if (!style) throw notKnown()
-  if (!providerCapability(requested, 'session.launch').enabled) {
+  try { provider = getProvider(requested) } catch { throw notStartable(requested) }
+  const style = launchStyleOf(requested)
+  if (!style) throw notStartable(requested)
+  if (!startsSessionsHere(requested)) {
     throw new Error(`${stripSpoofableText(String(provider.displayName || requested), 60)} cannot start sessions on this computer. Nothing was started.`)
   }
   return { id: requested, provider, style }
@@ -6155,11 +6205,22 @@ function spawnPtyResolved(
     // Local session — delegate binary + env construction to the provider.
     // The post-spawn shell-write (cd + claude command) stays here; only the
     // bare shell + env comes from the provider.
-    // Reached by a session whose provider's row in LOCAL_LAUNCH_STYLE is
-    // `shell` (Claude Code), with the provider the registry holds for it, and
-    // by a terminal tab, which starts no provider: its shell is the one the
-    // Claude Code package builds, as before. Any other provider id was refused
-    // above (localLaunchOf), so none starts as Claude Code here.
+    // Reached by a session whose row is `claude-shell`, which is Claude Code
+    // and no other provider (launchStyleOf), with the provider the registry
+    // holds for it, and by a terminal tab, which starts no provider: its shell
+    // is the one the Claude Code package builds, as before. Every other id was
+    // refused by the lookup before anything of the session was touched
+    // (localLaunchOf). The branch says the same of itself: what follows is
+    // Claude Code's launch, so a launch of any other style or id stops here.
+    if (localLaunch && (localLaunch.style !== 'claude-shell' || localLaunch.id !== CLAUDE_SHELL_PROVIDER)) throw notStartable(localLaunch.id)
+    // A session that names no provider starts Claude Code (the lookup's
+    // answer for it). From here on its options name the provider that was
+    // looked up, so everything after reads one answer: the run this launch is
+    // registered as, for the log, is that provider's, as it is for a session
+    // that names it. On this local branch only, and only for a launch that
+    // starts a provider: a terminal tab's options, and an SSH launch's, are
+    // never changed.
+    if (localLaunch && options?.provider === undefined) options = { ...options, provider: localLaunch.id }
     const shellOnly = options?.shellOnly
     const provider = localLaunch ? localLaunch.provider : getProvider('claude')
     // Read classicTerminalCopyPaste + theme fresh on every spawn (default true /

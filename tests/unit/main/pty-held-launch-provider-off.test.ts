@@ -2,13 +2,12 @@
 //
 // A local Claude Code launch on an account is held inside the PTY manager
 // while the account's sign-in is being refreshed, and again while the
-// project's settings are checked. pty:spawn asked main's launch rule before
-// those waits (provider-launch-gate.ts); when a wait ended the launch started
-// without asking again, so an assistant switched off meanwhile, or a setting
-// that could no longer be read, still got its session. The held launch now
-// asks the same rule when each wait ends: refused, it starts nothing, says why
-// in the terminal before the exit, and gives up its hold on the account. A
-// terminal tab starts no assistant and is never asked.
+// project's settings are checked. pty:spawn asks main's launch rule before
+// those waits (provider-launch-gate.ts), and a wait can be long, so the held
+// launch asks the same rule again when each wait ends. Refused (its assistant
+// was switched off meanwhile, or the setting can no longer be read), it
+// starts nothing, says why in the terminal before the exit, and gives up its
+// hold on the account. A terminal tab starts no assistant and is never asked.
 //
 // The real spawnPty and the real launch rule; only the accounts service's
 // answer is scripted. An account is a folder under this test's own root; the
@@ -26,7 +25,7 @@ const h = vi.hoisted(() => ({
   spawns: [] as string[],
   otherChildren: [] as string[],
   /** The accounts service, or null for "main has none". */
-  service: null as null | { launchRefusal: (id: string) => Refusal | null },
+  service: null as null | { launchRefusal: (id: string) => Refusal | null; localLaunchRefusal: (id: string) => null },
   /** What the service answers for a launch now (null: it may start). */
   refusal: null as Refusal | null,
   /** Every provider id the launch rule was asked about. */
@@ -178,7 +177,8 @@ beforeEach(() => {
   h.spawns.length = 0; h.otherChildren.length = 0; h.asked.length = 0; payloads.length = 0
   h.refusal = null
   h.folderCheck = null
-  h.service = { launchRefusal: (id: string) => { h.asked.push(id); return h.refusal } }
+  // Claude Code's sessions start on this computer (the PTY manager asks that too).
+  h.service = { launchRefusal: (id: string) => { h.asked.push(id); return h.refusal }, localLaunchRefusal: () => null }
   registerFakeClaudePackage({
     resolveBinary: () => ({ cmd: 'claude', args: [] }),
     buildSpawnCommand: () => ({ cmd: 'stand-in-shell', args: [], env: {} }),

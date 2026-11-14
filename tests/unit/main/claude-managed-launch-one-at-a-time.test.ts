@@ -89,7 +89,7 @@ vi.mock('../../../src/main/profile-consumers', async (orig) => ({ ...(await orig
 vi.mock('../../../src/main/managed-launch-diagnostics', async (orig) => ({ ...(await orig<any>()), gateManagedLaunchDirs: () => h.gate!.promise, recordManagedLaunchPreflight: () => {} }))
 vi.mock('../../../src/main/legacy-version-manager', () => ({ isVersionInstalled: () => true, installVersion: async () => ({ ok: true }) }))
 vi.mock('../../../src/main/credential-store', () => ({ loadCredential: () => null }))
-vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => ({ launchRefusal: () => null, remoteLaunchRefusal: () => null, prepareLaunch: async () => ({ ok: false, message: 'n/a' }) }) }))
+vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => ({ launchRefusal: () => null, remoteLaunchRefusal: () => null, localLaunchRefusal: () => null, prepareLaunch: async () => ({ ok: false, message: 'n/a' }) }) }))
 
 // Nothing real may start: the process layer must be the fake above.
 const nodePty = await import('node-pty')

@@ -146,6 +146,8 @@ vi.mock('../../../src/main/provider-accounts', () => ({
   getAccountsService: () => ({
     launchRefusal: () => null,
     remoteLaunchRefusal: () => ({ ok: false, code: 'unsupported', message: 'Codex runs on this computer only in this release; it is not available in SSH sessions.' }),
+    // Each provider's sessions start on this computer (the PTY manager asks).
+    localLaunchRefusal: () => null,
     prepareLaunch: async (input: { ownerId: string; sessionId: string; providerAccountId?: string }) => {
       h.prepared.push({ ownerId: input.ownerId, sessionId: input.sessionId, providerAccountId: input.providerAccountId })
       if (h.prepareGate) await h.prepareGate

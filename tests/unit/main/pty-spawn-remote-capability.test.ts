@@ -1,8 +1,7 @@
 /**
  * pty:spawn asks, for ANY assistant, whether its sessions run on another
- * machine before it loads anything for an SSH spawn. It used to ask only when
- * the session named one particular assistant, though the accounts service's
- * question (its `session.ssh` capability) takes any provider id. Now the
+ * machine before it loads anything for an SSH spawn: the accounts service's
+ * question (its `session.ssh` capability) takes any provider id. The
  * assistant an SSH launch starts is asked about whichever one it is, and a
  * terminal tab over SSH is asked about the assistant it names, when it names
  * one. Refused: nothing is spawned and the saved password is never read.

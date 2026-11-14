@@ -1,17 +1,28 @@
 // A local launch picks its assistant from the provider registry.
 //
-// The PTY manager used to tell the two assistants apart by one name test and
-// start Claude Code for everything else, so a session naming an assistant the
-// app does not know started Claude Code in its place. A local launch now looks
-// its provider up in the registry: one that is not registered, or whose package
-// does not declare session launches, is refused with a plain sentence and
-// nothing starts. Claude Code, named or by default, starts as before, and a
-// terminal tab starts no assistant, so it is not asked and still opens.
+// A local launch looks its provider up in the registry, before it touches
+// anything of the session: an assistant the app does not know, one that is
+// not registered, or one whose package does not declare session launches is
+// refused with a plain sentence, and nothing starts, never another assistant
+// in its place. Claude Code, named or by default, starts, and its run is
+// registered for the log under the provider the lookup found. A terminal tab
+// starts no assistant, so it is not asked and still opens.
+//
+// How each assistant is started is its own row of a table, and the Claude Code
+// row is Claude Code's alone: any other id that carried a copy of it is
+// refused, not started the way Claude Code is. Whether an assistant's sessions
+// start on this computer is the accounts service's answer (its `session.launch`
+// declaration on this platform, with the experimental ones the owner enabled),
+// so the PTY manager and the service cannot disagree; with no service to ask,
+// the registry's own declaration answers.
 //
 // The real spawnPty over the real registry: the Claude Code package as the app
 // ships it (its capability declarations included), with a stand-in session
-// that hands back a fixed shell. node-pty records, nothing is started, and any
-// other program a child-process call asks for is recorded and refused.
+// that hands back a fixed shell, and, where a case asks it, the real accounts
+// service over the registry. node-pty records, nothing is started, and any
+// other program a child-process call asks for is recorded and refused. The
+// cases that put the other assistant's own package behind a launch are in
+// tests/wp1/launch-handoff-pty.test.ts.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -26,6 +37,11 @@ const h = vi.hoisted(() => ({
   binder: false,
   /** Every session id that record was asked about (the conversation a Restart resumes). */
   binderAsked: [] as string[],
+  /** Main's accounts service, or null for "main has none". */
+  service: null as unknown,
+  /** Whether the log service is running, and every run it was told started. */
+  logging: false,
+  runs: [] as Array<{ sessionId: string; provider: string }>,
   /** Any program a child-process call asked for (refused, never run). */
   otherChildren: [] as string[],
 }))
@@ -70,7 +86,12 @@ vi.mock('child_process', async (importOriginal) => {
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: () => {}, logError: () => {}, logDebug: () => {} }))
 vi.mock('../../../src/main/ipc/setup-handlers', () => ({ getResourcesDirectory: () => h.root, getDataDirectory: () => h.root, registerSetupHandlers: () => {}, writeCliSetupPty: () => {} }))
 vi.mock('../../../src/main/logging/logging-service', () => ({
-  getLogSupervisor: () => null,
+  // The log service: none, unless a case turns it on to see which runs a
+  // launch registers (logging is on in the settings these launches read).
+  getLogSupervisor: () => (h.logging ? {
+    runStart: (run: { sessionId: string; provider: string }) => { h.runs.push({ sessionId: run.sessionId, provider: run.provider }) },
+    runEnd: () => {},
+  } : null),
   // The record a launch reads the conversation to resume from. It holds none
   // here; a case that turns it on sees which sessions it was asked about.
   getTranscriptBinder: () => (h.binder ? {
@@ -115,32 +136,56 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
   withProfileHome: (env: Record<string, string>) => ({ ...env }),
 }))
 
-const { spawnPty, killPty, isSessionWritable } = await import('../../../src/main/pty-manager')
-const { PROVIDER_IDS } = await import('../../../src/shared/providers')
-const { registerProviderPackage, _resetProviderRegistryForTest } = await import('../../../src/main/providers/core')
+// Main's accounts service: none, unless a case builds the real one.
+vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => h.service }))
+
+const { spawnPty, killPty, isSessionWritable, launchStyleOf, LOCAL_LAUNCH_STYLE } = await import('../../../src/main/pty-manager')
+const { PROVIDER_IDS, CAPABILITY_PLATFORMS, isCapabilityPlatform } = await import('../../../src/shared/providers')
+const { registerProviderPackage, listProviderPackages, _resetProviderRegistryForTest, AccountsService, ConsumerLeaseRegistry, SecretHandleStore } = await import('../../../src/main/providers/core')
 const { createClaudePackage } = await import('../../../src/main/providers/claude')
+type CapabilityPlatform = (typeof CAPABILITY_PLATFORMS)[number]
 
 // Claude Code is the first provider id in the app's own list; the second is the
 // other assistant the app knows, which this test never registers.
 const [CLAUDE, OTHER] = PROVIDER_IDS
 const SHELL = 'stand-in-shell'
 const NOT_KNOWN = /is not one this app can start/
+/** The platform these tests run on, as the capability declarations name it. */
+const HERE: CapabilityPlatform = isCapabilityPlatform(process.platform) ? process.platform : 'linux'
 
 const win = { webContents: { send: () => {} }, isDestroyed: () => false } as never
-const ids = ['not-known', 'not-registered', 'no-launch', 'by-default', 'named', 'tab', 'tab-no-launch', 'running']
+const ids = ['not-known', 'not-registered', 'no-launch', 'by-default', 'named', 'tab', 'tab-no-launch', 'running', 'experimental']
 let project = ''
+type Declared = 'supported' | 'unsupported' | 'unknown' | 'experimental'
 
 /** Register the Claude Code package as the app ships it, with a stand-in
- *  session, and `launch` as what it declares about starting sessions. */
-function registerClaude(launch: 'supported' | 'unsupported' | 'unknown' | 'experimental' = 'supported'): void {
+ *  session, `launch` as what it declares about starting sessions, and
+ *  `shownName` as the name its session is shown by (its own when absent). */
+function registerClaude(launch: Declared = 'supported', shownName?: string): void {
   const real = createClaudePackage()
   const session = Object.assign(Object.create(Object.getPrototypeOf(real.session) as object), real.session, {
     resolveBinary: () => ({ cmd: 'claude', args: [] }),
     buildSpawnCommand: () => ({ cmd: SHELL, args: [], env: {} }),
     ingestSessionTelemetry: () => ({ stop() {} }),
+    ...(shownName === undefined ? {} : { displayName: shownName }),
   })
   _resetProviderRegistryForTest()
   registerProviderPackage({ ...real, session, capabilities: { ...real.capabilities, 'session.launch': { state: launch } } })
+}
+
+/** The real accounts service over the registered packages, on `platform`,
+ *  with `experimental` as the declarations the owner enabled. */
+function accountsService(platform: CapabilityPlatform, experimental: string[] = []): InstanceType<typeof AccountsService> {
+  return new AccountsService({
+    store: () => null,
+    leases: new ConsumerLeaseRegistry(),
+    secrets: new SecretHandleStore({ now: () => 0 }),
+    packages: () => listProviderPackages(),
+    preference: () => 'on',
+    experimentalEnabled: () => experimental as never,
+    platform,
+    randomHex: () => '0'.repeat(32),
+  })
 }
 
 beforeEach(() => {
@@ -152,6 +197,9 @@ beforeEach(() => {
   h.binder = false
   h.binderAsked.length = 0
   h.otherChildren.length = 0
+  h.service = null
+  h.logging = false
+  h.runs.length = 0
   registerClaude()
 })
 afterEach(() => {
@@ -189,14 +237,100 @@ describe('a local launch of an assistant the registry does not hold', () => {
 })
 
 describe('a local launch of a registered assistant that does not declare session launches', () => {
-  // Mutation to prove this can fail: do not ask the registry for the capability.
-  for (const state of ['unsupported', 'unknown', 'experimental'] as const) {
-    it(`declared ${state}: refused, and nothing starts`, () => {
+  // Mutation to prove this can fail: do not ask for the capability.
+  for (const state of ['unsupported', 'unknown'] as const) {
+    it(`declared ${state}: refused, and nothing starts, with or without an accounts service to ask`, () => {
       registerClaude(state)
+      expect(() => spawnPty(win, 'no-launch', { provider: CLAUDE, cwd: project } as never)).toThrow(/cannot start sessions on this computer/)
+      h.service = accountsService(HERE)
       expect(() => spawnPty(win, 'no-launch', { provider: CLAUDE, cwd: project } as never)).toThrow(/cannot start sessions on this computer/)
       expect(h.spawns).toEqual([])
     })
   }
+
+  it('the sentence names the assistant by the name the app shows it by', () => {
+    registerClaude('unsupported')
+    expect(() => spawnPty(win, 'no-launch', { provider: CLAUDE, cwd: project } as never)).toThrow('Claude Code cannot start sessions on this computer. Nothing was started.')
+  })
+
+  // Mutation to prove this can fail: put the shown name into the sentence as it is.
+  it('a shown name carrying an escape sequence reaches the sentence without it', () => {
+    registerClaude('unsupported', 'Claude\u001b]8;;https://example.invalid\u0007 Code\u009b31m\u202e')
+    let message = ''
+    try { spawnPty(win, 'no-launch', { provider: CLAUDE, cwd: project } as never) } catch (e) { message = (e as Error).message }
+    expect(message).toMatch(/cannot start sessions on this computer/)
+    expect(message).toContain('Claude')
+    // eslint-disable-next-line no-control-regex
+    expect(message).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/)
+    expect(h.spawns).toEqual([])
+  })
+})
+
+describe('a declaration marked experimental starts sessions only once the owner has enabled it for that assistant', () => {
+  const launch = (): void => spawnPty(win, 'experimental', { provider: CLAUDE, cwd: project } as never)
+
+  // The accounts service resolves the declaration with the owner's list, and
+  // the PTY manager takes that answer. Mutation to prove this can fail:
+  // resolve the declaration in the PTY manager without the owner's list.
+  it('enabled for it: the accounts service says its sessions start, and the launch starts', () => {
+    registerClaude('experimental')
+    const service = accountsService(HERE, [`${CLAUDE}:session.launch`])
+    h.service = service
+    expect(service.localLaunchRefusal(CLAUDE)).toBeNull()
+    expect(launch).not.toThrow()
+    expect(h.spawns).toEqual([{ file: SHELL, cwd: project }])
+  })
+
+  it('not enabled: the accounts service refuses, and so does the launch', () => {
+    registerClaude('experimental')
+    const service = accountsService(HERE, [])
+    h.service = service
+    expect(service.localLaunchRefusal(CLAUDE)).not.toBeNull()
+    expect(launch).toThrow(/cannot start sessions on this computer/)
+    expect(h.spawns).toEqual([])
+  })
+
+  it('enabled for the other assistant only: refused', () => {
+    registerClaude('experimental')
+    h.service = accountsService(HERE, [`${OTHER}:session.launch`])
+    expect(launch).toThrow(/cannot start sessions on this computer/)
+    expect(h.spawns).toEqual([])
+  })
+
+  it('with no accounts service to ask, the registry\'s own declaration answers, and nothing experimental is enabled', () => {
+    registerClaude('experimental')
+    expect(launch).toThrow(/cannot start sessions on this computer/)
+    expect(h.spawns).toEqual([])
+  })
+
+  it('the accounts service is the one asked: its answer decides, whatever the registry would say by itself', () => {
+    // The registry by itself says Claude Code's sessions start; a service that refuses is believed.
+    const asked: string[] = []
+    h.service = { localLaunchRefusal: (id: string) => { asked.push(id); return { ok: false, code: 'capability-disabled' } } }
+    expect(launch).toThrow(/cannot start sessions on this computer/)
+    expect(asked).toEqual([CLAUDE])
+    expect(h.spawns).toEqual([])
+  })
+})
+
+describe('how an assistant is started is its own row, and the Claude Code row is Claude Code\'s alone', () => {
+  it('every provider id the app knows has a row, and exactly Claude Code has the Claude Code row', () => {
+    expect(Object.keys(LOCAL_LAUNCH_STYLE).sort()).toEqual([...PROVIDER_IDS].sort())
+    for (const id of PROVIDER_IDS) expect(launchStyleOf(id), id).toBeDefined()
+    expect(PROVIDER_IDS.filter((id) => launchStyleOf(id) === 'claude-shell')).toEqual([CLAUDE])
+  })
+
+  it('an id with no row has no way to start', () => {
+    for (const id of ['elsewhere', '', 'toString', '__proto__', undefined, null, 7]) expect(launchStyleOf(id), String(id)).toBeUndefined()
+  })
+
+  // Mutation to prove this can fail: take the row as it stands, whatever id it is under.
+  it('a third id given a copy of the Claude Code row has no way to start, and the two the app knows keep theirs', () => {
+    const widened = { ...LOCAL_LAUNCH_STYLE, third: LOCAL_LAUNCH_STYLE[CLAUDE] }
+    expect(launchStyleOf('third', widened)).toBeUndefined()
+    expect(launchStyleOf(CLAUDE, widened)).toBe(LOCAL_LAUNCH_STYLE[CLAUDE])
+    expect(launchStyleOf(OTHER, widened)).toBe(LOCAL_LAUNCH_STYLE[OTHER])
+  })
 })
 
 describe('a refused launch for a session that is running changes nothing of it', () => {
@@ -227,6 +361,26 @@ describe('a refused launch for a session that is running changes nothing of it',
       expect(h.binderAsked).toEqual(['running'])
     })
   }
+})
+
+describe('the run a local launch is registered as, for the log', () => {
+  // A launch that names no assistant starts Claude Code, and its run is
+  // registered under the provider the lookup found, as a launch that names
+  // Claude Code is. Mutation to prove this can fail: register the run from
+  // the name the session gave, which is none.
+  it('a session that names no assistant is registered as a Claude Code run, as one that names Claude Code is', () => {
+    h.logging = true
+    spawnPty(win, 'by-default', { cwd: project })
+    spawnPty(win, 'named', { provider: CLAUDE, cwd: project } as never)
+    expect(h.runs).toEqual([{ sessionId: 'by-default', provider: CLAUDE }, { sessionId: 'named', provider: CLAUDE }])
+  })
+
+  it('a terminal tab starts no assistant and registers no run, whatever it names', () => {
+    h.logging = true
+    spawnPty(win, 'tab', { shellOnly: true, cwd: project })
+    spawnPty(win, 'tab-no-launch', { shellOnly: true, provider: CLAUDE, cwd: project } as never)
+    expect(h.runs).toEqual([])
+  })
 })
 
 describe('what is unchanged', () => {
