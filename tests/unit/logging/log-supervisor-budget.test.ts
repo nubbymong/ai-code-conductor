@@ -209,3 +209,26 @@ describe('logging service: a fork that fails', () => {
     })
   })
 })
+
+describe('logging service: once degraded, nothing from the dead worker is taken', () => {
+  let h: ReturnType<typeof harness> | undefined
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => { h?.sup.shutdown(); h = undefined; vi.useRealTimers() })
+
+  it('no heartbeat, no error, no log line and no ready change what the card shows', () => {
+    h = harness({ maxRestarts: 0 })
+    h.ready()
+    h.last().exit()                                   // a budget of 0: degraded for good
+    const before = h.sup.getDiagnosticsSnapshot()
+    expect(before.services[0].state).toBe('degraded')
+    h.emitted.length = 0
+    h.last().t.emitToMain({ type: 'health', inFlight: 3, tailing: 1, messagesTotal: 99, dbBytes: 5 })
+    h.last().t.emitToMain({ type: 'error', message: 'late' })
+    h.last().t.emitToMain({ type: 'log', entry: { level: 'warn', message: 'late' } })
+    h.last().t.emitToMain({ type: 'ready' })
+    expect(h.emitted).toEqual([])
+    const after = h.sup.getDiagnosticsSnapshot()
+    expect(after.services).toEqual(before.services)
+    expect(after.log).toEqual(before.log)
+  })
+})
