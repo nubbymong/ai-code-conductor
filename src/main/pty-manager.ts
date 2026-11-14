@@ -93,6 +93,7 @@ import { stripSpoofableText } from '../shared/safe-text'
 import type { ProjectGateResult } from '../shared/providers'
 import { captureClaudeAccount, clearClaudeAccount, getAccountIdentity, pushAccountIdentity, startWatchingAccountIdentity, stopWatchingAccountIdentity, getWatchedProfileId } from './claude-account-identity'
 import { acquireProfileConsumer, pendingProfileRefresh } from './profile-consumers'
+import { providerLaunchRefusal } from './provider-launch-gate'
 import { updateSessionMeta, clearSessionMeta, markPtySessionAlive, markPtySessionGone } from './session-registry'
 import { readConfig, getConfigDir } from './config-manager'
 import { getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
@@ -2483,6 +2484,19 @@ function deferSpawnUntil<T>(
       return
     }
     try {
+      // The launch rule was asked before this wait (pty:spawn asks it before
+      // spawnPty runs), and the wait can be long: asked again now, for a held
+      // launch that starts a provider, so one switched off meanwhile, or a
+      // setting that can no longer be read, starts nothing
+      // (provider-launch-gate.ts; no answer is never a yes). Refused: the same
+      // exit as a re-entry that failed, with the rule's own sentence. A
+      // terminal tab (`agent` null) starts no provider and is not asked.
+      const refused = agent ? providerLaunchRefusal(agent) : null
+      if (refused) {
+        logInfo(`[profiles] session ${sessionId}: its launch was refused when the wait ended (${refused.code}) -- not spawning`)
+        failWithoutPty(wait, new Error(refused.message))
+        return
+      }
       // Re-enter through spawnPtyResolved with the teardown this wait carries,
       // NOT through spawnPty: the map entry that spawnPty would read it from
       // was deleted three lines up, so a re-entry that is deferred AGAIN (a
