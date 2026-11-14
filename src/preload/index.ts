@@ -879,7 +879,10 @@ interface HooksBridge {
 // redeclares this shape with precise return types sourced from
 // shared/github-types.ts.
 interface GitHubBridge {
+  // `{ config, readFailed }`: the config (null when there is none) and whether
+  // github-config.json is there but did not read.
   getConfig: () => Promise<unknown>
+  // The settings only; main takes no account and no schema version from it.
   updateConfig: (patch: unknown) => Promise<unknown>
   addPat: (input: {
     kind: 'pat-classic' | 'pat-fine-grained'
@@ -1483,7 +1486,9 @@ const electronAPI: ElectronAPI = {
     usageOne: (accountId, opts) => ipcRenderer.invoke(IPC.PROVIDER_ACCOUNTS_USAGE_ONE, { accountId, ...(opts?.read === true ? { read: true } : {}) }),
   },
   github: {
-    getConfig: () => ipcRenderer.invoke(IPC.GITHUB_CONFIG_GET),
+    // Asked with `readState`, so the answer says whether the file read: the
+    // settings pages must not take "did not read" for "no file yet".
+    getConfig: () => ipcRenderer.invoke(IPC.GITHUB_CONFIG_GET, { readState: true }),
     updateConfig: (patch) => ipcRenderer.invoke(IPC.GITHUB_CONFIG_UPDATE, patch),
     addPat: (input) => ipcRenderer.invoke(IPC.GITHUB_PROFILE_ADD_PAT, input),
     adoptGhCli: (username) => ipcRenderer.invoke(IPC.GITHUB_PROFILE_ADOPT_GHCLI, username),

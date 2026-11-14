@@ -99,9 +99,9 @@ export class AuthProfileStore {
   /**
    * The config a WRITER edits and saves back: an empty one only when there is
    * no file yet. A file that did not read is the read's own error, and the
-   * writer stops there with nothing written. Every writer used to start from
-   * `load()`, so one failed read ended with defaults plus the one change being
-   * saved over every saved account.
+   * writer stops there with nothing written. Every writer below starts from
+   * this, never from `load()`, whose empty answer for a file that did not
+   * read must not be saved.
    */
   private async loadForWrite(): Promise<GitHubConfig> {
     return (await this.io.readConfigForWrite()) ?? emptyGitHubConfig()
@@ -125,7 +125,23 @@ export class AuthProfileStore {
     })
   }
 
-  async addProfile(input: AddProfileInput): Promise<string> {
+  /**
+   * Add an account. With `replaceSameAccount` (the device sign-in), a sign-in
+   * for an account that is already saved REPLACES the saved one: every other
+   * oauth profile with the same username is removed, and the newest of them
+   * hands its per-account featureToggles to the new profile.
+   *
+   * The new profile is otherwise seeded from featureDefaults, which is the
+   * GLOBAL intent, not this account's. The old profile's map IS the user's
+   * intent for this account, so it wins when present; a sign-in must not put
+   * an account's toggles back to the defaults.
+   *
+   * The add and the replace are ONE read and ONE write under the lock. A file
+   * that did not read refuses the whole sign-in before anything is written,
+   * and a save that fails leaves the file as it was, so the account is never
+   * saved twice and a refusal never follows a change.
+   */
+  async addProfile(input: AddProfileInput, opts?: { replaceSameAccount?: boolean }): Promise<string> {
     return this.mutex.run(async () => {
       const id = randomUUID()
       const config = await this.loadForWrite()
@@ -169,6 +185,20 @@ export class AuthProfileStore {
         // to the constant for pre-migration / first-launch configs.
         featureToggles: { ...(config.featureDefaults ?? DEFAULT_AUTH_FEATURE_TOGGLES) },
       }
+
+      if (opts?.replaceSameAccount && input.kind === 'oauth') {
+        let carried: AuthProfile['featureToggles']
+        for (const [pid, p] of Object.entries(config.authProfiles)) {
+          if (pid === id || p.kind !== 'oauth' || p.username !== input.username) continue
+          // Newest old profile wins if there were somehow several; the loop order
+          // is insertion order, so the last match is the most recently added.
+          if (p.featureToggles) carried = p.featureToggles
+          delete config.authProfiles[pid]
+          if (config.defaultAuthProfileId === pid) config.defaultAuthProfileId = undefined
+        }
+        if (carried) config.authProfiles[id].featureToggles = { ...carried }
+      }
+
       await this.io.writeConfig(config)
       return id
     })
@@ -197,43 +227,6 @@ export class AuthProfileStore {
       const config = await this.loadForWrite()
       delete config.authProfiles[id]
       if (config.defaultAuthProfileId === id) config.defaultAuthProfileId = undefined
-      await this.io.writeConfig(config)
-    })
-  }
-
-  /**
-   * Re-auth dedupe for the SAME GitHub account: after a fresh oauth profile
-   * (`newId`) is added, this carries the user's per-account featureToggles from
-   * the OLD same-username profile(s) onto the new one and removes the olds — all
-   * in ONE transaction so the new profile is never observed with the wrong
-   * toggles and a concurrent reader can't see a half-applied state.
-   *
-   * The new profile was just seeded from featureDefaults (addProfile), which is
-   * the GLOBAL intent, not this account's. The old profile's map IS the user's
-   * intent for this account, so it always wins when present. Without this, a
-   * re-auth silently reverts per-account toggles to the master defaults.
-   */
-  async replaceSameAccountOAuth(newId: string, username: string): Promise<void> {
-    await this.mutex.run(async () => {
-      const config = await this.loadForWrite()
-      const fresh = config.authProfiles[newId]
-      if (!fresh) return
-      let carried: AuthProfile['featureToggles']
-      let removedAny = false
-      for (const [pid, p] of Object.entries(config.authProfiles)) {
-        if (pid === newId || p.kind !== 'oauth' || p.username !== username) continue
-        // Newest old profile wins if there were somehow several; the loop order
-        // is insertion order, so the last match is the most recently added.
-        if (p.featureToggles) carried = p.featureToggles
-        delete config.authProfiles[pid]
-        if (config.defaultAuthProfileId === pid) config.defaultAuthProfileId = undefined
-        removedAny = true
-      }
-      // First-ever auth for this account: nothing replaced, nothing to write.
-      if (!removedAny) return
-      if (carried) {
-        config.authProfiles[newId] = { ...fresh, featureToggles: { ...carried } }
-      }
       await this.io.writeConfig(config)
     })
   }

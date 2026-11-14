@@ -24,22 +24,27 @@ class Unreadable extends Error {}
 describe('AuthProfileStore', () => {
   // `unreadable`: the file is there but did not read (held by another program,
   // not JSON, from a newer build). `config: null` alone is "no file yet".
-  let mem: { config: GitHubConfig | null; writes: number; unreadable: boolean }
+  // `failWrites`: a save fails and leaves the file as it was.
+  let mem: { config: GitHubConfig | null; writes: number; unreadable: boolean; failWrites: boolean }
   let store: AuthProfileStore
 
   beforeEach(() => {
-    mem = { config: null, writes: 0, unreadable: false }
+    mem = { config: null, writes: 0, unreadable: false, failWrites: false }
     mockSafeStorage.isEncryptionAvailable.mockReturnValue(true)
+    // Every read hands out its own copy, as a read from disk does: what a
+    // writer changes reaches `mem.config` only through writeConfig.
+    const copy = (c: GitHubConfig | null): GitHubConfig | null => (c ? structuredClone(c) : null)
     store = new AuthProfileStore({
       // As GitHubConfigStore answers a reader: null for no file, and null for
       // a file that did not read.
-      readConfig: async () => (mem.unreadable ? null : mem.config),
+      readConfig: async () => (mem.unreadable ? null : copy(mem.config)),
       // ...and a writer: null only for no file; a file that did not read is an error.
       readConfigForWrite: async () => {
         if (mem.unreadable) throw new Unreadable('did not read')
-        return mem.config
+        return copy(mem.config)
       },
       writeConfig: async (c) => {
+        if (mem.failWrites) throw new Error('write failed')
         mem.config = c
         mem.writes++
       },
@@ -335,7 +340,11 @@ describe('AuthProfileStore', () => {
     expect(Object.keys(mem.config!.authProfiles).length).toBe(10)
   })
 
-  describe('replaceSameAccountOAuth — re-auth dedupe preserves per-account toggles', () => {
+  // A sign-in for an account that is already saved replaces the saved profile.
+  // Adding the new profile and removing the old one are ONE read and ONE
+  // write: a read that fails refuses the whole sign-in, and nothing in between
+  // can leave the account saved twice.
+  describe('addProfile with replaceSameAccount: a sign-in replaces the same account in one write', () => {
     const customToggles: Record<GitHubAuthFeatureKey, boolean> = {
       activePR: true,
       ci: false, // <-- the user's per-account intent that must survive re-auth
@@ -344,11 +353,19 @@ describe('AuthProfileStore', () => {
       notifications: false,
       aiCredits: true,
     }
+    const signIn = (username: string, rawToken = 'gho_new') =>
+      store.addProfile(
+        {
+          kind: 'oauth', label: username, username, scopes: ['repo', 'user'], capabilities: ['pulls', 'plan'],
+          rawToken, expiryObservable: false,
+        },
+        { replaceSameAccount: true },
+      )
 
-    it('carries the OLD profile featureToggles onto the fresh one, then removes the old', async () => {
+    it('carries the OLD profile featureToggles onto the fresh one and removes the old, in one write', async () => {
       // Old profile: the user previously turned ci OFF and aiCredits ON for this
-      // account. The fresh re-auth profile is seeded from featureDefaults (the
-      // GLOBAL intent), which would silently revert those choices.
+      // account. A fresh profile is seeded from featureDefaults (the GLOBAL
+      // intent); the account's own toggles are what must be kept.
       const oldId = await store.addProfile({
         kind: 'oauth',
         label: 'octocat',
@@ -359,29 +376,36 @@ describe('AuthProfileStore', () => {
         expiryObservable: false,
       })
       await store.updateProfile(oldId, { featureToggles: customToggles })
+      const writesBefore = mem.writes
 
-      // Fresh re-auth profile for the SAME account (broader scope/token).
-      const newId = await store.addProfile({
-        kind: 'oauth',
-        label: 'octocat',
-        username: 'octocat',
-        scopes: ['repo', 'user'],
-        capabilities: ['pulls', 'plan'],
-        rawToken: 'gho_new_broad',
-        expiryObservable: false,
-      })
+      const newId = await signIn('octocat', 'gho_new_broad')
 
-      await store.replaceSameAccountOAuth(newId, 'octocat')
-
+      expect(mem.writes).toBe(writesBefore + 1)
       // Old gone, new survives, and the survivor carries the user's intent.
       expect(mem.config!.authProfiles[oldId]).toBeUndefined()
       const survivor = mem.config!.authProfiles[newId]
       expect(survivor).toBeDefined()
       expect(survivor.featureToggles).toEqual(customToggles)
-      expect(survivor.featureToggles).not.toBe(customToggles) // cloned, not shared
-      // The fresh broad scopes/capabilities are NOT clobbered by the carry.
+      // The fresh broad scopes/capabilities and the fresh token are the survivor's.
       expect(survivor.scopes).toEqual(['repo', 'user'])
       expect(survivor.capabilities).toEqual(['pulls', 'plan'])
+      expect(await store.getToken(newId)).toBe('gho_new_broad')
+    })
+
+    it('the newest of several old profiles gives the toggles, and every old one goes', async () => {
+      const first = await store.addProfile({
+        kind: 'oauth', label: 'a', username: 'a', scopes: [], capabilities: [],
+        rawToken: 'gho_first', expiryObservable: false,
+      })
+      const second = await store.addProfile({
+        kind: 'oauth', label: 'a', username: 'a', scopes: [], capabilities: [],
+        rawToken: 'gho_second', expiryObservable: false,
+      })
+      await store.updateProfile(second, { featureToggles: customToggles })
+      const newId = await signIn('a')
+      expect(Object.keys(mem.config!.authProfiles)).toEqual([newId])
+      expect(mem.config!.authProfiles[newId].featureToggles).toEqual(customToggles)
+      void first
     })
 
     it('clears defaultAuthProfileId when it pointed at the removed old profile', async () => {
@@ -390,45 +414,76 @@ describe('AuthProfileStore', () => {
         rawToken: 'gho_old', expiryObservable: false,
       })
       mem.config!.defaultAuthProfileId = oldId
-      const newId = await store.addProfile({
-        kind: 'oauth', label: 'a', username: 'a', scopes: [], capabilities: [],
-        rawToken: 'gho_new', expiryObservable: false,
-      })
-      await store.replaceSameAccountOAuth(newId, 'a')
+      const newId = await signIn('a')
       expect(mem.config!.defaultAuthProfileId).toBeUndefined()
       expect(mem.config!.authProfiles[oldId]).toBeUndefined()
       expect(mem.config!.authProfiles[newId]).toBeDefined()
     })
 
-    it('leaves a DIFFERENT account untouched', async () => {
+    it('leaves a DIFFERENT account, and the same name signed in another way, untouched', async () => {
       const other = await store.addProfile({
         kind: 'oauth', label: 'other', username: 'other', scopes: [], capabilities: [],
         rawToken: 'gho_other', expiryObservable: false,
       })
-      const newId = await store.addProfile({
-        kind: 'oauth', label: 'me', username: 'me', scopes: [], capabilities: [],
-        rawToken: 'gho_me', expiryObservable: false,
+      const sameNameToken = await store.addProfile({
+        kind: 'pat-classic', label: 'me', username: 'me', scopes: [], capabilities: [],
+        rawToken: 'ghp_me', expiryObservable: false,
       })
-      await store.replaceSameAccountOAuth(newId, 'me')
-      expect(mem.config!.authProfiles[other]).toBeDefined()
-      expect(mem.config!.authProfiles[newId]).toBeDefined()
+      mem.config!.defaultAuthProfileId = other
+      const newId = await signIn('me')
+      expect(Object.keys(mem.config!.authProfiles).sort()).toEqual([other, sameNameToken, newId].sort())
+      expect(mem.config!.defaultAuthProfileId).toBe(other)
     })
 
-    it('first-ever auth (no old profile to replace) is a no-op write', async () => {
-      const newId = await store.addProfile({
-        kind: 'oauth', label: 'solo', username: 'solo', scopes: [], capabilities: [],
-        rawToken: 'gho_solo', expiryObservable: false,
-      })
+    it('a first sign-in for the account (nothing to replace) is one write, seeded from the defaults', async () => {
       const writesBefore = mem.writes
-      await store.replaceSameAccountOAuth(newId, 'solo')
-      expect(mem.writes).toBe(writesBefore) // nothing replaced, nothing written
-      expect(mem.config!.authProfiles[newId]).toBeDefined()
+      const newId = await signIn('solo')
+      expect(mem.writes).toBe(writesBefore + 1)
+      expect(mem.config!.authProfiles[newId].featureToggles).toEqual(emptyGitHubConfig().featureDefaults)
+    })
+
+    it('without the option, a second profile for the same account is added beside the first', async () => {
+      const oldId = await store.addProfile({
+        kind: 'oauth', label: 'a', username: 'a', scopes: [], capabilities: [],
+        rawToken: 'gho_old', expiryObservable: false,
+      })
+      const newId = await store.addProfile({
+        kind: 'oauth', label: 'a', username: 'a', scopes: [], capabilities: [],
+        rawToken: 'gho_new', expiryObservable: false,
+      })
+      expect(Object.keys(mem.config!.authProfiles).sort()).toEqual([oldId, newId].sort())
+    })
+
+    it('a read that fails refuses the whole sign-in: nothing added, nothing removed, nothing written', async () => {
+      const oldId = await store.addProfile({
+        kind: 'oauth', label: 'a', username: 'a', scopes: [], capabilities: [],
+        rawToken: 'gho_old', expiryObservable: false,
+      })
+      const before = JSON.stringify(mem.config)
+      mem.writes = 0
+      mem.unreadable = true
+      await expect(signIn('a')).rejects.toBeInstanceOf(Unreadable)
+      expect(mem.writes).toBe(0)
+      expect(JSON.stringify(mem.config)).toBe(before)
+      expect(Object.keys(mem.config!.authProfiles)).toEqual([oldId])
+    })
+
+    it('a write that fails leaves the file as it was: the old profile is still the only one', async () => {
+      const oldId = await store.addProfile({
+        kind: 'oauth', label: 'a', username: 'a', scopes: [], capabilities: [],
+        rawToken: 'gho_old', expiryObservable: false,
+      })
+      const before = JSON.stringify(mem.config)
+      mem.failWrites = true
+      await expect(signIn('a')).rejects.toThrow('write failed')
+      expect(JSON.stringify(mem.config)).toBe(before)
+      expect(Object.keys(mem.config!.authProfiles)).toEqual([oldId])
     })
   })
 
-  // The saved accounts live in the one config file. A writer that took "the
-  // file did not read" for "there is no file" started from an empty config and
-  // saved it over every account.
+  // The saved accounts live in the one config file. A writer starts from the
+  // defaults only when there is no file; a file that did not read stops it
+  // with the read's own error, and nothing is written.
   describe('a config that did not read is never replaced', () => {
     let aId: string
     let bId: string
@@ -461,7 +516,13 @@ describe('AuthProfileStore', () => {
       ['removeProfile', () => store.removeProfile(aId)],
       ['updateProfile', () => store.updateProfile(aId, { label: 'renamed' })],
       ['rotateToken', () => store.rotateToken(bId, 'gho_new')],
-      ['replaceSameAccountOAuth', () => store.replaceSameAccountOAuth(bId, 'b')],
+      ['addProfile replacing the same account', () => store.addProfile(
+        {
+          kind: 'oauth', label: 'b', username: 'b', scopes: [], capabilities: [],
+          rawToken: 'gho_again', expiryObservable: false,
+        },
+        { replaceSameAccount: true },
+      )],
       ['editConfig', () => store.editConfig((cur) => ({ ...(cur ?? emptyGitHubConfig()), transcriptScanningOptIn: true }))],
     ]
 

@@ -10,8 +10,13 @@ import type {
   CycleCredits,
   GitHubAuthFeatureKey,
   GitHubAppWideFeatureKey,
+  GitHubSettingsPatch,
 } from '../../shared/github-types'
-import { DEFAULT_AUTH_FEATURE_TOGGLES, emptyGitHubConfig } from '../../shared/github-constants'
+import {
+  DEFAULT_AUTH_FEATURE_TOGGLES,
+  emptyGitHubConfig,
+  GITHUB_CONFIG_UNREADABLE,
+} from '../../shared/github-constants'
 import { effectiveToggleMap, resolveAiUsageTargetId } from '../../shared/github-features'
 import { useSettingsStore } from './settingsStore'
 import { trackUsage } from './tipsStore'
@@ -50,18 +55,29 @@ interface GitHubStoreState {
   // Why the last save did not go through, in main's own words, or null. The
   // case it exists for: main refuses a save when github-config.json could not
   // be read, so the saved accounts are never replaced. The GitHub settings
-  // page shows this line. Cleared when the next save starts.
+  // page shows this line. It is also set when the page opens on a file that
+  // did not read and has only the defaults to show. Cleared when the next
+  // save starts.
   saveError: string | null
+  // true when the last read of github-config.json failed: the file is there
+  // and did not read. What `config` holds was then not confirmed by that
+  // read. It is what an earlier read gave, or, with nothing read before, the
+  // defaults, shown so the page renders. No save is built from it: while this
+  // is set every save reads the file again first, and is refused if it still
+  // does not read.
+  configUnread: boolean
 
   loadConfig: () => Promise<void>
-  updateConfig: (patch: Partial<GitHubConfig>) => Promise<void>
+  // A settings change (GitHubSettingsPatch). A sub-map carries only the keys
+  // that changed; main puts them on top of the map in the file.
+  updateConfig: (patch: GitHubSettingsPatch) => Promise<void>
   removeProfile: (id: string) => Promise<void>
   renameProfile: (id: string, label: string) => Promise<void>
   // Per-account feature toggle writes. ROUTING RULE: these patch each profile
-  // through the profile-update IPC (patch semantics), never a wholesale
-  // authProfiles write through updateConfig. Each write sends the FULL toggle
-  // map (read-modify-write via effectiveToggle) so partial maps inherit
-  // featureDefaults at write time.
+  // through the profile-update IPC (patch semantics), never through
+  // updateConfig, which carries the settings only. Each write sends the FULL
+  // toggle map of that one account (read-modify-write via effectiveToggle) so
+  // partial maps inherit featureDefaults at write time.
   setProfileFeature: (
     profileId: string,
     key: GitHubAuthFeatureKey,
@@ -126,7 +142,7 @@ function refusalText(err: unknown): string {
  * One save through the bridge. A save that did not go through, by a rejected
  * call or by an `{ ok: false }` answer, is kept as `saveError` and raised as
  * that sentence, so the caller stops there and never goes on to report the
- * change as made. (An `{ ok: false }` answer used to be read as done.)
+ * change as made. An `{ ok: false }` answer is a refusal like any other.
  */
 async function saved<T>(call: Promise<T>): Promise<T> {
   try {
@@ -143,6 +159,38 @@ async function saved<T>(call: Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * The defaults shown in place of settings that could not be read, kept by
+ * identity so a later failed read can tell them from settings that an earlier
+ * read gave (which stay on show).
+ */
+let standIn: GitHubConfig | null = null
+
+/**
+ * Before a save: when the last read of github-config.json failed, read it
+ * again, and stop here if it still does not read. The settings on show after
+ * a failed read are not the saved ones, so a change is never built from them:
+ * it is built from what this read gives, or not at all. Main refuses the save
+ * of such a file too; stopping here means the page says so without sending a
+ * change that was worked out from the defaults.
+ */
+async function readBeforeSave(): Promise<void> {
+  if (!useGitHubStore.getState().configUnread) return
+  try {
+    await useGitHubStore.getState().loadConfig()
+  } catch (err) {
+    const text = refusalText(err)
+    useGitHubStore.setState({ saveError: text })
+    throw new Error(text)
+  }
+  if (useGitHubStore.getState().configUnread) {
+    useGitHubStore.setState({ saveError: GITHUB_CONFIG_UNREADABLE })
+    throw new Error(GITHUB_CONFIG_UNREADABLE)
+  }
+  // It reads again: the line that said it did not is out of date.
+  useGitHubStore.setState({ saveError: null })
+}
+
 export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
   config: null,
   profiles: [],
@@ -155,32 +203,51 @@ export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
   aiUsageStatus: 'pending',
   aiUsageCycle: null,
   saveError: null,
+  configUnread: false,
 
   loadConfig: async () => {
-    const config = await window.electronAPI.github.getConfig()
-    if (config) {
-      set({ config, profiles: Object.values(config.authProfiles) })
+    const answer = await window.electronAPI.github.getConfig()
+    if (!answer || answer.readFailed) {
+      // github-config.json is there and did not read. (No answer at all is
+      // taken the same way: it is not "no file".) Settings an earlier read
+      // gave stay on show. With none, the defaults are shown so the page
+      // renders, and the page says why. Either way they are marked unread, and
+      // every save reads again first (readBeforeSave).
+      const shown = get().config
+      if (shown && shown !== standIn) {
+        set({ configUnread: true })
+      } else {
+        standIn = emptyGitHubConfig()
+        set({ config: standIn, profiles: [], configUnread: true, saveError: GITHUB_CONFIG_UNREADABLE })
+      }
+      return
+    }
+    if (answer.config) {
+      set({ config: answer.config, profiles: Object.values(answer.config.authProfiles), configUnread: false })
     } else {
       // No config file yet (first launch). Render UI with defaults; the first
       // updateConfig call will persist. Avoids a stuck "Loading…" state.
-      set({ config: emptyGitHubConfig(), profiles: [] })
+      set({ config: emptyGitHubConfig(), profiles: [], configUnread: false })
     }
   },
 
   updateConfig: async (patch) => {
     set({ saveError: null })
+    await readBeforeSave()
     const updated = await saved(window.electronAPI.github.updateConfig(patch))
-    set({ config: updated, profiles: Object.values(updated.authProfiles) })
+    set({ config: updated, profiles: Object.values(updated.authProfiles), configUnread: false })
   },
 
   removeProfile: async (id) => {
     set({ saveError: null })
+    await readBeforeSave()
     await saved(window.electronAPI.github.removeProfile(id))
     await get().loadConfig()
   },
 
   renameProfile: async (id, label) => {
     set({ saveError: null })
+    await readBeforeSave()
     await saved(window.electronAPI.github.renameProfile(id, label))
     await get().loadConfig()
   },
@@ -192,6 +259,7 @@ export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
   // after any prior write's loadConfig() — rapid clicks can't RMW a stale map.
   setProfileFeature: (profileId, key, on) =>
     enqueueToggleWrite(async () => {
+      await readBeforeSave()
       const cfg = get().config
       const p = cfg?.authProfiles[profileId]
       if (!cfg || !p) return
@@ -201,35 +269,39 @@ export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
       // a bare featureDefaults would collapse omitted keys to false on write.
       const next = effectiveToggleMap(p, layeredDefaults(cfg))
       next[key] = on
-      await saved(window.electronAPI.github.updateProfile(profileId, { featureToggles: next }))
-      // 3.2: with MasterFeaturesSection deleted, a SINGLE-account user's per-account
-      // toggle is now the seed for future accounts — persist featureDefaults too.
-      if (Object.keys(cfg.authProfiles).length === 1) {
-        await saved(
-          window.electronAPI.github.updateConfig({
-            featureDefaults: { ...layeredDefaults(cfg), [key]: on },
-          }),
-        )
+      // Up to two saves follow (the account, then the defaults). The first can
+      // go through and the second be refused, so the config is read again
+      // whichever way this ends: the page shows what the file holds.
+      try {
+        await saved(window.electronAPI.github.updateProfile(profileId, { featureToggles: next }))
+        // 3.2: with MasterFeaturesSection deleted, a SINGLE-account user's per-account
+        // toggle is now the seed for future accounts — persist featureDefaults too.
+        // Only the key that changed is sent; main puts it on top of the
+        // defaults in the file (completed from the built-in ones).
+        if (Object.keys(cfg.authProfiles).length === 1) {
+          await saved(window.electronAPI.github.updateConfig({ featureDefaults: { [key]: on } }))
+        }
+        // 3.1: aiCredits on the AI-usage TARGET profile is the single user-facing
+        // enable for the meter. settings.githubAiUsageEnabled stays the persisted
+        // source of truth (it also gates the main scheduler, boot migration, and the
+        // Tokenomics card), so write through to it.
+        if (
+          key === 'aiCredits' &&
+          profileId === resolveAiUsageTargetId(Object.values(cfg.authProfiles))
+        ) {
+          await useSettingsStore.getState().updateSettings({ githubAiUsageEnabled: on })
+          // Only on ENABLE: the tip this gates offers to show you the meter, and
+          // someone who has turned it off has answered that offer just as clearly
+          // as someone who turned it on.
+          if (on) trackUsage('github.ai-usage-enabled')
+          // Populate (or clear) the meter immediately, mirroring the old
+          // AiUsageSettings enable — otherwise the relocated statusline chip would
+          // sit on its placeholder until the ~60-min scheduler tick.
+          await get().loadAiUsage().catch(() => {})
+        }
+      } finally {
+        await get().loadConfig()
       }
-      // 3.1: aiCredits on the AI-usage TARGET profile is the single user-facing
-      // enable for the meter. settings.githubAiUsageEnabled stays the persisted
-      // source of truth (it also gates the main scheduler, boot migration, and the
-      // Tokenomics card), so write through to it.
-      if (
-        key === 'aiCredits' &&
-        profileId === resolveAiUsageTargetId(Object.values(cfg.authProfiles))
-      ) {
-        await useSettingsStore.getState().updateSettings({ githubAiUsageEnabled: on })
-        // Only on ENABLE: the tip this gates offers to show you the meter, and
-        // someone who has turned it off has answered that offer just as clearly
-        // as someone who turned it on.
-        if (on) trackUsage('github.ai-usage-enabled')
-        // Populate (or clear) the meter immediately, mirroring the old
-        // AiUsageSettings enable — otherwise the relocated statusline chip would
-        // sit on its placeholder until the ~60-min scheduler tick.
-        await get().loadAiUsage().catch(() => {})
-      }
-      await get().loadConfig()
     }),
 
   // Copy a source account's effective toggle map onto every OTHER account.
@@ -239,6 +311,7 @@ export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
   // loadConfig() always runs in the finally.
   applyProfileToAll: (sourceId) =>
     enqueueToggleWrite(async () => {
+      await readBeforeSave()
       const cfg = get().config
       const src = cfg?.authProfiles[sourceId]
       if (!cfg || !src) return
@@ -262,21 +335,15 @@ export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
     }),
 
   // App-wide (no-auth) toggle. Root-level field → updateConfig, never a profile
-  // patch. No account is touched. Serialized + snapshot re-read inside the thunk
-  // (F2) so it can't RMW a stale appWideToggles map against a concurrent write.
+  // patch. No account is touched. Only the toggle that changed is sent; main
+  // puts it on top of the appWideToggles map in the file, so the other toggle
+  // keeps whatever the file has. Serialized (F2) with the other toggle writes.
   setAppWideToggle: (key, on) =>
     enqueueToggleWrite(async () => {
-      const cfg = get().config
-      if (!cfg) return
+      await readBeforeSave()
+      if (!get().config) return
       set({ saveError: null })
-      await saved(
-        window.electronAPI.github.updateConfig({
-          appWideToggles: { ...(cfg.appWideToggles ?? {}), [key]: on } as Record<
-            GitHubAppWideFeatureKey,
-            boolean
-          >,
-        }),
-      )
+      await saved(window.electronAPI.github.updateConfig({ appWideToggles: { [key]: on } }))
       await get().loadConfig()
     }),
 

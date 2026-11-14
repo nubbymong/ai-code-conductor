@@ -818,9 +818,16 @@ export interface ElectronAPI {
     openExternal: (url: string) => Promise<void>
   }
   github: {
-    getConfig: () => Promise<import('../../shared/github-types').GitHubConfig | null>
+    // The config (null when there is none) and whether github-config.json is
+    // there but did not read. `readFailed` is what tells "no file yet" from
+    // "could not read it": settings shown after a failed read are not the
+    // saved ones, and no change is built from them.
+    getConfig: () => Promise<import('../../shared/github-types').GitHubConfigReadState>
+    // The settings only (GitHubSettingsPatch): a sub-map carries the keys that
+    // changed, and main merges them into the file. Rejects with one fixed
+    // sentence when github-config.json could not be read or saved.
     updateConfig: (
-      patch: Partial<import('../../shared/github-types').GitHubConfig>,
+      patch: import('../../shared/github-types').GitHubSettingsPatch,
     ) => Promise<import('../../shared/github-types').GitHubConfig>
     addPat: (input: {
       kind: 'pat-classic' | 'pat-fine-grained'

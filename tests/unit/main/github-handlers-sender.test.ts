@@ -57,11 +57,14 @@ vi.mock('../../../src/main/active-session', () => ({ setActiveSessionId: h.rec('
 vi.mock('../../../src/main/github/github-config-store', () => ({
   GitHubConfigStore: class {
     read = h.rec('config.read', async () => h.config)
+    readState = h.rec('config.readState', async () => ({ config: h.config, readFailed: false }))
     readForWrite = h.rec('config.readForWrite', async () => h.config)
     write = h.rec('config.write', async () => {})
   },
   GitHubConfigUnreadableError: class extends Error {},
+  GitHubConfigWriteError: class extends Error {},
   GITHUB_CONFIG_UNREADABLE: 'the settings file could not be read',
+  GITHUB_CONFIG_NOT_SAVED: 'the settings file could not be saved',
 }))
 vi.mock('../../../src/main/github/github-config-migrate', () => ({
   migrateGitHubConfig: h.rec('migrateGitHubConfig', (config: unknown) => ({ config, changed: false })),
@@ -72,7 +75,6 @@ vi.mock('../../../src/main/github/auth/auth-profile-store', () => ({
     removeProfile = h.rec('profiles.remove', async () => {})
     updateProfile = h.rec('profiles.update', async () => {})
     getToken = h.rec('profiles.getToken', async () => 'fake-token-value')
-    replaceSameAccountOAuth = h.rec('profiles.replaceSameAccountOAuth', async () => {})
     editConfig = h.rec('profiles.editConfig', async () => h.config)
   },
   pickRendererProfilePatch: h.rec('pickRendererProfilePatch', () => ({})),
