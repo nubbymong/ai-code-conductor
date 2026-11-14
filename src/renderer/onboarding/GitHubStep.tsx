@@ -60,7 +60,8 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
   // Why Next did not move on: the sentence its save was refused with, or
   // null. Shown below the page, outside the part that is dimmed while GitHub
   // is Off, and gone when the next action starts. Once Next has been refused,
-  // "Skip for now" stays on offer for as long as the page is open.
+  // "Skip for now" stays on offer for as long as the page is open, and is held
+  // with Next while a save is on its way.
   const [notSaved, setNotSaved] = useState<string | null>(null)
   const [skipOffered, setSkipOffered] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -222,8 +223,14 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
     } else onNext()
   }
   // The way past a save that keeps being refused: on to the next page, with
-  // nothing saved and nothing sent.
-  const skip = () => onNext()
+  // nothing saved and nothing sent. Not while a save is on its way: that save
+  // would still be made after a skip that says nothing is. The button is
+  // disabled then, and a press that arrives before the page has drawn it so
+  // stops here.
+  const skip = () => {
+    if (savingRef.current) return
+    onNext()
+  }
   const setMaster = (on: boolean) => setLocalMaster(on)
 
   const oauthScopes =
@@ -476,7 +483,7 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
           {/* Offered once Next's save has been refused: the way on that saves
               nothing. Before that, Next (or GitHub Off, then Next) is the way. */}
           {skipOffered && (
-            <button className="skip" onClick={skip} type="button">
+            <button className="skip" onClick={skip} disabled={saving} type="button">
               Skip for now →
             </button>
           )}

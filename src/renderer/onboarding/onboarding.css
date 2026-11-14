@@ -162,6 +162,7 @@
 .ob-root .foot-finish .skip { padding: 6px 4px; }
 .ob-root .self { border: 1px solid var(--border-strong); background: transparent; color: var(--text-secondary); border-radius: 9px; padding: 10px 16px; font-size: 13px; cursor: pointer; }
 .ob-root .skip { background: none; border: 0; color: var(--text-muted); font-size: 13px; cursor: pointer; padding: 10px 8px; text-decoration: underline; }
+.ob-root .skip:disabled { opacity: .6; cursor: default; }
 .ob-root .p2-priv { display: flex; gap: 9px; align-items: flex-start; margin-top: 12px; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
 .ob-root .p2-priv .lock { color: var(--status-success); flex: none; }
 

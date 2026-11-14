@@ -9,7 +9,7 @@
  *     user set it there or the shown value was read from the file.
  *   - The set-up page's Next waits for its save. A refused save is said on
  *     the page and the page stays; "Skip for now", offered then, moves on
- *     with nothing saved.
+ *     with nothing saved, and is held while a save is on its way.
  *   - A control that starts a save does not leave a refused save as an
  *     unhandled rejection: the reason is already on the page.
  *   - The add-account dialog and the device sign-in show main's sentence for
@@ -375,6 +375,77 @@ describe('a page opened while github-config.json did not read', () => {
       expect(github.updateConfig).toHaveBeenCalledTimes(1)
 
       await act(async () => { finishSave(savedConfig()) })
+      await settle()
+      expect(onNext).toHaveBeenCalledTimes(1)
+      expect(alerts()).toEqual([])
+    })
+
+    /** The page after a first Next was refused, so "Skip for now" is on offer,
+     *  with the second Next's save left for the test to end. */
+    async function refusedOnceThenSaving() {
+      const save: { finish: (config: GitHubConfig) => void; refuse: (reason: Error) => void } = {
+        finish: () => {},
+        refuse: () => {},
+      }
+      github.updateConfig.mockRejectedValueOnce(new Error(GITHUB_CONFIG_NOT_SAVED))
+      github.updateConfig.mockImplementationOnce(
+        () => new Promise<GitHubConfig>((finish, refuse) => Object.assign(save, { finish, refuse })),
+      )
+      const onNext = vi.fn()
+      const page = render(<GitHubStep onNext={onNext} onBack={() => {}} />)
+      await settle()
+      click(buttonContaining(page, 'Next'))
+      await settle()
+      expect(alerts()).toEqual([GITHUB_CONFIG_NOT_SAVED])
+      expect(skipButton(page)!.disabled).toBe(false)
+      expect(onNext).not.toHaveBeenCalled()
+      return { page, onNext, save }
+    }
+
+    it('"Skip for now" is held while a second Next is saving, and once that save has ended it moves on with nothing saved', async () => {
+      const { page, onNext, save } = await refusedOnceThenSaving()
+
+      click(buttonContaining(page, 'Next'))
+      await settle()
+      expect(github.updateConfig).toHaveBeenCalledTimes(2)
+      expect(skipButton(page)!.disabled).toBe(true)
+      click(skipButton(page)!)
+      await settle()
+      expect(onNext).not.toHaveBeenCalled()
+
+      // That save is refused as well: the page stays, and Skip is the way on again.
+      await act(async () => { save.refuse(new Error(GITHUB_CONFIG_NOT_SAVED)) })
+      await settle()
+      expect(alerts()).toEqual([GITHUB_CONFIG_NOT_SAVED])
+      expect(skipButton(page)!.disabled).toBe(false)
+
+      github.getConfig.mockClear()
+      click(skipButton(page)!)
+      await settle()
+      expect(onNext).toHaveBeenCalledTimes(1)
+      expect(github.updateConfig).toHaveBeenCalledTimes(2)
+      expect(github.getConfig).not.toHaveBeenCalled()
+    })
+
+    it('"Skip for now" pressed with Next, before the page has drawn it held, does not move on: the save does, once', async () => {
+      const { page, onNext, save } = await refusedOnceThenSaving()
+
+      // Both presses arrive before the page is drawn again.
+      const next = buttonContaining(page, 'Next')
+      const skip = skipButton(page)!
+      let heldWhenPressed: boolean | undefined
+      act(() => {
+        next.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        heldWhenPressed = skip.disabled
+        skip.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+      await settle()
+      // The press did reach a Skip that was not yet drawn as held.
+      expect(heldWhenPressed).toBe(false)
+      expect(github.updateConfig).toHaveBeenCalledTimes(2)
+      expect(onNext).not.toHaveBeenCalled()
+
+      await act(async () => { save.finish(savedConfig()) })
       await settle()
       expect(onNext).toHaveBeenCalledTimes(1)
       expect(alerts()).toEqual([])
