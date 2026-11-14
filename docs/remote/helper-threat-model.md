@@ -46,7 +46,7 @@ the two share one home folder (3.4). Each claim holds from its step in 2.1.
 
 | Guarantee | Enforced by | True from |
 | --- | --- | --- |
-| Host folders per device id; clean-up and removal only behind this install's marker; `unmanaged`, `elsewhere` and `unknown` sessions never ended or removed by the app | fixed scripts, app | R2; states R6 |
+| Host folders per device id; clean-up and removal only behind this install's marker; sessions `elsewhere` or `unknown` never ended or removed by the app, an `unmanaged` one only on the user's explicit end, shown by the CLI's stopped state (protocol 7); removal reads a session as dead only on positive proof | fixed scripts, app | R2; states R6 |
 | Fixed ssh options, minimal environment and per-connection pins; on a terminal `-e none` and the environment first, the rest later | app | R2 (execs), R6 (side channel); terminal R2, R10 |
 | Saved ssh passwords only through askpass, under its release rules | app | R2 (execs), R10 (terminal) |
 | Host home recorded once; the only pasted host text is a checked upload path; remote terminal: no clipboard read or write, links `http` or `https` only, on a click | app | R2 |
@@ -61,9 +61,8 @@ the two share one home folder (3.4). Each claim holds from its step in 2.1.
 | Nothing typed into a shell; no tmux; the terminal is not parsed | app | R3 (setup), R9 (no tmux), R10 (launch), R11 (sudo, no parsing) |
 | sudo release rules (3.7); shared homes found from the host side (3.4) | app, helper | R11 |
 
-Until R12 the old path runs beside the new; each step's adversarial pass covers
-both, a rollback returns to the earlier beta's rows, and every row has a
-negative test in its step.
+Until R12 the old path runs beside the new; each step's pass covers both, a
+rollback returns to the earlier beta's rows, and every row has a negative test.
 
 ## 3 Threats and mitigations
 
@@ -95,15 +94,14 @@ negative test in its step.
   remote CLI session ids are their own types, never given to local transcript,
   resume, relocation, usage or canvas code, never a local path or map key;
   resuming a remote conversation runs on the host by that id.
-- A message cannot name a session; each side channel serves the one session
-  it opened, and a hello naming another `sid` fails. Host text has control and
-  format characters removed wherever it is shown.
+- A message cannot name a session: identity comes from the connection alone, and
+  a hello naming another `sid` fails. Host text has control and format characters
+  removed wherever it is shown.
 - **The terminal view.** Not parsed (from R11). For a remote terminal the app
-  neither reads nor writes the local clipboard (no OSC 52 either way) and
-  cleans window titles. Links open only on a click, only `http` or `https`
-  after normalisation, through the main process's one checked open path,
-  showing the real target when an OSC 8 link's text differs (a test uses a
-  `file:` and a UNC link).
+  neither reads nor writes the local clipboard (no OSC 52) and cleans window
+  titles. Links open only on a click, only `http` or `https` after
+  normalisation, through one checked open path, showing the real target when an
+  OSC 8 link's text differs (tested with `file:` and UNC links).
 
 ### 3.4 Other users, shared homes and containers
 
@@ -119,15 +117,18 @@ negative test in its step.
 - **Containers.** The facts come from the host's fixed script running the
   engine's inspect (protocol 14), never from the container, whose own report
   can only add "shared". A target is **shared** if it has: a bind whose source
-  is the host home, the runtime folder or an ancestor of either, lies under the
-  runtime folder or `~/.aicc`, is an engine socket, or is `/proc`, `/sys` or
-  `/dev` or below one; a host PID, IPC, user, network, UTS or cgroup
-  namespace; privileged mode; `CapAdd` of SYS_ADMIN, SYS_PTRACE or SYS_MODULE;
-  unconfined `SecurityOpt`; or any device. Facts are read again at every
-  placement and user-started launch; a changed mount list, a missing field, a
-  failed parse or a detection that has not answered (it never needs a saved
-  sudo password) counts as shared. On shared, the consent screen says so and
-  no saved sudo password is released automatically (3.7).
+  is under or equal to the host home, the runtime folder or `~/.aicc`, an
+  ancestor of the home or runtime folder, an engine socket (any Unix socket, or
+  anything under `/run` or `/var/run`), or `/proc`, `/sys` or `/dev` or below
+  one; a host PID, IPC, user, network, UTS or cgroup namespace; `Privileged`; a
+  non-empty `CapAdd` or `CapDrop`; a `SecurityOpt` other than the engine
+  default; or a non-empty `Devices`. Sources are compared by real path and by
+  device and inode, against `$HOME` and each of its ancestors. Facts are read
+  again at every placement and user-started launch, and every exec names the
+  inspected container id. A changed mount list or id, a missing field, a failed
+  parse or a detection that has not answered counts as shared; a user confirm
+  clears only a change, never a list match. On shared, the consent screen says
+  so and no saved sudo password is released automatically (3.7).
 - **Machines sharing a home.** Each spec names its machine identity (machine
   id, host name, node id) and boot (protocol 1). The app never ends or removes
   a session on another or an unknown machine; the removal script refuses while
@@ -173,14 +174,13 @@ negative test in its step.
   refused. Downloads, file choosers, permissions and other windows are refused.
 - **Tests.** R2: every registered tool is in the fixture or refused, and a
   remote tools list holds only the fixture's tools; a canvas render naming a
-  local path registers no render root. R8: a remote canvas
-  render registers no render root and takes its identity from the side
-  channel; a script-added resource hint makes no connection; and each of these
-  is refused: a call naming another session; `file:`, `view-source:file:`,
-  `chrome://version`, `data:text/html`, `javascript:`, `blob:` and a
-  page-initiated `file:` navigation; a name resolving to loopback; rebinding;
-  `0.0.0.0`; `100.x`; a redirect chain; a system proxy; WebRTC; a download; a
-  name on the device deny list.
+  local path registers no render root. R8: a remote canvas render registers no
+  render root and takes its identity from the side channel; a script-added
+  resource hint makes no connection; and each of these is refused: a call naming
+  another session; `file:`, `view-source:file:`, `chrome://version`,
+  `data:text/html`, `javascript:`, `blob:` and a page-initiated `file:`
+  navigation; a name resolving to loopback; rebinding; `0.0.0.0`; `100.x`; a
+  redirect chain; a system proxy; WebRTC; a download; a deny-listed name.
 
 ### 3.6 Uploaded files
 
@@ -303,7 +303,7 @@ negative test in its step.
 - Device records (target, pinned host keys, home, consent and install state,
   the probe report) live under the app's resources folder, trusted to the OS
   user and protected only against a lower-privilege process planting or
-  changing them. Each carries a MAC under a purpose-bound subkey of a
+  editing them. Each carries a MAC under a purpose-bound subkey of a
   per-install secret, kept per OS user and machine in the OS secret store,
   never in the resources folder (which may be synced). With no real secret
   store, records live in an owner-only credential-style file in the per-user
@@ -318,5 +318,5 @@ negative test in its step.
 
 - Every R step that ships code takes the ADR-009 adversarial pass, scoped to
   the old and new parts live in that beta (2.1).
-- Design-stage adversarial pass: four fix rounds; the final result, with
-  disputed and deferred items, is recorded in the PR.
+- Design-stage adversarial pass: four fix rounds and a minors pass; the final
+  result is recorded in the PR.

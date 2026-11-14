@@ -4,8 +4,7 @@ The messages between the app and the helper on a remote device, and the ssh
 commands that carry them, for steps R2 to R11. Decision and step plan:
 `architecture/decisions/2026-11-14-adr-029-remote-sessions-run-through-a-device-helper.md`;
 threats: `docs/remote/helper-threat-model.md`. **Pending probe Pn** marks what a
-probe (ADR) must confirm. R5 fixtures fix field types and lengths, with one
-refusal fixture per error code and per pattern.
+probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
 
 ## 1 Names and places
 
@@ -31,10 +30,11 @@ refusal fixture per error code and per pattern.
   machine identity: the machine id (Linux `/etc/machine-id`, macOS
   `IOPlatformUUID`; empty or `uninitialized` is none), the host name (macOS
   `scutil --get LocalHostName`; Linux the kernel host name) and the node id
-  (section 13), made on every host so clones made before install differ. The
-  app keeps only an app-keyed hash. Identities are one machine only when every
-  part matches; the same machine id under another host name flags "cloned
-  machine id"; no machine id and no node id is unknown.
+  (section 13), made on every host so clones made before install differ. From
+  R6 it also holds the CLI's pid and start time once known (none known reads
+  as live, section 13). The app keeps only an app-keyed hash. Identities are
+  one machine only when every part matches; the same machine id under another
+  host name flags "cloned machine id"; no machine id and no node id is unknown.
 
 ## 2 The local ssh command
 
@@ -58,7 +58,7 @@ side channel (R2, R6); on the terminal `-e none` from R2, the rest from R10.
 | --- | --- |
 | `-a -x`, `ForwardAgent=no`, `ForwardX11=no`, `ForwardX11Trusted=no`, `GSSAPIDelegateCredentials=no`, `ClearAllForwardings=yes`, `Tunnel=no`, `PermitLocalCommand=no`, `ControlMaster=no`, `ControlPath=none` | the host gets no local agent, display or Kerberos ticket; the config adds no forward, local command or shared connection |
 | `-e none`, `EnableEscapeCommandline=no` (9.2+); `SetEnv=AICC_NONE=1` | no escape sequences, so pasted text cannot add a forward or end the link; ssh keeps the first `SetEnv` it is given, so no config `SetEnv` applies |
-| `StrictHostKeyChecking=yes`, `UserKnownHostsFile` and `GlobalKnownHostsFile` both the per-connection file (quoted, below), `UpdateHostKeys=no`, `VerifyHostKeyDNS=no`; `KnownHostsCommand=none` (8.5+) | only the app's pin counts, and the host cannot change it |
+| `StrictHostKeyChecking=yes`, `UserKnownHostsFile` and `GlobalKnownHostsFile` both the per-connection file (path rules below), `UpdateHostKeys=no`, `VerifyHostKeyDNS=no`; `KnownHostsCommand=none` (8.5+) | only the app's pin counts, and the host cannot change it |
 | `RemoteCommand=none`; `StdinNull=no`, `SessionType=default`, `ForkAfterAuthentication=no` (8.7+); `NumberOfPasswordPrompts=1`, `BatchMode=no` | the command and stdin are the app's; one password try (BatchMode would turn askpass off) |
 | `-T` (side channel, one-shot) or `-tt` (terminal); `-p <port> -l <user> -- <target>` | nothing after `--` is an option |
 
@@ -75,36 +75,38 @@ the port 1 to 65535; a value that breaks its pattern stops before ssh starts.
 store of a pin. Each ssh gets a 0600 known-hosts file the app writes from it in
 its private data folder, with that device's pins only (jump hops included),
 deleted when ssh ends; a planted line is never trusted (a test plants one). The
-path goes in double quotes inside the option, as ssh splits a value on
-whitespace and expands `%`; one holding `"` or `%` is refused, naming it. A
-target's first connection (R2's first upload, or R3's probe) uses
-`StrictHostKeyChecking=ask`: the question goes to the user through askpass,
-saying whether the user's own known hosts trust that key; nothing saved is
-released on it. On a yes the app reads the new line into the record and MACs
-it again. A changed key stops the device until the user checks it.
+path goes to ssh with forward slashes, in double quotes inside the option (ssh
+splits on whitespace, reads a backslash as an escape and expands `%`); one
+still holding a backslash, `"` or `%` is refused, naming it. A UNC data folder
+(a redirected profile) is not used: the file goes in a local, owner-only folder
+with no space. A target's first connection (R2's first upload, or R3's probe)
+uses `StrictHostKeyChecking=ask`: the question goes to the user through
+askpass, saying whether the user's own known hosts trust that key; nothing
+saved is released on it. On a yes the app reads the new line into the record
+and MACs it again. A changed key stops the device until the user checks it.
 
 **Jump hosts.** A `ProxyJump` from `ssh -G` becomes the app's own
 `ProxyCommand`: the same ssh, options, environment and pins, with `-W %h:%p`.
-On Windows each path in it is double-quoted; one holding `"`, `%` or `^` is
-refused, naming it. A user's own `ProxyCommand` is kept, marked "jump host not
-pinned by the app". **CI (R2, every app OS):** an sshd job puts every fixed
-key's unsafe value in a hostile config and asserts `ssh -G` prints the fixed
-value; a config `SendEnv` naming a variable in the app's own environment, a
-config `SetEnv` and any askpass variable never reach the test sshd
-(`AcceptEnv *`); the known-hosts path and a `ProxyCommand` path each have a
-space and a non-ASCII character, on the top-level ssh as well.
+On Windows each path in it uses forward slashes and is quoted for the command
+line, then again for ssh's own splitter; one holding `"`, `%`, `^` or a
+backslash is refused, naming it. A user's own `ProxyCommand` is kept, marked
+"jump host not pinned by the app". **CI (R2, every app OS):** an sshd job puts
+every fixed key's unsafe value in a hostile config and asserts `ssh -G` prints
+the fixed value; a config `SendEnv` naming a variable in the app's own
+environment, a config `SetEnv` and any askpass variable never reach the test
+sshd (`AcceptEnv *`); known-hosts and `ProxyCommand` paths with a space, a
+non-ASCII character, doubled backslashes or a UNC form, on the top-level ssh and
+nested in a jump host's `ProxyCommand`, each connect or are refused as named.
 
 ## 3 askpass
 
 ssh asks for passwords, codes and host-key answers through the app's askpass
-program (one per app OS; OpenSSH 8.4 or later, else keys with no passphrase
-only, and the app says why).
+program (per app OS; OpenSSH 8.4+, else only passphrase-free keys; it says why).
 
 - **How it is reached.** Each ssh gets `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE=force`
   and `AICC_ASKPASS_TOKEN`, random, bound to that connection and device, for
   its life and at most 4 prompts. The program sends token and prompt over an
-  owner-only local endpoint (Unix socket or current-user named pipe) and prints
-  the answer.
+  owner-only endpoint (Unix socket or current-user named pipe); it prints the answer.
 - **Released without the user:** a saved password, only when the prompt is
   exactly OpenSSH's password prompt built from `ssh -G` (`user`, `hostname`,
   and `hostkeyalias` when set), the connection started pinned, the device has
@@ -121,16 +123,15 @@ only, and the app says why).
 ## 4 Remote command lines
 
 Every command the app starts on a host is an exec over ssh, never typed into
-a shell. ssh joins the words after the target into one string the login shell
-parses, so each item's alphabet (no space, quote, backslash or shell
-metacharacter) is checked before ssh starts.
+a shell. ssh joins the words into one string the login shell parses, so each
+item's alphabet (no space, quote, backslash or metacharacter) is checked first.
 
 | Item | Pattern or source |
 | --- | --- |
 | fixed text | the sub-commands and flags below, and the fixed scripts (sections 13, 14) run as `/bin/sh -c '<script>'` |
 | `did`, `sid`; nonce | section 1; 32 lower-case hex characters, new for every exec |
 | helper folder; expected hash | `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?-[0-9a-f]{12}$`; 64 hex. Both only from the app's manifest, never from host data |
-| numbers; image name; engine and container (R11) | protocol version, offset, size: decimal integers in range; `paste-<n>.<ext>`; `docker` or `podman`, `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$` |
+| numbers; image name; engine and container (R11) | protocol version, offset, size: decimal integers in range; `paste-<n>.<ext>`; `docker` or `podman`; a container name (for inspect only) `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`, then the id inspect returned, 64 hex |
 
 No value a host reported (home, tool or CLI path) is put on a command line:
 scripts build paths from `$HOME` and find their tools themselves. Script text
@@ -201,8 +202,8 @@ hello fields are ignored. The app answers `hello.ack` `{proto, caps}`. States:
 | State | When | What the app does |
 | --- | --- | --- |
 | `new`; `live` (R9) | no folder yet; a `held` session whose holder answers | starts it; attaches |
-| `unmanaged` | a folder on this machine and boot, not ended, with no holder the running app speaks (before R9, none), or at any step a spec whose `mode` is `external` or absent; the old path keeps the CLI | keeps it, never offers resume, never removes it; it leaves this state only through a new boot, the app's confirmed `end` (never a closed tab or detach) or a user action (tests: ADR R6, R9) |
-| `stale` | this machine identity and a new boot (begun after the session started), or an `end` the app issued and had confirmed, either beating `unmanaged`; from R9 also a `held` spec with no holder answering and the `holder` lock free | offers remote resume (section 8), then removes the folder only if its own record holds it |
+| `unmanaged` | a folder on this machine and boot, not ended, whose spec `mode` is `external` or absent, or any spec while the running app predates holders (a rollback); the old path keeps the CLI. On an app that speaks holders a `held` spec is never `unmanaged` | keeps it, never offers resume, never removes it; it leaves this state only through a new boot, a confirmed end (see `stale`; never a closed tab or detach) or a user action (tests: ADR R6, R9) |
+| `stale` | this machine identity and a new boot (another boot id, begun after the session started); or a confirmed end, the CLI's stopped state shown by section 13's pid and start-time test, never a result line alone (for an `unmanaged` session the app's end is the old path's own kill plus `session.end`; a no-op `end` is not an end); or, from R9, a `held` spec with no holder answering and the `holder` lock free: each beats `unmanaged` | offers remote resume (section 8), then removes the folder only if its own record holds it |
 | `elsewhere`; `unknown` | another machine identity, or a boot begun before the session; no identity | never ended or removed by the app, and `end` refuses them; section 13 gives them an exit for removal |
 
 **Mismatch.** No common version: `proto-mismatch`, close, the device waits for
@@ -233,7 +234,7 @@ Every control message is a JSON object with a type `t`. Requests carry an
 | `error` | either | none | `{re?, code, text}`, text at most 512 characters | core, R6 |
 | `probe` | app | `probe.report` | what the host has (below) | core, R6 |
 | `session.attach` | app | `session.attached` | `{id, since_seq}`; reply `{re, ring_start, ring_end}` | core, R6 |
-| `session.end` | app | `session.ended` | stop this session (TERM, KILL after 5 s), remove its folder | core, R6 |
+| `session.end` | app | `session.ended` | stop this session (TERM, KILL after 5 s); its folder goes only once the CLI's stopped state is shown (section 7) | core, R6 |
 | `session.list` | app | `session.list.result` | up to 256 `{sid, state, helper, mode, started}`, this `did` only | core, R6 |
 | `status`; `event` | helper | event | `{seq, payload}`, one statusline update; `{seq, kind, payload}`, one hook event | `status`, R6; `hooks`, R7 |
 | `session.prepare` | app | `session.prepared` | `{id, files, edits, env, argv, cwd, mode}`; one result per file and edit | `hooks`, R7 |
@@ -250,12 +251,11 @@ session found by `session.list` is ended by a one-shot `end`.
 
 **What the helper may ask and run.** Its requests (`sudo.ask`, `mcp`) are
 questions the app may refuse; none makes the app run, open or write anything.
-It starts only its spec's `argv`, on `session.start`; there is no general exec
-or file-read request. `argv[0]` is a CLI path from the probe report or login
+It starts only its spec's `argv`, on `session.start`; no general exec or
+file-read request exists. `argv[0]` is a CLI path from the probe report or login
 shell; `cwd` is absolute; `env` names come from the provider's fixed list, none
 secret-named (section 2); `files` go only into the session folder by declared
-names; `edits` name rows of the closed list below; `mode` is `external` or
-`held`.
+names; `edits` name rows of the closed list below; `mode` is `external` or `held`.
 
 - `probe.report`: OS, kernel, architecture, userland bitness and ARM version,
   login shell, home (section 1) and its filesystem type, the device and inode
@@ -336,12 +336,11 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   an MCP call gets `not-connected`, a `sudo.ask` fails at once.
 - **Automatic reconnect** only after a link drop (no `pong` in 45 s, or ssh
   ending after a hello): `serve`, then `session.attach` with the last `seq`;
-  back-off 1, 2, 4, 8, 16 s, 5 tries, 5 more when the app machine wakes or its
-  network returns; then it waits for the user. Never after an authentication
-  failure, a prompt it may not answer (section 3), a host-key question or
-  change, `hash-mismatch`, `proto-mismatch`, `replaced`, `bad-frame`,
-  `unknown-type` or malformed input, nor for a one-time-code device. A
-  reconnect is never a launch the user started.
+  back-off 1, 2, 4, 8, 16 s, 5 tries, 5 more on wake or network return; then
+  it waits for the user. Never after an authentication failure, a prompt it may
+  not answer (section 3), a host-key question or change, `hash-mismatch`,
+  `proto-mismatch`, `replaced`, `bad-frame`, `unknown-type` or malformed
+  input, nor for a one-time-code device. It is never a user-started launch.
 - **Terminal reattach (R9).** From a 2 MiB output ring the app clears the view
   and runs `attach --from <ring_start>`: reset, replay at the recorded size,
   then live; the resize makes the CLI redraw. A too-short ring is reported.
@@ -380,15 +379,14 @@ marker holds this install's ids. Owner and mode come from `ls -ldn` against
 group and `id -gn` equals `id -un`. Tested under dash, bash, busybox sh and
 macOS sh; a failure prints a refusal as `AICC-RESULT`.
 
-- **Launcher.** Starts every helper command the app runs (`did`, helper
-  folder, expected hash, nonce, the command's words). It finds `sha256sum`,
-  `shasum -a 256` or `openssl dgst -sha256` with `command -v`, in that order
-  (none: the floor). The hex is the first field for the first two, the last
-  for `openssl`, and exactly 64 lower-case hex characters, else `tool-failed`
-  (tested: GNU, busybox, macOS, OpenSSL 1.1 and 3). It prints `AICC-HASH
-  <nonce> <state> <hex>` (`ok`, `mismatch`, `missing`, `no-tool`,
-  `tool-failed`) and execs only on `ok`, on every start; the app checks the hex
-  against its manifest again before `hello.ack`.
+- **Launcher.** Starts every helper command (`did`, helper folder, expected
+  hash, nonce, command words). It finds `sha256sum`, `shasum -a 256` or
+  `openssl dgst -sha256` with `command -v`, in that order (none: the floor).
+  The hex is the first field (the last for `openssl`) and exactly 64 lower-case
+  hex characters, else `tool-failed` (tested: GNU, busybox, macOS, OpenSSL 1.1
+  and 3). It prints the `AICC-HASH` line (state `ok`, `mismatch`, `missing`,
+  `no-tool` or `tool-failed`) and execs only on `ok`, on every start; the app
+  checks the hex against its manifest again before `hello.ack`.
 - **Install** (R6 and re-provision; `did`, helper folder, size, expected
   hash, nonce; the binary on stdin; umask 077). It takes a lock (`mkdir
   helper/.lock`, cleared after 15 minutes), removes this `did`'s `helper/.new-*`
@@ -400,17 +398,19 @@ macOS sh; a failure prints a refusal as `AICC-RESULT`.
   (session folder, socket, PTY, binary echo) follows.
 - **`end` and removal.** `end` signals a holder only on the spec's own
   machine, after the socket's peer pid and start time match `holder`; else it
-  does nothing. The removal script (also at the floor, with no helper) refuses
-  while any session is not provably dead, testing pid and start time (`/proc`
-  or `ps`), never a lock. **Provably dead:** this machine's identity, and a new
-  boot, or the same boot and no process with the pid and start time its spec
-  or `holder` records. A `sessions/<sid>/` folder with no spec is no session.
-  A session on another machine counts as live, the result naming that host,
-  unless it is older than its own maximum lifetime plus a day or the user
-  confirms, naming that host; on an unknown machine, unless the user confirms
-  no other machine shares this home; on this machine, not provably dead, it
-  ends only on the user's confirmed choice. It then deletes `~/.aicc/<did>`,
-  the node id, and `~/.aicc` if empty (tests: ADR R6, R11).
+  does nothing, and the result says not ended (section 7). The removal script
+  (also at the floor) refuses while any session is not provably dead, by pid
+  and start time (`/proc` or `ps`), never a lock. **Provably dead** needs
+  positive proof: this machine's identity, and a new boot (section 7), or the
+  same boot, a recorded pid and start time (the CLI's in the spec; from R9 the
+  holder's in `holder`) and a successful read showing each recorded pid absent
+  or with another start time. A missing record, an unreadable `/proc` or `ps`,
+  or a start-time format mismatch reads as live. A `sessions/<sid>/` folder
+  with no spec is no session. A session on another machine counts as live, the
+  result naming that host, and goes only on the user's confirm naming it; on an
+  unknown machine, only on the user's confirm that no other machine shares this
+  home; on this machine, only on the user's confirmed end. It then deletes
+  `~/.aicc/<did>`, the node id, and `~/.aicc` if empty (tests: ADR R6, R11).
 - **Node id.** The install script makes `/var/tmp/aicc-<uid>/node-<did>` if
   absent (random 32 hex; the folder checked like `~/.aicc`, 0700), outside any
   shared home; if that fails, there is none. A lost one makes old sessions
@@ -429,28 +429,28 @@ macOS sh; a failure prints a refusal as `AICC-RESULT`.
   folder, each absent or a user-owned regular file (not a link); one already
   there goes to a recorded backup in `backup/`, which Remove device puts back.
   Each is written fresh, renamed, and recorded with its hash.
-- **R6 wiring.** The per-session settings (from R7 via `session.prepare`) set
-  the statusline command to `"$HOME"/.aicc/<did>/helper/<folder>/aicc-helper
-  emit --session <sid>`, `$HOME` quoted, only checked values added (a fixture
-  uses a home with a space).
+- **R6 wiring.** Per-session settings (R7: `session.prepare`) set the statusline
+  command to `"$HOME"/.aicc/<did>/helper/<folder>/aicc-helper emit --session <sid>`,
+  `$HOME` quoted, only checked values added (fixture: a home with a space).
 
 ## 14 Containers (R11)
 
 - **Placing.** Each container target has its own `did` and consent. A one-shot
-  `<engine> exec -i <name>` runs the install script, binary on stdin, into the
-  container user's `~/.aicc/<did>/`, with the same checks, hash and self-test;
-  a recreated one (`missing`) at most once per target per app run, with a
-  notice. The side channel is `<engine> exec -i <name>` around the launcher,
-  with `sudo -A` in front when the engine needs sudo.
+  `<engine> exec -i <id>` (the id inspect returned, below) runs the install
+  script, binary on stdin, into the container user's `~/.aicc/<did>/`, with the
+  same checks, hash and self-test; a recreated one (`missing`) at most once per
+  target per app run, with a notice. The side channel is `<engine> exec -i
+  <id>` around the launcher, with `sudo -A` in front when the engine needs sudo.
 - **Shared homes, from the host side.** At placement and at every user-started
   launch before any release, the host's fixed script runs `<engine> inspect
   --type container <name>` and applies the shared list (threat model 3.4),
-  comparing mount sources by real path, or device and inode, on the host. The
-  app keeps the container id and a hash of the mount list: a change means
-  shared until the user confirms, and a missing field or a failed parse means
-  shared. The container's own report can add "shared", never clear it.
-  Detection never needs a saved sudo password: it runs without sudo or under
-  an answer the user types at that launch; until then, shared.
+  comparing each mount source by real path and by device and inode against
+  `$HOME` and each of its ancestors. The app keeps the container id and a hash
+  of the mount list; every exec names that id. A change means shared until the
+  user confirms, and a confirm never clears a list match; a missing field or a
+  failed parse means shared. The container's own report can add "shared",
+  never clear it. Detection never needs a saved sudo password: it runs without
+  sudo or under an answer typed at that launch; until then, shared.
 - **sudo.** The app first starts a host-side `serve` owning the host session
   folder and socket. The `askpass` wrapper (a 0700 `/bin/sh` file that execs
   the helper's `askpass`) and a hash-checked helper copy sit in a fresh private
