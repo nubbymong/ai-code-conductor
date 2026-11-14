@@ -196,8 +196,19 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
    * is reported alongside it rather than hidden behind a spinner.
    */
   let sweepFailed = 0
-  /** Note how far a file was read, so the sweep knows whether work remains. */
-  const noteScanned = (scannedTo: number, size: number): void => { if (scannedTo < size) sweepPending = true }
+  /**
+   * A file this sweep left with bytes to read did not move its cursor: the
+   * read came back short (the file shrank while it was read). A pass repeated
+   * at once would read the same nothing, so it waits for the 5 s timer.
+   */
+  let sweepStalled = false
+  /** Note how far a file was read, so the sweep knows whether work remains;
+   *  `moved` is whether the file's cursor went forward in this read. */
+  const noteScanned = (scannedTo: number, size: number, moved: boolean): void => {
+    if (scannedTo >= size) return
+    sweepPending = true
+    if (!moved) sweepStalled = true
+  }
   let firstSweepDone = false
   /**
    * aicc_planning#302: Claude transcripts the watcher reported as written
@@ -400,7 +411,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       if (res.pendingDropped) consumed += res.pendingLen
       else if (res.pendingLen > 0 && consumed === offset && res.pos - offset >= maxTickBytes) consumed = res.pos
       flush()
-      noteScanned(res.pos, st.size)
+      noteScanned(res.pos, st.size, consumed > offset)
       db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos })
     } finally { try { fs.closeSync(fd) } catch { /* ignore */ } }
     return inserted
@@ -497,7 +508,6 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
         logw('warn', `read failed for ${file}: ${String(err)}`)
         return 0
       }
-      noteScanned(res.pos, st.size)
       // Skip past a run that can never become a line we want, rather than
       // re-reading it forever. Two ways to know that: it passed the largest line
       // any caller wants, or a WHOLE tick's worth of bytes went by without one
@@ -510,6 +520,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       // on every sweep is `scannedTo`, not skipping it.
       if (res.pendingDropped) consumed += res.pendingLen
       else if (res.pendingLen > 0 && consumed === offset && res.pos - offset >= tickBytes) consumed = res.pos
+      noteScanned(res.pos, st.size, consumed > offset)
 
       let nextSeed = seed
       if (kept.length) {
@@ -650,11 +661,14 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     if (phase === 'incremental' && !fullSweepDue) { await ingestDirty(); return }
     sweeping = true
     sweepPending = false
+    sweepStalled = false
     sweepFailed = 0
     // #302: this walk covers every file, the reported ones included.
     fullSweepDue = false
     lastFullSweepAt = Date.now()
     dirtyClaude.clear()
+    // #302: whether the next full walk follows this one at once.
+    let again = false
     try {
       // What this sweep's list was made with (defect 4): the account folders
       // as named when it began, and whether they had been named at all.
@@ -713,6 +727,14 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       // A sweep whose list predates the latest naming of the account folders
       // has not read them: not drained, and another sweep follows (defect 4).
       const drained = !sweepPending && realmDirsSeq === dirsSeq
+      // #302: a walk that left work behind is still due. A file is read one
+      // budget per pass, so a large first index or the Codex account re-read
+      // takes many passes, and with the next walk up to TK_FULL_SWEEP_MS away
+      // that was one budget every five minutes. The next pass follows at once
+      // while every file left with bytes moved its cursor: each pass then
+      // reads further, and the passes end when the bytes do. Otherwise the
+      // 5 s timer runs it.
+      if (!drained) { fullSweepDue = true; again = !sweepStalled }
       // MP9: a drained sweep has re-read every rollout it could reach, so the
       // re-read is done; then the rollups are rebuilt if they need it. Inside
       // the sweep, so nothing is ingested while they are rebuilt; queries are
@@ -730,10 +752,16 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       } else {
         post({ type: 'index-complete', firstIndex: false, drained, filesFailed: sweepFailed, eventsTotal: db.eventCount() })
       }
-    } catch (err) { logw('error', `ingestAll failed: ${String(err)}`) }
+    } catch (err) {
+      // #302: a walk that failed did not reach every file, so it is still
+      // due; the 5 s timer retries it, never at once.
+      fullSweepDue = true
+      again = false
+      logw('error', `ingestAll failed: ${String(err)}`)
+    }
     finally {
       sweeping = false
-      if (sweepAfter && db) { sweepAfter = false; scheduleIncremental() }
+      if ((sweepAfter || again) && db) { sweepAfter = false; scheduleIncremental() }
     }
   }
 
@@ -902,8 +930,9 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     const codexWatch = codexDirs[0]?.dir ? watchDir(codexDirs[0].dir, false) : null
     if (codexWatch) watchers.push(codexWatch)
     // Safety tail: recursive watch can miss newly-created nested session files on
-    // some platforms. Every 5 s it reads what the watcher reported, and a full
-    // walk once TK_FULL_SWEEP_MS has passed since the last (#302).
+    // some platforms. Every 5 s it reads what the watcher reported, and runs a
+    // full walk when one is due: the last one left work behind or failed, or
+    // TK_FULL_SWEEP_MS has passed since it (#302).
     tailTimer = setInterval(() => {
       if (sweeping) return
       if (Date.now() - lastFullSweepAt >= TK_FULL_SWEEP_MS) fullSweepDue = true
