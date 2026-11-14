@@ -100,6 +100,8 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   let statted: string[] = []
   let opened: string[] = []
   let completes: Complete[] = []
+  /** How many files each finished sweep said it could not read. */
+  let failed: number[] = []
   let waiters: Array<(m: FromTkWorker) => boolean> = []
   const bounds = new Set<ReturnType<typeof setTimeout>>()
   const watchCbs = new Map<string, WatchCb>()
@@ -109,6 +111,8 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   let linkTarget = ''
   /** A file whose reads come back empty although it has bytes. */
   let stuck = ''
+  /** A file that cannot be opened. */
+  let denied = ''
   const stuckFds = new Set<number>()
 
   const follow = (p: unknown): string => (linkAt && String(p) === linkAt ? linkTarget : String(p))
@@ -128,6 +132,7 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
         }
         case 'lstatSync': return (p: string, o?: unknown) => (linkAt && String(p) === linkAt ? LINK : (realFs.lstatSync as (p: string, o?: unknown) => unknown)(p, o))
         case 'openSync': return (p: string, flags: string) => {
+          if (denied && String(p) === denied) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
           opened.push(String(p))
           const fd = realFs.openSync(follow(p), flags)
           if (stuck && String(p) === stuck) stuckFds.add(fd)
@@ -166,7 +171,7 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   async function start(opts: { maxTickBytes?: number; waitFirst?: boolean } = {}): Promise<void> {
     const fake = new FakeTkWorkerTransport()
     fake.onMessage((m) => {
-      if (m.type === 'index-complete') completes.push({ firstIndex: m.firstIndex, drained: m.drained })
+      if (m.type === 'index-complete') { completes.push({ firstIndex: m.firstIndex, drained: m.drained }); failed.push(m.filesFailed) }
       waiters = waiters.filter((w) => !w(m))
     })
     const first = opts.waitFirst === false ? null : nextSweep('the first sweep')
@@ -185,9 +190,9 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
     for (let i = 0; i < 5; i++) realFs.writeFileSync(transcript(`s${i}`), line(`init-${i}`))
     db.cursors.clear(); db.meta.clear(); db.events = 0; db.failNextSetMeta = false
     clearCounts()
-    completes = []; waiters = []
+    completes = []; failed = []; waiters = []
     watchCbs.clear()
-    linkAt = ''; linkTarget = ''; stuck = ''; stuckFds.clear()
+    linkAt = ''; linkTarget = ''; stuck = ''; stuckFds.clear(); denied = ''
   })
   afterEach(() => {
     try { stopWorker?.() } catch { /* stopped */ }
@@ -268,6 +273,31 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
         expect(db.events).toBe(6)
       })
     }
+
+    it('a transcript that could not be read stays counted while others are read on their own, until it is read', async () => {
+      denied = transcript('s1')
+      await start()
+      expect(failed).toEqual([1])
+      expect(db.events).toBe(4)
+      // Another file's change says nothing about the one that could not be read.
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      let read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', path.join('F--proj', 's2.jsonl'))
+      await read
+      expect(failed.at(-1)).toBe(1)
+      // Reported and still not readable: the same one file, counted once.
+      read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', path.join('F--proj', 's1.jsonl'))
+      await read
+      expect(failed.at(-1)).toBe(1)
+      // Reported and readable now: read, and no longer counted.
+      denied = ''
+      read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', path.join('F--proj', 's1.jsonl'))
+      await read
+      expect(failed.at(-1)).toBe(0)
+      expect(db.events).toBe(6)
+    })
 
     it('the 5 s timer lists and reads nothing until a full sweep is due again, then walks once', async () => {
       fakeTheTimer()

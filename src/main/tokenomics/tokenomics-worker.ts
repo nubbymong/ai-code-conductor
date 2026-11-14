@@ -184,7 +184,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
    */
   let sweepPending = false
   /**
-   * Files this sweep could not open or read at all.
+   * Files that could not be opened or read at all when last tried.
    *
    * Counted SEPARATELY from `sweepPending`, and deliberately not allowed to
    * block completion. Those are two different states: "there are more bytes to
@@ -194,8 +194,13 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
    * install, showing a spinner with no error and no way out. Reading everything
    * that CAN be read is the honest definition of done; what could not be read
    * is reported alongside it rather than hidden behind a spinner.
+   *
+   * Kept by path (#302): a changed-files sweep takes a file out when it tries
+   * it again and leaves the rest as the last full walk found them. A plain
+   * count, reset by every sweep, read none after any reported change, and the
+   * page's note about files that could not be read came and went.
    */
-  let sweepFailed = 0
+  const sweepFailed = new Set<string>()
   /**
    * A file this sweep left with bytes to read did not move its cursor: the
    * read came back short (the file shrank while it was read). A pass repeated
@@ -369,7 +374,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     // writes no cursor row, so nothing else can notice it — and an index that
     // declares itself complete while a file's spend is missing is worse than
     // one that admits it is still going.
-    try { fd = fs.openSync(file, 'r') } catch (err) { sweepFailed++; logw('warn', `open failed for ${file}: ${String(err)}`); return 0 }
+    try { fd = fs.openSync(file, 'r') } catch (err) { sweepFailed.add(file); logw('warn', `open failed for ${file}: ${String(err)}`); return 0 }
     let inserted = 0
     let fileCwd = ''
     try {
@@ -399,7 +404,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
         // Per-FILE containment. Letting this escape aborts the whole sweep, so
         // one locked or flaky transcript stops every later file from being read
         // and leaves the index reporting itself incomplete forever.
-        sweepFailed++
+        sweepFailed.add(file)
         logw('warn', `read failed for ${file}: ${String(err)}`)
         flush()
         return inserted
@@ -476,7 +481,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     const tickBytes = deps.maxTickBytes !== undefined ? maxTickBytes : CODEX_TICK_BYTES
     const end = Math.min(st.size, offset + tickBytes)
     let fd: number
-    try { fd = fs.openSync(file, 'r') } catch (err) { sweepFailed++; logw('warn', `open failed for ${file}: ${String(err)}`); return 0 }
+    try { fd = fs.openSync(file, 'r') } catch (err) { sweepFailed.add(file); logw('warn', `open failed for ${file}: ${String(err)}`); return 0 }
     let inserted = 0
     try {
       let consumed = offset
@@ -504,7 +509,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
         // first index never reports complete, and the five-second retry hits the
         // same file forever - the exact "Indexing 1700/1997" wedge this ingester
         // was written to remove, reached through a different door.
-        sweepFailed++
+        sweepFailed.add(file)
         logw('warn', `read failed for ${file}: ${String(err)}`)
         return 0
       }
@@ -662,7 +667,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     sweeping = true
     sweepPending = false
     sweepStalled = false
-    sweepFailed = 0
+    sweepFailed.clear()
     // #302: this walk covers every file, the reported ones included.
     fullSweepDue = false
     lastFullSweepAt = Date.now()
@@ -748,9 +753,9 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       if (drained && !firstSweepDone) {
         firstSweepDone = true
         db.setMeta('firstIndexComplete', '1')
-        post({ type: 'index-complete', firstIndex: true, drained, filesFailed: sweepFailed, eventsTotal: db.eventCount() })
+        post({ type: 'index-complete', firstIndex: true, drained, filesFailed: sweepFailed.size, eventsTotal: db.eventCount() })
       } else {
-        post({ type: 'index-complete', firstIndex: false, drained, filesFailed: sweepFailed, eventsTotal: db.eventCount() })
+        post({ type: 'index-complete', firstIndex: false, drained, filesFailed: sweepFailed.size, eventsTotal: db.eventCount() })
       }
     } catch (err) {
       // #302: a walk that failed did not reach every file, so it is still
@@ -773,18 +778,18 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     if (!db || sweeping || dirtyClaude.size === 0) return
     sweeping = true
     sweepPending = false
-    sweepFailed = 0
     try {
       const files = [...dirtyClaude]
       dirtyClaude.clear()
       let done = 0
       for (const f of files) {
+        sweepFailed.delete(f) // tried again now; it goes back in if it fails
         ingestClaudeFile(f)
         if (++done % YIELD_EVERY === 0) { await new Promise<void>((r) => setImmediate(r)); if (!db) return }
       }
       if (!db) return
       if (sweepPending) fullSweepDue = true
-      post({ type: 'index-complete', firstIndex: false, drained: firstSweepDone && !sweepPending, filesFailed: sweepFailed, eventsTotal: db.eventCount() })
+      post({ type: 'index-complete', firstIndex: false, drained: firstSweepDone && !sweepPending, filesFailed: sweepFailed.size, eventsTotal: db.eventCount() })
     } catch (err) { logw('error', `ingestDirty failed: ${String(err)}`) }
     finally {
       sweeping = false
@@ -826,7 +831,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       filesDone: lastProgress.filesDone,
       filesTotal: lastProgress.filesTotal,
       eventsTotal: db!.eventCount(),
-      filesFailed: sweepFailed,
+      filesFailed: sweepFailed.size,
       lastIndexAt: lastAt ? Number(lastAt) : null,
       accountReread: accountReread(),
     }
