@@ -85,7 +85,7 @@ export class TokenomicsSupervisor {
       // This service's rule, kept: a ready worker starts the backoff over at once.
       resetBackoffOnUp: true,
       onSpawn: (w) => this.onSpawned(w),
-      onExit: () => this.onExit(),
+      onExit: (forkError) => this.onExit(forkError),
       // Out of budget: no fallback and no manual restart, so the index is
       // degraded for the run (queries reject with degraded=true).
       onExhausted: () => {},
@@ -107,7 +107,7 @@ export class TokenomicsSupervisor {
     this.lastError = null
     this.worker = w
     this.listening = false
-    w.transport.onMessage((m) => this.onMessage(m))
+    w.transport.onMessage((m) => this.onMessage(m, w))
     // MP10: the attributions kept are sent when this worker is ready (below).
     w.transport.post({
       type: 'open', dbPath: this.opts.dbPath, pricing: this.opts.pricing, configs: this.opts.configs,
@@ -117,11 +117,14 @@ export class TokenomicsSupervisor {
     })
   }
 
-  private onMessage(m: FromTkWorker): void {
+  private onMessage(m: FromTkWorker, from: ForkedTkWorker): void {
     switch (m.type) {
       case 'ready': {
+        // A replaced or exited worker's `ready` still draining out of its pipe
+        // is not the current worker's: nothing is sent to a worker that has
+        // not opened, and no stable period starts.
+        if (!this.sup.markUp(from)) return
         this.listening = true
-        this.sup.markUp()
         // The DB's own record of a completed first index. Without this the
         // page said "Indexing usage data" on EVERY launch until a fresh sweep
         // completed - and stayed there for hours when the sweep wedged on the
@@ -256,7 +259,8 @@ export class TokenomicsSupervisor {
     }
   }
 
-  private onExit(): void {
+  private onExit(forkError?: Error): void {
+    if (forkError) logError('[tokenomics] worker could not be forked:', forkError.message)
     this.listening = false
     for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(new Error('tokenomics worker exited')) }
     this.pending.clear()

@@ -4,6 +4,10 @@ import { FakeTkWorkerTransport } from '../../../src/main/tokenomics/tk-worker-tr
 import type { ToTkWorker } from '../../../src/main/tokenomics/tk-worker-transport'
 import type { ForkedTkWorker } from '../../../src/main/tokenomics/fork-tokenomics-worker'
 
+// The service's own lines in the main debug log, kept out of the real logger.
+const logs = vi.hoisted(() => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
+vi.mock('../../../src/main/debug-logger', () => logs)
+
 function fakeFork() {
   const t = new FakeTkWorkerTransport()
   t.onWorker((m) => {
@@ -391,5 +395,70 @@ describe('usage index: the restart budget recovers (B9)', () => {
     vi.advanceTimersByTime(STABLE_MS)
     expect(h.fork).toHaveBeenCalledTimes(2)
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+// Review round: a replaced worker's late ready, what the service says in the
+// debug log, and a fork that fails.
+describe('usage index: a replaced worker\'s late ready', () => {
+  let h: ReturnType<typeof harness> | undefined
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => { h?.sup.shutdown(); h = undefined; vi.useRealTimers() })
+
+  it('is not the current worker\'s: nothing is sent, nothing is listening, and no budget comes back', async () => {
+    h = harness({ maxRestarts: 1, autoReady: false })
+    h.ready()                                       // worker 1 is up
+    h.last().exit(); vi.advanceTimersByTime(300)    // worker 2: the one restart is spent, and it is never ready
+    h.sup.setPricing(price(7))                      // held for a worker that is ready
+    h.kids[0].t.emitToMain({ type: 'ready', firstIndexComplete: true, eventsTotal: 5 })   // worker 1's, still draining
+    expect(h.kids[1].got.map((m) => m.type)).toEqual(['open'])
+    await expect(h.sup.query('summary', {})).rejects.toThrow('not ready')
+    expect(h.sup.getIndexStatus().firstIndexComplete).toBe(false)
+    vi.advanceTimersByTime(STABLE_MS + 10)
+    h.last().exit()
+    vi.advanceTimersByTime(60_000)
+    expect(h.fork).toHaveBeenCalledTimes(2)         // the budget of 1 is still spent
+  })
+
+  it('the current worker\'s own ready is taken as before', async () => {
+    h = harness({ autoReady: false })
+    h.last().exit(); vi.advanceTimersByTime(300)
+    h.sup.setPricing(price(7))
+    h.ready()
+    expect(h.kids[1].got.map((m) => m.type)).toEqual(['open', 'set-pricing'])
+  })
+})
+
+describe('usage index: what it says in the debug log', () => {
+  let h: ReturnType<typeof harness> | undefined
+  beforeEach(() => { vi.useFakeTimers(); logs.logInfo.mockClear(); logs.logError.mockClear() })
+  afterEach(() => { h?.sup.shutdown(); h = undefined; vi.useRealTimers() })
+
+  it('a stable period that gives a used budget back is logged', () => {
+    h = harness()
+    h.last().exit(); vi.advanceTimersByTime(250)    // one restart used; ready on open
+    vi.advanceTimersByTime(STABLE_MS - 1)
+    expect(logs.logInfo).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(logs.logInfo.mock.calls).toEqual([['[tokenomics] worker stable; restart budget restored']])
+  })
+
+  it('with nothing used, nothing is logged', () => {
+    h = harness()
+    vi.advanceTimersByTime(2 * STABLE_MS)
+    expect(logs.logInfo).not.toHaveBeenCalled()
+  })
+
+  it('a crash restart whose fork fails is logged with the reason, and the backoff forks the next', async () => {
+    h = harness()
+    h.fork.mockImplementationOnce(() => { throw new Error('no fork') })
+    h.last().exit()
+    expect(logs.logError).not.toHaveBeenCalled()    // an ordinary exit says nothing here, as before
+    vi.advanceTimersByTime(250)
+    expect(logs.logError.mock.calls).toEqual([['[tokenomics] worker could not be forked:', 'no fork']])
+    await expect(h.sup.query('summary', {})).rejects.toThrow('not ready')
+    vi.advanceTimersByTime(1000)                    // the second step of the backoff
+    expect(h.fork).toHaveBeenCalledTimes(3)
+    await expect(h.sup.query('summary', {})).resolves.toEqual([{ ok: 'summary' }])
   })
 })

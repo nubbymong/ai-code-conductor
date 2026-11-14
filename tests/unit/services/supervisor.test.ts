@@ -23,7 +23,7 @@ function harness(opts: Partial<SupervisorOptions<Kid>> & { killExits?: boolean }
   const sup: Supervisor<Kid> = new Supervisor<Kid>({
     forkChild: fork,
     onSpawn: (c) => events.push(`spawn ${c.n} restarts=${sup.getRestarts()}`),
-    onExit: () => events.push(`exit wanted=${sup.isWanted()}`),
+    onExit: (forkError) => events.push(`exit wanted=${sup.isWanted()}${forkError ? ` fork-failed=${forkError.message}` : ''}`),
     onExhausted: () => events.push(`exhausted latched=${sup.isExhausted()}`),
     onRestartCount: (n) => events.push(`count ${n}`),
     onBudgetRestored: () => events.push('restored'),
@@ -205,7 +205,7 @@ describe('Supervisor', () => {
     it('drops the old child\'s stable period with it', () => {
       const h = harness()
       h.sup.start()
-      h.sup.markUp()
+      h.sup.markUp(h.last())
       expect(vi.getTimerCount()).toBe(1)
       h.sup.restart()
       expect(vi.getTimerCount()).toBe(0)
@@ -246,7 +246,7 @@ describe('Supervisor', () => {
       const h = harness()
       h.sup.start()
       h.kids[0].exit(); vi.advanceTimersByTime(250)
-      h.sup.markUp()
+      h.sup.markUp(h.last())
       vi.advanceTimersByTime(SUPERVISOR_STABLE_RESET_MS - 1)
       expect(h.sup.getRestarts()).toBe(1)
       const before = h.events.length
@@ -261,7 +261,7 @@ describe('Supervisor', () => {
     it('nothing used, nothing said', () => {
       const h = harness()
       h.sup.start()
-      h.sup.markUp()
+      h.sup.markUp(h.last())
       vi.advanceTimersByTime(SUPERVISOR_STABLE_RESET_MS)
       expect(h.events).toEqual(['spawn 0 restarts=0'])
     })
@@ -278,13 +278,13 @@ describe('Supervisor', () => {
       const h = harness()
       h.sup.start()
       h.kids[0].exit(); vi.advanceTimersByTime(250)
-      h.sup.markUp()
+      h.sup.markUp(h.last())
       vi.advanceTimersByTime(SUPERVISOR_STABLE_RESET_MS - 1000)
       h.kids[1].exit(); vi.advanceTimersByTime(1000)
       expect(h.fork).toHaveBeenCalledTimes(3)
       vi.advanceTimersByTime(SUPERVISOR_STABLE_RESET_MS)
       expect(h.sup.getRestarts()).toBe(2)   // the new child never said it was up
-      h.sup.markUp()
+      h.sup.markUp(h.last())
       vi.advanceTimersByTime(SUPERVISOR_STABLE_RESET_MS)
       expect(h.sup.getRestarts()).toBe(0)
     })
@@ -293,9 +293,9 @@ describe('Supervisor', () => {
       const h = harness({ stableResetMs: 1000 })
       h.sup.start()
       h.kids[0].exit(); vi.advanceTimersByTime(250)
-      h.sup.markUp()
+      h.sup.markUp(h.last())
       vi.advanceTimersByTime(900)
-      h.sup.markUp()
+      h.sup.markUp(h.last())
       expect(vi.getTimerCount()).toBe(1)   // and leaves no second timer behind
       vi.advanceTimersByTime(100)
       expect(h.sup.getRestarts()).toBe(0)
@@ -305,7 +305,7 @@ describe('Supervisor', () => {
       const h = harness({ resetBackoffOnUp: true })
       h.sup.start()
       h.kids[0].exit(); vi.advanceTimersByTime(250)
-      h.sup.markUp()
+      h.sup.markUp(h.last())
       h.kids[1].exit(); vi.advanceTimersByTime(250)
       expect(h.fork).toHaveBeenCalledTimes(3)
       expect(h.sup.getRestarts()).toBe(2)
@@ -315,7 +315,7 @@ describe('Supervisor', () => {
       const h = harness()
       h.sup.start()
       h.kids[0].exit(); vi.advanceTimersByTime(250)
-      h.sup.markUp()
+      h.sup.markUp(h.last())
       h.kids[1].exit(); vi.advanceTimersByTime(999)
       expect(h.fork).toHaveBeenCalledTimes(2)
       vi.advanceTimersByTime(1)
@@ -325,18 +325,160 @@ describe('Supervisor', () => {
     it('an up report from a child that has exited, after shutdown, or with the budget spent arms nothing', () => {
       const a = harness()
       a.sup.start(); a.kids[0].exit(); a.sup.setWanted(false)
-      a.sup.markUp()
+      a.sup.markUp(a.kids[0])
       expect(vi.getTimerCount()).toBe(0)
 
       const b = harness()
       b.sup.start(); b.sup.shutdown()
-      b.sup.markUp()
+      b.sup.markUp(b.kids[0])
       expect(vi.getTimerCount()).toBe(0)
 
       const c = harness({ maxRestarts: 0 })
       c.sup.start(); c.kids[0].exit()
-      c.sup.markUp()
+      c.sup.markUp(c.kids[0])
       expect(vi.getTimerCount()).toBe(0)
+    })
+  })
+
+  describe('a fork that fails', () => {
+    const noFork = (): Kid => { throw new Error('no fork') }
+
+    it('on a manual restart: the old child is let go, the failure goes down the exit path, and the backoff forks the next', () => {
+      const h = harness({ killExits: true })
+      h.sup.start()
+      h.sup.markUp(h.kids[0])
+      h.fork.mockImplementationOnce(noFork)
+      const before = h.events.length
+      expect(h.sup.restart()).toBe(true)
+      expect(h.events.slice(before)).toEqual(['count 0', 'exit wanted=true fork-failed=no fork'])
+      expect(h.kids[0].kills).toBe(1)
+      expect(vi.getTimerCount()).toBe(1)   // the restart on its way, and no stable period left over
+      vi.advanceTimersByTime(249)
+      expect(h.fork).toHaveBeenCalledTimes(2)
+      vi.advanceTimersByTime(1)
+      expect(h.fork).toHaveBeenCalledTimes(3)
+      expect(h.events.slice(before + 2)).toEqual(['count 1', 'spawn 1 restarts=1'])
+    })
+
+    it('after it, the service is not taken for running: on again forks nothing extra, the old child\'s late report and exit count for nothing', () => {
+      const h = harness()
+      h.sup.start()
+      h.fork.mockImplementationOnce(noFork)
+      h.sup.restart()
+      const before = h.events.length
+      expect(h.sup.setWanted(true)).toBe(false)   // a restart is on its way
+      expect(h.sup.markUp(h.kids[0])).toBe(false)
+      h.kids[0].exit()
+      expect(h.events.slice(before)).toEqual([])
+      expect(vi.getTimerCount()).toBe(1)
+      h.sup.setWanted(false)                      // off drops it, as for any pending restart
+      expect(vi.getTimerCount()).toBe(0)
+      expect(h.sup.setWanted(true)).toBe(true)    // nothing running, nothing on its way: on forks one
+      expect(h.fork).toHaveBeenCalledTimes(3)
+    })
+
+    it('on a crash restart: it counts as a crash, the backoff climbs, and the budget still runs out', () => {
+      const h = harness({ maxRestarts: 2 })
+      h.sup.start()
+      h.fork.mockImplementation(noFork)
+      h.kids[0].exit()
+      const before = h.events.length
+      vi.advanceTimersByTime(250)
+      expect(h.events.slice(before)).toEqual(['count 1', 'exit wanted=true fork-failed=no fork'])
+      expect(h.kids[0].kills).toBe(0)    // the child that had already exited is not killed again
+      vi.advanceTimersByTime(999)
+      expect(h.fork).toHaveBeenCalledTimes(2)
+      vi.advanceTimersByTime(1)
+      expect(h.events.slice(before + 2)).toEqual(['count 2', 'exit wanted=true fork-failed=no fork', 'exhausted latched=true'])
+      vi.advanceTimersByTime(60_000)
+      expect(h.fork).toHaveBeenCalledTimes(3)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('on wanted on again: nothing is thrown, the failure is reported, and the backoff forks the next', () => {
+      const h = harness()
+      h.sup.start()
+      h.sup.setWanted(false)
+      h.kids[0].exit()
+      h.fork.mockImplementationOnce(noFork)
+      const before = h.events.length
+      expect(h.sup.setWanted(true)).toBe(false)
+      expect(h.events.slice(before)).toEqual(['exit wanted=true fork-failed=no fork'])
+      vi.advanceTimersByTime(250)
+      expect(h.fork).toHaveBeenCalledTimes(3)
+      expect(h.events.slice(before + 1)).toEqual(['count 1', 'spawn 1 restarts=1'])
+    })
+
+    it('a spawn hook that throws: the half-started child is killed and let go, and it counts as a crash', () => {
+      let boom = false
+      const h = harness({ onSpawn: () => { if (boom) throw new Error('spawn hook') } })
+      h.sup.start()
+      boom = true
+      h.kids[0].exit()
+      vi.advanceTimersByTime(250)
+      expect(h.kids[1].kills).toBe(1)
+      expect(h.events.slice(-2)).toEqual(['count 1', 'exit wanted=true fork-failed=spawn hook'])
+      expect(h.sup.markUp(h.kids[1])).toBe(false)
+      boom = false
+      vi.advanceTimersByTime(1000)
+      expect(h.fork).toHaveBeenCalledTimes(3)
+      expect(h.sup.markUp(h.kids[2])).toBe(true)
+    })
+
+    it('something thrown that is not an Error is still reported as one', () => {
+      const h = harness()
+      h.sup.start()
+      h.fork.mockImplementationOnce(() => { throw 'plain text' })   // eslint-disable-line no-throw-literal
+      h.sup.restart()
+      expect(h.events.at(-1)).toBe('exit wanted=true fork-failed=plain text')
+    })
+
+    it('the first start still throws to its caller, as before', () => {
+      const h = harness()
+      h.fork.mockImplementationOnce(noFork)
+      expect(() => h.sup.start()).toThrow('no fork')
+      expect(vi.getTimerCount()).toBe(0)
+    })
+  })
+
+  describe('an up report is only the current child\'s', () => {
+    it('from a child replaced after a crash: refused, no stable period, nothing given back', () => {
+      const h = harness()
+      h.sup.start()
+      h.kids[0].exit(); vi.advanceTimersByTime(250)   // kid 1 is the current child and never reports up
+      expect(h.sup.markUp(h.kids[0])).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+      vi.advanceTimersByTime(2 * SUPERVISOR_STABLE_RESET_MS)
+      expect(h.sup.getRestarts()).toBe(1)
+      expect(h.events).not.toContain('restored')
+    })
+
+    it('from a child replaced by a manual restart: refused', () => {
+      const h = harness()
+      h.sup.start()
+      h.sup.restart()
+      expect(h.sup.markUp(h.kids[0])).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('from the current child: taken, the first time and again', () => {
+      const h = harness()
+      h.sup.start()
+      expect(h.sup.markUp(h.kids[0])).toBe(true)
+      expect(h.sup.markUp(h.kids[0])).toBe(true)
+      expect(vi.getTimerCount()).toBe(1)
+    })
+
+    it('a replaced child\'s report does not start the backoff over either (resetBackoffOnUp)', () => {
+      const h = harness({ resetBackoffOnUp: true })
+      h.sup.start()
+      h.kids[0].exit(); vi.advanceTimersByTime(250)
+      h.sup.markUp(h.kids[0])            // stale
+      h.kids[1].exit()
+      vi.advanceTimersByTime(999)        // still the second step, 1000ms
+      expect(h.fork).toHaveBeenCalledTimes(2)
+      vi.advanceTimersByTime(1)
+      expect(h.fork).toHaveBeenCalledTimes(3)
     })
   })
 
@@ -344,7 +486,7 @@ describe('Supervisor', () => {
     it('is final: no timer is left, a pending restart never fires, a late exit is ignored', () => {
       const h = harness()
       h.sup.start()
-      h.sup.markUp()
+      h.sup.markUp(h.last())
       h.kids[0].exit()                 // a restart is pending
       h.sup.shutdown()
       expect(h.sup.isShuttingDown()).toBe(true)
@@ -356,7 +498,7 @@ describe('Supervisor', () => {
     it('leaves the kill to the service, and reports no exit after it', () => {
       const h = harness()
       h.sup.start()
-      h.sup.markUp()
+      h.sup.markUp(h.last())
       h.sup.shutdown()
       expect(vi.getTimerCount()).toBe(0)
       expect(h.kids[0].kills).toBe(0)

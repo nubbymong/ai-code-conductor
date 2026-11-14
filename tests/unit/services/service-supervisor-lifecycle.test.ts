@@ -57,8 +57,8 @@ describe('ServiceSupervisor lifecycle', () => {
   it('ignores the self-kill exit after fail-open (single fallback log, no re-entry)', () => {
     let exitCb: (() => void) | null = null
     // kill() synchronously fires the stored exit callback — the WORST case for
-    // re-entry (the real utilityProcess fires it async). The fellOpen flag (set
-    // before kill in activateFallback) must suppress it either way.
+    // re-entry (the real utilityProcess fires it async). The supervisor's exhausted latch (set
+    // before activateFallback runs its kill) must suppress it either way.
     const fork = vi.fn(() => ({
       transport: new FakeChildTransport(),
       kill: () => { exitCb?.() },

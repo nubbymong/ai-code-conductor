@@ -47,6 +47,9 @@ export class ServiceSupervisor {
   private child: ForkedChild | null = null
   private proxy: HooksGatewayProxy | null = null
   private sup: Supervisor<ForkedChild>
+  /** Set while the Settings toggle is turning the service on: a child forked
+   *  then is a fresh start, whatever the restart count says. */
+  private turningOn = false
 
   constructor(opts: ServiceSupervisorOptions) {
     this.opts = opts
@@ -56,7 +59,7 @@ export class ServiceSupervisor {
       maxRestarts: opts.maxRestarts,
       stableResetMs: opts.stableResetMs,
       onSpawn: (c) => this.onChildSpawned(c),
-      onExit: () => this.onChildExit(),
+      onExit: (forkError) => this.onChildExit(forkError),
       // Out of budget. The supervisor has latched that BEFORE this runs, so
       // activateFallback()'s own child.kill() cannot re-enter the exit path
       // and log a spurious second 'falling open'.
@@ -91,7 +94,7 @@ export class ServiceSupervisor {
   // The supervisor owns the SINGLE transport subscription (ChildTransport.onMessage
   // is last-writer-wins). It consumes bound/health/log itself and forwards the
   // proxy-relevant messages (event/dropped/permission-open) via handleChildMessage.
-  private onChildMessage(m: FromChildMessage): void {
+  private onChildMessage(m: FromChildMessage, from: ForkedChild): void {
     // Once we've failed open (or are shutting down) the child is dead; ignore any
     // messages still draining out of the pipe so a stale `bound`/`health` can't
     // flip the host back to utility-process and clobber the `degraded` state.
@@ -103,7 +106,10 @@ export class ServiceSupervisor {
         try { this.child?.transport.post({ type: 'stop' }) } catch { /* child gone */ }
         return
       }
-      this.sup.markUp()
+      // A replaced or exited child's `bound` still draining out of its pipe is
+      // not the current child's: nothing is shown as bound, and no stable
+      // period starts for a child that has not reported itself.
+      if (!this.sup.markUp(from)) return
       this.health = {
         ...this.health,
         state: 'listening',
@@ -134,8 +140,15 @@ export class ServiceSupervisor {
       if (this.log.length > LOG_CAP) this.log.splice(0, this.log.length - LOG_CAP)
       this.pushHealth()
     } else if (m.type === 'bind-failed') {
-      this.health = { ...this.health, state: 'crashed', lastError: { message: m.error, ts: this.now() } }
-      this.appendLog('error', 'bind-failed', `hooks child failed to bind: ${m.error}`)
+      if (this.sup.isWanted()) {
+        this.health = { ...this.health, state: 'crashed', lastError: { message: m.error, ts: this.now() } }
+        this.appendLog('error', 'bind-failed', `hooks child failed to bind: ${m.error}`)
+      } else {
+        // Turned off since this child was told to start (B8): nothing is
+        // wanted bound, so this is not a failure to show. It stays stopped,
+        // with no error left on the card.
+        this.appendLog('info', 'bind-failed-while-off', `hooks child failed to bind while turned off: ${m.error}`)
+      }
       this.pushHealth()
       // Escalate like an exit: the child is alive but useless. Kill it so the normal
       // exit-driven restart/backoff -> fail-open path runs (single-owner of that logic).
@@ -168,16 +181,24 @@ export class ServiceSupervisor {
    *  here, and its spawn path has already told it to start (returns true). */
   private setWanted(on: boolean): boolean {
     if (this.sup.isShuttingDown()) return false   // quitting: the proxy's stop() is only a goodbye
-    const was = this.sup.isWanted()
-    const forked = this.sup.setWanted(on)
-    if (was === on) return forked
+    if (this.sup.isWanted() === on) return this.sup.setWanted(on)
     if (!on) {
+      this.sup.setWanted(false)
       this.health = { ...this.health, state: 'stopped' }
       this.appendLog('info', 'disabled', 'hooks gateway turned off')
-    } else {
-      this.health = { ...this.health, state: 'starting' }
-      this.appendLog('info', 'enabled', 'hooks gateway turned on')
+      this.pushHealth()
+      return false
     }
+    // Said and shown BEFORE the supervisor acts, so the log reads in the order
+    // things happened and whatever the fork does next has the last word: a
+    // fresh child is shown as starting, a fork that fails as crashed (the
+    // supervisor's backoff then brings the next one up; nothing is thrown at
+    // the Settings toggle).
+    this.health = { ...this.health, state: 'starting' }
+    this.appendLog('info', 'enabled', 'hooks gateway turned on')
+    this.turningOn = true
+    const forked = this.sup.setWanted(true)
+    this.turningOn = false
     this.pushHealth()
     return forked
   }
@@ -196,7 +217,10 @@ export class ServiceSupervisor {
     // Turned off in Settings (B8): a restart must not turn it back on.
     if (!this.sup.isWanted()) return { ok: false, reason: 'disabled' }
     this.appendLog('info', 'manual-restart', 'manual restart requested')
-    this.sup.restart()   // clean slate + kill + fork; the spawn path rebinds the long-lived proxy, replays secrets, starts
+    // Clean slate + kill + fork; the spawn path rebinds the long-lived proxy,
+    // replays secrets, starts. A fork that fails is shown as crashed and the
+    // supervisor's backoff forks the next.
+    this.sup.restart()
     this.pushHealth()
     return { ok: true }
   }
@@ -215,7 +239,7 @@ export class ServiceSupervisor {
     } else {
       this.proxy.rebindTransport(c.transport)   // point the long-lived proxy at the NEW child
     }
-    c.transport.onMessage((m) => this.onChildMessage(m))
+    c.transport.onMessage((m) => this.onChildMessage(m, c))
     // S1 replay-before-listen: register the known secrets on the new child BEFORE it
     // binds/announces, so a request landing right after bind validates against a
     // populated secret map. The child applies `register` synchronously on receipt and
@@ -224,13 +248,16 @@ export class ServiceSupervisor {
     // Fresh child = fresh per-instance counters; forget the prior throughput
     // sample so the next health beat starts a clean interval (no negative rate).
     this.prevThroughput = null
-    this.health = { ...this.health, state: this.sup.getRestarts() > 0 ? 'restarting' : 'starting' }
-    this.appendLog('info', 'child-up', `hooks child forked (restart ${this.sup.getRestarts()})`)
+    // Turned on again in Settings is a fresh start, not a restart, even when
+    // earlier crashes are still counted.
+    const restart = this.sup.getRestarts() > 0 && !this.turningOn
+    this.health = { ...this.health, state: restart ? 'restarting' : 'starting' }
+    this.appendLog('info', 'child-up', `hooks child forked (${this.turningOn ? 'turned on' : `restart ${this.sup.getRestarts()}`})`)
     this.pushHealth()
     void this.proxy.start()
   }
 
-  private onChildExit(): void {
+  private onChildExit(forkError?: Error): void {
     // Turned off (B8): the supervisor leaves it down, so this is not a crash
     // on its way to a restart. It stays shown as stopped.
     if (!this.sup.isWanted()) {
@@ -239,8 +266,15 @@ export class ServiceSupervisor {
       this.pushHealth()
       return
     }
-    this.health = { ...this.health, state: 'crashed', lastError: { message: 'child exited', ts: this.now() } }
-    this.appendLog('error', 'crashed', 'hooks child exited unexpectedly')
+    if (forkError) {
+      // The fork itself failed (a restart, or turned on again): shown as a
+      // crash with the reason; the supervisor's backoff tries the next one.
+      this.health = { ...this.health, state: 'crashed', lastError: { message: `fork failed: ${forkError.message}`, ts: this.now() } }
+      this.appendLog('error', 'fork-failed', `hooks child could not be forked: ${forkError.message}`)
+    } else {
+      this.health = { ...this.health, state: 'crashed', lastError: { message: 'child exited', ts: this.now() } }
+      this.appendLog('error', 'crashed', 'hooks child exited unexpectedly')
+    }
     this.pushHealth()
   }
 

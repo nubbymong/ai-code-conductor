@@ -118,7 +118,7 @@ export class LogSupervisor {
       maxRestarts: opts.maxRestarts,
       stableResetMs: opts.stableResetMs,
       onSpawn: (w) => this.onWorkerSpawned(w),
-      onExit: () => this.onWorkerExit(),
+      onExit: (forkError) => this.onWorkerExit(forkError),
       // Out of budget (maxRestarts exhausted). The supervisor has latched that
       // BEFORE this runs, so a late/self-kill exit cannot re-enter the restart
       // path. There is NO fallback engine: terminal until a manual restart.
@@ -161,7 +161,7 @@ export class LogSupervisor {
 
   private onWorkerSpawned(w: ForkedTranscriptsWorker): void {
     this.worker = w
-    w.transport.onMessage((m) => this.onWorkerMessage(m))
+    w.transport.onMessage((m) => this.onWorkerMessage(m, w))
     // Fresh worker = fresh messagesTotal counter; forget the prior throughput
     // sample so the next health beat starts a clean interval (no negative rate).
     this.prevThroughput = null
@@ -188,14 +188,18 @@ export class LogSupervisor {
   // Worker -> main messages
   // -------------------------------------------------------------------------
 
-  private onWorkerMessage(m: FromTranscriptsWorker): void {
+  private onWorkerMessage(m: FromTranscriptsWorker, from: ForkedTranscriptsWorker): void {
     // Once shutting down or permanently degraded the worker is dead/irrelevant;
     // ignore any messages still draining out of the pipe so a stale `ready`/`health`
     // can't flip the pill back to listening and clobber the degraded state.
     if (this.sup.isShuttingDown() || this.sup.isExhausted()) return
     switch (m.type) {
       case 'ready': {
-        this.sup.markUp()
+        // A replaced or exited worker's `ready` still draining out of its pipe
+        // is not the current worker's: nothing is shown as listening, nothing
+        // is replayed into a worker that has not opened the DB, and no stable
+        // period starts.
+        if (!this.sup.markUp(from)) return
         this.health = {
           ...this.health,
           state: 'listening',
@@ -417,9 +421,15 @@ export class LogSupervisor {
   // Worker exit -> restart with backoff -> permanent degrade
   // -------------------------------------------------------------------------
 
-  private onWorkerExit(): void {
-    this.health = { ...this.health, state: 'crashed', lastError: { message: 'worker exited', ts: this.now() } }
-    this.appendLog('error', 'crashed', 'logging worker exited unexpectedly')
+  private onWorkerExit(forkError?: Error): void {
+    if (forkError) {
+      // The fork itself failed (a restart): shown as a crash with the reason.
+      this.health = { ...this.health, state: 'crashed', lastError: { message: `fork failed: ${forkError.message}`, ts: this.now() } }
+      this.appendLog('error', 'fork-failed', `logging worker could not be forked: ${forkError.message}`)
+    } else {
+      this.health = { ...this.health, state: 'crashed', lastError: { message: 'worker exited', ts: this.now() } }
+      this.appendLog('error', 'crashed', 'logging worker exited unexpectedly')
+    }
     // Reject every in-flight query so no caller hangs on a dead worker.
     this.rejectAllPending('logging worker exited')
     this.pushHealth()

@@ -16,6 +16,12 @@
  *    then run for `stableResetMs` without exiting, the restart count and the
  *    backoff go back to zero. A child that never comes up, or dies inside the
  *    period, gives nothing back, so a crash loop still runs the budget out.
+ *    Only the current child's own report counts: one still draining out of a
+ *    replaced child's pipe is refused.
+ *
+ * A fork that fails after the first start is a child that died at birth: it
+ * goes down the same exit path (backoff, budget), so the service is never left
+ * with no child and nothing on its way.
  *
  * No default export (project convention).
  */
@@ -33,9 +39,10 @@ export interface SupervisorOptions<C extends SupervisedChild> {
    *  wanted on again with none running): subscribe to it and send it its
    *  opening messages. Runs before the exit listener is attached. */
   onSpawn: (child: C) => void
-  /** The current child exited on its own. Runs for a service that is wanted
-   *  off too (ask `isWanted()`); that one is then left down. */
-  onExit: () => void
+  /** The current child exited on its own, or (with `forkError`) the fork
+   *  that was to replace it failed. Runs for a service that is wanted off too
+   *  (ask `isWanted()`); that one is then left down. */
+  onExit: (forkError?: Error) => void
   /** The restart budget is spent: nothing more is forked until a manual
    *  restart. The service falls back, or degrades. */
   onExhausted: () => void
@@ -103,12 +110,35 @@ export class Supervisor<C extends SupervisedChild> {
     c.onExit(() => { if (this.child === c) this.onChildExit() })
   }
 
-  /** The service says its child is up (bound, ready). From here the stable
-   *  period runs; a second report from the same child does not start it over. */
-  markUp(): void {
-    if (this.shuttingDown || !this.alive) return
+  /** Every fork after the first start; the child before it has exited or been
+   *  let go. A fork that throws (or a spawn hook that does) is a child that
+   *  died at birth: it goes down the exit path, so the backoff tries again and
+   *  the budget still runs out. Returns true when a child was forked. */
+  private relaunch(): boolean {
+    this.child = null
+    try {
+      this.launch()
+      return true
+    } catch (e) {
+      // Forked and then its spawn hook threw: no exit listener is on it yet,
+      // so it is killed here. (The cast undoes a narrowing: launch() is what
+      // assigns `child`.)
+      const halfStarted = this.child as C | null
+      try { halfStarted?.kill() } catch { /* best-effort */ }
+      this.onChildExit(e instanceof Error ? e : new Error(String(e)))
+      return false
+    }
+  }
+
+  /** The service says `child` is up (bound, ready). From here the stable
+   *  period runs; a second report from the same child does not start it over.
+   *  Returns false, and does nothing, when the report is not the current live
+   *  child's (a replaced or exited child's message still draining out of its
+   *  pipe): the service then ignores it too. */
+  markUp(child: C): boolean {
+    if (this.shuttingDown || child !== this.child || !this.alive) return false
     if (this.opts.resetBackoffOnUp) this.backoffIdx = 0
-    if (this.up) return
+    if (this.up) return true
     this.up = true
     this.stableTimer = unref(setTimeout(() => {
       this.stableTimer = null
@@ -120,6 +150,7 @@ export class Supervisor<C extends SupervisedChild> {
         this.opts.onBudgetRestored?.()
       }
     }, this.opts.stableResetMs ?? SUPERVISOR_STABLE_RESET_MS))
+    return true
   }
 
   private clearStable(): void {
@@ -130,13 +161,13 @@ export class Supervisor<C extends SupervisedChild> {
     if (this.restartTimer !== null) { clearTimeout(this.restartTimer); this.restartTimer = null }
   }
 
-  private onChildExit(): void {
+  private onChildExit(forkError?: Error): void {
     // Ignore exits once shutting down OR once the budget is spent (the latter
     // so a kill made while falling back cannot re-enter and re-run this).
     if (this.shuttingDown || this.exhausted) return
     this.alive = false
     this.clearStable()
-    this.opts.onExit()
+    this.opts.onExit(forkError)
     if (!this.wanted) return   // off stays off (B8)
     if (this.restarts >= (this.opts.maxRestarts ?? 5)) {
       this.exhausted = true
@@ -150,7 +181,7 @@ export class Supervisor<C extends SupervisedChild> {
       if (this.shuttingDown) return   // shutdown() raced the backoff: do not resurrect the child
       this.restarts++
       this.opts.onRestartCount?.(this.restarts)
-      this.launch()
+      this.relaunch()
     }, delay))
   }
 
@@ -163,8 +194,7 @@ export class Supervisor<C extends SupervisedChild> {
     if (!on) { this.clearRestart(); return false }
     if (!this.started || this.shuttingDown || this.exhausted) return false
     if (this.alive || this.restartTimer !== null) return false
-    this.launch()
-    return true
+    return this.relaunch()
   }
 
   /** Why a manual restart cannot run now, or null when it can. */
@@ -176,7 +206,8 @@ export class Supervisor<C extends SupervisedChild> {
 
   /** User-requested restart: a clean slate (the budget and the backoff start
    *  over, a spent budget is forgiven), the current child is killed and a new
-   *  one forked. Does nothing when `restartRefusal()` gives a reason. */
+   *  one forked (when that fork fails, the backoff forks the next). Does
+   *  nothing, and returns false, when `restartRefusal()` gives a reason. */
   restart(): boolean {
     if (this.restartRefusal() !== null) return false
     this.clearRestart()
@@ -190,7 +221,7 @@ export class Supervisor<C extends SupervisedChild> {
     const old = this.child
     this.child = null
     try { old?.kill() } catch { /* best-effort */ }
-    this.launch()
+    this.relaunch()
     return true
   }
 
