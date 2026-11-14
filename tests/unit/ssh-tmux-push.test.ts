@@ -24,6 +24,7 @@ import {
   SAFE_B64_RE,
 } from '../../src/main/ssh-tmux-push'
 import { buildTmuxStageScript, TMUX_STAGE_SHA256, TMUX_STAGE_SENTINEL_PREFIX, tmuxStageAssetUrl, type TmuxStageTarget } from '../../src/main/ssh-tmux-stage'
+import { runChunkedWrite, WRITE_CHUNK_SIZE } from '../../src/main/pty-chunked-write'
 
 const ARCHES: TmuxStageTarget[] = ['linux-x86_64', 'linux-arm64', 'macos-x86_64', 'macos-arm64']
 
@@ -365,6 +366,68 @@ describe('buildTmuxPushCommand (wire form fed through runChunkedWrite)', () => {
       .map((m) => m[1])
       .join('')
     expect(reassembled).toBe(b64)
+  })
+
+  // The push is written through runChunkedWrite (pty-chunked-write.ts), which
+  // sends 256 units of the string at a time and reports its progress in
+  // units. Two things the push relies on, and nothing else pinned:
+  //
+  // - Every character of the wire is plain ASCII (Base64 and shell text), so
+  //   one unit is one byte: the "staging tmux NN%" progress is a share of the
+  //   bytes sent, and the size of a slice in bytes is its size in units.
+  // - So no slice is ever grown. runChunkedWrite takes one unit more into a
+  //   chunk that would otherwise end between the two units of a character
+  //   outside the first 65,536 (an emoji in a paste); the wire has no such
+  //   character, and every slice but the last is exactly 256.
+  //
+  // Mutations to prove this can fail: put a character outside ASCII into a
+  // line buildTmuxPushLines emits (the first assertion fails), or one of two
+  // units on a slice boundary (a slice of 257 fails the second).
+  it.each(ARCHES)('the wire for %s is plain ASCII, and runChunkedWrite sends it in slices of exactly 256, its progress ending at the length of the command', (arch) => {
+    const wire = buildTmuxPushCommand({ arch, tarGzBase64: fakeTarGzBase64(54321), nonce: NONCE })
+    // Printable ASCII and the carriage return that ends each line: nothing else.
+    const ASCII_WIRE = /^[ -~\r]*$/
+    expect(ASCII_WIRE.test(wire)).toBe(true)
+    expect(Buffer.byteLength(wire, 'utf8')).toBe(wire.length)
+    // Both checks can fail: one character outside ASCII is refused by each.
+    const accented = wire + String.fromCodePoint(0xe9)
+    expect(ASCII_WIRE.test(accented)).toBe(false)
+    expect(Buffer.byteLength(accented, 'utf8')).toBe(accented.length + 1)
+
+    const slices: string[] = []
+    const progress: Array<[number, number]> = []
+    let dones = 0
+    runChunkedWrite(wire, {
+      write: (slice) => { slices.push(slice) },
+      isAlive: () => true,
+      schedule: (fn) => { fn() },
+      onProgress: (sent, total) => { progress.push([sent, total]) },
+      onDone: () => { dones++ },
+    })
+    expect(WRITE_CHUNK_SIZE).toBe(256)
+    expect(slices.length).toBe(Math.ceil(wire.length / 256))
+    expect(slices.length).toBeGreaterThan(100)
+    expect(slices.slice(0, -1).every((slice) => slice.length === 256)).toBe(true)
+    const last = slices[slices.length - 1]
+    expect(last.length).toBe(wire.length - 256 * (slices.length - 1))
+    expect(last.length).toBeGreaterThan(0)
+    expect(last.length).toBeLessThanOrEqual(256)
+    expect(slices.join('')).toBe(wire)
+    // One progress report for each slice, each a multiple of 256 but the last.
+    expect(progress).toHaveLength(slices.length)
+    expect(progress.every(([sent, total], i) => total === wire.length && sent === Math.min(256 * (i + 1), wire.length))).toBe(true)
+    expect(progress[progress.length - 1]).toEqual([wire.length, wire.length])
+    expect(dones).toBe(1)
+
+    // The slice check can fail too: the same wire with a character of two
+    // units on the first slice boundary gives a first slice of 257.
+    const grown: number[] = []
+    runChunkedWrite(wire.slice(0, 255) + String.fromCodePoint(0x1f600) + wire.slice(255), {
+      write: (slice) => { grown.push(slice.length) },
+      isAlive: () => true,
+      schedule: (fn) => { fn() },
+    })
+    expect(grown[0]).toBe(257)
   })
 })
 

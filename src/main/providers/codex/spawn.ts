@@ -19,6 +19,7 @@ import { logInfo, logWarn } from '../../debug-logger'
 import { isPlainScriptFile, isRealScriptFolder, deployFailedThisRun } from '../../script-deploy'
 import { checkDeployedScript, scriptFolderRefusal } from '../../script-folders'
 import { findOnPosixPath } from '../../login-shell'
+import { oneFileCannotBeRead } from '../../windows-programs'
 
 /** The two forms a Codex install puts on PATH on Windows: `listed`, the ones
  *  PATHEXT lists, in its order (Windows' own default when it is unset), as a
@@ -71,7 +72,7 @@ function winEnvValue(env: Readonly<Record<string, string | undefined>>, name: st
 }
 
 /** What one look at a candidate found: a regular file, nothing there, or a
- *  folder that could not be read (asked nothing more in that lookup). */
+ *  folder that could not be reached (asked nothing more in that lookup). */
 export type CodexCandidateStat = 'file' | 'none' | 'unreachable'
 
 export interface CodexBinaryLookup {
@@ -82,21 +83,28 @@ export interface CodexBinaryLookup {
   /** Whether a regular file is there (links followed as a terminal follows
    *  them). Default: statFile. */
   isFile?: (p: string) => boolean
-  /** The same, telling a folder that could not be read from one that holds
+  /** The same, telling a folder that could not be reached from one that holds
    *  nothing (default: the disk). */
   statFile?: (p: string) => CodexCandidateStat
 }
 
-/** `none` for an answer that says the file is not there (or is not a file);
- *  `unreachable` for anything else -- a drive that did not answer, a denied
- *  folder -- so the walk asks that folder nothing more (the precedent:
- *  claude-cli-version.ts findClaudeOnWindowsPath). */
+/** `none` for an answer that says the file is not there (or is not a file),
+ *  and for a failure known to be about this one file (windows-programs.ts
+ *  oneFileCannotBeRead): access to it is denied, or it is in use while an
+ *  update replaces it. That passes the one file, and the walk still asks the
+ *  folder for its other form. `unreachable` for anything else -- a drive
+ *  that did not answer, whatever reason its file test ends with -- so the
+ *  walk asks that folder nothing more (the precedent: claude-cli-version.ts
+ *  findClaudeOnWindowsPath). This walk is made in place, with no time limit
+ *  of its own: a folder that is down costs it one wait, not one for each
+ *  form. */
 const diskStat = (p: string): CodexCandidateStat => {
   try {
     return fs.statSync(p).isFile() ? 'file' : 'none'
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code
-    return code === 'ENOENT' || code === 'ENOTDIR' ? 'none' : 'unreachable'
+    if (code === 'ENOENT' || code === 'ENOTDIR') return 'none'
+    return oneFileCannotBeRead(err) ? 'none' : 'unreachable'
   }
 }
 
@@ -125,7 +133,7 @@ export function resolveCodexBinary(lookup: CodexBinaryLookup = {}): { cmd: strin
   // for in a second pass, once no folder held a listed one. Read in this
   // process with no shell and no process started, from the folders
   // codexWindowsPathFolders reads, each asked nothing more in this lookup
-  // once it could not be read.
+  // once it could not be reached.
   const env = lookup.env ?? process.env
   const isFile = lookup.isFile
   const stat: (p: string) => CodexCandidateStat = lookup.statFile ?? (isFile ? (p) => (isFile(p) ? 'file' : 'none') : diskStat)

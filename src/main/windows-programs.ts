@@ -122,8 +122,10 @@ function candidates(dirs: string[], names: readonly string[], order: WindowsPath
 }
 
 /** A regular file? `false` for an answer that says it is not there (or is not
- *  a file); THROWS for anything else (a share that did not answer, a denied
- *  folder), which the walk reads as "this folder cannot be reached". */
+ *  a file); THROWS for anything else (a share that did not answer, a file
+ *  that cannot be read). The walk reads the error: one of the few reasons
+ *  known to be about that one file (oneFileCannotBeRead) passes the file;
+ *  any other passes the folder. */
 function isRegularFileSync(p: string): boolean {
   try {
     return fs.statSync(p).isFile()
@@ -239,7 +241,12 @@ const FOLDER_TESTS_AT_ONCE = 2
  *  down). An error with no code at all is not in the set either. For those
  *  the test that waited is made itself, which is what a walk in place does;
  *  the cost, when the folder was down after all, is one more wait there for
- *  that test, one at a time, never another folder's program. */
+ *  that test, one at a time, never another folder's program.
+ *
+ *  This set is for that hand-on only. What a walk makes of the failure of
+ *  its OWN test is another, shorter list (ONE_FILE_UNREADABLE_CODES): a walk
+ *  passes the folder for every reason that is not on that one, UNKNOWN among
+ *  them. */
 const FOLDER_UNREACHABLE_CODES: ReadonlySet<string> = new Set([
   'ETIMEDOUT', 'ENETDOWN', 'ENETUNREACH', 'ENONET', 'EHOSTDOWN', 'EHOSTUNREACH',
   'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ENOTCONN',
@@ -250,6 +257,68 @@ const FOLDER_UNREACHABLE_CODES: ReadonlySet<string> = new Set([
 function folderCannotBeReached(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | null | undefined)?.code
   return typeof code === 'string' && FOLDER_UNREACHABLE_CODES.has(code)
+}
+
+/** The reasons a file test fails with that are known to be about the ONE
+ *  file that was asked for, in a folder that did answer. A walk of PATH
+ *  passes that file and still asks the folder for the next name
+ *  (oneFileCannotBeRead), so a program file that cannot be read does not
+ *  hide the one beside it: claude.cmd beside a claude.exe that an update is
+ *  replacing.
+ *
+ *  - EPERM: Windows says access is denied. That is the file's own
+ *    permissions, or a file being deleted while another program still holds
+ *    it open (an update replacing it).
+ *  - EACCES: permission denied. On Windows, a file the system will not open
+ *    for the caller (an app alias has answered so); elsewhere, the usual
+ *    word for a file the user may not read or run.
+ *  - EBUSY: the file is in use. Another program holds it open and shares
+ *    nothing, or has it locked (an installer writing it).
+ *
+ *  Each is an answer the folder's own file system gave about the file: the
+ *  folder was reached, and it answered. So asking it for the next name costs
+ *  no further wait, even when the reason turns out to be the folder's after
+ *  all (a folder whose every file is denied).
+ *
+ *  A short list on purpose. Every reason that is NOT on it passes the folder
+ *  for the rest of the walk, as every failure did before there was a list:
+ *  the ones that say the folder cannot be reached (FOLDER_UNREACHABLE_CODES,
+ *  a timeout among them); a reason Windows names that Node.js has no code
+ *  for (UNKNOWN: some reasons a share is down arrive so); a read error
+ *  (EIO); a broken link (ELOOP, EINVAL); and an error with no code at all. A
+ *  share that is down is so waited for once in a walk, whatever reason its
+ *  file test ends with, and never once for each name. That matters most for
+ *  a walk made in place (findOnWindowsPath, and the other provider's program
+ *  lookup): each such wait is tens of seconds of the main process's, with no
+ *  time limit.
+ *
+ *  Two codes are left off because here they are not about one file. ENOTDIR
+ *  says a step of the path, the folder itself, is not a folder; the file
+ *  tests of this module answer "not there" for it, as for ENOENT, and never
+ *  throw it. EISDIR is what Node.js has reported on Windows for a drive that
+ *  cannot do what was asked (some virtual drives), which is the whole
+ *  folder; a file test of something that IS a folder does not fail, it
+ *  answers "not a file".
+ *
+ *  The cost of a short list: a program file that cannot be read for a reason
+ *  that is not on it (a broken link, a read error) still hides the file
+ *  beside it, as it always did.
+ *
+ *  scripts/resume-picker.js keeps a copy (it cannot import this module), and
+ *  a test holds the two lists equal. */
+export const ONE_FILE_UNREADABLE_CODES: readonly string[] = Object.freeze(['EPERM', 'EACCES', 'EBUSY'])
+
+/** Whether a failed file test is known to be about the one file that was
+ *  asked for (ONE_FILE_UNREADABLE_CODES): a walk then passes that file only.
+ *  False for every other failure, one with no code included: a walk then
+ *  passes the folder. The one rule of every walk of PATH for a program:
+ *  findOnWindowsPath and findOnWindowsPathAsync here, and the walks that
+ *  keep a loop of their own (the Claude Code version probe in
+ *  claude-cli-version.ts, the other provider's program lookup, and the
+ *  resume list's copy in scripts/resume-picker.js). */
+export function oneFileCannotBeRead(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null | undefined)?.code
+  return typeof code === 'string' && ONE_FILE_UNREADABLE_CODES.includes(code)
 }
 
 /** A file test for ONE walk of PATH (findOnWindowsPathAsync) that keeps to
@@ -422,8 +491,21 @@ export function withPathWalkDeadline<T>(run: Promise<T>, deadline: PathWalkDeadl
 
 /** The full path of the first of `names` found IN-PROCESS in the folders
  *  PATH names (windowsPathFolders), in `order`; null when none is. `stat`
- *  answers whether a candidate is a file; a stat that THROWS marks that
- *  folder unreachable, and the walk does not ask it again for another name.
+ *  answers whether a candidate is a file. A stat that THROWS marks that
+ *  folder unreachable, and the walk does not ask it again for another name:
+ *  a share that is down is waited for once. The one exception is a stat that
+ *  throws for a reason known to be about that one file (oneFileCannotBeRead:
+ *  access denied, permission denied, in use). It passes the file only: a
+ *  program file that cannot be read, in use while an update replaces it,
+ *  says nothing about the one beside it, which is still asked for.
+ *
+ *  So a file that cannot be read ranks exactly as a file that is not there,
+ *  in every folder. In `name` order that changes the answer for a file in a
+ *  LATER folder too. With PATH `C:\A;D:\B`, claude.bat alone in A, and in B
+ *  a claude.exe that cannot be read beside a claude.cmd, the answer is
+ *  `D:\B\claude.cmd`: the answer when B has no claude.exe at all. (When any
+ *  failure passed the whole of B, it was `C:\A\claude.bat`.)
+ *
  *  Starts no process; never answers a bare name. */
 export function findOnWindowsPath(
   names: readonly string[],
@@ -437,8 +519,8 @@ export function findOnWindowsPath(
     if (unreachable.has(dir)) continue
     try {
       if (stat(file) === true) return file
-    } catch {
-      unreachable.add(dir)
+    } catch (error) {
+      if (!oneFileCannotBeRead(error)) unreachable.add(dir)
     }
   }
   return null
@@ -446,7 +528,9 @@ export function findOnWindowsPath(
 
 /** findOnWindowsPath, one stat at a time off the event loop: a PATH entry on
  *  a dead share can hold a stat for tens of seconds, which must not be the
- *  main process's. A rejected stat marks that folder unreachable. */
+ *  main process's. A rejected stat is read by the same rule: it marks the
+ *  folder unreachable, unless the reason is known to be about that one file
+ *  (oneFileCannotBeRead), which passes the file only. */
 export async function findOnWindowsPathAsync(
   names: readonly string[],
   env: NodeJS.ProcessEnv,
@@ -459,8 +543,8 @@ export async function findOnWindowsPathAsync(
     if (unreachable.has(dir)) continue
     try {
       if ((await stat(file)) === true) return file
-    } catch {
-      unreachable.add(dir)
+    } catch (error) {
+      if (!oneFileCannotBeRead(error)) unreachable.add(dir)
     }
   }
   return null
