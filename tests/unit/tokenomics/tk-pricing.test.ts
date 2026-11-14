@@ -110,6 +110,17 @@ describe('a dated Fable 5 turn is priced as Fable 5, not as Fable 5.2', () => {
     }
   })
 
+  // The rule is not the dated id's alone: any name that only carries a priced
+  // model's number on stops taking that model's key.
+  it('a name that only carries a priced model\'s number on takes a shorter key when there is one, and none when there is not', () => {
+    // claude-opus-5-50 was priced as Opus 5.5. Opus 5 is the key it starts with as an id.
+    expect(priced('claude-opus-5-50').key).toBe('claude-opus-5')
+    expect(normalizeModelForPricing('claude-opus-5-50', keys)).toBe('claude-opus-5')
+    // claude-opus-4-75 was priced as Opus 4.7. No key is its start now, so it has no price.
+    expect(priced('claude-opus-4-75')).toEqual({ key: 'claude-opus-4-75', price: undefined })
+    expect(normalizeModelForPricing('claude-opus-4-75', keys)).toBe('claude-opus-4-75')
+  })
+
   it('with no shorter key to take, the model keeps its own name (no price), never the key of another number', () => {
     const line = (model: string) => JSON.stringify({ type: 'assistant', timestamp: '2026-11-14T10:00:00Z', sessionId: 's',
       message: { id: 'm', model, usage: { input_tokens: 1, output_tokens: 1 } } })
@@ -193,6 +204,46 @@ describe('a Claude model written with a dot is priced as itself', () => {
     expect(keyOf('claude-3.5-sonnet-20241022', ['claude-3-5-sonnet'])).toBe('claude-3-5-sonnet')
     // A hyphen is never read as a dot.
     expect(keyOf('claude-3-5-sonnet-20241022', ['claude-3.5-sonnet'])).toBe('claude-3-5-sonnet-20241022')
+  })
+
+  // Only a dot between two digits is read as a hyphen. Each name here has a
+  // key that only a wrong reading reaches (every dot read as a hyphen, a dot
+  // with a digit on one side only, the first such dot alone). The names in the
+  // test after these have no such key, so they pass whichever dots are read.
+  describe('only a dot between two digits is read as a hyphen, and every such dot is', () => {
+    it('claude-opus-4-8.fast takes the Opus 4.8 key, not Opus 4.8 Fast\'s, on the path Tokenomics prices a turn on', () => {
+      expect(keys).toContain('claude-opus-4-8-fast')
+      expect(keyOf('claude-opus-4-8-fast')).toBe('claude-opus-4-8-fast')
+      expect(keyOf('claude-opus-4-8.fast')).toBe('claude-opus-4-8')
+      expect(keyOf('claude-opus-4-8.fast-20260101')).toBe('claude-opus-4-8')
+    })
+
+    it('and in normalizeModelForPricing', () => {
+      expect(normalizeModelForPricing('claude-opus-4-8-fast', keys)).toBe('claude-opus-4-8-fast')
+      expect(normalizeModelForPricing('claude-opus-4-8.fast', keys)).toBe('claude-opus-4-8')
+      expect(normalizeModelForPricing('claude-opus-4-8.fast-20260101', keys)).toBe('claude-opus-4-8')
+    })
+
+    it('a digit before the dot and a letter after, on a small list, in either order', () => {
+      for (const list of [['claude-x-5', 'claude-x-5-a'], ['claude-x-5-a', 'claude-x-5']]) {
+        expect(keyOf('claude-x-5.a', list)).toBe('claude-x-5')
+        expect(normalizeModelForPricing('claude-x-5.a', list)).toBe('claude-x-5')
+      }
+    })
+
+    it('a letter before the dot and a digit after, on a small list, in either order', () => {
+      for (const list of [['claude-x-a', 'claude-x-a-5'], ['claude-x-a-5', 'claude-x-a']]) {
+        expect(keyOf('claude-x-a.5', list)).toBe('claude-x-a')
+        expect(normalizeModelForPricing('claude-x-a.5', list)).toBe('claude-x-a')
+      }
+    })
+
+    it('every dot between two digits is read, not the first alone', () => {
+      for (const list of [['claude-2-5-x-4', 'claude-2-5-x-4-7'], ['claude-2-5-x-4-7', 'claude-2-5-x-4']]) {
+        expect(keyOf('claude-2.5-x-4.7-20260101', list)).toBe('claude-2-5-x-4-7')
+        expect(normalizeModelForPricing('claude-2.5-x-4.7-20260101', list)).toBe('claude-2-5-x-4-7')
+      }
+    })
   })
 
   it('names the change leaves alone: a dot not between two digits, a gateway\'s name, a model no key is the start of', () => {
