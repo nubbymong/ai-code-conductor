@@ -43,6 +43,7 @@ vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: 
 vi.mock('../../../src/main/conductor-mcp-server', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../../src/main/conductor-mcp-server')>()), getConductorMcpPort: () => 0 }))
 vi.mock('../../../src/main/providers', () => ({
   // An Ask question rides the environment (the real builder's CCC_ASK_PROMPT).
+  providerCapability: () => ({ enabled: true }),
   getProvider: () => ({ resolveBinary: () => ({ cmd: 'claude', source: 'system' }), buildSpawnCommand: (o: { askPrompt?: string }) => ({ cmd: 'pwsh', args: [], env: o.askPrompt ? { CCC_ASK_PROMPT: o.askPrompt } : {} }), ingestSessionTelemetry: () => ({ stop: () => {} }) }),
 }))
 vi.mock('../../../src/main/providers/claude/spawn', () => ({ resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }), resolveHostColorScheme: () => 'dark' }))

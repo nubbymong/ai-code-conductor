@@ -68,6 +68,7 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({
   disposeCodexReviewUsage: () => {},
 }))
 vi.mock('../../../src/main/providers', () => ({
+  providerCapability: () => ({ enabled: true }),
   getProvider: () => ({
     buildSpawnCommand: (opts: Record<string, unknown>) => {
       if (opts.provider !== 'codex') return { cmd: 'pwsh', args: [], env: {} }

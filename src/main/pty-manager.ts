@@ -20,7 +20,8 @@ import {
 } from '../shared/container-command'
 import { SSH_ENTRY, type SshEntryFailureReason } from '../shared/ssh-entry'
 import type { SshRuntime, DetachedRemoteLiveness, SshEndRemoteOutcome, SshEndRemoteResult, SubmitTextResult, AskConductorNotice } from '../shared/types'
-import type { RealmOwnership } from '../shared/providers'
+import type { RealmOwnership, ProviderId } from '../shared/providers'
+import { isProviderId } from '../shared/providers'
 import { IPC } from '../shared/ipc-channels'
 import { codexPromptKeeps } from '../shared/codex-screen'
 import { askConductorProjectDocMaxBytes } from './help-workspace'
@@ -53,9 +54,9 @@ import { buildSshArgs, buildSshExecArgs } from './ssh-args'
 import { getRemoteMcpPort } from './ssh-remote-port'
 import { partnerFolderLine, partnerPromptTail, isPartnerShellPrompt, partnerRecentOutput, partnerRecentText, PARTNER_BARE_PROMPT_RE, isPartnerUserInput } from './ssh-partner-folder'
 import { resolveHostColorScheme, colorFgBgEnvToken } from './providers/host-color-scheme'
-import { getProvider } from './providers'
+import { getProvider, providerCapability } from './providers'
 import { isSshCapable } from './providers/types'
-import type { TelemetrySource, SessionRunScreen, SpawnOptions, SshCapableProvider } from './providers/types'
+import type { TelemetrySource, SessionRunScreen, SpawnOptions, SshCapableProvider, SessionProvider } from './providers/types'
 import { resolveCwd, isHomeOrAncestor } from './path-utils'
 import { AGENTS_ENV, agentsEnvValue, agentsRef, buildTerminalLaunchLine } from './terminal-launch-line'
 import { findOnWindowsPath, findOnWindowsPathAsync } from './windows-programs'
@@ -2355,6 +2356,50 @@ function assertGatedDirectory(
 }
 
 /**
+ * How spawnPty starts each provider's local session: `direct` runs the
+ * provider's CLI as the PTY's own program (it owns its screen), `shell` opens
+ * a shell and types the launch line into it. One row per provider id: an id
+ * added to the list without a row here does not compile, and an id with no
+ * row at run time is refused (localLaunchOf), never started the way another
+ * provider is.
+ */
+const LOCAL_LAUNCH_STYLE: Readonly<Record<ProviderId, 'direct' | 'shell'>> = { claude: 'shell', codex: 'direct' }
+
+/** The provider a local launch starts, and how spawnPty starts it. */
+interface LocalLaunch {
+  id: ProviderId
+  provider: SessionProvider
+  style: 'direct' | 'shell'
+}
+
+/**
+ * The provider a LOCAL launch starts, looked up in the provider registry by
+ * the id the session names. Asked once per spawn, and never for an SSH launch
+ * or a terminal tab, which start no provider here.
+ *
+ * Throws when the id is not one this app knows, when no provider is
+ * registered for it, when the registered one does not declare session
+ * launches (its `session.launch` capability), or when spawnPty has no way to
+ * start it. The throw is the spawn's own failure path: pty:spawn rejects with
+ * the sentence, and a launch that was held writes it to the terminal. Nothing
+ * starts for a refused launch, and never another provider in its place.
+ */
+function localLaunchOf(requested: unknown): LocalLaunch {
+  // The id as it may be shown: it reaches a terminal and the log.
+  const asked = stripSpoofableText(String(requested), 60)
+  const notKnown = (): Error => new Error(`This session's assistant ("${asked}") is not one this app can start. Nothing was started.`)
+  if (!isProviderId(requested)) throw notKnown()
+  let provider: SessionProvider
+  try { provider = getProvider(requested) } catch { throw notKnown() }
+  const style = Object.hasOwn(LOCAL_LAUNCH_STYLE, requested) ? LOCAL_LAUNCH_STYLE[requested] : undefined
+  if (!style) throw notKnown()
+  if (!providerCapability(requested, 'session.launch').enabled) {
+    throw new Error(`${stripSpoofableText(String(provider.displayName || requested), 60)} cannot start sessions on this computer. Nothing was started.`)
+  }
+  return { id: requested, provider, style }
+}
+
+/**
  * Hold a managed spawn until `pending` settles, then re-enter `spawnPty` with
  * the options `next` builds from the settled value.
  *
@@ -2772,6 +2817,13 @@ function spawnPtyResolved(
     if (dropped > 0) logWarn(`[pty] Dropping ${dropped} held write(s) for ${sessionId}: launch never completed`)
     pendingWrites.delete(sessionId)
   }
+
+  // The provider a LOCAL launch starts, looked up in the registry here, once
+  // (localLaunchOf: an id that is not registered, or whose provider declares
+  // no session launches, is refused and nothing starts). Null for an SSH
+  // launch, which is not asked and takes its own branch below unchanged, and
+  // for a terminal tab, which starts no provider.
+  const localLaunch = options?.ssh || options?.shellOnly ? null : localLaunchOf(options?.provider ?? 'claude')
 
   if (options?.ssh) {
     // Defence in depth: pty:spawn refuses a Codex SSH session first, by the
@@ -5659,12 +5711,13 @@ function spawnPtyResolved(
         proceedAfterSetup()
       }
     })
-  } else if ((options?.provider ?? 'claude') === 'codex' && !options?.shellOnly) {
+  } else if (localLaunch?.style === 'direct') {
     // Codex local session — spawn `codex` directly. Codex itself owns the
     // REPL, so there is no shell-wrap-then-cd-then-launch dance like Claude
     // requires. cwd is propagated through pty.spawn options.
-    // shellOnly falls through to the Claude branch below so the user gets a
-    // plain shell, regardless of provider selection.
+    // The branch is chosen by the provider's row in LOCAL_LAUNCH_STYLE, not
+    // by its name. shellOnly falls through to the branch below so the user
+    // gets a plain shell, regardless of provider selection.
     //
     // WP2 (plan A10): it runs ONLY in its account's realm, from the launch
     // pty:spawn prepared -- the executable setup proved and the realm's
@@ -5689,7 +5742,7 @@ function spawnPtyResolved(
     // which goes again whenever nothing will use it.
     let tokenMinted = false
     try {
-      const provider = getProvider('codex')
+      const provider = localLaunch.provider
       const gw = getGateway()
       const gwStatus = gw?.status()
       if (gw && gwStatus?.listening && gwStatus.port && provider.prepareSessionHooks) {
@@ -6035,8 +6088,13 @@ function spawnPtyResolved(
     // Local session — delegate binary + env construction to the provider.
     // The post-spawn shell-write (cd + claude command) stays here; only the
     // bare shell + env comes from the provider.
+    // Reached by a session whose provider's row in LOCAL_LAUNCH_STYLE is
+    // `shell` (Claude Code), with the provider the registry holds for it, and
+    // by a terminal tab, which starts no provider: its shell is the one the
+    // Claude Code package builds, as before. Any other provider id was refused
+    // above (localLaunchOf), so none starts as Claude Code here.
     const shellOnly = options?.shellOnly
-    const provider = getProvider('claude')
+    const provider = localLaunch ? localLaunch.provider : getProvider('claude')
     // Read classicTerminalCopyPaste + theme fresh on every spawn (default true /
     // dark when absent). The theme drives COLORFGBG so Claude's startup theme
     // auto-detection matches CCC; 'system' follows the OS via nativeTheme.
@@ -6120,7 +6178,7 @@ function spawnPtyResolved(
         deferSpawnUntil(win, sessionId, resolvedProfileId, inheritedTeardown, pending,
           `profile ${resolvedProfileId} is mid-refresh -- holding the spawn until it settles`,
           () => ({ ...options, refreshAwaited: true }),
-          options?.shellOnly ? null : 'claude')
+          localLaunch ? localLaunch.id : null)
         return
       }
     }
@@ -6188,7 +6246,7 @@ function spawnPtyResolved(
       deferSpawnUntil(win, sessionId, resolvedProfileId, inheritedTeardown, pending,
         `checking the project settings in ${gateDirs.map(describePathForLog).join(' and ')}${managedPickerLaunch(options) ? ' and every worktree the resume picker may open' : ''} before the managed launch`,
         ({ verdict, dirs }) => ({ ...options, refreshAwaited: true, projectGate: verdict, projectGateDirs: dirs }),
-        options?.shellOnly ? null : 'claude')
+        localLaunch ? localLaunch.id : null)
       return
     }
     // Home selection (Bug 2): EVERY session of an account -- shell-only (plain
@@ -6936,7 +6994,10 @@ function spawnPtyResolved(
     if (resumed) noteClaudeTranscript(sessionId, resumed)
   }
   if (logSup) {
-    indexedRuns.set(sessionId, { ...(options?.configId ? { configId: options.configId } : {}), provider: codexRunProvider ? 'codex' : 'claude' })
+    // A run is registered only for a local launch that starts a provider
+    // (shouldRegisterRun leaves out SSH sessions and terminal tabs), so it is
+    // indexed under the provider this launch looked up in the registry.
+    indexedRuns.set(sessionId, { ...(options?.configId ? { configId: options.configId } : {}), provider: localLaunch?.id ?? runProvider })
   } else {
     indexedRuns.delete(sessionId)
     try { getLogSupervisor()?.runEnd(sessionId, Date.now(), 'exited') } catch { /* best-effort */ }

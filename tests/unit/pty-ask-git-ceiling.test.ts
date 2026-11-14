@@ -82,6 +82,7 @@ vi.mock('../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: () =
 vi.mock('../../src/main/logging/logging-service', () => ({ getLogSupervisor: () => null, getTranscriptBinder: () => null }))
 vi.mock('../../src/main/conductor-mcp-server', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../src/main/conductor-mcp-server')>()), getConductorMcpPort: () => 0 }))
 vi.mock('../../src/main/providers', () => ({
+  providerCapability: () => ({ enabled: true }),
   getProvider: () => ({ resolveBinary: () => ({ cmd: 'claude', source: 'system' }), buildSpawnCommand: () => ({ cmd: 'sh', args: [], env: { ...h.providerEnv } }), ingestSessionTelemetry: () => ({ stop: () => {} }) }),
 }))
 vi.mock('../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))

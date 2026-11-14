@@ -61,6 +61,7 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({
   getConductorMcpPort: () => 0, registerCodexReviewSession: () => {}, registerClaudeReviewSession: () => {}, unregisterCodexReviewSession: () => {}, releaseMcpSessionProvider: () => {},
 }))
 vi.mock('../../../src/main/providers', () => ({
+  providerCapability: () => ({ enabled: true }),
   getProvider: () => ({
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
     buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: {} }),

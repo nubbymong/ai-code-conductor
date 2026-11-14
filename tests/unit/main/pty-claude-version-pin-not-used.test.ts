@@ -87,6 +87,7 @@ vi.mock('../../../src/main/conductor-mcp-server', async (importOriginal) => ({ .
 vi.mock('../../../src/main/providers', async () => {
   const { resolveClaudeBinary } = await import('../../../src/main/providers/claude/spawn')
   return {
+    providerCapability: () => ({ enabled: true }),
     getProvider: () => ({
       resolveBinary: (legacy?: { enabled: boolean; version: string }) => resolveClaudeBinary(legacy),
       buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: {} }),

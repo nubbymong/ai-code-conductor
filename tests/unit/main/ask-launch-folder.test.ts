@@ -79,6 +79,7 @@ vi.mock('../../../src/main/logging/logging-service', () => ({
 }))
 vi.mock('../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => 0, registerCodexReviewSession: () => {}, registerClaudeReviewSession: () => {}, unregisterCodexReviewSession: () => {}, releaseMcpSessionProvider: () => {} }))
 vi.mock('../../../src/main/providers', () => ({
+  providerCapability: () => ({ enabled: true }),
   getProvider: (id: string) => (id === 'codex'
     ? {
         // A Codex builder that resumes what it is handed, where it is handed
