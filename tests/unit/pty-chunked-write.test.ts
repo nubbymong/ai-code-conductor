@@ -279,6 +279,29 @@ describe('runChunkedWrite keeps a character of two units in one chunk', () => {
     expect(written.join('')).toBe(data)
   })
 
+  // The chunk grows only for a pair: a high unit last in the chunk AND its low
+  // unit next. A low unit that happens to come first after the boundary, with
+  // no high unit before it, is not the second half of anything. Mutation to
+  // prove this can fail: grow whenever the unit after the boundary is a low
+  // one (the first chunk is then 257 units, and the lengths are 257, 256, 44).
+  it('a lone low unit right after a boundary grows nothing: the chunk before it ends in a letter', () => {
+    const data = 'a'.repeat(256) + LOW + 'b'.repeat(300)
+    const { written, progress } = chunked(data, 256)
+    expect(written.map((c) => c.length)).toEqual([256, 256, 45])
+    expect(written.join('')).toBe(data)
+    expect(progress).toEqual([[256, 557], [512, 557], [557, 557]])
+  })
+
+  // The other half of the same test: a high unit last in the chunk, with a
+  // letter next. Mutation to prove this can fail: grow whenever the last unit
+  // of the chunk is a high one (the lengths are then 257, 256, 44).
+  it('a lone high unit right before a boundary grows nothing: the unit after it is a letter', () => {
+    const data = 'a'.repeat(255) + HIGH + 'b'.repeat(301)
+    const { written } = chunked(data, 256)
+    expect(written.map((c) => c.length)).toEqual([256, 256, 45])
+    expect(written.join('')).toBe(data)
+  })
+
   it('a session that ends right after the grown chunk gets nothing more', () => {
     const data = 'a'.repeat(255) + EMOJI + 'b'.repeat(300)
     const written: string[] = []
@@ -290,5 +313,58 @@ describe('runChunkedWrite keeps a character of two units in one chunk', () => {
       chunkSize: 256,
     })
     expect(written).toEqual(['a'.repeat(255) + EMOJI])
+  })
+})
+
+// A chunk size below 1 took nothing from the data on each turn: the write
+// never advanced, and a turn was scheduled every 12 ms for as long as the
+// session lived. No caller passes one; the size is now at least 1, and a
+// whole number of units.
+describe('runChunkedWrite always advances, whatever chunk size it is given', () => {
+  /** Runs the write with a scheduler that gives up after `limit` turns, so a
+   *  write that never advances fails the test in place of hanging it. */
+  const run = (data: string, chunkSize: number, limit = 50) => {
+    const written: string[] = []
+    const progress: number[] = []
+    let dones = 0
+    let turns = 0
+    runChunkedWrite(data, {
+      write: (s) => written.push(s),
+      isAlive: () => true,
+      schedule: (fn) => { if (++turns <= limit) fn() },
+      chunkSize,
+      onProgress: (sent) => progress.push(sent),
+      onDone: () => { dones++ },
+    })
+    return { written, progress, dones, turns }
+  }
+
+  // Mutation to prove this can fail: use the size as given (the write then
+  // sends '' on every turn: nothing is delivered and onDone never runs).
+  it.each([0, -1, -256, 0.5, Number.NaN, Number.NEGATIVE_INFINITY])('a chunk size of %s is taken as 1: every unit is sent once, in order, and the write ends', (size) => {
+    const { written, progress, dones, turns } = run('abcde', size)
+    expect(written).toEqual(['a', 'b', 'c', 'd', 'e'])
+    expect(progress).toEqual([1, 2, 3, 4, 5])
+    expect(dones).toBe(1)
+    expect(turns).toBe(4)
+  })
+
+  it('a chunk size with a fraction is taken as the whole number below it: the progress counts stay whole', () => {
+    const { written, progress, dones } = run('abcdefg', 2.9)
+    expect(written).toEqual(['ab', 'cd', 'ef', 'g'])
+    expect(progress).toEqual([2, 4, 6, 7])
+    expect(dones).toBe(1)
+  })
+
+  it('a chunk size larger than the data, or with no limit, is one chunk', () => {
+    expect(run('abcde', 1000).written).toEqual(['abcde'])
+    expect(run('abcde', Number.POSITIVE_INFINITY).written).toEqual(['abcde'])
+  })
+
+  it('a pair is still kept whole at a size taken as 1', () => {
+    const emoji = String.fromCodePoint(0x1f600)
+    const { written, dones } = run('a' + emoji + 'b', 0)
+    expect(written).toEqual(['a', emoji, 'b'])
+    expect(dones).toBe(1)
   })
 })

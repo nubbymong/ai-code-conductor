@@ -3,8 +3,9 @@
  * paste chunking loop, extracted so it can be unit-tested without the full
  * pty-manager dependency graph (electron / node-pty / hooks / ...).
  *
- * R-010: a large paste is chunked at WRITE_CHUNK_SIZE bytes every
- * WRITE_CHUNK_DELAY ms, so a 50KB paste spans ~2.4s — long enough to race a
+ * R-010: a large paste is chunked at WRITE_CHUNK_SIZE units of the string
+ * (UTF-16 code units: one per ASCII character, so one per byte for ASCII)
+ * every WRITE_CHUNK_DELAY ms, so a 50KB paste spans ~2.4s — long enough to race a
  * session kill / in-session Restart / app-quit. Each chunk must therefore:
  *   1. re-check that the destination PTY is STILL the live one for the session
  *      (a respawn replaces it under the same sessionId), and bail if not; and
@@ -16,7 +17,8 @@
  * No default export (project convention).
  */
 
-/** Chunk-size + inter-chunk delay (ms). Shared with pty-manager's constants. */
+/** Chunk size (units of the string, see runChunkedWrite) + inter-chunk delay
+ *  (ms). Shared with pty-manager's constants. */
 export const WRITE_CHUNK_SIZE = 256
 export const WRITE_CHUNK_DELAY = 12
 
@@ -27,24 +29,30 @@ export interface ChunkedWriteHooks {
   isAlive: () => boolean
   /** Schedule the next chunk (defaults to setTimeout). Injectable for tests. */
   schedule?: (fn: () => void, delayMs: number) => void
-  /** Chunk size override (tests). */
+  /** Chunk size override (tests), in units of the string. Taken as a whole
+   *  number of at least 1: a size below 1 would never advance. */
   chunkSize?: number
   /** Inter-chunk delay override (tests). */
   delayMs?: number
-  /** Called exactly once when the write finishes — all bytes sent, the session
+  /** Called exactly once when the write finishes — everything sent, the session
    *  bailed (isAlive false), or a write threw. Lets a caller resolve a Promise
    *  (e.g. PasteQueue's envelope writer). No-op for callers that don't pass it. */
   onDone?: () => void
   /**
-   * #242 tier 4: called after EVERY successful chunk write with the
-   * cumulative byte count actually written so far and the total. Lets a
-   * caller surface progress (pty-manager forwards it to
+   * #242 tier 4: called after EVERY successful chunk write with how much of
+   * the data has actually been written so far and the total. Both count
+   * UNITS OF THE STRING (UTF-16 code units, what `data.length` counts), not
+   * bytes: the two are the same number only for ASCII, which is all the
+   * tmux push sends (Base64 and shell text), so its percentage is a share of
+   * the bytes too. (A character outside ASCII is one unit and two or three
+   * bytes, or two units and four bytes.) Lets a caller surface progress
+   * (pty-manager forwards it to
    * emitSshFlowState('running-setup', 'staging tmux NN%') for the ~1.27 MB
    * tmux-push transfer, with zero new IPC channels) without this module
    * knowing anything about SSH flow state. Monotonically non-decreasing,
    * ending at `data.length` on a full, successful write — NOT called on a
    * liveness bail or a throwing write, since `offset` only advances on a
-   * write that actually succeeded (reporting progress for bytes that were
+   * write that actually succeeded (reporting progress for data that was
    * never delivered would be a lie the caller has no way to detect).
    *
    * #242 round-3 MINOR fix: this call is itself wrapped in a try/catch
@@ -56,7 +64,7 @@ export interface ChunkedWriteHooks {
    * be exactly the hazard this module exists to prevent, so the guard lives
    * here rather than trusting every future caller to add its own.
    */
-  onProgress?: (bytesSent: number, totalBytes: number) => void
+  onProgress?: (unitsSent: number, totalUnits: number) => void
 }
 
 /** The first unit of a character that takes two units of a string. */
@@ -68,13 +76,20 @@ const isLowSurrogate = (unit: number): boolean => unit >= 0xdc00 && unit <= 0xdf
  * Drive a liveness-guarded, crash-safe chunked write of `data`. Returns
  * immediately after kicking off the first chunk; subsequent chunks are driven by
  * `schedule`. Stops (without throwing) the moment `isAlive()` is false or a write
- * throws — the remaining bytes are dropped rather than risk an uncaught throw.
+ * throws — the rest of the data is dropped rather than risk an uncaught throw.
  *
- * A chunk is `chunkSize` units of the string, and one unit more when it would
- * otherwise end in the middle of a character that takes two (see writeNext).
+ * A chunk is `chunkSize` units of the string (UTF-16 code units, not bytes),
+ * and one unit more when it would otherwise end in the middle of a character
+ * that takes two (see writeNext).
  */
 export function runChunkedWrite(data: string, hooks: ChunkedWriteHooks): void {
-  const size = hooks.chunkSize ?? WRITE_CHUNK_SIZE
+  // A whole number of units, and at least 1. A size below 1 (or one that is
+  // not a number) did not send the data: with 0 every chunk was empty and
+  // the write never advanced, a turn scheduled every `delay` ms for as long
+  // as the session lived. No caller passes one; this function must never
+  // throw, so such a size is taken as 1 rather than refused.
+  const requested = hooks.chunkSize ?? WRITE_CHUNK_SIZE
+  const size = requested >= 1 ? Math.floor(requested) : 1
   const delay = hooks.delayMs ?? WRITE_CHUNK_DELAY
   const schedule = hooks.schedule ?? ((fn, ms) => { setTimeout(fn, ms) })
   const total = data.length
