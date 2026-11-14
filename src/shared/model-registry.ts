@@ -253,8 +253,12 @@ function nameStartsWithId(name: string, id: string): boolean {
 
 /** A name with each dot between two digits read as a hyphen:
  *  `claude-opus-5.5` as `claude-opus-5-5`, `anthropic/claude-opus-4.7` as
- *  `anthropic/claude-opus-4-7`. The name as it is when it has no such dot. */
-function dotsAsHyphens(name: string): string {
+ *  `anthropic/claude-opus-4-7`. The name as it is when it has no such dot: a
+ *  dot with a letter on either side is not a version's (`claude-opus-4-8.fast`
+ *  is not `claude-opus-4-8-fast`). The result is as long as the name.
+ *  Exported for the check on a fetched model file (model-registry-data.ts),
+ *  which reads a new model's names the same two ways. */
+export function dotsAsHyphens(name: string): string {
   return name.replace(/(\d)\.(?=\d)/g, '$1-')
 }
 
@@ -276,8 +280,19 @@ function longestIdOfReading(reading: string, ids: readonly string[]): string {
  * `claude-opus-5.5` as written starts with `claude-opus-5` alone (a dot
  * follows, not a digit), so it was Opus 5: shown, and priced, as the base
  * model, by a match every reader trusts. Read as `claude-opus-5-5` it starts
- * with `claude-opus-5-5` too, and the longest id takes it. So a name written
- * with a dot goes where the same name written with a hyphen goes.
+ * with `claude-opus-5-5` too, and the longest id takes it. So for the Claude
+ * models the build ships, whose ids are all written with hyphens, a name
+ * written with a dot goes to the entry the same name written with a hyphen
+ * goes to.
+ *
+ * That holds for those models, and no further. A model only a fetched model
+ * file has is tried after every standing entry (matchEntry), so a name that
+ * is no entry's id or alias goes to a standing entry that places it before
+ * the fetched one's id is looked at: with a fetched `claude-opus-6-1`,
+ * `claude-opus-6.1` is not that model, it goes to the entry with the family's
+ * plain pattern, where the build alone puts it. And an id that is itself
+ * written with a dot is not the same id written with a hyphen (`gpt-5.5` is a
+ * model, `gpt-5-5` is not).
  *
  * The longest id of either reading takes the name; of two as long, the one
  * the name as written starts with. An id is compared as it is written, so one

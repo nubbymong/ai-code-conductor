@@ -345,6 +345,11 @@ describe('a fetched file is held to a strict shape', () => {
     ['Opus 6 with an alias that starts with its id', { id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['claude-opus-6[1m]'], family: 'opus', label: 'Opus 6', fallbackPricing: HIGH_PRICE }],
     ['Opus 6 with an alias that starts with its id and has a date-like tail only by length, not after a shipped id', { id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['claude-opus-6-x-20260101'], family: 'opus', label: 'Opus 6', fallbackPricing: HIGH_PRICE }],
     ['Opus 5.5.2: a longer form of a shipped id that is not a dated or [1m] one', { id: 'claude-opus-5-5-2', patterns: [], family: 'opus', label: 'Opus 5.5.2', fallbackPricing: HIGH_PRICE }],
+    // Written with a dot, as the same names written with a hyphen: no shipped
+    // id is one of these read either way, nor a dated or [1m] form of one.
+    ['Fable 5.3 written with a dot, with its [1m] and dated names', { id: 'claude-fable-5.3', patterns: [], aliases: ['claude-fable-5.3[1m]', 'claude-fable-5.3-20270101'], family: 'fable', label: 'Fable 5.3', fallbackPricing: HIGH_PRICE }],
+    ['Opus 5.5.2 written with dots', { id: 'claude-opus-5.5.2', patterns: [], family: 'opus', label: 'Opus 5.5.2', fallbackPricing: HIGH_PRICE }],
+    ['Opus 4.7 with more text after it, written with a dot, and its own dated name', { id: 'claude-opus-4.7-x', patterns: [], aliases: ['claude-opus-4.7-x-20270101'], family: 'opus', label: 'Opus 4.7 X', fallbackPricing: HIGH_PRICE }],
   ])('a new model whose id the build reaches only by an id-prefix or a pattern is taken (%s)', (_what, model) => {
     const r = validateModelData(file((f) => { f.models.unshift(model) }), bundled)
     expect(r.ok ? 'ok' : r.reason).toBe('ok')
@@ -380,6 +385,96 @@ describe('a fetched file is held to a strict shape', () => {
     ['another dated form of claude-fable-5 that starts with claude-fable-5-2', { id: 'claude-fable-5-20251001', patterns: [], family: 'fable', label: 'Fable 5 (dated)' }, 'claude-fable-5'],
   ])('a new model whose id is a dated form of a shipped id (%s) refuses the file, and the reason names the shipped entry', (_what, model, holder) => {
     expect(reasonOf(file((f) => { f.models.unshift(model) }))).toBe(`models: ${model.id} has a name the build already places on ${holder}`)
+  })
+
+  // 2.1.3-beta.3: the matcher reads a name with each dot between two digits as
+  // a hyphen too, so a shipped id written with a dot (claude-opus-5.5) is that
+  // shipped model's name, by an id match the app trusts for a label, a price
+  // and an effort list. A new model takes it no more than it takes the same
+  // name written with a hyphen: its id and its aliases are read both ways. (An
+  // alias that does not start with its model's own id was refused already, as
+  // a name the build places. So the alias rows that matter start with the new
+  // id, which makes for odd ids: one that ends in the dot, one that ends
+  // inside the date. The rules take such an id.)
+  it.each([
+    ['its id is a shipped id written with a dot', { id: 'claude-opus-4.7', patterns: [], family: 'opus', label: 'Opus 4.7' }, 'claude-opus-4-7'],
+    ['its id is the newest shipped id of its family written with a dot', { id: 'claude-opus-5.5', patterns: [], family: 'opus', label: 'Opus 5.5' }, 'claude-opus-5-5'],
+    ['its id is a shipped dated id written with a dot', { id: 'claude-opus-4.7-20260101', patterns: [], family: 'opus', label: 'Opus 4.7 (dated)' }, 'claude-opus-4-7'],
+    ['its id is a shipped id written with a dot, one that starts with another shipped id', { id: 'claude-fable-5.2', patterns: [], family: 'fable', label: 'Fable 5.2' }, 'claude-fable-5-2'],
+    ['its id is that shipped id\'s dated id written with a dot', { id: 'claude-fable-5.2-20260101', patterns: [], family: 'fable', label: 'Fable 5.2 (dated)' }, 'claude-fable-5-2'],
+    ['an alias is a shipped id written with a dot, on a model whose id is not its start', { id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['claude-opus-4.7'], family: 'opus', label: 'Opus 6' }, 'claude-opus-4-7'],
+    ['an alias is a shipped id written with a dot, and starts with the new id', { id: 'claude-opus-4.', patterns: [], aliases: ['claude-opus-4.7'], family: 'opus', label: 'Opus 4' }, 'claude-opus-4-7'],
+    ['an alias is the newest shipped id of its family written with a dot, and starts with the new id', { id: 'claude-opus-5.', patterns: [], aliases: ['claude-opus-5.5'], family: 'opus', label: 'Opus 5' }, 'claude-opus-5-5'],
+    ['an alias is a shipped dated id written with a dot, and starts with the new id', { id: 'claude-opus-4.7-2026', patterns: [], aliases: ['claude-opus-4.7-20260101'], family: 'opus', label: 'Opus 4.7 2026' }, 'claude-opus-4-7'],
+    ['an alias is a shipped [1m] name written with a dot, and starts with the new id', { id: 'claude-opus-4.', patterns: [], aliases: ['claude-opus-4.7[1m]'], family: 'opus', label: 'Opus 4' }, 'claude-opus-4-7'],
+    // The alias starts with the new id, and so does the shipped id once both
+    // are read as the alias is: as claude-opus-4-8-f with claude-opus-4-8-fast-x.
+    ['an alias the build reaches by an id-prefix, read with its dot as a hyphen, that starts with the new id and the shipped id', { id: 'claude-opus-4.8-f', patterns: [], aliases: ['claude-opus-4.8-fast-x'], family: 'opus', label: 'Opus 4.8 F' }, 'claude-opus-4-8-fast'],
+    ['the same, on a new id that ends in the dot', { id: 'claude-opus-4.', patterns: [], aliases: ['claude-opus-4.7-latest'], family: 'opus', label: 'Opus 4' }, 'claude-opus-4-7'],
+  ])('a new model with a shipped name written with a dot (%s) refuses the file, and the reason names the shipped entry', (_what, model, holder) => {
+    // The name the row is about (the alias when there is one, else the id):
+    // the bundled file alone puts it on that shipped entry, by its id.
+    for (const name of model.aliases ?? [model.id]) {
+      expect(resolveModelInfo(bundled, name), name).toMatchObject({ id: holder, matchKind: 'prefix' })
+    }
+    expect(reasonOf(file((f) => { f.models.unshift(model) }))).toBe(`models: ${model.id} has a name the build already places on ${holder}`)
+    // The same file with each dot between two digits written as a hyphen (the
+    // matcher's own second reading) is refused too. (Where that makes the new
+    // id a shipped id itself, as a model listed twice.)
+    const hyphens = (s: string) => s.replace(/(\d)\.(?=\d)/g, '$1-')
+    const twin = { ...model, id: hyphens(model.id), ...(model.aliases ? { aliases: model.aliases.map(hyphens) } : {}) }
+    expect(validateModelData(file((f) => { f.models.unshift(twin) }), bundled).ok, `the same file written with hyphens (${twin.id})`).toBe(false)
+  })
+
+  it('every shipped model with a two-part version, written with a dot, is refused as a new model\'s id and as an alias, dated or not', () => {
+    const twoPart = bundled.models.filter((m) => m.id.startsWith('claude-') && /\d-\d/.test(m.id))
+    expect(twoPart.length).toBe(13)
+    for (const m of twoPart) {
+      const dotted = m.id.replace(/(\d)-(\d)/, '$1.$2')
+      for (const id of [dotted, `${dotted}-20260101`]) {
+        expect(reasonOf(file((f) => { f.models.unshift({ id, patterns: [], family: m.family, label: 'New' }) })), id)
+          .toBe(`models: ${id} has a name the build already places on ${m.id}`)
+      }
+      for (const alias of [dotted, `${dotted}-20260101`, `${dotted}[1m]`]) {
+        expect(reasonOf(file((f) => { f.models.unshift({ ...NEW_MODEL, aliases: [alias] }) })), alias)
+          .toBe(`models: ${NEW_MODEL.id} has a name the build already places on ${m.id}`)
+      }
+    }
+  })
+
+  // Validation asks the matcher where the build places a name (placedBy), so
+  // its answers follow the matcher's two new rules (2.1.3-beta.3). Two files
+  // change sides, and both are meant.
+  it('a file the earlier matcher refused is taken now: gpt-5.55 is not gpt-5.5, so a new gpt-5 may have it as an alias', () => {
+    // An id that ends in a digit is not the start of a name whose next
+    // character is a digit, so the build no longer puts gpt-5.55 on gpt-5.5
+    // by its id: only its catch-all pattern places it, and an alias that
+    // starts with its model's own id is that model's name.
+    expect(resolveModelInfo(bundled, 'gpt-5.55')).toMatchObject({ id: 'codex-family', matchKind: 'pattern' })
+    const model = { id: 'gpt-5', patterns: [], aliases: ['gpt-5.55'], family: 'codex', label: 'GPT-5' }
+    const r = validateModelData(file((f) => { f.models.unshift(model) }), bundled)
+    expect(r.ok ? 'ok' : r.reason).toBe('ok')
+    const merged = mergeModelData(bundled, r.ok ? r.data : null, '2026-11-14')
+    expect(resolveModelInfo(merged, 'gpt-5.55')).toMatchObject({ id: 'gpt-5', matchKind: 'alias' })
+    // The shipped model keeps its own names.
+    expect(resolveModelInfo(merged, 'gpt-5.5')).toMatchObject({ id: 'gpt-5.5', matchKind: 'exact' })
+    expect(resolveModelInfo(merged, 'gpt-5.5-20260101')).toMatchObject({ id: 'gpt-5.5', matchKind: 'prefix' })
+    // And a name that carries on from it with other text is still refused.
+    expect(reasonOf(file((f) => { f.models.unshift({ ...model, aliases: ['gpt-5.5-x'] }) }))).toBe('models: gpt-5 has a name the build already places on gpt-5.5')
+  })
+
+  it('a file the earlier matcher took is refused now: claude-opus-4.7 is Opus 4.7, so a new claude-opus-4 does not have it as an alias', () => {
+    // Read with its dot as a hyphen the name is a shipped id. (Before, the
+    // name started with no shipped id: only the family's plain pattern placed
+    // it, on Opus 5.5, and an alias that starts with its model's own id is let
+    // past a pattern.)
+    expect(resolveModelInfo(bundled, 'claude-opus-4.7')).toMatchObject({ id: 'claude-opus-4-7', matchKind: 'prefix' })
+    const model = { id: 'claude-opus-4', patterns: ['opus-4'], aliases: ['claude-opus-4.7'], family: 'opus', label: 'Opus 4' }
+    expect(reasonOf(file((f) => { f.models.unshift(model) }))).toBe('models: claude-opus-4 has a name the build already places on claude-opus-4-7')
+    // Without the alias the model is taken, as before.
+    const { aliases: _aliases, ...alone } = model
+    void _aliases
+    expect(validateModelData(file((f) => { f.models.unshift(alone) }), bundled).ok).toBe(true)
   })
 
   // A bundled file that has a name of its own as an alias (this build's does not

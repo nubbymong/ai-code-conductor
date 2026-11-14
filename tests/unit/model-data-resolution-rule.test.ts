@@ -19,6 +19,10 @@
  * claude-opus-4-7[1m]). And a dated (-YYYYMMDD) or [1m] form of ANY shipped
  * entry's id is refused for the id and for every alias, however it is
  * placed: claude-opus-4-5-20260101 is claude-opus-4-5's, never a new model's.
+ * A name is read as the matcher reads it against the ids (2.1.3-beta.3), as
+ * written and with each dot between two digits as a hyphen: a shipped id
+ * written with a dot (claude-opus-5.5), and a dated or [1m] form of it, is
+ * that shipped model's name and refused in the same way.
  * A file with a refused name is refused whole.
  *
  * A property test: a fixed list of names against a set of fetched files that
@@ -203,6 +207,40 @@ const HOSTILE: [string, (f: Loose) => void, string?][] = [
   ['a new model (claude-fable-5-20) with the dated id of claude-fable-5 as an alias, that starts with the new id', (f) => {
     f.models.unshift({ id: 'claude-fable-5-20', patterns: [], aliases: ['claude-fable-5-20260101'], family: 'fable', label: 'Fable 5.20', fallbackPricing: HIGH })
   }, 'models: claude-fable-5-20 has a name the build already places on claude-fable-5'],
+  // 2.1.3-beta.3: the matcher reads a name with each dot between two digits as
+  // a hyphen too, so a shipped id written with a dot is that shipped model's
+  // name, by its id. A model only the file has is held to both readings: it
+  // takes such a name, or a dated or [1m] form of it, no more than it takes
+  // the same name written with a hyphen.
+  ['a new model whose id is a shipped id written with a dot', (f) => {
+    f.models.unshift({ id: 'claude-opus-5.5', patterns: [], family: 'opus', label: 'Opus 5.5 (dot)', fallbackPricing: HIGH })
+  }, 'models: claude-opus-5.5 has a name the build already places on claude-opus-5-5'],
+  ['a new model whose id is an older shipped id written with a dot', (f) => {
+    f.models.unshift({ id: 'claude-opus-4.7', patterns: [], family: 'opus', label: 'Opus 4.7 (dot)', fallbackPricing: HIGH })
+  }, 'models: claude-opus-4.7 has a name the build already places on claude-opus-4-7'],
+  ['a new model whose id is a shipped model\'s dated id written with a dot', (f) => {
+    f.models.unshift({ id: 'claude-opus-4.7-20260101', patterns: [], family: 'opus', label: 'Opus 4.7 (dated, dot)', fallbackPricing: HIGH })
+  }, 'models: claude-opus-4.7-20260101 has a name the build already places on claude-opus-4-7'],
+  ['a new model (claude-opus-4.) with a shipped id written with a dot as an alias, that starts with the new id', (f) => {
+    f.models.unshift({ id: 'claude-opus-4.', patterns: [], aliases: ['claude-opus-4.7'], family: 'opus', label: 'Opus 4', fallbackPricing: HIGH })
+  }, 'models: claude-opus-4. has a name the build already places on claude-opus-4-7'],
+  ['a new model (claude-opus-4.) with a shipped model\'s [1m] name written with a dot as an alias, that starts with the new id', (f) => {
+    f.models.unshift({ id: 'claude-opus-4.', patterns: [], aliases: ['claude-opus-4.7[1m]'], family: 'opus', label: 'Opus 4', fallbackPricing: HIGH })
+  }, 'models: claude-opus-4. has a name the build already places on claude-opus-4-7'],
+  ['a new model (claude-opus-4.7-2026) with a shipped model\'s dated id written with a dot as an alias, that starts with the new id', (f) => {
+    f.models.unshift({ id: 'claude-opus-4.7-2026', patterns: [], aliases: ['claude-opus-4.7-20260101'], family: 'opus', label: 'Opus 4.7 2026', fallbackPricing: HIGH })
+  }, 'models: claude-opus-4.7-2026 has a name the build already places on claude-opus-4-7'],
+  ['a new model (claude-opus-4.8-f) with an alias the shipped claude-opus-4-8-fast\'s id-prefix reaches, both read with the dot as a hyphen', (f) => {
+    f.models.unshift({ id: 'claude-opus-4.8-f', patterns: [], aliases: ['claude-opus-4.8-fast-x'], family: 'opus', label: 'Opus 4.8 F', fallbackPricing: HIGH })
+  }, 'models: claude-opus-4.8-f has a name the build already places on claude-opus-4-8-fast'],
+  // Written with a dot and the file's own, as the same names written with a
+  // hyphen are: no shipped id is one of these read either way.
+  ['Fable 5.3 written with a dot: its id is reached by the shipped claude-fable-5\'s id-prefix; its aliases start with its id', (f) => {
+    f.models.unshift({ id: 'claude-fable-5.3', patterns: [], aliases: ['claude-fable-5.3[1m]', 'claude-fable-5.3-20270101'], family: 'fable', label: 'Fable 5.3', fallbackPricing: HIGH })
+  }],
+  ['a new model whose id is a longer form of a shipped id written with a dot, with its own dated name', (f) => {
+    f.models.unshift({ id: 'claude-opus-4.7-x', patterns: [], aliases: ['claude-opus-4.7-x-20270101'], family: 'opus', label: 'Opus 4.7 X', fallbackPricing: HIGH })
+  }],
 ]
 
 /** The validated file, as the service would put it to use. */
@@ -237,7 +275,7 @@ const NAMES: string[] = [...new Set([
   ...claudeIds.flatMap((id) => [`anthropic.${id}-v1:0`, `us.anthropic.${id}-20260101-v1:0`, `${id}@20260101`, `vertex/${id}@20260101`]),
   // ...and a gateway's, which writes the version with a dot (claude-opus-4.7),
   // with nothing around it and behind the gateway's own name.
-  ...claudeIds.map((id) => id.replace(/(\d)-(\d)/, '$1.$2')).flatMap((dotted) => [dotted, `anthropic/${dotted}`, `anthropic/${dotted}-20260101`]),
+  ...claudeIds.map((id) => id.replace(/(\d)-(\d)/, '$1.$2')).flatMap((dotted) => [dotted, `${dotted}-20260101`, `${dotted}[1m]`, `anthropic/${dotted}`, `anthropic/${dotted}-20260101`]),
   // ...and for a version of each family the build does not list.
   ...CLAUDE_FAMILIES.flatMap((f) => [
     `anthropic.claude-${f}-9-v1:0`, `us.anthropic.claude-${f}-9-v1:0`, `claude-${f}-9@20990101`, `vertex/claude-${f}-9@20990101`,
@@ -262,14 +300,24 @@ const placed = (registry: ModelRegistry, name: string) => resolveModelInfo(regis
  *  the shipped entry's id (the id or the alias). A name the bundled file gives to a shipped entry by an exact id or
  *  an alias is never the file's own. */
 const isFilesOwn = (name: string, kind: 'exact' | 'alias', modelId: string): boolean => {
+  // The name as the matcher reads it against the ids (2.1.3-beta.3): as
+  // written, and with each dot between two digits as a hyphen. (Written out
+  // here, not taken from the code under test.)
+  const hyphened = name.replace(/(\d)\.(?=\d)/g, '$1-')
+  const readings = hyphened === name ? [name] : [name, hyphened]
   // A dated or [1m] form of a shipped id is that model's name, never the file's.
   // (Of ANY shipped id, not only the one the matcher placed it on.)
-  const isForm = (shipped: string) => name.startsWith(shipped) && /^(-\d{8}|\[)/.test(name.slice(shipped.length))
-  if (bundled.models.some((m) => isForm(m.id))) return false
+  const isForm = (reading: string, shipped: string) => reading.startsWith(shipped) && /^(-\d{8}|\[)/.test(reading.slice(shipped.length))
+  if (bundled.models.some((m) => readings.some((reading) => isForm(reading, m.id)))) return false
+  // And so is a shipped id written with a dot: claude-opus-5.5 is claude-opus-5-5's.
+  if (hyphened !== name && bundled.models.some((m) => m.id === hyphened)) return false
   const at = placed(bundled, name)
   if (!at.known) return true
   if (at.matchKind === 'exact' || at.matchKind === 'alias') return false
-  return kind === 'exact' || (name.startsWith(modelId) && !at.id.startsWith(modelId))
+  // An alias is its model's own when it starts with the model's id and the
+  // shipped id does not: the model's id as it is written, and as the alias
+  // reads it (claude-opus-4.8-f in claude-opus-4.8-fast-x is claude-opus-4-8-f).
+  return kind === 'exact' || (name.startsWith(modelId) && !at.id.startsWith(modelId) && !at.id.startsWith(hyphened.slice(0, modelId.length)))
 }
 
 /**
@@ -325,8 +373,8 @@ describe('a fetched model file never changes what a name the build already place
 
   it('the files that are refused are the ones after a shipped id or alias, or an alias the build places and the new id does not start; the others are in use', () => {
     const refused = HOSTILE.filter(([, , refusedFor]) => refusedFor !== undefined)
-    expect(refused).toHaveLength(14)
-    expect(HOSTILE.length - refused.length).toBe(22)
+    expect(refused).toHaveLength(21)
+    expect(HOSTILE.length - refused.length).toBe(24)
     for (const [what, change] of HOSTILE) expect(fetched(change).data === null, what).toBe(refused.some(([w]) => w === what))
   })
 
@@ -452,6 +500,40 @@ describe('a model only the fetched file has', () => {
     for (const name of ['claude-opus-6-20270101', 'anthropic.claude-opus-6-v1:0', 'Opus 6 (1M context)']) {
       expect(placed(merged, name), name).toEqual(placed(bundled, name))
     }
+  })
+
+  // 2.1.3-beta.3: a shipped model written with a dot (claude-opus-5.5) goes to
+  // the entry the same name written with a hyphen goes to. That is not so for
+  // a model only the fetched file has: a name that is no entry's id or alias
+  // is tried against every standing entry first (matchEntry), so the family's
+  // plain pattern takes it before the new model's id is looked at.
+  it('written with a dot, a new version of a shipped family is not the new model: the family\'s plain pattern takes the name first', () => {
+    const merged = inUse(checked((f) => {
+      f.models.unshift({ id: 'claude-opus-6-1', patterns: ['opus-6-1'], family: 'opus', label: 'Opus 6.1', fallbackPricing: HIGH })
+    }))
+    // Its id as the file writes it is the new model.
+    expect(placed(merged, 'claude-opus-6-1')).toMatchObject({ id: 'claude-opus-6-1', matchKind: 'exact', label: 'Opus 6.1' })
+    // The same id written with a dot is where the build alone puts it: on the
+    // entry with the family's plain pattern, as the dated id is in either
+    // spelling. So a dot and a hyphen do not go to the same entry here.
+    for (const name of ['claude-opus-6.1', 'claude-opus-6.1-20270101', 'claude-opus-6-1-20270101', 'anthropic/claude-opus-6.1']) {
+      expect(placed(merged, name), name).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern' })
+      expect(placed(merged, name), name).toEqual(placed(bundled, name))
+    }
+  })
+
+  it('written with a dot, a model of a family nothing shipped places is the new model, by its id', () => {
+    const merged = inUse(checked((f) => {
+      f.families.zeta = { label: 'zeta', color: '#336699' }
+      f.models.unshift({ id: 'claude-zeta-1-5', patterns: ['zeta'], family: 'zeta', label: 'Zeta 1.5' })
+    }))
+    // No standing entry places these, so the new model's id does, the name
+    // read with its dot as a hyphen.
+    for (const name of ['claude-zeta-1.5', 'claude-zeta-1.5-20270101', 'claude-zeta-1.5[1m]']) {
+      expect(placed(bundled, name).known, name).toBe(false)
+      expect(placed(merged, name), name).toMatchObject({ id: 'claude-zeta-1-5', matchKind: 'prefix' })
+    }
+    expect(placed(merged, 'claude-zeta-1-5-20270101')).toMatchObject({ id: 'claude-zeta-1-5', matchKind: 'prefix' })
   })
 })
 
