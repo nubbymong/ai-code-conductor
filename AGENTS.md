@@ -5,7 +5,7 @@ is the cross-tool standard file (read by Claude Code via `@AGENTS.md` in
 `CLAUDE.md`, and directly by Codex, Cursor, Copilot, and others). Read it before
 making changes.
 
-Multi-session Claude Code terminal orchestrator built with Electron 42 + React 19
+Multi-session Claude Code terminal orchestrator built with Electron 44 + React 19
 + TypeScript.
 
 ## Session isolation — do this FIRST
