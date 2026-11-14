@@ -3,8 +3,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 // node's fs, with two faults that can be switched on for github-config.json
 // only: the step that puts new bytes in place of the file fails part way, or
 // the staged copy beside it cannot be written. Off, every call is the real one.
+// `statMode` stands in for the mode github-config.json has on disk (a Windows
+// host has no such modes to set), and `staged` keeps the options each staged
+// copy was made with.
 const h = vi.hoisted(() => {
-  const state = { replaceFault: false, stageFault: false }
+  const state = {
+    replaceFault: false,
+    stageFault: false,
+    statMode: null as number | null,
+    staged: [] as Array<{ mode?: number } | undefined>,
+  }
   const isConfig = (p: unknown): boolean => typeof p === 'string' && p.endsWith('github-config.json')
   const isStaged = (p: unknown): boolean => typeof p === 'string' && /github-config\.json\..*\.tmp$/.test(p)
   const errno = (code: string): Error => Object.assign(new Error(`${code}: simulated`), { code })
@@ -29,6 +37,11 @@ const h = vi.hoisted(() => {
         if (state.stageFault && isStaged(p)) throw errno('ENOSPC')
         return real.promises.writeFile(p as string, d as string, o as BufferEncoding)
       },
+      stat: async (p: unknown) => {
+        const st = await real.promises.stat(p as string)
+        if (state.statMode != null && isConfig(p)) st.mode = state.statMode
+        return st
+      },
     }
     const patched = {
       ...real,
@@ -38,6 +51,7 @@ const h = vi.hoisted(() => {
         return real.renameSync(from as string, to as string)
       },
       writeFileSync: (p: unknown, d: unknown, o: unknown) => {
+        if (isStaged(p)) state.staged.push(o as { mode?: number } | undefined)
         if (state.stageFault && isStaged(p)) throw errno('ENOSPC')
         return real.writeFileSync(p as string, d as string, o as BufferEncoding)
       },
@@ -74,6 +88,12 @@ function sample() {
   }
 }
 
+/** The platform the run is really on, put back after a test that set another. */
+const hostPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+const onPlatform = (value: NodeJS.Platform): void => {
+  Object.defineProperty(process, 'platform', { value, configurable: true })
+}
+
 describe('GitHubConfigStore', () => {
   let tmp: string
   let store: GitHubConfigStore
@@ -83,11 +103,15 @@ describe('GitHubConfigStore', () => {
     store = new GitHubConfigStore(tmp)
     h.state.replaceFault = false
     h.state.stageFault = false
+    h.state.statMode = null
+    h.state.staged = []
     vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
   afterEach(() => {
     h.state.replaceFault = false
     h.state.stageFault = false
+    h.state.statMode = null
+    Object.defineProperty(process, 'platform', hostPlatform)
     vi.restoreAllMocks()
   })
 
@@ -324,6 +348,40 @@ describe('GitHubConfigStore', () => {
       await store.write(next)
       expect(await store.read()).toEqual(next)
       expect(await fs.readdir(tmp)).toEqual(['github-config.json'])
+    })
+  })
+
+  // The old write copied over the file in place, which kept the file's mode.
+  // A staged copy renamed over it is a new file: it has to be made with the
+  // mode the old one had, or a mode the user tightened is lost at the next save.
+  describe('the mode of the file a write replaces (macOS, Linux)', () => {
+    it('is the mode the staged copy is made with', async () => {
+      await store.write(sample())
+      onPlatform('linux')
+      h.state.statMode = 0o100600
+      h.state.staged = []
+      await store.write(sample())
+      expect(h.state.staged).toHaveLength(1)
+      expect(h.state.staged[0]?.mode).toBe(0o600)
+    })
+
+    it('is not asked for when there is no file yet: the first write takes the default', async () => {
+      onPlatform('linux')
+      h.state.statMode = 0o100600
+      await store.write(sample())
+      expect(h.state.staged).toHaveLength(1)
+      expect(h.state.staged[0]?.mode).toBeUndefined()
+      expect(await store.read()).toEqual(sample())
+    })
+
+    it('is left alone on Windows, which has no such modes', async () => {
+      await store.write(sample())
+      onPlatform('win32')
+      h.state.statMode = 0o100600
+      h.state.staged = []
+      await store.write(sample())
+      expect(h.state.staged).toHaveLength(1)
+      expect(h.state.staged[0]?.mode).toBeUndefined()
     })
   })
 })

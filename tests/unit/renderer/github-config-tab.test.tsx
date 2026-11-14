@@ -163,4 +163,36 @@ describe('GitHubConfigTab', () => {
     expect(updateConfig).toHaveBeenCalledWith({ enabledByDefault: true })
     r.unmount()
   })
+
+  // Main refuses a save when github-config.json could not be read. The store
+  // keeps the reason (saveError); this page is where the user reads it.
+  it('shows why a change was not saved, in one alert line', () => {
+    seed(makeConfig(), vi.fn())
+    const r = render(<GitHubConfigTab />)
+    expect(r.container.querySelector('[role="alert"]')).toBeNull()
+
+    const sentence = 'The GitHub settings file (github-config.json) could not be read, so nothing was changed.'
+    act(() => {
+      useGitHubStore.setState({ saveError: sentence } as never)
+    })
+    const alerts = r.container.querySelectorAll('[role="alert"]')
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].textContent).toBe(sentence)
+
+    // The next save starts by clearing it, and the line goes.
+    act(() => {
+      useGitHubStore.setState({ saveError: null } as never)
+    })
+    expect(r.container.querySelector('[role="alert"]')).toBeNull()
+    r.unmount()
+  })
+
+  it('does not show a refusal from before the page was opened', () => {
+    seed(makeConfig(), vi.fn())
+    useGitHubStore.setState({ saveError: 'an earlier refusal' } as never)
+    const r = render(<GitHubConfigTab />)
+    expect(r.container.querySelector('[role="alert"]')).toBeNull()
+    expect(useGitHubStore.getState().saveError).toBeNull()
+    r.unmount()
+  })
 })

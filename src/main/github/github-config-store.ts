@@ -119,8 +119,25 @@ export class GitHubConfigStore {
       // fails part way removes its staging file and leaves the old file whole;
       // it never leaves a half-written one. (This used to copy over the file
       // in place, which could.)
-      atomicWriteFileSync(this.filePath, JSON.stringify(config, null, 2))
+      atomicWriteFileSync(this.filePath, JSON.stringify(config, null, 2), await this.modeToKeep())
     })
+  }
+
+  /**
+   * macOS and Linux: the mode github-config.json has now, for the file that
+   * replaces it. Copying over the file in place kept its mode; a staged copy
+   * renamed over it is a new file and would take the default, which is wider
+   * than a mode the user tightened by hand. Nothing on Windows, which has no
+   * such modes, and nothing when there is no file yet (the first write takes
+   * the default, as it always did).
+   */
+  private async modeToKeep(): Promise<{ mode: number } | undefined> {
+    if (process.platform === 'win32') return undefined
+    try {
+      return { mode: (await fs.stat(this.filePath)).mode & 0o777 }
+    } catch {
+      return undefined
+    }
   }
 
   private async backupUnknownSchemaFile(raw: string, schemaVersion: unknown): Promise<void> {
