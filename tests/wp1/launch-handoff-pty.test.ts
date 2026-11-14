@@ -1164,6 +1164,23 @@ describe('a Codex launch asks whether its sessions start here of the Codex packa
     })
   }
 
+  // A Codex launch through pty:spawn is prepared first (its account, its
+  // lease) and then started by the PTY manager, which looks the provider up
+  // before it starts it. Mutation to prove this can fail: start a prepared
+  // launch without the lookup.
+  it('through pty:spawn: a prepared Codex launch whose sessions do not start here is refused, nothing is built or started, and its lease is let go', async () => {
+    const service = realAccountsService('win32', 'unsupported')
+    h.localLaunch = (id) => service.localLaunchRefusal(id as never)
+    const l = launch('a')
+    h.prepare = async () => prepared(l)
+    await expect(spawnIpc({ ...codexRequest, providerAccountId: 'acct-a' })).rejects.toThrow(/cannot start sessions on this computer/)
+    expect(h.prepareCalls).toBe(1)
+    expect(h.ptys).toHaveLength(0)
+    expect(h.built).toHaveLength(0)
+    expect(l.lease.release).toHaveBeenCalledTimes(1)
+    expect(holdsCodexLaunchLease(SID, l.lease as never)).toBe(false)
+  })
+
   it('a declaration marked experimental that the owner has not enabled is refused the same way', () => {
     const service = realAccountsService('win32', 'experimental')
     h.localLaunch = (id) => service.localLaunchRefusal(id as never)

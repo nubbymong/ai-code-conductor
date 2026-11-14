@@ -118,3 +118,17 @@ describe('the SSH setups read the built-in tools switch through the checked read
     expect(h.setupOpts[0].includeConductorMcp).toBe(true)
   })
 })
+
+describe('an SSH launch is not asked whether its assistant starts sessions on this computer', () => {
+  // The provider registered above is a session with no package behind it, so
+  // the registry holds no declaration that its sessions start here: a local
+  // launch of it is refused by the lookup a local launch makes. An SSH launch
+  // makes no such lookup and starts. Mutation to prove this can fail: look
+  // the provider up for an SSH launch as well.
+  it('a local launch of this provider is refused, and an SSH launch of it starts', () => {
+    expect(() => spawnPty(fakeWin, SID, { cwd: '/' } as never)).toThrow(/cannot start sessions on this computer/)
+    expect(getSshFlow(SID)).toBeFalsy()
+    expect(() => spawnPty(fakeWin, SID, { ssh: SSH } as never)).not.toThrow()
+    expect(getSshFlow(SID)).toBeTruthy()
+  })
+})

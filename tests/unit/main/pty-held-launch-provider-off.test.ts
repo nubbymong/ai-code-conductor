@@ -25,7 +25,9 @@ const h = vi.hoisted(() => ({
   spawns: [] as string[],
   otherChildren: [] as string[],
   /** The accounts service, or null for "main has none". */
-  service: null as null | { launchRefusal: (id: string) => Refusal | null; localLaunchRefusal: (id: string) => null },
+  service: null as null | { launchRefusal: (id: string) => Refusal | null; localLaunchRefusal: (id: string) => unknown },
+  /** Whether the assistant's sessions start on this computer, as the service answers now. */
+  startsHere: true,
   /** What the service answers for a launch now (null: it may start). */
   refusal: null as Refusal | null,
   /** Every provider id the launch rule was asked about. */
@@ -152,7 +154,7 @@ const until = async (cond: () => boolean, why: string): Promise<void> => {
 /** The held launch has ended one way or the other: it started, or it said it did not. */
 const settled = (id: string): Promise<void> => until(() => h.spawns.length > 0 || sent(`pty:exit:${id}`).length > 0, `the held launch ${id} to start or to say it did not`)
 
-const ids = ['held-refresh', 'held-project', 'held-unreadable', 'held-no-service', 'held-still-on', 'held-tab', 'held-both']
+const ids = ['held-refresh', 'held-project', 'held-unreadable', 'held-no-service', 'held-still-on', 'held-tab', 'held-both', 'held-not-here']
 let project = ''
 let seq = 0
 
@@ -176,9 +178,13 @@ beforeEach(() => {
   consumers._resetProfileConsumersForTest()
   h.spawns.length = 0; h.otherChildren.length = 0; h.asked.length = 0; payloads.length = 0
   h.refusal = null
+  h.startsHere = true
   h.folderCheck = null
   // Claude Code's sessions start on this computer (the PTY manager asks that too).
-  h.service = { launchRefusal: (id: string) => { h.asked.push(id); return h.refusal }, localLaunchRefusal: () => null }
+  h.service = {
+    launchRefusal: (id: string) => { h.asked.push(id); return h.refusal },
+    localLaunchRefusal: () => (h.startsHere ? null : { ok: false, code: 'capability-disabled' }),
+  }
   registerFakeClaudePackage({
     resolveBinary: () => ({ cmd: 'claude', args: [] }),
     buildSpawnCommand: () => ({ cmd: 'stand-in-shell', args: [], env: {} }),
@@ -277,6 +283,26 @@ describe('a held launch whose setting cannot be read when the wait ends', () => 
     expect(h.spawns).toEqual([])
     expect(sent('pty:exit:held-no-service')).toEqual([-1])
     expect(terminal('held-no-service')).toContain('could not read whether')
+  })
+})
+
+describe('a held launch whose assistant no longer starts sessions on this computer when the wait ends', () => {
+  // The launch that goes on after a wait looks its provider up again, as a
+  // launch that was not held does. Mutation to prove this can fail: go on
+  // after the wait with what the lookup answered before it.
+  it('nothing starts, and the terminal says so before the exit', async () => {
+    const id = account()
+    const refreshDone = refreshUnderWay(id)
+    expect(() => spawnPty(win, 'held-not-here', { profileId: id, cwd: project })).not.toThrow()
+    expect(h.spawns).toEqual([])
+    h.startsHere = false
+    refreshDone()
+    await settled('held-not-here')
+    expect(h.spawns).toEqual([])
+    expect(terminal('held-not-here')).toContain('Claude Code cannot start sessions on this computer. Nothing was started.')
+    expect(payloads.findIndex(([c]) => c === 'pty:data:held-not-here')).toBeLessThan(payloads.findIndex(([c]) => c === 'pty:exit:held-not-here'))
+    expect(sent('pty:exit:held-not-here')).toEqual([-1])
+    expect(consumers.profileConsumerCount(id), 'the hold on the account was released').toBe(0)
   })
 })
 
