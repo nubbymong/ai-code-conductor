@@ -537,3 +537,91 @@ describe('hooks service: a bind failure while turned off', () => {
     expect(h.fork).toHaveBeenCalledTimes(2)
   })
 })
+
+// planning #309, items 1 and 3: `bound` already refused a replaced child's late
+// report; a late bind failure and a late heartbeat did not.
+describe('hooks service: a replaced child\'s late bind failure and heartbeat', () => {
+  let h: ReturnType<typeof harness> | undefined
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(async () => {
+    vi.useRealTimers()
+    await h?.proxy.stop()
+    h?.sup.shutdown()
+    h = undefined
+  })
+  const logSince = (from: number) => h!.sup.getDiagnosticsSnapshot().log.slice(from).map((l) => [l.level, l.code, l.message])
+
+  it('a late bind failure is logged and does not stop the current child', () => {
+    h = harness({ killExits: true })
+    h.bound()
+    expect(h.sup.manualRestart('hooks')).toEqual({ ok: true })   // kids[0] is replaced by kids[1]
+    h.bound()
+    expect(h.health().state).toBe('listening')
+    const logged = h.sup.getDiagnosticsSnapshot().log.length
+    h.emitted.length = 0
+    h.kids[0].t.emitToParent({ type: 'bind-failed', error: 'EADDRINUSE' })
+    expect(h.kids[1].kills).toBe(0)
+    expect(h.health().state).toBe('listening')
+    expect(h.health().lastError).toBeNull()
+    expect(logSince(logged)).toEqual([
+      ['info', 'bind-failed-replaced', 'a replaced hooks child failed to bind: EADDRINUSE'],
+    ])
+    expect(pushedStates(h)).toEqual(['listening'])   // pushed, so the new log line reaches the panel
+    vi.advanceTimersByTime(60_000)
+    expect(h.fork).toHaveBeenCalledTimes(2)          // nothing was restarted
+    expect(h.proxy.status()).toEqual({ enabled: true, listening: true, port: 19430 })
+  })
+
+  it('a late bind failure after a crash restart leaves the new child starting', () => {
+    h = harness()
+    h.bound()
+    h.kids[0].exit(); vi.advanceTimersByTime(300)   // kids[1] is forked, not bound yet
+    h.kids[0].t.emitToParent({ type: 'bind-failed', error: 'EADDRINUSE' })
+    expect(h.kids[1].kills).toBe(0)
+    expect(h.health().state).toBe('restarting')
+    expect(h.health().lastError?.message).toBe('child exited')   // the crash, not the late report
+    h.bound()
+    expect(h.health().state).toBe('listening')
+  })
+
+  it('the current child\'s own bind failure is still a crash that stops it', () => {
+    h = harness()
+    h.bound()
+    h.sup.manualRestart('hooks')
+    h.last().t.emitToParent({ type: 'bind-failed', error: 'EADDRINUSE' })
+    expect(h.kids[1].kills).toBe(1)
+    expect(h.health().state).toBe('crashed')
+    expect(h.health().lastError?.message).toBe('EADDRINUSE')
+  })
+
+  it('a late heartbeat does not overwrite the current child\'s counters', () => {
+    h = harness()
+    h.bound()
+    h.kids[0].t.emitToParent({ type: 'health', inFlight: 4, eventsTotal: 900, dropsTotal: 3, stallsLastMin: 2 })
+    h.sup.manualRestart('hooks')
+    h.bound()
+    h.last().t.emitToParent({ type: 'health', inFlight: 1, eventsTotal: 5, dropsTotal: 0, stallsLastMin: 0 })
+    const beatAt = h.health().lastHeartbeatAt
+    vi.advanceTimersByTime(500)
+    h.emitted.length = 0
+    h.kids[0].t.emitToParent({ type: 'health', inFlight: 9, eventsTotal: 950, dropsTotal: 4, stallsLastMin: 7 })
+    expect(h.health()).toMatchObject({
+      inFlight: 1, eventsTotal: 5, dropsTotal: 0, childLoopStallsLastMin: 0, lastHeartbeatAt: beatAt,
+    })
+    expect(h.emitted).toEqual([])
+    // The current child's next beat is measured against its own last one.
+    vi.advanceTimersByTime(500)
+    h.last().t.emitToParent({ type: 'health', inFlight: 0, eventsTotal: 15, dropsTotal: 0, stallsLastMin: 0 })
+    expect(h.health()).toMatchObject({ inFlight: 0, eventsTotal: 15, throughputPerSec: 10 })
+  })
+
+  it('the current child\'s heartbeat is still shown', () => {
+    h = harness()
+    h.bound()
+    h.sup.manualRestart('hooks')
+    h.emitted.length = 0
+    h.last().t.emitToParent({ type: 'health', inFlight: 2, eventsTotal: 40, dropsTotal: 1, stallsLastMin: 3 })
+    expect(h.health()).toMatchObject({ inFlight: 2, eventsTotal: 40, dropsTotal: 1, childLoopStallsLastMin: 3 })
+    expect(pushedStates(h)).toHaveLength(1)
+  })
+})

@@ -82,11 +82,37 @@ export function createHooksHost(transport: HostTransport, opts?: CreateHooksHost
   let loopMonitor: LoopStallMonitor | null = null
   let beat: ReturnType<typeof setInterval> | null = null
 
+  // The one-second heartbeat and the jank monitor behind the Services card's
+  // live counters. They run from the moment the host is made, 'stop' ends them,
+  // and 'start' brings them back (hooks turned off and on again in Settings is
+  // a stop then a start to this same child). Does nothing while they run.
+  const startBeat = (): void => {
+    if (opts?.healthBeat === false || beat !== null) return
+    // Measure THIS child's event-loop jank with the same monitor + thresholds the
+    // main process uses (500ms tick, >250ms late = one stall, 60s window), so the
+    // "Jank m/c" pill's child half is real rather than a hardcoded 0.
+    // One monitor for the host's life, so a stall counted before a stop is
+    // still inside its 60s window after the start.
+    if (loopMonitor === null) loopMonitor = new LoopStallMonitor()
+    const monitor = loopMonitor
+    monitor.start()
+    beat = setInterval(() => {
+      const m = gateway.metrics()
+      transport.post({
+        type: 'health',
+        inFlight: m.inFlight, eventsTotal: m.eventsTotal, dropsTotal: m.dropsTotal,
+        stallsLastMin: monitor.stallsLastMin(),
+      })
+    }, 1000)
+    if (typeof (beat as { unref?: () => void }).unref === 'function') (beat as { unref: () => void }).unref()
+  }
+
   transport.onMessage((msg) => {
     switch (msg.type) {
       case 'register': gateway.registerSessionWithSecret(msg.sid, msg.secret); break
       case 'unregister': gateway.unregisterSession(msg.sid); break
       case 'start':
+        startBeat()
         void gateway.start(msg.port).then((s) => {
           if (s.listening && s.port != null) {
             transport.post({ type: 'bound', port: s.port, pid: process.pid })
@@ -99,7 +125,7 @@ export function createHooksHost(transport: HostTransport, opts?: CreateHooksHost
       case 'stop':
         postLog('info', 'child-stop', 'gateway stop requested')
         loopMonitor?.stop()
-        if (beat) clearInterval(beat)
+        if (beat) { clearInterval(beat); beat = null }
         void gateway.stop()
         break
       case 'setGate': gateway.setPermissionGateActive(msg.active); break
@@ -108,22 +134,7 @@ export function createHooksHost(transport: HostTransport, opts?: CreateHooksHost
     }
   })
 
-  if (opts?.healthBeat !== false) {
-    // Measure THIS child's event-loop jank with the same monitor + thresholds the
-    // main process uses (500ms tick, >250ms late = one stall, 60s window), so the
-    // "Jank m/c" pill's child half is real rather than a hardcoded 0.
-    loopMonitor = new LoopStallMonitor()
-    loopMonitor.start()
-    beat = setInterval(() => {
-      const m = gateway.metrics()
-      transport.post({
-        type: 'health',
-        inFlight: m.inFlight, eventsTotal: m.eventsTotal, dropsTotal: m.dropsTotal,
-        stallsLastMin: loopMonitor!.stallsLastMin(),
-      })
-    }, 1000)
-    if (typeof (beat as { unref?: () => void }).unref === 'function') (beat as { unref: () => void }).unref()
-  }
+  startBeat()
 
   return {
     _gatewayHasSecret: (sid) => gateway.hasSecret(sid),

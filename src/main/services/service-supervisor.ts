@@ -121,6 +121,10 @@ export class ServiceSupervisor {
       this.appendLog('info', 'bound', `bound :${m.port} pid=${m.pid}`)
       this.pushHealth()
     } else if (m.type === 'health') {
+      // A replaced child's last heartbeat, still draining out of its pipe, is
+      // not the current child's: its counters are not shown, and it is not the
+      // sample the next throughput is measured against.
+      if (from !== this.child) return
       const ts = this.now()
       const sample: ThroughputSample = { eventsTotal: m.eventsTotal, ts }
       const throughputPerSec = computeThroughput(this.prevThroughput, sample)
@@ -140,6 +144,13 @@ export class ServiceSupervisor {
       if (this.log.length > LOG_CAP) this.log.splice(0, this.log.length - LOG_CAP)
       this.pushHealth()
     } else if (m.type === 'bind-failed') {
+      // A replaced child's late bind failure is not the current child's. It is
+      // logged; the current child is neither shown as crashed nor killed.
+      if (from !== this.child) {
+        this.appendLog('info', 'bind-failed-replaced', `a replaced hooks child failed to bind: ${m.error}`)
+        this.pushHealth()
+        return
+      }
       if (this.sup.isWanted()) {
         this.health = { ...this.health, state: 'crashed', lastError: { message: m.error, ts: this.now() } }
         this.appendLog('error', 'bind-failed', `hooks child failed to bind: ${m.error}`)
