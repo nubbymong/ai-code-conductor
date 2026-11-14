@@ -1,6 +1,6 @@
 # ADR-009: Security-sensitive changes require an independent adversarial-review pass
 
-- **Status:** Accepted (2026-07-30)
+- **Status:** Accepted (2026-07-30). Amended by ADR-028 (2026-11-14): point 8's interactive "fix -> re-attack until clean" is now one round (one pass, one fix batch, one confirmation) and a narrow check of any later fix diff; a content change from that round re-issues the marker after its check instead of forcing a fresh full pass (point 7). The bar is unchanged.
 - **Deciders:** @nubbymong (owner)
 - **Related:** #150, CONTEXT.d/2026-07-30-150-adversarial-review-skill.md, SECURITY.md, ADR-004 (the same un-ignore reasoning applied to `AGENTS.md`), #116 (contributor/agent workflow)
 

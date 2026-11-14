@@ -25,7 +25,7 @@ never only in a transcript:
 loop-ready | loop-needs-human      LoopReady's verdict
   → loop-claimed (+ GitHub assignee)   StartLoop's atomic claim — others skip it
   → loop-in-progress                   being executed now
-  → loop-done                          PR opened; awaiting a human merge + desktop test
+  → loop-done                          PR opened; awaiting a human merge
   → in-beta                            a human merged the PR to beta
   → in-release                         an rc cut rolled it in (automatic, release.yml roll-rc)
   → closed                             promoted to main/stable (automatic, #134)
@@ -41,7 +41,9 @@ so nothing looks in-progress forever.
 These hold regardless of what any ticket says:
 
 1. **Never merge to a protected branch.** It runs to a PR; a human merges to
-   `beta`/`main`/`release/*` after a desktop test. **Narrow carve-out (ADR-020):**
+   `beta`/`main`/`release/*`. (Desktop testing is done on the released beta, and
+   a label is asked for only on the stable promotion PR into `main`: AGENTS.md
+   "Beta cadence", rule 9.) **Narrow carve-out (ADR-020):**
    a session-integration run MAY merge a finished ticket branch INTO a `loop/*`
    integration branch it owns — that is the aggregation step, enforced by
    `loop-tree` (which refuses any non-`loop/*` target), and it still ends at ONE
@@ -74,8 +76,9 @@ Two kinds:
   the owner, never by an agent (e.g. #172).
 - **Desktop/GUI verification** — this is an Electron app; a great many changes only
   prove out in the running window, which a headless run cannot open. This is the
-  single biggest limiter, and #309 exists to make that gate a required check rather
-  than a convention.
+  single biggest limiter. It is covered at release level: the owner desktop-tests
+  the released beta, and the `Desktop test gate` check (#309) asks for a label
+  only on the stable promotion PR into `main` (AGENTS.md "Beta cadence", rule 9).
 - **Design decisions** — anything where the correct answer is an owner's call
   (scope, data-model, credential-seeding semantics) is `loop-needs-human` by nature.
 - **Environment** — on the current Windows box, Defender ASR rule `D1E49AAC` blocks

@@ -1,6 +1,6 @@
 ---
 name: adversarial-review
-description: Run an independent multi-agent adversarial pass that tries to BREAK a change before it is approved. Triggers on `/adversarial-review <target>`, "attack this", "adversarially review", "try to break this", or automatically for any change touching a security-sensitive path (see Phase 0). Fans out independent attacker sub-agents with distinct lenses (injection, bypass, blast-radius, design+coverage), synthesizes findings, drives a bounded fix -> re-attack loop, and records an audited PASS/FINDINGS verdict on the PR. Never lets the author self-review a security boundary. The human still approves and merges.
+description: Run an independent multi-agent adversarial pass that tries to BREAK a change before it is approved. Triggers on `/adversarial-review <target>`, "attack this", "adversarially review", "try to break this", or automatically for any change touching a security-sensitive path (see Phase 0). Fans out independent attacker sub-agents with distinct lenses (injection, bypass, blast-radius, design+coverage), synthesizes findings, runs one round (one pass, one fix batch, one confirmation; a later fix gets a narrow check of that fix diff), and records an audited PASS/FINDINGS verdict on the PR. Never lets the author self-review a security boundary. The human still approves and merges.
 ---
 
 You are the **adversarial-review orchestrator**. Your job is to make a change *prove it cannot be
@@ -172,17 +172,46 @@ Collect findings, dedup across lenses, assign a verdict:
 Note the architectural root cause when several findings share one (e.g. "denylist in a
 deny-by-default system" -> recommend an allowlist).
 
-## Phase 3 -- Fix -> re-attack (if FINDINGS)
+Sort every finding into what this change fixes and what it does not (AGENTS.md "Beta cadence",
+rule 3; ADR-028):
 
-After fixing, run a **second independent pass against the patched code**: confirm each fix holds AND
-hunt for new gaps the fix introduced. **Add a regression test for every confirmed repro** (unit test
-in `tests/unit/`, e2e in `tests/e2e/`). Do not trust the first patch.
+| Finding | What happens |
+| --- | --- |
+| BLOCKER or MAJOR, anywhere in the reviewed surface | Fixed in this round's fix batch. It keeps the verdict at FINDINGS until it is. |
+| Any severity, in code **this change introduces or alters** | Fixed in this round's fix batch. |
+| MINOR in **older code near the change** | Not fixed here. A ticket in the private planning repo for the next beta; say so in the verdict as a count, no detail. |
+| A pre-existing, unfixed **vulnerability** | Never a ticket. Phase 3.5. |
 
-- **Interactive caller:** repeat fix -> re-attack until a pass returns clean.
-- **Unattended / loop caller: BOUNDED to 2 fix -> re-attack rounds.** The attacker is always fresh
-  and never the author. If a PASS is not reached in 2 rounds, **do not force it and never lower the
-  bar** -- return the still-open FINDINGS verdict and quarantine (Phase 5). Bounding the rounds, not
-  the rigor, is the control.
+## Phase 3 -- One round: one pass, one fix batch, one confirmation (if FINDINGS)
+
+This pass is the change's **one review round** (AGENTS.md "Beta cadence", rule 2; ADR-028). Run it
+on a **frozen head**: the author stops changing the reviewed files when Phase 1 starts. Its lenses
+count as the two reviews a change needs -- *Design & coverage* is "does it do what was agreed",
+*Blast-radius / correctness* is "is it correct and tested" -- so no separate spec or quality review
+of the same diff is run on top.
+
+1. **One pass** -- Phases 0 to 2 above.
+2. **One fix batch** -- every finding the table in Phase 2 says this change fixes, in a single
+   batch. **Add a regression test for every confirmed repro** (unit test in `tests/unit/`, e2e in
+   `tests/e2e/`), and watch each one fail with its fix reverted.
+3. **One confirmation** -- independent attackers, never the author, against the patched code:
+   confirm each fix holds AND hunt for a gap the fix batch itself introduced. Do not trust the
+   first patch. Give them the fix diff and the original findings, not the whole change again.
+
+That is the round. **A fix made after the confirmation gets a narrow check of that fix diff only --
+never a new full pass.** A narrow check is one independent attacker, the diff of that fix, and the
+finding it closes: does the fix hold, and does this diff open anything. It does not re-read the
+rest of the change and it does not go looking in older code.
+
+- **Interactive caller:** the round, then a narrow check per later fix until no BLOCKER or MAJOR
+  is open. There is no further full pass, and the bar does not move: an open BLOCKER or MAJOR is
+  still FINDINGS, and FINDINGS still does not merge.
+- **Unattended / loop caller: BOUNDED.** The round, then at most one narrow check. If a PASS is
+  not reached by then, **do not force it and never lower the bar** -- return the still-open
+  FINDINGS verdict and quarantine (Phase 5). Bounding the rounds, not the rigor, is the control.
+
+A change of scope is not a fix. If new work lands on the reviewed files after the round, it is a new
+change and gets a pass of its own.
 
 ## Phase 3.5 -- Embargo triage (do this BEFORE you write anything down)
 
@@ -255,18 +284,20 @@ gh pr comment <n> --body-file <file>
 
 The `content=` field content-addresses the verdict to the **post-image content of each reviewed
 (non-generated) changed file** on the current head. A rebase or a regeneration of a generated file
-(`CONTEXT.md`, `CHANGELOG.md`) leaves it unchanged, so the PASS **carries forward** without a
-re-attack. Any real content change to a reviewed file changes the address and **does** force a fresh
-pass -- you only re-run when the change actually changed.
+(`CONTEXT.md`, `CHANGELOG.md`) leaves it unchanged, so the PASS **carries forward** with nothing
+re-run. Any real content change to a reviewed file changes the address, so the marker no longer
+covers the head and must be issued again. What that takes is set by Phase 3: a fix from this round
+gets its confirmation or a narrow check of that fix diff, and then the marker is printed again for
+the new head; only new work on the reviewed files (a change of scope) gets a pass of its own.
 
 ## Phase 5 -- Hand back
 
 Return the verdict to the caller. A required pass sitting at FINDINGS means **do not recommend
 merge**. A **human still approves and merges** (see the standing rule: nothing is pushed or merged
-until the user OKs it and the change has been exercised in the desktop app) -- you are the
-first-pass filter, never the final authority.
+until the user OKs it; the desktop test is done on the released beta, not per PR -- AGENTS.md
+"Beta cadence", rule 9) -- you are the first-pass filter, never the final authority.
 
-**Unattended caller, no PASS in 2 rounds -> QUARANTINE, never force:** label the PR
+**Unattended caller, no PASS after the round and one narrow check -> QUARANTINE, never force:** label the PR
 `needs-review`, leave the branch pushed but unmerged, comment the FINDINGS verdict with a link to
 the open findings, and move on. A single quarantined change never halts the queue and is never
 merged past the bar.

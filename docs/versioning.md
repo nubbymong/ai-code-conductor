@@ -65,7 +65,9 @@ leaving the hand-written notes untouched — a *rolling re-release*.
 ## When to bump
 
 - Each new beta you want the updater to **deliver**: bump the prerelease number
-  (`2.1.0-beta.1` → `2.1.0-beta.2`).
+  (`2.1.0-beta.1` → `2.1.0-beta.2`). The bump rides in the last content PR of
+  that beta, with its changelog entry; there is no separate version-bump PR
+  (`AGENTS.md` "Beta cadence", ADR-028).
 - Stabilizing a release: move to `-rc.N` on a `release/vX.Y.Z` branch.
 - Shipping stable: drop the suffix (`2.1.0`) and release from `main` with
   `channel=stable`.
@@ -188,7 +190,10 @@ the comparison and the app's shared one to identical verdicts.
    `gh workflow run release.yml --ref <branch> -f channel=<...>`.
 4. `release.yml` tags `v<version>` at the exact built commit (`--target`, so the
    updater orders it correctly), builds Windows + macOS + Linux, and publishes the
-   GitHub release with notes generated from `changelog.ts`.
+   GitHub release with notes generated from `changelog.ts`. On `channel=beta` it
+   does not run the test suite again when `ci.yml` already passed it on the same
+   git tree (the `Reuse green CI (beta only)` job names the run it reused); in
+   every other case, and always on `channel=stable`, it runs the suite itself.
 5. The updater compares the published tag against the installed version for the
    user's channel and offers it only if it outranks what's installed.
 

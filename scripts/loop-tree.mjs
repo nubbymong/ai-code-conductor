@@ -24,7 +24,8 @@
 //
 // The AI has authority to `integrate` and `submit` (it owns the loop branch); it
 // NEVER merges the loop PR to base -- a human does, through every gate
-// (desktop-tested, ci-run, adversarial, owner review). See ADR-020.
+// (ci-run, adversarial, owner review; desktop testing is done on the released
+// beta, ADR-028 rule 9). See ADR-020.
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -326,9 +327,9 @@ function cmdSubmit(args) {
     ...folded.map((e) => `- \`${e.branch}\`${e.squash ? ' (squashed)' : ''}`),
     '',
     'The AI merged each ticket branch into this loop branch; a HUMAN merges this PR to',
-    `\`${base}\` after it clears every gate (desktop-tested, ci-run, adversarial, owner review).`,
+    `\`${base}\` after it clears every gate (ci-run, adversarial, owner review).`,
     '',
-    'NOT desktop-tested by the loop -- apply `desktop-tested` after verifying in the app.',
+    'NOT desktop-verified by the loop. Desktop testing is done on the released beta; only a PR into `main` needs a desktop-test label.',
   ]
   const bodyFile = path.join(cwd, '.loop', 'pr-body.md')
   fs.mkdirSync(path.dirname(bodyFile), { recursive: true })
