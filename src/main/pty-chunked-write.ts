@@ -59,11 +59,19 @@ export interface ChunkedWriteHooks {
   onProgress?: (bytesSent: number, totalBytes: number) => void
 }
 
+/** The first unit of a character that takes two units of a string. */
+const isHighSurrogate = (unit: number): boolean => unit >= 0xd800 && unit <= 0xdbff
+/** The second unit of such a character. */
+const isLowSurrogate = (unit: number): boolean => unit >= 0xdc00 && unit <= 0xdfff
+
 /**
  * Drive a liveness-guarded, crash-safe chunked write of `data`. Returns
  * immediately after kicking off the first chunk; subsequent chunks are driven by
  * `schedule`. Stops (without throwing) the moment `isAlive()` is false or a write
  * throws — the remaining bytes are dropped rather than risk an uncaught throw.
+ *
+ * A chunk is `chunkSize` units of the string, and one unit more when it would
+ * otherwise end in the middle of a character that takes two (see writeNext).
  */
 export function runChunkedWrite(data: string, hooks: ChunkedWriteHooks): void {
   const size = hooks.chunkSize ?? WRITE_CHUNK_SIZE
@@ -77,7 +85,14 @@ export function runChunkedWrite(data: string, hooks: ChunkedWriteHooks): void {
     if (offset >= data.length) return done()
     // Liveness: bail if the session is gone or its PTY was replaced by a respawn.
     if (!hooks.isAlive()) return done()
-    const end = Math.min(offset + size, data.length)
+    let end = Math.min(offset + size, data.length)
+    // A character outside the first 65,536 (an emoji, for one) is two units
+    // of the string: a high one, then a low one. Each chunk is turned into
+    // bytes on its own, so a chunk that ended between the two would send two
+    // broken marks in place of the character. Take the low unit into this
+    // chunk too. The chunk only ever grows, and by one unit, so a chunk size
+    // of 1 cannot stall; plain text is chunked exactly as before.
+    if (end < data.length && isHighSurrogate(data.charCodeAt(end - 1)) && isLowSurrogate(data.charCodeAt(end))) end += 1
     try {
       hooks.write(data.slice(offset, end))
     } catch {

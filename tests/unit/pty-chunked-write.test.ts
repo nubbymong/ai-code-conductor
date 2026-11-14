@@ -183,3 +183,112 @@ describe('runChunkedWrite (R-010)', () => {
     expect(written).toHaveLength(3)
   })
 })
+
+// A character outside the first 65,536 (an emoji, for one) is TWO units of the
+// string, a high one and then a low one. Each chunk is turned into bytes on
+// its own, so a chunk that ends between the two sends two broken marks in
+// place of the character. The chunk grows by the one unit instead.
+describe('runChunkedWrite keeps a character of two units in one chunk', () => {
+  const EMOJI = String.fromCodePoint(0x1f600)
+  const HIGH = EMOJI[0]
+  const LOW = EMOJI[1]
+  /** The bytes the PTY receives: each chunk encoded on its own, as a write does. */
+  const bytesOf = (chunks: string[]): Buffer => Buffer.concat(chunks.map((c) => Buffer.from(c, 'utf8')))
+  /** A unit that is half of a character with its other half not beside it. */
+  const BROKEN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+  const chunked = (data: string, chunkSize: number) => {
+    const written: string[] = []
+    const progress: Array<[number, number]> = []
+    let dones = 0
+    runChunkedWrite(data, {
+      write: (s) => written.push(s),
+      isAlive: () => true,
+      schedule: syncSchedule,
+      chunkSize,
+      onProgress: (sent, total) => progress.push([sent, total]),
+      onDone: () => { dones++ },
+    })
+    return { written, progress, dones }
+  }
+
+  it('the two units fall on a chunk boundary: the character is delivered whole', () => {
+    expect(EMOJI).toHaveLength(2)
+    const data = 'a'.repeat(255) + EMOJI + 'b'.repeat(300)
+    const { written, dones } = chunked(data, 256)
+    expect(written[0]).toBe('a'.repeat(255) + EMOJI)
+    expect(written.some((c) => BROKEN.test(c))).toBe(false)
+    expect(bytesOf(written).equals(Buffer.from(data, 'utf8'))).toBe(true)
+    expect(written.join('')).toBe(data)
+    expect(dones).toBe(1)
+  })
+
+  it('the chunk after it starts where the grown one ended, and nothing is sent twice or left out', () => {
+    const data = 'a'.repeat(255) + EMOJI + 'b'.repeat(300)
+    const { written, progress } = chunked(data, 256)
+    expect(written.map((c) => c.length)).toEqual([257, 256, 44])
+    expect(progress).toEqual([[257, 557], [513, 557], [557, 557]])
+  })
+
+  it('every boundary of a long paste of such characters: none is split', () => {
+    // One letter in front puts a boundary in the middle of a character.
+    const data = 'x' + EMOJI.repeat(700)
+    const { written, progress } = chunked(data, 256)
+    expect(written.some((c) => BROKEN.test(c))).toBe(false)
+    expect(bytesOf(written).equals(Buffer.from(data, 'utf8'))).toBe(true)
+    expect(written.join('')).toBe(data)
+    expect(progress[progress.length - 1]).toEqual([data.length, data.length])
+  })
+
+  it('the character is the last thing in the data: one chunk, no read past the end', () => {
+    const data = 'a'.repeat(255) + EMOJI
+    const { written, progress, dones } = chunked(data, 256)
+    expect(written).toEqual([data])
+    expect(progress).toEqual([[257, 257]])
+    expect(dones).toBe(1)
+  })
+
+  it('a chunk size of one cannot stall: the chunk only ever grows', () => {
+    const data = 'a' + EMOJI + 'b' + EMOJI + EMOJI
+    const { written, dones } = chunked(data, 1)
+    expect(written).toEqual(['a', EMOJI, 'b', EMOJI, EMOJI])
+    expect(dones).toBe(1)
+  })
+
+  it('a boundary between two whole characters is left where it is', () => {
+    const data = EMOJI.repeat(300)
+    const { written } = chunked(data, 256)
+    expect(written.map((c) => c.length)).toEqual([256, 256, 88])
+    expect(written.some((c) => BROKEN.test(c))).toBe(false)
+  })
+
+  it('plain text is chunked exactly as before, and its progress counts are the same', () => {
+    const data = 'p'.repeat(1000)
+    const { written, progress } = chunked(data, 256)
+    expect(written.map((c) => c.length)).toEqual([256, 256, 256, 232])
+    expect(progress).toEqual([[256, 1000], [512, 1000], [768, 1000], [1000, 1000]])
+    // Characters of one unit that take several bytes are not grown for either.
+    const accented = String.fromCodePoint(0xe9).repeat(600)
+    expect(chunked(accented, 256).written.map((c) => c.length)).toEqual([256, 256, 88])
+  })
+
+  it('half a character with no other half beside it is passed on as it came: nothing grows', () => {
+    // A high unit at the boundary followed by a letter, and a low unit after it.
+    const data = 'a'.repeat(255) + HIGH + 'b'.repeat(255) + LOW + 'c'.repeat(10)
+    const { written } = chunked(data, 256)
+    expect(written.map((c) => c.length)).toEqual([256, 256, 10])
+    expect(written.join('')).toBe(data)
+  })
+
+  it('a session that ends right after the grown chunk gets nothing more', () => {
+    const data = 'a'.repeat(255) + EMOJI + 'b'.repeat(300)
+    const written: string[] = []
+    let alive = true
+    runChunkedWrite(data, {
+      write: (s) => { written.push(s); alive = false },
+      isAlive: () => alive,
+      schedule: syncSchedule,
+      chunkSize: 256,
+    })
+    expect(written).toEqual(['a'.repeat(255) + EMOJI])
+  })
+})
