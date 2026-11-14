@@ -290,9 +290,11 @@ function longestIdOfReading(reading: string, ids: readonly string[]): string {
  * is no entry's id or alias goes to a standing entry that places it before
  * the fetched one's id is looked at: with a fetched `claude-opus-6-1`,
  * `claude-opus-6.1` is not that model, it goes to the entry with the family's
- * plain pattern, where the build alone puts it. And an id that is itself
- * written with a dot is not the same id written with a hyphen (`gpt-5.5` is a
- * model, `gpt-5-5` is not).
+ * plain pattern, where the build alone puts it. (The file may list that name
+ * as an alias of its model, and an alias is looked up before this step:
+ * aliasHeldBy in model-registry-data.ts.) And an id that is itself written
+ * with a dot is not the same id written with a hyphen (`gpt-5.5` is a model,
+ * `gpt-5-5` is not).
  *
  * The longest id of either reading takes the name; of two as long, the one
  * the name as written starts with. An id is compared as it is written, so one
