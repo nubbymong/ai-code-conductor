@@ -33,16 +33,22 @@
 //    file adds is its exact id and its aliases, and beyond those only a name
 //    nothing shipped places;
 //  - and a model the build does not ship takes no name the bundled file
-//    alone gives to one of its own entries: its ID is refused only when
-//    the bundled file places it by an exact id or an alias (a shipped
-//    name), so an id reached by an id-prefix or a pattern
-//    (`claude-fable-5-3`, `claude-opus-6`) is free, which is how a new model
-//    is added; each ALIAS is refused when the bundled file places it by an
-//    exact id or an alias, or by an id-prefix or a pattern when the alias
-//    does not start with the model's own id. An alias that does
-//    (`claude-fable-5-3-20270101`, `claude-fable-5-3[1m]`) is the model's own
-//    name, and one nothing places is free. A refused name refuses the whole
-//    file, and the log names the shipped entry;
+//    alone gives to one of its own entries: its ID is refused when the
+//    bundled file places it by an exact id or an alias (a shipped name), so
+//    an id reached by an id-prefix or a pattern (`claude-fable-5-3`,
+//    `claude-opus-6`) is free, which is how a new model is added; each ALIAS
+//    is refused when the bundled file places it by an exact id or an alias,
+//    or by an id-prefix or a pattern when the alias does not start with the
+//    model's own id, or when it does but the shipped entry's id starts with
+//    the model's own id as well (`claude-opus-4` does not own
+//    `claude-opus-4-7[1m]`). An alias that is the model's own
+//    (`claude-fable-5-3-20270101`, `claude-fable-5-3[1m]`) is its name, and
+//    one nothing places is free. In every case, the id and every alias, a
+//    dated (`-YYYYMMDD`) or bracketed (`[1m]`) form of a shipped entry's id
+//    is that shipped entry's name and refused (`claude-opus-4-5-20260101`,
+//    `gpt-5.5-20260101`), though the bundled file only reaches it by an
+//    id-prefix. A refused name refuses the whole file, and the log names the
+//    shipped entry;
 //  - a pattern is plain text (literalPattern), matched as text. Nothing in
 //    the file is ever compiled into a regular expression.
 //
@@ -160,24 +166,37 @@ function placedBy(bundled: ModelRegistry, name: string): { id: string; kind: Mod
   return at.known && at.matchKind ? { id: at.id, kind: at.matchKind } : undefined
 }
 
-/** The shipped entry that has `id` as its exact id or one of its aliases. An id
- *  the bundled file only reaches by an id-prefix or a pattern (`claude-fable-5-3`
- *  is reached through `claude-fable-5`) is a new model's own name. */
+/** Whether `name` is the shipped id `shipped` with a date (`-YYYYMMDD...`) or a
+ *  context size (`[1m]`) after it: that shipped model's own name. */
+function isDatedOrBracketedForm(name: string, shipped: string): boolean {
+  if (!name.startsWith(shipped)) return false
+  const rest = name.slice(shipped.length)
+  return /^-\d{8}/.test(rest) || rest.startsWith('[')
+}
+
+/** The shipped entry that has `id` as its exact id or one of its aliases, or
+ *  whose id `id` is a dated or bracketed form of. An id the bundled file only
+ *  reaches by an id-prefix or a pattern (`claude-fable-5-3` is reached through
+ *  `claude-fable-5`) is a new model's own name. */
 function idHeldBy(bundled: ModelRegistry, id: string): string | undefined {
   const at = placedBy(bundled, id)
-  return at && (at.kind === 'exact' || at.kind === 'alias') ? at.id : undefined
+  if (!at) return undefined
+  return at.kind === 'exact' || at.kind === 'alias' || isDatedOrBracketedForm(id, at.id) ? at.id : undefined
 }
 
 /** The shipped entry that stops `alias` being the alias of the model `own`: one
- *  that has it as an exact id or an alias, or one the bundled file reaches it
- *  on by an id-prefix or a pattern when it does not start with `own`'s id. An
- *  alias that starts with its model's id (`claude-fable-5-3-20270101`,
- *  `claude-fable-5-3[1m]`) is that model's own name; one nothing places is free. */
+ *  that has it as an exact id or an alias, or whose id it is a dated or
+ *  bracketed form of, or one the bundled file reaches it on by an id-prefix or
+ *  a pattern when it does not start with `own`'s id, or when it does but the
+ *  shipped id starts with `own` too (`claude-opus-4-7[1m]` is not
+ *  `claude-opus-4`'s). An alias that starts with its model's id
+ *  (`claude-fable-5-3-20270101`, `claude-fable-5-3[1m]`) is that model's own
+ *  name; one nothing places is free. */
 function aliasHeldBy(bundled: ModelRegistry, alias: string, own: string): string | undefined {
   const at = placedBy(bundled, alias)
   if (!at) return undefined
-  if (at.kind === 'exact' || at.kind === 'alias') return at.id
-  return alias.startsWith(own) ? undefined : at.id
+  if (at.kind === 'exact' || at.kind === 'alias' || isDatedOrBracketedForm(alias, at.id)) return at.id
+  return alias.startsWith(own) && !at.id.startsWith(own) ? undefined : at.id
 }
 
 /**
@@ -236,13 +255,14 @@ export function validateModelData(value: unknown, bundled: ModelRegistry): Model
     // (its catch-all entry, its short pattern) is the build's own and stays.
     if (!base && !isFullModelName(m.id, m.family)) return refuse(`models: ${m.id} is not a full model name of its family`)
     // A model the build does not ship takes no name the bundled file alone
-    // gives to one of its own entries. Its ID is refused only when that is an
-    // exact id or an alias (a shipped name): an id the bundled file reaches by
-    // an id-prefix or a pattern (`claude-fable-5-3`, `claude-opus-6`) is how a
-    // new model is added. Each ALIAS is refused when the bundled file places it
-    // by an exact id or alias, or by an id-prefix or a pattern when it does not
-    // start with the model's own id; one that does is the model's own name, and
-    // one nothing places is free. Exact ids and aliases are looked up first
+    // gives to one of its own entries. Its ID is refused when that is an exact
+    // id or an alias (a shipped name), or a dated or [1m] form of a shipped id:
+    // an id the bundled file reaches by an id-prefix or a pattern otherwise
+    // (`claude-fable-5-3`, `claude-opus-6`) is how a new model is added. Each
+    // ALIAS is refused when the bundled file places it by an exact id or alias,
+    // a dated or [1m] form of a shipped id, or by an id-prefix or a pattern when
+    // it does not start with the model's own id (or the shipped id starts with
+    // it too); one that is the model's own name, and one nothing places is free. Exact ids and aliases are looked up first
     // (matchEntry), so a refused name would leave the shipped entry for the new one.
     const holder = base ? undefined : [idHeldBy(bundled, m.id), ...(m.aliases ?? []).map((a) => aliasHeldBy(bundled, a, m.id))].find((id) => id !== undefined)
     if (holder) return refuse(`models: ${m.id} has a name the build already places on ${holder}`)
