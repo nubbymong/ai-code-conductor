@@ -10,16 +10,18 @@
 //
 // The root is created once per worker (keyed through the environment so every
 // test file in the worker shares it) and removed on process exit;
-// tests/global-setup.ts sweeps any orphan left by a killed worker.
+// tests/global-setup.ts removes any orphan of THIS run left by a killed worker.
 import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs'
+import { runTempPrefix } from './vitest-run-tag.mjs'
 
 const KEY = 'CCC_TEST_TMP_ROOT'
 const existing = process.env[KEY]
 
+// Named `ccc-vitest-<run tag>-...`: the teardown removes only this run's roots.
 export const TEST_TMP_ROOT =
-  existing && fs.existsSync(existing) ? existing : fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-vitest-'))
+  existing && fs.existsSync(existing) ? existing : fs.mkdtempSync(path.join(os.tmpdir(), runTempPrefix()))
 
 // First importer in this worker owns setup: pin the root in the env, redirect
 // the process temp dir, and register a single exit-time cleanup. Subsequent
