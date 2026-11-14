@@ -436,7 +436,7 @@ describe('release.yml: a beta release reuses green CI for the same tree; a stabl
 
   it('the lookup job reads and never writes, is never skipped, and cannot fail the release', () => {
     expect(reuse, 'release.yml has no ci-reuse job').toBeDefined()
-    expect(reuse.permissions).toEqual({ contents: 'read', actions: 'read' })
+    expect(reuse.permissions).toEqual({ contents: 'read', actions: 'read', 'pull-requests': 'read' })
     // A skipped job skips the jobs that need it: this one has no condition, and
     // a failure in it counts as a pass for them.
     expect(reuse.if).toBeUndefined()
