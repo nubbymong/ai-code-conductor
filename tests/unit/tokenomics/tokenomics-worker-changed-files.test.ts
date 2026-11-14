@@ -3,7 +3,8 @@
  * transcripts the folder watcher reported. The whole tree is listed at start,
  * on a re-index, on an event that names no transcript, and as a safety net
  * every TK_FULL_SWEEP_MS. A full walk that leaves work behind runs again
- * until every file is read.
+ * until every file is read, and a reported transcript that is a link is left
+ * alone, as the full walk leaves it.
  *
  * Host-safe: the real worker and real transcript files in a temp folder, a
  * wrapped fs that counts folder listings and file reads and hands the
@@ -72,6 +73,17 @@ function rollout(id: string, turns: number): string {
 }
 /** Long enough for a debounced sweep (5 ms here) to have run many times over. */
 const settle = (ms = 150): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** Whether this platform lets a test make a link to a file (Windows wants a
+ *  privilege for it; a simulated link covers the rule there). */
+const CAN_LINK_FILES = ((): boolean => {
+  const dir = realFs.mkdtempSync(path.join(os.tmpdir(), 'tklink-'))
+  try {
+    realFs.writeFileSync(path.join(dir, 'target'), '')
+    realFs.symlinkSync(path.join(dir, 'target'), path.join(dir, 'link'), 'file')
+    return true
+  } catch { return false } finally { realFs.rmSync(dir, { recursive: true, force: true }) }
+})()
 
 type WatchCb = (event: string, filename: string | null) => void
 type Complete = { firstIndex: boolean; drained: boolean }
@@ -349,4 +361,41 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
     })
   })
 
+  describe('a reported transcript that is a link', () => {
+    // The full walk skips links. A link is simulated here so the rule is
+    // checked on every platform: lstat says link, stat and open follow it.
+    it('is not read and starts no walk (simulated link)', async () => {
+      await start()
+      linkTarget = path.join(tmp, 'elsewhere.jsonl')
+      realFs.writeFileSync(linkTarget, line('elsewhere'))
+      linkAt = transcript('linked')
+      clearCounts()
+      fire(claudeDir, 'rename', path.join('F--proj', 'linked.jsonl'))
+      await settle()
+      expect(opened).toEqual([])
+      expect(db.cursors.has(linkAt)).toBe(false)
+      expect(db.events).toBe(5)
+      expect(listings).toBe(0)
+    })
+
+    it.runIf(CAN_LINK_FILES)('is read by neither a report of it nor a full walk (real link)', async () => {
+      await start()
+      const elsewhere = path.join(tmp, 'elsewhere.jsonl')
+      realFs.writeFileSync(elsewhere, line('elsewhere'))
+      const link = transcript('linked')
+      realFs.symlinkSync(elsewhere, link, 'file')
+      clearCounts()
+      fire(claudeDir, 'rename', path.join('F--proj', 'linked.jsonl'))
+      await settle()
+      expect(opened).toEqual([])
+      expect(listings).toBe(0)
+      const full = nextSweep('the full sweep')
+      fire(claudeDir, 'rename', 'F--proj')
+      await full
+      expect(walks).toBe(1)
+      expect(opened).toEqual([])
+      expect(db.cursors.has(link)).toBe(false)
+      expect(db.events).toBe(5)
+    })
+  })
 })

@@ -856,15 +856,19 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
 
   /** #302: what a watcher event means for the next sweep. `perFile` is the
    *  Claude projects folder, where a transcript that exists (written, or just
-   *  made) is read on its own; anything else -- no file name, a folder, a
-   *  deleted file, any Codex folder event -- makes the next sweep a full one,
-   *  as every event did before. */
+   *  made) is read on its own, and one that is a link is left alone; anything
+   *  else -- no file name, a folder, a deleted file, any Codex folder event --
+   *  makes the next sweep a full one, as every event did before. */
   function noteWatchEvent(dir: string, perFile: boolean, filename: unknown): void {
     if (perFile && typeof filename === 'string' && filename.endsWith('.jsonl')) {
       const full = path.join(dir, filename)
-      let isFile = false
-      try { isFile = fs.statSync(full).isFile() } catch { isFile = false }
-      if (isFile) { dirtyClaude.add(full); return }
+      // lstat, not stat: stat follows a link, and a linked transcript would
+      // then be read here although the full walk skips it. A link is left
+      // alone, with no walk either: the walk would skip it too.
+      let st: nodeFs.Stats | null = null
+      try { st = fs.lstatSync(full) } catch { st = null }
+      if (st?.isSymbolicLink()) return
+      if (st?.isFile()) { dirtyClaude.add(full); return }
     }
     fullSweepDue = true
   }
