@@ -662,6 +662,8 @@ describe('since tags: pinned, parseable, and curated for the newest release', ()
     'Working with Claude / Agent Canvas.': '2.1.0-beta.16',
     'Working with Claude / Session Watchdog.': '2.1.0-rc.1',
     'Working with Claude / Ask Conductor.': '2.1.0-beta.16',
+    'Across the app / New models, no update.': '2.1.3-beta.1',
+    'Across the app / Fable 5.2.': '2.1.3-beta.1',
     'Accounts & usage / Codex accounts.': '2.1.1-beta.2',
     'Accounts & usage / Switch mid-session.': '2.1.0-beta.16',
     'Accounts & usage / claude.ai in the app.': '2.1.0-beta.16',

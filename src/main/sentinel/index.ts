@@ -28,7 +28,7 @@ import {
 } from './sentinel-models'
 import { codexVersionFindings, type SupportedVersions } from './sentinel-codex'
 import { fetchArticleModelIds } from './sentinel-model-article'
-import { getRegistry, getBaseline, applyOverlayEntry, removeOverlayEntry, loadOverlay, setOverlay } from '../model-registry-service'
+import { getRegistry, getBundledRegistry, applyOverlayEntry, removeOverlayEntry, loadOverlay, setOverlay } from '../model-registry-service'
 import { reconcileOverlay } from '../../shared/model-registry'
 import { sentinelAnalysisProvider } from '../../shared/ask-conductor-provider'
 import { stripSpoofableText } from '../../shared/safe-text'
@@ -58,13 +58,31 @@ export function sentinelObserve(obs: Observation): void { observer?.(obs) }
 
 /** First launch after a CCC update: retire overlay entries the new baseline
  *  covers. Housekeeping only — severe-breaking-only Sentinel no longer raises
- *  user-facing findings for registry reconciliation. */
+ *  user-facing findings for registry reconciliation.
+ *  The baseline here is the file shipped with the build alone, never the
+ *  model data read from the network (2.1.3-beta.1): the overlay is the
+ *  durable local record of a model, and the model data can change or go
+ *  away, so only a release that carries the model retires its entry. */
 export function reconcileOnUpdate(): void {
   if (!state) return
   const overlay = loadOverlay()
   if (!overlay?.models?.length) return
-  const r = reconcileOverlay(getBaseline(), overlay)
+  const r = reconcileOverlay(getBundledRegistry(), overlay)
   if (r.autoRetired.length) setOverlay(r.overlay)
+}
+
+/** The model data read at start-up changed the registry (2.1.3-beta.1): a
+ *  model it now carries is in the picker, so its "not in the model picker"
+ *  notice is closed at once, from the registry alone (not at the next start).
+ *  The overlay is left as it is (see reconcileOnUpdate). Nothing is raised
+ *  here: the checks do that. Safe before initSentinel. */
+export function sentinelModelDataChanged(): void {
+  if (!state) return
+  try {
+    state.retireOpen(registryCoveredModelFindingIds(state.snapshot().findings, getRegistry()))
+  } catch (err) {
+    logInfo(`[sentinel] closing model notices after the model data changed failed: ${(err as Error)?.message ?? err}`)
+  }
 }
 
 // Lazy: claude-headless imports the pty-manager graph (which reaches electron.app

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-14T04:20:44.251Z",
-  "head": "05656d3f0781d45e4998f04aa997a9f4a7aba617",
-  "tree": "a3daee375ccdfc5144d3ab2ecc86af2dd983a912",
+  "generatedAt": "2026-11-14T05:06:08.523Z",
+  "head": "6a45533b5fafb2be1233d20072d8249cabb4e2c0",
+  "tree": "bd07729a69d03314e869f6bc558ff34fb428cd2b",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3152,
-  "excludedFileCount": 460,
-  "scannedFileCount": 2692,
+  "trackedFileCount": 3161,
+  "excludedFileCount": 463,
+  "scannedFileCount": 2698,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 894,
-  "pathDigest": "b5e0b0c487d33488f99ebe5ba25ffbe139ce337560553ab862c880b20c3b2688",
+  "matchedPathCount": 897,
+  "pathDigest": "3d3b8b10fc2d6f68c2e4ddc657b23e2a9b983a0b1b261ad7c4b795922535a14d",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -962,6 +962,13 @@
         "P14"
       ],
       "lineCount": 59
+    },
+    {
+      "path": "src/main/model-registry-data.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 4
     },
     {
       "path": "src/main/model-registry-service.ts",
@@ -5096,6 +5103,22 @@
       "lineCount": 34
     },
     {
+      "path": "tests/unit/model-data-resolution-rule.test.ts",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "tests/unit/model-data-schema.test.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "lineCount": 28
+    },
+    {
       "path": "tests/unit/model-picker-rows.test.ts",
       "predicates": [
         "P05",
@@ -7075,7 +7098,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 14
+      "lineCount": 16
     },
     {
       "path": "tests/unit/sentinel-analysis.test.ts",

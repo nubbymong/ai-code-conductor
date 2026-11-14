@@ -32,7 +32,11 @@ export interface ModelEntry {
 }
 
 export interface OverlayProvenance {
-  addedBy: 'sentinel' | 'user'
+  /** `model-data` (2.1.3-beta.1): not an overlay entry at all, but a model the
+   *  fetched model file carries and this build's own file does not
+   *  (mergeModelData, main). It is marked the same way because the same thing
+   *  is true of it: the lists shipped with this build cannot name it. */
+  addedBy: 'sentinel' | 'user' | 'model-data'
   date: string
   ccVersion?: string
   cccVersion?: string
@@ -56,6 +60,12 @@ export interface ModelRegistry {
    *  DERIVED from `models` by buildModelPickerRows() (#385) so a Sentinel or
    *  user overlay entry reaches both pickers without a code change. */
   dropdown: DropdownOptionSpec[]
+  /** The ids of the models the build ships, in the bundled file's order
+   *  (2.1.3-beta.1). Set in memory by mergeModelData (main) when model data
+   *  is in use, and never part of a file: `models` is then in the fetched
+   *  file's order, which is the pickers', and matchEntry places a name by this
+   *  order instead, so a fetched file cannot change it. */
+  shippedOrder?: string[]
 }
 
 export interface RegistryOverlay {
@@ -142,6 +152,25 @@ export function hashUnknownModelColor(modelId: string): string {
 
 export type ModelMatchKind = 'exact' | 'alias' | 'prefix' | 'pattern'
 
+/** A pattern that is plain text: lower-case letters, digits, dots and
+ *  hyphens, at most 64 of them, with an optional leading `^` meaning "the
+ *  name starts with this". */
+const LITERAL_PATTERN_RE = /^(\^?)([a-z0-9][a-z0-9.-]{0,63})$/
+
+/**
+ * A pattern as plain text, or null when it is not one (2.1.3-beta.1).
+ *
+ * One rule, two readers, so they cannot drift apart: the check on a fetched
+ * model file admits only patterns this returns non-null for
+ * (model-registry-data.ts), and matchEntry matches every such pattern as
+ * text. So nothing from a fetched file is ever compiled into a regular
+ * expression. Every pattern in the bundled file is of this form too.
+ */
+export function literalPattern(p: unknown): { text: string; atStart: boolean } | null {
+  const m = typeof p === 'string' ? LITERAL_PATTERN_RE.exec(p) : null
+  return m ? { text: m[2], atStart: m[1] === '^' } : null
+}
+
 /**
  * Entries this matcher will consider: those with a usable string `id`.
  *
@@ -160,6 +189,34 @@ function usableEntries(registry: ModelRegistry): ModelEntry[] {
   )
 }
 
+/** A model only the fetched model file has: mergeModelData (main) marks it. */
+function isModelDataEntry(m: ModelEntry): boolean {
+  return (m as Partial<OverlayModelEntry>).provenance?.addedBy === 'model-data'
+}
+
+/**
+ * The entries a name is tried against when it is no entry's id or alias, as
+ * two lists: the first is tried in full before the second (2.1.3-beta.1).
+ *
+ * The rule: a fetched model file never changes what a name the build already
+ * places resolves to. So the second list is the models only the fetched file
+ * has, and the first is every other entry: the shipped ones in the bundled
+ * file's order (`shippedOrder`; the fetched file's own order is the pickers',
+ * not this one's), then the user's and Sentinel's own additions in list
+ * order, which is where they stand without model data. With no model data in
+ * use the first list is `models` as it is (no order is given, and the sort
+ * below is stable, so it moves nothing).
+ */
+function entriesByStanding(registry: ModelRegistry, models: ModelEntry[]): [ModelEntry[], ModelEntry[]] {
+  const order = Array.isArray(registry?.shippedOrder) ? registry.shippedOrder : []
+  const rank = new Map<string, number>(order.map((id, i) => [id, i]))
+  // An entry the order does not name comes after every one it names; entries
+  // of the same rank keep list order (Array.prototype.sort is stable).
+  const at = (m: ModelEntry): number => rank.get(m.id) ?? rank.size
+  const standing = models.filter((m) => !isModelDataEntry(m)).sort((a, b) => at(a) - at(b))
+  return [standing, models.filter(isModelDataEntry)]
+}
+
 function matchEntry(
   registry: ModelRegistry,
   modelId: string,
@@ -175,13 +232,23 @@ function matchEntry(
   //    a bare STRING would otherwise substring-match via String.prototype.includes.
   const alias = models.find((m) => Array.isArray(m.aliases) && m.aliases.includes(raw))
   if (alias) return { entry: alias, kind: 'alias' }
+  // 3 and 4, first over every entry that is not the fetched model file's own
+  // addition; such an addition only places a name none of those does.
+  const [standing, added] = entriesByStanding(registry, models)
+  return matchByPrefixOrPattern(standing, raw) ?? matchByPrefixOrPattern(added, raw)
+}
+
+function matchByPrefixOrPattern(
+  models: ModelEntry[],
+  raw: string,
+): { entry: ModelEntry; kind: ModelMatchKind } | null {
   // 3. longest id-prefix (date-suffixed ids: claude-opus-4-7-20260101)
   let prefix: ModelEntry | null = null
   for (const m of models) {
     if (raw.startsWith(m.id) && (!prefix || m.id.length > prefix.id.length)) prefix = m
   }
   if (prefix) return { entry: prefix, kind: 'prefix' }
-  // 4. first pattern match in registry order (substring unless anchored regex).
+  // 4. first pattern match in the order given (substring unless anchored regex).
   //    A missing/!Array `patterns` degrades this entry to "unmatchable by
   //    pattern" — it stays reachable by id, alias and prefix above.
   const lower = raw.toLowerCase()
@@ -190,11 +257,20 @@ function matchEntry(
     for (const p of patterns) {
       if (typeof p !== 'string' || !p) continue
       let hit = false
-      try {
-        hit = p.startsWith('^') || p.endsWith('$')
-          ? new RegExp(p, 'i').test(lower)
-          : lower.includes(p.toLowerCase())
-      } catch { /* malformed pattern in a hand-edited overlay: skip, never crash a render */ }
+      // A plain pattern is matched as text and never compiled: the only kind
+      // a fetched model file may carry (literalPattern). Anything else can
+      // only come from the user's own hand-edited overlay, and is read as it
+      // always was.
+      const literal = literalPattern(p)
+      if (literal) {
+        hit = literal.atStart ? lower.startsWith(literal.text) : lower.includes(literal.text)
+      } else {
+        try {
+          hit = p.startsWith('^') || p.endsWith('$')
+            ? new RegExp(p, 'i').test(lower)
+            : lower.includes(p.toLowerCase())
+        } catch { /* malformed pattern in a hand-edited overlay: skip, never crash a render */ }
+      }
       if (hit) return { entry: m, kind: 'pattern' }
     }
   }

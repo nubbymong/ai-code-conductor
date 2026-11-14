@@ -220,3 +220,119 @@ describe('a notice whose model the registry does not cover (O8)', () => {
     expect(openIds(s)).toEqual([])
   })
 })
+
+// 2.1.3-beta.1: model definitions are data. The model file read at start-up
+// can carry a model this build's own file does not, and the notice for that
+// model goes once the file has it, with no release and no restart. The read
+// is a stand-in: no request leaves this suite.
+describe('the model data read at start-up carries the model (2.1.3-beta.1)', () => {
+  const NEW = 'claude-fable-6'
+  const fileWith = async (id: string) => {
+    const bundled = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'resources', 'model-registry.json'), 'utf8'))
+    bundled.models.unshift({ id, patterns: ['fable-6'], family: 'fable', label: 'Fable 6' })
+    return JSON.stringify(bundled)
+  }
+  const refresh = async (text: string) => {
+    const { refreshModelRegistry } = await import('../../../src/main/model-registry-service')
+    return refreshModelRegistry({ fetchText: async () => ({ ok: true, text }) })
+  }
+
+  it('the notice for a model the fetched file now has is closed as soon as the file is in use, and the file agrees', async () => {
+    const s = await sentinel([notice(NEW), notice('claude-fable-7')])
+    expect(openIds(s)).toEqual([`models:missing:${NEW}`, 'models:missing:claude-fable-7'])
+    expect(await refresh(await fileWith(NEW))).toBe(true)
+    s.sentinelModelDataChanged()
+    // The one the file carries is closed; the one it does not carry stays.
+    expect(openIds(s)).toEqual(['models:missing:claude-fable-7'])
+    expect(savedIds()).toEqual(['models:missing:claude-fable-7=open'])
+  })
+
+  it('a read that brings nothing new closes nothing', async () => {
+    const s = await sentinel([notice(NEW)])
+    const { refreshModelRegistry } = await import('../../../src/main/model-registry-service')
+    expect(await refreshModelRegistry({ fetchText: async () => ({ ok: false, reason: 'HTTP 404' }) })).toBe(false)
+    s.sentinelModelDataChanged()
+    expect(openIds(s)).toEqual([`models:missing:${NEW}`])
+  })
+
+  it('the next check, with the article listing the model, raises nothing about it: not missing, and not "possibly retired"', async () => {
+    const s = await sentinel([notice(NEW)])
+    await refresh(await fileWith(NEW))
+    s.sentinelModelDataChanged()
+    article.ids = [...liveIds, NEW]
+    await s.sentinelStartupCheck()
+    expect(snap(s).findings.filter((f) => f.status === 'open' && f.id.includes(NEW))).toEqual([])
+    // Offline (the shipped list, which cannot name it): still nothing.
+    article.ids = null
+    await s.sentinelStartupCheck()
+    expect(snap(s).findings.filter((f) => f.status === 'open' && f.id.includes(NEW))).toEqual([])
+  })
+
+  it('a muted notice stays muted', async () => {
+    const s = await sentinel([notice(NEW, 'muted')])
+    await refresh(await fileWith(NEW))
+    s.sentinelModelDataChanged()
+    expect(savedIds()).toContain(`models:missing:${NEW}=muted`)
+  })
+
+  it('before Sentinel is started, the call does nothing and does not throw', async () => {
+    vi.resetModules()
+    const mod = await import('../../../src/main/sentinel/index')
+    expect(() => mod.sentinelModelDataChanged()).not.toThrow()
+  })
+
+  // Review finding: the fetched file is a network file that can change or go
+  // away, and the overlay is the durable local record of a model Sentinel
+  // added. A fetched file that carried the model used to delete that record
+  // for good, so the model left the picker if the file later dropped it.
+  describe('an overlay entry Sentinel added is the durable record of a model', () => {
+    const overlayFile = () => path.join(dir, 'sentinel', 'registry-overlay.json')
+    const overlayIds = () => (JSON.parse(fs.readFileSync(overlayFile(), 'utf-8')).models as Array<{ id: string }>).map((m) => m.id)
+    const added = (id: string) => ({ id, patterns: [], family: 'fable', label: `Added ${id}`, provenance: { addedBy: 'sentinel', date: '2026-11-01' } })
+    const plantOverlay = (...ids: string[]) => {
+      fs.mkdirSync(path.join(dir, 'sentinel'), { recursive: true })
+      fs.writeFileSync(overlayFile(), JSON.stringify({ models: ids.map(added) }))
+    }
+    const inPicker = async (id: string) => {
+      const { getRegistry } = await import('../../../src/main/model-registry-service')
+      const { buildModelPickerRows } = await import('../../../src/shared/model-registry')
+      return buildModelPickerRows(getRegistry()).some((r) => r.value === id)
+    }
+
+    it('a fetched file that carries the model closes the notice and leaves the overlay entry where it is', async () => {
+      plantOverlay(NEW)
+      const s = await sentinel([notice(NEW)])
+      expect(await refresh(await fileWith(NEW))).toBe(true)
+      s.sentinelModelDataChanged()
+      expect(openIds(s)).toEqual([])
+      expect(overlayIds()).toEqual([NEW])
+    })
+
+    it('the next start, with that file as the last good copy, leaves it too; then with the file gone the model is still in the picker', async () => {
+      plantOverlay(NEW)
+      fs.mkdirSync(path.join(dir, 'CONFIG'))
+      const s = await sentinel([])
+      expect(await refresh(await fileWith(NEW))).toBe(true)
+      s.sentinelModelDataChanged()
+      expect(fs.existsSync(path.join(dir, 'CONFIG', 'model-data.json'))).toBe(true)
+      // The next start: the last good copy carries the model.
+      const { _initRegistryForTest } = await import('../../../src/main/model-registry-service')
+      _initRegistryForTest(dir)
+      s.reconcileOnUpdate()
+      expect(overlayIds()).toEqual([NEW])
+      // The file drops the model and the copy is lost: the overlay still has it.
+      fs.rmSync(path.join(dir, 'CONFIG', 'model-data.json'))
+      _initRegistryForTest(dir)
+      s.reconcileOnUpdate()
+      expect(overlayIds()).toEqual([NEW])
+      expect(await inPicker(NEW)).toBe(true)
+    })
+
+    it('an entry for a model this build\'s own file now carries is still retired, as after any update', async () => {
+      plantOverlay(NEW, 'claude-opus-5-5')
+      const s = await sentinel([])
+      s.reconcileOnUpdate()
+      expect(overlayIds()).toEqual([NEW])
+    })
+  })
+})

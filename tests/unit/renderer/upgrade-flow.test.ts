@@ -226,10 +226,15 @@ describe('sectionsFor — which highlights the upgrade page shows, by anchor', (
     for (const old of ['New name.', 'Agent Canvas.', 'SSH Persistent.', 'Insights.']) expect(titles, old).not.toContain(old)
   })
 
+  it('shows exactly the 2.1.3 lines to someone coming from 2.1.2', () => {
+    expect(titlesFor('2.1.2')).toEqual(['New models, no update.', 'Fable 5.2.'])
+  })
+
   it('nothing curated since the anchor gives nothing: the page then shows its fixes line, never an older set', () => {
     // The beta.2 rule fell back to the NEWEST set on a line with none of its
     // own, which is the owner's complaint again on the next patch (O1 verdict).
-    expect(titlesFor('2.1.1')).toEqual([])
+    // The anchor is the newest curated tag (2.1.3-beta.1 since that release's lines).
+    expect(titlesFor('2.1.3-beta.1')).toEqual([])
     expect(titlesFor('2.2.0')).toEqual([])
   })
 

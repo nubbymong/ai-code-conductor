@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "b5e0b0c487d33488f99ebe5ba25ffbe139ce337560553ab862c880b20c3b2688",
-  "manifestHead": "05656d3f0781d45e4998f04aa997a9f4a7aba617",
+  "manifestPathDigest": "3d3b8b10fc2d6f68c2e4ddc657b23e2a9b983a0b1b261ad7c4b795922535a14d",
+  "manifestHead": "6a45533b5fafb2be1233d20072d8249cabb4e2c0",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -1448,6 +1448,16 @@
       "disposition": "replace",
       "evidence": "WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): picks the normalizer by the binding's format, transcript-unbind, the Memory rail keeps to Claude runs; tests/unit/logging/codex-logs-worker.test.ts, tests/unit/logging/transcripts-worker.native.test.ts; WP2 PR 3 P3.16a main track, M1 (WP1.68): a Claude transcript bound by a new run of the same session continues from what was indexed (the digest of what was read vouches for the bytes when it can be compared, else the cursor, as a worker restart), and a Claude tail leaves out the records written while its conversation was not indexed, by record time, with the divider, as a Codex tail; tests/unit/logging/codex-logs-worker.test.ts; WP2 PR 3 P3.16a main track round 1 (WP1.68): a Claude tail also leaves out records stamped in its projects folder's window (N1); tests/unit/logging/codex-logs-worker.test.ts; WP2 PR 3 P3.16a main track round 2 (WP1.68): a Claude tail also leaves out records stamped in the window of the projects folders' root above its folder (Q2, Q3); tests/unit/logging/codex-logs-worker.test.ts; WP2 PR 3 PR-level ADR-009 round 1 (WP1.68): a Codex tail also leaves out the records stamped in the window of the folder its rollout's session_meta records, in the realm the rollout lies in, worked out once from the first line; a rollout whose first line records no folder is left out wherever any Codex folder window covers the time (C1); tests/unit/logging/codex-logs-worker.test.ts",
       "note": "newly names Codex in WP2 PR 3 P3.12"
+    },
+    {
+      "path": "src/main/model-registry-data.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "MODELS-PRICING",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.1 module (src/main/model-registry-data.ts): the strict check a model file read from the network must pass (only the bundled file's fields, bounded plain strings, ids and patterns from a small alphabet, a format version) and how it joins the bundled file; a Codex model's efforts are held to Codex's own levels, and a model the bundled file carries cannot be moved to the other assistant (WP1.68); tests/unit/model-data-schema.test.ts; tests/unit/model-registry-remote-service.test.ts",
+      "note": "created by the 2.1.3-beta.1 model definitions as data change; pure, main process only"
     },
     {
       "path": "src/main/model-registry-service.ts",
@@ -7306,6 +7316,28 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: WP2 PR 3 P3.8 round 1 (row 39) added the Codex half's parity cases (the release gate against evaluateCodexModelCoverage); the Claude cases are unchanged; tests/unit/model-coverage-parity.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 2 added the duplicate, picker-id and non-list cases; tests/unit/model-coverage-parity.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 round 1 (was retain)"
+    },
+    {
+      "path": "tests/unit/model-data-resolution-rule.test.ts",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.1 test (tests/unit/model-data-resolution-rule.test.ts): a fetched model file never changes what a name the build already places resolves to, for Claude Code's names and for Codex's (a fixed list of names against fetched files that pass every check and try to take names), and the user's own overlay keeps its place (WP1.68)",
+      "note": "created by the 2.1.3-beta.1 model definitions as data change; the P05 hit picks the Claude Code models of the bundled file by family for the list of names, not a provider gate; no file, no network"
+    },
+    {
+      "path": "tests/unit/model-data-schema.test.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.1 test (tests/unit/model-data-schema.test.ts): the rules a fetched model file is held to, how it joins the bundled file, the bundled file passing its own rules, and that no pattern is compiled into a regular expression, for Claude Code's models and for Codex's (WP1.68)",
+      "note": "created by the 2.1.3-beta.1 model definitions as data change; the P04 hit is the registry's providerEffortLevels.codex key, not a home resolver; no file, no network"
     },
     {
       "path": "tests/unit/model-picker-rows.test.ts",
