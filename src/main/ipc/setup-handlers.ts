@@ -9,6 +9,7 @@ import { logInfo } from '../debug-logger'
 import { getInstallPath } from '../update-watcher'
 import { resolveClaudeForPty } from '../pty-manager'
 import { probeClaudeCli } from '../claude-cli-probe'
+import { claudeLaunchWalkPending, awaitClaudeLaunchWalk } from '../claude-launch-walk'
 import { afterPathRefresh } from '../windows-path-refresh'
 import { pathHintFor } from '../install-folder-path'
 import type { PathHintView } from '../../shared/providers'
@@ -220,6 +221,27 @@ export function registerSetupHandlers(): void {
     const installPath = getInstallPath()
     const cwd = installPath && fs.existsSync(installPath) ? installPath : homedir()
 
+    // Windows, when no Claude Code is known for this PATH right now (no walk
+    // of it in the last minute found one): PATH is walked first, off the
+    // event loop and each folder bounded, the walk a session's launch waits
+    // for (claude-launch-walk.ts). So a Claude Code installed a moment ago
+    // is the one this terminal starts, and the resolution below reads that
+    // walk's answer instead of walking PATH in place. Not waited for when an
+    // answer is kept, or off Windows.
+    if (claudeLaunchWalkPending(false)) {
+      await awaitClaudeLaunchWalk(false)
+      // The walk can take seconds (a PATH folder that does not answer).
+      // Closed, or asked for again, meanwhile: this start makes no terminal
+      // and warms nothing up, as after the warm-up below.
+      if (thisStart !== cliSetupStart) {
+        logInfo('[setup] CLI setup PTY not started: the setup terminal was closed while Claude Code was looked for')
+        return null
+      }
+      // Claude Code switched off meanwhile: refused before anything of it
+      // runs (the warm-up below starts it once).
+      const offAfterWalk = providerLaunchRefusal('claude')
+      if (offAfterWalk) return { refused: offAfterWalk }
+    }
     const { cmd } = resolveClaudeForPty()
 
     // Once the before-quit teardown has run, no setup terminal starts, on any

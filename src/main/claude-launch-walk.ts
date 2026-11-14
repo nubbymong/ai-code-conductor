@@ -26,6 +26,13 @@
 // warmPickerNodeOnWindows); it waits for that look too when no answer is
 // kept, so it does not walk PATH in place for node.exe either.
 //
+// The other callers of the same resolution wait for the same walk before
+// they resolve: the path the Find Claude step shows (ipc/cli-handlers.ts),
+// the first-run setup terminal (ipc/setup-handlers.ts) and the /insights
+// terminal (insights-runner.ts). The resolution takes a walk under a minute
+// old as the answer, found or not, so without this wait they would miss a
+// Claude Code installed since that walk, for up to a minute.
+//
 // Nothing is held while a recent answer is kept (the usual case: the launch
 // goes straight on, as before), off Windows, or before main has started
 // (armClaudeLaunchWalk, at start: a unit test that drives pty:spawn alone
