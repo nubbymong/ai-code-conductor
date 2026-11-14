@@ -308,11 +308,6 @@
    "how": "app-path",
    "reason": "Electron's utility process running the app's own bundled script (tokenomics-worker.js beside this module)."
   },
-  "src/main/tokenomics/tk-supervisor.ts :: this.spawn(": {
-   "count": 2,
-   "how": "not-a-process",
-   "reason": "The supervisor's own method of that name; it forks the tokenomics worker through fork-tokenomics-worker.ts."
-  },
   "src/main/vision-browser-owner.ts :: execFileSync(file": {
    "count": 1,
    "how": "system-folder",

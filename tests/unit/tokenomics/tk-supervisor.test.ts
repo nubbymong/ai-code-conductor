@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { TokenomicsSupervisor } from '../../../src/main/tokenomics/tk-supervisor'
 import { FakeTkWorkerTransport } from '../../../src/main/tokenomics/tk-worker-transport'
+import type { ToTkWorker } from '../../../src/main/tokenomics/tk-worker-transport'
+import type { ForkedTkWorker } from '../../../src/main/tokenomics/fork-tokenomics-worker'
+
+// The service's own lines in the main debug log, kept out of the real logger.
+const logs = vi.hoisted(() => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
+vi.mock('../../../src/main/debug-logger', () => logs)
 
 function fakeFork() {
   const t = new FakeTkWorkerTransport()
@@ -221,5 +227,238 @@ describe('TokenomicsSupervisor', () => {
     expect(sup.getIndexStatus().accountReread).toEqual({ stage: 'reread', done: 1, total: 4 })
     t.emitToMain({ type: 'index-progress', filesDone: 4, filesTotal: 4, eventsIngested: 0, phase: 'incremental', accountReread: null })
     expect(sup.getIndexStatus().accountReread).toBeNull()
+  })
+})
+
+// The usage index on the one supervisor (planning #307, B9): its while-down
+// buffer is bounded, and its restart budget is given back after a period of
+// stable running (it had no way back at all: it has no manual restart).
+const STABLE_MS = 5 * 60_000
+
+interface Kid { t: FakeTkWorkerTransport; got: ToTkWorker[]; exit: () => void; kills: number }
+
+function harness(opts: { maxRestarts?: number; stableResetMs?: number; autoReady?: boolean } = {}) {
+  const { autoReady = true, ...supOpts } = opts
+  const kids: Kid[] = []
+  const fork = vi.fn((): ForkedTkWorker => {
+    const t = new FakeTkWorkerTransport()
+    const kid: Kid = { t, got: t.workerMessages, exit: () => {}, kills: 0 }
+    t.onWorker((m) => {
+      if (m.type === 'open' && autoReady) t.emitToMain({ type: 'ready', firstIndexComplete: false, eventsTotal: 0 })
+      if (m.type === 'query') t.emitToMain({ type: 'query-result', id: m.id, rows: [{ ok: m.kind }] })
+    })
+    kids.push(kid)
+    return { transport: t, kill: () => { kid.kills++ }, onExit: (cb: () => void) => { kid.exit = cb } }
+  })
+  const sup = new TokenomicsSupervisor({
+    forkChild: fork, dbPath: ':memory:', pricing: {}, configs: [], claudeProjectsDir: '/c', codexSessionsDir: '/x',
+    emit: () => {}, ...supOpts,
+  })
+  sup.start()
+  const last = () => kids[kids.length - 1]
+  const ready = () => last().t.emitToMain({ type: 'ready', firstIndexComplete: false, eventsTotal: 0 })
+  return { sup, fork, kids, last, ready }
+}
+
+const price = (n: number) => ({ m: { input: n, output: n } }) as never
+const config = (id: string) => [{ configId: id, label: id, workingDirectory: `/w/${id}` }]
+
+describe('usage index: the while-down buffer is bounded (B9)', () => {
+  let h: ReturnType<typeof harness> | undefined
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => { h?.sup.shutdown(); h = undefined; vi.useRealTimers() })
+
+  it('keeps the latest of each kind, however many arrive while the worker is not ready', () => {
+    h = harness({ autoReady: false })
+    for (let i = 0; i < 500; i++) h.sup.setPricing(price(i))
+    for (let i = 0; i < 300; i++) h.sup.setConfigs(config(`c${i}`))
+    for (let i = 0; i < 200; i++) h.sup.reindex()
+    h.sup.setCodexRealmSessionsDirs([{ dir: '/r/a/sessions', accountKey: 'codex:acct-a' }])
+    h.sup.setCodexRealmSessionsDirs([{ dir: '/r/b/sessions', accountKey: 'codex:acct-b' }])
+    expect(h.kids[0].got.map((m) => m.type)).toEqual(['open'])   // nothing sent before ready
+    h.ready()
+    expect(h.kids[0].got.slice(1)).toEqual([
+      { type: 'set-pricing', pricing: price(499) },
+      { type: 'set-configs', configs: config('c299') },
+      { type: 'reindex' },
+      { type: 'set-codex-realm-dirs', dirs: [{ dir: '/r/b/sessions', accountKey: 'codex:acct-b' }] },
+    ])
+  })
+
+  it('a newer message of a kind takes the place in the order of its newest arrival', () => {
+    h = harness({ autoReady: false })
+    h.sup.setPricing(price(1))
+    h.sup.reindex()
+    h.sup.setConfigs(config('a'))
+    h.sup.setPricing(price(2))
+    h.ready()
+    expect(h.kids[0].got.slice(1)).toEqual([
+      { type: 'reindex' },
+      { type: 'set-configs', configs: config('a') },
+      { type: 'set-pricing', pricing: price(2) },
+    ])
+  })
+
+  it('stays bounded across a crash window too, and the next worker gets the latest', () => {
+    h = harness()
+    h.kids[0].exit()                       // down: a restart is 250ms away
+    for (let i = 0; i < 1000; i++) h.sup.setPricing(price(i))
+    vi.advanceTimersByTime(300)
+    expect(h.fork).toHaveBeenCalledTimes(2)
+    expect(h.kids[1].got).toEqual([
+      expect.objectContaining({ type: 'open', pricing: price(999) }),
+      { type: 'set-pricing', pricing: price(999) },
+    ])
+  })
+
+  it('a listening worker is sent every message at once, as before', () => {
+    h = harness()
+    h.sup.setPricing(price(1))
+    h.sup.setPricing(price(2))
+    h.sup.reindex()
+    h.sup.reindex()
+    expect(h.kids[0].got.slice(1).map((m) => m.type)).toEqual(['set-pricing', 'set-pricing', 'reindex', 'reindex'])
+  })
+})
+
+describe('usage index: the restart budget recovers (B9)', () => {
+  let h: ReturnType<typeof harness> | undefined
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => { h?.sup.shutdown(); h = undefined; vi.useRealTimers() })
+
+  it('crashes far apart never degrade the index for the run', async () => {
+    h = harness({ maxRestarts: 2 })
+    for (let i = 0; i < 8; i++) {
+      h.last().exit()
+      vi.advanceTimersByTime(5000)         // forked again; it opens and is ready
+      vi.advanceTimersByTime(STABLE_MS)
+    }
+    expect(h.fork).toHaveBeenCalledTimes(9)
+    await expect(h.sup.query('summary', {})).resolves.toEqual([{ ok: 'summary' }])
+  })
+
+  it('a worker that opens and dies inside the period still uses the budget up', async () => {
+    h = harness({ maxRestarts: 2 })
+    for (let i = 0; i < 3; i++) {
+      vi.advanceTimersByTime(STABLE_MS - 5000)
+      h.last().exit()
+      vi.advanceTimersByTime(4999)
+    }
+    expect(h.fork).toHaveBeenCalledTimes(3)
+    await expect(h.sup.query('summary', {})).rejects.toThrow('degraded=true')
+    vi.advanceTimersByTime(10 * STABLE_MS)
+    expect(h.fork).toHaveBeenCalledTimes(3)   // degraded is for the run
+  })
+
+  it('a worker that never becomes ready gives nothing back', () => {
+    h = harness({ maxRestarts: 1, autoReady: false })
+    h.last().exit()
+    vi.advanceTimersByTime(300)            // forked again, never ready
+    vi.advanceTimersByTime(10 * STABLE_MS)
+    h.last().exit()                        // the budget of 1 is still spent
+    vi.advanceTimersByTime(60_000)
+    expect(h.fork).toHaveBeenCalledTimes(2)
+  })
+
+  it('the period is the one given', () => {
+    h = harness({ maxRestarts: 1, stableResetMs: 2000 })
+    h.last().exit(); vi.advanceTimersByTime(300)   // the one restart is spent; ready on open
+    vi.advanceTimersByTime(2000)                   // stable for the period given
+    h.last().exit(); vi.advanceTimersByTime(300)   // so this crash is restarted too
+    expect(h.fork).toHaveBeenCalledTimes(3)
+  })
+
+  it('a ready starts the backoff over at once, as before', () => {
+    h = harness()
+    h.last().exit(); vi.advanceTimersByTime(300)   // 250ms, ready on open
+    h.last().exit(); vi.advanceTimersByTime(300)   // 250ms again: the ready reset the step
+    expect(h.fork).toHaveBeenCalledTimes(3)
+  })
+
+  it('without a ready the backoff climbs, as before', () => {
+    h = harness({ autoReady: false })
+    h.last().exit(); vi.advanceTimersByTime(300)
+    h.last().exit(); vi.advanceTimersByTime(900)   // the second step is 1000ms
+    expect(h.fork).toHaveBeenCalledTimes(2)
+    vi.advanceTimersByTime(100)
+    expect(h.fork).toHaveBeenCalledTimes(3)
+  })
+
+  it('shutdown leaves no timer behind, and a late exit forks nothing', () => {
+    h = harness()
+    h.last().exit(); vi.advanceTimersByTime(300)
+    const kid = h.last()
+    h.sup.shutdown()
+    expect(kid.got.at(-1)).toEqual({ type: 'shutdown' })
+    expect(kid.kills).toBe(1)
+    kid.exit()
+    vi.advanceTimersByTime(STABLE_MS)
+    expect(h.fork).toHaveBeenCalledTimes(2)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+// Review round: a replaced worker's late ready, what the service says in the
+// debug log, and a fork that fails.
+describe('usage index: a replaced worker\'s late ready', () => {
+  let h: ReturnType<typeof harness> | undefined
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => { h?.sup.shutdown(); h = undefined; vi.useRealTimers() })
+
+  it('is not the current worker\'s: nothing is sent, nothing is listening, and no budget comes back', async () => {
+    h = harness({ maxRestarts: 1, autoReady: false })
+    h.ready()                                       // worker 1 is up
+    h.last().exit(); vi.advanceTimersByTime(300)    // worker 2: the one restart is spent, and it is never ready
+    h.sup.setPricing(price(7))                      // held for a worker that is ready
+    h.kids[0].t.emitToMain({ type: 'ready', firstIndexComplete: true, eventsTotal: 5 })   // worker 1's, still draining
+    expect(h.kids[1].got.map((m) => m.type)).toEqual(['open'])
+    await expect(h.sup.query('summary', {})).rejects.toThrow('not ready')
+    expect(h.sup.getIndexStatus().firstIndexComplete).toBe(false)
+    vi.advanceTimersByTime(STABLE_MS + 10)
+    h.last().exit()
+    vi.advanceTimersByTime(60_000)
+    expect(h.fork).toHaveBeenCalledTimes(2)         // the budget of 1 is still spent
+  })
+
+  it('the current worker\'s own ready is taken as before', async () => {
+    h = harness({ autoReady: false })
+    h.last().exit(); vi.advanceTimersByTime(300)
+    h.sup.setPricing(price(7))
+    h.ready()
+    expect(h.kids[1].got.map((m) => m.type)).toEqual(['open', 'set-pricing'])
+  })
+})
+
+describe('usage index: what it says in the debug log', () => {
+  let h: ReturnType<typeof harness> | undefined
+  beforeEach(() => { vi.useFakeTimers(); logs.logInfo.mockClear(); logs.logError.mockClear() })
+  afterEach(() => { h?.sup.shutdown(); h = undefined; vi.useRealTimers() })
+
+  it('a stable period that gives a used budget back is logged', () => {
+    h = harness()
+    h.last().exit(); vi.advanceTimersByTime(250)    // one restart used; ready on open
+    vi.advanceTimersByTime(STABLE_MS - 1)
+    expect(logs.logInfo).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(logs.logInfo.mock.calls).toEqual([['[tokenomics] worker stable; restart budget restored']])
+  })
+
+  it('with nothing used, nothing is logged', () => {
+    h = harness()
+    vi.advanceTimersByTime(2 * STABLE_MS)
+    expect(logs.logInfo).not.toHaveBeenCalled()
+  })
+
+  it('a crash restart whose fork fails is logged with the reason, and the backoff forks the next', async () => {
+    h = harness()
+    h.fork.mockImplementationOnce(() => { throw new Error('no fork') })
+    h.last().exit()
+    expect(logs.logError).not.toHaveBeenCalled()    // an ordinary exit says nothing here, as before
+    vi.advanceTimersByTime(250)
+    expect(logs.logError.mock.calls).toEqual([['[tokenomics] worker could not be forked:', 'no fork']])
+    await expect(h.sup.query('summary', {})).rejects.toThrow('not ready')
+    vi.advanceTimersByTime(1000)                    // the second step of the backoff
+    expect(h.fork).toHaveBeenCalledTimes(3)
+    await expect(h.sup.query('summary', {})).resolves.toEqual([{ ok: 'summary' }])
   })
 })

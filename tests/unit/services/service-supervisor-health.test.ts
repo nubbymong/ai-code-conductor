@@ -99,7 +99,7 @@ describe('ServiceSupervisor health', () => {
     const emitted: Array<{ channel: string; payload: unknown }> = []
     const { sup, t } = makeSup((c, p) => emitted.push({ channel: c, payload: p }))
     sup.start()
-    emitted.length = 0   // drop the 'starting' push from spawnChild; assert the bound push
+    emitted.length = 0   // drop the 'starting' push from onChildSpawned; assert the bound push
     t.emitToParent({ type: 'bound', port: 19430, pid: 4242 })
     const upd = emitted.find((e) => e.channel === 'serviceHealth:update')
     expect(upd).toBeDefined()

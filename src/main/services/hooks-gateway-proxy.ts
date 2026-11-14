@@ -16,6 +16,12 @@ export interface HooksGatewayProxyOptions {
   // discovery via hooks keeps working when the child path is gone. In utility-process
   // mode the child gateway forwards the path over the transport instead.
   onTranscriptPath?: (sessionId: string, path: string) => void
+  // The supervisor's desired-state seam (B8): told the user's intent on every
+  // start()/stop() in utility-process mode, so "off" outlives a child restart.
+  // Returns true when that call itself forked a fresh child — the supervisor's
+  // spawn path has then already posted `start` to it, so start() must not post
+  // a second one.
+  onDesiredState?: (on: boolean) => boolean
 }
 
 // `implements HooksGatewayLike` enforces the drop-in contract at compile time: if a
@@ -25,6 +31,7 @@ export class HooksGatewayProxy implements HooksGatewayLike {
   private port: number
   private emit: (channel: string, payload: unknown) => void
   private onTranscriptPath?: (sessionId: string, path: string) => void
+  private onDesiredState?: (on: boolean) => boolean
   private secrets = new Map<string, string>()
   private buffers = new Map<string, RingBufferEntry[]>()
   private subscribers = new Set<(e: HookEvent) => void>()
@@ -53,6 +60,7 @@ export class HooksGatewayProxy implements HooksGatewayLike {
     this.port = opts.defaultPort
     this.emit = opts.emit ?? (() => {})
     this.onTranscriptPath = opts.onTranscriptPath
+    this.onDesiredState = opts.onDesiredState
     if (opts.selfSubscribe !== false) this.transport.onMessage((m) => this.onChildMessage(m))
   }
 
@@ -148,7 +156,10 @@ export class HooksGatewayProxy implements HooksGatewayLike {
    *  after fail-open it drives the in-process gateway directly. */
   async start(): Promise<HooksGatewayStatus> {
     if (this.inProcess) { await this.inProcessReady; return this.inProcess.start() }
-    this.transport.post({ type: 'start', port: this.port })
+    // Wanted on (B8). With no child running the supervisor forks one here, and
+    // that child has already been posted its `start`.
+    const freshChildStarted = this.onDesiredState?.(true) === true
+    if (!freshChildStarted) this.transport.post({ type: 'start', port: this.port })
     this._status = { ...this._status, enabled: true }
     // Already listening (e.g. a re-enable). Safe because the supervisor resets
     // listening:false via rebindTransport() on every child restart, so a dead
@@ -172,6 +183,7 @@ export class HooksGatewayProxy implements HooksGatewayLike {
    *  start->stop race can't leak the listening socket. */
   async stop(): Promise<void> {
     if (this.inProcess) { await this.inProcessReady; await this.inProcess.stop(); return }
+    this.onDesiredState?.(false)   // wanted off (B8): no restart turns it back on
     this.transport.post({ type: 'stop' })
     this._status = { enabled: false, listening: false, port: null }
     this.resolveBoundWaiters()   // a start()->stop() race must not wait out the 4s bound fallback
