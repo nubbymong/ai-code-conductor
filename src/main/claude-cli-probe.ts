@@ -271,6 +271,20 @@ export function recentClaudeOnWindows(env: NodeJS.ProcessEnv, now: () => number 
   return kept.found ?? claudeFromPowerShellProfileForLaunch()
 }
 
+/** Whether a walk of the same PATH value ended less than
+ *  CLAUDE_LOOKUP_REUSE_MS ago, whatever it found. A launch that reads no
+ *  Claude Code from recentClaudeOnWindows then has its answer (none in PATH's
+ *  folders, none from the PowerShell profile) and does not walk PATH again
+ *  in place (providers/claude/spawn.ts findClaudeOnWindows): the walk a
+ *  launch waits for is made off the event loop, before it
+ *  (claude-launch-walk.ts). Reads no file. */
+export function claudeOnWindowsPathWalkedRecently(env: NodeJS.ProcessEnv, now: () => number = Date.now): boolean {
+  const kept = recentLookups.get(windowsEnvValue(env, 'PATH') ?? '')
+  if (!kept) return false
+  const age = now() - kept.at
+  return age >= 0 && age < CLAUDE_LOOKUP_REUSE_MS
+}
+
 // -- Windows: Claude Code that only the user's PowerShell profile puts on PATH --
 //
 // A Claude session on Windows runs in Windows PowerShell, which runs the

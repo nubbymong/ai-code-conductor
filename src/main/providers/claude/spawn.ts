@@ -2,7 +2,7 @@ import * as os from 'os'
 import { commandSecretEnvName } from '../../../shared/command-secret'
 import { AGENTS_ENV, askPromptEnvValue } from '../../terminal-launch-line'
 import { findOnWindowsPath, windowsEnvValue, withFullyQualifiedProgramLookup } from '../../windows-programs'
-import { CLAUDE_NOT_ON_PATH, CLAUDE_WINDOWS_NAMES, claudeFromPowerShellProfileForLaunch, claudeInLoginShellPathForLaunch, recentClaudeInLoginShellPath, recentClaudeOnWindows, recordClaudeOnWindows } from '../../claude-cli-probe'
+import { CLAUDE_NOT_ON_PATH, CLAUDE_WINDOWS_NAMES, claudeFromPowerShellProfileForLaunch, claudeInLoginShellPathForLaunch, claudeOnWindowsPathWalkedRecently, recentClaudeInLoginShellPath, recentClaudeOnWindows, recordClaudeOnWindows } from '../../claude-cli-probe'
 import { LEGACY_PIN_NOT_USED } from '../../../shared/legacy-version'
 import { logInfo } from '../../debug-logger'
 import { localSessionShell, shFamilyLoginShell } from '../../login-shell'
@@ -22,8 +22,11 @@ export { CLAUDE_NOT_ON_PATH }
  *  (`env`), in the order every check and start asks (claude-cli-probe.ts
  *  CLAUDE_WINDOWS_NAMES: `claude.exe` in any of them, then `claude.cmd`, then
  *  `claude.bat`). The launch cannot wait, so a recent answer of the same walk
- *  (the CLI check asks every 30 s, off the event loop) is used as is; only
- *  without one does this walk PATH here, and its answer is kept for the next
+ *  (the CLI check asks every 30 s, off the event loop; a session's launch
+ *  walks off the event loop first when there is none to go by,
+ *  claude-launch-walk.ts) is used as is, whether it found Claude Code or
+ *  not; only with no recent walk of this PATH at all does this walk it here,
+ *  and its answer is kept for the next
  *  launch. When none is there, the Claude Code the user's PowerShell profile
  *  last named (claude-cli-probe.ts claudeFromPowerShellProfileForLaunch: the
  *  answer kept from asking Windows PowerShell with that profile, which a
@@ -35,6 +38,12 @@ export { CLAUDE_NOT_ON_PATH }
 export function findClaudeOnWindows(env: NodeJS.ProcessEnv = process.env, stat?: (p: string) => boolean): string | null {
   const recent = recentClaudeOnWindows(env)
   if (recent) return recent
+  // A walk of this PATH less than a minute ago found none, and the profile
+  // names none: that is the answer. PATH is not walked again here, on the
+  // main process's own thread, where a folder on a share that does not
+  // answer would hold everything (a session's launch makes that walk off
+  // the event loop first, claude-launch-walk.ts).
+  if (claudeOnWindowsPathWalkedRecently(env)) return null
   const found = findOnWindowsPath(CLAUDE_WINDOWS_NAMES, env, stat, 'name')
   recordClaudeOnWindows(windowsEnvValue(env, 'PATH') ?? '', found, Date.now())
   if (found) return found

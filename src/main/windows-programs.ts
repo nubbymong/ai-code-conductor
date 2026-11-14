@@ -146,6 +146,68 @@ export async function isRegularFileAsync(p: string): Promise<boolean> {
   }
 }
 
+/** How long a PATH walk that something waits for (a launch) gives one folder
+ *  to answer a file test (fileTestWithin). A folder on this computer answers
+ *  in well under a millisecond and a share that is up in a fraction of a
+ *  second; one on a share that is down can hold the test for tens of
+ *  seconds. */
+export const WINDOWS_PATH_FILE_TEST_WAIT_MS = 2_000
+
+/** The folders with a file test of fileTestWithin still unanswered after its
+ *  wait, as Windows compares them (lower case), and how many such tests. */
+const foldersNotAnswering = new Map<string, number>()
+
+/** A file test for findOnWindowsPathAsync that waits at most `waitMs` for
+ *  each answer of `stat` (isRegularFileAsync by default). A test that has not
+ *  answered by then REJECTS, which the walk reads as "this folder cannot be
+ *  reached": the program is not found in that folder, the walk does not ask
+ *  it again for another name, and it goes on to the next folder. Never a
+ *  guess: an answer that comes too late is not used.
+ *
+ *  The test left unanswered still runs to its own end, on one of the few
+ *  threads file tests share. So until it has ended, the same folder is not
+ *  asked again by any walk through this function (it rejects at once): a
+ *  share that is down does not take one more of those threads for every
+ *  launch that walks PATH meanwhile, and is asked again once it has
+ *  answered. */
+export function fileTestWithin(
+  waitMs: number = WINDOWS_PATH_FILE_TEST_WAIT_MS,
+  stat: (p: string) => Promise<boolean> = isRegularFileAsync,
+): (p: string) => Promise<boolean> {
+  return (p: string): Promise<boolean> => {
+    const folder = path.win32.dirname(p).toLowerCase()
+    if (foldersNotAnswering.has(folder)) return Promise.reject(new Error('the folder has not answered an earlier file test'))
+    return new Promise<boolean>((resolve, reject) => {
+      let late = false
+      const timer = setTimeout(() => {
+        late = true
+        foldersNotAnswering.set(folder, (foldersNotAnswering.get(folder) ?? 0) + 1)
+        reject(new Error(`the folder did not answer a file test within ${waitMs} ms`))
+      }, waitMs)
+      ;(timer as { unref?: () => void }).unref?.()
+      /** The test has ended: in time (true), or after its wait. */
+      const ended = (): boolean => {
+        if (!late) { clearTimeout(timer); return true }
+        const left = (foldersNotAnswering.get(folder) ?? 1) - 1
+        if (left > 0) foldersNotAnswering.set(folder, left)
+        else foldersNotAnswering.delete(folder)
+        return false
+      }
+      // The test starts in this turn; one that throws before it has anything
+      // to wait for is a test that failed.
+      new Promise<boolean>((answer) => { answer(stat(p)) }).then(
+        (isFile) => { if (ended()) resolve(isFile) },
+        (e: unknown) => { if (ended()) reject(e) },
+      )
+    })
+  }
+}
+
+/** Test seam: no folder is waited for. */
+export function _resetFileTestWithinForTest(): void {
+  foldersNotAnswering.clear()
+}
+
 /** The full path of the first of `names` found IN-PROCESS in the folders
  *  PATH names (windowsPathFolders), in `order`; null when none is. `stat`
  *  answers whether a candidate is a file; a stat that THROWS marks that

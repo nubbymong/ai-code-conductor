@@ -50,6 +50,7 @@ import {
 import { startProfileStepsPending, startProfileStepsSettled } from '../account-profiles'
 import { scriptFoldersPending, awaitScriptFolders } from '../script-folders'
 import { claudeStartLookupPending, awaitClaudeStartLookup } from '../claude-start-lookup'
+import { claudeLaunchWalkPending, awaitClaudeLaunchWalk } from '../claude-launch-walk'
 
 /** SSH options as received from the renderer (no passwords — only configId) */
 interface RendererSSHOptions {
@@ -890,7 +891,17 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     // a local Claude launch waits for it, bounded, as a prepared spawn, so a
     // tab restored at start names the Claude Code they find; past the bound,
     // and once the start's deadline has passed, it resolves as any launch.
-    const holdForClaudeLookup = launchProvider === 'claude' && !options?.ssh && claudeStartLookupPending()
+    //
+    // And at any later time (claude-launch-walk.ts): a local Claude launch
+    // with no recent answer about Claude Code to read (or, when it opens the
+    // resume list, about node.exe) would walk PATH for it in place, where a
+    // folder on a share that does not answer holds the whole main process.
+    // It waits instead, as a prepared spawn, for that walk made off the
+    // event loop, each folder bounded, then names what the walk found or is
+    // refused as before. With a recent answer kept, the usual case, nothing
+    // is held.
+    const opensResumeList = options?.useResumePicker === true && !options.resume
+    const holdForClaudeLookup = launchProvider === 'claude' && !options?.ssh && (claudeStartLookupPending() || claudeLaunchWalkPending(opensResumeList))
     const preparation = codexSession || askSpawn || holdForStartSteps || holdForScripts || holdForClaudeLookup ? beginSpawnPreparation(win, sessionId, options?.shellOnly ? null : (options?.provider ?? 'claude')) : null
     // PR-level ADR-009 round 1 (B1): once that preparation is cancelled or
     // superseded, this spawn's ticket stops counting as one under way.
@@ -1056,6 +1067,9 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
       // PATH refresh, first lookup and version probe (holdForClaudeLookup
       // above).
       if (holdForClaudeLookup) await awaitClaudeStartLookup()
+      // Then the launch's own walk of PATH, when it still has one to make:
+      // an answer the start kept meanwhile is read, and nothing is walked.
+      if (holdForClaudeLookup) await awaitClaudeLaunchWalk(opensResumeList)
 
       // Closed, swept or superseded while it was prepared: start nothing, and
       // SAY so. The renderer holds any pty:exit that arrives while its own

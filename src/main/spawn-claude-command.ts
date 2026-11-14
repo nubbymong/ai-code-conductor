@@ -41,7 +41,7 @@ import * as nodeOs from 'node:os'
 import { UUID_RE, claudeProjectDirName, type ClaudeLaunchFolderOptions } from './logging/transcript-discovery'
 import { CMD_EXE_LINE_LIMIT, PS_LEGACY_ARGUMENT_PASSING, agentsRef, askPromptRef, startsAsExe, windowsCommandLineLimit } from './terminal-launch-line'
 import { escapeForCwdQuote, quoteArgForShell } from '../shared/shell-quote'
-import { findOnWindowsPath, findOnWindowsPathAsync, windowsEnvValue } from './windows-programs'
+import { fileTestWithin, findOnWindowsPath, findOnWindowsPathAsync, windowsEnvValue } from './windows-programs'
 import { logInfo } from './debug-logger'
 
 export interface BuildClaudeLaunchCommandOptions {
@@ -615,14 +615,18 @@ function recentPickerNodeAnswer(pathValue: string, now: number): string | null |
  * answer, the full path found or none, for pickerNodeOnWindows. The CLI
  * check calls it beside its own look for
  * Claude Code (ipc/cli-handlers.ts), so a launch normally reads a recent
- * answer and walks no PATH on the main process. Only one look runs at a time;
+ * answer and walks no PATH on the main process; a session's launch that has
+ * none to read waits for this look first (claude-launch-walk.ts). So each
+ * folder is given a bounded time to answer (fileTestWithin): one on a share
+ * that does not answer counts as holding no node.exe, and the look goes on.
+ * Only one look runs at a time;
  * a call while one is in flight gets that one. Elsewhere: nothing.
  */
 export function warmPickerNodeOnWindows(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   if (process.platform !== 'win32') return Promise.resolve()
   if (pickerNodeWarming) return pickerNodeWarming
   const pathValue = windowsEnvValue(env, 'PATH') ?? ''
-  const run: Promise<void> = findOnWindowsPathAsync([PICKER_NODE_FILE], env)
+  const run: Promise<void> = findOnWindowsPathAsync([PICKER_NODE_FILE], env, fileTestWithin())
     .then(
       (exe) => { pickerNodeAnswer = { path: pathValue, exe, at: performance.now() } },
       () => { /* no answer: a launch looks for itself */ },
@@ -631,6 +635,13 @@ export function warmPickerNodeOnWindows(env: NodeJS.ProcessEnv = process.env): P
     .finally(() => { if (pickerNodeWarming === run) pickerNodeWarming = null })
   pickerNodeWarming = run
   return run
+}
+
+/** Whether an answer about node.exe is kept for `env`'s PATH, found or not,
+ *  less than PICKER_NODE_REUSE_MS old: a launch then walks no PATH for it
+ *  (pickerNodeOnWindows). Reads no file. */
+export function pickerNodeAnswerKept(env: NodeJS.ProcessEnv = process.env): boolean {
+  return recentPickerNodeAnswer(windowsEnvValue(env, 'PATH') ?? '', performance.now()) !== undefined
 }
 
 /**

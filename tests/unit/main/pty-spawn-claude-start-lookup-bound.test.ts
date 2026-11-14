@@ -82,10 +82,28 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
   startProfileStepsSettled: () => Promise.resolve(),
 }))
 
+// The file test under a launch's own walk of PATH (the last cases): the real
+// bound over a stand-in, so no file of this computer is read. A folder in
+// `walk.hung` does not answer until its tests in `walk.held` are answered.
+const walk = vi.hoisted(() => ({ present: new Set<string>(), hung: new Set<string>(), held: [] as Array<() => void>, asked: [] as string[] }))
+vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../src/main/windows-programs')>()
+  const stat = (p: string): Promise<boolean> => {
+    walk.asked.push(p)
+    if (!walk.hung.has(p.slice(0, p.lastIndexOf('\\')).toLowerCase())) return Promise.resolve(walk.present.has(p.toLowerCase()))
+    return new Promise<boolean>((resolve) => { walk.held.push(() => resolve(walk.present.has(p.toLowerCase()))) })
+  }
+  return { ...real, fileTestWithin: (waitMs?: number) => real.fileTestWithin(waitMs, stat) }
+})
+
 // The start module itself: not a stand-in.
 const { startClaudeLookup, claudeStartLookupPending, CLAUDE_START_LOOKUP_WAIT_MS, CLAUDE_START_DEADLINE_MS, _resetClaudeStartLookupForTest } =
   await import('../../../src/main/claude-start-lookup')
 const { registerPtyHandlers } = await import('../../../src/main/ipc/pty-handlers')
+// The launch's own walk: the real module, and the real answers a launch reads.
+const { armClaudeLaunchWalk, _resetClaudeLaunchWalkForTest } = await import('../../../src/main/claude-launch-walk')
+const { recentClaudeOnWindows, recordClaudeOnWindows, _resetClaudeWindowsLookupForTest } = await import('../../../src/main/claude-cli-probe')
+const { WINDOWS_PATH_FILE_TEST_WAIT_MS, _resetFileTestWithinForTest } = await import('../../../src/main/windows-programs')
 registerPtyHandlers(() => ({} as never))
 const spawn = handlers.get('pty:spawn')!
 
@@ -119,6 +137,7 @@ function aSlowStart(): void {
 
 beforeEach(() => {
   live.clear(); current.clear(); spawned.length = 0; preparations = 0
+  walk.asked.length = 0
   answer = () => {}
   _resetClaudeStartLookupForTest()
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -190,5 +209,93 @@ describe('a local Claude Code launch held by the real start module, through the 
     expect(preparations, 'no preparation: nothing to wait for').toBe(0)
     expect(spawned).toEqual([{ sid: S, options: { cwd: 'C:/w' } }])
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+// The same handler, at any later time: a launch with no recent answer about
+// Claude Code to read (planning #309, item 7). The real launch-walk module
+// (src/main/claude-launch-walk.ts) and the real walk are behind it; only the
+// file test under the walk's bound is a stand-in. Windows only: nothing is
+// ever held for this anywhere else.
+describe('a local Claude Code launch with no answer about Claude Code to read, through the real pty:spawn handler', () => {
+  const GONE = 'S:\\gone'
+  const TOOLS = 'C:\\Tools'
+  const savedPath = process.env.PATH
+  beforeEach(() => {
+    walk.hung = new Set([GONE.toLowerCase()])
+    walk.present = new Set([`${TOOLS}\\claude.exe`.toLowerCase()])
+    walk.held = []
+    _resetClaudeLaunchWalkForTest()
+    _resetClaudeWindowsLookupForTest()
+    _resetFileTestWithinForTest()
+    process.env.PATH = `${GONE};${TOOLS}`
+  })
+  afterEach(() => {
+    for (const answer of walk.held.splice(0)) answer()
+    _resetClaudeLaunchWalkForTest()
+    _resetClaudeWindowsLookupForTest()
+    _resetFileTestWithinForTest()
+    if (savedPath === undefined) delete process.env.PATH
+    else process.env.PATH = savedPath
+  })
+
+  // Mutations to prove this can fail: decide the hold false (the launch then
+  // walks in place); wait for the walk without holding the launch as a
+  // prepared spawn; give the folder no bound.
+  it.runIf(process.platform === 'win32')('is held as a prepared spawn while PATH is walked off the event loop, and starts once the folder that does not answer has had its bounded time', async () => {
+    armClaudeLaunchWalk()
+    const started = outcome(spawn({}, S, { cwd: 'C:/w' }))
+    await settle()
+    expect(preparations, 'held as a prepared spawn').toBe(1)
+    await vi.advanceTimersByTimeAsync(WINDOWS_PATH_FILE_TEST_WAIT_MS - 1)
+    expect(await now(started), 'not before the bound of the folder').toBe('still held')
+    expect(spawned).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await now(started)).toBe('started')
+    expect(spawned).toEqual([{ sid: S, options: { cwd: 'C:/w' } }])
+    // What the launch reads: the full path the walk found past that folder.
+    expect(recentClaudeOnWindows(process.env)).toBe(`${TOOLS}\\claude.exe`)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  // Mutation to prove this can fail: hold every launch, whatever is kept.
+  it.runIf(process.platform === 'win32')('with a recent answer kept it is not held: no preparation, and it starts at once', async () => {
+    armClaudeLaunchWalk()
+    recordClaudeOnWindows(process.env.PATH ?? '', `${TOOLS}\\claude.exe`, Date.now())
+    expect(await now(outcome(spawn({}, S, { cwd: 'C:/w' })))).toBe('started')
+    expect(preparations, 'no preparation: nothing to wait for').toBe(0)
+    expect(spawned).toEqual([{ sid: S, options: { cwd: 'C:/w' } }])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.runIf(process.platform === 'win32')('before main has started nothing is held, whatever is kept', async () => {
+    expect(await now(outcome(spawn({}, S, { cwd: 'C:/w' })))).toBe('started')
+    expect(preparations).toBe(0)
+    expect(walk.asked).toEqual([])
+  })
+
+  // Mutation to prove this can fail: wait without holding the launch as a prepared spawn.
+  it.runIf(process.platform === 'win32')('a second spawn of the same session id while the first is held for the walk supersedes it: one launch starts, the newer one', async () => {
+    armClaudeLaunchWalk()
+    const first = outcome(spawn({}, S, { cwd: 'C:/first' }))
+    await settle()
+    const second = outcome(spawn({}, S, { cwd: 'C:/second' }))
+    await settle()
+    expect(preparations).toBe(2)
+    expect(spawned).toEqual([])
+    await vi.advanceTimersByTimeAsync(WINDOWS_PATH_FILE_TEST_WAIT_MS)
+    expect(await now(first)).toBe('not-started')
+    expect(await now(second)).toBe('started')
+    expect(spawned).toEqual([{ sid: S, options: { cwd: 'C:/second' } }])
+    // Both waited for the one walk.
+    expect(walk.asked.filter((p) => p.startsWith(GONE))).toEqual([`${GONE}\\claude.exe`])
+  })
+
+  // A terminal tab names no Claude Code at all.
+  it.runIf(process.platform === 'win32')('a terminal-only launch is not held by it', async () => {
+    armClaudeLaunchWalk()
+    expect(await now(outcome(spawn({}, S, { cwd: 'C:/w', shellOnly: true })))).toBe('started')
+    expect(preparations).toBe(0)
+    expect(walk.asked).toEqual([])
   })
 })

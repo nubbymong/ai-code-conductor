@@ -59,6 +59,7 @@
 // comes after, and never past the start's deadline.
 
 import { logInfo, logWarn } from './debug-logger'
+import { armClaudeLaunchWalk } from './claude-launch-walk'
 
 /** How long a launch waits for the start (the walk of PATH and, when that
  *  finds no Claude Code, the PATH refresh, the first lookup and the version
@@ -315,8 +316,14 @@ export interface ClaudeStartAtBoot {
  *  reads PATH, so it waits (bounded, claudeStartLookupSettled) for the walk,
  *  the refresh and the first lookup, which are under way by the time the
  *  accounts work can have answered; a look on the PATH from before would say
- *  "missing" until Check again for a CLI the refresh adds. */
+ *  "missing" until Check again for a CLI the refresh adds.
+ *
+ *  From here on a launch asked for with no recent answer about Claude Code
+ *  to read walks PATH off the event loop first (claude-launch-walk.ts), on
+ *  Windows; armed here, on every platform, because this is what main runs
+ *  once at every start. */
 export function startClaudeAtBoot(boot: ClaudeStartAtBoot, platform: string = process.platform): void {
+  armClaudeLaunchWalk()
   startClaudeLookup({
     claudeOn: boot.claudeOn,
     onPath: () => boot.walkPath(boot.env).then((found) => found !== null),
