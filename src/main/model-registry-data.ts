@@ -25,12 +25,19 @@
 //    entry stands for, and cannot have them (the next rule), so it is a
 //    mistake in the file and the log says so;
 //  - THE RULE: a file never changes what a name the build already places
-//    resolves to. A shipped model's patterns are always the bundled file's
-//    (the file's are left out; its label, prices and other fields are used),
-//    and a name is tried against the shipped entries, in the bundled file's
-//    order, before a model only the file has (mergeModelData here, matchEntry
-//    in model-registry.ts). So a model the file adds is its exact id and its
-//    aliases, and beyond those only a name nothing shipped places;
+//    resolves to. A shipped model's patterns and aliases are always the
+//    bundled file's (the file's are left out; its label, prices and other
+//    fields are used), and a name is tried against the shipped entries, in
+//    the bundled file's order, before a model only the file has
+//    (mergeModelData here, matchEntry in model-registry.ts). So a model the
+//    file adds is its exact id and its aliases, and beyond those only a name
+//    nothing shipped places;
+//  - and that id and those aliases are not names the bundled file alone
+//    gives to one of its own entries by an id or an alias (a shipped id or
+//    alias, or a longer form of a shipped id: a dated id, `[1m]`). A file
+//    with such a name is refused, and the log names the shipped entry. A
+//    name the bundled file only reaches by a pattern (`claude-opus-6`) is
+//    free: that is how a new model is added;
 //  - a pattern is plain text (literalPattern), matched as text. Nothing in
 //    the file is ever compiled into a regular expression.
 //
@@ -38,7 +45,7 @@
 // model-registry-service.ts puts it to use.
 import { z } from 'zod'
 import {
-  familyProvider, followsModelPickerRule, literalPattern,
+  familyProvider, followsModelPickerRule, literalPattern, resolveModelInfo,
   type EffortLevelSpec, type ModelEntry, type ModelProvider, type ModelRegistry, type OverlayModelEntry,
 } from '../shared/model-registry'
 import { stripSpoofableText } from '../shared/safe-text'
@@ -139,6 +146,16 @@ const FULL_MODEL_NAME: Record<ModelProvider, (id: string, family: string) => boo
 }
 const isFullModelName = (id: string, family: string): boolean => FULL_MODEL_NAME[familyProvider(family)](id, family)
 
+/** The shipped entry the bundled file alone gives `name` to by an id or an
+ *  alias: its exact id, one of its aliases, or a longer form of its id (a
+ *  dated id, `[1m]`), which is placed by that id. Undefined for a name the
+ *  bundled file only reaches by a pattern, or not at all. Asked of the
+ *  matcher itself (resolveModelInfo), so the two cannot drift apart. */
+function heldBy(bundled: ModelRegistry, name: string): string | undefined {
+  const at = resolveModelInfo(bundled, name)
+  return at.known && at.matchKind !== 'pattern' ? at.id : undefined
+}
+
 /**
  * A parsed model file against the rules above. `bundled` is the file shipped
  * with the build: a model it carries stays with its own assistant.
@@ -180,7 +197,8 @@ export function validateModelData(value: unknown, bundled: ModelRegistry): Model
     if (!Object.prototype.hasOwnProperty.call(file.families, m.family)) return refuse(`models: ${m.id} names a family the file does not define`)
     // An id or alias is what a picker hands to a launch or types into a
     // session, so it follows the rule of its family's own picker.
-    for (const v of [m.id, ...(m.aliases ?? [])]) {
+    const names = [m.id, ...(m.aliases ?? [])]
+    for (const v of names) {
       if (!followsModelPickerRule(m.family, v)) return refuse(`models: ${m.id} has a name its picker does not take`)
     }
     const levels = effortsOf[familyProvider(m.family)]
@@ -193,6 +211,14 @@ export function validateModelData(value: unknown, bundled: ModelRegistry): Model
     // price of every model not listed yet. What the bundled file itself has
     // (its catch-all entry, its short pattern) is the build's own and stays.
     if (!base && !isFullModelName(m.id, m.family)) return refuse(`models: ${m.id} is not a full model name of its family`)
+    // A model the build does not ship takes no name the bundled file alone
+    // already gives to one of its own entries by an id or an alias. An exact
+    // id or alias is looked up before anything else (matchEntry), so the name
+    // would leave the shipped entry for the new one. A name the bundled file
+    // only reaches by a pattern (`claude-opus-6`), or not at all, is free:
+    // that is how a new model is added.
+    const holder = base ? undefined : names.map((v) => heldBy(bundled, v)).find((id) => id !== undefined)
+    if (holder) return refuse(`models: ${m.id} has a name the build already places on ${holder}`)
     const had = new Set(base?.patterns ?? [])
     for (const p of m.patterns) {
       const patternText = literalPattern(p)?.text ?? ''
@@ -236,8 +262,9 @@ function joinByValue<T extends { value: string }>(file: readonly T[], bundled: r
  *    carry; a model only the bundled file carries stays, after them. So the
  *    file can add a model and correct one, and can never take one away.
  *  - A file never changes what a name the build already places resolves to.
- *    A shipped model's patterns are the bundled file's, whatever the file
- *    gives it. They are left out, not refused: a file edited for a later
+ *    A shipped model's patterns and aliases are the bundled file's, whatever
+ *    the file gives it (an entry the bundled file gives no aliases has
+ *    none). They are left out, not refused: a file edited for a later
  *    build may well have other patterns on a model this build ships, and
  *    refusing it would lock this build out of every later file. And the
  *    result carries the bundled file's own order (`shippedOrder`, in memory
@@ -264,9 +291,10 @@ export function mergeModelData(bundled: ModelRegistry, data: ModelRegistry | nul
   const fetched = new Set(data.models.map((m) => m.id))
   const added = (m: ModelEntry): OverlayModelEntry => ({ ...m, provenance: { addedBy: 'model-data', date } })
   const corrected = (m: ModelEntry, base: ModelEntry): ModelEntry => {
-    const { pickable: _theirs, ...rest } = m
-    void _theirs
+    const { pickable: _theirs, aliases: _names, ...rest } = m
+    void _theirs; void _names
     const kept: ModelEntry = { ...rest, patterns: base.patterns }
+    if (base.aliases !== undefined) kept.aliases = base.aliases
     return base.pickable === undefined ? kept : { ...kept, pickable: base.pickable }
   }
   const otherLevels: Record<string, EffortLevelSpec[]> = { ...(bundled.providerEffortLevels ?? {}) }
