@@ -50,6 +50,10 @@ const YIELD_EVERY = 16 // files between event-loop yields during a sweep
 /** #302: the longest between two full walks of the transcript folders; the
  *  watcher's reports are read every 5 s in between. */
 export const TK_FULL_SWEEP_MS = 5 * 60_000
+/** #302: how long after it was last read a Claude transcript is still asked
+ *  its size by the 5 s timer, and how many of them are kept at most. */
+export const TK_ACTIVE_MS = 10 * 60_000
+export const TK_ACTIVE_MAX = 200
 
 /** What one bounded pass over a file's byte range saw. */
 export interface StreamResult {
@@ -221,11 +225,30 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
    * all of ~/.claude/projects (thousands of files) and re-check each one;
    * with many working sessions that kept a core busy. An incremental sweep
    * now reads just these, and a full walk runs when it is due: at start, on
-   * an explicit re-index, on an event that names no transcript (a folder, no
-   * file name, a Codex folder), when a file still has bytes to read, and
-   * every TK_FULL_SWEEP_MS as the safety net for anything the watcher missed.
+   * an explicit re-index, on an event only a walk can answer (no file name, a
+   * name that is gone, a folder made or moved, any event in a Codex folder),
+   * when a file still has bytes to read, and every TK_FULL_SWEEP_MS as the
+   * safety net for anything the watcher missed.
    */
   const dirtyClaude = new Set<string>()
+  /**
+   * #302: the Claude transcripts found written in the last TK_ACTIVE_MS, with
+   * when, the one found longest ago first. The watcher does not report every
+   * write: on Windows one made through a handle that stays open raises no
+   * event until the handle closes (measured: five writes 500 ms apart
+   * reported nothing, then one 'change' at the close). The 5 s walk used to
+   * find those. The 5 s timer now asks the size of just these and reads the
+   * ones that moved, as if the watcher had reported them: one size check
+   * each and no folder listed. At most TK_ACTIVE_MAX are kept, so a first
+   * index that reads thousands of old transcripts leaves the timer that many
+   * to ask about for ten minutes, not thousands.
+   */
+  const activeClaude = new Map<string, number>()
+  const noteActive = (file: string): void => {
+    activeClaude.delete(file) // back in at the end: the Map keeps the order they were found in
+    activeClaude.set(file, Date.now())
+    if (activeClaude.size > TK_ACTIVE_MAX) activeClaude.delete(activeClaude.keys().next().value as string)
+  }
   let fullSweepDue = true
   let lastFullSweepAt = 0
   let lastProgress = { filesDone: 0, filesTotal: 0, eventsIngested: 0 }
@@ -370,7 +393,9 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     let offset = cursor ? cursor.lastOffset : 0
     if (cursor && st.size < cursor.lastOffset) offset = 0 // truncated/rotated -> re-read
     if (unchangedAndFullyScanned(cursor, st, offset)) return 0
-    if (st.size <= offset) { db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: offset, lastIngestedAt: Date.now(), scannedTo: st.size }); return 0 }
+    // #302: changed with nothing to read yet (a transcript just made is
+    // empty) is written lately too: its first lines may come with no report.
+    if (st.size <= offset) { db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: offset, lastIngestedAt: Date.now(), scannedTo: st.size }); noteActive(file); return 0 }
 
     const end = Math.min(st.size, offset + maxTickBytes)
     let fd: number
@@ -422,6 +447,9 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       flush()
       noteScanned(res.pos, st.size, consumed > offset)
       db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos })
+      // #302: read just now, so written lately. One that could not be read
+      // is not noted: it waits for its next report or the next walk.
+      noteActive(file)
     } finally { try { fs.closeSync(fd) } catch { /* ignore */ } }
     return inserted
   }
@@ -870,30 +898,54 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     ;(watchTimer as unknown as { unref?: () => void }).unref?.()
   }
 
-  /** #302: what a watcher event means for the next sweep. `perFile` is the
-   *  Claude projects folder, where a transcript that exists (written, or just
-   *  made) is read on its own, and one that is a link is left alone; anything
-   *  else -- no file name, a folder, a deleted file, any Codex folder event --
-   *  makes the next sweep a full one, as every event did before. */
-  function noteWatchEvent(dir: string, perFile: boolean, filename: unknown): void {
-    if (perFile && typeof filename === 'string' && filename.endsWith('.jsonl')) {
-      const full = path.join(dir, filename)
-      // lstat, not stat: stat follows a link, and a linked transcript would
-      // then be read here although the full walk skips it. A link is left
-      // alone, with no walk either: the walk would skip it too.
-      let st: nodeFs.Stats | null = null
-      try { st = fs.lstatSync(full) } catch { st = null }
-      if (st?.isSymbolicLink()) return
-      if (st?.isFile()) { dirtyClaude.add(full); return }
+  /**
+   * #302: what a watcher event means for the next sweep, and whether there
+   * is anything to sweep for. `perFile` is the Claude projects folder, where
+   * the name is looked at (one lstat, never a listing) before deciding:
+   *
+   * - a transcript that exists, written or just made, is read on its own;
+   * - a folder reported as changed starts nothing. Windows reports the
+   *   folder beside every write to a file in it (measured: an append to
+   *   proj\a.jsonl gives 'change proj' and then 'change proj\a.jsonl', a
+   *   nested one 'change proj\sid\subagents' and then the file), and the
+   *   file reports its own event. Taken as an event that names no
+   *   transcript, it walked the whole tree at every write;
+   * - a file that is not a transcript (a tool result, a memory file, a
+   *   subagent's .meta.json) and a link start nothing: the walk skips them
+   *   too;
+   * - a full walk is due for the rest: no file name, a name that is gone
+   *   (deleted, or renamed away) or cannot be looked at, and a folder
+   *   reported as renamed (made, or moved here: what it holds may have been
+   *   written before the watcher reached it).
+   *
+   * Any event in a Codex folder makes the next sweep a full one, as every
+   * event did before.
+   */
+  function noteWatchEvent(dir: string, perFile: boolean, event: unknown, filename: unknown): boolean {
+    if (!perFile || typeof filename !== 'string' || filename.length === 0) { fullSweepDue = true; return true }
+    const full = path.join(dir, filename)
+    // lstat, not stat: stat follows a link, and a linked transcript would
+    // then be read here although the full walk skips it.
+    let st: nodeFs.Stats | null = null
+    try { st = fs.lstatSync(full) } catch { st = null }
+    if (!st) { fullSweepDue = true; return true }
+    if (st.isDirectory()) {
+      if (event === 'change') return false
+      fullSweepDue = true
+      return true
     }
-    fullSweepDue = true
+    if (st.isFile() && filename.endsWith('.jsonl')) { dirtyClaude.add(full); return true }
+    // A link, or a file that is not a transcript: nothing to read, no walk.
+    return false
   }
 
   function watchDir(dir: string, perFile: boolean): { close(): void } | null {
     const warnOnce = (message: string): void => { if (!watchWarned.has(dir)) { watchWarned.add(dir); logw('warn', message) } }
     try {
       if (!fs.existsSync(dir)) return null
-      const wch = fs.watch(dir, { recursive: true }, (_event: unknown, filename: unknown) => { noteWatchEvent(dir, perFile, filename); scheduleIncremental() })
+      // An event that starts nothing schedules nothing, so it cannot put off
+      // the sweep a reported transcript is waiting for.
+      const wch = fs.watch(dir, { recursive: true }, (event: unknown, filename: unknown) => { if (noteWatchEvent(dir, perFile, event, filename)) scheduleIncremental() })
       // An FSWatcher 'error' with no listener throws -> uncaughtException -> the
       // worker dies and burns a restart toward permanent degrade. Log + close the
       // broken watcher and forget it: the 5 s timer then walks the folders, as it
@@ -933,6 +985,39 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     return due
   }
 
+  /**
+   * #302: ask the size of each transcript written lately and hand the ones
+   * that moved to the next sweep, as if the watcher had reported them. One
+   * lstat each, no folder listed; one not read for TK_ACTIVE_MS is dropped
+   * unasked. Skipped: a transcript already reported, and one that could not
+   * be read when last tried (it waits for its next report or the next walk,
+   * not for every tick). Never throws: it runs on the timer.
+   *
+   * On Windows the size check itself makes the watcher report a file that
+   * was written through an open handle, so a read found here is followed by
+   * a reported one, which finds nothing new or the bytes written since.
+   */
+  function noteActiveGrowth(): void {
+    if (!db) return
+    const now = Date.now()
+    for (const [file, at] of activeClaude) {
+      if (now - at > TK_ACTIVE_MS) { activeClaude.delete(file); continue }
+      if (dirtyClaude.has(file) || sweepFailed.has(file)) continue
+      let st: nodeFs.Stats
+      // Gone, or no longer to be looked at: its report, if any, says so.
+      try { st = fs.lstatSync(file) } catch { activeClaude.delete(file); continue }
+      if (!st.isFile()) { activeClaude.delete(file); continue }
+      try {
+        const cursor = db.getFileCursor(file)
+        if (!cursor || st.size !== cursor.size) dirtyClaude.add(file)
+      } catch {
+        // How far it was read cannot be told: the sweep reads it, and says
+        // so if the index fails there too.
+        dirtyClaude.add(file)
+      }
+    }
+  }
+
   /** The Codex accounts' folders now (plan A13): watch the new ones, stop
    *  watching the gone ones. A folder that does not exist yet (an account
    *  that has run no session) is watched by the 5 s timer once it does. */
@@ -969,11 +1054,14 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     // some platforms. Every 5 s it reads what the watcher reported, and runs a
     // full walk when one is due: the last one left work behind or failed, a
     // named folder was watched just now or cannot be watched, or
-    // TK_FULL_SWEEP_MS has passed since the last walk (#302).
+    // TK_FULL_SWEEP_MS has passed since the last walk (#302). With no walk
+    // due it asks the size of the transcripts written lately, for the writes
+    // the watcher does not report; a walk asks every file anyway.
     tailTimer = setInterval(() => {
       if (sweeping) return
       if (syncWatchers()) fullSweepDue = true
       if (Date.now() - lastFullSweepAt >= TK_FULL_SWEEP_MS) fullSweepDue = true
+      if (!fullSweepDue) noteActiveGrowth()
       if (fullSweepDue || dirtyClaude.size > 0) void ingestAll('incremental')
     }, 5000)
     ;(tailTimer as unknown as { unref?: () => void }).unref?.()

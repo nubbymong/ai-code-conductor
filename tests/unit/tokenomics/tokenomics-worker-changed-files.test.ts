@@ -8,6 +8,12 @@
  * its watcher failed) is tried again by the 5 s timer, and a reported
  * transcript that is a link is left alone, as the full walk leaves it.
  *
+ * A folder reported as changed (Windows reports it beside every write to a
+ * file in it) and a file that is not a transcript start no walk. A transcript
+ * read in the last ten minutes is asked its size by the 5 s timer and read
+ * when it grew, for the writes the watcher does not report (on Windows, the
+ * ones made through a handle that stays open).
+ *
  * Host-safe: the real worker and real transcript files in a temp folder, a
  * wrapped fs that counts folder listings and file reads and hands the
  * watcher's callback to the test, and an in-memory stand-in for the index
@@ -60,7 +66,7 @@ vi.mock('../../../src/main/tokenomics/tk-db', () => ({
   }),
 }))
 
-import { createTokenomicsWorker, TK_FULL_SWEEP_MS } from '../../../src/main/tokenomics/tokenomics-worker'
+import { createTokenomicsWorker, TK_FULL_SWEEP_MS, TK_ACTIVE_MS, TK_ACTIVE_MAX } from '../../../src/main/tokenomics/tokenomics-worker'
 import { FakeTkWorkerTransport } from '../../../src/main/tokenomics/tk-worker-transport'
 import type { FromTkWorker } from '../../../src/main/tokenomics/tk-worker-transport'
 
@@ -95,6 +101,10 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   /** Files the worker asked the size of, and files it opened to read. */
   let statted: string[] = []
   let opened: string[] = []
+  /** Every path the worker asked about without following a link: one per
+   *  watcher event that names a path, and one per transcript the 5 s timer
+   *  checks. */
+  let lstatted: string[] = []
   let completes: Complete[] = []
   /** How many files each finished sweep said it could not read. */
   let failed: number[] = []
@@ -140,7 +150,10 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
           statted.push(String(p))
           return (realFs.statSync as (p: string, o?: unknown) => unknown)(follow(p), o)
         }
-        case 'lstatSync': return (p: string, o?: unknown) => (linkAt && String(p) === linkAt ? LINK : (realFs.lstatSync as (p: string, o?: unknown) => unknown)(p, o))
+        case 'lstatSync': return (p: string, o?: unknown) => {
+          lstatted.push(String(p))
+          return linkAt && String(p) === linkAt ? LINK : (realFs.lstatSync as (p: string, o?: unknown) => unknown)(p, o)
+        }
         case 'openSync': return (p: string, flags: string) => {
           if (denied && String(p) === denied) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
           opened.push(String(p))
@@ -171,15 +184,17 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   }
   const nextSweep = (what: string): Promise<void> => waitFor(what, (m) => m.type === 'index-complete')
   const drainedSweep = (what: string): Promise<void> => waitFor(what, (m) => m.type === 'index-complete' && m.drained)
-  const clearCounts = (): void => { listings = 0; walks = 0; statted = []; opened = [] }
+  const clearCounts = (): void => { listings = 0; walks = 0; statted = []; opened = []; lstatted = [] }
   const transcript = (name: string): string => path.join(claudeDir, 'F--proj', `${name}.jsonl`)
+  /** The five transcripts every test starts with. */
+  const five = (): string[] => [0, 1, 2, 3, 4].map((i) => transcript(`s${i}`))
   const fire = (dir: string, event: string, filename: string | null): void => watchCbs.get(dir)!(event, filename)
   /** Only the periodic timer and the clock are faked: sweeps still run on real
    *  timers, so the test decides when 5 s (or 5 min) has passed. */
   const fakeTheTimer = (): void => { vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] }) }
 
   /** Start the worker on the temp tree; by default wait for its first sweep. */
-  async function start(opts: { maxTickBytes?: number; waitFirst?: boolean } = {}): Promise<void> {
+  async function start(opts: { maxTickBytes?: number; waitFirst?: boolean; watchDebounceMs?: number } = {}): Promise<void> {
     const fake = new FakeTkWorkerTransport()
     fake.onMessage((m) => {
       if (m.type === 'index-complete') { completes.push({ firstIndex: m.firstIndex, drained: m.drained }); failed.push(m.filesFailed) }
@@ -187,7 +202,7 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       waiters = waiters.filter((w) => !w(m))
     })
     const first = opts.waitFirst === false ? null : nextSweep('the first sweep')
-    const w = createTokenomicsWorker(fake.asWorkerSide(), { fs: wrapped, watchDebounceMs: 5, maxTickBytes: opts.maxTickBytes })
+    const w = createTokenomicsWorker(fake.asWorkerSide(), { fs: wrapped, watchDebounceMs: opts.watchDebounceMs ?? 5, maxTickBytes: opts.maxTickBytes })
     stopWorker = () => w.stop()
     fake.post({ type: 'open', dbPath: path.join(tmp, 'tk.db'), pricing: PRICING, configs: [], claudeProjectsDir: claudeDir, codexSessionsDir: codexDir })
     if (first) await first
@@ -263,22 +278,132 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       expect(db.events).toBe(6)
     })
 
-    const noTranscript: Array<[string, 'claude' | 'codex', string | null]> = [
-      ['no file name', 'claude', null],
-      ['a folder', 'claude', 'F--proj'],
-      ['a deleted transcript', 'claude', path.join('F--proj', 'gone.jsonl')],
-      ['a file that is not a transcript', 'claude', path.join('F--proj', 'notes.txt')],
+    // Windows reports the folder as changed beside every write to a file in
+    // it (measured: an append to proj\a.jsonl gives 'change proj' and then
+    // 'change proj\a.jsonl'; a nested one gives 'change proj\sid\subagents'
+    // and then the file). The file reports its own event, so the folder's
+    // starts nothing.
+    it('a write as Windows reports it, the folder and then the transcript, reads that transcript and lists nothing', async () => {
+      await start()
+      const reported = transcript('s2')
+      realFs.appendFileSync(reported, line('more-2'))
+      // Written and not reported: a walk would read it too.
+      realFs.appendFileSync(transcript('s3'), line('more-3'))
+      clearCounts()
+      const read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', 'F--proj')
+      fire(claudeDir, 'change', path.join('F--proj', 's2.jsonl'))
+      await read
+      // And no walk follows it.
+      await settle()
+      expect(listings).toBe(0)
+      expect(opened).toEqual([reported])
+      expect(new Set(statted)).toEqual(new Set([reported]))
+      expect(db.events).toBe(6)
+    })
+
+    it('a nested write as Windows reports it reads that transcript and lists nothing', async () => {
+      const dir = path.join(claudeDir, 'F--proj', 's9', 'subagents')
+      realFs.mkdirSync(dir, { recursive: true })
+      const nested = path.join(dir, 'agent-x.jsonl')
+      realFs.writeFileSync(nested, line('sub-0'))
+      await start()
+      realFs.appendFileSync(nested, line('sub-1'))
+      clearCounts()
+      const read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', path.join('F--proj', 's9', 'subagents'))
+      fire(claudeDir, 'change', path.join('F--proj', 's9', 'subagents', 'agent-x.jsonl'))
+      await read
+      await settle()
+      expect(listings).toBe(0)
+      expect(opened).toEqual([nested])
+      expect(db.events).toBe(5 + 2)
+    })
+
+    it('a folder reported as changed, with nothing else, starts no sweep', async () => {
+      await start()
+      // Written and not reported: a walk would read it.
+      realFs.writeFileSync(transcript('unseen'), line('unseen'))
+      clearCounts()
+      fire(claudeDir, 'change', 'F--proj')
+      await settle()
+      expect({ listings, statted, opened, sweeps: completes.length }).toEqual({ listings: 0, statted: [], opened: [], sweeps: 1 })
+      expect(db.events).toBe(5)
+    })
+
+    // Claude Code writes more than transcripts under the projects folder
+    // (tool results, memory files, a subagent's .meta.json). The walk reads
+    // none of them, so a report of one starts none.
+    it('a file that is not a transcript, made or written, starts no sweep', async () => {
+      await start()
+      realFs.writeFileSync(transcript('unseen'), line('unseen'))
+      realFs.writeFileSync(path.join(claudeDir, 'F--proj', 'notes.txt'), 'not a transcript')
+      clearCounts()
+      fire(claudeDir, 'rename', path.join('F--proj', 'notes.txt'))
+      fire(claudeDir, 'change', path.join('F--proj', 'notes.txt'))
+      await settle()
+      expect({ listings, statted, opened, sweeps: completes.length }).toEqual({ listings: 0, statted: [], opened: [], sweeps: 1 })
+      expect(db.events).toBe(5)
+    })
+
+    it('an event that starts nothing does not put off the sweep a reported transcript is waiting for', async () => {
+      await start({ watchDebounceMs: 400 })
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      realFs.writeFileSync(path.join(claudeDir, 'F--proj', 'notes.txt'), 'not a transcript')
+      clearCounts()
+      // The pause before a sweep is on this test's clock from here.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+      fire(claudeDir, 'change', path.join('F--proj', 's2.jsonl'))
+      vi.advanceTimersByTime(300)
+      expect(db.events).toBe(5)
+      // Neither starts the pause again.
+      fire(claudeDir, 'change', 'F--proj')
+      fire(claudeDir, 'change', path.join('F--proj', 'notes.txt'))
+      vi.advanceTimersByTime(100)
+      // Read 400 ms after its report, not 400 ms after the last event.
+      expect(db.events).toBe(6)
+      expect(opened).toEqual([transcript('s2')])
+      expect(listings).toBe(0)
+    })
+
+    it('a folder that was made is walked, for what was written in it before the watcher reached it', async () => {
+      await start()
+      const dir = path.join(claudeDir, 'F--other')
+      realFs.mkdirSync(dir)
+      realFs.writeFileSync(path.join(dir, 'new.jsonl'), line('new'))
+      clearCounts()
+      const full = nextSweep('the full sweep')
+      fire(claudeDir, 'rename', 'F--other')
+      // The event itself lists nothing: the walk runs later, off the timer.
+      expect(listings).toBe(0)
+      await full
+      expect(walks).toBe(1)
+      expect(opened).toEqual([path.join(dir, 'new.jsonl')])
+      expect(db.events).toBe(6)
+    })
+
+    const noTranscript: Array<[string, 'claude' | 'codex', string, string | null]> = [
+      ['no file name', 'claude', 'rename', null],
+      ['no file name, as a change', 'claude', 'change', null],
+      ['a folder that was made or moved', 'claude', 'rename', 'F--proj'],
+      ['a deleted transcript', 'claude', 'rename', path.join('F--proj', 'gone.jsonl')],
+      ['a deleted file that is not a transcript', 'claude', 'rename', path.join('F--proj', 'gone.txt')],
+      ['a name that is gone, as a change', 'claude', 'change', path.join('F--proj', 'gone.tmp')],
       // Not narrowed yet: any event in a Codex sessions folder walks everything.
-      ['a rollout in the Codex sessions folder', 'codex', 'rollout-2026-08-01T00-00-00-x.jsonl'],
+      ['a rollout in the Codex sessions folder', 'codex', 'rename', 'rollout-2026-08-01T00-00-00-x.jsonl'],
+      ['a folder changed in the Codex sessions folder', 'codex', 'change', '2026'],
     ]
-    for (const [what, where, filename] of noTranscript) {
+    for (const [what, where, event, filename] of noTranscript) {
       it(`an event that names ${what} makes the next sweep a full one`, async () => {
+        realFs.mkdirSync(path.join(codexDir, '2026'))
         await start()
         // Written but never reported: only a full walk can find it.
         realFs.writeFileSync(transcript('unseen'), line('unseen'))
         clearCounts()
         const full = nextSweep('the full sweep')
-        fire(where === 'claude' ? claudeDir : codexDir, 'rename', filename)
+        fire(where === 'claude' ? claudeDir : codexDir, event, filename)
+        // The event itself lists nothing: the walk runs later, off the timer.
+        expect(listings).toBe(0)
         await full
         expect(walks).toBe(1)
         expect(opened).toEqual([transcript('unseen')])
@@ -316,9 +441,14 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       await start()
       clearCounts()
       // Every tick but the last of the five minutes.
+      const ticks = TK_FULL_SWEEP_MS / TAIL_MS - 1
       vi.advanceTimersByTime(TK_FULL_SWEEP_MS - TAIL_MS)
       await settle()
       expect({ listings, statted, opened }).toEqual({ listings: 0, statted: [], opened: [] })
+      // All it asks is the size of the five transcripts read at start, once
+      // each per tick, while they were read in the last ten minutes.
+      expect(lstatted).toHaveLength(ticks * 5)
+      expect(new Set(lstatted)).toEqual(new Set(five()))
       expect(completes).toHaveLength(1)
       const due = nextSweep('the safety-net sweep')
       vi.advanceTimersByTime(TAIL_MS)
@@ -495,6 +625,179 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       await read
       expect(listings).toBe(0)
       expect(opened).toEqual([transcript('s3')])
+    })
+  })
+
+  describe('a transcript written with no report from the watcher', () => {
+    // On Windows a write through a handle that stays open raises no watcher
+    // event until the handle closes (measured: five writes 500 ms apart
+    // reported nothing, then one 'change' at the close). The 5 s walk used to
+    // find those; now the 5 s timer asks the size of the transcripts read in
+    // the last ten minutes, and reads the ones that moved.
+    it('is read at the next 5 s tick while it was read in the last ten minutes, and no folder is listed', async () => {
+      fakeTheTimer()
+      await start()
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      clearCounts()
+      const read = nextSweep('the sweep at the next tick')
+      vi.advanceTimersByTime(TAIL_MS)
+      await read
+      expect(listings).toBe(0)
+      expect(opened).toEqual([transcript('s2')])
+      expect(db.events).toBe(6)
+      // One size check for each transcript read lately, and no other.
+      expect([...lstatted].sort()).toEqual(five().sort())
+    })
+
+    it('a transcript reported as made while it is still empty is read at the next tick once it is written', async () => {
+      fakeTheTimer()
+      await start()
+      // A session makes its transcript, the watcher reports that, and the
+      // session then writes through the handle it kept.
+      const made = transcript('s8')
+      realFs.writeFileSync(made, '')
+      const seen = nextSweep('the sweep that sees the empty transcript')
+      fire(claudeDir, 'rename', path.join('F--proj', 's8.jsonl'))
+      await seen
+      expect(db.events).toBe(5)
+      realFs.appendFileSync(made, line('first'))
+      clearCounts()
+      const read = nextSweep('the sweep at the next tick')
+      vi.advanceTimersByTime(TAIL_MS)
+      await read
+      expect(listings).toBe(0)
+      expect(opened).toEqual([made])
+      expect(db.events).toBe(6)
+    })
+
+    it('a read renews its ten minutes: the others age out and it is still asked about', async () => {
+      fakeTheTimer()
+      await start()
+      // To 9 min, past the timed walk at 5 min (which reads nothing).
+      vi.advanceTimersByTime(TK_FULL_SWEEP_MS)
+      await settle()
+      vi.advanceTimersByTime(TK_ACTIVE_MS - TK_FULL_SWEEP_MS - 60_000)
+      await settle()
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      const read = nextSweep('the sweep at the next tick')
+      vi.advanceTimersByTime(TAIL_MS)
+      await read
+      expect(db.events).toBe(6)
+      // To 10 min, the next timed walk, and on to 12 min.
+      vi.advanceTimersByTime(60_000 - TAIL_MS)
+      await settle()
+      vi.advanceTimersByTime(2 * 60_000 - TAIL_MS)
+      await settle()
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS)
+      await settle()
+      // Twelve minutes after start: the four read only then are forgotten.
+      expect(lstatted).toEqual([transcript('s2')])
+      expect(listings).toBe(0)
+    })
+
+    it('is not asked about once ten minutes have passed since it was read; the timed walk reads it', async () => {
+      fakeTheTimer()
+      await start()
+      // The timed walks at 5 and 10 min read nothing: no transcript changed.
+      vi.advanceTimersByTime(TK_FULL_SWEEP_MS)
+      await settle()
+      vi.advanceTimersByTime(TK_ACTIVE_MS - TK_FULL_SWEEP_MS)
+      await settle()
+      expect(walks).toBe(3)
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS * 3)
+      await settle()
+      expect({ listings, lstatted, statted, opened }).toEqual({ listings: 0, lstatted: [], statted: [], opened: [] })
+      expect(db.events).toBe(5)
+      const found = nextSweep('the timed walk')
+      vi.advanceTimersByTime(TK_FULL_SWEEP_MS - TAIL_MS * 3)
+      await found
+      expect(walks).toBe(1)
+      expect(db.events).toBe(6)
+    })
+
+    it('at most TK_ACTIVE_MAX are asked about, the ones read longest ago dropped', async () => {
+      fakeTheTimer()
+      await start()
+      // The transcript read first at start is read again, so of the five it
+      // is now the one read last.
+      const first = opened[0]
+      realFs.appendFileSync(first, line('again'))
+      let read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', path.relative(claudeDir, first))
+      await read
+      // One fewer new transcripts than the bound, each reported as it is made.
+      const made = Array.from({ length: TK_ACTIVE_MAX - 1 }, (_, i) => transcript(`n${i}`))
+      for (const f of made) realFs.writeFileSync(f, line(path.basename(f)))
+      read = nextSweep('the changed-files sweep')
+      for (const f of made) fire(claudeDir, 'rename', path.relative(claudeDir, f))
+      await read
+      expect(db.events).toBe(5 + 1 + made.length)
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS)
+      await settle()
+      // The other four read at start are no longer asked about.
+      expect(lstatted).toHaveLength(TK_ACTIVE_MAX)
+      expect(new Set(lstatted)).toEqual(new Set([first, ...made]))
+      expect(listings).toBe(0)
+    })
+
+    it('one that was deleted is asked about once more and then forgotten, with no walk', async () => {
+      fakeTheTimer()
+      await start()
+      realFs.rmSync(transcript('s4'))
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS)
+      await settle()
+      expect(lstatted).toContain(transcript('s4'))
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS)
+      await settle()
+      expect(lstatted).toHaveLength(4)
+      expect(lstatted).not.toContain(transcript('s4'))
+      expect(listings).toBe(0)
+    })
+
+    it('one that cannot be read is tried once, then left to its next report or the next walk', async () => {
+      fakeTheTimer()
+      await start()
+      denied = transcript('s1')
+      realFs.appendFileSync(denied, line('more-1'))
+      const tried = nextSweep('the sweep at the next tick')
+      vi.advanceTimersByTime(TAIL_MS)
+      await tried
+      expect(failed.at(-1)).toBe(1)
+      expect(warnings.filter((w) => w.includes('open failed'))).toHaveLength(1)
+      // Not tried again at every tick: no sweep, and nothing more in the log.
+      const sweeps = completes.length
+      vi.advanceTimersByTime(TAIL_MS * 3)
+      await settle()
+      expect(completes).toHaveLength(sweeps)
+      expect(warnings.filter((w) => w.includes('open failed'))).toHaveLength(1)
+      // Its next report tries it again, and it is read once it can be.
+      denied = ''
+      const read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', path.join('F--proj', 's1.jsonl'))
+      await read
+      expect(failed.at(-1)).toBe(0)
+      expect(db.events).toBe(6)
+    })
+
+    it('a size check that fails does not stop the timer: the transcript is handed to the sweep', async () => {
+      fakeTheTimer()
+      await start()
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      clearCounts()
+      // The index cannot be asked how far the first transcript checked was read.
+      db.failNextGetCursor = true
+      const read = nextSweep('the sweep at the next tick')
+      expect(() => vi.advanceTimersByTime(TAIL_MS)).not.toThrow()
+      await read
+      expect(opened).toEqual([transcript('s2')])
+      expect(db.events).toBe(6)
+      expect(listings).toBe(0)
     })
   })
 
