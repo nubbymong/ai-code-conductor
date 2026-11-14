@@ -51,4 +51,4 @@ AI Code Conductor (formerly Claude Command Center) is a multi-session Claude Cod
 - `beta` is the working branch - all features land here first
 - `main` is stable-only - updated via reviewed PRs from beta
 - Beta releases: the version bump and the changelog entry ride in the last content PR of the beta (`AGENTS.md`, "Beta cadence", rule 5). Once the owner has merged it: `gh workflow run release.yml --ref beta -f channel=beta -f skip_vt=false`. Do not run `npm run release -- --beta` without `--no-bump` for this: it would bump the version a second time and add a separate bump commit
-- Stable releases: merge beta→main, then `npm run release -- --stable --no-bump` from main
+- Stable releases: follow the release-branch model in `AGENTS.md`, section "Release Process". Do not merge `beta` straight to `main`
