@@ -12,6 +12,7 @@ import {
   clearCompletedAgents,
 } from '../cloud-agent-manager'
 import { appWindowSender } from './trusted-sender'
+import { providerIdSchema } from './provider-id-schema'
 import { isOpaqueId } from '../../shared/providers'
 import { isValidProfileId } from '../../shared/profile-id'
 import { CODEX_MODEL_MAX, CODEX_MODEL_RE, CODEX_EFFORTS } from '../sanitize-restored-spawn-options'
@@ -45,7 +46,8 @@ export const dispatchSchema = z.object({
   description: z.string().min(1).max(DESCRIPTION_MAX),
   projectPath: z.string().min(1).max(PATH_MAX),
   configId: z.string().min(1).max(ID_MAX).optional(),
-  provider: z.enum(['claude', 'codex']).optional(),
+  // One of the app's provider ids (provider-id-schema.ts).
+  provider: providerIdSchema.optional(),
   // Claude Code only.
   profileId: claudeProfileId.optional(),
   legacyVersion: z.object({ enabled: z.boolean(), version: z.string().max(64) }).optional(),

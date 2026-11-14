@@ -22,19 +22,22 @@ import { z } from 'zod'
 import { IPC } from '../../shared/ipc-channels'
 import { getTokenomicsSupervisor } from '../tokenomics/tokenomics-service'
 import { tkAccountKeyOk } from '../tokenomics/tk-types'
+import { providerIdSchema } from './provider-id-schema'
 
 // ---------------------------------------------------------------------------
 // Zod schemas
 // ---------------------------------------------------------------------------
 
-const filterSchema = z.object({
+export const filterSchema = z.object({
   configId: z.string().min(1).max(200).nullable().optional(),   // undefined=all, null=External
   from: z.number().int().optional(),
   to: z.number().int().optional(),
   model: z.string().min(1).max(200).optional(),
   // Usage track MP9: one provider's, or one account's, usage. An account key
-  // is '' (not recorded) or `<provider>:<id>`, nothing else.
-  provider: z.enum(['claude', 'codex']).optional(),
+  // is '' (not recorded) or `<provider>:<id>`, nothing else. The provider is
+  // one of the app's provider ids (provider-id-schema.ts: Claude Code and
+  // Codex today).
+  provider: providerIdSchema.optional(),
   accountKey: z.string().max(140).refine((k) => tkAccountKeyOk(k)).optional(),
 }).strict()
 

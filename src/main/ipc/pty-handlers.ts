@@ -6,6 +6,7 @@ import { handOffAskQuestion } from '../pty-manager'
 import { ensureHelpWorkspace, helpWorkspaceDir } from '../help-workspace'
 import { ASK_HELP_FOLDER_FAILED } from '../../shared/ask-conductor-provider'
 import { getResourcesDirectory } from './setup-handlers'
+import { providerIdSchema } from './provider-id-schema'
 import { getAccountsService } from '../provider-accounts'
 import { awaitCodexHookFolders } from '../codex-hook-folders'
 import { getGateway } from '../hooks'
@@ -446,7 +447,8 @@ export const spawnOptionsSchema = z.object({
   // passes it verbatim) and must stay accepted — emission already skips empty (`if (options?.model)`).
   model: z.string().max(64).regex(/^[a-zA-Z0-9._[\]-]+$/).optional().or(z.literal('')),
   profileId: z.string().optional(),
-  provider: z.enum(['claude', 'codex']).optional(),
+  // One of the app's provider ids (provider-id-schema.ts).
+  provider: providerIdSchema.optional(),
   codexOptions: z.object({
     // Bounded and charset-limited like the Claude model above: it becomes a
     // launch argument. The value list lives in sanitize-restored-spawn-options.ts
