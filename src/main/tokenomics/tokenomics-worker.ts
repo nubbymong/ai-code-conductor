@@ -229,9 +229,13 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
   let fullSweepDue = true
   let lastFullSweepAt = 0
   let lastProgress = { filesDone: 0, filesTotal: 0, eventsIngested: 0 }
-  const watchers: Array<{ close(): void }> = []
-  /** Watchers of the Codex accounts' folders, by folder: the set changes. */
-  const realmWatchers = new Map<string, { close(): void }>()
+  /** The folder watchers, by folder: the Claude projects folder, this
+   *  computer's own Codex sessions folder and the Codex accounts' (that set
+   *  changes). A named folder with no watcher is tried again by the 5 s
+   *  timer (#302). */
+  const watchers = new Map<string, { close(): void }>()
+  /** Folders whose watcher failed and the log said so: once, not at every try. */
+  const watchWarned = new Set<string>()
   let watchTimer: ReturnType<typeof setTimeout> | null = null
   let tailTimer: ReturnType<typeof setInterval> | null = null
 
@@ -886,23 +890,52 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
   }
 
   function watchDir(dir: string, perFile: boolean): { close(): void } | null {
+    const warnOnce = (message: string): void => { if (!watchWarned.has(dir)) { watchWarned.add(dir); logw('warn', message) } }
     try {
       if (!fs.existsSync(dir)) return null
       const wch = fs.watch(dir, { recursive: true }, (_event: unknown, filename: unknown) => { noteWatchEvent(dir, perFile, filename); scheduleIncremental() })
       // An FSWatcher 'error' with no listener throws -> uncaughtException -> the
       // worker dies and burns a restart toward permanent degrade. Log + close the
-      // broken watcher; the 5s tailTimer sweep below keeps indexing alive.
+      // broken watcher and forget it: the 5 s timer then walks the folders, as it
+      // did for every folder before #302, and tries the watcher again.
       ;(wch as { on?: (ev: string, cb: (e: unknown) => void) => void }).on?.('error', (err) => {
-        logw('warn', `fs.watch error for ${dir}; relying on periodic sweep: ${String(err)}`)
+        warnOnce(`fs.watch error for ${dir}; relying on periodic sweep: ${String(err)}`)
         try { wch.close() } catch { /* already closed */ }
+        if (watchers.get(dir) === wch) watchers.delete(dir)
       })
       return wch
-    } catch (err) { logw('warn', `fs.watch failed for ${dir}: ${String(err)}`); return null }
+    } catch (err) { warnOnce(`fs.watch failed for ${dir}: ${String(err)}`); return null }
+  }
+
+  /** #302: stop watching the folders no longer named, and watch each named
+   *  folder that has no watcher: it did not exist when it was named (a first
+   *  session makes it), or its watcher failed. Returns whether a full walk is
+   *  due for one of them. A folder watched just now may hold what was written
+   *  before its watcher started, and one that exists and cannot be watched is
+   *  walked by the 5 s timer, as every folder was before the changed-files
+   *  sweep. A folder that does not exist costs one check and no walk. */
+  function syncWatchers(): boolean {
+    const named = new Map<string, boolean>()
+    if (claudeDir) named.set(claudeDir, true)
+    for (const root of codexDirs) if (root.dir && !named.has(root.dir)) named.set(root.dir, false)
+    for (const [dir, wch] of watchers) {
+      if (named.has(dir)) continue
+      try { wch.close() } catch { /* ignore */ }
+      watchers.delete(dir)
+    }
+    let due = false
+    for (const [dir, perFile] of named) {
+      if (watchers.has(dir) || !fs.existsSync(dir)) continue
+      const wch = watchDir(dir, perFile)
+      if (wch) watchers.set(dir, wch)
+      due = true
+    }
+    return due
   }
 
   /** The Codex accounts' folders now (plan A13): watch the new ones, stop
    *  watching the gone ones. A folder that does not exist yet (an account
-   *  that has run no session) is picked up by the periodic sweep. */
+   *  that has run no session) is watched by the 5 s timer once it does. */
   function setCodexRealmDirs(dirs: readonly unknown[]): void {
     const base = codexDirs[0]
     // MP9: each a folder and whose sessions it holds; anything else is
@@ -917,17 +950,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       next.push({ dir, accountKey })
     }
     codexDirs = base === undefined ? next : [base, ...next]
-    const nextDirs = next.map((n) => n.dir)
-    for (const [dir, wch] of realmWatchers) {
-      if (nextDirs.includes(dir)) continue
-      try { wch.close() } catch { /* ignore */ }
-      realmWatchers.delete(dir)
-    }
-    for (const dir of nextDirs) {
-      if (realmWatchers.has(dir)) continue
-      const wch = watchDir(dir, false)
-      if (wch) realmWatchers.set(dir, wch)
-    }
+    syncWatchers()
   }
 
   /** Usage track MP10: record the account a Claude session runs under now
@@ -941,16 +964,15 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
   }
 
   function startWatching(): void {
-    const claudeWatch = claudeDir ? watchDir(claudeDir, true) : null
-    if (claudeWatch) watchers.push(claudeWatch)
-    const codexWatch = codexDirs[0]?.dir ? watchDir(codexDirs[0].dir, false) : null
-    if (codexWatch) watchers.push(codexWatch)
+    syncWatchers()
     // Safety tail: recursive watch can miss newly-created nested session files on
     // some platforms. Every 5 s it reads what the watcher reported, and runs a
-    // full walk when one is due: the last one left work behind or failed, or
-    // TK_FULL_SWEEP_MS has passed since it (#302).
+    // full walk when one is due: the last one left work behind or failed, a
+    // named folder was watched just now or cannot be watched, or
+    // TK_FULL_SWEEP_MS has passed since the last walk (#302).
     tailTimer = setInterval(() => {
       if (sweeping) return
+      if (syncWatchers()) fullSweepDue = true
       if (Date.now() - lastFullSweepAt >= TK_FULL_SWEEP_MS) fullSweepDue = true
       if (fullSweepDue || dirtyClaude.size > 0) void ingestAll('incremental')
     }, 5000)
@@ -1017,10 +1039,8 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     post({ type: 'health', eventsTotal: db.eventCount(), filesTracked, dbBytes: 0 })
   }
   function stop(): void {
-    for (const wch of watchers) { try { wch.close() } catch { /* ignore */ } }
-    watchers.length = 0
-    for (const wch of realmWatchers.values()) { try { wch.close() } catch { /* ignore */ } }
-    realmWatchers.clear()
+    for (const wch of watchers.values()) { try { wch.close() } catch { /* ignore */ } }
+    watchers.clear()
     if (watchTimer) { clearTimeout(watchTimer); watchTimer = null }
     if (tailTimer) { clearInterval(tailTimer); tailTimer = null }
     try { db?.close() } catch { /* ignore */ }

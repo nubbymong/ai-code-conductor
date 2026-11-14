@@ -4,8 +4,9 @@
  * on a re-index, on an event that names no transcript, and as a safety net
  * every TK_FULL_SWEEP_MS. A full walk that leaves work behind runs again
  * until every file is read, a changed-files sweep that fails makes the next
- * sweep a full one, and a reported transcript that is a link is left alone,
- * as the full walk leaves it.
+ * sweep a full one, a named folder with no watcher (it did not exist yet, or
+ * its watcher failed) is tried again by the 5 s timer, and a reported
+ * transcript that is a link is left alone, as the full walk leaves it.
  *
  * Host-safe: the real worker and real transcript files in a temp folder, a
  * wrapped fs that counts folder listings and file reads and hands the
@@ -99,7 +100,14 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   let failed: number[] = []
   let waiters: Array<(m: FromTkWorker) => boolean> = []
   const bounds = new Set<ReturnType<typeof setTimeout>>()
+  /** The live watchers, by folder: what the worker handed each to be told of
+   *  a change, and of the watcher's own failure. */
   const watchCbs = new Map<string, WatchCb>()
+  const watchErrs = new Map<string, (err: unknown) => void>()
+  /** Folders whose watcher cannot be started. */
+  const unwatchable = new Set<string>()
+  /** What the worker logged as a warning. */
+  let warnings: string[] = []
   /** A path the wrapped fs shows as a link to `linkTarget`: lstat says link,
    *  stat and open follow it. Nothing is on disk at the path itself. */
   let linkAt = ''
@@ -120,7 +128,14 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
           if (path.resolve(String(dir)) === path.resolve(claudeDir)) walks++
           return (realFs.readdirSync as (d: string, o: unknown) => unknown)(dir, o)
         }
-        case 'watch': return (dir: string, _o: unknown, cb: WatchCb) => { watchCbs.set(dir, cb); return { close() {}, on() {} } }
+        case 'watch': return (dir: string, _o: unknown, cb: WatchCb) => {
+          if (unwatchable.has(dir)) throw new Error('simulated watch failure')
+          watchCbs.set(dir, cb)
+          return {
+            close() { if (watchCbs.get(dir) === cb) { watchCbs.delete(dir); watchErrs.delete(dir) } },
+            on(event: string, handler: (err: unknown) => void) { if (event === 'error') watchErrs.set(dir, handler) },
+          }
+        }
         case 'statSync': return (p: string, o?: unknown) => {
           statted.push(String(p))
           return (realFs.statSync as (p: string, o?: unknown) => unknown)(follow(p), o)
@@ -168,6 +183,7 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
     const fake = new FakeTkWorkerTransport()
     fake.onMessage((m) => {
       if (m.type === 'index-complete') { completes.push({ firstIndex: m.firstIndex, drained: m.drained }); failed.push(m.filesFailed) }
+      if (m.type === 'log' && m.entry.level === 'warn') warnings.push(m.entry.message)
       waiters = waiters.filter((w) => !w(m))
     })
     const first = opts.waitFirst === false ? null : nextSweep('the first sweep')
@@ -186,8 +202,8 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
     for (let i = 0; i < 5; i++) realFs.writeFileSync(transcript(`s${i}`), line(`init-${i}`))
     db.cursors.clear(); db.meta.clear(); db.events = 0; db.failNextSetMeta = false; db.failNextGetCursor = false
     clearCounts()
-    completes = []; failed = []; waiters = []
-    watchCbs.clear()
+    completes = []; failed = []; waiters = []; warnings = []
+    watchCbs.clear(); watchErrs.clear(); unwatchable.clear()
     linkAt = ''; linkTarget = ''; stuck = ''; stuckFds.clear(); denied = ''
   })
   afterEach(() => {
@@ -409,6 +425,76 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       expect(walks).toBe(1)
       expect([...opened].sort()).toEqual([transcript('s1'), transcript('s2')].sort())
       expect(db.events).toBe(7)
+    })
+  })
+
+  describe('a named folder with no watcher', () => {
+    it('costs no walk while it does not exist; once it does, the next 5 s tick watches it and reads what it holds', async () => {
+      fakeTheTimer()
+      realFs.rmSync(codexDir, { recursive: true, force: true })
+      await start()
+      expect(watchCbs.has(codexDir)).toBe(false)
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS * 3)
+      await settle()
+      expect({ listings, statted, opened }).toEqual({ listings: 0, statted: [], opened: [] })
+      // An account's first session makes its sessions folder and writes there.
+      const day = path.join(codexDir, '2026', '08', '01')
+      realFs.mkdirSync(day, { recursive: true })
+      realFs.writeFileSync(path.join(day, 'rollout-2026-08-01T00-00-00-a.jsonl'), rollout('cx-a', 2))
+      const found = nextSweep('the walk that finds the new folder')
+      vi.advanceTimersByTime(TAIL_MS)
+      await found
+      expect(watchCbs.has(codexDir)).toBe(true)
+      expect(walks).toBe(1)
+      expect(db.events).toBe(5 + 2)
+      // Watched now: the timer walks nothing more.
+      clearCounts()
+      vi.advanceTimersByTime(TAIL_MS * 3)
+      await settle()
+      expect(listings).toBe(0)
+      expect(warnings).toEqual([])
+    })
+
+    it('is walked by the 5 s timer when its watcher fails, as every folder was, until it is watched again', async () => {
+      fakeTheTimer()
+      await start()
+      // The watcher of the projects folder fails and cannot be started again.
+      unwatchable.add(claudeDir)
+      watchErrs.get(claudeDir)!(new Error('simulated watcher failure'))
+      expect(watchCbs.has(claudeDir)).toBe(false)
+      // Written with no watcher to report it: the next tick's walk reads it.
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      clearCounts()
+      let walked = nextSweep('the walk at the next tick')
+      vi.advanceTimersByTime(TAIL_MS)
+      await walked
+      expect(walks).toBe(1)
+      expect(db.events).toBe(6)
+      walked = nextSweep('the walk at the tick after')
+      vi.advanceTimersByTime(TAIL_MS)
+      await walked
+      expect(walks).toBe(2)
+      // It can be watched again: one walk for what was missed, then none.
+      unwatchable.delete(claudeDir)
+      walked = nextSweep('the walk as the watcher starts again')
+      vi.advanceTimersByTime(TAIL_MS)
+      await walked
+      expect(watchCbs.has(claudeDir)).toBe(true)
+      expect(walks).toBe(3)
+      vi.advanceTimersByTime(TAIL_MS * 3)
+      await settle()
+      expect(walks).toBe(3)
+      // Said once in the log, not at every try.
+      expect(warnings.filter((w) => w.includes('fs.watch'))).toHaveLength(1)
+      // And a transcript reported by the new watcher is read on its own again.
+      realFs.appendFileSync(transcript('s3'), line('more-3'))
+      clearCounts()
+      const read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', path.join('F--proj', 's3.jsonl'))
+      await read
+      expect(listings).toBe(0)
+      expect(opened).toEqual([transcript('s3')])
     })
   })
 
