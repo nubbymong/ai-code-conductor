@@ -221,7 +221,19 @@ const SECTIONS_211: WhatsNewSection[] = [
 ]
 
 /** Every curated set, oldest first. */
-export const WHATS_NEW_SECTIONS: readonly WhatsNewSection[] = [...SECTIONS_20, ...SECTIONS_21, ...SECTIONS_211]
+// 2.1.3: the model list refreshes without a release, and Fable 5.2. Upgrade
+// only: a fresh install meets the current model list in the picker itself.
+const SECTIONS_213: WhatsNewSection[] = [
+  {
+    heading: 'Across the app',
+    items: [
+      { since: '2.1.3-beta.1', upgradeOnly: true, title: 'New models, no update.', desc: 'The model list refreshes at start-up, so a new model can reach the picker without a new version of the app.' },
+      { since: '2.1.3-beta.1', upgradeOnly: true, title: 'Fable 5.2.', desc: 'Fable 5.2 is in the model picker.', needsClaude: true },
+    ],
+  },
+]
+
+export const WHATS_NEW_SECTIONS: readonly WhatsNewSection[] = [...SECTIONS_20, ...SECTIONS_21, ...SECTIONS_211, ...SECTIONS_213]
 
 /**
  * The curated lines that are new to someone whose anchor is `anchor`
@@ -346,7 +358,13 @@ export function summaryContent(
   currentVersion: string,
   sets: readonly WhatsNewSection[] = WHATS_NEW_SECTIONS,
 ): SummaryContent {
-  const curated = summarySections(view, sets)
+  // A build never lists a line newer than itself, as entriesSince caps the
+  // changelog at currentVersion. Only a test runs an older build against
+  // newer curated lines; a shipped build is always the newest of its sets.
+  const upToHere = sets
+    .map((s) => ({ ...s, items: s.items.filter((it) => compareVersions(it.since, currentVersion) <= 0) }))
+    .filter((s) => s.items.length > 0)
+  const curated = summarySections(view, upToHere)
   const fixesOnly = !view.fresh && curated.length === 0
   const sections = fixesOnly ? [fixesAndPolish(fixesEntries(entries, view.anchor, currentVersion), currentVersion)] : curated
   const showcases = fixesOnly ? [] : summaryShowcases(view)
