@@ -49,7 +49,8 @@ vi.mock('../../../src/main/pty-manager', () => ({
   },
   isSessionWritable: (id: string) => live.has(id),
   isSessionLiveOrStarting: (id: string) => live.has(id) || current.has(id),
-  endAgentRunsInFolder: async () => true,
+  // The help folder's runs have ended, unless a case holds an Ask launch for them (`walk.askRuns`).
+  endAgentRunsInFolder: () => walk.askRuns ?? Promise.resolve(true),
   getKeptCodexConversationSource: () => undefined,
   getKeptCodexConversation: () => undefined,
   holdsCodexLaunchLease: () => false,
@@ -75,7 +76,8 @@ vi.mock('../../../src/main/hooks', async (importOriginal) => ({
   getGateway: () => null,
 }))
 vi.mock('../../../src/main/provider-accounts', () => ({
-  getAccountsService: () => ({ launchRefusal: () => null, remoteLaunchRefusal: () => null, snapshot: () => ({ accounts: [] }) }),
+  // Every provider is on, unless a case switches one off while a launch is held (`walk.off`).
+  getAccountsService: () => ({ launchRefusal: () => walk.off, remoteLaunchRefusal: () => null, snapshot: () => ({ accounts: [] }) }),
 }))
 vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/account-profiles')>()),
@@ -87,10 +89,14 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
 // rule (one file test at a time in a folder) over a stand-in, so no file of
 // this computer is read. A folder in `walk.hung` does not answer until its
 // tests in `walk.held` are answered. `walk.scripts`, when set, is the scripts
-// folders' work a launch waits for first.
+// folders' work a launch waits for first; `walk.askRuns` the end of the help
+// folder's runs an Ask launch waits for last; `walk.off` why the accounts
+// service refuses a launch now (the provider was switched off).
 const walk = vi.hoisted(() => ({
   present: new Set<string>(), hung: new Set<string>(), held: [] as Array<() => void>, asked: [] as string[],
   scripts: null as Promise<void> | null,
+  askRuns: null as Promise<boolean> | null,
+  off: null as null | { code: string; providerId: string; message: string },
 }))
 vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../../src/main/windows-programs')>()
@@ -99,7 +105,8 @@ vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
     if (!walk.hung.has(p.slice(0, p.lastIndexOf('\\')).toLowerCase())) return Promise.resolve(walk.present.has(p.toLowerCase()))
     return new Promise<boolean>((resolve) => { walk.held.push(() => resolve(walk.present.has(p.toLowerCase()))) })
   }
-  return { ...real, folderFileTest: () => real.folderFileTest(stat) }
+  // The real rule, with the walk's own deadline, over the stand-in file test.
+  return { ...real, folderFileTest: (_stat?: unknown, deadline?: Parameters<typeof real.folderFileTest>[1]) => real.folderFileTest(stat, deadline) }
 })
 
 // The start module itself: not a stand-in.
@@ -130,6 +137,11 @@ const settle = async (): Promise<void> => { for (let i = 0; i < 20; i++) await n
  *  waits on the start (said at once, not by the test's timeout). */
 const now = (p: Promise<string>): Promise<string> => Promise.race([p, settle().then(() => 'still held')])
 
+/** What a spawn has answered by now, as the handler answered it; 'still held' while it waits. */
+const asItStands = (p: Promise<unknown>): Promise<unknown> => Promise.race([p, settle().then(() => 'still held')])
+/** What the accounts service answers for a provider the user switched off. */
+const OFF = { code: 'provider-off', providerId: 'claude', message: 'Claude Code is off. Turn it on in Settings, Accounts.' }
+
 /** A start on Windows that found Claude Code in no folder PATH names and whose
  *  registry read has not answered; `answer` lets it. */
 let answer = (): void => {}
@@ -146,6 +158,8 @@ function aSlowStart(): void {
 beforeEach(() => {
   live.clear(); current.clear(); spawned.length = 0; preparations = 0
   walk.asked.length = 0
+  walk.askRuns = null
+  walk.off = null
   answer = () => {}
   _resetClaudeStartLookupForTest()
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -154,6 +168,8 @@ afterEach(() => {
   vi.useRealTimers()
   _resetClaudeStartLookupForTest()
   answer()
+  walk.askRuns = null
+  walk.off = null
 })
 
 describe('a local Claude Code launch held by the real start module, through the real pty:spawn handler', () => {
@@ -408,6 +424,83 @@ describe('a local Claude Code launch with no answer about Claude Code to read, t
     shareBack()
     expect(await now(started)).toBe('started')
     expect(recentClaudeOnWindows(process.env)).toBe(`${TOOLS}\\claude.exe`)
+  })
+
+  // The rule at the top of pty:spawn is asked before every wait. A launch
+  // held for the walk asks it again when the hold ends: Claude Code switched
+  // off meanwhile starts nothing. Mutation to prove this can fail: do not
+  // ask again after the waits (the launch then starts after the switch-off).
+  it.runIf(process.platform === 'win32')('Claude Code switched off while the launch is held for the walk: when the hold ends it starts nothing, says why, and its preparation is given up', async () => {
+    armClaudeLaunchWalk()
+    const started = spawn({}, S, { cwd: 'C:/w' }) as Promise<unknown>
+    await settle()
+    expect(preparations, 'held as a prepared spawn').toBe(1)
+    expect(spawned).toEqual([])
+    // The user switches Claude Code off in Settings while the walk is under way.
+    walk.off = OFF
+    await vi.advanceTimersByTimeAsync(WINDOWS_PATH_WALK_WAIT_MS)
+    expect(await asItStands(started)).toEqual({ started: false, refused: OFF })
+    expect(spawned, 'nothing started after the switch-off').toEqual([])
+    expect(current.has(S), 'the preparation was given up').toBe(false)
+  })
+
+  it.runIf(process.platform === 'win32')('switched off while the launch is held, and the folder answers before the deadline: still nothing starts', async () => {
+    armClaudeLaunchWalk()
+    const started = spawn({}, S, { cwd: 'C:/w' }) as Promise<unknown>
+    await settle()
+    walk.off = OFF
+    shareBack()
+    expect(await asItStands(started)).toEqual({ started: false, refused: OFF })
+    expect(spawned).toEqual([])
+    // Switched on again: the next launch starts, with the answer the walk kept.
+    walk.off = null
+    expect(await now(outcome(spawn({}, S, { cwd: 'C:/w' })))).toBe('started')
+    expect(spawned).toEqual([{ sid: S, options: { cwd: 'C:/w' } }])
+  })
+
+  // A tab closed during the hold is not a refusal: it started nothing, and
+  // the rule is not asked about a launch nobody wants any more.
+  it.runIf(process.platform === 'win32')('closed while it is held, with Claude Code switched off too: it answers that nothing started, not a refusal', async () => {
+    armClaudeLaunchWalk()
+    const started = spawn({}, S, { cwd: 'C:/w' }) as Promise<unknown>
+    await settle()
+    current.delete(S)
+    walk.off = OFF
+    shareBack()
+    expect(await asItStands(started)).toEqual({ started: false })
+    expect(spawned).toEqual([])
+  })
+
+  // The same rule after the older holds, which also take seconds: here the
+  // scripts folders. Runs on every platform (main has not started here, so
+  // nothing is held for the walk and nothing is walked).
+  it('Claude Code switched off while the launch is held for the scripts folders: it starts nothing and says why', async () => {
+    let scriptsDone = (): void => {}
+    walk.scripts = new Promise<void>((resolve) => { scriptsDone = resolve })
+    const started = spawn({}, S, { cwd: 'C:/w' }) as Promise<unknown>
+    await settle()
+    expect(preparations, 'held for the scripts folders').toBe(1)
+    walk.off = OFF
+    scriptsDone()
+    expect(await asItStands(started)).toEqual({ started: false, refused: OFF })
+    expect(spawned).toEqual([])
+    expect(current.has(S)).toBe(false)
+  })
+
+  // An Ask Conductor launch waits last for the runs in the help folder to
+  // end. Mutation to prove this can fail: ask again only before that wait.
+  it('Claude Code switched off while an Ask Conductor launch waits for the runs in the help folder to end: it starts nothing and says why', async () => {
+    let runsEnded = (_ended: boolean): void => {}
+    walk.askRuns = new Promise<boolean>((resolve) => { runsEnded = resolve })
+    const started = spawn({}, S, { cwd: 'C:/res/help', isAsk: true }) as Promise<unknown>
+    await settle()
+    expect(preparations).toBe(1)
+    expect(await asItStands(started), 'held for the runs to end').toBe('still held')
+    walk.off = OFF
+    runsEnded(true)
+    expect(await asItStands(started)).toEqual({ started: false, refused: OFF })
+    expect(spawned).toEqual([])
+    expect(current.has(S)).toBe(false)
   })
 
   // Every case above holds a launch, so it runs on Windows only. This one

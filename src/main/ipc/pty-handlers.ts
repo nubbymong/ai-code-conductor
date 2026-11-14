@@ -913,6 +913,12 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     // PR-level ADR-009 round 1 (B1): once that preparation is cancelled or
     // superseded, this spawn's ticket stops counting as one under way.
     if (preparation) noteConfigLaunchPreparation(configClaim.ticket, () => preparation.current)
+    /** For a launch that was held and is still wanted (its preparation is
+     *  the current one): why its provider may not start now, asked again
+     *  after a wait, or null. A launch that was not held has waited for
+     *  nothing since the rule at the top; one closed or superseded starts
+     *  nothing anyway, and is not asked about. */
+    const heldLaunchSwitchedOff = (): ReturnType<typeof providerLaunchRefusal> => (preparation?.current && launchProvider ? providerLaunchRefusal(launchProvider) : null)
     let codexLease: AccountLease | undefined
     let carry: RespawnCarry | undefined
     try {
@@ -1088,11 +1094,19 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
       // spawn is in flight (the replaced run's late or synthetic exit), and
       // applies it only when this request started nothing -- which, without
       // this answer, it cannot tell from a spawn that went ahead.
-      if (preparation && !preparation.current) {
-        logInfo(`[pty] Session ${sessionId}: closed or superseded while its spawn was prepared -- not spawning`)
+      //
+      // Or its provider was switched off while it was held. The rule at the
+      // top was asked before every wait above, and they can take most of a
+      // minute between them (the scripts folders, the start's steps and its
+      // own wait, the walk of PATH): a launch still wanted asks it again
+      // here, after the last of them, and one that is refused now starts
+      // nothing and says why, as at the top (provider-launch-gate.ts).
+      const switchedOff = heldLaunchSwitchedOff()
+      if (preparation && (!preparation.current || switchedOff)) {
+        if (!switchedOff) logInfo(`[pty] Session ${sessionId}: closed or superseded while its spawn was prepared -- not spawning`)
         codexLease?.release()
         preparation.abandon()
-        return { started: false as const }
+        return switchedOff ? { started: false as const, refused: switchedOff } : { started: false as const }
       }
 
       // Agent Canvas UAT roots are NOT registered here any more (adversarial
@@ -1158,11 +1172,14 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
         // the same fixed sentence.
         let ended = false
         try { ended = await endAgentRunsInFolder(helpWorkspaceDir(resourcesDir), ASK_HELP_RUNS_END_WAIT_MS) } catch { ended = false }
-        if (preparation && !preparation.current) {
-          logInfo(`[pty] Session ${sessionId}: closed or superseded while the help folder's runs ended -- not spawning`)
+        // That wait is the last one: closed or superseded during it, or
+        // the provider switched off during it, starts nothing, as above.
+        const offNow = heldLaunchSwitchedOff()
+        if (preparation && (!preparation.current || offNow)) {
+          if (!offNow) logInfo(`[pty] Session ${sessionId}: closed or superseded while the help folder's runs ended -- not spawning`)
           codexLease?.release()
           preparation.abandon()
-          return { started: false as const }
+          return offNow ? { started: false as const, refused: offNow } : { started: false as const }
         }
         if (!ended) {
           logWarn(`[pty] Session ${sessionId}: a run in the help folder did not end in time; Ask Conductor does not start`)

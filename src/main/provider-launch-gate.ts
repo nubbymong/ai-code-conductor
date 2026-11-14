@@ -7,7 +7,8 @@
 // ONE question, asked by every entry point that starts a provider's CLI for
 // the user, BEFORE any process starts: pty:spawn (new launches, restored
 // sessions, Restart, Ask Conductor, SSH sessions that run Claude on the
-// remote), the SSH flow's "Launch Claude", the first-run CLI setup terminal,
+// remote; again after the waits of a launch it held, which can take most of
+// a minute), the SSH flow's "Launch Claude", the first-run CLI setup terminal,
 // Cloud Agents (again right before the agent's process starts), Insights
 // (again before each Claude step), Sentinel's analysis, the legacy CLI
 // install, and the review tools at run time. Probes that would run a

@@ -28,8 +28,9 @@ const h = vi.hoisted(() => ({
   /** Folders whose file tests do not answer (a share that is down), lower-cased. */
   hung: new Set<string>(),
   /** The file tests held there: `release()` answers them all, `fail()` ends
-   *  them as a share that is down ends a file test at last. */
-  held: [] as Array<{ answer: () => void; fail: () => void }>,
+   *  them as a share that is down ends a file test at last (the host did
+   *  not answer in time), or with the error code given. */
+  held: [] as Array<{ answer: () => void; fail: (code: string) => void }>,
   /** The file tests asked off the event loop, and the walks they belong to
    *  (by the names each walk was for). */
   asked: [] as string[],
@@ -46,7 +47,7 @@ const h = vi.hoisted(() => ({
   profileAnswer: null as string | null,
 }))
 const release = (): void => { for (const t of h.held.splice(0)) t.answer() }
-const fail = (): void => { for (const t of h.held.splice(0)) t.fail() }
+const fail = (code = 'ETIMEDOUT'): void => { for (const t of h.held.splice(0)) t.fail(code) }
 
 vi.mock('os', async (importOriginal) => ({ ...(await importOriginal<typeof import('os')>()), platform: () => h.platform }))
 vi.mock('../../../src/main/debug-logger', async (importOriginal) => ({
@@ -61,13 +62,14 @@ vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
     const folder = p.slice(0, p.lastIndexOf('\\')).toLowerCase()
     if (!h.hung.has(folder)) return Promise.resolve(h.present.has(p.toLowerCase()))
     return new Promise<boolean>((resolve, reject) => {
-      h.held.push({ answer: () => resolve(h.present.has(p.toLowerCase())), fail: () => reject(new Error('the network path was not found')) })
+      h.held.push({ answer: () => resolve(h.present.has(p.toLowerCase())), fail: (code) => reject(Object.assign(new Error('the file test failed'), { code })) })
     })
   }
   return {
     ...real,
-    // The real rule (one file test at a time in a folder), over the stand-in file test.
-    folderFileTest: () => real.folderFileTest(stat),
+    // The real rule (one file test at a time in a folder), with the walk's
+    // own deadline, over the stand-in file test.
+    folderFileTest: (_stat?: unknown, deadline?: Parameters<typeof real.folderFileTest>[1]) => real.folderFileTest(stat, deadline),
     findOnWindowsPath: (names: readonly string[], env: NodeJS.ProcessEnv, _stat?: unknown, order?: 'folder' | 'name') => {
       h.walksInPlace.push(names.join(','))
       // A walk in place cannot be given up: a folder that does not answer
@@ -286,6 +288,201 @@ describe('PATH\'s order holds: a launch with no answer to read, and a PATH folde
     await vi.advanceTimersByTimeAsync(CLAUDE_LOOKUP_REUSE_MS - DEADLINE)
     expect(() => launch()).toThrow(CLAUDE_PATH_NOT_ANSWERING)
     expect(recentClaudeOnWindows(process.env, () => keptAt + 1), 'the kept answer was not replaced').toBe(`${TOOLS}\\claude.exe`)
+    expect(h.walksInPlace).toEqual([])
+  })
+})
+
+// Why a launch is refused, as the session says it: the message alone.
+const refusal = (): string => {
+  try {
+    return `started ${launch()?.cmd}`
+  } catch (e) {
+    return (e as Error).message
+  }
+}
+
+describe('what a launch is told, and what it never starts, when the walk it waited for is past its deadline', () => {
+  // A "none" is the answer for a minute, but a launch with a "none" kept is
+  // held for a new walk all the same (a Claude Code installed since is seen
+  // at once). When that walk misses its deadline, what the launch waited to
+  // learn is not known. Mutation to prove this can fail: say "not found"
+  // whenever a "none" under a minute old is kept.
+  it('with a "none" under a minute old kept: refused saying a PATH folder did not answer, not that Claude Code was not found; and it works once the folder has answered', async () => {
+    process.env.PATH = `${GONE};${TOOLS}`
+    armClaudeLaunchWalk()
+    expect(await claudeOnWindowsPathAsync(process.env), 'a walk that ended: none').toBeNull()
+    expect(refusal()).toBe(CLAUDE_NOT_ON_PATH)
+    await vi.advanceTimersByTimeAsync(30_000)
+    // Claude Code is installed, and the share goes down.
+    h.present = files(`${TOOLS}\\claude.exe`)
+    h.hung = new Set([GONE.toLowerCase()])
+    expect(claudeLaunchWalkPending(false), 'held for a new walk').toBe(true)
+    const walked = awaitClaudeLaunchWalk(false)
+    await vi.advanceTimersByTimeAsync(DEADLINE)
+    expect(await ended(walked)).toBe(true)
+    expect(claudeOnWindowsPathWalkedRecently(process.env), 'the "none" is still under a minute old').toBe(true)
+    vi.mocked(logInfo).mockClear()
+    expect(refusal()).toBe(CLAUDE_PATH_NOT_ANSWERING)
+    expect(vi.mocked(logInfo)).toHaveBeenCalledWith(`[claude-provider] ${CLAUDE_PATH_NOT_ANSWERING}`)
+    expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith(`[claude-provider] ${CLAUDE_NOT_ON_PATH}`)
+    expect(h.walksInPlace).toEqual([])
+    // The share is back.
+    h.hung = new Set()
+    release()
+    await flush()
+    expect(refusal()).toBe(`started ${TOOLS}\\claude.exe`)
+  })
+
+  // The same reason whoever asks while that walk is overdue, and never the
+  // not-installed text. Mutation to prove this can fail: drop the reason
+  // (every such refusal then reads "not found").
+  it('with no answer kept at all: the reason is that a folder did not answer, in the message and in the log, never "not found"', async () => {
+    process.env.PATH = `${GONE};${NPM}`
+    h.hung = new Set([GONE.toLowerCase()])
+    armClaudeLaunchWalk()
+    const walked = awaitClaudeLaunchWalk(false)
+    await vi.advanceTimersByTimeAsync(DEADLINE)
+    expect(await ended(walked)).toBe(true)
+    vi.mocked(logInfo).mockClear()
+    expect(refusal()).toBe(CLAUDE_PATH_NOT_ANSWERING)
+    expect(refusal()).not.toBe(CLAUDE_NOT_ON_PATH)
+    expect(CLAUDE_PATH_NOT_ANSWERING).toContain('did not answer in time')
+    expect(CLAUDE_PATH_NOT_ANSWERING).not.toContain('not found')
+    expect(CLAUDE_PATH_NOT_ANSWERING).not.toContain('not installed')
+    expect(vi.mocked(logInfo)).toHaveBeenCalledWith(`[claude-provider] ${CLAUDE_PATH_NOT_ANSWERING}`)
+    expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith(`[claude-provider] ${CLAUDE_NOT_ON_PATH}`)
+  })
+
+  // The Claude Code the PowerShell profile named comes only after every
+  // folder of PATH has said it holds none. Mutation to prove this can fail:
+  // answer with the profile's Claude Code while the walk is past its
+  // deadline (providers/claude/spawn.ts findClaudeOnWindows).
+  it('never the Claude Code the PowerShell profile named: a folder of PATH has not said it holds none, so the launch is refused; once it has, the profile\'s is the answer', async () => {
+    const FNM = 'C:\\Users\\me\\fnm\\claude.cmd'
+    process.env.PATH = TOOLS
+    h.profileAnswer = FNM
+    setClaudeProfileLookupAllowed(() => true)
+    armClaudeLaunchWalk()
+    expect(await findClaudeOnWindowsAsync(process.env), 'the profile\'s answer is kept').toBe(FNM)
+    // Another PATH value (no answer kept for it), whose first folder does not answer.
+    process.env.PATH = `${GONE};${TOOLS}`
+    h.hung = new Set([GONE.toLowerCase()])
+    expect(claudeLaunchWalkPending(false)).toBe(true)
+    const walked = awaitClaudeLaunchWalk(false)
+    await vi.advanceTimersByTimeAsync(DEADLINE)
+    expect(await ended(walked)).toBe(true)
+    expect(refusal(), 'not the profile\'s Claude Code').toBe(CLAUDE_PATH_NOT_ANSWERING)
+    expect(h.walksInPlace).toEqual([])
+    // The folder answers at last: no Claude Code in any folder of PATH, so the profile's it is.
+    h.hung = new Set()
+    release()
+    await flush()
+    expect(refusal()).toBe(`started ${FNM}`)
+  })
+})
+
+describe('two walks in one folder: the look for node.exe and the walk for Claude Code', () => {
+  const SHARE = 'S:\\tools'
+
+  // The CLI check's own order (ipc/cli-handlers.ts): the look for node.exe,
+  // then the walk for Claude Code. The folder answers, but node.exe in it
+  // cannot be read (access denied on that file). Mutation to prove this can
+  // fail: hand the node.exe test's failure to the walk for Claude Code (it
+  // then passes the folder, and the launch runs the later folder's Claude
+  // Code for a minute).
+  it('a node.exe test that fails for that file alone: the walk for Claude Code still asks the folder, and the launch names its Claude Code, not the later folder\'s', async () => {
+    process.env.PATH = `${SHARE};${NODEJS}`
+    h.hung = new Set([SHARE.toLowerCase()])
+    h.present = files(`${SHARE}\\claude.exe`, `${NODEJS}\\claude.exe`, `${NODEJS}\\node.exe`)
+    armClaudeLaunchWalk()
+    void warmPickerNodeOnWindows()
+    void claudeOnWindowsPathAsync(process.env)
+    await flush()
+    expect(h.asked, 'one test at a time in the folder').toEqual([`${SHARE}\\node.exe`])
+    h.hung = new Set()
+    fail('EPERM')
+    await flush()
+    expect(h.asked).toContain(`${SHARE}\\claude.exe`)
+    expect(launch(), 'what a walk in place names').toEqual({ cmd: `${SHARE}\\claude.exe`, args: [] })
+    // The look whose own test failed passes the folder, as a walk in place does.
+    expect(opensList()).toBe(true)
+    expect(h.walksInPlace).toEqual([])
+  })
+
+  // The mirror: claude.exe in the folder cannot be read, and the look for
+  // node.exe waited behind that test.
+  it('a claude.exe test that fails for that file alone: the look for node.exe still asks the folder, and the resume list runs with its node.exe', async () => {
+    process.env.PATH = `${SHARE};${NODEJS}`
+    h.hung = new Set([SHARE.toLowerCase()])
+    h.present = files(`${SHARE}\\node.exe`, `${NODEJS}\\claude.exe`, `${NODEJS}\\node.exe`)
+    armClaudeLaunchWalk()
+    void claudeOnWindowsPathAsync(process.env)
+    void warmPickerNodeOnWindows()
+    await flush()
+    expect(h.asked).toEqual([`${SHARE}\\claude.exe`])
+    h.hung = new Set()
+    fail('EACCES')
+    await flush()
+    expect(launch()).toEqual({ cmd: `${NODEJS}\\claude.exe`, args: [] })
+    const line = buildClaudeLaunchCommand({ platform: 'win32', cwd: 'C:\\work', claudeBin: `${NODEJS}\\claude.exe`, extraFlags: '', agentsFlag: '', useResumePicker: true, pickerScript: PICKER })
+    expect(line, 'the node.exe PATH names first').toContain(`${SHARE}\\node.exe`)
+    expect(line).not.toContain(`${NODEJS}\\node.exe`)
+    expect(h.walksInPlace).toEqual([])
+  })
+
+  // A share that is down fails every file the same way: the walk that
+  // waited is not made to wait there once more.
+  it('a test that fails because the folder cannot be reached is the answer for both walks: the folder is asked once', async () => {
+    process.env.PATH = `${SHARE};${NODEJS}`
+    h.hung = new Set([SHARE.toLowerCase()])
+    h.present = files(`${NODEJS}\\claude.exe`, `${NODEJS}\\node.exe`)
+    armClaudeLaunchWalk()
+    void warmPickerNodeOnWindows()
+    void claudeOnWindowsPathAsync(process.env)
+    await vi.advanceTimersByTimeAsync(5_000)
+    fail('EHOSTUNREACH')
+    await flush()
+    expect(h.asked.filter((p) => p.startsWith(SHARE))).toEqual([`${SHARE}\\node.exe`])
+    expect(launch()).toEqual({ cmd: `${NODEJS}\\claude.exe`, args: [] })
+    expect(opensList()).toBe(true)
+  })
+})
+
+// A file test begun while a share was down can stay outstanding long after
+// the share is back. A later walk of that folder waits behind it until its
+// own deadline, no longer: the launch that waited is refused then (the walk
+// has no answer yet), and the walk asks the folder itself.
+describe('a file test an earlier walk left outstanding in a folder', () => {
+  // Mutations to prove this can fail: wait behind the old test however long
+  // it takes (every launch is then refused for as long); pass the folder
+  // over at the deadline (the later folder's Claude Code is named).
+  it('holds a later walk until that walk\'s own deadline: the launch is refused then, the walk asks the folder itself, never the later folder first, and the next launch reads its answer', async () => {
+    // A walk of the PATH from before a refresh asked the share while it was down. Its test does not end.
+    h.hung = new Set([GONE.toLowerCase()])
+    void claudeOnWindowsPathAsync({ PATH: `${GONE};${NPM}` })
+    await flush()
+    expect(h.asked).toEqual([`${GONE}\\claude.exe`])
+    await vi.advanceTimersByTimeAsync(60_000)
+    // A launch on the PATH of now, which names the same folder first.
+    process.env.PATH = `${GONE};${TOOLS}`
+    h.present = files(`${TOOLS}\\claude.exe`)
+    h.walks = []
+    armClaudeLaunchWalk()
+    const walked = awaitClaudeLaunchWalk(false)
+    await vi.advanceTimersByTimeAsync(DEADLINE - 1)
+    expect(await ended(walked), 'not before the walk\'s own deadline').toBe(false)
+    expect(h.asked, 'no second test yet, and the later folder is not asked').toEqual([`${GONE}\\claude.exe`])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await ended(walked)).toBe(true)
+    expect(refusal(), 'no answer yet: refused, saying so').toBe(CLAUDE_PATH_NOT_ANSWERING)
+    expect(h.asked, 'the walk asks the folder itself; the later folder is still not asked').toEqual([`${GONE}\\claude.exe`, `${GONE}\\claude.exe`])
+    // The share is back: the walk's own test answers (no Claude Code there). The old one is still outstanding.
+    h.hung = new Set()
+    h.held.splice(1, 1)[0].answer()
+    await flush()
+    expect(h.held, 'the old test has not ended').toHaveLength(1)
+    expect(refusal()).toBe(`started ${TOOLS}\\claude.exe`)
+    expect(h.walks, 'one walk for the launch').toEqual([CLAUDE_NAMES])
     expect(h.walksInPlace).toEqual([])
   })
 })

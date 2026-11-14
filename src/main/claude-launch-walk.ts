@@ -31,6 +31,19 @@
 // message), and nothing is walked in place. Never a later folder's Claude
 // Code, never a bare name. The walk itself goes on; when the folder answers
 // at last, the walk ends, its answer is kept, and the next launch reads it.
+// Until then every launch with no answer to read is refused at once, with
+// that reason: also one held for a new walk while a "none" under a minute
+// old is kept, which waited to learn whether that still holds.
+//
+// The walk's file tests keep to one at a time in a folder, across every
+// walk (windows-programs.ts folderFileTest), so a share that is down holds
+// one of the few threads file tests share. What one walk's test hands to
+// another walk is bounded by PATH's order too: its answer for the same
+// file; for another file only a failure that says the folder itself cannot
+// be reached, never one that may be about the one file (the walk that
+// waited then asks for its own file). And a walk waits behind another
+// walk's test until its own deadline, no longer: then it asks the folder
+// itself.
 //
 // A launch that opens the resume list starts it with node.exe, which is found
 // the same way and kept the same way (spawn-claude-command.ts

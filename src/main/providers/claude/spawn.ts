@@ -68,7 +68,8 @@ export function findClaudeOnWindows(env: NodeJS.ProcessEnv = process.env, stat?:
  *  findClaudeOnWindows finds in `env` (or that the PowerShell profile gave),
  *  and when there is none this THROWS (CLAUDE_NOT_ON_PATH) so the launch starts nothing. It THROWS
  *  CLAUDE_PATH_NOT_ANSWERING instead when there is no answer because a
- *  folder PATH names has not answered the walk in time: never the not-found
+ *  folder PATH names has not answered the walk in time (also when an earlier
+ *  walk, under a minute ago, found none): never the not-found
  *  message for that, and never a later folder's Claude Code. Elsewhere: for a user
  *  whose login shell is not of the sh family, the Claude Code found in the
  *  PATH that shell builds, by its full path, once the launch has that answer
@@ -88,9 +89,12 @@ export function resolveClaudeBinary(legacyVersion?: LegacyVersion, env: NodeJS.P
 
   const found = findClaudeOnWindows(env)
   if (found) return { cmd: found, args: [] }
-  // No walk of this PATH under a minute old says "none", and the one under
-  // way is past its deadline: not known, which is not "not installed".
-  const why = !claudeOnWindowsPathWalkedRecently(env) && claudeOnWindowsPathUnanswered(env) ? CLAUDE_PATH_NOT_ANSWERING : CLAUDE_NOT_ON_PATH
+  // The walk of this PATH under way is past its deadline: which Claude Code
+  // PATH names is not known now, which is not "not installed". Also with a
+  // "none" under a minute old kept: a launch held for a new walk is waiting
+  // to learn whether that still holds (a Claude Code installed since), and
+  // that walk has not said.
+  const why = claudeOnWindowsPathUnanswered(env) ? CLAUDE_PATH_NOT_ANSWERING : CLAUDE_NOT_ON_PATH
   logInfo(`[claude-provider] ${why}`)
   throw new Error(why)
 }

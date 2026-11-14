@@ -67,7 +67,7 @@ vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
   return {
     ...real,
     // The real rule (one file test at a time in a folder), over the stand-in file test.
-    folderFileTest: () => real.folderFileTest(stat),
+    folderFileTest: (_stat?: unknown, deadline?: Parameters<typeof real.folderFileTest>[1]) => real.folderFileTest(stat, deadline),
     findOnWindowsPath: (names: readonly string[], env: NodeJS.ProcessEnv, _stat?: unknown, order?: 'folder' | 'name') => {
       h.walksInPlace.push(names.join(','))
       // A walk in place cannot be given up: a folder that does not answer

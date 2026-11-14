@@ -3,7 +3,7 @@ import * as os from 'os'
 import { isAbsolute, posix } from 'path'
 import { logInfo } from './debug-logger'
 import { findOnPosixPath, findOnPosixPathAsync, loginShellPathAsync, loginShellPathSync, loginShellWithOwnPath, shFamilyLoginShell } from './login-shell'
-import { findOnWindowsPathAsync, findWithPowerShellProfile, folderFileTest, isRegularFileAsync, windowsEnvValue, windowsPathRefreshCount, withPathWalkDeadline, type PathWalkInFlight, type PowerShellProfileLookup } from './windows-programs'
+import { findOnWindowsPathAsync, findWithPowerShellProfile, folderFileTest, isRegularFileAsync, pathWalkDeadline, windowsEnvValue, windowsPathRefreshCount, withPathWalkDeadline, type PathWalkInFlight, type PowerShellProfileLookup } from './windows-programs'
 
 /**
  * Is the `claude` CLI actually INSTALLED on this machine?
@@ -216,21 +216,24 @@ let walkEpoch = 0
  *  (windows-programs.ts folderFileTest: one file test at a time in a
  *  folder): it never goes past a folder that has not answered, so what it
  *  names is what a walk in place would name. Its answer is kept when it
- *  ends, and only then. */
+ *  ends, and only then. Its one deadline begins with it: whoever waits for
+ *  the walk reads it, and so do the walk's file tests, which wait behind
+ *  another walk's test in a folder until then and no longer. */
 function sharedClaudeWalk(env: NodeJS.ProcessEnv, now: () => number): PathWalkInFlight<string | null> {
   const pathValue = windowsEnvValue(env, 'PATH') ?? ''
   const running = walksInFlight.get(pathValue)
   if (running) return running
   const epoch = walkEpoch
+  const deadline = pathWalkDeadline()
   // The walk begins in this turn; one that throws before it has anything to
   // wait for is a walk that kept no answer.
-  const run: Promise<string | null> = new Promise<string | null>((resolve) => { resolve(findOnWindowsPathAsync(CLAUDE_WINDOWS_NAMES, env, folderFileTest(), 'name')) })
+  const run: Promise<string | null> = new Promise<string | null>((resolve) => { resolve(findOnWindowsPathAsync(CLAUDE_WINDOWS_NAMES, env, folderFileTest(undefined, deadline), 'name')) })
     .then((found) => {
       if (epoch === walkEpoch) recordClaudeOnWindows(pathValue, found, now())
       return found
     })
     .finally(() => { if (walksInFlight.get(pathValue)?.run === run) walksInFlight.delete(pathValue) })
-  const walk = withPathWalkDeadline(run)
+  const walk = withPathWalkDeadline(run, deadline)
   walksInFlight.set(pathValue, walk)
   return walk
 }

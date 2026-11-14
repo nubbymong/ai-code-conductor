@@ -41,7 +41,7 @@ import * as nodeOs from 'node:os'
 import { UUID_RE, claudeProjectDirName, type ClaudeLaunchFolderOptions } from './logging/transcript-discovery'
 import { CMD_EXE_LINE_LIMIT, PS_LEGACY_ARGUMENT_PASSING, agentsRef, askPromptRef, startsAsExe, windowsCommandLineLimit } from './terminal-launch-line'
 import { escapeForCwdQuote, quoteArgForShell } from '../shared/shell-quote'
-import { findOnWindowsPath, findOnWindowsPathAsync, folderFileTest, windowsEnvValue, withPathWalkDeadline, type PathWalkInFlight } from './windows-programs'
+import { findOnWindowsPath, findOnWindowsPathAsync, folderFileTest, pathWalkDeadline, windowsEnvValue, withPathWalkDeadline, type PathWalkInFlight } from './windows-programs'
 import { logInfo } from './debug-logger'
 
 export interface BuildClaudeLaunchCommandOptions {
@@ -632,6 +632,9 @@ function recentPickerNodeAnswer(pathValue: string, now: number): string | null |
  * PATH's order, however long one takes, one file test at a time in a folder
  * (windows-programs.ts folderFileTest): it never goes past a folder that has
  * not answered, so the node.exe it names is the one a walk in place would.
+ * Its one deadline begins with it, for a launch that waits and for its file
+ * tests, which wait behind another walk's test in a folder until then and no
+ * longer.
  * Only one look runs at a time;
  * a call while one is in flight gets that one. Elsewhere: nothing.
  */
@@ -639,7 +642,16 @@ export function warmPickerNodeOnWindows(env: NodeJS.ProcessEnv = process.env): P
   if (process.platform !== 'win32') return Promise.resolve()
   if (pickerNodeWarming) return pickerNodeWarming
   const pathValue = windowsEnvValue(env, 'PATH') ?? ''
-  const run: Promise<void> = findOnWindowsPathAsync([PICKER_NODE_FILE], env, folderFileTest())
+  const deadline = pathWalkDeadline()
+  let look: Promise<string | null>
+  try {
+    look = findOnWindowsPathAsync([PICKER_NODE_FILE], env, folderFileTest(undefined, deadline))
+  } catch (e) {
+    // No look began: its deadline's timer is not left behind.
+    deadline.clear()
+    throw e
+  }
+  const run: Promise<void> = look
     .then(
       (exe) => { pickerNodeAnswer = { path: pathValue, exe, at: performance.now() } },
       () => { /* no answer: a launch looks for itself */ },
@@ -651,7 +663,7 @@ export function warmPickerNodeOnWindows(env: NodeJS.ProcessEnv = process.env): P
       pickerNodeLook = null
     })
   pickerNodeWarming = run
-  pickerNodeLook = withPathWalkDeadline(run)
+  pickerNodeLook = withPathWalkDeadline(run, deadline)
   return run
 }
 
