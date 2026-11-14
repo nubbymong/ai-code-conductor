@@ -13,6 +13,13 @@ import * as path from 'node:path'
 
 export const RUN_TAG_ENV = 'CCC_VITEST_RUN_TAG'
 
+// A folder that cannot be removed straight away (a virus scanner or indexer holding a
+// file in it on Windows) is retried a few times before it is given up on.
+const RM_OPTIONS = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
+
+// A `ccc-vitest-*` folder this old belongs to no run still going on.
+export const STALE_AFTER_MS = 24 * 60 * 60 * 1000
+
 // Eight lower-case hex digits: fixed length, so no tag is the start of another, and
 // nothing that could be read as a path.
 const RUN_TAG_RE = /^[0-9a-f]{8}$/
@@ -61,7 +68,42 @@ export function removeRunTempFolders(tmp, tag) {
   for (const name of names) {
     if (!name.startsWith(prefix)) continue
     try {
-      fs.rmSync(path.join(tmp, name), { recursive: true, force: true })
+      fs.rmSync(path.join(tmp, name), RM_OPTIONS)
+      removed.push(name)
+    } catch {
+      /* best effort */
+    }
+  }
+  return removed
+}
+
+/**
+ * Remove the `ccc-vitest-*` folders in `tmp` that were last modified more than
+ * `maxAgeMs` ago. A run's own teardown removes only its own folders, so a folder left
+ * by a run that was killed would otherwise stay for good; this bounds that litter. It
+ * never touches a run going on now, since a live run's folders are young. Only real
+ * folders: a link or a file with such a name is left alone.
+ * @param {string} tmp
+ * @param {number} [maxAgeMs]
+ * @param {number} [now]
+ * @returns {string[]} the names removed
+ */
+export function removeStaleTempFolders(tmp, maxAgeMs = STALE_AFTER_MS, now = Date.now()) {
+  /** @type {string[]} */
+  const removed = []
+  let names
+  try {
+    names = fs.readdirSync(tmp)
+  } catch {
+    return removed
+  }
+  for (const name of names) {
+    if (!name.startsWith('ccc-vitest-')) continue
+    const full = path.join(tmp, name)
+    try {
+      const st = fs.lstatSync(full)
+      if (!st.isDirectory() || now - st.mtimeMs <= maxAgeMs) continue
+      fs.rmSync(full, RM_OPTIONS)
       removed.push(name)
     } catch {
       /* best effort */
