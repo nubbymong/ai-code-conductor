@@ -91,8 +91,11 @@ function h3ByText(container: HTMLElement, text: string): HTMLElement {
   return h as HTMLElement
 }
 
+// The store's own actions, kept from before any test put a stand-in for one.
+const actions = { ...useGitHubStore.getState() }
+
 beforeEach(() => {
-  useGitHubStore.setState({ config: null, profiles: [] } as never)
+  useGitHubStore.setState({ ...actions, config: null, profiles: [], saveError: null, configUnread: false } as never)
 })
 
 describe('GitHubConfigTab', () => {
@@ -195,5 +198,41 @@ describe('GitHubConfigTab', () => {
     expect(r.container.querySelector('[role="alert"]')).toBeNull()
     expect(useGitHubStore.getState().saveError).toBeNull()
     r.unmount()
+  })
+
+  // The defaults the store shows in place of settings that could not be read
+  // are not settings an earlier read gave. A page opened while they are on
+  // show, on a file that still does not read, clears the line from before it
+  // opened like any other, and then says the file did not read: the defaults
+  // are never left on the page as if they were the saved settings.
+  it('opened on defaults that stand in for a file that did not read, says the file did not read', async () => {
+    const w = window as unknown as { electronAPI: Record<string, unknown> }
+    const apiBefore = w.electronAPI
+    const getConfig = vi.fn(async () => ({ config: null, readFailed: true }))
+    w.electronAPI = { ...w.electronAPI, github: { getConfig } }
+    try {
+      // Something read the file before this page did (the app starting, the
+      // set-up page): the store holds the stand-in defaults.
+      await act(async () => {
+        await useGitHubStore.getState().loadConfig()
+      })
+      expect(useGitHubStore.getState().saveError).toBe(GITHUB_CONFIG_UNREADABLE)
+
+      const r = render(<GitHubConfigTab />)
+      for (let i = 0; i < 4; i++) {
+        await act(async () => {
+          await new Promise((done) => setTimeout(done, 0))
+        })
+      }
+
+      expect(getConfig).toHaveBeenCalledTimes(2)
+      const alerts = Array.from(r.container.querySelectorAll('[role="alert"]')).map((a) => a.textContent)
+      expect(alerts).toEqual([GITHUB_CONFIG_UNREADABLE])
+      // The page rendered, on the defaults.
+      expect(r.container.textContent).toContain('GitHub integration')
+      r.unmount()
+    } finally {
+      w.electronAPI = apiBefore
+    }
   })
 })

@@ -298,6 +298,24 @@ describe('githubStore', () => {
       expect(state().saveError).toBe(UNREADABLE)
     })
 
+    // The defaults shown in place of settings that could not be read are told
+    // apart from settings an earlier read gave. A page that opens clears the
+    // line and reads again (GitHubConfigTab): with only those defaults on
+    // show, a read that fails again says why again.
+    it('with only the stand-in defaults on show: a later failed read says why again', async () => {
+      api().getConfig.mockResolvedValue(DID_NOT_READ)
+      await useGitHubStore.getState().loadConfig()
+      const shown = state().config
+      useGitHubStore.setState({ saveError: null } as never)
+
+      await useGitHubStore.getState().loadConfig()
+
+      expect(state().saveError).toBe(UNREADABLE)
+      expect(state().configUnread).toBe(true)
+      expect(state().config).toEqual(shown)
+      expect(state().profiles).toEqual([])
+    })
+
     it('no answer at all is taken the same way, never as "no file"', async () => {
       api().getConfig.mockResolvedValue(null)
       await useGitHubStore.getState().loadConfig()

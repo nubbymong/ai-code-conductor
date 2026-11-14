@@ -7,6 +7,9 @@
  *     made from it is sent as that one change: a sync interval names its own
  *     key, and the set-up page's Next saves the GitHub master only when the
  *     user set it there or the shown value was read from the file.
+ *   - The set-up page's Next waits for its save. A refused save is said on
+ *     the page and the page stays; "Skip for now", offered then, moves on
+ *     with nothing saved.
  *   - A control that starts a save does not leave a refused save as an
  *     unhandled rejection: the reason is already on the page.
  *   - The add-account dialog and the device sign-in show main's sentence for
@@ -26,7 +29,7 @@ import AddProfileModal from '../../../src/renderer/components/github/config/AddP
 import OAuthDeviceFlow from '../../../src/renderer/components/github/config/OAuthDeviceFlow'
 import { GitHubStep } from '../../../src/renderer/onboarding/GitHubStep'
 import { useGitHubStore } from '../../../src/renderer/stores/githubStore'
-import { GITHUB_CONFIG_UNREADABLE } from '../../../src/shared/github-constants'
+import { GITHUB_CONFIG_UNREADABLE, GITHUB_CONFIG_NOT_SAVED } from '../../../src/shared/github-constants'
 import type { GitHubConfig } from '../../../src/shared/github-types'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -245,17 +248,155 @@ describe('a page opened while github-config.json did not read', () => {
       expect(github.updateConfig).toHaveBeenCalledWith({ seenOnboardingVersion: APP_VERSION, enabledByDefault: false })
     })
 
-    it('saves nothing while the file still does not read, and still moves on', async () => {
+    const skipButton = (page: ParentNode): HTMLButtonElement | undefined =>
+      Array.from(page.querySelectorAll('button')).find((b) => (b.textContent ?? '').includes('Skip for now'))
+
+    it('while the file still does not read, Next saves nothing, says so in the sentence, and the page stays', async () => {
       github.getConfig.mockResolvedValue(DID_NOT_READ)
+      const onNext = vi.fn()
+      const page = render(<GitHubStep onNext={onNext} onBack={() => {}} />)
+      await settle()
+      // Nothing was refused yet: no line, and no way round a save.
+      expect(alerts()).toEqual([])
+      expect(skipButton(page)).toBeUndefined()
+
+      const unhandled = await unhandledDuring(() => click(buttonContaining(page, 'Next')))
+
+      expect(onNext).not.toHaveBeenCalled()
+      expect(github.updateConfig).not.toHaveBeenCalled()
+      expect(alerts()).toEqual([GITHUB_CONFIG_UNREADABLE])
+      expect(unhandled).toEqual([])
+    })
+
+    it('a master the user set while the file does not read is not dropped: Next is refused, then saves it once the file reads', async () => {
+      github.getConfig.mockResolvedValue(DID_NOT_READ)
+      const onNext = vi.fn()
+      const page = render(<GitHubStep onNext={onNext} onBack={() => {}} />)
+      await settle()
+
+      click(buttonByText(page, 'Off'))
+      click(buttonContaining(page, 'Next'))
+      await settle()
+      expect(onNext).not.toHaveBeenCalled()
+      expect(github.updateConfig).not.toHaveBeenCalled()
+      expect(alerts()).toEqual([GITHUB_CONFIG_UNREADABLE])
+
+      github.getConfig.mockResolvedValue(read(savedConfig()))
+      click(buttonContaining(page, 'Next'))
+      await settle()
+      expect(github.updateConfig).toHaveBeenCalledTimes(1)
+      expect(github.updateConfig).toHaveBeenCalledWith({ seenOnboardingVersion: APP_VERSION, enabledByDefault: false })
+      expect(onNext).toHaveBeenCalledTimes(1)
+      expect(alerts()).toEqual([])
+    })
+
+    it('"Skip for now", offered once Next was refused, moves on with nothing read, sent or saved', async () => {
+      github.getConfig.mockResolvedValue(DID_NOT_READ)
+      const onNext = vi.fn()
+      const page = render(<GitHubStep onNext={onNext} onBack={() => {}} />)
+      await settle()
+      click(buttonByText(page, 'Off'))
+      click(buttonContaining(page, 'Next'))
+      await settle()
+      expect(onNext).not.toHaveBeenCalled()
+
+      github.getConfig.mockClear()
+      click(skipButton(page)!)
+      await settle()
+
+      expect(onNext).toHaveBeenCalledTimes(1)
+      expect(github.getConfig).not.toHaveBeenCalled()
+      expect(github.updateConfig).not.toHaveBeenCalled()
+    })
+
+    it('a save that main refused is shown the same way, without the wrapper of the call', async () => {
+      github.updateConfig.mockRejectedValue(
+        new Error(`Error invoking remote method 'github:config:update': Error: ${GITHUB_CONFIG_NOT_SAVED}`),
+      )
       const onNext = vi.fn()
       const page = render(<GitHubStep onNext={onNext} onBack={() => {}} />)
       await settle()
 
       const unhandled = await unhandledDuring(() => click(buttonContaining(page, 'Next')))
 
-      expect(onNext).toHaveBeenCalledTimes(1)
-      expect(github.updateConfig).not.toHaveBeenCalled()
+      expect(github.updateConfig).toHaveBeenCalledTimes(1)
+      expect(onNext).not.toHaveBeenCalled()
+      expect(alerts()).toEqual([GITHUB_CONFIG_NOT_SAVED])
+      expect(skipButton(page)).toBeDefined()
       expect(unhandled).toEqual([])
+    })
+
+    it('the line goes when the next action starts, and "Skip for now" stays on offer', async () => {
+      github.getConfig.mockResolvedValue(DID_NOT_READ)
+      github.ghcliDetect.mockResolvedValue({ ok: true, users: ['octo-user'] })
+      github.adoptGhCli.mockImplementation(() => new Promise(() => {}))
+      const page = render(<GitHubStep onNext={() => {}} onBack={() => {}} />)
+      await settle()
+      click(buttonContaining(page, 'Next'))
+      await settle()
+      expect(alerts()).toEqual([GITHUB_CONFIG_UNREADABLE])
+
+      click(buttonByText(page, 'On'))
+      click(buttonContaining(page, 'Use octo-user'))
+      await settle()
+      expect(alerts()).toEqual([])
+      expect(skipButton(page)).toBeDefined()
+    })
+
+    it('Next clears the line a connect attempt left: the page says one thing at a time', async () => {
+      github.ghcliDetect.mockResolvedValue({ ok: true, users: ['octo-user'] })
+      github.adoptGhCli.mockResolvedValue({ ok: false, error: 'gh auth token failed' })
+      github.updateConfig.mockRejectedValue(new Error(GITHUB_CONFIG_NOT_SAVED))
+      const page = render(<GitHubStep onNext={() => {}} onBack={() => {}} />)
+      await settle()
+      click(buttonContaining(page, 'Use octo-user'))
+      await settle()
+      expect(alerts()).toEqual(['gh auth token failed'])
+
+      click(buttonContaining(page, 'Next'))
+      await settle()
+      expect(alerts()).toEqual([GITHUB_CONFIG_NOT_SAVED])
+    })
+
+    it('Next waits for the save: the page moves on once it went through, and a second press saves nothing more', async () => {
+      let finishSave: (config: GitHubConfig) => void = () => {}
+      github.updateConfig.mockImplementation(() => new Promise<GitHubConfig>((done) => { finishSave = done }))
+      const onNext = vi.fn()
+      const page = render(<GitHubStep onNext={onNext} onBack={() => {}} />)
+      await settle()
+
+      click(buttonContaining(page, 'Next'))
+      await settle()
+      expect(github.updateConfig).toHaveBeenCalledTimes(1)
+      expect(onNext).not.toHaveBeenCalled()
+      expect(buttonContaining(page, 'Next').disabled).toBe(true)
+      click(buttonContaining(page, 'Next'))
+      await settle()
+      expect(github.updateConfig).toHaveBeenCalledTimes(1)
+
+      await act(async () => { finishSave(savedConfig()) })
+      await settle()
+      expect(onNext).toHaveBeenCalledTimes(1)
+      expect(alerts()).toEqual([])
+    })
+
+    it('Back pressed while the save is on its way: the flow is not moved on from under the user', async () => {
+      let finishSave: (config: GitHubConfig) => void = () => {}
+      github.updateConfig.mockImplementation(() => new Promise<GitHubConfig>((done) => { finishSave = done }))
+      const onNext = vi.fn()
+      const page = render(<GitHubStep onNext={onNext} onBack={() => {}} />)
+      await settle()
+      click(buttonContaining(page, 'Next'))
+      await settle()
+
+      // Back takes the page away.
+      const shown = mounted.pop()!
+      act(() => shown.root.unmount())
+      shown.container.remove()
+      await act(async () => { finishSave(savedConfig()) })
+      await settle()
+
+      expect(onNext).not.toHaveBeenCalled()
     })
 
     it('shows the sentence main refused a gh account with', async () => {

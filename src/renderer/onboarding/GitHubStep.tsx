@@ -57,6 +57,16 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
   const [patToken, setPatToken] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Why Next did not move on: the sentence its save was refused with, or
+  // null. Shown below the page, outside the part that is dimmed while GitHub
+  // is Off, and gone when the next action starts. Once Next has been refused,
+  // "Skip for now" stays on offer for as long as the page is open.
+  const [notSaved, setNotSaved] = useState<string | null>(null)
+  const [skipOffered, setSkipOffered] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
+  const shownRef = useRef(true)
+  const notSavedRef = useRef<HTMLDivElement>(null)
   // Multi-auth is supported (authProfiles is a map): "adding" re-opens the
   // connect chooser alongside the already-connected rows.
   const [adding, setAdding] = useState(false)
@@ -86,6 +96,18 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
       .catch(() => setGhUsers([]))
   }, [])
 
+  useEffect(() => {
+    shownRef.current = true
+    return () => {
+      shownRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    // The page scrolls, and Next is in the footer below it.
+    if (notSaved) notSavedRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [notSaved])
+
   const pickMethod = (m: Method) => {
     methodTouched.current = true
     setMethod(m)
@@ -93,9 +115,16 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
 
   const connected = profiles.length > 0
 
-  const adoptGh = async (username: string) => {
+  /** A connect or disconnect starts: the page is busy, and what the last
+   *  action said (its own error, or why Next did not move on) goes. */
+  const begin = () => {
     setBusy(true)
     setError(null)
+    setNotSaved(null)
+  }
+
+  const adoptGh = async (username: string) => {
+    begin()
     try {
       const r = await window.electronAPI.github.adoptGhCli(username)
       if (r.ok) {
@@ -110,8 +139,7 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
   }
 
   const startOAuth = async () => {
-    setBusy(true)
-    setError(null)
+    begin()
     try {
       const r = await window.electronAPI.github.oauthStart(oauthMode)
       setOauthFlow(r)
@@ -123,8 +151,7 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
   }
 
   const submitPat = async () => {
-    setBusy(true)
-    setError(null)
+    begin()
     try {
       const r = await window.electronAPI.github.addPat({ kind: patKind, label: 'PAT', rawToken: patToken })
       if (r.ok) {
@@ -140,8 +167,7 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
   }
 
   const disconnect = async (id: string) => {
-    setBusy(true)
-    setError(null)
+    begin()
     try {
       await useGitHubStore.getState().removeProfile(id)
     } catch (err) {
@@ -163,12 +189,41 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
   // would put that default in place of a value nobody saw. The stamp alone is
   // sent then; the store reads the file again before it saves, and saves
   // nothing while it still does not read.
-  const finish = () => {
+  //
+  // Next waits for the save. A save that was refused is said on the page, in
+  // the store's own sentence, and the page stays: a choice made here is never
+  // dropped without a word. "Skip for now", offered then, moves on with
+  // nothing saved (skip, below).
+  const finish = async () => {
+    if (savingRef.current) return
     const patch: GitHubSettingsPatch = { seenOnboardingVersion: __APP_VERSION__ }
     if (localMaster !== null || !useGitHubStore.getState().configUnread) patch.enabledByDefault = masterOn
-    void useGitHubStore.getState().updateConfig(patch).catch(() => {})
-    onNext()
+    savingRef.current = true
+    setSaving(true)
+    setError(null)
+    setNotSaved(null)
+    let refusal: string | null = null
+    try {
+      await useGitHubStore.getState().updateConfig(patch)
+    } catch (err) {
+      // The store keeps the reason as it raises it; the two are one sentence.
+      refusal =
+        useGitHubStore.getState().saveError
+        ?? ((err instanceof Error && err.message) || 'The change could not be saved.')
+    }
+    savingRef.current = false
+    // Back was pressed while the save was on its way: the page is gone, and
+    // the flow is not moved on from under the user.
+    if (!shownRef.current) return
+    setSaving(false)
+    if (refusal !== null) {
+      setNotSaved(refusal)
+      setSkipOffered(true)
+    } else onNext()
   }
+  // The way past a save that keeps being refused: on to the next page, with
+  // nothing saved and nothing sent.
+  const skip = () => onNext()
   const setMaster = (on: boolean) => setLocalMaster(on)
 
   const oauthScopes =
@@ -385,6 +440,11 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
               </div>
             </div>
           )}
+          {notSaved && (
+            <div className="gh-err" role="alert" ref={notSavedRef}>
+              {notSaved}
+            </div>
+          )}
         </div>
       </div>
       <div className="foot" style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center' }}>
@@ -413,10 +473,17 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
           {masterOn && !connected && !cfgEnabledByDefault && (
             <span className="hint">Connect an account, or turn GitHub off</span>
           )}
+          {/* Offered once Next's save has been refused: the way on that saves
+              nothing. Before that, Next (or GitHub Off, then Next) is the way. */}
+          {skipOffered && (
+            <button className="skip" onClick={skip} type="button">
+              Skip for now →
+            </button>
+          )}
           <button
             className="cta"
-            onClick={finish}
-            disabled={masterOn && !connected && !cfgEnabledByDefault}
+            onClick={() => void finish()}
+            disabled={saving || (masterOn && !connected && !cfgEnabledByDefault)}
             type="button"
             style={{ marginLeft: 0 }}
           >
