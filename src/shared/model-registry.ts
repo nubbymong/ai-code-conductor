@@ -248,33 +248,113 @@ function matchByPrefixOrPattern(
     if (raw.startsWith(m.id) && (!prefix || m.id.length > prefix.id.length)) prefix = m
   }
   if (prefix) return { entry: prefix, kind: 'prefix' }
-  // 4. first pattern match in the order given (substring unless anchored regex).
-  //    A missing/!Array `patterns` degrades this entry to "unmatchable by
-  //    pattern" — it stays reachable by id, alias and prefix above.
+  // 4. first pattern match in the order given, as before: it settles the
+  //    family the name is in, and whether the name is a shipped entry's or
+  //    one of the user's or Sentinel's own. Then, among the entries of that
+  //    family and that origin, the one whose match covers the most of the
+  //    name takes it (patternReach). The tie-break: of entries that cover as
+  //    much, the first in the order given.
   const lower = raw.toLowerCase()
+  let best: ModelEntry | null = null
+  let bestReach = NO_PATTERN_HIT
   for (const m of models) {
-    const patterns = Array.isArray(m.patterns) ? m.patterns : []
-    for (const p of patterns) {
-      if (typeof p !== 'string' || !p) continue
-      let hit = false
-      // A plain pattern is matched as text and never compiled: the only kind
-      // a fetched model file may carry (literalPattern). Anything else can
-      // only come from the user's own hand-edited overlay, and is read as it
-      // always was.
-      const literal = literalPattern(p)
-      if (literal) {
-        hit = literal.atStart ? lower.startsWith(literal.text) : lower.includes(literal.text)
-      } else {
-        try {
-          hit = p.startsWith('^') || p.endsWith('$')
-            ? new RegExp(p, 'i').test(lower)
-            : lower.includes(p.toLowerCase())
-        } catch { /* malformed pattern in a hand-edited overlay: skip, never crash a render */ }
-      }
-      if (hit) return { entry: m, kind: 'pattern' }
+    // Past the first match, only its own family and origin are looked at.
+    if (best && (m.family !== best.family || isOverlaySourced(m) !== isOverlaySourced(best))) continue
+    const reach = patternReach(m, lower)
+    if (reach > bestReach) { best = m; bestReach = reach }
+  }
+  return best ? { entry: best, kind: 'pattern' } : null
+}
+
+/** patternReach: none of the entry's patterns matches the name. */
+const NO_PATTERN_HIT = -1
+
+/** What follows a match that ends in a digit when the version number carries
+ *  on past it: another digit (`5-2` then `0260101`), or a dot or a hyphen
+ *  and one or two digits (`5` then `.5`, `5` then `-5`). A date, eight
+ *  digits, is not a version: `opus-5` then `-20260101` is Opus 5. */
+const VERSION_CARRIES_ON_RE = /^(?:\d|[.-]\d{1,2}(?!\d))/
+
+/** Whether the text of `lower` that ends at `end` stops inside a version
+ *  number, so that it names another version than the one it spells. */
+function stopsInsideVersion(lower: string, end: number): boolean {
+  return /\d/.test(lower.charAt(end - 1)) && VERSION_CARRIES_ON_RE.test(lower.slice(end))
+}
+
+/**
+ * How much of a name (lower-cased) a text pattern covers: its length when it
+ * is found there whole, 0 when every place it is found stops inside a version
+ * number, NO_PATTERN_HIT when it is not found at all (which is exactly when
+ * it did not match before). `atStart`: only the start of the name counts.
+ */
+function textReach(lower: string, text: string, atStart: boolean): number {
+  if (atStart) {
+    if (!lower.startsWith(text)) return NO_PATTERN_HIT
+    return stopsInsideVersion(lower, text.length) ? 0 : text.length
+  }
+  let reach = NO_PATTERN_HIT
+  for (let at = lower.indexOf(text); at !== -1; at = lower.indexOf(text, at + 1)) {
+    if (!stopsInsideVersion(lower, at + text.length)) return text.length
+    reach = 0
+  }
+  return reach
+}
+
+/**
+ * How much of a name (lower-cased) an entry's patterns cover, or
+ * NO_PATTERN_HIT when none of them matches it (2.1.3-beta.2).
+ *
+ * The first pattern to match, in the order given, used to place the name
+ * outright. Each family's plain pattern (`opus`) sits on one entry, the
+ * newest for most, so a partner platform's id of an older model
+ * (`us.anthropic.claude-opus-4-7-v1:0`, which no id or id-prefix matches)
+ * was placed on the newest and took its label and price, though the older
+ * entry's own pattern (`opus-4-7`) matched too.
+ *
+ * The first match still says which family the name is in and whose it is, so
+ * no name moves to another family, and an entry the user or Sentinel added
+ * (one with a `provenance`) takes no name from a shipped entry, nor a shipped
+ * entry one from it. Within that family and origin, the entry that covers the
+ * most of the name now takes it (matchByPrefixOrPattern):
+ *
+ *  - A pattern that is text counts its length: a plain pattern, and one that
+ *    is text but not plain (a capital, a space: a hand-edited overlay only).
+ *  - But a pattern found only where the version number carries on after it
+ *    counts 0: `opus-5` is in `claude-opus-5-5` and in `claude-opus-5.5`,
+ *    and names neither. Such a name goes where a version no entry lists
+ *    goes (`claude-opus-5-7`): to the entry with the family's plain pattern.
+ *  - A regular expression (a hand-edited overlay only) has no length to
+ *    compare and counts 0 too: any text pattern found whole outranks it.
+ *
+ * A pattern that counts 0 has still matched: it places the name when nothing
+ * covers more, so no name is placed, or left unplaced, that was not before.
+ *
+ * A missing/!Array `patterns` makes the entry unmatchable by pattern; it
+ * stays reachable by id, alias and prefix.
+ */
+function patternReach(m: ModelEntry, lower: string): number {
+  let reach = NO_PATTERN_HIT
+  const patterns = Array.isArray(m.patterns) ? m.patterns : []
+  for (const p of patterns) {
+    if (typeof p !== 'string' || !p) continue
+    // A plain pattern is matched as text and never compiled: the only kind
+    // a fetched model file may carry (literalPattern). Anything else can
+    // only come from the user's own hand-edited overlay, and is read as it
+    // always was.
+    const literal = literalPattern(p)
+    if (literal) {
+      reach = Math.max(reach, textReach(lower, literal.text, literal.atStart))
+    } else {
+      try {
+        if (p.startsWith('^') || p.endsWith('$')) {
+          if (new RegExp(p, 'i').test(lower)) reach = Math.max(reach, 0)
+        } else {
+          reach = Math.max(reach, textReach(lower, p.toLowerCase(), false))
+        }
+      } catch { /* malformed pattern in a hand-edited overlay: skip, never crash a render */ }
     }
   }
-  return null
+  return reach
 }
 
 export function resolveModelInfo(registry: ModelRegistry, modelId: string): ResolvedModelInfo {
