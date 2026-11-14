@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "93cfc8339d5ecc7c6188601dddf25cc588ad2eee5ea9bbe4fcbdf80e51309bf5",
-  "manifestHead": "d7848570d9020e17473600eb32fbfc0bb984a203",
+  "manifestPathDigest": "0a7d7bd151d0570be539a58b32121f9ecf9ed57141549373916b36c8c5cc27f3",
+  "manifestHead": "157ac7d71fadbb0dc3042312d5d651ce02513f42",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -6899,6 +6899,16 @@
       "note": ""
     },
     {
+      "path": "tests/unit/main/pty-spawn-claude-start-lookup-bound.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new test for the Windows start-up fix (tests/unit/main/pty-spawn-claude-start-lookup-bound.test.ts): with the real start module (src/main/claude-start-lookup.ts) behind the real pty:spawn handler, a local Claude Code launch held while the start still looks for Claude Code starts when the module's own bound has passed; a newer spawn of the same session id supersedes the one held; the start answering ends the hold before the bound; once the start's deadline has passed nothing is held (WP1.68); tests/unit/main/pty-spawn-claude-start-lookup-bound.test.ts",
+      "note": "created by the Windows start-up Claude Code lookup fix, round 3 (regression since #638); every launch it makes is a Claude Code one, and its Codex mentions are only the names the pty-manager stand-in has to export for the handler to load"
+    },
+    {
       "path": "tests/unit/main/pty-spawn-one-at-a-time-rights.test.ts",
       "predicates": [
         "P07",
@@ -6943,6 +6953,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 PR-level ADR-009 round 1 (B1, row 72) test (tests/unit/main/pty-spawn-restart-pending.test.ts): through the real pty:spawn and pty:kill handlers and the real one-at-a-time rule, with preparations superseded as pty-manager supersedes them, ten Restarts of a Codex tab during a slow account preparation start the session and none is refused as already running; a spawn cancelled by a close counts for nothing (WP1.60, WP1.68)",
       "note": "created by WP2 PR 3 PR-level ADR-009 round 1 (B1); fake ipcMain, pty-manager faked, nothing spawns"
+    },
+    {
+      "path": "tests/unit/main/pty-spawn-waits-for-claude-start-lookup.test.ts",
+      "predicates": [
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new test for the Windows start-up fix (tests/unit/main/pty-spawn-waits-for-claude-start-lookup.test.ts): while the start's PATH refresh and first Claude Code lookup still run, a local Claude Code launch is held as a prepared spawn and starts once they have answered; a close while it waits starts nothing; a launch over SSH, a terminal-only one and a Codex one are not held by it (WP1.68); tests/unit/main/pty-spawn-waits-for-claude-start-lookup.test.ts",
+      "note": "created by the Windows start-up Claude Code lookup fix (regression since #638); its Codex mentions are the launch shape it shows is NOT held, and the accounts stand-in that launch needs"
     },
     {
       "path": "tests/unit/main/pty-spawn-waits-for-refresh.test.ts",

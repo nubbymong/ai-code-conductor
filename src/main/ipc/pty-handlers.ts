@@ -49,6 +49,7 @@ import {
 } from '../sanitize-restored-spawn-options'
 import { startProfileStepsPending, startProfileStepsSettled } from '../account-profiles'
 import { scriptFoldersPending, awaitScriptFolders } from '../script-folders'
+import { claudeStartLookupPending, awaitClaudeStartLookup } from '../claude-start-lookup'
 
 /** SSH options as received from the renderer (no passwords — only configId) */
 interface RendererSSHOptions {
@@ -883,7 +884,14 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     // so a tab restored at start gets its status line, resume list and hooks;
     // past the bound it starts without them.
     const holdForScripts = launchProvider !== null && !options?.ssh && scriptFoldersPending()
-    const preparation = codexSession || askSpawn || holdForStartSteps || holdForScripts ? beginSpawnPreparation(win, sessionId, options?.shellOnly ? null : (options?.provider ?? 'claude')) : null
+    // On Windows, while the start still looks for Claude Code
+    // (claude-start-lookup.ts: its walk of PATH and, when that finds none,
+    // the PATH refresh, the first Claude Code lookup and the version probe):
+    // a local Claude launch waits for it, bounded, as a prepared spawn, so a
+    // tab restored at start names the Claude Code they find; past the bound,
+    // and once the start's deadline has passed, it resolves as any launch.
+    const holdForClaudeLookup = launchProvider === 'claude' && !options?.ssh && claudeStartLookupPending()
+    const preparation = codexSession || askSpawn || holdForStartSteps || holdForScripts || holdForClaudeLookup ? beginSpawnPreparation(win, sessionId, options?.shellOnly ? null : (options?.provider ?? 'claude')) : null
     // PR-level ADR-009 round 1 (B1): once that preparation is cancelled or
     // superseded, this spawn's ticket stops counting as one under way.
     if (preparation) noteConfigLaunchPreparation(configClaim.ticket, () => preparation.current)
@@ -1044,6 +1052,10 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
       // folders before them, waited for before the check below, so nothing
       // starts for a tab closed meanwhile.
       if (holdForStartSteps) await startProfileStepsSettled()
+      // The start's walk of PATH and, when that found no Claude Code, its
+      // PATH refresh, first lookup and version probe (holdForClaudeLookup
+      // above).
+      if (holdForClaudeLookup) await awaitClaudeStartLookup()
 
       // Closed, swept or superseded while it was prepared: start nothing, and
       // SAY so. The renderer holds any pty:exit that arrives while its own

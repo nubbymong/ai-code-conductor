@@ -1,7 +1,9 @@
 // 2.1.1-beta.3 (F26): every check the user asks
 // for brings this process's PATH up to date first (windows-path-refresh.ts
 // refreshWindowsPath), and each such call is counted
-// (windows-programs.ts noteWindowsPathRefresh). That count is the only signal
+// (windows-programs.ts noteWindowsPathRefresh), as is the one at start
+// (claude-start-lookup.ts), and a refresh that ends having added folders is
+// counted once more. That count is the only signal
 // that makes the PowerShell profile's kept answer (claude-cli-probe.ts) be
 // asked again, so Check again after a profile edit finds the change without
 // a restart, while the 30 s CLI check never runs the profile by itself.
@@ -14,6 +16,8 @@ const h = vi.hoisted(() => ({
   holdRegistry: false,
   registryReads: 0,
   registryRelease: [] as Array<() => void>,
+  /** The user PATH the registry holds when the read answers, or null for none. */
+  registryUser: null as string | null,
   profileCalls: 0,
   profileAnswer: null as string | null,
 }))
@@ -23,9 +27,9 @@ vi.mock('../../../src/main/windows-registry-path', async (importOriginal) => {
     ...(await importOriginal<typeof import('../../../src/main/windows-registry-path')>()),
     readRegistryPaths: (): Promise<Values> => {
       h.registryReads += 1
-      const none: Values = { machine: null, user: null }
-      if (!h.holdRegistry) return Promise.resolve(none)
-      return new Promise<Values>((resolve) => { h.registryRelease.push(() => resolve(none)) })
+      const values = (): Values => ({ machine: null, user: h.registryUser ? { kind: 'String', data: h.registryUser } : null })
+      if (!h.holdRegistry) return Promise.resolve(values())
+      return new Promise<Values>((resolve) => { h.registryRelease.push(() => resolve(values())) })
     },
   }
 })
@@ -45,7 +49,7 @@ vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: (
 
 const { refreshWindowsPath, afterPathRefresh } = await import('../../../src/main/windows-path-refresh')
 const { windowsPathRefreshCount } = await import('../../../src/main/windows-programs')
-const { probeClaudeCli, findClaudeOnWindowsAsync, setClaudeProfileLookupAllowed, _resetClaudeCliProbeForTest, _resetClaudeWindowsLookupForTest } =
+const { probeClaudeCli, findClaudeOnWindowsAsync, keptClaudeFromPowerShellProfile, setClaudeProfileLookupAllowed, _resetClaudeCliProbeForTest, _resetClaudeWindowsLookupForTest } =
   await import('../../../src/main/claude-cli-probe')
 
 const FNM = 'C:\\Users\\me\\AppData\\Local\\fnm_multishells\\1234_1700000000\\claude.cmd'
@@ -56,6 +60,7 @@ beforeEach(() => {
   h.holdRegistry = false
   h.registryReads = 0
   h.registryRelease = []
+  h.registryUser = null
   h.profileCalls = 0
   h.profileAnswer = null
   _resetClaudeCliProbeForTest()
@@ -68,7 +73,7 @@ afterEach(() => {
   else process.env.PATH = savedPath
 })
 
-describe('a check the user asks for is counted, and only that makes the PowerShell profile be asked again', () => {
+describe('each PATH refresh is counted (the one at start, a check the user asks for, once more when it added folders), and only that count makes the PowerShell profile be asked again', () => {
   // Mutation to prove this can fail: drop the noteWindowsPathRefresh() call
   // from refreshWindowsPath.
   it('each refreshWindowsPath call counts once: one that joins a refresh already running too, and off Windows too', async () => {
@@ -102,5 +107,37 @@ describe('a check the user asks for is counted, and only that makes the PowerShe
     h.profileAnswer = FNM
     expect(await afterPathRefresh(probeClaudeCli)).toMatchObject({ installed: true, path: FNM })
     expect(h.profileCalls).toBe(2)
+  })
+
+  // The refresh also runs at start now, when Claude Code is in no folder
+  // PATH names (claude-start-lookup.ts, regression since #638), and a check
+  // the user asks for runs while other lookups run. A profile question asked while the
+  // registry is read starts PowerShell on the PATH from before, so its miss
+  // says nothing about the PATH the refresh then builds.
+  // Mutation to prove this can fail: count the call only, not the folders added.
+  it('a miss kept from a question asked while a refresh ran is asked again once that refresh added folders; one that added none keeps it', async () => {
+    const LOCAL_BIN = 'C:\\Users\\me\\.local\\bin'
+    setClaudeProfileLookupAllowed(() => true)
+    process.env.PATH = 'C:\\Windows\\System32'
+    h.holdRegistry = true
+    const refresh = refreshWindowsPath()
+    expect(await findClaudeOnWindowsAsync(process.env)).toBeNull()
+    expect(h.profileCalls).toBe(1)
+    expect(keptClaudeFromPowerShellProfile(), 'the miss is kept while the refresh runs').toBeNull()
+    h.registryUser = LOCAL_BIN
+    for (const r of h.registryRelease.splice(0)) r()
+    expect(await refresh).toEqual([LOCAL_BIN])
+    expect(keptClaudeFromPowerShellProfile(), 'not reused: the next lookup asks again').toBeUndefined()
+    h.profileAnswer = FNM
+    expect(await findClaudeOnWindowsAsync(process.env)).toBe(FNM)
+    expect(h.profileCalls).toBe(2)
+    // A later refresh that adds nothing: the answer of a question asked while it ran stays.
+    const second = refreshWindowsPath()
+    expect(keptClaudeFromPowerShellProfile(), 'the call itself makes the kept answer stale').toBeUndefined()
+    expect(await findClaudeOnWindowsAsync(process.env)).toBe(FNM)
+    expect(h.profileCalls).toBe(3)
+    for (const r of h.registryRelease.splice(0)) r()
+    expect(await second).toEqual([])
+    expect(keptClaudeFromPowerShellProfile()).toBe(FNM)
   })
 })

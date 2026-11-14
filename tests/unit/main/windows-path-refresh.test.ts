@@ -144,6 +144,20 @@ describe('the refresh is process-wide, and a lookup by name can then find anothe
     expect(adr).toMatch(/a PATH that resolved to npm's claude\.cmd resolves to that claude\.exe/)
   })
 
+  // The same read also runs once at start, with no check asked for
+  // (claude-start-lookup.ts, the Windows start-up fix): the decision record
+  // names that trigger, that its rules are the ones already decided, and
+  // that a program is then run with no check asked for either (the version
+  // probe runs the Claude Code found in a folder the read appended).
+  it('the header and ADR-024 name the read at start too: only with Claude Code switched on and in no folder PATH names, by the same rules, and the ADR says the version probe then runs the Claude Code found there', () => {
+    const header = prose(path.join(ROOT, 'src', 'main', 'windows-path-refresh.ts'))
+    expect(header).toMatch(/Once at start when Claude Code is switched on and in no folder PATH names \(claude-start-lookup\.ts\)/)
+    const adr = prose(path.join(ROOT, 'architecture', 'decisions', '2026-10-10-adr-024-vendor-installers-may-run-after-confirmation.md'))
+    expect(adr).toMatch(/The same read also runs once at start, when Claude Code is switched on and is in no folder PATH names, and the version probe at start then runs the Claude Code found on the PATH it leaves \(or, when the start-up deadline passes first, on the PATH there is then\); the append-only and fully qualified rules are unchanged\./)
+    // The trigger it had is still there, and still first.
+    expect(adr).toMatch(/On Windows, before a check the user asked for \(Check again, the check after an install ends\), main reads the system and user PATH values from the registry/)
+  })
+
   it('the header no longer says reg.exe loses only what the code page cannot carry: the read keeps every character', () => {
     const header = prose(path.join(ROOT, 'src', 'main', 'windows-path-refresh.ts'))
     expect(header).not.toMatch(/a character it cannot carry arrives as U\+FFFD/)

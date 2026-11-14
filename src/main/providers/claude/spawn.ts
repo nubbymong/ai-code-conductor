@@ -27,8 +27,9 @@ export { CLAUDE_NOT_ON_PATH }
  *  launch. When none is there, the Claude Code the user's PowerShell profile
  *  last named (claude-cli-probe.ts claudeFromPowerShellProfileForLaunch: the
  *  answer kept from asking Windows PowerShell with that profile, which a
- *  session's PowerShell also runs, also while a check the user asked for has
- *  made it stale); without a current answer that question starts in the
+ *  session's PowerShell also runs, also while a PATH refresh, the one at
+ *  start or a check the user asked for, has made it stale); without a
+ *  current answer that question starts in the
  *  background for the next launch, and with none kept at all this one gets
  *  null. Null is never a bare name. */
 export function findClaudeOnWindows(env: NodeJS.ProcessEnv = process.env, stat?: (p: string) => boolean): string | null {

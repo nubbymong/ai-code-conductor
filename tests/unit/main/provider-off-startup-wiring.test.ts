@@ -47,7 +47,8 @@ describe('provider-off start-up wiring', () => {
 
   it('the version probe is handed the launch rule, before the probe at start', () => {
     const wired = code.indexOf("setClaudeCliProbeAllowed(() => providerProbeRefusal('claude') === null)")
-    const probed = code.indexOf('void probeClaudeCliVersion()')
+    // The probe at start, handed to the start's steps (claude-start-lookup.ts).
+    const probed = code.indexOf('versionProbe: () => probeClaudeCliVersion()')
     expect(wired).toBeGreaterThan(-1)
     expect(probed).toBeGreaterThan(-1)
     expect(wired).toBeLessThan(probed)
