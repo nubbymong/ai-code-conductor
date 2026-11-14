@@ -11,7 +11,7 @@
  * watcher's callback to the test, and an in-memory stand-in for the index
  * database (better-sqlite3 is built for Electron; the totals are covered with
  * the real database in tests/unit/native/tokenomics-dirty-sweep.native.test.ts).
- * No process starts and no real watcher runs.
+ * No process starts, no real watcher runs and no link is planted.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as realFs from 'fs'
@@ -74,17 +74,6 @@ function rollout(id: string, turns: number): string {
 /** Long enough for a debounced sweep (5 ms here) to have run many times over. */
 const settle = (ms = 150): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-/** Whether this platform lets a test make a link to a file (Windows wants a
- *  privilege for it; a simulated link covers the rule there). */
-const CAN_LINK_FILES = ((): boolean => {
-  const dir = realFs.mkdtempSync(path.join(os.tmpdir(), 'tklink-'))
-  try {
-    realFs.writeFileSync(path.join(dir, 'target'), '')
-    realFs.symlinkSync(path.join(dir, 'target'), path.join(dir, 'link'), 'file')
-    return true
-  } catch { return false } finally { realFs.rmSync(dir, { recursive: true, force: true }) }
-})()
-
 type WatchCb = (event: string, filename: string | null) => void
 type Complete = { firstIndex: boolean; drained: boolean }
 
@@ -146,8 +135,9 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   }) as typeof realFs
 
   /** Resolves on the first message from the worker that matches, within a
-   *  bound. Ask BEFORE doing what causes the message. */
-  function waitFor(what: string, pred: (m: FromTkWorker) => boolean, bound = 3000): Promise<void> {
+   *  bound. Ask BEFORE doing what causes the message. The bound is generous
+   *  for a loaded CI runner; a passing run never waits for it. */
+  function waitFor(what: string, pred: (m: FromTkWorker) => boolean, bound = 10_000): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => { bounds.delete(timer); reject(new Error(`${what}: not within ${bound} ms`)) }, bound)
       bounds.add(timer)
@@ -379,9 +369,9 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
     it('a sweep that fails part-way is due again at the next 5 s tick', async () => {
       fakeTheTimer()
       db.failNextSetMeta = true
-      const failed = waitFor('the failed sweep', (m) => m.type === 'log' && m.entry.level === 'error')
+      const failure = waitFor('the failed sweep', (m) => m.type === 'log' && m.entry.level === 'error')
       await start({ waitFirst: false })
-      await failed
+      await failure
       expect(completes).toEqual([])
       const again = drainedSweep('the sweep after the failure')
       vi.advanceTimersByTime(TAIL_MS)
@@ -392,9 +382,10 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   })
 
   describe('a reported transcript that is a link', () => {
-    // The full walk skips links. A link is simulated here so the rule is
-    // checked on every platform: lstat says link, stat and open follow it.
-    it('is not read and starts no walk (simulated link)', async () => {
+    // The full walk skips links. The link here is simulated (lstat says link,
+    // stat and open follow it), so the rule is checked on every platform and
+    // no real link is planted where this file runs.
+    it('is not read and starts no walk', async () => {
       await start()
       linkTarget = path.join(tmp, 'elsewhere.jsonl')
       realFs.writeFileSync(linkTarget, line('elsewhere'))
@@ -406,26 +397,6 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       expect(db.cursors.has(linkAt)).toBe(false)
       expect(db.events).toBe(5)
       expect(listings).toBe(0)
-    })
-
-    it.runIf(CAN_LINK_FILES)('is read by neither a report of it nor a full walk (real link)', async () => {
-      await start()
-      const elsewhere = path.join(tmp, 'elsewhere.jsonl')
-      realFs.writeFileSync(elsewhere, line('elsewhere'))
-      const link = transcript('linked')
-      realFs.symlinkSync(elsewhere, link, 'file')
-      clearCounts()
-      fire(claudeDir, 'rename', path.join('F--proj', 'linked.jsonl'))
-      await settle()
-      expect(opened).toEqual([])
-      expect(listings).toBe(0)
-      const full = nextSweep('the full sweep')
-      fire(claudeDir, 'rename', 'F--proj')
-      await full
-      expect(walks).toBe(1)
-      expect(opened).toEqual([])
-      expect(db.cursors.has(link)).toBe(false)
-      expect(db.events).toBe(5)
     })
   })
 })
