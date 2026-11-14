@@ -1,6 +1,6 @@
 # ADR-009: Security-sensitive changes require an independent adversarial-review pass
 
-- **Status:** Accepted (2026-07-30). Amended by ADR-028 (2026-11-14): point 8's interactive "fix -> re-attack until clean" is now one round (one pass, one fix batch, one confirmation) and a narrow check of any later fix diff; a content change from that round re-issues the marker after its check instead of forcing a fresh full pass (point 7). The bar is unchanged.
+- **Status:** Accepted (2026-07-30). Amended by ADR-028 (2026-11-14): point 8's interactive "fix -> re-attack until clean" is now one round (one pass, one fix batch, one confirmation) and a narrow check of any later fix diff; a content change from that round re-issues the marker after its check instead of forcing a fresh full pass (point 7). Point 8's unattended caller's cap of two rounds is now the one round plus at most one narrow check, then quarantine as before. The bar is unchanged.
 - **Deciders:** @nubbymong (owner)
 - **Related:** #150, CONTEXT.d/2026-07-30-150-adversarial-review-skill.md, SECURITY.md, ADR-004 (the same un-ignore reasoning applied to `AGENTS.md`), #116 (contributor/agent workflow)
 
@@ -72,11 +72,12 @@ adversarial pass before any security-sensitive change is recommended for merge.*
    unchanged and the PASS carries forward; any real content change to a reviewed
    file forces a fresh pass. This is what makes the requirement affordable —
    re-review is triggered by actual change, not by branch churn.
+   (Amended by ADR-028: see Status.)
 
 8. **Bounded when unattended, never lowered.** An interactive caller loops
    fix -> re-attack until clean. An unattended caller is capped at two rounds and
    then *quarantines* — FINDINGS stands, the branch stays unmerged. The bound is
-   on the rounds, never on the bar.
+   on the rounds, never on the bar. (Amended by ADR-028: see Status.)
 
 9. **The human still approves and merges.** The pass is a first-pass filter, not
    an authority. It composes with — does not replace — owner review and CI.

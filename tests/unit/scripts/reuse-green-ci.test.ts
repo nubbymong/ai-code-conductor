@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 // Plain ESM with main() behind an argv[1] check, like release-gate.mjs:
 // importing it runs nothing. GitHub is injected as `get`.
 import {
-  REUSE_CHANNEL, CI_WORKFLOW_PATH, REUSE_EVENTS, MAX_RUNS, MAX_COMMITS, MAX_JOB_READS,
-  testedTreeStep, isReusableRun, treeProofProblems, findReusableRun, decideReuse, formatDecision, readHeadTree, main,
+  REUSE_CHANNEL, CI_WORKFLOW_PATH, REUSE_EVENTS, REUSE_PR_BASES, MAX_RUNS, MAX_COMMITS, MAX_JOB_READS, MAX_JOB_LISTS, MAX_PULLS,
+  testedTreeStep, isReusableRun, prBaseProblem, ranNoTests, treeProofProblems, findReusableRun, decideReuse, formatDecision, readHeadTree, main,
 } from '../../../scripts/ci/reuse-green-ci.mjs'
 
 const REPO = 'o/r'
@@ -23,17 +23,25 @@ const job = (os: string, over: Over = {}, runId = 100) => ({
   run_id: runId, name: `Test (${os})`, status: 'completed', conclusion: 'success',
   steps: [step('Unit tests'), step('Build'), step(`Tested tree ${TREE}`)], ...over,
 })
+/** A pull request as GitHub lists it for a commit: merged into beta, in this repository, its head the run's commit. */
+const pull = (over: Over = {}) => ({ number: 5, state: 'closed', base: { ref: 'beta', repo: { id: 7, full_name: REPO } }, head: { sha: HEAD, repo: { id: 7, full_name: REPO } }, ...over })
+/** A run that ran no Test job: what a label change or a title edit leaves on the commit. */
+const idleJobs = (id: number) => [{ run_id: id, name: 'Desktop test gate', status: 'completed', conclusion: 'success', steps: [] }, { run_id: id, name: 'Test (${{ matrix.os }})', status: 'completed', conclusion: 'skipped', steps: [] }]
+/** A run that ran the Test jobs and proves nothing: a docs-only change skipped the suite on Windows and macOS. */
+const docsOnlyJobs = (id = 100) => [job('windows-2025', { steps: [step('Decide the scope')] }, id), job('macos-latest', { steps: [step('Decide the scope')] }, id), job('ubuntu-latest', {}, id)]
 const greenJobs = (runId = 100) => [job('windows-2025', {}, runId), job('macos-latest', {}, runId), job('ubuntu-latest', {}, runId),
   { run_id: runId, name: 'Changelog in sync', status: 'completed', conclusion: 'success', steps: [] }]
 
-/** A fake GitHub: the runs listing, each commit's tree, each run's jobs. Records every path asked. */
-function github({ runs = [run()], trees = { [HEAD]: TREE } as Record<string, string>, jobs = { 100: greenJobs() } as Record<number, unknown[]>, total = {} as Record<number, number> } = {}) {
+/** A fake GitHub: the runs listing, each commit's tree and pull requests, each run's jobs. Records every path asked. */
+function github({ runs = [run()], trees = { [HEAD]: TREE } as Record<string, string>, jobs = { 100: greenJobs() } as Record<number, unknown[]>, total = {} as Record<number, number>, pulls = { [HEAD]: [pull()] } as Record<string, unknown> } = {}) {
   const asked: string[] = []
   const get = async (p: string) => {
     asked.push(p)
     if (p.startsWith(`/repos/${REPO}/actions/workflows/ci.yml/runs?`)) return { total_count: runs.length, workflow_runs: runs }
     const c = /^\/repos\/o\/r\/git\/commits\/([0-9a-f]{40})$/.exec(p)
     if (c) { if (!(c[1] in trees)) throw new Error(`GitHub API 404 for ${p}`); return { sha: c[1], tree: { sha: trees[c[1]] } } }
+    const pl = /^\/repos\/o\/r\/commits\/([0-9a-f]{40})\/pulls\?per_page=100$/.exec(p)
+    if (pl) { if (!(pl[1] in pulls)) throw new Error(`GitHub API 404 for ${p}`); return pulls[pl[1]] }
     const j = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/jobs\?filter=latest&per_page=100$/.exec(p)
     if (j) { const list = jobs[Number(j[1])]; if (!list) throw new Error(`GitHub API 404 for ${p}`); return { total_count: total[Number(j[1])] ?? list.length, jobs: list } }
     throw new Error(`unexpected request ${p}`)
@@ -101,14 +109,76 @@ describe('reuse-green-ci: which CI run may stand in for the release suite', () =
 })
 
 describe('reuse-green-ci: the search', () => {
-  it('finds the green run whose commit has the release tree and whose Test jobs prove it, in three reads', async () => {
+  it('finds the green run whose commit has the release tree and whose Test jobs prove it: four reads for a PR run, three for a push', async () => {
     const g = github()
     expect(await find(g)).toEqual({ reuse: true, runId: 100, url: 'https://github.com/o/r/actions/runs/100', reason: `ci.yml run 100 (pull_request, commit ${HEAD.slice(0, 12)}) passed the suite on Windows, macOS and Linux for tree ${TREE}` })
     expect(g.asked).toEqual([
       `/repos/${REPO}/actions/workflows/ci.yml/runs?status=success&per_page=${MAX_RUNS}`,
       `/repos/${REPO}/git/commits/${HEAD}`,
+      `/repos/${REPO}/commits/${HEAD}/pulls?per_page=${MAX_PULLS}`,
       `/repos/${REPO}/actions/runs/100/jobs?filter=latest&per_page=100`,
     ])
+    // A push run executed the workflow of its own commit: no pull request is read, and none is needed.
+    const p = github({ runs: [run({ event: 'push' })], pulls: {} })
+    expect(await find(p)).toMatchObject({ reuse: true, runId: 100 })
+    expect(p.asked).toEqual([
+      `/repos/${REPO}/actions/workflows/ci.yml/runs?status=success&per_page=${MAX_RUNS}`,
+      `/repos/${REPO}/git/commits/${HEAD}`,
+      `/repos/${REPO}/actions/runs/100/jobs?filter=latest&per_page=100`,
+    ])
+  })
+
+  it('a pull-request run counts only when the PR it ran for is into beta or main, in this repository', async () => {
+    expect(REUSE_PR_BASES).toEqual(['beta', 'main'])
+    expect(MAX_PULLS).toBe(100)
+    // A PR run executes the workflow of the MERGE into its base, so the same
+    // tree does not pin the ci.yml that ran unless the base is a protected line.
+    const refuse = async (list: unknown, why: RegExp) => {
+      const g = github({ pulls: { [HEAD]: list } })
+      const r = await find(g)
+      expect(r.reuse, String(why)).toBe(false)
+      expect(r.reason, String(why)).toMatch(why)
+      // Refused before its job list is read: it costs no job read.
+      expect(g.asked.some((p) => p.includes('/jobs')), String(why)).toBe(false)
+    }
+    const into = (ref: unknown, over: Over = {}) => pull({ base: { ref, repo: { id: 7, full_name: REPO } }, ...over })
+    await refuse([into('not-a-protected-base')], /run 100: pull request #5 is into not-a-protected-base, not beta or main/)
+    // A release line can be created by anyone who can push, with any ci.yml in it: not accepted.
+    await refuse([into('release/v2.1.3')], /is into release\/v2\.1\.3, not beta or main/)
+    for (const ref of ['Beta', 'beta ', 'BETA', 'beta2', 'refs/heads/beta', 'Main', '']) await refuse([into(ref)], /not beta or main/)
+    // The base is in another repository, by id or by name.
+    await refuse([pull({ base: { ref: 'beta', repo: { id: 8, full_name: REPO } } })], /pull request #5 is into another repository/)
+    await refuse([pull({ base: { ref: 'beta', repo: { id: 7, full_name: 'evil/r' } } })], /pull request #5 is into another repository/)
+    // No pull request is listed (GitHub lists the merged and the open ones), or none whose head is the run's commit.
+    await refuse([], /no pull request is listed for commit 0{12}/)
+    await refuse([pull({ head: { sha: sha(2) } })], /no pull request with commit 0{12} as its head/)
+    await refuse([pull({ head: undefined })], /no pull request with commit 0{12} as its head/)
+    // Every pull request of the commit must qualify, not one of them.
+    await refuse([pull(), into('scratch', { number: 6 })], /pull request #6 is into scratch/)
+    await refuse([into('scratch', { number: 6, head: { sha: sha(2) } }), pull()], /pull request #6 is into scratch/)
+    // An entry that cannot be read, or a list that may not be whole.
+    for (const bad of [null, 'x', {}, { number: 5 }, pull({ base: null }), into(7), pull({ base: { ref: 'beta' } }), pull({ base: { ref: 'beta', repo: { id: '7', full_name: REPO } } })]) await refuse([pull(), bad], /a pull request of commit 0{12} has no readable base/)
+    await refuse(Array.from({ length: MAX_PULLS }, () => pull()), /too many pull requests/)
+    // main is a protected line too, and one fewer than the page is whole.
+    expect(await find(github({ pulls: { [HEAD]: [into('main')] } }))).toMatchObject({ reuse: true, runId: 100 })
+    expect(await find(github({ pulls: { [HEAD]: Array.from({ length: MAX_PULLS - 1 }, () => pull()) } }))).toMatchObject({ reuse: true, runId: 100 })
+    // The function itself, on the run's own repository id.
+    expect(prBaseProblem([pull()], run(), REPO)).toBe(null)
+    expect(prBaseProblem([pull()], run({ repository: { id: 9, full_name: REPO } }), REPO)).toBe('pull request #5 is into another repository')
+    expect(prBaseProblem([pull()], run(), 'o/other')).toBe('pull request #5 is into another repository')
+  })
+
+  it('the pull requests are read once per commit, and a push run on the same commit still counts', async () => {
+    // Three PR runs on one commit whose PR is into an unprotected base, and an older push run.
+    const scratch = [pull({ base: { ref: 'scratch', repo: { id: 7, full_name: REPO } } })]
+    const runs = [run({ id: 103 }), run({ id: 102 }), run({ id: 101 }), run({ id: 100, event: 'push' })]
+    const g = github({ runs, pulls: { [HEAD]: scratch } })
+    expect(await find(g)).toMatchObject({ reuse: true, runId: 100 })
+    expect(g.asked.filter((p) => p.includes('/pulls'))).toHaveLength(1)
+    expect(g.asked.filter((p) => p.includes('/jobs'))).toEqual([`/repos/${REPO}/actions/runs/100/jobs?filter=latest&per_page=100`])
+    // With no push run behind them: refused, and the reason is the base.
+    const none = await find(github({ runs: runs.slice(0, 3), pulls: { [HEAD]: scratch } }))
+    expect(none).toEqual({ reuse: false, runId: null, url: null, reason: 'a green ci.yml run has this tree but none proves the suite ran on it (run 103: pull request #5 is into scratch, not beta or main)' })
   })
 
   it('a run for a commit with another tree is never read further', async () => {
@@ -125,8 +195,7 @@ describe('reuse-green-ci: the search', () => {
 
   it('label-only runs on the same commit are passed over for the run that ran the suite, newest first', async () => {
     // Four runs on one commit, as a burst of label changes leaves them: only run 97 ran the Test jobs to the end.
-    const labelOnly = (id: number) => [{ run_id: id, name: 'Desktop test gate', status: 'completed', conclusion: 'success', steps: [] }, { run_id: id, name: 'Test (${{ matrix.os }})', status: 'completed', conclusion: 'skipped', steps: [] }]
-    const g = github({ runs: [run({ id: 100 }), run({ id: 99 }), run({ id: 98 }), run({ id: 97 })], jobs: { 100: labelOnly(100), 99: labelOnly(99), 98: labelOnly(98), 97: greenJobs(97) } })
+    const g = github({ runs: [run({ id: 100 }), run({ id: 99 }), run({ id: 98 }), run({ id: 97 })], jobs: { 100: idleJobs(100), 99: idleJobs(99), 98: idleJobs(98), 97: greenJobs(97) } })
     const r = await find(g)
     expect(r.reuse).toBe(true)
     expect(r.runId).toBe(97)
@@ -134,9 +203,45 @@ describe('reuse-green-ci: the search', () => {
     expect(g.asked.filter((p) => p.includes('/jobs')).map((p) => /runs\/(\d+)/.exec(p)![1])).toEqual(['100', '99', '98', '97'])
   })
 
+  it('label and edit runs that ran no tests do not use up the reads kept for runs that did', async () => {
+    expect(MAX_JOB_READS).toBe(10)
+    expect(MAX_JOB_LISTS).toBe(40)
+    expect(ranNoTests(idleJobs(1))).toBe(true)
+    expect(ranNoTests([])).toBe(true)
+    expect(ranNoTests([{ name: 'Changelog in sync', conclusion: 'success' }])).toBe(true)
+    expect(ranNoTests(greenJobs())).toBe(false)
+    expect(ranNoTests(docsOnlyJobs())).toBe(false)
+    expect(ranNoTests([job('windows-2025', { conclusion: 'failure' })])).toBe(false)
+    expect(ranNoTests([job('windows-2025', { conclusion: 'cancelled' }), ...idleJobs(1)])).toBe(false)
+    // After the test run: in-beta, a release label, a title edit... each leaves a
+    // green run on the same commit, newer than the one that ran the suite.
+    const burst = (idle: number) => {
+      const runs = Array.from({ length: idle + 1 }, (_, i) => run({ id: 900 - i }))
+      const jobs = Object.fromEntries(runs.map((r, i) => [r.id, i === idle ? greenJobs(r.id as number) : idleJobs(r.id as number)]))
+      return { g: github({ runs, jobs }), last: runs[idle].id }
+    }
+    for (const idle of [MAX_JOB_READS, MAX_JOB_READS + 2, MAX_JOB_LISTS - 1]) {
+      const { g, last } = burst(idle)
+      expect(await find(g), `${idle} label runs first`).toMatchObject({ reuse: true, runId: last })
+      expect(g.asked.filter((p) => p.includes('/jobs'))).toHaveLength(idle + 1)
+    }
+    // The search is still bounded: MAX_JOB_LISTS job lists in all, and the reason says what they were.
+    const { g } = burst(MAX_JOB_LISTS)
+    const stopped = await find(g)
+    expect(stopped).toEqual({ reuse: false, runId: null, url: null, reason: `stopped after ${MAX_JOB_LISTS} job lists on this tree without proof (${MAX_JOB_LISTS} of them label or edit runs that ran no tests)` })
+    expect(g.asked.filter((p) => p.includes('/jobs'))).toHaveLength(MAX_JOB_LISTS)
+    // Nothing but label runs on the tree: said so, not hidden behind a first refusal.
+    const only = Array.from({ length: 3 }, (_, i) => run({ id: 700 - i }))
+    expect((await find(github({ runs: only, jobs: Object.fromEntries(only.map((r) => [r.id, idleJobs(r.id as number)])) }))).reason)
+      .toBe('a green ci.yml run has this tree but none proves the suite ran on it (3 label or edit runs that ran no tests)')
+    // A mix: the first refusal of a run that did run tests, then the count of the label runs.
+    const mix = [run({ id: 603 }), run({ id: 602 }), run({ id: 601 })]
+    expect((await find(github({ runs: mix, jobs: { 603: idleJobs(603), 602: docsOnlyJobs(602), 601: idleJobs(601) } }))).reason)
+      .toBe(`a green ci.yml run has this tree but none proves the suite ran on it (run 602: Test (windows-2025) has no green "Tested tree ${TREE}" step; 2 more were label or edit runs that ran no tests)`)
+  })
+
   it('a run on the tree that does not prove it is refused, with the first reason', async () => {
-    const docsOnly = [job('windows-2025', { steps: [step('Decide the scope')] }), job('macos-latest', { steps: [step('Decide the scope')] }), job('ubuntu-latest')]
-    expect(await find(github({ jobs: { 100: docsOnly } }))).toEqual({ reuse: false, runId: null, url: null, reason: `a green ci.yml run has this tree but none proves the suite ran on it (run 100: Test (windows-2025) has no green "Tested tree ${TREE}" step)` })
+    expect(await find(github({ jobs: { 100: docsOnlyJobs() } }))).toEqual({ reuse: false, runId: null, url: null, reason: `a green ci.yml run has this tree but none proves the suite ran on it (run 100: Test (windows-2025) has no green "Tested tree ${TREE}" step)` })
     // A job list GitHub says is longer than the page it sent: not read as complete.
     const r = await find(github({ total: { 100: 5 } }))
     expect(r.reuse).toBe(false)
@@ -163,16 +268,18 @@ describe('reuse-green-ci: the search', () => {
     // And just inside it: reached.
     trees[many[MAX_COMMITS].head_sha as string] = OTHER_TREE
     trees[many[MAX_COMMITS - 1].head_sha as string] = TREE
-    const inside = github({ runs: many, trees, jobs: { [many[MAX_COMMITS - 1].id as number]: greenJobs(many[MAX_COMMITS - 1].id as number) } })
+    const reached = many[MAX_COMMITS - 1]
+    const inside = github({ runs: many, trees, jobs: { [reached.id as number]: greenJobs(reached.id as number) }, pulls: { [reached.head_sha as string]: [pull({ head: { sha: reached.head_sha } })] } })
     expect(await find(inside)).toMatchObject({ reuse: true, runId: many[MAX_COMMITS - 1].id })
-    // Job lists: MAX_JOB_READS unproven runs on the tree, then stop, although the next one would prove it.
+    // Job lists: MAX_JOB_READS runs that ran the tests and prove nothing, then stop, although the next one would prove it.
     const burst = Array.from({ length: MAX_JOB_READS + 1 }, (_, i) => run({ id: 500 - i }))
-    const jobs = Object.fromEntries(burst.map((r, i) => [r.id, i === MAX_JOB_READS ? greenJobs(r.id as number) : []]))
+    const jobs = Object.fromEntries(burst.map((r, i) => [r.id, i === MAX_JOB_READS ? greenJobs(r.id as number) : docsOnlyJobs(r.id as number)]))
     const b = github({ runs: burst, jobs })
     const stopped = await find(b)
-    expect(stopped.reuse).toBe(false)
-    expect(stopped.reason).toMatch(new RegExp(`^read ${MAX_JOB_READS} runs on this tree without proof`))
+    expect(stopped).toEqual({ reuse: false, runId: null, url: null, reason: `stopped after ${MAX_JOB_READS} job lists on this tree without proof (run 500: Test (windows-2025) has no green "Tested tree ${TREE}" step)` })
     expect(b.asked.filter((p) => p.includes('/jobs'))).toHaveLength(MAX_JOB_READS)
+    // A job list that is not whole counts as one of them.
+    expect((await find(github({ runs: burst, jobs, total: Object.fromEntries(burst.map((r) => [r.id, 9])) }))).reason).toBe(`stopped after ${MAX_JOB_READS} job lists on this tree without proof (run 500: its job list is not complete)`)
     // One fewer unproven run before it: found.
     const fits = burst.slice(1)
     expect(await find(github({ runs: fits, jobs }))).toMatchObject({ reuse: true, runId: fits[fits.length - 1].id })
@@ -204,6 +311,10 @@ describe('reuse-green-ci: the search', () => {
     await expect(find(jobs({ jobs: greenJobs() }))).rejects.toThrow(/no job list for run 100/)
     await expect(find(jobs({ total_count: 4 }))).rejects.toThrow(/no job list for run 100/)
     await expect(find(github({ trees: {} }))).rejects.toThrow(/404/)
+    // The pull-request list of the commit: not a list, or not served.
+    for (const answer of [null, {}, { message: 'Not Found' }, 'x']) await expect(find(github({ pulls: { [HEAD]: answer } }))).rejects.toThrow(/no pull request list for commit/)
+    await expect(find(github({ pulls: {} }))).rejects.toThrow(/404/)
+    expect((await decideReuse({ channel: 'beta', repo: REPO, tree: TREE, get: github({ pulls: {} }).get })).reuse).toBe(false)
   })
 })
 

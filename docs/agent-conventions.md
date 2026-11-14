@@ -125,7 +125,8 @@ npm run test:e2e     # Playwright
   on Windows and macOS and still reports green.
 - **Beta cadence (AGENTS.md, ADR-028):** the owner approves a beta's scope
   before it is built; one review round per beta on a frozen head (one pass,
-  one fix batch, one confirmation, then a narrow check of any later fix diff);
+  one fix batch, one confirmation, then a narrow check of any later fix diff;
+  off the security-sensitive paths that round is one independent review);
   majors and anything the beta introduces are fixed before the cut, minors in
   older nearby code become tickets for the next beta; the version bump rides
   in the last content PR; the beta release reuses green CI for the same tree;

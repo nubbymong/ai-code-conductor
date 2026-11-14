@@ -5,7 +5,8 @@ import { resolve } from 'path'
 // overrides; nothing is installed for this test.
 import yaml from 'js-yaml'
 import { evalExpr, evalIf, evalValue, type GhaContext } from '../../helpers/gha-expr'
-import { testedTreeStep, CI_WORKFLOW_PATH } from '../../../scripts/ci/reuse-green-ci.mjs'
+import { testedTreeStep, CI_WORKFLOW_PATH, REUSE_PR_BASES } from '../../../scripts/ci/reuse-green-ci.mjs'
+import { main as gateMain, GATE_LABELS } from '../../../scripts/ci/desktop-gate.mjs'
 
 /**
  * The fast beta cadence (ADR-028), as the workflows carry it out. The
@@ -33,10 +34,12 @@ const REQUIRED_CHECKS = ['Test (windows-2025)', 'Test (macos-latest)']
 // ── The events ──────────────────────────────────────────────────────
 /** `base` is the PR's base branch now; `changes` is what an `edited` event
  *  says changed (GitHub sends `changes.base.ref.from` only when the base did). */
-type PrOpts = { labels?: string[]; label?: string; number?: number; runId?: number; base?: string | null; changes?: Record<string, unknown> }
-const pr = (action: string, { labels = [], label, number = 12, runId = 5001, base = 'beta', changes }: PrOpts = {}): GhaContext => ({
+/** `attempt` is the run attempt: 1 for the run an event starts, 2 and up when
+ *  that run is started again by hand. A re-run replays the event it began with. */
+type PrOpts = { labels?: string[]; label?: string; number?: number; runId?: number; base?: string | null; changes?: Record<string, unknown>; attempt?: number | string }
+const pr = (action: string, { labels = [], label, number = 12, runId = 5001, base = 'beta', changes, attempt = 1 }: PrOpts = {}): GhaContext => ({
   github: {
-    event_name: 'pull_request', run_id: runId, workflow: 'CI', ref: `refs/pull/${number}/merge`, head_ref: 'fix/thing', base_ref: base ?? '',
+    event_name: 'pull_request', run_id: runId, run_attempt: attempt, workflow: 'CI', ref: `refs/pull/${number}/merge`, head_ref: 'fix/thing', base_ref: base ?? '',
     event: {
       action, number, ...(label ? { label: { name: label } } : {}), ...(changes ? { changes } : {}),
       pull_request: { number, labels: labels.map((name) => ({ name })), ...(base === null ? {} : { base: { ref: base } }) },
@@ -47,8 +50,8 @@ const pr = (action: string, { labels = [], label, number = 12, runId = 5001, bas
 /** The two kinds of `edited` event: the base branch was changed, or only text was. */
 const retargeted = (from: string, opts: PrOpts = {}) => pr('edited', { ...opts, changes: { base: { ref: { from }, sha: { from: 'a'.repeat(40) } } } })
 const textEdited = (opts: PrOpts = {}) => pr('edited', { ...opts, changes: { title: { from: 'old title' }, body: { from: 'old text' } } })
-const push = (runId = 7001, ref = 'refs/heads/main'): GhaContext => ({ github: { event_name: 'push', run_id: runId, workflow: 'CI', ref, head_ref: '', event: {} }, inputs: {} })
-const dispatch = (runId = 9001): GhaContext => ({ github: { event_name: 'workflow_dispatch', run_id: runId, workflow: 'CI', ref: 'refs/heads/beta', head_ref: '', event: {} }, inputs: { codex_rc_version: '', conformance_prove_red: false } })
+const push = (runId = 7001, ref = 'refs/heads/main', attempt: number | string = 1): GhaContext => ({ github: { event_name: 'push', run_id: runId, run_attempt: attempt, workflow: 'CI', ref, head_ref: '', event: {} }, inputs: {} })
+const dispatch = (runId = 9001, attempt: number | string = 1): GhaContext => ({ github: { event_name: 'workflow_dispatch', run_id: runId, run_attempt: attempt, workflow: 'CI', ref: 'refs/heads/beta', head_ref: '', event: {} }, inputs: { codex_rc_version: '', conformance_prove_red: false } })
 
 const group = (ctx: GhaContext) => String(evalValue(ci.concurrency!.group, ctx))
 const cancels = (ctx: GhaContext) => evalIf(ci.concurrency!['cancel-in-progress'], ctx)
@@ -143,6 +146,36 @@ describe('ci.yml: a newer run supersedes the older one, and only where that is s
     expect(cancels(retargeted('beta', { base: 'main' }))).toBe(true)
   })
 
+  it('a run started again by hand never joins the group of its PR, so it cannot cancel the run on the current head', () => {
+    // GitHub evaluates the group of a re-run from the event the run began
+    // with: an old run of PR 12 would come out as ci-pr-12 and, with
+    // cancel-in-progress, stop the matrix running on the PR's newest commit.
+    const live = [group(pr('synchronize', { labels: ['ci-run'] })), group(pr('labeled', { labels: ['ci-run', 'in-beta'], label: 'in-beta' }))]
+    expect(live).toEqual(['ci-pr-12', 'ci-pr-12-labels'])
+    const events: [string, PrOpts][] = [
+      ['opened', {}], ['synchronize', { labels: ['ci-run'] }], ['reopened', {}],
+      ['labeled', { labels: ['ci-run'], label: 'ci-run' }], ['labeled', { labels: ['ci-run', 'in-beta'], label: 'in-beta' }], ['unlabeled', { label: 'ci-run' }],
+      ['edited', { changes: { title: { from: 'old' } } }], ['edited', { changes: { base: { ref: { from: 'beta' } } }, base: 'main' }],
+    ]
+    for (const [action, opts] of events) {
+      // The context carries the attempt as a number or as text; both are read.
+      for (const attempt of [2, 3, '2', '10']) {
+        const g = group(pr(action, { ...opts, runId: 4000, attempt }))
+        expect(g, `${action}, attempt ${attempt}`).toBe('ci-run-4000')
+        expect(live, `${action}, attempt ${attempt}`).not.toContain(g)
+      }
+      // Two old runs started again do not meet each other either.
+      expect(group(pr(action, { ...opts, runId: 4001, attempt: 2 })), action).toBe('ci-run-4001')
+      // The first attempt is the live run: in its PR's group, as text or as a number.
+      for (const attempt of [1, '1']) expect(live, `${action}, attempt ${attempt}`).toContain(group(pr(action, { ...opts, attempt })))
+    }
+    // A push or a dispatch started again keeps the group of its own run.
+    expect(group(push(7001, 'refs/heads/main', 2))).toBe('ci-run-7001')
+    expect(group(dispatch(9001, 3))).toBe('ci-run-9001')
+    // A run id is unique in the repository, so no PR group can be mistaken for one of these.
+    expect(group(pr('synchronize', { number: 4000 }))).toBe('ci-pr-4000')
+  })
+
   it('no job has a concurrency of its own, and no other workflow cancels a run', () => {
     for (const [id, job] of Object.entries(ci.jobs)) expect(job.concurrency, id).toBeUndefined()
     // The release is never cancelled or queued behind another: it has no concurrency at all.
@@ -193,17 +226,22 @@ describe('ci.yml: a label change does not restart the tests', () => {
 
 describe('ci.yml: the Desktop test gate is at release level on beta, and pre-release on stable (ADR-028, rule 9)', () => {
   const gate = ci.jobs['desktop-gate']
-  const GATE_LABELS = ['desktop-tested', 'runtime-validated', 'skip-desktop-test']
   const NOT_MAIN = ['beta', 'release/v2.1.3', 'release/v2.2.0', 'maintenance', 'main-old', 'not-main', 'mainline']
-  /** What the gate job does with a PR event: which step runs, and how it ends.
-   *  The job's own condition, the two step conditions and the label step's
-   *  three env expressions are evaluated; the label step's script is fixed
-   *  text (pinned below) that passes on any of the three being 'true'. */
-  const decide = (ctx: GhaContext): { ran: string[]; pass: boolean } | 'not run' => {
+  /** The pull request as GitHub serves it NOW, which is what the gate reads. */
+  const live = (base: string, labels: string[] = [], number = 12) => ({ number, state: 'open', base: { ref: base }, labels: labels.map((name) => ({ name })) })
+  /** What the gate job does with a PR event while the PR is in the state
+   *  `now`: the job's own condition and its step's env are evaluated against
+   *  the event, and the step's script (scripts/ci/desktop-gate.mjs) is run with
+   *  that env and nothing else, GitHub answering with `now`. */
+  const decide = async (ctx: GhaContext, now: unknown): Promise<{ pass: boolean; asked: string[] } | 'not run'> => {
     if (!evalIf(gate.if, ctx)) return 'not run'
-    const ran = gate.steps.filter((s) => evalIf(s.if, ctx))
-    const pass = ran.length === 1 && (ran[0] === gate.steps[0] || Object.values(gate.steps[1].env!).some((e) => evalValue(e, ctx) === true))
-    return { ran: ran.map((s) => (s === gate.steps[0] ? 'released-beta' : 'label')), pass }
+    const step = gate.steps[gate.steps.length - 1]
+    if (!evalIf(step.if, ctx)) return 'not run'
+    const env: Record<string, string> = { GITHUB_REPOSITORY: 'o/r' }
+    for (const [k, v] of Object.entries(step.env ?? {})) env[k] = String(evalValue(v, { ...ctx, secrets: { GITHUB_TOKEN: 'placeholder' } }) ?? '')
+    const asked: string[] = []
+    const code = await gateMain([], env, { log: () => {}, sleep: async () => {}, get: async (p: string) => { asked.push(p); return now } })
+    return { pass: code === 0, asked }
   }
 
   it('keeps its name, runs on every PR event whatever the base or the labels, and can never be skipped or pass on a failure', () => {
@@ -212,85 +250,90 @@ describe('ci.yml: the Desktop test gate is at release level on beta, and pre-rel
     expect(gate.if).toBe("github.event_name == 'pull_request'")
     expect(gate.needs).toBeUndefined()
     expect(gate['continue-on-error']).toBeUndefined()
+    // Reads, never writes: the checkout, and the pull request as it is now.
+    expect(gate.permissions).toEqual({ contents: 'read', 'pull-requests': 'read' })
     expect(gate.steps).toHaveLength(2)
+    const [checkout, step] = gate.steps
+    expect(checkout.uses).toMatch(/^actions\/checkout@/)
+    // The token is not left on disk: nothing after the checkout uses git.
+    expect(checkout.with).toEqual({ 'persist-credentials': false })
+    expect(step.run).toBe('node scripts/ci/desktop-gate.mjs')
+    expect(step.uses).toBeUndefined()
     for (const s of gate.steps) {
-      expect(s['continue-on-error'], s.name).toBeUndefined()
-      expect(s.uses, s.name).toBeUndefined()
-      expect(String(s.if), s.name).not.toMatch(/always\(\)|failure\(\)|cancelled\(\)/)
+      // No step condition at all: on every PR event both run, and the script decides.
+      expect(s.if, s.name ?? s.uses).toBeUndefined()
+      expect(s['continue-on-error'], s.name ?? s.uses).toBeUndefined()
     }
     for (const action of ci.on.pull_request.types as string[]) for (const base of ['beta', 'main', 'release/v2.1.3']) expect(runs('desktop-gate', pr(action, { base })), `${action} into ${base}`).toBe(true)
     expect(runs('desktop-gate', dispatch())).toBe(false)
   })
 
-  it('a PR into beta or a release line passes with no label, on every event, and says where desktop testing happens', () => {
+  it('reads the pull request as it is now: the event gives the step the PR number and nothing else', async () => {
+    const step = gate.steps[1]
+    expect(step.env).toEqual({ GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}', PR_NUMBER: '${{ github.event.pull_request.number }}' })
+    // Neither the base branch nor a label of the event reaches the decision.
+    const text = JSON.stringify(gate)
+    for (const stale of [/base\.ref/, /base_ref/, /labels/, /label\.name/, /event\.changes/, /head_ref/]) expect(text, String(stale)).not.toMatch(stale)
+    const d = await decide(pr('synchronize', { number: 31 }), live('beta', [], 31))
+    expect(d).toEqual({ pass: true, asked: ['/repos/o/r/pulls/31'] })
+  })
+
+  it('a PR into beta or a release line passes with no label, on every event', async () => {
     for (const base of NOT_MAIN) {
       for (const action of ci.on.pull_request.types as string[]) {
         for (const labels of [[], ['ci-run'], ['desktop-tested'], ['skip-desktop-test', 'ci-run']]) {
-          expect(decide(pr(action, { base, labels, label: labels[0] })), `${action} into ${base} with [${labels}]`).toEqual({ ran: ['released-beta'], pass: true })
+          expect(await decide(pr(action, { base, labels, label: labels[0] }), live(base, labels)), `${action} into ${base} with [${labels}]`).toMatchObject({ pass: true })
         }
       }
     }
-    const step = gate.steps[0]
-    expect(step.env).toEqual({ BASE_REF: '${{ github.event.pull_request.base.ref }}' })
-    // One line, and nothing in it can fail the step.
-    expect(step.run).toBe(`echo "This PR targets '$BASE_REF', not main. Desktop testing happens on the released beta build, not per PR, and no label is needed. Gate open."`)
-    expect(step.run).not.toMatch(/\$\{\{/)
   })
 
-  it('a PR into main, the stable promotion, still needs one of the three labels', () => {
+  it('a PR into main, the stable promotion, still needs one of the three labels', async () => {
+    expect(GATE_LABELS).toEqual(['desktop-tested', 'runtime-validated', 'skip-desktop-test'])
     for (const action of ci.on.pull_request.types as string[]) {
-      expect(decide(pr(action, { base: 'main' })), `${action}, no label`).toEqual({ ran: ['label'], pass: false })
-      expect(decide(pr(action, { base: 'main', labels: ['ci-run', 'in-beta', 'desktop-test', 'desktop-tested-not'] })), `${action}, other labels`).toEqual({ ran: ['label'], pass: false })
-      for (const l of GATE_LABELS) expect(decide(pr(action, { base: 'main', labels: ['ci-run', l], label: l })), `${action}, ${l}`).toEqual({ ran: ['label'], pass: true })
+      expect(await decide(pr(action, { base: 'main' }), live('main')), `${action}, no label`).toMatchObject({ pass: false })
+      expect(await decide(pr(action, { base: 'main' }), live('main', ['ci-run', 'in-beta', 'desktop-test', 'desktop-tested-not'])), `${action}, other labels`).toMatchObject({ pass: false })
+      for (const l of GATE_LABELS) expect(await decide(pr(action, { base: 'main', labels: ['ci-run', l], label: l }), live('main', ['ci-run', l])), `${action}, ${l}`).toMatchObject({ pass: true })
     }
-    // Branch names compare without case in an expression, and a base that
-    // cannot be read is treated as main: both need the label (fail closed).
-    for (const base of ['MAIN', 'Main', '', null]) {
-      expect(decide(pr('opened', { base })), `base ${JSON.stringify(base)}`).toEqual({ ran: ['label'], pass: false })
-      expect(decide(pr('opened', { base, labels: ['desktop-tested'] })), `base ${JSON.stringify(base)}, labelled`).toEqual({ ran: ['label'], pass: true })
-    }
-    const step = gate.steps[1]
-    expect(step.env).toEqual({
-      HAS_TESTED: "${{ contains(github.event.pull_request.labels.*.name, 'desktop-tested') }}",
-      HAS_RUNTIME: "${{ contains(github.event.pull_request.labels.*.name, 'runtime-validated') }}",
-      HAS_SKIP: "${{ contains(github.event.pull_request.labels.*.name, 'skip-desktop-test') }}",
-    })
-    // The script, whole: it passes on one of the three and otherwise ends in exit 1.
-    expect(step.run).toBe([
-      'if [ "$HAS_TESTED" = "true" ]; then',
-      `  echo "PR carries 'desktop-tested' — a human exercised the packaged app on a real desktop. Gate open."`,
-      '  exit 0',
-      'fi',
-      'if [ "$HAS_RUNTIME" = "true" ]; then',
-      `  echo "PR carries 'runtime-validated' — automated runtime validation passed (VM Playwright e2e and/or the live SSH statusline matrix). Gate open."`,
-      '  exit 0',
-      'fi',
-      'if [ "$HAS_SKIP" = "true" ]; then',
-      `  echo "PR carries 'skip-desktop-test' — no runtime test required (docs/deps/CI/changelog-only). Gate open."`,
-      '  exit 0',
-      'fi',
-      `echo "::error::Desktop test gate: a PR into main (the stable promotion) must carry 'desktop-tested' (a human launched and exercised the packaged app), 'runtime-validated' (automated VM e2e and/or the live SSH statusline matrix passed), or 'skip-desktop-test' (docs/deps/CI/changelog-only) before it can merge. See CONTRIBUTING.md > Desktop-test gate."`,
-      'exit 1',
-      '',
-    ].join('\n'))
+    // A pull request GitHub does not serve, or serves without a base, decides nothing: the check fails.
+    for (const now of [null, {}, { number: 12, labels: [] }, live('', ['desktop-tested']), live('beta', [], 13)]) expect(await decide(pr('opened'), now), JSON.stringify(now)).toMatchObject({ pass: false })
   })
 
-  it('a green earned on a beta base does not survive a retarget to main: the base change is an event, and the gate is decided again', () => {
-    expect(decide(pr('synchronize', { base: 'beta' }))).toEqual({ ran: ['released-beta'], pass: true })
+  it('a green earned on a beta base does not survive a retarget to main: the base change is an event, and the gate is decided again', async () => {
+    expect(await decide(pr('synchronize', { base: 'beta' }), live('beta'))).toMatchObject({ pass: true })
     // GitHub sends `edited` for a base change, and nothing else.
     expect(ci.on.pull_request.types).toContain('edited')
     expect(ci.on.pull_request.branches).toContain('main')
-    expect(decide(retargeted('beta', { base: 'main' }))).toEqual({ ran: ['label'], pass: false })
-    expect(decide(retargeted('release/v2.1.3', { base: 'main', labels: ['ci-run'] }))).toEqual({ ran: ['label'], pass: false })
-    expect(decide(retargeted('beta', { base: 'main', labels: ['desktop-tested'] }))).toEqual({ ran: ['label'], pass: true })
+    expect(await decide(retargeted('beta', { base: 'main' }), live('main'))).toMatchObject({ pass: false })
+    expect(await decide(retargeted('release/v2.1.3', { base: 'main', labels: ['ci-run'] }), live('main', ['ci-run']))).toMatchObject({ pass: false })
+    expect(await decide(retargeted('beta', { base: 'main', labels: ['desktop-tested'] }), live('main', ['desktop-tested']))).toMatchObject({ pass: true })
     // And the other way: off main, the label stops mattering.
-    expect(decide(retargeted('main', { base: 'beta' }))).toEqual({ ran: ['released-beta'], pass: true })
+    expect(await decide(retargeted('main', { base: 'beta' }), live('beta'))).toMatchObject({ pass: true })
     // On a PR into main a label change is still an event that decides it again.
     for (const t of ['labeled', 'unlabeled']) expect(ci.on.pull_request.types).toContain(t)
-    expect(decide(pr('unlabeled', { base: 'main', labels: ['ci-run'], label: 'desktop-tested' }))).toEqual({ ran: ['label'], pass: false })
-    expect(decide(pr('labeled', { base: 'main', labels: ['ci-run', 'runtime-validated'], label: 'runtime-validated' }))).toEqual({ ran: ['label'], pass: true })
+    expect(await decide(pr('unlabeled', { base: 'main', labels: ['ci-run'], label: 'desktop-tested' }), live('main', ['ci-run']))).toMatchObject({ pass: false })
+    expect(await decide(pr('labeled', { base: 'main', labels: ['ci-run', 'runtime-validated'], label: 'runtime-validated' }), live('main', ['ci-run', 'runtime-validated']))).toMatchObject({ pass: true })
     // A text edit of a PR into main decides it again as well, from the labels it has now.
-    expect(decide(textEdited({ base: 'main' }))).toEqual({ ran: ['label'], pass: false })
+    expect(await decide(textEdited({ base: 'main' }), live('main'))).toMatchObject({ pass: false })
+  })
+
+  it('a run started again replays the event it began with, and the gate still decides from the PR as it is now', async () => {
+    // 1. A run on a PR into beta: green. 2. The PR is retargeted to main.
+    // 3. "Re-run all jobs" on the run of step 1: its event still says beta,
+    //    and it becomes the newest Desktop test gate check on the commit.
+    const began = pr('synchronize', { base: 'beta' })
+    expect(await decide(began, live('beta'))).toMatchObject({ pass: true })
+    for (const attempt of [2, 3]) {
+      const again = pr('synchronize', { base: 'beta', attempt })
+      expect(runs('desktop-gate', again)).toBe(true)
+      expect(await decide(again, live('main')), `attempt ${attempt}`).toEqual({ pass: false, asked: ['/repos/o/r/pulls/12'] })
+      expect(await decide(again, live('main', ['desktop-tested'])), `attempt ${attempt}`).toMatchObject({ pass: true })
+    }
+    // The same for a label: the run began while desktop-tested was on a PR into main; the label is gone now.
+    const labelled = pr('labeled', { base: 'main', labels: ['ci-run', 'desktop-tested'], label: 'desktop-tested', attempt: 2 })
+    expect(await decide(labelled, live('main', ['ci-run']))).toMatchObject({ pass: false })
+    // And a run that began red on main is green once the PR is back on beta.
+    expect(await decide(pr('opened', { base: 'main', attempt: 2 }), live('beta'))).toMatchObject({ pass: true })
   })
 
   it('no release-evidence gate was added for it: the release workflow and the release gate know nothing of these labels', () => {
@@ -443,6 +486,10 @@ describe('release.yml: a beta release reuses green CI for the same tree; a stabl
 
   it('what CI ran is what the release would run: the same command on the same runner images, in the workflow the lookup reads', () => {
     expect(CI_WORKFLOW_PATH).toBe('.github/workflows/ci.yml')
+    // A PR run is reused only for a PR into a line that already exists and is
+    // protected; ci.yml runs on PRs into each of them.
+    for (const base of REUSE_PR_BASES) expect(ci.on.pull_request.branches, base).toContain(base)
+    expect(REUSE_PR_BASES.some((b) => /[*?]|release/.test(b))).toBe(false)
     const ciOses = ci.jobs.test.strategy!.matrix.os as string[]
     const ciSuite = ci.jobs.test.steps.find((s) => s.name === 'Unit tests')!
     for (const id of ['build-windows', 'build-linux']) {
@@ -471,6 +518,54 @@ describe('the written rules match (AGENTS.md, CONTRIBUTING.md, the adversarial-r
     expect(read('architecture/decisions/2026-11-14-adr-028-fast-beta-cadence.md')).toMatch(/^# ADR-028: /)
   })
 
+  it('rule 2 says what the one round is off the security paths, and what its two terms mean', () => {
+    for (const doc of ['AGENTS.md', 'CONTRIBUTING.md']) {
+      const text = read(doc)
+      // The change that is not security-sensitive: one independent review, both questions, no loop.
+      expect(text, doc).toMatch(/A change that touches no security-sensitive path gets one independent review on the frozen head/)
+      expect(text, doc).toMatch(/both what was agreed and whether it is correct and tested/)
+      // The two terms the cadence stands on, defined where the rule is.
+      expect(text, doc).toMatch(/\*\*Frozen head:\*\* no more commits to the reviewed files once the review starts/)
+      expect(text, doc).toMatch(/\*\*Narrow check:\*\* one independent attacker, on the fix diff only/)
+    }
+    const adr = read('architecture/decisions/2026-11-14-adr-028-fast-beta-cadence.md').replace(/\s+/g, ' ')
+    expect(adr).toMatch(/A change that touches no security-sensitive path gets one independent review on the frozen head/)
+    expect(adr).toMatch(/for an unattended one the cap of two rounds becomes the round plus at most one narrow check/)
+  })
+
+  it('ADR-009 says in its own status line what became of each bound it set, the unattended one included', () => {
+    const status = read('architecture/decisions/2026-07-30-adr-009-adversarial-review-for-security-changes.md').split('\n').find((l) => l.startsWith('- **Status:**'))!
+    expect(status).toMatch(/Amended by ADR-028/)
+    expect(status).toMatch(/interactive/)
+    // Point 8 capped an unattended caller at two rounds; the skill now gives it the round and one narrow check.
+    expect(status).toMatch(/unattended caller'?s? cap of two rounds is now the one round plus at most one narrow check/)
+    // The body is the record as decided; each amended point carries a pointer.
+    const body = read('architecture/decisions/2026-07-30-adr-009-adversarial-review-for-security-changes.md')
+    expect(body.match(/\(Amended by ADR-028: see Status\.\)/g) ?? []).toHaveLength(2)
+    expect(read('.claude/skills/adversarial-review/SKILL.md')).toMatch(/Unattended \/ loop caller: BOUNDED\.\*\* The round, then at most one narrow check/)
+  })
+
+  it('no release instruction still runs the version-bumping script on a beta whose bump is already merged', () => {
+    // Rule 5: the bump rides in the last content PR. `npm run release -- --beta`
+    // without --no-bump bumps again and commits, which also gives the tree a
+    // new hash and loses the green-CI reuse of rule 4.
+    const cut = /gh workflow run release\.yml --ref beta -f channel=beta/
+    const copilot = read('.github/copilot-instructions.md')
+    expect(copilot).not.toMatch(/Beta releases: `npm run release -- --beta` from beta branch/)
+    expect(copilot).toMatch(cut)
+    expect(copilot).toMatch(/last content PR/i)
+    for (const line of copilot.split('\n')) if (/npm run release -- --beta/.test(line)) expect(line).toMatch(/--no-bump/)
+    const versioning = read('docs/versioning.md')
+    const flow = versioning.slice(versioning.indexOf('## End-to-end flow'))
+    expect(flow).not.toMatch(/`scripts\/release\.js` \(local bump \+ dispatch\)/)
+    expect(flow).toMatch(cut)
+    expect(flow).toMatch(/last content PR/i)
+    expect(flow).toMatch(/--no-bump/)
+    expect(flow).toMatch(/never without `--no-bump`/)
+    // AGENTS.md and CONTRIBUTING.md name the same command for the cut.
+    expect(read('AGENTS.md')).toMatch(/gh workflow run release\.yml --ref beta -f channel=beta/)
+  })
+
   it('rule 9 is written where the old rule was: a PR into beta needs no desktop-test label, the promotion PR into main does', () => {
     const rule = /Desktop testing is at release level on beta and pre-release on stable,\s+not per PR/
     for (const doc of ['AGENTS.md', 'CONTRIBUTING.md', 'architecture/decisions/2026-11-14-adr-028-fast-beta-cadence.md']) expect(read(doc), doc).toMatch(rule)
@@ -492,5 +587,8 @@ describe('the written rules match (AGENTS.md, CONTRIBUTING.md, the adversarial-r
     // What stays true is still said: a headless run cannot vouch for the screen.
     expect(read('.claude/skills/StartLoop/SKILL.md')).toMatch(/NOT desktop-verified/)
     expect(read('scripts/loop-tree.mjs')).toMatch(/NOT desktop-verified by the loop/)
+    // The check reads the PR as it is now, and the docs say what that means for a re-run.
+    expect(contributing).toMatch(/reads the pull request as it is now/)
+    expect(read('AGENTS.md')).toMatch(/from the PR as it is now/)
   })
 })

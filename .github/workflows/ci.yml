@@ -3,8 +3,8 @@ name: CI
 on:
   pull_request:
     # `labeled` asks for the tests (`ci-run`). `labeled`, `unlabeled` and
-    # `edited` are here for the Desktop test gate below, which keys on the PR's
-    # labels AND on its base branch: removing `desktop-tested` from a PR into
+    # `edited` are here for the Desktop test gate below, which reads the PR's
+    # labels AND its base branch: removing `desktop-tested` from a PR into
     # main must turn the check red again (#309), and a PR that passed on a
     # `beta` base and is then retargeted to `main` must be decided again
     # (`edited` is the only event a base change sends). Neither restarts the
@@ -45,13 +45,18 @@ permissions:
 #     `test` job's condition).
 #   - A push (main is the only branch that pushes here) and a dispatch get a
 #     group of their own per run: never cancelled, never queued behind another.
+#   - So does a PR run that is started again by hand ("Re-run all jobs",
+#     `run_attempt` above 1). GitHub evaluates the group of a re-run from the
+#     event the run began with, so an old run of a PR would otherwise join that
+#     PR's code group and cancel the matrix running on its newest commit. The
+#     cost, accepted: a later push does not cancel a re-run in progress.
 # release.yml has no concurrency at all: a release is never cancelled.
 # tests/unit/scripts/ci-cadence.test.ts evaluates these two expressions against
 # each event.
 concurrency:
   group: >-
     ${{
-      github.event_name != 'pull_request' && format('ci-run-{0}', github.run_id)
+      (github.event_name != 'pull_request' || github.run_attempt != 1) && format('ci-run-{0}', github.run_id)
       || (github.event.action == 'labeled' && github.event.label.name != 'ci-run'
           || github.event.action == 'unlabeled'
           || github.event.action == 'edited' && github.event.changes.base.ref.from == '')
@@ -92,51 +97,42 @@ jobs:
   # Direct pushes to `main` have no PR and are exempt by the event guard.
   #
   # The job's only `if` is event-scoped (`pull_request`), and that is the whole
-  # design: on every PR event it ALWAYS runs, then decides INSIDE, from the base
-  # branch and the labels. Never turn either into a job-level `if:`: a job
-  # skipped by its condition reports as passed, so a skip would wave a PR into
-  # main through. Exactly one of the two steps runs (their conditions are each
-  # other's negation; tests/unit/scripts/ci-cadence.test.ts evaluates both).
+  # design: on every PR event it ALWAYS runs, then decides INSIDE, in
+  # scripts/ci/desktop-gate.mjs. Never turn the base branch or the labels into
+  # a job-level or step-level `if:`: a job skipped by its condition reports as
+  # passed, so a skip would wave a PR into main through.
+  #
+  # The script reads the pull request AS IT IS NOW from GitHub (its base branch
+  # and its labels). The event gives it the PR's number and nothing else, on
+  # purpose: a run started again by hand replays the event it began with, so a
+  # run that began on a `beta` base, or while `desktop-tested` was on the PR,
+  # would otherwise report green again after the PR was retargeted to `main`
+  # or lost the label. A pull request that cannot be read decides nothing: the
+  # check fails and says to re-run it.
   #
   # The decision is redone whenever its inputs change: `labeled` / `unlabeled`
   # for the labels, `edited` for the base branch, so a PR cannot pass on a
-  # `beta` base and keep that green after being retargeted to `main`. An empty
-  # base cannot happen on a pull_request event; if it did, the label would be
-  # required (fail closed).
+  # `beta` base and keep that green after being retargeted to `main`.
   #
+  # The job only reads: the checkout (for the script) and the pull request.
   # Keep the name exactly `Desktop test gate`: checks are known by name.
   desktop-gate:
     name: Desktop test gate
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - name: Not a PR into main - desktop testing happens on the released beta
-        if: github.event.pull_request.base.ref != 'main' && github.event.pull_request.base.ref != ''
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: echo "This PR targets '$BASE_REF', not main. Desktop testing happens on the released beta build, not per PR, and no label is needed. Gate open."
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
-      - name: PR into main - require desktop-tested / runtime-validated (or skip-desktop-test) label
-        if: github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == ''
+      - name: Decide from the PR as it is now - a label is asked only on a PR into main
         env:
-          HAS_TESTED: ${{ contains(github.event.pull_request.labels.*.name, 'desktop-tested') }}
-          HAS_RUNTIME: ${{ contains(github.event.pull_request.labels.*.name, 'runtime-validated') }}
-          HAS_SKIP: ${{ contains(github.event.pull_request.labels.*.name, 'skip-desktop-test') }}
-        run: |
-          if [ "$HAS_TESTED" = "true" ]; then
-            echo "PR carries 'desktop-tested' — a human exercised the packaged app on a real desktop. Gate open."
-            exit 0
-          fi
-          if [ "$HAS_RUNTIME" = "true" ]; then
-            echo "PR carries 'runtime-validated' — automated runtime validation passed (VM Playwright e2e and/or the live SSH statusline matrix). Gate open."
-            exit 0
-          fi
-          if [ "$HAS_SKIP" = "true" ]; then
-            echo "PR carries 'skip-desktop-test' — no runtime test required (docs/deps/CI/changelog-only). Gate open."
-            exit 0
-          fi
-          echo "::error::Desktop test gate: a PR into main (the stable promotion) must carry 'desktop-tested' (a human launched and exercised the packaged app), 'runtime-validated' (automated VM e2e and/or the live SSH statusline matrix passed), or 'skip-desktop-test' (docs/deps/CI/changelog-only) before it can merge. See CONTRIBUTING.md > Desktop-test gate."
-          exit 1
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/ci/desktop-gate.mjs
 
   test:
     # Gate the test matrix on a `ci-run` label for PRs.

@@ -95,9 +95,9 @@ For the versioning scheme, prerelease suffixes (`-beta.N`/`-rc.N`), update chann
 A beta is meant to ship within 24 hours of its scope being approved. These are the owner's rules (2026-11-13 and 2026-11-14, [ADR-028](architecture/decisions/2026-11-14-adr-028-fast-beta-cadence.md)); `AGENTS.md` ("Beta cadence") carries the same list for agents.
 
 1. **Scope first.** The owner approves the scope of each beta before it is built. Each beta carries at least one architecture simplification and one process simplification.
-2. **One review round per beta, on a frozen head.** On security-sensitive paths the adversarial pass is that round, and its lenses count as the two reviews a change needs. The round is one pass, one fix batch, one confirmation. A fix made after the confirmation gets a narrow check of that fix diff only, never a new full pass.
+2. **One review round per beta, on a frozen head.** On security-sensitive paths the adversarial pass is that round, and its lenses count as the two reviews a change needs. A change that touches no security-sensitive path gets one independent review on the frozen head, by a reviewer who did not write it, covering both what was agreed and whether it is correct and tested, with the same shape and no repeat loop. The round is one pass, one fix batch, one confirmation. A fix made after the confirmation gets a narrow check of that fix diff only, never a new full pass. **Frozen head:** no more commits to the reviewed files once the review starts. **Narrow check:** one independent attacker, on the fix diff only (off the security paths: one independent reviewer); it does not re-read the rest of the change.
 3. **What gets fixed before the cut.** Majors, and anything the beta itself introduces. A minor finding in older code near the change gets a ticket in the private planning repo for the next beta.
-4. **The beta release reuses green CI for the same tree.** `release.yml`'s `Reuse green CI (beta only)` job looks for a green `ci.yml` run in this repository (not from a fork) for a commit with the same git tree, in which the Windows, macOS and Linux Test jobs each end with a green `Tested tree <hash>` step for that tree. If it finds one, the release does not run the suite again and links the run in its summary. On any doubt or API error the full suite runs. A stable release always runs the suite.
+4. **The beta release reuses green CI for the same tree.** `release.yml`'s `Reuse green CI (beta only)` job looks for a green `ci.yml` run in this repository (not from a fork) for a commit with the same git tree, in which the Windows, macOS and Linux Test jobs each end with a green `Tested tree <hash>` step for that tree. A pull-request run counts only for a PR into `beta` or `main`: it tests the merge into its base, so only a protected base vouches for the `ci.yml` that ran. If it finds one, the release does not run the suite again and links the run in its summary. On any doubt or API error the full suite runs. A stable release always runs the suite.
 5. **The version bump rides in the last content PR of a beta** (the `package.json` version and the changelog entry). There is no separate version-bump PR.
 6. **CI runs only what a change touches.** A push to a PR cancels the run on the commit it replaced. Adding or removing a label does not run the tests again (only adding `ci-run` does). A PR that changes only documentation (Markdown, `docs/`, `CONTEXT.d/`, `architecture/`) skips the suite on Windows and macOS, and the required checks still report green; Linux always runs the whole suite.
 7. **No new release-evidence gate is added.**
@@ -256,6 +256,13 @@ On a PR into `main` the `Desktop test gate` check **fails until one of these
 labels is present**, so it is the inverse of `ci-run` (which is opt-in — apply it
 to *run* the matrix; this one must be present to *allow* the merge). Removing the
 label turns the check red again.
+
+The check reads the pull request as it is now (its base branch and its labels)
+from GitHub, not from the event that started the run. So re-running an old run
+gives today's answer: a run that began while the PR was into `beta`, or still
+carried `desktop-tested`, goes red when it is run again after the PR was
+retargeted to `main` or lost the label. If GitHub cannot be read the check fails
+and says so; re-run it.
 
 The check is decided again whenever what it reads changes: on a label change, and
 when the PR's base branch changes. A PR that passed on a `beta` base and is then

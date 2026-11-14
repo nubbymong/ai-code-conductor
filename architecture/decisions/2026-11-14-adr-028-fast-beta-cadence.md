@@ -39,10 +39,16 @@ cadence") and `CONTRIBUTING.md`, and the workflows carry out rules 4, 6 and 9.
 2. **One review round per beta, on a frozen head.** On security-sensitive
    paths the adversarial pass (ADR-009) is that round, and its lenses count as
    the two reviews a change needs (does it do what was agreed; is it correct
-   and tested). The round is one pass, one fix batch, one confirmation. A fix
-   made after the confirmation gets a narrow check of that fix diff only, never
-   a new full pass. This replaces "repeat until clean" for an interactive
-   caller. The bar does not move: a pass with an open BLOCKER or MAJOR is
+   and tested). A change that touches no security-sensitive path gets one
+   independent review on the frozen head, by a reviewer who did not write it,
+   covering both questions, with the same shape. The round is one pass, one
+   fix batch, one confirmation. A fix made after the confirmation gets a
+   narrow check of that fix diff only, never a new full pass. This replaces
+   "repeat until clean" for an interactive caller, and for an unattended one
+   the cap of two rounds becomes the round plus at most one narrow check.
+   "Frozen head" means no more commits to the reviewed files once the review
+   starts; a "narrow check" is one independent attacker (or reviewer) reading
+   the fix diff only. The bar does not move: a pass with an open BLOCKER or MAJOR is
    still FINDINGS, and FINDINGS still does not merge.
 3. **Majors, and anything the beta itself introduces, are fixed before the
    cut.** A minor finding in older code near the change gets a ticket in the
@@ -70,8 +76,11 @@ cadence") and `CONTRIBUTING.md`, and the workflows carry out rules 4, 6 and 9.
 being changed) share a group that cancels the run in progress. Every other
 label change, and an edit of the title or description, runs in a second group
 per PR, so it can never cancel the tests of that PR. A push to `main` and a
-dispatch get a group of their own per run and are never cancelled.
-`release.yml` has no concurrency at all.
+dispatch get a group of their own per run and are never cancelled. So does a
+PR run that is started again by hand (`run_attempt` above 1): GitHub
+evaluates a re-run's group from the event the run began with, so an old run
+would otherwise join its PR's code group and cancel the matrix on the newest
+commit. `release.yml` has no concurrency at all.
 
 **Label changes (`ci.yml`, the `test` and `codex-conformance` conditions).**
 On a `labeled` event the two OS matrices run only when the label added is
@@ -89,11 +98,20 @@ decides from the base branch first. On any base but `main` it reports success
 with one line saying that desktop testing happens on the released beta. On a
 PR into `main` (the stable promotion, `release/vX.Y.Z` to `main`) it asks for
 one of the three labels, exactly as it did for every PR before. The decision
-is taken inside the job, never by a job-level condition, because a job skipped
-by its condition reports as passed. The workflow now also starts on the
-`edited` event, the only event GitHub sends when a PR's base branch changes,
-so a PR that passed on a `beta` base is decided again, and goes red, when it
-is retargeted to `main`. A base that cannot be read is treated as `main`.
+is taken inside the job (`scripts/ci/desktop-gate.mjs`), never by a job-level
+or step-level condition, because a job skipped by its condition reports as
+passed. The workflow now also starts on the `edited` event, the only event
+GitHub sends when a PR's base branch changes, so a PR that passed on a `beta`
+base is decided again, and goes red, when it is retargeted to `main`.
+
+The script reads the pull request as it is now from GitHub (base branch and
+labels; the job has `pull-requests: read`) and takes only the PR's number
+from the event. A run started again by hand replays the event it began with:
+decided from that event, a run that began on a `beta` base, or while
+`desktop-tested` was on the PR, would report green again after the PR was
+retargeted to `main` or lost the label, and sit as the newest check on the
+commit. A pull request that cannot be read decides nothing: the check fails
+and says to re-run it.
 
 **Only what a change touches (`ci.yml`, "Decide the scope";
 `scripts/ci/change-scope.mjs`).** The safe minimum: a PR that changes only
@@ -112,14 +130,23 @@ when the suite, the native tests and the build passed. On `channel=beta` the
 release looks for a `ci.yml` run that is green, in this repository, not from a
 fork, started by a PR or a push, for a commit whose tree equals the release
 commit's, and in which the Windows, macOS and Linux Test jobs are each green
-with a green `Tested tree <that hash>` step. If it finds one, `build-windows`
+with a green `Tested tree <that hash>` step. A pull-request run counts only
+when every pull request GitHub lists for that commit is into `beta` or `main`
+in this repository, and one of them has the commit as its head. If it finds one, `build-windows`
 and `build-linux` skip "Run tests" and the job summary links the run. On any
 doubt, and on any API error, the full suite runs as before. `channel=stable`
 never reuses.
 
-Two conditions are checked because each closes a different gap. The commit's
-tree is what GitHub itself records for the run, so the `ci.yml` that ran is the
-one in the released tree and not one a branch altered. The step is what the
+Three conditions are checked because each closes a different gap. The commit's
+tree is what GitHub itself records for the run, so for a push run the `ci.yml`
+that ran is the one in the released tree and not one a branch altered. A
+pull-request run executes the workflow of the merge into its base, and the
+merge takes the base's side of `ci.yml` where the base changed it, so the
+tree alone does not pin the workflow: the base must be a line that takes
+changes only through an owner-merged PR. `release/*` is not accepted, because
+such a branch can be created with any `ci.yml` in it by anyone who can push
+(an rc cut pushes its bump straight to the release line, so it never reused
+CI anyway). The step is what the
 job says it tested: a pull-request run tests the merge of the branch into its
 base, so a branch that was behind its base tested another tree than its head,
 and a docs-only run tested nothing on Windows and macOS. In both cases the
@@ -136,7 +163,21 @@ step is missing or names another tree, and the release runs the suite.
   not run the suite on that tree). Rule 5 makes the last PR a content PR.
 - The reuse trusts a green run of this repository's own `ci.yml` on a tree the
   owner merged. Branches in this repository are pushed by collaborators only,
-  and the owner merges every PR (rule 8).
+  and the owner merges every PR (rule 8). The base of a pull-request run is
+  read as GitHub serves it at release time: a PR closed without merging, or
+  retargeted after its run, is not seen. Both need push access and the
+  owner's merge, which a ruleset's required checks already trust in the same
+  way.
+- Label and edit runs end green on the same commit as the run that ran the
+  suite and are listed before it. The lookup passes over them (up to 40 job
+  lists in all, 10 of runs that ran the tests and prove nothing) and says in
+  its summary how many there were.
+- The `Desktop test gate` job now checks out the repository and makes one
+  read of the GitHub API (a few seconds). If that read fails three times the
+  check is red until the job is re-run.
+- A later push does not cancel a re-run in progress (it is in a group of its
+  own), so a re-run of an old run can spend a matrix on a commit nobody
+  needs. That is the price of a re-run never cancelling the current run.
 - `ci.yml` and `release.yml` are among the WP1 carry-forward gate files
   (ADR-027). They change here on `beta`, where the candidate check does not
   run. A carry-forward patch is cut from the stable tag, so it does not
