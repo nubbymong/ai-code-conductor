@@ -120,7 +120,18 @@ npm run test:e2e     # Playwright
   stabilize on their own `release/vX.Y.Z` branch (see `CONTRIBUTING.md`).
 - Protected branches (`beta`/`main`) require a **code-owner (@nubbymong)** review
   — you cannot self-approve. CI (`Test` matrix, Win + macOS) is gated on a
-  `ci-run` PR label.
+  `ci-run` PR label. A push to the PR cancels the run it replaced; another
+  label change does not start the tests again; a docs-only PR skips the suite
+  on Windows and macOS and still reports green.
+- **Beta cadence (AGENTS.md, ADR-028):** the owner approves a beta's scope
+  before it is built; one review round per beta on a frozen head (one pass,
+  one fix batch, one confirmation, then a narrow check of any later fix diff;
+  off the security-sensitive paths that round is one independent review);
+  majors and anything the beta introduces are fixed before the cut, minors in
+  older nearby code become tickets for the next beta; the version bump rides
+  in the last content PR; the beta release reuses green CI for the same tree;
+  desktop testing is done on the released beta, so a PR into `beta` needs no
+  desktop-test label (only the stable promotion PR into `main` does).
 - Commit messages: imperative subject, explain the *why*; end with the
   `Co-Authored-By:` trailer when authored with an assistant.
 

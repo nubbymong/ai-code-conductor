@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "db972d30ac81e27f73e6fd473ca948150e1f3717648b2a3e39ce108966146608",
-  "manifestHead": "48b9a38efdd5bc8d791443e2433aa6a5fe0923e6",
+  "manifestPathDigest": "93cfc8339d5ecc7c6188601dddf25cc588ad2eee5ea9bbe4fcbdf80e51309bf5",
+  "manifestHead": "d7848570d9020e17473600eb32fbfc0bb984a203",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -267,7 +267,7 @@
       ],
       "category": "OTHER",
       "disposition": "replace",
-      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md",
+      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md; 2.1.3-beta.1 process track (ADR-028): the codex-conformance job keeps its steps, its matrix and the versions it checks; only its start condition changed: on a PR it still needs ci-run, and another label change or an edit of the PR title or description no longer starts it again (a change of base branch does) (WP1.71); tests/unit/scripts/ci-cadence.test.ts",
       "note": "the job's name, comments and test paths; no Codex code path; P04 (P4.8 review): CODEX_HOME set to fresh empty folders made by codex-conformance-ci.mjs homes for the PATH check and the flag-drift suite; no global home resolver"
     },
     {
@@ -9891,6 +9891,16 @@
       "disposition": "added",
       "evidence": "new WP2 PR 4 P4.11 test (046c50e8): the training screenshot tool's seed and its isolated home (WP1.68); tests/unit/scripts/capture-seed.test.ts",
       "note": ""
+    },
+    {
+      "path": "tests/unit/scripts/ci-cadence.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.1 process test (ADR-028, fast beta cadence): parses ci.yml and release.yml and evaluates their conditions against the events GitHub sends; it names Codex only as the codex-conformance job, whose start condition it pins: the job runs on a push, on a dispatch and on a PR that carries ci-run, and is not started again by another label change or by an edit of the PR; the job's steps and the CLI versions it checks are unchanged (WP1.71); tests/unit/scripts/ci-cadence.test.ts",
+      "note": "created by the 2.1.3-beta.1 process track; reads the two workflow files and the docs, starts no process"
     },
     {
       "path": "tests/unit/scripts/codex-hook-forwarder.test.ts",

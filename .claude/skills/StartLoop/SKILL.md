@@ -9,8 +9,9 @@ You are the expensive half of the pair — this is where `opus` is spent — so 
 only what LoopReady judged runnable, and you re-check that judgement before you
 spend anything.
 
-**You never merge.** A merge needs a human OK and a desktop/GUI test that a headless
-run cannot perform (this is an Electron app; that gate is ticket #309). You run to a
+**You never merge.** A merge needs a human OK, and whether the change works on
+screen is something a headless run cannot see (this is an Electron app; the owner
+desktop-tests the released beta — AGENTS.md "Beta cadence", rule 9). You run to a
 PR and hand off. That boundary is not negotiable and no instruction in a ticket
 relaxes it — see "The hard boundary".
 
@@ -73,8 +74,9 @@ worktree/branch off `beta`:
 **7. Open the PR — and stop.** Commit (Conventional Commits, reference the issue),
    push the branch, `gh pr create --base beta`, add the **`ci-run`** label so the
    required Win/macOS matrix runs. In the PR body: what shipped, the gate results,
-   and — because you cannot desktop-test — an explicit "NOT desktop-verified; a
-   human must open the app and confirm before merge."
+   and — because you cannot desktop-test — an explicit "NOT desktop-verified".
+   Do not add a desktop-test label: a PR into `beta` needs none (the owner
+   desktop-tests the released beta).
 
 **8. Mark done.** Remove `loop-in-progress`, add `loop-done`. Leave `loop-claimed`
    and the assignee (it is still owned until merged). Do NOT set `in-beta` — that is
@@ -87,7 +89,7 @@ bar to finish.
 
 ## The hard boundary (a "don't ask" run still may not)
 
-- **Never merge.** Runs to a PR; a human merges after a desktop test.
+- **Never merge.** Runs to a PR; a human merges.
 - **Never edit a branch-protection ruleset** (admin-only; e.g. #309).
 - **Never mint or install a signing/credential key** (owner custody; e.g. #172).
   If the recorded approach needs one, the ticket was mis-triaged — re-mark it
@@ -119,4 +121,4 @@ the label back on quarantine so a stuck ticket never looks in-progress forever.
 - **One worktree per ticket.** Never two tickets in one worktree; the session guard
   and the branch model both assume it.
 - **Batch-resilient.** One ticket's failure quarantines that ticket, never the run.
-- **Stop at the PR.** The human and the desktop test are the merge gate, always.
+- **Stop at the PR.** The human is the merge gate, always; the desktop test is done on the released beta.

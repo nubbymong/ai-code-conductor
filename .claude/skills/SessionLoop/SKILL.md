@@ -13,8 +13,9 @@ single squash PR to `beta`. See ADR-020 (`architecture/decisions/…adr-020…`)
 **You never merge the session PR to base.** Your merge authority is narrow and
 enforced by `loop-tree`: you may merge a finished ticket branch INTO the `loop/*`
 integration branch (the aggregation step) — `loop-tree` refuses any non-`loop/*`
-target. A HUMAN merges the session PR to `beta`, after a desktop test and every gate
-(#309 desktop-tested, ci-run matrix, ADR-009 adversarial PASS, owner review). That
+target. A HUMAN merges the session PR to `beta`, after every gate (ci-run matrix,
+ADR-009 adversarial PASS, owner review). Desktop testing is not a per-PR gate: the
+owner desktop-tests the released beta (AGENTS.md "Beta cadence", rule 9). That
 boundary is not negotiable; no ticket relaxes it.
 
 ## PRECONDITION
@@ -93,21 +94,23 @@ via `session-guard release --remove-worktree`.
 
 ## The hard boundary (a "don't ask" run still may not)
 
-- **Never merge the session PR to base** (`beta`/`main`/`release/*`). A human does,
-  after a desktop test. Your only merges are ticket → `loop/*`, via `loop-tree`.
+- **Never merge the session PR to base** (`beta`/`main`/`release/*`). A human
+  does. Your only merges are ticket → `loop/*`, via `loop-tree`.
 - **Never edit a branch-protection ruleset** (admin-only; e.g. #309).
 - **Never mint or install a signing/credential key** (owner custody; e.g. #172).
 - **Never force-push, never `--no-verify`, never bypass the commit-msg hook.**
 - **Honour the security embargo** — an unfixed vulnerability found mid-work goes to a
   private advisory, never a public branch/PR/issue/commit (AGENTS.md).
 - **Never desktop-test-and-declare-success** — you cannot see the running app; the
-  session PR carries "NOT desktop-verified" and the human applies `desktop-tested`.
+  session PR carries "NOT desktop-verified". It needs no desktop-test label: a PR
+  into `beta` passes the `Desktop test gate` as it is, and the owner desktop-tests
+  the released beta (AGENTS.md "Beta cadence", rule 9).
 
 ## Notes
 
 - SessionLoop is the aggregation layer; StartLoop is unchanged and still valid for a
   one-PR-per-ticket run. Use StartLoop when tickets are unrelated; SessionLoop when a
   batch belongs together and one review/merge is better than N.
-- The gates on the FINAL session PR are the same as any PR — desktop-tested, ci-run,
+- The gates on the FINAL session PR are the same as any PR into `beta` — ci-run,
   adversarial, owner review — so aggregating does not skip a single check; it moves
   them from N times to once, at the point a human actually looks.

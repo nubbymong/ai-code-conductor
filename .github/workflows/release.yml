@@ -88,9 +88,56 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/release-gate.mjs --version ${{ steps.version.outputs.milestone }}
 
+  # ── Reuse green CI (beta only; ADR-028, rule 4) ──
+  # A beta release does not run the suite again when ci.yml already passed it
+  # on this exact tree. This job asks GitHub for a green ci.yml run in this
+  # repository, not from a fork, for a commit whose git tree equals this
+  # commit's, in which each Test job (Windows, macOS, Linux) is green and ends
+  # with the step ci.yml names after the tree it tested. Only then does it
+  # print reuse=true, and build-windows and build-linux skip their "Run tests"
+  # step; the run it reused is linked in this job's summary.
+  # scripts/ci/reuse-green-ci.mjs holds the rule; the script never fails.
+  #
+  # On any doubt or any API error the answer is reuse=false and the full suite
+  # runs as before. A stable (or dev) release always runs it: the script
+  # answers false off the beta channel without asking GitHub, and the two
+  # "Run tests" conditions check the channel again themselves.
+  #
+  # Never give this job an `if:`: a skipped job skips the jobs that need it.
+  # continue-on-error makes a failure here count as a pass for them, with no
+  # outputs, which they read as "run the suite". Read-only: contents and
+  # actions read. It holds no signing secret and feeds no signing, packaging,
+  # upload or publish step (tests/unit/scripts/ci-cadence.test.ts pins all of
+  # this).
+  ci-reuse:
+    name: Reuse green CI (beta only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      reuse: ${{ steps.find.outputs.reuse }}
+      run_id: ${{ steps.find.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Look for a green CI run on this exact tree
+        id: find
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ inputs.channel }}
+        run: node scripts/ci/reuse-green-ci.mjs
+
   # ── Build Windows installer ──
   build-windows:
-    needs: gate
+    needs: [gate, ci-reuse]
     # Pinned off windows-latest: the new vs2026 image breaks @electron/node-gyp
     # (no supported Visual Studio). Same pin as ci.yml — unpin together.
     runs-on: windows-2025
@@ -143,7 +190,11 @@ jobs:
       # gate0, so the phase comes from here, and the environment can only
       # raise it (tests/wp1/phase.ts; pinned by tests/wp1/traceability.test.ts).
       # A dry run, or a beta or dev release, leaves it to the manifest.
+      #
+      # Skipped only on a beta release whose tree ci.yml already passed (the
+      # `ci-reuse` job above); every other case runs it, a stable one always.
       - name: Run tests
+        if: ${{ !(inputs.channel == 'beta' && needs.ci-reuse.outputs.reuse == 'true') }}
         env:
           WP1_PHASE: ${{ inputs.channel == 'stable' && !inputs.dry_run && 'candidate' || '' }}
         run: npx vitest run
@@ -458,7 +509,7 @@ jobs:
   # in the run (visible to the maintainer), and release.js flags the missing
   # AppImage asset — but the release proceeds with the platforms that built.
   build-linux:
-    needs: gate
+    needs: [gate, ci-reuse]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -505,8 +556,10 @@ jobs:
       - name: Fetch the WP1 ledger's bound commit
         run: node scripts/wp1/fetch-ledger-commit.mjs
 
-      # The stable release's WP1 candidate check, as in build-windows.
+      # The stable release's WP1 candidate check, as in build-windows; skipped
+      # on the same condition (a beta release whose tree ci.yml already passed).
       - name: Run tests
+        if: ${{ !(inputs.channel == 'beta' && needs.ci-reuse.outputs.reuse == 'true') }}
         env:
           WP1_PHASE: ${{ inputs.channel == 'stable' && !inputs.dry_run && 'candidate' || '' }}
         run: npx vitest run

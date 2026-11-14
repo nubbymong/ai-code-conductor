@@ -90,6 +90,22 @@ We cut a dedicated RC branch for every release cycle so that `beta` stays open f
 
 For the versioning scheme, prerelease suffixes (`-beta.N`/`-rc.N`), update channels, and when a rebuild ships to users vs. requires a version bump, see [`docs/versioning.md`](docs/versioning.md).
 
+### Beta cadence (maintainers)
+
+A beta is meant to ship within 24 hours of its scope being approved. These are the owner's rules (2026-11-13 and 2026-11-14, [ADR-028](architecture/decisions/2026-11-14-adr-028-fast-beta-cadence.md)); `AGENTS.md` ("Beta cadence") carries the same list for agents.
+
+1. **Scope first.** The owner approves the scope of each beta before it is built. Each beta carries at least one architecture simplification and one process simplification.
+2. **One review round per beta, on a frozen head.** On security-sensitive paths the adversarial pass is that round, and its lenses count as the two reviews a change needs. A change that touches no security-sensitive path gets one independent review on the frozen head, by a reviewer who did not write it, covering both what was agreed and whether it is correct and tested, with the same shape and no repeat loop. The round is one pass, one fix batch, one confirmation. A fix made after the confirmation gets a narrow check of that fix diff only, never a new full pass. **Frozen head:** no more commits to the reviewed files once the review starts. **Narrow check:** one independent attacker, on the fix diff only (off the security paths: one independent reviewer); it does not re-read the rest of the change.
+3. **What gets fixed before the cut.** Majors, and anything the beta itself introduces. A minor finding in older code near the change gets a ticket in the private planning repo for the next beta.
+4. **The beta release reuses green CI for the same tree.** `release.yml`'s `Reuse green CI (beta only)` job looks for a green `ci.yml` run in this repository (not from a fork) for a commit with the same git tree, in which the Windows, macOS and Linux Test jobs each end with a green `Tested tree <hash>` step for that tree. A pull-request run counts only for a PR into `beta` or `main`: it tests the merge into its base, so only a protected base vouches for the `ci.yml` that ran. If it finds one, the release does not run the suite again and links the run in its summary. On any doubt or API error the full suite runs. A stable release always runs the suite.
+5. **The version bump rides in the last content PR of a beta** (the `package.json` version and the changelog entry). There is no separate version-bump PR.
+6. **CI runs only what a change touches.** A push to a PR cancels the run on the commit it replaced. Adding or removing a label does not run the tests again (only adding `ci-run` does). A PR that changes only documentation (Markdown, `docs/`, `CONTEXT.d/`, `architecture/`) skips the suite on Windows and macOS, and the required checks still report green; Linux always runs the whole suite.
+7. **No new release-evidence gate is added.**
+8. **Security paths keep the adversarial pass, and the owner still merges every PR.**
+9. **Desktop testing is at release level on beta and pre-release on stable, not per PR.** The owner desktop-tests the released beta build; that test is an input to the stable promotion. A PR into `beta` never needs a desktop-test label. See "Desktop-test gate" below.
+
+For the release to reuse CI (rule 4), the last content PR must be rebased on `beta`, carry `ci-run`, be green, and be the last merge before the cut: the squash commit then has exactly the tree CI tested. Otherwise the release runs the suite itself, as before.
+
 ### Issue lifecycle (beta vs. main)
 
 Because fixes merge to `beta` (in testing) long before they ship in a stable
@@ -207,32 +223,60 @@ node scripts/reconcile-issue-dispositions.js --dry-run
 ### Desktop-test gate (`desktop-tested` / `runtime-validated` / `skip-desktop-test`)
 
 Headless CI (typecheck, unit tests, build) can pass while the packaged app fails
-to run usefully on a real desktop — that has happened. So a PR does not merge on
-green CI alone: **the built app must actually be exercised**, and that fact is
-recorded as a label, enforced by the `Desktop test gate` check. There are two
-ways to satisfy it — a human pass or an automated one — plus the skip for
-changes with no runtime surface.
+to run usefully on a real desktop — that has happened. So **the built app must
+actually be exercised** before it reaches stable users. Where that happens was
+set by the owner on 2026-11-14 (Beta cadence, rule 9; ADR-028): **at release
+level on beta, and pre-release on stable — not per PR.**
 
-- **`desktop-tested`** — a **human** launched and exercised the packaged app on a
-  real desktop for this change. Apply it once you (or the tester) have actually
-  driven the feature in the running app, not just watched CI go green.
+- **A PR into `beta` (or a `release/*` line) needs no label.** Its
+  `Desktop test gate` check reports success and says that desktop testing
+  happens on the released beta. Do not add `desktop-tested`,
+  `runtime-validated` or `skip-desktop-test` to a beta PR, and do not wait for
+  one.
+- **The beta is desktop-tested as a released build.** The owner installs the
+  released beta and exercises it. That test is an input to the stable promotion.
+- **A PR into `main` (the stable promotion, `release/vX.Y.Z` → `main`) must
+  carry a label**, enforced by the `Desktop test gate` check. There are two ways
+  to satisfy it — a human pass or an automated one — plus the skip for a
+  promotion with no runtime surface.
+
+- **`desktop-tested`** — a **human** launched and exercised the released
+  beta/rc build on a real desktop. Apply it once you (or the tester) have actually
+  driven the release in the running app, not just watched CI go green.
 - **`runtime-validated`** — **automated** runtime validation passed: VM Playwright
   E2E and/or the live SSH statusline matrix. This is the automation route (so it
   no longer borrows `desktop-tested`), and it is strong enough to open the gate on
   its own — a separate human pass is then optional. See the Master Test Process
   (aicc_planning discussion #20) for what each automated pack covers.
-- **`skip-desktop-test`** — this PR needs no runtime test: docs-, deps-, CI- or
-  changelog-only changes with no runtime surface. Apply it instead of the two
-  above for those.
+- **`skip-desktop-test`** — this PR into `main` needs no runtime test: docs-,
+  deps-, CI- or changelog-only changes with no runtime surface. Apply it instead
+  of the two above for those.
 
-The `Desktop test gate` check **fails until one of these labels is present**, so
-it is the inverse of `ci-run` (which is opt-in — apply it to *run* the matrix;
-this one must be present to *allow* the merge). Removing the label turns the check
-red again.
+On a PR into `main` the `Desktop test gate` check **fails until one of these
+labels is present**, so it is the inverse of `ci-run` (which is opt-in — apply it
+to *run* the matrix; this one must be present to *allow* the merge). Removing the
+label turns the check red again.
 
-Maintainer note: the check only becomes a hard merge block once it is marked a
-**required status check** in branch protection for `beta` (and `main`) — that step
-is admin-only. Until then the check is advisory (a red X, not a stop).
+The check reads the pull request as it is now (its base branch and its labels)
+from GitHub, not from the event that started the run. So re-running an old run
+gives today's answer: a run that began while the PR was into `beta`, or still
+carried `desktop-tested`, goes red when it is run again after the PR was
+retargeted to `main` or lost the label. If GitHub cannot be read the check fails
+and says so; re-run it.
+
+The check is decided again whenever what it reads changes: on a label change, and
+when the PR's base branch changes. A PR that passed on a `beta` base and is then
+retargeted to `main` goes red until it carries a label. Neither event starts the
+test matrix again for a label or a title/description edit: the test results
+already reported for the commit stand. To run the tests again without a push,
+remove `ci-run` and add it back.
+
+Maintainer note: the three branch rulesets require `Test (windows-2025)` and
+`Test (macos-latest)` only (read 2026-11-14). `Desktop test gate` is not in
+them, so on a PR into `main` a red gate is a red X the owner reads before
+merging, not a hard block. Making it a required status check for `main` is an
+admin-only ruleset change, and safe to make: the job runs on every PR event and
+is never skipped.
 
 ## Commit Messages
 

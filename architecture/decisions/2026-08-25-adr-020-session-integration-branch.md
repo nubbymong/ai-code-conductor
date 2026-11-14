@@ -1,6 +1,6 @@
 # ADR-020: Session-integration branch — aggregate many tickets into one PR
 
-- Status: Accepted
+- Status: Accepted. Amended by ADR-028 (2026-11-14, rule 9): desktop testing is at release level on beta, so `desktop-tested` is no longer one of the gates a session PR into `beta` clears; it is asked for only on the stable promotion PR into `main`.
 - Date: 2026-08-25
 
 ## Context

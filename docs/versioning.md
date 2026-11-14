@@ -65,7 +65,9 @@ leaving the hand-written notes untouched — a *rolling re-release*.
 ## When to bump
 
 - Each new beta you want the updater to **deliver**: bump the prerelease number
-  (`2.1.0-beta.1` → `2.1.0-beta.2`).
+  (`2.1.0-beta.1` → `2.1.0-beta.2`). The bump rides in the last content PR of
+  that beta, with its changelog entry; there is no separate version-bump PR
+  (`AGENTS.md` "Beta cadence", ADR-028).
 - Stabilizing a release: move to `-rc.N` on a `release/vX.Y.Z` branch.
 - Shipping stable: drop the suffix (`2.1.0`) and release from `main` with
   `channel=stable`.
@@ -181,14 +183,27 @@ the comparison and the app's shared one to identical verdicts.
 ## End-to-end flow
 
 1. Bump `package.json` `version` and add the matching `src/renderer/changelog.ts`
-   entry.
+   entry. For a beta both go into the last content PR of that beta (`AGENTS.md`,
+   "Beta cadence", rule 5): there is no separate version-bump PR or commit.
 2. `npm run changelog` to refresh `CHANGELOG.md`; commit both (CI gate:
    `Changelog in sync`).
-3. Release — `scripts/release.js` (local bump + dispatch) or
-   `gh workflow run release.yml --ref <branch> -f channel=<...>`.
+3. Release. For a beta, once the owner has merged that PR:
+   `gh workflow run release.yml --ref beta -f channel=beta -f skip_vt=false`.
+   The version is already bumped, so `scripts/release.js` is not needed here.
+   If it is used anyway, never without `--no-bump`
+   (`npm run release -- --beta --no-bump`, from a clean checkout of `beta`):
+   on its own the script increments the version a second time and commits
+   `build(release): <version>`, which is the separate bump commit rule 5
+   removes, and a commit whose tree CI never tested, so the release cannot
+   reuse green CI (step 4). For a release line or a stable promotion:
+   `gh workflow run release.yml --ref <branch> -f channel=<...>`, as
+   `AGENTS.md` ("Release Process") gives it.
 4. `release.yml` tags `v<version>` at the exact built commit (`--target`, so the
    updater orders it correctly), builds Windows + macOS + Linux, and publishes the
-   GitHub release with notes generated from `changelog.ts`.
+   GitHub release with notes generated from `changelog.ts`. On `channel=beta` it
+   does not run the test suite again when `ci.yml` already passed it on the same
+   git tree (the `Reuse green CI (beta only)` job names the run it reused); in
+   every other case, and always on `channel=stable`, it runs the suite itself.
 5. The updater compares the published tag against the installed version for the
    user's channel and offers it only if it outranks what's installed.
 

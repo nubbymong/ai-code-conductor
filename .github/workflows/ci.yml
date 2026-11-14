@@ -2,10 +2,14 @@ name: CI
 
 on:
   pull_request:
-    # `unlabeled` added alongside `labeled` (#309): the desktop-test gate below
-    # keys on a label, so removing `desktop-tested` must re-run the check and
-    # turn it red again, not leave a stale green.
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # `labeled` asks for the tests (`ci-run`). `labeled`, `unlabeled` and
+    # `edited` are here for the Desktop test gate below, which reads the PR's
+    # labels AND its base branch: removing `desktop-tested` from a PR into
+    # main must turn the check red again (#309), and a PR that passed on a
+    # `beta` base and is then retargeted to `main` must be decided again
+    # (`edited` is the only event a base change sends). Neither restarts the
+    # tests: see the `concurrency` block and the `test` job's condition.
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
     branches: [main, beta, 'release/**']
   push:
     branches: [main]
@@ -30,6 +34,37 @@ on:
 permissions:
   contents: read
 
+# A newer run supersedes the older one (ADR-028, rule 6), where that is safe:
+#   - The code events of one PR share a group that cancels: opened,
+#     synchronize, reopened, `ci-run` being added (which asks for the tests),
+#     and the base branch being changed (which changes the merge under test).
+#     A push to the PR stops the run on the commit it replaced.
+#   - Every other label change, and every other edit (a title, a description),
+#     runs in a second group per PR, so it can never cancel the tests of the
+#     same PR. Those runs only re-decide the label and base checks (see the
+#     `test` job's condition).
+#   - A push (main is the only branch that pushes here) and a dispatch get a
+#     group of their own per run: never cancelled, never queued behind another.
+#   - So does a PR run that is started again by hand ("Re-run all jobs",
+#     `run_attempt` above 1). GitHub evaluates the group of a re-run from the
+#     event the run began with, so an old run of a PR would otherwise join that
+#     PR's code group and cancel the matrix running on its newest commit. The
+#     cost, accepted: a later push does not cancel a re-run in progress.
+# release.yml has no concurrency at all: a release is never cancelled.
+# tests/unit/scripts/ci-cadence.test.ts evaluates these two expressions against
+# each event.
+concurrency:
+  group: >-
+    ${{
+      (github.event_name != 'pull_request' || github.run_attempt != 1) && format('ci-run-{0}', github.run_id)
+      || (github.event.action == 'labeled' && github.event.label.name != 'ci-run'
+          || github.event.action == 'unlabeled'
+          || github.event.action == 'edited' && github.event.changes.base.ref.from == '')
+         && format('ci-pr-{0}-labels', github.event.pull_request.number)
+      || format('ci-pr-{0}', github.event.pull_request.number)
+    }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Fast, always-on guard (not gated on the `ci-run` label): CHANGELOG.md is
   # generated from src/renderer/changelog.ts, so it must never drift. The
@@ -45,56 +80,59 @@ jobs:
       - name: Verify CHANGELOG.md matches changelog.ts
         run: node scripts/gen-changelog.js --check
 
-  # Desktop-test merge gate (#309). Headless CI can pass while the packaged app
-  # fails to run usefully on a real desktop (it has), so "was the built app
-  # actually exercised?" is the real acceptance gate — and it should be enforced
-  # by the merge button, not left to a reviewer's memory or a PR-body note.
-  # Two ways to satisfy it (aicc_planning D#20, the Master Test Process):
-  #   - `desktop-tested`    a HUMAN opened and exercised the packaged app
-  #   - `runtime-validated` AUTOMATED runtime validation passed — VM Playwright
-  #                         e2e and/or the live SSH statusline matrix
-  #
-  # This is the INVERSE of the `ci-run` label below: `ci-run` is opt-in (present
-  # => run the matrix); this one is required-to-allow (the check FAILS unless the
-  # PR carries `desktop-tested`, `runtime-validated`, or `skip-desktop-test`).
-  # Only PRs are gated; direct pushes to `main` have no label and are exempt by
-  # the event guard.
+  # Desktop test gate (#309; ADR-028, rule 9). Headless CI can pass while the
+  # packaged app fails to run usefully on a real desktop (it has), so "was the
+  # built app actually exercised?" is a real acceptance gate. The owner set its
+  # level on 2026-11-14: desktop testing is at RELEASE level on beta and
+  # PRE-RELEASE on stable, not per PR.
+  #   - A PR into `beta` or a `release/*` line needs no label: this check
+  #     reports success and says so. The owner desktop-tests the RELEASED beta
+  #     build, and that test is an input to the stable promotion.
+  #   - A PR into `main` (the stable promotion, release/vX.Y.Z -> main) must
+  #     carry one of the labels, as every PR did before:
+  #       `desktop-tested`    a HUMAN opened and exercised the packaged app
+  #       `runtime-validated` AUTOMATED runtime validation passed (VM Playwright
+  #                           e2e and/or the live SSH statusline matrix)
+  #       `skip-desktop-test` nothing to exercise (docs/deps/CI/changelog-only)
+  # Direct pushes to `main` have no PR and are exempt by the event guard.
   #
   # The job's only `if` is event-scoped (`pull_request`), and that is the whole
-  # design: on every PR it ALWAYS runs, then decides pass/fail from the labels
-  # INTERNALLY. Do not "optimise" this into a label-based `if:`. A required check
-  # that is *skipped* never reports, so GitHub treats it as pending and the PR
-  # blocks forever — a label-gated skip would deadlock exactly the PRs it was
-  # meant to wave through. Decide inside the job; never skip it.
+  # design: on every PR event it ALWAYS runs, then decides INSIDE, in
+  # scripts/ci/desktop-gate.mjs. Never turn the base branch or the labels into
+  # a job-level or step-level `if:`: a job skipped by its condition reports as
+  # passed, so a skip would wave a PR into main through.
   #
-  # That matters once @nubbymong marks this a required status check in branch
-  # protection — the step that turns it from an advisory red X into an actual
-  # merge block (admin-only, tracked in #309).
+  # The script reads the pull request AS IT IS NOW from GitHub (its base branch
+  # and its labels). The event gives it the PR's number and nothing else, on
+  # purpose: a run started again by hand replays the event it began with, so a
+  # run that began on a `beta` base, or while `desktop-tested` was on the PR,
+  # would otherwise report green again after the PR was retargeted to `main`
+  # or lost the label. A pull request that cannot be read decides nothing: the
+  # check fails and says to re-run it.
+  #
+  # The decision is redone whenever its inputs change: `labeled` / `unlabeled`
+  # for the labels, `edited` for the base branch, so a PR cannot pass on a
+  # `beta` base and keep that green after being retargeted to `main`.
+  #
+  # The job only reads: the checkout (for the script) and the pull request.
+  # Keep the name exactly `Desktop test gate`: checks are known by name.
   desktop-gate:
     name: Desktop test gate
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - name: Require desktop-tested / runtime-validated (or skip-desktop-test) label
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Decide from the PR as it is now - a label is asked only on a PR into main
         env:
-          HAS_TESTED: ${{ contains(github.event.pull_request.labels.*.name, 'desktop-tested') }}
-          HAS_RUNTIME: ${{ contains(github.event.pull_request.labels.*.name, 'runtime-validated') }}
-          HAS_SKIP: ${{ contains(github.event.pull_request.labels.*.name, 'skip-desktop-test') }}
-        run: |
-          if [ "$HAS_TESTED" = "true" ]; then
-            echo "PR carries 'desktop-tested' — a human exercised the packaged app on a real desktop. Gate open."
-            exit 0
-          fi
-          if [ "$HAS_RUNTIME" = "true" ]; then
-            echo "PR carries 'runtime-validated' — automated runtime validation passed (VM Playwright e2e and/or the live SSH statusline matrix). Gate open."
-            exit 0
-          fi
-          if [ "$HAS_SKIP" = "true" ]; then
-            echo "PR carries 'skip-desktop-test' — no runtime test required (docs/deps/CI/changelog-only). Gate open."
-            exit 0
-          fi
-          echo "::error::Desktop-test merge gate: this PR must carry 'desktop-tested' (a human launched and exercised the packaged app), 'runtime-validated' (automated VM e2e and/or the live SSH statusline matrix passed), or 'skip-desktop-test' (docs/deps/CI/changelog-only) before it can merge. See CONTRIBUTING.md > Desktop-test gate."
-          exit 1
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/ci/desktop-gate.mjs
 
   test:
     # Gate the test matrix on a `ci-run` label for PRs.
@@ -104,9 +142,29 @@ jobs:
     # commits. Apply the `ci-run` label when the PR is ready for a real CI gate
     # (e.g. before requesting human review, before merge, or after a fix-loop).
     # Direct pushes to `main` always run CI as the final pre-merge guard.
+    #
+    # A label change does not restart the tests (ADR-028, rule 6): on a
+    # `labeled` event the matrix runs only when the label added is `ci-run`
+    # itself, and on an `unlabeled` event never. Nor does an edit of the PR's
+    # title or description: on an `edited` event the matrix runs only when the
+    # base branch changed, because the merge under test is then another one.
+    # The results already reported for the commit stand. (The cheap always-on
+    # jobs, `changelog` and `ssh-smoke`, do run again on a label change or an
+    # edit, about a minute in all: a job skipped by its condition reports as
+    # passed under its own name, which would sit over an earlier red result
+    # for the same commit.)
+    #
+    # `Test (windows-2025)` and `Test (macos-latest)` are REQUIRED checks in
+    # the branch rulesets. Never gate this job on the changed paths, here or
+    # with a workflow-level path filter: a job skipped as a whole never reports
+    # those names and the PR waits forever. The paths are read INSIDE the job
+    # ("Decide the scope" below), which then ends green.
     if: |
       github.event_name == 'push' ||
-      contains(github.event.pull_request.labels.*.name, 'ci-run')
+      (contains(github.event.pull_request.labels.*.name, 'ci-run') &&
+       github.event.action != 'unlabeled' &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+       (github.event.action != 'edited' || github.event.changes.base.ref.from != ''))
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Linux joined the matrix with P4.8 (OD20 D5) and was non-blocking until
@@ -125,24 +183,47 @@ jobs:
         os: [windows-2025, macos-latest, ubuntu-latest]
 
     steps:
+      # Depth 2: on a PR this is the merge commit and its parents, so the next
+      # step can read what the PR changes against its base.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      # CI runs only what a change touches (ADR-028, rule 6), the safe minimum:
+      # a PR that changes ONLY documentation (Markdown, docs/, CONTEXT.d/,
+      # architecture/) skips the suite on Windows and macOS. Linux always runs
+      # it, because some tests read the Markdown they guard. The job itself
+      # still runs and ends green, so the required checks report.
+      #
+      # EVERY step below carries `steps.scope.outputs.suite != 'false'`: only
+      # the literal 'false' skips, so an output that was never written runs the
+      # suite (scripts/ci/change-scope.mjs; the test file named above checks
+      # each step). A new step needs the same condition.
+      - name: Decide the scope
+        id: scope
+        run: node scripts/ci/change-scope.mjs
 
       - uses: actions/setup-node@v7
+        if: steps.scope.outputs.suite != 'false'
         with:
           node-version: '20'
           cache: 'npm'
 
       - uses: actions/setup-python@v7
+        if: steps.scope.outputs.suite != 'false'
         with:
           python-version: '3.12'
 
       - name: Install Python setuptools
+        if: steps.scope.outputs.suite != 'false'
         run: pip install setuptools
 
       - name: Install dependencies
+        if: steps.scope.outputs.suite != 'false'
         run: npm ci --ignore-scripts
 
       - name: Install Electron binary
+        if: steps.scope.outputs.suite != 'false'
         run: node node_modules/electron/install.js
 
       # Windows: no VS Build Tools / native rebuild. node-pty and better-sqlite3
@@ -154,7 +235,7 @@ jobs:
       # Build Tools install at random with "not valid XML". macOS/Linux still rebuild
       # from source below.
       - name: Rebuild native modules
-        if: runner.os != 'Windows'
+        if: steps.scope.outputs.suite != 'false' && runner.os != 'Windows'
         shell: bash
         run: |
           node -e "
@@ -167,21 +248,26 @@ jobs:
           "
 
       - name: Typecheck
+        if: steps.scope.outputs.suite != 'false'
         run: npm run typecheck
 
       # A WP1 gate test lists the tree of the commit its ledger is bound to, and
-      # the checkout above is depth 1: fetch exactly that one commit. Shared with
+      # the checkout above is shallow: fetch exactly that one commit. Shared with
       # release.yml's test steps (see the script's header).
       - name: Fetch the WP1 ledger's bound commit
+        if: steps.scope.outputs.suite != 'false'
         run: node scripts/wp1/fetch-ledger-commit.mjs
 
       - name: Unit tests
+        if: steps.scope.outputs.suite != 'false'
         run: npx vitest run
 
       - name: Unit tests (native / SQLite under Electron-as-Node)
+        if: steps.scope.outputs.suite != 'false'
         run: npm run test:unit:native
 
       - name: Build
+        if: steps.scope.outputs.suite != 'false'
         run: npm run build
 
       # Beta-testing artifact pipeline.
@@ -197,21 +283,21 @@ jobs:
       # image is pinned above, so a re-pin silently turns these steps off while
       # the job stays green.
       - name: Package Windows installer (release/* branches only)
-        if: runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         # --config.npmRebuild=false: the Windows rebuild step is skipped (prebuilds),
         # so tell electron-builder not to rebuild either; package the prebuilds as-is.
         run: npx electron-builder --win --config.npmRebuild=false
 
       - name: Verify native modules unpacked (release/* branches only)
-        if: runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         run: npm run verify:package
 
       - name: Package macOS DMG (release/* branches only)
-        if: runner.os == 'macOS' && startsWith(github.head_ref, 'release/')
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'macOS' && startsWith(github.head_ref, 'release/')
         run: npx electron-builder --mac
 
       - name: Upload Windows installer
-        if: runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         uses: actions/upload-artifact@v7
         with:
           name: windows-installer-${{ github.sha }}
@@ -220,13 +306,31 @@ jobs:
           retention-days: 14
 
       - name: Upload macOS DMG
-        if: runner.os == 'macOS' && startsWith(github.head_ref, 'release/')
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'macOS' && startsWith(github.head_ref, 'release/')
         uses: actions/upload-artifact@v7
         with:
           name: macos-dmg-${{ github.sha }}
           path: dist/*.dmg
           if-no-files-found: error
           retention-days: 14
+
+      # The record a beta release reads to reuse this run instead of running the
+      # suite again (ADR-028, rule 4; scripts/ci/reuse-green-ci.mjs): the LAST
+      # step of the job is named after the git tree the job checked out, and it
+      # is reached only when every step above passed. On a PR that tree is the
+      # merge of the branch into its base, so a branch behind its base records
+      # the tree it really tested, not the tree of its own head. Keep these two
+      # steps last, and never give them always() or continue-on-error.
+      - name: Read the tree under test
+        id: tree
+        if: steps.scope.outputs.suite != 'false'
+        shell: bash
+        run: echo "sha=$(git rev-parse --verify 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+
+      - name: Tested tree ${{ steps.tree.outputs.sha }}
+        if: steps.scope.outputs.suite != 'false'
+        shell: bash
+        run: echo "The suite, the native tests and the build passed on this tree."
 
   # Real-CLI conformance (P4.8; rows 59, 60; OD20 D7, WP1.71). Each supported
   # Codex CLI version is installed into a prefix of its own on each OS and run
@@ -244,12 +348,16 @@ jobs:
   # src/main/providers/codex/cli-contract.ts. The release candidate is a
   # dispatch input (PR runs have none), checked at release level. The job
   # holds no secrets and installs only the published @openai/codex package.
-  # Gated like the test matrix: the `ci-run` label on a PR, every push to main.
+  # Gated like the test matrix: the `ci-run` label on a PR, every push to main,
+  # and not restarted by another label change or an edit (see the `test` job).
   codex-conformance:
     if: |
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'ci-run')
+      (contains(github.event.pull_request.labels.*.name, 'ci-run') &&
+       github.event.action != 'unlabeled' &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+       (github.event.action != 'edited' || github.event.changes.base.ref.from != ''))
     name: Codex CLI ${{ matrix.cli }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -383,8 +491,8 @@ jobs:
   # connection / `-R` / argv layer (child_process ssh + the pure argv builder) —
   # NOT claude/tmux/statusline, which still need the manual matrix.
   #
-  # ALWAYS runs on PRs (not `ci-run`-gated) so it can be a REQUIRED status check
-  # without the skipped-required deadlock the desktop-gate comment describes.
+  # ALWAYS runs on PRs (not `ci-run`-gated), so it reports on every PR event
+  # and could be made a required status check.
   ssh-smoke:
     name: SSH multi-session smoke (#24)
     if: github.event_name == 'pull_request' || github.event_name == 'push'
