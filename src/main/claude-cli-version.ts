@@ -29,7 +29,7 @@ import path from 'node:path'
 import { logInfo, logWarn } from './debug-logger'
 import { CLAUDE_PROFILE_PROBE, claudeFromPowerShellProfile, probeClaudeCli, setClaudeProfileLookupAllowed, type ClaudeCliProbe } from './claude-cli-probe'
 import { windowsFolderAsRun, windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
-import { folderCannotBeReached } from './windows-programs'
+import { oneFileCannotBeRead } from './windows-programs'
 import { claudeVersionRunEnv } from './providers/review-support'
 import { warmFirstStart } from './first-start-warmup'
 import { timedStart } from './main-thread-ops'
@@ -140,19 +140,28 @@ export async function findClaudeOnWindowsPath(
   return null
 }
 
-/** `unreachable` only for a failure that says the FOLDER cannot be reached
- *  (the network, the host, a timeout: windows-programs.ts
- *  folderCannotBeReached), so the walk stops asking that folder. `none` for
- *  an answer that says the file is not there (or is not a file), and for any
- *  other failure, which may be about this one file: access to it is denied,
- *  or it is in use while an update replaces it. That passes the one file, and
- *  the walk still asks the folder for the next name (claude.cmd beside a
- *  claude.exe that cannot be read), as the launch's own walk does. */
+/** `none` for an answer that says the file is not there (or is not a file),
+ *  and for a failure known to be about this one file (windows-programs.ts
+ *  oneFileCannotBeRead): access to it is denied, or it is in use while an
+ *  update replaces it. That passes the one file, and the walk still asks the
+ *  folder for the next name (claude.cmd beside a claude.exe that cannot be
+ *  read), as the launch's own walk does. `unreachable` for anything else --
+ *  a share that did not answer, whatever reason its file test ends with --
+ *  so the walk stops asking that folder, and a share that is down is waited
+ *  for once, not once for each name.
+ *
+ *  A file that cannot be read so ranks exactly as one that is not there, in
+ *  a later folder too: with claude.bat alone in the first folder, and a
+ *  claude.exe that cannot be read beside a claude.cmd in the second, the
+ *  second folder's claude.cmd is the answer, as when that folder has no
+ *  claude.exe at all (windows-programs.ts findOnWindowsPath). */
 async function statRegularFile(p: string): Promise<'file' | 'none' | 'unreachable'> {
   try {
     return (await fs.promises.stat(p)).isFile() ? 'file' : 'none'
   } catch (e) {
-    return folderCannotBeReached(e) ? 'unreachable' : 'none'
+    const code = (e as NodeJS.ErrnoException)?.code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return 'none'
+    return oneFileCannotBeRead(e) ? 'none' : 'unreachable'
   }
 }
 

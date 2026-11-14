@@ -5,9 +5,10 @@
 // file beside it. The probe read any failed file test as "this folder cannot
 // be reached" and asked the folder nothing more, so claude.cmd beside a locked
 // claude.exe was passed, and a later folder's Claude Code was resolved or none
-// at all. Only a failure that says the folder itself cannot be reached (the
-// network, the host, a timeout) passes the folder now: the same rule as the
-// launch's own walk (windows-programs.ts folderCannotBeReached).
+// at all. A failure known to be about the one file (access denied, permission
+// denied, in use) passes that file only now, and every other failure still
+// passes the folder, so a share that is down is asked once: the same short
+// list as the launch's own walk (windows-programs.ts oneFileCannotBeRead).
 //
 // Host-safe: the file test is a stand-in for every path under the made-up
 // folder below, so no file of this computer is asked for there; any other
@@ -66,7 +67,7 @@ afterEach(() => {
 describe('the Claude Code version probe on Windows, with one program file that cannot be read', () => {
   // Mutation to prove this can fail: answer `unreachable` for every failed
   // file test (the folder is then passed, and the later folder's is resolved).
-  it.each(['EPERM', 'EACCES', 'EBUSY', 'UNKNOWN'])('claude.exe cannot be read (%s): the claude.cmd beside it is resolved, not a later folder\'s', async (code) => {
+  it.each(['EPERM', 'EACCES', 'EBUSY'])('claude.exe cannot be read (%s): the claude.cmd beside it is resolved, not a later folder\'s', async (code) => {
     disk.set(`${FIRST}\\claude.exe`, code)
     disk.set(`${FIRST}\\claude.cmd`, true)
     disk.set(`${LATER}\\claude.cmd`, true)
@@ -88,13 +89,48 @@ describe('the Claude Code version probe on Windows, with one program file that c
     expect(asked).toEqual([`${FIRST}\\claude.exe`, `${FIRST}\\claude.cmd`, `${FIRST}\\claude.bat`])
   })
 
-  // Mutation to prove this can fail: read no failure as the folder's (a share
-  // that is down is then waited for once for every name).
-  it.each(['EHOSTUNREACH', 'ETIMEDOUT', 'ENETUNREACH'])('a folder that cannot be reached (%s) is still passed once: it is asked for no other name', async (code) => {
+  // Mutation to prove this can fail: read no failure as the folder's, or only
+  // the ones that name the network (a share that is down, and says so with a
+  // reason Node.js has no code for, is then waited for once for every name).
+  it.each(['EHOSTUNREACH', 'ETIMEDOUT', 'ENETUNREACH', 'UNKNOWN', 'EIO', 'ELOOP', 'EISDIR'])('a folder whose file test fails for any other reason (%s) is still passed once: it is asked for no other name', async (code) => {
     disk.set(`${FIRST}\\claude.exe`, code)
     disk.set(`${FIRST}\\claude.cmd`, true)
     disk.set(`${LATER}\\claude.cmd`, true)
     expect(await resolveClaudeExecutable()).toBe(`${LATER}\\claude.cmd`)
     expect(asked.filter((p) => p.startsWith(FIRST))).toEqual([`${FIRST}\\claude.exe`])
+  })
+
+  it.each(['ENOENT', 'ENOTDIR'])('a file that is not there (%s) is "no such file", as before: its folder is still asked for the next name', async (code) => {
+    disk.set(`${FIRST}\\claude.exe`, code)
+    disk.set(`${FIRST}\\claude.cmd`, true)
+    disk.set(`${LATER}\\claude.cmd`, true)
+    expect(await resolveClaudeExecutable()).toBe(`${FIRST}\\claude.cmd`)
+  })
+
+  // A file that cannot be read ranks exactly as one that is not there, in a
+  // LATER folder too. The first folder holds claude.bat alone; the later one
+  // a claude.exe that cannot be read, and a claude.cmd. The probe resolves
+  // the later folder's claude.cmd: what it resolves when that folder has no
+  // claude.exe at all. (Passing the whole later folder, as before, resolved
+  // the first folder's claude.bat.)
+  it.each(['EPERM', 'EACCES', 'EBUSY'])('a claude.exe that cannot be read (%s) in a later folder ranks as one that is not there: the same answer, asking the same files', async (code) => {
+    disk.set(`${FIRST}\\claude.bat`, true)
+    disk.set(`${LATER}\\claude.cmd`, true)
+    expect(await resolveClaudeExecutable()).toBe(`${LATER}\\claude.cmd`)
+    const whenAbsent = [...asked]
+    asked = []
+    _resetClaudeCliVersionForTest()
+    disk.set(`${LATER}\\claude.exe`, code)
+    expect(await resolveClaudeExecutable()).toBe(`${LATER}\\claude.cmd`)
+    expect(asked).toEqual(whenAbsent)
+    expect(asked).toEqual([`${FIRST}\\claude.exe`, `${LATER}\\claude.exe`, `${FIRST}\\claude.cmd`, `${LATER}\\claude.cmd`])
+  })
+
+  it('a later folder that cannot be reached is passed, and the first folder\'s claude.bat is resolved, as it always was', async () => {
+    disk.set(`${FIRST}\\claude.bat`, true)
+    disk.set(`${LATER}\\claude.exe`, 'UNKNOWN')
+    disk.set(`${LATER}\\claude.cmd`, true)
+    expect(await resolveClaudeExecutable()).toBe(`${FIRST}\\claude.bat`)
+    expect(asked.filter((p) => p.startsWith(LATER))).toEqual([`${LATER}\\claude.exe`])
   })
 })

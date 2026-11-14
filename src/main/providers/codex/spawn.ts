@@ -19,7 +19,7 @@ import { logInfo, logWarn } from '../../debug-logger'
 import { isPlainScriptFile, isRealScriptFolder, deployFailedThisRun } from '../../script-deploy'
 import { checkDeployedScript, scriptFolderRefusal } from '../../script-folders'
 import { findOnPosixPath } from '../../login-shell'
-import { folderCannotBeReached } from '../../windows-programs'
+import { oneFileCannotBeRead } from '../../windows-programs'
 
 /** The two forms a Codex install puts on PATH on Windows: `listed`, the ones
  *  PATHEXT lists, in its order (Windows' own default when it is unset), as a
@@ -88,19 +88,23 @@ export interface CodexBinaryLookup {
   statFile?: (p: string) => CodexCandidateStat
 }
 
-/** `unreachable` only for a failure that says the FOLDER cannot be reached
- *  (the network, the host, a timeout: windows-programs.ts
- *  folderCannotBeReached), so the walk asks that folder nothing more (the
- *  precedent: claude-cli-version.ts findClaudeOnWindowsPath). `none` for an
- *  answer that says the file is not there (or is not a file), and for any
- *  other failure, which may be about this one file: access to it is denied,
- *  or it is in use while an update replaces it. That passes the one file, and
- *  the walk still asks the folder for its other form. */
+/** `none` for an answer that says the file is not there (or is not a file),
+ *  and for a failure known to be about this one file (windows-programs.ts
+ *  oneFileCannotBeRead): access to it is denied, or it is in use while an
+ *  update replaces it. That passes the one file, and the walk still asks the
+ *  folder for its other form. `unreachable` for anything else -- a drive
+ *  that did not answer, whatever reason its file test ends with -- so the
+ *  walk asks that folder nothing more (the precedent: claude-cli-version.ts
+ *  findClaudeOnWindowsPath). This walk is made in place, with no time limit
+ *  of its own: a folder that is down costs it one wait, not one for each
+ *  form. */
 const diskStat = (p: string): CodexCandidateStat => {
   try {
     return fs.statSync(p).isFile() ? 'file' : 'none'
   } catch (err) {
-    return folderCannotBeReached(err) ? 'unreachable' : 'none'
+    const code = (err as NodeJS.ErrnoException)?.code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return 'none'
+    return oneFileCannotBeRead(err) ? 'none' : 'unreachable'
   }
 }
 

@@ -39,21 +39,23 @@ import {
   powerShellProfileLookupCommand,
   POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS,
   POWERSHELL_PROFILE_EXIT_DRAIN_MS,
+  ONE_FILE_UNREADABLE_CODES,
+  oneFileCannotBeRead,
 } from '../../../src/main/windows-programs'
 import { windowsPathFolderIsFullyQualified } from '../../../src/main/providers/windows-path-names'
 
 /** A file test that answers from a set, recording every path it was asked.
  *  A file under an `unreachable` folder fails as a host that is down fails a
- *  file test (`downCode`). A file in `locked` fails for itself alone, with
- *  the code given there (null: an error with no code). */
-function files(present: string[], unreachable: string[] = [], locked: Record<string, string | null> = {}, downCode = 'EHOSTUNREACH') {
+ *  file test (`downCode`; null: an error with no code). A file in `locked`
+ *  fails for itself alone, with the code given there (null: no code). */
+function files(present: string[], unreachable: string[] = [], locked: Record<string, string | null> = {}, downCode: string | null = 'EHOSTUNREACH') {
   const asked: string[] = []
   const set = new Set(present.map((p) => p.toLowerCase()))
   const dead = unreachable.map((d) => d.toLowerCase())
   const held = new Map(Object.entries(locked).map(([p, code]) => [p.toLowerCase(), code]))
   const stat = (p: string): boolean => {
     asked.push(p)
-    if (dead.some((d) => p.toLowerCase().startsWith(d + '\\'))) throw Object.assign(new Error('unreachable'), { code: downCode })
+    if (dead.some((d) => p.toLowerCase().startsWith(d + '\\'))) throw Object.assign(new Error('unreachable'), downCode == null ? {} : { code: downCode })
     if (held.has(p.toLowerCase())) {
       const code = held.get(p.toLowerCase())
       throw Object.assign(new Error('this file cannot be read'), code == null ? {} : { code })
@@ -64,10 +66,19 @@ function files(present: string[], unreachable: string[] = [], locked: Record<str
   return { asked, stat, statAsync }
 }
 
-/** The reasons a file test fails with that say the folder cannot be reached. */
-const FOLDER_DOWN = ['ETIMEDOUT', 'ENETDOWN', 'ENETUNREACH', 'ENONET', 'EHOSTDOWN', 'EHOSTUNREACH', 'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ENOTCONN']
-/** Reasons that may be about the one file asked for (null: no code at all). */
-const ONE_FILE = ['EPERM', 'EACCES', 'EBUSY', 'ELOOP', 'EINVAL', 'EIO', 'UNKNOWN', null]
+/** The reasons known to be about the one file asked for, in a folder that
+ *  answered: the walk passes that file only (ONE_FILE_UNREADABLE_CODES). */
+const ONE_FILE = ['EPERM', 'EACCES', 'EBUSY']
+/** Every other reason passes the folder for the rest of the walk, as it
+ *  always did: the ones that say the folder cannot be reached; a reason
+ *  Windows names that Node.js has no code for (UNKNOWN: some reasons a share
+ *  is down arrive so); a read error; a broken link; a folder that is not one,
+ *  or a drive that cannot do what was asked; and an error with no code at all
+ *  (null). */
+const FOLDER_PASSED = [
+  'ETIMEDOUT', 'ENETDOWN', 'ENETUNREACH', 'ENONET', 'EHOSTDOWN', 'EHOSTUNREACH', 'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ENOTCONN',
+  'UNKNOWN', 'EIO', 'ELOOP', 'EINVAL', 'ENOTDIR', 'EISDIR', null,
+]
 
 describe('helper tools start from the system folder', () => {
   it('names the tool below <SystemRoot>\\System32 by its full path', () => {
@@ -147,13 +158,48 @@ describe('programs are found only in PATH\'s absolute folders', () => {
     expect(g.asked.filter((p) => p.startsWith('C:\\dead'))).toEqual(['C:\\dead\\x.exe'])
   })
 
-  it.each(FOLDER_DOWN)('a folder that cannot be reached (%s) is passed once, in both walks, and the later folder\'s program is named', async (code) => {
-    const f = files(['D:\\B\\claude.cmd'], ['\\\\dead\\share'], {}, code)
-    expect(findOnWindowsPath(['claude.exe', 'claude.cmd', 'claude.bat'], { PATH: '\\\\dead\\share;D:\\B' }, f.stat, 'name')).toBe('D:\\B\\claude.cmd')
-    expect(f.asked.filter((p) => p.startsWith('\\\\dead'))).toEqual(['\\\\dead\\share\\claude.exe'])
-    const g = files(['D:\\B\\claude.cmd'], ['\\\\dead\\share'], {}, code)
-    expect(await findOnWindowsPathAsync(['claude.exe', 'claude.cmd', 'claude.bat'], { PATH: '\\\\dead\\share;D:\\B' }, g.statAsync)).toBe('D:\\B\\claude.cmd')
-    expect(g.asked.filter((p) => p.startsWith('\\\\dead'))).toEqual(['\\\\dead\\share\\claude.exe'])
+  it('the reasons that pass one file only are a short list: access denied, permission denied, in use', () => {
+    expect([...ONE_FILE_UNREADABLE_CODES].sort()).toEqual(['EACCES', 'EBUSY', 'EPERM'])
+    for (const code of ONE_FILE) expect(oneFileCannotBeRead(Object.assign(new Error('x'), { code })), code).toBe(true)
+    for (const code of [...FOLDER_PASSED, 'ENOENT']) expect(oneFileCannotBeRead(Object.assign(new Error('x'), code == null ? {} : { code })), String(code)).toBe(false)
+    for (const notAnError of [null, undefined, 'EPERM', 5, { code: 5 }, { code: 'eperm' }]) expect(oneFileCannotBeRead(notAnError), JSON.stringify(notAnError)).toBe(false)
+  })
+
+  // A share that is down is waited for once in a walk, whatever reason its
+  // file test ends with: any reason that is not on the short list passes the
+  // folder for the rest of the walk. Each file asked under the dead folder
+  // stands for one such wait (tens of seconds, and for the walk in place they
+  // are the main process's). Mutation to prove this can fail: pass only the
+  // one file for a reason that is not on the list (the dead folder is then
+  // asked once for every name: three waits for Claude Code).
+  it.each(FOLDER_PASSED)('a folder whose file test fails for any other reason (%s) is passed once, in both walks and both orders, and the later folder\'s program is named with no further wait', async (code) => {
+    const NAMES = ['claude.exe', 'claude.cmd', 'claude.bat']
+    const env = { PATH: '\\\\dead\\share;D:\\B' }
+    const f = files(['D:\\B\\claude.bat'], ['\\\\dead\\share'], {}, code)
+    expect(findOnWindowsPath(NAMES, env, f.stat, 'name')).toBe('D:\\B\\claude.bat')
+    expect(f.asked).toEqual(['\\\\dead\\share\\claude.exe', 'D:\\B\\claude.exe', 'D:\\B\\claude.cmd', 'D:\\B\\claude.bat'])
+    const inFolderOrder = files(['D:\\B\\claude.bat'], ['\\\\dead\\share'], {}, code)
+    expect(findOnWindowsPath(NAMES, env, inFolderOrder.stat)).toBe('D:\\B\\claude.bat')
+    expect(inFolderOrder.asked.filter((p) => p.startsWith('\\\\dead'))).toEqual(['\\\\dead\\share\\claude.exe'])
+    const g = files(['D:\\B\\claude.bat'], ['\\\\dead\\share'], {}, code)
+    expect(await findOnWindowsPathAsync(NAMES, env, g.statAsync, 'name')).toBe('D:\\B\\claude.bat')
+    expect(g.asked).toEqual(['\\\\dead\\share\\claude.exe', 'D:\\B\\claude.exe', 'D:\\B\\claude.cmd', 'D:\\B\\claude.bat'])
+    const h = files(['D:\\B\\claude.bat'], ['\\\\dead\\share'], {}, code)
+    expect(await findOnWindowsPathAsync(NAMES, env, h.statAsync)).toBe('D:\\B\\claude.bat')
+    expect(h.asked.filter((p) => p.startsWith('\\\\dead'))).toEqual(['\\\\dead\\share\\claude.exe'])
+  })
+
+  // The same reasons on ONE file of a folder that otherwise answers: the walk
+  // cannot tell that from a folder that is down, so the folder is passed all
+  // the same, as it always was. Only the short list keeps the folder asked.
+  it.each(FOLDER_PASSED)('one file fails for a reason that is not on the short list (%s): its folder is passed for the rest of the walk, and a later folder\'s program is named', async (code) => {
+    const NAMES = ['claude.exe', 'claude.cmd', 'claude.bat']
+    const f = files(['C:\\A\\claude.cmd', 'D:\\B\\claude.cmd'], [], { 'C:\\A\\claude.exe': code })
+    expect(findOnWindowsPath(NAMES, { PATH: 'C:\\A;D:\\B' }, f.stat, 'name')).toBe('D:\\B\\claude.cmd')
+    expect(f.asked).toEqual(['C:\\A\\claude.exe', 'D:\\B\\claude.exe', 'D:\\B\\claude.cmd'])
+    const g = files(['C:\\A\\claude.cmd', 'D:\\B\\claude.cmd'], [], { 'C:\\A\\claude.exe': code })
+    expect(await findOnWindowsPathAsync(NAMES, { PATH: 'C:\\A;D:\\B' }, g.statAsync, 'name')).toBe('D:\\B\\claude.cmd')
+    expect(g.asked).toEqual(['C:\\A\\claude.exe', 'D:\\B\\claude.exe', 'D:\\B\\claude.cmd'])
   })
 
   // One program file that cannot be read (access denied, in use while it is
@@ -163,6 +209,28 @@ describe('programs are found only in PATH\'s absolute folders', () => {
   describe.each(ONE_FILE)('one file in a folder cannot be read (%s)', (code) => {
     const LOCKED = { 'C:\\A\\claude.exe': code }
     const NAMES = ['claude.exe', 'claude.cmd', 'claude.bat']
+
+    // A file that cannot be read ranks exactly as one that is not there, in a
+    // LATER folder too. With claude.bat alone in the first folder, and a
+    // claude.exe that cannot be read beside a claude.cmd in the second, the
+    // walk in name order answers the second folder's claude.cmd: the answer
+    // it gives when that folder has no claude.exe at all. (Passing the whole
+    // second folder, as before, answered the first folder's claude.bat.)
+    it('in a later folder it ranks exactly as a file that is not there: the same answer, asking the same files (name order)', async () => {
+      const env = { PATH: 'C:\\A;D:\\B' }
+      const there = ['C:\\A\\claude.bat', 'D:\\B\\claude.cmd']
+      const unreadable = files(there, [], { 'D:\\B\\claude.exe': code })
+      const absent = files(there)
+      expect(findOnWindowsPath(NAMES, env, unreadable.stat, 'name')).toBe('D:\\B\\claude.cmd')
+      expect(findOnWindowsPath(NAMES, env, absent.stat, 'name')).toBe('D:\\B\\claude.cmd')
+      expect(unreadable.asked).toEqual(absent.asked)
+      expect(unreadable.asked).toEqual(['C:\\A\\claude.exe', 'D:\\B\\claude.exe', 'C:\\A\\claude.cmd', 'D:\\B\\claude.cmd'])
+      const unreadableAsync = files(there, [], { 'D:\\B\\claude.exe': code })
+      expect(await findOnWindowsPathAsync(NAMES, env, unreadableAsync.statAsync, 'name')).toBe('D:\\B\\claude.cmd')
+      expect(unreadableAsync.asked).toEqual(absent.asked)
+      // In folder order the first folder's claude.bat is the answer either way.
+      expect(findOnWindowsPath(NAMES, env, files(there, [], { 'D:\\B\\claude.exe': code }).stat)).toBe('C:\\A\\claude.bat')
+    })
 
     it('the file beside it is still found, ahead of a later folder\'s (the launch\'s order)', () => {
       const f = files(['C:\\A\\claude.cmd', 'D:\\B\\claude.cmd'], [], LOCKED)

@@ -198,9 +198,11 @@ describe('the protections the lookup keeps', () => {
 
 // The lookup's own file test (no stand-in passed in). One program file that
 // cannot be read (access to it is denied, or it is in use while an update
-// replaces it) says nothing about the file beside it: only a failure that
-// says the folder itself cannot be reached passes the folder, the same rule
-// as the Claude walk (windows-programs.ts folderCannotBeReached).
+// replaces it) says nothing about the file beside it: a failure known to be
+// about the one file passes that file only. Every other failure still passes
+// the folder, so a share that is down is asked once in a lookup, whatever
+// reason its file test ends with. The same short list as the Claude walk
+// (windows-programs.ts oneFileCannotBeRead).
 describe('one program file that cannot be read does not hide the one beside it', () => {
   const FIRST = `${madeUp.root}first`
   const LATER = `${madeUp.root}later`
@@ -213,7 +215,7 @@ describe('one program file that cannot be read does not hide the one beside it',
 
   // Mutation to prove this can fail: answer `unreachable` for every failed
   // file test (the folder is then passed, and the later folder's is found).
-  it.each(['EPERM', 'EACCES', 'EBUSY', 'UNKNOWN'])('[host] the .exe cannot be read (%s): the .cmd beside it is found, not a later folder\'s .exe', (code) => {
+  it.each(['EPERM', 'EACCES', 'EBUSY'])('[host] the .exe cannot be read (%s): the .cmd beside it is found, not a later folder\'s .exe', (code) => {
     madeUp.files.set(`${FIRST}\\codex.exe`, code).set(`${FIRST}\\codex.cmd`, true).set(`${LATER}\\codex.exe`, true)
     expect(lookUp()?.cmd).toBe(`${FIRST}\\codex.cmd`)
     expect(madeUp.asked).toEqual([`${FIRST}\\codex.exe`, `${FIRST}\\codex.cmd`])
@@ -229,11 +231,26 @@ describe('one program file that cannot be read does not hide the one beside it',
     expect(lookUp(FIRST)).toBeNull()
   })
 
-  // Mutation to prove this can fail: read no failure as the folder's (a share
-  // that is down is then waited for once for every form).
-  it.each(['EHOSTUNREACH', 'ETIMEDOUT', 'ENETUNREACH'])('[host] a folder that cannot be reached (%s) is still passed once: it is asked for no other form', (code) => {
+  // This lookup runs in place, on the main thread, with no time limit of its
+  // own: each file asked in a folder that is down is one wait of tens of
+  // seconds. Mutation to prove this can fail: read no failure as the folder's,
+  // or only the ones that name the network (a share that is down, and says so
+  // with a reason Node.js has no code for, is then waited for once for every
+  // form).
+  it.each(['EHOSTUNREACH', 'ETIMEDOUT', 'ENETUNREACH', 'UNKNOWN', 'EIO', 'ELOOP', 'EISDIR'])('[host] a folder whose file test fails for any other reason (%s) is still passed once: it is asked for no other form', (code) => {
     madeUp.files.set(`${FIRST}\\codex.exe`, code).set(`${FIRST}\\codex.cmd`, true).set(`${LATER}\\codex.exe`, true)
     expect(lookUp()?.cmd).toBe(`${LATER}\\codex.exe`)
     expect(madeUp.asked.filter((p) => p.startsWith(FIRST))).toEqual([`${FIRST}\\codex.exe`])
+  })
+
+  it('[host] such a folder is not asked again in the second pass either, for a form PATHEXT does not list', () => {
+    madeUp.files.set(`${FIRST}\\codex.exe`, 'UNKNOWN').set(`${FIRST}\\codex.cmd`, true).set(`${LATER}\\codex.cmd`, true)
+    expect(resolveCodexBinary({ platform: 'win32', env: { PATH: `${FIRST};${LATER}`, PATHEXT: '.COM;.EXE' } })?.cmd).toBe(`${LATER}\\codex.cmd`)
+    expect(madeUp.asked.filter((p) => p.startsWith(FIRST))).toEqual([`${FIRST}\\codex.exe`])
+  })
+
+  it.each(['ENOENT', 'ENOTDIR'])('[host] a file that is not there (%s) is "no such file", as before: its folder is still asked for the other form', (code) => {
+    madeUp.files.set(`${FIRST}\\codex.exe`, code).set(`${FIRST}\\codex.cmd`, true).set(`${LATER}\\codex.exe`, true)
+    expect(lookUp()?.cmd).toBe(`${FIRST}\\codex.cmd`)
   })
 })
