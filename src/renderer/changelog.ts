@@ -21,6 +21,16 @@ export interface ChangelogEntry {
 // a backtick in a comment opens a phantom string and the parse fails.
 export const changelog: ChangelogEntry[] = [
   {
+    version: '2.1.3-beta.2',
+    date: '2026-11-15',
+    highlights: 'A small steadier release. The Services panel\'s hooks counters keep moving after you turn hooks off and on, and an older Claude model used through Amazon Bedrock or Google Vertex is named and priced as itself.',
+    changes: [
+      { type: 'fix', description: 'After you turn hooks off and then on again in Settings, the hooks counters on the Services panel move again. Before, they could stay still until the app restarted.' },
+      { type: 'fix', description: 'When the hooks service restarts, a late message from the one it replaced can no longer stop the new one or briefly show its old state on the Services panel.' },
+      { type: 'fix', description: 'An older Claude Opus, Sonnet or Haiku model used through Amazon Bedrock or Google Vertex is now named and priced as itself in Usage and Tokenomics. Before, it could be counted as the newest model of its family.' },
+    ],
+  },
+  {
     version: '2.1.3-beta.1',
     date: '2026-11-15',
     highlights: 'A steadier release. Windows finds Claude Code at start-up without you pressing Check again, a failed read no longer wipes your accounts, turning hooks off now keeps them off, and Sentinel says plainly when its analysis account is signed out. The app also learns about new models without waiting for an update, and Fable 5.2 is in the model picker.',
