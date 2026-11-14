@@ -94,7 +94,7 @@ import type { ProjectGateResult } from '../shared/providers'
 import { captureClaudeAccount, clearClaudeAccount, getAccountIdentity, pushAccountIdentity, startWatchingAccountIdentity, stopWatchingAccountIdentity, getWatchedProfileId } from './claude-account-identity'
 import { acquireProfileConsumer, pendingProfileRefresh } from './profile-consumers'
 import { providerLaunchRefusal } from './provider-launch-gate'
-import { updateSessionMeta, clearSessionMeta, markPtySessionAlive, markPtySessionGone } from './session-registry'
+import { updateSessionMeta, clearSessionMeta, markPtySessionAlive, markPtySessionGone, isPtySessionLive } from './session-registry'
 import { readConfig, getConfigDir } from './config-manager'
 import { getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
 import { getWatchdogManager, clampAnsiChunk } from './watchdog/watchdog-manager'
@@ -2112,6 +2112,23 @@ export function emitDeferredSpawnFailure(
   err: unknown,
 ): void {
   if (win.isDestroyed()) return
+  writeDeferredSpawnFailureReason(win, sessionId, err)
+  win.webContents.send(`pty:exit:${sessionId}`, -1)
+}
+
+/**
+ * The reason line of a DEFERRED spawn that failed, on its own: the red line
+ * emitDeferredSpawnFailure writes, without the exit that follows it there.
+ * For a failed launch whose session is ended by something else (the teardown
+ * of the process it replaced, or that process's own end still to come), so
+ * the terminal says why first and the window is still told of one exit.
+ */
+export function writeDeferredSpawnFailureReason(
+  win: Pick<BrowserWindow, 'isDestroyed'> & { webContents: Pick<BrowserWindow['webContents'], 'send'> },
+  sessionId: string,
+  err: unknown,
+): void {
+  if (win.isDestroyed()) return
   // CONTROL CHARACTERS OUT. On the refusal path the text is this app's own; on
   // the deferred path `err` is whatever the spawn threw, and a node-pty error
   // embeds argv and cwd -- so a directory name containing ESC would write raw
@@ -2136,7 +2153,6 @@ export function emitDeferredSpawnFailure(
   const why = stripSpoofableText(raw, 500)
   // Red, and bracketed so it cannot be mistaken for program output.
   win.webContents.send(`pty:data:${sessionId}`, `\r\n\x1b[31m${why}\x1b[0m\r\n`)
-  win.webContents.send(`pty:exit:${sessionId}`, -1)
 }
 
 /** What a Claude session naming an account that is no longer set up here is
@@ -2401,6 +2417,20 @@ function localLaunchOf(requested: unknown): LocalLaunch {
 }
 
 /**
+ * The provider `options` starts on this computer (localLaunchOf, which throws
+ * for one it refuses), or null for a launch that starts none here: an SSH
+ * launch, which is not asked and keeps its own branch, and a terminal tab.
+ *
+ * Asked by every caller of spawnPtyResolved BEFORE anything of the session is
+ * touched, and handed down: a launch that is refused here has taken no held
+ * launch's place, ended no running process and read or changed no
+ * conversation to resume.
+ */
+function localLaunchFor(options: SpawnPtyOptions | undefined): LocalLaunch | null {
+  return options?.ssh || options?.shellOnly ? null : localLaunchOf(options?.provider ?? 'claude')
+}
+
+/**
  * Hold a managed spawn until `pending` settles, then re-enter `spawnPty` with
  * the options `next` builds from the settled value.
  *
@@ -2448,9 +2478,22 @@ function deferSpawnUntil<T>(
   // leaves a live PTY that killPty ends later, exactly as a synchronous spawn
   // that throws there does, and the teardown would delete that PTY's entry and
   // report an exit the renderer would act on.
+  //
+  // Every way out says WHY in the terminal before the exit, and the window is
+  // told of ONE exit, whichever of three states the session is in:
+  //  - the process this launch replaced has ended and left its teardown to
+  //    the wait (a Restart, a Switch Account): the reason, then that
+  //    teardown, whose pty:exit is the session's;
+  //  - that process was ended and has still to report its end (the session
+  //    is recorded as live, with no PTY and no teardown handed over): the
+  //    reason now and no exit from here, because its end is the session's end
+  //    and sends the exit when it arrives;
+  //  - the session had no process (a first launch): the reason and the
+  //    start's own `pty:exit -1`.
   const failWithoutPty = (wait: { abandonedTeardown?: () => void } | undefined, err: unknown): void => {
     if (ptySessions.has(sessionId)) return
     if (wait?.abandonedTeardown) {
+      writeDeferredSpawnFailureReason(win, sessionId, err)
       wait.abandonedTeardown()
     } else if (!win.isDestroyed()) {
       // ADR-009 round 3 (Codex finding 3): a FRESH deferred spawn has no
@@ -2458,8 +2501,13 @@ function deferSpawnUntil<T>(
       // a notification the renderer is left with a blank terminal treated as
       // spawned (no error/exit handler fires). Tell it the start ended and
       // drop the canvas stamp the spawn handler wrote before spawnPty ran.
-      logError(`[profiles] session ${sessionId}: fresh deferred spawn failed with no PTY -- notifying the renderer the start ended`)
       forgetSessionForCanvas(sessionId)
+      if (isPtySessionLive(sessionId)) {
+        logError(`[profiles] session ${sessionId}: deferred spawn failed with no PTY while the process it replaced has still to report its end -- the reason is written now, and that end tells the renderer`)
+        writeDeferredSpawnFailureReason(win, sessionId, err)
+        return
+      }
+      logError(`[profiles] session ${sessionId}: fresh deferred spawn failed with no PTY -- notifying the renderer the start ended`)
       // Say WHY, in the terminal, before the exit code. On the synchronous
       // path a spawn failure rejects the pty:spawn invoke and the renderer
       // shows a readable error; here the invoke has already resolved, so
@@ -2506,7 +2554,8 @@ function deferSpawnUntil<T>(
       // session it replaced -- 697d3448 reopened by the second wait (found by
       // the test rework of 2026-09-22).
       const nextOptions = next(settled)
-      spawnPtyResolved(win, sessionId, carriedResume && !nextOptions.resume ? { ...nextOptions, resume: carriedResume } : nextOptions, wait?.abandonedTeardown)
+      const reentry = carriedResume && !nextOptions.resume ? { ...nextOptions, resume: carriedResume } : nextOptions
+      spawnPtyResolved(win, sessionId, reentry, wait?.abandonedTeardown, localLaunchFor(reentry))
     } catch (err) {
       logError(`[profiles] session ${sessionId}: the spawn after the wait failed: ${(err as Error)?.message ?? err}`)
       failWithoutPty(wait, err)
@@ -2587,7 +2636,7 @@ export function beginSpawnPreparation(win: BrowserWindow, sessionId: string, age
       refreshWaitSpawns.delete(sessionId)
       const teardown = entry.abandonedTeardown
       try {
-        spawnPtyResolved(win, sessionId, options, teardown)
+        spawnPtyResolved(win, sessionId, options, teardown, localLaunchFor(options))
       } catch (err) {
         if (teardown && !ptySessions.has(sessionId)) {
           logInfo(`[pty] Session ${sessionId}: the prepared spawn failed before it had a PTY -- ending the session its predecessor's exit was told to leave alone`)
@@ -2606,6 +2655,10 @@ export function beginSpawnPreparation(win: BrowserWindow, sessionId: string, age
 }
 
 export function spawnPty(win: BrowserWindow, sessionId: string, options?: SpawnPtyOptions): void {
+  // First of all, before this spawn takes an earlier one's place: the
+  // provider a local launch starts (localLaunchFor). A launch refused here
+  // throws now and has changed nothing of the session.
+  const localLaunch = localLaunchFor(options)
   const supersededWait = refreshWaitSpawns.get(sessionId)
   const inheritedTeardown = supersededWait?.abandonedTeardown
   if (supersededWait) {
@@ -2613,7 +2666,7 @@ export function spawnPty(win: BrowserWindow, sessionId: string, options?: SpawnP
     supersededWait.cancel()
   }
   try {
-    spawnPtyResolved(win, sessionId, options, inheritedTeardown)
+    spawnPtyResolved(win, sessionId, options, inheritedTeardown, localLaunch)
   } catch (err) {
     if (inheritedTeardown && !ptySessions.has(sessionId)) {
       logInfo(`[pty] Session ${sessionId}: the superseding spawn failed before it had a PTY -- ending the session its predecessor's exit was told to leave alone`)
@@ -2626,7 +2679,7 @@ export function spawnPty(win: BrowserWindow, sessionId: string, options?: SpawnP
 function spawnPtyResolved(
   win: BrowserWindow,
   sessionId: string,
-  options?: {
+  options: undefined | {
     cwd?: string
     cols?: number
     rows?: number
@@ -2719,7 +2772,14 @@ function spawnPtyResolved(
   /** MAIN-INTERNAL: the teardown carried over from a superseded refresh wait
    *  (see spawnPty). Attached to this spawn's own wait if it parks; dropped
    *  once its PTY is registered. */
-  inheritedTeardown?: () => void,
+  inheritedTeardown: (() => void) | undefined,
+  /** MAIN-INTERNAL: the provider a LOCAL launch starts, looked up in the
+   *  registry by the caller before this runs (localLaunchFor: an id that is
+   *  not registered, or whose provider declares no session launches, was
+   *  refused there and never reaches here). Null for an SSH launch, which is
+   *  not asked and takes its own branch below unchanged, and for a terminal
+   *  tab, which starts no provider. */
+  localLaunch: LocalLaunch | null,
 ): void {
   // P3.16a round 2 (Q5): a Restart's mark is for the exit of the process it
   // ended before this spawn; this spawn's own process ends as any other does.
@@ -2831,13 +2891,6 @@ function spawnPtyResolved(
     if (dropped > 0) logWarn(`[pty] Dropping ${dropped} held write(s) for ${sessionId}: launch never completed`)
     pendingWrites.delete(sessionId)
   }
-
-  // The provider a LOCAL launch starts, looked up in the registry here, once
-  // (localLaunchOf: an id that is not registered, or whose provider declares
-  // no session launches, is refused and nothing starts). Null for an SSH
-  // launch, which is not asked and takes its own branch below unchanged, and
-  // for a terminal tab, which starts no provider.
-  const localLaunch = options?.ssh || options?.shellOnly ? null : localLaunchOf(options?.provider ?? 'claude')
 
   if (options?.ssh) {
     // Defence in depth: pty:spawn refuses a Codex SSH session first, by the

@@ -127,6 +127,9 @@ vi.mock('../../../src/main/hooks/per-session-settings', () => ({
 }))
 vi.mock('../../../src/main/session-registry', () => ({
   updateSessionMeta: () => {}, clearSessionMeta: () => {}, markPtySessionAlive: () => {}, markPtySessionGone: () => {},
+  // Nothing is recorded as live here (the marks above record nothing), so a
+  // held launch that fails is a first launch's: the reason, then its own exit.
+  isPtySessionLive: () => false,
 }))
 vi.mock('../../../src/main/services/pty-integrity-monitor', () => ({ getPtyIntegrityMonitor: () => null }))
 vi.mock('../../../src/main/config-manager', async (importOriginal) => ({

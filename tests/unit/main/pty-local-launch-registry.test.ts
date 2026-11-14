@@ -20,6 +20,12 @@ import path from 'node:path'
 const h = vi.hoisted(() => ({
   root: '',
   spawns: [] as Array<{ file: string; cwd: string }>,
+  /** How often each stand-in process was told to end, in spawn order. */
+  kills: [] as number[],
+  /** Whether logging's record of each session's conversation is there to ask. */
+  binder: false,
+  /** Every session id that record was asked about (the conversation a Restart resumes). */
+  binderAsked: [] as string[],
   /** Any program a child-process call asked for (refused, never run). */
   otherChildren: [] as string[],
 }))
@@ -35,9 +41,10 @@ vi.mock('electron', () => ({
 vi.mock('node-pty', () => ({
   spawn: (file: string, _args: string[], opts: { cwd: string }) => {
     h.spawns.push({ file, cwd: opts.cwd })
+    const n = h.kills.push(0) - 1
     return { pid: 4343, cols: 80, rows: 24, process: file,
       onData: () => ({ dispose() {} }), onExit: () => ({ dispose() {} }),
-      write() {}, resize() {}, kill() {}, pause() {}, resume() {}, clear() {} }
+      write() {}, resize() {}, kill() { h.kills[n]++ }, pause() {}, resume() {}, clear() {} }
   },
 }))
 // No program is started here: every child-process call is recorded and refused
@@ -62,7 +69,16 @@ vi.mock('child_process', async (importOriginal) => {
 })
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: () => {}, logError: () => {}, logDebug: () => {} }))
 vi.mock('../../../src/main/ipc/setup-handlers', () => ({ getResourcesDirectory: () => h.root, getDataDirectory: () => h.root, registerSetupHandlers: () => {}, writeCliSetupPty: () => {} }))
-vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: () => null, getTranscriptBinder: () => null }))
+vi.mock('../../../src/main/logging/logging-service', () => ({
+  getLogSupervisor: () => null,
+  // The record a launch reads the conversation to resume from. It holds none
+  // here; a case that turns it on sees which sessions it was asked about.
+  getTranscriptBinder: () => (h.binder ? {
+    getExactResumeTarget: (id: string) => { h.binderAsked.push(id); return null },
+    getLatestTranscriptPath: () => null,
+    registerRun: () => {}, endRun: () => {}, notifyTranscriptPath: () => {},
+  } : null),
+}))
 vi.mock('../../../src/main/conductor-mcp-server', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../../src/main/conductor-mcp-server')>()), getConductorMcpPort: () => 0 }))
 // No Claude CLI is asked for its version.
 vi.mock('../../../src/main/claude-cli-version', async (importOriginal) => ({
@@ -99,7 +115,7 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
   withProfileHome: (env: Record<string, string>) => ({ ...env }),
 }))
 
-const { spawnPty, killPty } = await import('../../../src/main/pty-manager')
+const { spawnPty, killPty, isSessionWritable } = await import('../../../src/main/pty-manager')
 const { PROVIDER_IDS } = await import('../../../src/shared/providers')
 const { registerProviderPackage, _resetProviderRegistryForTest } = await import('../../../src/main/providers/core')
 const { createClaudePackage } = await import('../../../src/main/providers/claude')
@@ -111,7 +127,7 @@ const SHELL = 'stand-in-shell'
 const NOT_KNOWN = /is not one this app can start/
 
 const win = { webContents: { send: () => {} }, isDestroyed: () => false } as never
-const ids = ['not-known', 'not-registered', 'no-launch', 'by-default', 'named', 'tab', 'tab-no-launch']
+const ids = ['not-known', 'not-registered', 'no-launch', 'by-default', 'named', 'tab', 'tab-no-launch', 'running']
 let project = ''
 
 /** Register the Claude Code package as the app ships it, with a stand-in
@@ -132,6 +148,9 @@ beforeEach(() => {
   project = path.join(h.root, 'project')
   fs.mkdirSync(project, { recursive: true })
   h.spawns.length = 0
+  h.kills.length = 0
+  h.binder = false
+  h.binderAsked.length = 0
   h.otherChildren.length = 0
   registerClaude()
 })
@@ -176,6 +195,36 @@ describe('a local launch of a registered assistant that does not declare session
       registerClaude(state)
       expect(() => spawnPty(win, 'no-launch', { provider: CLAUDE, cwd: project } as never)).toThrow(/cannot start sessions on this computer/)
       expect(h.spawns).toEqual([])
+    })
+  }
+})
+
+describe('a refused launch for a session that is running changes nothing of it', () => {
+  // The launch is refused before the session's process is ended and before
+  // the conversation a Restart would resume is read. Mutation to prove this
+  // can fail: look the provider up after the running process was ended.
+  const refusals: Array<[string, () => Record<string, unknown>, RegExp]> = [
+    ['an assistant the app does not know', () => ({ provider: 'elsewhere' }), NOT_KNOWN],
+    ['an assistant the app knows but has not registered', () => ({ provider: OTHER }), NOT_KNOWN],
+    ['an assistant that declares no session launches', () => { registerClaude('unsupported'); return { provider: CLAUDE } }, /cannot start sessions on this computer/],
+  ]
+  for (const [what, refusedOptions, sentence] of refusals) {
+    it(`${what}: the running process is not ended, and the conversation to resume is not read`, () => {
+      h.binder = true
+      spawnPty(win, 'running', { cwd: project })
+      expect(h.spawns).toHaveLength(1)
+      expect(h.binderAsked, 'a launch that starts reads the conversation its session was on').toEqual(['running'])
+      h.binderAsked.length = 0
+      expect(() => spawnPty(win, 'running', { ...refusedOptions(), cwd: project } as never)).toThrow(sentence)
+      expect(h.kills, 'the running process was ended for a launch that was refused').toEqual([0])
+      expect(h.binderAsked, 'the conversation to resume was read for a launch that was refused').toEqual([])
+      expect(isSessionWritable('running'), 'the session still has its process').toBe(true)
+      expect(h.spawns, 'nothing new started').toHaveLength(1)
+      // A launch that may start replaces the running process, as before.
+      registerClaude()
+      spawnPty(win, 'running', { cwd: project })
+      expect(h.kills).toEqual([1, 0])
+      expect(h.binderAsked).toEqual(['running'])
     })
   }
 })

@@ -69,7 +69,9 @@ vi.mock('../../src/main/hooks/per-session-settings', () => ({
 vi.mock('../../src/main/claude-account-identity', () => ({
   captureClaudeAccount: () => {}, clearClaudeAccount: () => {}, getAccountIdentity: () => null, pushAccountIdentity: () => {}, startWatchingAccountIdentity: () => {}, stopWatchingAccountIdentity: () => {}, getWatchedProfileId: () => null,
 }))
-vi.mock('../../src/main/session-registry', () => ({ updateSessionMeta: () => {}, clearSessionMeta: () => {}, markPtySessionAlive: () => {}, markPtySessionGone: () => {}, isPtySessionLive: () => true }))
+// The session liveness record is the real one: a held launch that fails reads
+// from it whether a process of the session has still to report its end.
+vi.mock('../../src/main/session-registry', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../src/main/session-registry')>()), updateSessionMeta: () => {}, clearSessionMeta: () => {} }))
 vi.mock('../../src/main/services/pty-integrity-monitor', () => ({ getPtyIntegrityMonitor: () => null }))
 vi.mock('../../src/main/config-manager', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/main/config-manager')>()),

@@ -66,7 +66,7 @@ vi.mock('../../../src/main/hooks', () => ({ getGateway: () => null, isExactBindS
 vi.mock('../../../src/main/hooks/session-hooks-writer', () => ({ injectHooks: () => {} }))
 vi.mock('../../../src/main/hooks/per-session-settings', () => ({ writeLocalSessionSettings: () => null, removeLocalSessionSettings: () => {}, writeLocalSessionMcpConfig: () => null, removeLocalSessionMcpConfig: () => {}, removeLocalSessionStatusUrl: () => {} }))
 vi.mock('../../../src/main/claude-account-identity', () => ({ captureClaudeAccount: () => {}, clearClaudeAccount: () => {}, getAccountIdentity: () => null, pushAccountIdentity: () => {}, startWatchingAccountIdentity: () => {}, stopWatchingAccountIdentity: () => {}, getWatchedProfileId: () => null }))
-vi.mock('../../../src/main/session-registry', () => ({ updateSessionMeta: () => {}, clearSessionMeta: () => {}, markPtySessionAlive: () => {}, markPtySessionGone: () => {} }))
+vi.mock('../../../src/main/session-registry', () => ({ updateSessionMeta: () => {}, clearSessionMeta: () => {}, markPtySessionAlive: () => {}, markPtySessionGone: () => {}, isPtySessionLive: () => false }))
 vi.mock('../../../src/main/services/pty-integrity-monitor', () => ({ getPtyIntegrityMonitor: () => null }))
 vi.mock('../../../src/main/config-manager', async (orig) => ({ ...(await orig<any>()), readConfig: (key: string) => (key === 'configs' ? h.configs : {}), getConfigDir: () => os.tmpdir() }))
 vi.mock('../../../src/main/account-profiles', async (orig) => {
