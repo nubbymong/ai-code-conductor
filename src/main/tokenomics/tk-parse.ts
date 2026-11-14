@@ -1,3 +1,4 @@
+import { nameStartsWithId } from '../../shared/model-registry'
 import type { TkEvent } from './tk-types'
 
 /** A price-key list's lookup index: a Set for the exact hits, and each
@@ -10,7 +11,9 @@ const PRICE_MEMO_MAX = 10_000
 
 /** A Claude model's price key: its own id when priced, else the longest
  *  price key it starts with (a dated id takes its undated entry), else
- *  itself (no price). */
+ *  itself (no price). A key that stops inside a number is not one the model
+ *  starts with (nameStartsWithId, the model matcher's own rule): the dated
+ *  id of Fable 5 is not priced as Fable 5.2. */
 function toPriceModel(model: string, priceKeys: string[]): string {
   let index = priceKeyIndexes.get(priceKeys)
   if (!index) {
@@ -22,7 +25,7 @@ function toPriceModel(model: string, priceKeys: string[]): string {
   if (known !== undefined) return known
   let best = ''
   for (const k of priceKeys) {
-    if (model.startsWith(k) && k.length > best.length) best = k
+    if (nameStartsWithId(model, k) && k.length > best.length) best = k
   }
   const answer = best || model
   if (index.memo.size < PRICE_MEMO_MAX) index.memo.set(model, answer)

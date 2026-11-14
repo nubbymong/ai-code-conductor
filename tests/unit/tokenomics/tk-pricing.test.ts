@@ -76,7 +76,57 @@ describe('Tokenomics prices Opus 5.5 and Sonnet 5.5 as themselves', () => {
   })
 })
 
+// planning #310: a price key that ends in a digit is not the start of a model
+// name whose next character is a digit too. The dated id of Fable 5
+// (claude-fable-5-20260101) starts with `claude-fable-5-2`, the longest key it
+// starts with, so each such turn was priced as Fable 5.2 (8 and 40 per million
+// tokens, not 10 and 50). The same rule as the model matcher's (nameStartsWithId).
+describe('a dated Fable 5 turn is priced as Fable 5, not as Fable 5.2', () => {
+  const map = getAllPricing()
+  const keys = Object.keys(map)
+  const priced = (model: string) => {
+    const line = JSON.stringify({ type: 'assistant', timestamp: '2026-11-14T10:00:00Z', sessionId: 's', requestId: 'r',
+      message: { id: 'm', model, usage: { input_tokens: 1, output_tokens: 1 } } })
+    const key = parseClaudeUsageLine(line, keys)!.priceModel
+    return { key, price: map[key] }
+  }
+  const fable5 = { input: 10, output: 50, cacheRead: 1.0, cacheWrite: 12.5 }
+  const fable52 = { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 }
+
+  it('on the path Tokenomics prices a turn on (parseClaudeUsageLine)', () => {
+    expect(priced('claude-fable-5-20260101')).toEqual({ key: 'claude-fable-5', price: fable5 })
+    expect(priced('claude-fable-5-20251001')).toEqual({ key: 'claude-fable-5', price: fable5 })
+    expect(priced('claude-fable-5')).toEqual({ key: 'claude-fable-5', price: fable5 })
+    // Fable 5.2 keeps its own turns, dated or not; Fable 5.1 too.
+    expect(priced('claude-fable-5-2')).toEqual({ key: 'claude-fable-5-2', price: fable52 })
+    expect(priced('claude-fable-5-2-20261101')).toEqual({ key: 'claude-fable-5-2', price: fable52 })
+    expect(priced('claude-fable-5-1-20260801')).toEqual({ key: 'claude-fable-5-1', price: fable5 })
+  })
+
+  it('a dated id of every priced Claude model takes that model\'s own key', () => {
+    for (const id of Object.keys(registryFallbackPricing())) {
+      expect(priced(`${id}-20260101`).key, id).toBe(id)
+      expect(normalizeModelForPricing(`${id}-20260101`, keys), id).toBe(id)
+    }
+  })
+
+  it('with no shorter key to take, the model keeps its own name (no price), never the key of another number', () => {
+    const line = (model: string) => JSON.stringify({ type: 'assistant', timestamp: '2026-11-14T10:00:00Z', sessionId: 's',
+      message: { id: 'm', model, usage: { input_tokens: 1, output_tokens: 1 } } })
+    const only = ['claude-fable-5-2']
+    expect(parseClaudeUsageLine(line('claude-fable-5-20260101'), only)?.priceModel).toBe('claude-fable-5-20260101')
+    expect(parseClaudeUsageLine(line('claude-fable-5-2-20261101'), only)?.priceModel).toBe('claude-fable-5-2')
+    expect(normalizeModelForPricing('claude-fable-5-20260101', only)).toBe('claude-fable-5-20260101')
+    expect(normalizeModelForPricing('claude-fable-5-2-20261101', only)).toBe('claude-fable-5-2')
+  })
+})
+
 describe('normalizeModelForPricing', () => {
+  it('a dated Fable 5 id is Fable 5\'s key, and a dated Fable 5.2 id is Fable 5.2\'s (planning #310)', () => {
+    const keys = Object.keys(registryFallbackPricing())
+    expect(normalizeModelForPricing('claude-fable-5-20260101', keys)).toBe('claude-fable-5')
+    expect(normalizeModelForPricing('claude-fable-5-2-20261101', keys)).toBe('claude-fable-5-2')
+  })
   it('exact match wins', () => {
     expect(normalizeModelForPricing('claude-opus-4-8', Object.keys(registryFallbackPricing()))).toBe('claude-opus-4-8')
   })

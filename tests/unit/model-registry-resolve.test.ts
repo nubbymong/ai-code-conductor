@@ -285,3 +285,119 @@ describe('resolveModelInfo: the most specific pattern wins', () => {
     expect(resolveModelInfo(own, 'us.anthropic.claude-zeta-9-v1:0').id).toBe('claude-zeta-1')
   })
 })
+
+// planning #310. Two more ways a name went to another version's entry:
+//  - an id that ends in a digit was taken as the start of a name whose next
+//    character is a digit too. The dated id of Fable 5
+//    (`claude-fable-5-20260101`) starts with `claude-fable-5-2`, the longest
+//    id it starts with, so it was read, and priced, as Fable 5.2;
+//  - a gateway writes a version with a dot (`anthropic/claude-opus-4.7`). No
+//    version pattern (`opus-4-7`) is in such a name, so it went to the entry
+//    with the family's plain pattern: the newest for most families.
+describe('resolveModelInfo: a dated id, and a version written with a dot', () => {
+  const entry = (id: string): ModelEntry => {
+    const m = reg.models.find((x) => x.id === id)
+    if (!m) throw new Error(`the bundled file has no ${id}`)
+    return m
+  }
+  const model = (id: string, patterns: string[] = []): ModelEntry => ({ id, patterns, family: 'opus', label: id })
+  const list = (...models: ModelEntry[]): ModelRegistry => ({ ...reg, models })
+
+  it('the dated id of Fable 5 is Fable 5, not Fable 5.2, though its year starts with a 2', () => {
+    for (const name of ['claude-fable-5-20260101', 'claude-fable-5-20251001', 'claude-fable-5-20260101[1m]']) {
+      expect(resolveModelInfo(reg, name), name).toMatchObject({
+        known: true, id: 'claude-fable-5', label: 'Fable 5', matchKind: 'prefix', fallbackPricing: entry('claude-fable-5').fallbackPricing,
+      })
+    }
+  })
+
+  it('the dated id of every model in the bundled file is that model, by its id', () => {
+    for (const m of reg.models) {
+      for (const name of [`${m.id}-20260101`, `${m.id}-20251001`]) {
+        expect(resolveModelInfo(reg, name), name).toMatchObject({ known: true, id: m.id, matchKind: 'prefix' })
+      }
+    }
+  })
+
+  it('Fable 5.2 keeps its own names: its id, its dated id, its [1m] name, the family alias', () => {
+    expect(resolveModelInfo(reg, 'claude-fable-5-2')).toMatchObject({ id: 'claude-fable-5-2', matchKind: 'exact' })
+    expect(resolveModelInfo(reg, 'claude-fable-5-2-20261101')).toMatchObject({ id: 'claude-fable-5-2', label: 'Fable 5.2', matchKind: 'prefix' })
+    expect(resolveModelInfo(reg, 'claude-fable-5-2[1m]')).toMatchObject({ id: 'claude-fable-5-2', matchKind: 'prefix' })
+    expect(resolveModelInfo(reg, 'claude-fable-5-2@20261101')).toMatchObject({ id: 'claude-fable-5-2', matchKind: 'prefix' })
+    expect(resolveModelInfo(reg, 'fable')).toMatchObject({ id: 'claude-fable-5-2', matchKind: 'alias' })
+  })
+
+  it('an id that ends in a digit is not the start of a name whose next character is a digit', () => {
+    const r = list(model('claude-x-5-2'), model('claude-x-5'))
+    expect(resolveModelInfo(r, 'claude-x-5-20260101')).toMatchObject({ id: 'claude-x-5', matchKind: 'prefix' })
+    expect(resolveModelInfo(r, 'claude-x-5-21')).toMatchObject({ id: 'claude-x-5', matchKind: 'prefix' })
+    // The longest id still wins where the number ends with the id.
+    for (const name of ['claude-x-5-2-20260101', 'claude-x-5-2@20260101', 'claude-x-5-2[1m]', 'claude-x-5-2-fast']) {
+      expect(resolveModelInfo(r, name), name).toMatchObject({ id: 'claude-x-5-2', matchKind: 'prefix' })
+    }
+    // With no shorter id to go to, the name is not placed by an id at all.
+    expect(resolveModelInfo(list(model('claude-x-5-2')), 'claude-x-5-20260101').known).toBe(false)
+    // An id that ends in a letter is the start of any name that begins with it, as before.
+    expect(resolveModelInfo(list(model('claude-x-fast')), 'claude-x-fast2')).toMatchObject({ id: 'claude-x-fast', matchKind: 'prefix' })
+  })
+
+  it('claude-opus-4.7 and anthropic/claude-opus-4.7 are Opus 4.7, not the newest Opus', () => {
+    for (const name of ['claude-opus-4.7', 'anthropic/claude-opus-4.7', 'openrouter/anthropic/claude-opus-4.7', 'anthropic/claude-opus-4.7-20260101', 'Anthropic/Claude-Opus-4.7']) {
+      expect(resolveModelInfo(reg, name), name).toMatchObject({
+        known: true, id: 'claude-opus-4-7', label: 'Opus 4.7', matchKind: 'pattern', fallbackPricing: entry('claude-opus-4-7').fallbackPricing,
+      })
+    }
+  })
+
+  it('every model with a two-part version, written with a dot behind a gateway\'s name, is its own entry', () => {
+    const twoPart = reg.models.filter((m) => m.id.startsWith('claude-') && /\d-\d/.test(m.id))
+    // Fable 5.2 and 5.1, Opus 5.5 to 4.5, Sonnet 5.5 to 4.5, Haiku 5.5 and 4.5.
+    expect(twoPart.length).toBe(13)
+    for (const m of twoPart) {
+      const name = `anthropic/${m.id.replace(/(\d)-(\d)/, '$1.$2')}`
+      expect(resolveModelInfo(reg, name), name).toMatchObject({
+        known: true, id: m.id, label: m.label, matchKind: 'pattern', fallbackPricing: m.fallbackPricing,
+      })
+    }
+  })
+
+  it('an older model\'s own id written with a dot and nothing around it is its own entry', () => {
+    for (const [name, id] of [['claude-opus-4.8', 'claude-opus-4-8'], ['claude-opus-4.8-fast', 'claude-opus-4-8-fast'], ['claude-opus-4.5', 'claude-opus-4-5'],
+      ['claude-sonnet-4.6', 'claude-sonnet-4-6'], ['claude-sonnet-4.5', 'claude-sonnet-4-5'], ['claude-haiku-4.5', 'claude-haiku-4-5']]) {
+      expect(resolveModelInfo(reg, name), name).toMatchObject({ known: true, id, label: entry(id).label, matchKind: 'pattern' })
+    }
+  })
+
+  it('a dotted version that carries on, or that no entry lists, still goes to the family\'s plain pattern', () => {
+    for (const name of ['anthropic/claude-opus-4.75', 'anthropic/claude-opus-4.7.1', 'anthropic/claude-opus-4.9', 'anthropic/claude-opus-9.1', 'Opus 4.7 (1M context)']) {
+      expect(resolveModelInfo(reg, name), name).toMatchObject({ known: true, id: 'claude-opus-5-5', matchKind: 'pattern' })
+    }
+    // A dot that is not between two digits is not a version's.
+    expect(resolveModelInfo(reg, 'us.anthropic.claude-opus-4-7-v1:0').id).toBe('claude-opus-4-7')
+    expect(resolveModelInfo(reg, 'x/claude-opus-5.json').id).toBe('claude-opus-5')
+  })
+
+  it('the name is read as written and with the dot as a hyphen, and the reading that covers more counts', () => {
+    const r = list(model('newest', ['opus']), model('hyphen', ['opus-4-7']), model('dot', ['opus-4.6']))
+    expect(resolveModelInfo(r, 'x/claude-opus-4.7')).toMatchObject({ id: 'hyphen', matchKind: 'pattern' })
+    // A pattern written with a dot is still found in the name as written.
+    expect(resolveModelInfo(r, 'x/claude-opus-4.6')).toMatchObject({ id: 'dot', matchKind: 'pattern' })
+    expect(resolveModelInfo(r, 'x/claude-opus-4-6').id).toBe('newest')
+    expect(resolveModelInfo(r, 'x/claude-opus-4.8').id).toBe('newest')
+    // Held to the start of the name, and held to the version rule, in the same way.
+    const atStart = list(model('newest', ['opus']), model('older', ['^opus-4-7']))
+    expect(resolveModelInfo(atStart, 'opus-4.7-x').id).toBe('older')
+    expect(resolveModelInfo(atStart, 'opus-4.7.2-x').id).toBe('newest')
+    expect(resolveModelInfo(atStart, 'x-opus-4.7').id).toBe('newest')
+  })
+
+  it('names with a dot that were placed before are placed as before', () => {
+    // An id with a dot in it, and a name around one (no pattern names it).
+    expect(resolveModelInfo(reg, 'gpt-5.5')).toMatchObject({ id: 'gpt-5.5', matchKind: 'exact' })
+    expect(resolveModelInfo(reg, 'gpt-5.5-20260101')).toMatchObject({ id: 'gpt-5.5', matchKind: 'prefix' })
+    expect(resolveModelInfo(reg, 'azure/gpt-5.5').known).toBe(false)
+    // Opus 5.5 and Sonnet 5.5 behind a gateway's name: the newest, as before.
+    expect(resolveModelInfo(reg, 'anthropic/claude-opus-5.5')).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern' })
+    expect(resolveModelInfo(reg, 'anthropic/claude-sonnet-5.5')).toMatchObject({ id: 'claude-sonnet-5-5', matchKind: 'pattern' })
+  })
+})

@@ -238,14 +238,33 @@ function matchEntry(
   return matchByPrefixOrPattern(standing, raw) ?? matchByPrefixOrPattern(added, raw)
 }
 
+/**
+ * Whether a model name starts with an id as an id, not only as text
+ * (2.1.3-beta.3). An id that ends in a digit is not the start of a name whose
+ * next character is a digit too: the number carries on there, so it is
+ * another number. `claude-fable-5-2` is the start of
+ * `claude-fable-5-20260101`, the dated id of Fable 5, and is not its model:
+ * that name was shown, and priced, as Fable 5.2.
+ *
+ * One rule for every reader that takes the longest id a name starts with:
+ * the matcher below, and the two price-key lookups in Tokenomics
+ * (toPriceModel in tk-parse.ts, normalizeModelForPricing in tk-pricing.ts).
+ * So the three cannot disagree about where an id ends.
+ */
+export function nameStartsWithId(name: string, id: string): boolean {
+  if (!name.startsWith(id)) return false
+  return !(/\d/.test(id.charAt(id.length - 1)) && /\d/.test(name.charAt(id.length)))
+}
+
 function matchByPrefixOrPattern(
   models: ModelEntry[],
   raw: string,
 ): { entry: ModelEntry; kind: ModelMatchKind } | null {
-  // 3. longest id-prefix (date-suffixed ids: claude-opus-4-7-20260101)
+  // 3. longest id-prefix (date-suffixed ids: claude-opus-4-7-20260101). An
+  //    id that stops inside a number is not one (nameStartsWithId).
   let prefix: ModelEntry | null = null
   for (const m of models) {
-    if (raw.startsWith(m.id) && (!prefix || m.id.length > prefix.id.length)) prefix = m
+    if (nameStartsWithId(raw, m.id) && (!prefix || m.id.length > prefix.id.length)) prefix = m
   }
   if (prefix) return { entry: prefix, kind: 'prefix' }
   // 4. first pattern match in the order given, as before: it settles the
@@ -255,6 +274,8 @@ function matchByPrefixOrPattern(
   //    name takes it (patternReach). The tie-break: of entries that cover as
   //    much, the first in the order given.
   const lower = raw.toLowerCase()
+  // The name read a second way, for a version written with a dot (patternReach).
+  const hyphened = dotsAsHyphens(lower)
   let best: ModelEntry | null = null
   let bestReach = NO_PATTERN_HIT
   for (const m of models) {
@@ -262,7 +283,7 @@ function matchByPrefixOrPattern(
     // (A shipped entry's family is the bundled file's, whatever a fetched
     // model file gives it: mergeModelData, main.)
     if (best && (m.family !== best.family || isOverlaySourced(m) !== isOverlaySourced(best))) continue
-    const reach = patternReach(m, lower)
+    const reach = patternReach(m, lower, hyphened)
     if (reach > bestReach) { best = m; bestReach = reach }
   }
   return best ? { entry: best, kind: 'pattern' } : null
@@ -333,8 +354,10 @@ function textReach(lower: string, text: string, atStart: boolean): number {
  *
  * A missing/!Array `patterns` makes the entry unmatchable by pattern; it
  * stays reachable by id, alias and prefix.
+ *
+ * This is one reading of the name. patternReach takes the better of two.
  */
-function patternReach(m: ModelEntry, lower: string): number {
+function readingReach(m: ModelEntry, lower: string): number {
   let reach = NO_PATTERN_HIT
   const patterns = Array.isArray(m.patterns) ? m.patterns : []
   for (const p of patterns) {
@@ -357,6 +380,37 @@ function patternReach(m: ModelEntry, lower: string): number {
     }
   }
   return reach
+}
+
+/** A name (lower-cased) with each dot between two digits read as a hyphen:
+ *  `anthropic/claude-opus-4.7` as `anthropic/claude-opus-4-7`. The name as
+ *  it is when it has no such dot. */
+function dotsAsHyphens(lower: string): string {
+  return lower.replace(/(\d)\.(?=\d)/g, '$1-')
+}
+
+/**
+ * How much of a name an entry's patterns cover, the name read two ways
+ * (2.1.3-beta.3): as written (`lower`), and with each dot between two digits
+ * as a hyphen (`hyphened`: dotsAsHyphens). The reading that covers more
+ * counts; NO_PATTERN_HIT when neither is matched.
+ *
+ * A gateway writes a version with a dot (`anthropic/claude-opus-4.7`) and the
+ * version patterns are written with a hyphen (`opus-4-7`), so none was found
+ * in such a name. It went to the entry with the family's plain pattern, and
+ * an older model was shown as the newest of its family.
+ *
+ * Each reading is held to every rule of readingReach, the version rule
+ * included: `claude-opus-4.75` and `claude-opus-4.7.1` are not Opus 4.7. A
+ * pattern written with a dot is still found in the name as written. The
+ * second reading only adds matches, so a name that was placed is still
+ * placed; one that was not is placed now only by a version pattern found in
+ * it this way. In the bundled file every such name already had its family's
+ * plain pattern in it, so none changes family or becomes placed.
+ */
+function patternReach(m: ModelEntry, lower: string, hyphened: string): number {
+  const reach = readingReach(m, lower)
+  return hyphened === lower ? reach : Math.max(reach, readingReach(m, hyphened))
 }
 
 export function resolveModelInfo(registry: ModelRegistry, modelId: string): ResolvedModelInfo {

@@ -191,9 +191,10 @@ const HOSTILE: [string, (f: Loose) => void, string?][] = [
   ['a new Codex model whose id is a shipped id\'s dated id', (f) => {
     f.models.unshift({ id: 'gpt-5.5-20260101', patterns: [], family: 'codex', label: 'GPT-5.5 (dated)' })
   }, 'models: gpt-5.5-20260101 has a name the build already places on gpt-5.5'],
-  // The matcher places these on claude-fable-5-2 by id-prefix (they start with
-  // 'claude-fable-5-2'), but each is the dated form of the shipped claude-fable-5.
-  ['a new model whose id is the dated id of claude-fable-5, placed on claude-fable-5-2 by id-prefix', (f) => {
+  // These start with 'claude-fable-5-2' as text (until 2.1.3-beta.3 the matcher
+  // put them there by id-prefix), and each is the dated form of the shipped
+  // claude-fable-5, which is where the matcher puts them now.
+  ['a new model whose id is the dated id of claude-fable-5, which starts with claude-fable-5-2', (f) => {
     f.models.unshift({ id: 'claude-fable-5-20260101', patterns: [], family: 'fable', label: 'Fable 5 (dated)', fallbackPricing: HIGH })
   }, 'models: claude-fable-5-20260101 has a name the build already places on claude-fable-5'],
   ['a new model whose id is another dated id of claude-fable-5', (f) => {
@@ -234,6 +235,9 @@ const NAMES: string[] = [...new Set([
   ...bundled.models.flatMap((m) => [`${m.id}-20260101`, `${m.id}[1m]`]),
   // A partner platform's id for each shipped Claude model...
   ...claudeIds.flatMap((id) => [`anthropic.${id}-v1:0`, `us.anthropic.${id}-20260101-v1:0`, `${id}@20260101`, `vertex/${id}@20260101`]),
+  // ...and a gateway's, which writes the version with a dot (claude-opus-4.7),
+  // with nothing around it and behind the gateway's own name.
+  ...claudeIds.map((id) => id.replace(/(\d)-(\d)/, '$1.$2')).flatMap((dotted) => [dotted, `anthropic/${dotted}`, `anthropic/${dotted}-20260101`]),
   // ...and for a version of each family the build does not list.
   ...CLAUDE_FAMILIES.flatMap((f) => [
     `anthropic.claude-${f}-9-v1:0`, `us.anthropic.claude-${f}-9-v1:0`, `claude-${f}-9@20990101`, `vertex/claude-${f}-9@20990101`,

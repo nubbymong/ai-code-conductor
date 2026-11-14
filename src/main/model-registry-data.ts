@@ -177,7 +177,8 @@ function isDatedOrBracketedForm(name: string, shipped: string): boolean {
 
 /** The shipped id `name` is a dated or bracketed form of, whichever entry the
  *  matcher placed it on: `claude-fable-5-20260101` is `claude-fable-5`'s, though
- *  the matcher puts it on `claude-fable-5-2` by id-prefix. */
+ *  it starts with `claude-fable-5-2` as well. (The matcher puts it on
+ *  `claude-fable-5` too since 2.1.3-beta.3; this does not rest on that.) */
 function formOfShipped(bundled: ModelRegistry, name: string): string | undefined {
   return bundled.models.find((m) => isDatedOrBracketedForm(name, m.id))?.id
 }
