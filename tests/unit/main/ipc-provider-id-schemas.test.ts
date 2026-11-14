@@ -8,7 +8,7 @@
 //
 // The shipped schemas are imported, not mirrored: each one's `provider` field
 // is read out of it and asked directly.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { PROVIDER_IDS } from '../../../src/shared/providers'
 import { providerIdSchema } from '../../../src/main/ipc/provider-id-schema'
 import { spawnOptionsSchema } from '../../../src/main/ipc/pty-handlers'
@@ -52,6 +52,66 @@ describe.each(fields)('the provider named in %s', (_what, field) => {
 
   it('refuses anything that is not one of them', () => {
     for (const v of NOT_IDS) expect(field.safeParse(v).success, JSON.stringify(v)).toBe(false)
+  })
+})
+
+// The cases above hold the schemas to the list as it stands, which a schema
+// that wrote the same names out again would pass too. This one changes the
+// list: the module the app's provider ids live in is stood in for by itself
+// plus one more id, and everything else is the app's own, imported afresh
+// over it. The shared schema and each of the three requests then accept the
+// added id, which only a schema built from the list does.
+// Mutation to prove this can fail: write the two names out in the shared
+// schema (it lists the same two, so every case above still passes).
+describe('with one more id on the app\'s list of providers', () => {
+  const THIRD = 'third'
+  const IDS = '../../../src/shared/providers/ids'
+
+  it('the shared schema and all three requests accept it, and still refuse anything that is not on the list', async () => {
+    vi.resetModules()
+    vi.doMock(IDS, async (importOriginal) => {
+      const real = await importOriginal<typeof import('../../../src/shared/providers/ids')>()
+      const widened: readonly string[] = [...real.PROVIDER_IDS, THIRD]
+      return { ...real, PROVIDER_IDS: widened, isProviderId: (v: unknown): boolean => typeof v === 'string' && widened.includes(v) }
+    })
+    try {
+      const listed = (await import('../../../src/shared/providers')).PROVIDER_IDS as readonly string[]
+      expect(listed, 'the list the schemas are built from holds the added id').toEqual([...PROVIDER_IDS, THIRD])
+      const shared = (await import('../../../src/main/ipc/provider-id-schema')).providerIdSchema
+      const spawn = (await import('../../../src/main/ipc/pty-handlers')).spawnOptionsSchema
+      const dispatch = (await import('../../../src/main/ipc/cloud-agent-handlers')).dispatchSchema
+      const filter = (await import('../../../src/main/ipc/tokenomics2-handlers')).filterSchema
+      expect(shared, 'the schema was built again, over the widened list').not.toBe(providerIdSchema)
+      expect(shared.options).toEqual(listed)
+      expect(shared.safeParse(THIRD).success).toBe(true)
+
+      const widenedFields: Array<[string, ProviderField]> = [
+        ['pty:spawn options', spawn.unwrap().shape.provider as unknown as ProviderField],
+        ['a Cloud Agent dispatch', dispatch.shape.provider as unknown as ProviderField],
+        ['a usage filter', filter.shape.provider as unknown as ProviderField],
+      ]
+      for (const [what, field] of widenedFields) {
+        expect(field.unwrap(), what).toBe(shared)
+        for (const id of listed) expect(field.safeParse(id).success, `${what}: ${id}`).toBe(true)
+        for (const v of NOT_IDS) expect(field.safeParse(v).success, `${what}: ${JSON.stringify(v)}`).toBe(false)
+      }
+      // And as whole requests.
+      expect(spawn.safeParse({ provider: THIRD }).success).toBe(true)
+      expect(dispatch.safeParse({ name: 'n', description: 'd', projectPath: '/p', provider: THIRD }).success).toBe(true)
+      expect(filter.safeParse({ provider: THIRD }).success).toBe(true)
+      expect(spawn.safeParse({ provider: 'elsewhere' }).success).toBe(false)
+      expect(dispatch.safeParse({ name: 'n', description: 'd', projectPath: '/p', provider: 'elsewhere' }).success).toBe(false)
+      expect(filter.safeParse({ provider: 'elsewhere' }).success).toBe(false)
+    } finally {
+      vi.doUnmock(IDS)
+      vi.resetModules()
+    }
+  })
+
+  it('the schemas as the app has them do not know that id', () => {
+    expect(PROVIDER_IDS as readonly string[]).not.toContain(THIRD)
+    expect(providerIdSchema.safeParse(THIRD).success).toBe(false)
+    for (const [what, field] of fields) expect(field.safeParse(THIRD).success, what).toBe(false)
   })
 })
 

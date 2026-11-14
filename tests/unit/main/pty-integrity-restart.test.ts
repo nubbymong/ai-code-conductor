@@ -372,4 +372,81 @@ describe('a Restart is not the session\'s end on the Services page (P3.16a round
       g.window = before
     }
   })
+
+  // A Restart whose next launch is refused before it starts anything (its
+  // assistant is not one the app can start) is followed by no process. The
+  // exit of the process the Restart ended is then the session's end: one
+  // "session ended", and the session is listed no more. Each way a local
+  // launch starts refuses in the same place, so each is held here.
+  // Mutation to prove this can fail: leave the Restart's mark in place when
+  // the launch is refused.
+  describe('a Restart whose next launch is refused', () => {
+    const refused = () => ({ ...spawnOptions(), provider: 'elsewhere' }) as unknown as Parameters<typeof spawnPty>[2]
+    const NOT_STARTED = /is not one this app can start/
+
+    it('a launch asked for directly: the ended process\'s exit is the session\'s end', () => {
+      spawn()
+      report(0)
+      killPty(SID, { reason: 'restart' })
+      expect(() => spawnPty(fakeWin, SID, refused())).toThrow(NOT_STARTED)
+      expect(h.procs, 'nothing new started').toHaveLength(1)
+      expect(ends(), 'the session ends when its process does').toEqual([])
+      exitOf(0)
+      expect(ends()).toHaveLength(1)
+      expect(row()).toBeUndefined()
+    })
+
+    it('a launch prepared first: the same, when the ended process reports its end after the refusal', () => {
+      spawn()
+      report(0)
+      killPty(SID, { reason: 'restart' })
+      const prep = beginSpawnPreparation(fakeWin, SID, null)
+      expect(() => prep.spawn(refused())).toThrow(NOT_STARTED)
+      expect(h.procs, 'nothing new started').toHaveLength(1)
+      exitOf(0)
+      expect(ends()).toHaveLength(1)
+      expect(row()).toBeUndefined()
+    })
+
+    it('a launch prepared first: the same, when the ended process reported its end while the launch was prepared', () => {
+      spawn()
+      report(0)
+      killPty(SID, { reason: 'restart' })
+      const prep = beginSpawnPreparation(fakeWin, SID, null)
+      // Handed to the preparation: not the session's end while a launch may follow.
+      exitOf(0)
+      expect(ends()).toEqual([])
+      expect(() => prep.spawn(refused())).toThrow(NOT_STARTED)
+      expect(h.procs, 'nothing new started').toHaveLength(1)
+      expect(ends()).toHaveLength(1)
+      expect(row()).toBeUndefined()
+    })
+
+    it('a refused launch with no Restart before it leaves the running session\'s count as it was', () => {
+      const first = spawn()
+      first.data('x'.repeat(1_200))
+      report(1_200)
+      expect(() => spawnPty(fakeWin, SID, refused())).toThrow(NOT_STARTED)
+      expect(ends()).toEqual([])
+      expect(row()).toMatchObject({ bytesFromPty: 1_200, bytesReceived: 1_200, byteGap: 0 })
+      exitOf(0)
+      expect(ends()).toHaveLength(1)
+    })
+
+    it('a Restart whose next launch starts is still not the session\'s end, after one that was refused', () => {
+      spawn()
+      report(0)
+      killPty(SID, { reason: 'restart' })
+      expect(() => spawnPty(fakeWin, SID, refused())).toThrow(NOT_STARTED)
+      exitOf(0)
+      expect(ends()).toHaveLength(1)
+      // The tab is restarted again, and this time its launch may start.
+      killPty(SID, { reason: 'restart' })
+      const second = spawn()
+      second.data('z'.repeat(40))
+      report(40)
+      expect(ends()).toHaveLength(1)
+      expect(row()).toMatchObject({ bytesFromPty: 40, bytesReceived: 40, byteGap: 0 })
+    })
+  })
 })

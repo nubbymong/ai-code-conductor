@@ -2398,9 +2398,22 @@ const CLAUDE_SHELL_PROVIDER: ProviderId = 'claude'
 export const LOCAL_LAUNCH_STYLE: Readonly<Record<ProviderId, LocalLaunchStyle>> = Object.freeze({ claude: 'claude-shell', codex: 'direct' })
 
 let localLaunchStyles: Readonly<Record<string, LocalLaunchStyle>> = LOCAL_LAUNCH_STYLE
-/** Test-only: the rows launches are looked up in (null restores the app's own). */
-export function _setLocalLaunchStylesForTest(rows: Readonly<Record<string, LocalLaunchStyle>> | null): void {
+/** Test-only, never set by the app: the lookup takes a row as the rows hold
+ *  it, in place of launchStyleOf's answer. */
+let lookupTakesRowsAsHeld = false
+/**
+ * Test-only: the rows launches are looked up in (null restores the app's own).
+ *
+ * `asHeld` makes the lookup take each row as the rows hold it, without
+ * launchStyleOf's check of whose row it is. Two lines keep Claude Code's
+ * launch to Claude Code, the lookup and the branch that runs it, and the
+ * lookup always answers first: this is the one way a test can hand that
+ * branch a row the lookup would have refused, and see the branch refuse it by
+ * itself. Restored with the rows (null).
+ */
+export function _setLocalLaunchStylesForTest(rows: Readonly<Record<string, LocalLaunchStyle>> | null, asHeld = false): void {
   localLaunchStyles = rows ?? LOCAL_LAUNCH_STYLE
+  lookupTakesRowsAsHeld = rows !== null && asHeld
 }
 
 /**
@@ -2458,7 +2471,9 @@ function localLaunchOf(requested: unknown): LocalLaunch {
   if (!isProviderId(requested)) throw notStartable(requested)
   let provider: SessionProvider
   try { provider = getProvider(requested) } catch { throw notStartable(requested) }
-  const style = launchStyleOf(requested)
+  const style = lookupTakesRowsAsHeld
+    ? (Object.hasOwn(localLaunchStyles, requested) ? localLaunchStyles[requested] : undefined)
+    : launchStyleOf(requested)
   if (!style) throw notStartable(requested)
   if (!startsSessionsHere(requested)) {
     throw new Error(`${stripSpoofableText(String(provider.displayName || requested), 60)} cannot start sessions on this computer. Nothing was started.`)
@@ -2471,13 +2486,37 @@ function localLaunchOf(requested: unknown): LocalLaunch {
  * for one it refuses), or null for a launch that starts none here: an SSH
  * launch, which is not asked and keeps its own branch, and a terminal tab.
  *
- * Asked by every caller of spawnPtyResolved BEFORE anything of the session is
- * touched, and handed down: a launch that is refused here has taken no held
- * launch's place, ended no running process and read or changed no
- * conversation to resume.
+ * Asked by every caller of spawnPtyResolved (through localLaunchForSpawn)
+ * BEFORE anything of the session is touched, and handed down: a launch that
+ * is refused here has taken no held launch's place, ended no running process
+ * and read or changed no conversation to resume.
  */
 function localLaunchFor(options: SpawnPtyOptions | undefined): LocalLaunch | null {
   return options?.ssh || options?.shellOnly ? null : localLaunchOf(options?.provider ?? 'claude')
+}
+
+/**
+ * localLaunchFor, as each caller of spawnPtyResolved asks it for `sessionId`.
+ *
+ * A launch that is refused never reaches spawnPtyResolved, which is where a
+ * Restart's mark is cleared for every launch that does (restartKills). So a
+ * refused one clears it here: no process follows the one the Restart ended,
+ * and that process's exit is the session's end on the Services page, with
+ * its event, and not a count started again. An SSH launch and a terminal tab
+ * are answered "none" without a throw, so nothing is cleared for them here.
+ *
+ * The re-entry after a wait asks through here like the others. The pass that
+ * parked it cleared the mark, and the kill that sets one cancels the wait, so
+ * there is none to clear by then; it asks here so that every caller reads the
+ * same.
+ */
+function localLaunchForSpawn(sessionId: string, options: SpawnPtyOptions | undefined): LocalLaunch | null {
+  try {
+    return localLaunchFor(options)
+  } catch (err) {
+    restartKills.delete(sessionId)
+    throw err
+  }
 }
 
 /**
@@ -2605,7 +2644,7 @@ function deferSpawnUntil<T>(
       // the test rework of 2026-09-22).
       const nextOptions = next(settled)
       const reentry = carriedResume && !nextOptions.resume ? { ...nextOptions, resume: carriedResume } : nextOptions
-      spawnPtyResolved(win, sessionId, reentry, wait?.abandonedTeardown, localLaunchFor(reentry))
+      spawnPtyResolved(win, sessionId, reentry, wait?.abandonedTeardown, localLaunchForSpawn(sessionId, reentry))
     } catch (err) {
       logError(`[profiles] session ${sessionId}: the spawn after the wait failed: ${(err as Error)?.message ?? err}`)
       failWithoutPty(wait, err)
@@ -2686,7 +2725,7 @@ export function beginSpawnPreparation(win: BrowserWindow, sessionId: string, age
       refreshWaitSpawns.delete(sessionId)
       const teardown = entry.abandonedTeardown
       try {
-        spawnPtyResolved(win, sessionId, options, teardown, localLaunchFor(options))
+        spawnPtyResolved(win, sessionId, options, teardown, localLaunchForSpawn(sessionId, options))
       } catch (err) {
         if (teardown && !ptySessions.has(sessionId)) {
           logInfo(`[pty] Session ${sessionId}: the prepared spawn failed before it had a PTY -- ending the session its predecessor's exit was told to leave alone`)
@@ -2707,8 +2746,9 @@ export function beginSpawnPreparation(win: BrowserWindow, sessionId: string, age
 export function spawnPty(win: BrowserWindow, sessionId: string, options?: SpawnPtyOptions): void {
   // First of all, before this spawn takes an earlier one's place: the
   // provider a local launch starts (localLaunchFor). A launch refused here
-  // throws now and has changed nothing of the session.
-  const localLaunch = localLaunchFor(options)
+  // throws now and has changed nothing of the session; a Restart it was to
+  // follow is followed by no process (localLaunchForSpawn).
+  const localLaunch = localLaunchForSpawn(sessionId, options)
   const supersededWait = refreshWaitSpawns.get(sessionId)
   const inheritedTeardown = supersededWait?.abandonedTeardown
   if (supersededWait) {
@@ -7811,8 +7851,10 @@ function cleanupSessionResources(sessionId: string): void {
 /** P3.16a round 2 (Q5): the sessions a Restart killed whose next process has
  *  not started yet. The exit of the process it ended restarts the Services
  *  count quietly instead of ending the session there. Set by a Restart's kill,
- *  cleared by the next spawn of the id or a close, taken by that exit; bounded
- *  (an id past the bound just ends as a close would). */
+ *  cleared by the next spawn of the id, by a local launch of the id that is
+ *  refused before it starts (localLaunchForSpawn: no process follows) or by a
+ *  close, taken by that exit; bounded (an id past the bound just ends as a
+ *  close would). */
 const restartKills = new Set<string>()
 export const RESTART_KILLS_MAX = 512
 

@@ -1195,7 +1195,9 @@ describe('the row that runs Claude Code\'s launch is Claude Code\'s alone (WP1.3
   // runs Claude Code's launch refuses any other id. Mutation to prove this
   // can fail: remove both. With only the lookup's check removed the launch is
   // still refused, by the branch (the lookup's own case, in
-  // tests/unit/main/pty-local-launch-registry.test.ts, fails then).
+  // tests/unit/main/pty-local-launch-registry.test.ts, fails then); with only
+  // the branch's removed it is still refused, by the lookup (the branch's own
+  // case, the next one here, fails then).
   it('Codex under a copy of that row is refused at a launch, and is not started the way Claude Code is', () => {
     _setLocalLaunchStylesForTest({ claude: LOCAL_LAUNCH_STYLE.claude, codex: LOCAL_LAUNCH_STYLE.claude })
     expect(() => start(launch('a'))).toThrow(/is not one this app can start/)
@@ -1205,6 +1207,39 @@ describe('the row that runs Claude Code\'s launch is Claude Code\'s alone (WP1.3
     spawnPty(fakeWin, SID, { cwd: os.tmpdir(), provider: 'claude' })
     expect(h.ptys).toHaveLength(1)
     expect(h.ptys[0].cmd).toBe('pwsh')
+  })
+
+  // The branch's own refusal, by itself. The lookup answers first at every
+  // launch, so the branch is reached with another id only when the lookup did
+  // not refuse it: here the lookup is made to take each row as the rows hold
+  // it (the test hook's second argument), and Codex holds a copy of Claude
+  // Code's row. The lookup then hands the branch a launch that is not Claude
+  // Code's, and the branch refuses it. Mutation to prove this can fail:
+  // remove the branch's refusal alone (the lookup's stays as it is).
+  it('handed Codex under that row by a lookup that did not refuse it, the branch that runs Claude Code\'s launch refuses it by itself', () => {
+    _setLocalLaunchStylesForTest({ claude: LOCAL_LAUNCH_STYLE.claude, codex: LOCAL_LAUNCH_STYLE.claude }, true)
+    expect(() => start(launch('a'))).toThrow(/is not one this app can start/)
+    expect(h.ptys, 'Claude Code\'s shell was opened for Codex').toHaveLength(0)
+    expect(h.built, 'a launch was built for Codex by Claude Code\'s branch').toHaveLength(0)
+    // Claude Code is started by that branch from the same lookup, as before.
+    spawnPty(fakeWin, SID, { cwd: os.tmpdir(), provider: 'claude' })
+    expect(h.ptys.map((pty) => pty.cmd)).toEqual(['pwsh'])
+  })
+
+  // The hook's second argument lasts until the hook is called again: a later
+  // call without it has the lookup ask again whose row it is. Mutation to
+  // prove this can fail: let the second argument stay set once it was given.
+  it('the lookup takes the rows as they are held only while the hook says so: the next rows are checked again, before the session is touched', () => {
+    _setLocalLaunchStylesForTest({ ...LOCAL_LAUNCH_STYLE }, true)
+    // The app's own rows, taken as they are held, start each provider by its own row.
+    start(launch('a'))
+    expect(h.ptys.map((pty) => pty.cmd)).toEqual(['/proven/a/codex'])
+    _setLocalLaunchStylesForTest({ claude: LOCAL_LAUNCH_STYLE.claude, codex: LOCAL_LAUNCH_STYLE.claude })
+    // Refused by the lookup: the running process is not ended for it (the
+    // branch is reached only once it has been).
+    expect(() => start(launch('b'))).toThrow(/is not one this app can start/)
+    expect(h.ptys[0].kill).not.toHaveBeenCalled()
+    expect(h.ptys).toHaveLength(1)
   })
 
   it('with the rows as the app has them, a Codex launch runs its prepared executable and Claude Code\'s shell is not opened for it', () => {
