@@ -56,9 +56,8 @@ That shape has a cost:
    the CLI, and the rest for one call. Nothing runs on the host between
    sessions: no service, no autostart, no listening network port, no root
    install, nothing on `PATH`. The helper opens no TCP or UDP socket, only its
-   session's Unix-domain socket. The control against a hostile dependency is
-   source review of every `Cargo.lock` change; seccomp on Linux and the build
-   checks are defence in depth against a helper that opens a socket itself
+   session's Unix-domain socket. Source review of every `Cargo.lock` change is
+   the control; seccomp on Linux and the build checks are defence in depth
    (none at run time on macOS in version 1; threat model 3.10).
 4. **No Claude token is copied to the host.** From R8 the app writes no app
    secret there. The helper opens no CLI file except one named edit (the
@@ -164,8 +163,8 @@ hours of real-host time across R1 to R12; local tests and CI do not replace it.
   new shipped binary. The helper's source, its build and its hash manifest join
   the ADR-009 path table when they land (R5), and so does any change to the
   helper's `Cargo.lock` or `deny.toml`, of any size.
-- Design-stage adversarial pass: four fix rounds and a minors pass; the final
-  result is recorded in the PR.
+- Design-stage adversarial pass and the PR review's comments are applied; the
+  final result is recorded in the PR.
 - The SSH statusline live-matrix gate in `AGENTS.md` stays in force, unchanged,
   for every step that touches its blast radius. From R6 the new remote files
   join that radius. The gate shrinks only at R12, to about 8 rows per helper
@@ -201,17 +200,19 @@ The order is the build order. Each line is one step; most are two betas.
 - **R2** Image paste and Snap over SSH by file upload, before any helper: a
   one-shot ssh exec with exit code and error text, the fixed ssh options and
   minimal environment, the host key pinned at the first upload, the home
-  recorded once, the device-id folder and its marker, saved passwords through
-  askpass, per-device extra variables, pins only in the device record, a CI
-  sshd job (every app OS) with a hostile config, environment canaries and
-  known-hosts paths with a space, a non-ASCII character, doubled backslashes or
-  a UNC form, also nested in a jump host's `ProxyCommand`. Every terminal ssh
-  the app starts gets `-e none` and the minimal environment. **The remote
-  allow-list ships here** for SSH sessions on the route they use before R8: a
-  fixture file names each tool, its class and its argument rule; the Conductor
-  server marks each SSH session remote, lists and runs only fixture tools,
-  applies the argument rules, and registers no local render roots for it. A
-  test: every registered tool is in the fixture or refused.
+  recorded once, the device-id folder and its marker (folder checks refuse a
+  link, and a home or ancestor writable by its group, even one named like the
+  user, or by others), saved passwords through askpass, per-device extra
+  variables, pins only in the device record, a CI sshd job (every app OS) with
+  a hostile config, environment canaries and known-hosts paths with a space, a
+  non-ASCII character, doubled backslashes or a UNC form, also nested in a jump
+  host's `ProxyCommand`. Every terminal ssh the app starts gets `-e none` and
+  the minimal environment. **The remote allow-list ships here** for SSH
+  sessions on the route they use before R8: a fixture file names each tool, its
+  class and its argument rule; the Conductor server marks each SSH session
+  remote, lists and runs only fixture tools, applies the argument rules, and
+  registers no local render roots for it. A test: every registered tool is in
+  the fixture or refused.
 - **R3** Probe the host and run setup over exec with a real result per file
   (protocol 13), backing up any user file it replaces. Device records are made
   from saved SSH configs, with the key pinned at the probe. The typed setup
@@ -233,9 +234,10 @@ The order is the build order. Each line is one step; most are two betas.
   for a live same-machine `unmanaged` session, an unreadable `ps` or a missing
   pid record; an `end` that does nothing is reported as not ended.
 - **R4** The Devices page (add, check, re-provision, report, remove, host key
-  shown and pinned, leftover `~/.aicc` folders of other installs), then the
-  session dialog picks a device. Mockup approved on the Agent Canvas first; it
-  decides whether the terminal may forward the agent per device (default off).
+  shown and pinned, a read-only list of other installs' `~/.aicc` folders with
+  by-hand removal steps), then the session dialog picks a device. Mockup
+  approved on the Agent Canvas first; it decides whether the terminal may
+  forward the agent per device (default off).
 - **R7** Setup, hooks and file transfer through the helper. SSH sessions get
   attention events on every host OS.
 - **R8** Conductor tools over the side channel, under the same remote
@@ -248,10 +250,13 @@ The order is the build order. Each line is one step; most are two betas.
 - **R9** The helper replaces tmux on Linux and macOS hosts: the CLI survives a
   dropped link or an app restart, and missed output is replayed. Tests: the CLI
   keeps its network and sudo while `serve` has neither (protocol 5); two
-  concurrent starts leave one CLI; a live R8-era session survives the update,
-  a reconnect and a rollback, folder, spool and `seq` kept, no resume offered;
-  a held session whose CLI exits on the same boot becomes `stale`, not
-  `unmanaged`, and is cleaned or offered resume.
+  concurrent starts leave one CLI; `serve` and `attach` stay open together, a
+  second of a role replacing only the first; a live R8-era session survives the
+  update, a reconnect and a rollback, folder, spool and `seq` kept, no resume
+  offered; a held session whose CLI exits on the same boot becomes `stale`, not
+  `unmanaged`, and is cleaned or offered resume; one whose holder dies while its
+  CLI lives (hangup ignored, or the pid check unreadable) is `orphaned`: kept,
+  never resumed over or removed, "reattach or end" offered.
 - **R10** Host sessions launch by exec, with the helper as the terminal's
   command. Passwords go only through askpass. The riskiest step.
 - **R11** Containers and sudo on the helper, with shared-home detection read

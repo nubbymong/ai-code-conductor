@@ -46,7 +46,7 @@ the two share one home folder (3.4). Each claim holds from its step in 2.1.
 
 | Guarantee | Enforced by | True from |
 | --- | --- | --- |
-| Host folders per device id; clean-up and removal only behind this install's marker; sessions `elsewhere` or `unknown` never ended or removed by the app, an `unmanaged` one only on the user's explicit end, shown by the CLI's stopped state (protocol 7); removal reads a session as dead only on positive proof | fixed scripts, app | R2; states R6 |
+| Host folders per device id; clean-up and removal only behind this install's marker, another install's folder read-only to the app; sessions `elsewhere` or `unknown` never ended or removed by the app, an `unmanaged` or `orphaned` one only on the user's explicit end, shown by the CLI's stopped state (protocol 7); removal reads a session as dead only on positive proof | fixed scripts, app | R2; states R6, R9 |
 | Fixed ssh options, minimal environment and per-connection pins; on a terminal `-e none` and the environment first, the rest later | app | R2 (execs), R6 (side channel); terminal R2, R10 |
 | Saved ssh passwords only through askpass, under its release rules | app | R2 (execs), R10 (terminal) |
 | Host home recorded once; the only pasted host text is a checked upload path; remote terminal: no clipboard read or write, links `http` or `https` only, on a click | app | R2 |
@@ -91,9 +91,9 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   makes the app run a program, open a URL, or read or write a local file,
   except `mcp` messages within the remote allow-list (3.5).
 - Payloads pass a per-provider field allow-list (protocol 8). Host paths and
-  remote CLI session ids are their own types, never given to local transcript,
-  resume, relocation, usage or canvas code, never a local path or map key;
-  resuming a remote conversation runs on the host by that id.
+  remote CLI session ids are remote-only types: never a local path or map key,
+  never given to local transcript, resume, usage or canvas code; a remote
+  resume runs on the host.
 - A message cannot name a session: identity comes from the connection alone, and
   a hello naming another `sid` fails. Host text has control and format characters
   removed wherever it is shown.
@@ -107,13 +107,15 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 
 - `~/.aicc` and everything under it is 0700, files 0600 (the binary 0700),
   checked and set by the fixed scripts from `$HOME` down; the helper sets umask
-  077 and checks again. A home that is `/`, a link, or writable by others is
-  refused. The only file outside the home is the node id, in a user-owned 0700
-  folder checked the same way, holding nothing secret (protocol 13).
+  077 and checks again. A home that is `/`, a link, or writable by its group or
+  by others, or that sits under an ancestor writable by either, is refused; no
+  group is exempt, since another account can be a member, even of a group named
+  like the user. The only file outside the home is the node id, in a user-owned
+  0700 folder checked the same way, holding nothing secret (protocol 13).
 - The helper listens on no port, network or loopback. The session socket sits
   in its 0700 folder; its owner checks the peer's user id on every connection.
-- **Shared homes.** Each device id has its own marked folder, so clean-up,
-  listing and removal never cross devices or installs.
+- **Shared homes.** Each device id has its own marked folder, so clean-up and
+  removal never cross devices or installs; other folders are only listed (3.9).
 - **Containers.** The facts come from the host's fixed script running the
   engine's inspect (protocol 14), never from the container, whose own report
   can only add "shared". A target is **shared** if it has: a bind whose source
@@ -133,8 +135,9 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   id, host name, node id) and boot (protocol 1). The app never ends or removes
   a session on another or an unknown machine; the removal script refuses while
   one exists, naming the host to use, with the exits in protocol 13. Clones
-  identical in all three parts are not told apart. An `unmanaged` folder is
-  kept until a new boot or a confirmed `end` makes it `stale` (protocol 7).
+  identical in all three parts are not told apart. An `unmanaged` folder, or an
+  `orphaned` one (holder gone, CLI not shown stopped), is kept, never resumed
+  over, until a new boot or a confirmed `end` makes it `stale` (protocol 7).
 
 ### 3.5 Conductor tools reached from the host
 
@@ -235,13 +238,15 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 - **Clean-up.** The app itself acts only on `stale` sessions (protocol 7): it
   offers remote resume, then removes the folder only if its own record holds
   it. A live session it has no record of appears in the device report and ends
-  only on a user action. A detached session ends at its maximum lifetime (7
-  days by default, per device). From R4 the Devices page lists `~/.aicc`
-  folders of other installs and removes one on a confirm.
+  only on a user action; an `orphaned` one is offered "reattach or end". A
+  detached session ends at its maximum lifetime (7 days by default, per
+  device). From R4 the Devices page lists the `~/.aicc` folders of other
+  installs read-only, with by-hand removal steps; the app never writes to or
+  deletes one, even on a confirm (protocol 1, 13).
 - **Remove device** (from R4; R3 and R6 ship with the consent screen's by-hand
   removal steps) ends the sessions the user chose, restores each named edit
   (at the floor it shows the edit to undo), puts back R3's backups and removes
-  R3's files, runs the removal script (protocol 13), checks the folder is gone,
+  R3's files, runs the removal script (protocol 13), checks its folder is gone,
   and removes copies in running containers, the device record with its pins
   and the device's saved secrets, any copy under an older key included. An
   unreachable host is marked removed, with the command to clean it by hand.
@@ -318,5 +323,5 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 
 - Every R step that ships code takes the ADR-009 adversarial pass, scoped to
   the old and new parts live in that beta (2.1).
-- Design-stage adversarial pass: four fix rounds and a minors pass; the final
-  result is recorded in the PR.
+- Design-stage adversarial pass and the PR review's comments are applied; the
+  final result is recorded in the PR.

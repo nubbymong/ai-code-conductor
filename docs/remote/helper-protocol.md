@@ -12,12 +12,13 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   install once per target (a host, or a container on it; R2 at a saved SSH
   config's first upload), so installs and devices never share one.
 - **Layout.** Everything lives under `~/.aicc/<did>/` (the node id aside,
-  section 13); `~/.aicc` holds nothing else. In it: `owner`, a marker with the
-  `did` and app install id; `helper/<version>-<hash12>/aicc-helper` (first 12
-  hex of its SHA-256; never on `PATH`); `sessions/<sid>/` (0700: spec, provider
-  files, socket `s`, `seq`, a bounded spool, the helper log, `holder` from R9,
-  `paste/`); `backup/`; and `edits` (section 8). Nothing is written, run or
-  deleted in a `did` folder whose marker lacks this install's ids.
+  section 13); `~/.aicc` holds only `did` folders. In one: `owner`, a marker
+  with the `did` and app install id; `helper/<version>-<hash12>/aicc-helper`
+  (first 12 hex of its SHA-256; never on `PATH`); `sessions/<sid>/` (0700: spec,
+  provider files, socket `s`, `seq`, a bounded spool, the helper log, `holder`
+  from R9, `paste/`); `backup/`; and `edits` (section 8). Nothing is written,
+  run or deleted in a `did` folder whose marker lacks this install's ids; the
+  app never removes another install's folder, it only lists it (section 8).
 - **Session id (`sid`)**, chosen by the app: `^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$`.
   Every socket bind and connect happens after a `chdir` into the session
   folder, by the name `s`, so a long home never meets the path limit.
@@ -90,13 +91,12 @@ and MACs it again. A changed key stops the device until the user checks it.
 On Windows each path in it uses forward slashes and is quoted for the command
 line, then again for ssh's own splitter; one holding `"`, `%`, `^` or a
 backslash is refused, naming it. A user's own `ProxyCommand` is kept, marked
-"jump host not pinned by the app". **CI (R2, every app OS):** an sshd job puts
-every fixed key's unsafe value in a hostile config and asserts `ssh -G` prints
-the fixed value; a config `SendEnv` naming a variable in the app's own
-environment, a config `SetEnv` and any askpass variable never reach the test
-sshd (`AcceptEnv *`); known-hosts and `ProxyCommand` paths with a space, a
-non-ASCII character, doubled backslashes or a UNC form, on the top-level ssh and
-nested in a jump host's `ProxyCommand`, each connect or are refused as named.
+"jump host not pinned by the app". **CI (R2, every app OS):** the sshd job of
+ADR step R2 asserts that `ssh -G` prints each fixed value under a hostile
+config; that no app variable (a config `SendEnv` naming one included), config
+`SetEnv` or askpass variable reaches the sshd (`AcceptEnv *`); and that each odd
+known-hosts and `ProxyCommand` path, also nested in a jump host, connects or is
+refused as named.
 
 ## 3 askpass
 
@@ -115,8 +115,8 @@ program (per app OS; OpenSSH 8.4+, else only passphrase-free keys; it says why).
 - **Always the user's:** key passphrases, confirm prompts, host-key questions,
   one-time codes, keyboard-interactive prompts (the usual form on macOS, PAM
   and one-time-code hosts) and any other text; a prompt not in one of ssh's
-  own local forms shows as cleaned text under "text written by <device>".
-  During an automatic reconnect no dialog shows; it ends as "sign-in needed".
+  own local forms shows as cleaned text under "text written by <device>". An
+  automatic reconnect shows no dialog and ends as "sign-in needed".
 - **A failed release** (ssh ends before a hello or result, or prints
   `Permission denied`) stops release and automatic reconnect until the user acts.
 
@@ -163,13 +163,17 @@ The CLI or sudo starts `emit` (statusline and hook command, R6, R7), `mcp`
   takes the exclusive lock on `holder` and exits if it cannot, so concurrent
   starts leave one holder and one CLI. It then writes `holder` (machine
   identity, boot id, pid, start time), reads only its spec and start size,
-  starts the CLI, and installs its filter before it reads any socket (threat
-  model 3.10). Outliving logout: **pending probe P3**.
+  starts the CLI, records the CLI's pid and start time in the spec, and
+  installs its filter before it reads any socket (threat model 3.10).
+  Outliving logout: **pending probe P3**.
 - Only the holder outlives a connection; `mcp` lives as long as the CLI, the
   rest for one call. The holder exits when the session ends, a non-detachable
-  terminal closes, or a detached session reaches its maximum lifetime. The
-  newest `serve` or `attach` takes the slot; the older gets `replaced` and
-  exits (another app instance shows "taken over").
+  terminal closes, or a detached session reaches its maximum lifetime.
+- **Two relay slots.** The holder has a control slot (`serve`) and a terminal
+  slot (`attach`). The newest connection of a role takes its slot; the older of
+  that role gets `replaced` and exits (another app instance shows "taken over").
+  A `serve` never replaces an `attach`, so status, hooks and MCP keep flowing
+  while the terminal is open (test: ADR R9).
 
 ## 6 Framing
 
@@ -203,7 +207,8 @@ hello fields are ignored. The app answers `hello.ack` `{proto, caps}`. States:
 | --- | --- | --- |
 | `new`; `live` (R9) | no folder yet; a `held` session whose holder answers | starts it; attaches |
 | `unmanaged` | a folder on this machine and boot, not ended, whose spec `mode` is `external` or absent, or any spec while the running app predates holders (a rollback); the old path keeps the CLI. On an app that speaks holders a `held` spec is never `unmanaged` | keeps it, never offers resume, never removes it; it leaves this state only through a new boot, a confirmed end (see `stale`; never a closed tab or detach) or a user action (tests: ADR R6, R9) |
-| `stale` | this machine identity and a new boot (another boot id, begun after the session started); or a confirmed end, the CLI's stopped state shown by section 13's pid and start-time test, never a result line alone (for an `unmanaged` session the app's end is the old path's own kill plus `session.end`; a no-op `end` is not an end); or, from R9, a `held` spec with no holder answering and the `holder` lock free: each beats `unmanaged` | offers remote resume (section 8), then removes the folder only if its own record holds it |
+| `stale` | this machine identity and a new boot (another boot id, begun after the session started); or a confirmed end, the CLI's stopped state shown by section 13's pid and start-time test, never a result line alone (for an `unmanaged` session the app's end is the old path's own kill plus `session.end`; a no-op `end` is not an end); or, from R9, a `held` spec with no holder answering, the `holder` lock free and the CLI provably stopped (section 13's test on its recorded pid and start time): each beats `unmanaged` | offers remote resume (section 8), then removes the folder only if its own record holds it |
+| `orphaned` (R9) | a `held` spec on this machine and boot whose holder does not answer, not `stale`: the `holder` lock is held or cannot be tested, or the CLI's record shows it live, is missing or cannot be read (a CLI can outlive its holder by ignoring hangup) | keeps it; never offers resume, never starts a holder over it, never removes it; offers "reattach or end": reattach asks the holder again and repeats the test (a stopped CLI makes it `stale`); end is the confirmed end above |
 | `elsewhere`; `unknown` | another machine identity, or a boot begun before the session; no identity | never ended or removed by the app, and `end` refuses them; section 13 gives them an exit for removal |
 
 **Mismatch.** No common version: `proto-mismatch`, close, the device waits for
@@ -261,8 +266,9 @@ names; `edits` name rows of the closed list below; `mode` is `external` or `held
   login shell, home (section 1) and its filesystem type, the device and inode
   numbers of `$HOME` and `~/.aicc`, machine identity, boot id, the hash tool
   found, each CLI (name, absolute path, version), container engines, sudo
-  mode, self-test result (one validator, R3 included); a container's facts
-  that decide trust come from the host (section 14).
+  mode, the names and ages of other `~/.aicc` entries (listed, never opened),
+  self-test result (one validator, R3 included); a container's trust facts
+  come from the host (section 14).
 - `file.put` `{id, name, size, sha256}`, then `size` bytes as kind 1 frames on
   channel = request id. `name` is `paste-<n>.<ext>`, `<ext>` from a fixed image
   list; only into `paste/`, 20 MiB each, 100 MiB per session. `file.stored`
@@ -270,7 +276,8 @@ names; `edits` name rows of the closed list below; `mode` is `external` or `held
   `/.aicc/<did>/sessions/<sid>/paste/<name>`, and the hash. Attachment by
   pasted path is **pending probe P4**.
 - `mcp` goes to the Conductor MCP server as the side channel's session, under
-  the remote allow-list (threat model 3.5). `sudo.ask` `layer` names the target.
+  the remote allow-list (threat model 3.5), no local render root, inline
+  content only. `sudo.ask` `layer` names the target.
 
 **Payload allow-lists.** `status` and `event` payloads (at most 64 KiB) keep
 only the fields the provider declares per kind, typed as number, label (at most
@@ -294,19 +301,19 @@ characters) and tool name; prompts, tool inputs and results are dropped.
 **Named edits (closed list, from R7).** One row: `claude-folder-trust` sets
 `projects["<cwd>"].hasTrustDialogAccepted` to `true` in the CLI's config file
 (`~/.claude.json`, or under `CLAUDE_CONFIG_DIR`) for exactly the `cwd` the user
-chose, turning off the CLI's trust prompt there (the consent screen says so).
-The helper changes bytes only inside that value (or inserts that key), writes
-a new file with the same mode, and renames it over the old one only if that is
-unchanged just before (else `io`; a writer in that last moment can still lose
-one update). A golden-file test covers fake secrets, integers past 2^53,
-unicode escapes, key order, CRLF, no final newline and a concurrent writer.
-The old value goes to `edits`. Probe P4 confirms file and key; a CLI flag, if
-one exists, replaces the row. A new row needs its own adversarial pass.
+chose, turning off the CLI's trust prompt there. The helper changes bytes only
+inside that value (or inserts that key), writes a new file with the same mode,
+and renames it over the old one only if that is unchanged just before (else
+`io`; a writer in that last moment can still lose one update). A golden-file
+test covers fake secrets, integers past 2^53, unicode escapes, key order, CRLF,
+no final newline and a concurrent writer. The old value goes to `edits`. Probe
+P4 confirms file and key (a CLI flag, if one exists, replaces the row); a new
+row needs its own adversarial pass.
 
 | Error code | Meaning | Closes |
 | --- | --- | --- |
 | `bad-frame`; `unknown-type` | length over the limit or under 5, unknown kind, bad or too-deep JSON, raw bytes with no open transfer; a type the version and capabilities do not allow | yes |
-| `proto-mismatch`, `no-hello`, `hash-mismatch`; `replaced` | sections 7, 6, 13; a newer connection took the session | yes |
+| `proto-mismatch`, `no-hello`, `hash-mismatch`; `replaced` | sections 7, 6, 13; a newer connection of the same role took its slot (section 5) | yes |
 | `bad-field`, `too-large` | a field breaks its schema; a size rule is broken | no (budget, section 12) |
 | `busy`; `not-found`, `not-connected`, `denied`, `timeout`, `io`, `internal` | one already open, a budget full, or already started; as named | no |
 
@@ -372,12 +379,14 @@ and name (a fixture: a home with CR, ESC and a leading `~`).
 
 **Folder checks first.** Before any write or exec, every fixed script checks
 that `$HOME` is an absolute real folder (not a link, not `/`), owned by the
-user, not writable by others; that `~/.aicc`, `~/.aicc/<did>` and each folder
-below it uses are real folders owned by the user, set to 0700; and that the
-marker holds this install's ids. Owner and mode come from `ls -ldn` against
-`id -u` and `id -g`; a group may write only when it is the user's primary
-group and `id -gn` equals `id -un`. Tested under dash, bash, busybox sh and
-macOS sh; a failure prints a refusal as `AICC-RESULT`.
+user, and that neither it nor any ancestor of its real path is writable by its
+group or by others (an ancestor is owned by the user or root); that `~/.aicc`,
+`~/.aicc/<did>` and each folder below it uses are real folders owned by the
+user, set to 0700; and that the marker holds this install's ids. Owner and mode
+come from `ls -ldn` against `id -u`; no group is exempt, not even one named
+like the user, as another account can be a member. A failure prints a refusal
+naming the folder and mode as `AICC-RESULT`, and the device stays at the floor.
+Tested under dash, bash, busybox sh and macOS sh (fixtures: ADR step R2).
 
 - **Launcher.** Starts every helper command (`did`, helper folder, expected
   hash, nonce, command words). It finds `sha256sum`, `shasum -a 256` or
@@ -397,10 +406,11 @@ macOS sh; a failure prints a refusal as `AICC-RESULT`.
   exist (a wrong-hash one is removed first). A self-test in `selftest-<nonce>/`
   (session folder, socket, PTY, binary echo) follows.
 - **`end` and removal.** `end` signals a holder only on the spec's own
-  machine, after the socket's peer pid and start time match `holder`; else it
-  does nothing, and the result says not ended (section 7). The removal script
-  (also at the floor) refuses while any session is not provably dead, by pid
-  and start time (`/proc` or `ps`), never a lock. **Provably dead** needs
+  machine, after the socket's peer pid and start time match `holder` (for an
+  `orphaned` session, the CLI's recorded pid and start time); else it does
+  nothing, and the result says not ended (section 7). The removal script (also
+  at the floor) refuses while any session is not provably dead, by pid and
+  start time (`/proc` or `ps`), never a lock. **Provably dead** needs
   positive proof: this machine's identity, and a new boot (section 7), or the
   same boot, a recorded pid and start time (the CLI's in the spec; from R9 the
   holder's in `holder`) and a successful read showing each recorded pid absent
@@ -410,7 +420,7 @@ macOS sh; a failure prints a refusal as `AICC-RESULT`.
   result naming that host, and goes only on the user's confirm naming it; on an
   unknown machine, only on the user's confirm that no other machine shares this
   home; on this machine, only on the user's confirmed end. It then deletes
-  `~/.aicc/<did>`, the node id, and `~/.aicc` if empty (tests: ADR R6, R11).
+  `~/.aicc/<did>`, the node id, and `~/.aicc` if empty (tests: ADR R6, R9, R11).
 - **Node id.** The install script makes `/var/tmp/aicc-<uid>/node-<did>` if
   absent (random 32 hex; the folder checked like `~/.aicc`, 0700), outside any
   shared home; if that fails, there is none. A lost one makes old sessions
@@ -446,11 +456,10 @@ macOS sh; a failure prints a refusal as `AICC-RESULT`.
   --type container <name>` and applies the shared list (threat model 3.4),
   comparing each mount source by real path and by device and inode against
   `$HOME` and each of its ancestors. The app keeps the container id and a hash
-  of the mount list; every exec names that id. A change means shared until the
-  user confirms, and a confirm never clears a list match; a missing field or a
-  failed parse means shared. The container's own report can add "shared",
-  never clear it. Detection never needs a saved sudo password: it runs without
-  sudo or under an answer typed at that launch; until then, shared.
+  of the mount list; every exec names that id. Changes, gaps, parse failures
+  and confirms follow threat model 3.4. Detection never needs a saved sudo
+  password: it runs without sudo or under one typed at that launch; until
+  then, shared.
 - **sudo.** The app first starts a host-side `serve` owning the host session
   folder and socket. The `askpass` wrapper (a 0700 `/bin/sh` file that execs
   the helper's `askpass`) and a hash-checked helper copy sit in a fresh private
