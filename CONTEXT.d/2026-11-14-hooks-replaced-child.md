@@ -1,0 +1,11 @@
+## 2026-11-14 -- Hooks: a replaced child's late messages, and the heartbeat after off and on (planning #309, items 1 to 3)
+
+Three minors left over from the one-supervisor change (same day), all in the hooks service. None of them loses a hook event.
+
+**A replaced child's late bind failure stopped the current child.** `src/main/services/service-supervisor.ts` reads every child's messages through one handler. A "bound" from a child that had already been replaced was refused; a "bind-failed" was not. One still draining out of the old child's pipe after a restart marked the service as crashed and killed the new, healthy child, which then went through a needless restart. It is now logged (`bind-failed-replaced`, info) and otherwise ignored: the card keeps its state and the current child is left alone. The current child's own bind failure is handled as before.
+
+**A replaced child's late heartbeat overwrote the card's counters.** Same handler. For one beat the Services card showed the old child's in-flight, event, drop and stall counts, and the next throughput figure was measured against the old child's event total. A heartbeat from a replaced child is now dropped.
+
+**The live counters froze after hooks were turned off and on.** Turning hooks off in Settings tells the child to stop, and the child ended its one-second heartbeat and its jank monitor. Turning hooks on again tells the same child to start, and nothing started them again, so throughput, in-flight and stall counts stopped updating until the child was replaced. `src/main/services/hooks-host-core.ts` now starts both again on "start" when they are not running. A start while they run does nothing, so there is never more than one heartbeat. The same jank monitor is kept across the stop, so a stall counted just before it is still inside its 60 second window afterwards. Display only: hook delivery was never affected.
+
+**Tests.** New group at the end of `tests/unit/services/service-supervisor-desired-state.test.ts` (late bind failure after a manual restart and after a crash restart, late heartbeat, and the current child's own messages still taken) and a new group in `tests/unit/services/hooks-host-core.test.ts` (beats again after stop and start, stalls counted again, no second heartbeat, stays off when switched off). Five of the new cases failed before the change.
