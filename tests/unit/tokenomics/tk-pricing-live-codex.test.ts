@@ -11,13 +11,18 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-const env = vi.hoisted(() => ({ dir: '', requests: 0, body: '' as string, fail: false }))
+const env = vi.hoisted(() => ({ dir: '', requests: 0, body: '' as string, fail: false, forgotten: [] as string[] }))
 
 vi.mock('../../../src/main/config-manager', () => ({
   getConfigDir: () => env.dir,
   ensureConfigDir: () => {},
 }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: () => {} }))
+// Recorded: the folder a failed save asks the folder-rights step to read again.
+vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/account-profiles')>()),
+  forgetHardenedDir: (dir: string) => { env.forgotten.push(dir) },
+}))
 vi.mock('https', () => {
   const request = (_opts: unknown, cb: (res: EventEmitter) => void) => {
     env.requests++
@@ -61,6 +66,7 @@ beforeEach(() => {
   env.requests = 0
   env.body = BODY
   env.fail = false
+  env.forgotten.length = 0
 })
 afterEach(() => {
   // Only the folder this test made: its own prefix, directly in the temp folder.
@@ -100,6 +106,7 @@ describe('live Codex prices from the LiteLLM fetch', () => {
     await tk.fetchModelPricing()
     expect(fs.existsSync(path.join(env.dir, 'openai-model-pricing.json'))).toBe(true)
     expect(env.requests).toBe(1)
+    expect(env.forgotten, 'a copy that was saved forgets nothing').toEqual([])
     const loaded = await load()
     tk = loaded.tk
     await tk.fetchModelPricing()
@@ -140,6 +147,18 @@ describe('live Codex prices from the LiteLLM fetch', () => {
     expect(env.requests).toBe(1)
     expect(cx.priceForModel('gpt-old')).toBeNull()
     expect(cx.priceForModel('gpt-6-astra')).not.toBeNull()
+  })
+
+  it('a copy that cannot be saved has the config folder\'s access list read again before the next write, and nothing throws', async () => {
+    // The Claude copy's name is held by a folder, so that one write fails.
+    fs.mkdirSync(path.join(env.dir, 'model-pricing.json'))
+    const { tk, cx } = await load()
+    await expect(tk.fetchModelPricing()).resolves.toBeUndefined()
+    expect(env.forgotten).toEqual([env.dir])
+    // The other copy was saved, and the prices are live all the same.
+    expect(fs.statSync(path.join(env.dir, 'openai-model-pricing.json')).isFile()).toBe(true)
+    expect(cx.priceForModel('gpt-6-astra')).not.toBeNull()
+    expect(tk.getAllPricing()['claude-opus-5'].input).toBeCloseTo(5, 9)
   })
 
   it('offline: nothing throws and Codex is priced from the table, anything else no price', async () => {

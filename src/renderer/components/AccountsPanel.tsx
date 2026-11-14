@@ -155,7 +155,9 @@ function ProfileRow({ profile, primaryId, claudeOn }: { profile: AccountProfile;
     colourKey: legacyColourKey,
     canColour: hasEmail,
     rename: async (next) => {
-      await window.electronAPI.accountProfiles.rename(profile.id, next)
+      const res = await window.electronAPI.accountProfiles.rename(profile.id, next)
+      // Nothing changed on a refusal: the editor shows main's reason.
+      if (res && res.ok === false) return res.error || 'That did not work.'
       await useAccountProfilesStore.getState().hydrate()
       return null
     },

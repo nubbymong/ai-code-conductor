@@ -12,22 +12,30 @@ vi.mock('electron', () => ({
 // is deliberately NOT mocked -- the last-active backstop must be tested against
 // the real read-side rule.
 let store: AccountProfile[] = []
-vi.mock('../../../src/main/account-profiles', () => ({
-  listProfiles: () => store.map((p) => ({ ...p })),
-  upsertProfile: (p: AccountProfile) => {
-    const i = store.findIndex((x) => x.id === p.id)
-    if (i >= 0) store[i] = p
-    else store.push(p)
-  },
-  isValidProfileId: (id: unknown) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(id),
-  safeTeardownProfile: vi.fn(),
-  readProfileAccountEmail: vi.fn(),
-  getProfileConfigDir: vi.fn(),
-  createProfile: vi.fn(),
-  captureDetectedAccount: vi.fn(),
-  backupProfileHomeToCanonical: vi.fn(),
-  restoreProfileHomeFromCanonical: vi.fn(),
-}))
+vi.mock('../../../src/main/account-profiles', async () => {
+  // The real error class and sentence, which the handlers compare against.
+  const real = await vi.importActual<typeof import('../../../src/main/account-profiles')>('../../../src/main/account-profiles')
+  return {
+    ProfilesUnreadableError: real.ProfilesUnreadableError,
+    PROFILES_UNREADABLE: real.PROFILES_UNREADABLE,
+    listProfiles: () => store.map((p) => ({ ...p })),
+    // The read the edits use: the same list, read strictly.
+    readProfilesStrict: () => store.map((p) => ({ ...p })),
+    upsertProfile: (p: AccountProfile) => {
+      const i = store.findIndex((x) => x.id === p.id)
+      if (i >= 0) store[i] = p
+      else store.push(p)
+    },
+    isValidProfileId: (id: unknown) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(id),
+    safeTeardownProfile: vi.fn(),
+    readProfileAccountEmail: vi.fn(),
+    getProfileConfigDir: vi.fn(),
+    createProfile: vi.fn(),
+    captureDetectedAccount: vi.fn(),
+    backupProfileHomeToCanonical: vi.fn(),
+    restoreProfileHomeFromCanonical: vi.fn(),
+  }
+})
 vi.mock('../../../src/main/claude-account-identity', () => ({
   getAccountIdentity: vi.fn(), getDefaultAccountEmail: vi.fn(),
   getWatchedProfileId: vi.fn(), isProfileInUseByLiveSession: vi.fn(() => false), sessionsOnProfile: vi.fn(() => [] as string[]),

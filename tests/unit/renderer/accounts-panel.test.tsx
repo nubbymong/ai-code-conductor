@@ -27,7 +27,7 @@ import type { AccountProfile } from '../../../src/shared/account-types'
 
 const listMock = vi.fn<() => Promise<AccountProfile[]>>()
 const deleteMock = vi.fn<(id: string) => Promise<{ ok: boolean; error?: string }>>()
-const renameMock = vi.fn<(id: string, name: string) => Promise<{ ok: boolean }>>()
+const renameMock = vi.fn<(id: string, name: string) => Promise<{ ok: boolean; error?: string }>>()
 const setActiveMock = vi.fn<(id: string, active: boolean) => Promise<{ ok: boolean; error?: string }>>()
 const globalEmailMock = vi.fn<() => Promise<string | null>>()
 const refreshIdentityMock = vi.fn<(id: string) => Promise<{ ok: boolean; email: string; configDir: string } | null>>()
@@ -488,6 +488,28 @@ describe('AccountsPanel', () => {
     await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
     expect(document.querySelector(`[data-testid="identity-editor-${profileWithEmail.id}-error"]`)!.textContent).toBe('That did not work; try again.')
     expect(input.disabled).toBe(false)
+    renameMock.mockResolvedValue({ ok: true })
+  })
+
+  it('a rename main refused shows main\'s reason in the editor, and one with no reason says it did not work', async () => {
+    useAccountProfilesStore.setState({ profiles: [profileWithEmail] })
+    const reason = 'The accounts list (profiles.json) could not be read, so nothing was changed.'
+    renameMock.mockResolvedValue({ ok: false, error: reason })
+    const { unmount: u } = renderComponent(React.createElement(AccountsPanel, { onAdd: vi.fn() }))
+    unmount = u
+    const editor = await openEditor(profileWithEmail.id)
+    const input = editor!.querySelector(`[data-testid="identity-editor-${profileWithEmail.id}-name"]`) as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    const type = async (text: string) => {
+      await act(async () => { setter.call(input, text); input.dispatchEvent(new Event('input', { bubbles: true })) })
+      await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+    }
+    const shown = () => document.querySelector(`[data-testid="identity-editor-${profileWithEmail.id}-error"]`)?.textContent
+    await type('Day job')
+    expect(shown()).toBe(reason)
+    renameMock.mockResolvedValue({ ok: false })
+    await type('Night job')
+    expect(shown()).toBe('That did not work.')
     renameMock.mockResolvedValue({ ok: true })
   })
 

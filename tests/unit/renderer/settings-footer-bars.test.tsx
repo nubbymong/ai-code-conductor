@@ -140,3 +140,37 @@ describe('Status Line tab, usage bar toggles (usage track MP6)', () => {
     expect(pressed('usage-bars-footer-codex')).toEqual(['true', 'false'])
   })
 })
+
+// The Accounts tab's Add account when main refuses it. Main rejects the call
+// with one sentence while the accounts list (profiles.json) cannot be read;
+// Settings shows that sentence and stays on the page.
+describe('Accounts tab, Add account refused by main', () => {
+  it('the sentence main rejected with is shown, and the page does not go to Sessions', async () => {
+    const SENTENCE = 'The accounts list (profiles.json) could not be read, so nothing was changed.'
+    // As the bridge hands a rejected call to the window.
+    const create = vi.fn(async () => { throw new Error(`Error invoking remote method 'accountProfiles:create': Error: ${SENTENCE}`) })
+    ;(window as any).electronAPI.accountProfiles.create = create
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    const onNavigateToSessions = vi.fn()
+    h.settings = { ...choiceSettings('claude') }
+    await act(async () => {
+      root.render(React.createElement(
+        SettingsPage as React.ComponentType<{ initialTab?: string; onNavigateToSessions?: () => void }>,
+        { initialTab: 'accounts', onNavigateToSessions },
+      ))
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    const add = container.querySelector('[data-testid="add-account-btn"]') as HTMLElement | null
+    expect(add, 'the Add account button').not.toBeNull()
+    await click(add!)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(alert).toHaveBeenCalledTimes(1)
+    expect(alert).toHaveBeenCalledWith(`The account was not added. ${SENTENCE}`)
+    expect(onNavigateToSessions).not.toHaveBeenCalled()
+    alert.mockRestore()
+    delete (window as any).electronAPI.accountProfiles.create
+  })
+})

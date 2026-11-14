@@ -17,6 +17,7 @@ import { atomicWriteFileSync } from './atomic-write'
 import { secureSignInFoldersWindows, OWNER_ONLY_INSIDE_REASONS, OWNER_ONLY_INSIDE_FAILED_REASONS } from './owner-only-folders'
 import type { OwnerOnlyFolderResult } from './owner-only-folders'
 import { logInfo, logWarn } from './debug-logger'
+import { noteMainThreadOp } from './main-thread-ops'
 import { recordSettingsSanitise, recordAmbientStrip, clearSettingsSanitise } from './managed-launch-state'
 import { recordManagedLaunchPreflight } from './managed-launch-diagnostics'
 import { decodeSettingsText } from './settings-text'
@@ -26,7 +27,7 @@ import { decodeSettingsText } from './settings-text'
 import { realmEnvForProvider, ambientAuthVariablesForProvider, sanitizeManagedSettingsFor } from './providers'
 import { canonicaliseEmail } from '../shared/account-chip-color'
 import { lowerAsciiLetters } from '../shared/profile-id'
-import type { AccountProfile, AccountProfilesConfig } from '../shared/account-types'
+import type { AccountProfile } from '../shared/account-types'
 import type { ProjectGateResult } from '../shared/providers'
 
 // Shared-directory names junctioned from a profile back to the shared root.
@@ -98,9 +99,19 @@ const CRED_DIR_MODE = 0o700
  * Kept as a named export because the config/hooks credential writers and
  * `usage/account-usage.ts` import it, and because the name states the intent at
  * a credential call site.
+ *
+ * A write that fails forgets what was remembered about its folder's access
+ * list (`forgetHardenedDir`), so the folder is read again before the next
+ * write into it. Every writer that goes through here gets that; the error
+ * goes on to the caller unchanged.
  */
 export function atomicWriteSecure(file: string, data: string | Uint8Array, mode?: number): void {
-  atomicWriteFileSync(file, data, mode != null ? { mode } : undefined)
+  try {
+    atomicWriteFileSync(file, data, mode != null ? { mode } : undefined)
+  } catch (e) {
+    forgetHardenedDir(path.dirname(file))
+    throw e
+  }
 }
 
 /** chmod a just-written/copied credential FILE to 0o600 on POSIX (no-op on Win). */
@@ -212,14 +223,18 @@ export function hardenCredentialFile(file: string): void {
 // directory, and an owner can re-grant themselves the instant any write of ours
 // returns. Hardening is not a defence against the owner of the directory.
 //
-// Unmemoised is a DECISION, not an oversight. A path-keyed memo would be wrong
-// twice over: `ensureCanvasPlugin` deletes and recreates its tree, so a
-// recreated directory is back on its parent's ACL while the memo still calls it
-// done -- and re-asserting on every call is the whole reason the POSIX branch
-// repairs installs made by older builds. The read-first skip gets the same
-// saving that a memo was tempting for, without a cache to invalidate: it asks
-// the filesystem rather than remembering, so a recreated directory reads as
-// unhardened and is repaired.
+// The read itself is remembered, narrowly. The read-first skip still started
+// icacls on every call, and under scanner load one start can take seconds: on
+// `ensureConfigDir` that froze the window 1-5s at a time. So a folder a read
+// PROVED owner-only is not read again for ten minutes (see
+// `provenOwnerOnlyDirs`). A plain path-keyed memo would be wrong:
+// `ensureCanvasPlugin` deletes and recreates its tree, so a recreated
+// directory is back on its parent's ACL while the memo still calls it done.
+// This one is tied to the folder's file identity, so a recreated directory is
+// another folder, reads as unhardened and is repaired; only a read that
+// showed the owner-only list enters it, never a write or a failure; it
+// expires, so a list changed from outside is found again within those
+// minutes; and a failed write into the folder drops it at once.
 //   * Children need no pass of their own. Windows resolves inheritance live, so
 //     existing and future subdirectories/files reflect the new DACL at once.
 const IS_WINDOWS = process.platform === 'win32'
@@ -241,6 +256,12 @@ const ICACLS_TIMEOUT_MS = 5000
  */
 let icaclsCallsMade = 0
 export function _icaclsCallsForTest(): number { return icaclsCallsMade }
+/** What the `[jank]` line calls a folder being made owner-only
+ *  (main-thread-ops.ts): the program, never the folder. One operation per
+ *  `hardenDirAclWindows` call that starts icacls, however many runs it
+ *  takes, so a session start that hardens several folders does not push the
+ *  other tracked operations out of the detector's short list. */
+const ICACLS_OP_LABEL = 'icacls.exe on one folder'
 /** Characters that would change what icacls PARSES rather than merely fail to
  *  resolve: `:` and `()` are grant syntax, `,`/`;` separate entries, `/` starts
  *  an option, `*` marks a literal SID, `\` splits domain from account, and
@@ -664,12 +685,99 @@ function learnHardenedPrincipals(dir: string): void {
 
 /** Test seam: the learned pair, the un-removable memo and the learn budget are
  *  per-PROCESS machine state, so a test that wants to watch LEARNING happen has
- *  to be able to put the module back to its unlearned state. */
+ *  to be able to put the module back to its unlearned state. The folders
+ *  proven owner-only this run are forgotten with them. */
 export function _resetAclStateForTest(): void {
   hardenedPrincipals = null
   unremovableAclPrincipals.clear()
   learnAttemptsLeft = LEARN_ATTEMPT_MAX
   fallbackUnprovenLogged.clear()
+  provenOwnerOnlyDirs.clear()
+}
+
+/** How long a folder stays remembered as owner-only (`provenOwnerOnlyDirs`). */
+const HARDENED_DIR_TTL_MS = 10 * 60 * 1000
+/** Past this many folders the one remembered longest ago goes: a long run
+ *  hardens a few folders per session, and none of them needs to stay. */
+const HARDENED_DIR_MEMO_MAX = 512
+/**
+ * Folders this run has PROVEN owner-only, so the next call for one of them
+ * starts no icacls at all: a folder's key (`folderKey`) -> its file identity
+ * when it was proven, and when that was.
+ *
+ * `hardenCredentialDir` runs on every config write (`ensureConfigDir`), at
+ * every session start and for each session's settings, MCP config and hooks,
+ * and every one of those calls began with an icacls read. That read is a
+ * program start on the main thread: 12-25ms idle, seconds while a scanner is
+ * busy, which froze the window for 1-5s at a time.
+ *
+ * What may enter, and how it leaves:
+ *   * One way in: an icacls read of the folder that showed the owner-only
+ *     list. A write is never remembered, read back or not, nor a `false` or
+ *     any fallback outcome: the next call reads, and that read decides. So a
+ *     folder that needed hardening costs a read and a write, then one read,
+ *     then nothing.
+ *   * Keyed by the resolved path, compared as the file system compares names
+ *     (`folderKey`), and tied to the folder's file identity (`realFolderId`,
+ *     taken BEFORE the read that proves it and checked again after, so a
+ *     folder swapped in during the read is not remembered). A folder removed
+ *     and made again under the same name (`ensureCanvasPlugin` does that on
+ *     every rebuild) is another folder, back on its parent's list: its file
+ *     id differs, so it is read again and repaired. Checking the identity is
+ *     one lstat, never a program start. A folder with no identity to read (a
+ *     link, not a folder, or not there) is never remembered.
+ *   * For ten minutes, counted on a clock that only moves forward
+ *     (`performance.now()`), so a system clock set back cannot keep an entry
+ *     longer. After that the next call reads again, so a list changed from
+ *     outside is found within that time. Until then it is not seen; changing
+ *     it takes the right to write the folder's list, which is its owner's or
+ *     an administrator's, and this hardening is no defence against either
+ *     (see the note on the skip above).
+ *   * `forgetHardenedDir` drops one folder at once. `atomicWriteSecure` calls
+ *     it for a write that failed, as do the two config writers that do not go
+ *     through it (the session state and the saved price lists).
+ */
+const provenOwnerOnlyDirs = new Map<string, { id: string; at: number }>()
+
+/** Whether `dir` was proven owner-only within the last ten minutes and is
+ *  still the same folder. Anything else forgets it. Never throws. */
+function isProvenOwnerOnly(dir: string): boolean {
+  let key: string
+  try { key = folderKey(dir) } catch { return false }
+  const known = provenOwnerOnlyDirs.get(key)
+  if (!known) return false
+  const age = performance.now() - known.at
+  if (age >= 0 && age < HARDENED_DIR_TTL_MS && realFolderId(dir) === known.id) return true
+  provenOwnerOnlyDirs.delete(key)
+  return false
+}
+
+/** Remember `dir` as proven owner-only now. Called only where an icacls read
+ *  of it has just shown the owner-only list; `idBefore` is its identity as
+ *  taken before that read, and nothing is remembered unless the folder has
+ *  one and still has the same one. Never throws. */
+function noteProvenOwnerOnly(dir: string, idBefore: string | null): void {
+  let key: string
+  try { key = folderKey(dir) } catch { return }
+  provenOwnerOnlyDirs.delete(key)
+  if (idBefore === null || realFolderId(dir) !== idBefore) return
+  if (provenOwnerOnlyDirs.size >= HARDENED_DIR_MEMO_MAX) {
+    const oldest = provenOwnerOnlyDirs.keys().next()
+    if (!oldest.done) provenOwnerOnlyDirs.delete(oldest.value)
+  }
+  provenOwnerOnlyDirs.set(key, { id: idBefore, at: performance.now() })
+}
+
+/**
+ * Forget that `dir` was proven owner-only this run, so the next
+ * `hardenCredentialDir` / `hardenDirAclWindows` call for it reads its access
+ * list again. For a write INTO a hardened folder that just failed: whatever
+ * was proven about the folder, it is not serving the app now. The path is
+ * taken as the hardening takes it (resolved, compared as the file system
+ * compares names). Never throws.
+ */
+export function forgetHardenedDir(dir: string): void {
+  try { provenOwnerOnlyDirs.delete(folderKey(dir)) } catch { /* not a path: nothing was remembered for it */ }
 }
 
 /**
@@ -801,6 +909,13 @@ function strandedPrincipals(entries: string[], removals: string[], granted: Read
  * ACL_FALLBACK_UNPROVEN_LOG (once per folder) and answers false; the folder
  * keeps the grants just written, and stays usable.
  *
+ * A folder this run has already proven owner-only, the same folder still and
+ * within the last ten minutes, is answered true with no icacls started at all
+ * (`provenOwnerOnlyDirs` says what counts as proof). The first call for a
+ * folder, and every call that is not such a hit, runs exactly the sequence
+ * above, noted as one main-thread operation for the jank detector
+ * (`execFileSync` holds the thread for every run of it).
+ *
  * Never throws. Every caller sits on a session-spawn or config-write path where
  * a permissions failure must not be fatal -- including the case where a mocked
  * or absent `child_process` makes `execFileSync` unusable.
@@ -809,9 +924,21 @@ export function hardenDirAclWindows(dir: string): boolean {
   if (!IS_WINDOWS) return false
   const spellings = windowsAclPrincipals()
   if (spellings.length === 0) return false
+  if (isProvenOwnerOnly(dir)) return true
+  const end = noteMainThreadOp(ICACLS_OP_LABEL)
+  try { return readThenHardenDirAcl(dir, spellings) } finally { end() }
+}
 
+/** `hardenDirAclWindows` past its remembered-folder answer: the read, and the
+ *  writes when the read does not show the owner-only list. */
+function readThenHardenDirAcl(dir: string, spellings: string[]): boolean {
+  // Before the read, so what is remembered is the folder the read saw.
+  const idBefore = realFolderId(dir)
   const entries = windowsAclEntries(dir)
-  if (windowsAclIsOwnerOnly(entries, hardenedPrincipals, unremovableAclPrincipals)) return true
+  if (windowsAclIsOwnerOnly(entries, hardenedPrincipals, unremovableAclPrincipals)) {
+    noteProvenOwnerOnly(dir, idBefore)
+    return true
+  }
 
   for (const principal of spellings) {
     const grants = ['/inheritance:r', '/grant:r', `${principal}:(OI)(CI)F`, `${SYSTEM_SID}:(OI)(CI)F`]
@@ -1125,6 +1252,17 @@ const credentialFolderVerdicts = new Map<string, { id: string; ok: boolean }>()
 const credentialFolderChecks = new Map<string, Promise<void>>()
 /** Homes whose last check gave no read for some folder: a home's key. */
 const credentialChecksUnanswered = new Set<string>()
+/** Profile homes removed this run: a home's key, recorded before the folder
+ *  goes (removeProfileFolder). A check that began before the removal has the
+ *  rule make the missing home again, and the folder it makes can report the
+ *  file identity of the one removed (ext4 gives a freed inode number to the
+ *  next folder made), so a removal is recorded here, never inferred from the
+ *  identity alone. A key leaves when makeProfileHome makes a home there: a
+ *  home just made is a new account's, not the removed one's (an id is new
+ *  each time, so in practice none leaves). One short string per account
+ *  removed this run; a listed account's home is never dropped whatever is
+ *  recorded here (profileRemoved). */
+const removedProfileHomes = new Set<string>()
 let readyHomeCheck: Promise<void> | null = null
 /** The start's profile steps while they are still to run. */
 let startStepsPending: Promise<void> | null = null
@@ -1240,6 +1378,7 @@ export function _setCredentialFolderRuleForTest(rule: CredentialFolderRule | nul
   credentialFolderVerdicts.clear()
   credentialFolderChecks.clear()
   credentialChecksUnanswered.clear()
+  removedProfileHomes.clear()
   readyHomeCheck = null
   startStepsPending = null
 }
@@ -1447,10 +1586,11 @@ function profileRemoved(home: string): boolean {
   })
 }
 
-/** An account removed while its folders were checked: the folder now in its
- *  home's place, made after the check began (by the check, as the account's
- *  own was removed), goes -- links as links, never followed -- and nothing
- *  there keeps a verdict. */
+/** An account removed while its folders were checked (its removal recorded
+ *  in removedProfileHomes, or its home another folder or none now): the folder
+ *  now in its home's place, made after the check began (by the check, as the
+ *  account's own was removed), goes -- links as links, never followed -- and
+ *  nothing there keeps a verdict. */
 function dropRemovedProfileHome(home: string): void {
   for (const dir of signInFoldersOf(home)) credentialFolderVerdicts.delete(folderKey(dir))
   credentialChecksUnanswered.delete(folderKey(home))
@@ -1517,9 +1657,11 @@ async function checkFolders(homes: readonly string[], rule: CredentialFolderRule
   const answers = await askRule(rule, ask)
   const again: string[] = []
   for (const { home, homeId, set } of checks) {
-    // The home is another folder (or none) now and its account was removed
-    // meanwhile: what is in its place was made after the check began.
-    if (realFolderId(home) !== homeId && profileRemoved(home)) { dropRemovedProfileHome(home); continue }
+    // The home was removed this run (recorded: the folder made in its place
+    // can report the removed one's file identity) or is another folder (or
+    // none) now, and its account is not listed: what is in its place was made
+    // after the check began.
+    if ((removedProfileHomes.has(folderKey(home)) || realFolderId(home) !== homeId) && profileRemoved(home)) { dropRemovedProfileHome(home); continue }
     await askAgainWhereInsideFailed(rule, set, answers)
     for (const dir of set) {
       if (!isProfileHome(dir)) { await settleOne(dir, answers, rule, refused, unanswered); continue }
@@ -1815,59 +1957,106 @@ function takeReadyHome(home: string): boolean {
 
 function profilesMetaFile(): string { return path.join(getProfilesRoot(), 'profiles.json') }
 
-export function listProfiles(): AccountProfile[] {
-  try {
-    const raw = fs.readFileSync(profilesMetaFile(), 'utf8')
-    return (JSON.parse(raw) as AccountProfilesConfig)?.profiles ?? []
-  } catch { return [] }
+/** What the user is told when the accounts list did not read: the file's
+ *  name, never its path. */
+export const PROFILES_UNREADABLE = 'The accounts list (profiles.json) could not be read, so nothing was changed.'
+
+/**
+ * profiles.json is there but did not read completely (it could not be opened,
+ * is not JSON, or holds no profiles list), so nothing was written.
+ *
+ * `listProfiles` answers such a read with an empty list, and the three writers
+ * (upsertProfile, deleteProfileMeta, setPrimaryProfile) used to save what it
+ * gave them: one read that failed while another program held the file, and
+ * the next account edit replaced every saved account with the one being
+ * edited. The account handlers answer a user's action with its sentence; a
+ * start-up step skips its work for that start and logs it.
+ */
+export class ProfilesUnreadableError extends Error {
+  constructor() { super(PROFILES_UNREADABLE) }
 }
 
-function saveProfiles(profiles: AccountProfile[]): void {
-  const file = profilesMetaFile()
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  atomicWriteSecure(file, JSON.stringify({ profiles } satisfies AccountProfilesConfig, null, 2))
-}
-export function upsertProfile(p: AccountProfile): void {
-  const all = listProfiles().filter((x) => x.id !== p.id)
-  all.push(p)
-  saveProfiles(all)
-}
-export function deleteProfileMeta(id: string): void {
-  saveProfiles(listProfiles().filter((x) => x.id !== id))
-}
+const isProfileRecord = (v: unknown): v is AccountProfile => !!v && typeof v === 'object' && !Array.isArray(v)
 
-/** profiles.json read strictly, for the provider account registry (WP2): no
- *  file is an empty list, and ANY other failure -- unreadable, not JSON, no
- *  profiles array -- is null. Never the `[]` listProfiles returns, which the
- *  registry would read as "every account was removed". */
-export function readProfilesStrict(): AccountProfile[] | null {
+/** profiles.json's top level as it parsed: the list, and every other key. */
+type ProfilesFile = Record<string, unknown> & { profiles: unknown[] }
+
+/**
+ * The one read of profiles.json, which every reader and writer below goes
+ * through: its whole top level, or null when it did not read completely
+ * (unreadable, not JSON, no profiles list). No file reads as `whenMissing`,
+ * an empty list unless the caller says otherwise (the first write makes the
+ * file). A byte-order mark an editor put before the text is passed over. An
+ * entry of the list may be anything; only the list itself is checked.
+ */
+function readProfilesFile(whenMissing: ProfilesFile | null = { profiles: [] }): ProfilesFile | null {
   let raw: string
   try { raw = fs.readFileSync(profilesMetaFile(), 'utf8') } catch (e) {
-    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? [] : null
+    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? whenMissing : null
   }
   try {
-    const parsed = JSON.parse(raw) as Partial<AccountProfilesConfig> | null
-    return Array.isArray(parsed?.profiles) ? parsed.profiles : null
+    const parsed = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray((parsed as { profiles?: unknown }).profiles)) return null
+    return parsed as ProfilesFile
   } catch { return null }
+}
+
+/** The saved accounts, for callers that only READ: the entries of the list
+ *  that are profile objects, and a file that did not read completely is an
+ *  empty list here. A writer never saves this list back; it edits the file as
+ *  `readProfilesFile` gave it, every other entry included. */
+export function listProfiles(): AccountProfile[] {
+  return (readProfilesFile()?.profiles ?? []).filter(isProfileRecord)
+}
+
+/** The file as a write would use it, or ProfilesUnreadableError. A caller
+ *  with a step it could not take back (making an account's folder, removing
+ *  one) asks this first and hands the answer to its write, so the list is
+ *  read once and nothing can stop reading between the step and the write. */
+function assertProfilesReadable(): ProfilesFile {
+  const top = readProfilesFile()
+  if (!top) throw new ProfilesUnreadableError()
+  return top
+}
+
+/** The one write every edit of the list shares: the list is edited only when
+ *  the file read completely (or is not there yet), every other top-level key
+ *  and every entry that is not a profile object goes back exactly as it was,
+ *  and a file that did not read is left untouched (ProfilesUnreadableError).
+ *  `top` is the file a caller already read; the file as written is returned,
+ *  for a caller with another edit to make from it. */
+function rewriteProfiles(edit: (entries: unknown[]) => unknown[], top: ProfilesFile = assertProfilesReadable()): ProfilesFile {
+  const next = { ...top, profiles: edit(top.profiles) }
+  const file = profilesMetaFile()
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  atomicWriteSecure(file, JSON.stringify(next, null, 2))
+  return next
+}
+
+const withProfile = (p: AccountProfile) => (all: unknown[]): unknown[] => [...all.filter((x) => !(isProfileRecord(x) && x.id === p.id)), p]
+const withoutProfile = (id: string) => (all: unknown[]): unknown[] => all.filter((x) => !(isProfileRecord(x) && x.id === id))
+
+export function upsertProfile(p: AccountProfile): void { rewriteProfiles(withProfile(p)) }
+export function deleteProfileMeta(id: string): void { rewriteProfiles(withoutProfile(id)) }
+
+/** profiles.json read strictly: no file is an empty list, and a file that did
+ *  not read completely is null. Never the `[]` listProfiles returns, which a
+ *  caller would read as "every account was removed". */
+export function readProfilesStrict(): AccountProfile[] | null {
+  return (readProfilesFile()?.profiles as AccountProfile[] | undefined) ?? null
 }
 
 /** Edit profiles.json in place, and only when it read completely. `edit`
  *  gets copies of the profile OBJECTS and returns whether it changed any;
  *  anything else in the list, and every other key of the file, is written
- *  back exactly as it was. Returns false when the file could not be read
- *  (nothing is written then). */
+ *  back exactly as it was. Returns false when there is no file or it could
+ *  not be read (nothing is written then). */
 export function updateProfilesStrict(edit: (profiles: AccountProfile[]) => boolean): boolean {
-  const file = profilesMetaFile()
-  let top: Record<string, unknown>
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray((parsed as { profiles?: unknown }).profiles)) return false
-    top = parsed as Record<string, unknown>
-  } catch { return false }
-  const isRecord = (v: unknown): v is AccountProfile => !!v && typeof v === 'object' && !Array.isArray(v)
-  const entries = (top.profiles as unknown[]).map((v) => (isRecord(v) ? { ...v } : v))
-  if (!edit(entries.filter(isRecord))) return true
-  atomicWriteSecure(file, JSON.stringify({ ...top, profiles: entries }, null, 2))
+  const top = readProfilesFile(null)
+  if (!top) return false
+  const entries = top.profiles.map((v) => (isProfileRecord(v) ? { ...v } : v))
+  if (!edit(entries.filter(isProfileRecord))) return true
+  atomicWriteSecure(profilesMetaFile(), JSON.stringify({ ...top, profiles: entries }, null, 2))
   return true
 }
 
@@ -1878,8 +2067,7 @@ export function getPrimaryProfileId(): string | null {
 
 /** Mark exactly one profile as primary (clears the flag on all others). */
 export function setPrimaryProfile(id: string): void {
-  const all = listProfiles().map((p) => ({ ...p, isPrimary: p.id === id }))
-  saveProfiles(all)
+  rewriteProfiles((all) => all.map((x) => (isProfileRecord(x) ? { ...x, isPrimary: x.id === id } : x)))
 }
 
 /**
@@ -1923,12 +2111,13 @@ export function resolveHeadlessProfileHome(preferredProfileId?: string | null): 
   return { home: getProfileConfigDir(id), profileId: id }
 }
 
-/** Create a fresh, EMPTY profile dir + shared junctions + metadata. The account
- *  email is filled in later by readProfileAccountEmail once the user runs /login
- *  under this profile's CLAUDE_CONFIG_DIR. Never copies credentials; never
- *  touches the default ~/.claude. */
-export function createProfile(name?: string): AccountProfile {
+/** A new account's folder and shared junctions, and the record for it. The
+ *  record is not on the list yet: the caller writes it. */
+function makeProfileHome(name?: string): AccountProfile {
   const id = `profile-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`
+  // The home made here is a new account's, whatever was removed at its path
+  // this run: a check never drops it as a removed one (removedProfileHomes).
+  removedProfileHomes.delete(folderKey(getProfileConfigDir(id)))
   // Windows: a new profile takes the home kept ready, made and checked
   // owner-only, so its first sign-in can be written at once; without one its
   // folders are checked now (a write before that ends is refused as pending).
@@ -1941,7 +2130,7 @@ export function createProfile(name?: string): AccountProfile {
     void prepareReadyHome(rule)
   }
   const trimmed = name?.trim()
-  const profile: AccountProfile = {
+  return {
     id,
     // No auto-name: an account is identified by its email once /login resolves
     // it; the friendly name stays blank until the user sets one (user request
@@ -1950,7 +2139,18 @@ export function createProfile(name?: string): AccountProfile {
     accountEmail: '',
     createdAt: Date.now(),
   }
-  upsertProfile(profile)
+}
+
+/** Create a fresh, EMPTY profile dir + shared junctions + metadata. The account
+ *  email is filled in later by readProfileAccountEmail once the user runs /login
+ *  under this profile's CLAUDE_CONFIG_DIR. Never copies credentials; never
+ *  touches the default ~/.claude. */
+export function createProfile(name?: string): AccountProfile {
+  // The list is read before anything is made, and the write uses that read:
+  // with a list that cannot be read no folder is made for the account.
+  const top = assertProfilesReadable()
+  const profile = makeProfileHome(name)
+  rewriteProfiles(withProfile(profile), top)
   return profile
 }
 
@@ -2664,8 +2864,17 @@ export function resyncProfileSettings(id: string): void {
  * re-runs /login once. Only ever touches files UNDER the profile dir.
  */
 export function migrateProfilesToHomeLayout(): void {
-  for (const p of listProfiles()) {
-    if (!isValidProfileId(p.id)) continue
+  // The list is read once, before any sign-in file is removed, and every
+  // email reset below is written from that read. With a list that cannot be
+  // read nothing is migrated: every profile keeps its old layout for this
+  // start and the next start migrates it.
+  let top = readProfilesFile()
+  if (!top) {
+    logWarn(`[profiles] home-layout migration skipped: ${PROFILES_UNREADABLE}`)
+    return
+  }
+  for (const p of top.profiles as AccountProfile[]) {
+    if (!isValidProfileId(p?.id)) continue // also an entry that is not a profile object
     const home = getProfileConfigDir(p.id)
     if (!fs.existsSync(home)) continue
     if (fs.existsSync(path.join(home, '.claude'))) continue // already new layout
@@ -2674,7 +2883,7 @@ export function migrateProfilesToHomeLayout(): void {
       try { fs.unlinkSync(path.join(home, f)) } catch { /* absent */ }
     }
     try { setupProfileLinks(p.id) } catch { /* best-effort; leaves it setup-incomplete */ }
-    upsertProfile({ ...p, accountEmail: '' })
+    top = rewriteProfiles(withProfile({ ...p, accountEmail: '' }), top)
   }
 }
 
@@ -2695,7 +2904,8 @@ function safeTeardown(dir: string): void {
   fs.rmdirSync(dir)
 }
 
-export function safeTeardownProfile(id: string): void {
+/** One account's folder, checked: exactly <profilesRoot>/<id>, or a throw. */
+function profileDirForTeardown(id: string): string {
   if (!isValidProfileId(id)) throw new Error(`refusing teardown: invalid profile id ${JSON.stringify(id)}`)
   const dir = getProfileConfigDir(id)
   // Defense-in-depth: the dir MUST be exactly <profilesRoot>/<id>. A validated
@@ -2703,12 +2913,29 @@ export function safeTeardownProfile(id: string): void {
   if (path.resolve(dir) !== path.resolve(getProfilesRoot(), id)) {
     throw new Error('refusing teardown: path escapes the profiles root')
   }
-  if (fs.existsSync(dir)) {
-    // Never recurse a reparse point AS THE ROOT (would walk into a junction target).
-    if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('refusing teardown: profile dir is a reparse point')
-    safeTeardown(dir)
-  }
-  deleteProfileMeta(id)
+  return dir
+}
+
+/** Remove an account's folder (junction links only, never their targets).
+ *  The list is not touched. The removal is recorded first, so a check of the
+ *  folder that is running now drops whatever it makes in its place
+ *  (removedProfileHomes). */
+function removeProfileFolder(dir: string): void {
+  removedProfileHomes.add(folderKey(dir))
+  if (!fs.existsSync(dir)) return
+  // Never recurse a reparse point AS THE ROOT (would walk into a junction target).
+  if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('refusing teardown: profile dir is a reparse point')
+  safeTeardown(dir)
+}
+
+export function safeTeardownProfile(id: string): void {
+  const dir = profileDirForTeardown(id)
+  // The list is read before the folder is removed, and the write uses that
+  // read: with a list that cannot be read the account stays whole, folder and
+  // entry, to be removed again.
+  const top = assertProfilesReadable()
+  removeProfileFolder(dir)
+  rewriteProfiles(withoutProfile(id), top)
 }
 
 // ---------------------------------------------------------------------------
@@ -2881,7 +3108,11 @@ export function captureGlobalLogin(name?: string): AccountProfile | null {
   let credentials: string | undefined
   try { credentials = fs.readFileSync(path.join(sharedRoot(), '.credentials.json'), 'utf8') } catch { credentials = undefined }
 
-  const profile = createProfile(name)
+  // The folder and the copies first, the list once at the end, written from
+  // the read made here. A list that cannot be read throws before anything is
+  // made (ProfilesUnreadableError).
+  const top = assertProfilesReadable()
+  const profile = makeProfileHome(name)
   try {
     writeCanonicalIdentity(profile.id, { claudeJson, credentials })
     // Also seed the per-account-home layout the spawn reads (USERPROFILE=<profileDir>):
@@ -2894,11 +3125,12 @@ export function captureGlobalLogin(name?: string): AccountProfile | null {
       writeCredentialFile(path.join(claudeDir, '.credentials.json'), credentials)
     }
     const updated: AccountProfile = { ...profile, accountEmail: email, name: name?.trim() || '' }
-    upsertProfile(updated)
+    rewriteProfiles(withProfile(updated), top)
     return updated
   } catch {
-    // capture failed mid-write: don't leave a dangling empty profile
-    try { safeTeardownProfile(profile.id) } catch { /* best-effort */ }
+    // The account never reached the list, so only the folder made above (and
+    // the copy of the sign-in in it) is removed.
+    try { removeProfileFolder(profileDirForTeardown(profile.id)) } catch { /* best-effort */ }
     return null
   }
 }
@@ -2927,8 +3159,12 @@ export function migrateProfilesToCanonicalLayout(): void {
  *  should display its email instead. Clears that placeholder on profiles that
  *  have a real account email (an in-progress add-account with no email keeps it). */
 export function healPlaceholderNames(): void {
-  for (const p of listProfiles()) {
-    if (p.accountEmail && p.name === 'New account') upsertProfile({ ...p, name: '' })
+  // Read once, and each heal is written from that read. A list that cannot
+  // be read is left alone; a later start heals the names.
+  let top = readProfilesFile()
+  if (!top) return
+  for (const p of top.profiles as AccountProfile[]) {
+    if (p?.accountEmail && p.name === 'New account') top = rewriteProfiles(withProfile({ ...p, name: '' }), top)
   }
 }
 
@@ -3255,7 +3491,9 @@ export function captureDetectedAccount(profileId: string, name?: string): Accoun
   if (!email) return null
   let credentials: string | undefined
   try { credentials = fs.readFileSync(path.join(home, '.claude', '.credentials.json'), 'utf8') } catch { credentials = undefined }
-  const np = createProfile(name)
+  // As captureGlobalLogin: folder and copies first, the list once at the end.
+  const top = assertProfilesReadable()
+  const np = makeProfileHome(name)
   try {
     writeCanonicalIdentity(np.id, { claudeJson, credentials })
     const npHome = getProfileConfigDir(np.id)
@@ -3266,10 +3504,11 @@ export function captureDetectedAccount(profileId: string, name?: string): Accoun
       writeCredentialFile(path.join(cd, '.credentials.json'), credentials)
     }
     const updated: AccountProfile = { ...np, accountEmail: email }
-    upsertProfile(updated)
+    rewriteProfiles(withProfile(updated), top)
     return updated
   } catch {
-    try { safeTeardownProfile(np.id) } catch { /* best-effort */ }
+    // Never listed, so only the folder made above is removed.
+    try { removeProfileFolder(profileDirForTeardown(np.id)) } catch { /* best-effort */ }
     return null
   }
 }

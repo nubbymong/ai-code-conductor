@@ -18,7 +18,7 @@ import HooksGatewaySection from './github/config/HooksGatewaySection'
 import PageFrame from './PageFrame'
 import { SectionLabel } from './ui/SectionLabel'
 import { resolveDefaultPanelTab, type PanelTab } from './sidebar/sessionsPanelState'
-import { resolveResumeAccountMode } from '../utils/sessionLaunch'
+import { resolveResumeAccountMode, formatSpawnError } from '../utils/sessionLaunch'
 import { Kbd } from './ui/Kbd'
 import { trackUsage } from '../stores/tipsStore'
 import { useAddAccount } from '../hooks/useAddAccount'
@@ -174,7 +174,14 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
   // Add account: create a profile + open a login shell, then navigate to Sessions.
   const addAccount = useAddAccount()
   const handleAddAccount = async () => {
-    await addAccount()
+    // Main refuses to add an account while the accounts list cannot be read;
+    // its sentence is shown, and the page stays where it is.
+    try {
+      await addAccount()
+    } catch (err) {
+      window.alert(`The account was not added. ${formatSpawnError(err)}`)
+      return
+    }
     onNavigateToSessions?.()
   }
 

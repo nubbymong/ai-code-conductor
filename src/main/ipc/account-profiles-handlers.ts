@@ -3,12 +3,12 @@ import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { IPC } from '../../shared/ipc-channels'
 import { ipcStreamEnd } from '../../shared/ipc-stream'
 import {
-  listProfiles, upsertProfile, safeTeardownProfile,
+  listProfiles, readProfilesStrict, upsertProfile, safeTeardownProfile, ProfilesUnreadableError, PROFILES_UNREADABLE,
   readProfileAccountEmail, getProfileConfigDir, isValidProfileId, createProfile,
   captureDetectedAccount, backupProfileHomeToCanonical, restoreProfileIdentityFromCanonical,
   readProfileCredentialStamp, startProfileStepsSettled,
 } from '../account-profiles'
-import { isAccountActive } from '../../shared/account-types'
+import { isAccountActive, type AccountProfile } from '../../shared/account-types'
 import { getAccountIdentity, getDefaultAccountEmail, getWatchedProfileId, isProfileInUseByLiveSession, sessionsOnProfile, detectedNewAccountEmail } from '../claude-account-identity'
 import { profileConsumerCount } from '../profile-consumers'
 import { appWindowSender } from './trusted-sender'
@@ -22,6 +22,31 @@ import { closeAccountPanesForProfile } from '../account-web/account-pane'
 import { listManagedLaunchReports } from '../managed-launch-diagnostics'
 
 const UNTRUSTED = { ok: false, code: 'untrusted-sender', error: 'That request was not accepted.' } as const
+/** The answer to a user's account edit while the accounts list cannot be
+ *  read: one fixed sentence that names the file, never its path. */
+function unreadable(): { ok: false; error: string } {
+  return { ok: false, error: PROFILES_UNREADABLE }
+}
+
+/** The saved accounts for an edit, read strictly (the entries that are
+ *  profiles); a list that did not read is ProfilesUnreadableError, which
+ *  `refusingUnreadable` answers for an edit the user asked for. */
+function profilesForEdit(): AccountProfile[] {
+  const all = readProfilesStrict()
+  if (all === null) throw new ProfilesUnreadableError()
+  return all.filter((x) => isValidProfileId(x?.id))
+}
+
+/** Runs an account edit the user asked for. A list that did not read, at the
+ *  edit's own read or at the write's, is answered with that sentence instead
+ *  of a rejected call, so the row shows it. */
+function refusingUnreadable<T>(edit: () => T): T | { ok: false; error: string } {
+  try { return edit() } catch (err) {
+    if (!(err instanceof ProfilesUnreadableError)) throw err
+    logWarn(`[account-profiles] an account edit was refused: ${err.message}`)
+    return unreadable()
+  }
+}
 
 /** What holds a profile, for a refusal the Accounts row turns into "Go to"
  *  buttons: the sessions on it (ids), and how many holders are not sessions
@@ -149,20 +174,20 @@ export function registerAccountProfilesHandlers(getWindow: () => BrowserWindow |
   // Renderer pull: the reliable per-session account identity captured at spawn.
   handle(IPC.ACCOUNT_IDENTITY_GET, (_e, p: { sessionId: string }) => (p?.sessionId ? getAccountIdentity(p.sessionId) : null))
 
-  handle(IPC.ACCOUNT_PROFILES_RENAME, (_e, p: { id: string; name: string }) => {
+  handle(IPC.ACCOUNT_PROFILES_RENAME, (_e, p: { id: string; name: string }) => refusingUnreadable(() => {
     if (!p || !isValidProfileId(p.id)) return { ok: false }
-    const prof = listProfiles().find((x) => x.id === p.id)
+    const prof = profilesForEdit().find((x) => x.id === p.id)
     if (!prof) return { ok: false }
     upsertProfile({ ...prof, name: String(p.name ?? '').trim().slice(0, 120) })
     return { ok: true }
-  })
+  }))
 
   // Mark an account active/inactive. Inactive accounts stay listed but cannot be
   // chosen when switching a session's account (enforced in the switch surfaces
   // and, as a backstop, in useSwitchAccount).
-  handle(IPC.ACCOUNT_PROFILES_SET_ACTIVE, (_e, p: { id: string; active: boolean }) => {
+  handle(IPC.ACCOUNT_PROFILES_SET_ACTIVE, (_e, p: { id: string; active: boolean }) => refusingUnreadable(() => {
     if (!p || !isValidProfileId(p.id)) return { ok: false }
-    const profs = listProfiles()
+    const profs = profilesForEdit()
     const prof = profs.find((x) => x.id === p.id)
     if (!prof) return { ok: false }
     // Already inactive: nothing to change (as the account registry treats it).
@@ -191,7 +216,7 @@ export function registerAccountProfilesHandlers(getWindow: () => BrowserWindow |
     }
     upsertProfile({ ...prof, active: p.active !== false })
     return { ok: true }
-  })
+  }))
 
   // ASYNC because the delete now AWAITS the web-session clear before it destroys
   // anything (#216). Losing the `async` here in a merge would make that await a
@@ -207,6 +232,10 @@ export function registerAccountProfilesHandlers(getWindow: () => BrowserWindow |
     if (isProfileInUseByLiveSession(p.id)) {
       return { ok: false, code: 'in-use', error: 'This account is in use by an open session. Close its sessions and try again.', ...holdersOf(p.id) }
     }
+    // Asked before anything is closed or cleared: with a list that cannot be
+    // read the account could not be taken off it, so nothing of it is touched
+    // and the sentence says so.
+    if (readProfilesStrict() === null) return unreadable()
     // #216: the profile dir is not the whole account. This account's claude.ai
     // WEB session lives in an Electron partition, so without this a delete
     // leaves live cookies on disk indefinitely and an artifacts window open.
@@ -256,6 +285,12 @@ export function registerAccountProfilesHandlers(getWindow: () => BrowserWindow |
       safeTeardownProfile(p.id)
     } catch (err) {
       logError(`[account-profiles] delete failed for ${p.id}:`, err)
+      // The list stopped reading during the awaited clear. The removal reads
+      // it before it removes anything, so the account is whole; its claude.ai
+      // sign-in is not, and the answer says both.
+      if (err instanceof ProfilesUnreadableError) {
+        return { ok: false, error: 'The accounts list (profiles.json) could not be read, so the account was kept. Its claude.ai sign-in was cleared; try again.' }
+      }
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
     return { ok: true }
@@ -264,14 +299,26 @@ export function registerAccountProfilesHandlers(getWindow: () => BrowserWindow |
   handle(IPC.ACCOUNT_PROFILES_REFRESH_IDENTITY, (_e, p: { id: string }) => {
     if (!p || !isValidProfileId(p.id)) return { ok: false, email: null }
     const email = readProfileAccountEmail(p.id)
+    let saved = true
     if (email) {
-      const prof = listProfiles().find((x) => x.id === p.id)
-      if (prof) upsertProfile({ ...prof, accountEmail: email })
+      // A poll asks this every few seconds while a sign-in is open, and it
+      // stops at the first email it is given. So when the accounts list cannot
+      // be read just now, at the read here or at the write, the email is not
+      // saved and no email is answered either: the poll asks again and that
+      // ask saves it. Any other error is the caller's, as before.
+      try {
+        const prof = profilesForEdit().find((x) => x.id === p.id)
+        if (prof) upsertProfile({ ...prof, accountEmail: email })
+      } catch (err) {
+        if (!(err instanceof ProfilesUnreadableError)) throw err
+        logWarn(`[account-profiles] refreshIdentity for ${p.id}: ${err.message}`)
+        saved = false
+      }
       // Ensure a canonical backup exists now (not just after the next restart),
       // so a later capture/restore always has a source to restore from.
       backupProfileHomeToCanonical(p.id)
     }
-    return { ok: true, email, configDir: getProfileConfigDir(p.id) }
+    return { ok: true, email: saved ? email : null, configDir: getProfileConfigDir(p.id) }
   })
   // rc.14 review F7: the re-auth poll needs to know whether the CREDENTIALS
   // changed, not whether an email exists -- an expired account still has its
