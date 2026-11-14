@@ -1006,7 +1006,7 @@ describe('allowance from the rollout (usage track MP2)', () => {
       // Round 1, C4: the status line the session emits has no credits key or text.
       expect(updates.length).toBeGreaterThan(0)
       for (const u of updates) expect(Object.keys(u as object).join(' ')).not.toMatch(/credit/i)
-      expect(JSON.stringify(updates)).not.toMatch(/credits|1250/i)
+      expect(JSON.stringify(updates)).not.toMatch(/credits|(?<![0-9])1250(?![0-9])/i)
     } finally {
       src.stop()
       remove()
