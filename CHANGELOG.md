@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.1] - 2026-11-15
+
+> A steadier release. Windows finds Claude Code at start-up without you pressing Check again, a failed read no longer wipes your accounts, turning hooks off now keeps them off, and Sentinel says plainly when its analysis account is signed out. The app also learns about new models without waiting for an update, and Fable 5.2 is in the model picker.
+
+### Added
+- The model list can now be updated without a new version of the app. At start-up, in the background, the app reads a model list that the project publishes on GitHub. It checks the file strictly, keeps the last good copy if it cannot reach GitHub, and falls back to the list that came with the app. The file can add new models and correct names and prices. It never removes a model and never changes which model a name you already use points to.
+- Fable 5.2 is added to the model picker.
+
+### Changed
+- On Windows, the app no longer repeats permission checks on folders it has already confirmed are private to you. On a busy computer those checks could pause the window for a second or more.
+
+### Fixed
+- Your accounts are no longer lost when the app cannot read its list of accounts. Before, one failed read could be saved back as an empty list, dropping every other account. Now nothing is written when the list cannot be read.
+- On Windows, sessions restored at start-up find Claude Code on their own. Since 2.1.1-beta.2 they could say Claude Code was not found until you pressed Check again. The app now looks for it once at start, refreshes its folders if needed and looks again, and a session waits for that for up to 15 seconds.
+- Sentinel now says a signed-out analysis account is signed out. Before, it could call this a usage limit. The message names the account it ran on and why (chosen in Settings, the primary account, or picked automatically), appears once for a run, and gives the whole fix: sign that account in again from its card on the Usage page, or pick another account in Settings, Sentinel, then press Re-run.
+- Turning hooks off in Settings now keeps them off. Before, a crash restart or a restart from the Services panel could start the hooks service again. The Services panel now shows it as disabled, and turning hooks on starts it again.
+- Background services recover on their own. A few crashes over several days used to use up a service's restarts for the rest of the run. A service that then runs for 5 minutes without stopping now gets its restarts back, and the usage index no longer holds a growing backlog of messages while it is down.
+
 ## [2.1.2] - 2026-10-17
 
 > A fix for Macs. When the app is opened from the Dock or Finder, it now finds Claude Code for the setup version check, Insights and Sentinel, which failed before.
@@ -1858,6 +1876,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.1
 [2.1.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.2
 [2.1.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.1
 [2.1.1-beta.3]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.1-beta.3
