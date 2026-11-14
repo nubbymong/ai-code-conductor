@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useGitHubStore } from '../../../stores/githubStore'
+import { quietly } from './quietly'
 
 const OPTS_FAST = [30, 60, 120, 300]
 const OPTS_SLOW = [120, 300, 600, 900]
@@ -17,8 +18,11 @@ export default function SyncSettings() {
   const [lastClick, setLastClick] = useState(0)
   if (!config) return null
 
+  // The one interval that changed. Main puts it on top of the intervals in
+  // the file, so the other two keep what the file has, whatever this page is
+  // showing for them.
   const setInt = (k: keyof typeof config.syncIntervals, v: number) =>
-    void updateConfig({ syncIntervals: { ...config.syncIntervals, [k]: v } })
+    quietly(updateConfig({ syncIntervals: { [k]: v } }))
 
   const syncActiveNow = async () => {
     // Render debounce: the user can't know server state; 5s dedupe prevents

@@ -9,6 +9,7 @@
 import React, { useRef, useState } from 'react'
 import type { AuthProfile, ReauthPlan } from '../../../../shared/github-types'
 import { useGitHubStore } from '../../../stores/githubStore'
+import { quietly } from './quietly'
 import { useSessionStore } from '../../../stores/sessionStore'
 import {
   AUTH_FEATURE_KEYS,
@@ -217,7 +218,7 @@ export default function AccountPanel({ profile, index }: Props) {
             type="button"
             onClick={() => {
               if (confirm(`Remove profile "${profile.label}"? The token is wiped from keychain.`)) {
-                void removeProfile(profile.id)
+                quietly(removeProfile(profile.id))
               }
             }}
             className="text-xs bg-red/20 hover:bg-red/40 text-red px-2 py-1 rounded transition-colors"
@@ -263,7 +264,7 @@ export default function AccountPanel({ profile, index }: Props) {
                 <ToggleSwitch
                   state={on ? 'on' : 'off'}
                   label={meta.label}
-                  onToggle={() => void setProfileFeature(profile.id, key, !on)}
+                  onToggle={() => quietly(setProfileFeature(profile.id, key, !on))}
                 />
                 <div className="flex-1 text-text text-sm">{meta.label}</div>
                 {differs && <Chip tone="custom">differs across accounts</Chip>}
@@ -311,7 +312,7 @@ export default function AccountPanel({ profile, index }: Props) {
               </span>
               <button
                 type="button"
-                onClick={() => void applyProfileToAll(profile.id)}
+                onClick={() => quietly(applyProfileToAll(profile.id))}
                 className={ghostBtn}
               >
                 Apply to all accounts

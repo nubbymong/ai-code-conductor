@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useGitHubStore } from '../stores/githubStore'
 import OAuthDeviceFlow from '../components/github/config/OAuthDeviceFlow'
-import type { GitHubConfig } from '../../shared/github-types'
+import type { GitHubSettingsPatch } from '../../shared/github-types'
 
 declare const __APP_VERSION__: string
 
@@ -156,8 +156,16 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
   // displayed master state. Since the display initialises FROM the stored
   // value, this is a no-op for an untouched upgrader (no clobber), and it
   // guarantees Settings shows exactly what this page showed.
+  //
+  // The master is saved only when it is the user's own: set on this page, or
+  // shown from a config that was read. When github-config.json did not read,
+  // the master shown is a default standing in for the saved one, and saving it
+  // would put that default in place of a value nobody saw. The stamp alone is
+  // sent then; the store reads the file again before it saves, and saves
+  // nothing while it still does not read.
   const finish = () => {
-    const patch: Partial<GitHubConfig> = { seenOnboardingVersion: __APP_VERSION__, enabledByDefault: masterOn }
+    const patch: GitHubSettingsPatch = { seenOnboardingVersion: __APP_VERSION__ }
+    if (localMaster !== null || !useGitHubStore.getState().configUnread) patch.enabledByDefault = masterOn
     void useGitHubStore.getState().updateConfig(patch).catch(() => {})
     onNext()
   }

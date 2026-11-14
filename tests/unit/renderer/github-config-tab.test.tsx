@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import GitHubConfigTab from '../../../src/renderer/components/github/config/GitHubConfigTab'
 import { useGitHubStore } from '../../../src/renderer/stores/githubStore'
+import { GITHUB_CONFIG_UNREADABLE } from '../../../src/shared/github-constants'
 import type {
   GitHubAuthFeatureKey,
   GitHubConfig,
@@ -171,7 +172,7 @@ describe('GitHubConfigTab', () => {
     const r = render(<GitHubConfigTab />)
     expect(r.container.querySelector('[role="alert"]')).toBeNull()
 
-    const sentence = 'The GitHub settings file (github-config.json) could not be read, so nothing was changed.'
+    const sentence = GITHUB_CONFIG_UNREADABLE
     act(() => {
       useGitHubStore.setState({ saveError: sentence } as never)
     })

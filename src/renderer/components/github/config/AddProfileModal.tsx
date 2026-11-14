@@ -98,6 +98,9 @@ export default function AddProfileModal({ onClose }: Props) {
   const submitPat = async () => {
     setPatSaving(true)
     setPatError(null)
+    // An error an earlier sign-in or gh attempt left says nothing about this
+    // token: only this attempt's outcome is shown.
+    setOauthError(null)
     const repos = patRepos.split(/[\s,]+/).filter(Boolean)
     try {
       const r = await window.electronAPI.github.addPat({

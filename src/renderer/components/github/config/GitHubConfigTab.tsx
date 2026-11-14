@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useGitHubStore } from '../../../stores/githubStore'
+import { quietly } from './quietly'
 import AccountsSection from './AccountsSection'
 import AppWideFeatures from './AppWideFeatures'
 import PermissionsSummary from './PermissionsSummary'
@@ -10,10 +11,12 @@ export default function GitHubConfigTab() {
   const loadConfig = useGitHubStore((s) => s.loadConfig)
   const updateConfig = useGitHubStore((s) => s.updateConfig)
   // Why the last change on this page was not saved (for one, main refuses a
-  // save when github-config.json could not be read). Every control here saves
-  // through the store, so one line covers the toggles, the selects and the
-  // account edits alike; without it a refused change just looks like a click
-  // that did nothing.
+  // save when github-config.json could not be read), or that the page opened
+  // on a file that did not read and is showing the defaults. Every control
+  // here saves through the store, so one line covers the toggles, the selects
+  // and the account edits alike, and a refused change never looks like a click
+  // that did nothing. A control that starts a save hands it to `quietly`: the
+  // reason is on this line, so the rejection needs no second handler.
   const saveError = useGitHubStore((s) => s.saveError)
   const saveErrorRef = useRef<HTMLDivElement>(null)
 
@@ -41,7 +44,7 @@ export default function GitHubConfigTab() {
             type="checkbox"
             className="mt-0.5"
             checked={config.enabledByDefault}
-            onChange={(e) => updateConfig({ enabledByDefault: e.target.checked })}
+            onChange={(e) => quietly(updateConfig({ enabledByDefault: e.target.checked }))}
           />
           <span>
             Enable GitHub
