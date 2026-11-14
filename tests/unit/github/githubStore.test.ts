@@ -140,4 +140,81 @@ describe('githubStore', () => {
     })
     expect(useGitHubStore.getState().syncStatus['a/b'].state).toBe('synced')
   })
+
+  // Main refuses a save when github-config.json did not read, so the saved
+  // accounts are never replaced. The settings page has to say so: the store
+  // keeps the reason as `saveError`, and never reports the save as done.
+  describe('a save main refused', () => {
+    const SENTENCE = 'The GitHub settings file (github-config.json) could not be read, so nothing was changed.'
+    /** A rejected `invoke`, as the renderer receives it. */
+    const rejected = (channel: string) =>
+      new Error(`Error invoking remote method '${channel}': Error: ${SENTENCE}`)
+    const api = () =>
+      (globalThis as unknown as { window: { electronAPI: { github: Record<string, ReturnType<typeof vi.fn>> } } })
+        .window.electronAPI.github
+
+    beforeEach(async () => {
+      useGitHubStore.setState({ saveError: null } as never)
+      await useGitHubStore.getState().loadConfig()
+    })
+
+    it('a rejected settings change is kept as saveError without the IPC wrapper, and the config is left as it was', async () => {
+      const before = useGitHubStore.getState().config
+      api().updateConfig.mockRejectedValueOnce(rejected('github:config:update'))
+      await expect(
+        useGitHubStore.getState().updateConfig({ transcriptScanningOptIn: true }),
+      ).rejects.toThrow(SENTENCE)
+      expect(useGitHubStore.getState().saveError).toBe(SENTENCE)
+      expect(useGitHubStore.getState().config).toBe(before)
+      expect(useGitHubStore.getState().profiles).toHaveLength(1)
+    })
+
+    it('an { ok: false } answer to removing an account is kept as saveError and raised, not taken as done', async () => {
+      api().removeProfile.mockResolvedValueOnce({ ok: false, error: SENTENCE })
+      await expect(useGitHubStore.getState().removeProfile('p1')).rejects.toThrow(SENTENCE)
+      expect(useGitHubStore.getState().saveError).toBe(SENTENCE)
+    })
+
+    it('an { ok: false } answer to renaming an account is kept as saveError and raised', async () => {
+      api().renameProfile.mockResolvedValueOnce({ ok: false, error: SENTENCE })
+      await expect(useGitHubStore.getState().renameProfile('p1', 'new')).rejects.toThrow(SENTENCE)
+      expect(useGitHubStore.getState().saveError).toBe(SENTENCE)
+    })
+
+    it('a refused feature toggle is kept as saveError and raised', async () => {
+      api().updateProfile = vi.fn().mockResolvedValue({ ok: false, error: SENTENCE })
+      await expect(useGitHubStore.getState().setProfileFeature('p1', 'ci', false)).rejects.toThrow(SENTENCE)
+      expect(useGitHubStore.getState().saveError).toBe(SENTENCE)
+      expect(api().updateConfig).not.toHaveBeenCalled()
+    })
+
+    it('a refused app-wide toggle is kept as saveError and raised', async () => {
+      api().updateConfig.mockRejectedValueOnce(rejected('github:config:update'))
+      await expect(useGitHubStore.getState().setAppWideToggle('localGit', false)).rejects.toThrow(SENTENCE)
+      expect(useGitHubStore.getState().saveError).toBe(SENTENCE)
+    })
+
+    it('a refusal that gives no reason still reads as a failure', async () => {
+      api().removeProfile.mockResolvedValueOnce({ ok: false })
+      await expect(useGitHubStore.getState().removeProfile('p1')).rejects.toThrow()
+      expect(useGitHubStore.getState().saveError).toBe('The change could not be saved.')
+    })
+
+    it('the next save clears it', async () => {
+      api().updateConfig.mockRejectedValueOnce(rejected('github:config:update'))
+      await expect(
+        useGitHubStore.getState().updateConfig({ transcriptScanningOptIn: true }),
+      ).rejects.toThrow()
+      expect(useGitHubStore.getState().saveError).toBe(SENTENCE)
+      await useGitHubStore.getState().updateConfig({ transcriptScanningOptIn: true })
+      expect(useGitHubStore.getState().saveError).toBeNull()
+      expect(useGitHubStore.getState().config!.transcriptScanningOptIn).toBe(true)
+    })
+
+    it('a save that goes through sets no error', async () => {
+      await useGitHubStore.getState().removeProfile('p1')
+      await useGitHubStore.getState().renameProfile('p1', 'new')
+      expect(useGitHubStore.getState().saveError).toBeNull()
+    })
+  })
 })

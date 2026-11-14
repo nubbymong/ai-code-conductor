@@ -9,7 +9,11 @@ import type {
   SessionGitHubIntegration,
 } from '../../shared/github-types'
 import type { SavedSession } from '../../shared/types'
-import { GitHubConfigStore } from '../github/github-config-store'
+import {
+  GitHubConfigStore,
+  GitHubConfigUnreadableError,
+  GITHUB_CONFIG_UNREADABLE,
+} from '../github/github-config-store'
 import { migrateGitHubConfig } from '../github/github-config-migrate'
 import { AuthProfileStore, pickRendererProfilePatch } from '../github/auth/auth-profile-store'
 import { ghAuthStatus, ghAuthToken, defaultGhRun } from '../github/auth/gh-cli-delegate'
@@ -70,6 +74,19 @@ interface RegisterDeps {
 /** What a refused request on an `{ ok }` channel is answered. */
 const NOT_APP_WINDOW = Object.freeze({ ok: false as const, error: 'not-app-window' })
 
+/**
+ * The answer to an account edit the user asked for while github-config.json
+ * cannot be read: one fixed sentence that names the file, never its path, in
+ * the `{ ok }` shape, so the dialog or the settings page shows it instead of
+ * an opaque rejected call. Nothing was written. Any other failure is raised
+ * as it always was.
+ */
+function unreadableAnswer(err: unknown): { ok: false; error: string } {
+  if (!(err instanceof GitHubConfigUnreadableError)) throw err
+  logWarn('[github] an account edit was refused: github-config.json could not be read')
+  return { ok: false, error: GITHUB_CONFIG_UNREADABLE }
+}
+
 interface OAuthFlow {
   deviceCode: string
   intervalSec: number
@@ -113,6 +130,16 @@ export interface GitHubHandlersHandle {
 export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle {
   const configStore = new GitHubConfigStore(deps.resourcesDir)
 
+  // Every change to github-config.json goes through this store's lock: the
+  // account edits, the settings patch (GITHUB_CONFIG_UPDATE) and the start-up
+  // migration below. A writer reads with readForWrite, so a file that is there
+  // but did not read is refused instead of being replaced by defaults.
+  const profileStore = new AuthProfileStore({
+    readConfig: () => configStore.read(),
+    readConfigForWrite: () => configStore.readForWrite(),
+    writeConfig: (c) => configStore.write(c),
+  })
+
   // One-shot per boot: migrate to the per-account toggle shape (spec
   // 2026-06-13 s2). Shape-detected and additive, so re-running is a no-op.
   // Fire-and-forget: the renderer's first hydrate can race this write and
@@ -120,23 +147,21 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
   // nothing renders featureDefaults/appWideToggles; the Plan 2 settings UI
   // must either tolerate the legacy shape for one frame or re-pull after
   // boot rather than assume loadConfig() always returns the migrated shape.
+  // A file that did not read is left alone (the read's error is logged here).
   void (async () => {
     try {
-      const cur = await configStore.read()
-      if (!cur) return // no config yet; emptyGitHubConfig() is born migrated
-      const aiUsageEnabled =
-        readConfig<{ githubAiUsageEnabled?: boolean }>('settings')?.githubAiUsageEnabled === true
-      const { config, changed } = migrateGitHubConfig(cur, { aiUsageEnabled })
-      if (changed) await configStore.write(config)
+      await profileStore.editConfig((cur) => {
+        if (!cur) return null // no config yet; emptyGitHubConfig() is born migrated
+        const aiUsageEnabled =
+          readConfig<{ githubAiUsageEnabled?: boolean }>('settings')?.githubAiUsageEnabled === true
+        const { config, changed } = migrateGitHubConfig(cur, { aiUsageEnabled })
+        return changed ? config : null
+      })
     } catch (err) {
       console.warn('[github] toggle migration failed (will retry next boot):', err)
     }
   })()
 
-  const profileStore = new AuthProfileStore({
-    readConfig: () => configStore.read(),
-    writeConfig: (c) => configStore.write(c),
-  })
   const activeFlows = new Map<string, OAuthFlow>()
 
   // Orchestrator dependencies. The RateLimitShield and EtagCache are shared
@@ -368,10 +393,14 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
 
   ipcMain.handle(IPC.GITHUB_CONFIG_UPDATE, async (e, patch: Partial<GitHubConfig>) => {
     if (!trusted(e)) return refused('config update', null)
-    const cur = (await configStore.read()) ?? emptyGitHubConfig()
-    const next = { ...cur, ...patch }
-    await configStore.write(next)
-    cachedConfig = next
+    // Under the account writers' lock, from the file as a writer reads it: a
+    // settings change cannot save over an account edit made at the same
+    // moment (or be saved over by one), and it starts from defaults only when
+    // there is no file yet. A file that is there but did not read rejects this
+    // call with GitHubConfigUnreadableError and is left as it is; this channel
+    // answers the config itself, so it has no `{ ok }` shape to refuse with.
+    const next = await profileStore.editConfig((cur) => ({ ...(cur ?? emptyGitHubConfig()), ...patch }))
+    cachedConfig = next ?? undefined
     return next
   })
 
@@ -401,18 +430,23 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
           if (await probeRepoAccess(input.rawToken, slug)) allowed.push(slug)
         }
       }
-      const id = await profileStore.addProfile({
-        kind: input.kind,
-        label: input.label,
-        username: v.username,
-        avatarUrl: v.avatarUrl,
-        scopes: v.scopes,
-        capabilities: caps,
-        allowedRepos: allowed,
-        rawToken: input.rawToken,
-        expiresAt: v.expiresAt,
-        expiryObservable: !!v.expiresAt,
-      })
+      let id: string
+      try {
+        id = await profileStore.addProfile({
+          kind: input.kind,
+          label: input.label,
+          username: v.username,
+          avatarUrl: v.avatarUrl,
+          scopes: v.scopes,
+          capabilities: caps,
+          allowedRepos: allowed,
+          rawToken: input.rawToken,
+          expiresAt: v.expiresAt,
+          expiryObservable: !!v.expiresAt,
+        })
+      } catch (err) {
+        return unreadableAnswer(err)
+      }
       cachedConfig = undefined
       void syncNotificationsPollerToConfig()
       return { ok: true, id }
@@ -426,23 +460,28 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     } catch {
       return { ok: false, error: 'gh auth token failed' }
     }
-    const id = await profileStore.addProfile({
-      kind: 'gh-cli',
-      label: username,
-      username,
-      scopes: [],
-      capabilities: [
-        'pulls',
-        'issues',
-        'contents',
-        'statuses',
-        'checks',
-        'actions',
-        'notifications',
-      ],
-      ghCliUsername: username,
-      expiryObservable: false,
-    })
+    let id: string
+    try {
+      id = await profileStore.addProfile({
+        kind: 'gh-cli',
+        label: username,
+        username,
+        scopes: [],
+        capabilities: [
+          'pulls',
+          'issues',
+          'contents',
+          'statuses',
+          'checks',
+          'actions',
+          'notifications',
+        ],
+        ghCliUsername: username,
+        expiryObservable: false,
+      })
+    } catch (err) {
+      return unreadableAnswer(err)
+    }
     cachedConfig = undefined
     void syncNotificationsPollerToConfig()
     return { ok: true, id }
@@ -450,7 +489,12 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
 
   ipcMain.handle(IPC.GITHUB_PROFILE_REMOVE, async (e, id: string) => {
     if (!trusted(e)) return refused('profile remove', NOT_APP_WINDOW)
-    await profileStore.removeProfile(id)
+    try {
+      await profileStore.removeProfile(id)
+    } catch (err) {
+      // Nothing was removed, so nothing below (the session bindings) is touched.
+      return unreadableAnswer(err)
+    }
     cachedConfig = undefined
     void syncNotificationsPollerToConfig()
 
@@ -495,7 +539,11 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
 
   ipcMain.handle(IPC.GITHUB_PROFILE_RENAME, async (e, id: string, label: string) => {
     if (!trusted(e)) return refused('profile rename', NOT_APP_WINDOW)
-    await profileStore.updateProfile(id, { label })
+    try {
+      await profileStore.updateProfile(id, { label })
+    } catch (err) {
+      return unreadableAnswer(err)
+    }
     return { ok: true }
   })
 
@@ -515,7 +563,11 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
     IPC.GITHUB_PROFILE_UPDATE,
     async (e, id: string, patch: RendererProfilePatch) => {
     if (!trusted(e)) return refused('profile update', NOT_APP_WINDOW)
-    await profileStore.updateProfile(id, pickRendererProfilePatch(patch ?? {}))
+    try {
+      await profileStore.updateProfile(id, pickRendererProfilePatch(patch ?? {}))
+    } catch (err) {
+      return unreadableAnswer(err)
+    }
     // The cached config snapshot now holds a stale profile; force a re-read on
     // the next consumer so feature-gating sees the new toggles immediately.
     cachedConfig = undefined
@@ -618,6 +670,9 @@ export function registerGitHubHandlers(deps: RegisterDeps): GitHubHandlersHandle
       }
       return { ok: false, error: 'pending' }
     } catch (err) {
+      // github-config.json did not read while the account was being saved:
+      // the dialog shows that sentence as it stands.
+      if (err instanceof GitHubConfigUnreadableError) return unreadableAnswer(err)
       return { ok: false, error: String(err) }
     }
   })

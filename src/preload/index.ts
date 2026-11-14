@@ -888,9 +888,11 @@ interface GitHubBridge {
     allowedRepos?: string[]
   }) => Promise<{ ok: boolean; id?: string; error?: string }>
   adoptGhCli: (username: string) => Promise<{ ok: boolean; id?: string; error?: string }>
-  removeProfile: (id: string) => Promise<{ ok: boolean }>
-  renameProfile: (id: string, label: string) => Promise<{ ok: boolean }>
-  updateProfile: (id: string, patch: unknown) => Promise<{ ok: boolean }>
+  // The three edits below answer { ok: false, error } when github-config.json
+  // could not be read: nothing was changed, and `error` says so.
+  removeProfile: (id: string) => Promise<{ ok: boolean; error?: string }>
+  renameProfile: (id: string, label: string) => Promise<{ ok: boolean; error?: string }>
+  updateProfile: (id: string, patch: unknown) => Promise<{ ok: boolean; error?: string }>
   testProfile: (id: string) => Promise<{
     ok: boolean
     username?: string

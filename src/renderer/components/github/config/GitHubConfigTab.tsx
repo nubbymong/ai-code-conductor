@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useGitHubStore } from '../../../stores/githubStore'
 import AccountsSection from './AccountsSection'
 import AppWideFeatures from './AppWideFeatures'
@@ -9,10 +9,24 @@ export default function GitHubConfigTab() {
   const config = useGitHubStore((s) => s.config)
   const loadConfig = useGitHubStore((s) => s.loadConfig)
   const updateConfig = useGitHubStore((s) => s.updateConfig)
+  // Why the last change on this page was not saved (for one, main refuses a
+  // save when github-config.json could not be read). Every control here saves
+  // through the store, so one line covers the toggles, the selects and the
+  // account edits alike; without it a refused change just looks like a click
+  // that did nothing.
+  const saveError = useGitHubStore((s) => s.saveError)
+  const saveErrorRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    // A refusal from before this page was opened says nothing about it.
+    useGitHubStore.setState({ saveError: null })
     loadConfig()
   }, [loadConfig])
+
+  useEffect(() => {
+    // The page is long and the control that was refused may be far below.
+    if (saveError) saveErrorRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [saveError])
 
   if (!config) {
     return <div className="p-6 text-overlay1">Loading GitHub config…</div>
@@ -37,6 +51,11 @@ export default function GitHubConfigTab() {
           </span>
         </label>
       </div>
+      {saveError && (
+        <div ref={saveErrorRef} role="alert" className="text-xs text-red">
+          {saveError}
+        </div>
+      )}
       <AccountsSection />
       <AppWideFeatures />
       <PrivacySettings />

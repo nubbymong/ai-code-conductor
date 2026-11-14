@@ -1,4 +1,4 @@
-import { promises as fs, existsSync } from 'node:fs'
+import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { GitHubConfig } from '../../shared/github-types'
@@ -8,8 +8,31 @@ import {
 } from '../../shared/github-constants'
 import { redactTokens } from './security/token-redactor'
 import { AsyncMutex } from './async-mutex'
+import { atomicWriteFileSync } from '../atomic-write'
 
 const FILENAME = 'github-config.json'
+
+/** What the user is told when the GitHub settings file did not read: the
+ *  file's name, never its path. */
+export const GITHUB_CONFIG_UNREADABLE =
+  'The GitHub settings file (github-config.json) could not be read, so nothing was changed.'
+
+/**
+ * github-config.json is there but did not read (it could not be opened, is
+ * not JSON, or is from a version this build does not know), so nothing was
+ * written.
+ *
+ * `read()` answers such a file with null, the same as no file at all, and the
+ * writers used to start from an empty config whenever they got null: one read
+ * that failed while another program held the file, and the next change saved
+ * defaults plus that one change over every saved account. A writer now reads
+ * with `readForWrite()`, which raises this instead.
+ */
+export class GitHubConfigUnreadableError extends Error {
+  constructor() {
+    super(GITHUB_CONFIG_UNREADABLE)
+  }
+}
 
 /**
  * Sanitizes an untrusted schemaVersion value for use in a backup filename.
@@ -25,79 +48,91 @@ function sanitizeSchemaVersionForFilename(raw: unknown): string {
 
 export class GitHubConfigStore {
   private mutex = new AsyncMutex()
+  /** The unknown-schema file text this store last backed up (see
+   *  backupUnknownSchemaFile). */
+  private backedUp: string | null = null
 
   constructor(private dir: string) {}
   private get filePath() {
     return path.join(this.dir, FILENAME)
   }
 
-  async read(): Promise<GitHubConfig | null> {
-    // Serialize with write() on the same mutex. The overwrite path uses
-    // copyFile which is NOT atomic at the byte level — without this, a
-    // concurrent read could observe a partially-copied destination and
-    // fail JSON.parse. AsyncMutex is exclusive (no reader/writer split),
-    // so reads also serialize against other reads. That's acceptable here:
-    // read() is called O(1)-ish per feature event (app start, profile
-    // list, after a push), not on a hot path.
-    return this.mutex.run(async () => {
-      try {
-        const raw = await fs.readFile(this.filePath, 'utf8')
-        const parsed = JSON.parse(raw)
-        if (parsed.schemaVersion !== GITHUB_CONFIG_SCHEMA_VERSION) {
-          await this.backupUnknownSchemaFile(raw, parsed.schemaVersion)
-          return null
-        }
-        return parsed as GitHubConfig
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
-        console.warn('[github-config] read failed:', redactTokens(String(err)))
-        return null
+  /**
+   * The one read of the file, which both reads below go through: the config,
+   * 'missing' when there is no file, or 'unreadable' for everything else (it
+   * could not be opened, is not JSON, or is from a version this build does
+   * not know). A byte-order mark an editor put before the text is passed over.
+   */
+  private async load(): Promise<GitHubConfig | 'missing' | 'unreadable'> {
+    try {
+      const raw = await fs.readFile(this.filePath, 'utf8')
+      const parsed = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw)
+      if (parsed.schemaVersion !== GITHUB_CONFIG_SCHEMA_VERSION) {
+        await this.backupUnknownSchemaFile(raw, parsed.schemaVersion)
+        return 'unreadable'
       }
+      return parsed as GitHubConfig
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
+      console.warn('[github-config] read failed:', redactTokens(String(err)))
+      return 'unreadable'
+    }
+  }
+
+  /**
+   * The config for a caller that only READS it: null when there is no file,
+   * and null when the file did not read, so the panel still renders. Never
+   * save a config built from this null: a writer reads with `readForWrite()`.
+   */
+  async read(): Promise<GitHubConfig | null> {
+    // On the same mutex as write(), so reads and writes take turns.
+    // AsyncMutex is exclusive (no reader/writer split), so reads also
+    // serialize against other reads. That's acceptable here: read() is
+    // called O(1)-ish per feature event (app start, profile list, after a
+    // push), not on a hot path.
+    return this.mutex.run(async () => {
+      const got = await this.load()
+      return typeof got === 'string' ? null : got
+    })
+  }
+
+  /**
+   * The config as a write would start from it: null ONLY when there is no
+   * file yet (first run; the first write makes it). A file that is there but
+   * did not read is GitHubConfigUnreadableError, never null, so a writer
+   * cannot take it for "no file", start from defaults and save them over the
+   * saved accounts.
+   */
+  async readForWrite(): Promise<GitHubConfig | null> {
+    return this.mutex.run(async () => {
+      const got = await this.load()
+      if (got === 'unreadable') throw new GitHubConfigUnreadableError()
+      return got === 'missing' ? null : got
     })
   }
 
   async write(config: GitHubConfig): Promise<void> {
     await this.mutex.run(async () => {
-      // Unique tmp per write — prevents parallel writers from colliding on a
-      // shared `.tmp` path and corrupting each other's output.
-      const tmp = `${this.filePath}.${randomUUID()}.tmp`
-      await fs.writeFile(tmp, JSON.stringify(config, null, 2), 'utf8')
-      try {
-        // Windows cross-platform write. fs.rename fails on Windows when the
-        // destination already exists — see src/main/config-manager.ts for
-        // the reference pattern. copyFile gives us Windows overwrite
-        // compatibility, but it is NOT crash-safe atomic: a process crash
-        // mid-copy could leave a partially-written dest. The mutex above
-        // prevents concurrent reads from observing a partial write, and a
-        // future hardening could add fsync, but single-process crash-safety
-        // is not a goal here. Plain rename is used only for the first write
-        // when no dest exists yet.
-        if (existsSync(this.filePath)) {
-          await fs.copyFile(tmp, this.filePath)
-          try {
-            await fs.unlink(tmp)
-          } catch {
-            /* ignore tmp cleanup failures */
-          }
-        } else {
-          await fs.rename(tmp, this.filePath)
-        }
-      } catch (err) {
-        try {
-          await fs.unlink(tmp)
-        } catch {
-          /* ignore */
-        }
-        throw err
-      }
+      // The shared atomic write (atomic-write.ts): the new bytes are staged
+      // beside the file under a random name and renamed over it, with the
+      // short retry Windows needs while a scanner holds the file. A write that
+      // fails part way removes its staging file and leaves the old file whole;
+      // it never leaves a half-written one. (This used to copy over the file
+      // in place, which could.)
+      atomicWriteFileSync(this.filePath, JSON.stringify(config, null, 2))
     })
   }
 
   private async backupUnknownSchemaFile(raw: string, schemaVersion: unknown): Promise<void> {
-    // Unknown schema → likely written by a newer app version. Preserve the
-    // original file before any downstream code issues a `write()` that would
-    // clobber it with an empty / downgraded config.
+    // Unknown schema → likely written by a newer app version. Keep a copy of
+    // the original file beside it. No writer replaces such a file any more
+    // (readForWrite refuses it), so the copy is a second line of defence.
     //
+    // The file therefore stays, and is read again and again: one copy of the
+    // same text per run is enough, and more would push older, different
+    // backups out of the few that pruneBackups keeps.
+    if (raw === this.backedUp) return
+
     // `schemaVersion` comes from untrusted file content, so NEVER interpolate
     // it raw into a filename. sanitizeSchemaVersionForFilename limits the
     // value to integers or 'unknown'.
@@ -113,6 +148,7 @@ export class GitHubConfigStore {
         `${FILENAME}.v${safeVersion}.${suffix}.bak`,
       )
       await fs.writeFile(backup, raw, 'utf8')
+      this.backedUp = raw
       console.warn(
         `[github-config] unknown schemaVersion ${safeVersion}; backed up to ${path.basename(backup)}`,
       )

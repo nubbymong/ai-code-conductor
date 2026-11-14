@@ -47,6 +47,11 @@ interface GitHubStoreState {
   // null when no cycle start is configured. The chip prefers this over the
   // whole-month report so it matches GitHub's billing-card "X / allowance".
   aiUsageCycle: CycleCredits | null
+  // Why the last save did not go through, in main's own words, or null. The
+  // case it exists for: main refuses a save when github-config.json could not
+  // be read, so the saved accounts are never replaced. The GitHub settings
+  // page shows this line. Cleared when the next save starts.
+  saveError: string | null
 
   loadConfig: () => Promise<void>
   updateConfig: (patch: Partial<GitHubConfig>) => Promise<void>
@@ -103,6 +108,41 @@ function layeredDefaults(cfg: GitHubConfig): Record<GitHubAuthFeatureKey, boolea
   return { ...DEFAULT_AUTH_FEATURE_TOGGLES, ...(cfg.featureDefaults ?? {}) }
 }
 
+const SAVE_FAILED = 'The change could not be saved.'
+
+/** A refused save's reason as the sentence main gave it, without the wrapper
+ *  a rejected `invoke` puts in front. */
+function refusalText(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? '')
+  return (
+    raw
+      .replace(/^Error invoking remote method '[^']*':\s*/i, '')
+      .replace(/^(Uncaught )?Error:\s*/i, '')
+      .trim() || SAVE_FAILED
+  )
+}
+
+/**
+ * One save through the bridge. A save that did not go through, by a rejected
+ * call or by an `{ ok: false }` answer, is kept as `saveError` and raised as
+ * that sentence, so the caller stops there and never goes on to report the
+ * change as made. (An `{ ok: false }` answer used to be read as done.)
+ */
+async function saved<T>(call: Promise<T>): Promise<T> {
+  try {
+    const answer = await call
+    const refusal = answer as { ok?: unknown; error?: unknown } | null | undefined
+    if (refusal && typeof refusal === 'object' && refusal.ok === false) {
+      throw new Error(typeof refusal.error === 'string' && refusal.error ? refusal.error : SAVE_FAILED)
+    }
+    return answer
+  } catch (err) {
+    const text = refusalText(err)
+    useGitHubStore.setState({ saveError: text })
+    throw new Error(text)
+  }
+}
+
 export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
   config: null,
   profiles: [],
@@ -114,6 +154,7 @@ export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
   aiUsage: null,
   aiUsageStatus: 'pending',
   aiUsageCycle: null,
+  saveError: null,
 
   loadConfig: async () => {
     const config = await window.electronAPI.github.getConfig()
@@ -127,17 +168,20 @@ export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
   },
 
   updateConfig: async (patch) => {
-    const updated = await window.electronAPI.github.updateConfig(patch)
+    set({ saveError: null })
+    const updated = await saved(window.electronAPI.github.updateConfig(patch))
     set({ config: updated, profiles: Object.values(updated.authProfiles) })
   },
 
   removeProfile: async (id) => {
-    await window.electronAPI.github.removeProfile(id)
+    set({ saveError: null })
+    await saved(window.electronAPI.github.removeProfile(id))
     await get().loadConfig()
   },
 
   renameProfile: async (id, label) => {
-    await window.electronAPI.github.renameProfile(id, label)
+    set({ saveError: null })
+    await saved(window.electronAPI.github.renameProfile(id, label))
     await get().loadConfig()
   },
 
@@ -151,18 +195,21 @@ export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
       const cfg = get().config
       const p = cfg?.authProfiles[profileId]
       if (!cfg || !p) return
+      set({ saveError: null })
       // Layer DEFAULT under a sparse/absent featureDefaults so a map-less
       // profile inherits the same complete defaults the settings UI renders —
       // a bare featureDefaults would collapse omitted keys to false on write.
       const next = effectiveToggleMap(p, layeredDefaults(cfg))
       next[key] = on
-      await window.electronAPI.github.updateProfile(profileId, { featureToggles: next })
+      await saved(window.electronAPI.github.updateProfile(profileId, { featureToggles: next }))
       // 3.2: with MasterFeaturesSection deleted, a SINGLE-account user's per-account
       // toggle is now the seed for future accounts — persist featureDefaults too.
       if (Object.keys(cfg.authProfiles).length === 1) {
-        await window.electronAPI.github.updateConfig({
-          featureDefaults: { ...layeredDefaults(cfg), [key]: on },
-        })
+        await saved(
+          window.electronAPI.github.updateConfig({
+            featureDefaults: { ...layeredDefaults(cfg), [key]: on },
+          }),
+        )
       }
       // 3.1: aiCredits on the AI-usage TARGET profile is the single user-facing
       // enable for the meter. settings.githubAiUsageEnabled stays the persisted
@@ -195,19 +242,20 @@ export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
       const cfg = get().config
       const src = cfg?.authProfiles[sourceId]
       if (!cfg || !src) return
+      set({ saveError: null })
       const map = effectiveToggleMap(src, layeredDefaults(cfg))
       try {
         for (const p of Object.values(cfg.authProfiles)) {
           if (p.id === sourceId) continue
           try {
-            await window.electronAPI.github.updateProfile(p.id, { featureToggles: map })
+            await saved(window.electronAPI.github.updateProfile(p.id, { featureToggles: map }))
           } catch (err) {
             console.warn('[github] toggle write failed for profile', p.id, err)
           }
         }
         // 3.2: persist the applied map as the seed for future accounts (replaces the
         // deleted MasterFeaturesSection's featureDefaults-write responsibility).
-        await window.electronAPI.github.updateConfig({ featureDefaults: map })
+        await saved(window.electronAPI.github.updateConfig({ featureDefaults: map }))
       } finally {
         await get().loadConfig()
       }
@@ -220,12 +268,15 @@ export const useGitHubStore = create<GitHubStoreState>((set, get) => ({
     enqueueToggleWrite(async () => {
       const cfg = get().config
       if (!cfg) return
-      await window.electronAPI.github.updateConfig({
-        appWideToggles: { ...(cfg.appWideToggles ?? {}), [key]: on } as Record<
-          GitHubAppWideFeatureKey,
-          boolean
-        >,
-      })
+      set({ saveError: null })
+      await saved(
+        window.electronAPI.github.updateConfig({
+          appWideToggles: { ...(cfg.appWideToggles ?? {}), [key]: on } as Record<
+            GitHubAppWideFeatureKey,
+            boolean
+          >,
+        }),
+      )
       await get().loadConfig()
     }),
 

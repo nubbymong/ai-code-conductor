@@ -829,8 +829,10 @@ export interface ElectronAPI {
       allowedRepos?: string[]
     }) => Promise<{ ok: boolean; id?: string; error?: string }>
     adoptGhCli: (username: string) => Promise<{ ok: boolean; id?: string; error?: string }>
-    removeProfile: (id: string) => Promise<{ ok: boolean }>
-    renameProfile: (id: string, label: string) => Promise<{ ok: boolean }>
+    // removeProfile, renameProfile and updateProfile answer { ok: false, error }
+    // when github-config.json could not be read: nothing was changed.
+    removeProfile: (id: string) => Promise<{ ok: boolean; error?: string }>
+    renameProfile: (id: string, label: string) => Promise<{ ok: boolean; error?: string }>
     // Generic profile patch. The renderer may ONLY assert label + featureToggles
     // (RendererProfilePatch). Auth-system fields (scopes/capabilities/expiry/
     // verification timestamps) are derived from token verification in main and
@@ -839,7 +841,7 @@ export interface ElectronAPI {
     updateProfile: (
       id: string,
       patch: import('../../shared/github-types').RendererProfilePatch,
-    ) => Promise<{ ok: boolean }>
+    ) => Promise<{ ok: boolean; error?: string }>
     testProfile: (id: string) => Promise<{
       ok: boolean
       username?: string

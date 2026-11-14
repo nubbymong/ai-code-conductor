@@ -1,7 +1,8 @@
 // Additive, shape-detected migration to the per-account toggle model
 // (spec 2026-06-13 section 2). HARD CONSTRAINTS:
-//  - never bump schemaVersion (GitHubConfigStore discards the whole config
-//    on version mismatch, so a bump would nuke profiles on downgrade)
+//  - never bump schemaVersion (a build that does not know the version reads
+//    no config and refuses every change to the file, so a bump would leave
+//    GitHub without its accounts and settings after a downgrade)
 //  - never delete or rewrite the legacy featureToggles field
 //  - aiUsageEnabled comes from the SEPARATE settings config file; it is read
 //    once here and ignored forever after (the flag itself is left in place).

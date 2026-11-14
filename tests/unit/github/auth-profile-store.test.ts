@@ -18,15 +18,27 @@ vi.mock('electron', () => ({
   safeStorage: mockSafeStorage,
 }))
 
+/** What the config store raises to a writer when the file did not read. */
+class Unreadable extends Error {}
+
 describe('AuthProfileStore', () => {
-  let mem: { config: GitHubConfig | null; writes: number }
+  // `unreadable`: the file is there but did not read (held by another program,
+  // not JSON, from a newer build). `config: null` alone is "no file yet".
+  let mem: { config: GitHubConfig | null; writes: number; unreadable: boolean }
   let store: AuthProfileStore
 
   beforeEach(() => {
-    mem = { config: null, writes: 0 }
+    mem = { config: null, writes: 0, unreadable: false }
     mockSafeStorage.isEncryptionAvailable.mockReturnValue(true)
     store = new AuthProfileStore({
-      readConfig: async () => mem.config,
+      // As GitHubConfigStore answers a reader: null for no file, and null for
+      // a file that did not read.
+      readConfig: async () => (mem.unreadable ? null : mem.config),
+      // ...and a writer: null only for no file; a file that did not read is an error.
+      readConfigForWrite: async () => {
+        if (mem.unreadable) throw new Unreadable('did not read')
+        return mem.config
+      },
       writeConfig: async (c) => {
         mem.config = c
         mem.writes++
@@ -411,6 +423,135 @@ describe('AuthProfileStore', () => {
       await store.replaceSameAccountOAuth(newId, 'solo')
       expect(mem.writes).toBe(writesBefore) // nothing replaced, nothing written
       expect(mem.config!.authProfiles[newId]).toBeDefined()
+    })
+  })
+
+  // The saved accounts live in the one config file. A writer that took "the
+  // file did not read" for "there is no file" started from an empty config and
+  // saved it over every account.
+  describe('a config that did not read is never replaced', () => {
+    let aId: string
+    let bId: string
+    let before: string
+
+    beforeEach(async () => {
+      aId = await store.addProfile({
+        kind: 'gh-cli', label: 'a', username: 'a', scopes: [], capabilities: [],
+        ghCliUsername: 'a', expiryObservable: false,
+      })
+      bId = await store.addProfile({
+        kind: 'oauth', label: 'b', username: 'b', scopes: [], capabilities: [],
+        rawToken: 'gho_b', expiryObservable: false,
+      })
+      mem.config!.defaultAuthProfileId = bId
+      before = JSON.stringify(mem.config)
+      mem.writes = 0
+      mem.unreadable = true
+    })
+
+    const writers: Array<[string, () => Promise<unknown>]> = [
+      ['addProfile (gh-cli)', () => store.addProfile({
+        kind: 'gh-cli', label: 'c', username: 'c', scopes: [], capabilities: [],
+        ghCliUsername: 'c', expiryObservable: false,
+      })],
+      ['addProfile (token)', () => store.addProfile({
+        kind: 'pat-classic', label: 'c', username: 'c', scopes: [], capabilities: [],
+        rawToken: 'ghp_c', expiryObservable: false,
+      })],
+      ['removeProfile', () => store.removeProfile(aId)],
+      ['updateProfile', () => store.updateProfile(aId, { label: 'renamed' })],
+      ['rotateToken', () => store.rotateToken(bId, 'gho_new')],
+      ['replaceSameAccountOAuth', () => store.replaceSameAccountOAuth(bId, 'b')],
+      ['editConfig', () => store.editConfig((cur) => ({ ...(cur ?? emptyGitHubConfig()), transcriptScanningOptIn: true }))],
+    ]
+
+    it.each(writers)('%s is refused with the read\'s own error, and nothing is written', async (_name, write) => {
+      await expect(write()).rejects.toBeInstanceOf(Unreadable)
+      expect(mem.writes).toBe(0)
+      expect(JSON.stringify(mem.config)).toBe(before)
+    })
+
+    it('editConfig does not run its edit at all', async () => {
+      const edit = vi.fn(() => emptyGitHubConfig())
+      await expect(store.editConfig(edit)).rejects.toBeInstanceOf(Unreadable)
+      expect(edit).not.toHaveBeenCalled()
+    })
+
+    it('readers still answer, with nothing: no profiles listed, no token', async () => {
+      expect(await store.listProfiles()).toEqual([])
+      expect(await store.getToken(bId)).toBeNull()
+      expect(mem.writes).toBe(0)
+    })
+
+    it('once it reads again, the same edit goes through on top of what was there', async () => {
+      await expect(store.removeProfile(aId)).rejects.toBeInstanceOf(Unreadable)
+      mem.unreadable = false
+      await store.removeProfile(aId)
+      expect(Object.keys(mem.config!.authProfiles)).toEqual([bId])
+      expect(mem.config!.defaultAuthProfileId).toBe(bId)
+      expect(await store.getToken(bId)).toBe('gho_b')
+    })
+  })
+
+  // The settings patch and the start-up migration change the same file as the
+  // profile writers. They go through editConfig, under the writers' lock.
+  describe('editConfig — a whole-file change under the profile writers\' lock', () => {
+    it('gives the edit null when there is no file yet, and saves what it returns', async () => {
+      const seen: Array<GitHubConfig | null> = []
+      const saved = await store.editConfig((cur) => {
+        seen.push(cur)
+        return { ...emptyGitHubConfig(), transcriptScanningOptIn: true }
+      })
+      expect(seen).toEqual([null])
+      expect(mem.writes).toBe(1)
+      expect(mem.config!.transcriptScanningOptIn).toBe(true)
+      expect(saved).toEqual(mem.config)
+    })
+
+    it('gives the edit the config as it read, accounts included', async () => {
+      const id = await store.addProfile({
+        kind: 'gh-cli', label: 'a', username: 'a', scopes: [], capabilities: [],
+        ghCliUsername: 'a', expiryObservable: false,
+      })
+      await store.editConfig((cur) => ({ ...cur!, enabledByDefault: true }))
+      expect(mem.config!.enabledByDefault).toBe(true)
+      expect(Object.keys(mem.config!.authProfiles)).toEqual([id])
+    })
+
+    it('saves nothing when the edit returns null', async () => {
+      mem.config = emptyGitHubConfig()
+      expect(await store.editConfig(() => null)).toBeNull()
+      expect(mem.writes).toBe(0)
+    })
+
+    it('a settings change and profile edits made at once keep every change', async () => {
+      // A store that takes time, and hands out and keeps copies, as a file does:
+      // two read-modify-writes that overlapped would each save over the other.
+      const pause = () => new Promise<void>((r) => setTimeout(r, 2))
+      const file: { saved: GitHubConfig | null } = { saved: null }
+      const slow = new AuthProfileStore({
+        readConfig: async () => { await pause(); return structuredClone(file.saved) },
+        readConfigForWrite: async () => { await pause(); return structuredClone(file.saved) },
+        writeConfig: async (c) => { await pause(); file.saved = structuredClone(c) },
+      })
+      const patch = (p: Partial<GitHubConfig>) =>
+        slow.editConfig((cur) => ({ ...(cur ?? emptyGitHubConfig()), ...p }))
+      const add = (name: string) => slow.addProfile({
+        kind: 'gh-cli', label: name, username: name, scopes: [], capabilities: [],
+        ghCliUsername: name, expiryObservable: false,
+      })
+      await Promise.all([
+        patch({ transcriptScanningOptIn: true }),
+        add('one'),
+        patch({ enabledByDefault: true }),
+        add('two'),
+        patch({ seenOnboardingVersion: '9.9.9' }),
+      ])
+      const after = file.saved!
+      expect(after.transcriptScanningOptIn).toBe(true)
+      expect(after.enabledByDefault).toBe(true)
+      expect(after.seenOnboardingVersion).toBe('9.9.9')
+      expect(Object.values(after.authProfiles).map((p) => p.username).sort()).toEqual(['one', 'two'])
     })
   })
 

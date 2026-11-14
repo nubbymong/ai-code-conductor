@@ -5,7 +5,13 @@ import { DEFAULT_AUTH_FEATURE_TOGGLES, emptyGitHubConfig } from '../../../shared
 import { AsyncMutex } from '../async-mutex'
 
 export interface AuthProfileStoreIO {
+  /** For a caller that only reads: null when there is no file, and null when
+   *  the file did not read. */
   readConfig(): Promise<GitHubConfig | null>
+  /** For a caller that will save the result back: null ONLY when there is no
+   *  file yet. A file that is there but did not read must be raised as an
+   *  error (GitHubConfigStore.readForWrite), never answered null. */
+  readConfigForWrite(): Promise<GitHubConfig | null>
   writeConfig(config: GitHubConfig): Promise<void>
 }
 
@@ -84,14 +90,45 @@ export class AuthProfileStore {
 
   constructor(private io: AuthProfileStoreIO) {}
 
+  /** The config for the READERS below (getToken, listProfiles): an empty one
+   *  when there is no file and when the file did not read. Never saved back. */
   private async load(): Promise<GitHubConfig> {
     return (await this.io.readConfig()) ?? emptyGitHubConfig()
+  }
+
+  /**
+   * The config a WRITER edits and saves back: an empty one only when there is
+   * no file yet. A file that did not read is the read's own error, and the
+   * writer stops there with nothing written. Every writer used to start from
+   * `load()`, so one failed read ended with defaults plus the one change being
+   * saved over every saved account.
+   */
+  private async loadForWrite(): Promise<GitHubConfig> {
+    return (await this.io.readConfigForWrite()) ?? emptyGitHubConfig()
+  }
+
+  /**
+   * A change to the file that is not a profile edit (the settings patch, the
+   * start-up migration), under the same lock as the profile writers, so that
+   * neither can save over a change the other made in between its own read and
+   * write. `edit` gets the file as a writer reads it (null: no file yet) and
+   * returns what to save, or null to save nothing. A file that did not read is
+   * the read's error: `edit` is not run and nothing is written.
+   */
+  async editConfig(
+    edit: (current: GitHubConfig | null) => GitHubConfig | null,
+  ): Promise<GitHubConfig | null> {
+    return this.mutex.run(async () => {
+      const next = edit(await this.io.readConfigForWrite())
+      if (next) await this.io.writeConfig(next)
+      return next
+    })
   }
 
   async addProfile(input: AddProfileInput): Promise<string> {
     return this.mutex.run(async () => {
       const id = randomUUID()
-      const config = await this.load()
+      const config = await this.loadForWrite()
 
       let tokenCiphertext: string | undefined
       if (input.kind !== 'gh-cli') {
@@ -157,7 +194,7 @@ export class AuthProfileStore {
 
   async removeProfile(id: string): Promise<void> {
     await this.mutex.run(async () => {
-      const config = await this.load()
+      const config = await this.loadForWrite()
       delete config.authProfiles[id]
       if (config.defaultAuthProfileId === id) config.defaultAuthProfileId = undefined
       await this.io.writeConfig(config)
@@ -178,7 +215,7 @@ export class AuthProfileStore {
    */
   async replaceSameAccountOAuth(newId: string, username: string): Promise<void> {
     await this.mutex.run(async () => {
-      const config = await this.load()
+      const config = await this.loadForWrite()
       const fresh = config.authProfiles[newId]
       if (!fresh) return
       let carried: AuthProfile['featureToggles']
@@ -203,7 +240,7 @@ export class AuthProfileStore {
 
   async updateProfile(id: string, patch: ProfilePatch): Promise<void> {
     await this.mutex.run(async () => {
-      const config = await this.load()
+      const config = await this.loadForWrite()
       const existing = config.authProfiles[id]
       if (!existing) throw new Error(`Profile not found: ${id}`)
       // Strip all immutable-by-design fields even if a caller bypassed the
@@ -225,7 +262,7 @@ export class AuthProfileStore {
 
   async rotateToken(id: string, rawToken: string): Promise<void> {
     await this.mutex.run(async () => {
-      const config = await this.load()
+      const config = await this.loadForWrite()
       const existing = config.authProfiles[id]
       if (!existing) throw new Error(`Profile not found: ${id}`)
       if (existing.kind === 'gh-cli') {
