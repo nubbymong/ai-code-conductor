@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.2] - 2026-11-15
+
+> A small steadier release. On Windows, a network share in PATH that does not answer no longer freezes the app when a session starts, the Services panel's hooks counters keep moving after you turn hooks off and on, and an older Claude model used through Amazon Bedrock or Google Vertex is named and priced as itself.
+
+### Fixed
+- On Windows, a folder in PATH on a network share that does not answer no longer freezes the app when a session starts. The app now looks for Claude Code in the background and waits up to 20 seconds. If a folder has still not answered by then, the session says so instead of starting a copy of Claude Code from a later folder.
+- After you turn hooks off and then on again in Settings, the hooks counters on the Services panel move again. Before, they could stay still until the app restarted.
+- When the hooks service restarts, a late message from the one it replaced can no longer stop the new one or briefly show its old state on the Services panel.
+- An older Claude Opus, Sonnet or Haiku model used through Amazon Bedrock or Google Vertex is now named and priced as itself in Usage and Tokenomics. Before, it could be counted as the newest model of its family.
+
 ## [2.1.3-beta.1] - 2026-11-15
 
 > A steadier release. Windows finds Claude Code at start-up without you pressing Check again, a failed read no longer wipes your accounts, turning hooks off now keeps them off, and Sentinel says plainly when its analysis account is signed out. The app also learns about new models without waiting for an update, and Fable 5.2 is in the model picker.
@@ -1876,6 +1886,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.2
 [2.1.3-beta.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.1
 [2.1.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.2
 [2.1.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.1
