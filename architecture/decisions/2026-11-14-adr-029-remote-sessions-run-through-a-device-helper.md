@@ -34,24 +34,34 @@ That shape has a cost:
 1. **A host is a device you add once.** A device record holds the target, the
    kind of authentication, the pinned host key, what the probe found (OS,
    architecture, login shell, CLI paths and versions, container engine) and the
-   helper version installed. Passwords stay in the OS keychain, keyed by
-   device. A session picks a device, a target on it (the host or a named
-   container) and a folder.
+   helper version installed. Records carry a MAC and a stored consent is
+   re-checked against the pinned key and helper hash before use (threat model
+   3.12). Passwords stay in the OS keychain, keyed by device. Each target has
+   a random device id that names its folder on the host (`~/.aicc/<did>/`),
+   so two app installs, or two devices sharing a home, never touch each
+   other's files. A session picks a device, a target on it (the host or a
+   named container) and a folder.
 2. **A small helper, written in Rust, is bundled with the app** and uploaded
-   once per device, after the user agrees on a screen that lists what is
-   placed where: when the device is added on the Devices page (R4), or, for a
-   device made from a saved SSH config, in a one-time dialog at its first
-   connect from R6. It is installed under the user's home in a folder named by
-   version and content hash, hash-checked at every side-channel start and
-   self-tested after every upload. The host never downloads anything.
+   once per target, after the user agrees on a screen that lists what is
+   placed where, that sessions keep running after a disconnect, and how to
+   remove it all by hand: when the device is added on the Devices page (R4),
+   or, for a device made from a saved SSH config, in a one-time dialog at its
+   first connect from R6. Fixed scripts check folder owners and modes before
+   they write or run anything; the launcher checks the hash before every
+   start, which catches corruption and wrong files but not a hostile root or
+   same-user host; a self-test runs after every upload. The host never
+   downloads anything.
 3. **One long-lived helper process per session, and no daemon.** From R9 one
    holder per session is the only helper process that outlives a connection.
    Relays live while their ssh connection is open, the MCP process as long as
    the CLI, and the rest for one call. Nothing runs on the host between
    sessions: no service, no autostart, no listening network port, no root
-   install, nothing on `PATH`. The helper has no network code at all.
+   install, nothing on `PATH`. The helper opens no TCP or UDP socket, only its
+   session's Unix-domain socket: enforced by the kernel on Linux (seccomp) and
+   shown on every OS by a source lint and a symbol check in CI.
 4. **No Claude token is copied to the host.** The app writes no app secret
-   there. The helper never reads the host's own CLI credentials.
+   there. The helper opens no CLI file except one named edit (the folder-trust
+   key) and never sends, logs or keeps a CLI credential.
 5. **A second ssh connection per session carries structured messages** (the
    side channel): statusline, hook events, file uploads, Conductor tool calls,
    sudo prompts and session state, as framed messages with strict schemas and
@@ -66,8 +76,18 @@ That shape has a cost:
    or the next (see the step plan). No tmux tier is kept.
 9. **The floor.** A host that cannot take the helper opens as a clearly
    labelled plain SSH terminal with no extras.
-10. **Host platforms.** Linux (x64, arm64, 32-bit ARM) and macOS hosts in this
-    plan. Windows hosts wait for R13.
+10. **Host platforms.** Linux (x64, arm64, 32-bit ARM; static musl builds)
+    and macOS hosts in this plan. Windows hosts wait for R13.
+11. **The app fixes its own ssh options.** Every ssh it starts turns off
+    agent, X11 and port forwarding, local commands and shared connections,
+    puts `--` before a checked target, and trusts only host keys the app
+    pinned per device from the first step that connects, jump hops included.
+    Saved passwords go only through the app's askpass, under release rules
+    bound to the connection (protocol sections 2 and 3).
+12. **Remote sessions get a default-deny tool list.** A remote session
+    reaches only the Conductor tools on the remote allow-list, with argument
+    rules per tool; nothing returns local-machine or local-network data
+    unless the list allows it (threat model 3.5).
 
 ## Consequences
 
@@ -101,8 +121,11 @@ That shape has a cost:
   old per-session SSH fields.
 
 **Old beside new.** Old per-session SSH fields are still read until R12, so a
-rollback to an earlier beta keeps working. The old SSH branch shrinks at each
-step instead of going in one change.
+rollback to an earlier beta keeps working; each saved secret has one copy that
+both generations read, and Remove device deletes it. The old SSH branch
+shrinks at each step instead of going in one change. Each guarantee holds from
+the step the threat model (2.1) names, not before, and each step's adversarial
+pass covers the old and new parts live in that beta.
 
 **Risks.**
 
@@ -111,10 +134,12 @@ step instead of going in one change.
 - A new binary (signed on macOS, and on Windows at R13) is uploaded to other
   machines. Antivirus on a host may flag it, most of all on Windows hosts.
 - Two connections per session (side channel and terminal), three for a
-  container that needs sudo. On a Windows app machine, where ssh connection
-  sharing is not available, a one-time-code host asks for a code once per
-  connection: at every session start and every reconnect, at provisioning,
-  and at R2 for each image upload until R7.
+  container that needs sudo. Connection sharing is off on every app OS, so a
+  one-time-code host asks for a code once per connection: at every session
+  start, at provisioning, and at R2 for each image upload until R7. Such a
+  device never reconnects by itself.
+- Agent forwarding is off on the app's connections. A user who relied on it in
+  a remote terminal loses it from R10 unless R4 adds a per-device choice.
 - Replaying output into a terminal of a different size can garble the first
   screen after a reattach. The holder replays at the recorded size, then the
   resize makes the CLI redraw.
@@ -123,9 +148,8 @@ step instead of going in one change.
 - Six behaviours are unproven until the R1 probes run.
 
 **What still needs real hosts.** The live matrix, the R1 probes, and about 24
-hours of real-host time across R1 to R12. Unit tests run the real helper as a
-local child process (vitest and Rust tests, on all three CI systems) and a CI
-sshd job covers exec lines and askpass. Neither replaces a real host.
+hours of real-host time across R1 to R12. Unit tests running the real helper
+locally and a CI sshd job (exec lines, ssh options, askpass) do not replace it.
 
 **Review gates.**
 
@@ -133,8 +157,8 @@ sshd job covers exec lines and askpass. Neither replaces a real host.
   IPC and preload, ssh arguments, credentials, the Conductor MCP server, or the
   new shipped binary. The helper's source, its build and its hash manifest
   join the ADR-009 path table when they land (R5).
-- R1 records a design-stage adversarial pass on the protocol spec and the
-  threat model before R5 starts. Status: not yet run.
+- Design-stage adversarial pass: round 1 found 1 blocker and about 22 majors;
+  applied in this revision; round 2 result recorded in the PR.
 - The SSH statusline live-matrix gate in `AGENTS.md` stays in force, unchanged,
   for every step that touches its blast radius. From R6 the new remote files
   join that radius. The gate shrinks only at R12, to about 8 rows per helper
@@ -146,18 +170,15 @@ sshd job covers exec lines and askpass. Neither replaces a real host.
 The remote design study scored three shapes out of 40.
 
 - **A per-user daemon that also carries the terminal (31 of 40).** Not chosen:
-  it bets everything at once, with a shared daemon that must survive upgrades
-  without stranding sessions and the terminal moved off the proven ssh path.
-  Its frame format (a kind and a channel id from the start) is kept, so the
-  terminal can move onto the side channel later if Windows hosts need it.
-- **Nothing installed on the host (26 of 40).** Not chosen: the cheapest, but
-  it keeps tmux, the reverse tunnel and the remote usage fetch, which are the
-  parts the owner asked to rethink, and it weakens persistence on hosts
-  without tmux. Its ordering (image paste first, by plain upload) and resume
-  by conversation id are kept.
-- **Keep patching today's path.** Not chosen: the owner decided against it,
-  and each fix pays the same cost and leaves the same shared stream in place.
-  Most of that code is deleted by this plan rather than tidied.
+  it bets everything at once, on a shared daemon that must survive upgrades
+  without stranding sessions. Its frame format is kept, so the terminal can
+  move onto the side channel later if Windows hosts need it.
+- **Nothing installed on the host (26 of 40).** Not chosen: it keeps tmux, the
+  reverse tunnel and the remote usage fetch, the parts the owner asked to
+  rethink. Its ordering (image paste first) and resume by conversation id are
+  kept.
+- **Keep patching today's path.** Not chosen: the owner decided against it;
+  each fix pays the same cost and leaves the same shared stream in place.
 - **An in-process SSH library.** Not chosen: it loses the user's ssh config,
   agent and jump hosts. It stays the fallback if probe P2 fails. (**Go**
   instead of Rust was not chosen either: the owner chose Rust.)
@@ -170,24 +191,31 @@ The order is the build order. Each line is one step; most are two betas.
   threat model and the six probes. Docs only. A statusline cause outside the
   remote path gets its own small beta before R2.
 - **R2** Image paste and Snap over SSH by file upload, before any helper: a
-  one-shot ssh exec with exit code and error text, saved passwords through
-  askpass, a CI sshd job.
+  one-shot ssh exec with exit code and error text, the fixed ssh options, the
+  host key pinned at the first upload, the device-id folder and its marker,
+  saved passwords through askpass, a CI sshd job.
 - **R3** Probe the host and run setup over exec with a real result per file.
-  Device records are made from saved SSH configs. The typed setup line goes.
+  Device records are made from saved SSH configs, with the key pinned at the
+  probe. The typed setup line goes.
 - **R5** The helper lands dark: a Rust project with a pinned toolchain, CI
   builds for every host target, signing, a hash manifest, shared message
-  fixtures. Not bundled; no behaviour change.
+  fixtures with a refusal per error code and pattern, seccomp and the network
+  checks with their canary. Not bundled; no behaviour change.
 - **R5.1** Message recorder and replay: the live harness saves side-channel
-  messages from real-host runs, with secrets and host names replaced; CI
-  replays them.
+  messages from real-host runs, redacted by message type and field, written
+  outside the repository and viewed by a human before commit; CI replays them.
 - **R6** The helper ships; the statusline moves to the side channel. The
   helper is bundled, uploaded with consent, hash-checked and self-tested.
 - **R4** The Devices page (add, check, re-provision, report, remove, host key
   shown and pinned), then the session dialog picks a device. Mockup approved
-  on the Agent Canvas first.
+  on the Agent Canvas first; it decides whether the terminal may forward the
+  agent per device (off by default).
 - **R7** Setup, hooks and file transfer through the helper. SSH sessions get
   attention events on every host OS.
-- **R8** Conductor tools over the side channel. The reverse port forward goes.
+- **R8** Conductor tools over the side channel, under the remote allow-list.
+  A remote session registers no local render roots: what it shows is inline
+  content, and its identity comes from the side channel alone. Tests cover
+  both. The reverse port forward goes.
 - **R9** The helper replaces tmux on Linux and macOS hosts: the CLI survives a
   dropped link or an app restart, and missed output is replayed.
 - **R10** Host sessions launch by exec, with the helper as the terminal's
@@ -224,46 +252,55 @@ shows the missing statusline, and permission to probe hosts).**
   machine.
 
 **P2 Saved passwords through askpass with Windows `ssh.exe`.**
-- Proves: Windows OpenSSH calls an app-supplied askpass program for a password
-  and for a one-time code, with no console prompt.
-- Go: both prompts are answered by the askpass program, from a non-interactive
-  start, and the connection opens.
+- Proves: the ssh program the app runs (named in the result) calls an
+  app-supplied askpass program for a password and a one-time code, with no
+  console prompt, from an install path with a space and a non-ASCII user name.
+- Go: both are answered from a non-interactive start and the connection
+  opens; a keyboard-interactive prompt with other text, a confirm prompt and a
+  jump-host prompt each reach the user and release nothing.
 - No-go: password devices need another answer (an in-process SSH library for
   those devices only), decided before R2's askpass part is built.
-- Host role: a password-auth host, reached from the Windows app machine.
+- Host role: a password-auth host and a jump host, from the Windows app machine.
 
 **P3 A helper process outliving logout.**
 - Proves: a process started by an exec over ssh keeps running after that
-  connection closes and the user has no other login.
-- Go: the process is alive five minutes later, without root and without any
-  setting the user would have to change.
+  connection closes and the user has no other login; three connections per
+  session for several sessions stay within the server's connection limits.
+- Go: alive five minutes later, without root or a setting the user must change.
 - No-go: on that host role sessions stay non-detachable and are labelled so;
   R9's persistence claim is reduced for it.
 - Host role: a Linux host with tmux (systemd with user-process cleanup on), a
-  macOS host.
+  macOS host, a container host (a process after the engine client exits).
 
 **P4 Claude Code accepting a pasted remote image path.**
 - Proves: pasting the absolute path of an image file on the host into a remote
-  Claude Code session makes it an image attachment.
+  Claude Code session makes it an image attachment. Also records the file and
+  key where the CLI keeps folder trust, or a supported flag that replaces the
+  named edit.
 - Go: the image is attached, both on the host and inside a container.
 - No-go: R2 is rescoped before it is built.
 - Host role: a Linux host with tmux, a container host.
 
 **P5 sudo answered without a terminal.**
 - Proves: a container engine command that needs sudo can be answered through
-  an askpass program from a non-terminal exec, once, with nothing echoed; and
-  the container has `/bin/sh` and a writable home for its user.
-- Go: the command runs with the answer given once, and nothing is written to
-  disk.
+  an askpass program from a non-terminal exec, once, with nothing echoed, and
+  framing through `sudo -A <engine> exec -i` stays binary clean; the container
+  has `/bin/sh` and a writable home for its user. Also tried: a wrong answer
+  and sudo's retry, `requiretty`, and `!visiblepw`.
+- Go: the command runs with the answer given once; nothing is written to disk.
 - No-go: sudo for that host role stays on the old path until another design;
   R11 is rescoped.
 - Host role: a container host where the engine needs sudo.
 
 **P6 A launch by exec gets the same PATH as an interactive login.**
 - Proves: a command run by exec over ssh finds the same CLI paths and the same
-  environment as the user's interactive login shell.
-- Go: the same `PATH` and the same CLI paths, for bash and zsh.
-- No-go: the probe records absolute CLI paths through one interactive login
-  when the device is added, the launch uses those paths, and R10 is sized
-  again.
+  environment as the user's interactive login shell, and the fixed scripts run
+  unchanged under each login shell.
+- Go: the same `PATH` and CLI paths for bash and zsh, including a `.bashrc`
+  that returns early for non-interactive shells; csh, tcsh and fish pass the
+  scripts through; a home mounted `noexec` is detected.
+- No-go: the probe records absolute CLI paths through one login run by exec
+  (`$SHELL -ilc`) when the device is added, and R10 is sized again. Either
+  way the comparison is repeated per device at provisioning, falling back to
+  recorded paths or the floor.
 - Host role: a Linux host with tmux, a macOS host, a password-auth host.
