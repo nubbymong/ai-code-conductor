@@ -121,6 +121,93 @@ describe('a dated Fable 5 turn is priced as Fable 5, not as Fable 5.2', () => {
   })
 })
 
+// planning #310: a model written with a dot is read with the dot as a hyphen
+// too, and takes the longest key of either reading. As written,
+// claude-opus-5.5 starts with the key claude-opus-5 alone (a dot follows, not
+// a digit), so each such turn was priced as Opus 5 (5 and 25 per million
+// tokens, not 4 and 20), and claude-fable-5.2 as Fable 5 (10 and 50, not 8 and
+// 40). An older model written that way (claude-opus-4.7) started with no key
+// and had no price. The same rule as the model matcher's
+// (longestIdNameStartsWith).
+describe('a Claude model written with a dot is priced as itself', () => {
+  const map = getAllPricing()
+  const keys = Object.keys(map)
+  const line = (model: string) => JSON.stringify({ type: 'assistant', timestamp: '2026-11-14T10:00:00Z', sessionId: 's', requestId: 'r',
+    message: { id: 'm', model, usage: { input_tokens: 1, output_tokens: 1 } } })
+  const keyOf = (model: string, list: string[] = keys) => parseClaudeUsageLine(line(model), list)!.priceModel
+  const priced = (model: string) => ({ key: keyOf(model), price: map[keyOf(model)] })
+  const opus55 = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 }
+  const sonnet55 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }
+  const fable52 = { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 }
+  const fable51 = { input: 10, output: 50, cacheRead: 1.0, cacheWrite: 12.5 }
+
+  it('the 5.x models take their own key and price, on the path Tokenomics prices a turn on', () => {
+    for (const [name, key, price] of [['claude-opus-5.5', 'claude-opus-5-5', opus55], ['claude-sonnet-5.5', 'claude-sonnet-5-5', sonnet55],
+      ['claude-fable-5.2', 'claude-fable-5-2', fable52], ['claude-fable-5.1', 'claude-fable-5-1', fable51]] as const) {
+      for (const written of [name, `${name}-20260101`, `${name}[1m]`]) {
+        expect(priced(written), written).toEqual({ key, price })
+        expect(normalizeModelForPricing(written, keys), written).toBe(key)
+      }
+    }
+    // The base models keep their own turns.
+    expect(priced('claude-opus-5-20260101').key).toBe('claude-opus-5')
+    expect(priced('claude-fable-5-20260101').key).toBe('claude-fable-5')
+  })
+
+  it('every priced Claude model with a two-part version, written with a dot, takes its own key', () => {
+    const twoPart = Object.keys(registryFallbackPricing()).filter((id) => /\d-\d/.test(id))
+    expect(twoPart.length).toBe(13)
+    for (const id of twoPart) {
+      const dotted = id.replace(/(\d)-(\d)/, '$1.$2')
+      for (const written of [dotted, `${dotted}-20260101`]) {
+        expect(priced(written), written).toEqual({ key: id, price: map[id] })
+        expect(normalizeModelForPricing(written, keys), written).toBe(id)
+      }
+    }
+  })
+
+  it('the longest key of either reading, as the same name written with a hyphen; a key is compared as it is written', () => {
+    for (const list of [['claude-x-5', 'claude-x-5-5'], ['claude-x-5-5', 'claude-x-5']]) {
+      for (const [dotted, hyphenated] of [['claude-x-5.5', 'claude-x-5-5'], ['claude-x-5.5-20260101', 'claude-x-5-5-20260101'], ['claude-x-5.7', 'claude-x-5-7'],
+        ['claude-x-5.55', 'claude-x-5-55'], ['claude-x-5.5.1', 'claude-x-5-5-1']]) {
+        expect(keyOf(dotted, list), dotted).toBe(keyOf(hyphenated, list))
+        expect(normalizeModelForPricing(dotted, list), dotted).toBe(normalizeModelForPricing(hyphenated, list))
+      }
+      expect(keyOf('claude-x-5.5-20260101', list)).toBe('claude-x-5-5')
+      expect(keyOf('claude-x-5.7', list)).toBe('claude-x-5')
+    }
+    // With no longer key to take, the base model's key, as the hyphenated name takes it.
+    expect(keyOf('claude-x-5.5', ['claude-x-5'])).toBe('claude-x-5')
+    expect(normalizeModelForPricing('claude-x-5.5', ['claude-x-5'])).toBe('claude-x-5')
+    // The digit rule holds for the second reading: 5.20 is not 5.2.
+    expect(keyOf('claude-x-5.20', ['claude-x-5-2'])).toBe('claude-x-5.20')
+    expect(normalizeModelForPricing('claude-x-5.20', ['claude-x-5-2', 'claude-x-5'])).toBe('claude-x-5')
+    // A key written with a dot is found in the name as written, its own key
+    // first; of two keys as long, the one in the name as written.
+    for (const list of [['claude-3-5-sonnet', 'claude-3.5-sonnet'], ['claude-3.5-sonnet', 'claude-3-5-sonnet']]) {
+      expect(keyOf('claude-3.5-sonnet', list)).toBe('claude-3.5-sonnet')
+      expect(keyOf('claude-3.5-sonnet-20241022', list)).toBe('claude-3.5-sonnet')
+      expect(keyOf('claude-3-5-sonnet-20241022', list)).toBe('claude-3-5-sonnet')
+      expect(normalizeModelForPricing('claude-3.5-sonnet-20241022', list)).toBe('claude-3.5-sonnet')
+    }
+    expect(keyOf('claude-3.5-sonnet-20241022', ['claude-3-5-sonnet'])).toBe('claude-3-5-sonnet')
+    // A hyphen is never read as a dot.
+    expect(keyOf('claude-3-5-sonnet-20241022', ['claude-3.5-sonnet'])).toBe('claude-3-5-sonnet-20241022')
+  })
+
+  it('names the change leaves alone: a dot not between two digits, a gateway\'s name, a model no key is the start of', () => {
+    for (const name of ['claude-opus-5.x', 'claude-opus-5.', 'claude-opus-5.-5']) {
+      expect(keyOf(name), name).toBe('claude-opus-5')
+      expect(normalizeModelForPricing(name, keys), name).toBe('claude-opus-5')
+    }
+    // Tokenomics has no pattern step: a name that starts with no key has no price.
+    for (const name of ['anthropic/claude-opus-5.5', 'us.anthropic.claude-opus-5-5-v1:0', 'claude-3.5-sonnet', 'claude-3-5-sonnet-20241022', 'claude-opus-4.75', 'mystery-1.5']) {
+      expect(keyOf(name), name).toBe(name)
+      expect(normalizeModelForPricing(name, keys), name).toBe(name)
+    }
+  })
+})
+
 describe('normalizeModelForPricing', () => {
   it('a dated Fable 5 id is Fable 5\'s key, and a dated Fable 5.2 id is Fable 5.2\'s (planning #310)', () => {
     const keys = Object.keys(registryFallbackPricing())

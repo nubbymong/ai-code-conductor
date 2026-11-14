@@ -17,7 +17,7 @@ import { logInfo } from '../debug-logger'
 import { tryGetProviderPackage } from '../providers/core'
 import { isPlainPriceId, checkedPer1M, listPricePer1M, isFreshCopy, isPriceRecord } from './price-checks'
 import { getRegistry } from '../model-registry-service'
-import { nameStartsWithId } from '../../shared/model-registry'
+import { longestIdNameStartsWith } from '../../shared/model-registry'
 import type { TkPricing } from './tk-types'
 
 // ── Types ──
@@ -233,16 +233,14 @@ async function fetchModelPricingOnce(): Promise<void> {
 /**
  * Maps a raw model name (possibly with a date suffix like `-20260101`) to the
  * longest matching canonical pricing key. Returns the raw model name unchanged
- * when no key matches. A key that stops inside a number does not match
- * (nameStartsWithId, as in tk-parse.ts toPriceModel and the model matcher).
+ * when no key matches. A key that stops inside a number does not match, and a
+ * model written with a dot (claude-opus-5.5) is read with the dot as a hyphen
+ * too (longestIdNameStartsWith, as in tk-parse.ts toPriceModel and the model
+ * matcher).
  */
 export function normalizeModelForPricing(model: string, keys: string[]): string {
   if (keys.includes(model)) return model
-  let best = ''
-  for (const k of keys) {
-    if (nameStartsWithId(model, k) && k.length > best.length) best = k
-  }
-  return best || model
+  return longestIdNameStartsWith(model, keys) || model
 }
 
 // ── getAllPricing — merged Claude + Codex map ──

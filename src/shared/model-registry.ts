@@ -245,27 +245,70 @@ function matchEntry(
  * another number. `claude-fable-5-2` is the start of
  * `claude-fable-5-20260101`, the dated id of Fable 5, and is not its model:
  * that name was shown, and priced, as Fable 5.2.
+ */
+function nameStartsWithId(name: string, id: string): boolean {
+  if (!name.startsWith(id)) return false
+  return !(/\d/.test(id.charAt(id.length - 1)) && /\d/.test(name.charAt(id.length)))
+}
+
+/** A name with each dot between two digits read as a hyphen:
+ *  `claude-opus-5.5` as `claude-opus-5-5`, `anthropic/claude-opus-4.7` as
+ *  `anthropic/claude-opus-4-7`. The name as it is when it has no such dot. */
+function dotsAsHyphens(name: string): string {
+  return name.replace(/(\d)\.(?=\d)/g, '$1-')
+}
+
+/** The longest of `ids` that one reading of a name starts with as an id, or ''. */
+function longestIdOfReading(reading: string, ids: readonly string[]): string {
+  let best = ''
+  for (const id of ids) {
+    if (id.length > best.length && nameStartsWithId(reading, id)) best = id
+  }
+  return best
+}
+
+/**
+ * The longest of `ids` a model name starts with as an id (nameStartsWithId),
+ * or '' when it starts with none (2.1.3-beta.3).
+ *
+ * The name is read two ways, as the pattern step reads it (patternReach): as
+ * written, and with each dot between two digits as a hyphen (dotsAsHyphens).
+ * `claude-opus-5.5` as written starts with `claude-opus-5` alone (a dot
+ * follows, not a digit), so it was Opus 5: shown, and priced, as the base
+ * model, by a match every reader trusts. Read as `claude-opus-5-5` it starts
+ * with `claude-opus-5-5` too, and the longest id takes it. So a name written
+ * with a dot goes where the same name written with a hyphen goes.
+ *
+ * The longest id of either reading takes the name; of two as long, the one
+ * the name as written starts with. An id is compared as it is written, so one
+ * with a dot in it (`gpt-5.5`) is found in the name as written, as before,
+ * and a hyphen is never read as a dot. A name with no dot between two digits
+ * has one reading. So every name that had an id still has one, and only a
+ * longer id takes it from the one it had.
  *
  * One rule for every reader that takes the longest id a name starts with:
  * the matcher below, and the two price-key lookups in Tokenomics
  * (toPriceModel in tk-parse.ts, normalizeModelForPricing in tk-pricing.ts).
- * So the three cannot disagree about where an id ends.
+ * So the three cannot disagree about where an id ends, or about a dot.
  */
-export function nameStartsWithId(name: string, id: string): boolean {
-  if (!name.startsWith(id)) return false
-  return !(/\d/.test(id.charAt(id.length - 1)) && /\d/.test(name.charAt(id.length)))
+export function longestIdNameStartsWith(name: string, ids: readonly string[]): string {
+  const asWritten = longestIdOfReading(name, ids)
+  const hyphened = dotsAsHyphens(name)
+  if (hyphened === name) return asWritten
+  const second = longestIdOfReading(hyphened, ids)
+  return second.length > asWritten.length ? second : asWritten
 }
 
 function matchByPrefixOrPattern(
   models: ModelEntry[],
   raw: string,
 ): { entry: ModelEntry; kind: ModelMatchKind } | null {
-  // 3. longest id-prefix (date-suffixed ids: claude-opus-4-7-20260101). An
-  //    id that stops inside a number is not one (nameStartsWithId).
-  let prefix: ModelEntry | null = null
-  for (const m of models) {
-    if (nameStartsWithId(raw, m.id) && (!prefix || m.id.length > prefix.id.length)) prefix = m
-  }
+  // 3. longest id-prefix (date-suffixed ids: claude-opus-4-7-20260101), the
+  //    name read as written and with a dotted version as a hyphenated one
+  //    (claude-opus-5.5). An id that stops inside a number is not one
+  //    (longestIdNameStartsWith). Of entries with that id, the first.
+  const id = longestIdNameStartsWith(raw, models.map((m) => m.id))
+  const prefix = id ? models.find((m) => m.id === id) : undefined
   if (prefix) return { entry: prefix, kind: 'prefix' }
   // 4. first pattern match in the order given, as before: it settles the
   //    family the name is in, and whether the name is a shipped entry's or
@@ -382,13 +425,6 @@ function readingReach(m: ModelEntry, lower: string): number {
   return reach
 }
 
-/** A name (lower-cased) with each dot between two digits read as a hyphen:
- *  `anthropic/claude-opus-4.7` as `anthropic/claude-opus-4-7`. The name as
- *  it is when it has no such dot. */
-function dotsAsHyphens(lower: string): string {
-  return lower.replace(/(\d)\.(?=\d)/g, '$1-')
-}
-
 /**
  * How much of a name an entry's patterns cover, the name read two ways
  * (2.1.3-beta.3): as written (`lower`), and with each dot between two digits
@@ -401,7 +437,10 @@ function dotsAsHyphens(lower: string): string {
  * an older model was shown as the newest of its family.
  *
  * Each reading is held to every rule of readingReach, the version rule
- * included: `claude-opus-4.75` and `claude-opus-4.7.1` are not Opus 4.7. A
+ * included: `anthropic/claude-opus-4.75` and `anthropic/claude-opus-4.7.1`
+ * are not Opus 4.7. (This step is reached only by a name that starts with no
+ * id: with nothing before it, `claude-opus-4.7.1` starts with the id
+ * `claude-opus-4-7` and is placed by it, as `claude-opus-4-7-1` is.) A
  * pattern written with a dot is still found in the name as written. The
  * second reading only adds matches, so a name that was placed is still
  * placed; one that was not is placed now only by a version pattern found in
