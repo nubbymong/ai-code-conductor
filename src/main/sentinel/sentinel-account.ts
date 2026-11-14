@@ -3,8 +3,9 @@
 // settings and the account lists and asks here for the words.
 //
 // The rule both labels follow: a failure names the account that was actually
-// used and how it came to be used, and "auto-picked" is said only when an
-// account the user can still see chosen in Settings could not be used. A
+// used and how it came to be used, and "auto-picked" is said only with the
+// reason that is true: an account the user can still see chosen in Settings
+// could not be used, the primary account could not be used, or none is set. A
 // saved choice whose account has since gone shows as the default in Settings
 // (SettingsPage.tsx), so here it is the default too: before, it was reported
 // as "auto-picked, your chosen analysis account is no longer available" to a
@@ -35,8 +36,13 @@ export function claudeAnalysisAccountLabel(input: { chosen: string | null; used:
       ? `${name}, the account chosen in Settings`
       : `${name}; auto-picked — your chosen analysis account is no longer available`
   }
-  return mine?.isPrimary === true
-    ? `${name}, the primary account`
+  if (mine?.isPrimary === true) return `${name}, the primary account`
+  // Auto-picked, with the reason that is true (review finding): a primary
+  // account that is set but could not be used (its folder is missing, so
+  // resolveHeadlessProfileHome passed over it) was said as "no primary
+  // account is set".
+  return profiles.some((p) => p.isPrimary === true)
+    ? `${name}; auto-picked — the primary account could not be used`
     : `${name}; auto-picked — no primary account is set`
 }
 

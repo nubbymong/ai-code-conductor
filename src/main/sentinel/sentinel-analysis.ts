@@ -409,11 +409,19 @@ const CLASSIFY_MAX = 2000
  *  it is how long something may run or last, never how much may be used. */
 const USAGE_LIMIT_REASON = /(?<!\btime[ -])\blimit\b/i
 
-/** A sign-in that failed, in the CLIs' words: Claude Code's "Failed to
- *  authenticate", "OAuth token has expired", "Invalid API key", "Not logged
- *  in", "Please run /login", the API's authentication_error; Codex's "sign in
- *  again", a token that could not be refreshed, "401 Unauthorized". */
-const SIGN_IN_REASON = /\bfailed to authenticate\b|\bauthentication[_ ]error\b|\bnot (?:logged|signed) in\b|\b(?:log|sign) in again\b|\bclaude auth login\b|\brun \/login\b|\b(?:oauth|access|refresh|auth|authentication) token\b[^.]{0,80}\b(?:expired|revoked|invalid|could not be refreshed)\b|\binvalid (?:api key|x-api-key|bearer token)\b|\b401 unauthorized\b|\blogin\b[^.]{0,60}\b(?:expired|cannot be renewed)\b/i
+/** A sign-in that failed, said outright, in the CLIs' words: Claude Code's
+ *  "Failed to authenticate", "OAuth token has expired", "Invalid API key",
+ *  "Not logged in", the API's authentication_error; Codex's token that could
+ *  not be refreshed, "401 Unauthorized". */
+const SIGN_IN_FAILED = /\bfailed to authenticate\b|\bauthentication[_ ]error\b|\bnot (?:logged|signed) in\b|\b(?:oauth|access|refresh|auth|authentication) token\b[^.]{0,80}\b(?:expired|revoked|invalid|could not be refreshed)\b|\binvalid (?:api key|x-api-key|bearer token)\b|\b401 unauthorized\b|\blogin\b[^.]{0,60}\b(?:expired|cannot be renewed)\b/i
+
+/** Being told to sign in ("Please run /login", "sign in again", "claude auth
+ *  login"): a remedy, not a statement of what failed. With nothing else to go
+ *  on it means the sign-in failed. Beside a usage limit it is the CLI saying
+ *  how to change account, and the limit is what went wrong (review finding:
+ *  "You've hit your limit · resets 4am. Please run /login to switch
+ *  accounts" was reported as signed out, without its reset time). */
+const SIGN_IN_ASKED = /\b(?:log|sign) in again\b|\bclaude auth login\b|\brun \/login\b/i
 
 /** Longest envelope `result` we echo. The CLI's error strings are short; the cap
  *  bounds what a surprising payload can put in front of the user. */
@@ -461,9 +469,12 @@ export function envelopeError(stdout: string): EnvelopeFailure | null {
   const fallback = status !== null ? `the account returned HTTP ${status}` : 'the account could not be reached'
   const raw = ((text ? plainLine(text) : '') || fallback).slice(0, CLASSIFY_MAX)
   // A 401 is the service refusing the sign-in, whatever the text says; a 429
-  // is a limit, whatever the text says.
-  const signInSaid = status === 401 || SIGN_IN_REASON.test(raw)
-  const rateLimited = status === 429 || (!signInSaid && USAGE_LIMIT_REASON.test(raw))
+  // is a limit, whatever the text says. Between the two, a text that says
+  // outright that the sign-in failed is a sign-in failure; a text that only
+  // tells the user to sign in is one unless it also speaks of a usage limit.
+  const limitSaid = USAGE_LIMIT_REASON.test(raw)
+  const signInSaid = status === 401 || SIGN_IN_FAILED.test(raw) || (!limitSaid && SIGN_IN_ASKED.test(raw))
+  const rateLimited = status === 429 || (!signInSaid && limitSaid)
   // An HTTP status is an answer from the service, so it never counts as unreachable.
   const unreachable = status === null && !rateLimited && UNREACHABLE_REASON.test(raw)
   // A sign-in that could not even reach the service is said as unreachable:
@@ -527,7 +538,8 @@ export function plainErrorReason(text: string): string {
  *  whole sentences that fit are kept and the one that does not is dropped
  *  whole (2.1.3-beta.1: a remedy was shown cut off in the middle, "...or use
  *  claude setup-token and set"); a line with no sentence end inside the cap
- *  is cut at a word, as before. */
+ *  is cut at a word, as before. Either way no bracket is left open
+ *  (withNoOpenBracket). */
 function capReason(t: string): string {
   if (t.length <= ENVELOPE_REASON_MAX) return t
   const cut = t.slice(0, ENVELOPE_REASON_MAX)
@@ -536,7 +548,25 @@ function capReason(t: string): string {
   let sentenceEnd = -1
   for (const m of t.slice(0, ENVELOPE_REASON_MAX + 1).matchAll(/[.!?](?=\s)/g)) sentenceEnd = m.index
   const kept = sentenceEnd > 0 ? cut.slice(0, sentenceEnd) : cut.replace(/\s+\S*$/, '').replace(/[\s.,;:]+$/, '') || cut
-  return `${kept} (cut short)`
+  return `${withNoOpenBracket(kept)} (cut short)`
+}
+
+/** Cut text with no bracket left open (review finding: a long first
+ *  sentence cut inside its bracket read "Failed to authenticate (word word
+ *  (cut short). Sign that account in again..."). The text goes back to
+ *  before the first bracket the cut left open; when nothing comes before
+ *  that bracket, it is closed instead. */
+function withNoOpenBracket(kept: string): string {
+  const openAt: number[] = []
+  for (let i = 0; i < kept.length; i++) {
+    const c = kept[i]
+    if (c === '(' || c === '[') openAt.push(i)
+    else if (c === ')' || c === ']') openAt.pop()
+  }
+  if (openAt.length === 0) return kept
+  const before = kept.slice(0, openAt[0]).replace(/[\s.,;:]+$/, '')
+  if (before) return before
+  return kept + openAt.map((i) => (kept[i] === '(' ? ')' : ']')).reverse().join('')
 }
 
 /** A failure's text as one plain line (plainErrorReason, before its cut). */

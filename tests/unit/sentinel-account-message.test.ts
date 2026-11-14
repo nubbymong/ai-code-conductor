@@ -70,6 +70,54 @@ describe('a login that has expired is a sign-in problem, never a usage limit', (
     expect(e.reason).toBe('Not logged in')
   })
 
+  // Review finding: the reverse of the owner's bug. A usage limit whose text
+  // also said how to change account was read as signed out, lost its reset
+  // time, and the user was told to sign in again when the remedy was to wait.
+  it.each([
+    ["You've hit your limit · resets 4am. Please run /login to switch accounts", 'resets 4am'],
+    ['Usage limit reached. You can sign in again with another account after reset', 'Usage limit reached'],
+    ["You've hit your weekly limit · resets 4am (Europe/London) · run claude auth login to use another account", 'resets 4am (Europe/London)'],
+    ['Rate limit reached. Log in again with a different account to continue', 'Rate limit reached'],
+  ])('a usage limit whose text also says how to sign in is still a usage limit, and keeps its reset time: %s', (text, kept) => {
+    const e = envelopeError(envelope(text))!
+    expect(e.rateLimited).toBe(true)
+    expect(e.signIn).toBe(false)
+    expect(e.reason).toContain(kept)
+    const msg = analysisFailureMessage('', e, 'ACCOUNT, the primary account')
+    expect(msg).toMatch(/has hit its usage limit/)
+    expect(msg).toContain(kept)
+    expect(msg).not.toMatch(/signed out/i)
+  })
+
+  it.each([
+    'Failed to authenticate: the rate limit could not be read. Please run /login',
+    'OAuth token has expired, so your usage limit could not be read. Please run /login',
+    'API Error: authentication_error while reading the usage limit',
+    'Invalid API key · the usage limit could not be read',
+    'Codex exited with code 1: 401 Unauthorized while reading the usage limit',
+    'Your login has expired, so the usage limit could not be read',
+  ])('a text that says outright that the sign-in failed is a sign-in failure, even with a limit in it: %s', (text) => {
+    const e = envelopeError(envelope(text))!
+    expect(e.signIn).toBe(true)
+    expect(e.rateLimited).toBe(false)
+  })
+
+  it('a 401 from the service is a sign-in failure even when its text speaks of a limit', () => {
+    const e = envelopeError(envelope("You've hit your limit. Please run /login", { api_error_status: 401 }))!
+    expect(e.signIn).toBe(true)
+    expect(e.rateLimited).toBe(false)
+  })
+
+  it.each([
+    'Please run /login',
+    'Codex exited with code 1: Please sign in again.',
+    'Run claude auth login to continue',
+  ])('with no limit in the text, being told to sign in is a sign-in failure as before: %s', (text) => {
+    const e = envelopeError(envelope(text))!
+    expect(e.signIn).toBe(true)
+    expect(e.rateLimited).toBe(false)
+  })
+
   it('a sign-in that could not reach the service is said as unreachable, not as signed out', () => {
     const e = envelopeError(envelope('Failed to authenticate: connect ECONNREFUSED 10.0.0.5:443'))!
     expect(e.unreachable).toBe(true)
@@ -149,6 +197,52 @@ describe('a long reason is never left half a sentence', () => {
     expect(reason.startsWith('Request to api.example.com with v2.1.300 failed again')).toBe(true)
     expect(reason.endsWith(' (cut short)')).toBe(true)
   })
+
+  // Review finding: a first sentence longer than the cap was cut at a word
+  // inside a bracket, and the message went on with the bracket left open.
+  const open = (s: string) => (s.match(/[([]/g) ?? []).length - (s.match(/[)\]]/g) ?? []).length
+
+  it('a cut never leaves a bracket open: the text goes back to before the bracket', () => {
+    expect(plainErrorReason(`Failed to authenticate (${'word '.repeat(60)}end)`)).toBe('Failed to authenticate (cut short)')
+    expect(plainErrorReason(`The service refused the request [${'word '.repeat(60)}end]`)).toBe('The service refused the request (cut short)')
+  })
+
+  it('with one bracket inside another, it goes back to before the first one left open', () => {
+    expect(plainErrorReason(`Refused by the service (first reason (second reason ${'word '.repeat(60)}end))`)).toBe('Refused by the service (cut short)')
+    // The inner one closed inside the cap, the outer one did not.
+    expect(plainErrorReason(`Refused by the service (first (second) ${'word '.repeat(60)}end)`)).toBe('Refused by the service (cut short)')
+  })
+
+  it('a bracket that closes inside the cap is kept as it is', () => {
+    const reason = plainErrorReason(`The request (id 42) was refused ${'again and again '.repeat(12)}`)
+    expect(reason.startsWith('The request (id 42) was refused again and again')).toBe(true)
+    expect(reason.endsWith(' (cut short)')).toBe(true)
+    expect(open(reason)).toBe(0)
+  })
+
+  it('a text that opens with its bracket has nothing to go back to: the bracket is closed', () => {
+    const reason = plainErrorReason(`(${'word '.repeat(60)}end)`)
+    expect(reason.startsWith('(word word')).toBe(true)
+    expect(reason.endsWith('word) (cut short)')).toBe(true)
+    expect(open(reason)).toBe(0)
+    // Two kinds, one inside the other: closed inner first, each with its own mark.
+    expect(plainErrorReason(`([${'word '.repeat(60)}end])`).endsWith('word]) (cut short)')).toBe(true)
+  })
+
+  it('a closing bracket with none before it changes nothing', () => {
+    const reason = plainErrorReason(`one) two ${'word '.repeat(60)}`)
+    expect(reason.startsWith('one) two word')).toBe(true)
+    expect(reason.endsWith('word (cut short)')).toBe(true)
+  })
+
+  it('the sign-in message with a long bracketed first sentence reads whole', () => {
+    const e = envelopeError(envelope(`Failed to authenticate (${'word '.repeat(60)}end). Run claude auth login to sign in again.`))!
+    expect(e.signIn).toBe(true)
+    expect(e.reason).toBe('Failed to authenticate (cut short)')
+    const msg = analysisFailureMessage('', e, 'ACCOUNT, the primary account')
+    expect(msg).toContain('could not run: Failed to authenticate (cut short). Sign that account in again from its card on the Usage page')
+    expect(open(msg)).toBe(0)
+  })
 })
 
 describe('which account the analysis ran on, and why', () => {
@@ -181,6 +275,26 @@ describe('which account the analysis ran on, and why', () => {
   it('no account chosen and no primary one: auto-picked, for that reason', () => {
     const noPrimary = profiles.map((p) => ({ ...p, isPrimary: false }))
     expect(claudeAnalysisAccountLabel({ chosen: null, used: 'profile-b', profiles: noPrimary })).toBe('ACCOUNT-B; auto-picked — no primary account is set')
+  })
+
+  // Review finding: "no primary account is set" was said when one was set
+  // and could not be used (its folder was missing, so another was picked).
+  it('no account chosen and a primary account that could not be used: auto-picked, for that reason, never "no primary account is set"', () => {
+    const label = claudeAnalysisAccountLabel({ chosen: null, used: 'profile-b', profiles })
+    expect(label).toBe('ACCOUNT-B; auto-picked — the primary account could not be used')
+    expect(label).not.toMatch(/no primary account is set/)
+  })
+
+  it('a removed choice and a primary account that could not be used: the same', () => {
+    expect(claudeAnalysisAccountLabel({ chosen: 'profile-removed', used: 'profile-b', profiles }))
+      .toBe('ACCOUNT-B; auto-picked — the primary account could not be used')
+  })
+
+  it('an account the list does not have is named by its id, with the reason that is true of the list', () => {
+    expect(claudeAnalysisAccountLabel({ chosen: null, used: 'profile-x', profiles })).toBe('profile-x; auto-picked — the primary account could not be used')
+    const noPrimary = profiles.map((p) => ({ ...p, isPrimary: false }))
+    expect(claudeAnalysisAccountLabel({ chosen: null, used: 'profile-x', profiles: noPrimary })).toBe('profile-x; auto-picked — no primary account is set')
+    expect(claudeAnalysisAccountLabel({ chosen: null, used: 'profile-x', profiles: [] })).toBe('profile-x; auto-picked — no primary account is set')
   })
 
   it('an account with no address yet is named by its id', () => {
