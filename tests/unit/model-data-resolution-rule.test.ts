@@ -7,17 +7,22 @@
  * entry that is not the fetched file's own addition is tried, shipped ones in
  * the bundled file's order, before a model only the fetched file has. So such
  * a model is reached by its exact id or one of its aliases, and beyond that
- * only by a name nothing else places. And its id and aliases are names the
- * bundled file alone gives to no shipped entry by an id or an alias (a
- * shipped id or alias, a dated or `[1m]` form of a shipped id): a file with
- * such a name is refused.
+ * only by a name nothing else places. And what it takes is held to this: its
+ * ID is refused only when the bundled file alone places it by an exact id or
+ * an alias (a shipped name), so an id reached by an id-prefix or a pattern
+ * (claude-fable-5-3, claude-opus-5-6, gpt-5.5-pro, claude-opus-6) is its own;
+ * each ALIAS is refused when the bundled file alone places it by an exact id
+ * or an alias, or by an id-prefix or a pattern when it does not start with the
+ * model's own id (claude-fable-5-3-20270101 and claude-fable-5-3[1m] are its
+ * own names; claude-opus-latest-x on claude-opus-6 is not). A file with a
+ * refused name is refused whole.
  *
  * A property test: a fixed list of names against a set of fetched files that
  * try to take names. Most pass every check and are put to use; one that is
  * refused is not used at all, as in the app. For every name, the registry
  * with the file says what the registry without it says, but for two cases: a
- * name that is the id or an alias of a model only the file has, and that the
- * bundled file reaches by a pattern or not at all, is that model; and a name
+ * name that is the id or an alias of a model only the file has, and that is its
+ * own by the rule above (isFilesOwn), is that model; and a name
  * nothing places without the file may be placed by such a model (that is how
  * a new family is added). Pure: no file, no network.
  */
@@ -82,8 +87,8 @@ const HOSTILE: [string, (f: Loose) => void, string?][] = [
     f.models.reverse()
   }],
   ['a new model listed first and another listed last, each with an alias', (f) => {
-    f.models.unshift({ id: 'claude-fable-9', patterns: ['fable-9', 'fable-5-', 'claude-fable'], aliases: ['fable-next'], family: 'fable', label: 'Fable 9', fallbackPricing: HIGH })
-    f.models.push({ id: 'claude-sonnet-9', patterns: ['sonnet-9', 'claude-sonnet'], aliases: ['sonnet-next'], family: 'sonnet', label: 'Sonnet 9', fallbackPricing: HIGH })
+    f.models.unshift({ id: 'claude-fable-9', patterns: ['fable-9', 'fable-5-', 'claude-fable'], aliases: ['claude-fable-9-next'], family: 'fable', label: 'Fable 9', fallbackPricing: HIGH })
+    f.models.push({ id: 'claude-sonnet-9', patterns: ['sonnet-9', 'claude-sonnet'], aliases: ['claude-sonnet-9-next'], family: 'sonnet', label: 'Sonnet 9', fallbackPricing: HIGH })
   }],
   // A shipped model's aliases are the bundled file's too.
   ['a shipped alias moved to another shipped entry, listed first, with a shipped model\'s [1m] name as a second', (f) => {
@@ -109,11 +114,8 @@ const HOSTILE: [string, (f: Loose) => void, string?][] = [
     f.models.unshift({ id: 'claude-opus-6', patterns: ['opus-6', 'opus-5-5-', 'claude-opus-'], aliases: ['opus'], family: 'opus', label: 'Opus 6', fallbackPricing: HIGH })
   }, 'models: claude-opus-6 has a name the build already places on claude-opus-5-5'],
   ['a new model with a shipped alias the shipped entry still has, as its second alias', (f) => {
-    f.models.unshift({ id: 'claude-fable-9', patterns: ['fable-9'], aliases: ['fable-next', 'fable[1m]'], family: 'fable', label: 'Fable 9', fallbackPricing: HIGH })
+    f.models.unshift({ id: 'claude-fable-9', patterns: ['fable-9'], aliases: ['claude-fable-9-next', 'fable[1m]'], family: 'fable', label: 'Fable 9', fallbackPricing: HIGH })
   }, 'models: claude-fable-9 has a name the build already places on claude-fable-5-2'],
-  ['a new model whose id is a shipped model\'s dated id', (f) => {
-    f.models.unshift({ id: 'claude-opus-4-5-20260101', patterns: [], family: 'opus', label: 'Opus 4.5 (dated)', fallbackPricing: HIGH })
-  }, 'models: claude-opus-4-5-20260101 has a name the build already places on claude-opus-4-5'],
   ['a new model with a shipped model\'s dated id as an alias', (f) => {
     f.models.unshift({ id: 'claude-opus-9', patterns: ['opus-9'], aliases: ['claude-opus-4-8-20260101'], family: 'opus', label: 'Opus 9', fallbackPricing: HIGH })
   }, 'models: claude-opus-9 has a name the build already places on claude-opus-4-8'],
@@ -123,12 +125,34 @@ const HOSTILE: [string, (f: Loose) => void, string?][] = [
   ['a new model with a shipped id as an alias', (f) => {
     f.models.unshift({ id: 'claude-haiku-9', patterns: ['haiku-9'], aliases: ['claude-haiku-4-5'], family: 'haiku', label: 'Haiku 9', fallbackPricing: HIGH })
   }, 'models: claude-haiku-9 has a name the build already places on claude-haiku-4-5'],
+  ['a new model with an alias the bundled file reaches by a pattern, that does not start with the new id', (f) => {
+    f.models.unshift({ id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['claude-opus-latest-x'], family: 'opus', label: 'Opus 6', fallbackPricing: HIGH })
+  }, 'models: claude-opus-6 has a name the build already places on claude-opus-5-5'],
+  // A model only the file has, whose ID the bundled file reaches by an
+  // id-prefix or a pattern (not by an exact id or an alias): the file's own,
+  // with its aliases that start with that id. These are the files that add a
+  // model without a release.
+  ['Fable 5.3: its id is reached by the shipped claude-fable-5\'s id-prefix; its aliases start with its id', (f) => {
+    f.models.unshift({ id: 'claude-fable-5-3', patterns: ['fable-5-3'], aliases: ['claude-fable-5-3[1m]', 'claude-fable-5-3-20270101'], family: 'fable', label: 'Fable 5.3', fallbackPricing: HIGH })
+  }],
+  ['Opus 5.6: its id is reached by the shipped claude-opus-5\'s id-prefix', (f) => {
+    f.models.unshift({ id: 'claude-opus-5-6', patterns: ['opus-5-6'], family: 'opus', label: 'Opus 5.6', fallbackPricing: HIGH })
+  }],
+  ['a new Codex model whose id is reached by the shipped gpt-5.5\'s id-prefix', (f) => {
+    f.models.unshift({ id: 'gpt-5.5-pro', patterns: [], family: 'codex', label: 'GPT-5.5 Pro' })
+  }],
+  ['Opus 6: its id is reached by the family pattern; its [1m] alias starts with its id', (f) => {
+    f.models.unshift({ id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['claude-opus-6[1m]'], family: 'opus', label: 'Opus 6', fallbackPricing: HIGH })
+  }],
+  ['a new model whose id is a shipped model\'s dated id (placed by an id-prefix, not by an exact id or an alias)', (f) => {
+    f.models.unshift({ id: 'claude-opus-4-5-20260101', patterns: [], family: 'opus', label: 'Opus 4.5 (dated)', fallbackPricing: HIGH })
+  }],
   ['a new model whose id is a longer form of a shipped id', (f) => {
     f.models.unshift({ id: 'claude-opus-5-5-2', patterns: [], family: 'opus', label: 'Opus 5.5.2', fallbackPricing: HIGH })
-  }, 'models: claude-opus-5-5-2 has a name the build already places on claude-opus-5-5'],
+  }],
   ['a new Codex model whose id is a longer form of a shipped id', (f) => {
     f.models.unshift({ id: 'gpt-5.5-20260101', patterns: [], family: 'codex', label: 'GPT-5.5 (dated)' })
-  }, 'models: gpt-5.5-20260101 has a name the build already places on gpt-5.5'],
+  }],
 ]
 
 /** The validated file, as the service would put it to use. */
@@ -177,12 +201,17 @@ const NAMES: string[] = [...new Set([
 
 const placed = (registry: ModelRegistry, name: string) => resolveModelInfo(registry, name)
 
-/** True for a name the bundled file alone gives to a shipped entry by an id
- *  or an alias: an exact id, an alias, or a longer form of an id (a dated id,
- *  `[1m]`). Such a name is never a fetched model's own. */
-const heldByTheBuild = (name: string): boolean => {
+/** Whether a name a model only the fetched file has carries is the file's own
+ *  (the final rule): its ID, unless the bundled file alone places it by an
+ *  exact id or an alias; an ALIAS, when nothing in the bundled file places it,
+ *  or when only an id-prefix or a pattern does and it starts with the model's
+ *  own id. A name the bundled file gives to a shipped entry by an exact id or
+ *  an alias is never the file's own. */
+const isFilesOwn = (name: string, kind: 'exact' | 'alias', modelId: string): boolean => {
   const at = placed(bundled, name)
-  return at.known && at.matchKind !== 'pattern'
+  if (!at.known) return true
+  if (at.matchKind === 'exact' || at.matchKind === 'alias') return false
+  return kind === 'exact' || name.startsWith(modelId)
 }
 
 /**
@@ -204,9 +233,9 @@ function namesTaken(written: Loose, used: boolean, merged: ModelRegistry, alone:
   for (const name of [...NAMES, ...own.keys()]) {
     const got = placed(merged, name)
     const mine = own.get(name)
-    // The file's own: when the file is in use, and the name is not one the
-    // build already gives to a shipped entry by an id or an alias.
-    if (mine && used && !heldByTheBuild(name)) {
+    // The file's own: when the file is in use, and the name is its own by
+    // the rule (isFilesOwn).
+    if (mine && used && isFilesOwn(name, mine.kind, mine.id)) {
       if (got.id !== mine.id || got.matchKind !== mine.kind) wrong.push(`${name}: ${got.id} (${got.matchKind}), not the file's own ${mine.id} (${mine.kind})`)
       continue
     }
@@ -236,10 +265,10 @@ describe('a fetched model file never changes what a name the build already place
     expect(reason).toBe(refusedFor ?? null)
   })
 
-  it('the files that are refused are the ones after a shipped id, alias or longer form of an id; the others are in use', () => {
+  it('the files that are refused are the ones after a shipped id or alias, or an alias the build places and the new id does not start; the others are in use', () => {
     const refused = HOSTILE.filter(([, , refusedFor]) => refusedFor !== undefined)
-    expect(refused).toHaveLength(8)
-    expect(HOSTILE.length - refused.length).toBe(13)
+    expect(refused).toHaveLength(6)
+    expect(HOSTILE.length - refused.length).toBe(20)
     for (const [what, change] of HOSTILE) expect(fetched(change).data === null, what).toBe(refused.some(([w]) => w === what))
   })
 

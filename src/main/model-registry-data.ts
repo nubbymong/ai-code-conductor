@@ -32,12 +32,17 @@
 //    (mergeModelData here, matchEntry in model-registry.ts). So a model the
 //    file adds is its exact id and its aliases, and beyond those only a name
 //    nothing shipped places;
-//  - and that id and those aliases are not names the bundled file alone
-//    gives to one of its own entries by an id or an alias (a shipped id or
-//    alias, or a longer form of a shipped id: a dated id, `[1m]`). A file
-//    with such a name is refused, and the log names the shipped entry. A
-//    name the bundled file only reaches by a pattern (`claude-opus-6`) is
-//    free: that is how a new model is added;
+//  - and a model the build does not ship takes no name the bundled file
+//    alone gives to one of its own entries: its ID is refused only when
+//    the bundled file places it by an exact id or an alias (a shipped
+//    name), so an id reached by an id-prefix or a pattern
+//    (`claude-fable-5-3`, `claude-opus-6`) is free, which is how a new model
+//    is added; each ALIAS is refused when the bundled file places it by an
+//    exact id or an alias, or by an id-prefix or a pattern when the alias
+//    does not start with the model's own id. An alias that does
+//    (`claude-fable-5-3-20270101`, `claude-fable-5-3[1m]`) is the model's own
+//    name, and one nothing places is free. A refused name refuses the whole
+//    file, and the log names the shipped entry;
 //  - a pattern is plain text (literalPattern), matched as text. Nothing in
 //    the file is ever compiled into a regular expression.
 //
@@ -46,7 +51,7 @@
 import { z } from 'zod'
 import {
   familyProvider, followsModelPickerRule, literalPattern, resolveModelInfo,
-  type EffortLevelSpec, type ModelEntry, type ModelProvider, type ModelRegistry, type OverlayModelEntry,
+  type EffortLevelSpec, type ModelEntry, type ModelMatchKind, type ModelProvider, type ModelRegistry, type OverlayModelEntry,
 } from '../shared/model-registry'
 import { stripSpoofableText } from '../shared/safe-text'
 
@@ -146,14 +151,33 @@ const FULL_MODEL_NAME: Record<ModelProvider, (id: string, family: string) => boo
 }
 const isFullModelName = (id: string, family: string): boolean => FULL_MODEL_NAME[familyProvider(family)](id, family)
 
-/** The shipped entry the bundled file alone gives `name` to by an id or an
- *  alias: its exact id, one of its aliases, or a longer form of its id (a
- *  dated id, `[1m]`), which is placed by that id. Undefined for a name the
- *  bundled file only reaches by a pattern, or not at all. Asked of the
- *  matcher itself (resolveModelInfo), so the two cannot drift apart. */
-function heldBy(bundled: ModelRegistry, name: string): string | undefined {
+/** The shipped entry the bundled file alone places `name` on, with how: by its
+ *  exact id, by one of its aliases, by the longest id `name` starts with (a
+ *  dated id, `[1m]`), or by a pattern. Undefined when nothing places it. Asked
+ *  of the matcher itself (resolveModelInfo), so the two cannot drift apart. */
+function placedBy(bundled: ModelRegistry, name: string): { id: string; kind: ModelMatchKind } | undefined {
   const at = resolveModelInfo(bundled, name)
-  return at.known && at.matchKind !== 'pattern' ? at.id : undefined
+  return at.known && at.matchKind ? { id: at.id, kind: at.matchKind } : undefined
+}
+
+/** The shipped entry that has `id` as its exact id or one of its aliases. An id
+ *  the bundled file only reaches by an id-prefix or a pattern (`claude-fable-5-3`
+ *  is reached through `claude-fable-5`) is a new model's own name. */
+function idHeldBy(bundled: ModelRegistry, id: string): string | undefined {
+  const at = placedBy(bundled, id)
+  return at && (at.kind === 'exact' || at.kind === 'alias') ? at.id : undefined
+}
+
+/** The shipped entry that stops `alias` being the alias of the model `own`: one
+ *  that has it as an exact id or an alias, or one the bundled file reaches it
+ *  on by an id-prefix or a pattern when it does not start with `own`'s id. An
+ *  alias that starts with its model's id (`claude-fable-5-3-20270101`,
+ *  `claude-fable-5-3[1m]`) is that model's own name; one nothing places is free. */
+function aliasHeldBy(bundled: ModelRegistry, alias: string, own: string): string | undefined {
+  const at = placedBy(bundled, alias)
+  if (!at) return undefined
+  if (at.kind === 'exact' || at.kind === 'alias') return at.id
+  return alias.startsWith(own) ? undefined : at.id
 }
 
 /**
@@ -212,12 +236,15 @@ export function validateModelData(value: unknown, bundled: ModelRegistry): Model
     // (its catch-all entry, its short pattern) is the build's own and stays.
     if (!base && !isFullModelName(m.id, m.family)) return refuse(`models: ${m.id} is not a full model name of its family`)
     // A model the build does not ship takes no name the bundled file alone
-    // already gives to one of its own entries by an id or an alias. An exact
-    // id or alias is looked up before anything else (matchEntry), so the name
-    // would leave the shipped entry for the new one. A name the bundled file
-    // only reaches by a pattern (`claude-opus-6`), or not at all, is free:
-    // that is how a new model is added.
-    const holder = base ? undefined : names.map((v) => heldBy(bundled, v)).find((id) => id !== undefined)
+    // gives to one of its own entries. Its ID is refused only when that is an
+    // exact id or an alias (a shipped name): an id the bundled file reaches by
+    // an id-prefix or a pattern (`claude-fable-5-3`, `claude-opus-6`) is how a
+    // new model is added. Each ALIAS is refused when the bundled file places it
+    // by an exact id or alias, or by an id-prefix or a pattern when it does not
+    // start with the model's own id; one that does is the model's own name, and
+    // one nothing places is free. Exact ids and aliases are looked up first
+    // (matchEntry), so a refused name would leave the shipped entry for the new one.
+    const holder = base ? undefined : [idHeldBy(bundled, m.id), ...(m.aliases ?? []).map((a) => aliasHeldBy(bundled, a, m.id))].find((id) => id !== undefined)
     if (holder) return refuse(`models: ${m.id} has a name the build already places on ${holder}`)
     const had = new Set(base?.patterns ?? [])
     for (const p of m.patterns) {

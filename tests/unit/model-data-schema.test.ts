@@ -331,6 +331,50 @@ describe('a fetched file is held to a strict shape', () => {
     expect(validateModelData(file(), bundled).ok).toBe(true)
   })
 
+  // The naming rule for a model the build does not ship: its ID is refused only
+  // when the bundled file places it by an exact id or an alias; each ALIAS is
+  // refused when the bundled file places it by an exact id or an alias, or by
+  // an id-prefix or a pattern when it does not start with the model's own id.
+  const HIGH_PRICE = { input: 99, output: 99, cacheRead: 99, cacheWrite: 99 }
+  it.each([
+    ['Fable 5.3 with its [1m] and dated names', { id: 'claude-fable-5-3', patterns: ['fable-5-3'], aliases: ['claude-fable-5-3[1m]', 'claude-fable-5-3-20270101'], family: 'fable', label: 'Fable 5.3', fallbackPricing: HIGH_PRICE }],
+    ['Opus 5.6', { id: 'claude-opus-5-6', patterns: ['opus-5-6'], family: 'opus', label: 'Opus 5.6', fallbackPricing: HIGH_PRICE }],
+    ['a Codex model after the shipped gpt-5.5', { id: 'gpt-5.5-pro', patterns: [], family: 'codex', label: 'GPT-5.5 Pro' }],
+    ['Opus 6 with an alias that starts with its id', { id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['claude-opus-6[1m]'], family: 'opus', label: 'Opus 6', fallbackPricing: HIGH_PRICE }],
+  ])('a new model whose id the build reaches only by an id-prefix or a pattern is taken (%s)', (_what, model) => {
+    const r = validateModelData(file((f) => { f.models.unshift(model) }), bundled)
+    expect(r.ok ? 'ok' : r.reason).toBe('ok')
+    const merged = mergeModelData(bundled, r.ok ? r.data : null, '2026-11-14')
+    expect(resolveModelInfo(merged, model.id)).toMatchObject({ id: model.id, matchKind: 'exact' })
+    for (const a of model.aliases ?? []) expect(resolveModelInfo(merged, a)).toMatchObject({ id: model.id, matchKind: 'alias' })
+  })
+
+  it.each([
+    ['the family alias', { id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['opus'], family: 'opus', label: 'Opus 6' }, 'claude-opus-5-5'],
+    ['a shipped [1m] alias', { id: 'claude-fable-5-3', patterns: ['fable-5-3'], aliases: ['fable[1m]'], family: 'fable', label: 'Fable 5.3' }, 'claude-fable-5-2'],
+    ['a shipped id', { id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['claude-opus-4-8'], family: 'opus', label: 'Opus 6' }, 'claude-opus-4-8'],
+    ['a shipped dated id', { id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['claude-opus-4-8-20260101'], family: 'opus', label: 'Opus 6' }, 'claude-opus-4-8'],
+    ['a name the build reaches by a pattern that does not start with the new id', { id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['claude-opus-latest-x'], family: 'opus', label: 'Opus 6' }, 'claude-opus-5-5'],
+    ['a name that only contains the new id, not starts with it', { id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['x-claude-opus-6'], family: 'opus', label: 'Opus 6' }, 'claude-opus-5-5'],
+  ])('a new model with an alias that is not its own (%s) refuses the file, and the reason names the shipped entry', (_what, model, holder) => {
+    expect(reasonOf(file((f) => { f.models.unshift(model) }))).toBe(`models: ${model.id} has a name the build already places on ${holder}`)
+  })
+
+  // A bundled file that has a name of its own as an alias (this build's does not
+  // for a full model name, so the file is built here): the id and the alias
+  // rules both refuse it, even for an alias that starts with the new id.
+  it('the id or alias of a new model that a shipped entry has as an alias is refused, and the reason names that entry', () => {
+    const withAliases = (extra: string[]) => file((f) => { f.models.find((m: Loose) => m.id === 'claude-opus-5-5').aliases.push(...extra) }) as unknown as ModelRegistry
+    const add = (model: Loose) => file((f) => { f.models.unshift(model) })
+    const own = { id: 'claude-opus-7', patterns: ['opus-7'], family: 'opus', label: 'Opus 7' }
+    // Its id is a shipped alias.
+    expect(validateModelData(add(own), withAliases(['claude-opus-7']))).toEqual({ ok: false, reason: 'models: claude-opus-7 has a name the build already places on claude-opus-5-5' })
+    // One of its aliases is a shipped alias that starts with its own id.
+    expect(validateModelData(add({ ...own, aliases: ['claude-opus-7[1m]'] }), withAliases(['claude-opus-7[1m]']))).toEqual({ ok: false, reason: 'models: claude-opus-7 has a name the build already places on claude-opus-5-5' })
+    // Without those aliases in the build, both are taken.
+    expect(validateModelData(add({ ...own, aliases: ['claude-opus-7[1m]'] }), bundled).ok).toBe(true)
+  })
+
   it('a price that is not a finite number is refused', () => {
     // JSON has no way to write these, so they are given as values.
     for (const price of [Number.NaN, Number.POSITIVE_INFINITY]) reasonOf(file((f) => { f.models[0].fallbackPricing.output = price }))
