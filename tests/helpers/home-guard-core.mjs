@@ -77,6 +77,7 @@ import childProcess from 'node:child_process'
 import workerThreads from 'node:worker_threads'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { runTempPrefix } from './vitest-run-tag.mjs'
 
 export const VIOLATION_CODE = 'TEST_ISOLATION_VIOLATION'
 export const MARKER_ENV = 'CCC_HOME_GUARD'
@@ -1903,8 +1904,9 @@ function hideGuardEnv() {
 function makeIsolated(state, /** @type {string[] | undefined} */ extraTmpRoots) {
   const origTmp = (extraTmpRoots ?? []).find(nonEmpty) ?? os.tmpdir()
   // A sibling of the per-worker temp root, never inside it: some code treats a home
-  // below os.tmpdir() differently. The `ccc-vitest-` prefix lets global-setup sweep it.
-  let root = fs.mkdtempSync(path.join(origTmp, 'ccc-vitest-home-'))
+  // below os.tmpdir() differently. The `ccc-vitest-<run tag>-` prefix lets global-setup
+  // remove it when this run ends, and only this run's.
+  let root = fs.mkdtempSync(path.join(origTmp, runTempPrefix('home-')))
   // On Windows, the long form: a runner's TEMP carries 8.3 short names (RUNNER~1), which
   // a real profile path never has, and code that wants a plain path would read the
   // isolated home differently from a real one.
@@ -1923,7 +1925,7 @@ function makeIsolated(state, /** @type {string[] | undefined} */ extraTmpRoots) 
     try {
       fs.rmSync(root, { recursive: true, force: true })
     } catch {
-      /* best effort; global-setup sweeps ccc-vitest-* */
+      /* best effort; global-setup removes this run's ccc-vitest-<tag>-* */
     }
   })
 }
