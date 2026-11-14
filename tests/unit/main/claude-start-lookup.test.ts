@@ -233,7 +233,10 @@ describe('on Windows, at start, with Claude Code in a folder PATH already names'
     void claudeStartLookupSettled().then(() => { done.push('look for each CLI') })
     await flush()
     expect(done, 'both wait while PATH is walked').toEqual([])
-    expect(vi.getTimerCount(), 'the deadline and the two waits').toBe(3)
+    // The fourth is the walk's own: the deadline of a launch that waits for
+    // this walk at a later time (claude-cli-probe.ts sharedClaudeWalk),
+    // cleared when the walk ends.
+    expect(vi.getTimerCount(), 'the deadline, the two waits, and the deadline of the walk itself').toBe(4)
     h.openWalk()
     await flush()
     expect(claudeStartLookupPending(), 'found: no launch is held').toBe(false)

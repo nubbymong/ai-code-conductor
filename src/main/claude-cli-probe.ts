@@ -3,7 +3,7 @@ import * as os from 'os'
 import { isAbsolute, posix } from 'path'
 import { logInfo } from './debug-logger'
 import { findOnPosixPath, findOnPosixPathAsync, loginShellPathAsync, loginShellPathSync, loginShellWithOwnPath, shFamilyLoginShell } from './login-shell'
-import { findOnWindowsPathAsync, findWithPowerShellProfile, isRegularFileAsync, windowsEnvValue, windowsPathRefreshCount, type PowerShellProfileLookup } from './windows-programs'
+import { findOnWindowsPathAsync, findWithPowerShellProfile, folderFileTest, isRegularFileAsync, pathWalkDeadline, windowsEnvValue, windowsPathRefreshCount, withPathWalkDeadline, type PathWalkInFlight, type PowerShellProfileLookup } from './windows-programs'
 
 /**
  * Is the `claude` CLI actually INSTALLED on this machine?
@@ -185,6 +185,13 @@ export const CLAUDE_WINDOWS_NAMES: readonly string[] = Object.freeze(['claude.ex
 /** What a check or a start says when Claude Code is in none of PATH's folders. */
 export const CLAUDE_NOT_ON_PATH = `Claude Code was not found in a folder PATH names (${CLAUDE_WINDOWS_NAMES.join(', ')})`
 
+/** What a launch says when the walk of PATH for Claude Code has not ended in
+ *  time (windows-programs.ts WINDOWS_PATH_WALK_WAIT_MS): a folder PATH names
+ *  has not answered, so whether Claude Code is in it is not known. Not the
+ *  not-found message: nothing here says Claude Code is missing. The launch
+ *  starts nothing, and never the Claude Code of a later folder. */
+export const CLAUDE_PATH_NOT_ANSWERING = 'Claude Code was not started: a folder PATH names did not answer in time (a network share that cannot be reached, for example), so the app cannot tell which Claude Code PATH names first. Try again in a moment, or take that folder out of PATH.'
+
 /** How long an answer of findClaudeOnWindowsAsync is reused by
  *  recentClaudeOnWindows. The CLI check asks every 30 s while the app runs. */
 export const CLAUDE_LOOKUP_REUSE_MS = 60_000
@@ -194,6 +201,42 @@ export const CLAUDE_LOOKUP_REUSE_MS = 60_000
  *  walk that found nothing. A few only. */
 const recentLookups = new Map<string, { found: string | null; at: number }>()
 const RECENT_LOOKUPS_KEPT = 8
+
+/** The walk of PATH for Claude Code under way, by the PATH value it walks,
+ *  with the deadline of whoever waits for it. One walk per PATH value at a
+ *  time, for every caller with no file test of its own: the CLI check every
+ *  30 s, the start, a launch, a headless run. So a folder on a share that is
+ *  down is asked by one walk, not by one more for each of them. */
+const walksInFlight = new Map<string, PathWalkInFlight<string | null>>()
+/** Moved by the test seam, so a walk still under way from an earlier case keeps nothing. */
+let walkEpoch = 0
+
+/** The walk of `env`'s PATH under way, or a new one. The walk asks every
+ *  folder in PATH's order and waits for each answer, however long one takes
+ *  (windows-programs.ts folderFileTest: one file test at a time in a
+ *  folder): it never goes past a folder that has not answered, so what it
+ *  names is what a walk in place would name. Its answer is kept when it
+ *  ends, and only then. Its one deadline begins with it: whoever waits for
+ *  the walk reads it, and so do the walk's file tests, which wait behind
+ *  another walk's test in a folder until then and no longer. */
+function sharedClaudeWalk(env: NodeJS.ProcessEnv, now: () => number): PathWalkInFlight<string | null> {
+  const pathValue = windowsEnvValue(env, 'PATH') ?? ''
+  const running = walksInFlight.get(pathValue)
+  if (running) return running
+  const epoch = walkEpoch
+  const deadline = pathWalkDeadline()
+  // The walk begins in this turn; one that throws before it has anything to
+  // wait for is a walk that kept no answer.
+  const run: Promise<string | null> = new Promise<string | null>((resolve) => { resolve(findOnWindowsPathAsync(CLAUDE_WINDOWS_NAMES, env, folderFileTest(undefined, deadline), 'name')) })
+    .then((found) => {
+      if (epoch === walkEpoch) recordClaudeOnWindows(pathValue, found, now())
+      return found
+    })
+    .finally(() => { if (walksInFlight.get(pathValue)?.run === run) walksInFlight.delete(pathValue) })
+  const walk = withPathWalkDeadline(run, deadline)
+  walksInFlight.set(pathValue, walk)
+  return walk
+}
 
 /** findClaudeOnWindowsAsync's answer, whether the PowerShell profile gave
  *  it, and whether the profile was consulted at all (not while Claude Code
@@ -230,7 +273,9 @@ export async function findClaudeOnWindowsAsync(
  *  (windows-programs.ts findOnWindowsPathAsync), a full path or null. The
  *  PowerShell profile is not read and not asked. The answer is kept for
  *  recentClaudeOnWindows under the PATH value that was walked, so a launch
- *  soon after on that PATH does not walk again, in place. The first step of
+ *  soon after on that PATH does not walk again, in place. Callers that pass
+ *  no file test of their own share one walk per PATH value (sharedClaudeWalk)
+ *  and each waits for it as long as it takes. The first step of
  *  every lookup (findClaudeOnWindowsAsync), and by itself what the start
  *  decides by (claude-start-lookup.ts): there the profile's question waits
  *  for the PATH the refresh leaves, and the walk is never made in place,
@@ -241,10 +286,31 @@ export async function claudeOnWindowsPathAsync(
   stat?: (p: string) => Promise<boolean>,
   now: () => number = Date.now,
 ): Promise<string | null> {
+  if (!stat) return sharedClaudeWalk(env, now).run
   const pathValue = windowsEnvValue(env, 'PATH') ?? ''
   const found = await findOnWindowsPathAsync(CLAUDE_WINDOWS_NAMES, env, stat, 'name')
   recordClaudeOnWindows(pathValue, found, now())
   return found
+}
+
+/** For a launch, which waits a bounded time: the walk of `env`'s PATH for
+ *  Claude Code (the one under way, or a new one), waited for until it ends
+ *  (true: its answer is kept) or until its deadline passes with a folder
+ *  still unanswered (false: no answer is kept, and none is made up;
+ *  windows-programs.ts WINDOWS_PATH_WALK_WAIT_MS, counted from the walk's
+ *  own start, so a launch that joins a walk already past it does not wait at
+ *  all). Never rejects. */
+export function claudeOnWindowsPathAnswered(env: NodeJS.ProcessEnv): Promise<boolean> {
+  return sharedClaudeWalk(env, Date.now).answered
+}
+
+/** Whether the walk of `env`'s PATH for Claude Code under way has passed
+ *  its deadline with a folder still unanswered. A launch with no answer to
+ *  read is then refused (CLAUDE_PATH_NOT_ANSWERING), and does not walk PATH
+ *  in place, where that same folder would hold the main process. Reads no
+ *  file. */
+export function claudeOnWindowsPathUnanswered(env: NodeJS.ProcessEnv): boolean {
+  return walksInFlight.get(windowsEnvValue(env, 'PATH') ?? '')?.overdue === true
 }
 
 /** Keep an answer of a PATH walk for Claude Code under `pathValue`, a walk
@@ -269,6 +335,35 @@ export function recentClaudeOnWindows(env: NodeJS.ProcessEnv, now: () => number 
   const age = now() - kept.at
   if (age < 0 || age >= CLAUDE_LOOKUP_REUSE_MS) return null
   return kept.found ?? claudeFromPowerShellProfileForLaunch()
+}
+
+/** Whether recentClaudeOnWindows would name a Claude Code now, asked without
+ *  starting anything: the PowerShell profile's kept path is read, and its
+ *  question is NOT started (recentClaudeOnWindows starts it in the
+ *  background when there is no current answer). For a decision that must
+ *  change nothing: whether a launch has a walk to wait for
+ *  (claude-launch-walk.ts). Reads no file. */
+export function claudeOnWindowsKnown(env: NodeJS.ProcessEnv, now: () => number = Date.now): boolean {
+  const kept = recentLookups.get(windowsEnvValue(env, 'PATH') ?? '')
+  if (!kept) return false
+  const age = now() - kept.at
+  if (age < 0 || age >= CLAUDE_LOOKUP_REUSE_MS) return false
+  if (kept.found) return true
+  return profileLookupMayRun() && !!profileKept?.found
+}
+
+/** Whether a walk of the same PATH value ended less than
+ *  CLAUDE_LOOKUP_REUSE_MS ago, whatever it found. A launch that reads no
+ *  Claude Code from recentClaudeOnWindows then has its answer (none in PATH's
+ *  folders, none from the PowerShell profile) and does not walk PATH again
+ *  in place (providers/claude/spawn.ts findClaudeOnWindows): the walk a
+ *  launch waits for is made off the event loop, before it
+ *  (claude-launch-walk.ts). Reads no file. */
+export function claudeOnWindowsPathWalkedRecently(env: NodeJS.ProcessEnv, now: () => number = Date.now): boolean {
+  const kept = recentLookups.get(windowsEnvValue(env, 'PATH') ?? '')
+  if (!kept) return false
+  const age = now() - kept.at
+  return age >= 0 && age < CLAUDE_LOOKUP_REUSE_MS
 }
 
 // -- Windows: Claude Code that only the user's PowerShell profile puts on PATH --
@@ -452,6 +547,9 @@ export function claudeFromPowerShellProfileForLaunch(): string | null {
  *  rule back to not set (the profile is not asked until a case sets it). */
 export function _resetClaudeWindowsLookupForTest(): void {
   recentLookups.clear()
+  for (const walk of walksInFlight.values()) walk.forget()
+  walksInFlight.clear()
+  walkEpoch += 1
   profileKept = null
   profileInFlight = null
   profileEpoch += 1

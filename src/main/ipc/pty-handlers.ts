@@ -50,6 +50,7 @@ import {
 import { startProfileStepsPending, startProfileStepsSettled } from '../account-profiles'
 import { scriptFoldersPending, awaitScriptFolders } from '../script-folders'
 import { claudeStartLookupPending, awaitClaudeStartLookup } from '../claude-start-lookup'
+import { claudeLaunchWalkPending, awaitClaudeLaunchWalk } from '../claude-launch-walk'
 
 /** SSH options as received from the renderer (no passwords — only configId) */
 interface RendererSSHOptions {
@@ -890,11 +891,34 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     // a local Claude launch waits for it, bounded, as a prepared spawn, so a
     // tab restored at start names the Claude Code they find; past the bound,
     // and once the start's deadline has passed, it resolves as any launch.
-    const holdForClaudeLookup = launchProvider === 'claude' && !options?.ssh && claudeStartLookupPending()
+    //
+    // And at any later time (claude-launch-walk.ts): a local Claude launch
+    // with no recent answer about Claude Code to read (or, when it opens the
+    // resume list, about node.exe) would walk PATH for it in place, where a
+    // folder on a share that does not answer holds the whole main process.
+    // It waits instead, as a prepared spawn, for that walk made off the
+    // event loop, at most until the walk's deadline, then names what the
+    // walk found or is refused: as before when Claude Code is in no folder,
+    // and saying so when a PATH folder did not answer in time. With a recent
+    // answer kept, the usual case, nothing is held.
+    //
+    // Whenever the resume list is asked for, whether or not a conversation
+    // to resume is named too: a named one whose transcript or folder is
+    // gone is dropped by the PTY manager, and the launch then opens the
+    // list after all (a restored tab asks for both).
+    const localClaudeLaunch = launchProvider === 'claude' && !options?.ssh
+    const opensResumeList = options?.useResumePicker === true
+    const holdForClaudeLookup = localClaudeLaunch && (claudeStartLookupPending() || claudeLaunchWalkPending(opensResumeList))
     const preparation = codexSession || askSpawn || holdForStartSteps || holdForScripts || holdForClaudeLookup ? beginSpawnPreparation(win, sessionId, options?.shellOnly ? null : (options?.provider ?? 'claude')) : null
     // PR-level ADR-009 round 1 (B1): once that preparation is cancelled or
     // superseded, this spawn's ticket stops counting as one under way.
     if (preparation) noteConfigLaunchPreparation(configClaim.ticket, () => preparation.current)
+    /** For a launch that was held and is still wanted (its preparation is
+     *  the current one): why its provider may not start now, asked again
+     *  after a wait, or null. A launch that was not held has waited for
+     *  nothing since the rule at the top; one closed or superseded starts
+     *  nothing anyway, and is not asked about. */
+    const heldLaunchSwitchedOff = (): ReturnType<typeof providerLaunchRefusal> => (preparation?.current && launchProvider ? providerLaunchRefusal(launchProvider) : null)
     let codexLease: AccountLease | undefined
     let carry: RespawnCarry | undefined
     try {
@@ -1056,17 +1080,33 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
       // PATH refresh, first lookup and version probe (holdForClaudeLookup
       // above).
       if (holdForClaudeLookup) await awaitClaudeStartLookup()
+      // Then the launch's own walk of PATH, when it has one to make by now:
+      // an answer the start kept meanwhile is read, and nothing is walked.
+      // Asked again here, after every wait above, for any launch held for
+      // any of them: an answer that was recent when the hold was decided
+      // can have run out while the launch waited for something else. One
+      // wait after the other, never side by side: the start's own first,
+      // then this.
+      if (preparation && localClaudeLaunch) await awaitClaudeLaunchWalk(opensResumeList)
 
       // Closed, swept or superseded while it was prepared: start nothing, and
       // SAY so. The renderer holds any pty:exit that arrives while its own
       // spawn is in flight (the replaced run's late or synthetic exit), and
       // applies it only when this request started nothing -- which, without
       // this answer, it cannot tell from a spawn that went ahead.
-      if (preparation && !preparation.current) {
-        logInfo(`[pty] Session ${sessionId}: closed or superseded while its spawn was prepared -- not spawning`)
+      //
+      // Or its provider was switched off while it was held. The rule at the
+      // top was asked before every wait above, and they can take most of a
+      // minute between them (the scripts folders, the start's steps and its
+      // own wait, the walk of PATH): a launch still wanted asks it again
+      // here, after the last of them, and one that is refused now starts
+      // nothing and says why, as at the top (provider-launch-gate.ts).
+      const switchedOff = heldLaunchSwitchedOff()
+      if (preparation && (!preparation.current || switchedOff)) {
+        if (!switchedOff) logInfo(`[pty] Session ${sessionId}: closed or superseded while its spawn was prepared -- not spawning`)
         codexLease?.release()
         preparation.abandon()
-        return { started: false as const }
+        return switchedOff ? { started: false as const, refused: switchedOff } : { started: false as const }
       }
 
       // Agent Canvas UAT roots are NOT registered here any more (adversarial
@@ -1132,11 +1172,14 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
         // the same fixed sentence.
         let ended = false
         try { ended = await endAgentRunsInFolder(helpWorkspaceDir(resourcesDir), ASK_HELP_RUNS_END_WAIT_MS) } catch { ended = false }
-        if (preparation && !preparation.current) {
-          logInfo(`[pty] Session ${sessionId}: closed or superseded while the help folder's runs ended -- not spawning`)
+        // That wait is the last one: closed or superseded during it, or
+        // the provider switched off during it, starts nothing, as above.
+        const offNow = heldLaunchSwitchedOff()
+        if (preparation && (!preparation.current || offNow)) {
+          if (!offNow) logInfo(`[pty] Session ${sessionId}: closed or superseded while the help folder's runs ended -- not spawning`)
           codexLease?.release()
           preparation.abandon()
-          return { started: false as const }
+          return offNow ? { started: false as const, refused: offNow } : { started: false as const }
         }
         if (!ended) {
           logWarn(`[pty] Session ${sessionId}: a run in the help folder did not end in time; Ask Conductor does not start`)

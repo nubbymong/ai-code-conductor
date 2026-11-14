@@ -44,6 +44,7 @@ import { getAccountsService } from './provider-accounts'
 import { ownerOnlyThroughHandle, sweepStaleFolders } from './stale-folder-sweep'
 import { withFullyQualifiedProgramLookup } from './windows-programs'
 import { warmFirstStart } from './first-start-warmup'
+import { awaitClaudeLaunchWalk } from './claude-launch-walk'
 import { timedStart } from './main-thread-ops'
 import { claudeVersionRunEnv, redactFailure, redactHead, redactTail } from './providers/review-support'
 import { createLineRedactor } from './log-line-redact'
@@ -486,6 +487,18 @@ export function insightsTerminalEnv(env: Record<string, string>, platform: NodeJ
  * This is needed because /insights is a TUI slash command, not a CLI argument.
  */
 async function spawnClaudeInsights(home: string | null, timeoutMs = 600000): Promise<{ code: number; output: string }> {
+  // Windows, when no Claude Code is known for this PATH right now: PATH is
+  // walked first, off the event loop, the walk a session's launch waits for
+  // and for as long (claude-launch-walk.ts), and the resolution below reads
+  // its answer instead of walking PATH in place. At once when an answer is
+  // kept, and off Windows.
+  await awaitClaudeLaunchWalk(false)
+  // That wait can take seconds (a PATH folder that does not answer). Claude
+  // Code switched off meanwhile: nothing of it runs, not the warm-up below
+  // either, which starts it once. The run fails with the reason, as one
+  // switched off before this step does.
+  const offAfterWalk = providerLaunchRefusal('claude')
+  if (offAfterWalk) throw new Error(offAfterWalk.message)
   const { cmd } = resolveClaudeForPty()
   const cwd = findTrustedCwd()
   // The project gate, before the PTY exists: the run happens in `cwd`, whose

@@ -41,7 +41,7 @@ import * as nodeOs from 'node:os'
 import { UUID_RE, claudeProjectDirName, type ClaudeLaunchFolderOptions } from './logging/transcript-discovery'
 import { CMD_EXE_LINE_LIMIT, PS_LEGACY_ARGUMENT_PASSING, agentsRef, askPromptRef, startsAsExe, windowsCommandLineLimit } from './terminal-launch-line'
 import { escapeForCwdQuote, quoteArgForShell } from '../shared/shell-quote'
-import { findOnWindowsPath, findOnWindowsPathAsync, windowsEnvValue } from './windows-programs'
+import { findOnWindowsPath, findOnWindowsPathAsync, folderFileTest, pathWalkDeadline, windowsEnvValue, withPathWalkDeadline, type PathWalkInFlight } from './windows-programs'
 import { logInfo } from './debug-logger'
 
 export interface BuildClaudeLaunchCommandOptions {
@@ -492,6 +492,14 @@ export const CLAUDE_RESUME_LIST_SKIPPED_NO_NODE = 'Node.js was not found in a fo
  *  a program from (PICKER_NODE_UNSTARTABLE_RE). Never the path itself. */
 export const CLAUDE_RESUME_LIST_SKIPPED_NODE_PATH = 'Node.js was found, but its folder path holds [ or ], which a launch line does not start a program from, so the resume list was skipped and Claude Code starts directly. Install Node.js in a folder without [ or ] to use the resume list'
 
+/** What the log says when a fresh session on Windows starts Claude Code
+ *  directly because the look for node.exe has not ended in time
+ *  (windows-programs.ts WINDOWS_PATH_WALK_WAIT_MS): a folder PATH names has
+ *  not answered, so which node.exe PATH names first is not known. The resume
+ *  list is left out for this launch; never the node.exe of a later folder,
+ *  and nothing is walked in place. */
+export const CLAUDE_RESUME_LIST_SKIPPED_PATH_NOT_ANSWERING = 'A folder PATH names did not answer in time, so Node.js (node.exe) could not be looked for, the resume list was skipped and Claude Code starts directly'
+
 /** What a macOS or Linux session prints, in the session itself, when its
  *  shell finds no node and Claude Code starts without the resume list
  *  (buildClaudeLaunchCommand). ASCII, with no single quote: the line carries
@@ -599,6 +607,9 @@ let pickerNodeAnswer: { path: string; exe: string | null; at: number } | null = 
 /** The look warmPickerNodeOnWindows has in flight, so a slow one (a PATH
  *  folder on a share that does not answer) is never joined by another. */
 let pickerNodeWarming: Promise<void> | null = null
+/** That look with the deadline of a launch that waits for it
+ *  (pickerNodeLookAnswered). */
+let pickerNodeLook: PathWalkInFlight<void> | null = null
 
 /** The answer kept for `pathValue` when it is less than PICKER_NODE_REUSE_MS
  *  old (the full path, or null for none); undefined when there is none. */
@@ -615,22 +626,73 @@ function recentPickerNodeAnswer(pathValue: string, now: number): string | null |
  * answer, the full path found or none, for pickerNodeOnWindows. The CLI
  * check calls it beside its own look for
  * Claude Code (ipc/cli-handlers.ts), so a launch normally reads a recent
- * answer and walks no PATH on the main process. Only one look runs at a time;
+ * answer and walks no PATH on the main process; a session's launch that has
+ * none to read waits for this look first (claude-launch-walk.ts), a bounded
+ * time (pickerNodeLookAnswered). The look itself waits for every folder in
+ * PATH's order, however long one takes, one file test at a time in a folder
+ * (windows-programs.ts folderFileTest): it never goes past a folder that has
+ * not answered, so the node.exe it names is the one a walk in place would.
+ * Its one deadline begins with it, for a launch that waits and for its file
+ * tests, which wait behind another walk's test in a folder until then and no
+ * longer.
+ * Only one look runs at a time;
  * a call while one is in flight gets that one. Elsewhere: nothing.
  */
 export function warmPickerNodeOnWindows(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   if (process.platform !== 'win32') return Promise.resolve()
   if (pickerNodeWarming) return pickerNodeWarming
   const pathValue = windowsEnvValue(env, 'PATH') ?? ''
-  const run: Promise<void> = findOnWindowsPathAsync([PICKER_NODE_FILE], env)
+  const deadline = pathWalkDeadline()
+  let look: Promise<string | null>
+  try {
+    look = findOnWindowsPathAsync([PICKER_NODE_FILE], env, folderFileTest(undefined, deadline))
+  } catch (e) {
+    // No look began: its deadline's timer is not left behind.
+    deadline.clear()
+    throw e
+  }
+  const run: Promise<void> = look
     .then(
       (exe) => { pickerNodeAnswer = { path: pathValue, exe, at: performance.now() } },
       () => { /* no answer: a launch looks for itself */ },
     )
     // Only this look's own mark: one started after a reset is left in flight.
-    .finally(() => { if (pickerNodeWarming === run) pickerNodeWarming = null })
+    .finally(() => {
+      if (pickerNodeWarming !== run) return
+      pickerNodeWarming = null
+      pickerNodeLook = null
+    })
   pickerNodeWarming = run
+  pickerNodeLook = withPathWalkDeadline(run, deadline)
   return run
+}
+
+/** For a launch that opens the resume list and has no answer about node.exe
+ *  to read, which waits a bounded time: the look under way, or a new one for
+ *  `env`'s PATH, waited for until it ends (true) or until its deadline
+ *  passes with a folder still unanswered (false; windows-programs.ts
+ *  WINDOWS_PATH_WALK_WAIT_MS, counted from the look's own start, so a launch
+ *  that joins a look already past it does not wait at all). Never rejects.
+ *  Elsewhere: true at once. */
+export function pickerNodeLookAnswered(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  if (process.platform !== 'win32') return Promise.resolve(true)
+  void warmPickerNodeOnWindows(env)
+  return pickerNodeLook ? pickerNodeLook.answered : Promise.resolve(true)
+}
+
+/** No answer about node.exe is kept for this process's PATH, and the look
+ *  under way is past its deadline with a folder still unanswered: which
+ *  node.exe PATH names first is not known. Reads no file. */
+function pickerNodeLookUnanswered(): boolean {
+  if (pickerNodeLook?.overdue !== true) return false
+  return recentPickerNodeAnswer(windowsEnvValue(process.env, 'PATH') ?? '', performance.now()) === undefined
+}
+
+/** Whether an answer about node.exe is kept for `env`'s PATH, found or not,
+ *  less than PICKER_NODE_REUSE_MS old: a launch then walks no PATH for it
+ *  (pickerNodeOnWindows). Reads no file. */
+export function pickerNodeAnswerKept(env: NodeJS.ProcessEnv = process.env): boolean {
+  return recentPickerNodeAnswer(windowsEnvValue(env, 'PATH') ?? '', performance.now()) !== undefined
 }
 
 /**
@@ -678,8 +740,12 @@ function pickerNodeOnWindows(): string | null {
 /** The node.exe a Windows launch line starts the resume picker with: the
  *  path pickerNodeOnWindows found (`exe`), or null with what the log says
  *  instead (`skipped`): none found, or one at a path the line does not start
- *  a program from (PICKER_NODE_UNSTARTABLE_RE). */
+ *  a program from (PICKER_NODE_UNSTARTABLE_RE); or, with no answer kept and
+ *  the look off the event loop past its deadline (pickerNodeLookUnanswered),
+ *  no answer: PATH is not walked here then, where the folder that has not
+ *  answered would hold the main process. */
 function windowsPickerNode(): { exe: string; skipped: null } | { exe: null; skipped: string } {
+  if (pickerNodeLookUnanswered()) return { exe: null, skipped: CLAUDE_RESUME_LIST_SKIPPED_PATH_NOT_ANSWERING }
   const exe = pickerNodeOnWindows()
   if (exe === null) return { exe: null, skipped: CLAUDE_RESUME_LIST_SKIPPED_NO_NODE }
   if (PICKER_NODE_UNSTARTABLE_RE.test(exe)) return { exe: null, skipped: CLAUDE_RESUME_LIST_SKIPPED_NODE_PATH }
@@ -707,6 +773,8 @@ export function pickerNodeFound(): boolean {
 export function _resetPickerNodeFoundForTest(): void {
   pickerNodeAnswer = null
   pickerNodeWarming = null
+  pickerNodeLook?.forget()
+  pickerNodeLook = null
 }
 
 /** What decides whether a launch line starts the resume picker, and the

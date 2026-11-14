@@ -2,7 +2,7 @@ import * as os from 'os'
 import { commandSecretEnvName } from '../../../shared/command-secret'
 import { AGENTS_ENV, askPromptEnvValue } from '../../terminal-launch-line'
 import { findOnWindowsPath, windowsEnvValue, withFullyQualifiedProgramLookup } from '../../windows-programs'
-import { CLAUDE_NOT_ON_PATH, CLAUDE_WINDOWS_NAMES, claudeFromPowerShellProfileForLaunch, claudeInLoginShellPathForLaunch, recentClaudeInLoginShellPath, recentClaudeOnWindows, recordClaudeOnWindows } from '../../claude-cli-probe'
+import { CLAUDE_NOT_ON_PATH, CLAUDE_PATH_NOT_ANSWERING, CLAUDE_WINDOWS_NAMES, claudeFromPowerShellProfileForLaunch, claudeInLoginShellPathForLaunch, claudeOnWindowsPathUnanswered, claudeOnWindowsPathWalkedRecently, recentClaudeInLoginShellPath, recentClaudeOnWindows, recordClaudeOnWindows } from '../../claude-cli-probe'
 import { LEGACY_PIN_NOT_USED } from '../../../shared/legacy-version'
 import { logInfo } from '../../debug-logger'
 import { localSessionShell, shFamilyLoginShell } from '../../login-shell'
@@ -22,8 +22,12 @@ export { CLAUDE_NOT_ON_PATH }
  *  (`env`), in the order every check and start asks (claude-cli-probe.ts
  *  CLAUDE_WINDOWS_NAMES: `claude.exe` in any of them, then `claude.cmd`, then
  *  `claude.bat`). The launch cannot wait, so a recent answer of the same walk
- *  (the CLI check asks every 30 s, off the event loop) is used as is; only
- *  without one does this walk PATH here, and its answer is kept for the next
+ *  (the CLI check asks every 30 s, off the event loop; a session's launch,
+ *  and each other caller of resolveClaudeBinary, walks off the event loop
+ *  first when no Claude Code is known, claude-launch-walk.ts) is used as is,
+ *  whether it found Claude Code or
+ *  not; only with no recent walk of this PATH at all does this walk it here,
+ *  and its answer is kept for the next
  *  launch. When none is there, the Claude Code the user's PowerShell profile
  *  last named (claude-cli-probe.ts claudeFromPowerShellProfileForLaunch: the
  *  answer kept from asking Windows PowerShell with that profile, which a
@@ -31,10 +35,29 @@ export { CLAUDE_NOT_ON_PATH }
  *  start or a check the user asked for, has made it stale); without a
  *  current answer that question starts in the
  *  background for the next launch, and with none kept at all this one gets
- *  null. Null is never a bare name. */
+ *  null. Null is never a bare name.
+ *
+ *  Null too, with nothing walked here and the profile not read, while the
+ *  walk of this PATH off the event loop has passed its deadline with a
+ *  folder still unanswered (claude-cli-probe.ts
+ *  claudeOnWindowsPathUnanswered): which Claude Code PATH names first is not
+ *  known then, a walk in place would wait on that same folder, and the
+ *  profile's Claude Code comes only after every folder of PATH has said it
+ *  holds none. resolveClaudeBinary says which of the two it was. */
 export function findClaudeOnWindows(env: NodeJS.ProcessEnv = process.env, stat?: (p: string) => boolean): string | null {
   const recent = recentClaudeOnWindows(env)
   if (recent) return recent
+  // A walk of this PATH less than a minute ago found none, and the profile
+  // names none: that is the answer. PATH is not walked again here, on the
+  // main process's own thread, where a folder on a share that does not
+  // answer would hold everything. Every caller makes that walk off the
+  // event loop first (claude-launch-walk.ts): a session's launch, the path
+  // the Find Claude step shows, the setup terminal and the /insights
+  // terminal. So a Claude Code installed since is still seen at once.
+  if (claudeOnWindowsPathWalkedRecently(env)) return null
+  // The walk of this PATH off the event loop is past its deadline, a folder
+  // still unanswered: no answer, and none is made here.
+  if (claudeOnWindowsPathUnanswered(env)) return null
   const found = findOnWindowsPath(CLAUDE_WINDOWS_NAMES, env, stat, 'name')
   recordClaudeOnWindows(windowsEnvValue(env, 'PATH') ?? '', found, Date.now())
   if (found) return found
@@ -43,7 +66,11 @@ export function findClaudeOnWindows(env: NodeJS.ProcessEnv = process.env, stat?:
 
 /** The Claude Code a launch runs: on Windows, the full path
  *  findClaudeOnWindows finds in `env` (or that the PowerShell profile gave),
- *  and when there is none this THROWS (CLAUDE_NOT_ON_PATH) so the launch starts nothing. Elsewhere: for a user
+ *  and when there is none this THROWS (CLAUDE_NOT_ON_PATH) so the launch starts nothing. It THROWS
+ *  CLAUDE_PATH_NOT_ANSWERING instead when there is no answer because a
+ *  folder PATH names has not answered the walk in time (also when an earlier
+ *  walk, under a minute ago, found none): never the not-found
+ *  message for that, and never a later folder's Claude Code. Elsewhere: for a user
  *  whose login shell is not of the sh family, the Claude Code found in the
  *  PATH that shell builds, by its full path, once the launch has that answer
  *  (claude-cli-probe.ts recentClaudeInLoginShellPath; buildClaudeLocalSpawn
@@ -62,8 +89,14 @@ export function resolveClaudeBinary(legacyVersion?: LegacyVersion, env: NodeJS.P
 
   const found = findClaudeOnWindows(env)
   if (found) return { cmd: found, args: [] }
-  logInfo(`[claude-provider] ${CLAUDE_NOT_ON_PATH}`)
-  throw new Error(CLAUDE_NOT_ON_PATH)
+  // The walk of this PATH under way is past its deadline: which Claude Code
+  // PATH names is not known now, which is not "not installed". Also with a
+  // "none" under a minute old kept: a launch held for a new walk is waiting
+  // to learn whether that still holds (a Claude Code installed since), and
+  // that walk has not said.
+  const why = claudeOnWindowsPathUnanswered(env) ? CLAUDE_PATH_NOT_ANSWERING : CLAUDE_NOT_ON_PATH
+  logInfo(`[claude-provider] ${why}`)
+  throw new Error(why)
 }
 
 /**

@@ -146,6 +146,280 @@ export async function isRegularFileAsync(p: string): Promise<boolean> {
   }
 }
 
+/** How long anything waits for one walk of PATH made off the event loop (a
+ *  launch waits for the walk for Claude Code, and for the look for node.exe
+ *  when it opens the resume list). Counted from the walk's own start, for the
+ *  walk as a whole, never for one file test: a test that waits its turn for
+ *  a free thread is not a folder that is down. That time is counted all the
+ *  same: a walk whose tests wait a long time for a thread, behind other
+ *  file work of the app, can pass its deadline with no folder down.
+ *
+ *  Twenty seconds: a folder on this computer answers in well under a
+ *  millisecond and a share that is up in a fraction of a second, so a walk
+ *  still unanswered by then is waiting on a folder that is down, not a slow
+ *  one; and a launch held for the start's own wait first
+ *  (claude-start-lookup.ts, 15 s) is still let go in about half a minute. It
+ *  bounds the wait only. The walk itself runs on to its own end and keeps
+ *  its answer then. From the deadline until that end, every launch that has
+ *  no answer to read is refused at once, saying a PATH folder did not
+ *  answer; the first launch after the walk has ended reads its answer. So a
+ *  value too short costs refused launches for as long as the walk still
+ *  runs, never a wrong program. Not timed against a real share that is
+ *  down. */
+export const WINDOWS_PATH_WALK_WAIT_MS = 20_000
+
+/** The deadline of the wait for one walk of PATH: one timer, begun when the
+ *  walk begins (pathWalkDeadline). The walk's file tests read it
+ *  (folderFileTest), and so does whoever waits for the walk
+ *  (withPathWalkDeadline). */
+export interface PathWalkDeadline {
+  /** The deadline has passed. */
+  readonly passed: boolean
+  /** Run `then` once, when the deadline passes (not at all when it is
+   *  cleared first, or has passed already). Returns how to withdraw it. */
+  onPassed(then: () => void): () => void
+  /** The walk has ended, or is forgotten: drop the timer. Nothing asked for
+   *  with onPassed runs after this. */
+  clear(): void
+}
+
+/** A deadline `waitMs` from now, for a walk of PATH that begins now. */
+export function pathWalkDeadline(waitMs: number = WINDOWS_PATH_WALK_WAIT_MS): PathWalkDeadline {
+  let passed = false
+  const waiting = new Set<() => void>()
+  const timer = setTimeout(() => {
+    passed = true
+    const all = [...waiting]
+    waiting.clear()
+    for (const then of all) then()
+  }, waitMs)
+  ;(timer as { unref?: () => void }).unref?.()
+  return {
+    get passed() { return passed },
+    onPassed: (then) => {
+      if (passed) return () => {}
+      waiting.add(then)
+      return () => { waiting.delete(then) }
+    },
+    clear: () => {
+      clearTimeout(timer)
+      waiting.clear()
+    },
+  }
+}
+
+/** A file test outstanding in a folder, and the file it is for (both as
+ *  Windows compares them: lower case). */
+interface FolderTest { file: string; test: Promise<boolean> }
+
+/** A folder with a file test outstanding: the one begun last while it is
+ *  still outstanding (`held`: what a new test there waits behind), and how
+ *  many are outstanding in all. */
+interface FolderState { held: FolderTest | null; outstanding: number }
+
+/** The folders with a file test of folderFileTest outstanding, for each
+ *  underlying file test (the real one, or a stand-in). */
+let folderTests = new WeakMap<(p: string) => Promise<boolean>, Map<string, FolderState>>()
+
+/** The most file tests outstanding in one folder at a time: the one begun
+ *  first, and one more that a walk makes for itself once it has waited its
+ *  whole deadline behind another walk's test (folderFileTest). */
+const FOLDER_TESTS_AT_ONCE = 2
+
+/** The reasons a file test fails with that say the FOLDER cannot be reached,
+ *  whatever file was asked for: the network, the host or the connection to
+ *  it is down, or it did not answer in time. Only these are passed on to a
+ *  test that waited for ANOTHER file in the same folder (folderFileTest).
+ *
+ *  Every other reason may be about the one file that was asked for: access
+ *  denied on it or a file being deleted (EPERM, EACCES), a file in use
+ *  (EBUSY), a broken link (ELOOP, EINVAL), a read error (EIO), and an error
+ *  Windows names that Node.js has no code for (UNKNOWN: a file its cloud
+ *  provider cannot fetch is one such, and so are some reasons a share is
+ *  down). An error with no code at all is not in the set either. For those
+ *  the test that waited is made itself, which is what a walk in place does;
+ *  the cost, when the folder was down after all, is one more wait there for
+ *  that test, one at a time, never another folder's program. */
+const FOLDER_UNREACHABLE_CODES: ReadonlySet<string> = new Set([
+  'ETIMEDOUT', 'ENETDOWN', 'ENETUNREACH', 'ENONET', 'EHOSTDOWN', 'EHOSTUNREACH',
+  'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ENOTCONN',
+])
+
+/** Whether a failed file test says its folder cannot be reached
+ *  (FOLDER_UNREACHABLE_CODES), not something about the one file. */
+function folderCannotBeReached(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null | undefined)?.code
+  return typeof code === 'string' && FOLDER_UNREACHABLE_CODES.has(code)
+}
+
+/** A file test for ONE walk of PATH (findOnWindowsPathAsync) that keeps to
+ *  one test at a time in each folder, across every walk that asks through
+ *  it (the walk for Claude Code, the look for node.exe, a walk of another
+ *  PATH value that names the same folder). `stat` answers
+ *  (isRegularFileAsync by default). `deadline` is that walk's own
+ *  (pathWalkDeadline).
+ *
+ *  A file test on a share that is down holds one of the few threads file
+ *  tests share until it ends, tens of seconds later. So while a folder has a
+ *  test outstanding, no other is started there:
+ *
+ *  - A walk that asks for the SAME file gets that test's own answer,
+ *    whatever it is: it is the answer its own test would have had.
+ *  - A walk that asks for ANOTHER file waits for that test to end, and then
+ *    makes its own. The one exception: when the test ended by failing with a
+ *    reason that says the folder itself cannot be reached
+ *    (FOLDER_UNREACHABLE_CODES), that is the answer for the test that waited
+ *    too, and it is not made, for one more such wait. A failure that may be
+ *    about the one file (access denied, in use, a broken link) says nothing
+ *    about another file: handed on, it would make a walk pass a folder that
+ *    holds its program and name a later folder's.
+ *
+ *  A walk waits behind ANOTHER walk's test until its own deadline, and no
+ *  longer. A test begun while a share was down can stay outstanding long
+ *  after the share is back, and would hold every later walk of that folder
+ *  for as long. So once the walk's deadline has passed (whoever waits for
+ *  the walk has by then been told it has no answer), the walk makes its own
+ *  test of the folder, beside the one outstanding: the folder is asked, not
+ *  passed over. At most FOLDER_TESTS_AT_ONCE tests are outstanding in a
+ *  folder; with that many, the walk waits for the one begun last. A share
+ *  that is down then holds one thread however many walks name it, and a
+ *  second only once a walk has waited its whole deadline behind the first.
+ *
+ *  No file test has a timer of its own, and a folder is never given up: a
+ *  folder that has not answered is not a folder without the program. How
+ *  long a caller waits for the walk as a whole is its own to bound
+ *  (withPathWalkDeadline). With no `deadline`, a test waits behind another
+ *  for as long as that one takes. */
+export function folderFileTest(stat: (p: string) => Promise<boolean> = isRegularFileAsync, deadline?: PathWalkDeadline): (p: string) => Promise<boolean> {
+  let outstanding = folderTests.get(stat)
+  if (!outstanding) {
+    outstanding = new Map<string, FolderState>()
+    folderTests.set(stat, outstanding)
+  }
+  const tests = outstanding
+  /** Start a test of `p` now: the one a later test in `folder` waits behind. */
+  const begin = (p: string, folder: string, file: string): Promise<boolean> => {
+    const state = tests.get(folder) ?? { held: null, outstanding: 0 }
+    tests.set(folder, state)
+    // The test starts in this turn; one that throws before it has anything
+    // to wait for is a test that failed.
+    const test = new Promise<boolean>((answer) => { answer(stat(p)) })
+    const mine: FolderTest = { file, test }
+    state.held = mine
+    state.outstanding += 1
+    const ended = (): void => {
+      state.outstanding -= 1
+      if (state.held === mine) state.held = null
+      if (state.outstanding === 0 && tests.get(folder) === state) tests.delete(folder)
+    }
+    test.then(ended, ended)
+    return test
+  }
+  const ask = (p: string): Promise<boolean> => {
+    const folder = path.win32.dirname(p).toLowerCase()
+    const file = p.toLowerCase()
+    const state = tests.get(folder)
+    const held = state?.held
+    if (!state || !held) return begin(p, folder, file)
+    // Past this walk's deadline it waits behind no other walk's test: its
+    // own, unless the folder has as many outstanding as it may.
+    if (deadline?.passed && state.outstanding < FOLDER_TESTS_AT_ONCE) return begin(p, folder, file)
+    return new Promise<boolean>((answer, failed) => {
+      let waiting = true
+      let withdraw = (): void => {}
+      const stop = (): void => {
+        waiting = false
+        withdraw()
+      }
+      // The deadline passes while this still waits: ask again, which is
+      // the walk's own test now (or, with the folder at its most, a wait
+      // for the test begun last).
+      if (deadline && !deadline.passed) {
+        withdraw = deadline.onPassed(() => {
+          if (!waiting) return
+          stop()
+          answer(ask(p))
+        })
+      }
+      held.test.then(
+        (found) => {
+          if (!waiting) return
+          stop()
+          answer(held.file === file ? found : ask(p))
+        },
+        (error: unknown) => {
+          if (!waiting) return
+          stop()
+          if (held.file === file || folderCannotBeReached(error)) failed(error)
+          else answer(ask(p))
+        },
+      )
+    })
+  }
+  return ask
+}
+
+/** Test seam: no folder has a test outstanding. */
+export function _resetFolderFileTestForTest(): void {
+  folderTests = new WeakMap()
+}
+
+/** A walk of PATH off the event loop that something waits for, with the
+ *  deadline of that wait (withPathWalkDeadline). */
+export interface PathWalkInFlight<T> {
+  /** The walk itself. It ends when every folder it asks has answered, however
+   *  long that takes. */
+  readonly run: Promise<T>
+  /** True once the walk has ended; false once its deadline has passed with
+   *  the walk still not ended, whichever comes first. Never rejects. */
+  readonly answered: Promise<boolean>
+  /** The deadline has passed and the walk has still not ended: a folder PATH
+   *  names has not answered in time. False again once it ends. */
+  readonly overdue: boolean
+  /** Drop the deadline's timer, and let whoever waits go on with no answer
+   *  (a walk forgotten by a test seam). */
+  forget(): void
+}
+
+/** `run`, a walk of PATH under way, with a deadline for whoever waits for
+ *  it: `deadline` when the walk's file tests read one too (pathWalkDeadline,
+ *  begun with the walk), or one a number of milliseconds from now. The
+ *  deadline ends the WAIT, never the walk: nothing is skipped and no answer
+ *  is made up when it passes. A caller that finds the walk `overdue` has no
+ *  answer and says so; the walk's own answer is kept by whoever started it,
+ *  when it ends. One timer for the walk, however many wait, cleared when the
+ *  walk ends. */
+export function withPathWalkDeadline<T>(run: Promise<T>, deadline: PathWalkDeadline | number = WINDOWS_PATH_WALK_WAIT_MS): PathWalkInFlight<T> {
+  const until = typeof deadline === 'number' ? pathWalkDeadline(deadline) : deadline
+  let overdue = false
+  let ended = false
+  let settle: (inTime: boolean) => void = () => {}
+  const answered = new Promise<boolean>((resolve) => { settle = resolve })
+  const late = (): void => {
+    if (ended) return
+    overdue = true
+    settle(false)
+  }
+  if (until.passed) late()
+  else until.onPassed(late)
+  const end = (): void => {
+    ended = true
+    overdue = false
+    until.clear()
+    settle(true)
+  }
+  run.then(end, end)
+  return {
+    run,
+    answered,
+    get overdue() { return overdue },
+    forget: () => {
+      until.clear()
+      settle(false)
+    },
+  }
+}
+
 /** The full path of the first of `names` found IN-PROCESS in the folders
  *  PATH names (windowsPathFolders), in `order`; null when none is. `stat`
  *  answers whether a candidate is a file; a stat that THROWS marks that

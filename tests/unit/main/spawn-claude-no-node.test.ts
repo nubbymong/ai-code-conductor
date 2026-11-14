@@ -28,15 +28,22 @@ const lookups: Array<{ names: readonly string[]; path: string | undefined }> = [
 const asyncLookups: Array<{ names: readonly string[]; path: string | undefined }> = []
 /** When set, an off-the-loop look waits for it before it answers. */
 let asyncGate: Promise<void> | null = null
+/** The file test each off-the-loop look was handed, and the one the app's
+ *  rule for such a look gives (windows-programs.ts folderFileTest: one file
+ *  test at a time in a folder, and no folder given up). */
+const asyncLookupTests: unknown[] = []
+const folderTest = async (): Promise<boolean> => false
 vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/main/windows-programs')>()
   return {
     ...actual,
+    folderFileTest: () => folderTest,
     findOnWindowsPath: vi.fn((names: readonly string[], env: NodeJS.ProcessEnv) => {
       lookups.push({ names, path: actual.windowsEnvValue(env, 'PATH') })
       return ((globalThis as any).__nodeExe as string | undefined) ?? null
     }),
-    findOnWindowsPathAsync: vi.fn(async (names: readonly string[], env: NodeJS.ProcessEnv) => {
+    findOnWindowsPathAsync: vi.fn(async (names: readonly string[], env: NodeJS.ProcessEnv, test?: unknown) => {
+      asyncLookupTests.push(test)
       asyncLookups.push({ names, path: actual.windowsEnvValue(env, 'PATH') })
       const answer = ((globalThis as any).__nodeExe as string | undefined) ?? null
       if (asyncGate) await asyncGate
@@ -113,6 +120,7 @@ function later(ms: number): void {
 beforeEach(() => {
   lookups.length = 0
   asyncLookups.length = 0
+  asyncLookupTests.length = 0
   asyncGate = null
   vi.mocked(logInfo).mockClear()
   ;(mod as any)._resetPickerNodeFoundForTest?.()
@@ -375,6 +383,10 @@ describe('Windows: the CLI check looks for node.exe off the event loop, and a la
     nodeExe(NODE)
     await warm()
     expect(asyncLookups).toEqual([{ names: ['node.exe'], path: PATH_A }])
+    // Mutation to prove this can fail: look with a plain file test, a new one
+    // in a folder for every look (a share that is down then holds a thread
+    // for each).
+    expect(asyncLookupTests, 'the look asks through the one-test-a-folder file test').toEqual([folderTest])
     expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --model opus; exit`)
     // The next check, 30 s later, finds none: so does the next launch.
     nodeExe(null)
