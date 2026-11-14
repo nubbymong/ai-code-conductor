@@ -23,8 +23,9 @@ export const changelog: ChangelogEntry[] = [
   {
     version: '2.1.3-beta.2',
     date: '2026-11-15',
-    highlights: 'A small steadier release. The Services panel\'s hooks counters keep moving after you turn hooks off and on, and an older Claude model used through Amazon Bedrock or Google Vertex is named and priced as itself.',
+    highlights: 'A small steadier release. On Windows, a network share in PATH that does not answer no longer freezes the app when a session starts, the Services panel\'s hooks counters keep moving after you turn hooks off and on, and an older Claude model used through Amazon Bedrock or Google Vertex is named and priced as itself.',
     changes: [
+      { type: 'fix', description: 'On Windows, a folder in PATH on a network share that does not answer no longer freezes the app when a session starts. The app now looks for Claude Code in the background and waits up to 20 seconds. If a folder has still not answered by then, the session says so instead of starting a copy of Claude Code from a later folder.' },
       { type: 'fix', description: 'After you turn hooks off and then on again in Settings, the hooks counters on the Services panel move again. Before, they could stay still until the app restarted.' },
       { type: 'fix', description: 'When the hooks service restarts, a late message from the one it replaced can no longer stop the new one or briefly show its old state on the Services panel.' },
       { type: 'fix', description: 'An older Claude Opus, Sonnet or Haiku model used through Amazon Bedrock or Google Vertex is now named and priced as itself in Usage and Tokenomics. Before, it could be counted as the newest model of its family.' },
