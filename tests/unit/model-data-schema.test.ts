@@ -12,10 +12,11 @@
  * Pure: no file, no network.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { createHash } from 'crypto'
 import bundledJson from '../../resources/model-registry.json'
 import snapshotJson from '../../resources/claude-code-model-configuration.json'
 import { parseModelData, validateModelData, mergeModelData, MODEL_DATA_FORMAT } from '../../src/main/model-registry-data'
-import { resolveModelInfo, evaluateModelCoverage, mergeRegistry, buildModelPickerRows, literalPattern, type ModelRegistry } from '../../src/shared/model-registry'
+import { resolveModelInfo, evaluateModelCoverage, mergeRegistry, buildModelPickerRows, effortLevelsFor, literalPattern, type ModelRegistry } from '../../src/shared/model-registry'
 
 const bundled = bundledJson as unknown as ModelRegistry
 type Loose = Record<string, any>
@@ -41,18 +42,61 @@ describe('the bundled file', () => {
     expect((bundledJson as Loose).formatVersion).toBe(MODEL_DATA_FORMAT)
   })
 
+  it('carries a revision, the date of its last edit as a whole number, so an older copy can be told from a newer one', () => {
+    const revision = (bundledJson as Loose).revision
+    expect(Number.isInteger(revision)).toBe(true)
+    expect(revision).toBeGreaterThanOrEqual(20261114)
+    const r = validateModelData(file(), bundled)
+    expect(r.ok && r.revision).toBe(revision)
+  })
+
+  // The revision only orders the files if it is raised with every edit, and
+  // nothing else can check that: an install uses a fetched file or a kept
+  // copy whenever its revision is not lower than the bundled one. So the
+  // file's content is pinned here beside its revision. An edit to
+  // resources/model-registry.json fails this test until BOTH are updated:
+  // set "revision" in the file to today's date (YYYYMMDD, higher than the
+  // one pinned), then pin the new revision and the digest the failure prints.
+  it('its revision is raised with every edit (the content is pinned beside the revision)', () => {
+    const PINNED = { revision: 20261114, digest: '8bb8ca0eb493501f0f6c45b6ac77ed7f44693efa23f0cec7a1243092810bb1b1' }
+    const { revision, ...content } = bundledJson as Loose
+    const digest = createHash('sha256').update(JSON.stringify(content)).digest('hex')
+    expect({ revision, digest }, 'resources/model-registry.json changed: raise its "revision" to today\'s date, then pin the new revision and digest here').toEqual(PINNED)
+  })
+
   it('carries Fable 5.2 as the latest Fable, with its own prices', () => {
     const info = resolveModelInfo(bundled, 'claude-fable-5-2')
     expect(info).toMatchObject({ known: true, id: 'claude-fable-5-2', label: 'Fable 5.2', family: 'fable', matchKind: 'exact' })
     expect(info.fallbackPricing).toEqual({ input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 })
     // The family alias and a bare family name now mean 5.2; 5.1 and 5 keep their own ids.
     expect(resolveModelInfo(bundled, 'fable').id).toBe('claude-fable-5-2')
-    expect(resolveModelInfo(bundled, 'some-fable-build').id).toBe('claude-fable-5-2')
+    expect(resolveModelInfo(bundled, 'fable[1m]')).toMatchObject({ id: 'claude-fable-5-2', matchKind: 'alias' })
     expect(resolveModelInfo(bundled, 'claude-fable-5-1').label).toBe('Fable 5.1')
     expect(resolveModelInfo(bundled, 'claude-fable-5-1-20260801').id).toBe('claude-fable-5-1')
     expect(resolveModelInfo(bundled, 'claude-fable-5').label).toBe('Fable 5')
     expect(bundled.models.filter((m) => m.aliases?.includes('fable')).map((m) => m.id)).toEqual(['claude-fable-5-2'])
     expect(buildModelPickerRows(bundled).some((r) => r.value === 'claude-fable-5-2' && r.kind === 'pinned')).toBe(true)
+  })
+
+  // Review finding: Fable 5.2 held the plain pattern 'fable', so a partner
+  // platform's id for an OLDER Fable (which starts with the platform's own
+  // prefix, so no id or id-prefix match helps) was read, and priced, as 5.2.
+  it.each([
+    ['anthropic.claude-fable-5-2-v1:0', 'claude-fable-5-2', 8],
+    ['anthropic.claude-fable-5-1-v1:0', 'claude-fable-5-1', 10],
+    ['vertex/claude-fable-5-1@20261001', 'claude-fable-5-1', 10],
+    ['us.anthropic.claude-fable-5-v1:0', 'claude-fable-5', 10],
+    ['vertex/claude-fable-5@20260801', 'claude-fable-5', 10],
+  ])('a partner platform\'s id %s is its own Fable version, with its own price', (id, entry, input) => {
+    const info = resolveModelInfo(bundled, id)
+    expect(info).toMatchObject({ known: true, id: entry, matchKind: 'pattern' })
+    expect(info.fallbackPricing?.input).toBe(input)
+  })
+
+  it('a Fable name no entry names (a display name, a version not listed yet) is still in the Fable family', () => {
+    for (const name of ['Fable 5.2', 'Fable 5.1 (1M context)', 'some-fable-build', 'claude-fable-9']) {
+      expect(resolveModelInfo(bundled, name), name).toMatchObject({ known: true, family: 'fable', matchKind: 'pattern' })
+    }
   })
 
   it('agrees with the model list shipped beside it: nothing missing, nothing called retired', () => {
@@ -188,11 +232,63 @@ describe('a fetched file is held to a strict shape', () => {
 
   it.each([
     ['negative', -1],
-    ['beyond the range', 100001],
+    ['beyond the range', 1000.01],
+    ['far beyond any real price', 100000],
     ['text', '8'],
     ['nothing', null],
   ])('a price that is %s is refused', (_what, price) => {
     reasonOf(file((f) => { f.models[0].fallbackPricing.input = price }))
+  })
+
+  it('a price up to 1000 per million tokens is taken', () => {
+    expect(validateModelData(file((f) => { f.models[0].fallbackPricing.input = 1000 }), bundled).ok).toBe(true)
+  })
+
+  it.each([
+    ['missing', (f: Loose) => { delete f.revision }],
+    ['zero', (f: Loose) => { f.revision = 0 }],
+    ['not a whole number', (f: Loose) => { f.revision = 20261114.5 }],
+    ['text', (f: Loose) => { f.revision = '20261114' }],
+    ['beyond eight digits', (f: Loose) => { f.revision = 100000000 }],
+  ])('a revision that is %s is refused', (_what, change) => {
+    expect(reasonOf(file(change))).toMatch(/^revision: /)
+  })
+
+  // Review finding: a model whose id is only the start of a name ("claude")
+  // matched every later name that starts with it, so one entry could take
+  // the label and the price of every model the registry does not list yet.
+  it.each([
+    ['only the start of every Claude name', { ...NEW_MODEL, id: 'claude', patterns: [] }],
+    ['a family with no version', { ...NEW_MODEL, id: 'claude-fable', patterns: [] }],
+    ['a family and a hyphen', { ...NEW_MODEL, id: 'claude-fable-', patterns: [] }],
+    // The same length as `claude-fable-` and a digit after it: only the family in the name tells them apart.
+    ['another family\'s name', { ...NEW_MODEL, id: 'claude-opus-10', patterns: [] }],
+    ['only the start of every GPT name', { id: 'gpt', patterns: [], family: 'codex', label: 'GPT' }],
+    ['one letter', { id: 'o', patterns: [], family: 'codex', label: 'O' }],
+  ])('a new model whose id is %s is refused', (_what, model) => {
+    expect(reasonOf(file((f) => { f.models.unshift(model) }))).toMatch(/not a full model name/)
+  })
+
+  it('a new model with a full name is taken, and a shipped id is never held to the rule', () => {
+    for (const model of [NEW_MODEL, { ...NEW_MODEL, id: 'claude-fable-6-1-fast' }, { id: 'gpt-7', patterns: [], family: 'codex', label: 'GPT-7' }, { id: 'o5', patterns: [], family: 'codex', label: 'o5' }]) {
+      const r = validateModelData(file((f) => { f.models.unshift(model) }), bundled)
+      expect(r.ok ? 'ok' : r.reason, model.id).toBe('ok')
+    }
+    // codex-family has no digit in it: it is the bundled file's own entry.
+    expect(bundled.models.some((m) => m.id === 'codex-family')).toBe(true)
+    expect(validateModelData(file(), bundled).ok).toBe(true)
+  })
+
+  it('a new pattern shorter than four characters is refused: it would match almost any name', () => {
+    for (const pattern of ['a', '-', 'gpt', '^o', '^cl']) {
+      expect(reasonOf(file((f) => { f.models.unshift({ ...NEW_MODEL, patterns: [pattern] }) })), pattern).toMatch(/pattern/)
+      // On a shipped model too, when the bundled entry does not have it.
+      expect(reasonOf(file((f) => { f.models[0].patterns = [...f.models[0].patterns, pattern] })), pattern).toMatch(/pattern/)
+    }
+    // The bundled file's own short pattern (^o, on its Codex catch-all) stays.
+    expect(bundled.models.find((m) => m.id === 'codex-family')?.patterns).toContain('^o')
+    expect(validateModelData(file(), bundled).ok).toBe(true)
+    expect(validateModelData(file((f) => { f.models.unshift({ ...NEW_MODEL, patterns: ['fabl'] }) }), bundled).ok).toBe(true)
   })
 
   it('a price that is not a finite number is refused', () => {
@@ -266,7 +362,7 @@ describe('how a fetched file joins the bundled one', () => {
     expect(merged.models).toHaveLength(bundled.models.length)
   })
 
-  it('a family the fetched file leaves out stays too, and the file\'s levels and picker rows are used', () => {
+  it('a family, a picker row and an effort level the fetched file leaves out stay too; what it does carry is corrected', () => {
     const merged = mergeModelData(bundled, fetched((f) => {
       f.models = f.models.filter((m: Loose) => m.family !== 'haiku')
       delete f.families.haiku
@@ -275,9 +371,52 @@ describe('how a fetched file joins the bundled one', () => {
     }), '2026-11-14')
     expect(merged.families.haiku).toEqual(bundled.families.haiku)
     expect(resolveModelInfo(merged, 'claude-haiku-5-5').known).toBe(true)
-    expect(merged.dropdown.some((d) => d.value === 'haiku')).toBe(false)
+    expect(merged.dropdown.map((d) => d.value).sort()).toEqual(bundled.dropdown.map((d) => d.value).sort())
+    expect(merged.dropdown[merged.dropdown.length - 1].value).toBe('haiku')
     expect(merged.effortLevels[0].label).toBe('Lowest')
+    expect(merged.effortLevels.map((l) => l.value)).toEqual(bundled.effortLevels.map((l) => l.value))
     expect(merged.providerEffortLevels?.codex).toEqual(bundled.providerEffortLevels?.codex)
+  })
+
+  // Review finding: a file that passed every check could still empty both
+  // pickers (pickable false on every model, no picker rows) and cut the
+  // effort levels down to one, on every install, until the branch was fixed.
+  it('a fetched file cannot empty either picker: a shipped model stays pickable and the shipped picker rows stay', () => {
+    const merged = mergeModelData(bundled, fetched((f) => {
+      for (const m of f.models) m.pickable = false
+      f.dropdown = []
+    }), '2026-11-14')
+    expect(buildModelPickerRows(merged, 'claude')).toEqual(buildModelPickerRows(bundled, 'claude'))
+    expect(buildModelPickerRows(merged, 'codex')).toEqual(buildModelPickerRows(bundled, 'codex'))
+    expect(buildModelPickerRows(bundled, 'claude').length).toBeGreaterThan(10)
+    expect(buildModelPickerRows(bundled, 'codex').length).toBeGreaterThan(3)
+  })
+
+  it('nor can it offer an entry the bundled file keeps out of the pickers, and a model it adds may be kept out', () => {
+    const merged = mergeModelData(bundled, fetched((f) => {
+      delete f.models.find((m: Loose) => m.id === 'codex-family').pickable
+      f.models.unshift({ ...NEW_MODEL, pickable: false })
+    }), '2026-11-14')
+    expect(merged.models.find((m) => m.id === 'codex-family')?.pickable).toBe(false)
+    expect(buildModelPickerRows(merged, 'codex').some((r) => r.value === 'codex-family')).toBe(false)
+    expect(buildModelPickerRows(merged, 'claude').some((r) => r.value === 'claude-fable-6')).toBe(false)
+    // A shipped model the file does not mark at all stays as the bundled file has it.
+    expect(merged.models.find((m) => m.id === 'claude-opus-5-5')).not.toHaveProperty('pickable')
+  })
+
+  it('a fetched file cannot take an effort level away, for either assistant; it can add one and correct one', () => {
+    const merged = mergeModelData(bundled, fetched((f) => {
+      f.effortLevels = [{ value: 'low', label: 'Low' }, { value: 'turbo', label: 'Turbo' }]
+      f.providerEffortLevels.codex = [{ value: 'ultra', label: 'Ultra!' }]
+      // Each model keeps only the one level the file still has for its assistant.
+      const kept: Record<string, string> = { codex: 'ultra' }
+      for (const m of f.models) if (m.efforts) m.efforts = m.efforts.filter((e: string) => e === (kept[m.family] ?? 'low'))
+    }), '2026-11-14')
+    const values = (levels: { value: string }[]) => levels.map((l) => l.value)
+    expect(values(effortLevelsFor(merged, 'claude'))).toEqual(['low', 'turbo', 'medium', 'high', 'xhigh', 'max', 'ultracode'])
+    expect(values(effortLevelsFor(merged, 'codex'))).toEqual(['ultra', 'low', 'medium', 'high', 'xhigh', 'max'])
+    expect(effortLevelsFor(merged, 'codex')[0].label).toBe('Ultra!')
+    expect(values(effortLevelsFor(bundled, 'claude'))).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'])
   })
 
   it('the bundled file is not changed by a merge', () => {

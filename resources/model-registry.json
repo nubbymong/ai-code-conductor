@@ -1,14 +1,15 @@
 {
   "formatVersion": 1,
+  "revision": 20261114,
   "models": [
-    { "id": "claude-fable-5-2", "patterns": ["fable"], "aliases": ["fable"], "family": "fable", "label": "Fable 5.2",
+    { "id": "claude-fable-5-2", "patterns": ["fable-5-2"], "aliases": ["fable", "fable[1m]"], "family": "fable", "label": "Fable 5.2",
       "articleExempt": true,
       "efforts": ["low", "medium", "high", "xhigh", "max", "ultracode"],
       "fallbackPricing": { "input": 8, "output": 40, "cacheRead": 0.2, "cacheWrite": 10 } },
     { "id": "claude-fable-5-1", "patterns": ["fable-5-1"], "family": "fable", "label": "Fable 5.1",
       "efforts": ["low", "medium", "high", "xhigh", "max", "ultracode"],
       "fallbackPricing": { "input": 10, "output": 50, "cacheRead": 1.0, "cacheWrite": 12.5 } },
-    { "id": "claude-fable-5", "patterns": ["fable-5"], "family": "fable", "label": "Fable 5",
+    { "id": "claude-fable-5", "patterns": ["fable-5", "fable"], "family": "fable", "label": "Fable 5",
       "efforts": ["low", "medium", "high", "xhigh", "max", "ultracode"],
       "fallbackPricing": { "input": 10, "output": 50, "cacheRead": 1.0, "cacheWrite": 12.5 } },
     { "id": "claude-opus-5-5", "patterns": ["opus"], "aliases": ["opus", "opus[1m]"], "family": "opus", "label": "Opus 5.5",

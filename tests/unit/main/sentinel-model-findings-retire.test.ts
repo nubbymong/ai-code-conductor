@@ -280,4 +280,59 @@ describe('the model data read at start-up carries the model (2.1.3-beta.1)', () 
     const mod = await import('../../../src/main/sentinel/index')
     expect(() => mod.sentinelModelDataChanged()).not.toThrow()
   })
+
+  // Review finding: the fetched file is a network file that can change or go
+  // away, and the overlay is the durable local record of a model Sentinel
+  // added. A fetched file that carried the model used to delete that record
+  // for good, so the model left the picker if the file later dropped it.
+  describe('an overlay entry Sentinel added is the durable record of a model', () => {
+    const overlayFile = () => path.join(dir, 'sentinel', 'registry-overlay.json')
+    const overlayIds = () => (JSON.parse(fs.readFileSync(overlayFile(), 'utf-8')).models as Array<{ id: string }>).map((m) => m.id)
+    const added = (id: string) => ({ id, patterns: [], family: 'fable', label: `Added ${id}`, provenance: { addedBy: 'sentinel', date: '2026-11-01' } })
+    const plantOverlay = (...ids: string[]) => {
+      fs.mkdirSync(path.join(dir, 'sentinel'), { recursive: true })
+      fs.writeFileSync(overlayFile(), JSON.stringify({ models: ids.map(added) }))
+    }
+    const inPicker = async (id: string) => {
+      const { getRegistry } = await import('../../../src/main/model-registry-service')
+      const { buildModelPickerRows } = await import('../../../src/shared/model-registry')
+      return buildModelPickerRows(getRegistry()).some((r) => r.value === id)
+    }
+
+    it('a fetched file that carries the model closes the notice and leaves the overlay entry where it is', async () => {
+      plantOverlay(NEW)
+      const s = await sentinel([notice(NEW)])
+      expect(await refresh(await fileWith(NEW))).toBe(true)
+      s.sentinelModelDataChanged()
+      expect(openIds(s)).toEqual([])
+      expect(overlayIds()).toEqual([NEW])
+    })
+
+    it('the next start, with that file as the last good copy, leaves it too; then with the file gone the model is still in the picker', async () => {
+      plantOverlay(NEW)
+      fs.mkdirSync(path.join(dir, 'CONFIG'))
+      const s = await sentinel([])
+      expect(await refresh(await fileWith(NEW))).toBe(true)
+      s.sentinelModelDataChanged()
+      expect(fs.existsSync(path.join(dir, 'CONFIG', 'model-data.json'))).toBe(true)
+      // The next start: the last good copy carries the model.
+      const { _initRegistryForTest } = await import('../../../src/main/model-registry-service')
+      _initRegistryForTest(dir)
+      s.reconcileOnUpdate()
+      expect(overlayIds()).toEqual([NEW])
+      // The file drops the model and the copy is lost: the overlay still has it.
+      fs.rmSync(path.join(dir, 'CONFIG', 'model-data.json'))
+      _initRegistryForTest(dir)
+      s.reconcileOnUpdate()
+      expect(overlayIds()).toEqual([NEW])
+      expect(await inPicker(NEW)).toBe(true)
+    })
+
+    it('an entry for a model this build\'s own file now carries is still retired, as after any update', async () => {
+      plantOverlay(NEW, 'claude-opus-5-5')
+      const s = await sentinel([])
+      s.reconcileOnUpdate()
+      expect(overlayIds()).toEqual([NEW])
+    })
+  })
 })

@@ -141,6 +141,15 @@ release.** Before cutting, re-read it and refresh the snapshot if it has moved:
    grouped under its family — so no `dropdown` edit is needed for a new version.
    `dropdown` holds only the family *alias* rows ("Opus" = the newest Opus).
 4. Run `node scripts/release-gate.mjs` until the model check passes.
+5. Whenever `resources/model-registry.json` changes, set its `"revision"` to the
+   date of the edit as a whole number (`20261120`), and after the release copy
+   the file to the `model-data` branch as `model-registry.v1.json`. Installed
+   apps read that branch file at each start and use it only when its revision
+   is **not older** than their own bundled file's; an older file is ignored
+   with one log line, so a branch that lags behind a release costs nothing but
+   also adds nothing until it is brought up to date. A unit test pins the
+   file's content beside its revision (`tests/unit/model-data-schema.test.ts`),
+   so an edit that forgets the revision fails until both are updated.
 
 #### What the article does and does not govern
 

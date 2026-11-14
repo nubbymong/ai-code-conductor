@@ -6,6 +6,7 @@
  * The fetch is a stand-in in every case: no request leaves this suite.
  */
 import { describe, it, expect } from 'vitest'
+import { MODEL_DATA_FORMAT } from '../../../src/main/model-registry-data'
 import { fetchModelDataText, MODEL_DATA_URL, MODEL_DATA_MAX_BYTES, MODEL_DATA_TIMEOUT_MS, type ModelDataFetch } from '../../../src/main/model-registry-remote'
 
 type Init = Parameters<ModelDataFetch>[1]
@@ -25,7 +26,11 @@ const redirect = (location: string, status = 302) => new Response(null, { status
 
 describe('the address', () => {
   it('is the model-data branch of the app\'s own repository, over https', () => {
-    expect(MODEL_DATA_URL).toBe('https://raw.githubusercontent.com/nubbymong/ai-code-conductor/model-data/model-registry.json')
+    // The format is in the file's name (review finding): a later format is
+    // published beside this one, so a version that reads format 1 keeps
+    // getting new models from the format 1 file for as long as it is kept.
+    expect(MODEL_DATA_FORMAT).toBe(1)
+    expect(MODEL_DATA_URL).toBe('https://raw.githubusercontent.com/nubbymong/ai-code-conductor/model-data/model-registry.v1.json')
     expect(MODEL_DATA_MAX_BYTES).toBe(256 * 1024)
     expect(MODEL_DATA_TIMEOUT_MS).toBe(5000)
   })
@@ -63,12 +68,32 @@ describe('the read', () => {
   })
 
   it('a redirect within the same host is followed, a few times at most', async () => {
-    const r = await fetchModelDataText(stub(redirect('/nubbymong/ai-code-conductor/refs/heads/model-data/model-registry.json', 301), ok('{"a":1}')))
+    const r = await fetchModelDataText(stub(redirect('/nubbymong/ai-code-conductor/refs/heads/model-data/model-registry.v1.json', 301), ok('{"a":1}')))
     expect(r).toEqual({ ok: true, text: '{"a":1}' })
-    expect(calls.map((c) => c.url)).toEqual([MODEL_DATA_URL, 'https://raw.githubusercontent.com/nubbymong/ai-code-conductor/refs/heads/model-data/model-registry.json'])
-    const loop = await fetchModelDataText(stub(() => redirect('/again')))
+    expect(calls.map((c) => c.url)).toEqual([MODEL_DATA_URL, 'https://raw.githubusercontent.com/nubbymong/ai-code-conductor/refs/heads/model-data/model-registry.v1.json'])
+    const loop = await fetchModelDataText(stub(() => redirect('/nubbymong/ai-code-conductor/again')))
     expect(loop).toEqual({ ok: false, reason: 'too many redirects' })
     expect(calls).toHaveLength(4)
+  })
+
+  // Review finding: the host serves every repository's files, so a redirect
+  // checked by host alone could lead to a file in any of them.
+  it('a redirect within the same host but out of the app\'s own repository is refused, and never asked for', async () => {
+    for (const to of [
+      '/other/path',
+      '/someone-else/ai-code-conductor/model-data/model-registry.v1.json',
+      '/nubbymong/another-repo/model-data/model-registry.v1.json',
+      '/nubbymong/ai-code-conductor-fork/model-data/model-registry.v1.json',
+      '/nubbymong/ai-code-conductor/../another-repo/x.json',
+      '/nubbymong/ai-code-conductor/%2e%2e/another-repo/x.json',
+      '/NUBBYMONG/ai-code-conductor/model-data/model-registry.v1.json',
+      '/nubbymong/ai-code-conductor',
+      '/',
+    ]) {
+      const r = await fetchModelDataText(stub(redirect(to), ok('{}')))
+      expect(r, to).toEqual({ ok: false, reason: 'redirected out of the app\'s repository' })
+      expect(calls, to).toHaveLength(1)
+    }
   })
 
   it('a redirect with nowhere to go is refused', async () => {

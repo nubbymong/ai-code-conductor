@@ -7,7 +7,10 @@
 //     background, checked (model-registry-data.ts) and kept as the last good
 //     copy in <resourcesDir>/CONFIG/model-data.json (only when that folder is
 //     already there: it is config-manager's to make), so a new model needs no
-//     release. On any failure the last good copy is used, else layer 1;
+//     release. On any failure the last good copy is used, else layer 1. Each
+//     file carries a revision, and model data older than layer 1's is never
+//     used: an older copy would put back the aliases, labels and prices a
+//     newer build has since corrected;
 //  3. the overlay, <resourcesDir>/sentinel/registry-overlay.json (the user's
 //     and Sentinel's own additions; it wins per id).
 //
@@ -26,17 +29,18 @@ import { fetchModelDataText, MODEL_DATA_MAX_BYTES, type ModelDataRead } from './
 import { stripSpoofableText } from '../shared/safe-text'
 import { logInfo } from './debug-logger'
 
-/** The file shipped with the build, without its format version (a field of
- *  the file, not of the registry readers get). */
-const bundled: ModelRegistry = (() => {
-  const { formatVersion: _format, ...registry } = baselineJson as unknown as ModelRegistry & { formatVersion?: number }
+/** The file shipped with the build, without its format version and its
+ *  revision (fields of the file, not of the registry readers get). */
+const { bundled, bundledRevision } = (() => {
+  const { formatVersion: _format, revision, ...registry } = baselineJson as unknown as ModelRegistry & { formatVersion?: number; revision?: number }
   void _format
-  return registry
+  return { bundled: registry as ModelRegistry, bundledRevision: Number.isInteger(revision) ? (revision as number) : 0 }
 })()
 
 let overlayDir: string | null = null         // <resourcesDir> root; sentinel/ created lazily
-/** The model data in use (read just now, or the last good copy), if any. */
-let modelData: ModelRegistry | null = null
+/** The model data in use (read just now, or the last good copy), if any, as
+ *  the text it is kept as (its revision included). */
+let modelData: string | null = null
 let baseline: ModelRegistry = bundled
 let merged: ModelRegistry = mergeRegistry(baseline, null)
 /** The one read of a start (refreshModelRegistry). */
@@ -79,6 +83,10 @@ export function reloadRegistry(): void {
 export function getRegistry(): ModelRegistry { return merged }
 /** The registry without the overlay: the bundled file with the model data. */
 export function getBaseline(): ModelRegistry { return baseline }
+/** The file shipped with the build, alone. What an overlay entry is retired
+ *  against: only a release makes an entry of the user's own file redundant
+ *  for good; the model data can change or go away. */
+export function getBundledRegistry(): ModelRegistry { return bundled }
 export function onRegistryReload(fn: (reg: ModelRegistry) => void): () => void {
   reloadSubs.add(fn); return () => reloadSubs.delete(fn)
 }
@@ -104,17 +112,22 @@ const plain = (reason: string): string => stripSpoofableText(String(reason), 200
 
 const today = (): string => new Date().toISOString().slice(0, 10)
 
+/** Checked model data with its revision. */
+type ModelData = { data: ModelRegistry; revision: number }
+
 /** Put model data (or none) to use: the baseline is rebuilt from it. */
-function useModelData(data: ModelRegistry | null): void {
-  modelData = data
-  baseline = mergeModelData(bundled, data, today())
+function useModelData(got: ModelData | null): void {
+  modelData = got ? modelDataText(got.data, got.revision) : null
+  baseline = mergeModelData(bundled, got?.data ?? null, today())
 }
 
 const TOO_LARGE = 'larger than 256 KB'
 
 /** The last good copy, checked exactly as a file just read is: the folder is
- *  the user's, so the copy is never trusted for having been written here. */
-function readLastGood(): ModelRegistry | null {
+ *  the user's, so the copy is never trusted for having been written here.
+ *  A copy older than the build's own file (kept by an earlier version) is
+ *  removed: it would never be used again, and it would be wrong if it were. */
+function readLastGood(): ModelData | null {
   const file = modelDataFile()
   if (!file) return null
   const unusable = (why: string): null => {
@@ -130,7 +143,14 @@ function readLastGood(): ModelRegistry | null {
     return unusable('it could not be read')
   }
   const parsed = parseModelData(text, bundled)
-  return parsed.ok ? parsed.data : unusable(parsed.reason)
+  if (!parsed.ok) return unusable(parsed.reason)
+  if (parsed.revision < bundledRevision) {
+    let removed = true
+    try { fs.rmSync(file, { force: true }) } catch { removed = false }
+    logInfo(`[registry] the last good model data is older than this build's own (revision ${parsed.revision}, this build's ${bundledRevision}); ${removed ? 'removed, ' : ''}using the bundled file`)
+    return null
+  }
+  return { data: parsed.data, revision: parsed.revision }
 }
 
 /**
@@ -152,14 +172,19 @@ export function refreshModelRegistry(deps: { fetchText?: () => Promise<ModelData
     } catch {
       got = { ok: false, reason: 'the read failed' }
     }
-    const parsed = got.ok ? parseModelData(got.text, bundled) : got
+    let parsed = got.ok ? parseModelData(got.text, bundled) : got
+    // A file older than the build's own (the branch lags behind a release)
+    // is a failure like any other: the build's newer values stay.
+    if (parsed.ok && parsed.revision < bundledRevision) {
+      parsed = { ok: false, reason: `revision ${parsed.revision} is older than this build's own, ${bundledRevision}` }
+    }
     if (!parsed.ok) {
       logInfo(`[registry] model data not read (${plain(parsed.reason)}); using ${using()}`)
       return false
     }
-    const text = modelDataText(parsed.data)
-    if (modelData && modelDataText(modelData) === text) return false   // what is in use already
-    useModelData(parsed.data)
+    const text = modelDataText(parsed.data, parsed.revision)
+    if (modelData === text) return false                               // what is in use already
+    useModelData(parsed)
     reloadRegistry()
     logInfo(`[registry] model data read: ${parsed.data.models.length} models, in use`)
     const file = modelDataFile()

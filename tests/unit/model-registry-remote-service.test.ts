@@ -21,7 +21,7 @@ vi.mock('../../src/main/debug-logger', () => ({
 }))
 
 import {
-  _initRegistryForTest, getRegistry, getBaseline, onRegistryReload, refreshModelRegistry, applyOverlayEntry, modelDataFile,
+  _initRegistryForTest, getRegistry, getBaseline, getBundledRegistry, onRegistryReload, refreshModelRegistry, applyOverlayEntry, modelDataFile,
 } from '../../src/main/model-registry-service'
 import { resolveModelInfo, buildModelPickerRows } from '../../src/shared/model-registry'
 
@@ -62,8 +62,10 @@ describe('a good model file', () => {
     expect(reloads).toEqual([bundledJson.models.length + 1])
     expect(resolveModelInfo(getRegistry(), 'claude-fable-6')).toMatchObject({ known: true, label: 'Fable 6' })
     expect(buildModelPickerRows(getRegistry()).some((r) => r.value === 'claude-fable-6')).toBe(true)
-    // The baseline the overlay is reconciled against carries it too.
+    // The baseline the overlay goes on top of carries it; the file shipped
+    // with the build, which the overlay is reconciled against, does not.
     expect(getBaseline().models.some((m) => m.id === 'claude-fable-6')).toBe(true)
+    expect(getBundledRegistry().models.map((m) => m.id)).toEqual(bundledJson.models.map((m) => m.id))
     expect(registryLines()).toEqual([`[registry] model data read: ${bundledJson.models.length + 1} models, in use`])
   })
 
@@ -197,5 +199,72 @@ describe('the last good copy is checked like a fetched file', () => {
 
   it('no copy: nothing is logged about it', () => {
     expect(registryLines()).toEqual([])
+  })
+})
+
+// Review finding (MAJOR): the fetched models win for an id both files have,
+// and nothing ordered the two. So a last good copy kept by an earlier
+// version, or a branch file that lagged behind a release, silently replaced
+// the newer build's own aliases, labels and prices. Each file now carries a
+// revision, and one older than the build's own file is never used.
+describe('a model file older than this build\'s own is never used', () => {
+  const REVISION = (bundledJson as Loose).revision as number
+  /** The model file as an earlier day had it: no Fable 5.2 yet, the `fable`
+   *  alias on Fable 5.1. */
+  const earlier = (revision: number): string => fileText((f) => {
+    f.revision = revision
+    f.models = f.models.filter((m: Loose) => m.id !== 'claude-fable-5-2')
+    const was = f.models.find((m: Loose) => m.id === 'claude-fable-5-1')
+    was.patterns = ['fable-5-1', 'fable']
+    was.aliases = ['fable']
+  })
+  const plant = (text: string) => { fs.writeFileSync(path.join(dir, 'CONFIG', 'model-data.json'), text) }
+  const latestFable = () => resolveModelInfo(getRegistry(), 'fable')
+
+  it('an older last good copy is not used at start-up: it is removed, with one line, and the build\'s own file is used', () => {
+    plant(earlier(REVISION - 1))
+    logged.lines.length = 0
+    _initRegistryForTest(dir)
+    expect(latestFable()).toMatchObject({ id: 'claude-fable-5-2', label: 'Fable 5.2', fallbackPricing: { input: 8, output: 40 } })
+    expect(getRegistry().models.map((m) => m.id)).toEqual(bundledJson.models.map((m) => m.id))
+    expect(fs.existsSync(modelDataFile()!)).toBe(false)
+    expect(registryLines()).toEqual([`[registry] the last good model data is older than this build's own (revision ${REVISION - 1}, this build's ${REVISION}); removed, using the bundled file`])
+  })
+
+  it('an older file that is read is not used and not kept, and the line says why', async () => {
+    expect(await refreshModelRegistry({ fetchText: answers(earlier(REVISION - 1)) })).toBe(false)
+    expect(latestFable().id).toBe('claude-fable-5-2')
+    expect(fs.existsSync(modelDataFile()!)).toBe(false)
+    expect(registryLines()).toEqual([`[registry] model data not read (revision ${REVISION - 1} is older than this build's own, ${REVISION}); using the bundled file`])
+  })
+
+  it('an older file that is read leaves a current last good copy in use and untouched', async () => {
+    await refreshModelRegistry({ fetchText: answers(fileText()) })
+    const good = fs.readFileSync(modelDataFile()!, 'utf-8')
+    _initRegistryForTest(dir)
+    logged.lines.length = 0
+    expect(await refreshModelRegistry({ fetchText: answers(earlier(REVISION - 1)) })).toBe(false)
+    expect(has('claude-fable-6')).toBe(true)
+    expect(latestFable().id).toBe('claude-fable-5-2')
+    expect(fs.readFileSync(modelDataFile()!, 'utf-8')).toBe(good)
+    expect(registryLines()).toEqual([`[registry] model data not read (revision ${REVISION - 1} is older than this build's own, ${REVISION}); using the last good copy`])
+  })
+
+  it('a file of the same revision, or a later one, is used and kept with its revision', async () => {
+    expect(await refreshModelRegistry({ fetchText: answers(fileText()) })).toBe(true)
+    expect(JSON.parse(fs.readFileSync(modelDataFile()!, 'utf-8')).revision).toBe(REVISION)
+    _initRegistryForTest(dir)
+    expect(await refreshModelRegistry({ fetchText: answers(fileText((f) => { f.revision = REVISION + 1; f.models.unshift({ ...NEW_MODEL, label: 'Fable Six' }) })) })).toBe(true)
+    expect(JSON.parse(fs.readFileSync(modelDataFile()!, 'utf-8')).revision).toBe(REVISION + 1)
+    _initRegistryForTest(dir)                              // the next start: the later copy is in use
+    expect(resolveModelInfo(getRegistry(), 'claude-fable-6').label).toBe('Fable Six')
+    expect(registryLines().filter((l) => /older/.test(l))).toEqual([])
+  })
+
+  it('a file that differs only in its revision is a new file: it is kept, so the copy on disk is never behind', async () => {
+    await refreshModelRegistry({ fetchText: answers(fileText()) })
+    _initRegistryForTest(dir)
+    expect(await refreshModelRegistry({ fetchText: answers(fileText((f) => { f.revision = REVISION + 1; f.models.unshift(NEW_MODEL) })) })).toBe(true)
+    expect(JSON.parse(fs.readFileSync(modelDataFile()!, 'utf-8')).revision).toBe(REVISION + 1)
   })
 })

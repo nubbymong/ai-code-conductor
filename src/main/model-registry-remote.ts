@@ -3,15 +3,24 @@
 //
 // The file lives on its own branch of the app's repository, so a new model
 // needs an edit there and no release. The read is deliberately narrow:
-// https only, the one host (a redirect is followed only within it, a few
-// times at most, each hop checked here and never by the transport), at most
-// 256 KB whatever the reply says about its length, an answer within 5 s, no
-// credentials, and never a throw. What comes back is only text: it is used
-// only after model-registry-data.ts has checked it.
+// https only, the one host and, on it, the app's own repository (a redirect
+// is followed only within that, a few times at most, each hop checked here
+// and never by the transport), at most 256 KB whatever the reply says about
+// its length, an answer within 5 s, no credentials, and never a throw. What
+// comes back is only text: it is used only after model-registry-data.ts has
+// checked it.
+import { MODEL_DATA_FORMAT } from './model-registry-data'
+
+/** The app's own repository on the host. The host serves every repository's
+ *  files, so a redirect must stay under this path, not only on the host. */
+export const MODEL_DATA_REPO_PATH = '/nubbymong/ai-code-conductor/'
 
 /** Where the model file is read from: the `model-data` branch, which holds
- *  only this file. To add a model, edit model-registry.json on that branch. */
-export const MODEL_DATA_URL = 'https://raw.githubusercontent.com/nubbymong/ai-code-conductor/model-data/model-registry.json'
+ *  only model files. To add a model, edit model-registry.v1.json on that
+ *  branch. The format is in the name: a later format is published as its own
+ *  file beside this one, so a version that reads this format is never locked
+ *  out of new models by a change it cannot read. */
+export const MODEL_DATA_URL = `https://raw.githubusercontent.com${MODEL_DATA_REPO_PATH}model-data/model-registry.v${MODEL_DATA_FORMAT}.json`
 export const MODEL_DATA_TIMEOUT_MS = 5000
 export const MODEL_DATA_MAX_BYTES = 256 * 1024
 const MAX_REDIRECTS = 3
@@ -81,6 +90,9 @@ async function read(fetchImpl: ModelDataFetch, start: URL, signal: AbortSignal):
       try { next = new URL(location, url) } catch { return fail('a redirect with no address') }
       // The same origin exactly: scheme, host and port, and no sign-in part.
       if (next.origin !== start.origin || next.username || next.password) return fail('redirected to another host')
+      // And inside the app's own repository. `next.pathname` is the path as
+      // it will be asked for: any `..` in it is already resolved.
+      if (!next.pathname.startsWith(MODEL_DATA_REPO_PATH)) return fail('redirected out of the app\'s repository')
       url = next
       continue
     }
