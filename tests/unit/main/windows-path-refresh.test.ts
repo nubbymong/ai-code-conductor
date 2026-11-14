@@ -153,7 +153,7 @@ describe('the refresh is process-wide, and a lookup by name can then find anothe
     const header = prose(path.join(ROOT, 'src', 'main', 'windows-path-refresh.ts'))
     expect(header).toMatch(/Once at start when Claude Code is switched on and in no folder PATH names \(claude-start-lookup\.ts\)/)
     const adr = prose(path.join(ROOT, 'architecture', 'decisions', '2026-10-10-adr-024-vendor-installers-may-run-after-confirmation.md'))
-    expect(adr).toMatch(/The same read also runs once at start, when Claude Code is switched on and is in no folder PATH names, and the version probe at start then runs the Claude Code found on the PATH it leaves; the append-only and fully qualified rules are unchanged\./)
+    expect(adr).toMatch(/The same read also runs once at start, when Claude Code is switched on and is in no folder PATH names, and the version probe at start then runs the Claude Code found on the PATH it leaves \(or, when the start-up deadline passes first, on the PATH there is then\); the append-only and fully qualified rules are unchanged\./)
     // The trigger it had is still there, and still first.
     expect(adr).toMatch(/On Windows, before a check the user asked for \(Check again, the check after an install ends\), main reads the system and user PATH values from the registry/)
   })
