@@ -91,22 +91,40 @@ export interface TkPricing { input: number; output: number; cacheRead: number; c
 
 export interface TkConfigDim { configId: string; label: string; workingDirectory: string }
 
+/** Tokens by kind, and their sum (2.1.3-beta.4). Every model is counted,
+ *  priced or not: a token count needs no price. */
+export interface TkTokenTotals { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
+
 /** Summary payload — constant size regardless of corpus. */
-/** The headline figures; costs cover models with a price only (MP11). */
+/** The headline figures; costs cover models with a price only (MP11).
+ *  The token figures (2.1.3-beta.4) cover the same windows and filters as
+ *  the costs beside them, and every model. */
 export interface TkKpis {
   lifeToDateCostUsd: number
   last7dCostUsd: number
   prev7dCostUsd: number
   cacheEfficiencyPct: number
   cacheSavingsUsd: number
+  lifeToDateTokens: TkTokenTotals
+  last7dTokens: TkTokenTotals
+}
+
+/** One day of the daily series. The costs are of priced models only, and
+ *  `byProvider` splits them (MP11); the tokens are of every model, and
+ *  `tokensByProvider` splits their total the same way (2.1.3-beta.4). */
+export interface TkDailyPoint {
+  day: string
+  costUsd: number
+  byProvider: Record<TkProvider, number>
+  tokens: TkTokenTotals
+  tokensByProvider: Record<TkProvider, number>
 }
 
 export interface TkSummary {
   kpis: TkKpis
   /** Usage track MP11: the same figures for each provider. */
   kpisByProvider: Record<TkProvider, TkKpis>
-  /** Priced models only; `byProvider` splits each day (MP11). */
-  dailySeries: Array<{ day: string; costUsd: number; byProvider: Record<TkProvider, number> }>
+  dailySeries: TkDailyPoint[]
   /** `costUsd` is null for a model with no price (MP11), never 0. */
   modelSplit: Array<{ model: string; costUsd: number | null; tokens: number }>
   /** MP11: the models in these figures that have no price, with their

@@ -12,7 +12,9 @@ import { logError, logWarn, logInfo } from '../debug-logger'
 import { Supervisor } from '../services/supervisor'
 import { IPC } from '../../shared/ipc-channels'
 import { createInitialHealth, SERVICE_ID, SERVICE_LABEL } from '../../shared/service-health'
-import type { DiagnosticsSnapshot, ServiceState } from '../../shared/service-health'
+import type { DiagnosticsSnapshot, ServiceMeasured, ServiceState } from '../../shared/service-health'
+import { createProcessCpuSampler } from '../services/process-cpu'
+import type { ProcessCpuMetric, ProcessCpuSampler } from '../services/process-cpu'
 import type { ForkedTkWorker } from './fork-tokenomics-worker'
 import type { ToTkWorker, FromTkWorker } from './tk-worker-transport'
 import type { TkConfigDim, TkPricing, TkIndexStatus, TkSessionsRoot, TkAccountReread, TkAccountKey, TkWalkCount, TkWalkStats } from './tk-types'
@@ -33,6 +35,12 @@ export interface TokenomicsSupervisorOptions {
    *  to the worker when it is ready. */
   sessionAccounts?: Iterable<readonly [string, TkAccountKey]>
   emit: (channel: string, payload: unknown) => void
+  /** 2.1.3-beta.4: the app's process figures (Electron's
+   *  app.getAppMetrics()), for the worker's CPU share on its Services row.
+   *  Without it the row has no CPU figure. Asked at most once in 5 s, and
+   *  only when the row is read (a Services push, or the view's own read), so
+   *  the share is the average since the read before (see process-cpu.ts). */
+  processMetrics?: () => readonly ProcessCpuMetric[]
   now?: () => number
   maxRestarts?: number
   /** A worker ready and running this long gives the restart budget back (default 5 min). */
@@ -79,8 +87,10 @@ export class TokenomicsSupervisor {
   private completeSubs = new Set<(c: TkIndexCompleteEvent) => void>()
   private errorSubs = new Set<(s: TkIndexStatus) => void>()
   private readySubs = new Set<(s: TkIndexStatus) => void>()
-  /** 2.1.3-beta.4: what the last full pass over the transcript roots
-   *  touched, as the worker reported it. Null until one has finished. */
+  /** 2.1.3-beta.4: what the current worker's last full pass over the
+   *  transcript roots touched, as it reported it. Null until one has
+   *  finished, and again for each new worker, so its row never shows a
+   *  pass the worker before it made beside its own CPU share. */
   private lastWalk: TkWalkStats | null = null
   private lastProgress: TkIndexProgress = { filesDone: 0, filesTotal: 0, eventsIngested: 0, phase: 'initial' }
   private firstIndexComplete = false
@@ -112,6 +122,9 @@ export class TokenomicsSupervisor {
   /** The window that coalesces counter-driven row pushes (schedulePush). */
   private coalesceTimer: ReturnType<typeof setTimeout> | null = null
   private coalesceDirty = false
+  /** 2.1.3-beta.4: the current worker's CPU share, sampled for its row. A
+   *  new one for each worker, so a sample is never of the one before. */
+  private cpu: ProcessCpuSampler | null = null
 
   constructor(private opts: TokenomicsSupervisorOptions) {
     this.realmDirsKnown = Array.isArray(opts.codexRealmSessionsDirs)
@@ -153,6 +166,11 @@ export class TokenomicsSupervisor {
     // A new worker has no ready time until it is ready, so the row never counts
     // the age of the one it replaced.
     this.readyAt = null
+    const metrics = this.opts.processMetrics
+    this.cpu = metrics ? createProcessCpuSampler({ metrics, now: () => this.now() }) : null
+    // A manual restart forks the next worker without an exit first, so the
+    // last pass is let go here as well as on an exit.
+    this.lastWalk = null
     w.transport.onMessage((m) => this.onMessage(m, w))
     // MP10: the attributions kept are sent when this worker is ready (below).
     w.transport.post({
@@ -214,7 +232,8 @@ export class TokenomicsSupervisor {
         this.lastFilesFailed = m.filesFailed
         this.lastIndexAt = this.now()
         // 2.1.3-beta.4: a full pass says what its walks touched; a pass over
-        // the reported transcripts alone says nothing and changes nothing.
+        // the reported transcripts alone says nothing and changes nothing. (A
+        // replaced worker's pass was turned away above.)
         if (m.walk !== undefined) this.lastWalk = walkStatsOf(m.walk) ?? this.lastWalk
         for (const cb of this.completeSubs) { try { cb({ firstIndex: m.firstIndex, drained: m.drained, filesFailed: m.filesFailed, eventsTotal: m.eventsTotal }) } catch { /* ignore */ } }
         if (eventsChanged) this.schedulePush()
@@ -316,8 +335,8 @@ export class TokenomicsSupervisor {
     this.sendOrBuffer({ type: 'rescan' })
     return true
   }
-  /** What the last full pass over the transcript roots touched (for the
-   *  Services panel), or null when none has finished since this started. */
+  /** What the current worker's last full pass over the transcript roots
+   *  touched (for the Services panel), or null when it has finished none. */
   getLastWalkStats(): TkWalkStats | null {
     const w = this.lastWalk
     return w ? { ...w, transcripts: { ...w.transcripts }, rollouts: { ...w.rollouts } } : null
@@ -388,7 +407,45 @@ export class TokenomicsSupervisor {
     row.restartCount = this.sup.getRestarts()
     row.lastError = this.lastError ?? this.lastExit
     row.lastHeartbeatAt = this.lastHeardAt
+    // 2.1.3-beta.4: the worker's process id while there is a worker, and
+    // what it was measured to cost.
+    row.pid = this.worker ? this.workerPid() : null
+    const measured = this.measured()
+    if (measured) row.measured = measured
     return { capturedAt: this.now(), services: [row], log: [] }
+  }
+
+  /** The OS process id of the current worker, once the app knows it (a
+   *  utility process has none until it has spawned). */
+  private workerPid(): number | null {
+    try {
+      const pid = this.worker?.pid?.()
+      return typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 0 ? pid : null
+    } catch {
+      return null
+    }
+  }
+
+  /** What the worker was measured to cost, for its Services row: its CPU
+   *  share (when the app's process figures were given and list it; the
+   *  average since the row was last sampled, see process-cpu.ts), and the
+   *  transcripts its own last full pass found and looked at (each one found
+   *  is checked for a change, and those that changed are read). None
+   *  without a worker, and none when there is no figure. */
+  private measured(): ServiceMeasured | undefined {
+    if (!this.worker || this.sup.isShuttingDown()) return undefined
+    const pid = this.workerPid()
+    const cpu = pid !== null && this.cpu ? this.cpu.sample(pid) : null
+    const walk = this.lastWalk
+    const files = walk ? walk.transcripts.files + walk.rollouts.files : undefined
+    const cpuPercent = cpu?.cpuPercent
+    if (cpuPercent === undefined && files === undefined) return undefined
+    return {
+      ...(cpuPercent !== undefined ? { cpuPercent } : {}),
+      ...(files !== undefined ? { filesTouchedLastScan: files } : {}),
+      // When the CPU share was sampled, or else when that pass finished.
+      sampledAt: cpu && cpuPercent !== undefined ? cpu.sampledAt : walk!.at,
+    }
   }
 
   private rowState(): ServiceState {
@@ -462,6 +519,8 @@ export class TokenomicsSupervisor {
     this.readyAt = null
     this.rejectPending('tokenomics worker exited')
     this.worker = null
+    this.cpu = null
+    this.lastWalk = null
     this.lastExit = { message: forkError ? `fork failed: ${forkError.message}` : 'worker exited', ts: this.now() }
     this.pushHealth()
     // The supervisor forks the next worker after the backoff, or stops until a restart is asked for.
@@ -473,6 +532,7 @@ export class TokenomicsSupervisor {
     try { this.worker?.transport.post({ type: 'shutdown' }) } catch { /* ignore */ }
     try { this.worker?.kill() } catch { /* ignore */ }
     this.worker = null
+    this.cpu = null
     this.listening = false
     // The supervisor's shutdown suppresses the exit callback that clears this,
     // so clear it here: a stopped row shows no uptime.

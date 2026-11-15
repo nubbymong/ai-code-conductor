@@ -1,6 +1,6 @@
 import React from 'react'
-import type { TkSummary, TkKpis, TkProvider } from '../../../shared/types'
-import { TK_PROVIDER_LABEL, TK_PROVIDER_COLOR, TK_CODEX_COST_NOTE } from './tk-labels'
+import type { TkSummary, TkKpis, TkProvider, TkTokenTotals } from '../../../shared/types'
+import { TK_PROVIDER_LABEL, TK_PROVIDER_COLOR, TK_CODEX_COST_NOTE, tkTokenBreakdown, tkTokens } from './tk-labels'
 
 function formatCostKpi(usd: number): string {
   if (usd >= 1000) return `$${(usd / 1000).toFixed(1)}k`
@@ -61,6 +61,24 @@ function CostFigure({ split, p, value }: { split: TkKpiSplit; p: TkProvider; val
     : <span className="font-mono">{formatCostKpi(value)}</span>
 }
 
+/** The tokens beside a cost figure (2.1.3-beta.4): their total, compactly,
+ *  with the parts in its tooltip. The same filters and window as the cost,
+ *  and every model, priced or not. A summary without the figure shows
+ *  none, never a zero. */
+function TokenFigure({ tokens, testId }: { tokens: TkTokenTotals | undefined; testId: string }) {
+  if (!tokens || !Number.isFinite(tokens.total)) return null
+  return (
+    <div
+      className="text-xs font-mono mt-0.5"
+      style={{ color: 'var(--text-secondary)' }}
+      title={tkTokenBreakdown(tokens)}
+      data-testid={testId}
+    >
+      {tkTokens(tokens.total)} tokens
+    </div>
+  )
+}
+
 interface Props {
   kpis: TkSummary['kpis']
   /** MP12: the split between providers, when both have usage here. */
@@ -69,7 +87,7 @@ interface Props {
 
 export function KpiRow({ kpis, split }: Props) {
   const showSplit = !!split && split.providers.length > 1
-  const { lifeToDateCostUsd, last7dCostUsd, prev7dCostUsd, cacheEfficiencyPct, cacheSavingsUsd } = kpis
+  const { lifeToDateCostUsd, last7dCostUsd, prev7dCostUsd, cacheEfficiencyPct, cacheSavingsUsd, lifeToDateTokens, last7dTokens } = kpis
 
   // Week-over-week delta
   let wowDelta: number | null = null
@@ -93,6 +111,7 @@ export function KpiRow({ kpis, split }: Props) {
         >
           {formatCostKpi(lifeToDateCostUsd)}
         </div>
+        <TokenFigure tokens={lifeToDateTokens} testId="tk-kpi-tokens-life" />
         <div className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
           API-equivalent estimate
         </div>
@@ -127,6 +146,7 @@ export function KpiRow({ kpis, split }: Props) {
             <span className="text-xs text-overlay0">—</span>
           )}
         </div>
+        <TokenFigure tokens={last7dTokens} testId="tk-kpi-tokens-7d" />
         <div className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
           vs prior 7 days
         </div>

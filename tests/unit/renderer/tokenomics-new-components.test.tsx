@@ -83,6 +83,9 @@ const baseKpis = {
   prev7dCostUsd: 8.0,
   cacheEfficiencyPct: 72,
   cacheSavingsUsd: 3.5,
+  // The token figures (2.1.3-beta.4) are not what these cases test, so none.
+  lifeToDateTokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  last7dTokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 }
 
 describe('KpiRow', () => {

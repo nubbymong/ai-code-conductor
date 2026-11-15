@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "41861ed6d67e701e943e932bfd11f71c36eebd22ba0a9cc3f7477b3ecc4cd767",
-  "manifestHead": "3d30eb0ec5e6479cd66a9acbe9351aedc816b3e8",
+  "manifestPathDigest": "923c5b1a8eec5de0ab337a483645bd74545e3b027cce753f0482ca9e5d466452",
+  "manifestHead": "0cfc3864703f0f64566cd73c7580bdaae3b7cc70",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -215,7 +215,7 @@
     {
       "path": "tests/unit/renderer/conductor-services-panel.test.tsx",
       "disposition": "replace",
-      "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.3-beta.4 services batch made the MCP server a row read from the snapshot, so the fixed-text case was replaced and the watchdog card case renamed (it runs in-process), and cases were added for the MCP row, stopped rows, a Tokenomics restart, the counters each card shows, a row's measured cost, a hooks row that fell back to the main process, a row with no child up showing a dash for PID and Uptime, and the panel scrolling inside the window; the other cases are kept; tests/unit/renderer/conductor-services-panel.test.tsx"
+      "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.3-beta.4 services batch made the MCP server a row read from the snapshot, so the fixed-text case was replaced and the watchdog card case renamed (it runs in-process), and cases were added for the MCP row, stopped rows, a Tokenomics restart, the counters each card shows, a row's measured cost, a hooks row that fell back to the main process, a row with no child up showing a dash for PID and Uptime, and the panel scrolling inside the window; the other cases are kept; tests/unit/renderer/conductor-services-panel.test.tsx; 2.1.3-beta.4 PR 5: the Tokenomics card now shows its worker's PID, so three cases changed in their bodies (the counters each card shows, the Tokenomics card, a row with no child up) and their names are kept; tests/unit/renderer/conductor-services-panel.test.tsx"
     },
     {
       "path": "tests/unit/renderer/sidebar-dock-tips.test.tsx",
@@ -2257,7 +2257,7 @@
       ],
       "category": "TOKENOMICS",
       "disposition": "replace",
-      "evidence": "WP2 P3 usage track MP9 (owner decision 2026-09-26, Q1.4 and Q1.10/U3: Codex attributed from the realm folder, ~/.codex as this computer's sign-in): schema v2 (accountKey on events, sessions and files; the daily rollup keyed by account and the hourly one by provider and account; '' for not recorded), the v1 migration, stamping at ingest and by the Codex re-read, the stepped rollup rebuild, and the provider and account filters; tests/unit/native/tk-db-schema.native.test.ts, tests/unit/native/tokenomics-reindex-accounts.native.test.ts (WP1.2); WP2 P3 usage track MP10 (owner decision 2026-09-26, Q1.4: Claude attributed from the session id and the profile recorded at launch, from now on; no manual attribution): tk_session_accounts, a Claude row of an attributed session stored with its account, and setSessionAccount re-attributing stored rows with exact rollup deltas (WP1.2); tests/unit/native/tokenomics-attribution.native.test.ts; WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the v2 rollups in their own tables (tk_daily2, tk_heatmap2) beside the v1 ones, kept as released and still written, so a build from before MP9 keeps working after a downgrade; a watermark catches what such a build stored; a database upgraded in place by an earlier build of this work converts; a rollout never stamps a Claude session; the rollups marked dirty once per transaction (WP1.2); tests/unit/native/tk-db-downgrade.native.test.ts, tests/unit/native/tk-db-schema.native.test.ts; WP2 P3 usage track MP11 (owner decision 2026-09-26, Q1.4: unpriced models read \"no price\", not $0; each KPI and the cost chart split by provider): a row with no price costs NULL (never $0), the unpriced models listed with their tokens, sessions with no priced model have no cost, and the figures and daily series split by provider (WP1.2); tests/unit/native/tk-db-summary.native.test.ts; WP2 P3 usage track MP10 round 1 (review fix: the transcript path decides the account): the latest account of a Claude session applies to what is stored after it; the same again records nothing (WP1.2); tests/unit/native/tokenomics-attribution.native.test.ts; WP2 P3 usage track MP12 (owner decisions 2026-09-26, Q1.4 and Q1.5; the approved canvas \"Tokenomics with two providers\", option A): each unpriced model names its provider (WP1.2); tests/unit/native/tk-db-summary.native.test.ts; WP2 P3 usage track MP11 round 1 (review fixes) and the MP9 lens B nits: a config with no priced usage has no cost (listed after the priced ones), and the unpriced list covers the range shown (WP1.2); tests/unit/native/tk-db-summary.native.test.ts; WP2 PR 3 P3.8 round 1 (row 28): stored Codex rows re-keyed once to their own model's price, and a query binds only the price keys the stored usage names (WP1.33); tests/unit/native/tk-db-codex-exact-price.native.test.ts, tests/unit/tokenomics/tk-pricing-cte.test.ts; WP2 PR 3 P3.8 round 2 (row 28): the re-key runs on every open, and the used price keys are read again only after a write (WP1.33); tests/unit/native/tk-db-codex-exact-price.native.test.ts; WP2 PR 3 P3.8 round 3 (row 28): a failed re-key is logged and the open goes on; an open that fails during setup closes its handle (WP1.33); tests/unit/tokenomics/tk-db-open-failure.test.ts, tests/unit/native/tk-db-codex-exact-price.native.test.ts",
+      "evidence": "WP2 P3 usage track MP9 (owner decision 2026-09-26, Q1.4 and Q1.10/U3: Codex attributed from the realm folder, ~/.codex as this computer's sign-in): schema v2 (accountKey on events, sessions and files; the daily rollup keyed by account and the hourly one by provider and account; '' for not recorded), the v1 migration, stamping at ingest and by the Codex re-read, the stepped rollup rebuild, and the provider and account filters; tests/unit/native/tk-db-schema.native.test.ts, tests/unit/native/tokenomics-reindex-accounts.native.test.ts (WP1.2); WP2 P3 usage track MP10 (owner decision 2026-09-26, Q1.4: Claude attributed from the session id and the profile recorded at launch, from now on; no manual attribution): tk_session_accounts, a Claude row of an attributed session stored with its account, and setSessionAccount re-attributing stored rows with exact rollup deltas (WP1.2); tests/unit/native/tokenomics-attribution.native.test.ts; WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the v2 rollups in their own tables (tk_daily2, tk_heatmap2) beside the v1 ones, kept as released and still written, so a build from before MP9 keeps working after a downgrade; a watermark catches what such a build stored; a database upgraded in place by an earlier build of this work converts; a rollout never stamps a Claude session; the rollups marked dirty once per transaction (WP1.2); tests/unit/native/tk-db-downgrade.native.test.ts, tests/unit/native/tk-db-schema.native.test.ts; WP2 P3 usage track MP11 (owner decision 2026-09-26, Q1.4: unpriced models read \"no price\", not $0; each KPI and the cost chart split by provider): a row with no price costs NULL (never $0), the unpriced models listed with their tokens, sessions with no priced model have no cost, and the figures and daily series split by provider (WP1.2); tests/unit/native/tk-db-summary.native.test.ts; WP2 P3 usage track MP10 round 1 (review fix: the transcript path decides the account): the latest account of a Claude session applies to what is stored after it; the same again records nothing (WP1.2); tests/unit/native/tokenomics-attribution.native.test.ts; WP2 P3 usage track MP12 (owner decisions 2026-09-26, Q1.4 and Q1.5; the approved canvas \"Tokenomics with two providers\", option A): each unpriced model names its provider (WP1.2); tests/unit/native/tk-db-summary.native.test.ts; WP2 P3 usage track MP11 round 1 (review fixes) and the MP9 lens B nits: a config with no priced usage has no cost (listed after the priced ones), and the unpriced list covers the range shown (WP1.2); tests/unit/native/tk-db-summary.native.test.ts; WP2 PR 3 P3.8 round 1 (row 28): stored Codex rows re-keyed once to their own model's price, and a query binds only the price keys the stored usage names (WP1.33); tests/unit/native/tk-db-codex-exact-price.native.test.ts, tests/unit/tokenomics/tk-pricing-cte.test.ts; WP2 PR 3 P3.8 round 2 (row 28): the re-key runs on every open, and the used price keys are read again only after a write (WP1.33); tests/unit/native/tk-db-codex-exact-price.native.test.ts; WP2 PR 3 P3.8 round 3 (row 28): a failed re-key is logged and the open goes on; an open that fails during setup closes its handle (WP1.33); tests/unit/tokenomics/tk-db-open-failure.test.ts, tests/unit/native/tk-db-codex-exact-price.native.test.ts; 2.1.3-beta.4 PR 5: the summary sums each kind of token beside the costs for the headline figures and each day, every model counted and per provider as the cost is (Claude and Codex); the rows become the summary in tk-summary.ts, so the provider list moved there (WP1.2); tests/unit/tokenomics/tk-summary.test.ts, tests/unit/native/tk-db-summary.native.test.ts",
       "note": ""
     },
     {
@@ -2279,6 +2279,16 @@
       "disposition": "replace",
       "evidence": "unchanged observable behaviour; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); runs unchanged in the merge-candidate suite (WP1.33); WP1.33 mapping: adapted in place for WP2 P3 usage track MP11 (owner decision 2026-09-26, Q1.4: unpriced models read \"no price\", not $0; each KPI and the cost chart split by provider): a Codex model with no cached tier charges cached input at its input rate (was 0), the one rule the session strip uses, so Tokenomics prices every Codex turn as the strip does (WP1.33); tests/unit/tokenomics/tk-pricing.test.ts; WP2 PR 3 P3.8 (row 28): the LiteLLM fetch also takes the OpenAI prices for Codex, saved beside Claude's and read back checked, and Tokenomics prices every Codex model the strip prices, live over the table (WP1.33, WP1.68); tests/unit/tokenomics/tk-pricing-live-codex.test.ts; WP2 PR 3 P3.8 round 1 (row 28): both providers' prices read through the same checks, the list's halves read independently, an empty OpenAI result saved, a future-dated copy stale, calls in flight sharing one request, a Claude price never replaced by a Codex one (WP1.33, WP1.68); tests/unit/tokenomics/tk-pricing-checks.test.ts, tests/unit/tokenomics/price-checks.test.ts",
       "note": ""
+    },
+    {
+      "path": "src/main/tokenomics/tk-summary.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "TOKENOMICS",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.4 PR 5 module (src/main/tokenomics/tk-summary.ts): the summary's headline figures and daily series made from its query rows, with the token totals beside the costs; it names Codex only as the second provider key of the per-provider split, the split every summary already carried (WP1.2); tests/unit/tokenomics/tk-summary.test.ts, tests/unit/native/tk-db-summary.native.test.ts",
+      "note": "created by 2.1.3-beta.4 PR 5; the P14 hits are the provider keys of the split, not a Codex code path"
     },
     {
       "path": "src/main/tokenomics/tk-supervisor.ts",
@@ -3213,7 +3223,7 @@
       ],
       "category": "TOKENOMICS",
       "disposition": "added",
-      "evidence": "new WP2 P3 usage track MP12 (owner decisions 2026-09-26, Q1.4 and Q1.5; the approved canvas \"Tokenomics with two providers\", option A) module: the page's provider and account labels, the Account filter's groups (\"Not recorded\" under Codex as under Claude, \"This computer's sign-in\"), the cost wording per provider (Q1.5), the unpriced and account-sorting notices, and the KPI split (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; WP2 P3 usage track MP12 round 1 (the approved canvas, option A): the cost tooltips as drawn, the Codex legend wording, each account's identity colour, the chart's series only for providers with cost in the range shown, and the undrawn notices kept short (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; WP2 P3 usage track MP9 (VM final pass, defect 4 follow-up): stage 1 of the account re-read says it is counting its files until they are counted: \"counting files\" in the notice (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx",
+      "evidence": "new WP2 P3 usage track MP12 (owner decisions 2026-09-26, Q1.4 and Q1.5; the approved canvas \"Tokenomics with two providers\", option A) module: the page's provider and account labels, the Account filter's groups (\"Not recorded\" under Codex as under Claude, \"This computer's sign-in\"), the cost wording per provider (Q1.5), the unpriced and account-sorting notices, and the KPI split (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; WP2 P3 usage track MP12 round 1 (the approved canvas, option A): the cost tooltips as drawn, the Codex legend wording, each account's identity colour, the chart's series only for providers with cost in the range shown, and the undrawn notices kept short (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; WP2 P3 usage track MP9 (VM final pass, defect 4 follow-up): stage 1 of the account re-read says it is counting its files until they are counted: \"counting files\" in the notice (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; 2.1.3-beta.4 PR 5: the chart's series can be of tokens, so a provider whose usage has no price (a Codex model, say) is drawn on Tokens; and a token figure's parts for its tooltip (WP1.2); tests/unit/renderer/tokenomics-tokens.test.tsx",
       "note": "the P05 hits are the Q1.5 wording, provider-specific by owner decision, and the account-key forms; the P11 hits are the Codex labels the approved canvas names"
     },
     {
@@ -7456,7 +7466,7 @@
       ],
       "category": "TEST",
       "disposition": "replace",
-      "evidence": "WP1.33 mapping: adapted in place for WP2 P3 usage track MP11 (owner decision 2026-09-26, Q1.4: unpriced models read \"no price\", not $0; each KPI and the cost chart split by provider): cases for a model with no price (no cost, in no total, listed with its tokens, the list following the filters), sessions with no or some priced models, and the figures and daily series per provider; the existing cases are kept, the daily series now carrying its split (WP1.2); tests/unit/native/tk-db-summary.native.test.ts; WP2 P3 usage track MP12 (owner decisions 2026-09-26, Q1.4 and Q1.5; the approved canvas \"Tokenomics with two providers\", option A): the unpriced entries with their provider (WP1.2); tests/unit/native/tk-db-summary.native.test.ts; WP2 P3 usage track MP11 round 1 (review fixes) and the MP9 lens B nits: cases for a config with no price and the unpriced list over the range (WP1.2); tests/unit/native/tk-db-summary.native.test.ts",
+      "evidence": "WP1.33 mapping: adapted in place for WP2 P3 usage track MP11 (owner decision 2026-09-26, Q1.4: unpriced models read \"no price\", not $0; each KPI and the cost chart split by provider): cases for a model with no price (no cost, in no total, listed with its tokens, the list following the filters), sessions with no or some priced models, and the figures and daily series per provider; the existing cases are kept, the daily series now carrying its split (WP1.2); tests/unit/native/tk-db-summary.native.test.ts; WP2 P3 usage track MP12 (owner decisions 2026-09-26, Q1.4 and Q1.5; the approved canvas \"Tokenomics with two providers\", option A): the unpriced entries with their provider (WP1.2); tests/unit/native/tk-db-summary.native.test.ts; WP2 P3 usage track MP11 round 1 (review fixes) and the MP9 lens B nits: cases for a config with no price and the unpriced list over the range (WP1.2); tests/unit/native/tk-db-summary.native.test.ts; 2.1.3-beta.4 PR 5: the two daily-series cases carry each day's tokens, and a group for the token totals (both windows, each day split between Claude and Codex, and the filters); the existing cases are kept (WP1.2); tests/unit/native/tk-db-summary.native.test.ts",
       "note": "the P04 hits are reads of the summary's per-provider figures (.codex), not a home resolver"
     },
     {
@@ -9871,7 +9881,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new WP2 P3 usage track MP12 (owner decisions 2026-09-26, Q1.4 and Q1.5; the approved canvas \"Tokenomics with two providers\", option A) test (tests/unit/renderer/tokenomics-mp12.test.tsx): the labels, groups, notices and tooltips, and the filter bar, KPI split, cost series, \"no price\" rows, account column and drawer line, the heatmap while usage is sorted by account, and the page wiring (WP1.2); WP2 P3 usage track MP11 round 1 (review fixes) and the MP9 lens B nits: cases for costs of 100 dollars and more, and a config with no price (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; WP2 P3 usage track MP12 round 1 (the approved canvas and the code-quality review): cases for the tooltips and legend as drawn, provider marks, identity chips and a muted \"Not recorded\", the cache split bar, the no-price swatch, the filter bar labels, the chart series per range, and a provider choice cleared with its control (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; WP2 P3 usage track MP12 (review nit): \"This computer's sign-in\" muted in the sessions table, as drawn (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; WP2 P3 usage track MP9 (VM final pass, defect 4 follow-up): stage 1 of the account re-read says it is counting its files until they are counted: a case for the notice (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx",
+      "evidence": "new WP2 P3 usage track MP12 (owner decisions 2026-09-26, Q1.4 and Q1.5; the approved canvas \"Tokenomics with two providers\", option A) test (tests/unit/renderer/tokenomics-mp12.test.tsx): the labels, groups, notices and tooltips, and the filter bar, KPI split, cost series, \"no price\" rows, account column and drawer line, the heatmap while usage is sorted by account, and the page wiring (WP1.2); WP2 P3 usage track MP11 round 1 (review fixes) and the MP9 lens B nits: cases for costs of 100 dollars and more, and a config with no price (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; WP2 P3 usage track MP12 round 1 (the approved canvas and the code-quality review): cases for the tooltips and legend as drawn, provider marks, identity chips and a muted \"Not recorded\", the cache split bar, the no-price swatch, the filter bar labels, the chart series per range, and a provider choice cleared with its control (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; WP2 P3 usage track MP12 (review nit): \"This computer's sign-in\" muted in the sessions table, as drawn (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; WP2 P3 usage track MP9 (VM final pass, defect 4 follow-up): stage 1 of the account re-read says it is counting its files until they are counted: a case for the notice (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx; 2.1.3-beta.4 PR 5: the page's chart line now hands the token series too, so its pin matches the new line; the cases are kept (WP1.2); tests/unit/renderer/tokenomics-mp12.test.tsx",
       "note": "created by WP2 usage track MP12"
     },
     {
@@ -9881,8 +9891,18 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new WP2 P3 usage track MP12 round 1 (code-quality review) test (tests/unit/renderer/tokenomics-page-renders.test.tsx): an index progress tick redraws the notice, not the dashboard, the sessions table or its rows, and a longer list draws only the new rows (WP1.2)",
+      "evidence": "new WP2 P3 usage track MP12 round 1 (code-quality review) test (tests/unit/renderer/tokenomics-page-renders.test.tsx): an index progress tick redraws the notice, not the dashboard, the sessions table or its rows, and a longer list draws only the new rows (WP1.2); 2.1.3-beta.4 PR 5: the fixture summary carries the new token fields, none, so it is a whole summary; the cases are kept (WP1.2); tests/unit/renderer/tokenomics-page-renders.test.tsx",
       "note": "created by WP2 usage track MP12 round 1"
+    },
+    {
+      "path": "tests/unit/renderer/tokenomics-tokens.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.4 PR 5 test (tests/unit/renderer/tokenomics-tokens.test.tsx): the token figures in the headline row, the chart's Cost or Tokens switch, and the token series by provider, Codex usage with no price drawn on Tokens (WP1.2)",
+      "note": "created by 2.1.3-beta.4 PR 5; jsdom only"
     },
     {
       "path": "tests/unit/renderer/tokenomicspage-formatting.test.ts",
@@ -10370,6 +10390,26 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: adapted in place for WP2 P3 usage track MP11 (owner decision 2026-09-26, Q1.4: unpriced models read \"no price\", not $0; each KPI and the cost chart split by provider): cases for the Codex cached-input rule and for Tokenomics and the strip pricing a turn alike; the existing cases are kept (WP1.33); tests/unit/tokenomics/tk-pricing.test.ts",
       "note": ""
+    },
+    {
+      "path": "tests/unit/tokenomics/tk-summary.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.4 PR 5 test (tests/unit/tokenomics/tk-summary.test.ts): the token totals of the headline figures and of each day, in all and per provider (Claude and Codex), from the summary's query rows (WP1.2)",
+      "note": "created by 2.1.3-beta.4 PR 5; pure, no database"
+    },
+    {
+      "path": "tests/unit/tokenomics/tk-supervisor-measured.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.4 PR 5 test (tests/unit/tokenomics/tk-supervisor-measured.test.ts): the Tokenomics Services row's process id and measured cost (CPU share, files of the last full pass); the supervisor is opened with a Codex sessions folder as every supervisor test is, and nothing is read from it (WP1.2)",
+      "note": "created by 2.1.3-beta.4 PR 5; the fork, the settings read and the app's process figures are faked"
     },
     {
       "path": "tests/unit/tokenomics/tk-supervisor.test.ts",

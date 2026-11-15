@@ -4,7 +4,7 @@
 // read their labels, groups, notices and tooltips from here.
 import type { AccountsSnapshot, AccountView } from '../../../shared/providers'
 import type { IdentityColorKey } from '../../../shared/identity-colors'
-import type { TkAccountPresent, TkAccountReread, TkProvider, TkSummary } from '../../../shared/types'
+import type { TkAccountPresent, TkAccountReread, TkProvider, TkSummary, TkTokenTotals } from '../../../shared/types'
 import { accountDisplayName } from '../../stores/providerAccountsStore'
 
 export const TK_PROVIDERS: readonly TkProvider[] = ['claude', 'codex']
@@ -68,11 +68,17 @@ export function tkKpiSplit(summary: TkSummary, present: readonly TkAccountPresen
   return { byProvider: summary.kpisByProvider, providers, noPrice }
 }
 
-/** The cost chart's series (MP12 round 1): of the split's providers, those
- *  with cost in the range shown (the chart plots cost), or none when fewer
- *  than two are left. */
-export function tkSeriesInRange(providers: readonly TkProvider[] | undefined, daily: TkSummary['dailySeries']): TkProvider[] | undefined {
-  const shown = (providers ?? []).filter((p) => daily.some((d) => (d.byProvider?.[p] ?? 0) > 0))
+/** What the chart over time plots (2.1.3-beta.4): cost, or tokens. */
+export type TkChartMetric = 'cost' | 'tokens'
+
+/** The chart's series (MP12 round 1): of the split's providers, those with
+ *  some of what the chart plots in the range shown (cost, or with `tokens`
+ *  their tokens: a provider whose usage has no price has tokens and no
+ *  cost), or none when fewer than two are left. */
+export function tkSeriesInRange(providers: readonly TkProvider[] | undefined, daily: TkSummary['dailySeries'], metric: TkChartMetric = 'cost'): TkProvider[] | undefined {
+  const part = (d: TkSummary['dailySeries'][number], p: TkProvider): number =>
+    (metric === 'tokens' ? d.tokensByProvider?.[p] : d.byProvider?.[p]) ?? 0
+  const shown = (providers ?? []).filter((p) => daily.some((d) => part(d, p) > 0))
   return shown.length > 1 ? shown : undefined
 }
 
@@ -135,6 +141,11 @@ export function tkTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
   return String(n)
+}
+
+/** A token figure's parts, for its tooltip (2.1.3-beta.4). */
+export function tkTokenBreakdown(t: TkTokenTotals): string {
+  return `Input ${tkTokens(t.input)}, output ${tkTokens(t.output)}, cache read ${tkTokens(t.cacheRead)}, cache write ${tkTokens(t.cacheWrite)}`
 }
 
 /** "a", "a and b", "a, b and c". */
