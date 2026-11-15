@@ -169,6 +169,17 @@ describe('pr-numbers: the cap on pty-manager.ts', () => {
     expect(report({ paths: ['README.md'], ptyLines: CAP - 40, baseLines: CAP - 40 }).lowerTheCap).toBe(false)
   })
 
+  it('a PR that grows the file but stays under the cap is not told to lower the cap', () => {
+    const grows = report({ paths: [PTY_MANAGER], ptyLines: CAP - 16, baseLines: CAP - 66 })
+    expect(grows.failed).toBe(false)
+    expect(grows.lowerTheCap).toBe(false)
+    expect(renderSummary(grows)).not.toContain('lower `PTY_MANAGER_LINE_CAP`')
+    // Same length as the base: nothing was shortened either.
+    expect(report({ paths: [PTY_MANAGER], ptyLines: CAP - 40, baseLines: CAP - 40 }).lowerTheCap).toBe(false)
+    // Base unknown: no basis to say the PR shortened it.
+    expect(report({ paths: [PTY_MANAGER], ptyLines: CAP - 40, baseLines: null }).lowerTheCap).toBe(false)
+  })
+
   it(`the ${OVERRIDE_LABEL} label lets it pass, and the summary says so`, () => {
     const r = report({ paths: [PTY_MANAGER], ptyLines: CAP + 12, labels: ['ci-run', OVERRIDE_LABEL] })
     expect(r.exceeds).toBe(true)

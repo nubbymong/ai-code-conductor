@@ -119,8 +119,9 @@ export function buildReport({ paths, ptyLines, baseLines, labels }) {
     exceeds,
     failed,
     capVerdict,
-    // The cap is today's length and only goes down: a shorter file lowers it.
-    lowerTheCap: !unreadable && overBy < 0 && ptyTouched && ptyLines > 0,
+    // The cap is today's length and only goes down: a PR that shortens the file lowers it.
+    // A PR that grows the file (but stays under the cap) is not told to give headroom away.
+    lowerTheCap: !unreadable && overBy < 0 && ptyTouched && ptyLines > 0 && baseLines !== null && ptyLines < baseLines,
     matrixState,
     matrixOwed: matrixState === 'owed',
   }
