@@ -144,7 +144,8 @@ CREATE TABLE IF NOT EXISTS tk_files (
   codexCwd       TEXT    NOT NULL DEFAULT '',
   codexTurns     INTEGER NOT NULL DEFAULT 0,
   accountKey     TEXT    NOT NULL DEFAULT '',
-  accountReread  INTEGER NOT NULL DEFAULT 0
+  accountReread  INTEGER NOT NULL DEFAULT 0,
+  readMark       TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS tk_events (
@@ -252,6 +253,16 @@ export interface TkFileCursor {
   /** Read-only here (the DB keeps it): 1 while the file waits to be re-read
    *  for the one-off account attribution, 2 once it has been. */
   accountReread?: number
+  /** A mark of what was read of the file, as the worker writes it: a hash
+   *  of its first bytes and of the bytes just before `lastOffset`, with
+   *  where they are and how many, or '' for none. The next read checks it
+   *  before it reads on from `lastOffset`: a file deleted and made again at
+   *  the same path, as long as what was read of the old one or longer, is
+   *  told by it and read from its first byte. A cursor from before the mark
+   *  was kept has none and is read on as it always was. An older build
+   *  opening this database names its own columns, so it never sees the mark
+   *  and leaves it as it was. */
+  readMark?: string
 }
 
 /** One step of the rollup rebuild (usage track MP9). */
@@ -341,6 +352,9 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
       // Usage track MP9 (schema v2): whose file, and the account re-read.
       ['accountKey', "TEXT NOT NULL DEFAULT ''"],
       ['accountReread', 'INTEGER NOT NULL DEFAULT 0'],
+      // The mark of what was read: none on an existing row, which is read
+      // on from its offset as before and marked then.
+      ['readMark', "TEXT NOT NULL DEFAULT ''"],
     ]
     for (const [col, ddl] of added) if (!have.has(col)) sqlite.exec(`ALTER TABLE tk_files ADD COLUMN ${col} ${ddl}`)
     // A pre-migration row has scannedTo=0 but was in fact scanned to
@@ -471,14 +485,14 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
 
   // The #307 one-off re-index runs further down, once the rollup upserts it
   // rebuilds with have been prepared (see `reindex307`).
-  const getCursorStmt = sqlite.prepare('SELECT path,size,mtime,lastOffset,lastIngestedAt,scannedTo,codexSessionId,codexModel,codexCwd,codexTurns,accountKey,accountReread FROM tk_files WHERE path = ?')
+  const getCursorStmt = sqlite.prepare('SELECT path,size,mtime,lastOffset,lastIngestedAt,scannedTo,codexSessionId,codexModel,codexCwd,codexTurns,accountKey,accountReread,readMark FROM tk_files WHERE path = ?')
   // MP9: a file waiting for the account re-read is done once a write says it
   // has been scanned to its end.
-  const setCursorStmt = sqlite.prepare(`INSERT INTO tk_files(path,size,mtime,lastOffset,lastIngestedAt,scannedTo,codexSessionId,codexModel,codexCwd,codexTurns,accountKey)
-      VALUES(@path,@size,@mtime,@lastOffset,@lastIngestedAt,@scannedTo,@codexSessionId,@codexModel,@codexCwd,@codexTurns,@accountKey)
+  const setCursorStmt = sqlite.prepare(`INSERT INTO tk_files(path,size,mtime,lastOffset,lastIngestedAt,scannedTo,codexSessionId,codexModel,codexCwd,codexTurns,accountKey,readMark)
+      VALUES(@path,@size,@mtime,@lastOffset,@lastIngestedAt,@scannedTo,@codexSessionId,@codexModel,@codexCwd,@codexTurns,@accountKey,@readMark)
     ON CONFLICT(path) DO UPDATE SET size=excluded.size,mtime=excluded.mtime,lastOffset=excluded.lastOffset,lastIngestedAt=excluded.lastIngestedAt,
       scannedTo=excluded.scannedTo,codexSessionId=excluded.codexSessionId,codexModel=excluded.codexModel,codexCwd=excluded.codexCwd,codexTurns=excluded.codexTurns,
-      accountKey=excluded.accountKey,
+      accountKey=excluded.accountKey,readMark=excluded.readMark,
       accountReread=CASE WHEN tk_files.accountReread = 1 AND excluded.scannedTo >= excluded.size THEN 2 ELSE tk_files.accountReread END`)
 
   // Fill the columns a caller predating them does not know about. `scannedTo`
@@ -492,6 +506,9 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
     codexCwd: c.codexCwd ?? '',
     codexTurns: c.codexTurns ?? 0,
     accountKey: tkAccountKeyOk(c.accountKey) ? c.accountKey : TK_ACCOUNT_NOT_RECORDED,
+    // None from a caller that names none: nothing is then checked at the
+    // next read, as for a cursor from before the mark was kept.
+    readMark: c.readMark ?? '',
   })
   const countStmt = sqlite.prepare('SELECT COUNT(*) AS n FROM tk_events')
 

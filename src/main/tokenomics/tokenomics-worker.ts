@@ -1,5 +1,6 @@
 import * as nodeFs from 'fs'
 import * as path from 'path'
+import { createHash } from 'crypto'
 import { openTkDb, TK_REBUILD_PAGE, type TkDb, type TkFileCursor } from './tk-db'
 import { parseClaudeUsageLine, extractCwdFromLine, codexEventsFromRollout, type CodexRolloutSeed } from './tk-parse'
 import { findConfigForCwd, isJunkCwd } from './tk-config-match'
@@ -47,6 +48,17 @@ const MAX_TICK_BYTES = 16 * 1024 * 1024
  *  ~40, and a sweep over an 80 GB tree stays under a minute. */
 const CODEX_TICK_BYTES = 64 * 1024 * 1024
 const YIELD_EVERY = 16 // files between event-loop yields during a sweep
+/** #302: the longest between two full walks of the transcript folders; the
+ *  watcher's reports are read every 5 s in between. */
+export const TK_FULL_SWEEP_MS = 5 * 60_000
+/** #302: how many Claude transcripts the 5 s timer asks the size of at most:
+ *  the ones modified last, of those a sweep looked at. */
+export const TK_ACTIVE_MAX = 200
+/** How many of a file's first bytes, and how many of the bytes before the
+ *  offset, its cursor keeps a mark of. */
+const MARK_BYTES = 256
+/** The longest run of bytes a cursor's mark is trusted to name. */
+const MARK_BYTES_MAX = 4096
 
 /** What one bounded pass over a file's byte range saw. */
 export interface StreamResult {
@@ -121,6 +133,75 @@ export function streamLines(
 }
 
 /**
+ * A mark of an open file as it was read up to `at`: a hash of its first bytes
+ * and of the bytes that end at `at`, with where and how many, as
+ * `<at>:<first>:<last>:<hash>`. '' when nothing was read (`at` is 0) or the
+ * file ends before `at`.
+ *
+ * A file's cursor keeps the mark of where reading stopped, and the next read
+ * checks it before it reads on from there. The offset alone cannot tell a
+ * file from another made at its path: only one shorter than the offset was
+ * read again from its first byte, so a file deleted and made again LONGER was
+ * read on from the old offset, its first lines skipped or the first of them
+ * read from its middle, and their usage never counted.
+ *
+ * Both runs are needed. The first bytes say whose file it is (a transcript's
+ * first line, a rollout's header: each carries its own ids), and the bytes
+ * before the offset are the end of the last line read, so they say that
+ * reading can go on from exactly there. A writer that appends rewrites
+ * neither. A file put back with the same bytes (a copy, a sync) is the same
+ * file here, and is read on.
+ *
+ * It is the file's own bytes and nothing the file system says of it, so it
+ * tells the same on every platform. Measured on Windows 11 (NTFS, Node 24):
+ * a file deleted and made again at once at the same path has the creation
+ * time of the one deleted, and only its file id differs. Not measured
+ * elsewhere: a file id may be given again to the next file made, and Node
+ * documents that the creation time may hold the change time where the file
+ * system keeps none, which moves with every write.
+ *
+ * The hash is kept, not the bytes: they are part of a conversation, and the
+ * index holds none of it.
+ */
+function readMarkAt(fsx: typeof nodeFs, fd: number, at: number, first: number = Math.min(MARK_BYTES, at), last: number = Math.min(MARK_BYTES, at)): string {
+  if (!(at > 0)) return ''
+  const hash = createHash('sha256')
+  for (const [from, bytes] of [[0, first], [at - last, last]]) {
+    const buf = Buffer.alloc(bytes)
+    let got = 0
+    while (got < bytes) {
+      const n = fsx.readSync(fd, buf, got, bytes - got, from + got)
+      if (n <= 0) return '' // the file ends before `at`
+      got += n
+    }
+    hash.update(buf)
+  }
+  return `${at}:${first}:${last}:${hash.digest('hex').slice(0, 32)}`
+}
+
+/**
+ * Whether an open file is no longer the one its cursor was written for: the
+ * bytes the cursor's mark names are not there now.
+ *
+ * The mark says where its bytes end, so it is checked there and not at the
+ * cursor's offset. After a downgrade an older build reads on, moves the
+ * offset and leaves the mark alone: the mark is then of an earlier offset in
+ * the same file, and still tells it from another. A file that ends before the
+ * mark is another file too (that build read one made again shorter).
+ *
+ * False for a cursor with no mark, or one that is not a mark this build
+ * writes: a database from before the mark was kept, or nothing read yet. Such
+ * a file is read on from its offset, as it always was, and marked then.
+ */
+function replacedSince(fsx: typeof nodeFs, fd: number, cursor: TkFileCursor): boolean {
+  const m = /^(\d{1,15}):(\d{1,4}):(\d{1,4}):[0-9a-f]{32}$/.exec(cursor.readMark ?? '')
+  if (!m) return false
+  const [at, first, last] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  for (const bytes of [first, last]) if (bytes < 1 || bytes > MARK_BYTES_MAX || bytes > at) return false
+  return readMarkAt(fsx, fd, at, first, last) !== cursor.readMark
+}
+
+/**
  * Nothing new to look at: the file has not changed since the last tick, and we
  * already scanned to its end.
  *
@@ -181,7 +262,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
    */
   let sweepPending = false
   /**
-   * Files this sweep could not open or read at all.
+   * Files that could not be opened or read at all when last tried.
    *
    * Counted SEPARATELY from `sweepPending`, and deliberately not allowed to
    * block completion. Those are two different states: "there are more bytes to
@@ -191,15 +272,96 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
    * install, showing a spinner with no error and no way out. Reading everything
    * that CAN be read is the honest definition of done; what could not be read
    * is reported alongside it rather than hidden behind a spinner.
+   *
+   * Kept by path (#302): a changed-files sweep takes a file out when it tries
+   * it again and leaves the rest as the last full walk found them. A plain
+   * count, reset by every sweep, read none after any reported change, and the
+   * page's note about files that could not be read came and went.
    */
-  let sweepFailed = 0
-  /** Note how far a file was read, so the sweep knows whether work remains. */
-  const noteScanned = (scannedTo: number, size: number): void => { if (scannedTo < size) sweepPending = true }
+  const sweepFailed = new Set<string>()
+  /**
+   * A file this sweep left with bytes to read did not move its cursor: the
+   * read came back short (the file shrank while it was read). A pass repeated
+   * at once would read the same nothing, so it waits for the 5 s timer.
+   */
+  let sweepStalled = false
+  /** Note how far a file was read, so the sweep knows whether work remains;
+   *  `moved` is whether the file's cursor went forward in this read. */
+  const noteScanned = (scannedTo: number, size: number, moved: boolean): void => {
+    if (scannedTo >= size) return
+    sweepPending = true
+    if (!moved) sweepStalled = true
+  }
   let firstSweepDone = false
+  /**
+   * aicc_planning#302: Claude transcripts the watcher reported as written
+   * since the last sweep. Every change event and a 5 s timer used to re-walk
+   * all of ~/.claude/projects (thousands of files) and re-check each one;
+   * with many working sessions that kept a core busy. An incremental sweep
+   * now reads just these, and a full walk runs when it is due: at start, on
+   * an explicit re-index, on an event only a walk can answer (no file name, a
+   * name that is gone, a folder made or moved, any event in a Codex folder),
+   * when a file still has bytes to read, and every TK_FULL_SWEEP_MS as the
+   * safety net for anything the watcher missed.
+   */
+  const dirtyClaude = new Set<string>()
+  /**
+   * #302: the Claude transcripts the 5 s timer asks the size of, each with
+   * the time it was last modified as the sweep that looked at it last found
+   * it. The watcher does not report every write: on Windows one made through
+   * a handle that stays open raises no event for the file until the handle
+   * closes (measured: five writes 500 ms apart reported nothing, then one
+   * 'change' at the close). The 5 s walk used to find those. The 5 s timer
+   * now asks the size of just these and reads the ones that moved, as if the
+   * watcher had reported them: one size check each and no folder listed.
+   *
+   * Every transcript a sweep looks at is noted: one it read, and one it
+   * found as the index has it (review round 3). A worker that starts, in an
+   * app started again or started again by the supervisor, finds most
+   * transcripts like that; as first written only a transcript that was read
+   * was noted, so a session that then wrote through the handle it kept was
+   * found only by the next timed walk.
+   *
+   * At most TK_ACTIVE_MAX are kept: the ones modified last, so a walk over
+   * thousands of old transcripts leaves the timer that many to ask about,
+   * not thousands, and the ones being written are among them wherever the
+   * walk finds them. As first written the ones found last were kept, and a
+   * walk finds them in the order the folders list them. A write through a
+   * handle that stays open moves the time as it is asked from outside
+   * (measured on Windows 11, NTFS, Node 24: each write, at once).
+   *
+   * None is dropped for how long ago it was modified. A session that pauses
+   * and then writes again through the handle it kept has no other report
+   * (the folder reported as changed, at most, which names no file), so one
+   * dropped after ten minutes, as first written, was then found only by the
+   * next timed walk.
+   */
+  const activeClaude = new Map<string, number>()
+  const noteActive = (file: string, modifiedAt: number): void => {
+    activeClaude.delete(file) // back in at the end: of two modified at the same time, the one noted longer ago goes first
+    activeClaude.set(file, modifiedAt)
+    if (activeClaude.size <= TK_ACTIVE_MAX) return
+    let drop = file
+    let oldest = Infinity
+    for (const [f, at] of activeClaude) if (at < oldest) { oldest = at; drop = f }
+    activeClaude.delete(drop)
+  }
+  /** The mark of where reading stopped, for the file's cursor. None when it
+   *  cannot be read: the next read then has nothing to check, as with a
+   *  cursor from before the mark was kept. */
+  const markOf = (fd: number, at: number): string => {
+    try { return readMarkAt(fs, fd, at) } catch { return '' }
+  }
+  let fullSweepDue = true
+  let lastFullSweepAt = 0
   let lastProgress = { filesDone: 0, filesTotal: 0, eventsIngested: 0 }
-  const watchers: Array<{ close(): void }> = []
-  /** Watchers of the Codex accounts' folders, by folder: the set changes. */
-  const realmWatchers = new Map<string, { close(): void }>()
+  /** The folder watchers, by folder: the Claude projects folder, this
+   *  computer's own Codex sessions folder and the Codex accounts' (that set
+   *  changes). A named folder with no watcher is tried again by the 5 s
+   *  timer (#302). */
+  const watchers = new Map<string, { close(): void }>()
+  /** Folders whose watcher failed and the log said so: once, not at every try. */
+  const watchWarned = new Set<string>()
   let watchTimer: ReturnType<typeof setTimeout> | null = null
   let tailTimer: ReturnType<typeof setInterval> | null = null
 
@@ -333,19 +495,43 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     const cursor = db!.getFileCursor(file)
     let offset = cursor ? cursor.lastOffset : 0
     if (cursor && st.size < cursor.lastOffset) offset = 0 // truncated/rotated -> re-read
-    if (unchangedAndFullyScanned(cursor, st, offset)) return 0
-    if (st.size <= offset) { db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: offset, lastIngestedAt: Date.now(), scannedTo: st.size }); return 0 }
+    // #302 (review round 3): as the index has it, so not read, and asked
+    // about all the same: it may be written next with no report.
+    if (unchangedAndFullyScanned(cursor, st, offset)) { noteActive(file, st.mtimeMs); return 0 }
+    // What was read can be checked: something was, and its cursor has a
+    // mark (one from before the mark was kept has none).
+    const marked = offset > 0 && !!cursor?.readMark
+    // #302: changed with nothing to read yet (a transcript just made is
+    // empty) is written lately too: its first lines may come with no report.
+    const nothingToRead = (): number => {
+      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: offset, lastIngestedAt: Date.now(), scannedTo: st.size, readMark: offset > 0 ? cursor?.readMark : '' })
+      noteActive(file, st.mtimeMs)
+      return 0
+    }
+    if (st.size <= offset && !marked) return nothingToRead()
 
-    const end = Math.min(st.size, offset + maxTickBytes)
     let fd: number
     // A file we could not read is work still outstanding, not work done. It
     // writes no cursor row, so nothing else can notice it — and an index that
     // declares itself complete while a file's spend is missing is worse than
     // one that admits it is still going.
-    try { fd = fs.openSync(file, 'r') } catch (err) { sweepFailed++; logw('warn', `open failed for ${file}: ${String(err)}`); return 0 }
+    try { fd = fs.openSync(file, 'r') } catch (err) { sweepFailed.add(file); logw('warn', `open failed for ${file}: ${String(err)}`); return 0 }
     let inserted = 0
     let fileCwd = ''
     try {
+      // Another file than the one read, made at its path: read from its
+      // first byte, whatever its size (see readMarkAt). Its lines are new
+      // rows; any it shares with the file that was read are stored already
+      // and are not stored twice.
+      if (marked) {
+        try { if (replacedSince(fs, fd, cursor!)) offset = 0 } catch (err) {
+          sweepFailed.add(file)
+          logw('warn', `read failed for ${file}: ${String(err)}`)
+          return 0
+        }
+      }
+      if (st.size <= offset) return nothingToRead()
+      const end = Math.min(st.size, offset + maxTickBytes)
       let batch: Array<TkEvent & { configId?: string | null }> = []
       let consumed = offset
       const flush = (): void => { if (batch.length) { inserted += db!.insertEvents(batch); batch = [] } }
@@ -372,7 +558,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
         // Per-FILE containment. Letting this escape aborts the whole sweep, so
         // one locked or flaky transcript stops every later file from being read
         // and leaves the index reporting itself incomplete forever.
-        sweepFailed++
+        sweepFailed.add(file)
         logw('warn', `read failed for ${file}: ${String(err)}`)
         flush()
         return inserted
@@ -384,8 +570,11 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       if (res.pendingDropped) consumed += res.pendingLen
       else if (res.pendingLen > 0 && consumed === offset && res.pos - offset >= maxTickBytes) consumed = res.pos
       flush()
-      noteScanned(res.pos, st.size)
-      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos })
+      noteScanned(res.pos, st.size, consumed > offset)
+      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos, readMark: markOf(fd, consumed) })
+      // #302: read, so asked about from now on. One that could not be read
+      // is not noted: it waits for its next report or the next walk.
+      noteActive(file, st.mtimeMs)
     } finally { try { fs.closeSync(fd) } catch { /* ignore */ } }
     return inserted
   }
@@ -430,28 +619,45 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     let offset = cursor ? cursor.lastOffset : 0
     let turnBase = cursor?.codexTurns ?? 0
     let seed: CodexRolloutSeed = { sessionId: cursor?.codexSessionId || undefined, cwd: cursor?.codexCwd || undefined, model: cursor?.codexModel || undefined }
-    if (cursor && st.size < cursor.lastOffset) {
-      // Truncated or rotated: the file we counted is not this one. Re-read from
-      // the top with the ordinal base back at zero, so the stored rows dedup
-      // against their own keys instead of being re-inserted beside them.
+    // The file we counted is not this one. Re-read from the top with the
+    // ordinal base back at zero, so the stored rows dedup against their own
+    // keys instead of being re-inserted beside them.
+    const fromTheTop = (): void => {
       offset = 0
       turnBase = 0
       seed = { sessionId: undefined, cwd: undefined, model: undefined }
     }
+    // Truncated or rotated: shorter than what was read of it.
+    if (cursor && st.size < cursor.lastOffset) fromTheTop()
     if (unchangedAndFullyScanned(cursor, st, offset)) return 0
-    if (st.size <= offset) {
-      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: offset, lastIngestedAt: Date.now(), scannedTo: st.size, codexSessionId: seed.sessionId ?? '', codexModel: seed.model ?? '', codexCwd: seed.cwd ?? '', codexTurns: turnBase, accountKey })
+    // As for a Claude transcript: what was read can be checked.
+    const marked = offset > 0 && !!cursor?.readMark
+    const nothingToRead = (): number => {
+      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: offset, lastIngestedAt: Date.now(), scannedTo: st.size, codexSessionId: seed.sessionId ?? '', codexModel: seed.model ?? '', codexCwd: seed.cwd ?? '', codexTurns: turnBase, accountKey, readMark: offset > 0 ? cursor?.readMark : '' })
       return 0
     }
+    if (st.size <= offset && !marked) return nothingToRead()
 
     // `!== undefined`, not truthiness: a caller asking for a 0-byte tick meant
     // it, and silently handing back 64 MB instead is not a kindness.
     const tickBytes = deps.maxTickBytes !== undefined ? maxTickBytes : CODEX_TICK_BYTES
-    const end = Math.min(st.size, offset + tickBytes)
     let fd: number
-    try { fd = fs.openSync(file, 'r') } catch (err) { sweepFailed++; logw('warn', `open failed for ${file}: ${String(err)}`); return 0 }
+    try { fd = fs.openSync(file, 'r') } catch (err) { sweepFailed.add(file); logw('warn', `open failed for ${file}: ${String(err)}`); return 0 }
     let inserted = 0
     try {
+      // Deleted and made again at this path, as long as what was read of the
+      // old one or longer (see readMarkAt): from the top, as one that is
+      // shorter. Read on from the old offset, its first turns were never
+      // counted and the rest were stored as the old session's.
+      if (marked) {
+        try { if (replacedSince(fs, fd, cursor!)) fromTheTop() } catch (err) {
+          sweepFailed.add(file)
+          logw('warn', `read failed for ${file}: ${String(err)}`)
+          return 0
+        }
+      }
+      if (st.size <= offset) return nothingToRead()
+      const end = Math.min(st.size, offset + tickBytes)
       let consumed = offset
       // The rollout header sits at the top of the file. On a resumed read we
       // start past it, so re-read the head for those lines - bounded and cheap.
@@ -477,11 +683,10 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
         // first index never reports complete, and the five-second retry hits the
         // same file forever - the exact "Indexing 1700/1997" wedge this ingester
         // was written to remove, reached through a different door.
-        sweepFailed++
+        sweepFailed.add(file)
         logw('warn', `read failed for ${file}: ${String(err)}`)
         return 0
       }
-      noteScanned(res.pos, st.size)
       // Skip past a run that can never become a line we want, rather than
       // re-reading it forever. Two ways to know that: it passed the largest line
       // any caller wants, or a WHOLE tick's worth of bytes went by without one
@@ -494,6 +699,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       // on every sweep is `scannedTo`, not skipping it.
       if (res.pendingDropped) consumed += res.pendingLen
       else if (res.pendingLen > 0 && consumed === offset && res.pos - offset >= tickBytes) consumed = res.pos
+      noteScanned(res.pos, st.size, consumed > offset)
 
       let nextSeed = seed
       if (kept.length) {
@@ -540,7 +746,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
             logw('warn', `codex rollout ${file}: dropped ${keyed.length - fresh.length} turn(s) with an unusable timestamp`)
           }
           turnBase = offset === 0 ? Math.max(turnBase, probe.length) : turnBase + probe.length
-          inserted = db!.insertEventsWithCursor(fresh, { path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos, codexSessionId: nextSeed.sessionId ?? '', codexModel: nextSeed.model ?? '', codexCwd: nextSeed.cwd ?? '', codexTurns: turnBase, accountKey })
+          inserted = db!.insertEventsWithCursor(fresh, { path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos, codexSessionId: nextSeed.sessionId ?? '', codexModel: nextSeed.model ?? '', codexCwd: nextSeed.cwd ?? '', codexTurns: turnBase, accountKey, readMark: markOf(fd, consumed) })
           return inserted
         }
         if (offset > 0 && !nextSeed.sessionId) {
@@ -550,7 +756,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
           logw('warn', `codex rollout ${file}: no session identity for ${kept.length} line(s) at offset ${offset}`)
         }
       }
-      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos, codexSessionId: nextSeed.sessionId ?? '', codexModel: nextSeed.model ?? '', codexCwd: nextSeed.cwd ?? '', codexTurns: turnBase, accountKey })
+      db!.setFileCursor({ path: file, size: st.size, mtime: st.mtimeMs, lastOffset: consumed, lastIngestedAt: Date.now(), scannedTo: res.pos, codexSessionId: nextSeed.sessionId ?? '', codexModel: nextSeed.model ?? '', codexCwd: nextSeed.cwd ?? '', codexTurns: turnBase, accountKey, readMark: markOf(fd, consumed) })
     } finally { try { fs.closeSync(fd) } catch { /* ignore */ } }
     return inserted
   }
@@ -631,9 +837,17 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
 
   async function ingestAll(phase: 'initial' | 'incremental'): Promise<void> {
     if (!db || sweeping) return
+    if (phase === 'incremental' && !fullSweepDue) { await ingestDirty(); return }
     sweeping = true
     sweepPending = false
-    sweepFailed = 0
+    sweepStalled = false
+    sweepFailed.clear()
+    // #302: this walk covers every file, the reported ones included.
+    fullSweepDue = false
+    lastFullSweepAt = Date.now()
+    dirtyClaude.clear()
+    // #302: whether the next full walk follows this one at once.
+    let again = false
     try {
       // What this sweep's list was made with (defect 4): the account folders
       // as named when it began, and whether they had been named at all.
@@ -692,6 +906,14 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       // A sweep whose list predates the latest naming of the account folders
       // has not read them: not drained, and another sweep follows (defect 4).
       const drained = !sweepPending && realmDirsSeq === dirsSeq
+      // #302: a walk that left work behind is still due. A file is read one
+      // budget per pass, so a large first index or the Codex account re-read
+      // takes many passes, and with the next walk up to TK_FULL_SWEEP_MS away
+      // that was one budget every five minutes. The next pass follows at once
+      // while every file left with bytes moved its cursor: each pass then
+      // reads further, and the passes end when the bytes do. Otherwise the
+      // 5 s timer runs it.
+      if (!drained) { fullSweepDue = true; again = !sweepStalled }
       // MP9: a drained sweep has re-read every rollout it could reach, so the
       // re-read is done; then the rollups are rebuilt if they need it. Inside
       // the sweep, so nothing is ingested while they are rebuilt; queries are
@@ -705,20 +927,94 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       if (drained && !firstSweepDone) {
         firstSweepDone = true
         db.setMeta('firstIndexComplete', '1')
-        post({ type: 'index-complete', firstIndex: true, drained, filesFailed: sweepFailed, eventsTotal: db.eventCount() })
+        post({ type: 'index-complete', firstIndex: true, drained, filesFailed: sweepFailed.size, eventsTotal: db.eventCount() })
       } else {
-        post({ type: 'index-complete', firstIndex: false, drained, filesFailed: sweepFailed, eventsTotal: db.eventCount() })
+        post({ type: 'index-complete', firstIndex: false, drained, filesFailed: sweepFailed.size, eventsTotal: db.eventCount() })
       }
-    } catch (err) { logw('error', `ingestAll failed: ${String(err)}`) }
+    } catch (err) {
+      // #302: a walk that failed did not reach every file, so it is still
+      // due; the 5 s timer retries it, never at once.
+      fullSweepDue = true
+      again = false
+      logw('error', `ingestAll failed: ${String(err)}`)
+    }
+    finally {
+      sweeping = false
+      if ((sweepAfter || again) && db) { sweepAfter = false; scheduleIncremental() }
+    }
+  }
+
+  /** #302: read just the Claude transcripts the watcher reported. A file
+   *  left with bytes to read makes the next sweep a full one (the per-tick
+   *  byte budget is tracked per sweep, not per file). Says it is complete,
+   *  as a full sweep does, so the Usage page refreshes.
+   *
+   *  It then settles the accounts when the last walk left that to do
+   *  (settleDue), and runs for that alone with nothing reported. Inside the
+   *  sweep, as a walk does it, so nothing is ingested while the rollups are
+   *  rebuilt. */
+  async function ingestDirty(): Promise<void> {
+    if (!db || sweeping) return
+    if (dirtyClaude.size === 0 && !settleDue()) return
+    sweeping = true
+    sweepPending = false
+    try {
+      const files = [...dirtyClaude]
+      dirtyClaude.clear()
+      let done = 0
+      for (const f of files) {
+        sweepFailed.delete(f) // tried again now; it goes back in if it fails
+        ingestClaudeFile(f)
+        if (++done % YIELD_EVERY === 0) { await new Promise<void>((r) => setImmediate(r)); if (!db) return }
+      }
+      if (!db) return
+      if (sweepPending) fullSweepDue = true
+      if (settleDue()) await settleAccounts('incremental')
+      if (!db) return
+      post({ type: 'index-complete', firstIndex: false, drained: firstSweepDone && !sweepPending, filesFailed: sweepFailed.size, eventsTotal: db.eventCount() })
+    } catch (err) {
+      // The reported files were taken out of the set before the sweep failed,
+      // so the ones it did not reach would wait for their next report or the
+      // next timed walk. A full walk is due instead; the 5 s timer runs it,
+      // never at once.
+      fullSweepDue = true
+      logw('error', `ingestDirty failed: ${String(err)}`)
+    }
     finally {
       sweeping = false
       if (sweepAfter && db) { sweepAfter = false; scheduleIncremental() }
     }
   }
 
+  /**
+   * #302: the rollups are dirty and no walk is due, so the next sweep
+   * settles the accounts. A walk settles them itself once it has read every
+   * file (it is due again until it has), and only when the app has named its
+   * account folders; with none due, the last one did both and still left the
+   * rollups dirty. That happens three ways: a session attribution arrived
+   * between two pages of the rebuild (the database leaves them dirty for
+   * another one), the rebuild failed, or an attribution that the rollups
+   * could not follow came at any other time. The 5 s walk used to settle
+   * those. A walk made due for it would list every folder to change no
+   * file's reading, so the sweep of the reported files does it instead: one
+   * indexed read of a row per tick while the rollups are clean, and the
+   * rebuild alone when they are not.
+   *
+   * The one-off Codex re-read needs no check of its own: it is pending only
+   * while the rollups are dirty (the upgrade sets both, and they are rebuilt
+   * only after the re-read is finished), and settleAccounts finishes it
+   * first. Never throws (it runs on the timer): a state that cannot be read
+   * is handed to the sweep, which says so in the log.
+   */
+  function settleDue(): boolean {
+    if (!db || fullSweepDue || !realmDirsKnown) return false
+    try { return db.rollupsDirty() } catch { return true }
+  }
+
   /** Usage track MP9: finish the Codex re-read, then rebuild the rollups
    *  when they are dirty, in steps with progress. Never throws: a failed
-   *  rebuild leaves them dirty for the next drained sweep. */
+   *  rebuild leaves them dirty, and the next 5 s tick tries again
+   *  (settleDue). */
   async function settleAccounts(phase: 'initial' | 'incremental'): Promise<void> {
     if (!db) return
     try {
@@ -750,7 +1046,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       filesDone: lastProgress.filesDone,
       filesTotal: lastProgress.filesTotal,
       eventsTotal: db!.eventCount(),
-      filesFailed: sweepFailed,
+      filesFailed: sweepFailed.size,
       lastIndexAt: lastAt ? Number(lastAt) : null,
       accountReread: accountReread(),
     }
@@ -778,24 +1074,142 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     ;(watchTimer as unknown as { unref?: () => void }).unref?.()
   }
 
-  function watchDir(dir: string): { close(): void } | null {
+  /**
+   * #302: what a watcher event means for the next sweep, and whether there
+   * is anything to sweep for. `perFile` is the Claude projects folder, where
+   * the name is looked at (one lstat, never a listing) before deciding:
+   *
+   * - a transcript that exists, written or just made, is read on its own;
+   * - on Windows a folder reported as changed starts nothing. Windows
+   *   reports the folder beside every write to a file in it (measured: an
+   *   append to proj\a.jsonl gives 'change proj' and then
+   *   'change proj\a.jsonl', a nested one 'change proj\sid\subagents' and
+   *   then the file), and the file reports its own event. Taken as an event
+   *   that names no transcript, it walked the whole tree at every write;
+   * - a file that is not a transcript (a tool result, a memory file, a
+   *   subagent's .meta.json) and a link start nothing: the walk skips them
+   *   too;
+   * - a full walk is due for the rest: no file name, a name that is gone
+   *   (deleted, or renamed away) or cannot be looked at, a folder reported
+   *   as renamed (made, or moved here: what it holds may have been written
+   *   before the watcher reached it), and anywhere but Windows a folder
+   *   reported as changed. That report was measured on Windows only.
+   *   Elsewhere it is not known to come beside a file's own event, and may
+   *   be all the watcher says of what happened below the folder (macOS
+   *   reports a folder when it has dropped the events under it), so the
+   *   walk it always started there stays.
+   *
+   * Any event in a Codex folder makes the next sweep a full one, as every
+   * event did before.
+   */
+  function noteWatchEvent(dir: string, perFile: boolean, event: unknown, filename: unknown): boolean {
+    if (!perFile || typeof filename !== 'string' || filename.length === 0) { fullSweepDue = true; return true }
+    const full = path.join(dir, filename)
+    // lstat, not stat: stat follows a link, and a linked transcript would
+    // then be read here although the full walk skips it.
+    let st: nodeFs.Stats | null = null
+    try { st = fs.lstatSync(full) } catch { st = null }
+    if (!st) { fullSweepDue = true; return true }
+    if (st.isDirectory()) {
+      if (event === 'change' && process.platform === 'win32') return false
+      fullSweepDue = true
+      return true
+    }
+    if (st.isFile() && filename.endsWith('.jsonl')) { dirtyClaude.add(full); return true }
+    // A link, or a file that is not a transcript: nothing to read, no walk.
+    return false
+  }
+
+  function watchDir(dir: string, perFile: boolean): { close(): void } | null {
+    const warnOnce = (message: string): void => { if (!watchWarned.has(dir)) { watchWarned.add(dir); logw('warn', message) } }
     try {
       if (!fs.existsSync(dir)) return null
-      const wch = fs.watch(dir, { recursive: true }, () => scheduleIncremental())
+      // An event that starts nothing schedules nothing, so it cannot put off
+      // the sweep a reported transcript is waiting for.
+      const wch = fs.watch(dir, { recursive: true }, (event: unknown, filename: unknown) => { if (noteWatchEvent(dir, perFile, event, filename)) scheduleIncremental() })
       // An FSWatcher 'error' with no listener throws -> uncaughtException -> the
       // worker dies and burns a restart toward permanent degrade. Log + close the
-      // broken watcher; the 5s tailTimer sweep below keeps indexing alive.
+      // broken watcher and forget it: the 5 s timer then walks the folders, as it
+      // did for every folder before #302, and tries the watcher again.
       ;(wch as { on?: (ev: string, cb: (e: unknown) => void) => void }).on?.('error', (err) => {
-        logw('warn', `fs.watch error for ${dir}; relying on periodic sweep: ${String(err)}`)
+        warnOnce(`fs.watch error for ${dir}; relying on periodic sweep: ${String(err)}`)
         try { wch.close() } catch { /* already closed */ }
+        if (watchers.get(dir) === wch) watchers.delete(dir)
       })
       return wch
-    } catch (err) { logw('warn', `fs.watch failed for ${dir}: ${String(err)}`); return null }
+    } catch (err) { warnOnce(`fs.watch failed for ${dir}: ${String(err)}`); return null }
+  }
+
+  /** #302: stop watching the folders no longer named, and watch each named
+   *  folder that has no watcher: it did not exist when it was named (a first
+   *  session makes it), or its watcher failed. Returns whether a full walk is
+   *  due for one of them. A folder watched just now may hold what was written
+   *  before its watcher started, and one that exists and cannot be watched is
+   *  walked by the 5 s timer, as every folder was before the changed-files
+   *  sweep. A folder that does not exist costs one check and no walk. */
+  function syncWatchers(): boolean {
+    const named = new Map<string, boolean>()
+    if (claudeDir) named.set(claudeDir, true)
+    for (const root of codexDirs) if (root.dir && !named.has(root.dir)) named.set(root.dir, false)
+    for (const [dir, wch] of watchers) {
+      if (named.has(dir)) continue
+      try { wch.close() } catch { /* ignore */ }
+      watchers.delete(dir)
+    }
+    let due = false
+    for (const [dir, perFile] of named) {
+      if (watchers.has(dir) || !fs.existsSync(dir)) continue
+      const wch = watchDir(dir, perFile)
+      if (wch) watchers.set(dir, wch)
+      due = true
+    }
+    return due
+  }
+
+  /**
+   * #302: ask the size of each transcript noted (activeClaude) and
+   * hand the ones that moved to the next sweep, as if the watcher had
+   * reported them. One lstat each, no folder listed. Skipped: a transcript
+   * already reported, and one that could not be read when last tried (it
+   * waits for its next report or the next walk, not for every tick). Never
+   * throws: it runs on the timer.
+   *
+   * A transcript is forgotten when it is gone (ENOENT, or ENOTDIR when a
+   * folder on its path is no longer one) or is no longer a plain file: its
+   * report, if any, says so. A size check that fails any other way (a file
+   * in use, a drive that does not answer) may pass, so the transcript is
+   * kept and asked about again at the next tick; forgotten, its later
+   * writes would wait for the next walk.
+   *
+   * On Windows the size check itself makes the watcher report a file that
+   * was written through an open handle, so a read found here is followed by
+   * a reported one, which finds nothing new or the bytes written since.
+   */
+  function noteActiveGrowth(): void {
+    if (!db) return
+    for (const file of activeClaude.keys()) {
+      if (dirtyClaude.has(file) || sweepFailed.has(file)) continue
+      let st: nodeFs.Stats
+      try { st = fs.lstatSync(file) } catch (err) {
+        const code = (err as { code?: unknown } | null)?.code
+        if (code === 'ENOENT' || code === 'ENOTDIR') activeClaude.delete(file)
+        continue
+      }
+      if (!st.isFile()) { activeClaude.delete(file); continue }
+      try {
+        const cursor = db.getFileCursor(file)
+        if (!cursor || st.size !== cursor.size) dirtyClaude.add(file)
+      } catch {
+        // How far it was read cannot be told: the sweep reads it, and says
+        // so if the index fails there too.
+        dirtyClaude.add(file)
+      }
+    }
   }
 
   /** The Codex accounts' folders now (plan A13): watch the new ones, stop
    *  watching the gone ones. A folder that does not exist yet (an account
-   *  that has run no session) is picked up by the periodic sweep. */
+   *  that has run no session) is watched by the 5 s timer once it does. */
   function setCodexRealmDirs(dirs: readonly unknown[]): void {
     const base = codexDirs[0]
     // MP9: each a folder and whose sessions it holds; anything else is
@@ -810,17 +1224,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       next.push({ dir, accountKey })
     }
     codexDirs = base === undefined ? next : [base, ...next]
-    const nextDirs = next.map((n) => n.dir)
-    for (const [dir, wch] of realmWatchers) {
-      if (nextDirs.includes(dir)) continue
-      try { wch.close() } catch { /* ignore */ }
-      realmWatchers.delete(dir)
-    }
-    for (const dir of nextDirs) {
-      if (realmWatchers.has(dir)) continue
-      const wch = watchDir(dir)
-      if (wch) realmWatchers.set(dir, wch)
-    }
+    syncWatchers()
   }
 
   /** Usage track MP10: record the account a Claude session runs under now
@@ -834,13 +1238,23 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
   }
 
   function startWatching(): void {
-    for (const dir of [claudeDir, codexDirs[0]?.dir]) {
-      const wch = dir ? watchDir(dir) : null
-      if (wch) watchers.push(wch)
-    }
+    syncWatchers()
     // Safety tail: recursive watch can miss newly-created nested session files on
-    // some platforms; a slow periodic incremental sweep guarantees eventual pickup.
-    tailTimer = setInterval(() => { if (!sweeping) void ingestAll('incremental') }, 5000)
+    // some platforms. Every 5 s it reads what the watcher reported, and runs a
+    // full walk when one is due: the last one left work behind or failed, a
+    // named folder was watched just now or cannot be watched, or
+    // TK_FULL_SWEEP_MS has passed since the last walk (#302). With no walk
+    // due it asks the size of the transcripts found written, for the writes
+    // the watcher does not report (a walk asks every file anyway), and
+    // starts a sweep for the accounts alone when they are still to be
+    // settled.
+    tailTimer = setInterval(() => {
+      if (sweeping) return
+      if (syncWatchers()) fullSweepDue = true
+      if (Date.now() - lastFullSweepAt >= TK_FULL_SWEEP_MS) fullSweepDue = true
+      if (!fullSweepDue) noteActiveGrowth()
+      if (fullSweepDue || dirtyClaude.size > 0 || settleDue()) void ingestAll('incremental')
+    }, 5000)
     ;(tailTimer as unknown as { unref?: () => void }).unref?.()
   }
 
@@ -879,11 +1293,12 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
         realmDirsKnown = true
         realmDirsSeq++
         // A sweep running now listed its files without these: one follows it.
+        fullSweepDue = true
         if (sweeping) sweepAfter = true
         scheduleIncremental()
         return
       case 'set-session-account': setSessionAccount(msg); return
-      case 'reindex': void ingestAll('incremental'); return
+      case 'reindex': fullSweepDue = true; void ingestAll('incremental'); return
       case 'query': handleQuery(msg.id, msg.kind, msg.args); return
       default: { const _x: never = msg; void _x }
     }
@@ -896,17 +1311,15 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     }
   })
 
-  function tickNow(): void { void ingestAll('incremental') }
+  function tickNow(): void { fullSweepDue = true; void ingestAll('incremental') }
   function healthNow(): void {
     if (!db) return
     const filesTracked = (db.raw.prepare('SELECT COUNT(*) AS n FROM tk_files').get() as { n: number }).n
     post({ type: 'health', eventsTotal: db.eventCount(), filesTracked, dbBytes: 0 })
   }
   function stop(): void {
-    for (const wch of watchers) { try { wch.close() } catch { /* ignore */ } }
-    watchers.length = 0
-    for (const wch of realmWatchers.values()) { try { wch.close() } catch { /* ignore */ } }
-    realmWatchers.clear()
+    for (const wch of watchers.values()) { try { wch.close() } catch { /* ignore */ } }
+    watchers.clear()
     if (watchTimer) { clearTimeout(watchTimer); watchTimer = null }
     if (tailTimer) { clearInterval(tailTimer); tailTimer = null }
     try { db?.close() } catch { /* ignore */ }
