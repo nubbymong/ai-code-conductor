@@ -124,6 +124,22 @@ describe('the labels (MP12)', () => {
     expect(tkUnpricedNotice(undefined)).toBeNull()
   })
 
+  // aicc_planning#312: a model with no tokens in the figures has nothing for its
+  // missing price to leave out; the notice named "<synthetic>" at 0 tokens.
+  it('the unpriced notice does not name a model with no tokens, and still names one that has some', () => {
+    expect(tkUnpricedNotice([{ model: '<synthetic>', provider: 'claude', tokens: 0 }])).toBeNull()
+    expect(tkUnpricedNotice([{ model: 'gpt-5.4', provider: 'codex', tokens: 0 }, { model: 'claude-new-9', provider: 'claude', tokens: 0 }])).toBeNull()
+    expect(tkUnpricedNotice([
+      { model: '<synthetic>', provider: 'claude', tokens: 0 },
+      { model: 'claude-new-9', provider: 'claude', tokens: 220_000 },
+    ])).toBe('claude-new-9 has no price yet (220.0k tokens), so its cost is not in these figures.')
+    // The same model on two providers: one with tokens is named once, with its tokens.
+    expect(tkUnpricedNotice([
+      { model: 'x', provider: 'claude', tokens: 5 },
+      { model: 'x', provider: 'codex', tokens: 0 },
+    ])).toBe('x has no price yet (5 tokens), so its cost is not in these figures.')
+  })
+
   it('the notice while usage is sorted by account, in both stages, says the totals are complete', () => {
     expect(tkRereadNotice({ stage: 'reread', done: 3, total: 12 })).toBe('Sorting Codex history by account: 3 of 12 files. Totals are complete; the split by account fills in.')
     expect(tkRereadNotice({ stage: 'rebuild', done: 5000, total: 21000 })).toBe('Sorting usage by account and provider: 5000 of 21000 entries. Totals are complete; the split fills in.')
@@ -262,6 +278,25 @@ describe('the components (MP12)', () => {
     expect(swatch.style.backgroundColor).not.toBe('')
     expect((rows[0].lastElementChild as HTMLElement).className).toContain('italic')
     expect(container.textContent).not.toContain('$0.00')
+  })
+
+  it('the legend does not list a model with no price and no tokens ("<synthetic>" showed as "System, no price"), and still lists one with tokens', () => {
+    const s = summary()
+    const split = [
+      ...s.modelSplit,
+      { model: '<synthetic>', costUsd: null, tokens: 0 },
+    ]
+    render(createElement(ModelCacheDonut, { modelSplit: split, cacheSplit: s.cacheSplit }))
+    const rows = [...container.querySelectorAll('[data-testid="tk-no-price-model"]')]
+    // The same one row as without it: the model that has tokens.
+    expect(rows).toHaveLength(1)
+    expect(container.textContent).not.toContain('System')
+  })
+
+  it('a breakdown whose only model with no price has no tokens shows no "no price" row at all', () => {
+    const s = summary()
+    render(createElement(ModelCacheDonut, { modelSplit: [{ model: '<synthetic>', costUsd: null, tokens: 0 }, { model: 'claude-opus-4-8', costUsd: 3, tokens: 100 }], cacheSplit: s.cacheSplit }))
+    expect(container.querySelectorAll('[data-testid="tk-no-price-model"]')).toHaveLength(0)
   })
 
   it('the heatmap says its hours are filling in while usage is sorted by account', () => {

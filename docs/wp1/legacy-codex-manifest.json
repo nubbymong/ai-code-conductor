@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-15T12:01:11.056Z",
-  "head": "0cfc3864703f0f64566cd73c7580bdaae3b7cc70",
-  "tree": "8a8b7e1d85516e505ce6a08a251739db15a5986e",
+  "generatedAt": "2026-11-15T15:55:51.152Z",
+  "head": "166b1133559a145f69d62d6a5c9b3d33cf7e55ba",
+  "tree": "e465331eefb24fc32d46d7f63621262016040d77",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3231,
-  "excludedFileCount": 480,
-  "scannedFileCount": 2751,
+  "trackedFileCount": 3234,
+  "excludedFileCount": 481,
+  "scannedFileCount": 2753,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 905,
-  "pathDigest": "923c5b1a8eec5de0ab337a483645bd74545e3b027cce753f0482ca9e5d466452",
+  "matchedPathCount": 906,
+  "pathDigest": "b902df9ef946f73e989aa08d9e1a50277142d5cb7734de66acce86eb7e49b768",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1520,7 +1520,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 3
+      "lineCount": 2
     },
     {
       "path": "src/main/tokenomics/tk-supervisor.ts",
@@ -1558,7 +1558,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 73
+      "lineCount": 74
     },
     {
       "path": "src/main/watchdog/codex-patterns.ts",
@@ -2680,7 +2680,7 @@
         "P12",
         "P14"
       ],
-      "lineCount": 140
+      "lineCount": 142
     },
     {
       "path": "src/shared/ask-conductor-provider.ts",
@@ -6921,7 +6921,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 67
+      "lineCount": 69
     },
     {
       "path": "tests/unit/renderer/tokenomics-page-renders.test.tsx",
@@ -7315,6 +7315,13 @@
         "P13"
       ],
       "lineCount": 50
+    },
+    {
+      "path": "tests/unit/tokenomics/tokenomics-worker-prune.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 8
     },
     {
       "path": "tests/unit/tokenomics/tokenomics-worker-reread-order.test.ts",

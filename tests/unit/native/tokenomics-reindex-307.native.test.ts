@@ -37,7 +37,7 @@ describe('#307 re-index is Codex-scoped', () => {
   // the temp dir can be removed (Windows refuses to delete an open db).
   let opened: ReturnType<typeof openTkDb>[] = []
   const openTkDb = (p: string) => { const db = openTkDbRaw(p); opened.push(db); return db }
-  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tk307-')); dbPath = path.join(tmp, 'tk.db'); opened = [] })
+  beforeEach(() => { tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'tk307-'))); dbPath = path.join(tmp, 'tk.db'); opened = [] })
   afterEach(() => {
     for (const db of opened) { try { db.close() } catch { /* already closed */ } }
     fs.rmSync(tmp, { recursive: true, force: true })
@@ -125,7 +125,7 @@ describe('#307 re-index -- re-attack findings', () => {
   let dbPath: string
   let opened: ReturnType<typeof openTkDbRaw>[] = []
   const openTkDb = (p: string) => { const db = openTkDbRaw(p); opened.push(db); return db }
-  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tk307b-')); dbPath = path.join(tmp, 'tk.db'); opened = [] })
+  beforeEach(() => { tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'tk307b-'))); dbPath = path.join(tmp, 'tk.db'); opened = [] })
   afterEach(() => {
     for (const db of opened) { try { db.close() } catch { /* already closed */ } }
     fs.rmSync(tmp, { recursive: true, force: true })

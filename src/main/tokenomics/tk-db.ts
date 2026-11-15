@@ -372,6 +372,14 @@ export interface TkDb {
    *  not stored twice and the totals do not move. Whose file it is, and where
    *  the one-off account re-read stands, are kept. Returns the files reset. */
   resetFileProgress(): number
+  /** Every path the file-progress table holds a row for (2.1.3-beta.5): the
+   *  worker compares them with what a complete walk found. */
+  listFilePaths(): string[]
+  /** Delete the file-progress rows for these paths and return how many went
+   *  (2.1.3-beta.5). Only the progress rows: a stored usage event is never
+   *  touched, and a file read again later is read from its first byte and
+   *  stored once (events are keyed by turn). */
+  deleteFileRows(paths: readonly string[]): number
   /** Usage track MP10: record the account a Claude session runs under now:
    *  rows stored after it take it (another account than before applies from
    *  then on; rows already attributed keep theirs; the same again records
@@ -1260,6 +1268,13 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
     },
     resetFileProgress: () => sqlite.prepare(`UPDATE tk_files SET lastOffset = 0, scannedTo = 0, codexTurns = 0,
       codexSessionId = '', codexModel = '', codexCwd = '', readMark = ''`).run().changes,
+    listFilePaths: () => (sqlite.prepare('SELECT path FROM tk_files').all() as Array<{ path: string }>).map((r) => r.path),
+    deleteFileRows: (paths) => {
+      const del = sqlite.prepare('DELETE FROM tk_files WHERE path = ?')
+      let gone = 0
+      sqlite.transaction(() => { for (const p of paths) gone += del.run(p).changes })()
+      return gone
+    },
     accountRereadPending: () => (getMetaStmt.get('accountReread') as { value?: string } | undefined)?.value === 'pending',
     finishAccountReread: () => {
       sqlite.transaction(() => {

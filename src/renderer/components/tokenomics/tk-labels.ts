@@ -155,11 +155,15 @@ function joined(items: string[]): string {
 }
 
 /** The unpriced notice (Q1.4), or null: the models in these figures with no
- *  price and their tokens. */
+ *  price and their tokens. A model with no tokens in these figures is not
+ *  named: there is nothing for its missing price to leave out (this is how the
+ *  transcript's own "<synthetic>" entries, which carry no usage, used to show
+ *  up as "has no price yet (0 tokens)"). */
 export function tkUnpricedNotice(unpriced: TkSummary['unpriced'] | undefined): string | null {
-  if (!unpriced || unpriced.length === 0) return null
-  const models = [...new Set(unpriced.map((u) => u.model))]
-  const tokens = unpriced.reduce((s, u) => s + (u.tokens || 0), 0)
+  const used = (unpriced ?? []).filter((u) => u.tokens > 0)
+  if (used.length === 0) return null
+  const models = [...new Set(used.map((u) => u.model))]
+  const tokens = used.reduce((s, u) => s + u.tokens, 0)
   return `${joined(models)} ${models.length === 1 ? 'has' : 'have'} no price yet (${tkTokens(tokens)} tokens), so ${models.length === 1 ? 'its' : 'their'} cost is not in these figures.`
 }
 

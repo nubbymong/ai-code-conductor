@@ -18,7 +18,7 @@ describe('tokenomics worker ingest', () => {
   let tmp: string
   let workers: { stop: () => void }[]
   const track = <T extends { stop: () => void }>(w: T): T => { workers.push(w); return w }
-  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tkw-')); workers = [] })
+  beforeEach(() => { tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'tkw-'))); workers = [] })
   afterEach(() => {
     // Stop every worker created in the test so its fs.watch watchers release the
     // temp dir before removal. Under Node 24 (Electron 42) an active fs.watch
@@ -269,7 +269,7 @@ describe('codex rollouts are streamed, not slurped', () => {
   let tmp: string
   let workers: { stop: () => void }[]
   const track = <T extends { stop: () => void }>(w: T): T => { workers.push(w); return w }
-  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tkc-')); workers = [] })
+  beforeEach(() => { tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'tkc-'))); workers = [] })
   afterEach(() => { for (const w of workers) { try { w.stop() } catch { /* */ } } fs.rmSync(tmp, { recursive: true, force: true }) })
 
   const CODEX_PRICING = { 'gpt-5.5': { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 0 } }

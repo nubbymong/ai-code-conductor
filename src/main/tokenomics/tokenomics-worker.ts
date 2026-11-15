@@ -253,8 +253,9 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
    * or one that could not be read at all?
    *
    * Deliberately in memory and per-sweep, rather than a query over the cursor
-   * table. `tk_files` is never pruned, so it accumulates rows for files that no
-   * longer exist — 92% of the rows in a real 221 MB database, nine of them
+   * table. `tk_files` accumulated rows for files that no longer exist (it is
+   * pruned now, after a complete walk, but a row can wait for the next one) —
+   * 92% of the rows in a real 221 MB database, nine of them
    * parked mid-file. Asking the TABLE "is anything unscanned" lets a rollout
    * deleted years ago veto completion forever, which is the same "Indexing
    * usage data" wedge this code exists to remove, only now persisted. Asking
@@ -387,29 +388,81 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
   const logw = (level: 'info' | 'warn' | 'error', message: string): void => post({ type: 'log', entry: { level, message } })
   const setPricing = (p: Record<string, TkPricing>): void => { pricing = p; priceKeys = Object.keys(p) }
 
-  function enumerateClaude(): string[] {
+  /** What a walk of the Claude projects folder found (2.1.3-beta.5): the
+   *  transcripts to read, every transcript known to be there (those plus the
+   *  ones in a subagent folder that was not listed because it had not changed),
+   *  and whether the walk listed the whole tree. */
+  interface ClaudeWalk { files: string[]; present: Set<string>; complete: boolean }
+  /** 2.1.3-beta.5: a subagent folder as the last walk read it: its state then,
+   *  and what it held. */
+  interface SubagentFolder { key: string; files: string[]; dirs: string[] }
+  /** The subagent folders the last walk read, by path. In memory only: the
+   *  first walk after the worker starts, and the first after a Rescan or a
+   *  re-index, reads every folder. */
+  let subagentFolders = new Map<string, SubagentFolder>()
+  /** A folder written to less than this long ago is not remembered: a file
+   *  made a moment after it was listed could leave the same time on it. */
+  const SUBAGENT_SETTLE_MS = 2000
+  /** A folder's state for the memo above: its modified time, its id and its
+   *  size, and whether it has been left alone long enough to trust. None
+   *  when it cannot be read. */
+  const folderState = (dir: string): { key: string; settled: boolean } | null => {
+    try {
+      const st = fs.statSync(dir)
+      return { key: `${st.mtimeMs}:${st.ino}:${st.size}`, settled: Date.now() - st.mtimeMs >= SUBAGENT_SETTLE_MS }
+    } catch { return null }
+  }
+
+  function enumerateClaude(): ClaudeWalk {
     // Recurse the whole tree (spec: `~/.claude/projects/**`). Session transcripts
     // live one level deep (`<proj>/<sid>.jsonl`) but subagent/sidechain transcripts
     // are nested (`<proj>/<sid>/subagents/agent-*.jsonl`) and carry real billed
     // usage — a one-level scan silently undercounts cost. Skip symlinks/junctions
     // so account-isolation reparse points can't introduce traversal cycles.
+    //
+    // 2.1.3-beta.5: a folder named subagents, and the folders below it, that has
+    // not changed since the walk that last read it (its modified time, id and
+    // size are the same, and it was left alone for a moment before that) is not
+    // listed again, and its transcripts are not asked about: the watcher and
+    // the sizes the 5 s timer asks of the ones written last cover them. A
+    // transcript added to it changes the folder, so it is read. A transcript
+    // that only grew in place does not change the folder; the watcher reports
+    // it, and a Rescan reads every folder. The folders below it are asked
+    // about again each walk, so a change deeper down is found.
     const out: string[] = []
-    const walk = (dir: string, depth: number): void => {
+    const present = new Set<string>()
+    const next = new Map<string, SubagentFolder>()
+    let complete = true
+    const walk = (dir: string, depth: number, inSubagents: boolean): void => {
       if (depth > 12) return
+      const state = inSubagents ? folderState(dir) : null
+      const before = state ? subagentFolders.get(dir) : undefined
+      if (state && before && before.key === state.key) {
+        next.set(dir, before)
+        for (const f of before.files) present.add(f)
+        for (const d of before.dirs) walk(d, depth + 1, true)
+        return
+      }
       let entries: nodeFs.Dirent[]
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { complete = false; return }
       walkCounts.transcripts.dirs++
       walkCounts.transcripts.entries += entries.length
+      const heldFiles: string[] = []
+      const heldDirs: string[] = []
       for (const e of entries) {
         if (e.isSymbolicLink()) continue
         const full = path.join(dir, e.name)
-        if (e.isDirectory()) walk(full, depth + 1)
-        else if (e.isFile() && e.name.endsWith('.jsonl')) { walkCounts.transcripts.files++; out.push(full) }
+        if (e.isDirectory()) { heldDirs.push(full); walk(full, depth + 1, inSubagents || e.name === 'subagents') }
+        else if (e.isFile() && e.name.endsWith('.jsonl')) { walkCounts.transcripts.files++; out.push(full); present.add(full); heldFiles.push(full) }
       }
+      if (state?.settled) next.set(dir, { key: state.key, files: heldFiles, dirs: heldDirs })
     }
-    try { if (fs.existsSync(claudeDir)) walk(claudeDir, 0) }
-    catch (err) { logw('warn', `enumerateClaude failed: ${String(err)}`) }
-    return out
+    try {
+      if (claudeDir && fs.existsSync(claudeDir)) walk(claudeDir, 0, false)
+      else complete = false
+    } catch (err) { complete = false; logw('warn', `enumerateClaude failed: ${String(err)}`) }
+    subagentFolders = next
+    return { files: out, present, complete }
   }
 
   /** A file or folder's identity: its volume and file id, or its path where
@@ -513,7 +566,15 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
 
   function ingestClaudeFile(file: string): number {
     let st: nodeFs.Stats
-    try { st = fs.statSync(file) } catch { return 0 }
+    try { st = fs.statSync(file) } catch (err) {
+      // A transcript that is gone is done with (its folder changed too, so it
+      // is listed again). Any other failure (a file in use, a share that does
+      // not answer) may pass: it is work outstanding, so no folder is
+      // remembered over it and the next walk asks again.
+      const code = (err as { code?: unknown } | null)?.code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') { sweepFailed.add(file); logw('warn', `stat failed for ${file}: ${String(err)}`) }
+      return 0
+    }
     const cursor = db!.getFileCursor(file)
     let offset = cursor ? cursor.lastOffset : 0
     if (cursor && st.size < cursor.lastOffset) offset = 0 // truncated/rotated -> re-read
@@ -859,6 +920,75 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     return lines.length ? lines.join(String.fromCharCode(10)) : null
   }
 
+  /** How many progress rows are looked at, and dropped, between two yields
+   *  to the event loop. */
+  const PRUNE_BATCH = 500
+  /** Is this path gone for certain (not found, as opposed to not readable)? */
+  const isGone = (p: string): boolean => {
+    try { fs.lstatSync(p); return false } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code
+      return code === 'ENOENT' || code === 'ENOTDIR'
+    }
+  }
+  /**
+   * 2.1.3-beta.5: drop the file-progress rows of transcripts that no longer
+   * exist (aicc_planning#306, item 2). The table is otherwise never pruned, so
+   * a real history held tens of thousands of rows for deleted files and for
+   * the same files under a second path (the profile folder's link), all of
+   * which a health figure counted.
+   *
+   * Only the progress rows go. A stored usage event is never touched, and a
+   * file that comes back is read from its first byte, its turns stored once
+   * (they are keyed by turn), so the worst a wrong drop costs is a read again,
+   * never a total.
+   *
+   * Only after a walk that listed the whole projects folder: it exists, it
+   * was listed, no folder in it failed to list and it held a transcript. A
+   * walk that failed or fell short proves nothing is gone, and a folder
+   * that lists empty is as likely a drive not mounted as a history deleted.
+   * A Claude row goes when its path is not among the transcripts the walk
+   * found (the ones it did not list because their folder had not changed
+   * count as found). A rollout row goes only when its file is not found at
+   * all, as the rollout walk's own lists vary with the account folders named.
+   * A Claude row written since the pass began (by the watcher, for a
+   * transcript made after the walk listed its folder) is kept.
+   * In batches, with the event loop given back between them. The first batch
+   * is dropped in the turn that called this (a pass with nothing to drop,
+   * the usual one, is over then); the rest is returned to be waited for.
+   */
+  function pruneGoneFiles(walk: ClaudeWalk, rolloutsFound: ReadonlySet<string>, passStart: number): Promise<void> | undefined {
+    if (!db || !walk.complete || walk.present.size === 0) return undefined
+    let paths: string[] = []
+    let dropped = 0
+    const dropBatch = (from: number): void => {
+      const gone: string[] = []
+      for (const p of paths.slice(from, from + PRUNE_BATCH)) {
+        if (path.basename(p).includes('rollout-')) { if (!rolloutsFound.has(p) && isGone(p)) gone.push(p) }
+        // A row the watcher wrote while this pass ran is for a transcript
+        // made after the walk listed the folders: not gone.
+        else if (!walk.present.has(p) && !((db!.getFileCursor(p)?.lastIngestedAt ?? 0) >= passStart)) gone.push(p)
+      }
+      if (gone.length) dropped += db!.deleteFileRows(gone)
+    }
+    const done = (): void => { if (dropped > 0) logw('info', `dropped the progress of ${dropped} transcripts that are gone`) }
+    const failed = (err: unknown): void => logw('warn', `dropping the progress of gone transcripts failed: ${String(err)}`)
+    try {
+      paths = db.listFilePaths()
+      dropBatch(0)
+    } catch (err) { failed(err); return undefined }
+    if (paths.length <= PRUNE_BATCH) { done(); return undefined }
+    return (async () => {
+      try {
+        for (let i = PRUNE_BATCH; i < paths.length; i += PRUNE_BATCH) {
+          await new Promise<void>((r) => setImmediate(r))
+          if (!db) return
+          dropBatch(i)
+        }
+        done()
+      } catch (err) { failed(err) }
+    })()
+  }
+
   async function ingestAll(phase: 'initial' | 'incremental'): Promise<void> {
     if (!db || sweeping) return
     if (phase === 'incremental' && !fullSweepDue) { await ingestDirty(); return }
@@ -882,7 +1012,8 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       // as named when it began, and whether they had been named at all.
       const dirsKnown = realmDirsKnown
       const dirsSeq = realmDirsSeq
-      const claude = enumerateClaude()
+      const claudeWalk = enumerateClaude()
+      const claude = claudeWalk.files
       const codex = enumerateCodex()
       const total = claude.length + codex.length
       let done = 0
@@ -975,11 +1106,23 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       } else {
         post({ type: 'index-complete', firstIndex: false, drained: drainedNow, filesFailed: sweepFailed.size, eventsTotal: db.eventCount(), walk })
       }
+      // 2.1.3-beta.5: a subagent folder is remembered when it is listed, before
+      // its transcripts are read. A pass that left work behind (a transcript
+      // longer than one budget, one that could not be opened or read) must not
+      // let the next walk skip that folder, or the file would never be read
+      // again. So nothing is remembered until a pass has read everything.
+      if (!drained || sweepPending || sweepFailed.size > 0) subagentFolders = new Map()
+      // 2.1.3-beta.5: after the pass has said it is complete, the progress
+      // rows of transcripts that are gone are dropped (only after a walk that
+      // listed the whole tree, and never any stored usage).
+      const rest = pruneGoneFiles(claudeWalk, new Set(codex.map((c) => c.file)), passStart)
+      if (rest) await rest
     } catch (err) {
       // #302: a walk that failed did not reach every file, so it is still
       // due; the 5 s timer retries it, never at once.
       fullSweepDue = true
       again = false
+      subagentFolders = new Map() // the files it did not reach are listed again
       logw('error', `ingestAll failed: ${String(err)}`)
     }
     finally {
@@ -1006,13 +1149,21 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       const files = [...dirtyClaude]
       dirtyClaude.clear()
       let done = 0
+      let failedNow = false
       for (const f of files) {
         sweepFailed.delete(f) // tried again now; it goes back in if it fails
         ingestClaudeFile(f)
+        if (sweepFailed.has(f)) failedNow = true
         if (++done % YIELD_EVERY === 0) { await new Promise<void>((r) => setImmediate(r)); if (!db) return }
       }
       if (!db) return
-      if (sweepPending) fullSweepDue = true
+      // A reported transcript left part-read: the folders are not trusted at
+      // the full walk that follows, so it lists them again.
+      if (sweepPending) { fullSweepDue = true; subagentFolders = new Map() }
+      // One that could not be opened or read: the full walk clears the failure
+      // before it starts, so without this it would skip the folder the
+      // transcript is in and never ask for it again.
+      if (failedNow) subagentFolders = new Map()
       if (settleDue()) await settleAccounts('incremental')
       if (!db) return
       // Not drained while a Rescan waits for its pass (2.1.3-beta.4): this
@@ -1208,6 +1359,12 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     let due = false
     for (const [dir, perFile] of named) {
       if (watchers.has(dir) || !fs.existsSync(dir)) continue
+      // The Claude folder has no watcher (it failed, or is being attached
+      // again): a transcript grown in place while none ran was reported to no
+      // one, and its folder did not change, so no folder is remembered. The
+      // walk that follows (this one makes it due) lists every folder, and so
+      // does each one while the folder cannot be watched.
+      if (dir === claudeDir) subagentFolders = new Map()
       const wch = watchDir(dir, perFile)
       if (wch) watchers.set(dir, wch)
       due = true
@@ -1312,7 +1469,12 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     setPricing(msg.pricing)
     configs = msg.configs
     if (configs.length) db.upsertConfigs(configs)
+    // 2.1.3-beta.5: the folder's real path, once: a folder that is itself a
+    // link (the profile's) was kept under the link's path, and its files again
+    // under the real one. The path as given when it cannot be resolved.
     claudeDir = msg.claudeProjectsDir
+    try { claudeDir = fs.realpathSync.native(msg.claudeProjectsDir) } catch { /* kept as given */ }
+    subagentFolders = new Map()
     // The user's own Codex home: this computer's sign-in (MP9).
     codexDirs = [{ dir: msg.codexSessionsDir, accountKey: TK_CODEX_EXTERNAL }]
     // A caller that does not say (one predating the flag) has named them.
@@ -1347,13 +1509,14 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
         scheduleIncremental()
         return
       case 'set-session-account': setSessionAccount(msg); return
-      case 'reindex': fullSweepDue = true; void ingestAll('incremental'); return
+      case 'reindex': subagentFolders = new Map(); fullSweepDue = true; void ingestAll('incremental'); return
       case 'rescan':
         // The page's Rescan (2.1.3-beta.4): every file starts again from its
         // first byte. What is stored stays, and a turn read again is stored
         // once (its key is the same), so the figures can only fill in.
         if (rescanPending) return
         db.resetFileProgress()
+        subagentFolders = new Map() // every folder is read again
         rescanPending = true
         rescanSeq++
         // A pass running now read some files before this: one follows it.

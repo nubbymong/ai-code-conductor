@@ -43,7 +43,7 @@ describe('the one-off Codex account attribution (usage track MP9)', () => {
   let workers: Array<{ stop: () => void }> = []
   /** Links to the temp folder made outside it, removed before it. */
   let aliases: string[] = []
-  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tkacct-')); workers = []; aliases = [] })
+  beforeEach(() => { tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'tkacct-'))); workers = []; aliases = [] })
   afterEach(() => {
     for (const w of workers) { try { w.stop() } catch { /* stopped */ } }
     // The link itself, never what it points at.

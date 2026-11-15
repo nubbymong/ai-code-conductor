@@ -61,6 +61,9 @@ vi.mock('../../../src/main/tokenomics/tk-db', () => {
       eventCount: () => db.keys.size,
       upsertConfigs: () => {},
       setSessionAccount: () => {},
+      // As the database: the paths with a progress row, and those rows deleted.
+      listFilePaths: () => [...db.cursors.keys()],
+      deleteFileRows: (paths: string[]) => { let n = 0; for (const p of paths) if (db.cursors.delete(p)) n++; return n },
       queryAccounts: () => [],
       close: () => {},
     }),
@@ -89,7 +92,7 @@ describe('history carried over by a sign in again is counted once (P3.3 review r
   let tmp: string
   let stop: (() => void) | null = null
   beforeEach(() => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tkcarried-'))
+    tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'tkcarried-')))
     db.cursors.clear(); db.meta.clear(); db.keys.clear(); db.offered.clear(); db.stored.clear()
     db.meta.set('firstIndexComplete', '1')
   })

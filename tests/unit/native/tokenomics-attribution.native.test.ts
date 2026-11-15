@@ -51,7 +51,7 @@ describe('recording a Claude session\'s account in the index (MP10)', () => {
   let tmp: string
   let opened: Db[] = []
   const open = (p: string) => { const db = openTkDb(p); opened.push(db); return db }
-  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tkattr-')); opened = [] })
+  beforeEach(() => { tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'tkattr-'))); opened = [] })
   afterEach(() => { for (const db of opened) { try { db.close() } catch { /* closed */ } } fs.rmSync(tmp, { recursive: true, force: true }) })
 
   it('is recorded once while it stays; another account for the session is the latest', () => {
@@ -245,7 +245,7 @@ function writeClaude(dir: string, id: string, lines: number, from = 0): string {
 describe('the worker attributes a Claude session in either order (MP10)', () => {
   let tmp: string
   let workers: Array<{ stop: () => void }> = []
-  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tkattrw-')); workers = [] })
+  beforeEach(() => { tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'tkattrw-'))); workers = [] })
   afterEach(() => {
     for (const w of workers) { try { w.stop() } catch { /* stopped */ } }
     fs.rmSync(tmp, { recursive: true, force: true })
