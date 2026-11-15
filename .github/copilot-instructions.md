@@ -2,14 +2,14 @@
 
 ## Project Overview
 
-AI Code Conductor (formerly Claude Command Center) is a multi-session Claude Code terminal orchestrator built with Electron 43, React 19, TypeScript, and Tailwind CSS v4. It manages multiple Claude Code CLI sessions in parallel, with features like SSH remoting, vision/browser control, cloud agents, tokenomics tracking, and a memory visualizer.
+AI Code Conductor (formerly Claude Command Center) is a multi-session Claude Code terminal orchestrator built with Electron 44, React 19, TypeScript, and Tailwind CSS v4. It manages multiple Claude Code CLI sessions in parallel, with features like SSH remoting, vision/browser control, cloud agents, tokenomics tracking, and a memory visualizer.
 
 ## Tech Stack
 
-- **Runtime**: Electron 33 (main + renderer + preload)
-- **UI**: React 18 with Zustand 5 for state management
+- **Runtime**: Electron 44 (main + renderer + preload)
+- **UI**: React 19 with Zustand 5 for state management
 - **Styling**: Tailwind CSS v4 with `@theme` directive in `src/renderer/styles.css` (no tailwind.config)
-- **Terminal**: xterm.js 5.5 with WebGL addon, node-pty for PTY management
+- **Terminal**: xterm.js 6 with WebGL addon, node-pty for PTY management
 - **Build**: electron-vite, electron-builder for packaging
 - **Testing**: Vitest (unit), Playwright (E2E)
 - **Color palette**: Catppuccin Mocha - use theme tokens (base, mantle, crust, surface0-2, overlay0-2, subtext0-1, text, blue, green, red, yellow, peach, mauve, teal, etc.)
