@@ -37,7 +37,7 @@ export default function WindowPickerModal({ onCapture, onCancel }: Props) {
             <div className="text-center py-8" style={{ color: 'var(--text-secondary)' }} data-testid="window-picker-empty">
               {/* On a Mac an empty list is most often the Screen Recording permission, which main has just asked about. */}
               {window.electronPlatform === 'darwin'
-                ? 'No windows to show. Snap needs the Screen Recording permission to list them: switch AI Code Conductor on in System Settings, Privacy and Security, Screen Recording, then quit and reopen the app.'
+                ? 'No windows to show. If Snap has no Screen Recording permission, switch AI Code Conductor on in System Settings, Privacy and Security, Screen Recording, then quit and reopen the app.'
                 : 'No windows found'}
             </div>
           ) : (
