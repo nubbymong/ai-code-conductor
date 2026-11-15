@@ -304,8 +304,9 @@ describe('ConductorServicesPanel', () => {
     expect(counterLabels(r.container, 'hooks')).toEqual(['PID', 'Uptime', 'In-flight', 'Restarts', 'Events', 'Trimmed', 'Thrput/s', 'Jank m/c'])
     // The logging worker reports no event-loop stalls of its own.
     expect(counterLabels(r.container, 'logging')).toEqual(['PID', 'Uptime', 'In-flight', 'Restarts', 'Events', 'Trimmed', 'Thrput/s', 'Jank m'])
-    // The usage index keeps no process id, no trim count, no rate and no stalls of its own.
-    expect(counterLabels(r.container, 'tokenomics')).toEqual(['Uptime', 'In-flight', 'Restarts', 'Events', 'Jank m'])
+    // The usage index keeps its worker's process id (2.1.3-beta.4), and no
+    // trim count, no rate and no stalls of its own.
+    expect(counterLabels(r.container, 'tokenomics')).toEqual(['PID', 'Uptime', 'In-flight', 'Restarts', 'Events', 'Jank m'])
     // The Watchdog has no process of its own and counts no restarts.
     expect(counterLabels(r.container, 'watchdog')).toEqual(['Uptime', 'In-flight', 'Events', 'Jank m'])
     expect(counterLabels(r.container, 'mcp')).toBeNull()
@@ -315,16 +316,17 @@ describe('ConductorServicesPanel', () => {
     const tk = {
       ...createInitialHealth('tokenomics', 'Tokenomics', 'utility-process'),
       state: 'listening' as ServiceState,
-      inFlight: 2, eventsTotal: 4200, restartCount: 1, mainLoopStallsLastMin: 3,
+      pid: 7001, inFlight: 2, eventsTotal: 4200, restartCount: 1, mainLoopStallsLastMin: 3,
     }
     mockApi({ capturedAt: 1, services: [tk], log: [] })
     const r = await renderPanel({ onClose: () => {} })
     unmount = r.unmount
+    expect(counterValue(r.container, 'tokenomics', 'PID')).toBe('7001')
     expect(counterValue(r.container, 'tokenomics', 'In-flight')).toBe('2')
     expect(counterValue(r.container, 'tokenomics', 'Events')).toBe('4200')
     expect(counterValue(r.container, 'tokenomics', 'Restarts')).toBe('1')
     expect(counterValue(r.container, 'tokenomics', 'Jank m')).toBe('3')
-    expect(card(r.container, 'tokenomics').textContent).not.toMatch(/PID|Trimmed|Thrput|Jank m\/c|3\/0/)
+    expect(card(r.container, 'tokenomics').textContent).not.toMatch(/Trimmed|Thrput|Jank m\/c|3\/0/)
   })
 
   it('a hooks row that fell back to the main process shows no PID and no child stalls, as an in-process row does', async () => {
@@ -350,11 +352,10 @@ describe('ConductorServicesPanel', () => {
     })
     const r = await renderPanel({ onClose: () => {} })
     unmount = r.unmount
-    for (const id of ['hooks', 'logging']) {
+    for (const id of ['hooks', 'logging', 'tokenomics']) {
       expect(counterValue(r.container, id, 'PID')).toBe('-')
       expect(counterValue(r.container, id, 'Uptime')).toBe('-')
     }
-    expect(counterValue(r.container, 'tokenomics', 'Uptime')).toBe('-')
     for (const id of ['hooks', 'logging', 'tokenomics']) {
       expect(card(r.container, id).textContent).not.toMatch(/NaN|\b0s\b|undefined/)
     }

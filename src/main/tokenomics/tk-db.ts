@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3'
-import type { TkEvent, TkPricing, TkProvider, TkSummary, TkKpis, TkSummaryFilter, TkSessionsQuery, TkSessionsPage, TkSessionDetail, TkAccountPresent } from './tk-types'
+import type { TkEvent, TkPricing, TkProvider, TkSummary, TkSummaryFilter, TkSessionsQuery, TkSessionsPage, TkSessionDetail, TkAccountPresent } from './tk-types'
 import { tkAccountKeyOk, tkClaudeAccountKeyOk, tkExcludedAccounts, TK_ACCOUNT_NOT_RECORDED } from './tk-types'
+import { tkDailySeriesOf, tkKpisOf, tkTokenSumsSql } from './tk-summary'
+import type { TkDailyRow, TkLifeRow, TkPrevWeekRow, TkWeekRow } from './tk-summary'
 
 function dayOf(ts: number): string {
   const d = new Date(ts)
@@ -121,8 +123,6 @@ export const TK_REBUILD_PAGE = 5000
  *  (usage track MP11): sums then cover the priced models only, and a model
  *  or session with no price reads as none, never as $0. */
 const COST = (a: string) => `(CASE WHEN p.pm IS NULL THEN NULL ELSE (${a}.inTok*p.pin+${a}.outTok*p.pout+${a}.cacheReadTok*p.pcr+${a}.cacheCreateTok*p.pcw)/1000000.0 END)`
-/** The providers a summary splits its figures by (MP11). */
-const PROVIDERS: readonly TkProvider[] = ['claude', 'codex']
 /** The accounts a query leaves out (Settings, Tokenomics; 2.1.3-beta.4): a
  *  condition on a table's account column, bound by value, and its binds;
  *  nothing when none is left out. It filters what a query answers and nothing
@@ -1067,36 +1067,20 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
 
       // KPIs: config+model scope, NO range (life-to-date / cache are all-time).
       // MP11: per provider, and in all; costs of priced models only.
+      // 2.1.3-beta.4: the tokens of the same rows, every model counted.
       const life = sqlite.prepare(`WITH ${cte} SELECT d.provider AS provider,
           COALESCE(SUM(${COST('d')}),0) AS cost,
-          COALESCE(SUM(d.cacheReadTok),0) AS cr,
-          COALESCE(SUM(d.inTok),0) AS inp,
+          ${tkTokenSumsSql('d')},
           COALESCE(SUM(d.cacheReadTok*(COALESCE(p.pin,0)-COALESCE(p.pcr,0))/1000000.0),0) AS savings
-        FROM ${dailyJoin} WHERE 1=1 ${frag('d','model',false)} GROUP BY d.provider`).all(binds) as any[]
-      const l7 = sqlite.prepare(`WITH ${cte} SELECT d.provider AS provider, COALESCE(SUM(${COST('d')}),0) AS c FROM ${dailyJoin} WHERE d.day > @last7Cut ${frag('d','model',false)} GROUP BY d.provider`).all(binds) as any[]
-      const p7 = sqlite.prepare(`WITH ${cte} SELECT d.provider AS provider, COALESCE(SUM(${COST('d')}),0) AS c FROM ${dailyJoin} WHERE d.day > @prev7Cut AND d.day <= @last7Cut ${frag('d','model',false)} GROUP BY d.provider`).all(binds) as any[]
-      const kpisOf = (keep: (provider: string) => boolean): TkKpis => {
-        const sum = (rows: any[], k: string): number => rows.filter((r) => keep(String(r.provider))).reduce((a, r) => a + (Number(r[k]) || 0), 0)
-        const cr = sum(life, 'cr'), inp = sum(life, 'inp')
-        return {
-          lifeToDateCostUsd: sum(life, 'cost'),
-          last7dCostUsd: sum(l7, 'c'),
-          prev7dCostUsd: sum(p7, 'c'),
-          cacheEfficiencyPct: (cr + inp) > 0 ? (cr / (cr + inp)) * 100 : 0,
-          cacheSavingsUsd: sum(life, 'savings'),
-        }
-      }
+        FROM ${dailyJoin} WHERE 1=1 ${frag('d','model',false)} GROUP BY d.provider`).all(binds) as TkLifeRow[]
+      const last7 = sqlite.prepare(`WITH ${cte} SELECT d.provider AS provider, COALESCE(SUM(${COST('d')}),0) AS cost, ${tkTokenSumsSql('d')} FROM ${dailyJoin} WHERE d.day > @last7Cut ${frag('d','model',false)} GROUP BY d.provider`).all(binds) as TkWeekRow[]
+      const prev7 = sqlite.prepare(`WITH ${cte} SELECT d.provider AS provider, COALESCE(SUM(${COST('d')}),0) AS cost FROM ${dailyJoin} WHERE d.day > @prev7Cut AND d.day <= @last7Cut ${frag('d','model',false)} GROUP BY d.provider`).all(binds) as TkPrevWeekRow[]
+      const kpiRows = { life, last7, prev7 }
 
-      // Charts: config+model+range scope. MP11: the daily series per provider.
-      const dailyRows = sqlite.prepare(`WITH ${cte} SELECT d.day AS day, d.provider AS provider, SUM(${COST('d')}) AS costUsd FROM ${dailyJoin} WHERE 1=1 ${frag('d','model',true)} GROUP BY d.day, d.provider ORDER BY d.day`).all(binds) as any[]
-      const daily: TkSummary['dailySeries'] = []
-      for (const r of dailyRows) {
-        let day = daily[daily.length - 1]
-        if (!day || day.day !== r.day) { day = { day: r.day, costUsd: 0, byProvider: { claude: 0, codex: 0 } }; daily.push(day) }
-        const c = Number(r.costUsd) || 0
-        day.costUsd += c
-        if ((PROVIDERS as readonly string[]).includes(r.provider)) day.byProvider[r.provider as TkProvider] += c
-      }
+      // Charts: config+model+range scope. MP11: the daily series per
+      // provider; 2.1.3-beta.4: with each day's tokens.
+      const dailyRows = sqlite.prepare(`WITH ${cte} SELECT d.day AS day, d.provider AS provider, SUM(${COST('d')}) AS costUsd, ${tkTokenSumsSql('d')} FROM ${dailyJoin} WHERE 1=1 ${frag('d','model',true)} GROUP BY d.day, d.provider ORDER BY d.day`).all(binds) as TkDailyRow[]
+      const daily = tkDailySeriesOf(dailyRows)
       // MP11: the models in these figures with no price, and their tokens,
       // over the range shown (MP11 round 1: as the charts are), so the notice
       // names what the view holds.
@@ -1129,8 +1113,8 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
       })).sort((a: any, b: any) => (b.costUsd ?? -1) - (a.costUsd ?? -1))
 
       return {
-        kpis: kpisOf(() => true),
-        kpisByProvider: { claude: kpisOf((p) => p === 'claude'), codex: kpisOf((p) => p === 'codex') },
+        kpis: tkKpisOf(kpiRows, () => true),
+        kpisByProvider: { claude: tkKpisOf(kpiRows, (p) => p === 'claude'), codex: tkKpisOf(kpiRows, (p) => p === 'codex') },
         dailySeries: daily,
         // A model with no price has no cost (null), never $0.
         modelSplit: models.map((m: any) => ({ model: m.model, costUsd: m.costUsd ?? null, tokens: m.tokens ?? 0 })),

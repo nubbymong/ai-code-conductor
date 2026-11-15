@@ -15,7 +15,11 @@ describe('tk-db querySummary', () => {
     db.insertEvents([ev({ dedupKey: 'c:1:1' })])
     const s = db.querySummary(PRICING, {})
     expect(s.kpis.lifeToDateCostUsd).toBeCloseTo(5, 5)
-    expect(s.dailySeries).toEqual([{ day: '2026-06-01', costUsd: 5, byProvider: { claude: 5, codex: 0 } }])
+    expect(s.dailySeries).toEqual([{
+      day: '2026-06-01', costUsd: 5, byProvider: { claude: 5, codex: 0 },
+      // 2.1.3-beta.4: the day's tokens beside its cost.
+      tokens: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, total: 1_000_000 }, tokensByProvider: { claude: 1_000_000, codex: 0 },
+    }])
     expect(s.costByConfig[0]).toMatchObject({ configId: 'a', label: 'App', costUsd: 5, sessions: 1 })
   })
 
@@ -142,10 +146,20 @@ describe('tk-db querySummary: unpriced models and the provider split (MP11)', ()
     }
     expect(s.kpisByProvider.claude.cacheEfficiencyPct).toBeCloseTo((7 / (7 + 2_000_400)) * 100, 6)
     expect(s.kpisByProvider.codex.cacheEfficiencyPct).toBe(0)
+    // 2.1.3-beta.4: each day's tokens beside its cost, every model counted
+    // (the models with no price as well).
     expect(s.dailySeries).toEqual([
-      { day: '2026-06-01', costUsd: expect.closeTo(7, 6), byProvider: { claude: expect.closeTo(5, 6), codex: expect.closeTo(2, 6) } },
-      { day: '2026-06-02', costUsd: expect.closeTo(5, 6), byProvider: { claude: expect.closeTo(5, 6), codex: 0 } },
+      {
+        day: '2026-06-01', costUsd: expect.closeTo(7, 6), byProvider: { claude: expect.closeTo(5, 6), codex: expect.closeTo(2, 6) },
+        tokens: { input: 3_000_400, output: 20, cacheRead: 7, cacheWrite: 0, total: 3_000_427 }, tokensByProvider: { claude: 1_000_427, codex: 2_000_000 },
+      },
+      {
+        day: '2026-06-02', costUsd: expect.closeTo(5, 6), byProvider: { claude: expect.closeTo(5, 6), codex: 0 },
+        tokens: { input: 1_000_050, output: 0, cacheRead: 0, cacheWrite: 0, total: 1_000_050 }, tokensByProvider: { claude: 1_000_000, codex: 50 },
+      },
     ])
+    expect(s.kpis.lifeToDateTokens).toEqual({ input: 4_000_450, output: 20, cacheRead: 7, cacheWrite: 0, total: 4_000_477 })
+    expect(s.kpisByProvider.claude.lifeToDateTokens.total + s.kpisByProvider.codex.lifeToDateTokens.total).toBe(4_000_477)
     // One provider's summary: the other's part is empty.
     const onlyCodex = seedOnly('codex')
     expect(onlyCodex.kpisByProvider.claude.lifeToDateCostUsd).toBe(0)
@@ -181,4 +195,73 @@ describe('tk-db querySummary: unpriced models and the provider split (MP11)', ()
   function seedOnly(provider: 'codex') {
     return seed().querySummary(PRICED, { provider }, NOW)
   }
+})
+
+// 2.1.3-beta.4: the token totals beside the costs. Input, output, cache read,
+// cache write and their total, for the headline figures (life to date, the
+// last seven days) and for each day split by provider. Every model counts,
+// priced or not, and the tokens follow the same filters as the costs.
+describe('tk-db querySummary: the token totals (2.1.3-beta.4)', () => {
+  const PRICED = { ...PRICING, 'gpt-5.5': { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0 } }
+  const NOW = Date.parse('2026-06-03T12:00:00Z')
+  const A = 'claude:acct-a'
+  const B = 'claude:acct-b'
+  const tk = (input: number, output: number, cacheRead: number, cacheWrite: number) =>
+    ({ input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite })
+  function seed() {
+    const db = openTkDb(':memory:')
+    db.insertEvents([
+      // 2026-06-01, priced, account A: 3520 tokens.
+      ev({ dedupKey: 'c:1:1', sessionId: 's1', inTok: 100, outTok: 20, cacheReadTok: 3_000, cacheCreateTok: 400, accountKey: A }),
+      // 2026-06-02, a model with no price, account A: 55 tokens.
+      ev({ dedupKey: 'c:2:2', sessionId: 's1', model: 'claude-new-9', priceModel: 'claude-new-9', inTok: 50, outTok: 5, ts: Date.parse('2026-06-02T10:00:00Z'), accountKey: A }),
+      // 2026-05-01, more than seven days before now, account B: 7 tokens.
+      ev({ dedupKey: 'c:3:3', sessionId: 's2', inTok: 7, ts: Date.parse('2026-05-01T10:00:00Z'), accountKey: B }),
+      // 2026-06-02, Codex, recorded to no account: 1100 tokens.
+      ev({ dedupKey: 'x:c:0', sessionId: 'cx', provider: 'codex', model: 'gpt-5.5', priceModel: 'gpt-5.5', inTok: 1_000, outTok: 100, ts: Date.parse('2026-06-02T11:00:00Z') }),
+    ])
+    return db
+  }
+  const days = (s: { dailySeries: Array<{ day: string; tokens: { total: number }; tokensByProvider: Record<string, number> }> }) =>
+    s.dailySeries.map((d) => [d.day, d.tokens.total, d.tokensByProvider])
+
+  it('the headline figures: life to date and the last seven days, by kind, in all and per provider', () => {
+    const s = seed().querySummary(PRICED, {}, NOW)
+    expect(s.kpis.lifeToDateTokens).toEqual(tk(1_157, 125, 3_000, 400))
+    expect(s.kpis.last7dTokens).toEqual(tk(1_150, 125, 3_000, 400))
+    expect(s.kpisByProvider.claude.lifeToDateTokens).toEqual(tk(157, 25, 3_000, 400))
+    expect(s.kpisByProvider.codex.lifeToDateTokens).toEqual(tk(1_000, 100, 0, 0))
+    expect(s.kpisByProvider.claude.last7dTokens).toEqual(tk(150, 25, 3_000, 400))
+  })
+
+  it('each day: its tokens by kind, and their total per provider', () => {
+    const s = seed().querySummary(PRICED, {}, NOW)
+    expect(s.dailySeries.map((d) => [d.day, d.tokens])).toEqual([
+      ['2026-05-01', tk(7, 0, 0, 0)],
+      ['2026-06-01', tk(100, 20, 3_000, 400)],
+      ['2026-06-02', tk(1_050, 105, 0, 0)],
+    ])
+    expect(days(s)).toEqual([
+      ['2026-05-01', 7, { claude: 7, codex: 0 }],
+      ['2026-06-01', 3_520, { claude: 3_520, codex: 0 }],
+      ['2026-06-02', 1_155, { claude: 55, codex: 1_100 }],
+    ])
+  })
+
+  it('follow the filters as the costs do: a provider, a model, an account, the accounts left out, and the range (the charts only)', () => {
+    const db = seed()
+    const codex = db.querySummary(PRICED, { provider: 'codex' }, NOW)
+    expect(codex.kpis.lifeToDateTokens).toEqual(tk(1_000, 100, 0, 0))
+    expect(days(codex)).toEqual([['2026-06-02', 1_100, { claude: 0, codex: 1_100 }]])
+    expect(db.querySummary(PRICED, { model: 'claude-new-9' }, NOW).kpis.lifeToDateTokens).toEqual(tk(50, 5, 0, 0))
+    const onlyB = db.querySummary(PRICED, { accountKey: B }, NOW)
+    expect([onlyB.kpis.lifeToDateTokens, onlyB.kpis.last7dTokens]).toEqual([tk(7, 0, 0, 0), tk(0, 0, 0, 0)])
+    const lessA = db.querySummary(PRICED, { excludeAccountKeys: [A] }, NOW)
+    expect(lessA.kpis.lifeToDateTokens).toEqual(tk(1_007, 100, 0, 0))
+    expect(days(lessA)).toEqual([['2026-05-01', 7, { claude: 7, codex: 0 }], ['2026-06-02', 1_100, { claude: 0, codex: 1_100 }]])
+    // A range narrows the chart; the headline figures are all time, as their costs are.
+    const fromJune2 = db.querySummary(PRICED, { from: Date.parse('2026-06-02T10:00:00Z') }, NOW)
+    expect(days(fromJune2)).toEqual([['2026-06-02', 1_155, { claude: 55, codex: 1_100 }]])
+    expect(fromJune2.kpis.lifeToDateTokens.total).toBe(4_682)
+  })
 })

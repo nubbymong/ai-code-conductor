@@ -341,7 +341,13 @@ export default function TokenomicsPage() {
 
                 {/* Charts row */}
                 <div className="grid grid-cols-2 gap-3 mb-5">
-                  <CostOverTimeChart data={summary.dailySeries} series={tkSeriesInRange(split?.providers, summary.dailySeries)} />
+                  {/* 2.1.3-beta.4: the chart can plot tokens too, with its own
+                      series: a provider with no price has tokens, not cost. */}
+                  <CostOverTimeChart
+                    data={summary.dailySeries}
+                    series={tkSeriesInRange(split?.providers, summary.dailySeries)}
+                    tokenSeries={tkSeriesInRange(split?.providers, summary.dailySeries, 'tokens')}
+                  />
                   <ModelCacheDonut
                     modelSplit={summary.modelSplit}
                     cacheSplit={summary.cacheSplit}

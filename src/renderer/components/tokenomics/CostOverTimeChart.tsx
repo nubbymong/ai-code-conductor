@@ -1,20 +1,32 @@
 import React, { useLayoutEffect, useMemo, useState } from 'react'
-import type { TkProvider } from '../../../shared/types'
-import { TK_PROVIDER_LABEL, TK_PROVIDER_COLOR } from './tk-labels'
+import type { TkProvider, TkTokenTotals } from '../../../shared/types'
+import { TK_PROVIDER_LABEL, TK_PROVIDER_COLOR, tkTokens } from './tk-labels'
+import type { TkChartMetric } from './tk-labels'
 
 interface DataPoint {
   day: string
   costUsd: number
   /** Usage track MP11/MP12: the day's cost per provider. */
   byProvider?: Partial<Record<TkProvider, number>>
+  /** 2.1.3-beta.4: the day's tokens, and their total per provider. */
+  tokens?: TkTokenTotals
+  tokensByProvider?: Partial<Record<TkProvider, number>>
 }
 
 interface Props {
   data: DataPoint[]
-  /** MP12 (Q1.4): the providers drawn as their own series, when both have
-   *  usage in these figures. */
+  /** MP12 (Q1.4): the providers drawn as their own series of cost, when
+   *  both have cost in these figures. */
   series?: TkProvider[]
+  /** 2.1.3-beta.4: the same for tokens, when both have tokens here. */
+  tokenSeries?: TkProvider[]
 }
+
+/** The chart's two-way switch, in the order it shows them. */
+const METRICS: ReadonlyArray<{ value: TkChartMetric; label: string }> = [
+  { value: 'cost', label: 'Cost' },
+  { value: 'tokens', label: 'Tokens' },
+]
 
 function formatCostShort(usd: number): string {
   if (usd >= 100) return `$${usd.toFixed(0)}`
@@ -55,8 +67,8 @@ function pointX(i: number, n: number, width: number): number {
   return n === 1 ? width / 2 : PAD_X + (i / (n - 1)) * (width - 2 * PAD_X)
 }
 
-/** The y of a cost `v` on a plot `plotH` px high whose top is `max`. */
-function costY(v: number, max: number, plotH: number): number {
+/** The y of a value `v` on a plot `plotH` px high whose top is `max`. */
+function valueY(v: number, max: number, plotH: number): number {
   return plotH - (v / max) * plotH * 0.88 - 4
 }
 
@@ -88,14 +100,31 @@ function axisLabelLayout(n: number, width: number, labelPx: number): Array<{ ind
   return out
 }
 
+/** What a point plots: its cost, or its tokens. */
+function valueOf(d: DataPoint, metric: TkChartMetric): number {
+  return (metric === 'tokens' ? d.tokens?.total : d.costUsd) ?? 0
+}
+/** A point's part for one provider, of what the chart plots. */
+function partOf(d: DataPoint, p: TkProvider, metric: TkChartMetric): number {
+  return (metric === 'tokens' ? d.tokensByProvider?.[p] : d.byProvider?.[p]) ?? 0
+}
+/** A value as the tooltips read it. */
+function formatValue(v: number, metric: TkChartMetric): string {
+  return metric === 'tokens' ? `${tkTokens(v)} tokens` : formatCostShort(v)
+}
+
 /**
  * Area + line chart of daily cost over time, built with inline SVG (no
  * external charting library). The SVG is drawn at the width it is given, one
  * unit to a pixel, so its text and dots are never stretched, and the date
- * labels are chosen to fit that width.
+ * labels are chosen to fit that width. A switch (2.1.3-beta.4) plots each
+ * day's tokens instead, split by provider the same way; it starts on Cost
+ * and is kept while the page stays open.
  */
-export function CostOverTimeChart({ data, series }: Props) {
-  const split = series && series.length > 1 ? series : null
+export function CostOverTimeChart({ data, series, tokenSeries }: Props) {
+  const [metric, setMetric] = useState<TkChartMetric>('cost')
+  const chosen = metric === 'tokens' ? tokenSeries : series
+  const split = chosen && chosen.length > 1 ? chosen : null
 
   // The width the chart is drawn at: measured, and re-measured on resize.
   const [frame, setFrame] = useState<HTMLDivElement | null>(null)
@@ -115,16 +144,21 @@ export function CostOverTimeChart({ data, series }: Props) {
   const plotH = plotHeight(width)
   const svgH = plotH + LABEL_H
 
-  const { points, maxCost } = useMemo(() => {
-    if (!data || data.length === 0) return { points: [], maxCost: 0 }
-    const max = Math.max(...data.map((d) => d.costUsd), 0.001)
+  const { points, maxValue, peak } = useMemo(() => {
+    if (!data || data.length === 0) return { points: [], maxValue: 0, peak: 0 }
+    // The largest value in range, and the top of the scale drawn: the floor
+    // keeps a range of zeros drawable (a tenth of a cent, or one token), and
+    // is never read as a figure.
+    const most = Math.max(0, ...data.map((d) => valueOf(d, metric)))
+    const max = Math.max(most, metric === 'tokens' ? 1 : 0.001)
     const pts = data.map((d, i) => ({
       ...d,
+      value: valueOf(d, metric),
       x: pointX(i, data.length, width),
-      y: costY(d.costUsd, max, plotH),
+      y: valueY(valueOf(d, metric), max, plotH),
     }))
-    return { points: pts, maxCost: max }
-  }, [data, width, plotH])
+    return { points: pts, maxValue: max, peak: most }
+  }, [data, width, plotH, metric])
 
   // The date labels: the year when the range crosses one, spaced to fit.
   const { labelAt, withYear } = useMemo(() => {
@@ -143,12 +177,12 @@ export function CostOverTimeChart({ data, series }: Props) {
       provider: p,
       d: points
         .map((pt, i) => {
-          const y = costY(pt.byProvider?.[p] ?? 0, maxCost, plotH)
+          const y = valueY(partOf(pt, p, metric), maxValue, plotH)
           return `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)} ${y.toFixed(1)}`
         })
         .join(' '),
     }))
-  }, [split, points, maxCost, plotH])
+  }, [split, points, maxValue, plotH, metric])
 
   if (!data || data.length === 0) {
     return (
@@ -181,8 +215,8 @@ export function CostOverTimeChart({ data, series }: Props) {
       style={{ background: 'var(--surface-raised)', border: '1px solid var(--border-subtle)' }}
     >
       <div className="flex items-center gap-3 mb-3">
-        <div className="text-[11px] text-overlay0 uppercase tracking-wider">
-          Cost over time
+        <div className="text-[11px] text-overlay0 uppercase tracking-wider" data-testid="tk-chart-title">
+          {metric === 'tokens' ? 'Tokens over time' : 'Cost over time'}
         </div>
         {split && (
           <div className="flex items-center gap-2 ml-auto" data-testid="tk-cost-series-legend">
@@ -194,6 +228,34 @@ export function CostOverTimeChart({ data, series }: Props) {
             ))}
           </div>
         )}
+        {/* 2.1.3-beta.4: Cost or Tokens, styled as the filter bar's switches. */}
+        <div
+          role="group"
+          aria-label="Chart shows"
+          className={`flex rounded overflow-hidden${split ? '' : ' ml-auto'}`}
+          style={{ border: '1px solid var(--border-subtle)' }}
+          data-testid="tk-chart-metric"
+        >
+          {METRICS.map(({ value, label }) => {
+            const active = metric === value
+            return (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setMetric(value)}
+                className="px-2.5 py-0.5 text-xs transition-colors"
+                style={{
+                  background: active ? 'var(--accent)' : 'var(--surface-stage)',
+                  color: active ? 'var(--surface-base)' : 'var(--text-secondary)',
+                  fontWeight: active ? 600 : 400,
+                }}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
       </div>
       <div className="overflow-x-auto" ref={setFrame}>
         <svg
@@ -237,7 +299,7 @@ export function CostOverTimeChart({ data, series }: Props) {
             const labelX = labelAt.get(i)
             return (
               <g key={p.day}>
-                {p.costUsd > 0 && (
+                {p.value > 0 && (
                   <circle
                     cx={p.x}
                     cy={p.y}
@@ -247,8 +309,8 @@ export function CostOverTimeChart({ data, series }: Props) {
                   />
                 )}
                 <title>{split
-                  ? `${p.day}: ${split.map((s) => `${TK_PROVIDER_LABEL[s]} ${formatCostShort(p.byProvider?.[s] ?? 0)}`).join(', ')}`
-                  : `${p.day}: ${formatCostShort(p.costUsd)}`}</title>
+                  ? `${p.day}: ${split.map((s) => `${TK_PROVIDER_LABEL[s]} ${formatValue(partOf(p, s, metric), metric)}`).join(', ')}`
+                  : `${p.day}: ${formatValue(p.value, metric)}`}</title>
                 {labelX !== undefined && (
                   <text
                     x={labelX}
@@ -264,10 +326,11 @@ export function CostOverTimeChart({ data, series }: Props) {
               </g>
             )
           })}
-          {/* Max label */}
-          {maxCost > 0 && (
-            <text x={2} y={10} fontSize={AXIS_FONT_PX} fill="var(--text-muted)">
-              {formatCostShort(maxCost)}
+          {/* The top of the scale, only when something in range is above
+              zero: a range of zeros has no top figure to give. */}
+          {peak > 0 && (
+            <text x={2} y={10} fontSize={AXIS_FONT_PX} fill="var(--text-muted)" data-testid="tk-chart-max">
+              {metric === 'tokens' ? tkTokens(maxValue) : formatCostShort(maxValue)}
             </text>
           )}
         </svg>

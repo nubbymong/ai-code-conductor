@@ -88,7 +88,9 @@ const PRESENT: TkAccountPresent[] = [
   { provider: 'claude', accountKey: KEY_WORK },
   { provider: 'claude', accountKey: KEY_HOME },
 ]
-const K = (v: number) => ({ lifeToDateCostUsd: v, last7dCostUsd: v / 10, prev7dCostUsd: v / 20, cacheEfficiencyPct: 50, cacheSavingsUsd: 1 })
+// The token figures (2.1.3-beta.4) are not what these cases test, so none.
+const T0 = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+const K = (v: number) => ({ lifeToDateCostUsd: v, last7dCostUsd: v / 10, prev7dCostUsd: v / 20, cacheEfficiencyPct: 50, cacheSavingsUsd: 1, lifeToDateTokens: T0, last7dTokens: T0 })
 const SUMMARY: TkSummary = {
   kpis: K(20),
   // One provider has usage here, so the split by provider is never read.
@@ -124,6 +126,7 @@ const api = {
   onIndexStatus: vi.fn((cb: StatusCb) => { pushStatus = cb; return unsubs.status }),
   onIndexProgress: vi.fn(() => unsubs.progress),
   onIndexComplete: vi.fn((cb: CompleteCb) => { pushComplete = cb; return unsubs.complete }),
+  // The filter the page asks with, typed so a case can read it back.
   summary: vi.fn(async (_filter?: unknown) => SUMMARY),
   sessions: vi.fn(async () => ({ rows: [], nextCursor: null })),
   accounts: vi.fn(async (_opts?: { includeExcluded?: boolean }) => PRESENT),

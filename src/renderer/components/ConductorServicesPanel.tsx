@@ -101,11 +101,11 @@ const COUNTERS_KEPT: Record<ServiceId, readonly Counter[]> = {
   hooks: EVERY_COUNTER,
   // The logging worker reports no event-loop stalls of its own.
   logging: ['pid', 'uptime', 'inFlight', 'restarts', 'events', 'trimmed', 'throughput'],
-  // The usage index: how long the current worker has been ready, the queries
-  // not answered yet, its restarts and its event count. Its worker's process
-  // id is not known here, and nothing counts a trim, a rate or the worker's
-  // stalls.
-  tokenomics: ['uptime', 'inFlight', 'restarts', 'events'],
+  // The usage index: its worker's process id (2.1.3-beta.4: the supervisor
+  // now knows it, while there is a worker), how long the current worker has
+  // been ready, the queries not answered yet, its restarts and its event
+  // count. Nothing counts a trim, a rate or the worker's stalls.
+  tokenomics: ['pid', 'uptime', 'inFlight', 'restarts', 'events'],
   // The Watchdog runs inside the app: no process of its own, and a restart of
   // it is not counted. In-flight is the sessions waiting out a retry.
   watchdog: ['uptime', 'inFlight', 'events'],

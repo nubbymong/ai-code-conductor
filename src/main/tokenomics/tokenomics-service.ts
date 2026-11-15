@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { TokenomicsSupervisor } from './tk-supervisor'
-import { forkTokenomicsWorker } from './fork-tokenomics-worker'
+import { forkTokenomicsWorker, appProcessMetrics } from './fork-tokenomics-worker'
 import { getAllPricing, fetchModelPricing } from './tk-pricing'
 import { readConfig, readConfigChecked } from '../config-manager'
 import { onRegistryReload } from '../model-registry-service'
@@ -193,6 +193,9 @@ function startTokenomics(emit: (channel: string, payload: unknown) => void): voi
     codexSessionsDir: join(homedir(), '.codex', 'sessions'),
     sessionAccounts: _keptSessionAccounts,
     emit,
+    // 2.1.3-beta.4: the worker's CPU share on its Services row. Asked only
+    // when the row is read, and at most once in 5 s.
+    processMetrics: () => appProcessMetrics(),
   })
   // Before the fork, so a push from the very first message is forwarded.
   for (const cb of _startSubs) { try { cb(sup) } catch (err) { logError(`[tokenomics] a start listener failed: ${(err as Error)?.message ?? err}`) } }

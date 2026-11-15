@@ -57,14 +57,16 @@ const PRESENT: TkAccountPresent[] = [
   { provider: 'codex', accountKey: `codex:${A_REVIEW}` },
   { provider: 'codex', accountKey: `codex:${A_OLD}` },
 ]
-const K = (v: number) => ({ lifeToDateCostUsd: v, last7dCostUsd: v / 10, prev7dCostUsd: v / 20, cacheEfficiencyPct: 50, cacheSavingsUsd: 1 })
+// The token figures (2.1.3-beta.4) are not what these cases test, so none.
+const T0 = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+const K = (v: number) => ({ lifeToDateCostUsd: v, last7dCostUsd: v / 10, prev7dCostUsd: v / 20, cacheEfficiencyPct: 50, cacheSavingsUsd: 1, lifeToDateTokens: T0, last7dTokens: T0 })
 function summary(over: Partial<TkSummary> = {}): TkSummary {
   return {
     kpis: K(1284.4),
     kpisByProvider: { claude: K(1102.1), codex: K(182.3) },
     dailySeries: [
-      { day: '2026-09-25', costUsd: 10, byProvider: { claude: 7, codex: 3 } },
-      { day: '2026-09-26', costUsd: 12, byProvider: { claude: 8, codex: 4 } },
+      { day: '2026-09-25', costUsd: 10, byProvider: { claude: 7, codex: 3 }, tokens: T0, tokensByProvider: { claude: 0, codex: 0 } },
+      { day: '2026-09-26', costUsd: 12, byProvider: { claude: 8, codex: 4 }, tokens: T0, tokensByProvider: { claude: 0, codex: 0 } },
     ],
     modelSplit: [{ model: 'claude-opus-4-8', costUsd: 824.1, tokens: 1 }, { model: 'gpt-5.4', costUsd: null, tokens: 1_000_000 }],
     unpriced: [{ model: 'gpt-5.4', provider: 'codex', tokens: 1_000_000 }, { model: 'gpt-5.4-mini', provider: 'codex', tokens: 400_000 }],
@@ -147,7 +149,7 @@ describe('the labels (MP12)', () => {
   it('the cost chart\'s series: the providers with cost in the range shown, or none when fewer than two', () => {
     const both = summary().dailySeries
     expect(tkSeriesInRange(['claude', 'codex'], both)).toEqual(['claude', 'codex'])
-    const claudeOnly = [{ day: '2026-09-26', costUsd: 8, byProvider: { claude: 8, codex: 0 } }]
+    const claudeOnly = [{ day: '2026-09-26', costUsd: 8, byProvider: { claude: 8, codex: 0 }, tokens: T0, tokensByProvider: { claude: 0, codex: 0 } }]
     expect(tkSeriesInRange(['claude', 'codex'], claudeOnly)).toBeUndefined()
     expect(tkSeriesInRange(['claude', 'codex'], [])).toBeUndefined()
     expect(tkSeriesInRange(undefined, both)).toBeUndefined()
@@ -359,7 +361,8 @@ describe('the page wires the split and the notices (MP12)', () => {
     expect(page).toMatch(/const split = summary \? tkKpiSplit\(summary, accounts, filter\.provider \?\? filter\.account\?\.provider\) : undefined/)
     expect(page).toMatch(/<KpiRow kpis=\{summary\.kpis\} split=\{split\} \/>/)
     // MP12 round 1: a series only for a provider with cost in the range shown.
-    expect(page).toMatch(/<CostOverTimeChart data=\{summary\.dailySeries\} series=\{tkSeriesInRange\(split\?\.providers, summary\.dailySeries\)\} \/>/)
+    // 2.1.3-beta.4: and the series of tokens beside it, for the chart's switch.
+    expect(page).toMatch(/<CostOverTimeChart\s+data=\{summary\.dailySeries\}\s+series=\{tkSeriesInRange\(split\?\.providers, summary\.dailySeries\)\}\s+tokenSeries=\{tkSeriesInRange\(split\?\.providers, summary\.dailySeries, 'tokens'\)\}\s+\/>/)
     expect(page).toMatch(/const rereading = useTokenomicsStore\(\(s\) => !!s\.indexStatus\?\.accountReread\)/)
     expect(page).toMatch(/const splitFilling = rereading && !!\(filter\.provider \|\| filter\.account\)/)
     expect(page).toMatch(/<ActivityHeatmap data=\{summary\.heatmap\} filling=\{splitFilling\} \/>/)
