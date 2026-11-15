@@ -3959,10 +3959,22 @@ export function withProfileHome(
   // account's name. Refused before anything else is composed. The profile is
   // the one this home belongs to; a home outside the profiles root has no
   // account to judge.
-  const launchProfileId = profileIdFromHome(home)
-  if (launchProfileId) {
-    const macRefusal = profileLaunchRefusal(launchProfileId, platform)
-    if (macRefusal) throw new Error(`${MANAGED_LAUNCH_REFUSAL}: ${macRefusal}`)
+  // Only macOS has a rule to apply, so only there is the id derived at all: on
+  // any other platform nothing here can refuse, and a failing derivation must
+  // never reach a launch that is already hardened (it is a diagnostic helper
+  // everywhere but here). On macOS an id that cannot be derived is "cannot
+  // tell", which is a refusal (the same stance as an unreadable profile list).
+  if (platform === 'darwin') {
+    let launchProfileId: string | null
+    try {
+      launchProfileId = profileIdFromHome(home)
+    } catch {
+      throw new Error(`${MANAGED_LAUNCH_REFUSAL}: ${MAC_PRIMARY_UNKNOWN_REFUSAL}`)
+    }
+    if (launchProfileId) {
+      const macRefusal = profileLaunchRefusal(launchProfileId, platform)
+      if (macRefusal) throw new Error(`${MANAGED_LAUNCH_REFUSAL}: ${macRefusal}`)
+    }
   }
   // Windows: the account's sign-in folders are checked owner-only before
   // anything runs in them -- the CLI writes its sign-in into the home and its

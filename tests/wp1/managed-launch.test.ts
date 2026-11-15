@@ -3023,14 +3023,16 @@ describe('the launch paths', () => {
       // redundant with the recorder's own catch, so removing it changed nothing
       // and nothing would have noticed (adversarial review, MAJOR). Driven by
       // making the derivation itself throw, which is INSIDE the choke point's
-      // guard and outside the recorder's.
+      // guard and outside the recorder's. The platform is stated: on macOS the
+      // same derivation decides the primary-account rule, and "cannot tell" is
+      // a refusal there by design, so that case is not this one.
       const profileId = await import('../../src/main/profile-id')
       const original = profileId.profileIdFromHome
       const spy = vi.spyOn(profileId, 'profileIdFromHome').mockImplementation(() => {
         throw new Error('synthetic diagnostic failure')
       })
       try {
-        const env = withProfileHome({ PATH: '/x', ANTHROPIC_API_KEY: 'sk-poison' }, HOME, { launchId: 's-throws' })
+        const env = withProfileHome({ PATH: '/x', ANTHROPIC_API_KEY: 'sk-poison' }, HOME, { launchId: 's-throws' }, 'linux')
         expect(env.USERPROFILE, 'the launch was refused by a diagnostic').toBe(HOME)
         expect(env.ANTHROPIC_API_KEY, 'the hardening was lost with the diagnostic').toBeUndefined()
         expect(diag.listManagedLaunchReports('p1')).toEqual([])
