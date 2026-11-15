@@ -212,6 +212,13 @@ describe('a cross-account summary waits for the check of the account its written
     kpis: { Volume: { sessions: { value: 10, label: 'Sessions', format: 'number', goodDirection: 'up' } } },
   })
 
+  // The second account runs a member here. On macOS only the primary account
+  // can run a session (the Mac rule is covered in account-launch-refusals), so
+  // this case is composed with Linux's launch rules on a macOS runner.
+  const realPlatform = process.platform
+  beforeEach(() => { if (realPlatform === 'darwin') Object.defineProperty(process, 'platform', { value: 'linux' }) })
+  afterEach(() => { Object.defineProperty(process, 'platform', { value: realPlatform }) })
+
   /** An account with real folders, a synthetic sign-in and a report its run archives. */
   function makeAccount(id: string, email: string): void {
     const home = ap.getProfileConfigDir(id)

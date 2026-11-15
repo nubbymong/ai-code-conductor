@@ -3812,14 +3812,36 @@ export function profileReviewRefusal(profileId: string, platform: NodeJS.Platfor
  *  primary one. False off macOS. THROWS when it cannot tell (see
  *  profileReviewRefusal). `read` is the strict profile list, a parameter so
  *  the rule tests on any OS without a profiles file. */
-function macNotPrimary(profileId: string, platform: NodeJS.Platform, read: () => AccountProfile[] | null): boolean {
+function macNotPrimary(
+  profileId: string,
+  platform: NodeJS.Platform,
+  read: () => AccountProfile[] | null,
+  whenNoPrimary: 'throw' | 'allow' = 'throw',
+): boolean {
   if (platform !== 'darwin') return false
   const all = read()
   if (all === null) throw new Error('the profile list could not be read')
   const primary = all.find((p) => p && p.isPrimary)?.id
-  if (!primary) throw new Error('no primary profile is recorded')
+  if (!primary) {
+    if (whenNoPrimary === 'throw') throw new Error('no primary profile is recorded')
+    noteMacNoPrimary()
+    return false
+  }
   return primary !== profileId
 }
+
+let macNoPrimaryLogged = false
+/** A readable list with no primary recorded is a normal state (first-run
+ *  capture only marks one when a normal sign-in exists, and an older or fresh
+ *  install may have none), so a launch there goes on as it did before the
+ *  rule. Said once per run, so a busy launcher does not repeat it. */
+function noteMacNoPrimary(): void {
+  if (macNoPrimaryLogged) return
+  macNoPrimaryLogged = true
+  logWarn('[profiles] no account is marked as the normal sign-in on this Mac, so launches on Claude accounts are not restricted to it')
+}
+/** Test hook: say the no-primary notice again. */
+export function _resetMacNoPrimaryLogForTest(): void { macNoPrimaryLogged = false }
 
 /** What a macOS session on a Claude account other than the primary one is
  *  told. A session cannot run as that account there (the login keychain is
@@ -3832,21 +3854,25 @@ export const MAC_NON_PRIMARY_REFUSAL = 'On a Mac, only your normal Claude sign-i
 export const MAC_NOT_CHECKABLE = 'On a Mac, only your normal Claude sign-in can be checked here, so this account is not checked.'
 
 /** What a macOS launch is told when it cannot tell which account is the
- *  normal sign-in (profiles.json unreadable, or no primary recorded). */
+ *  normal sign-in because profiles.json could not be read. */
 export const MAC_PRIMARY_UNKNOWN_REFUSAL = 'This app could not tell which Claude account is your normal sign-in on this Mac, so it did not start. Check Settings, Accounts, then try again.'
 
 /** Why a session in this profile home must not start on this platform, or
  *  null when it may. The launch counterpart of profileReviewRefusal, reading
- *  the same rule (`macNotPrimary`): on macOS only the primary account runs a
- *  session, and "cannot tell" is a refusal here, since a session started on
- *  the wrong account is the harm and a refused one only waits. */
+ *  the same rule (`macNotPrimary`): on macOS a session on a profile that is
+ *  definitely not the primary account is refused. A list that cannot be read
+ *  is a refusal too (a session on the wrong account is the harm; a refused one
+ *  only waits). A readable list with NO primary recorded is not: that is a
+ *  real state (no normal sign-in was there to capture, an older config, a
+ *  single account), and refusing there would stop every account's launch, so
+ *  the launch goes on as it did before the rule, and says so once in the log. */
 export function profileLaunchRefusal(
   profileId: string,
   platform: NodeJS.Platform = process.platform,
   read: () => AccountProfile[] | null = readProfilesStrict,
 ): string | null {
   try {
-    return macNotPrimary(profileId, platform, read) ? MAC_NON_PRIMARY_REFUSAL : null
+    return macNotPrimary(profileId, platform, read, 'allow') ? MAC_NON_PRIMARY_REFUSAL : null
   } catch {
     return MAC_PRIMARY_UNKNOWN_REFUSAL
   }

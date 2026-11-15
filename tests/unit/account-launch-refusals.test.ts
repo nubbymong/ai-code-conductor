@@ -13,14 +13,21 @@ import path from 'node:path'
 import type { AccountProfile } from '../../src/shared/account-types'
 import {
   _setRootsForTest, upsertProfile, withProfileHome, profileLaunchRefusal, inactiveAccountRefusal, assertAccountActive, launchRefusalText, sharedConfigPins,
-  MAC_NON_PRIMARY_REFUSAL, MAC_PRIMARY_UNKNOWN_REFUSAL, MANAGED_LAUNCH_REFUSAL,
+  MAC_NON_PRIMARY_REFUSAL, MAC_PRIMARY_UNKNOWN_REFUSAL, MANAGED_LAUNCH_REFUSAL, _resetMacNoPrimaryLogForTest, getProfilesRoot,
 } from '../../src/main/account-profiles'
 import { composeProviders } from '../../src/main/providers/compose'
 import { APP_KNOWLEDGE_SECTIONS } from '../../src/shared/app-knowledge'
+import { logWarn } from '../../src/main/debug-logger'
+
+// Only the warning the no-primary case says once is watched; the rest of the logger is the real one.
+vi.mock('../../src/main/debug-logger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/debug-logger')>()),
+  logWarn: vi.fn(),
+}))
 
 const profile = (over: Partial<AccountProfile>): AccountProfile => ({ id: 'p1', name: 'Work', accountEmail: 'a@example.test', createdAt: 0, ...over })
 
-describe('profileLaunchRefusal: a Mac session runs on the primary account only', () => {
+describe('profileLaunchRefusal: a Mac session never runs on a profile that is not the primary account', () => {
   const list = [profile({ id: 'p1', isPrimary: true }), profile({ id: 'p2' })]
 
   it('refuses a profile that is not the primary one on macOS, with a sentence that says what to do', () => {
@@ -40,10 +47,29 @@ describe('profileLaunchRefusal: a Mac session runs on the primary account only',
     for (const platform of ['win32', 'linux'] as const) expect(profileLaunchRefusal('p2', platform, () => list)).toBeNull()
   })
 
-  it('refuses when it cannot tell which account is primary, rather than letting any account run', () => {
+  it('refuses when it cannot read the account list, rather than letting any account run', () => {
     expect(profileLaunchRefusal('p1', 'darwin', () => null)).toBe(MAC_PRIMARY_UNKNOWN_REFUSAL)
-    expect(profileLaunchRefusal('p1', 'darwin', () => [profile({ id: 'p1' })])).toBe(MAC_PRIMARY_UNKNOWN_REFUSAL)
     expect(profileLaunchRefusal('p1', 'darwin', () => { throw new Error('boom') })).toBe(MAC_PRIMARY_UNKNOWN_REFUSAL)
+  })
+
+  it('does not refuse when the list reads but no primary is recorded (a real state: no normal sign-in to capture, an older config, one account)', () => {
+    expect(profileLaunchRefusal('p1', 'darwin', () => [profile({ id: 'p1' })])).toBeNull()
+    expect(profileLaunchRefusal('p2', 'darwin', () => [profile({ id: 'p1' }), profile({ id: 'p2' })])).toBeNull()
+    expect(profileLaunchRefusal('p1', 'darwin', () => [])).toBeNull()
+  })
+
+  it('says so once in the log when it goes ahead with no primary recorded', () => {
+    _resetMacNoPrimaryLogForTest()
+    const warn = vi.mocked(logWarn)
+    warn.mockClear()
+    for (let i = 0; i < 3; i++) profileLaunchRefusal('p1', 'darwin', () => [profile({ id: 'p1' })])
+    const said = warn.mock.calls.filter((c) => /no account is marked as the normal sign-in/.test(String(c[0])))
+    expect(said).toHaveLength(1)
+    // A list that names a primary says nothing.
+    _resetMacNoPrimaryLogForTest()
+    warn.mockClear()
+    profileLaunchRefusal('p2', 'darwin', () => [profile({ id: 'p1', isPrimary: true }), profile({ id: 'p2' })])
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('says nothing off macOS even when the list cannot be read', () => {
@@ -81,6 +107,20 @@ describe('withProfileHome enforces the macOS rule before composing anything', ()
 
   it('does not refuse the primary account on macOS', () => {
     expect(() => withProfileHome({ PATH: '/x' }, homeOf('p1'), undefined, 'darwin')).not.toThrow()
+  })
+
+  it('does not refuse any account on macOS when no primary is recorded, so every account can still start', () => {
+    fs.rmSync(path.join(getProfilesRoot(), 'profiles.json'), { force: true })
+    upsertProfile(profile({ id: 'p1' }))
+    upsertProfile(profile({ id: 'p2' }))
+    for (const id of ['p1', 'p2']) expect(() => withProfileHome({ PATH: '/x' }, homeOf(id), undefined, 'darwin'), id).not.toThrow()
+  })
+
+  it('still refuses on macOS when the account list cannot be read', () => {
+    fs.writeFileSync(path.join(getProfilesRoot(), 'profiles.json'), '{ not json')
+    const launch = () => withProfileHome({ PATH: '/x' }, homeOf('p1'), undefined, 'darwin')
+    expect(launch).toThrow(MANAGED_LAUNCH_REFUSAL)
+    expect(launch).toThrow(MAC_PRIMARY_UNKNOWN_REFUSAL)
   })
 })
 
