@@ -38,6 +38,16 @@ export interface ScreenPermissionDeps {
   /** Makes one tiny screen capture request so macOS lists the app under Screen Recording (and, the
    *  first time ever, shows its own permission prompt). */
   prompt: () => Promise<void>
+  /** Waits `ms` before the permission is read again after the request, so macOS can show its own
+   *  prompt first. Defaults to a real timer; tests pass one that returns at once. */
+  settle?: (ms: number) => Promise<void>
+}
+
+/** How long to wait after the capture request before reading the permission again. */
+export const PROMPT_SETTLE_MS = 500
+
+function defaultSettle(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /**
@@ -65,6 +75,7 @@ export async function screenCaptureAllowed(deps: ScreenPermissionDeps): Promise<
   if (status === 'denied') {
     try {
       await deps.prompt()
+      await (deps.settle ?? defaultSettle)(PROMPT_SETTLE_MS)
       status = deps.status()
     } catch (err) {
       logWarn(`[screenshot] the Screen Recording request could not be made (${err instanceof Error ? err.name : 'error'})`)

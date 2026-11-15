@@ -45,18 +45,19 @@ vi.mock('../../../src/main/clipboard-file', () => ({ isReapableImageFile: () => 
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
 const { captureRectangle } = await import('../../../src/main/screenshot-capture')
-const { screenCaptureAllowed, SCREEN_RECORDING_SETTINGS_URL, SCREEN_RECORDING_NEEDED_MESSAGE, SCREEN_RECORDING_RESTRICTED_MESSAGE } = await import('../../../src/main/screenshot-permission')
+const { screenCaptureAllowed, SCREEN_RECORDING_SETTINGS_URL, SCREEN_RECORDING_NEEDED_MESSAGE, SCREEN_RECORDING_RESTRICTED_MESSAGE, PROMPT_SETTLE_MS } = await import('../../../src/main/screenshot-permission')
 type Deps = import('../../../src/main/screenshot-permission').ScreenPermissionDeps
 
 const win = { isDestroyed: () => false } as never
 
 /** A permission state to test with, and what was asked of it. */
 function fake(status: string, over: Partial<Deps> = {}, answer = false, statusAfterPrompt?: string) {
-  const calls = { status: 0, prompted: 0, asked: [] as Array<{ message: string; canOpen: boolean }>, opened: [] as string[] }
+  const calls = { status: 0, prompted: 0, settled: [] as number[], statusAtSettle: 0, asked: [] as Array<{ message: string; canOpen: boolean }>, opened: [] as string[] }
   const deps: Deps = {
     platform: 'darwin',
     status: () => { calls.status++; return calls.prompted > 0 && statusAfterPrompt !== undefined ? statusAfterPrompt : status },
     prompt: async () => { calls.prompted++ },
+    settle: async (ms) => { calls.settled.push(ms); calls.statusAtSettle = calls.status },
     ask: async (message, canOpen) => { calls.asked.push({ message, canOpen }); return answer },
     open: (url) => { calls.opened.push(url) },
     ...over,
@@ -93,6 +94,24 @@ describe('screenCaptureAllowed: the Screen Recording permission on macOS', () =>
     expect(calls.asked).toEqual([{ message: SCREEN_RECORDING_NEEDED_MESSAGE, canOpen: true }])
     expect(SCREEN_RECORDING_NEEDED_MESSAGE).toMatch(/Screen Recording/)
     expect(SCREEN_RECORDING_NEEDED_MESSAGE).toMatch(/System Settings, Privacy and Security/)
+  })
+
+  it('waits briefly after the request before it reads the permission again, so macOS can show its own prompt first', async () => {
+    const { deps, calls } = fake('denied')
+    await screenCaptureAllowed(deps)
+    expect(calls.settled).toEqual([PROMPT_SETTLE_MS])
+    expect(PROMPT_SETTLE_MS).toBeGreaterThan(0)
+    // One read before the request; the second read comes only after the wait.
+    expect(calls.statusAtSettle).toBe(1)
+    expect(calls.status).toBe(2)
+  })
+
+  it('does not wait when no request was made', async () => {
+    for (const status of ['granted', 'not-determined', 'unknown', 'restricted']) {
+      const { deps, calls } = fake(status)
+      await screenCaptureAllowed(deps)
+      expect(calls.settled, status).toEqual([])
+    }
   })
 
   it('shows no message when the request leaves the permission granted or still to be decided', async () => {
