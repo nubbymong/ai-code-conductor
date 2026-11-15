@@ -9,9 +9,12 @@
  * and split by provider as the costs beside them.
  */
 import type { TkDailyPoint, TkKpis, TkProvider, TkTokenTotals } from './tk-types'
+import { PROVIDER_IDS } from '../../shared/providers/ids'
 
-/** The providers a summary splits its figures by (MP11). */
-export const TK_SUMMARY_PROVIDERS: readonly TkProvider[] = ['claude', 'codex']
+/** The providers a summary splits its figures by (MP11): every provider id
+ *  the registry lists. A provider added there that Tokenomics does not know
+ *  is a compile error here, not a figure quietly left out. */
+export const TK_SUMMARY_PROVIDERS: readonly TkProvider[] = PROVIDER_IDS
 
 /** A query row's token sums, by the names the summary queries give them. */
 export interface TkTokenSums {
