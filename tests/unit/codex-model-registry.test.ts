@@ -11,6 +11,8 @@ import { describe, it, expect } from 'vitest'
 import {
   buildModelPickerRows,
   buildEffortRows,
+  codexEffortRuns,
+  resolveModelInfo,
   groupPickerRows,
   familyProvider,
   effortLevelsFor,
@@ -150,6 +152,31 @@ describe('Codex effort levels per model (row 40)', () => {
     expect(rows.map((r) => r.value)).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     expect(rows.every((r) => r.supported)).toBe(true)
     expect(buildEffortRows(reg, '', 'codex').every((r) => r.supported)).toBe(true)
+  })
+
+  // 2.1.3-beta.3: an id that ends in a digit is not the start of a name whose
+  // next character is a digit, so gpt-5.55 is not read as gpt-5.5 any more
+  // (nor gpt-5.25 as gpt-5.2). It was, by an id match, and took that model's
+  // levels: a launch on it with max dropped the effort. Now only the catch-all
+  // pattern places it, a pattern match is not trusted for an effort list, and
+  // it is held as any model the registry cannot place: every level runs. The
+  // session dialog, the command bar pill and the launch in main all ask
+  // codexEffortRuns.
+  it('a name that only carries a shipped Codex id\'s number on takes every level: gpt-5.55 runs max', () => {
+    expect(resolveModelInfo(reg, 'gpt-5.55')).toMatchObject({ id: 'codex-family', matchKind: 'pattern' })
+    expect(codexEffortRuns(reg, 'gpt-5.55', 'max')).toBe(true)
+    expect(codexEffortRuns(reg, 'gpt-5.25', 'ultra')).toBe(true)
+    expect(buildEffortRows(reg, 'gpt-5.55', 'codex').every((r) => r.supported)).toBe(true)
+    // The model itself, its dated id and a name with other text after it keep
+    // the model's own levels: no max on gpt-5.5.
+    for (const name of ['gpt-5.5', 'gpt-5.5-20260101', 'gpt-5.5-pro']) {
+      expect(codexEffortRuns(reg, name, 'max'), name).toBe(false)
+      expect(codexEffortRuns(reg, name, 'xhigh'), name).toBe(true)
+    }
+    // A level Codex's list does not hold never runs, on any name.
+    expect(codexEffortRuns(reg, 'gpt-5.55', 'minimal')).toBe(false)
+    // No effort is the model's own default: it always runs.
+    expect(codexEffortRuns(reg, 'gpt-5.55', undefined)).toBe(true)
   })
 
   it("never gates one provider's levels by the other provider's model", () => {
