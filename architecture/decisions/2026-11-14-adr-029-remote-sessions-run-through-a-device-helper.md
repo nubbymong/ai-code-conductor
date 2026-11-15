@@ -8,6 +8,11 @@
   `docs/remote/helper-threat-model.md`
 - Amends, step by step: the SSH statusline live-matrix gate in `AGENTS.md`
   (shrinks at R12, not before)
+- Amended by: ADR-030 (2026-11-15). It supersedes decision 4 and decision 10,
+  amends decisions 6 and 7 and the remote data rule of the helper protocol
+  (Payload allow-lists), and replaces the step plan R1 to R14 with its own
+  ordered slices. The text below is the record as decided; the rest of it
+  stands.
 
 ## Context
 
