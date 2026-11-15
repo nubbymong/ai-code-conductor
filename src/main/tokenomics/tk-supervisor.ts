@@ -15,8 +15,8 @@ import { createInitialHealth, SERVICE_ID, SERVICE_LABEL } from '../../shared/ser
 import type { DiagnosticsSnapshot, ServiceState } from '../../shared/service-health'
 import type { ForkedTkWorker } from './fork-tokenomics-worker'
 import type { ToTkWorker, FromTkWorker } from './tk-worker-transport'
-import type { TkConfigDim, TkPricing, TkIndexStatus, TkSessionsRoot, TkAccountReread, TkAccountKey } from './tk-types'
-import { tkSessionUuidOk, tkClaudeAccountKeyOk } from './tk-types'
+import type { TkConfigDim, TkPricing, TkIndexStatus, TkSessionsRoot, TkAccountReread, TkAccountKey, TkWalkCount, TkWalkStats } from './tk-types'
+import { tkSessionUuidOk, tkClaudeAccountKeyOk, TK_SESSION_ACCOUNTS_KEPT } from './tk-types'
 
 export interface TokenomicsSupervisorOptions {
   forkChild: () => ForkedTkWorker
@@ -28,6 +28,10 @@ export interface TokenomicsSupervisorOptions {
   /** WP2 (plan A13): the transcript folders of the app's Codex accounts,
    *  each with the account's key (usage track MP9). */
   codexRealmSessionsDirs?: TkSessionsRoot[]
+  /** Session attributions a supervisor stopped before this one still held
+   *  (Tokenomics switched off and on again): kept here as its own, and sent
+   *  to the worker when it is ready. */
+  sessionAccounts?: Iterable<readonly [string, TkAccountKey]>
   emit: (channel: string, payload: unknown) => void
   now?: () => number
   maxRestarts?: number
@@ -39,12 +43,25 @@ export interface TokenomicsSupervisorOptions {
 export interface TkIndexProgress { filesDone: number; filesTotal: number; eventsIngested: number; phase: string; accountReread?: TkAccountReread | null }
 export interface TkIndexCompleteEvent { firstIndex: boolean; drained: boolean; filesFailed: number; eventsTotal: number }
 
-/** Session attributions kept for the next worker that is ready (MP10),
- *  oldest dropped. */
-const SESSION_ACCOUNTS_KEPT = 4096
 const DEFAULT_QUERY_TIMEOUT_MS = 15_000
 /** Counter changes (Events, In-flight) reach the Services view at most this often. */
 const COALESCE_MS = 250
+
+/** A walk's counts as the worker reports them: whole numbers, none negative. */
+function walkCountOk(v: unknown): v is TkWalkCount {
+  if (!v || typeof v !== 'object') return false
+  const c = v as Record<string, unknown>
+  return ['dirs', 'entries', 'files'].every((k) => Number.isSafeInteger(c[k]) && (c[k] as number) >= 0)
+}
+/** A full pass's figures, copied, or null when they are not well formed. */
+function walkStatsOf(v: unknown): TkWalkStats | null {
+  if (!v || typeof v !== 'object') return null
+  const w = v as Record<string, unknown>
+  if (!walkCountOk(w.transcripts) || !walkCountOk(w.rollouts)) return null
+  if (![w.at, w.ms, w.filesRead].every((n) => Number.isSafeInteger(n) && (n as number) >= 0)) return null
+  const copy = (c: TkWalkCount): TkWalkCount => ({ dirs: c.dirs, entries: c.entries, files: c.files })
+  return { at: w.at as number, ms: w.ms as number, transcripts: copy(w.transcripts), rollouts: copy(w.rollouts), filesRead: w.filesRead as number }
+}
 
 export class TokenomicsSupervisor {
   private worker: ForkedTkWorker | null = null
@@ -61,6 +78,10 @@ export class TokenomicsSupervisor {
   private progressSubs = new Set<(p: TkIndexProgress) => void>()
   private completeSubs = new Set<(c: TkIndexCompleteEvent) => void>()
   private errorSubs = new Set<(s: TkIndexStatus) => void>()
+  private readySubs = new Set<(s: TkIndexStatus) => void>()
+  /** 2.1.3-beta.4: what the last full pass over the transcript roots
+   *  touched, as the worker reported it. Null until one has finished. */
+  private lastWalk: TkWalkStats | null = null
   private lastProgress: TkIndexProgress = { filesDone: 0, filesTotal: 0, eventsIngested: 0, phase: 'initial' }
   private firstIndexComplete = false
   private lastEventsTotal = 0
@@ -94,6 +115,7 @@ export class TokenomicsSupervisor {
 
   constructor(private opts: TokenomicsSupervisorOptions) {
     this.realmDirsKnown = Array.isArray(opts.codexRealmSessionsDirs)
+    for (const [sessionId, accountKey] of opts.sessionAccounts ?? []) this.keepSessionAccount(sessionId, accountKey)
     this.sup = new Supervisor<ForkedTkWorker>({
       forkChild: () => this.opts.forkChild(),
       maxRestarts: opts.maxRestarts,
@@ -164,6 +186,11 @@ export class TokenomicsSupervisor {
         // already has): the latest per session, within the bound.
         for (const [sessionId, accountKey] of this.sessionAccounts) this.worker?.transport.post({ type: 'set-session-account', sessionId, accountKey })
         this.pushHealth()
+        // 2.1.3-beta.4: what the index knows as its worker comes up, so a
+        // page open while Tokenomics is switched on shows what was recorded
+        // before at once, not after the first whole pass.
+        const status = this.getIndexStatus()
+        for (const cb of this.readySubs) { try { cb(status) } catch { /* ignore */ } }
         return
       }
       case 'index-progress': {
@@ -186,6 +213,9 @@ export class TokenomicsSupervisor {
         this.lastEventsTotal = m.eventsTotal
         this.lastFilesFailed = m.filesFailed
         this.lastIndexAt = this.now()
+        // 2.1.3-beta.4: a full pass says what its walks touched; a pass over
+        // the reported transcripts alone says nothing and changes nothing.
+        if (m.walk !== undefined) this.lastWalk = walkStatsOf(m.walk) ?? this.lastWalk
         for (const cb of this.completeSubs) { try { cb({ firstIndex: m.firstIndex, drained: m.drained, filesFailed: m.filesFailed, eventsTotal: m.eventsTotal }) } catch { /* ignore */ } }
         if (eventsChanged) this.schedulePush()
         return
@@ -272,28 +302,61 @@ export class TokenomicsSupervisor {
     this.sendOrBuffer({ type: 'set-codex-realm-dirs', dirs: copy.map((d) => ({ ...d })) })
   }
   reindex(): void { this.sendOrBuffer({ type: 'reindex' }) }
+  /** The page's Rescan (2.1.3-beta.4): every transcript is read again from
+   *  its first byte; what is stored stays. Held for a worker that is not
+   *  listening yet, once, like `reindex`. False, and nothing held, when no
+   *  worker will come to read it: the restarts are used up for the run,
+   *  this supervisor is shutting down, or the worker is alive but reported
+   *  a fault before it was ready (a database it could not open), which
+   *  leaves it never ready and never restarted. A worker being started, or
+   *  one to come after a crash, is held for as before. */
+  rescan(): boolean {
+    if (this.degraded || this.sup.isShuttingDown()) return false
+    if (this.worker && !this.listening && this.lastError) return false
+    this.sendOrBuffer({ type: 'rescan' })
+    return true
+  }
+  /** What the last full pass over the transcript roots touched (for the
+   *  Services panel), or null when none has finished since this started. */
+  getLastWalkStats(): TkWalkStats | null {
+    const w = this.lastWalk
+    return w ? { ...w, transcripts: { ...w.transcripts }, rollouts: { ...w.rollouts } } : null
+  }
   /** Usage track MP10: a Claude session id and the account it runs under
    *  now. The same again sends nothing; another account applies from then
    *  on (MP10 round 1); anything not well formed is dropped. Sent at once to
    *  a worker that listens; otherwise only kept (the latest per session,
    *  within the bound) for the next ready to send. */
   setSessionAccount(sessionId: string, accountKey: TkAccountKey): void {
-    if (this.sup.isShuttingDown() || !tkSessionUuidOk(sessionId) || !tkClaudeAccountKeyOk(accountKey)) return
-    if (this.sessionAccounts.get(sessionId) === accountKey) return
+    if (this.sup.isShuttingDown() || !this.keepSessionAccount(sessionId, accountKey)) return
+    if (this.listening && this.worker) this.worker.transport.post({ type: 'set-session-account', sessionId, accountKey })
+  }
+  /** Keep a session's attribution as the latest (the oldest dropped past the
+   *  bound). False when it is not well formed or is the one already kept. */
+  private keepSessionAccount(sessionId: string, accountKey: TkAccountKey): boolean {
+    if (!tkSessionUuidOk(sessionId) || !tkClaudeAccountKeyOk(accountKey)) return false
+    if (this.sessionAccounts.get(sessionId) === accountKey) return false
     this.sessionAccounts.delete(sessionId)
     this.sessionAccounts.set(sessionId, accountKey)
-    if (this.sessionAccounts.size > SESSION_ACCOUNTS_KEPT) {
+    if (this.sessionAccounts.size > TK_SESSION_ACCOUNTS_KEPT) {
       const oldest = this.sessionAccounts.keys().next()
       if (!oldest.done) this.sessionAccounts.delete(oldest.value)
     }
-    if (this.listening && this.worker) this.worker.transport.post({ type: 'set-session-account', sessionId, accountKey })
+    return true
   }
+  /** The attributions kept, oldest first: handed to the next supervisor when
+   *  Tokenomics is switched off and on again, so one made while no worker
+   *  was listening is not lost with this one. */
+  keptSessionAccounts(): Array<[string, TkAccountKey]> { return [...this.sessionAccounts] }
 
   onIndexProgress(cb: (p: TkIndexProgress) => void): () => void { this.progressSubs.add(cb); return () => { this.progressSubs.delete(cb) } }
   onIndexComplete(cb: (c: TkIndexCompleteEvent) => void): () => void { this.completeSubs.add(cb); return () => { this.completeSubs.delete(cb) } }
   /** Fires with the fault status when the worker reports an uncorrelated error
    *  (e.g. a failed DB open). The handler layer forwards it to the renderer. */
   onIndexError(cb: (s: TkIndexStatus) => void): () => void { this.errorSubs.add(cb); return () => { this.errorSubs.delete(cb) } }
+  /** Fires with the index status each time a worker reports itself ready
+   *  (2.1.3-beta.4). The handler layer forwards it to the renderer. */
+  onIndexReady(cb: (s: TkIndexStatus) => void): () => void { this.readySubs.add(cb); return () => { this.readySubs.delete(cb) } }
 
   getIndexStatus(): TkIndexStatus {
     const error = this.lastError?.message ?? null

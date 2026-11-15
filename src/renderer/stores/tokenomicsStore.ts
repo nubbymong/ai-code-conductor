@@ -37,6 +37,9 @@ interface TokenomicsState {
   loadingSummary: boolean
   loadingSessions: boolean
   indexJustCompleted: boolean
+  /** 2.1.3-beta.4: a Rescan was asked for and has not read every file to
+   *  its end yet. The figures stay up while it runs. */
+  rescanning: boolean
   /** Set when a read-surface IPC call rejects (worker crash/restart-backoff or
    *  the 15s query timeout). Surfaced by TokenomicsPage so a fault clears the
    *  spinner and shows a retryable error instead of spinning forever. */
@@ -46,6 +49,9 @@ interface TokenomicsState {
   init: () => Promise<void>
   refresh: () => Promise<void>
   refreshIndexStatus: () => Promise<void>
+  /** 2.1.3-beta.4: read every transcript again from its first byte. What is
+   *  stored stays; the figures refresh as the passes finish. */
+  rescan: () => Promise<void>
   setConfig: (configId: string | null | undefined) => void
   /** MP12: one provider, or all (an account under the other is let go). */
   setProvider: (provider: TkProvider | undefined) => void
@@ -55,6 +61,10 @@ interface TokenomicsState {
   setSearch: (search: string) => void
   loadMore: () => Promise<void>
   selectSession: (id: string) => Promise<void>
+  /** 2.1.3-beta.4: the open session's detail asked for again (the accounts
+   *  left out changed); closed when main has none for it now, or the
+   *  question fails. An answer for a session no longer open changes nothing. */
+  refreshSelected: () => Promise<void>
   clearSelected: () => void
   clearIndexBadge: () => void
   dispose: () => void
@@ -65,6 +75,12 @@ function rangeToWindow(range: TkRange, now: number): { from?: number } {
   if (range === '30d') return { from: now - 30 * 86_400_000 }
   return {}
 }
+
+/** Which start of the store is the current one: every init and every
+ *  dispose moves it on. An init that was waiting for main's answer when it
+ *  moved has been let go (the page was closed, or Tokenomics was switched
+ *  off, or another init began), and subscribes to nothing. */
+let generation = 0
 
 export const useTokenomicsStore = create<TokenomicsState>((set, get) => ({
   summary: null,
@@ -77,28 +93,40 @@ export const useTokenomicsStore = create<TokenomicsState>((set, get) => ({
   loadingSummary: false,
   loadingSessions: false,
   indexJustCompleted: false,
+  rescanning: false,
   error: null,
   _unsubs: [],
 
   init: async () => {
     const tk = window.electronAPI.tokenomics
+    const started = ++generation
 
     // Fetch initial index status
     let status: TkIndexStatus
     try {
       status = await tk.indexStatus()
     } catch (err) {
+      if (started !== generation) return
       console.error('[tokenomicsStore] init: indexStatus failed', err)
       set({ error: err instanceof Error ? err.message : String(err) })
       return
     }
+    // Disposed, or started again, while main was answering: this start
+    // leaves no listener behind (they would stay on after the dispose, and
+    // the next start would add three more).
+    if (started !== generation) return
     set({ indexStatus: status, error: status.error ?? null })
 
     // Subscribe to pushed status updates — carries the worker's fatal `error`
     // (e.g. a failed DB open) so the page leaves the 'indexing' gate instead
     // of spinning forever with zero diagnostics.
     const unsubStatus = tk.onIndexStatus((st) => {
+      const had = get().indexStatus?.firstIndexComplete === true
       set({ indexStatus: st, error: st.error ?? null })
+      // 2.1.3-beta.4: a worker that comes up says what the index already
+      // holds (Tokenomics switched on while the page is open). The figures
+      // recorded before are loaded then, not after a whole pass.
+      if (st.firstIndexComplete && !had) void get().refresh()
     })
 
     // Subscribe to progress events — update filesDone/filesTotal
@@ -123,6 +151,8 @@ export const useTokenomicsStore = create<TokenomicsState>((set, get) => ({
             ? { ...s.indexStatus, filesFailed: e.filesFailed }
             : s.indexStatus,
         indexJustCompleted: e.firstIndex ? true : s.indexJustCompleted,
+        // A Rescan is over once a pass has read every file to its end.
+        rescanning: e.drained ? false : s.rescanning,
       }))
       // Always refresh after an index completion
       get().refresh()
@@ -145,6 +175,19 @@ export const useTokenomicsStore = create<TokenomicsState>((set, get) => ({
     } catch (err) {
       console.error('[tokenomicsStore] refreshIndexStatus failed', err)
       set({ error: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  rescan: async () => {
+    const tk = window.electronAPI.tokenomics
+    if (!tk.rescan) return
+    try {
+      const res = await tk.rescan()
+      if (res.ok) set({ rescanning: true, error: null })
+      else set({ rescanning: false, error: res.reason === 'off' ? 'Tokenomics is off.' : 'Tokenomics is not running, so nothing was read again.' })
+    } catch (err) {
+      console.error('[tokenomicsStore] rescan failed', err)
+      set({ rescanning: false, error: err instanceof Error ? err.message : String(err) })
     }
   },
 
@@ -258,11 +301,27 @@ export const useTokenomicsStore = create<TokenomicsState>((set, get) => ({
     }
   },
 
+  refreshSelected: async () => {
+    const id = get().selected?.sessionId
+    if (!id) return
+    let detail: TkSessionDetail | null = null
+    try {
+      detail = await window.electronAPI.tokenomics.sessionDetail(id)
+    } catch (err) {
+      // Not shown again with figures that may hold an account left out.
+      console.error('[tokenomicsStore] refreshSelected failed', err)
+    }
+    if (get().selected?.sessionId !== id) return
+    set({ selected: detail })
+  },
+
   clearSelected: () => set({ selected: null }),
 
   clearIndexBadge: () => set({ indexJustCompleted: false }),
 
   dispose: () => {
+    // An init still waiting for main's answer is let go with it.
+    generation++
     const { _unsubs } = get()
     _unsubs.forEach((fn) => fn())
     set({ _unsubs: [] })

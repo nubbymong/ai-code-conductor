@@ -4,7 +4,7 @@ import { createHash } from 'crypto'
 import { openTkDb, TK_REBUILD_PAGE, type TkDb, type TkFileCursor } from './tk-db'
 import { parseClaudeUsageLine, extractCwdFromLine, codexEventsFromRollout, type CodexRolloutSeed } from './tk-parse'
 import { findConfigForCwd, isJunkCwd } from './tk-config-match'
-import type { TkConfigDim, TkEvent, TkPricing, TkSessionsRoot, TkAccountReread } from './tk-types'
+import type { TkConfigDim, TkEvent, TkPricing, TkSessionsRoot, TkAccountReread, TkWalkCount, TkWalkStats } from './tk-types'
 import { tkAccountKeyOk, tkSessionUuidOk, tkClaudeAccountKeyOk, TK_CODEX_EXTERNAL } from './tk-types'
 import type { ToTkWorker, FromTkWorker, TkWorkerHostTransport } from './tk-worker-transport'
 
@@ -354,6 +354,24 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
   }
   let fullSweepDue = true
   let lastFullSweepAt = 0
+  /** 2.1.3-beta.4: what the two walks of the full pass under way have
+   *  touched, and how many files the pass opened to read. A finished pass's
+   *  figures go to the app with its `index-complete`, where the Services
+   *  panel can show them. Each walk starts at a folder the app named and
+   *  lists nothing outside it; a test holds the walks to that, and fails
+   *  when one lists a folder outside the transcript roots or touches more
+   *  than the tree under them. */
+  const noWalk = (): TkWalkCount => ({ dirs: 0, entries: 0, files: 0 })
+  let walkCounts = { transcripts: noWalk(), rollouts: noWalk() }
+  let passFilesRead = 0
+  /** How often the page asked for a Rescan: a pass that began before the
+   *  latest one read some files with the progress since reset, so it is not
+   *  drained and another follows. */
+  let rescanSeq = 0
+  /** A Rescan was asked for and no pass since has read every file to its
+   *  end and settled the accounts. Asking again meanwhile changes nothing,
+   *  so one re-read is never started over by a second ask. */
+  let rescanPending = false
   let lastProgress = { filesDone: 0, filesTotal: 0, eventsIngested: 0 }
   /** The folder watchers, by folder: the Claude projects folder, this
    *  computer's own Codex sessions folder and the Codex accounts' (that set
@@ -380,11 +398,13 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       if (depth > 12) return
       let entries: nodeFs.Dirent[]
       try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+      walkCounts.transcripts.dirs++
+      walkCounts.transcripts.entries += entries.length
       for (const e of entries) {
         if (e.isSymbolicLink()) continue
         const full = path.join(dir, e.name)
         if (e.isDirectory()) walk(full, depth + 1)
-        else if (e.isFile() && e.name.endsWith('.jsonl')) out.push(full)
+        else if (e.isFile() && e.name.endsWith('.jsonl')) { walkCounts.transcripts.files++; out.push(full) }
       }
     }
     try { if (fs.existsSync(claudeDir)) walk(claudeDir, 0) }
@@ -447,6 +467,8 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       if (depth > 12) return
       let entries: nodeFs.Dirent[]
       try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+      walkCounts.rollouts.dirs++
+      walkCounts.rollouts.entries += entries.length
       for (const e of entries) {
         if (e.isSymbolicLink()) continue
         const full = path.join(dir, e.name)
@@ -456,7 +478,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
         try { st = fs.statSync(full, { bigint: true }) } catch { continue }
         // One rollout, one cursor: never the same file twice, by any path.
         const id = fileIdOf(st, full)
-        if (BigInt(st.size) > 0n && !seen.has(id)) { seen.add(id); out.push({ file: full, accountKey }) }
+        if (BigInt(st.size) > 0n && !seen.has(id)) { seen.add(id); walkCounts.rollouts.files++; out.push({ file: full, accountKey }) }
       }
     }
     const roots: Array<{ root: TkSessionsRoot; order: number; id: string; real: string; link: number; direct: boolean }> = []
@@ -516,6 +538,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     // declares itself complete while a file's spend is missing is worse than
     // one that admits it is still going.
     try { fd = fs.openSync(file, 'r') } catch (err) { sweepFailed.add(file); logw('warn', `open failed for ${file}: ${String(err)}`); return 0 }
+    passFilesRead++
     let inserted = 0
     let fileCwd = ''
     try {
@@ -643,6 +666,7 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     const tickBytes = deps.maxTickBytes !== undefined ? maxTickBytes : CODEX_TICK_BYTES
     let fd: number
     try { fd = fs.openSync(file, 'r') } catch (err) { sweepFailed.add(file); logw('warn', `open failed for ${file}: ${String(err)}`); return 0 }
+    passFilesRead++
     let inserted = 0
     try {
       // Deleted and made again at this path, as long as what was read of the
@@ -845,6 +869,11 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     // #302: this walk covers every file, the reported ones included.
     fullSweepDue = false
     lastFullSweepAt = Date.now()
+    // 2.1.3-beta.4: this pass's own counts, and the Rescan it began after.
+    walkCounts = { transcripts: noWalk(), rollouts: noWalk() }
+    passFilesRead = 0
+    const passStart = lastFullSweepAt
+    const scanSeq = rescanSeq
     dirtyClaude.clear()
     // #302: whether the next full walk follows this one at once.
     let again = false
@@ -905,7 +934,9 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       // hidden.
       // A sweep whose list predates the latest naming of the account folders
       // has not read them: not drained, and another sweep follows (defect 4).
-      const drained = !sweepPending && realmDirsSeq === dirsSeq
+      // Nor has one that began before the latest Rescan read every file
+      // from its start (2.1.3-beta.4).
+      const drained = !sweepPending && realmDirsSeq === dirsSeq && rescanSeq === scanSeq
       // #302: a walk that left work behind is still due. A file is read one
       // budget per pass, so a large first index or the Codex account re-read
       // takes many passes, and with the next walk up to TK_FULL_SWEEP_MS away
@@ -924,12 +955,25 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       // they were read (defect 4).
       if (drained && realmDirsKnown) await settleAccounts(phase)
       if (!db) return
-      if (drained && !firstSweepDone) {
+      // 2.1.3-beta.4: what this pass's two walks touched.
+      const now = Date.now()
+      const walk: TkWalkStats = { at: now, ms: Math.max(0, now - passStart), transcripts: walkCounts.transcripts, rollouts: walkCounts.rollouts, filesRead: passFilesRead }
+      // A Rescan first asked while the accounts were settled (the worker
+      // yields there) put every file back to its start after this pass had
+      // read them: what it says now is as a pass that began before the Rescan,
+      // not drained, and the pass that reads them again follows it (the
+      // Rescan made one due).
+      const drainedNow = drained && rescanSeq === scanSeq
+      // A Rescan is over only here, once the accounts are settled too: one
+      // asked again while they were is the same Rescan, still under way,
+      // and is not started over (2.1.3-beta.4).
+      if (drainedNow) rescanPending = false
+      if (drainedNow && !firstSweepDone) {
         firstSweepDone = true
         db.setMeta('firstIndexComplete', '1')
-        post({ type: 'index-complete', firstIndex: true, drained, filesFailed: sweepFailed.size, eventsTotal: db.eventCount() })
+        post({ type: 'index-complete', firstIndex: true, drained: drainedNow, filesFailed: sweepFailed.size, eventsTotal: db.eventCount(), walk })
       } else {
-        post({ type: 'index-complete', firstIndex: false, drained, filesFailed: sweepFailed.size, eventsTotal: db.eventCount() })
+        post({ type: 'index-complete', firstIndex: false, drained: drainedNow, filesFailed: sweepFailed.size, eventsTotal: db.eventCount(), walk })
       }
     } catch (err) {
       // #302: a walk that failed did not reach every file, so it is still
@@ -971,7 +1015,10 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       if (sweepPending) fullSweepDue = true
       if (settleDue()) await settleAccounts('incremental')
       if (!db) return
-      post({ type: 'index-complete', firstIndex: false, drained: firstSweepDone && !sweepPending, filesFailed: sweepFailed.size, eventsTotal: db.eventCount() })
+      // Not drained while a Rescan waits for its pass (2.1.3-beta.4): this
+      // one read only the reported transcripts, not every file from its
+      // start, whether the Rescan came before it or while it ran.
+      post({ type: 'index-complete', firstIndex: false, drained: firstSweepDone && !sweepPending && !rescanPending, filesFailed: sweepFailed.size, eventsTotal: db.eventCount() })
     } catch (err) {
       // The reported files were taken out of the set before the sweep failed,
       // so the ones it did not reach would wait for their next report or the
@@ -1058,10 +1105,12 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       switch (kind) {
         case 'summary': rows = [db!.querySummary(pricing, args as any)]; break
         case 'sessions': rows = [db!.querySessions(pricing, args as any)]; break
-        case 'session-detail': rows = [db!.querySessionDetail(pricing, String((args as any).sessionId))]; break
+        // 2.1.3-beta.4: main adds the accounts Settings leaves out; the
+        // summary and the sessions list take them with their filter.
+        case 'session-detail': rows = [db!.querySessionDetail(pricing, String((args as any).sessionId), (args as any).excludeAccountKeys)]; break
         case 'index-status': rows = [indexStatus()]; break
         // MP9: the providers and accounts the stored usage has.
-        case 'accounts': rows = [db!.queryAccounts()]; break
+        case 'accounts': rows = [db!.queryAccounts((args as any).excludeAccountKeys)]; break
         default: post({ type: 'error', id, message: `unknown query kind: ${kind}` }); return
       }
       post({ type: 'query-result', id, rows })
@@ -1299,6 +1348,19 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
         return
       case 'set-session-account': setSessionAccount(msg); return
       case 'reindex': fullSweepDue = true; void ingestAll('incremental'); return
+      case 'rescan':
+        // The page's Rescan (2.1.3-beta.4): every file starts again from its
+        // first byte. What is stored stays, and a turn read again is stored
+        // once (its key is the same), so the figures can only fill in.
+        if (rescanPending) return
+        db.resetFileProgress()
+        rescanPending = true
+        rescanSeq++
+        // A pass running now read some files before this: one follows it.
+        fullSweepDue = true
+        if (sweeping) sweepAfter = true
+        scheduleIncremental()
+        return
       case 'query': handleQuery(msg.id, msg.kind, msg.args); return
       default: { const _x: never = msg; void _x }
     }

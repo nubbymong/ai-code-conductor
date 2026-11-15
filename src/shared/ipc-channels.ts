@@ -262,6 +262,9 @@ export const IPC = {
   // Usage track MP9: the providers and accounts the stored usage has (the
   // Account filter's choices). No arguments; keys and provider names only.
   TOKENOMICS2_ACCOUNTS: 'tokenomics2:accounts',
+  // 2.1.3-beta.4: the page's Rescan. No arguments; every transcript is read
+  // again from its first byte and what is stored stays. Replies TkRescanResult.
+  TOKENOMICS2_RESCAN: 'tokenomics2:rescan',
 
   // Provider accounts (WP2 commit 3): the one provider-neutral Accounts
   // surface. Requests name opaque ids only; replies are views, never paths,

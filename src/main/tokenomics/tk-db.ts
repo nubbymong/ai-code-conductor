@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import type { TkEvent, TkPricing, TkProvider, TkSummary, TkKpis, TkSummaryFilter, TkSessionsQuery, TkSessionsPage, TkSessionDetail, TkAccountPresent } from './tk-types'
-import { tkAccountKeyOk, tkClaudeAccountKeyOk, TK_ACCOUNT_NOT_RECORDED } from './tk-types'
+import { tkAccountKeyOk, tkClaudeAccountKeyOk, tkExcludedAccounts, TK_ACCOUNT_NOT_RECORDED } from './tk-types'
 
 function dayOf(ts: number): string {
   const d = new Date(ts)
@@ -123,6 +123,78 @@ export const TK_REBUILD_PAGE = 5000
 const COST = (a: string) => `(CASE WHEN p.pm IS NULL THEN NULL ELSE (${a}.inTok*p.pin+${a}.outTok*p.pout+${a}.cacheReadTok*p.pcr+${a}.cacheCreateTok*p.pcw)/1000000.0 END)`
 /** The providers a summary splits its figures by (MP11). */
 const PROVIDERS: readonly TkProvider[] = ['claude', 'codex']
+/** The accounts a query leaves out (Settings, Tokenomics; 2.1.3-beta.4): a
+ *  condition on a table's account column, bound by value, and its binds;
+ *  nothing when none is left out. It filters what a query answers and nothing
+ *  else: the rows stay stored and are still written, so it saves no reading,
+ *  and an account included again is whole. Usage recorded to no account is
+ *  never left out (tkExcludedAccounts).
+ *
+ *  Each stored turn carries its own account, and so do the daily and hourly
+ *  rollups, so the totals and charts leave out exactly the turns of those
+ *  accounts. A session row carries one account, its first. A Claude session
+ *  resumed under another account has turns of both, so the sessions list,
+ *  a session's detail and the session counts go by its turns as well
+ *  (`sessions`, and keptByModel below): such a session is listed while any
+ *  turn of it is kept, with the figures of the kept turns only, under its
+ *  own account while that is kept (so with both of its accounts kept it
+ *  reads exactly as it does with none left out), else under the account of
+ *  its latest kept turn. A session is looked at turn by turn only when the
+ *  account it was last attributed to is not its first, which is one keyed
+ *  read per session; no other session's turns are read for it.
+ *
+ *  The Account filter and the session counts go by that same account, the
+ *  one the row is shown under (`shownAs`), in the query itself, so a page is
+ *  cut after the filter and stays full and in order. With none left out
+ *  that is the session's own account, and the query is as it was.
+ *
+ *  Two things are left as they are, both because the list is ordered,
+ *  filtered and paged by the session row (its last time and last model):
+ *  - A moved session shown with its kept turns only keeps the session's
+ *    last time and last model, even when that last turn is one of an
+ *    account left out. Its place in the list, the range and model filters
+ *    and the cursor all go by that time; a row shown with another time
+ *    would sit out of order and no longer match the cursor that continues
+ *    after it, so only the figures and the account go by the kept turns.
+ *  - A session that went to another account and then back to its first is
+ *    treated in the list and the counts as its first account's as a whole
+ *    (the index keeps a session's first and latest account, not each
+ *    change). With that account left out it is neither listed nor counted,
+ *    while the turns it spent under the other account stay in the totals,
+ *    so the list is short by those turns. Its detail goes by its turns. */
+interface LeftOutAccounts {
+  keys: string[]
+  /** For a table whose rows each carry their own account. */
+  sql: (alias: string) => string
+  /** For tk_sessions: the session's own account is kept, or it moved to an
+   *  account that is and has a turn that is. */
+  sessions: (alias: string) => string
+  /** For tk_sessions: the account the row is shown under, as an
+   *  expression. Its own while that is kept, else the account of its latest
+   *  kept turn ('' when it has none); its own when none is left out. The
+   *  latest kept turn is read only for a session whose own account is left
+   *  out. */
+  shownAs: (alias: string) => string
+  binds: Record<string, unknown>
+}
+function leftOutAccounts(keys: unknown): LeftOutAccounts {
+  const list = tkExcludedAccounts(keys)
+  const binds: Record<string, unknown> = {}
+  list.forEach((key, i) => { binds[`xa${i}`] = key })
+  const names = list.map((_, i) => `@xa${i}`).join(',')
+  const sql = (alias: string): string => (list.length ? ` AND ${alias}.accountKey NOT IN (${names})` : '')
+  const sessions = (alias: string): string => (list.length
+    ? ` AND (${alias}.accountKey NOT IN (${names}) OR EXISTS (SELECT 1 FROM tk_session_accounts xs
+        WHERE xs.sessionId = ${alias}.sessionId AND xs.accountKey NOT IN (${names})
+          AND EXISTS (SELECT 1 FROM tk_events xe WHERE xe.sessionId = ${alias}.sessionId AND xe.accountKey NOT IN (${names}))))`
+    : '')
+  const shownAs = (alias: string): string => (list.length
+    ? `(CASE WHEN ${alias}.accountKey NOT IN (${names}) THEN ${alias}.accountKey
+        ELSE COALESCE((SELECT xl.accountKey FROM tk_events xl WHERE xl.sessionId = ${alias}.sessionId AND xl.accountKey NOT IN (${names})
+          ORDER BY xl.ts DESC, xl.rowid DESC LIMIT 1), '') END)`
+    : `${alias}.accountKey`)
+  return { keys: list, sql, sessions, shownAs, binds }
+}
 
 const DDL = `
 PRAGMA journal_mode=WAL;
@@ -287,9 +359,19 @@ export interface TkDb {
   getSessionCwd(sessionId: string): string | null
   querySummary(pricing: Record<string, TkPricing>, filter?: TkSummaryFilter, nowMs?: number): TkSummary
   querySessions(pricing: Record<string, TkPricing>, query?: TkSessionsQuery): TkSessionsPage
-  querySessionDetail(pricing: Record<string, TkPricing>, sessionId: string): TkSessionDetail | null
-  /** Usage track MP9: every provider and account the stored usage has. */
-  queryAccounts(): TkAccountPresent[]
+  /** `excludeAccountKeys` (2.1.3-beta.4): the session's figures are of its
+   *  turns less the accounts the figures leave out; with no turn kept it
+   *  answers null, as one that is not stored. */
+  querySessionDetail(pricing: Record<string, TkPricing>, sessionId: string, excludeAccountKeys?: unknown): TkSessionDetail | null
+  /** Usage track MP9: every provider and account the stored usage has, less
+   *  the accounts the figures leave out (2.1.3-beta.4). */
+  queryAccounts(excludeAccountKeys?: unknown): TkAccountPresent[]
+  /** The page's Rescan (2.1.3-beta.4): put every file's stored progress back
+   *  to its start, so the next walk reads each from its first byte. No row is
+   *  deleted: a turn read again carries the key it was stored under, so it is
+   *  not stored twice and the totals do not move. Whose file it is, and where
+   *  the one-off account re-read stands, are kept. Returns the files reset. */
+  resetFileProgress(): number
   /** Usage track MP10: record the account a Claude session runs under now:
    *  rows stored after it take it (another account than before applies from
    *  then on; rows already attributed keep theirs; the same again records
@@ -889,6 +971,46 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
     return { recorded: true, stamped: rows.length }
   })
 
+  // 2.1.3-beta.4: a session's figures from its stored turns less the
+  // accounts left out, by model, each model priced by the key the session's
+  // own model row carries (so a session with no turn left out reads exactly
+  // as its own rows do). Empty when no turn of it is kept.
+  const keptByModel = (sessionId: string, leftOut: LeftOutAccounts, cte: string, pb: Record<string, unknown>): any[] => sqlite.prepare(
+    `WITH ${cte}, kept AS (
+        SELECT e.model AS model, SUM(e.inTok) AS inTok, SUM(e.outTok) AS outTok,
+          SUM(e.cacheReadTok) AS cacheReadTok, SUM(e.cacheCreateTok) AS cacheCreateTok, COUNT(*) AS msgCount
+        FROM tk_events e WHERE e.sessionId = @sid${leftOut.sql('e')} GROUP BY e.model
+      )
+      SELECT sm.model AS model, ${COST('sm')} AS costUsd,
+        sm.inTok AS inTok, sm.outTok AS outTok, sm.cacheReadTok AS cacheReadTok,
+        sm.cacheCreateTok AS cacheCreateTok, sm.msgCount AS msgCount
+      FROM kept sm LEFT JOIN tk_session_models own ON own.sessionId = @sid AND own.model = sm.model
+        LEFT JOIN pricing p ON own.priceModel = p.pm
+      ORDER BY costUsd DESC`
+  ).all({ ...pb, ...leftOut.binds, sid: sessionId }) as any[]
+  // A session's figures from its rows by model. MP11: the priced models'
+  // cost, none when no model has a price, and the tokens of the unpriced.
+  const totalsOf = (byModel: any[]): { costUsd: number | null; unpricedTokens: number; inTok: number; outTok: number; cacheReadTok: number; cacheCreateTok: number; msgCount: number } => {
+    const tokensOf = (m: any): number => (m.inTok as number) + (m.outTok as number) + (m.cacheReadTok as number) + (m.cacheCreateTok as number)
+    const priced = byModel.filter((m: any) => m.costUsd !== null && m.costUsd !== undefined)
+    const sum = (k: string): number => byModel.reduce((a: number, m: any) => a + (Number(m[k]) || 0), 0)
+    return {
+      costUsd: priced.length ? priced.reduce((a: number, m: any) => a + (m.costUsd as number), 0) : null,
+      unpricedTokens: byModel.filter((m: any) => m.costUsd === null || m.costUsd === undefined).reduce((a: number, m: any) => a + tokensOf(m), 0),
+      inTok: sum('inTok'), outTok: sum('outTok'), cacheReadTok: sum('cacheReadTok'), cacheCreateTok: sum('cacheCreateTok'), msgCount: sum('msgCount'),
+    }
+  }
+  // The account a session shows under with accounts left out: its own
+  // while that one is kept (so a session of two kept accounts shows as it
+  // does with none left out), else the account of its latest kept turn.
+  // The same expression the Account filter and the session counts use.
+  const keptAccount = (sessionId: string, own: string, leftOut: LeftOutAccounts): string => {
+    if (!leftOut.keys.includes(own)) return own
+    const shown = sqlite.prepare(`SELECT ${leftOut.shownAs('s')} AS accountKey FROM tk_sessions s WHERE s.sessionId = @sid`)
+      .get({ ...leftOut.binds, sid: sessionId }) as { accountKey?: string | null } | undefined
+    return shown?.accountKey ?? ''
+  }
+
   return {
     raw: sqlite,
     getMeta: (key) => (getMetaStmt.get(key) as { value: string } | undefined)?.value ?? null,
@@ -905,16 +1027,23 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
       const { cte, binds: pb } = pricingCte(pricing, usedPriceModels())
       const cfg = filter.configId   // undefined=all, null=External(''), string=that id
       const cfgVal = cfg === undefined ? undefined : (cfg === null ? '' : cfg)
+      const leftOut = leftOutAccounts(filter.excludeAccountKeys)
 
       // Build a WHERE fragment for a given table alias.
       // modelCol differs per table; withRange (day) only valid on tk_daily.
-      const frag = (alias: string, modelCol: string, withRange: boolean): string => {
+      // `sessions`: the alias is tk_sessions, whose rows carry one account.
+      const frag = (alias: string, modelCol: string, withRange: boolean, sessions = false): string => {
         let s = ''
         if (cfg !== undefined) s += ` AND ${alias}.configId = @cfg`
         if (filter.model !== undefined) s += ` AND ${alias}.${modelCol} = @model`
         // MP9: one provider's, or one account's, usage.
         if (filter.provider !== undefined) s += ` AND ${alias}.provider = @provider`
-        if (filter.accountKey !== undefined) s += ` AND ${alias}.accountKey = @accountKey`
+        // 2.1.3-beta.4: a session is counted under the account it is listed
+        // under (see leftOutAccounts), as its turns are in the totals.
+        if (filter.accountKey !== undefined) s += ` AND ${sessions ? leftOut.shownAs(alias) : `${alias}.accountKey`} = @accountKey`
+        // 2.1.3-beta.4: every table read here carries the account; a
+        // session row carries its first, and is counted by its turns.
+        s += sessions ? leftOut.sessions(alias) : leftOut.sql(alias)
         if (withRange && filter.from !== undefined) s += ` AND ${alias}.day >= @fromDay`
         if (withRange && filter.to !== undefined) s += ` AND ${alias}.day <= @toDay`
         return s
@@ -924,6 +1053,7 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
       const prev7Cut = dayOf(now - 14 * 86_400_000)
       const binds: Record<string, unknown> = {
         ...pb,
+        ...leftOut.binds,
         ...(cfgVal !== undefined ? { cfg: cfgVal } : {}),
         ...(filter.model !== undefined ? { model: filter.model } : {}),
         ...(filter.provider !== undefined ? { provider: filter.provider } : {}),
@@ -981,7 +1111,7 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
       const cbcRaw = sqlite.prepare(`WITH ${cte} SELECT d.configId AS configId, SUM(${COST('d')}) AS costUsd FROM ${dailyJoin} WHERE 1=1 ${frag('d','model',true)} GROUP BY d.configId`).all(binds) as any[]
 
       // Sessions count per config (config+model scope only; lastModel is the model col)
-      const sessCounts = sqlite.prepare(`SELECT configId, COUNT(*) AS sessions FROM tk_sessions s WHERE 1=1 ${frag('s','lastModel',false)} GROUP BY configId`).all(binds) as any[]
+      const sessCounts = sqlite.prepare(`SELECT configId, COUNT(*) AS sessions FROM tk_sessions s WHERE 1=1 ${frag('s','lastModel',false,true)} GROUP BY configId`).all(binds) as any[]
 
       // Heatmap (config+model scope; no range — heatmap has no day col)
       const heat = sqlite.prepare(`SELECT bucket, SUM(inTok+outTok+cacheReadTok+cacheCreateTok) AS tokens FROM ${HEAT} h WHERE 1=1 ${frag('h','model',false)} GROUP BY bucket`).all(binds) as any[]
@@ -1021,7 +1151,12 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
       if (query.to !== undefined) { where += ` AND s.lastTs <= @to`; fb.to = query.to }
       if (query.model !== undefined) { where += ` AND s.lastModel = @model`; fb.model = query.model }
       if (query.provider !== undefined) { where += ` AND s.provider = @provider`; fb.provider = query.provider }
-      if (query.accountKey !== undefined) { where += ` AND s.accountKey = @accountKey`; fb.accountKey = query.accountKey }
+      const leftOut = leftOutAccounts(query.excludeAccountKeys)
+      // 2.1.3-beta.4: the account the row is shown under, before the page
+      // is cut (see leftOutAccounts).
+      if (query.accountKey !== undefined) { where += ` AND ${leftOut.shownAs('s')} = @accountKey`; fb.accountKey = query.accountKey }
+      where += leftOut.sessions('s')
+      Object.assign(fb, leftOut.binds)
       if (query.search) { where += ` AND s.sessionId LIKE @search`; fb.search = `%${query.search}%` }
       if (query.cursor) { where += ` AND (s.lastTs < @ct OR (s.lastTs = @ct AND s.sessionId < @cs))`; fb.ct = query.cursor.lastTs; fb.cs = query.cursor.sessionId }
       const lim = Math.min(Math.max(query.limit ?? 50, 1), 200)
@@ -1035,7 +1170,8 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
         SELECT page.sessionId AS sessionId, page.provider AS provider, page.configId AS configId,
           page.lastModel AS model, page.inTok AS inTok, page.outTok AS outTok,
           page.cacheReadTok AS cacheReadTok, page.cacheCreateTok AS cacheCreateTok,
-          page.msgCount AS msgCount, page.lastTs AS lastTs, page.accountKey AS accountKey,
+          page.msgCount AS msgCount, page.lastTs AS lastTs, page.accountKey AS accountKey,${leftOut.keys.length ? `
+          (SELECT xs.accountKey FROM tk_session_accounts xs WHERE xs.sessionId = page.sessionId) AS movedTo,` : ''}
           (SELECT SUM(${COST('sm')}) FROM tk_session_models sm LEFT JOIN pricing p ON sm.priceModel=p.pm WHERE sm.sessionId = page.sessionId) AS costUsd,
           (SELECT COALESCE(SUM(sm.inTok+sm.outTok+sm.cacheReadTok+sm.cacheCreateTok), 0) FROM tk_session_models sm LEFT JOIN pricing p ON sm.priceModel=p.pm WHERE sm.sessionId = page.sessionId AND p.pm IS NULL) AS unpricedTokens,
           c.label AS cfgLabel
@@ -1044,62 +1180,77 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
       const raw = sqlite.prepare(sql).all(binds) as any[]
       const hasMore = raw.length > lim
       const pageRows = hasMore ? raw.slice(0, lim) : raw
-      const rows = pageRows.map((r: any) => ({
-        sessionId: r.sessionId as string,
-        provider: r.provider as TkProvider,
-        configId: (r.configId === '' ? null : r.configId) as string | null,
-        configLabel: (r.cfgLabel && r.cfgLabel !== '') ? r.cfgLabel as string : 'External / no config',
-        model: r.model as string,
-        // MP11: null when none of its models has a price.
-        costUsd: (r.costUsd ?? null) as number | null,
-        unpricedTokens: Number(r.unpricedTokens) || 0,
-        inTok: r.inTok as number,
-        outTok: r.outTok as number,
-        cacheReadTok: r.cacheReadTok as number,
-        cacheCreateTok: r.cacheCreateTok as number,
-        msgCount: r.msgCount as number,
-        lastTs: r.lastTs as number,
-        accountKey: (r.accountKey as string | null) ?? '',
-      }))
+      const rows = pageRows.map((r: any) => {
+        const row = {
+          sessionId: r.sessionId as string,
+          provider: r.provider as TkProvider,
+          configId: (r.configId === '' ? null : r.configId) as string | null,
+          configLabel: (r.cfgLabel && r.cfgLabel !== '') ? r.cfgLabel as string : 'External / no config',
+          model: r.model as string,
+          // MP11: null when none of its models has a price.
+          costUsd: (r.costUsd ?? null) as number | null,
+          unpricedTokens: Number(r.unpricedTokens) || 0,
+          inTok: r.inTok as number,
+          outTok: r.outTok as number,
+          cacheReadTok: r.cacheReadTok as number,
+          cacheCreateTok: r.cacheCreateTok as number,
+          msgCount: r.msgCount as number,
+          lastTs: r.lastTs as number,
+          accountKey: (r.accountKey as string | null) ?? '',
+        }
+        // 2.1.3-beta.4: a session that moved to another account, with
+        // accounts left out: the figures of its kept turns, under its own
+        // account while that is kept, else the account of its latest kept
+        // turn. Its time and model stay the session's: they are the keys
+        // the list is ordered, filtered and paged by (see leftOutAccounts).
+        if (typeof r.movedTo === 'string' && r.movedTo !== row.accountKey) {
+          Object.assign(row, totalsOf(keptByModel(row.sessionId, leftOut, cte, pb)), { accountKey: keptAccount(row.sessionId, row.accountKey, leftOut) })
+        }
+        return row
+      })
       const nextCursor = hasMore
         ? { lastTs: pageRows[lim - 1].lastTs as number, sessionId: pageRows[lim - 1].sessionId as string }
         : null
       return { rows, nextCursor }
     },
 
-    querySessionDetail(pricing, sessionId) {
+    querySessionDetail(pricing, sessionId, excludeAccountKeys) {
       const { cte, binds: pb } = pricingCte(pricing, usedPriceModels())
       const s = sqlite.prepare(
         `SELECT s.*, c.label AS cfgLabel FROM tk_sessions s LEFT JOIN tk_configs c ON s.configId=c.configId WHERE s.sessionId=@sid`
       ).get({ sid: sessionId }) as any
       if (!s) return null
-      const byModel = sqlite.prepare(
+      // 2.1.3-beta.4: with accounts left out, the session's figures are of
+      // its kept turns; with none kept it is as one that is not stored.
+      const leftOut = leftOutAccounts(excludeAccountKeys)
+      const filtered = leftOut.keys.length > 0
+      const byModel = filtered ? keptByModel(sessionId, leftOut, cte, pb) : sqlite.prepare(
         `WITH ${cte} SELECT sm.model AS model, ${COST('sm')} AS costUsd,
           sm.inTok AS inTok, sm.outTok AS outTok, sm.cacheReadTok AS cacheReadTok,
           sm.cacheCreateTok AS cacheCreateTok, sm.msgCount AS msgCount
         FROM tk_session_models sm LEFT JOIN pricing p ON sm.priceModel=p.pm
         WHERE sm.sessionId=@sid ORDER BY costUsd DESC`
       ).all({ ...pb, sid: sessionId }) as any[]
-      // MP11: the priced models' cost; none when no model has a price.
-      const priced = byModel.filter((m: any) => m.costUsd !== null && m.costUsd !== undefined)
-      const costUsd = priced.length ? priced.reduce((a: number, m: any) => a + (m.costUsd as number), 0) : null
-      const unpricedTokens = byModel.filter((m: any) => m.costUsd === null || m.costUsd === undefined)
-        .reduce((a: number, m: any) => a + (m.inTok as number) + (m.outTok as number) + (m.cacheReadTok as number) + (m.cacheCreateTok as number), 0)
+      if (filtered && byModel.length === 0) return null
+      const kept = totalsOf(byModel)
+      const own = (s.accountKey as string | null) ?? ''
       return {
         sessionId: s.sessionId as string,
         provider: s.provider as TkProvider,
         configId: (s.configId === '' ? null : s.configId) as string | null,
         configLabel: (s.cfgLabel && s.cfgLabel !== '') ? s.cfgLabel as string : 'External / no config',
+        // The session's own last model and time, as the list shows them
+        // (see leftOutAccounts); the figures below are of the kept turns.
         model: s.lastModel as string,
-        costUsd,
-        unpricedTokens,
-        inTok: s.inTok as number,
-        outTok: s.outTok as number,
-        cacheReadTok: s.cacheReadTok as number,
-        cacheCreateTok: s.cacheCreateTok as number,
-        msgCount: s.msgCount as number,
+        costUsd: kept.costUsd,
+        unpricedTokens: kept.unpricedTokens,
+        inTok: filtered ? kept.inTok : s.inTok as number,
+        outTok: filtered ? kept.outTok : s.outTok as number,
+        cacheReadTok: filtered ? kept.cacheReadTok : s.cacheReadTok as number,
+        cacheCreateTok: filtered ? kept.cacheCreateTok : s.cacheCreateTok as number,
+        msgCount: filtered ? kept.msgCount : s.msgCount as number,
         lastTs: s.lastTs as number,
-        accountKey: (s.accountKey as string | null) ?? '',
+        accountKey: filtered ? keptAccount(sessionId, own, leftOut) : own,
         firstTs: s.firstTs as number,
         projectDir: s.projectDir as string,
         byModel: byModel.map((m: any) => ({
@@ -1118,10 +1269,13 @@ function setUpTkDb(sqlite: Database.Database, opts: TkDbOpenOptions): TkDb {
       if (typeof sessionId !== 'string' || sessionId.length === 0 || !tkClaudeAccountKeyOk(accountKey)) return { recorded: false, stamped: 0 }
       return setSessionAccountTxn(sessionId, accountKey, now)
     },
-    queryAccounts() {
+    queryAccounts(excludeAccountKeys) {
       const rows = sqlite.prepare(`SELECT provider, accountKey FROM ${DAILY} GROUP BY provider, accountKey ORDER BY provider, accountKey`).all() as Array<{ provider: TkProvider; accountKey: string }>
-      return rows.map((r) => ({ provider: r.provider, accountKey: r.accountKey ?? '' }))
+      const leftOut = leftOutAccounts(excludeAccountKeys).keys
+      return rows.map((r) => ({ provider: r.provider, accountKey: r.accountKey ?? '' })).filter((r) => !leftOut.includes(r.accountKey))
     },
+    resetFileProgress: () => sqlite.prepare(`UPDATE tk_files SET lastOffset = 0, scannedTo = 0, codexTurns = 0,
+      codexSessionId = '', codexModel = '', codexCwd = '', readMark = ''`).run().changes,
     accountRereadPending: () => (getMetaStmt.get('accountReread') as { value?: string } | undefined)?.value === 'pending',
     finishAccountReread: () => {
       sqlite.transaction(() => {

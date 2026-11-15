@@ -24,6 +24,38 @@ export function tkAccountKey(provider: TkProvider, accountId: string | null | un
 /** A transcript folder and whose sessions it holds. */
 export interface TkSessionsRoot { dir: string; accountKey: TkAccountKey }
 
+/** Most accounts the figures can leave out (Settings, Tokenomics). */
+export const TK_EXCLUDED_ACCOUNTS_MAX = 64
+/** The accounts a list names to leave out of the figures: the well-formed
+ *  keys of an account (never "not recorded"), each once, within the bound.
+ *  Anything else in the list, and a value that is not a list, is dropped. */
+export function tkExcludedAccounts(list: unknown): TkAccountKey[] {
+  if (!Array.isArray(list)) return []
+  const out: TkAccountKey[] = []
+  for (const key of list) {
+    if (key === TK_ACCOUNT_NOT_RECORDED || !tkAccountKeyOk(key) || out.includes(key)) continue
+    out.push(key)
+    if (out.length >= TK_EXCLUDED_ACCOUNTS_MAX) break
+  }
+  return out
+}
+
+/** What one walk of a transcript root touched: the folders it listed, the
+ *  names those listings returned (files, folders and links alike), and the
+ *  transcripts it found among them. */
+export interface TkWalkCount { dirs: number; entries: number; files: number }
+/** The last full pass over the transcript roots (2.1.3-beta.4): when it
+ *  finished, how long it took, what each of the two walks touched (the
+ *  projects folder's transcripts, and the sessions folders' rollouts), and
+ *  how many of the files it found were opened to be read. A pass that reads
+ *  only the transcripts the watcher reported walks nothing and is not one. */
+export interface TkWalkStats { at: number; ms: number; transcripts: TkWalkCount; rollouts: TkWalkCount; filesRead: number }
+
+/** Session attributions kept for a worker that is not listening, or for a
+ *  supervisor that is not running (MP10): the latest per session, the oldest
+ *  dropped past this many. */
+export const TK_SESSION_ACCOUNTS_KEPT = 4096
+
 /** A Claude session id as its transcript file names it, exactly: a lower-case
  *  UUID (usage track MP10). */
 const TK_SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -136,6 +168,9 @@ export interface TkIndexStatus {
    *  rebuilding the daily and hourly rollups (rows done of total). Totals are
    *  whole throughout; only the split by provider and account is incomplete. */
   accountReread?: TkAccountReread | null
+  /** True when Tokenomics is switched off in Settings (2.1.3-beta.4): no
+   *  worker runs, nothing is read, and what was recorded before is kept. */
+  off?: boolean
 }
 
 export interface TkAccountReread {
@@ -151,6 +186,8 @@ export interface TkAccountReread {
 export interface TkAccountPresent { provider: TkProvider; accountKey: TkAccountKey }
 
 /** `provider` and `accountKey` (MP9): only that provider's, or that account's,
- *  usage; `accountKey: ''` is the usage not recorded to any account. */
-export interface TkSummaryFilter { configId?: string | null; from?: number; to?: number; model?: string; provider?: TkProvider; accountKey?: TkAccountKey }
+ *  usage; `accountKey: ''` is the usage not recorded to any account.
+ *  `excludeAccountKeys` (2.1.3-beta.4): the accounts Settings leaves out of
+ *  every figure. Main adds it to a query; the page never sends it. */
+export interface TkSummaryFilter { configId?: string | null; from?: number; to?: number; model?: string; provider?: TkProvider; accountKey?: TkAccountKey; excludeAccountKeys?: TkAccountKey[] }
 export interface TkSessionsQuery extends TkSummaryFilter { search?: string; cursor?: { lastTs: number; sessionId: string } | null; limit?: number }

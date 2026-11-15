@@ -950,7 +950,14 @@ export interface TkIndexStatus {
    *  while it runs (re-reading the Codex history, then rebuilding the rollups).
    *  Totals are whole throughout; the split by provider and account is not. */
   accountReread?: TkAccountReread | null
+  /** True when Tokenomics is switched off in Settings (2.1.3-beta.4): no
+   *  worker runs, nothing is read, and what was recorded before is kept. */
+  off?: boolean
 }
+
+/** The answer to the Tokenomics page's Rescan (2.1.3-beta.4): started, or
+ *  why not (switched off in Settings, or its worker is not running). */
+export type TkRescanResult = { ok: true } | { ok: false; reason: 'off' | 'not-running' }
 
 export interface TkAccountReread {
   stage: 'reread' | 'rebuild'

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-15T08:40:49.918Z",
-  "head": "aa5c38f25786e588a67d5ebb4b90b0d4d96004e3",
-  "tree": "be0a80245d28f6f90c60460620ff3b6ed0f86e10",
+  "generatedAt": "2026-11-15T11:58:19.508Z",
+  "head": "3d30eb0ec5e6479cd66a9acbe9351aedc816b3e8",
+  "tree": "bde6b69d789cd24cba9f15129b507b66445d499d",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3197,
-  "excludedFileCount": 473,
-  "scannedFileCount": 2724,
+  "trackedFileCount": 3224,
+  "excludedFileCount": 479,
+  "scannedFileCount": 2745,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 900,
-  "pathDigest": "9d1f45febc317fcbe89098e673b3f02166db703ec3f84c8e84d19e37cddb3e0a",
+  "matchedPathCount": 901,
+  "pathDigest": "41861ed6d67e701e943e932bfd11f71c36eebd22ba0a9cc3f7477b3ecc4cd767",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1079,7 +1079,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 95
+      "lineCount": 99
     },
     {
       "path": "src/main/providers/codex/cli-contract.ts",
@@ -1137,7 +1137,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 49
+      "lineCount": 51
     },
     {
       "path": "src/main/providers/codex/enablement.ts",
@@ -1165,7 +1165,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 286
+      "lineCount": 288
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -1295,7 +1295,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 167
+      "lineCount": 184
     },
     {
       "path": "src/main/providers/codex/telemetry.ts",
@@ -1499,7 +1499,7 @@
         "P05",
         "P14"
       ],
-      "lineCount": 61
+      "lineCount": 63
     },
     {
       "path": "src/main/tokenomics/tk-parse.ts",
@@ -4541,7 +4541,7 @@
         "P09",
         "P13"
       ],
-      "lineCount": 20
+      "lineCount": 22
     },
     {
       "path": "tests/unit/main/first-start-worker.test.ts",
@@ -4993,7 +4993,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 22
+      "lineCount": 24
     },
     {
       "path": "tests/unit/main/ssh-end-remote-password.test.ts",
@@ -5117,7 +5117,7 @@
         "P05",
         "P13"
       ],
-      "lineCount": 21
+      "lineCount": 26
     },
     {
       "path": "tests/unit/model-data-schema.test.ts",
@@ -5198,7 +5198,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 47
+      "lineCount": 49
     },
     {
       "path": "tests/unit/native/tokenomics-worker-hardening.native.test.ts",
@@ -5213,7 +5213,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 38
+      "lineCount": 42
     },
     {
       "path": "tests/unit/pr600-r1-lifetime.test.ts",
@@ -5305,7 +5305,7 @@
         "P09",
         "P13"
       ],
-      "lineCount": 53
+      "lineCount": 55
     },
     {
       "path": "tests/unit/providers/codex/cli-runner-open-stdin.test.ts",
@@ -5330,7 +5330,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 79
+      "lineCount": 114
     },
     {
       "path": "tests/unit/providers/codex/codex-discovery-path-names.test.ts",
@@ -5338,7 +5338,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 26
+      "lineCount": 49
     },
     {
       "path": "tests/unit/providers/codex/conversation-carry-folders.test.ts",
@@ -5424,7 +5424,7 @@
         "P09",
         "P13"
       ],
-      "lineCount": 88
+      "lineCount": 92
     },
     {
       "path": "tests/unit/providers/codex/models-scratch-home.test.ts",
@@ -5613,7 +5613,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 302
+      "lineCount": 328
     },
     {
       "path": "tests/unit/providers/codex/telemetry-bounded-reads.test.ts",
@@ -7274,11 +7274,19 @@
       "lineCount": 7
     },
     {
+      "path": "tests/unit/tokenomics/tokenomics-optional-service.test.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "lineCount": 8
+    },
+    {
       "path": "tests/unit/tokenomics/tokenomics-worker-changed-files.test.ts",
       "predicates": [
         "P13"
       ],
-      "lineCount": 41
+      "lineCount": 50
     },
     {
       "path": "tests/unit/tokenomics/tokenomics-worker-reread-order.test.ts",

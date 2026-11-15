@@ -73,7 +73,7 @@ import { backupRealClaudeOnce } from './claude-backup'
 import { registerCloudAgentHandlers } from './ipc/cloud-agent-handlers'
 import { registerLegacyVersionHandlers } from './ipc/legacy-version-handlers'
 import { registerMemoryHandlers } from './ipc/memory-handlers'
-import { initTokenomics, shutdownTokenomics, getTokenomicsSupervisor } from './tokenomics/tokenomics-service'
+import { initTokenomics, shutdownTokenomics, getTokenomicsSupervisor, noteTokenomicsSessionAccount, applyTokenomicsSettings } from './tokenomics/tokenomics-service'
 import { createTranscriptAttribution, profileOfTranscript, type TkProfileFolders } from './tokenomics/tk-attribution'
 import { getClaudeProfileId, sessionsOnProfile } from './claude-account-identity'
 import { registerTokenomics2Handlers } from './ipc/tokenomics2-handlers'
@@ -770,6 +770,9 @@ if (!gotTheLock) {
         // P3.12 round 1 (V1): the logging switch turned off stops indexing the
         // sessions already running, both assistants.
         try { applyLoggingSwitches() } catch (err) { logError('[main] logging switches failed:', err) }
+        // 2.1.3-beta.4: the Tokenomics switch stops or starts its worker at
+        // once, and the accounts left out apply to the next query.
+        try { applyTokenomicsSettings() } catch (err) { logError('[main] tokenomics settings apply failed:', err) }
       },
       // P3.12 round 1 (V1): a config's own logging switch turned off stops
       // indexing its running session.
@@ -936,12 +939,9 @@ if (!gotTheLock) {
       launchProfile: (sessionId) => getClaudeProfileId(sessionId),
       ...profileFolders,
       accountOf: (profileId) => getAccountsService()?.accountIdForLegacy('claude', profileId, { ignoreCase: process.platform === 'win32' }) ?? null,
-      record: (sessionId, accountKey) => {
-        const tokenomics = getTokenomicsSupervisor()
-        if (!tokenomics) return false
-        tokenomics.setSessionAccount(sessionId, accountKey)
-        return true
-      },
+      // To the usage index, or kept for it while Tokenomics is switched off
+      // (2.1.3-beta.4), so the catch-up records the session to its account.
+      record: (sessionId, accountKey) => noteTokenomicsSessionAccount(sessionId, accountKey),
     })
     // Logs v2 (Task 8): route transcript paths the child gateway lifts from hook
     // POSTs into the binder. Resolved lazily — the binder is created later by
@@ -996,6 +996,9 @@ if (!gotTheLock) {
     // register the new read-surface handlers. The worker ingests from raw
     // transcripts on its own timer/fs-watch — the statusline tick no longer
     // feeds tokenomics (that path drove the ~30s UI freeze).
+    // 2.1.3-beta.4: an optional service. With Tokenomics switched off in
+    // Settings this starts nothing (no worker, nothing beside it); the
+    // handlers below are registered either way and answer "off".
     try { initTokenomics({ emit: emitWithMerge }) } catch (err) { logError(`[tokenomics] init failed: ${(err as Error)?.message ?? err}`) }
     registerTokenomics2Handlers(getWindow)
     startEffortTracker()

@@ -11,7 +11,11 @@ vi.mock('../../../src/main/tokenomics/fork-tokenomics-worker', () => ({
     return { transport: t, kill: () => t.kill(), onExit: () => {} }
   },
 }))
-vi.mock('../../../src/main/config-manager', () => ({ readConfig: vi.fn(() => [{ id: 'a', label: 'App', workingDirectory: 'F:\\proj' }]) }))
+vi.mock('../../../src/main/config-manager', () => ({
+  readConfig: vi.fn(() => [{ id: 'a', label: 'App', workingDirectory: 'F:\\proj' }]),
+  // The saved settings: none yet, so Tokenomics is on (its default).
+  readConfigChecked: vi.fn(() => ({ outcome: 'absent', value: null })),
+}))
 vi.mock('../../../src/main/data-paths', () => ({ getDataDirectory: () => 'F:\\data', getResourcesDirectory: () => 'F:\\resources' }))
 vi.mock('../../../src/main/tokenomics/tk-pricing', () => ({ getAllPricing: () => ({}), fetchModelPricing: vi.fn(() => Promise.resolve()) }))
 

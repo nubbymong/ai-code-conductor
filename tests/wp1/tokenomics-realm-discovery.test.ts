@@ -142,13 +142,15 @@ vi.mock('../../src/main/tokenomics/tk-supervisor', () => ({
     setPricing() {}
     setConfigs() {}
     setCodexRealmSessionsDirs(d: Array<{ dir: string; accountKey: string }>) { tk.dirs.push(d.map((x) => ({ ...x }))) }
+    keptSessionAccounts() { return [] }
   },
 }))
 vi.mock('../../src/main/tokenomics/fork-tokenomics-worker', () => ({ forkTokenomicsWorker: () => null }))
 vi.mock('../../src/main/tokenomics/tk-pricing', () => ({ getAllPricing: () => ({}), fetchModelPricing: async () => {} }))
 vi.mock('../../src/main/model-registry-service', () => ({ onRegistryReload: () => () => {} }))
 vi.mock('../../src/main/data-paths', () => ({ getDataDirectory: () => 'C:\\data', getResourcesDirectory: () => 'C:\\res' }))
-vi.mock('../../src/main/config-manager', () => ({ readConfig: () => [] }))
+// No settings file yet: Tokenomics is on (its default).
+vi.mock('../../src/main/config-manager', () => ({ readConfig: () => [], readConfigChecked: () => ({ outcome: 'absent', value: null }) }))
 vi.mock('../../src/main/provider-accounts', () => ({
   getAccountsService: () => (tk.noService ? null : {
     sessionsRoots: tk.sessionsRoots,

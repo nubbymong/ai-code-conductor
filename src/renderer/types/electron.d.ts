@@ -805,8 +805,11 @@ export interface ElectronAPI {
     sessions: (query?: import('../../shared/types').TkSessionsQuery) => Promise<import('../../shared/types').TkSessionsPage>
     sessionDetail: (sessionId: string) => Promise<import('../../shared/types').TkSessionDetail | null>
     indexStatus: () => Promise<import('../../shared/types').TkIndexStatus>
-    /** Usage track MP9: the providers and accounts the stored usage has. */
-    accounts?: () => Promise<import('../../shared/types').TkAccountPresent[]>
+    /** Usage track MP9: the providers and accounts the stored usage has, less
+     *  the accounts Settings leaves out; `includeExcluded` lists those too. */
+    accounts?: (opts?: { includeExcluded?: boolean }) => Promise<import('../../shared/types').TkAccountPresent[]>
+    /** 2.1.3-beta.4: read every transcript again from its first byte. */
+    rescan?: () => Promise<import('../../shared/types').TkRescanResult>
     onIndexStatus: (cb: (s: import('../../shared/types').TkIndexStatus) => void) => () => void
     onIndexProgress: (cb: (p: import('../../shared/types').TkIndexProgress) => void) => () => void
     onIndexComplete: (cb: (c: import('../../shared/types').TkIndexCompleteEvent) => void) => () => void
