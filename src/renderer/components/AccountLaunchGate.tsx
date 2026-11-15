@@ -112,7 +112,7 @@ export default function AccountLaunchGate({ suppressed = false }: { suppressed?:
     ? (own?.gone
         ? 'The account this session last ran on is no longer set up here. Choose one to start it.'
         : ownIsSwitchedOff
-          ? 'The account this session last ran on is switched off. Choose another to start it.'
+          ? 'The account this session last ran on is inactive. Choose another to start it.'
           : 'No account was saved with this session. Choose one to start it.')
     : ''
   const lastUsedProfile = lastUsedAccountId

@@ -10,11 +10,19 @@ const lib = vi.hoisted(() => ({
   constructed: 0,
   startCalls: 0,
   mode: 'cancel' as 'cancel' | 'construct-throws' | 'start-throws' | 'start-rejects',
+  windowLists: 0,
+  windows: [] as Array<{ id: string; name: string; thumbnail: unknown }>,
 }))
 
 vi.mock('electron', () => ({
   BrowserWindow: class {},
-  desktopCapturer: { getSources: async () => [] },
+  desktopCapturer: {
+    getSources: async (opts: { types?: string[] }) => {
+      if (!opts?.types?.includes('window')) return []
+      lib.windowLists++
+      return lib.windows
+    },
+  },
   dialog: { showMessageBox: async () => ({ response: 1 }) },
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => true }) },
   shell: { openExternal: async () => {} },
@@ -44,11 +52,14 @@ vi.mock('../../../src/main/ipc/setup-handlers', () => ({ getResourcesDirectory: 
 vi.mock('../../../src/main/clipboard-file', () => ({ isReapableImageFile: () => false }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
-const { captureRectangle } = await import('../../../src/main/screenshot-capture')
+const { captureRectangle, listWindows } = await import('../../../src/main/screenshot-capture')
 const { screenCaptureAllowed, SCREEN_RECORDING_SETTINGS_URL, SCREEN_RECORDING_NEEDED_MESSAGE, SCREEN_RECORDING_RESTRICTED_MESSAGE, PROMPT_SETTLE_MS } = await import('../../../src/main/screenshot-permission')
 type Deps = import('../../../src/main/screenshot-permission').ScreenPermissionDeps
 
 const win = { isDestroyed: () => false } as never
+
+/** A stand-in window thumbnail; its PNG is the bytes of "png". */
+const thumb = (empty: boolean) => ({ isEmpty: () => empty, toPNG: () => Buffer.from('png') })
 
 /** A permission state to test with, and what was asked of it. */
 function fake(status: string, over: Partial<Deps> = {}, answer = false, statusAfterPrompt?: string) {
@@ -69,6 +80,8 @@ beforeEach(() => {
   lib.constructed = 0
   lib.startCalls = 0
   lib.mode = 'cancel'
+  lib.windowLists = 0
+  lib.windows = []
 })
 
 describe('screenCaptureAllowed: the Screen Recording permission on macOS', () => {
@@ -228,5 +241,37 @@ describe('captureRectangle with the permission check and a throwing capture', ()
     await expect(captureRectangle(win, fake('denied').deps)).resolves.toBeNull()
     await expect(captureRectangle(win, fake('granted').deps)).resolves.toBeNull()
     expect(lib.startCalls).toBe(1)
+  })
+})
+
+describe('listWindows (Snap, Window) with the permission check', () => {
+  it('lists nothing and asks for no windows while the permission is off, after saying so', async () => {
+    lib.windows = [{ id: 'window:1', name: 'Editor', thumbnail: thumb(false) }]
+    const { deps, calls } = fake('denied')
+    expect(await listWindows(win, deps)).toEqual([])
+    expect(calls.asked).toEqual([{ message: SCREEN_RECORDING_NEEDED_MESSAGE, canOpen: true }])
+    expect(lib.windowLists).toBe(0)
+  })
+
+  it('lists the windows when the permission is granted, and asks the user nothing', async () => {
+    lib.windows = [{ id: 'window:1', name: 'Editor', thumbnail: thumb(false) }]
+    const { deps, calls } = fake('granted')
+    expect(await listWindows(win, deps)).toEqual([{ id: 'window:1', name: 'Editor', thumbnail: 'cG5n' }])
+    expect(calls.asked).toEqual([])
+    expect(lib.windowLists).toBe(1)
+  })
+
+  it('lists the windows, with no message, when the app has never asked, so macOS shows its own prompt', async () => {
+    const { deps, calls } = fake('not-determined')
+    expect(await listWindows(win, deps)).toEqual([])
+    expect(calls.asked).toEqual([])
+    expect(lib.windowLists).toBe(1)
+  })
+
+  it('does not look at the permission off macOS', async () => {
+    const { deps, calls } = fake('denied', { platform: 'win32' })
+    await listWindows(win, deps)
+    expect(calls.status).toBe(0)
+    expect(lib.windowLists).toBe(1)
   })
 })
