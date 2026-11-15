@@ -86,7 +86,7 @@ import { prepareCodexCanvasLaunch } from './canvas/codex-canvas-launch'
 import { registerCodexCanvasRoots } from './canvas/codex-canvas-roots'
 import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from './canvas/codex-guidance'
 import { disposeSession as disposeCodexReviewUsage } from './codex-review-usage'
-import { getProfileConfigDir, setupProfileLinks, getPrimaryProfileId, isValidProfileId, backupProfileHomeToCanonical, syncPrimaryCredentialsWithGlobal, withProfileHome, checkProfileCredentialFolders, MANAGED_LAUNCH_REFUSAL } from './account-profiles'
+import { getProfileConfigDir, setupProfileLinks, getPrimaryProfileId, isValidProfileId, backupProfileHomeToCanonical, syncPrimaryCredentialsWithGlobal, withProfileHome, checkProfileCredentialFolders, assertAccountActive, MANAGED_LAUNCH_REFUSAL } from './account-profiles'
 export { withProfileHome } from './account-profiles'
 import { gateManagedLaunchDirs, gatePickerSiblingDirs, recordManagedLaunchPreflight, displayPath } from './managed-launch-diagnostics'
 import { stripSpoofableText } from '../shared/safe-text'
@@ -6549,6 +6549,7 @@ function spawnPtyResolved(
     // account that is not set up here, below, and getProfileConfigDir's throw
     // stays genuinely unreachable.
     if (wantProfileId && isValidProfileId(wantProfileId) && fs.existsSync(getProfileConfigDir(wantProfileId))) {
+      if (!shellOnly) assertAccountActive(wantProfileId, sessionId)
       resolvedProfileId = wantProfileId
     } else if (wantProfileId && !shellOnly) {
       // A Claude session runs on the account it names or not at all: never on

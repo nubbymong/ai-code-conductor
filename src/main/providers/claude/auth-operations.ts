@@ -29,7 +29,7 @@ export interface ClaudeProfileAuthStatus {
 export interface ClaudeProfileLogout {
   ran: boolean
   after: ClaudeProfileAuthStatus | null
-  refused?: 'invalid-profile' | 'in-use' | 'no-home' | 'project-gate' | 'host-control' | 'cli-unavailable' | 'computer-sign-in'
+  refused?: 'invalid-profile' | 'in-use' | 'no-home' | 'project-gate' | 'host-control' | 'cli-unavailable' | 'computer-sign-in' | 'mac-not-primary'
   timedOut?: boolean
 }
 
@@ -63,6 +63,9 @@ const CLAUDE_CLI_UNAVAILABLE = 'Claude Code was not found, or is older than this
 
 /** Why the project gate stopped a sign-out (the file and keys are in the log). */
 const CLAUDE_SIGN_OUT_GATE_REFUSAL = 'Claude Code settings in the folder it would run from could redirect this account, so the sign-out was not run. The app log names the file.'
+
+/** Why the sign-out of a Mac's other account was not run: only the normal sign-in can be used there. */
+const CLAUDE_SIGN_OUT_MAC_NOT_PRIMARY = 'On a Mac, only your normal Claude sign-in can be signed out here, so this account was not signed out.'
 
 /** Why a sign-out's environment could not be prepared (the reason is in the log). */
 const CLAUDE_SIGN_OUT_NOT_PREPARED = 'The app could not prepare this account\'s Claude Code environment, so the sign-out was not run. The app log has the reason.'
@@ -150,6 +153,7 @@ export function createClaudeAuthOperations(ports: ClaudeAuthPorts, cli: ClaudeAu
       if (out.refused === 'invalid-profile' || out.refused === 'no-home') return refuse('realm-unavailable')
       if (out.refused === 'cli-unavailable') return refuse('cli-unavailable', CLAUDE_CLI_UNAVAILABLE)
       if (out.refused === 'project-gate') return refuse('not-started', CLAUDE_SIGN_OUT_GATE_REFUSAL)
+      if (out.refused === 'mac-not-primary') return refuse('not-started', CLAUDE_SIGN_OUT_MAC_NOT_PRIMARY)
       if (out.refused === 'host-control') return refuse('not-started', CLAUDE_SIGN_OUT_NOT_PREPARED)
       if (out.refused !== undefined || out.ran !== true) return refuse('not-started')
       if (out.timedOut === true) return { ...refuse('timed-out'), ran: true }

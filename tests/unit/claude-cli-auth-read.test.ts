@@ -398,4 +398,34 @@ describe('readClaudeCliAuth -- through a runner, and on macOS [host]', () => {
     expect(seen!.HOME).not.toBe(join(root, ID))
     // Elsewhere it is still pointed at the profile home (the case above this block).
   })
+
+  it('macOS: an account other than the primary one is not checked: nothing runs, no fault is logged, and it is not read as signed out', async () => {
+    // Every account's CLI there would answer with the Mac's own sign-in, so only the primary
+    // one can be read. The answer says so (the Accounts panel shows it); it is an expected state.
+    const prof = await import('../../src/main/account-profiles')
+    const sandbox = fs.mkdtempSync(join(os.tmpdir(), 'ccc-cli-auth-mac-'))
+    prof._setRootsForTest({ resourcesDir: sandbox, sharedRoot: join(sandbox, 'shared') })
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    try {
+      fs.mkdirSync(join(sandbox, 'account-profiles'), { recursive: true })
+      fs.writeFileSync(join(sandbox, 'account-profiles', 'profiles.json'), JSON.stringify({ profiles: [
+        { id: 'profile-primary-1', name: 'Main', createdAt: 1, isPrimary: true },
+        { id: ID, name: ID, createdAt: 1 },
+      ] }))
+      writeCredFile(ID, '.claude') // a file that must not be read as an answer for this account
+      let spawned = false
+      execFileImpl = (_c, _a, _o, cb) => { spawned = true; cb(null, { stdout: JSON.stringify({ loggedIn: true }), stderr: '' }) }
+      const warn = vi.mocked((await import('../../src/main/debug-logger')).logWarn)
+      warn.mockClear()
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+      const out = await readClaudeCliAuth(ID)
+      expect(out).toEqual({ authenticated: false, notChecked: prof.MAC_NOT_CHECKABLE })
+      expect(spawned, 'the CLI ran for an account that cannot be checked on a Mac').toBe(false)
+      expect(warn, 'an expected state was logged as an isolation fault').not.toHaveBeenCalled()
+    } finally {
+      Object.defineProperty(process, 'platform', realPlatform)
+      prof._setRootsForTest(null)
+      fs.rmSync(sandbox, { recursive: true, force: true })
+    }
+  })
 })

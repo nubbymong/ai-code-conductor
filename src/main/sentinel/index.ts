@@ -176,11 +176,11 @@ async function savedSettings(): Promise<Record<string, unknown> | null> {
  * owner-only verdict in this run, so the headless run reads a verdict instead
  * of being refused for want of one. Each wait only when pending.
  */
-async function analysisHome(): Promise<{ home: string | null; accountLabel: string | null }> {
+async function analysisHome(): Promise<{ home: string | null; accountLabel: string | null; switchedOff?: string }> {
   try {
     const { readConfig } = await import('../config-manager')
     const {
-      resolveHeadlessProfileHome, listProfiles,
+      resolveHeadlessProfileHome, listProfiles, inactiveAccountRefusal,
       startProfileStepsPending, startProfileStepsSettled, profileCredentialFoldersChecked, checkProfileCredentialFolders,
     } = await import('../account-profiles')
     if (startProfileStepsPending()) await startProfileStepsSettled()
@@ -195,7 +195,11 @@ async function analysisHome(): Promise<{ home: string | null; accountLabel: stri
     // not be used; a saved choice whose account is gone shows as the default
     // there, and is the default here (sentinel-account.ts).
     const accountLabel = profileId ? claudeAnalysisAccountLabel({ chosen, used: profileId, profiles: listProfiles() }) : null
-    return { home, accountLabel }
+    // An account switched off runs no analysis, whichever way it was picked
+    // (a saved choice, or the primary or first account as the default): the
+    // run says so instead of running on it.
+    const switchedOff = profileId ? inactiveAccountRefusal(profileId) : null
+    return { home, accountLabel, ...(switchedOff ? { switchedOff } : {}) }
   } catch {
     return { home: null, accountLabel: null } // fail-open: bare global is still better than no analysis
   }
@@ -356,7 +360,8 @@ async function claudeAnalysisRunner(signal: AbortSignal): Promise<AnalysisRunner
   let handedOver = false
   try {
     const { spawnClaudeHeadless } = await headlessRunner()
-    const { home, accountLabel } = await analysisHome()
+    const { home, accountLabel, switchedOff } = await analysisHome()
+    if (switchedOff) return { refused: switchedOff }
     const transportEnv = await claudeSettingsTransportEnv(home)
     const parent = analysisParent()
     let cwd: string

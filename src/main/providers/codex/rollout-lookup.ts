@@ -263,6 +263,28 @@ export function sameDirectory(a: string, b: string, platform: NodeJS.Platform = 
   return norm(a) === norm(b)
 }
 
+/** Whether two folder spellings are one folder by their REAL paths: a session
+ *  started in a symlinked folder (or a Windows junction) has the link's name
+ *  as its folder, while a program that asks the system where it is running
+ *  answers with the real one, so the rollout may record either. Callers try
+ *  the exact spelling first; this is the second look. Never true when either
+ *  folder cannot be resolved (it does not exist, or access was refused), and
+ *  case-folded on Windows as sameDirectory does. Only for two absolute paths
+ *  on a local path: a relative spelling has no fixed folder, and a network
+ *  share (a \\server\share or //server/share path) can hold the call up for
+ *  as long as the share takes to time out, on the main thread, so neither is
+ *  looked at. `real` is a parameter so the rule tests without a link. */
+export function sameFolderByRealPath(a: string, b: string, real: (p: string) => string = (p) => fs.realpathSync.native(p)): boolean {
+  if (!a || !b) return false
+  const absolute = /^(?:[A-Za-z]:[\\/]|\/(?![\\/]))/
+  if (!absolute.test(a) || !absolute.test(b)) return false
+  try {
+    return sameDirectory(real(a), real(b))
+  } catch {
+    return false
+  }
+}
+
 export interface CodexResumeTarget {
   uuid: string
   cwd: string

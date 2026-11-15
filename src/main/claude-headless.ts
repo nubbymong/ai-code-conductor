@@ -7,6 +7,7 @@ import { CLAUDE_NOT_ON_PATH, claudeFolderForPath, claudeFoundByLastProbe, claude
 import { StringDecoder } from 'string_decoder'
 import { logInfo, logError } from './debug-logger'
 import { withProfileHome } from './pty-manager'
+import { launchRefusalText } from './launch-refusal'
 import { gateManagedLaunch, peekGateVerdict } from './managed-launch-diagnostics'
 import type { ProjectGateResult } from '../shared/providers'
 import { acquireProfileConsumer, pendingProfileRefresh } from './profile-consumers'
@@ -271,7 +272,9 @@ function spawnNow(
   } catch (e) {
     const message = (e as Error)?.message ?? String(e)
     logError(`[claude-headless] Not spawning: ${message}`)
-    return Promise.resolve({ code: 1, stdout: '', stderr: message })
+    // The sentence only: the log marker in front of it is for the log, and
+    // this text is shown as it stands (a KPI run's reason, a Sentinel failure).
+    return Promise.resolve({ code: 1, stdout: '', stderr: launchRefusalText(message) })
   }
   // How the run starts. Windows: Claude Code by the full path found in PATH's
   // folders (claude-cli-probe.ts CLAUDE_WINDOWS_NAMES, in that order), never

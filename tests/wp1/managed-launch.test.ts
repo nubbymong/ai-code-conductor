@@ -1360,12 +1360,30 @@ describe('the profile settings copy on disk', () => {
 describe('the launch paths', () => {
   let withProfileHome: typeof import('../../src/main/account-profiles').withProfileHome
   let profileRealmConfigRoot: typeof import('../../src/main/account-profiles').profileRealmConfigRoot
+  let sharedConfigPins: typeof import('../../src/main/account-profiles').sharedConfigPins
 
   beforeAll(async () => {
     composeProviders()
     const m = await import('../../src/main/account-profiles')
     withProfileHome = m.withProfileHome
     profileRealmConfigRoot = m.profileRealmConfigRoot
+    sharedConfigPins = m.sharedConfigPins
+  })
+
+  // On macOS a launch for a profile home asks which account is the primary one
+  // and refuses when it cannot tell. The list is an isolated temp one that
+  // records p1 as the primary, so no case here reads the machine's own list.
+  let launchSandbox = ''
+  beforeEach(async () => {
+    const m = await import('../../src/main/account-profiles')
+    launchSandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-launch-paths-'))
+    m._setRootsForTest({ resourcesDir: path.join(launchSandbox, 'resources'), sharedRoot: path.join(launchSandbox, 'shared') })
+    m.upsertProfile({ id: 'p1', name: 'Work', accountEmail: 'a@example.test', createdAt: 0, isPrimary: true })
+  })
+  afterEach(async () => {
+    const m = await import('../../src/main/account-profiles')
+    m._setRootsForTest(null)
+    try { fs.rmSync(launchSandbox, { recursive: true, force: true }) } catch { /* ignore */ }
   })
 
   const HOME = path.resolve('/r/account-profiles/p1')
@@ -3005,14 +3023,16 @@ describe('the launch paths', () => {
       // redundant with the recorder's own catch, so removing it changed nothing
       // and nothing would have noticed (adversarial review, MAJOR). Driven by
       // making the derivation itself throw, which is INSIDE the choke point's
-      // guard and outside the recorder's.
+      // guard and outside the recorder's. The platform is stated: on macOS the
+      // same derivation decides the primary-account rule, and "cannot tell" is
+      // a refusal there by design, so that case is not this one.
       const profileId = await import('../../src/main/profile-id')
       const original = profileId.profileIdFromHome
       const spy = vi.spyOn(profileId, 'profileIdFromHome').mockImplementation(() => {
         throw new Error('synthetic diagnostic failure')
       })
       try {
-        const env = withProfileHome({ PATH: '/x', ANTHROPIC_API_KEY: 'sk-poison' }, HOME, { launchId: 's-throws' })
+        const env = withProfileHome({ PATH: '/x', ANTHROPIC_API_KEY: 'sk-poison' }, HOME, { launchId: 's-throws' }, 'linux')
         expect(env.USERPROFILE, 'the launch was refused by a diagnostic').toBe(HOME)
         expect(env.ANTHROPIC_API_KEY, 'the hardening was lost with the diagnostic').toBeUndefined()
         expect(diag.listManagedLaunchReports('p1')).toEqual([])
@@ -3322,8 +3342,10 @@ describe('the launch paths', () => {
   it('still composes the launch variables it owned before, unchanged', () => {
     const env = withProfileHome({ PATH: '/x' }, HOME)
     expect(env.USERPROFILE).toBe(HOME)
-    expect(env.GIT_CONFIG_GLOBAL).toBe(path.join(os.homedir(), '.gitconfig'))
-    expect(env.npm_config_userconfig).toBe(path.join(os.homedir(), '.npmrc'))
+    // git and npm read the real home's config, pinned only where that hides nothing (sharedConfigPins).
+    const pins = sharedConfigPins(os.homedir(), { PATH: '/x' })
+    expect(env.GIT_CONFIG_GLOBAL).toBe(pins.GIT_CONFIG_GLOBAL)
+    expect(env.npm_config_userconfig).toBe(pins.npm_config_userconfig)
     expect(env.PATH).toBe(`/x${path.delimiter}${path.join(HOME, '.local', 'bin')}`)
     // The lever that never isolated identity is still never set.
     expect(env.CLAUDE_CONFIG_DIR).toBeUndefined()

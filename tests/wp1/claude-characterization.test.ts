@@ -94,6 +94,8 @@ const win = { webContents: { send: () => {} }, isDestroyed: () => false } as nev
 let sandbox = ''
 let primaryId = ''
 let workId = ''
+// The account the cases below ask for. On macOS only the primary account can run a session (a Mac has one Claude sign-in), so there it is the primary one; elsewhere the second account. The Mac refusal itself is covered in account-launch-refusals.test.ts.
+let requestedId = ''
 const sids: string[] = []
 // A MANAGED spawn -- one that resolves a profile -- is DEFERRED once behind the
 // project-settings gate (src/main/managed-launch-diagnostics.ts) and re-enters
@@ -127,6 +129,7 @@ describe('C1: local Claude spawn resolves a profile and isolates it through USER
     const p2 = profiles.createProfile('Work')
     profiles.upsertProfile({ ...p2, accountEmail: 'work@example.test', active: true })
     workId = p2.id
+    requestedId = process.platform === 'darwin' ? primaryId : workId
     providerEnv = { PATH: '/usr/bin', FROM_PROVIDER: '1', CCC_SESSION_WORKTREE: 'inherited-from-parent' }
     // WP1 slice 2: the launch path now takes the ambient-strip list and the
     // host control from the REGISTERED PACKAGE, so a bare session provider is
@@ -152,15 +155,17 @@ describe('C1: local Claude spawn resolves a profile and isolates it through USER
   })
 
   it('a requested valid profile becomes the child USERPROFILE; CLAUDE_CONFIG_DIR is never set; git/npm stay on the real home', async () => {
-    await launch('wp1-c1-requested', { shellOnly: false, profileId: workId })
+    await launch('wp1-c1-requested', { shellOnly: false, profileId: requestedId })
     const env = lastEnv()
-    expect(env.USERPROFILE).toBe(profiles.getProfileConfigDir(workId))
+    expect(env.USERPROFILE).toBe(profiles.getProfileConfigDir(requestedId))
     expect(env.CLAUDE_CONFIG_DIR).toBeUndefined()
     expect(env.FROM_PROVIDER).toBe('1') // the provider env is extended, not replaced
     expect(env.CCC_CONFIG_DIR).toBe(getConfigDir())
-    expect(env.GIT_CONFIG_GLOBAL).toBe(path.join(os.homedir(), '.gitconfig'))
-    expect(env.npm_config_userconfig).toBe(path.join(os.homedir(), '.npmrc'))
-    if (process.platform === 'linux') expect(env.HOME).toBe(profiles.getProfileConfigDir(workId))
+    // The real home's git and npm config, pinned only where that hides nothing (sharedConfigPins).
+    const pins = profiles.sharedConfigPins(os.homedir(), { PATH: providerEnv.PATH })
+    expect(env.GIT_CONFIG_GLOBAL).toBe(pins.GIT_CONFIG_GLOBAL)
+    expect(env.npm_config_userconfig).toBe(pins.npm_config_userconfig)
+    if (process.platform === 'linux') expect(env.HOME).toBe(profiles.getProfileConfigDir(requestedId))
     else expect(env.HOME).toBeUndefined()
   })
 
@@ -188,19 +193,19 @@ describe('C1: local Claude spawn resolves a profile and isolates it through USER
   it('an inherited CCC_SESSION_WORKTREE is deleted for a session that does not designate its own worktree (ADR-016)', async () => {
     await launch('wp1-c1-wt-shell', { shellOnly: true })
     expect(lastEnv().CCC_SESSION_WORKTREE).toBeUndefined()
-    await launch('wp1-c1-wt-interactive', { shellOnly: false, profileId: workId }) // sandbox cwd is not a git checkout
+    await launch('wp1-c1-wt-interactive', { shellOnly: false, profileId: requestedId }) // sandbox cwd is not a git checkout
     expect(lastEnv().CCC_SESSION_WORKTREE).toBeUndefined()
   })
 
   it('the redirected profile .local/bin is appended to PATH exactly once (case-insensitive) and the real entry stays first', async () => {
-    await launch('wp1-c1-path', { shellOnly: false, profileId: workId })
-    const localBin = path.join(profiles.getProfileConfigDir(workId), '.local', 'bin')
+    await launch('wp1-c1-path', { shellOnly: false, profileId: requestedId })
+    const localBin = path.join(profiles.getProfileConfigDir(requestedId), '.local', 'bin')
     const parts = lastEnv().PATH.split(path.delimiter)
     expect(parts[0]).toBe('/usr/bin')
     expect(parts.filter((p) => p.toLowerCase() === localBin.toLowerCase())).toHaveLength(1)
     // Already present in a different case: not appended again.
     providerEnv = { ...providerEnv, PATH: `/usr/bin${path.delimiter}${localBin.toUpperCase()}` }
-    await launch('wp1-c1-path-dedupe', { shellOnly: false, profileId: workId })
+    await launch('wp1-c1-path-dedupe', { shellOnly: false, profileId: requestedId })
     const parts2 = lastEnv().PATH.split(path.delimiter)
     expect(parts2.filter((p) => p.toLowerCase() === localBin.toLowerCase())).toHaveLength(1)
     expect(parts2).toHaveLength(2)

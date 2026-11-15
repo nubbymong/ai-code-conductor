@@ -16,11 +16,11 @@
  *   watchAndClaimRollout    -- 250ms-poll claim + 500ms-poll tail pipeline
  */
 
-import { readdirSync, lstatSync, unlinkSync, rmdirSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants, promises as fsp } from 'fs'
+import { readdirSync, lstatSync, realpathSync, unlinkSync, rmdirSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants, promises as fsp } from 'fs'
 import type { FileHandle } from 'fs/promises'
 import { join, relative, isAbsolute, sep, dirname, basename } from 'path'
 import { computeCodexCostUsd } from './pricing'
-import { CODEX_CONVERSATION_ID_RE, codexDayFolders, codexFolderIdentity, findCodexRollout, isRealFolder, parseSessionMetaLine, readRolloutFirstLine, sameDirectory } from './rollout-lookup'
+import { CODEX_CONVERSATION_ID_RE, codexDayFolders, codexFolderIdentity, findCodexRollout, isRealFolder, parseSessionMetaLine, readRolloutFirstLine, sameDirectory, sameFolderByRealPath } from './rollout-lookup'
 import type { FoundRollout, RolloutSessionMeta } from './rollout-lookup'
 import type { PickFolderIdentity } from '../types'
 import { normaliseCodexRateLimits, mergeAllowanceReadings, readingToBuckets, isoFromEpochMs, zonedTimeMs, CODEX_DEFAULT_LIMIT_ID } from './rate-limits'
@@ -793,7 +793,10 @@ function realFolderChain(sessionsDir: string, dir: string): boolean {
  *
  * Windows path note: Codex records cwd exactly as provided by the OS at spawn
  * time. Pass the same resolvedCwd string from pty-manager (backslashes on
- * Windows) so the exact-string match works correctly.
+ * Windows) so the exact-string match works correctly. When the session runs in
+ * a symlinked folder the rollout may record the real folder instead (the
+ * program asks the system where it is), so a rollout whose cwd is not the
+ * exact string is also taken when both resolve to one real folder.
  *
  * `sessionsDir` (WP2): the transcript folder of the realm the session runs in.
  * Required (WP2 commit 6g): there is no fallback to the ambient home, which
@@ -821,6 +824,23 @@ export function watchAndClaimRollout(
   const pickFile = typeof claimOpts?.pickFile === 'string' && claimOpts.pickFile ? claimOpts.pickFile : undefined
   const pickFolder = claimOpts?.pickFolder && typeof claimOpts.pickFolder.id === 'string' && typeof claimOpts.pickFolder.real === 'string' ? claimOpts.pickFolder : null
   const waitsForUser = !!pickFile && !resumeId
+
+  /** Whether a folder a rollout (or another launch) names is this session's:
+   *  the exact spelling first, then by real path (a symlinked folder). */
+  const realPaths = new Map<string, string | null>()
+  /** Each folder is resolved on disk once per watch (the session's own folder
+   *  once, however many rollouts are looked at); a failure is kept too, so a
+   *  folder that cannot be resolved is not asked about again. */
+  const realOnce = (p: string): string => {
+    let v = realPaths.get(p)
+    if (v === undefined) {
+      try { v = realpathSync.native(p) } catch { v = null }
+      realPaths.set(p, v)
+    }
+    if (v === null) throw new Error('not resolvable')
+    return v
+  }
+  const sameSessionFolder = (cwd: string): boolean => cwd === sessionCwd || sameFolderByRealPath(cwd, sessionCwd, realOnce)
 
   let claimedPath: string | null = null
   let intervalHandle: ReturnType<typeof setInterval> | null = null
@@ -1399,7 +1419,7 @@ export function watchAndClaimRollout(
         if (!head || head.kind === 'partial') continue
         if (head.kind === 'too-long') { settled.add(fullPath); continue }
         const found = parseSessionMetaLine(head.line)
-        if (found && found.cwd === sessionCwd && found.at >= since) {
+        if (found && sameSessionFolder(found.cwd) && found.at >= since) {
           candidates++
           if (!first) first = { path: fullPath, meta: found }
           continue
@@ -1414,7 +1434,7 @@ export function watchAndClaimRollout(
     // launch this claim competes with is marked, so its own claim is not
     // certain either.
     const at = first.meta.at
-    const rivals = [...pendingNewClaims].filter((p) => p !== pending && sameDirectory(p.sessionsDir, sessionsDir) && p.cwd === sessionCwd && p.admits(at))
+    const rivals = [...pendingNewClaims].filter((p) => p !== pending && sameDirectory(p.sessionsDir, sessionsDir) && sameSessionFolder(p.cwd) && p.admits(at))
     for (const p of rivals) p.contested = true
     claim(first.path, first.meta, candidates === 1 && rivals.length === 0 && !pending?.contested, { exact: false })
   }

@@ -277,7 +277,7 @@ describe('a Claude session of a user whose login shell is not of the sh family',
     expect(buildClaudeLocalSpawn({ ...BASE_OPTS }, { SHELL: '/bin/zsh', PATH: APP_PATH })).toMatchObject({ cmd: '/bin/zsh', args: ['-l'], env: { PATH: APP_PATH } })
     expect(resolveClaudeBinary(undefined, { SHELL: '/bin/zsh', PATH: APP_PATH }).cmd).toBe('claude')
     expect(buildClaudeLocalSpawn({ ...BASE_OPTS, shellOnly: true }, { SHELL: FISH, PATH: APP_PATH })).toMatchObject({ cmd: FISH, args: ['-l'], env: { PATH: APP_PATH } })
-    expect(buildClaudeLocalSpawn({ ...BASE_OPTS, shellOnly: true, elevated: true }, { SHELL: FISH, PATH: APP_PATH })).toMatchObject({ cmd: 'sudo', args: [FISH, '-l'] })
+    expect(buildClaudeLocalSpawn({ ...BASE_OPTS, shellOnly: true, elevated: true }, { SHELL: FISH, PATH: APP_PATH })).toMatchObject({ cmd: 'sudo', args: ['env', 'CLAUDE_CODE_DISABLE_MOUSE=1', 'CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1', 'CLAUDE_CODE_DISABLE_MOUSE_CLICKS=1', 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1', FISH, '-l'] })
     expect(h.sync).toEqual([])
     expect(h.async).toEqual([])
   })

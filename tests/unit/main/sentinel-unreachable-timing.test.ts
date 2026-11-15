@@ -92,8 +92,13 @@ vi.mock('../../../src/main/config-manager', () => ({
   readConfig: () => null,
   readConfigChecked: () => ({ value: null, outcome: 'absent' }),
 }))
+/** The account the analysis would run on, and the sentence main gives when it is switched off. */
+const analysisAccount = vi.hoisted(() => ({ profileId: null as string | null, switchedOff: null as string | null }))
 vi.mock('../../../src/main/account-profiles', () => ({
-  resolveHeadlessProfileHome: () => ({ home: null, profileId: null }),
+  resolveHeadlessProfileHome: () => (analysisAccount.profileId
+    ? { home: `/profiles/${analysisAccount.profileId}`, profileId: analysisAccount.profileId }
+    : { home: null, profileId: null }),
+  inactiveAccountRefusal: () => analysisAccount.switchedOff,
   // No start steps pending and every sign-in folder checked (the waits a launch makes first).
   startProfileStepsPending: () => false,
   startProfileStepsSettled: async () => {},
@@ -183,6 +188,8 @@ beforeEach(() => {
   codexRuns.mode = 'unreachable'
   claudeMode.analysis = 'unreachable'
   claudeAnalyses.length = 0
+  analysisAccount.profileId = null
+  analysisAccount.switchedOff = null
   notes.readable = true
   spawnClaudeHeadless.mockClear()
 })
@@ -272,6 +279,19 @@ describe('the analysis cannot reach its service: the panel reports within a minu
     expect(report.at).not.toBeNull()
     expect(report.at!).toBeLessThanOrEqual(MINUTE)
     expect(claudeAnalyses).toHaveLength(1)
+  })
+})
+
+describe('the analysis account is switched off: no analysis runs on it, and the panel says so', () => {
+  it('Claude Code: nothing is run, and the panel names the account and what to do', async () => {
+    pref.claude = 'on'; pref.codex = 'off'
+    analysisAccount.profileId = 'profile-off-1'
+    analysisAccount.switchedOff = 'The Claude account "Side project" is switched off, so nothing was started on it. Choose another account, or switch "Side project" back on in Settings, Accounts.'
+    const { mod, report } = await sentinelSeeded({ lastSeenCcVersion: '2.1.290' })
+    await mod.sentinelStartupCheck()
+    expect(claudeAnalyses).toHaveLength(0)
+    expect(report.error).toContain('"Side project" is switched off')
+    expect(mod.getSentinelState()!.snapshot().lastSeenCcVersion).toBe('2.1.290')
   })
 })
 

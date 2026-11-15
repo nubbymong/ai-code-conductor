@@ -165,6 +165,12 @@ describe('Claude sign-out: the profile the realm names, judged by its state afte
     expect(unprepared.message).toMatch(/could not prepare/)
     expect(unprepared.message).not.toMatch(/settings/)
     expect(unprepared.ran).toBeUndefined()
+    // On a Mac, another account's sign-out says why, not "could not prepare".
+    const macOther = await createClaudeAuthOperations(ports({ logouts: { [PA]: { ran: false, after: null, refused: 'mac-not-primary' } } }).p, proven).logout({ authRealmId: 'realm-a' })
+    expect(macOther).toMatchObject({ ok: false, code: 'not-started' })
+    expect(macOther.message).toMatch(/On a Mac, only your normal Claude sign-in can be signed out here/)
+    expect(macOther.message).not.toMatch(/could not prepare/)
+    expect(macOther.ran).toBeUndefined()
     const thrown = createClaudeAuthOperations(ports({ logout: async () => { throw new Error('x') } }).p, proven)
     expect(await thrown.logout({ authRealmId: 'realm-a' })).toEqual({ ok: false, code: 'not-started' })
     const notRun = createClaudeAuthOperations(ports({ logouts: { [PA]: { ran: false, after: cliStatus(false) } } }).p, proven)

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "e804f4988e46956ed0e2e7f8f05db399e0f13aefb8c97af7add5b7976ce2ce0a",
-  "manifestHead": "5253afe0f3cbaf3570e86c2561bf1f210884059f",
+  "manifestPathDigest": "fb471dd3f58e60fb8442ec1f80a5f68b0ab26bad6fa2f096a49f529a71a44510",
+  "manifestHead": "6cd51363d4b7a39c3d4e66dafe3e1568331f1bc8",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -8214,6 +8214,30 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.7 review follow-up test (tests/unit/providers/codex/telemetry-settle-reject.test.ts), reworked after CI at 427807fb: keeping a run's running time that throws is logged, the status line still updates, and neither the watch nor its end throws (WP1.68); WP2 PR 3 fixer 9 A2 (row 36): one warning for three failed keeps, and the once-per-run case (WP1.68); tests/unit/providers/codex/telemetry-settle-reject.test.ts; WP2 PR 3 fixer 10 (ADR-009 D4, row 36): a large rollout's run whose keep fails, works and fails again while its count runs is warned of twice, and one watch that lets its claim go and claims again warns again (WP1.68); tests/unit/providers/codex/telemetry-settle-reject.test.ts",
       "note": "created by WP2 PR 3 P3.7; the running-time store is replaced by vi.mock to throw on demand; real files in a temp folder, no Codex process"
+    },
+    {
+      "path": "tests/unit/providers/codex/telemetry-symlink-real.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.5 test (tests/unit/providers/codex/telemetry-symlink-real.test.ts): a Codex session started in a real symlinked folder is claimed by its real path (WP1.68)",
+      "note": "created by the 2.1.3-beta.5 accounts and sessions track; makes a real symlink in a temp folder, no Codex process"
+    },
+    {
+      "path": "tests/unit/providers/codex/telemetry-symlinked-folder.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.5 test (tests/unit/providers/codex/telemetry-symlinked-folder.test.ts): a rollout that records the real folder of a symlinked session folder is claimed, and a folder that cannot be resolved is not (WP1.68)",
+      "note": "created by the 2.1.3-beta.5 accounts and sessions track; the real-path lookup is a stand-in, no link and no Codex process"
     },
     {
       "path": "tests/unit/providers/codex/telemetry.test.ts",

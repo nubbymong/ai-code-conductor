@@ -31,7 +31,7 @@ import { spawnClaudeHeadless } from './claude-headless'
 import { acquireProfileConsumer, waitForProfileRefresh } from './profile-consumers'
 import { providerLaunchRefusal, providerProbeRefusal } from './provider-launch-gate'
 import type { ProviderLaunchRefused } from '../shared/providers'
-import { getProfileConfigDir, getPrimaryProfileId, setupProfileLinks, listProfiles, isValidProfileId, startProfileStepsPending, startProfileStepsSettled, profileCredentialFoldersChecked, checkProfileCredentialFolders } from './account-profiles'
+import { getProfileConfigDir, getPrimaryProfileId, setupProfileLinks, listProfiles, isValidProfileId, startProfileStepsPending, startProfileStepsSettled, profileCredentialFoldersChecked, checkProfileCredentialFolders, inactiveAccountRefusal, launchRefusalText } from './account-profiles'
 import { claudeSettingsTransportEnv } from './sentinel/sentinel-analysis'
 import { getProjectRootPath, getInstallPath } from './update-watcher'
 import { getResourcesDirectory } from './ipc/setup-handlers'
@@ -1286,6 +1286,17 @@ export async function runInsights(getWindow: () => BrowserWindow | null, opts?: 
       notifyRenderer(getWindow, run)
       return id
     }
+    // An account switched off never runs, however its id arrived (the page's
+    // list hides it, but a direct request, or the primary fallback, may name
+    // one): the run fails with the sentence, which the page shows.
+    const switchedOff = account.profileId ? inactiveAccountRefusal(account.profileId, listProfiles) : null
+    if (switchedOff) {
+      run.status = 'failed'
+      run.error = switchedOff
+      upsertRun(run)
+      notifyRenderer(getWindow, run)
+      return id
+    }
     run.statusMessage = 'Step 1/3: Generating report...'
     upsertRun(run)
     notifyRenderer(getWindow, run)
@@ -1345,7 +1356,7 @@ export async function runInsights(getWindow: () => BrowserWindow | null, opts?: 
     notifyRenderer(getWindow, run)
   } catch (err: any) {
     run.status = 'failed'
-    run.error = err.message || 'Unknown error'
+    run.error = launchRefusalText(err.message || 'Unknown error')
     upsertRun(run)
     notifyRenderer(getWindow, run)
   } finally {
@@ -1903,7 +1914,7 @@ export async function runCrossAccountInsights(
       } catch (err: any) {
         // The per-account lock rejecting (that account is already running) lands
         // here, as does anything thrown before a run entry existed.
-        patchMember(target.id, { status: 'failed', error: err?.message || 'Run could not be started' })
+        patchMember(target.id, { status: 'failed', error: launchRefusalText(err?.message || 'Run could not be started') })
       } finally {
         done++
         run.statusMessage = describeCrossAccountFanout(done, targets.length)
@@ -2109,7 +2120,7 @@ export async function runCrossAccountInsights(
   } catch (err: any) {
     run.status = 'failed'
     run.statusMessage = undefined
-    run.error = err?.message || 'Unknown error'
+    run.error = launchRefusalText(err?.message || 'Unknown error')
     publish()
   } finally {
     inFlight.delete(CROSS_ACCOUNT_KEY)

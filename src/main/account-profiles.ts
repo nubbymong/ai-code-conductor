@@ -28,6 +28,8 @@ import { realmEnvForProvider, ambientAuthVariablesForProvider, sanitizeManagedSe
 import { canonicaliseEmail } from '../shared/account-chip-color'
 import { lowerAsciiLetters } from '../shared/profile-id'
 import type { AccountProfile } from '../shared/account-types'
+import { isAccountActive } from '../shared/account-types'
+import { MANAGED_LAUNCH_REFUSAL, launchRefusalText } from './launch-refusal'
 import type { ProjectGateResult } from '../shared/providers'
 
 // Shared-directory names junctioned from a profile back to the shared root.
@@ -3556,10 +3558,10 @@ export function captureDetectedAccount(profileId: string, name?: string): Accoun
  * choke point makes "every managed launch is reported" the same kind of fact as
  * "every managed launch is hardened".
  */
-/** Prefix every managed-launch refusal carries, so a caller can tell an
- *  ISOLATION FAULT apart from an ordinary failure (a missing CLI, a timeout)
- *  instead of swallowing both in one bare catch (adversarial review, MAJOR 7). */
-export const MANAGED_LAUNCH_REFUSAL = '[profiles] refusing a managed Claude launch'
+/** MANAGED_LAUNCH_REFUSAL, the prefix every managed-launch refusal carries, and
+ *  launchRefusalText live in launch-refusal.ts (no imports, so claude-headless
+ *  can use them too). */
+export { MANAGED_LAUNCH_REFUSAL, launchRefusalText }
 
 /** Who is launching, for the preflight report.
  *
@@ -3684,6 +3686,63 @@ export function profileSecureStorageRoot(home: string): string | null {
   return path.join(home, '.claude')
 }
 
+/**
+ * The git and npm config files a managed launch pins to the REAL home, so a
+ * profile home cannot hide the user's own settings.
+ *
+ * Git ignores the XDG file (`$XDG_CONFIG_HOME/git/config`, or
+ * `~/.config/git/config`) whenever GIT_CONFIG_GLOBAL is set, so a pin to
+ * `~/.gitconfig` hid a config kept only in the XDG place. The pin is made
+ * only when `~/.gitconfig` is there and no XDG git config is: with neither
+ * file, or only the XDG one, or both, the variable is left alone and git reads
+ * what a normal terminal reads (through the profile home's mirror of the real
+ * home, or the real home itself). The npm pin follows the same existence rule
+ * for `~/.npmrc`, which is the one place npm looks.
+ *
+ * One layout needs more. `mirrorRealHome` skips a symlink at the root of the
+ * real home, so when `~/.gitconfig` is a symlink AND an XDG git config exists,
+ * the profile home has no `.gitconfig` and git would read only the XDG file.
+ * Git's per-process config variables (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_n`,
+ * `GIT_CONFIG_VALUE_n`) add an include of the real `~/.gitconfig` on top, and
+ * leave the XDG lookup alone, so both files are read. An existing count in
+ * `source` is continued, not replaced. A regular `~/.gitconfig` needs none of
+ * this: the mirror hard-links it, and an include would read it twice.
+ *
+ * A pure function over `existsFile` and `isLink`, so it tests with a temp
+ * home. `source` is the environment the child will have (XDG_CONFIG_HOME and
+ * GIT_CONFIG_COUNT are read from it).
+ */
+export function sharedConfigPins(
+  realHome: string,
+  source: Readonly<Record<string, string | undefined>> = process.env,
+  existsFile: (p: string) => boolean = (p) => fs.existsSync(p),
+  isLink: (p: string) => boolean = (p) => fs.lstatSync(p).isSymbolicLink(),
+): Record<string, string> {
+  const exists = (p: string): boolean => { try { return existsFile(p) } catch { return false } }
+  const linked = (p: string): boolean => { try { return isLink(p) } catch { return false } }
+  const pins: Record<string, string> = {}
+  const gitrc = path.join(realHome, '.gitconfig')
+  const xdgBase = source.XDG_CONFIG_HOME
+  const xdgFiles = [path.join(realHome, '.config', 'git', 'config')]
+  if (xdgBase) xdgFiles.unshift(path.join(xdgBase, 'git', 'config'))
+  if (exists(gitrc)) {
+    if (!xdgFiles.some((p) => exists(p))) pins.GIT_CONFIG_GLOBAL = gitrc
+    else if (linked(gitrc)) {
+      const raw = source.GIT_CONFIG_COUNT
+      const count = raw === undefined || raw === '' ? 0 : /^\d+$/.test(raw) ? Number(raw) : -1
+      // An unreadable count is left alone: appending to it could hide the user's own entries.
+      if (count >= 0) {
+        pins.GIT_CONFIG_COUNT = String(count + 1)
+        pins[`GIT_CONFIG_KEY_${count}`] = 'include.path'
+        pins[`GIT_CONFIG_VALUE_${count}`] = gitrc
+      }
+    }
+  }
+  const npmrc = path.join(realHome, '.npmrc')
+  if (exists(npmrc)) pins.npm_config_userconfig = npmrc
+  return pins
+}
+
 /** What a profile-home launch composes BEFORE its realm patch, for a session
  *  (withProfileHome) and a reviewer (profileRealmLaunch) alike. */
 function profileHomeLaunchBase(env: Record<string, string>, home: string): Record<string, string> {
@@ -3692,8 +3751,8 @@ function profileHomeLaunchBase(env: Record<string, string>, home: string): Recor
     ...env,
     // Belt-and-suspenders: keep git/npm reading the real shared config even if a
     // hard-linked dotfile ever desyncs (the mirror also links these through).
-    GIT_CONFIG_GLOBAL: path.join(realHome, '.gitconfig'),
-    npm_config_userconfig: path.join(realHome, '.npmrc'),
+    // Only where it does not hide a config the user keeps elsewhere.
+    ...sharedConfigPins(realHome, env),
   }
   // Claude's native install lives at `$HOME/.local/bin`. With the home redirected,
   // CC computes that as `<home>/.local/bin` (a junction to the real ~/.local) but
@@ -3746,13 +3805,104 @@ export interface ProfileRealmLaunch {
  *  recorded): a caller must not read that as "not the primary" -- nothing is
  *  offered on it, and nothing already chosen is cleared because of it. */
 export function profileReviewRefusal(profileId: string, platform: NodeJS.Platform = process.platform): string | null {
-  if (platform !== 'darwin') return null
-  const all = readProfilesStrict()
+  return macNotPrimary(profileId, platform, readProfilesStrict) ? 'On macOS only your normal Claude sign-in can run Claude reviews.' : null
+}
+
+/** The macOS rule both refusals share: true when this profile is not the
+ *  primary one. False off macOS. THROWS when it cannot tell (see
+ *  profileReviewRefusal). `read` is the strict profile list, a parameter so
+ *  the rule tests on any OS without a profiles file. */
+function macNotPrimary(
+  profileId: string,
+  platform: NodeJS.Platform,
+  read: () => AccountProfile[] | null,
+  whenNoPrimary: 'throw' | 'allow' = 'throw',
+): boolean {
+  if (platform !== 'darwin') return false
+  const all = read()
   if (all === null) throw new Error('the profile list could not be read')
   const primary = all.find((p) => p && p.isPrimary)?.id
-  if (!primary) throw new Error('no primary profile is recorded')
-  if (primary === profileId) return null
-  return 'On macOS only your normal Claude sign-in can run Claude reviews.'
+  if (!primary) {
+    if (whenNoPrimary === 'throw') throw new Error('no primary profile is recorded')
+    noteMacNoPrimary()
+    return false
+  }
+  return primary !== profileId
+}
+
+let macNoPrimaryLogged = false
+/** A readable list with no primary recorded is a normal state (first-run
+ *  capture only marks one when a normal sign-in exists, and an older or fresh
+ *  install may have none), so a launch there goes on as it did before the
+ *  rule. Said once per run, so a busy launcher does not repeat it. */
+function noteMacNoPrimary(): void {
+  if (macNoPrimaryLogged) return
+  macNoPrimaryLogged = true
+  logWarn('[profiles] no account is marked as the normal sign-in on this Mac, so launches on Claude accounts are not restricted to it')
+}
+/** Test hook: say the no-primary notice again. */
+export function _resetMacNoPrimaryLogForTest(): void { macNoPrimaryLogged = false }
+
+/** What a macOS session on a Claude account other than the primary one is
+ *  told. A session cannot run as that account there (the login keychain is
+ *  found through $HOME and is shared, so the CLI would run as the Mac's own
+ *  sign-in under the other account's name), so it starts nothing. */
+export const MAC_NON_PRIMARY_REFUSAL = 'On a Mac, only your normal Claude sign-in can be used, so this account cannot start it. Choose your primary account and try again.'
+
+/** What the account's sign-in check says on a Mac for an account other than
+ *  the primary one: an expected state, not a fault and not "signed out". */
+export const MAC_NOT_CHECKABLE = 'On a Mac, only your normal Claude sign-in can be checked here, so this account is not checked.'
+
+/** What a macOS launch is told when it cannot tell which account is the
+ *  normal sign-in because profiles.json could not be read. */
+export const MAC_PRIMARY_UNKNOWN_REFUSAL = 'This app could not tell which Claude account is your normal sign-in on this Mac, so it did not start. Check Settings, Accounts, then try again.'
+
+/** Why a session in this profile home must not start on this platform, or
+ *  null when it may. The launch counterpart of profileReviewRefusal, reading
+ *  the same rule (`macNotPrimary`): on macOS a session on a profile that is
+ *  definitely not the primary account is refused. A list that cannot be read
+ *  is a refusal too (a session on the wrong account is the harm; a refused one
+ *  only waits). A readable list with NO primary recorded is not: that is a
+ *  real state (no normal sign-in was there to capture, an older config, a
+ *  single account), and refusing there would stop every account's launch, so
+ *  the launch goes on as it did before the rule, and says so once in the log. */
+export function profileLaunchRefusal(
+  profileId: string,
+  platform: NodeJS.Platform = process.platform,
+  read: () => AccountProfile[] | null = readProfilesStrict,
+): string | null {
+  try {
+    return macNotPrimary(profileId, platform, read, 'allow') ? MAC_NON_PRIMARY_REFUSAL : null
+  } catch {
+    return MAC_PRIMARY_UNKNOWN_REFUSAL
+  }
+}
+
+/** Why a Claude session may not start on this account because it has been
+ *  switched off, or null when it may. The picker already hides an inactive
+ *  account; this is the main-side check for an id that arrives some other
+ *  way (a restored tab or a saved session that names an account switched off
+ *  since). It names the account and how to move the tab to another. An
+ *  account that is not in the list, or a list that did not read, is not
+ *  refused here (the missing-account refusal and the launch checks cover
+ *  those): only an account that is there and switched off is. */
+export function inactiveAccountRefusal(profileId: string, list: () => AccountProfile[] = listProfiles): string | null {
+  const p = list().find((x) => x && x.id === profileId)
+  if (!p || isAccountActive(p)) return null
+  const name = typeof p.name === 'string' && p.name.trim() ? `"${p.name.trim()}"` : 'this account'
+  return `The Claude account ${name} is switched off, so nothing was started on it. Choose another account (for a tab, use Switch Account in its right-click menu), or switch ${name} back on in Settings, Accounts.`
+}
+
+/** The one call a launch makes to refuse a switched-off account: logs the
+ *  refusal and throws the sentence. Applies to a Claude session wherever its
+ *  account id arrives from (a restored tab, a saved session; the picker only
+ *  hides the account). A launch that names no account session has nothing to
+ *  refuse, so its caller does not ask. */
+export function assertAccountActive(profileId: string, sessionId: string): void {
+  const why = inactiveAccountRefusal(profileId)
+  if (!why) return
+  logWarn(`[profiles] session ${sessionId}: the account it names is switched off; the session is not started`)
+  throw new Error(why)
 }
 
 /** The profile-home composition of withProfileHome, for a reviewer launch the
@@ -3826,8 +3976,32 @@ export function withProfileHome(
   env: Record<string, string>,
   home: string | null,
   context?: ManagedLaunchContext,
+  platform: NodeJS.Platform = process.platform,
 ): Record<string, string> {
   if (!home) return env
+  // macOS: only the primary account can run a session there. HOME stays the
+  // real home (the login keychain is found through it), so any other
+  // profile's session would run as the Mac's own sign-in under that
+  // account's name. Refused before anything else is composed. The profile is
+  // the one this home belongs to; a home outside the profiles root has no
+  // account to judge.
+  // Only macOS has a rule to apply, so only there is the id derived at all: on
+  // any other platform nothing here can refuse, and a failing derivation must
+  // never reach a launch that is already hardened (it is a diagnostic helper
+  // everywhere but here). On macOS an id that cannot be derived is "cannot
+  // tell", which is a refusal (the same stance as an unreadable profile list).
+  if (platform === 'darwin') {
+    let launchProfileId: string | null
+    try {
+      launchProfileId = profileIdFromHome(home)
+    } catch {
+      throw new Error(`${MANAGED_LAUNCH_REFUSAL}: ${MAC_PRIMARY_UNKNOWN_REFUSAL}`)
+    }
+    if (launchProfileId) {
+      const macRefusal = profileLaunchRefusal(launchProfileId, platform)
+      if (macRefusal) throw new Error(`${MANAGED_LAUNCH_REFUSAL}: ${macRefusal}`)
+    }
+  }
   // Windows: the account's sign-in folders are checked owner-only before
   // anything runs in them -- the CLI writes its sign-in into the home and its
   // config folder (see credentialFoldersVerdict). Refused, as an isolation
