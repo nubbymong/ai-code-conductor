@@ -234,9 +234,13 @@ export class TokenomicsSupervisor {
         // 2.1.3-beta.4: a full pass says what its walks touched; a pass over
         // the reported transcripts alone says nothing and changes nothing. (A
         // replaced worker's pass was turned away above.)
-        if (m.walk !== undefined) this.lastWalk = walkStatsOf(m.walk) ?? this.lastWalk
+        // The row shows those figures, so an accepted report is pushed (coalesced)
+        // even when the event count did not move: a panel opened before the pass
+        // finished would otherwise never learn its Files/scan.
+        const walk = m.walk !== undefined ? walkStatsOf(m.walk) : null
+        if (walk) this.lastWalk = walk
         for (const cb of this.completeSubs) { try { cb({ firstIndex: m.firstIndex, drained: m.drained, filesFailed: m.filesFailed, eventsTotal: m.eventsTotal }) } catch { /* ignore */ } }
-        if (eventsChanged) this.schedulePush()
+        if (eventsChanged || walk) this.schedulePush()
         return
       }
       case 'health': {

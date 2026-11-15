@@ -52,6 +52,7 @@ const proc = (pid: number, cpuSeconds: number, creationTime = T0 - 20_000): Proc
 /** A supervisor over fake workers, each with a process id, on a clock the
  *  test moves, with the app's process figures as the test sets them. */
 function harness(opts: { metrics?: boolean } = {}) {
+  const pushes: Array<{ channel: string; payload: unknown }> = []
   // `pids`: the process id each worker forked gets, in turn (4321, 4322, ...
   // when not set).
   const w = { t: T0, list: [] as ProcessCpuMetric[], calls: 0, exits: [] as Array<() => void>, pids: [] as number[] }
@@ -63,14 +64,14 @@ function harness(opts: { metrics?: boolean } = {}) {
     return { transport: t, kill: () => t.kill(), onExit: (cb) => { w.exits.push(cb) }, pid: () => kid.pid }
   })
   const sup = new TokenomicsSupervisor({
-    forkChild: fork, dbPath: ':memory:', pricing: {}, configs: [], claudeProjectsDir: '/c', codexSessionsDir: '/x', emit: () => {},
+    forkChild: fork, dbPath: ':memory:', pricing: {}, configs: [], claudeProjectsDir: '/c', codexSessionsDir: '/x', emit: (channel: string, payload: unknown) => { pushes.push({ channel, payload }) },
     now: () => w.t,
     ...(opts.metrics === false ? {} : { processMetrics: () => { w.calls++; return w.list } }),
   })
   const row = (): ServiceHealth => sup.getDiagnosticsSnapshot().services[0]
   const ready = () => kids[kids.length - 1].t.emitToMain({ type: 'ready', firstIndexComplete: true, eventsTotal: 3 })
   const pass = (walk: unknown = WALK) => kids[kids.length - 1].t.emitToMain({ type: 'index-complete', firstIndex: false, drained: true, filesFailed: 0, eventsTotal: 3, walk: walk as never })
-  return { w, kids, fork, sup, row, ready, pass }
+  return { w, kids, fork, sup, row, ready, pass, pushes }
 }
 
 describe('the Tokenomics Services row: its process id and measured cost (2.1.3-beta.4)', () => {
@@ -175,6 +176,46 @@ describe('the Tokenomics Services row: its process id and measured cost (2.1.3-b
     // The new worker's own first full pass.
     h.pass({ ...WALK, at: WALK.at + 5_000, transcripts: { dirs: 1, entries: 2, files: 2 } })
     expect(h.row().measured).toEqual({ filesTouchedLastScan: 5, sampledAt: WALK.at + 5_000 })
+    h.sup.shutdown()
+  })
+
+  it('a full pass whose event count did not change still pushes the row, so its files figure reaches an open Services panel', () => {
+    const h = harness({ metrics: false })
+    h.sup.start()
+    h.ready()                                       // events: 3
+    vi.advanceTimersByTime(10_000)                  // any coalesce window from the start has closed
+    const before = h.pushes.length
+    h.pass()                                        // events: still 3, but the walk figures are new
+    expect(h.pushes.length).toBe(before + 1)
+    const sent = h.pushes[h.pushes.length - 1].payload as { services: ServiceHealth[] }
+    expect(sent.services[0].measured?.filesTouchedLastScan).toBe(9)
+    // A second pass inside the window is held and sent once when it ends.
+    h.pass({ ...WALK, at: WALK.at + 1000, transcripts: { dirs: 1, entries: 1, files: 1 }, rollouts: { dirs: 1, entries: 1, files: 0 } })
+    expect(h.pushes.length).toBe(before + 1)
+    vi.advanceTimersByTime(10_000)
+    expect(h.pushes.length).toBe(before + 2)
+    const later = h.pushes[h.pushes.length - 1].payload as { services: ServiceHealth[] }
+    expect(later.services[0].measured?.filesTouchedLastScan).toBe(1)
+    h.sup.shutdown()
+  })
+
+  it('a pass with no usable walk figures and the same event count pushes nothing; neither does a replaced worker\'s late pass', () => {
+    const h = harness({ metrics: false })
+    h.sup.start()
+    h.ready()
+    vi.advanceTimersByTime(10_000)
+    const before = h.pushes.length
+    h.kids[0].t.emitToMain({ type: 'index-complete', firstIndex: false, drained: true, filesFailed: 0, eventsTotal: 3 })
+    h.kids[0].t.emitToMain({ type: 'index-complete', firstIndex: false, drained: true, filesFailed: 0, eventsTotal: 3, walk: { nonsense: true } as never })
+    vi.advanceTimersByTime(10_000)
+    expect(h.pushes.length).toBe(before)
+    expect(h.sup.manualRestart('tokenomics')).toEqual({ ok: true })
+    h.ready()
+    vi.advanceTimersByTime(10_000)
+    const afterRestart = h.pushes.length
+    h.kids[0].t.emitToMain({ type: 'index-complete', firstIndex: false, drained: true, filesFailed: 0, eventsTotal: 3, walk: WALK })
+    vi.advanceTimersByTime(10_000)
+    expect(h.pushes.length).toBe(afterRestart)
     h.sup.shutdown()
   })
 
