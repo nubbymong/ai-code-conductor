@@ -218,8 +218,9 @@ const RECENT_LOOKUPS_KEPT = 8
 const walksInFlight = new Map<string, PathWalkInFlight<string | null>>()
 /** Moved by the test seam, so a walk still under way from an earlier case keeps nothing. */
 let walkEpoch = 0
-/** The PATH values whose last walk failed (it threw), with no answer since. */
-const failedWalks = new Set<string>()
+/** The PATH values whose last walk failed (it threw) with no answer since, and
+ *  when. A failure older than CLAUDE_LOOKUP_REUSE_MS is not counted. */
+const failedWalks = new Map<string, number>()
 
 /** The walk of `env`'s PATH under way, or a new one. The walk asks every
  *  folder in PATH's order and waits for each answer, however long one takes
@@ -246,8 +247,11 @@ function sharedClaudeWalk(env: NodeJS.ProcessEnv, now: () => number): PathWalkIn
       // again. One that fails twice in a row for the same PATH keeps "none":
       // the launch then says Claude Code was not found, not "try again" for
       // ever, and the PATH is walked again once that answer is a minute old.
+      // A failure more than a minute old is not the first of two in a row.
       if (epoch === walkEpoch) {
-        if (failedWalks.has(pathValue)) { failedWalks.delete(pathValue); recordClaudeOnWindows(pathValue, null, now()) } else failedWalks.add(pathValue)
+        const at = now()
+        const before = failedWalks.get(pathValue)
+        if (before !== undefined && at - before < CLAUDE_LOOKUP_REUSE_MS) { failedWalks.delete(pathValue); recordClaudeOnWindows(pathValue, null, at) } else failedWalks.set(pathValue, at)
         logInfo(`[claude-provider] the walk of PATH for Claude Code failed: ${err instanceof Error ? err.message : String(err)}`)
       }
       throw err

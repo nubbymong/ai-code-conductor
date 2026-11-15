@@ -707,6 +707,22 @@ describe('the wait itself (awaitClaudeLaunchWalk)', () => {
     expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
   })
 
+  // Mutation to prove this can fail: count a failure however old it is.
+  it('two failures more than a minute apart are not two in a row: the launch is told to try again, not that Claude Code was not found', async () => {
+    process.env.PATH = `${TOOLS};${NPM}`
+    h.present = files(`${NPM}\\claude.cmd`)
+    h.walkThrows = true
+    armClaudeLaunchWalk()
+    // The first failure: no answer, try again.
+    await awaitClaudeLaunchWalk(false)
+    // The next launch comes a good while later, and its walk fails too: the first of a new pair.
+    await vi.advanceTimersByTimeAsync(CLAUDE_LOOKUP_REUSE_MS + 1)
+    expect(() => launch()).toThrow(CLAUDE_LOOKUP_UNDER_WAY)
+    await flush()
+    expect(() => launch()).toThrow(CLAUDE_LOOKUP_UNDER_WAY)
+    expect(h.walksInPlace).toEqual([])
+  })
+
   // PATH is brought up to date while the app runs (the refresh at start, a
   // check the user asks for), and a walk keeps its answer for the PATH it
   // walked. Mutation to prove this can fail: end the wait when the walks
