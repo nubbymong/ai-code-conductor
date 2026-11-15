@@ -218,6 +218,8 @@ const RECENT_LOOKUPS_KEPT = 8
 const walksInFlight = new Map<string, PathWalkInFlight<string | null>>()
 /** Moved by the test seam, so a walk still under way from an earlier case keeps nothing. */
 let walkEpoch = 0
+/** The PATH values whose last walk failed (it threw), with no answer since. */
+const failedWalks = new Set<string>()
 
 /** The walk of `env`'s PATH under way, or a new one. The walk asks every
  *  folder in PATH's order and waits for each answer, however long one takes
@@ -237,8 +239,18 @@ function sharedClaudeWalk(env: NodeJS.ProcessEnv, now: () => number): PathWalkIn
   // wait for is a walk that kept no answer.
   const run: Promise<string | null> = new Promise<string | null>((resolve) => { resolve(findOnWindowsPathAsync(CLAUDE_WINDOWS_NAMES, env, folderFileTest(undefined, deadline), 'name')) })
     .then((found) => {
-      if (epoch === walkEpoch) recordClaudeOnWindows(pathValue, found, now())
+      if (epoch === walkEpoch) { failedWalks.delete(pathValue); recordClaudeOnWindows(pathValue, found, now()) }
       return found
+    }, (err: unknown) => {
+      // A walk that failed has no answer, and the launch is told to try
+      // again. One that fails twice in a row for the same PATH keeps "none":
+      // the launch then says Claude Code was not found, not "try again" for
+      // ever, and the PATH is walked again once that answer is a minute old.
+      if (epoch === walkEpoch) {
+        if (failedWalks.has(pathValue)) { failedWalks.delete(pathValue); recordClaudeOnWindows(pathValue, null, now()) } else failedWalks.add(pathValue)
+        logInfo(`[claude-provider] the walk of PATH for Claude Code failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      throw err
     })
     .finally(() => { if (walksInFlight.get(pathValue)?.run === run) walksInFlight.delete(pathValue) })
   const walk = withPathWalkDeadline(run, deadline)
@@ -557,6 +569,7 @@ export function _resetClaudeWindowsLookupForTest(): void {
   recentLookups.clear()
   for (const walk of walksInFlight.values()) walk.forget()
   walksInFlight.clear()
+  failedWalks.clear()
   walkEpoch += 1
   profileKept = null
   profileInFlight = null

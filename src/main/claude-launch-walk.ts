@@ -128,12 +128,12 @@ async function nodeLookAnswered(env: NodeJS.ProcessEnv): Promise<void> {
  *  names now, made off the event loop. At once when it names none: the
  *  answers are kept by now (the start's walk or another launch's ended
  *  meanwhile), or nothing is ever walked here (before main has
- *  started, or off Windows for a user whose login shell is of the sh family). Each walk is waited for until it ends or until its own deadline
- *  passes (windows-programs.ts WINDOWS_PATH_WALK_WAIT_MS, from the walk's
- *  start), whichever is first; launches asked for together wait for the one
- *  walk. A walk past its deadline keeps no answer, and the launch is then
- *  refused with that reason, or opens no resume list (the header of this
- *  file).
+ *  started, or off Windows for a user whose login shell is of the sh family).
+ *  Each walk is waited for until it ends or until its own deadline passes
+ *  (windows-programs.ts WINDOWS_PATH_WALK_WAIT_MS, from the walk's start),
+ *  whichever is first; launches asked for together wait for the one walk. A
+ *  walk past its deadline keeps no answer, and the launch is then refused
+ *  with that reason, or opens no resume list (the header of this file).
  *
  *  When PATH reads differently once the walks have ended (it was brought up
  *  to date meanwhile), the answers kept are for the PATH from before: the

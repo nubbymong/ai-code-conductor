@@ -684,6 +684,29 @@ describe('the wait itself (awaitClaudeLaunchWalk)', () => {
     expect(h.walks).toEqual([CLAUDE_NAMES])
   })
 
+  // Mutation to prove this can fail: keep no answer for a walk that fails
+  // twice (the launch is then told to try again for ever).
+  it('a walk that fails twice in a row for the same PATH keeps none: the launch then says Claude Code was not found, and does not start another walk', async () => {
+    process.env.PATH = `${TOOLS};${NPM}`
+    h.present = files(`${NPM}\\claude.cmd`)
+    h.walkThrows = true
+    armClaudeLaunchWalk()
+    // The first failure: no answer, try again.
+    await awaitClaudeLaunchWalk(false)
+    expect(() => launch()).toThrow(CLAUDE_LOOKUP_UNDER_WAY)
+    // The walk that launch started fails too (the second in a row).
+    await flush()
+    h.walks.length = 0
+    expect(() => launch()).toThrow(CLAUDE_NOT_ON_PATH)
+    expect(h.walks).toEqual([])
+    expect(h.walksInPlace).toEqual([])
+    // A walk that succeeds clears the count: the next failure is the first again.
+    h.walkThrows = false
+    recordClaudeOnWindows(process.env.PATH, null, Date.now() - CLAUDE_LOOKUP_REUSE_MS)
+    await awaitClaudeLaunchWalk(false)
+    expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
+  })
+
   // PATH is brought up to date while the app runs (the refresh at start, a
   // check the user asks for), and a walk keeps its answer for the PATH it
   // walked. Mutation to prove this can fail: end the wait when the walks
