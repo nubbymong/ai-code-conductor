@@ -105,6 +105,28 @@ describe('hooks service: desired state (B8)', () => {
     expect((await p).listening).toBe(true)
   })
 
+  it('the same child bound again after off and on keeps its uptime; a replacement starts it over', async () => {
+    vi.setSystemTime(1000)
+    h = harness()
+    h.bound()
+    expect(h.health().startedAt).toBe(1000)
+    vi.advanceTimersByTime(5000)
+    await h.proxy.stop()                  // off: the child lives on, so its age is kept
+    expect(h.health().startedAt).toBe(1000)
+    const p = h.proxy.start()             // on: the same child is told to start again
+    vi.advanceTimersByTime(7000)
+    h.bound()                             // ...and reports bound a second time
+    expect(h.fork).toHaveBeenCalledTimes(1)
+    expect(h.health()).toMatchObject({ state: 'listening', startedAt: 1000 })
+    await p
+    h.kids[0].exit()                      // a real replacement: the clock starts over
+    vi.advanceTimersByTime(300)
+    expect(h.health().startedAt).toBeNull()
+    vi.advanceTimersByTime(2000)
+    h.bound()
+    expect(h.health().startedAt).toBe(1000 + 5000 + 7000 + 300 + 2000)
+  })
+
   it('turned on again after a crash while off: a fresh child, secrets first, started once', async () => {
     h = harness()
     const secret = h.proxy.registerSession('s1')
@@ -403,7 +425,7 @@ describe('hooks service: a replaced child\'s late bound', () => {
     expect(h.health().restartCount).toBe(3)
     h.emitted.length = 0
     h.kids[2].t.emitToParent({ type: 'bound', port: 19431, pid: 99 })   // a child that has already been replaced
-    expect(h.health()).toMatchObject({ state: 'restarting', pid: 7, port: 19430 })
+    expect(h.health()).toMatchObject({ state: 'restarting', pid: null, startedAt: null, port: 19430 })
     expect(h.proxy.status().listening).toBe(false)
     expect(h.emitted).toEqual([])
     vi.advanceTimersByTime(STABLE_MS + 10)
@@ -416,7 +438,7 @@ describe('hooks service: a replaced child\'s late bound', () => {
     h.bound()
     expect(h.sup.manualRestart('hooks')).toEqual({ ok: true })
     h.kids[0].t.emitToParent({ type: 'bound', port: 19431, pid: 99 })
-    expect(h.health()).toMatchObject({ state: 'starting', pid: 7 })
+    expect(h.health()).toMatchObject({ state: 'starting', pid: null, startedAt: null })
     expect(h.proxy.status().listening).toBe(false)
     h.bound()                                           // the current child's own report is taken
     expect(h.health().state).toBe('listening')

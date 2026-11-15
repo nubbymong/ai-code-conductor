@@ -93,6 +93,11 @@
       "evidence": "WP1.38: WP1 (#619) added legacyCliPin, the enabled and valid legacy CLI pin with whether it is installed, which the PTY and cloud-agent launch paths read; the existing cases are kept; tests/unit/legacy-version-security.test.ts"
     },
     {
+      "path": "tests/unit/logging/log-supervisor.test.ts",
+      "disposition": "replace",
+      "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.3-beta.4 services batch added cases: the logging row is a utility process from the start, before the worker is ready, and its uptime and pid follow the current worker (a crash, a manual restart, a failed fork and a spent budget leave neither; ready starts the uptime over); the existing cases are kept; this mapping also covers changes made after the WP1 baseline and before this batch; tests/unit/logging/log-supervisor.test.ts"
+    },
+    {
       "path": "tests/unit/main/account-usage-stream-handler.test.ts",
       "disposition": "replace",
       "evidence": "WP1.60 enable/disable: WP2 P3 usage track MP3 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md) added the accountUsage:knownLabels handler cases (cached labels, input ignored, a failure is no labels) and mocks knownUsageLabels; the existing cases are kept; tests/unit/main/account-usage-stream-handler.test.ts; WP2 P3 usage track MP3 round-2 review fixes added the cases that the credential state is not read while Claude Code is off (a rule that throws is a no) and that an older stream never reads as current again after a newer one finished, and holds the scripted source per call; WP2 P3 usage track MP4 review fixes renamed the gate it mocks to claudeAccountDataAllowed; the existing cases are kept"
@@ -136,6 +141,11 @@
       "path": "tests/unit/main/per-session-settings-statusline.test.ts",
       "disposition": "replace",
       "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.1-beta.2 batch added three cases: the app sets up no status line of its own from a resources folder path the shell would read as more than a path, says why and keeps the user's own status line, and an ordinary path with spaces still gets it; the existing cases are kept; tests/unit/main/per-session-settings-statusline.test.ts"
+    },
+    {
+      "path": "tests/unit/main/watchdog/watchdog-throttle-silence.test.ts",
+      "disposition": "replace",
+      "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.3-beta.4 services batch added one case: the watchdog row says it runs inside the main process, watching or not; the existing cases are kept; tests/unit/main/watchdog/watchdog-throttle-silence.test.ts"
     },
     {
       "path": "tests/unit/profile-consumers.test.ts",
@@ -198,6 +208,16 @@
       "evidence": "WP1.33 mapping, not a WP1 change: the WP2 T24 fix makes a bulk close run a container session's End before its local kill (endContainerSessionRemote), so the first case was renamed to 'ends a container remote, kills the PTY, forgets the browser profile, then drops the record -- in that order, once per id', every order assertion now starts with that step, and one case was added (the container branch gets the session record, or nothing for an id the store no longer has); 2 baseline cases to 3; tests/unit/renderer/close-session-batch.test.ts"
     },
     {
+      "path": "tests/unit/renderer/conductor-health-pill.test.tsx",
+      "disposition": "replace",
+      "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.3-beta.4 services batch changed what the title-bar pill says, so the starting case was renamed (a degraded row on its own host reads Degraded) and cases were added for a row that is starting, a row that is restarting, and rows that are switched off beside running ones; the other cases are kept; tests/unit/renderer/conductor-health-pill.test.tsx"
+    },
+    {
+      "path": "tests/unit/renderer/conductor-services-panel.test.tsx",
+      "disposition": "replace",
+      "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.3-beta.4 services batch made the MCP server a row read from the snapshot, so the fixed-text case was replaced and the watchdog card case renamed (it runs in-process), and cases were added for the MCP row, stopped rows, a Tokenomics restart, the counters each card shows, a row's measured cost, a hooks row that fell back to the main process, a row with no child up showing a dash for PID and Uptime, and the panel scrolling inside the window; the other cases are kept; tests/unit/renderer/conductor-services-panel.test.tsx"
+    },
+    {
       "path": "tests/unit/renderer/sidebar-dock-tips.test.tsx",
       "disposition": "replace",
       "evidence": "WP1.2: WP2 commit 6e review fix (ca441e86) added the cases for the sidebar dock's Ask row with Claude Code off (says why, opens nothing, can still be hidden, live again once turned back on); the existing cases are kept; tests/unit/renderer/sidebar-dock-tips.test.tsx; WP2 PR 4 owner answers review (9d606305, C-S4): three cases for the tip row's assistant mark added; the existing cases are kept (WP1.33); tests/unit/renderer/sidebar-dock-tips.test.tsx"
@@ -241,6 +261,31 @@
       "path": "tests/unit/sentinel-ui-logic.test.ts",
       "disposition": "replace",
       "evidence": "WP1.33 mapping, not a WP1 change: the PR 4 owner answers review (fa79af12) added four cases for the title-bar chip after a failed analysis (the incomplete state and its tooltip); the existing cases are kept; tests/unit/sentinel-ui-logic.test.ts; the PR 4 round 2 fix (2cb791d4) added cases: a message that is no failure leaves the chip ok or reviewed, and incomplete needs the failed-analysis flag; the existing cases are kept; tests/unit/sentinel-ui-logic.test.ts"
+    },
+    {
+      "path": "tests/unit/services/diagnostics-merge.test.ts",
+      "disposition": "replace",
+      "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.3-beta.4 services batch ported the merge cases onto the one service registry, so the group and two cases were renamed (a stopped hooks row in place of a synthetic base; no PTY block without PTY data) and three were added (lines merged by time across every source, a supervisor's own log array left as it was, the PTY block beside a logging row); tests/unit/services/diagnostics-merge.test.ts; the rows and the restart routing are in tests/unit/services/service-registry.test.ts"
+    },
+    {
+      "path": "tests/unit/services/service-health-handlers.test.ts",
+      "disposition": "replace",
+      "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.3-beta.4 services batch took the snapshot merge and the restart routing out of the IPC handlers into one service registry, so this file keeps three cases (the two channels hand over to the registry) and its twelve earlier cases are covered where the behaviour now lives: rows, the Watchdog block and restart routing in tests/unit/services/service-registry.test.ts, the merged log and the PTY block in tests/unit/services/diagnostics-merge.test.ts; a service that is not there to ask now has a stopped row where it had none; tests/unit/services/service-health-handlers.test.ts"
+    },
+    {
+      "path": "tests/unit/services/service-supervisor-health.test.ts",
+      "disposition": "replace",
+      "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.3-beta.4 services batch added one case: the hooks row is a utility process from the start, before its child has bound; the existing cases are kept; tests/unit/services/service-supervisor-health.test.ts"
+    },
+    {
+      "path": "tests/unit/services/service-supervisor-lifecycle.test.ts",
+      "disposition": "replace",
+      "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.3-beta.4 services batch added cases: when the hooks gateway fails open its row drops the dead child process id and event-loop stalls, and the row follows the current child (a crash, a manual restart, a failed fork and a child that exits while turned off leave no pid, uptime or stalls; bound starts the uptime over); the existing cases are kept; tests/unit/services/service-supervisor-lifecycle.test.ts"
+    },
+    {
+      "path": "tests/unit/shared/service-health.test.ts",
+      "disposition": "replace",
+      "evidence": "WP1.33 mapping, not a WP1 change: the 2.1.3-beta.4 services batch made a new row state its own host, so one case was renamed (a starting record on the host the caller states) and two were added (no fallback host a row did not state; no measured figures until something measures it); the other cases are kept; tests/unit/shared/service-health.test.ts"
     },
     {
       "path": "tests/unit/ssh-tmux.test.ts",

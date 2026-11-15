@@ -3,11 +3,14 @@ import type { DiagnosticsSnapshot, ServiceHealth } from '../../shared/service-he
 
 type Tone = 'green' | 'amber' | 'red' | 'grey'
 
-// Severity ordering: higher index = worse. Used by worst() to pick the
-// most-alarming service across all supervised services (hooks + logging).
+// Severity ordering: higher = worse. Used by worst() to pick the row the pill
+// speaks for, across every row the service registry lists. A stopped row is
+// one that is switched off (or simply not in use), which is not an alarm: it
+// ranks below a running one, so it decides the pill only when every row is
+// stopped.
 const STATE_SEVERITY: Record<string, number> = {
-  listening: 0,
-  stopped: 1,
+  stopped: 0,
+  listening: 1,
   starting: 2,
   restarting: 3,
   degraded: 4,
@@ -17,9 +20,8 @@ const STATE_SEVERITY: Record<string, number> = {
 function worst(services: ServiceHealth[]): { tone: Tone; word: string | null; tip: string } {
   if (!services.length) return { tone: 'grey', word: null, tip: 'Services: unknown' }
 
-  // Pick the service with the highest severity across ALL supervised services
-  // (hooks + logging, and any future additions). Falls back to services[0] when
-  // all severities are tied (e.g. all listening = green).
+  // Pick the row with the highest severity across ALL rows. Falls back to the
+  // first of them when severities are tied (e.g. all listening = green).
   const s = services.reduce((a, b) =>
     (STATE_SEVERITY[b.state] ?? 0) > (STATE_SEVERITY[a.state] ?? 0) ? b : a
   )
@@ -31,9 +33,16 @@ function worst(services: ServiceHealth[]): { tone: Tone; word: string | null; ti
     case 'crashed':
       return { tone: 'red', word: 'Down', tip }
     case 'stopped':
+      // Only reached when every row is stopped.
       return { tone: 'grey', word: null, tip: `${s.label}: off` }
+    // A row that is coming up says so. It is not degraded: at every launch the
+    // utility processes and the MCP server take a moment to start.
+    case 'starting':
+      return { tone: 'amber', word: 'Starting', tip }
+    case 'restarting':
+      return { tone: 'amber', word: 'Restarting', tip }
     default:
-      // starting / restarting / degraded
+      // degraded (and any state this pill does not know)
       return {
         tone: 'amber',
         word: s.host === 'in-process-fallback' ? 'Fallback' : 'Degraded',

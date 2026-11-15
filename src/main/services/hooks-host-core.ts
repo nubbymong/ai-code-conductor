@@ -1,6 +1,7 @@
 import { HooksGateway } from '../hooks/hooks-gateway'
 import { LoopStallMonitor } from './loop-stall-monitor'
 import { IPC } from '../../shared/ipc-channels'
+import { SERVICE_ID } from '../../shared/service-health'
 import type { HooksGatewayOptions } from '../hooks/hooks-gateway'
 import type { HostTransport } from './service-transport'
 import type { HookEvent, HooksGatewayStatus } from '../../shared/hook-types'
@@ -74,7 +75,7 @@ export function createHooksHost(transport: HostTransport, opts?: CreateHooksHost
   // ring. Metadata-only (never hook bodies). `Date.now()` is fine here -- this is
   // a real child process, NOT a workflow script.
   const postLog = (level: 'info' | 'warn' | 'error', code: string, message: string) =>
-    transport.post({ type: 'log', entry: { ts: Date.now(), serviceId: 'hooks', level, code, message } })
+    transport.post({ type: 'log', entry: { ts: Date.now(), serviceId: SERVICE_ID.hooks, level, code, message } })
 
   // Declared ahead of the message handler so the 'stop' case can tear them
   // down explicitly (review nit on 3bddbaa: unref alone leaves the monitor

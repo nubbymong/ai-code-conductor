@@ -31,7 +31,7 @@
  *
  * No default export (project convention).
  */
-import { createInitialHealth, computeThroughput } from '../../shared/service-health'
+import { createInitialHealth, computeThroughput, SERVICE_ID, SERVICE_LABEL } from '../../shared/service-health'
 import { IPC } from '../../shared/ipc-channels'
 import { Supervisor } from '../services/supervisor'
 import type { ServiceHealth, ServiceLogEntry, DiagnosticsSnapshot, ThroughputSample } from '../../shared/service-health'
@@ -53,7 +53,6 @@ export interface LogSupervisorOptions {
 }
 
 const LOG_CAP = 200
-const SERVICE_ID = 'logging'
 const DEFAULT_BUFFER_CAP_BYTES = 8 * 1024 * 1024
 const DEFAULT_QUERY_TIMEOUT_MS = 15_000
 // A rough byte estimate for the tiny lifecycle posts (run-start/run-end/
@@ -91,7 +90,7 @@ interface PendingQuery {
 export class LogSupervisor {
   private opts: LogSupervisorOptions
   private now: () => number
-  private health: ServiceHealth = createInitialHealth(SERVICE_ID, 'Session logging')
+  private health: ServiceHealth = createInitialHealth(SERVICE_ID.logging, SERVICE_LABEL.logging, 'utility-process')
   // Last (eventsTotal, ts) sample throughput was computed against. eventsTotal
   // here maps onto the worker's messagesTotal ingest counter. Reset on respawn.
   private prevThroughput: ThroughputSample | null = null
@@ -136,7 +135,7 @@ export class LogSupervisor {
   }
 
   private appendLog(level: ServiceLogEntry['level'], code: string, message: string): void {
-    this.log.push({ ts: this.now(), serviceId: SERVICE_ID, level, code, message })
+    this.log.push({ ts: this.now(), serviceId: SERVICE_ID.logging, level, code, message })
     if (this.log.length > LOG_CAP) this.log.splice(0, this.log.length - LOG_CAP)
   }
 
@@ -168,9 +167,12 @@ export class LogSupervisor {
     // Surface the forked worker's OS pid on the diagnostics pill (hooks does this
     // via its `bound` message; the transcripts worker has no bind, so we read the
     // utilityProcess pid directly at fork — covers initial start AND each restart).
+    // A forked worker is a live process but has not opened the DB: it has its
+    // pid and no uptime until it reports ready.
     this.health = {
       ...this.health,
       pid: w.pid,
+      startedAt: null,
       state: this.sup.getRestarts() > 0 ? 'restarting' : 'starting',
     }
     this.appendLog('info', 'worker-up', `logging worker forked (restart ${this.sup.getRestarts()})`)
@@ -204,7 +206,7 @@ export class LogSupervisor {
           ...this.health,
           state: 'listening',
           host: 'utility-process',
-          startedAt: this.health.startedAt ?? this.now(),
+          startedAt: this.now(),   // this worker's: each ready starts the uptime over
         }
         this.appendLog('info', 'ready', 'logging worker ready (DB open)')
         this.flushBuffer()
@@ -422,12 +424,13 @@ export class LogSupervisor {
   // -------------------------------------------------------------------------
 
   private onWorkerExit(forkError?: Error): void {
+    // The worker is gone either way: the row shows no process id and no uptime.
     if (forkError) {
       // The fork itself failed (a restart): shown as a crash with the reason.
-      this.health = { ...this.health, state: 'crashed', lastError: { message: `fork failed: ${forkError.message}`, ts: this.now() } }
+      this.health = { ...this.health, pid: null, startedAt: null, state: 'crashed', lastError: { message: `fork failed: ${forkError.message}`, ts: this.now() } }
       this.appendLog('error', 'fork-failed', `logging worker could not be forked: ${forkError.message}`)
     } else {
-      this.health = { ...this.health, state: 'crashed', lastError: { message: 'worker exited', ts: this.now() } }
+      this.health = { ...this.health, pid: null, startedAt: null, state: 'crashed', lastError: { message: 'worker exited', ts: this.now() } }
       this.appendLog('error', 'crashed', 'logging worker exited unexpectedly')
     }
     // Reject every in-flight query so no caller hangs on a dead worker.
@@ -445,7 +448,7 @@ export class LogSupervisor {
   private degradePermanently(): void {
     this.appendLog('error', 'degraded',
       `logging worker failed to recover after ${this.sup.getRestarts()} restarts; logging degraded (runs will not be recorded)`)
-    this.health = { ...this.health, host: 'utility-process', state: 'degraded', restartCount: this.sup.getRestarts() }
+    this.health = { ...this.health, host: 'utility-process', state: 'degraded', restartCount: this.sup.getRestarts(), pid: null, startedAt: null }
     // Free the dead worker; there is nothing to fall back to.
     try { this.worker?.kill() } catch { /* best-effort */ }
     this.pushHealth()
@@ -463,7 +466,7 @@ export class LogSupervisor {
    *  resumes tails). The old worker's late exit is ignored (it is no longer the
    *  current child). Declines during shutdown. */
   manualRestart(serviceId: string): { ok: boolean; reason?: string } {
-    if (serviceId !== SERVICE_ID) return { ok: false, reason: 'unknown-service' }
+    if (serviceId !== SERVICE_ID.logging) return { ok: false, reason: 'unknown-service' }
     if (this.sup.isShuttingDown()) return { ok: false, reason: 'shutting-down' }
     this.appendLog('info', 'manual-restart', 'manual restart requested')
     this.sup.restart()

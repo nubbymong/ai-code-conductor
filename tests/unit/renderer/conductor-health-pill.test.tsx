@@ -5,9 +5,11 @@
  * Verifies the aggregate-colour mapping + label rules from spec §2:
  *   - green + no state word when the hooks service is `listening`
  *   - amber + "Fallback" when host is `in-process-fallback`
- *   - amber + "Degraded" for degraded/starting/restarting (utility host)
+ *   - amber + "Degraded" for a degraded row on its own host
+ *   - amber + "Starting" / "Restarting" for a row that is coming up
  *   - red + "Down" when crashed
- *   - grey + no state word when stopped (hooks off — not an alarm)
+ *   - grey + no state word only when every row is stopped; a row that is
+ *     switched off beside a running one is not an alarm and decides nothing
  *   - the label always renders "<diamond> Services"
  *   - clicking the pill invokes onOpen
  *
@@ -27,8 +29,17 @@ import { createInitialHealth } from '../../../src/shared/service-health'
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
 function mkSnap(state: ServiceState, host: ServiceHost = 'utility-process'): DiagnosticsSnapshot {
-  const h = { ...createInitialHealth('hooks', 'Hooks gateway'), state, host, port: 19431 }
+  const h = { ...createInitialHealth('hooks', 'Hooks gateway', host), state, host, port: 19431 }
   return { capturedAt: 1, services: [h], log: [] }
+}
+
+/** A snapshot of several rows, each given as [id, state] on a utility process. */
+function mkRows(...rows: Array<[id: string, state: ServiceState]>): DiagnosticsSnapshot {
+  return {
+    capturedAt: 1,
+    services: rows.map(([id, state]) => ({ ...createInitialHealth(id, `${id} service`, 'utility-process'), state })),
+    log: [],
+  }
 }
 
 function mockApi(snap: DiagnosticsSnapshot): void {
@@ -106,13 +117,34 @@ describe('ConductorHealthPill', () => {
     expect(r.container.textContent).toContain('Fallback')
   })
 
-  it('shows amber + "Degraded" for a starting/utility transition', async () => {
-    mockApi(mkSnap('starting'))
+  it('shows amber + "Degraded" for a degraded row on its own host', async () => {
+    mockApi(mkSnap('degraded'))
     const r = await renderPill({ open: false, onOpen: () => {} })
     unmount = r.unmount
     const dot = r.container.querySelector('span.rounded-full') as HTMLElement
     expect(dot.className).toContain('bg-yellow')
     expect(r.container.textContent).toContain('Degraded')
+    expect(r.container.textContent).not.toMatch(/Fallback|Starting|Down/)
+  })
+
+  it('a row that is starting reads "Starting", not "Degraded"', async () => {
+    mockApi(mkSnap('starting'))
+    const r = await renderPill({ open: false, onOpen: () => {} })
+    unmount = r.unmount
+    const dot = r.container.querySelector('span.rounded-full') as HTMLElement
+    expect(dot.className).toContain('bg-yellow')
+    expect(r.container.textContent).toContain('Starting')
+    expect(r.container.textContent).not.toMatch(/Degraded|Fallback|Down/)
+  })
+
+  it('a row that is restarting reads "Restarting", not "Degraded"', async () => {
+    mockApi(mkSnap('restarting'))
+    const r = await renderPill({ open: false, onOpen: () => {} })
+    unmount = r.unmount
+    const dot = r.container.querySelector('span.rounded-full') as HTMLElement
+    expect(dot.className).toContain('bg-yellow')
+    expect(r.container.textContent).toContain('Restarting')
+    expect(r.container.textContent).not.toMatch(/Degraded|Fallback|Down/)
   })
 
   it('shows red + "Down" when crashed', async () => {
@@ -122,6 +154,46 @@ describe('ConductorHealthPill', () => {
     const dot = r.container.querySelector('span.rounded-full') as HTMLElement
     expect(dot.className).toContain('bg-red')
     expect(r.container.textContent).toContain('Down')
+  })
+
+  // --- a row that is switched off is not an alarm ---
+
+  it('stays green, with no state word, when a row is switched off beside running ones', async () => {
+    mockApi(mkRows(['hooks', 'listening'], ['logging', 'stopped'], ['tokenomics', 'stopped'], ['mcp', 'listening']))
+    const r = await renderPill({ open: false, onOpen: () => {} })
+    unmount = r.unmount
+    const dot = r.container.querySelector('span.rounded-full') as HTMLElement
+    expect(dot.className).toContain('bg-green')
+    expect(r.container.textContent).toBe('Services')
+    // The tooltip is the running row's, not "off".
+    expect(r.container.querySelector('button')?.getAttribute('title')).toMatch(/^hooks service: utility-process listening/)
+  })
+
+  it('a switched-off row listed first does not hide one that is starting, degraded or down', async () => {
+    mockApi(mkRows(['hooks', 'stopped'], ['tokenomics', 'starting']))
+    let r = await renderPill({ open: false, onOpen: () => {} })
+    expect((r.container.querySelector('span.rounded-full') as HTMLElement).className).toContain('bg-yellow')
+    expect(r.container.textContent).toContain('Starting')
+    r.unmount()
+    mockApi(mkRows(['hooks', 'stopped'], ['logging', 'degraded'], ['tokenomics', 'starting']))
+    r = await renderPill({ open: false, onOpen: () => {} })
+    expect(r.container.textContent).toContain('Degraded')
+    r.unmount()
+    mockApi(mkRows(['hooks', 'stopped'], ['logging', 'degraded'], ['mcp', 'crashed']))
+    r = await renderPill({ open: false, onOpen: () => {} })
+    unmount = r.unmount
+    expect((r.container.querySelector('span.rounded-full') as HTMLElement).className).toContain('bg-red')
+    expect(r.container.textContent).toContain('Down')
+  })
+
+  it('is grey and says the first row is off only when every row is stopped', async () => {
+    mockApi(mkRows(['hooks', 'stopped'], ['logging', 'stopped']))
+    const r = await renderPill({ open: false, onOpen: () => {} })
+    unmount = r.unmount
+    const dot = r.container.querySelector('span.rounded-full') as HTMLElement
+    expect(dot.className).toContain('bg-overlay0')
+    expect(r.container.textContent).toBe('Services')
+    expect(r.container.querySelector('button')?.getAttribute('title')).toBe('hooks service: off')
   })
 
   it('shows neutral grey and no state word when stopped (hooks off)', async () => {
@@ -145,8 +217,8 @@ describe('ConductorHealthPill', () => {
 
   // --- worst-of-all-services: hooks listening + logging crashed -> red ---
   it('picks the worst state when multiple services are present (hooks ok + logging crashed -> red)', async () => {
-    const hooks = { ...createInitialHealth('hooks', 'Hooks gateway'), state: 'listening' as const, host: 'utility-process' as const }
-    const logging = { ...createInitialHealth('logging', 'Session logging'), state: 'crashed' as const, host: 'utility-process' as const }
+    const hooks = { ...createInitialHealth('hooks', 'Hooks gateway', 'utility-process'), state: 'listening' as const, host: 'utility-process' as const }
+    const logging = { ...createInitialHealth('logging', 'Session logging', 'utility-process'), state: 'crashed' as const, host: 'utility-process' as const }
     const snap: DiagnosticsSnapshot = { capturedAt: 1, services: [hooks, logging], log: [] }
     ;(globalThis as any).window.electronAPI = {
       serviceHealth: {
@@ -164,8 +236,8 @@ describe('ConductorHealthPill', () => {
 
   // --- worst-of-all-services: both listening -> green ---
   it('stays green when all services are listening (hooks + logging both ok)', async () => {
-    const hooks = { ...createInitialHealth('hooks', 'Hooks gateway'), state: 'listening' as const, host: 'utility-process' as const }
-    const logging = { ...createInitialHealth('logging', 'Session logging'), state: 'listening' as const, host: 'utility-process' as const }
+    const hooks = { ...createInitialHealth('hooks', 'Hooks gateway', 'utility-process'), state: 'listening' as const, host: 'utility-process' as const }
+    const logging = { ...createInitialHealth('logging', 'Session logging', 'utility-process'), state: 'listening' as const, host: 'utility-process' as const }
     const snap: DiagnosticsSnapshot = { capturedAt: 1, services: [hooks, logging], log: [] }
     ;(globalThis as any).window.electronAPI = {
       serviceHealth: {

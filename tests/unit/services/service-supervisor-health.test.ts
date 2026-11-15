@@ -20,6 +20,16 @@ describe('ServiceSupervisor health', () => {
     expect(snap.services[0].id).toBe('hooks')
     expect(snap.services[0].state).toBe('starting')
   })
+  it('the hooks row is a utility process from the start, before its child has bound', () => {
+    // The gateway is forked as its own process. It is a fallback only once
+    // the supervisor has failed open, never while it is merely starting.
+    const { sup } = makeSup()
+    expect(sup.getDiagnosticsSnapshot().services[0].host).toBe('utility-process')
+    sup.start()
+    const h = sup.getDiagnosticsSnapshot().services[0]
+    expect(h.state).toBe('starting')
+    expect(h.host).toBe('utility-process')
+  })
   it('a child health beat updates counters and lastHeartbeat', () => {
     const { sup, t } = makeSup()
     sup.start()

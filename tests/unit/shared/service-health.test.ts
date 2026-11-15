@@ -4,15 +4,26 @@ import type { ThroughputSample } from '../../../src/shared/service-health'
 import { IPC } from '../../../src/shared/ipc-channels'
 
 describe('service-health', () => {
-  it('createInitialHealth returns a starting, in-process record', () => {
-    const h = createInitialHealth('hooks', 'Hooks gateway')
+  it('createInitialHealth returns a starting record on the host the caller states', () => {
+    const h = createInitialHealth('hooks', 'Hooks gateway', 'utility-process')
     expect(h.id).toBe('hooks')
     expect(h.state).toBe('starting')
-    expect(h.host).toBe('in-process-fallback')
+    expect(h.host).toBe('utility-process')
     expect(h.inFlight).toBe(0)
     expect(h.restartCount).toBe(0)
     expect(h.throughputPerSec).toBe(0)
     expect(h.mainLoopStallsLastMin).toBe(0)
+  })
+  it('a new row is never handed a fallback host it did not state', () => {
+    // The old default called every new row an in-process fallback, so a
+    // service that had never fallen back read as one.
+    for (const host of ['utility-process', 'in-process', 'helper'] as const) {
+      expect(createInitialHealth('x', 'X', host).host).toBe(host)
+    }
+    expect(createInitialHealth('hooks', 'Hooks gateway', 'in-process-fallback').host).toBe('in-process-fallback')
+  })
+  it('a new row carries no measured figures until something measures it', () => {
+    expect('measured' in createInitialHealth('x', 'X', 'in-process')).toBe(false)
   })
   it('defines the service-health IPC channels', () => {
     expect(IPC.SERVICE_HEALTH_GET).toBe('serviceHealth:get')

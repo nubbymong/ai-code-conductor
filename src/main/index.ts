@@ -79,7 +79,8 @@ import { getClaudeProfileId, sessionsOnProfile } from './claude-account-identity
 import { registerTokenomics2Handlers } from './ipc/tokenomics2-handlers'
 import { registerGitHubHandlers } from './ipc/github-handlers'
 import { registerHooksHandlers } from './ipc/hooks-handlers'
-import { registerServiceHealthHandlers, getMergedDiagnostics } from './ipc/service-health-handlers'
+import { registerServiceHealthHandlers } from './ipc/service-health-handlers'
+import { createServiceRegistry } from './services/service-registry'
 import { PtyIntegrityMonitor, setPtyIntegrityMonitor, getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
 import { registerProviderAccountsHandlers } from './ipc/provider-accounts-handlers'
 import { registerCodexReviewHandlers } from './ipc/codex-review-handlers'
@@ -101,7 +102,7 @@ import { setGateway, getGateway } from './hooks'
 import { ServiceSupervisor } from './services/service-supervisor'
 import { forkHooksChild } from './services/fork-hooks-child'
 import { start as startLoopStallMonitor, stop as stopLoopStallMonitor } from './services/loop-stall-monitor'
-import { initLogging, shutdownLogging, getTranscriptBinder } from './logging/logging-service'
+import { initLogging, shutdownLogging, getTranscriptBinder, getLogSupervisor } from './logging/logging-service'
 import { backfillCompanionDirsAsync, nodeFsCompanionDeps } from './logging/companion-dir'
 import { cleanupStaleHookEntries, cleanupStaleMcpConfigs } from './hooks/boot-cleanup'
 import { isSentinelEnabled } from '../shared/sentinel-enabled'
@@ -115,7 +116,7 @@ import { peekSessionState, hasSavedSessionState, SessionState } from './session-
 import { createAppSessionDurability } from './app-session-durability'
 import { getConfigDir, snapshotConfig, readConfig, readConfigChecked } from './config-manager'
 import { stopGlobalVision, killSpawnedBrowser, cleanupLegacyVisionMarkers } from './vision-manager'
-import { startConductorMcpServer, stopConductorMcpServer, startBrowserAtBoot } from './conductor-mcp-server'
+import { startConductorMcpServer, stopConductorMcpServer, startBrowserAtBoot, isMcpServerRunning, getMcpPort } from './conductor-mcp-server'
 import { loadWindowState, clampToVisibleDisplay, saveWindowStateFor } from './window-state'
 import { registerCredentialHandlers } from './ipc/credentials-handlers'
 import { resolveConductorMcpPort } from '../shared/mcp-ports'
@@ -890,13 +891,23 @@ if (!gotTheLock) {
         try { win.webContents.send(channel, payload) } catch { /* destroyed */ }
       }
     }
-    // PTY-integrity monitor (D1 diagnostics). Lives in main; surfaces through the
-    // SAME SERVICE_HEALTH_GET/UPDATE as the hooks supervisor via a merge so every
-    // push carries BOTH snapshots (else one source would wipe the other in the UI).
-    const getSup = () => getHooksSupervisor()
-    const getPtyDiag = () => getPtyIntegrityMonitor()?.diagnostics() ?? null
-    const getWatchdogDiag = () => getWatchdogManager()
-    const pushDiagnostics = () => emitToWindow(IPC.SERVICE_HEALTH_UPDATE, getMergedDiagnostics(getSup, getPtyDiag, getWatchdogDiag))
+    // The one service registry (services/service-registry.ts): every Services
+    // row and where its restart goes. Each source is asked on every read, so a
+    // service created further down (or never, when it is off) is seen as it is.
+    // Every push and the GET handler read the same registry, so each carries
+    // every row (else one source would wipe the others in the UI).
+    let mcpStartError: { message: string; ts: number } | null = null
+    const serviceRegistry = createServiceRegistry({
+      hooks: () => getHooksSupervisor(),
+      logging: () => getLogSupervisor(),
+      tokenomics: () => getTokenomicsSupervisor(),
+      watchdog: () => getWatchdogManager(),
+      mcp: () => ({ running: isMcpServerRunning(), port: getMcpPort(), startError: mcpStartError }),
+      // PTY-integrity monitor (D1 diagnostics). Lives in main; not a service
+      // row, a block of its own in the same snapshot.
+      pty: () => getPtyIntegrityMonitor()?.diagnostics() ?? null,
+    })
+    const pushDiagnostics = () => emitToWindow(IPC.SERVICE_HEALTH_UPDATE, serviceRegistry.snapshot())
     const ptyMonitor = new PtyIntegrityMonitor({ emit: pushDiagnostics })
     setPtyIntegrityMonitor(ptyMonitor)
     // Redirect ONLY SERVICE_HEALTH_UPDATE through the merge; every other channel
@@ -1021,7 +1032,7 @@ if (!gotTheLock) {
     getGateway()?.subscribe((e) => { try { noteCodexHookEvent(e) } catch { /* a claim never breaks the feed */ } })
     startJankDetector()
     // Main-process event-loop jank monitor: feeds the "Jank m/c" main half on the
-    // Conductor services pill (getMergedDiagnostics stamps stallsLastMin() onto
+    // Conductor services pill (the service registry stamps stallsLastMin() onto
     // every service). Stopped in before-quit.
     startLoopStallMonitor()
     registerHooksHandlers(getGateway()!)   // B1: handlers get whatever gateway backs the singleton
@@ -1048,9 +1059,9 @@ if (!gotTheLock) {
       onHealthChange: () => pushDiagnostics(),
     })
     registerWatchdogHandlers()
-    // D1b: diagnostics IPC. The getter returns null in the hooks-disabled branch
-    // (supervisor never set) -> the handler serves an honest synthetic "hooks off" snapshot.
-    registerServiceHealthHandlers(getSup, getPtyDiag, getWatchdogDiag)
+    // D1b: diagnostics IPC, answered by the service registry. In the
+    // hooks-disabled branch no supervisor was set, so the hooks row reads stopped.
+    registerServiceHealthHandlers(serviceRegistry)
     if (hooksEnabled) {
       cleanupStaleHookEntries(new Set())   // supervisor.start() already fired proxy.start()
     }
@@ -1083,6 +1094,11 @@ if (!gotTheLock) {
     const mcpPort = resolveConductorMcpPort(isPackagedApp())
     startConductorMcpServer(mcpPort, getWindow).catch(err => {
       logError(`[main] Conductor MCP server startup failed: ${err?.message}`)
+      mcpStartError = { message: String(err?.message ?? err), ts: Date.now() }
+    }).finally(() => {
+      // The MCP server's Services row: listening now, or why it is not. A push
+      // that fails here has no caller to catch it, so it is caught and logged.
+      try { pushDiagnostics() } catch (err) { logError('[main] Services push after the MCP server start failed:', err) }
     })
 
     // P7.3: Browser-vision sub-tool auto-starts at boot (MCP server is always up).
