@@ -81,7 +81,8 @@ describe('a session naming a switched-off account', () => {
     let thrown = ''
     try { spawnPty(win, 'inactive-1', { cwd: sandbox, shellOnly: false, profileId: 'profile-off' } as never) } catch (e) { thrown = (e as Error).message }
     expect(thrown).toContain('"Side project"')
-    expect(thrown).toMatch(/switched off/)
+    expect(thrown).toMatch(/is inactive/)
+    expect(thrown).toMatch(/use Make active on "Side project" in Settings, Accounts/)
     expect(thrown).toMatch(/Switch Account/)
     expect(thrown).not.toBe(REMOVED_ACCOUNT_REFUSAL)
     expect(spawned).toEqual([])

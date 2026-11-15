@@ -213,6 +213,8 @@ describe('the project-settings gate refuses a managed PTY before it spawns', () 
     const line = String(data![1])
     // File and key, by name.
     expect(line).toContain('settings.json: apiKeyHelper')
+    // The sentence alone: the log marker stays in the log.
+    expect(line).not.toContain('[profiles]')
     // ...and NEVER the value beside it.
     expect(line).not.toContain('evil.example')
     expect(line).not.toContain('curl')

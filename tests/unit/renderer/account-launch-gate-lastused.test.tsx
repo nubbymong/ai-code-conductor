@@ -285,7 +285,7 @@ describe("AccountLaunchGate: a RESUMED session shows its own account (O9)", () =
     gateState.restored = ['s1']
     render()
     expect(row()).toBeNull()
-    expect(q('[data-testid="account-launch-own-notice"]')!.textContent).toBe('The account this session last ran on is switched off. Choose another to start it.')
+    expect(q('[data-testid="account-launch-own-notice"]')!.textContent).toBe('The account this session last ran on is inactive. Choose another to start it.')
     expect(container.querySelector('option[value="p-parked"]')).toBeNull()
     expect(select().value).toBe('primary')
   })

@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { AccountProfile } from '../../src/shared/account-types'
 import {
-  _setRootsForTest, upsertProfile, withProfileHome, profileLaunchRefusal, inactiveAccountRefusal, assertAccountActive, launchRefusalText, sharedConfigPins,
+  _setRootsForTest, upsertProfile, withProfileHome, profileLaunchRefusal, inactiveAccountRefusal, assertAccountActive, launchRefusalText, refusalSentenceOrMessage, sharedConfigPins,
   MAC_NON_PRIMARY_REFUSAL, MAC_PRIMARY_UNKNOWN_REFUSAL, MANAGED_LAUNCH_REFUSAL, _resetMacNoPrimaryLogForTest, getProfilesRoot,
 } from '../../src/main/account-profiles'
 import { composeProviders } from '../../src/main/providers/compose'
@@ -209,6 +209,18 @@ describe('launchRefusalText: a refusal as a user reads it', () => {
 
   it('leaves any other message as it is', () => {
     expect(launchRefusalText('Unknown error')).toBe('Unknown error')
+  })
+})
+
+describe('refusalSentenceOrMessage: a failed spawn as a terminal line says it', () => {
+  it('gives a refusal as its sentence', () => {
+    expect(refusalSentenceOrMessage(`${MANAGED_LAUNCH_REFUSAL}: ${MAC_NON_PRIMARY_REFUSAL}`)).toBe(MAC_NON_PRIMARY_REFUSAL)
+  })
+
+  it('never cuts a message that only quotes the marker further in, such as a directory name in a spawn error', () => {
+    const quoting = `spawn failed in C:\\work\\${MANAGED_LAUNCH_REFUSAL}: x\\project`
+    expect(refusalSentenceOrMessage(quoting)).toBe(quoting)
+    expect(refusalSentenceOrMessage('Unknown error')).toBe('Unknown error')
   })
 })
 
