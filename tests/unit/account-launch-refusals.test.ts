@@ -201,6 +201,57 @@ describe('sharedConfigPins: git and npm config pinned to the real home only wher
     expect(sharedConfigPins(home, {}).GIT_CONFIG_GLOBAL).toBeUndefined()
   })
 
+  describe('a symlinked ~/.gitconfig beside an XDG git config (the mirror skips a root-level link)', () => {
+    const rc = (): string => path.join(home, '.gitconfig')
+    const exists = (p: string): boolean => fs.existsSync(p)
+    const isRcLink = (p: string): boolean => p === rc()
+
+    it('adds the real ~/.gitconfig as an include, and leaves the XDG lookup and GIT_CONFIG_GLOBAL alone', () => {
+      touch('.gitconfig')
+      touch('.config', 'git', 'config')
+      const pins = sharedConfigPins(home, {}, exists, isRcLink)
+      expect(pins.GIT_CONFIG_GLOBAL).toBeUndefined()
+      expect(pins).toMatchObject({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'include.path', GIT_CONFIG_VALUE_0: rc() })
+    })
+
+    it('does the same when XDG_CONFIG_HOME holds the XDG config', () => {
+      touch('.gitconfig')
+      touch('xdg', 'git', 'config')
+      const pins = sharedConfigPins(home, { XDG_CONFIG_HOME: path.join(home, 'xdg') }, exists, isRcLink)
+      expect(pins).toMatchObject({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'include.path', GIT_CONFIG_VALUE_0: rc() })
+    })
+
+    it('continues a count the environment already has, and keeps its entries', () => {
+      touch('.gitconfig')
+      touch('.config', 'git', 'config')
+      const pins = sharedConfigPins(home, { GIT_CONFIG_COUNT: '2' }, exists, isRcLink)
+      expect(pins).toEqual({ GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_2: 'include.path', GIT_CONFIG_VALUE_2: rc() })
+    })
+
+    it('leaves an unreadable count alone rather than guessing where to append', () => {
+      touch('.gitconfig')
+      touch('.config', 'git', 'config')
+      expect(sharedConfigPins(home, { GIT_CONFIG_COUNT: 'two' }, exists, isRcLink)).toEqual({})
+    })
+
+    it('adds nothing for a regular ~/.gitconfig, which the mirror hard-links and an include would read twice', () => {
+      touch('.gitconfig')
+      touch('.config', 'git', 'config')
+      expect(sharedConfigPins(home, {}, exists, () => false)).toEqual({})
+    })
+
+    it('adds nothing when the link check cannot be made', () => {
+      touch('.gitconfig')
+      touch('.config', 'git', 'config')
+      expect(sharedConfigPins(home, {}, exists, () => { throw new Error('denied') })).toEqual({})
+    })
+
+    it('still pins the file itself when the symlinked ~/.gitconfig is the only git config', () => {
+      touch('.gitconfig')
+      expect(sharedConfigPins(home, {}, exists, isRcLink)).toEqual({ GIT_CONFIG_GLOBAL: rc() })
+    })
+  })
+
   it('leaves git unpinned when XDG_CONFIG_HOME holds the config', () => {
     touch('.gitconfig')
     touch('xdg', 'git', 'config')
@@ -231,13 +282,34 @@ describe('sharedConfigPins: git and npm config pinned to the real home only wher
       vi.spyOn(os, 'homedir').mockReturnValue(home)
       touch('.gitconfig')
       touch('.npmrc')
-      const pinned = withProfileHome({ PATH: '/x' }, FAKE_HOME)
+      // The platform is named (not the host's), so a macOS run does not read this
+      // machine's account list: the Mac rule is covered by the cases above.
+      const pinned = withProfileHome({ PATH: '/x' }, FAKE_HOME, undefined, 'linux')
       expect(pinned.GIT_CONFIG_GLOBAL).toBe(path.join(home, '.gitconfig'))
       expect(pinned.npm_config_userconfig).toBe(path.join(home, '.npmrc'))
       touch('.config', 'git', 'config')
-      const both = withProfileHome({ PATH: '/x' }, FAKE_HOME)
+      const both = withProfileHome({ PATH: '/x' }, FAKE_HOME, undefined, 'linux')
       expect(both.GIT_CONFIG_GLOBAL).toBeUndefined()
       expect(both.npm_config_userconfig).toBe(path.join(home, '.npmrc'))
+    })
+
+    it('hands a symlinked ~/.gitconfig on as an include through the launch hardening, after the user\'s own entries', () => {
+      vi.spyOn(os, 'homedir').mockReturnValue(home)
+      touch('.gitconfig')
+      touch('.config', 'git', 'config')
+      // The link is stood in for (making one needs a privilege on Windows): only this file reads as a symlink.
+      const rc = path.join(home, '.gitconfig')
+      const realLstat = fs.lstatSync
+      vi.spyOn(fs, 'lstatSync').mockImplementation(((p: fs.PathLike, ...rest: unknown[]) => {
+        const st = (realLstat as (...a: unknown[]) => fs.Stats)(p, ...rest)
+        return String(p) === rc ? Object.assign(Object.create(st), { isSymbolicLink: () => true }) : st
+      }) as typeof fs.lstatSync)
+      const env = withProfileHome({ PATH: '/x', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false' }, FAKE_HOME, undefined, 'linux')
+      expect(env.GIT_CONFIG_GLOBAL).toBeUndefined()
+      expect(env.GIT_CONFIG_COUNT).toBe('2')
+      expect(env.GIT_CONFIG_KEY_0).toBe('core.autocrlf')
+      expect(env.GIT_CONFIG_KEY_1).toBe('include.path')
+      expect(env.GIT_CONFIG_VALUE_1).toBe(rc)
     })
   })
 })

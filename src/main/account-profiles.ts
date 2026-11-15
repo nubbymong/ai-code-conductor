@@ -3699,21 +3699,45 @@ export function profileSecureStorageRoot(home: string): string | null {
  * home, or the real home itself). The npm pin follows the same existence rule
  * for `~/.npmrc`, which is the one place npm looks.
  *
- * A pure function over `existsFile`, so it tests with a temp home. `source` is
- * the environment the child will have (XDG_CONFIG_HOME is read from it).
+ * One layout needs more. `mirrorRealHome` skips a symlink at the root of the
+ * real home, so when `~/.gitconfig` is a symlink AND an XDG git config exists,
+ * the profile home has no `.gitconfig` and git would read only the XDG file.
+ * Git's per-process config variables (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_n`,
+ * `GIT_CONFIG_VALUE_n`) add an include of the real `~/.gitconfig` on top, and
+ * leave the XDG lookup alone, so both files are read. An existing count in
+ * `source` is continued, not replaced. A regular `~/.gitconfig` needs none of
+ * this: the mirror hard-links it, and an include would read it twice.
+ *
+ * A pure function over `existsFile` and `isLink`, so it tests with a temp
+ * home. `source` is the environment the child will have (XDG_CONFIG_HOME and
+ * GIT_CONFIG_COUNT are read from it).
  */
 export function sharedConfigPins(
   realHome: string,
   source: Readonly<Record<string, string | undefined>> = process.env,
   existsFile: (p: string) => boolean = (p) => fs.existsSync(p),
+  isLink: (p: string) => boolean = (p) => fs.lstatSync(p).isSymbolicLink(),
 ): Record<string, string> {
   const exists = (p: string): boolean => { try { return existsFile(p) } catch { return false } }
+  const linked = (p: string): boolean => { try { return isLink(p) } catch { return false } }
   const pins: Record<string, string> = {}
   const gitrc = path.join(realHome, '.gitconfig')
   const xdgBase = source.XDG_CONFIG_HOME
   const xdgFiles = [path.join(realHome, '.config', 'git', 'config')]
   if (xdgBase) xdgFiles.unshift(path.join(xdgBase, 'git', 'config'))
-  if (exists(gitrc) && !xdgFiles.some((p) => exists(p))) pins.GIT_CONFIG_GLOBAL = gitrc
+  if (exists(gitrc)) {
+    if (!xdgFiles.some((p) => exists(p))) pins.GIT_CONFIG_GLOBAL = gitrc
+    else if (linked(gitrc)) {
+      const raw = source.GIT_CONFIG_COUNT
+      const count = raw === undefined || raw === '' ? 0 : /^\d+$/.test(raw) ? Number(raw) : -1
+      // An unreadable count is left alone: appending to it could hide the user's own entries.
+      if (count >= 0) {
+        pins.GIT_CONFIG_COUNT = String(count + 1)
+        pins[`GIT_CONFIG_KEY_${count}`] = 'include.path'
+        pins[`GIT_CONFIG_VALUE_${count}`] = gitrc
+      }
+    }
+  }
   const npmrc = path.join(realHome, '.npmrc')
   if (exists(npmrc)) pins.npm_config_userconfig = npmrc
   return pins

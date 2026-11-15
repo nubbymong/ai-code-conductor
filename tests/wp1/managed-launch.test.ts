@@ -1370,6 +1370,22 @@ describe('the launch paths', () => {
     sharedConfigPins = m.sharedConfigPins
   })
 
+  // On macOS a launch for a profile home asks which account is the primary one
+  // and refuses when it cannot tell. The list is an isolated temp one that
+  // records p1 as the primary, so no case here reads the machine's own list.
+  let launchSandbox = ''
+  beforeEach(async () => {
+    const m = await import('../../src/main/account-profiles')
+    launchSandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-launch-paths-'))
+    m._setRootsForTest({ resourcesDir: path.join(launchSandbox, 'resources'), sharedRoot: path.join(launchSandbox, 'shared') })
+    m.upsertProfile({ id: 'p1', name: 'Work', accountEmail: 'a@example.test', createdAt: 0, isPrimary: true })
+  })
+  afterEach(async () => {
+    const m = await import('../../src/main/account-profiles')
+    m._setRootsForTest(null)
+    try { fs.rmSync(launchSandbox, { recursive: true, force: true }) } catch { /* ignore */ }
+  })
+
   const HOME = path.resolve('/r/account-profiles/p1')
 
   it('a MANAGED launch sets NO host-managed flag, and an inherited one does not survive', () => {
