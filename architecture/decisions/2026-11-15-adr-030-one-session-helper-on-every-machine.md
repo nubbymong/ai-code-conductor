@@ -333,7 +333,7 @@ otherwise carried from earlier measurement.
 | Files per change | Median 14.5 | Median at or under 10 after the local deletion (observed, not enforced) |
 | Gates per change | A change in `pty-manager.ts` owes 14 | At most 13 for a change that leaves the live radius; no file on both the adversarial list and the live radius after the remote deletion |
 | Live SSH matrix rows | Six per-host packs under `tests/live` | None for a PR that leaves the radius; a radius of no files at the remote deletion; then about 8 helper rows per helper release, one on a Windows host |
-| `src/main/pty-manager.ts` lines | 8,366 on 2026-11-15 (#681 raised it from 8,128 before the check existed) | Capped at its length on beta when the check was added: `PTY_MANAGER_LINE_CAP` in `scripts/ci/pr-numbers.mjs` is the one source of the number, and the check fails a PR that grows the file past it unless the PR carries the `cap-override` label; lower after the local deletion; gone at the remote deletion, replaced by a session client and launch spec builder of under 2,000 lines together (estimate) |
+| `src/main/pty-manager.ts` lines | 8,367 on 2026-11-15 (#681 raised it from 8,128 before the check existed; #689 added one line) | Capped at its length on beta when the check was added: `PTY_MANAGER_LINE_CAP` in `scripts/ci/pr-numbers.mjs` is the one source of the number, and the check fails a PR that grows the file past it unless the PR carries the `cap-override` label; lower after the local deletion; gone at the remote deletion, replaced by a session client and launch spec builder of under 2,000 lines together (estimate) |
 | Loopback listeners the app opens | 2 | 1 after the local deletion if probe P16 passed; 0 after the remote deletion (1 if P16 failed) |
 | Utility processes | 3 | 2 after the local deletion if probe P16 passed |
 | Supervisors | 3 (shown through one registry from beta 4) | 2 once the hooks gateway is gone |
@@ -393,6 +393,15 @@ their questions, gates and fallbacks are restated for the slice plan.
 P12 result (2026-11-15): a Token session runs and keeps its usage figures;
 Remote Control and extra-usage credits need a Standard login; which kind is
 the default is decided before the accounts slice.
+
+P7 result (2026-11-15, Windows test machine, the skeleton holder from #685 and a silent
+install of 2.1.3-beta.4): yes. A detached holder is not in a job object, and it and its
+console child survive the app process tree being ended and the installer running; a
+new process re-attaches, types, and replays from an offset. One condition: the helper
+must run from a per-user folder outside the install folder, because the installer
+removes the install folder's files (run from there, the holder survived but its program
+file was gone, so nothing could attach again). Local sessions through the holder (S6)
+are unblocked on Windows on that condition.
 
 ## Parked questions
 
