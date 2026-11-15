@@ -1,0 +1,5 @@
+# Pinned: the helper is built with exactly this compiler on every OS and in CI.
+# Raising it is a deliberate change of its own (threat model 3.10).
+[toolchain]
+channel = "1.90.0"
+profile = "minimal"

@@ -1,0 +1,53 @@
+# The Rust session helper (ADR-029, ADR-030). Dormant: nothing here is built into
+# the app, bundled in the installer or started by it. `helper/` is a top-level
+# folder on purpose, outside `src/` and `resources/`, so no packaging glob picks
+# it up (tests/unit/scripts/helper-not-shipped.test.ts keeps that true).
+#
+# Supply chain rules, from docs/remote/helper-threat-model.md 3.10:
+#   - every dependency is pinned with an exact `=x.y.z`
+#   - crates.io only: no git or path dependencies
+#   - no async runtime, no TLS or HTTP crate, no JSON crate (src/json.rs is ours)
+#   - under 25 crates in Cargo.lock, the helper itself included (CI counts them)
+#   - Cargo.lock is committed and every build runs with --locked
+
+# An empty workspace table makes this folder its own workspace root, so cargo
+# never looks upwards for a parent workspace.
+[workspace]
+
+[package]
+name = "aicc-helper"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+publish = false
+description = "Per-machine session helper: frame codec, hello line, output ring, PTY hold and attach"
+
+[lib]
+name = "aicc_helper"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aicc-helper"
+path = "src/main.rs"
+
+# A tiny stand-in for the real CLI, so hold, detach, re-attach and replay can be
+# tested on every OS without installing or running a real provider CLI.
+[[bin]]
+name = "aicc-fake-cli"
+path = "src/bin/aicc-fake-cli.rs"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.172"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.59.0", default-features = false, features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Console",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }
+
+[profile.release]
+strip = true
+opt-level = "s"
