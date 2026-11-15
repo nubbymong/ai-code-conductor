@@ -25,6 +25,7 @@ import { useAddAccount } from '../hooks/useAddAccount'
 import { AccountsSurface } from './settings/accounts/AccountsSurface'
 import { CodeReviewTools } from './settings/CodeReviewTools'
 import { AccountLogFoldersPanel } from './settings/AccountLogFoldersPanel'
+import { TokenomicsSettings } from './settings/TokenomicsSettings'
 import { BuildIdentityLine } from './BuildIdentityLine'
 import { shortSha } from '../../shared/build-identity'
 import { usesClaude, usesCodex } from '../onboarding/provider-choice'
@@ -531,6 +532,10 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
                   </>
                 )}
               </Section>
+
+              {/* Tokenomics as an optional service (2.1.3-beta.4): its
+                  switch, and the accounts its figures leave out. */}
+              <TokenomicsSettings />
 
               <Section title="Terminal" icon={<><rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.2" fill="none" /><path d="M5 7l2 2-2 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /><line x1="9" y1="11" x2="11" y2="11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" /></>}>
                 <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">

@@ -25,6 +25,14 @@
  * bytes and of the bytes just before where it stopped reading (review round
  * 3).
  *
+ * 2.1.3-beta.4 (Tokenomics as an optional service): a full pass counts what
+ * its two walks touched, and a guard fails when a walk lists a folder outside
+ * the transcript roots, touches more than the fixture holds, goes deeper
+ * than twelve folders below a root or follows a link; a worker started again
+ * reads on from each file's stored progress; the page's Rescan reads every
+ * file again from its first byte, and no pass says it is done while a
+ * Rescan still waits for its own.
+ *
  * Host-safe: the real worker and real transcript files in a temp folder, a
  * wrapped fs that counts folder listings and file reads and hands the
  * watcher's callback to the test, and an in-memory stand-in for the index
@@ -64,6 +72,10 @@ const db = vi.hoisted(() => ({
   failNextRebuildStep: false,
   /** The next rollupsDirty throws, once. */
   failNextRollupsDirty: false,
+  /** How often every file's progress was put back to its start (Rescan). */
+  resets: 0,
+  /** Queries answered: the kind, then what the database was handed. */
+  queries: [] as unknown[][],
 }))
 vi.mock('../../../src/main/tokenomics/tk-db', () => ({
   TK_REBUILD_PAGE: 5000,
@@ -109,7 +121,17 @@ vi.mock('../../../src/main/tokenomics/tk-db', () => ({
       if (db.rebuild !== null || db.meta.get('rollupsDirty') === '1') { db.dirtyEpoch++; db.meta.set('rollupsDirty', '1') }
       return { recorded: true, stamped: 1 }
     },
-    queryAccounts: () => [],
+    // As the database: every file's progress back to its start; its size,
+    // its time and whose file it is are kept.
+    resetFileProgress: () => {
+      db.resets++
+      for (const [p, c] of db.cursors) db.cursors.set(p, { ...c, lastOffset: 0, scannedTo: 0, readMark: '', codexSessionId: '', codexTurns: 0 })
+      return db.cursors.size
+    },
+    querySummary: (_pricing: unknown, filter: unknown) => { db.queries.push(['summary', filter]); return {} },
+    querySessions: (_pricing: unknown, query: unknown) => { db.queries.push(['sessions', query]); return { rows: [], nextCursor: null } },
+    querySessionDetail: (_pricing: unknown, sessionId: string, leftOut: unknown) => { db.queries.push(['session-detail', sessionId, leftOut]); return null },
+    queryAccounts: (leftOut: unknown) => { db.queries.push(['accounts', leftOut]); return [] },
     close: () => {},
   }),
 }))
@@ -153,6 +175,9 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   /** Folder listings, and how many were of the transcript root: one per full walk. */
   let listings = 0
   let walks = 0
+  /** Every folder listed, and how many names those listings returned. */
+  let listed: string[] = []
+  let entriesListed = 0
   /** Files the worker asked the size of, and files it opened to read. */
   let statted: string[] = []
   let opened: string[] = []
@@ -187,6 +212,12 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
    *  stat and open follow it. Nothing is on disk at the path itself. */
   let linkAt = ''
   let linkTarget = ''
+  /** Folders the wrapped fs shows a link in: the link's name and the folder
+   *  it leads to. Listing the folder returns the link among its names (a
+   *  link, neither a file nor a folder, as a real one is listed); stat,
+   *  list and open through the link follow it. Nothing is on disk at the
+   *  link itself. */
+  const dirLinks = new Map<string, { name: string; target: string }>()
   /** A file whose reads come back empty although it has bytes. */
   let stuck = ''
   /** A file that cannot be opened. */
@@ -197,15 +228,29 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   const readFails = new Map<string, (nth: number) => boolean>()
   const readsOf = new Map<number, { fails: (nth: number) => boolean; done: number }>()
 
-  const follow = (p: unknown): string => (linkAt && String(p) === linkAt ? linkTarget : String(p))
+  const follow = (p: unknown): string => {
+    const s = String(p)
+    if (linkAt && s === linkAt) return linkTarget
+    for (const [parent, link] of dirLinks) {
+      const at = path.join(parent, link.name)
+      if (s === at) return link.target
+      if (s.startsWith(at + path.sep)) return path.join(link.target, s.slice(at.length + 1))
+    }
+    return s
+  }
   const LINK = { isSymbolicLink: () => true, isFile: () => false, isDirectory: () => false }
   const wrapped = new Proxy(realFs, {
     get(target, prop) {
       switch (prop) {
         case 'readdirSync': return (dir: string, o: unknown) => {
           listings++
+          listed.push(String(dir))
           if (path.resolve(String(dir)) === path.resolve(claudeDir)) walks++
-          return (realFs.readdirSync as (d: string, o: unknown) => unknown)(dir, o)
+          const names = (realFs.readdirSync as (d: string, o: unknown) => unknown)(follow(dir), o)
+          const link = dirLinks.get(String(dir))
+          if (Array.isArray(names) && link) names.push({ name: link.name, ...LINK })
+          if (Array.isArray(names)) entriesListed += names.length
+          return names
         }
         case 'watch': return (dir: string, _o: unknown, cb: WatchCb) => {
           if (unwatchable.has(dir)) throw new Error('simulated watch failure')
@@ -223,7 +268,9 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
           lstatted.push(String(p))
           const code = lstatFails.get(String(p))
           if (code) throw Object.assign(new Error(`${code}: simulated`), { code })
-          return linkAt && String(p) === linkAt ? LINK : (realFs.lstatSync as (p: string, o?: unknown) => unknown)(p, o)
+          if (linkAt && String(p) === linkAt) return LINK
+          for (const [parent, link] of dirLinks) if (String(p) === path.join(parent, link.name)) return LINK
+          return (realFs.lstatSync as (p: string, o?: unknown) => unknown)(p, o)
         }
         case 'openSync': return (p: string, flags: string) => {
           if (denied && String(p) === denied) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
@@ -263,7 +310,7 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   }
   const nextSweep = (what: string): Promise<void> => waitFor(what, (m) => m.type === 'index-complete')
   const drainedSweep = (what: string): Promise<void> => waitFor(what, (m) => m.type === 'index-complete' && m.drained)
-  const clearCounts = (): void => { listings = 0; walks = 0; statted = []; opened = []; lstatted = []; bytesRead = 0 }
+  const clearCounts = (): void => { listings = 0; walks = 0; listed = []; entriesListed = 0; statted = []; opened = []; lstatted = []; bytesRead = 0 }
   const transcript = (name: string): string => path.join(claudeDir, 'F--proj', `${name}.jsonl`)
   /** The five transcripts every test starts with. */
   const five = (): string[] => [0, 1, 2, 3, 4].map((i) => transcript(`s${i}`))
@@ -328,11 +375,13 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
     db.cursors.clear(); db.meta.clear(); db.events = 0; db.failNextSetMeta = false; db.failNextGetCursor = false
     db.rebuilds = 0; db.rebuildSteps = 1; db.rebuild = null; db.dirtyEpoch = 0; db.attributions = 0
     db.failNextRebuildStep = false; db.failNextRollupsDirty = false
+    db.resets = 0; db.queries = []
     clearCounts()
     completes = []; failed = []; rebuildsAt = []; waiters = []; warnings = []; errors = []
     onWorkerMessage = null; transport = null
     watchCbs.clear(); watchErrs.clear(); unwatchable.clear(); lstatFails.clear()
     linkAt = ''; linkTarget = ''; stuck = ''; stuckFds.clear(); denied = ''
+    dirLinks.clear()
     readFails.clear(); readsOf.clear()
   })
   afterEach(() => {
@@ -1534,6 +1583,424 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
       expect(db.cursors.has(linkAt)).toBe(false)
       expect(db.events).toBe(5)
       expect(listings).toBe(0)
+    })
+  })
+
+  // 2.1.3-beta.4: Tokenomics as an optional service. A full pass counts what
+  // its two walks touched and says so as it finishes (the Services panel
+  // shows it). The walks start at the folders the app named and list nothing
+  // outside them: the guards below fail when a walk widens (a folder outside
+  // the roots, more than the fixture holds, a folder deeper than twelve
+  // below a root, a link followed). Switched off and on again, the worker
+  // reads on from each file's stored progress. The page's Rescan puts that
+  // progress back to the start and reads every file again, and no pass says
+  // it is done while a Rescan waits. The accounts Settings leaves out reach
+  // the database with a query.
+  describe('the optional service: counted walks, catching up, and Rescan (2.1.3-beta.4)', () => {
+    type Walk = NonNullable<Extract<FromTkWorker, { type: 'index-complete' }>['walk']>
+    /** What each finished pass said its walks touched: nothing, for a pass
+     *  over the reported transcripts alone. */
+    let walkOf: Array<Walk | undefined> = []
+    /** Whether a worker said the index was complete as it opened. */
+    let readyComplete: boolean[] = []
+    beforeEach(() => {
+      walkOf = []
+      readyComplete = []
+      onWorkerMessage = (m) => {
+        if (m.type === 'index-complete') walkOf.push(m.walk)
+        if (m.type === 'ready') readyComplete.push(m.firstIndexComplete)
+      }
+    })
+    /** `p` is `root` or lies below it. */
+    const under = (p: string, root: string): boolean => {
+      const rel = path.relative(path.resolve(root), path.resolve(p))
+      return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel))
+    }
+    const rolloutA = (): string => path.join(codexDir, '2026', '08', '01', 'rollout-2026-08-01T00-00-00-a.jsonl')
+    /** An account's own sessions folder, named to the worker after it opens. */
+    const realm = (): string => path.join(tmp, 'realms', 'acct-1', 'sessions')
+    const rolloutB = (): string => path.join(realm(), '2026', '08', '02', 'rollout-2026-08-02T00-00-00-b.jsonl')
+    const nested = (): string => path.join(claudeDir, 'F--proj', 's9', 'subagents', 'agent-x.jsonl')
+
+    /**
+     * The fixture tree. Under the three transcript roots, beside the five
+     * transcripts every test starts with: a nested transcript, files that
+     * are not transcripts, and an empty project. Outside the roots, close
+     * by: what a wider walk would find.
+     *
+     *   claude/                    2 names   (the projects root)
+     *     F--proj/                 7 names   s0..s4.jsonl, notes.txt, s9/
+     *       s9/                    1 name
+     *         subagents/           2 names   agent-x.jsonl, agent-x.meta.json
+     *     G--empty/                0 names
+     *   codex/                     1 name    (this computer's sessions root)
+     *     2026/08/01/              1, 1, 2   rollout-...-a.jsonl, other.jsonl
+     *   realms/acct-1/sessions/    1 name    (an account's sessions root)
+     *     2026/08/02/              1, 1, 1   rollout-...-b.jsonl
+     */
+    function plant(): void {
+      realFs.mkdirSync(path.dirname(nested()), { recursive: true })
+      realFs.writeFileSync(nested(), line('sub'))
+      realFs.writeFileSync(path.join(path.dirname(nested()), 'agent-x.meta.json'), '{}')
+      realFs.writeFileSync(path.join(claudeDir, 'F--proj', 'notes.txt'), 'notes')
+      realFs.mkdirSync(path.join(claudeDir, 'G--empty'))
+      realFs.mkdirSync(path.dirname(rolloutA()), { recursive: true })
+      realFs.writeFileSync(rolloutA(), rollout('cx-a', 2))
+      realFs.writeFileSync(path.join(path.dirname(rolloutA()), 'other.jsonl'), line('not-a-rollout'))
+      realFs.mkdirSync(path.dirname(rolloutB()), { recursive: true })
+      realFs.writeFileSync(rolloutB(), rollout('cx-b', 3))
+      // Outside every root.
+      realFs.writeFileSync(path.join(tmp, 'decoy.jsonl'), line('decoy-above'))
+      realFs.mkdirSync(path.join(tmp, 'claude-other', 'F--proj'), { recursive: true })
+      realFs.writeFileSync(path.join(tmp, 'claude-other', 'F--proj', 'decoy.jsonl'), line('decoy-beside'))
+      realFs.mkdirSync(path.join(tmp, 'realms', 'acct-2', 'sessions'), { recursive: true })
+      realFs.writeFileSync(path.join(tmp, 'realms', 'acct-2', 'sessions', 'rollout-decoy.jsonl'), rollout('cx-decoy', 1))
+      realFs.writeFileSync(path.join(tmp, 'realms', 'acct-1', 'rollout-above.jsonl'), rollout('cx-above', 1))
+    }
+    /** Name the account's folder to the running worker and wait for the
+     *  pass that reads it. */
+    async function nameRealm(): Promise<void> {
+      const read = drainedSweep('the pass with the account folder')
+      transport!.post({ type: 'set-codex-realm-dirs', dirs: [{ dir: realm(), accountKey: 'codex:acct-1' }] })
+      await read
+    }
+
+    it('a full pass says what each of its two walks touched and how many files it opened', async () => {
+      plant()
+      await start()
+      // The projects root and this computer's sessions root.
+      expect(walkOf).toHaveLength(1)
+      expect(walkOf[0]).toMatchObject({
+        transcripts: { dirs: 5, entries: 12, files: 6 },
+        rollouts: { dirs: 4, entries: 5, files: 1 },
+        filesRead: 7,
+      })
+      expect(Number.isSafeInteger(walkOf[0]!.at)).toBe(true)
+      expect(walkOf[0]!.ms).toBeGreaterThanOrEqual(0)
+      // With the account's folder named: its walk is counted with the other.
+      await nameRealm()
+      expect(walkOf.at(-1)).toMatchObject({
+        transcripts: { dirs: 5, entries: 12, files: 6 },
+        rollouts: { dirs: 8, entries: 9, files: 2 },
+        // Only the account's rollout is new; the rest is as the index has it.
+        filesRead: 1,
+      })
+    })
+
+    it('a pass over the reported transcripts alone walks nothing and reports no walk', async () => {
+      await start()
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      clearCounts()
+      const read = nextSweep('the changed-files sweep')
+      fire(claudeDir, 'change', path.join('F--proj', 's2.jsonl'))
+      await read
+      expect(listings).toBe(0)
+      expect(walkOf).toHaveLength(2)
+      expect(walkOf[0]).toBeDefined()
+      expect(walkOf[1]).toBeUndefined()
+    })
+
+    // The guard that fails if a walk widens: it lists a folder outside the
+    // transcript roots, opens anything but the fixture's transcripts, or
+    // touches more than the fixture holds under the roots.
+    it('no walk lists a folder outside the transcript roots, and only the transcripts under them are opened', async () => {
+      plant()
+      await start()
+      await nameRealm()
+      const roots = [claudeDir, codexDir, realm()]
+      const inRoots = (p: string): boolean => roots.some((r) => under(p, r))
+
+      // Every folder listed is a root or below one.
+      expect(listed.filter((d) => !inRoots(d))).toEqual([])
+      // Every file opened is one of the fixture's eight transcripts, and all
+      // eight were: nothing more, nothing outside.
+      expect([...new Set(opened)].sort()).toEqual([...five(), nested(), rolloutA(), rolloutB()].sort())
+      // Every size asked is of a path under a root.
+      expect(statted.filter((p) => !inRoots(p))).toEqual([])
+      // A path looked at without following a link is under a root, or is a
+      // folder a root lies in (how deep a link on a root's own path leads).
+      expect(lstatted.filter((p) => !inRoots(p) && !roots.some((r) => under(r, p)))).toEqual([])
+      // Only the roots are watched.
+      expect([...watchCbs.keys()].sort()).toEqual([...roots].sort())
+
+      // The counts are the fixture's, exactly, and they are what was really
+      // listed: two passes, the second with the account's folder too.
+      const [first, second] = [walkOf[0]!, walkOf.at(-1)!]
+      expect(walkOf).toHaveLength(2)
+      expect([first.transcripts, first.rollouts]).toEqual([{ dirs: 5, entries: 12, files: 6 }, { dirs: 4, entries: 5, files: 1 }])
+      expect([second.transcripts, second.rollouts]).toEqual([{ dirs: 5, entries: 12, files: 6 }, { dirs: 8, entries: 9, files: 2 }])
+      expect(listings).toBe(5 + 4 + 5 + 8)
+      expect(entriesListed).toBe(12 + 5 + 12 + 9)
+    })
+
+    // The guard on depth. A walk lists its root (depth 0) and the folders
+    // down to twelve below it, and no folder below that. A transcript in a
+    // folder twelve down is read; one a folder further down is never found.
+    // Both walks, each with its own chain of folders, so a limit moved at
+    // either one, up or down, fails here.
+    it('no walk lists a folder more than twelve below its root: a transcript twelve down is read, one thirteen down is never found', async () => {
+      /** The folders `from`..13 below `root`, each inside the one before. */
+      const chain = (top: string, from: number, prefix: string): string[] => {
+        const out: string[] = []
+        let dir = top
+        for (let depth = from; depth <= 13; depth++) { dir = path.join(dir, `${prefix}${String(depth).padStart(2, '0')}`); out.push(dir) }
+        return out
+      }
+      // The projects root: F--proj is one below it, k02 two, ... k13 thirteen.
+      const k = chain(path.join(claudeDir, 'F--proj'), 2, 'k')
+      const [k12, k13] = [k[k.length - 2], k[k.length - 1]]
+      realFs.mkdirSync(k13, { recursive: true })
+      const edge = path.join(k12, 'edge.jsonl')
+      const beyond = path.join(k13, 'beyond.jsonl')
+      realFs.writeFileSync(edge, line('edge'))
+      realFs.writeFileSync(beyond, line('beyond'))
+      // This computer's sessions root: r01 is one below it, ... r13 thirteen.
+      const r = chain(codexDir, 1, 'r')
+      const [r12, r13] = [r[r.length - 2], r[r.length - 1]]
+      realFs.mkdirSync(r13, { recursive: true })
+      const rolloutEdge = path.join(r12, 'rollout-2026-08-01T00-00-00-edge.jsonl')
+      const rolloutBeyond = path.join(r13, 'rollout-2026-08-01T00-00-00-beyond.jsonl')
+      realFs.writeFileSync(rolloutEdge, rollout('cx-edge', 1))
+      realFs.writeFileSync(rolloutBeyond, rollout('cx-beyond', 1))
+
+      await start()
+      // Twelve down: listed, and its transcript read.
+      expect(listed).toContain(k12)
+      expect(listed).toContain(r12)
+      expect(opened).toContain(edge)
+      expect(opened).toContain(rolloutEdge)
+      // Thirteen down: never listed, so what it holds is never asked about or opened.
+      expect(listed).not.toContain(k13)
+      expect(listed).not.toContain(r13)
+      expect(opened).not.toContain(beyond)
+      expect(opened).not.toContain(rolloutBeyond)
+      expect(statted).not.toContain(beyond)
+      expect(statted).not.toContain(rolloutBeyond)
+      expect([...new Set(opened)].sort()).toEqual([...five(), edge, rolloutEdge].sort())
+      expect(db.events).toBe(5 + 1 + 1)
+      // The counts, exactly: thirteen folders listed by each walk (the root
+      // and twelve below it), with the names they returned.
+      expect(walkOf).toHaveLength(1)
+      expect([walkOf[0]!.transcripts, walkOf[0]!.rollouts]).toEqual([{ dirs: 13, entries: 1 + 6 + 10 + 2, files: 6 }, { dirs: 13, entries: 1 + 11 + 2, files: 1 }])
+      expect(listings).toBe(13 + 13)
+    })
+
+    // The guard on links. The link here is simulated (listed as a link,
+    // and stat, list and open through it reach a folder outside the roots),
+    // so the rule is checked on every platform and no real link is planted
+    // where this file runs; real links are in the CI suite
+    // (tests/unit/native/tokenomics-reindex-accounts.native.test.ts).
+    it('a link inside a root is a name in its folder and is never followed: nothing behind it is listed, asked about or opened', async () => {
+      plant()
+      // What lies behind the links, outside every root: a transcript, and a rollout.
+      const outside = path.join(tmp, 'outside')
+      realFs.mkdirSync(path.join(outside, 'deeper'), { recursive: true })
+      realFs.writeFileSync(path.join(outside, 'behind.jsonl'), line('behind'))
+      realFs.writeFileSync(path.join(outside, 'deeper', 'rollout-2026-08-01T00-00-00-behind.jsonl'), rollout('cx-behind', 4))
+      dirLinks.set(path.join(claudeDir, 'F--proj'), { name: 'linked', target: outside })
+      dirLinks.set(codexDir, { name: 'linked', target: outside })
+      const links = [path.join(claudeDir, 'F--proj', 'linked'), path.join(codexDir, 'linked')]
+      const behind = (p: string): boolean => links.some((l) => under(p, l))
+
+      await start()
+      expect(listed.filter(behind)).toEqual([])
+      expect(statted.filter(behind)).toEqual([])
+      expect(opened.filter(behind)).toEqual([])
+      expect([...new Set(opened)].sort()).toEqual([...five(), nested(), rolloutA()].sort())
+      expect(db.events).toBe(5 + 1 + 2)
+      // The fixture's counts with one more name in each linked folder: the link itself.
+      expect(walkOf).toHaveLength(1)
+      expect([walkOf[0]!.transcripts, walkOf[0]!.rollouts]).toEqual([{ dirs: 5, entries: 13, files: 6 }, { dirs: 4, entries: 6, files: 1 }])
+      expect(listings).toBe(5 + 4)
+    })
+
+    it('switched off and on again, it reads only what was written while it was off', async () => {
+      await start()
+      expect(db.events).toBe(5)
+      expect(readyComplete).toEqual([false])
+      // Off: the worker stops. The index, with how far each file was read, stays.
+      stopWorker!()
+      stopWorker = null
+      realFs.appendFileSync(transcript('s1'), line('while-off-1') + line('while-off-2'))
+      realFs.writeFileSync(transcript('s7'), line('made-while-off'))
+      clearCounts()
+      // On: another worker on the same index.
+      await start()
+      // What was recorded before is there as it opens.
+      expect(readyComplete).toEqual([false, true])
+      expect([...opened].sort()).toEqual([transcript('s1'), transcript('s7')].sort())
+      expect(db.events).toBe(5 + 3)
+      expect(completes.at(-1)).toEqual({ firstIndex: false, drained: true })
+      expect(db.resets).toBe(0)
+    })
+
+    it('Rescan puts every file back to its start and reads each again, once; what is stored stays', async () => {
+      realFs.mkdirSync(path.dirname(rolloutA()), { recursive: true })
+      realFs.writeFileSync(rolloutA(), rollout('cx-a', 2))
+      await start()
+      expect(db.events).toBe(5 + 2)
+      clearCounts()
+      const again = waitFor('the pass after Rescan', (m) => m.type === 'index-complete' && m.drained, 4000)
+      transport!.post({ type: 'rescan' })
+      // Asked again before it has finished: the one re-read, not another.
+      transport!.post({ type: 'rescan' })
+      await again
+      expect(db.resets).toBe(1)
+      expect(walks).toBe(1)
+      expect([...opened].sort()).toEqual([...five(), rolloutA()].sort())
+      // The stand-in stores every row it is handed, so each turn read again
+      // shows here. The index itself keys each turn and stores it once: the
+      // totals do not move (covered with the real database in
+      // tests/unit/native/tokenomics-excluded-accounts.native.test.ts and
+      // tests/unit/native/tokenomics-worker-ingest.native.test.ts).
+      expect(db.events).toBe((5 + 2) * 2)
+      // The rollout is read from its first byte: its identity and its turns
+      // are learned again, as on a first read.
+      expect(db.cursors.get(rolloutA())).toMatchObject({ codexSessionId: 'cx-a', codexTurns: 2, lastOffset: realFs.statSync(rolloutA()).size })
+      for (const f of five()) expect(db.cursors.get(f)!.lastOffset).toBe(realFs.statSync(f).size)
+      // Once: the next full walk finds every file as the index has it.
+      clearCounts()
+      const full = nextSweep('the next full walk')
+      fire(claudeDir, 'rename', 'F--proj')
+      await full
+      expect(walks).toBe(1)
+      expect(opened).toEqual([])
+      expect(db.resets).toBe(1)
+      // Asked again once it has finished: read again.
+      clearCounts()
+      const second = waitFor('the pass after a second Rescan', (m) => m.type === 'index-complete' && m.drained, 4000)
+      transport!.post({ type: 'rescan' })
+      await second
+      expect(db.resets).toBe(2)
+      expect([...opened].sort()).toEqual([...five(), rolloutA()].sort())
+    })
+
+    it('a Rescan asked while a pass runs is not finished by that pass: the next one reads what it had already read', async () => {
+      for (let i = 0; i < 60; i++) realFs.writeFileSync(transcript(`n${String(i).padStart(2, '0')}`), line(`n-${i}`))
+      let asked = false
+      const watch = onWorkerMessage!
+      onWorkerMessage = (m) => {
+        watch(m)
+        // The pass reports its progress after its fiftieth file: asked then,
+        // with fifteen of the sixty-five still to read.
+        if (!asked && m.type === 'index-progress' && m.filesDone === 50) { asked = true; transport!.post({ type: 'rescan' }) }
+      }
+      const drained = drainedSweep('the pass that follows the Rescan')
+      await start({ waitFirst: false })
+      await drained
+      expect(asked).toBe(true)
+      expect(db.resets).toBe(1)
+      // The pass under way did not finish the index; the one after it did.
+      expect(completes).toEqual([{ firstIndex: false, drained: false }, { firstIndex: true, drained: true }])
+      // Sixty-five read by the first pass, and the fifty it had read before
+      // the Rescan read again by the second.
+      expect(db.events).toBe(65 + 50)
+      await settle()
+      expect(completes).toHaveLength(2)
+    })
+
+    // A pass that says it is done ends the page's "Rescanning". Neither a
+    // pass over the reported transcripts nor a full pass that had read every
+    // file before the Rescan arrived may say so: the Rescan's own pass has
+    // not run yet. Both are asked while the pass settles the accounts, where
+    // the worker yields (a rollup rebuild of two steps).
+    it('a Rescan asked while a pass over the reported transcripts runs: that pass does not say it is done, the pass that follows does', async () => {
+      await start()
+      expect(completes).toEqual([{ firstIndex: true, drained: true }])
+      db.meta.set('rollupsDirty', '1')
+      db.rebuildSteps = 2
+      let asked = false
+      const watch = onWorkerMessage!
+      onWorkerMessage = (m) => {
+        watch(m)
+        if (!asked && m.type === 'index-progress' && m.accountReread?.stage === 'rebuild') { asked = true; transport!.post({ type: 'rescan' }) }
+      }
+      realFs.appendFileSync(transcript('s2'), line('more-2'))
+      const after = drainedSweep('the pass that follows the Rescan')
+      fire(claudeDir, 'change', path.join('F--proj', 's2.jsonl'))
+      await after
+      expect(asked).toBe(true)
+      expect(db.resets).toBe(1)
+      // The pass over the reported transcript, then the Rescan's own.
+      expect(completes.slice(1)).toEqual([{ firstIndex: false, drained: false }, { firstIndex: false, drained: true }])
+      // Only the Rescan's pass walked.
+      expect(walkOf.slice(1).map((w) => w !== undefined)).toEqual([false, true])
+      await settle()
+      expect(completes).toHaveLength(3)
+    })
+
+    it('a Rescan asked after a full pass has read every file, while it settles the accounts: that pass does not say it is done either', async () => {
+      db.meta.set('rollupsDirty', '1')
+      db.rebuildSteps = 2
+      let asked = false
+      const watch = onWorkerMessage!
+      onWorkerMessage = (m) => {
+        watch(m)
+        if (!asked && m.type === 'index-progress' && m.accountReread?.stage === 'rebuild') { asked = true; transport!.post({ type: 'rescan' }) }
+      }
+      const drained = drainedSweep('the pass that follows the Rescan')
+      await start({ waitFirst: false })
+      await drained
+      expect(asked).toBe(true)
+      expect(db.resets).toBe(1)
+      // The first pass read all five and then was asked: not done, and not
+      // the first index. The Rescan's pass read them again and is.
+      expect(completes).toEqual([{ firstIndex: false, drained: false }, { firstIndex: true, drained: true }])
+      expect(db.events).toBe(5 + 5)
+      await settle()
+      expect(completes).toHaveLength(2)
+    })
+
+    // The Rescan's own pass has read every file from its start and settles
+    // the accounts, where the worker yields. A second Rescan asked there is
+    // the one still under way: nothing is reset again, and that pass says it
+    // is done. It used to reset every file again and start the read over.
+    it('a Rescan asked again while the Rescan\'s own pass settles the accounts is the same Rescan: nothing is reset again, and that pass says it is done', async () => {
+      await start()
+      expect(completes).toEqual([{ firstIndex: true, drained: true }])
+      const eventsBefore = db.events
+      db.meta.set('rollupsDirty', '1')
+      db.rebuildSteps = 2
+      let asked = false
+      const watch = onWorkerMessage!
+      onWorkerMessage = (m) => {
+        watch(m)
+        if (!asked && m.type === 'index-progress' && m.accountReread?.stage === 'rebuild') { asked = true; transport!.post({ type: 'rescan' }) }
+      }
+      clearCounts()
+      const done = drainedSweep('the Rescan\'s own pass')
+      transport!.post({ type: 'rescan' })
+      await done
+      expect(asked).toBe(true)
+      expect(db.resets).toBe(1)
+      expect(completes.slice(1)).toEqual([{ firstIndex: false, drained: true }])
+      expect(walks).toBe(1)
+      expect(db.events).toBe(eventsBefore + 5)
+      await settle()
+      expect(completes).toHaveLength(2)
+      expect(db.resets).toBe(1)
+      // Over: a Rescan asked now is a new one.
+      const again = drainedSweep('the pass of the next Rescan')
+      transport!.post({ type: 'rescan' })
+      await again
+      expect(db.resets).toBe(2)
+    })
+
+    it('the accounts Settings leaves out reach the database with each query', async () => {
+      await start()
+      const A = 'claude:acct-a'
+      transport!.post({ type: 'query', id: 1, kind: 'summary', args: { configId: 'a', excludeAccountKeys: [A] } })
+      transport!.post({ type: 'query', id: 2, kind: 'sessions', args: { limit: 5, excludeAccountKeys: [A] } })
+      transport!.post({ type: 'query', id: 3, kind: 'session-detail', args: { sessionId: SESSION, excludeAccountKeys: [A] } })
+      transport!.post({ type: 'query', id: 4, kind: 'accounts', args: { excludeAccountKeys: [A] } })
+      transport!.post({ type: 'query', id: 5, kind: 'accounts', args: {} })
+      expect(db.queries).toEqual([
+        ['summary', { configId: 'a', excludeAccountKeys: [A] }],
+        ['sessions', { limit: 5, excludeAccountKeys: [A] }],
+        ['session-detail', SESSION, [A]],
+        ['accounts', [A]],
+        ['accounts', undefined],
+      ])
     })
   })
 })

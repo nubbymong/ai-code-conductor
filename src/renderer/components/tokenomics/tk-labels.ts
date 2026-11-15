@@ -22,6 +22,10 @@ export const TK_REMOVED_ACCOUNT = 'Removed account'
 export const TK_CODEX_COST_NOTE = 'ChatGPT sign-in: API-equivalent estimate. API key: Estimate at API list prices.'
 /** A cost with no price, said as briefly as the page's notice says it. */
 export const TK_NO_PRICE_NOTE = 'No price yet, so not in the totals.'
+/** What the page says while a Rescan runs (2.1.3-beta.4). */
+export const TK_RESCAN_NOTICE = 'Reading every transcript again from the start. The figures stay as they are and fill in if anything was missed.'
+/** What Rescan asks before it starts. */
+export const TK_RESCAN_CONFIRM = 'Read every transcript again from the start? This can take a while on a large history and uses disk and processor time while it runs. Nothing that was recorded is removed.'
 
 /** The registry account an account key names, if the snapshot has it. */
 export function tkAccountView(snapshot: AccountsSnapshot | null, accountKey: string): AccountView | undefined {

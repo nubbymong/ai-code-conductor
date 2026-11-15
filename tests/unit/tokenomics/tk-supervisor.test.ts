@@ -239,7 +239,7 @@ const STABLE_MS = 5 * 60_000
 
 interface Kid { t: FakeTkWorkerTransport; got: ToTkWorker[]; exit: () => void; kills: number }
 
-function harness(opts: { maxRestarts?: number; stableResetMs?: number; autoReady?: boolean; now?: () => number; emit?: (channel: string, payload: unknown) => void } = {}) {
+function harness(opts: { maxRestarts?: number; stableResetMs?: number; autoReady?: boolean; now?: () => number; queryTimeoutMs?: number; emit?: (channel: string, payload: unknown) => void } = {}) {
   const { autoReady = true, ...supOpts } = opts
   const kids: Kid[] = []
   const fork = vi.fn((): ForkedTkWorker => {
@@ -727,12 +727,13 @@ describe('usage index: a replaced worker\'s late messages', () => {
     const old = h.kids[0].t
     old.emitToMain({ type: 'health', eventsTotal: 999, filesTracked: 1, dbBytes: 1 })
     old.emitToMain({ type: 'index-progress', filesDone: 9, filesTotal: 9, eventsIngested: 9, phase: 'initial' })
-    old.emitToMain({ type: 'index-complete', firstIndex: true, drained: true, filesFailed: 3, eventsTotal: 777 })
+    old.emitToMain({ type: 'index-complete', firstIndex: true, drained: true, filesFailed: 3, eventsTotal: 777, walk: { at: 1, ms: 1, transcripts: { dirs: 1, entries: 1, files: 1 }, rollouts: { dirs: 1, entries: 1, files: 1 }, filesRead: 1 } })
     vi.advanceTimersByTime(1000)
     expect(progress).not.toHaveBeenCalled()
     expect(complete).not.toHaveBeenCalled()
     expect(h.sup.getIndexStatus()).toMatchObject({ eventsTotal: 0, filesDone: 0, filesFailed: 0, lastIndexAt: null, firstIndexComplete: false })
     expect(rowOf(h.sup).eventsTotal).toBe(0)
+    expect(h.sup.getLastWalkStats()).toBeNull()       // a replaced worker's walk figures are not the row's
     expect(pushed).toEqual([])
     old.emitToMain({ type: 'log', entry: { level: 'info', message: 'late line' } })
     expect(logs.logInfo).toHaveBeenCalledWith('[tokenomics worker]', 'late line')
@@ -832,5 +833,172 @@ describe('usage index: its row follows the counters', () => {
     h.sup.shutdown()
     expect(rowOf(h.sup)).toMatchObject({ state: 'stopped', startedAt: null })
     expect(lastRow()).toMatchObject({ state: 'stopped', startedAt: null })
+  })
+})
+
+// 2.1.3-beta.4: Tokenomics as an optional service. What the supervisor
+// gained for it: the page's Rescan, the last full pass's walk figures (for
+// the Services panel), a status as each worker comes up, and attributions
+// carried from a supervisor that was stopped.
+describe('usage index: the optional service (2.1.3-beta.4)', () => {
+  const SESSION_A = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+  const SESSION_B = '1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e'
+  /** A worker the test makes ready itself. */
+  function manual() {
+    const t = new FakeTkWorkerTransport()
+    const seen: ToTkWorker[] = []
+    t.onWorker((m) => { seen.push(m) })
+    const fork = { transport: t, kill: () => t.kill(), onExit: () => {} } as unknown as ForkedTkWorker
+    const ready = (firstIndexComplete = false) => t.emitToMain({ type: 'ready', firstIndexComplete, eventsTotal: 4 })
+    return { t, seen, fork, ready }
+  }
+  const WALK = { at: 1_700_000_000_000, ms: 42, transcripts: { dirs: 5, entries: 12, files: 6 }, rollouts: { dirs: 4, entries: 6, files: 1 }, filesRead: 7 }
+
+  it('Rescan is sent to a listening worker at once, and held once for one that is not', () => {
+    const w = manual()
+    const sup = new TokenomicsSupervisor({ forkChild: () => w.fork, ...baseOpts() })
+    sup.start()
+    // Not ready yet: held, and three asks are one. Each says a worker will read it.
+    expect([sup.rescan(), sup.rescan(), sup.rescan()]).toEqual([true, true, true])
+    expect(w.seen.filter((m) => m.type === 'rescan')).toHaveLength(0)
+    w.ready()
+    expect(w.seen.filter((m) => m.type === 'rescan')).toHaveLength(1)
+    expect(sup.rescan()).toBe(true)
+    expect(w.seen.filter((m) => m.type === 'rescan')).toHaveLength(2)
+    sup.shutdown()
+  })
+
+  it('Rescan is refused, and nothing is held, once no worker will come to read it: the restarts are used up, or it is shutting down', () => {
+    vi.useFakeTimers()
+    try {
+      const held = (sup: TokenomicsSupervisor): string[] => (sup as unknown as { buffer: ToTkWorker[] }).buffer.map((m) => m.type)
+      const h = harness({ maxRestarts: 1, autoReady: false })
+      // Down and being started again: one will come, so it is held.
+      h.last().exit()
+      expect(h.sup.rescan()).toBe(true)
+      expect(held(h.sup)).toEqual(['rescan'])
+      vi.advanceTimersByTime(300)            // the one restart: forked again, never ready
+      expect(h.fork).toHaveBeenCalledTimes(2)
+      h.last().exit()                        // the restarts are used up
+      vi.advanceTimersByTime(60_000)
+      expect(h.fork).toHaveBeenCalledTimes(2)
+      const before = held(h.sup)
+      expect(h.sup.rescan()).toBe(false)
+      expect(held(h.sup)).toEqual(before)
+      h.sup.shutdown()
+
+      // Shutting down: refused, whatever its worker was doing.
+      const up = harness()
+      expect(up.sup.rescan()).toBe(true)
+      up.sup.shutdown()
+      expect(up.sup.rescan()).toBe(false)
+      expect(up.kids[0].got.filter((m) => m.type === 'rescan')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // A worker that cannot open its database stays alive and is never ready,
+  // so nothing would ever read a Rescan held for it. One being started, or
+  // between a crash and its restart, is still held for as before.
+  it('Rescan is refused, and nothing is held, while the worker is alive but could not open its database; a worker started again takes it', () => {
+    vi.useFakeTimers()
+    try {
+      const held = (sup: TokenomicsSupervisor): string[] => (sup as unknown as { buffer: ToTkWorker[] }).buffer.map((m) => m.type)
+      const h = harness({ autoReady: false })
+      h.last().t.emitToMain({ type: 'error', message: 'open failed: disk I/O error' })
+      expect(h.sup.getIndexStatus().error).toMatch(/open failed/)
+      expect(h.sup.rescan()).toBe(false)
+      expect(held(h.sup)).toEqual([])
+      // That worker exits: one will be started, so a Rescan is held for it.
+      h.last().exit()
+      expect(h.sup.rescan()).toBe(true)
+      expect(held(h.sup)).toEqual(['rescan'])
+      vi.advanceTimersByTime(300)
+      expect(h.fork).toHaveBeenCalledTimes(2)
+      h.ready()
+      expect(h.kids[1].got.filter((m) => m.type === 'rescan')).toHaveLength(1)
+      expect(h.sup.rescan()).toBe(true)
+      expect(h.kids[1].got.filter((m) => m.type === 'rescan')).toHaveLength(2)
+      h.sup.shutdown()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps what the last full pass touched, readable as a copy; a pass with no walk leaves it', () => {
+    const w = manual()
+    const sup = new TokenomicsSupervisor({ forkChild: () => w.fork, ...baseOpts() })
+    sup.start()
+    w.ready()
+    expect(sup.getLastWalkStats()).toBeNull()
+    w.t.emitToMain({ type: 'index-complete', firstIndex: true, drained: true, filesFailed: 0, eventsTotal: 5, walk: WALK })
+    expect(sup.getLastWalkStats()).toEqual(WALK)
+    // A pass over the reported transcripts alone walks nothing and says nothing.
+    w.t.emitToMain({ type: 'index-complete', firstIndex: false, drained: true, filesFailed: 0, eventsTotal: 6 })
+    expect(sup.getLastWalkStats()).toEqual(WALK)
+    // The next full pass replaces it.
+    const next = { ...WALK, at: WALK.at + 300_000, transcripts: { dirs: 6, entries: 14, files: 7 }, filesRead: 1 }
+    w.t.emitToMain({ type: 'index-complete', firstIndex: false, drained: true, filesFailed: 0, eventsTotal: 7, walk: next })
+    expect(sup.getLastWalkStats()).toEqual(next)
+    // A copy: changing what was handed out changes nothing kept.
+    sup.getLastWalkStats()!.transcripts.files = 999
+    expect(sup.getLastWalkStats()!.transcripts.files).toBe(7)
+    sup.shutdown()
+  })
+
+  it('figures that are not well formed are not kept', () => {
+    const w = manual()
+    const sup = new TokenomicsSupervisor({ forkChild: () => w.fork, ...baseOpts() })
+    sup.start()
+    w.ready()
+    w.t.emitToMain({ type: 'index-complete', firstIndex: true, drained: true, filesFailed: 0, eventsTotal: 5, walk: WALK })
+    const bad: unknown[] = [
+      null, 'walk', {}, { ...WALK, transcripts: undefined }, { ...WALK, rollouts: { dirs: 1, entries: 1 } },
+      { ...WALK, transcripts: { dirs: -1, entries: 1, files: 1 } }, { ...WALK, transcripts: { dirs: 1.5, entries: 1, files: 1 } },
+      { ...WALK, filesRead: 'many' }, { ...WALK, ms: Number.NaN }, { ...WALK, at: -5 },
+    ]
+    for (const walk of bad) {
+      w.t.emitToMain({ type: 'index-complete', firstIndex: false, drained: true, filesFailed: 0, eventsTotal: 5, walk: walk as never })
+      expect(sup.getLastWalkStats(), JSON.stringify(walk)).toEqual(WALK)
+    }
+    sup.shutdown()
+  })
+
+  it('says what the index holds each time a worker comes up', () => {
+    const w = manual()
+    const sup = new TokenomicsSupervisor({ forkChild: () => w.fork, ...baseOpts() })
+    const statuses: Array<{ firstIndexComplete: boolean; indexing: boolean; eventsTotal: number }> = []
+    const off = sup.onIndexReady((s) => statuses.push(s))
+    sup.start()
+    expect(statuses).toHaveLength(0)
+    w.ready(true)
+    expect(statuses).toHaveLength(1)
+    expect(statuses[0]).toMatchObject({ firstIndexComplete: true, indexing: false, eventsTotal: 4 })
+    off()
+    w.ready(true)
+    expect(statuses).toHaveLength(1)
+    sup.shutdown()
+  })
+
+  it('attributions handed over from a stopped supervisor are sent when the worker is ready, with the ones made since', () => {
+    const w = manual()
+    const sup = new TokenomicsSupervisor({
+      forkChild: () => w.fork, ...baseOpts(),
+      // One well formed, and three that are not: dropped.
+      sessionAccounts: [[SESSION_A, 'claude:acct-a'], ['not-a-session', 'claude:acct-a'], [SESSION_B, 'bogus'], [SESSION_B, '']],
+    })
+    sup.start()
+    sup.setSessionAccount(SESSION_B, 'claude:acct-b')
+    expect(sup.keptSessionAccounts()).toEqual([[SESSION_A, 'claude:acct-a'], [SESSION_B, 'claude:acct-b']])
+    expect(w.seen.filter((m) => m.type === 'set-session-account')).toHaveLength(0)
+    w.ready()
+    expect(w.seen.filter((m) => m.type === 'set-session-account')).toEqual([
+      { type: 'set-session-account', sessionId: SESSION_A, accountKey: 'claude:acct-a' },
+      { type: 'set-session-account', sessionId: SESSION_B, accountKey: 'claude:acct-b' },
+    ])
+    // Still kept after a shutdown, for the next supervisor.
+    sup.shutdown()
+    expect(sup.keptSessionAccounts()).toHaveLength(2)
   })
 })

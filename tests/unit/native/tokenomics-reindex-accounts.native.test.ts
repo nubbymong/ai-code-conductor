@@ -296,6 +296,43 @@ describe('the one-off Codex account attribution (usage track MP9)', () => {
     }
   }
 
+  // 2.1.3-beta.4: the guard on a walk that widens by following a link, with
+  // real links (the simulated one is in
+  // tests/unit/tokenomics/tokenomics-worker-changed-files.test.ts). A link
+  // inside the projects folder or a sessions folder is a name in its folder
+  // and no more: the folder it leads to, outside every root, is never
+  // listed, and nothing in it is read.
+  it('a link inside a transcript root is never followed: the folder behind it is not listed and nothing in it is read', async () => {
+    const outside = path.join(tmp, 'outside')
+    writeClaude(path.join(outside, 'F--elsewhere'), 's-outside')
+    writeClaude(outside, 's-outside-top')
+    writeRollout(path.join(outside, '2026', '08', '01'), 'rollout-2026-08-01T00-00-00-out.jsonl', 'cx-out', 4)
+    writeRollout(outside, 'rollout-2026-08-01T00-00-00-out-top.jsonl', 'cx-out-top', 3)
+    // Inside the roots: one transcript, and one rollout of two turns.
+    writeClaude(path.join(tmp, 'claude', 'F--proj'), 's-inside')
+    writeRollout(path.join(tmp, 'home-codex', '2026', '08', '01'), 'rollout-2026-08-01T00-00-00-in.jsonl', 'cx-in', 2)
+    const links = [path.join(tmp, 'claude', 'linked'), path.join(tmp, 'claude', 'F--proj', 'linked'), path.join(tmp, 'home-codex', 'linked'), path.join(tmp, 'home-codex', '2026', 'linked')]
+    for (const at of links) link(outside, at)
+
+    const listed: string[] = []
+    const opened: string[] = []
+    const tracing = new Proxy(fs, {
+      get(target, k) {
+        if (k === 'readdirSync') return (p: string, o: unknown) => { listed.push(String(p)); return (fs.readdirSync as (p: string, o: unknown) => unknown)(p, o) }
+        if (k === 'openSync') return (p: string, flags: string) => { opened.push(String(p)); return fs.openSync(p, flags) }
+        return (target as unknown as Record<PropertyKey, unknown>)[k]
+      },
+    })
+    const t = start(path.join(tmp, 'tk.db'), [], {}, tracing as unknown as typeof fs)
+    await t.settle()
+    // The one turn and the two turns inside the roots, and no other.
+    expect((await t.ask('index-status')).eventsTotal).toBe(1 + 2)
+    const behind = (p: string): boolean => p.startsWith(outside) || links.some((at) => p === at || p.startsWith(at + path.sep))
+    expect(listed.filter(behind)).toEqual([])
+    expect(opened.filter(behind)).toEqual([])
+    expect(listed.length).toBeGreaterThan(0)
+  })
+
   it('this computer\'s own folder linked into a folder inside an account\'s never takes that account\'s sessions', async () => {
     const realmB = path.join(tmp, 'realms', 'b', 'sessions')
     writeRollout(path.join(realmB, '2026', '08', '01'), 'rollout-2026-08-01T00-00-00-b.jsonl', 'cx-b', 2)

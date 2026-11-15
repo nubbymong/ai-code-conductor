@@ -563,12 +563,22 @@ describe('main composes the attribution beside the transcript binder (MP10)', ()
     expect(code).toMatch(/projectsDirOf: \(profileId\) => join\(getProfileConfigDir\(profileId\), '\.claude', 'projects'\)/)
     expect(code).toMatch(/realRoot: \(root\) => \{ try \{ return realpathSync\.native\(root\) \} catch \{ return null \} \}/)
     expect(code).toMatch(/accountOf: \(profileId\) => getAccountsService\(\)\?\.accountIdForLegacy\('claude', profileId, \{ ignoreCase: process\.platform === 'win32' \}\) \?\? null/)
-    expect(code).toMatch(/const tokenomics = getTokenomicsSupervisor\(\)\s*if \(!tokenomics\) return false\s*tokenomics\.setSessionAccount\(sessionId, accountKey\)\s*return true/)
+    // 2.1.3-beta.4: through the service, which hands it to the usage index
+    // or, while Tokenomics is switched off, keeps it for when it is on again
+    // (tests/unit/tokenomics/tokenomics-optional-service.test.ts).
+    expect(code).toMatch(/import \{[^}]*\bnoteTokenomicsSessionAccount\b[^}]*\} from '\.\/tokenomics\/tokenomics-service'/)
+    expect(code).toMatch(/record: \(sessionId, accountKey\) => noteTokenomicsSessionAccount\(sessionId, accountKey\),/)
     // P3.2: the live usage recorder gets the same folder rule on the same folders.
     expect(code).toMatch(/setLiveUsageTranscriptProfile\(\(path\) => profileOfTranscript\(profileFolders, path\)\)/)
     expect(code).toMatch(/launchProfile: \(sessionId\) => getClaudeProfileId\(sessionId\),\s*\.\.\.profileFolders,/)
-    // No manual attribution: nothing else in main records one.
-    expect(code.split('setSessionAccount(').length).toBe(2)
+    // No manual attribution: nothing else in main records one, and none
+    // goes round the service to the supervisor.
+    expect(code.split('noteTokenomicsSessionAccount(').length).toBe(2)
+    expect(code).not.toMatch(/setSessionAccount\(/)
+    // The supervisor is only the service registry's source (read on every
+    // ask): the import and that one line, never a way to attribute a session.
+    expect(code).toMatch(/tokenomics: \(\) => getTokenomicsSupervisor\(\),/)
+    expect(code.match(/\bgetTokenomicsSupervisor\b/g)).toHaveLength(2)
     expect(code.split('createTranscriptAttribution(').length).toBe(2)
   })
 })

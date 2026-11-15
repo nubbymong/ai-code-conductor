@@ -3,6 +3,7 @@ import { saveConfigNow } from '../utils/config-saver'
 import { DEFAULT_SHORTCUTS } from '../utils/shortcuts'
 import { migrateTypography } from './migrateTypography'
 import { parseFooterHiddenEntry } from '../../shared/usage-labels'
+import { isProviderId } from '../../shared/providers/ids'
 import type { AskConductorProvider } from '../../shared/ask-conductor-provider'
 
 export type StatusLineFont = 'sans' | 'mono'
@@ -401,6 +402,18 @@ export interface AppSettings {
    *  Ctrl+B (or /bg) can't detach and strand a session. Default-on (absent/true
    *  = disabled); set false to allow background agents. New sessions only. */
   disableBackgroundTasks?: boolean
+  /** Tokenomics as an optional service (2.1.3-beta.4). DEFAULT-TRUE: absent
+   *  or true = on, so existing users see no change; only an explicit false
+   *  switches it off. Off, its worker is not started and nothing is read;
+   *  what was recorded before is kept, and switching it on again reads what
+   *  was written since. Main reads this key from the shared settings config
+   *  and applies it at once when the settings are saved. */
+  tokenomicsEnabled?: boolean
+  /** Accounts whose usage the Tokenomics figures leave out (2.1.3-beta.4):
+   *  account keys, `<provider>:<account id>`. It only filters what the page
+   *  shows; their transcripts are still read and recorded, so it saves no
+   *  disk work, and an account put back is complete. */
+  tokenomicsExcludedAccounts?: string[]
   /** Sentinel service (spec 2026-06-11): when not enabled, the service is not
    *  initialised at all — no startup check, no dot, zero overhead.
    *  OPT-IN (default-off): absent or false = disabled; only an explicit `true`
@@ -475,6 +488,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hooksPort: 19334,
   theme: 'dark',
   loggingEnabled: true,
+  tokenomicsEnabled: true,
   classicTerminalCopyPaste: true,
   clickableQuestions: false,
   sentinelEnabled: false,
@@ -556,6 +570,30 @@ export function migrateFooterHiddenBuckets(settings: AppSettings): { settings: A
   return changed ? { settings: { ...settings, footerHiddenUsageBuckets: out }, changed } : { settings, changed: false }
 }
 
+/** An account's id in an account key, as main's rule has it. */
+const TK_ACCOUNT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
+/** Most accounts the Tokenomics figures leave out, as main's rule has it. */
+const TK_EXCLUDED_ACCOUNTS_MAX = 64
+/** The accounts the Tokenomics figures leave out, read from a saved value
+ *  as main reads it (src/main/tokenomics/tk-types.ts, tkExcludedAccounts,
+ *  and a test holds the two to the same answer): each a well-formed account
+ *  key, `<provider>:<account id>`, never "not recorded", each once, within
+ *  the bound. Anything else in the list, and a value that is not a list, is
+ *  dropped, so a hand-edited or damaged value cannot break the Tokenomics
+ *  page or Settings (2.1.3-beta.4). */
+export function tokenomicsExcludedAccountsOf(list: unknown): string[] {
+  if (!Array.isArray(list)) return []
+  const out: string[] = []
+  for (const key of list) {
+    if (typeof key !== 'string' || out.includes(key)) continue
+    const at = key.indexOf(':')
+    if (at <= 0 || !isProviderId(key.slice(0, at)) || !TK_ACCOUNT_ID_RE.test(key.slice(at + 1))) continue
+    out.push(key)
+    if (out.length >= TK_EXCLUDED_ACCOUNTS_MAX) break
+  }
+  return out
+}
+
 export const useSettingsStore = create<SettingsState>((set) => ({
   settings: { ...DEFAULT_SETTINGS },
   isLoaded: false,
@@ -576,6 +614,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       // (the Sidebar #124 renameSession patch was this same bug).
       keyboardShortcuts: { ...DEFAULT_SHORTCUTS, ...(settings.keyboardShortcuts || {}) },
       typography: migrateTypography(settings),
+      // 2.1.3-beta.4: read as main reads it, so the page and Settings only
+      // ever see a list of account keys. Left absent when it was not saved.
+      ...(Object.hasOwn(settings, 'tokenomicsExcludedAccounts')
+        ? { tokenomicsExcludedAccounts: tokenomicsExcludedAccountsOf(settings.tokenomicsExcludedAccounts) }
+        : {}),
     }
     const font = migrateV2Font(merged)
     const gpu = migrateGpuDefaultOn(font.settings)

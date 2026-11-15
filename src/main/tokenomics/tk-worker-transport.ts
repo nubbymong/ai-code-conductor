@@ -1,4 +1,4 @@
-import type { TkConfigDim, TkPricing, TkSessionsRoot, TkAccountReread, TkAccountKey } from './tk-types'
+import type { TkConfigDim, TkPricing, TkSessionsRoot, TkAccountReread, TkAccountKey, TkWalkStats } from './tk-types'
 
 export type ToTkWorker =
   /** `codexSessionsDir` is the user's own Codex home's (this computer's
@@ -15,6 +15,10 @@ export type ToTkWorker =
    *  now; another account than before applies from then on. */
   | { type: 'set-session-account'; sessionId: string; accountKey: TkAccountKey }
   | { type: 'reindex' }
+  /** The page's Rescan (2.1.3-beta.4): every file's stored progress is put
+   *  back to its start and each is read again from its first byte. Rows
+   *  already stored are kept. */
+  | { type: 'rescan' }
   | { type: 'query'; id: number; kind: string; args: Record<string, unknown> }
   | { type: 'shutdown' }
 
@@ -35,8 +39,10 @@ export type FromTkWorker =
    *  can finish with most of the user's spend still unread. Anything deciding
    *  whether to stop saying "Indexing" must gate on this, not on the message
    *  merely arriving — which is what left the page showing a confidently wrong
-   *  total after the very first sweep. */
-  | { type: 'index-complete'; firstIndex: boolean; drained: boolean; filesFailed: number; eventsTotal: number }
+   *  total after the very first sweep. `walk` (2.1.3-beta.4): what a full
+   *  pass over the transcript roots touched; absent from a pass that read
+   *  only the transcripts the watcher reported. */
+  | { type: 'index-complete'; firstIndex: boolean; drained: boolean; filesFailed: number; eventsTotal: number; walk?: TkWalkStats }
   | { type: 'log'; entry: { level: 'info' | 'warn' | 'error'; message: string } }
   | { type: 'query-result'; id: number; rows: unknown[] }
   | { type: 'error'; id?: number; message: string }

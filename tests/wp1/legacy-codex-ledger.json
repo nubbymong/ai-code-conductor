@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "9d1f45febc317fcbe89098e673b3f02166db703ec3f84c8e84d19e37cddb3e0a",
-  "manifestHead": "aa5c38f25786e588a67d5ebb4b90b0d4d96004e3",
+  "manifestPathDigest": "41861ed6d67e701e943e932bfd11f71c36eebd22ba0a9cc3f7477b3ecc4cd767",
+  "manifestHead": "3d30eb0ec5e6479cd66a9acbe9351aedc816b3e8",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -10400,6 +10400,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.3 (review round 3, C5) test: the real Tokenomics worker reads a Codex rollout from an account's old folder, then the same rollout carried into its new folder by a sign in again (a hard link and a byte copy), and every turn it offers the second time is already stored: one count (WP1.52); tests/unit/tokenomics/tokenomics-carried-history-once.test.ts",
       "note": "created by WP2 PR 3 P3.3 review round 3"
+    },
+    {
+      "path": "tests/unit/tokenomics/tokenomics-optional-service.test.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.4 test (tests/unit/tokenomics/tokenomics-optional-service.test.ts): Tokenomics as an optional service, switched off and on at start and while the app runs; the worker is handed the Claude projects folder and this computer's own Codex sessions folder, each exactly and nothing wider (WP1.2)",
+      "note": "created by 2.1.3-beta.4 PR 4; the fork, the settings read and the account registry are faked, nothing is read from disk"
     },
     {
       "path": "tests/unit/tokenomics/tokenomics-worker-changed-files.test.ts",

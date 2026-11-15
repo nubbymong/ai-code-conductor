@@ -852,8 +852,11 @@ export interface ElectronAPI {
     sessions: (query?: import('../shared/types').TkSessionsQuery) => Promise<import('../shared/types').TkSessionsPage>
     sessionDetail: (sessionId: string) => Promise<import('../shared/types').TkSessionDetail | null>
     indexStatus: () => Promise<import('../shared/types').TkIndexStatus>
-    /** Usage track MP9: the providers and accounts the stored usage has. */
-    accounts: () => Promise<import('../shared/types').TkAccountPresent[]>
+    /** Usage track MP9: the providers and accounts the stored usage has, less
+     *  the accounts Settings leaves out; `includeExcluded` lists those too. */
+    accounts: (opts?: { includeExcluded?: boolean }) => Promise<import('../shared/types').TkAccountPresent[]>
+    /** 2.1.3-beta.4: read every transcript again from its first byte. */
+    rescan: () => Promise<import('../shared/types').TkRescanResult>
     onIndexStatus: (cb: (s: import('../shared/types').TkIndexStatus) => void) => () => void
     onIndexProgress: (cb: (p: import('../shared/types').TkIndexProgress) => void) => () => void
     onIndexComplete: (cb: (c: import('../shared/types').TkIndexCompleteEvent) => void) => () => void
@@ -1411,7 +1414,8 @@ const electronAPI: ElectronAPI = {
     sessions: (query?: import('../shared/types').TkSessionsQuery) => ipcRenderer.invoke(IPC.TOKENOMICS2_SESSIONS, query ?? {}),
     sessionDetail: (sessionId: string) => ipcRenderer.invoke(IPC.TOKENOMICS2_SESSION_DETAIL, { sessionId }),
     indexStatus: () => ipcRenderer.invoke(IPC.TOKENOMICS2_INDEX_STATUS),
-    accounts: () => ipcRenderer.invoke(IPC.TOKENOMICS2_ACCOUNTS, {}),
+    accounts: (opts?: { includeExcluded?: boolean }) => ipcRenderer.invoke(IPC.TOKENOMICS2_ACCOUNTS, opts?.includeExcluded === true ? { includeExcluded: true } : {}),
+    rescan: () => ipcRenderer.invoke(IPC.TOKENOMICS2_RESCAN),
     onIndexStatus: (cb: (s: import('../shared/types').TkIndexStatus) => void) =>
       onChannel(IPC.TOKENOMICS2_INDEX_STATUS, cb),
     onIndexProgress: (cb: (p: import('../shared/types').TkIndexProgress) => void) =>

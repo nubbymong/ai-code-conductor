@@ -196,6 +196,68 @@ describe('tokenomics worker ingest', () => {
     await new Promise((r) => setTimeout(r, 60))
     expect(() => { w.stop(); w.stop() }).not.toThrow()
   })
+
+  // 2.1.3-beta.4: the Tokenomics page's Rescan, on the real database. Every
+  // transcript is opened and read again from its first byte, and because a
+  // turn read again carries the key it was stored under, nothing is counted
+  // twice: the cost, the stored turns and each session's count stay as they
+  // were.
+  it('Rescan reads every transcript again from its first byte, and the totals do not move', async () => {
+    const claudeDir = path.join(tmp, 'claude')
+    const turn = (n: number, sessionId: string) => ({ type: 'assistant', timestamp: `2026-06-01T10:0${n}:00Z`, sessionId, requestId: `r${n}`,
+      message: { id: `m${n}`, model: 'claude-opus-4-8', usage: { input_tokens: 1_000_000, output_tokens: 0 } } })
+    writeClaudeFile(claudeDir, 'F--proj', 's1.jsonl', [turn(1, 's1'), turn(2, 's1')])
+    writeClaudeFile(claudeDir, 'F--proj', 's2.jsonl', [turn(3, 's2')])
+    // The real fs, noting which files are opened.
+    const opened: string[] = []
+    const noting = new Proxy(fs, {
+      get(target, prop) {
+        if (prop === 'openSync') return (p: string, flags: string) => { opened.push(path.basename(String(p))); return fs.openSync(p, flags) }
+        return (target as unknown as Record<PropertyKey, unknown>)[prop]
+      },
+    }) as typeof fs
+    const fake = new FakeTkWorkerTransport()
+    const msgs: FromTkWorker[] = []
+    fake.onMessage((m) => msgs.push(m))
+    track(createTokenomicsWorker(fake.asWorkerSide(), { fs: noting }))
+    const drained = async (): Promise<void> => {
+      for (let i = 0; i < 300; i++) {
+        if (msgs.some((m) => m.type === 'index-complete' && m.drained)) return
+        await new Promise((r) => setTimeout(r, 10))
+      }
+      throw new Error('no drained pass')
+    }
+    const ask = async (id: number, kind: string): Promise<any> => {
+      fake.post({ type: 'query', id, kind, args: {} })
+      for (let i = 0; i < 200; i++) {
+        const r = msgs.find((m) => m.type === 'query-result' && (m as { id: number }).id === id) as { rows: unknown[] } | undefined
+        if (r) return r.rows[0]
+        await new Promise((res) => setTimeout(res, 5))
+      }
+      throw new Error('no answer')
+    }
+    fake.post({ type: 'open', dbPath: ':memory:', pricing: PRICING, configs: [], claudeProjectsDir: claudeDir, codexSessionsDir: path.join(tmp, 'codex') })
+    await drained()
+    expect([...opened].sort()).toEqual(['s1.jsonl', 's2.jsonl'])
+    expect((await ask(1, 'summary')).kpis.lifeToDateCostUsd).toBeCloseTo(15, 5)
+    expect((await ask(2, 'index-status')).eventsTotal).toBe(3)
+
+    opened.length = 0
+    msgs.length = 0
+    fake.post({ type: 'rescan' })
+    await drained()
+    // Read again, both of them...
+    expect([...opened].sort()).toEqual(['s1.jsonl', 's2.jsonl'])
+    // ...and nothing counted twice.
+    expect((await ask(3, 'summary')).kpis.lifeToDateCostUsd).toBeCloseTo(15, 5)
+    expect((await ask(4, 'index-status')).eventsTotal).toBe(3)
+    const sessions = await ask(5, 'sessions') as { rows: Array<{ sessionId: string; msgCount: number }> }
+    expect(sessions.rows.map((r) => [r.sessionId, r.msgCount]).sort()).toEqual([['s1', 2], ['s2', 1]])
+    // The pass that read them again says what its walks touched: the
+    // projects folder and the one project in it, and both files opened.
+    const pass = msgs.find((m) => m.type === 'index-complete' && m.walk !== undefined) as Extract<FromTkWorker, { type: 'index-complete' }>
+    expect(pass.walk).toMatchObject({ transcripts: { dirs: 2, entries: 3, files: 2 }, rollouts: { dirs: 0, entries: 0, files: 0 }, filesRead: 2 })
+  })
 })
 
 describe('codex rollouts are streamed, not slurped', () => {
@@ -287,6 +349,104 @@ describe('codex rollouts are streamed, not slurped', () => {
     // near a whole-file read per sweep. Old behaviour: size * (sweeps + 1).
     expect(bytesRead).toBeLessThan(size * 1.5)
     expect(bytesRead).toBeGreaterThanOrEqual(size)
+  })
+
+  // 2.1.3-beta.4: the Tokenomics page's Rescan on the real database, with a
+  // rollout that takes several passes to read (a small budget per pass) and
+  // enough transcripts for a pass to yield part-way. A Rescan asked in the
+  // middle of a pass, while the rollout is part read, and one asked again
+  // while the re-read is under way, store no turn twice: a rollout's turns
+  // are numbered from its first line again, so each has the key it was
+  // stored under.
+  it('Rescan with a part-read rollout, asked in the middle of a pass and asked again while it runs: every turn is stored once', async () => {
+    const codexDir = path.join(tmp, 'codex')
+    const claudeDir = path.join(tmp, 'claude')
+    // Twelve turns behind 64 KB of filler each: several passes of 128 KB.
+    writeRollout(path.join(codexDir, '2026', '08', '01'), 'rollout-2026-08-01T00-00-00-abc.jsonl', 12, 64 * 1024)
+    // Sixty transcripts of one turn each: a pass reports its progress after the fiftieth.
+    for (let i = 0; i < 60; i++) {
+      const id = `s${String(i).padStart(2, '0')}`
+      writeClaudeFile(claudeDir, 'F--proj', `${id}.jsonl`, [{ type: 'assistant', timestamp: '2026-06-01T10:00:00Z', sessionId: id, requestId: `r${i}`,
+        message: { id: `m${i}`, model: 'claude-opus-4-8', usage: { input_tokens: 1_000_000, output_tokens: 0 } } }])
+    }
+    const fake = new FakeTkWorkerTransport()
+    const msgs: FromTkWorker[] = []
+    let onMessage: ((m: FromTkWorker) => void) | null = null
+    fake.onMessage((m) => { msgs.push(m); onMessage?.(m) })
+    track(createTokenomicsWorker(fake.asWorkerSide(), { maxTickBytes: 128 * 1024, watchDebounceMs: 5 }))
+    const passes = (): Array<Extract<FromTkWorker, { type: 'index-complete' }>> => msgs.filter((m): m is Extract<FromTkWorker, { type: 'index-complete' }> => m.type === 'index-complete')
+    const drained = async (): Promise<void> => {
+      for (let i = 0; i < 1000; i++) {
+        if (passes().some((m) => m.drained)) return
+        await new Promise((r) => setTimeout(r, 10))
+      }
+      throw new Error('no drained pass')
+    }
+    let qid = 0
+    const ask = async (kind: string): Promise<any> => {
+      const id = ++qid
+      fake.post({ type: 'query', id, kind, args: {} })
+      for (let i = 0; i < 400; i++) {
+        const r = msgs.find((m) => m.type === 'query-result' && (m as { id: number }).id === id) as { rows: unknown[] } | undefined
+        if (r) return r.rows[0]
+        await new Promise((res) => setTimeout(res, 5))
+      }
+      throw new Error(`no answer to ${kind}`)
+    }
+    const stored = async (): Promise<Array<[string, number]>> => {
+      const all: Array<[string, number]> = []
+      let cursor: unknown = null
+      for (let page = 0; page < 10; page++) {
+        const id = ++qid
+        fake.post({ type: 'query', id, kind: 'sessions', args: { limit: 200, cursor } })
+        let got: { rows: Array<{ sessionId: string; msgCount: number }>; nextCursor: unknown } | undefined
+        for (let i = 0; i < 400 && !got; i++) {
+          const r = msgs.find((m) => m.type === 'query-result' && (m as { id: number }).id === id) as { rows: unknown[] } | undefined
+          if (r) got = r.rows[0] as typeof got
+          else await new Promise((res) => setTimeout(res, 5))
+        }
+        if (!got) throw new Error('no answer to sessions')
+        for (const s of got.rows) all.push([s.sessionId, s.msgCount])
+        if (!got.nextCursor) break
+        cursor = got.nextCursor
+      }
+      return all.sort((a, b) => a[0].localeCompare(b[0]))
+    }
+    /** Sixty sessions of one turn, and the rollout's of twelve. */
+    const whole: Array<[string, number]> = [['cx-1', 12] as [string, number], ...Array.from({ length: 60 }, (_, i): [string, number] => [`s${String(i).padStart(2, '0')}`, 1])].sort((a, b) => a[0].localeCompare(b[0]))
+
+    // The first index, with a Rescan asked in the middle of its second pass
+    // (after the fiftieth file), when the rollout is part read.
+    let midPass = 0
+    onMessage = (m) => {
+      if (midPass === 0 && m.type === 'index-progress' && m.phase === 'incremental' && m.filesDone === 50) { midPass++; fake.post({ type: 'rescan' }) }
+    }
+    fake.post({ type: 'open', dbPath: ':memory:', pricing: { ...CODEX_PRICING, ...PRICING }, configs: [], claudeProjectsDir: claudeDir, codexSessionsDir: codexDir })
+    await drained()
+    onMessage = null
+    expect(midPass).toBe(1)
+    // The rollout took more than one pass.
+    expect(passes().filter((m) => !m.drained).length).toBeGreaterThan(0)
+    expect((await ask('index-status')).eventsTotal).toBe(60 + 12)
+    expect(await stored()).toEqual(whole)
+    const cost = (await ask('summary')).kpis.lifeToDateCostUsd as number
+    expect(cost).toBeGreaterThan(300)
+
+    // A Rescan at rest, asked again each time a pass ends with the rollout
+    // still part read: the one re-read goes on, and is not started over.
+    msgs.length = 0
+    let again = 0
+    onMessage = (m) => { if (m.type === 'index-complete' && !m.drained) { again++; fake.post({ type: 'rescan' }) } }
+    fake.post({ type: 'rescan' })
+    await drained()
+    onMessage = null
+    expect(again).toBeGreaterThan(0)
+    // Started over at each ask, it would take as many passes again each time
+    // and never finish within the bound; it finished, in a handful.
+    expect(passes().length).toBeLessThan(40)
+    expect((await ask('index-status')).eventsTotal).toBe(60 + 12)
+    expect(await stored()).toEqual(whole)
+    expect((await ask('summary')).kpis.lifeToDateCostUsd).toBeCloseTo(cost, 5)
   })
 
   it('reports firstIndexComplete on ready when the DB already has it', async () => {
