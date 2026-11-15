@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-15T17:19:45.040Z",
-  "head": "33ad74f84ef293011bf95c91dd184f2f3346fe12",
-  "tree": "7c0454e4b22e287ec22837b37fe5fdef84601dc5",
+  "generatedAt": "2026-11-15T17:19:55.225Z",
+  "head": "5253afe0f3cbaf3570e86c2561bf1f210884059f",
+  "tree": "9a17cbc291740bccc70580b3707adb879c3c558b",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,8 +116,8 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3280,
-  "excludedFileCount": 488,
+  "trackedFileCount": 3276,
+  "excludedFileCount": 484,
   "scannedFileCount": 2792,
   "unscopedFileCount": 42,
   "unscoped": [
@@ -1396,7 +1396,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 37
+      "lineCount": 38
     },
     {
       "path": "src/main/pty-input-guard.ts",
@@ -4880,7 +4880,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 15
+      "lineCount": 16
     },
     {
       "path": "tests/unit/main/pty-spawn-one-at-a-time-rights.test.ts",
@@ -5612,7 +5612,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 63
+      "lineCount": 64
     },
     {
       "path": "tests/unit/providers/codex/spawn-hooks.test.ts",
