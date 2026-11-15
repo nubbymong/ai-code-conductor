@@ -604,6 +604,7 @@ export const trainingSteps: TrainingStep[] = [
       'JPEG-encoded at 1920px max long edge to stay under the agent\'s image budget',
       'Saved to the session resources screenshots/ folder so you can drag-drop later too',
       'Esc cancels at any point -- no stuck overlays',
+      'On a Mac, Snap checks the **Screen Recording** permission first: without it, it offers **Open System Settings** and captures nothing; switch the app on there, quit and reopen it, and Snap again',
     ],
     howToTrigger: [
       { label: 'Open', value: 'Session toolbar → Snap' },
