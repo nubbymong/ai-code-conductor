@@ -138,7 +138,7 @@ describe('the project-settings gate on the insights run', () => {
     expect(h.headlessRuns).toBe(0)
     const run = getCatalogue().runs.find((r) => r.id === id)!
     expect(run.status).toBe('failed')
-    expect(run.error).toMatch(/^The Claude account "Acct A" is switched off, so nothing was started on it\./)
+    expect(run.error).toMatch(/^The Claude account "Acct A" is inactive, so nothing was started on it\./)
     expect(run.error).not.toContain(MANAGED_LAUNCH_REFUSAL)
     expect(isRunning('a')).toBe(false)
     expect(hasTransientProfileConsumer('a')).toBe(false)

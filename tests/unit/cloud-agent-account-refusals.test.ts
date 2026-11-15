@@ -95,7 +95,7 @@ describe('a cloud agent that cannot run on its account says so', () => {
   it('answers a switched-off account with the sentence, makes no record and starts nothing', async () => {
     saveAccount(false)
     const answer = await dispatch()
-    expect(answer).toEqual({ rejected: expect.stringContaining('"Side project" is switched off') })
+    expect(answer).toEqual({ rejected: expect.stringContaining('"Side project" is inactive') })
     expect((answer as { rejected: string }).rejected).not.toContain(MANAGED_LAUNCH_REFUSAL)
     expect(listAgents()).toHaveLength(0)
     expect(mockSpawn).not.toHaveBeenCalled()
@@ -118,7 +118,7 @@ describe('a cloud agent that cannot run on its account says so', () => {
     const before = listAgents().length
     saveAccount(false)
     const answer = await retryAgent(id)
-    expect(answer).toEqual({ rejected: expect.stringContaining('is switched off') })
+    expect(answer).toEqual({ rejected: expect.stringContaining('is inactive') })
     expect(listAgents()).toHaveLength(before)
   })
 })

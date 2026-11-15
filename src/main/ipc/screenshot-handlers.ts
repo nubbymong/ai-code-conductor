@@ -28,7 +28,7 @@ export function registerScreenshotHandlers(getWindow: () => BrowserWindow | null
   })
 
   ipcMain.handle('screenshot:listWindows', async () => {
-    return listWindows()
+    return listWindows(getWindow())
   })
 
   ipcMain.handle('screenshot:listRecent', async () => {

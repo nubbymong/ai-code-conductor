@@ -23,3 +23,12 @@ export function launchRefusalText(message: string): string {
   const sentence = message.slice(at + prefix.length)
   return sentence.charAt(0).toUpperCase() + sentence.slice(1)
 }
+
+/** For a terminal line about ANY failed spawn: the sentence when the message
+ *  IS a managed launch refusal (it starts with the marker), and any other
+ *  message as it is. Unlike launchRefusalText it never cuts a message that
+ *  only contains the marker further in, such as a node-pty error quoting a
+ *  directory whose name holds it. */
+export function refusalSentenceOrMessage(message: string): string {
+  return message.startsWith(`${MANAGED_LAUNCH_REFUSAL}: `) ? launchRefusalText(message) : message
+}

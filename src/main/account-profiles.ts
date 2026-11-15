@@ -29,7 +29,7 @@ import { canonicaliseEmail } from '../shared/account-chip-color'
 import { lowerAsciiLetters } from '../shared/profile-id'
 import type { AccountProfile } from '../shared/account-types'
 import { isAccountActive } from '../shared/account-types'
-import { MANAGED_LAUNCH_REFUSAL, launchRefusalText } from './launch-refusal'
+import { MANAGED_LAUNCH_REFUSAL, launchRefusalText, refusalSentenceOrMessage } from './launch-refusal'
 import type { ProjectGateResult } from '../shared/providers'
 
 // Shared-directory names junctioned from a profile back to the shared root.
@@ -3559,9 +3559,9 @@ export function captureDetectedAccount(profileId: string, name?: string): Accoun
  * "every managed launch is hardened".
  */
 /** MANAGED_LAUNCH_REFUSAL, the prefix every managed-launch refusal carries, and
- *  launchRefusalText live in launch-refusal.ts (no imports, so claude-headless
- *  can use them too). */
-export { MANAGED_LAUNCH_REFUSAL, launchRefusalText }
+ *  launchRefusalText and refusalSentenceOrMessage live in launch-refusal.ts (no
+ *  imports, so claude-headless can use them too). */
+export { MANAGED_LAUNCH_REFUSAL, launchRefusalText, refusalSentenceOrMessage }
 
 /** Who is launching, for the preflight report.
  *
@@ -3890,7 +3890,7 @@ export function inactiveAccountRefusal(profileId: string, list: () => AccountPro
   const p = list().find((x) => x && x.id === profileId)
   if (!p || isAccountActive(p)) return null
   const name = typeof p.name === 'string' && p.name.trim() ? `"${p.name.trim()}"` : 'this account'
-  return `The Claude account ${name} is switched off, so nothing was started on it. Choose another account (for a tab, use Switch Account in its right-click menu), or switch ${name} back on in Settings, Accounts.`
+  return `The Claude account ${name} is inactive, so nothing was started on it. Choose another account (for a tab, use Switch Account in its right-click menu), or use Make active on ${name} in Settings, Accounts.`
 }
 
 /** The one call a launch makes to refuse a switched-off account: logs the

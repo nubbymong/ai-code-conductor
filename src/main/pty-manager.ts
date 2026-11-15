@@ -86,7 +86,7 @@ import { prepareCodexCanvasLaunch } from './canvas/codex-canvas-launch'
 import { registerCodexCanvasRoots } from './canvas/codex-canvas-roots'
 import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from './canvas/codex-guidance'
 import { disposeSession as disposeCodexReviewUsage } from './codex-review-usage'
-import { getProfileConfigDir, setupProfileLinks, getPrimaryProfileId, isValidProfileId, backupProfileHomeToCanonical, syncPrimaryCredentialsWithGlobal, withProfileHome, checkProfileCredentialFolders, assertAccountActive, MANAGED_LAUNCH_REFUSAL } from './account-profiles'
+import { getProfileConfigDir, setupProfileLinks, getPrimaryProfileId, isValidProfileId, backupProfileHomeToCanonical, syncPrimaryCredentialsWithGlobal, withProfileHome, checkProfileCredentialFolders, assertAccountActive, MANAGED_LAUNCH_REFUSAL, refusalSentenceOrMessage } from './account-profiles'
 export { withProfileHome } from './account-profiles'
 import { gateManagedLaunchDirs, gatePickerSiblingDirs, recordManagedLaunchPreflight, displayPath } from './managed-launch-diagnostics'
 import { stripSpoofableText } from '../shared/safe-text'
@@ -2156,7 +2156,7 @@ export function writeDeferredSpawnFailureReason(
   // and paragraph separators (U+2028/2029), which let a path fake a second,
   // separate message on its own line. Cosmetic rather than control-sequence
   // injection, so a smaller blast radius -- and the same one-line fix.
-  const raw = (err as Error)?.message ?? String(err)
+  const raw = refusalSentenceOrMessage((err as Error)?.message ?? String(err))
   const why = stripSpoofableText(raw, 500)
   // Red, and bracketed so it cannot be mistaken for program output.
   win.webContents.send(`pty:data:${sessionId}`, `\r\n\x1b[31m${why}\x1b[0m\r\n`)

@@ -286,11 +286,11 @@ describe('the analysis account is switched off: no analysis runs on it, and the 
   it('Claude Code: nothing is run, and the panel names the account and what to do', async () => {
     pref.claude = 'on'; pref.codex = 'off'
     analysisAccount.profileId = 'profile-off-1'
-    analysisAccount.switchedOff = 'The Claude account "Side project" is switched off, so nothing was started on it. Choose another account, or switch "Side project" back on in Settings, Accounts.'
+    analysisAccount.switchedOff = 'The Claude account "Side project" is inactive, so nothing was started on it. Choose another account, or use Make active on "Side project" in Settings, Accounts.'
     const { mod, report } = await sentinelSeeded({ lastSeenCcVersion: '2.1.290' })
     await mod.sentinelStartupCheck()
     expect(claudeAnalyses).toHaveLength(0)
-    expect(report.error).toContain('"Side project" is switched off')
+    expect(report.error).toContain('"Side project" is inactive')
     expect(mod.getSentinelState()!.snapshot().lastSeenCcVersion).toBe('2.1.290')
   })
 })
