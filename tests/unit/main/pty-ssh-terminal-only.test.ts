@@ -447,6 +447,36 @@ describe('the end of a Terminal only SSH tab\'s post-connect phase', () => {
     expect(shown(SID)).not.toContain('awaiting-postcommand')
   })
 
+  // A Skip hands the terminal to the user. With the prompt still valid and no key
+  // typed, the unasked write must still not happen: the flow is no longer in
+  // running-postcommand when the timer fires. Mutation to prove this can fail:
+  // drop the running-postcommand check before the unasked write.
+  it('a Skip inside the 200 ms window with the prompt still valid and no key typed: nothing is typed', () => {
+    openTerminal({ postCommand: ATTACH })
+    feed(PROMPT)
+    vi.advanceTimersByTime(100)
+    getSshFlow(SID)!.skip()
+    expect(stateOf(SID)?.state).toBe('skipped')
+    vi.advanceTimersByTime(3000)
+    expect(h.writes).toEqual([])
+    expect(stateOf(SID)?.state).toBe('skipped')
+    expect(shown(SID)).not.toContain('awaiting-postcommand')
+    // The attempt is given up for this connection: a later prompt types
+    // nothing (at most it offers the command, as a prompt after a Skip always did).
+    feed(`\r\n${PROMPT}`)
+    vi.advanceTimersByTime(3000)
+    expect(h.writes).toEqual([])
+  })
+
+  it('control: the same window with no Skip types the command', () => {
+    openTerminal({ postCommand: ATTACH })
+    feed(PROMPT)
+    vi.advanceTimersByTime(100)
+    expect(stateOf(SID)?.state).toBe('running-postcommand')
+    vi.advanceTimersByTime(101)
+    expect(h.writes).toEqual([`${ATTACH}\r`])
+  })
+
   it('the connection ending inside the 200 ms window of a refused write stays a failed connection', () => {
     openTerminal({ postCommand: ATTACH })
     feed(PROMPT)

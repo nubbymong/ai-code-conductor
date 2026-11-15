@@ -4321,9 +4321,11 @@ function spawnPtyResolved(
           // typed, or a CLI screen showing: nothing is typed, the attempt is
           // withdrawn as if never started, and the offer appears as for every
           // other config. It is not tried again without a click on this
-          // connection.
+          // connection. A Skip, a CLI screen or an end inside the window has
+          // moved the state off running-postcommand: that hands the terminal to
+          // the user, so nothing is typed even when the prompt is still valid.
           unaskedWritePending = false
-          if (!atShellPromptForUnasked()) {
+          if (currentFlowState !== 'running-postcommand' || !atShellPromptForUnasked()) {
             postCommandSent = false
             unaskedGivenUp = true
             if (entryNonce !== null) {
