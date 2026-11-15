@@ -14,6 +14,15 @@
 // Drives the REAL spawnPty and the REAL pty:spawn handler with node-pty, the
 // providers and the accounts service mocked (the stack of
 // tests/unit/main/canvas-worktree-spawn.test.ts). No process is started.
+//
+// WP1.41: before it starts a local session the PTY manager asks the accounts
+// service whether the provider's sessions start on this computer. The last
+// cases here put the REAL accounts service over the REAL Claude Code and
+// Codex packages behind that question, on each platform the app runs on, so
+// the answer a Codex launch gets is the Codex package's own `session.launch`
+// declaration and not a stand-in's. They also hold the line between the two
+// launch rows at a launch: the row that runs Claude Code's launch is Claude
+// Code's alone.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as os from 'os'
 import * as path from 'path'
@@ -49,6 +58,9 @@ const h = vi.hoisted(() => ({
   ptyCwds: [] as string[],
   /** P3.10: a Hooks gateway listening (none: the gateway is off). */
   gateway: null as null | Record<string, unknown>,
+  /** Whether a provider's sessions start on this computer, as a case's own
+   *  accounts service answers it (none: they do). */
+  localLaunch: null as null | ((providerId: string) => unknown),
 }))
 
 vi.mock('node-pty', () => ({
@@ -96,6 +108,7 @@ vi.mock('../../src/main/conductor-mcp-server', () => ({
   disposeCodexReviewUsage: () => {},
 }))
 vi.mock('../../src/main/providers', () => ({
+  providerCapability: () => ({ enabled: true }),
   getProvider: () => ({
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }), // WP2 PR 4: the local launch resolves Claude through the provider
     buildSpawnCommand: (opts: Record<string, unknown>) => {
@@ -183,15 +196,25 @@ vi.mock('../../src/main/provider-accounts', () => ({
     // Every provider is on here (main's launch rule, provider-launch-gate.ts).
     launchRefusal: () => null,
     remoteLaunchRefusal: () => ({ ok: false, code: 'unsupported', message: 'Codex runs on this computer only in this release; it is not available in SSH sessions.' }),
+    // Each provider's sessions start on this computer (the PTY manager asks),
+    // unless a case puts its own accounts service behind the question.
+    localLaunchRefusal: (providerId: string) => (h.localLaunch ? h.localLaunch(providerId) : null),
     prepareLaunch: (input: Record<string, unknown>) => { h.prepareCalls++; return h.prepare ? h.prepare(input) : Promise.resolve({ ok: false, code: 'not-found', message: 'no account' }) },
     carryConversation: (...a: unknown[]) => { h.carries.push(a); return h.carry ? h.carry(...a) : Promise.resolve({ ok: true, carried: 'copied' }) },
   }),
 }))
 
-const { spawnPty, killPty, killAllPty, holdsCodexLaunchLease, countUnleasedAgentSessions, beginSpawnPreparation, CODEX_LEASE_EXIT_GRACE_MS, codexRunEnded, rememberUncertainCodexConversationsFrom, getKeptCodexConversation, noteCodexHookTranscript } = await import('../../src/main/pty-manager')
+const { LOCAL_LAUNCH_STYLE, _setLocalLaunchStylesForTest, spawnPty, killPty, killAllPty, holdsCodexLaunchLease, countUnleasedAgentSessions, beginSpawnPreparation, CODEX_LEASE_EXIT_GRACE_MS, codexRunEnded, rememberUncertainCodexConversationsFrom, getKeptCodexConversation, noteCodexHookTranscript } = await import('../../src/main/pty-manager')
 h.watchFn = (await import('../../src/main/providers/codex/telemetry')).watchAndClaimRollout as never
 const { codexDayFolders, codexFolderIdentity } = await import('../../src/main/providers/codex/rollout-lookup')
 const { registerPtyHandlers, CODEX_CARRY_EXIT_WAIT_MS, CODEX_CARRY_TIMEOUT_MS } = await import('../../src/main/ipc/pty-handlers')
+// The real packages and the real accounts service, for the cases that ask
+// them (the registry the launch reads its session provider from stays the
+// stand-in above).
+const { AccountsService, ConsumerLeaseRegistry, SecretHandleStore } = await import('../../src/main/providers/core')
+const { createClaudePackage } = await import('../../src/main/providers/claude')
+const { createCodexPackage } = await import('../../src/main/providers/codex')
+const { CAPABILITY_PLATFORMS } = await import('../../src/shared/providers')
 type Launch = NonNullable<NonNullable<Parameters<typeof spawnPty>[2]>['codexLaunch']>
 
 const SID = 'lh0000000000000000000001'
@@ -242,6 +265,8 @@ beforeEach(() => {
   h.legacyInstalled = true
   h.claudeReview = []
   h.ptyCwds = []
+  h.localLaunch = null
+  _setLocalLaunchStylesForTest(null)
   sent.length = 0
   destroyed = false
 })
@@ -1089,5 +1114,136 @@ describe('a conversation whose claim was not certain is never carried (P3.6, own
     onAccount('acct-b')
     await expect(spawnFor(sid, { ...codexRequest, providerAccountId: 'acct-b' })).resolves.toMatchObject({ started: true, carry: { code: 'conversation-uncertain', resumed: false } })
     expect(h.carries).toEqual([])
+  })
+})
+
+/** The real accounts service on `platform`, over the Claude Code and Codex
+ *  packages as the app ships them (Codex wired to its realms, as at start);
+ *  `codexLaunch` replaces what the Codex package declares about starting
+ *  sessions when given. Nothing is read or started: it has no registry. */
+function realAccountsService(platform: (typeof CAPABILITY_PLATFORMS)[number], codexLaunch?: 'unsupported' | 'unknown' | 'experimental') {
+  const claude = createClaudePackage()
+  const codex = createCodexPackage({ realms: { lookup: async () => ({ ok: false }), mkdirSecure: () => {} } } as never)
+  const codexSeen = codexLaunch ? { ...codex, capabilities: { ...codex.capabilities, 'session.launch': { state: codexLaunch } } } : codex
+  return new AccountsService({
+    store: () => null,
+    leases: new ConsumerLeaseRegistry(),
+    secrets: new SecretHandleStore({ now: () => 0 }),
+    packages: () => [claude, codexSeen],
+    preference: () => 'on',
+    experimentalEnabled: () => [],
+    platform,
+    randomHex: () => '0'.repeat(32),
+  })
+}
+
+describe('a Codex launch asks whether its sessions start here of the Codex package as the app ships it (WP1.41)', () => {
+  // Mutation to prove this can fail: start a local session without asking the
+  // accounts service (the declared-unsupported case then starts).
+  for (const platform of CAPABILITY_PLATFORMS) {
+    it(`on ${platform}: the real accounts service says Codex sessions start, and the launch runs the prepared executable`, () => {
+      const service = realAccountsService(platform)
+      const asked: string[] = []
+      h.localLaunch = (id) => { asked.push(id); return service.localLaunchRefusal(id as never) }
+      expect(service.localLaunchRefusal('codex')).toBeNull()
+      start(launch('a'))
+      expect(asked).toEqual(['codex'])
+      expect(h.ptys).toHaveLength(1)
+      expect(h.ptys[0].cmd).toBe('/proven/a/codex')
+    })
+
+    it(`on ${platform}: a Codex package that declared no session launches is refused, and nothing is built or started`, () => {
+      const service = realAccountsService(platform, 'unsupported')
+      h.localLaunch = (id) => service.localLaunchRefusal(id as never)
+      expect(service.localLaunchRefusal('codex')).not.toBeNull()
+      // Claude Code's own declaration is untouched by Codex's.
+      expect(service.localLaunchRefusal('claude')).toBeNull()
+      expect(() => start(launch('a'))).toThrow(/cannot start sessions on this computer\. Nothing was started\./)
+      expect(h.ptys).toHaveLength(0)
+      expect(h.built).toHaveLength(0)
+    })
+  }
+
+  // A Codex launch through pty:spawn is prepared first (its account, its
+  // lease) and then started by the PTY manager, which looks the provider up
+  // before it starts it. Mutation to prove this can fail: start a prepared
+  // launch without the lookup.
+  it('through pty:spawn: a prepared Codex launch whose sessions do not start here is refused, nothing is built or started, and its lease is let go', async () => {
+    const service = realAccountsService('win32', 'unsupported')
+    h.localLaunch = (id) => service.localLaunchRefusal(id as never)
+    const l = launch('a')
+    h.prepare = async () => prepared(l)
+    await expect(spawnIpc({ ...codexRequest, providerAccountId: 'acct-a' })).rejects.toThrow(/cannot start sessions on this computer/)
+    expect(h.prepareCalls).toBe(1)
+    expect(h.ptys).toHaveLength(0)
+    expect(h.built).toHaveLength(0)
+    expect(l.lease.release).toHaveBeenCalledTimes(1)
+    expect(holdsCodexLaunchLease(SID, l.lease as never)).toBe(false)
+  })
+
+  it('a declaration marked experimental that the owner has not enabled is refused the same way', () => {
+    const service = realAccountsService('win32', 'experimental')
+    h.localLaunch = (id) => service.localLaunchRefusal(id as never)
+    expect(() => start(launch('a'))).toThrow(/cannot start sessions on this computer/)
+    expect(h.ptys).toHaveLength(0)
+  })
+})
+
+describe('the row that runs Claude Code\'s launch is Claude Code\'s alone (WP1.38)', () => {
+  // Two lines hold this at a launch: the lookup gives that row to Claude Code
+  // alone (before anything of the session is touched), and the branch that
+  // runs Claude Code's launch refuses any other id. Mutation to prove this
+  // can fail: remove both. With only the lookup's check removed the launch is
+  // still refused, by the branch (the lookup's own case, in
+  // tests/unit/main/pty-local-launch-registry.test.ts, fails then); with only
+  // the branch's removed it is still refused, by the lookup (the branch's own
+  // case, the next one here, fails then).
+  it('Codex under a copy of that row is refused at a launch, and is not started the way Claude Code is', () => {
+    _setLocalLaunchStylesForTest({ claude: LOCAL_LAUNCH_STYLE.claude, codex: LOCAL_LAUNCH_STYLE.claude })
+    expect(() => start(launch('a'))).toThrow(/is not one this app can start/)
+    expect(h.ptys).toHaveLength(0)
+    expect(h.built).toHaveLength(0)
+    // Claude Code itself is started by that row, as before.
+    spawnPty(fakeWin, SID, { cwd: os.tmpdir(), provider: 'claude' })
+    expect(h.ptys).toHaveLength(1)
+    expect(h.ptys[0].cmd).toBe('pwsh')
+  })
+
+  // The branch's own refusal, by itself. The lookup answers first at every
+  // launch, so the branch is reached with another id only when the lookup did
+  // not refuse it: here the lookup is made to take each row as the rows hold
+  // it (the test hook's second argument), and Codex holds a copy of Claude
+  // Code's row. The lookup then hands the branch a launch that is not Claude
+  // Code's, and the branch refuses it. Mutation to prove this can fail:
+  // remove the branch's refusal alone (the lookup's stays as it is).
+  it('handed Codex under that row by a lookup that did not refuse it, the branch that runs Claude Code\'s launch refuses it by itself', () => {
+    _setLocalLaunchStylesForTest({ claude: LOCAL_LAUNCH_STYLE.claude, codex: LOCAL_LAUNCH_STYLE.claude }, true)
+    expect(() => start(launch('a'))).toThrow(/is not one this app can start/)
+    expect(h.ptys, 'Claude Code\'s shell was opened for Codex').toHaveLength(0)
+    expect(h.built, 'a launch was built for Codex by Claude Code\'s branch').toHaveLength(0)
+    // Claude Code is started by that branch from the same lookup, as before.
+    spawnPty(fakeWin, SID, { cwd: os.tmpdir(), provider: 'claude' })
+    expect(h.ptys.map((pty) => pty.cmd)).toEqual(['pwsh'])
+  })
+
+  // The hook's second argument lasts until the hook is called again: a later
+  // call without it has the lookup ask again whose row it is. Mutation to
+  // prove this can fail: let the second argument stay set once it was given.
+  it('the lookup takes the rows as they are held only while the hook says so: the next rows are checked again, before the session is touched', () => {
+    _setLocalLaunchStylesForTest({ ...LOCAL_LAUNCH_STYLE }, true)
+    // The app's own rows, taken as they are held, start each provider by its own row.
+    start(launch('a'))
+    expect(h.ptys.map((pty) => pty.cmd)).toEqual(['/proven/a/codex'])
+    _setLocalLaunchStylesForTest({ claude: LOCAL_LAUNCH_STYLE.claude, codex: LOCAL_LAUNCH_STYLE.claude })
+    // Refused by the lookup: the running process is not ended for it (the
+    // branch is reached only once it has been).
+    expect(() => start(launch('b'))).toThrow(/is not one this app can start/)
+    expect(h.ptys[0].kill).not.toHaveBeenCalled()
+    expect(h.ptys).toHaveLength(1)
+  })
+
+  it('with the rows as the app has them, a Codex launch runs its prepared executable and Claude Code\'s shell is not opened for it', () => {
+    start(launch('a'))
+    expect(h.ptys.map((pty) => pty.cmd)).toEqual(['/proven/a/codex'])
   })
 })

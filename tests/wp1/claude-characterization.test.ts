@@ -61,6 +61,14 @@ vi.mock('../../src/main/claude-cli-version', async (importOriginal) => ({
 vi.mock('../../src/main/usage/usage-snapshots', () => ({ loadSnapshots: () => new Map(), saveSnapshots() {} }))
 vi.mock('../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn(), logVerbose: vi.fn() }))
 
+// Main's launch rule says the provider may start: a launch that was held
+// asks it again when its wait ends, which has its own suite
+// (pty-held-launch-provider-off.test.ts). A probe keeps the real rule.
+vi.mock('../../src/main/provider-launch-gate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/provider-launch-gate')>()),
+  providerLaunchRefusal: () => null,
+}))
+
 const profiles = await import('../../src/main/account-profiles')
 const { spawnPty, killPty, REMOVED_ACCOUNT_REFUSAL } = await import('../../src/main/pty-manager')
 const { registerProviderPackage, _resetProviderRegistryForTest } = await import('../../src/main/providers/core')

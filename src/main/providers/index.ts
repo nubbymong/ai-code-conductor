@@ -10,6 +10,9 @@
 // applied" and "how the app-owned settings copy is sanitised" all arrive here
 // from the registered package rather than being restated at each call site.
 export { registerProvider, getProvider, tryGetProvider } from './core'
+// What a registered provider declares it can do, for a launch path that asks
+// before it starts one (a local session: `session.launch`).
+export { providerCapability } from './core'
 export {
   realmEnvForProvider, ambientAuthVariablesForProvider,
   sanitizeManagedSettingsFor, authoritySettingsKeysFor, managedLaunchPreflightFor, minimumManagedCliVersionFor,

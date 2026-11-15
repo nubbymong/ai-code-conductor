@@ -53,6 +53,7 @@ vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: (
 vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: () => null, getTranscriptBinder: () => null }))
 vi.mock('../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => 0, registerCodexReviewSession: () => {}, registerClaudeReviewSession: () => {}, unregisterCodexReviewSession: () => {}, releaseMcpSessionProvider: () => {} }))
 vi.mock('../../../src/main/providers', () => ({
+  providerCapability: () => ({ enabled: true }),
   getProvider: (id: string) => (id === 'codex'
     ? { buildSpawnCommand: () => ({ cmd: '/proven/codex', args: [], env: {}, logLine: '' }), ingestSessionTelemetry: () => ({ stop: () => {} }) }
     : { resolveBinary: () => ({ cmd: 'claude', source: 'system' }), buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: {} }), ingestSessionTelemetry: () => ({ stop: () => {} }) }),

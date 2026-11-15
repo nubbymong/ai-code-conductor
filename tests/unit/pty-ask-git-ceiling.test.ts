@@ -82,6 +82,7 @@ vi.mock('../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: () =
 vi.mock('../../src/main/logging/logging-service', () => ({ getLogSupervisor: () => null, getTranscriptBinder: () => null }))
 vi.mock('../../src/main/conductor-mcp-server', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../src/main/conductor-mcp-server')>()), getConductorMcpPort: () => 0 }))
 vi.mock('../../src/main/providers', () => ({
+  providerCapability: () => ({ enabled: true }),
   getProvider: () => ({ resolveBinary: () => ({ cmd: 'claude', source: 'system' }), buildSpawnCommand: () => ({ cmd: 'sh', args: [], env: { ...h.providerEnv } }), ingestSessionTelemetry: () => ({ stop: () => {} }) }),
 }))
 vi.mock('../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))
@@ -101,6 +102,14 @@ vi.mock('../../src/main/config-manager', async (importOriginal) => ({
   readConfig: () => ({}),
   readConfigChecked: () => ({ value: {}, outcome: 'ok' }),
   getConfigDir: () => h.root,
+}))
+
+// Main's launch rule says the provider may start: a launch that was held
+// asks it again when its wait ends, which has its own suite
+// (pty-held-launch-provider-off.test.ts). A probe keeps the real rule.
+vi.mock('../../src/main/provider-launch-gate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/provider-launch-gate')>()),
+  providerLaunchRefusal: () => null,
 }))
 
 const { spawnPty, killPty, pickerGitPath, askGitEnvironment, askGitCeiling, _setPickerGitLookupForTest } = await import('../../src/main/pty-manager')

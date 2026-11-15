@@ -43,9 +43,12 @@ vi.mock('electron', () => ({
 }))
 
 const { spawnPty, killPty } = await import('../../src/main/pty-manager')
-const { registerProvider } = await import('../../src/main/providers')
-const { ClaudeProvider } = await import('../../src/main/providers/claude')
-registerProvider(new ClaudeProvider())
+// The Claude Code package as the app registers it (the same session provider,
+// with what the package declares): a local launch asks the registry whether
+// its provider starts sessions before it starts one.
+const { registerProviderPackage } = await import('../../src/main/providers/core')
+const { createClaudePackage } = await import('../../src/main/providers/claude')
+registerProviderPackage(createClaudePackage())
 // On Windows the launch names Claude Code by the full path its PATH walk finds,
 // and starts nothing without one: a stand-in it finds (tests/helpers).
 const fakeClaude = putFakeClaudeOnPath()

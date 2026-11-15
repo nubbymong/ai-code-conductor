@@ -6,6 +6,7 @@ import { handOffAskQuestion } from '../pty-manager'
 import { ensureHelpWorkspace, helpWorkspaceDir } from '../help-workspace'
 import { ASK_HELP_FOLDER_FAILED } from '../../shared/ask-conductor-provider'
 import { getResourcesDirectory } from './setup-handlers'
+import { providerIdSchema } from './provider-id-schema'
 import { getAccountsService } from '../provider-accounts'
 import { awaitCodexHookFolders } from '../codex-hook-folders'
 import { getGateway } from '../hooks'
@@ -13,6 +14,7 @@ import { providerLaunchRefusal } from '../provider-launch-gate'
 import { claimConfigLaunch, settleConfigLaunch, discardConfigLaunch, noteConfigLaunchPreparation, type ConfigLaunchTicket } from '../launch-one-at-a-time'
 import { isPartnerPtyId } from '../../shared/multi-spawn-rule'
 import type { AccountLease, AccountsService } from '../providers/core'
+import { providerCapability, tryGetProviderPackage } from '../providers/core'
 import type { ConversationCarryNotice } from '../../shared/providers'
 import { forgetCanvasMarkers } from '../canvas/canvas-marker-delivery'
 import { logUserInput, isDebugModeEnabled } from '../debug-capture'
@@ -445,7 +447,8 @@ export const spawnOptionsSchema = z.object({
   // passes it verbatim) and must stay accepted — emission already skips empty (`if (options?.model)`).
   model: z.string().max(64).regex(/^[a-zA-Z0-9._[\]-]+$/).optional().or(z.literal('')),
   profileId: z.string().optional(),
-  provider: z.enum(['claude', 'codex']).optional(),
+  // One of the app's provider ids (provider-id-schema.ts).
+  provider: providerIdSchema.optional(),
   codexOptions: z.object({
     // Bounded and charset-limited like the Claude model above: it becomes a
     // launch argument. The value list lives in sanitize-restored-spawn-options.ts
@@ -849,16 +852,24 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     if (options?.shellOnly && options.ssh) sshShellSessions.add(sessionId)
     else sshShellSessions.delete(sessionId)
 
-    // WP2: a Codex spawn that is to run on another machine is refused HERE,
-    // before anything is installed, loaded or leased for it -- by the
-    // provider's `session.ssh` capability, not its name (Codex runs on this
-    // computer only in this release). Shell-only too: pty-manager refuses
-    // every Codex SSH spawn, so nothing is prepared for one.
+    // WP2: a spawn that is to run on another machine is refused HERE, before
+    // anything is installed, loaded or leased for it, when its provider's
+    // sessions do not run there -- by the provider's `session.ssh` capability,
+    // not its name, so every provider is asked the same question (Codex runs
+    // on this computer only in this release). Asked about the provider an SSH
+    // launch starts and, for a terminal tab over SSH, about the one it names
+    // when it names one: pty-manager refuses every Codex SSH spawn, so nothing
+    // is prepared for one. With no accounts service to ask, the registry's own
+    // declaration answers, so a provider that declares sessions on another
+    // machine is not refused for want of the service, and one that declares
+    // none (or is not registered) still is.
     const codexSession = options?.provider === 'codex' && !options.shellOnly
-    if (options?.provider === 'codex' && options?.ssh) {
+    const remoteProvider = options?.ssh ? (options.provider ?? launchProvider) : null
+    if (remoteProvider) {
       const service = getAccountsService()
-      const refused = service ? service.remoteLaunchRefusal('codex') : { message: 'Accounts are not ready yet.' }
-      if (refused) throw new Error(`Codex session refused: ${refused.message}`)
+      const refused = service ? service.remoteLaunchRefusal(remoteProvider)
+        : providerCapability(remoteProvider, 'session.ssh').enabled ? null : { message: 'Accounts are not ready yet.' }
+      if (refused) throw new Error(`${tryGetProviderPackage(remoteProvider)?.displayName ?? remoteProvider} session refused: ${refused.message}`)
     }
 
     // A spawn that awaits work in main first -- a Codex account launch, the

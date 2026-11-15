@@ -58,7 +58,7 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: () => null, getTranscriptBinder: () => null }))
 vi.mock('../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => 0, registerCodexReviewSession: () => {}, registerClaudeReviewSession: () => {}, unregisterCodexReviewSession: () => {}, releaseMcpSessionProvider: () => {}, disposeCodexReviewUsage: () => {} }))
-vi.mock('../../../src/main/providers', () => ({ getProvider: () => ({ buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: {} }), prepareSessionHooks: () => null, ingestSessionTelemetry: () => ({ stop: () => {} }) }) }))
+vi.mock('../../../src/main/providers', () => ({ providerCapability: () => ({ enabled: true }), getProvider: () => ({ buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: {} }), prepareSessionHooks: () => null, ingestSessionTelemetry: () => ({ stop: () => {} }) }) }))
 vi.mock('../../../src/main/providers/claude/spawn', () => ({ resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }), resolveHostColorScheme: () => 'dark' }))
 vi.mock('../../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))
 vi.mock('../../../src/main/canvas/canvas-plugin', () => ({ ensureCanvasPlugin: () => null }))
@@ -66,7 +66,7 @@ vi.mock('../../../src/main/hooks', () => ({ getGateway: () => null, isExactBindS
 vi.mock('../../../src/main/hooks/session-hooks-writer', () => ({ injectHooks: () => {} }))
 vi.mock('../../../src/main/hooks/per-session-settings', () => ({ writeLocalSessionSettings: () => null, removeLocalSessionSettings: () => {}, writeLocalSessionMcpConfig: () => null, removeLocalSessionMcpConfig: () => {}, removeLocalSessionStatusUrl: () => {} }))
 vi.mock('../../../src/main/claude-account-identity', () => ({ captureClaudeAccount: () => {}, clearClaudeAccount: () => {}, getAccountIdentity: () => null, pushAccountIdentity: () => {}, startWatchingAccountIdentity: () => {}, stopWatchingAccountIdentity: () => {}, getWatchedProfileId: () => null }))
-vi.mock('../../../src/main/session-registry', () => ({ updateSessionMeta: () => {}, clearSessionMeta: () => {}, markPtySessionAlive: () => {}, markPtySessionGone: () => {} }))
+vi.mock('../../../src/main/session-registry', () => ({ updateSessionMeta: () => {}, clearSessionMeta: () => {}, markPtySessionAlive: () => {}, markPtySessionGone: () => {}, isPtySessionLive: () => false }))
 vi.mock('../../../src/main/services/pty-integrity-monitor', () => ({ getPtyIntegrityMonitor: () => null }))
 vi.mock('../../../src/main/config-manager', async (orig) => ({ ...(await orig<any>()), readConfig: (key: string) => (key === 'configs' ? h.configs : {}), getConfigDir: () => os.tmpdir() }))
 vi.mock('../../../src/main/account-profiles', async (orig) => {
@@ -89,7 +89,7 @@ vi.mock('../../../src/main/profile-consumers', async (orig) => ({ ...(await orig
 vi.mock('../../../src/main/managed-launch-diagnostics', async (orig) => ({ ...(await orig<any>()), gateManagedLaunchDirs: () => h.gate!.promise, recordManagedLaunchPreflight: () => {} }))
 vi.mock('../../../src/main/legacy-version-manager', () => ({ isVersionInstalled: () => true, installVersion: async () => ({ ok: true }) }))
 vi.mock('../../../src/main/credential-store', () => ({ loadCredential: () => null }))
-vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => ({ launchRefusal: () => null, remoteLaunchRefusal: () => null, prepareLaunch: async () => ({ ok: false, message: 'n/a' }) }) }))
+vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => ({ launchRefusal: () => null, remoteLaunchRefusal: () => null, localLaunchRefusal: () => null, prepareLaunch: async () => ({ ok: false, message: 'n/a' }) }) }))
 
 // Nothing real may start: the process layer must be the fake above.
 const nodePty = await import('node-pty')

@@ -55,7 +55,7 @@ const STALE_WT = path.join('F:', 'stale-outer', 'ccc-wt', 'deadbeefdead')
 vi.mock('../../../src/main/providers', async () => {
   const screen = await import('../../../src/main/providers/codex/session-screen')
   const runScreen = { open: screen.openCodexScreen, feed: screen.feedCodexScreen, resize: screen.resizeCodexScreen, close: screen.closeCodexScreen, has: screen.hasCodexScreen, submit: screen.submitCodexText }
-  return { getProvider: () => ({
+  return { providerCapability: () => ({ enabled: true }), getProvider: () => ({
     runScreen,
     buildSpawnCommand: (opts: Record<string, unknown>) => {
       h.built.push(opts)

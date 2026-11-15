@@ -6,6 +6,13 @@
 // register exactly the two providers, idempotently). Operation conformance
 // (discovery/auth/realm) is added by the slices that wire those operations;
 // at the candidate phase the WP1-required capabilities must be `supported`.
+//
+// WP1.41, where a provider's sessions run: the REAL accounts service over the
+// packages the composition root registers answers the two questions a launch
+// asks before anything is started (may this provider's session run on
+// another machine, and may it start on this computer), on every platform the
+// app names. An SSH launch of Claude Code depends on the first answer being
+// "yes" for the Claude Code package as it is shipped.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // Importing the Codex entry point loads its spawn module, which reads the
@@ -13,14 +20,15 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 vi.mock('../../src/main/ipc/setup-handlers', () => ({ getResourcesDirectory: () => '' }))
 vi.mock('../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => 0, mcpSessionToken: () => 'tok', issueMcpSessionToken: () => 'tok' }))
 
-import { CAPABILITY_KEYS, WP1_REQUIRED_CAPABILITIES, PROVIDER_IDS, missingCapabilityKeys, isNeverOwnedLaunchVariable, NEVER_OWNED_LAUNCH_VARIABLES } from '../../src/shared/providers'
-import type { CapabilityPlatform } from '../../src/shared/providers'
+import { CAPABILITY_KEYS, CAPABILITY_PLATFORMS, WP1_REQUIRED_CAPABILITIES, PROVIDER_IDS, missingCapabilityKeys, isNeverOwnedLaunchVariable, NEVER_OWNED_LAUNCH_VARIABLES, resolveCapability } from '../../src/shared/providers'
+import type { CapabilityPlatform, ProviderCapabilities, ScopedCapabilityKey } from '../../src/shared/providers'
 import { createClaudePackage, claudeWiredCapabilities } from '../../src/main/providers/claude'
 import { createCodexPackage, codexWiredCapabilities } from '../../src/main/providers/codex'
 import { claudeDescriptor } from '../../src/renderer/providers/claude'
 import { codexDescriptor } from '../../src/renderer/providers/codex'
 import { composeProviders, composedProviderIds } from '../../src/main/providers/compose'
-import { listProviderPackages, packageRegistrationProblem, tryGetProviderPackage, _resetProviderRegistryForTest } from '../../src/main/providers/core'
+import { listProviderPackages, packageRegistrationProblem, tryGetProviderPackage, _resetProviderRegistryForTest, AccountsService, ConsumerLeaseRegistry, SecretHandleStore } from '../../src/main/providers/core'
+import type { ProviderPackage } from '../../src/main/providers/core'
 import { composeRendererProviders, composedRendererProviderIds } from '../../src/renderer/providers'
 import { listRendererProviders, getRendererProvider, _resetRendererProviderRegistryForTest } from '../../src/renderer/providers/core'
 import { resolvePhase } from './phase'
@@ -258,5 +266,81 @@ describe('Codex declares what it implements (WP1.17, WP1.18)', () => {
     const realm = { authRealmId: 'realm-' + '1'.repeat(32) }
     expect(await wired.usage!.live(realm)).toEqual({ ok: false })
     expect(await wired.usage!.lastSeen(realm)).toEqual({ ok: false })
+  })
+})
+
+describe('where a provider\'s sessions run, as the accounts service answers from the packages the app registers (WP1.41)', () => {
+  /** The real accounts service on `platform` over `packages`, with
+   *  `experimental` as the declarations the owner enabled. It has no registry
+   *  and starts nothing: only its capability answers are asked. */
+  const serviceOn = (platform: CapabilityPlatform, packages: readonly ProviderPackage[], experimental: ScopedCapabilityKey[] = []) => new AccountsService({
+    store: () => null,
+    leases: new ConsumerLeaseRegistry(),
+    secrets: new SecretHandleStore({ now: () => 0 }),
+    packages: () => packages,
+    preference: () => 'on',
+    experimentalEnabled: () => experimental,
+    platform,
+    randomHex: () => '0'.repeat(32),
+  })
+  const shipped = (): ProviderPackage[] => [judgedPackage('claude'), judgedPackage('codex')]
+  const declaring = (pkg: ProviderPackage, over: Partial<ProviderCapabilities>): ProviderPackage => ({ ...pkg, capabilities: { ...pkg.capabilities, ...over } as ProviderCapabilities })
+
+  it('the platforms asked about here are every platform the app names', () => {
+    expect([...PLATFORMS].sort()).toEqual([...CAPABILITY_PLATFORMS].sort())
+  })
+
+  // Mutation to prove this can fail: declare `session.ssh` unsupported in the
+  // Claude Code package (every SSH launch of Claude Code is then refused).
+  it.each(PLATFORMS)('on %s: Claude Code declares sessions on another machine, and an SSH launch of it is not refused', (platform) => {
+    const [claude] = shipped()
+    expect(resolveCapability(claude.capabilities, 'session.ssh', { providerId: 'claude', platform })).toMatchObject({ state: 'supported', enabled: true })
+    expect(serviceOn(platform, shipped()).remoteLaunchRefusal('claude')).toBeNull()
+  })
+
+  // Mutation to prove this can fail: answer "not refused" for every provider.
+  it.each(PLATFORMS)('on %s: Codex declares none, and an SSH launch of it is refused by name', (platform) => {
+    const [, codex] = shipped()
+    expect(resolveCapability(codex.capabilities, 'session.ssh', { providerId: 'codex', platform }).enabled).toBe(false)
+    const refused = serviceOn(platform, shipped()).remoteLaunchRefusal('codex')
+    expect(refused).toMatchObject({ ok: false, code: 'unsupported' })
+    expect(refused?.message).toBe('Codex runs on this computer only in this release; it is not available in SSH sessions.')
+  })
+
+  it.each(PLATFORMS)('on %s: both declare session launches, and a local launch of either is not refused', (platform) => {
+    const service = serviceOn(platform, shipped())
+    for (const id of PROVIDER_IDS) expect(service.localLaunchRefusal(id), id).toBeNull()
+  })
+
+  it('a provider the service holds no package for is refused both ways', () => {
+    const service = serviceOn('win32', [judgedPackage('claude')])
+    expect(service.remoteLaunchRefusal('codex')).toMatchObject({ ok: false, code: 'unsupported' })
+    expect(service.localLaunchRefusal('codex')).toMatchObject({ ok: false, code: 'unsupported' })
+    expect(service.remoteLaunchRefusal('claude')).toBeNull()
+    expect(service.localLaunchRefusal('claude')).toBeNull()
+  })
+
+  // The local answer is the capability registry's, as every other capability
+  // the service gates: experimental is off until the owner enables it for
+  // that provider. Mutation to prove this can fail: resolve `session.launch`
+  // without the owner's list.
+  it('a session-launch declaration marked experimental starts sessions only once the owner enabled it for that provider', () => {
+    const [claude, codex] = shipped()
+    const packages = [declaring(claude, { 'session.launch': { state: 'experimental' } }), codex]
+    expect(serviceOn('win32', packages).localLaunchRefusal('claude')).toMatchObject({ ok: false, code: 'capability-disabled' })
+    expect(serviceOn('win32', packages, ['codex:session.launch']).localLaunchRefusal('claude')).toMatchObject({ ok: false, code: 'capability-disabled' })
+    expect(serviceOn('win32', packages, ['claude:session.launch']).localLaunchRefusal('claude')).toBeNull()
+    // The other provider's own declaration is untouched throughout.
+    expect(serviceOn('win32', packages).localLaunchRefusal('codex')).toBeNull()
+  })
+
+  it('declared unsupported or unknown, or supported on another platform only: a local launch is refused', () => {
+    const [claude, codex] = shipped()
+    for (const state of ['unsupported', 'unknown'] as const) {
+      expect(serviceOn('linux', [declaring(claude, { 'session.launch': { state } }), codex]).localLaunchRefusal('claude'), state).toMatchObject({ ok: false, code: 'capability-disabled' })
+    }
+    const elsewhere = [claude, declaring(codex, { 'session.launch': { state: 'unsupported', platformOverrides: { darwin: 'supported' } } })]
+    expect(serviceOn('darwin', elsewhere).localLaunchRefusal('codex')).toBeNull()
+    expect(serviceOn('win32', elsewhere).localLaunchRefusal('codex')).toMatchObject({ ok: false, code: 'capability-disabled' })
   })
 })

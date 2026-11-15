@@ -58,6 +58,14 @@ vi.mock('../../src/main/managed-launch-diagnostics', async (importOriginal) => {
       : real.gateManagedLaunchDirs(cwds),
   }
 })
+// Main's launch rule says the provider may start: a launch that was held
+// asks it again when its wait ends, which has its own suite
+// (pty-held-launch-provider-off.test.ts). A probe keeps the real rule.
+vi.mock('../../src/main/provider-launch-gate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/provider-launch-gate')>()),
+  providerLaunchRefusal: () => null,
+}))
+
 const profiles = await import('../../src/main/account-profiles')
 const consumers = await import('../../src/main/profile-consumers')
 const identity = await import('../../src/main/claude-account-identity')

@@ -1,0 +1,118 @@
+{
+  "schema": "provider-name-ceilings/1",
+  "note": "Per-file ceilings of the provider-name ratchet (tests/unit/architecture/provider-name-ratchet.test.ts, which says exactly what is counted): for each file in src/main outside src/main/providers, how many comparisons with a provider name it holds and how many ids it defaults to one, as they stand. Lower a number when its count drops and take a file out when both reach none; never raise a number and never add a file. `total` is the sum of `files`.",
+  "total": {
+    "comparisons": 78,
+    "rederivations": 33
+  },
+  "files": {
+    "src/main/account-web/codex-web-session.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/account-web/codex-web-wiring.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/claude-cli-probe.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/cloud-agent-manager.ts": {
+      "comparisons": 2,
+      "rederivations": 1
+    },
+    "src/main/conductor-mcp-server.ts": {
+      "comparisons": 4,
+      "rederivations": 0
+    },
+    "src/main/config-manager.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/github/session/codex-rollout-loader.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/hooks/hooks-gateway.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/index.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/insights-cross-account.ts": {
+      "comparisons": 2,
+      "rederivations": 0
+    },
+    "src/main/insights-runner.ts": {
+      "comparisons": 8,
+      "rederivations": 3
+    },
+    "src/main/ipc/cloud-agent-handlers.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/ipc/codex-web-handlers.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/ipc/github-handlers.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/ipc/insights-handlers.ts": {
+      "comparisons": 3,
+      "rederivations": 1
+    },
+    "src/main/ipc/pty-handlers.ts": {
+      "comparisons": 7,
+      "rederivations": 2
+    },
+    "src/main/launch-one-at-a-time.ts": {
+      "comparisons": 0,
+      "rederivations": 3
+    },
+    "src/main/logging/should-register-run.ts": {
+      "comparisons": 3,
+      "rederivations": 0
+    },
+    "src/main/logging/transcripts-worker.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/pty-manager.ts": {
+      "comparisons": 20,
+      "rederivations": 16
+    },
+    "src/main/sanitize-restored-spawn-options.ts": {
+      "comparisons": 2,
+      "rederivations": 0
+    },
+    "src/main/sentinel/index.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/sentinel/sentinel-analysis.ts": {
+      "comparisons": 2,
+      "rederivations": 4
+    },
+    "src/main/session-resume-enrich.ts": {
+      "comparisons": 2,
+      "rederivations": 2
+    },
+    "src/main/tokenomics/tk-db.ts": {
+      "comparisons": 4,
+      "rederivations": 0
+    },
+    "src/main/tokenomics/tk-pricing.ts": {
+      "comparisons": 1,
+      "rederivations": 0
+    },
+    "src/main/watchdog/watchdog-manager.ts": {
+      "comparisons": 6,
+      "rederivations": 1
+    }
+  }
+}

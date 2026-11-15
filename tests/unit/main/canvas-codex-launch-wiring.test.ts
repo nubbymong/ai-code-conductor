@@ -53,6 +53,7 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: 
 vi.mock('../../../src/main/providers', async () => {
   const paths = await import('../../../src/main/providers/codex/realm-paths')
   return {
+    providerCapability: () => ({ enabled: true }),
     getProvider: () => ({
       // Takes the route the real builder would: a named conversation is resumed
       // exactly, else the picker runs when it is in place, else Codex itself.

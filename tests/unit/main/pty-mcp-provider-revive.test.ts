@@ -60,6 +60,7 @@ vi.mock('../../../src/main/conductor-mcp-server', async (importOriginal) => ({
   getConductorMcpPort: () => 0,
 }))
 vi.mock('../../../src/main/providers', () => ({
+  providerCapability: () => ({ enabled: true }),
   getProvider: () => ({
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
     buildSpawnCommand: (opts: Record<string, any>) => {

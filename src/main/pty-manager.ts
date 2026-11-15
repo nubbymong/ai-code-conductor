@@ -20,7 +20,8 @@ import {
 } from '../shared/container-command'
 import { SSH_ENTRY, type SshEntryFailureReason } from '../shared/ssh-entry'
 import type { SshRuntime, DetachedRemoteLiveness, SshEndRemoteOutcome, SshEndRemoteResult, SubmitTextResult, AskConductorNotice } from '../shared/types'
-import type { RealmOwnership } from '../shared/providers'
+import type { RealmOwnership, ProviderId } from '../shared/providers'
+import { isProviderId } from '../shared/providers'
 import { IPC } from '../shared/ipc-channels'
 import { codexPromptKeeps } from '../shared/codex-screen'
 import { askConductorProjectDocMaxBytes } from './help-workspace'
@@ -53,9 +54,9 @@ import { buildSshArgs, buildSshExecArgs } from './ssh-args'
 import { getRemoteMcpPort } from './ssh-remote-port'
 import { partnerFolderLine, partnerPromptTail, isPartnerShellPrompt, partnerRecentOutput, partnerRecentText, PARTNER_BARE_PROMPT_RE, isPartnerUserInput } from './ssh-partner-folder'
 import { resolveHostColorScheme, colorFgBgEnvToken } from './providers/host-color-scheme'
-import { getProvider } from './providers'
+import { getProvider, providerCapability } from './providers'
 import { isSshCapable } from './providers/types'
-import type { TelemetrySource, SessionRunScreen, SpawnOptions, SshCapableProvider } from './providers/types'
+import type { TelemetrySource, SessionRunScreen, SpawnOptions, SshCapableProvider, SessionProvider } from './providers/types'
 import { resolveCwd, isHomeOrAncestor } from './path-utils'
 import { AGENTS_ENV, agentsEnvValue, agentsRef, buildTerminalLaunchLine } from './terminal-launch-line'
 import { findOnWindowsPath, findOnWindowsPathAsync } from './windows-programs'
@@ -92,7 +93,9 @@ import { stripSpoofableText } from '../shared/safe-text'
 import type { ProjectGateResult } from '../shared/providers'
 import { captureClaudeAccount, clearClaudeAccount, getAccountIdentity, pushAccountIdentity, startWatchingAccountIdentity, stopWatchingAccountIdentity, getWatchedProfileId } from './claude-account-identity'
 import { acquireProfileConsumer, pendingProfileRefresh } from './profile-consumers'
-import { updateSessionMeta, clearSessionMeta, markPtySessionAlive, markPtySessionGone } from './session-registry'
+import { providerLaunchRefusal } from './provider-launch-gate'
+import { getAccountsService } from './provider-accounts'
+import { updateSessionMeta, clearSessionMeta, markPtySessionAlive, markPtySessionGone, isPtySessionLive } from './session-registry'
 import { readConfig, getConfigDir } from './config-manager'
 import { getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
 import { getWatchdogManager, clampAnsiChunk } from './watchdog/watchdog-manager'
@@ -2110,6 +2113,23 @@ export function emitDeferredSpawnFailure(
   err: unknown,
 ): void {
   if (win.isDestroyed()) return
+  writeDeferredSpawnFailureReason(win, sessionId, err)
+  win.webContents.send(`pty:exit:${sessionId}`, -1)
+}
+
+/**
+ * The reason line of a DEFERRED spawn that failed, on its own: the red line
+ * emitDeferredSpawnFailure writes, without the exit that follows it there.
+ * For a failed launch whose session is ended by something else (the teardown
+ * of the process it replaced, or that process's own end still to come), so
+ * the terminal says why first and the window is still told of one exit.
+ */
+export function writeDeferredSpawnFailureReason(
+  win: Pick<BrowserWindow, 'isDestroyed'> & { webContents: Pick<BrowserWindow['webContents'], 'send'> },
+  sessionId: string,
+  err: unknown,
+): void {
+  if (win.isDestroyed()) return
   // CONTROL CHARACTERS OUT. On the refusal path the text is this app's own; on
   // the deferred path `err` is whatever the spawn threw, and a node-pty error
   // embeds argv and cwd -- so a directory name containing ESC would write raw
@@ -2134,7 +2154,6 @@ export function emitDeferredSpawnFailure(
   const why = stripSpoofableText(raw, 500)
   // Red, and bracketed so it cannot be mistaken for program output.
   win.webContents.send(`pty:data:${sessionId}`, `\r\n\x1b[31m${why}\x1b[0m\r\n`)
-  win.webContents.send(`pty:exit:${sessionId}`, -1)
 }
 
 /** What a Claude session naming an account that is no longer set up here is
@@ -2355,6 +2374,167 @@ function assertGatedDirectory(
 }
 
 /**
+ * How spawnPty starts a provider's local session.
+ *
+ * `direct` runs the provider's CLI as the PTY's own program (it owns its
+ * screen), from the launch pty:spawn prepared for it.
+ *
+ * `claude-shell` is Claude Code's own launch and no other provider's: a shell
+ * is opened and Claude Code's launch line is typed into it, by code that is
+ * Claude Code's throughout (its accounts, its resume rules, its resume list).
+ * The name says so, and a row of this style under any other id is not a way
+ * to start that id (launchStyleOf).
+ */
+export type LocalLaunchStyle = 'direct' | 'claude-shell'
+
+/** The one provider `claude-shell` starts. */
+const CLAUDE_SHELL_PROVIDER: ProviderId = 'claude'
+
+/**
+ * Each provider's row. One per provider id: an id added to the list without
+ * a row here does not compile, and an id with no row at run time is refused
+ * (localLaunchOf), never started the way another provider is.
+ */
+export const LOCAL_LAUNCH_STYLE: Readonly<Record<ProviderId, LocalLaunchStyle>> = Object.freeze({ claude: 'claude-shell', codex: 'direct' })
+
+let localLaunchStyles: Readonly<Record<string, LocalLaunchStyle>> = LOCAL_LAUNCH_STYLE
+/** Test-only, never set by the app: the lookup takes a row as the rows hold
+ *  it, in place of launchStyleOf's answer. */
+let lookupTakesRowsAsHeld = false
+/**
+ * Test-only: the rows launches are looked up in (null restores the app's own).
+ *
+ * `asHeld` makes the lookup take each row as the rows hold it, without
+ * launchStyleOf's check of whose row it is. Two lines keep Claude Code's
+ * launch to Claude Code, the lookup and the branch that runs it, and the
+ * lookup always answers first: this is the one way a test can hand that
+ * branch a row the lookup would have refused, and see the branch refuse it by
+ * itself. Restored with the rows (null).
+ */
+export function _setLocalLaunchStylesForTest(rows: Readonly<Record<string, LocalLaunchStyle>> | null, asHeld = false): void {
+  localLaunchStyles = rows ?? LOCAL_LAUNCH_STYLE
+  lookupTakesRowsAsHeld = rows !== null && asHeld
+}
+
+/**
+ * How `id` is started on this computer by the rows in `rows` (the app's own
+ * when absent), or undefined when they hold no way to start it: no row of its
+ * own, a row that is not a style, or the `claude-shell` row under an id that
+ * is not Claude Code's. Pure.
+ */
+export function launchStyleOf(id: unknown, rows: Readonly<Record<string, LocalLaunchStyle>> = localLaunchStyles): LocalLaunchStyle | undefined {
+  if (typeof id !== 'string' || !Object.hasOwn(rows, id)) return undefined
+  const style: unknown = rows[id]
+  if (style === 'claude-shell') return id === CLAUDE_SHELL_PROVIDER ? style : undefined
+  return style === 'direct' ? style : undefined
+}
+
+/**
+ * Whether `id`'s sessions start on this computer: its `session.launch`
+ * capability as the accounts service resolves it (localLaunchRefusal: this
+ * platform, and the experimental declarations the owner enabled), so the PTY
+ * manager and the service give one answer. With no accounts service to ask,
+ * the registry's own declaration answers, with nothing experimental enabled.
+ */
+function startsSessionsHere(id: ProviderId): boolean {
+  const service = getAccountsService()
+  return service ? service.localLaunchRefusal(id) === null : providerCapability(id, 'session.launch').enabled
+}
+
+/** What a launch naming an assistant this app has no way to start is told.
+ *  The id is shown as it may be: it reaches a terminal and the log. */
+function notStartable(requested: unknown): Error {
+  return new Error(`This session's assistant ("${stripSpoofableText(String(requested), 60)}") is not one this app can start. Nothing was started.`)
+}
+
+/** The provider a local launch starts, and how spawnPty starts it. */
+interface LocalLaunch {
+  id: ProviderId
+  provider: SessionProvider
+  style: LocalLaunchStyle
+}
+
+/**
+ * The provider a LOCAL launch starts, looked up in the provider registry by
+ * the id the session names. Asked once per spawn, and never for an SSH launch
+ * or a terminal tab, which start no provider here.
+ *
+ * Throws when the id is not one this app knows, when no provider is
+ * registered for it, when spawnPty has no way to start it (launchStyleOf), or
+ * when its sessions do not start on this computer (startsSessionsHere: its
+ * `session.launch` capability). The throw is the spawn's own failure path:
+ * pty:spawn rejects with the sentence, and a launch that was held writes it
+ * to the terminal. Nothing starts for a refused launch, and never another
+ * provider in its place.
+ */
+function localLaunchOf(requested: unknown): LocalLaunch {
+  if (!isProviderId(requested)) throw notStartable(requested)
+  let provider: SessionProvider
+  try { provider = getProvider(requested) } catch { throw notStartable(requested) }
+  const style = lookupTakesRowsAsHeld
+    ? (Object.hasOwn(localLaunchStyles, requested) ? localLaunchStyles[requested] : undefined)
+    : launchStyleOf(requested)
+  if (!style) throw notStartable(requested)
+  if (!startsSessionsHere(requested)) {
+    throw new Error(`${stripSpoofableText(String(provider.displayName || requested), 60)} cannot start sessions on this computer. Nothing was started.`)
+  }
+  return { id: requested, provider, style }
+}
+
+/**
+ * The provider `options` starts on this computer (localLaunchOf, which throws
+ * for one it refuses), or null for a launch that starts none here: an SSH
+ * launch, which is not asked and keeps its own branch, and a terminal tab.
+ *
+ * Asked by every caller of spawnPtyResolved (through localLaunchForSpawn)
+ * BEFORE anything of the session is touched, and handed down: a launch that
+ * is refused here has taken no held launch's place, ended no running process
+ * and read or changed no conversation to resume.
+ */
+function localLaunchFor(options: SpawnPtyOptions | undefined): LocalLaunch | null {
+  return options?.ssh || options?.shellOnly ? null : localLaunchOf(options?.provider ?? 'claude')
+}
+
+/**
+ * localLaunchFor, as each caller of spawnPtyResolved asks it for `sessionId`.
+ *
+ * A launch that is refused never reaches spawnPtyResolved, which is where a
+ * Restart's mark is cleared for every launch that does (restartKills). So a
+ * refused one clears it here: no process follows the one the Restart ended,
+ * and that process's exit is the session's end on the Services page, with
+ * its event, and not a count started again.
+ *
+ * When that exit came first it took the mark, and started the count again
+ * for the launch that was to follow. The refusal then finds no mark, and
+ * nothing of the session left that could end it later (no running process,
+ * no other launch of it waiting on a profile refresh or a preparation), so
+ * the refusal is the session's end there. Either order, one end: the
+ * monitor logs an end only for a session it lists, so a session that was
+ * never listed, or whose end is already logged, gets none here. A refused
+ * launch that finds a process running, or another launch of the session
+ * waiting, has taken neither's place and ends nothing.
+ *
+ * An SSH launch and a terminal tab are answered "none" without a throw, so
+ * nothing is cleared or ended for them here.
+ *
+ * The re-entry after a wait asks through here like the others. The pass that
+ * parked it cleared the mark, and the kill that sets one cancels the wait, so
+ * there is none to clear by then, and its own wait is over: one refused here
+ * ends the session as above, once, whether or not the process it replaced
+ * has reported its end.
+ */
+function localLaunchForSpawn(sessionId: string, options: SpawnPtyOptions | undefined): LocalLaunch | null {
+  try {
+    return localLaunchFor(options)
+  } catch (err) {
+    if (!restartKills.delete(sessionId) && !ptySessions.has(sessionId) && !refreshWaitSpawns.has(sessionId)) {
+      getPtyIntegrityMonitor()?.endSession(sessionId)
+    }
+    throw err
+  }
+}
+
+/**
  * Hold a managed spawn until `pending` settles, then re-enter `spawnPty` with
  * the options `next` builds from the settled value.
  *
@@ -2402,9 +2582,22 @@ function deferSpawnUntil<T>(
   // leaves a live PTY that killPty ends later, exactly as a synchronous spawn
   // that throws there does, and the teardown would delete that PTY's entry and
   // report an exit the renderer would act on.
+  //
+  // Every way out says WHY in the terminal before the exit, and the window is
+  // told of ONE exit, whichever of three states the session is in:
+  //  - the process this launch replaced has ended and left its teardown to
+  //    the wait (a Restart, a Switch Account): the reason, then that
+  //    teardown, whose pty:exit is the session's;
+  //  - that process was ended and has still to report its end (the session
+  //    is recorded as live, with no PTY and no teardown handed over): the
+  //    reason now and no exit from here, because its end is the session's end
+  //    and sends the exit when it arrives;
+  //  - the session had no process (a first launch): the reason and the
+  //    start's own `pty:exit -1`.
   const failWithoutPty = (wait: { abandonedTeardown?: () => void } | undefined, err: unknown): void => {
     if (ptySessions.has(sessionId)) return
     if (wait?.abandonedTeardown) {
+      writeDeferredSpawnFailureReason(win, sessionId, err)
       wait.abandonedTeardown()
     } else if (!win.isDestroyed()) {
       // ADR-009 round 3 (Codex finding 3): a FRESH deferred spawn has no
@@ -2412,8 +2605,13 @@ function deferSpawnUntil<T>(
       // a notification the renderer is left with a blank terminal treated as
       // spawned (no error/exit handler fires). Tell it the start ended and
       // drop the canvas stamp the spawn handler wrote before spawnPty ran.
-      logError(`[profiles] session ${sessionId}: fresh deferred spawn failed with no PTY -- notifying the renderer the start ended`)
       forgetSessionForCanvas(sessionId)
+      if (isPtySessionLive(sessionId)) {
+        logError(`[profiles] session ${sessionId}: deferred spawn failed with no PTY while the process it replaced has still to report its end -- the reason is written now, and that end tells the renderer`)
+        writeDeferredSpawnFailureReason(win, sessionId, err)
+        return
+      }
+      logError(`[profiles] session ${sessionId}: fresh deferred spawn failed with no PTY -- notifying the renderer the start ended`)
       // Say WHY, in the terminal, before the exit code. On the synchronous
       // path a spawn failure rejects the pty:spawn invoke and the renderer
       // shows a readable error; here the invoke has already resolved, so
@@ -2438,6 +2636,19 @@ function deferSpawnUntil<T>(
       return
     }
     try {
+      // The launch rule was asked before this wait (pty:spawn asks it before
+      // spawnPty runs), and the wait can be long: asked again now, for a held
+      // launch that starts a provider, so one switched off meanwhile, or a
+      // setting that can no longer be read, starts nothing
+      // (provider-launch-gate.ts; no answer is never a yes). Refused: the same
+      // exit as a re-entry that failed, with the rule's own sentence. A
+      // terminal tab (`agent` null) starts no provider and is not asked.
+      const refused = agent ? providerLaunchRefusal(agent) : null
+      if (refused) {
+        logInfo(`[profiles] session ${sessionId}: its launch was refused when the wait ended (${refused.code}) -- not spawning`)
+        failWithoutPty(wait, new Error(refused.message))
+        return
+      }
       // Re-enter through spawnPtyResolved with the teardown this wait carries,
       // NOT through spawnPty: the map entry that spawnPty would read it from
       // was deleted three lines up, so a re-entry that is deferred AGAIN (a
@@ -2447,7 +2658,8 @@ function deferSpawnUntil<T>(
       // session it replaced -- 697d3448 reopened by the second wait (found by
       // the test rework of 2026-09-22).
       const nextOptions = next(settled)
-      spawnPtyResolved(win, sessionId, carriedResume && !nextOptions.resume ? { ...nextOptions, resume: carriedResume } : nextOptions, wait?.abandonedTeardown)
+      const reentry = carriedResume && !nextOptions.resume ? { ...nextOptions, resume: carriedResume } : nextOptions
+      spawnPtyResolved(win, sessionId, reentry, wait?.abandonedTeardown, localLaunchForSpawn(sessionId, reentry))
     } catch (err) {
       logError(`[profiles] session ${sessionId}: the spawn after the wait failed: ${(err as Error)?.message ?? err}`)
       failWithoutPty(wait, err)
@@ -2528,7 +2740,7 @@ export function beginSpawnPreparation(win: BrowserWindow, sessionId: string, age
       refreshWaitSpawns.delete(sessionId)
       const teardown = entry.abandonedTeardown
       try {
-        spawnPtyResolved(win, sessionId, options, teardown)
+        spawnPtyResolved(win, sessionId, options, teardown, localLaunchForSpawn(sessionId, options))
       } catch (err) {
         if (teardown && !ptySessions.has(sessionId)) {
           logInfo(`[pty] Session ${sessionId}: the prepared spawn failed before it had a PTY -- ending the session its predecessor's exit was told to leave alone`)
@@ -2547,6 +2759,11 @@ export function beginSpawnPreparation(win: BrowserWindow, sessionId: string, age
 }
 
 export function spawnPty(win: BrowserWindow, sessionId: string, options?: SpawnPtyOptions): void {
+  // First of all, before this spawn takes an earlier one's place: the
+  // provider a local launch starts (localLaunchFor). A launch refused here
+  // throws now and has changed nothing of the session; a Restart it was to
+  // follow is followed by no process (localLaunchForSpawn).
+  const localLaunch = localLaunchForSpawn(sessionId, options)
   const supersededWait = refreshWaitSpawns.get(sessionId)
   const inheritedTeardown = supersededWait?.abandonedTeardown
   if (supersededWait) {
@@ -2554,7 +2771,7 @@ export function spawnPty(win: BrowserWindow, sessionId: string, options?: SpawnP
     supersededWait.cancel()
   }
   try {
-    spawnPtyResolved(win, sessionId, options, inheritedTeardown)
+    spawnPtyResolved(win, sessionId, options, inheritedTeardown, localLaunch)
   } catch (err) {
     if (inheritedTeardown && !ptySessions.has(sessionId)) {
       logInfo(`[pty] Session ${sessionId}: the superseding spawn failed before it had a PTY -- ending the session its predecessor's exit was told to leave alone`)
@@ -2567,7 +2784,7 @@ export function spawnPty(win: BrowserWindow, sessionId: string, options?: SpawnP
 function spawnPtyResolved(
   win: BrowserWindow,
   sessionId: string,
-  options?: {
+  options: undefined | {
     cwd?: string
     cols?: number
     rows?: number
@@ -2660,7 +2877,14 @@ function spawnPtyResolved(
   /** MAIN-INTERNAL: the teardown carried over from a superseded refresh wait
    *  (see spawnPty). Attached to this spawn's own wait if it parks; dropped
    *  once its PTY is registered. */
-  inheritedTeardown?: () => void,
+  inheritedTeardown: (() => void) | undefined,
+  /** MAIN-INTERNAL: the provider a LOCAL launch starts, looked up in the
+   *  registry by the caller before this runs (localLaunchFor: an id that is
+   *  not registered, or whose provider declares no session launches, was
+   *  refused there and never reaches here). Null for an SSH launch, which is
+   *  not asked and takes its own branch below unchanged, and for a terminal
+   *  tab, which starts no provider. */
+  localLaunch: LocalLaunch | null,
 ): void {
   // P3.16a round 2 (Q5): a Restart's mark is for the exit of the process it
   // ended before this spawn; this spawn's own process ends as any other does.
@@ -5659,12 +5883,13 @@ function spawnPtyResolved(
         proceedAfterSetup()
       }
     })
-  } else if ((options?.provider ?? 'claude') === 'codex' && !options?.shellOnly) {
+  } else if (localLaunch?.style === 'direct') {
     // Codex local session — spawn `codex` directly. Codex itself owns the
     // REPL, so there is no shell-wrap-then-cd-then-launch dance like Claude
     // requires. cwd is propagated through pty.spawn options.
-    // shellOnly falls through to the Claude branch below so the user gets a
-    // plain shell, regardless of provider selection.
+    // The branch is chosen by the provider's row in LOCAL_LAUNCH_STYLE, not
+    // by its name. shellOnly falls through to the branch below so the user
+    // gets a plain shell, regardless of provider selection.
     //
     // WP2 (plan A10): it runs ONLY in its account's realm, from the launch
     // pty:spawn prepared -- the executable setup proved and the realm's
@@ -5689,7 +5914,7 @@ function spawnPtyResolved(
     // which goes again whenever nothing will use it.
     let tokenMinted = false
     try {
-      const provider = getProvider('codex')
+      const provider = localLaunch.provider
       const gw = getGateway()
       const gwStatus = gw?.status()
       if (gw && gwStatus?.listening && gwStatus.port && provider.prepareSessionHooks) {
@@ -6035,8 +6260,24 @@ function spawnPtyResolved(
     // Local session — delegate binary + env construction to the provider.
     // The post-spawn shell-write (cd + claude command) stays here; only the
     // bare shell + env comes from the provider.
+    // Reached by a session whose row is `claude-shell`, which is Claude Code
+    // and no other provider (launchStyleOf), with the provider the registry
+    // holds for it, and by a terminal tab, which starts no provider: its shell
+    // is the one the Claude Code package builds, as before. Every other id was
+    // refused by the lookup before anything of the session was touched
+    // (localLaunchOf). The branch says the same of itself: what follows is
+    // Claude Code's launch, so a launch of any other style or id stops here.
+    if (localLaunch && (localLaunch.style !== 'claude-shell' || localLaunch.id !== CLAUDE_SHELL_PROVIDER)) throw notStartable(localLaunch.id)
+    // A session that names no provider starts Claude Code (the lookup's
+    // answer for it). From here on its options name the provider that was
+    // looked up, so everything after reads one answer: the run this launch is
+    // registered as, for the log, is that provider's, as it is for a session
+    // that names it. On this local branch only, and only for a launch that
+    // starts a provider: a terminal tab's options, and an SSH launch's, are
+    // never changed.
+    if (localLaunch && options?.provider === undefined) options = { ...options, provider: localLaunch.id }
     const shellOnly = options?.shellOnly
-    const provider = getProvider('claude')
+    const provider = localLaunch ? localLaunch.provider : getProvider('claude')
     // Read classicTerminalCopyPaste + theme fresh on every spawn (default true /
     // dark when absent). The theme drives COLORFGBG so Claude's startup theme
     // auto-detection matches CCC; 'system' follows the OS via nativeTheme.
@@ -6120,7 +6361,7 @@ function spawnPtyResolved(
         deferSpawnUntil(win, sessionId, resolvedProfileId, inheritedTeardown, pending,
           `profile ${resolvedProfileId} is mid-refresh -- holding the spawn until it settles`,
           () => ({ ...options, refreshAwaited: true }),
-          options?.shellOnly ? null : 'claude')
+          localLaunch ? localLaunch.id : null)
         return
       }
     }
@@ -6188,7 +6429,7 @@ function spawnPtyResolved(
       deferSpawnUntil(win, sessionId, resolvedProfileId, inheritedTeardown, pending,
         `checking the project settings in ${gateDirs.map(describePathForLog).join(' and ')}${managedPickerLaunch(options) ? ' and every worktree the resume picker may open' : ''} before the managed launch`,
         ({ verdict, dirs }) => ({ ...options, refreshAwaited: true, projectGate: verdict, projectGateDirs: dirs }),
-        options?.shellOnly ? null : 'claude')
+        localLaunch ? localLaunch.id : null)
       return
     }
     // Home selection (Bug 2): EVERY session of an account -- shell-only (plain
@@ -6936,7 +7177,10 @@ function spawnPtyResolved(
     if (resumed) noteClaudeTranscript(sessionId, resumed)
   }
   if (logSup) {
-    indexedRuns.set(sessionId, { ...(options?.configId ? { configId: options.configId } : {}), provider: codexRunProvider ? 'codex' : 'claude' })
+    // A run is registered only for a local launch that starts a provider
+    // (shouldRegisterRun leaves out SSH sessions and terminal tabs), so it is
+    // indexed under the provider this launch looked up in the registry.
+    indexedRuns.set(sessionId, { ...(options?.configId ? { configId: options.configId } : {}), provider: localLaunch?.id ?? runProvider })
   } else {
     indexedRuns.delete(sessionId)
     try { getLogSupervisor()?.runEnd(sessionId, Date.now(), 'exited') } catch { /* best-effort */ }
@@ -7622,8 +7866,10 @@ function cleanupSessionResources(sessionId: string): void {
 /** P3.16a round 2 (Q5): the sessions a Restart killed whose next process has
  *  not started yet. The exit of the process it ended restarts the Services
  *  count quietly instead of ending the session there. Set by a Restart's kill,
- *  cleared by the next spawn of the id or a close, taken by that exit; bounded
- *  (an id past the bound just ends as a close would). */
+ *  cleared by the next spawn of the id, by a local launch of the id that is
+ *  refused before it starts (localLaunchForSpawn: no process follows) or by a
+ *  close, taken by that exit; bounded (an id past the bound just ends as a
+ *  close would). */
 const restartKills = new Set<string>()
 export const RESTART_KILLS_MAX = 512
 

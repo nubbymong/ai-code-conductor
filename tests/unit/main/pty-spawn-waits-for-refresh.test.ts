@@ -88,6 +88,14 @@ vi.mock('https', () => {
   return { request, default: { request } }
 })
 
+// Main's launch rule says the provider may start: a launch that was held
+// asks it again when its wait ends, which has its own suite
+// (pty-held-launch-provider-off.test.ts). A probe keeps the real rule.
+vi.mock('../../../src/main/provider-launch-gate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/provider-launch-gate')>()),
+  providerLaunchRefusal: () => null,
+}))
+
 const profiles = await import('../../../src/main/account-profiles')
 const { spawnPty, killPty, writePty, isSessionWritable, killAllPty, gracefulExitAllPty } = await import('../../../src/main/pty-manager')
 const { registerFakeClaudePackage } = await import('../../helpers/claude-package')

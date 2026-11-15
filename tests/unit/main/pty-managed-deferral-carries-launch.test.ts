@@ -127,12 +127,23 @@ vi.mock('../../../src/main/hooks/per-session-settings', () => ({
 }))
 vi.mock('../../../src/main/session-registry', () => ({
   updateSessionMeta: () => {}, clearSessionMeta: () => {}, markPtySessionAlive: () => {}, markPtySessionGone: () => {},
+  // Nothing is recorded as live here (the marks above record nothing), so a
+  // held launch that fails is a first launch's: the reason, then its own exit.
+  isPtySessionLive: () => false,
 }))
 vi.mock('../../../src/main/services/pty-integrity-monitor', () => ({ getPtyIntegrityMonitor: () => null }))
 vi.mock('../../../src/main/config-manager', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/config-manager')>()),
   readConfig: () => ({}),
   getConfigDir: () => os.tmpdir(),
+}))
+
+// Main's launch rule says the provider may start: a launch that was held
+// asks it again when its wait ends, which has its own suite
+// (pty-held-launch-provider-off.test.ts). A probe keeps the real rule.
+vi.mock('../../../src/main/provider-launch-gate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/provider-launch-gate')>()),
+  providerLaunchRefusal: () => null,
 }))
 
 const profiles = await import('../../../src/main/account-profiles')
