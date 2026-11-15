@@ -9,7 +9,7 @@ import type { TkEvent } from '../../../src/main/tokenomics/tk-types'
 function ev(p: Partial<TkEvent> & { configId?: string | null }): any {
   return {
     dedupKey: 'c:m:r', sessionId: 's1', provider: 'claude', model: 'claude-opus-4-8', priceModel: 'claude-opus-4-8',
-    ts: Date.parse('2026-06-01T10:00:00Z'), cwd: 'F:\proj', inTok: 10, outTok: 20, cacheReadTok: 5, cacheCreateTok: 3, configId: 'a', ...p,
+    ts: Date.parse('2026-06-01T10:00:00Z'), cwd: 'F:/proj', inTok: 10, outTok: 20, cacheReadTok: 5, cacheCreateTok: 3, configId: 'a', ...p,
   }
 }
 const cursor = (p: string) => ({ path: p, size: 10, mtime: 1, lastOffset: 10, lastIngestedAt: 1, scannedTo: 10 })
@@ -35,7 +35,7 @@ describe('tk-db file progress rows: listing and deleting', () => {
 
   it('never touches a stored usage event or the rollups', () => {
     const db = openTkDb(':memory:')
-    db.upsertConfigs([{ configId: 'a', label: 'App', workingDirectory: 'F:\proj' }])
+    db.upsertConfigs([{ configId: 'a', label: 'App', workingDirectory: 'F:/proj' }])
     db.insertEventsWithCursor([ev({ dedupKey: 'c:1:1' }), ev({ dedupKey: 'c:2:2' })], cursor('/p/a.jsonl') as any)
     const before = {
       events: db.eventCount(),

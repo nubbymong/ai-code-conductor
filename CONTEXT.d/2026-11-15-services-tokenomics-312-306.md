@@ -23,7 +23,7 @@ One branch, four items carried from the beta 4 planning records (aicc_planning #
 - At each `open` the folder is resolved with `realpathSync.native`; the path as given is kept when it cannot be resolved.
 - After a COMPLETE full walk the worker lists the progress rows (`listFilePaths`) and deletes those of transcripts that are not there (`deleteFileRows`), 500 rows at a time with the event loop given back between batches. The first batch runs in the turn that said the pass was complete, so a pass with nothing to drop is over at once.
 - A complete walk is one where the root exists and was listed, no folder in the tree failed to list, and at least one transcript was found. A walk that failed or fell short, a missing root, a root that lists empty (a drive that is not mounted looks the same) and a pass that threw drop nothing.
-- A Claude row is dropped when its path is not among the transcripts the walk found. A rollout row is dropped only when its file is not found at all (the rollout lists vary with the account folders named).
+- A Claude row is dropped when its path is not among the transcripts the walk found and it was not written since the pass began (a transcript the watcher read while the pass ran has a row the walk did not list). A rollout row is dropped only when its file is not found at all (the rollout lists vary with the account folders named).
 - Only progress rows are deleted. No stored usage event, rollup or session is touched, and a file that comes back is read from its first byte and its turns stored once (they are keyed by turn), so a wrong drop could only cost a read again.
 
 **Cost to know about.** For a user whose projects folder is a link, the first walk after the upgrade reads every transcript again from its first byte under the real path (the rows were keyed by the link's path) and then drops the old rows. Totals do not move: events are keyed by turn.
@@ -34,13 +34,15 @@ One branch, four items carried from the beta 4 planning records (aicc_planning #
 
 The first walk after the worker starts, a Rescan and a re-index read every folder. Depth stays 12.
 
+Nothing is remembered from a pass that left work behind: a transcript longer than one budget (the next pass follows at once), one that could not be opened or read, or a pass that threw. The next walk then lists every folder again, and folders are remembered only after a pass that read everything, so a transcript is never stranded part-read.
+
 **Scope, stated plainly.** A transcript that only grows in place does not change its folder. Those depend on the watcher and on the 5 s timer's size checks of the 200 transcripts written last, no longer on the 5 minute full walk's per-file check. A Rescan reads everything.
 
 ### Tests
 
 - `tests/unit/logging/log-supervisor.test.ts`: the PID is asked when the row is built, pushed on spawn, null before spawn, for a failed fork, a bad value, a throw and after exit.
 - `tests/unit/renderer/tokenomics-mp12.test.tsx`: no notice and no legend row for a model with no tokens; a model with tokens still named.
-- `tests/unit/tokenomics/tokenomics-worker-prune.test.ts`: realpath at open, the drop (with batches, rollout rows, rows under another path), no drop after a folder that would not list, a root that would not list, a missing root, an empty root, a pass that threw or a failed row listing; unchanged subagent folders not listed, an added transcript read, a deeper change found, a fresh folder not trusted, Rescan, re-index and a restart reading everything.
+- `tests/unit/tokenomics/tokenomics-worker-prune.test.ts`: realpath at open, the drop (with batches, rollout rows, rows under another path), no drop after a folder that would not list, a root that would not list, a missing root, an empty root, a pass that threw or a failed row listing, a row written since the pass began kept; unchanged subagent folders not listed, an added transcript read, a deeper change found, a transcript over one budget read to its end and one that failed to open read at the next walk (folder unchanged), a fresh folder not trusted, Rescan, re-index and a restart reading everything.
 - `tests/unit/native/tk-db-prune.native.test.ts`: the two database methods, and events untouched. Native tests do not run on the dev host; CI runs it.
 
 ### Not in this change

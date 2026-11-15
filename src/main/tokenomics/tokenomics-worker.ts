@@ -942,11 +942,13 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
    * found (the ones it did not list because their folder had not changed
    * count as found). A rollout row goes only when its file is not found at
    * all, as the rollout walk's own lists vary with the account folders named.
+   * A Claude row written since the pass began (by the watcher, for a
+   * transcript made after the walk listed its folder) is kept.
    * In batches, with the event loop given back between them. The first batch
    * is dropped in the turn that called this (a pass with nothing to drop,
    * the usual one, is over then); the rest is returned to be waited for.
    */
-  function pruneGoneFiles(walk: ClaudeWalk, rolloutsFound: ReadonlySet<string>): Promise<void> | undefined {
+  function pruneGoneFiles(walk: ClaudeWalk, rolloutsFound: ReadonlySet<string>, passStart: number): Promise<void> | undefined {
     if (!db || !walk.complete || walk.present.size === 0) return undefined
     let paths: string[] = []
     let dropped = 0
@@ -954,7 +956,9 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       const gone: string[] = []
       for (const p of paths.slice(from, from + PRUNE_BATCH)) {
         if (path.basename(p).includes('rollout-')) { if (!rolloutsFound.has(p) && isGone(p)) gone.push(p) }
-        else if (!walk.present.has(p)) gone.push(p)
+        // A row the watcher wrote while this pass ran is for a transcript
+        // made after the walk listed the folders: not gone.
+        else if (!walk.present.has(p) && !((db!.getFileCursor(p)?.lastIngestedAt ?? 0) >= passStart)) gone.push(p)
       }
       if (gone.length) dropped += db!.deleteFileRows(gone)
     }
@@ -1094,16 +1098,23 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       } else {
         post({ type: 'index-complete', firstIndex: false, drained: drainedNow, filesFailed: sweepFailed.size, eventsTotal: db.eventCount(), walk })
       }
+      // 2.1.3-beta.5: a subagent folder is remembered when it is listed, before
+      // its transcripts are read. A pass that left work behind (a transcript
+      // longer than one budget, one that could not be opened or read) must not
+      // let the next walk skip that folder, or the file would never be read
+      // again. So nothing is remembered until a pass has read everything.
+      if (!drained || sweepPending || sweepFailed.size > 0) subagentFolders = new Map()
       // 2.1.3-beta.5: after the pass has said it is complete, the progress
       // rows of transcripts that are gone are dropped (only after a walk that
       // listed the whole tree, and never any stored usage).
-      const rest = pruneGoneFiles(claudeWalk, new Set(codex.map((c) => c.file)))
+      const rest = pruneGoneFiles(claudeWalk, new Set(codex.map((c) => c.file)), passStart)
       if (rest) await rest
     } catch (err) {
       // #302: a walk that failed did not reach every file, so it is still
       // due; the 5 s timer retries it, never at once.
       fullSweepDue = true
       again = false
+      subagentFolders = new Map() // the files it did not reach are listed again
       logw('error', `ingestAll failed: ${String(err)}`)
     }
     finally {

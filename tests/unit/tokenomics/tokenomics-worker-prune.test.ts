@@ -26,7 +26,7 @@ import * as realFs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-type Cursor = { path: string; size: number; mtime: number; lastOffset: number; scannedTo?: number; readMark?: string; codexSessionId?: string; codexTurns?: number }
+type Cursor = { path: string; size: number; mtime: number; lastOffset: number; lastIngestedAt?: number; scannedTo?: number; readMark?: string; codexSessionId?: string; codexTurns?: number }
 const db = vi.hoisted(() => ({
   cursors: new Map<string, Cursor>(),
   meta: new Map<string, string>(),
@@ -109,6 +109,8 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
   const realPaths = new Map<string, string>()
   /** Folder paths whose real path cannot be resolved. */
   const unresolvable = new Set<string>()
+  /** Files whose next open fails, once. */
+  const openFailsOnce = new Set<string>()
 
   const wrapped = new Proxy(realFs, {
     get(target, prop) {
@@ -122,7 +124,11 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
           statted.push(String(p))
           return (realFs.statSync as (p: string, o?: unknown) => unknown)(p, o)
         }
-        case 'openSync': return (p: string, flags: string) => { opened.push(String(p)); return realFs.openSync(p, flags) }
+        case 'openSync': return (p: string, flags: string) => {
+          opened.push(String(p))
+          if (openFailsOnce.delete(String(p))) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+          return realFs.openSync(p, flags)
+        }
         case 'watch': return () => ({ close() {}, on() {} })
         case 'realpathSync': return Object.assign((p: string): string => realFs.realpathSync(p), {
           native: (p: string): string => {
@@ -153,7 +159,7 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
   const settle = (ms = 100): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const clearCounts = (): void => { listed = []; statted = []; opened = [] }
 
-  async function start(given?: string): Promise<void> {
+  async function start(given?: string, maxTickBytes?: number): Promise<void> {
     const fake = new FakeTkWorkerTransport()
     transport = fake
     fake.onMessage((m) => {
@@ -164,7 +170,7 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
       waiters = waiters.filter((w) => !w(m))
     })
     const first = nextSweep('the first sweep')
-    const w = createTokenomicsWorker(fake.asWorkerSide(), { fs: wrapped, watchDebounceMs: 5 })
+    const w = createTokenomicsWorker(fake.asWorkerSide(), { fs: wrapped, watchDebounceMs: 5, ...(maxTickBytes ? { maxTickBytes } : {}) })
     stopWorker = () => w.stop()
     fake.post({ type: 'open', dbPath: path.join(tmp, 'tk.db'), pricing: PRICING, configs: [], claudeProjectsDir: given ?? claudeDir, codexSessionsDir: codexDir })
     await first
@@ -203,7 +209,7 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
     db.cursors.clear(); db.meta.clear(); db.events = 0; db.failNextSetMeta = false; db.deleteCalls = []; db.failNextList = false
     clearCounts()
     completes = 0; infos = []; warnings = []; errors = []; waiters = []; transport = null
-    listFails.clear(); realPaths.clear(); unresolvable.clear()
+    listFails.clear(); realPaths.clear(); unresolvable.clear(); openFailsOnce.clear()
   })
   afterEach(() => {
     try { stopWorker?.() } catch { /* stopped */ }
@@ -276,6 +282,17 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
       for (const p of [there, missing]) db.cursors.set(p, { path: p, size: 2, mtime: 1, lastOffset: 2, scannedTo: 2 })
       await fullPass()
       expect(rows()).toEqual([...four(), there].sort())
+    })
+
+    it('a row written since the pass began (a transcript made after its folder was listed) is kept, and an older one is dropped', async () => {
+      await start()
+      const fresh = proj('made-during-the-pass.jsonl')
+      const stale = proj('gone-long-ago.jsonl')
+      db.cursors.set(fresh, { path: fresh, size: 1, mtime: 1, lastOffset: 1, scannedTo: 1, lastIngestedAt: Date.now() + 60_000 })
+      db.cursors.set(stale, { path: stale, size: 1, mtime: 1, lastOffset: 1, scannedTo: 1, lastIngestedAt: 1 })
+      await fullPass()
+      expect(rows()).toContain(fresh)
+      expect(rows()).not.toContain(stale)
     })
 
     describe('and never after a walk that did not list the whole tree', () => {
@@ -453,6 +470,31 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
       clearCounts()
       await start()
       expect(listed).toContain(subs())
+    })
+
+    it('a transcript longer than one budget is read to its end across passes though its folder has not changed', async () => {
+      const big = agent('agent-big')
+      realFs.mkdirSync(path.dirname(big), { recursive: true })
+      const count = 60
+      realFs.writeFileSync(big, Array.from({ length: count }, (_, i) => line(`big-${i}`)).join(''))
+      age(subs()); age(proj('s9')); age(proj())
+      const size = realFs.statSync(big).size
+      // About a tenth of the file at a time.
+      await start(undefined, Math.ceil(size / 10))
+      for (let i = 0; i < 30 && (db.cursors.get(big)?.lastOffset ?? 0) < size; i++) await fullPass()
+      expect(db.cursors.get(big)?.lastOffset).toBe(size)
+      expect(db.events).toBe(4 + count)
+    })
+
+    it('a transcript that could not be opened is tried again at the next walk though its folder has not changed', async () => {
+      plantSubagents()
+      openFailsOnce.add(agent('agent-a'))
+      await start()
+      expect(db.cursors.has(agent('agent-a'))).toBe(false)
+      await fullPass()
+      expect(opened.filter((p) => p === agent('agent-a')).length).toBeGreaterThanOrEqual(2)
+      expect(db.cursors.has(agent('agent-a'))).toBe(true)
+      expect(db.events).toBe(5)
     })
 
     it('a transcript removed from a remembered folder changes it, so the folder is listed and the transcript\'s row is dropped', async () => {

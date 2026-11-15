@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "923c5b1a8eec5de0ab337a483645bd74545e3b027cce753f0482ca9e5d466452",
-  "manifestHead": "0cfc3864703f0f64566cd73c7580bdaae3b7cc70",
+  "manifestPathDigest": "b902df9ef946f73e989aa08d9e1a50277142d5cb7734de66acce86eb7e49b768",
+  "manifestHead": "166b1133559a145f69d62d6a5c9b3d33cf7e55ba",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -10461,6 +10461,16 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.3 test (tests/unit/tokenomics/tokenomics-worker-changed-files.test.ts): between full walks the usage worker reads only the Claude transcripts the watcher reports; any event in a Codex sessions folder still starts a full walk, so a rollout is found as before; a full walk that leaves bytes unread runs again until every file is read, for a Claude transcript and for the Codex account re-read, which is settled only by the walk that drains; a reported transcript that is a link is left alone (WP1.2)",
       "note": "created by the 2.1.3-beta.3 changed-transcripts usage sweep (planning 302 and 306); the real worker over temp folders with an in-memory stand-in for the index database; no process starts and no real watcher runs"
+    },
+    {
+      "path": "tests/unit/tokenomics/tokenomics-worker-prune.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.5 test (tests/unit/tokenomics/tokenomics-worker-prune.test.ts): the usage worker opens the projects folder by its real path, drops the progress rows of transcripts that are gone only after a complete walk (never a usage row, and keeps a row written since the pass began), and does not list an unchanged subagent folder again unless a pass left a transcript unread or unopened (WP1.2)",
+      "note": "created by the 2.1.3-beta.5 services and tokenomics fixes (planning 306); the real worker over temp folders with an in-memory stand-in for the index database; no process starts and no real watcher runs"
     },
     {
       "path": "tests/unit/tokenomics/tokenomics-worker-reread-order.test.ts",
