@@ -704,3 +704,36 @@ jobs:
           path: helper/target/helper-windows
           if-no-files-found: error
           retention-days: 14
+
+  # PR numbers (ADR-030, SDLC table): on every pull request, a short table in the
+  # job summary - does the PR touch the eight files of the live SSH blast radius,
+  # how long is src/main/pty-manager.ts against its cap, and is the live SSH
+  # matrix owed. It FAILS only when pty-manager.ts grows past the cap, and the
+  # `cap-override` label lets that pass (the summary says so).
+  #
+  # The job's only `if` is event-scoped (`pull_request`), and that is the whole
+  # design, the same as `desktop-gate`: it ALWAYS runs on a pull request and
+  # decides INSIDE, in scripts/ci/pr-numbers.mjs. Never turn the changed paths or
+  # the labels into a job-level or step-level `if:`: a job skipped by its
+  # condition reports as passed, and a job behind a path filter never reports at
+  # all. It is not a required check today; it may become one only because it
+  # always runs. Labels are read from the event, so adding or removing
+  # `cap-override` (`labeled` / `unlabeled`) runs it again.
+  #
+  # Checked out with depth 2, so the merge commit and its parents give the PR's
+  # changed paths and the base's copy of pty-manager.ts. The job only reads.
+  # The action is pinned by commit.
+  pr-numbers:
+    name: PR numbers
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Print the PR's numbers - fails only if pty-manager.ts grows past its cap
+        run: node scripts/ci/pr-numbers.mjs

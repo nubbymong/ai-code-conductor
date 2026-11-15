@@ -21,7 +21,7 @@ they were:
   a crash of the app ends it.
 - Most features are built twice, once for local sessions and once over SSH,
   and the two drift apart.
-- `src/main/pty-manager.ts` (8,128 lines) owns the terminal, the launch, the
+- `src/main/pty-manager.ts` (8,366 lines) owns the terminal, the launch, the
   status parsing and the SSH branch together, so almost any session change
   pays every gate, the live SSH matrix included.
 
@@ -333,7 +333,7 @@ otherwise carried from earlier measurement.
 | Files per change | Median 14.5 | Median at or under 10 after the local deletion (observed, not enforced) |
 | Gates per change | A change in `pty-manager.ts` owes 14 | At most 13 for a change that leaves the live radius; no file on both the adversarial list and the live radius after the remote deletion |
 | Live SSH matrix rows | Six per-host packs under `tests/live` | None for a PR that leaves the radius; a radius of no files at the remote deletion; then about 8 helper rows per helper release, one on a Windows host |
-| `src/main/pty-manager.ts` lines | 8,128 | Capped at 8,128; lower after the local deletion; gone at the remote deletion, replaced by a session client and launch spec builder of under 2,000 lines together (estimate) |
+| `src/main/pty-manager.ts` lines | 8,366 | Capped at 8,366 (#681 raised it from 8,128 before the check existed; `scripts/ci/pr-numbers.mjs` now holds the cap and fails a PR that grows the file past it, unless it carries the `cap-override` label); lower after the local deletion; gone at the remote deletion, replaced by a session client and launch spec builder of under 2,000 lines together (estimate) |
 | Loopback listeners the app opens | 2 | 1 after the local deletion if probe P16 passed; 0 after the remote deletion (1 if P16 failed) |
 | Utility processes | 3 | 2 after the local deletion if probe P16 passed |
 | Supervisors | 3 (shown through one registry from beta 4) | 2 once the hooks gateway is gone |
