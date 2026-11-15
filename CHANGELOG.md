@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.4] - 2026-11-15
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- Quitting the app now closes Terminal only tabs, partner terminals and SSH tabs where the app did not start a CLI, without typing Escape, Ctrl-C or /exit into them. Whatever runs there is left as closing a terminal leaves it, so a tmux session you attached to keeps running.
+- A Terminal only SSH config with an "After connecting, run" command now types that command by itself at the first shell prompt after you sign in. Check those commands before you connect, and clear any you do not want run without a click.
+- To go back to 2.1.3-beta.3, download its installer from the GitHub releases page and run it over this version.
+
+> Tokenomics becomes a service you can switch off, the Services panel shows an honest row for every service, Terminal only SSH tabs open straight into the terminal, and quitting no longer types into terminals the app did not start a CLI in. Release notes can now open with warnings.
+
+### Added
+- Tokenomics is now a service you can switch off, in Settings, General, Tokenomics (on by default). Off, nothing is read and its worker does not run; what was recorded is kept, and switching it on again catches up from where it stopped. The Tokenomics page gains Rescan, which reads every transcript again without removing anything, and you can leave accounts out of the figures (that hides their usage; it saves no disk work).
+- The Tokenomics page shows token counts beside the costs, and its chart switches between Cost and Tokens, so usage with no price shows too. On the Services panel, the Tokenomics card shows its process id, its CPU use and how many transcripts each scan checks.
+
+### Changed
+- The Services panel shows an honest row for every service. The MCP server shows its real state and port, Tokenomics has a row with its own Restart, the Watchdog reads in-process, and each card shows only the counters that service keeps. Uptime is the age of the current process and starts over after a restart. The title-bar pill says Starting or Restarting instead of Degraded while a service comes up, and a service you switched off no longer turns it grey.
+- Release notes can open with warnings: a risk, or a step you must take. They are shown first in What's New, in the Feature Guide release history, in CHANGELOG.md and on the GitHub release page. After an update, the summary also shows the warnings of every release you skipped on the way.
+- The Codex CLI check at start-up, and before each sign-in, launch, usage read and model list, no longer holds the app while it looks for Codex.
+
+### Fixed
+- A Terminal only SSH tab with an "After connecting, run" command no longer stops at "Run post-connect command?" or asks "launch anyway?". It types the command at the first shell prompt after sign-in, never onto a line you are typing or a sign-in prompt, and becomes a plain terminal once the command is done. Where the app cannot read the prompt, the one-click offer stays.
+- Quitting the app no longer types Escape, Ctrl-C and /exit into terminals it did not start a CLI in (Terminal only tabs, partner terminals, SSH tabs you drive by hand). Those are closed, so a tmux session you attached to keeps running. Sessions the app wraps in its own tmux session are detached as before.
+- On macOS and Linux, a settings file (platform-config.json) that cannot be read is no longer replaced by one that holds only the latest change. It is left as it is, and first-run setup says to repair or remove it.
+- On Windows, a PATH folder on a network share that does not answer now holds one file check at a time for everything the app looks for (git, the GitHub CLI, npm, Node.js, Claude Code), not one for each.
+- A new model that arrives without an app update is shown and priced as itself under its dated name, and when its version is written with a dot. A proposed model entry whose name is an existing model's dated or dotted name is refused.
+
 ## [2.1.3-beta.3] - 2026-11-15
 
 > A steadier release. Your saved GitHub accounts are no longer wiped when their settings file cannot be read, long pastes keep emoji whole, the usage index reads far less from disk, a launch refused after a wait now says why, and model names with dates or dots resolve to the right model.
@@ -1904,6 +1930,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.4]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.4
 [2.1.3-beta.3]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.3
 [2.1.3-beta.2]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.2
 [2.1.3-beta.1]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.1

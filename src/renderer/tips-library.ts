@@ -353,9 +353,43 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'See where your Claude and Codex money is going',
         title: 'Tokenomics',
-        body: 'The **Tokenomics** page is a spend dashboard for every Claude and Codex session: today, this week, all time.\n\nA background indexer reads all of your transcripts (including subagent and sidechain files), dedups globally, and computes cost at query time from live pricing, so the page opens instantly. You get:\n\n• A **KPI row** with Life-to-date, Last 7 days and Cache efficiency, each split between Claude Code and Codex when both have usage and no filter narrows the view\n• **Charts** for daily spend, with a line per provider when both have spend in the range, and a per-model breakdown\n• A **sessions table** with cost, model, account and config attribution\n• **Filters** for provider, account, config, date range (7d / 30d / all) and a free-text search over model and project\n\nA model with no price yet reads **no price** instead of costing $0, and a notice names it. Model pricing is fetched from BerriAI\'s LiteLLM repo on GitHub (cached for 24h) so costs stay accurate.',
+        body: 'The **Tokenomics** page is a spend dashboard for every Claude and Codex session: today, this week, all time.\n\nA background indexer reads all of your transcripts (including subagent and sidechain files), dedups globally, and computes cost at query time from live pricing, so the page opens instantly (you can switch the indexer off in Settings, General, Tokenomics). You get:\n\n• A **KPI row** with Life-to-date, Last 7 days and Cache efficiency, each split between Claude Code and Codex when both have usage and no filter narrows the view\n• **Charts** for daily spend, with a line per provider when both have spend in the range, and a per-model breakdown\n• A **sessions table** with cost, model, account and config attribution\n• **Filters** for provider, account, config, date range (7d / 30d / all) and a free-text search over model and project\n\nA model with no price yet reads **no price** instead of costing $0, and a notice names it. Model pricing is fetched from BerriAI\'s LiteLLM repo on GitHub (cached for 24h) so costs stay accurate.',
         actionLabel: 'Open Tokenomics',
         actionTarget: 'tokenomics',
+      },
+    },
+  },
+
+  {
+    id: 'tip.tokenomics-service',
+    category: 'tokenomics',
+    complexity: 'intermediate',
+    priority: 32,
+    variants: {
+      primary: {
+        shortText: 'Tokenomics can be switched off, and rescanned',
+        title: 'Tokenomics Is a Service You Control',
+        body: '**Settings, General, Tokenomics** has a switch for the usage index behind the Tokenomics page. It is on by default. Switch it **off** and nothing is read and its background worker does not run; what was recorded stays, and the page says **Tokenomics is off** with a **Turn on** button. Switch it on again and it catches up from where it stopped.\n\nTwo more controls. **Rescan** on the Tokenomics page reads every transcript again from the start, after you confirm; nothing is removed and the totals do not double, so it can only fill in what was missed. And in the same Settings section you can **leave accounts out** of the figures. That hides their usage from the totals, charts and session list, but it saves no disk work, because their transcripts are still read.\n\nThe **Services** pill in the title bar lists Tokenomics beside the other background services, with a Restart of its own.',
+        actionLabel: 'Open Settings',
+        actionTarget: 'settings',
+        focusHint: 'Settings -- General, Tokenomics',
+      },
+    },
+  },
+
+  {
+    id: 'tip.tokenomics-tokens',
+    category: 'tokenomics',
+    complexity: 'simple',
+    priority: 34,
+    variants: {
+      primary: {
+        shortText: 'Tokenomics shows tokens as well as cost',
+        title: 'Cost or Tokens',
+        body: 'The Tokenomics page shows **token counts** beside the costs, and its chart switches between **Cost** and **Tokens**. Pick **Tokens** when you want to see how much was used rather than what it cost. Usage on a model with no price yet shows there too, where the Cost view reads **no price**.',
+        actionLabel: 'Open Tokenomics',
+        actionTarget: 'tokenomics',
+        focusHint: 'Tokenomics page -- the Cost / Tokens switch above the chart',
       },
     },
   },
@@ -1306,7 +1340,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'The Feature Guide is the map of this app',
         title: 'Feature Guide',
-        body: 'Tips arrive one at a time and in no particular order. The **Feature Guide** is the same material laid out properly: Getting started, Integrations, Admin & data and Productivity, each with what the feature is for rather than only where it lives.\n\nIt also carries **What\'s New**: every version\'s full notes, newest first. After an update you see a short summary of what is new since the version you came from, and every prerelease of a release shows that release\'s whole story; the full notes stay here, any time.\n\nWorth ten minutes on a quiet afternoon; most of what people ask Ask Conductor is answered there.',
+        body: 'Tips arrive one at a time and in no particular order. The **Feature Guide** is the same material laid out properly: Getting started, Integrations, Admin & data and Productivity, each with what the feature is for rather than only where it lives.\n\nIt also carries **What\'s New**: every version\'s full notes, newest first. After an update you see a short summary of what is new since the version you came from, and every prerelease of a release shows that release\'s whole story; the full notes stay here, any time. A release can open with **warnings**, a risk or a step you must take; they come first, here and on that summary.\n\nWorth ten minutes on a quiet afternoon; most of what people ask Ask Conductor is answered there.',
         actionLabel: 'Open Feature Guide',
         actionTarget: 'help',
       },
@@ -1437,6 +1471,36 @@ export const TIPS_LIBRARY: Tip[] = [
         shortText: 'What the app sends over the network',
         title: 'Network Activity',
         body: 'In the interest of transparency, here\'s every network call the app makes:\n\n• **Rate limits** (`api.anthropic.com/api/oauth/usage`) -- once per Claude Code command, only when statusline is enabled. Uses YOUR Claude OAuth token (read from `~/.claude/.credentials.json`).\n\n• **Update check** (`api.github.com`) -- via `gh` CLI, checks for new releases when you explicitly trigger an update check or on app start. The optional GitHub integration talks to GitHub too, when you use it.\n\n• **Model pricing** (`raw.githubusercontent.com/BerriAI/litellm`) -- once per 24 hours, to get current Claude and Codex model pricing for cost calculations. Cached locally.\n\n\u2022 **Model list** (`raw.githubusercontent.com`, the project\'s model-data branch) -- once at start-up, in the background, to pick up new models and corrected labels and prices, with no sign-in. The app keeps the last good copy and falls back to the list that shipped with it.\n\n• **Service status** (`status.claude.com` while Claude Code is on, `status.openai.com` while Codex is on) -- the public status pages behind the title bar\'s status pills.\n\n\u2022 **Sentinel** (off by default) -- while it is on, Claude Code\'s public model list and changelog (`support.claude.com`, `raw.githubusercontent.com`) and Codex\'s public release notes (`api.github.com`), read without any sign-in. Its analysis of a new version is a run of the assistant you use, on the account chosen for it.\n\n\u2022 **Codex usage check** (`chatgpt.com`, and with some Codex versions OpenAI\'s content storage) -- only when you open the Usage page, press Refresh or use a card\'s Retry: for a Codex account you added, signed in with ChatGPT, with no session or review on it, Codex checks that account\'s usage once, with its own sign-in.\n\n\u2022 **chatgpt.com sign-in** (`chatgpt.com`, and the sign-in pages it sends you to) -- only when you sign a Codex account in to chatgpt.com in the app, or open chatgpt.com in its browser pane, with that account\'s own sign-in in its own browser storage here. Nothing is copied from your own browser.\n\n• **Vision MCP server** -- listens on `127.0.0.1:19333` only. Localhost-only, never exposed to the network.\n\n**The app sends NO telemetry, analytics, or usage data.** Everything else stays on your machine.',
+      },
+    },
+  },
+
+  {
+    id: 'tip.terminal-only-ssh',
+    category: 'sessions',
+    complexity: 'intermediate',
+    priority: 36,
+    variants: {
+      primary: {
+        shortText: 'A Terminal only SSH tab types its command for you',
+        title: 'Terminal Only Over SSH',
+        body: 'A **Terminal only** config over SSH is a plain terminal, so the app never offers to start an assistant in it. If the config has an **After connecting, run** command (a tmux attach, say), the app **types it for you at the first shell prompt** after you sign in, then leaves the tab alone. There is no **Run post-connect command?** question and no **launch anyway?** question.\n\nIt never types onto a line you are typing or into a sign-in prompt. On a host whose prompt it cannot read it still asks first, with one button, and one click runs the command. Check that command before you connect: it now runs without a click.\n\nQuitting follows the same rule. The app types **Escape, Ctrl-C and /exit** only into sessions where it started the assistant itself. Terminal only tabs, partner terminals and tabs you drove by hand are closed with nothing typed, so a tmux session you attached to keeps running.',
+        focusHint: 'Sidebar -- the pencil on a saved Terminal only SSH config, Advanced, After connecting, run',
+      },
+    },
+  },
+
+  {
+    id: 'tip.services-panel',
+    category: 'advanced',
+    complexity: 'intermediate',
+    priority: 26,
+    variants: {
+      primary: {
+        shortText: 'The Services pill shows what runs in the background',
+        title: 'The Services Panel',
+        body: 'The **Services** pill in the title bar is a dot and a word for the app\'s background services. Click it for the panel: one card each for the **Hooks gateway**, **Session logging**, **Tokenomics**, the **Watchdog** and the **MCP server**, each with its real state and only the counters that service keeps.\n\nThe pill reads **Starting** or **Restarting** while a service comes up, and a service you switched off does not turn it grey. A card has its own **Restart** where a restart makes sense; the MCP server runs inside the app, so it has none. **Uptime** is the age of the current process and starts over after a restart.',
+        focusHint: 'Title bar -- the Services pill',
       },
     },
   },
