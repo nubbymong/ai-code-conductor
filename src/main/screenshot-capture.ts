@@ -1,4 +1,4 @@
-import { BrowserWindow, desktopCapturer, nativeImage } from 'electron'
+import { BrowserWindow, desktopCapturer, dialog, nativeImage, shell, systemPreferences } from 'electron'
 import { join } from 'path'
 import { mkdirSync, existsSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
@@ -6,6 +6,8 @@ import Screenshots from 'electron-screenshots'
 
 import { getResourcesDirectory } from './ipc/setup-handlers'
 import { isReapableImageFile } from './clipboard-file'
+import { logWarn } from './debug-logger'
+import { screenCaptureAllowed, type ScreenPermissionDeps } from './screenshot-permission'
 
 function getScreenshotsDir(): string { return join(getResourcesDirectory(), 'screenshots') }
 
@@ -99,23 +101,76 @@ function getScreenshotsInstance(): Screenshots {
   return screenshotsInstance
 }
 
-export async function captureRectangle(_mainWindow: BrowserWindow): Promise<string | null> {
+/** The real system behind the Screen Recording check: the permission state, the
+ *  message dialog (on the app window when there is one) and System Settings. */
+function systemScreenPermission(mainWindow: BrowserWindow): ScreenPermissionDeps {
+  return {
+    platform: process.platform,
+    status: () => systemPreferences.getMediaAccessStatus('screen'),
+    ask: async (message, canOpen) => {
+      const options = {
+        type: 'info' as const,
+        message: 'Snap needs Screen Recording permission',
+        detail: message,
+        buttons: canOpen ? ['Open System Settings', 'Not now'] : ['OK'],
+        defaultId: 0,
+        cancelId: canOpen ? 1 : 0,
+        noLink: true,
+      }
+      const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+      const answer = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+      return canOpen && answer.response === 0
+    },
+    open: (url) => shell.openExternal(url),
+  }
+}
+
+/**
+ * Snap's capture of a region. On macOS the Screen Recording permission is
+ * checked first (screenshot-permission.ts): when it is not granted the user is
+ * told and offered System Settings, and nothing is captured. Whatever goes
+ * wrong after that (the capture library failing to load or to start, a throw
+ * in its start) answers null, so it never reaches the uncaught-exception
+ * handler. `permission` is a parameter for tests; the app passes none.
+ */
+export async function captureRectangle(mainWindow: BrowserWindow, permission?: ScreenPermissionDeps): Promise<string | null> {
   if (captureInProgress) return null
   captureInProgress = true
+  try {
+    if (!(await screenCaptureAllowed(permission ?? systemScreenPermission(mainWindow)))) return null
+    return await runRectangleCapture()
+  } catch (err) {
+    logWarn(`[screenshot] capture failed (${err instanceof Error ? err.name : 'error'}); nothing captured`)
+    return null
+  } finally {
+    captureInProgress = false
+  }
+}
 
+function runRectangleCapture(): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
-    const screenshots = getScreenshotsInstance()
+    let screenshots: Screenshots | null = null
     let settled = false
 
     const finish = (result: string | null) => {
       if (settled) return
       settled = true
-      screenshots.removeAllListeners('ok')
-      screenshots.removeAllListeners('cancel')
-      screenshots.removeAllListeners('save')
-      captureInProgress = false
+      try {
+        screenshots?.removeAllListeners('ok')
+        screenshots?.removeAllListeners('cancel')
+        screenshots?.removeAllListeners('save')
+      } catch { /* a listener that cannot be removed leaves nothing to answer */ }
       resolve(result)
     }
+
+    try {
+      screenshots = getScreenshotsInstance()
+    } catch (err) {
+      console.error('[screenshot] the capture library could not start:', err)
+      finish(null)
+      return
+    }
+    const library = screenshots
 
     const handleBuffer = (buffer: Buffer) => {
       try {
@@ -143,14 +198,20 @@ export async function captureRectangle(_mainWindow: BrowserWindow): Promise<stri
     // the overlay; 'save' fires when they pick "save" instead — same
     // buffer either way, so we treat both the same and drop our copy
     // into the screenshots dir.
-    screenshots.on('ok', (_e, buffer, _data) => handleBuffer(buffer))
-    screenshots.on('save', (_e, buffer, _data) => handleBuffer(buffer))
-    screenshots.on('cancel', () => finish(null))
+    try {
+      library.on('ok', (_e, buffer, _data) => handleBuffer(buffer))
+      library.on('save', (_e, buffer, _data) => handleBuffer(buffer))
+      library.on('cancel', () => finish(null))
 
-    screenshots.startCapture().catch((err: Error) => {
-      console.error('[screenshot] startCapture failed:', err)
+      library.startCapture().catch((err: Error) => {
+        console.error('[screenshot] startCapture failed:', err)
+        finish(null)
+      })
+    } catch (err) {
+      // A throw before the capture is under way (not a rejection of it).
+      console.error('[screenshot] startCapture threw:', err)
       finish(null)
-    })
+    }
   })
 }
 
