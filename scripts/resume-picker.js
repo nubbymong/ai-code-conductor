@@ -190,7 +190,8 @@ function isFileOnDisk(p) {
   try {
     return fs.statSync(p).isFile()
   } catch (e) {
-    // Not there; any other failure (a folder that does not answer) is thrown.
+    // Not there; any other failure (a folder that does not answer, a file that
+    // cannot be read) is thrown, and findOnPath reads which of the two it is.
     if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return false
     throw e
   }
@@ -234,10 +235,28 @@ function pathFolders(env, platform) {
  *  cannot import; a parity test holds the copy to the same list): the native
  *  claude.exe in any folder PATH names, then claude.cmd, then claude.bat. */
 const CLAUDE_WINDOWS_NAMES = Object.freeze(['claude.exe', 'claude.cmd', 'claude.bat'])
+/** The reasons a file check fails with that are known to be about the ONE
+ *  file that was asked for, in a folder that did answer: access to it is
+ *  denied (EPERM, EACCES), or it is in use (EBUSY) while an update replaces
+ *  it. Every other reason passes the folder, a reason with no name of its own
+ *  included, so a folder that is down is asked once. The app's own list
+ *  (src/main/windows-programs.ts ONE_FILE_UNREADABLE_CODES, which this script
+ *  cannot import and which says why each code is on it; a parity test holds
+ *  the copy to the same list, and to the same answer). */
+const ONE_FILE_UNREADABLE_CODES = Object.freeze(['EPERM', 'EACCES', 'EBUSY'])
+function oneFileCannotBeRead(error) {
+  const code = error ? error.code : undefined
+  return typeof code === 'string' && ONE_FILE_UNREADABLE_CODES.includes(code)
+}
 /** The full path of the first of `names` found in PATH's folders -- every
  *  folder for the first name, then every folder for the next -- or null. A
  *  folder whose check throws (one that does not answer) is not asked again
- *  for another name, as the app's walk does. */
+ *  for another name. The one exception is a check that throws for a reason
+ *  known to be about that one file (oneFileCannotBeRead): it passes the file
+ *  only, and the file beside it is still asked for (claude.cmd beside a
+ *  claude.exe that cannot be read). So a file that cannot be read ranks
+ *  exactly as one that is not there, in a later folder too. All as the app's
+ *  walk does. */
 function findOnPath(names, env, platform, isFile) {
   const api = platform === 'win32' ? path.win32 : path.posix
   const dirs = pathFolders(env, platform)
@@ -246,7 +265,7 @@ function findOnPath(names, env, platform, isFile) {
     for (const dir of dirs) {
       if (unreachable.has(dir)) continue
       const candidate = api.join(dir, name)
-      try { if (isFile(candidate)) return candidate } catch { unreachable.add(dir) }
+      try { if (isFile(candidate)) return candidate } catch (e) { if (!oneFileCannotBeRead(e)) unreachable.add(dir) }
     }
   }
   return null
@@ -1358,6 +1377,7 @@ module.exports = {
   resolveClaudeCmd,
   CLAUDE_BIN_ENV,
   CLAUDE_WINDOWS_NAMES,
+  ONE_FILE_UNREADABLE_CODES,
   withFullyQualifiedProgramLookup,
   encodeProjectPath,
   resolveProjectDir,

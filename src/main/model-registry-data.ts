@@ -47,8 +47,20 @@
 //    dated (`-YYYYMMDD`) or bracketed (`[1m]`) form of a shipped entry's id
 //    is that shipped entry's name and refused (`claude-opus-4-5-20260101`,
 //    `gpt-5.5-20260101`), though the bundled file only reaches it by an
-//    id-prefix. A refused name refuses the whole file, and the log names the
-//    shipped entry;
+//    id-prefix. And a name is read as the matcher reads it against the ids,
+//    as written and with each dot between two digits as a hyphen
+//    (2.1.3-beta.3): a shipped id written with a dot (`claude-opus-5.5`), or a
+//    dated or bracketed form of it (`claude-opus-4.7-20260101`), is that
+//    shipped entry's name and refused as the same name written with a hyphen
+//    is. An alias is held against its model's own id in the same two
+//    readings, so that id written the other way is the model's own name
+//    (`claude-opus-5.7` on `claude-opus-5-7`), and the shipped id is held
+//    against the model's in them too (`gpt-5-5` does not own `gpt-5.5-x`).
+//    For an alias the shipped ids are read with a dot as a hyphen as well,
+//    which the matcher never does, so a shipped model's name written with a
+//    hyphen for its dot is held for that model too (`gpt-5.6` does not own
+//    `gpt-5-6-sol`, nor `gpt-5-5` `gpt-5-5-x`). A refused name refuses the
+//    whole file, and the log names the shipped entry;
 //  - a pattern is plain text (literalPattern), matched as text. Nothing in
 //    the file is ever compiled into a regular expression.
 //
@@ -56,7 +68,7 @@
 // model-registry-service.ts puts it to use.
 import { z } from 'zod'
 import {
-  familyProvider, followsModelPickerRule, literalPattern, resolveModelInfo,
+  dotsAsHyphens, familyProvider, followsModelPickerRule, literalPattern, longestIdNameStartsWith, resolveModelInfo,
   type EffortLevelSpec, type ModelEntry, type ModelMatchKind, type ModelProvider, type ModelRegistry, type OverlayModelEntry,
 } from '../shared/model-registry'
 import { stripSpoofableText } from '../shared/safe-text'
@@ -177,39 +189,142 @@ function isDatedOrBracketedForm(name: string, shipped: string): boolean {
 
 /** The shipped id `name` is a dated or bracketed form of, whichever entry the
  *  matcher placed it on: `claude-fable-5-20260101` is `claude-fable-5`'s, though
- *  the matcher puts it on `claude-fable-5-2` by id-prefix. */
+ *  it starts with `claude-fable-5-2` as well. (The matcher puts it on
+ *  `claude-fable-5` too since 2.1.3-beta.3; this does not rest on that.)
+ *
+ *  This check and the one below it (dottedFormOfShipped) look at the shipped
+ *  ids themselves. Where the build places a name is otherwise the matcher's
+ *  answer (placedBy), so validation follows the matcher: when its rules
+ *  change, what a file may carry changes with them. Two files changed sides
+ *  with the matcher of 2.1.3-beta.3, and both are meant
+ *  (tests/unit/model-data-schema.test.ts pins them). An id that ends in a
+ *  digit is no longer the start of a name whose next character is a digit, so
+ *  `gpt-5.55` is not `gpt-5.5`'s by an id-prefix and a new `gpt-5` may have it
+ *  as an alias: refused before, taken now. And a name is read with each dot
+ *  between two digits as a hyphen too, so `claude-opus-4.7` is
+ *  `claude-opus-4-7`'s and a new `claude-opus-4` may not have it as an alias:
+ *  taken before, refused now. */
 function formOfShipped(bundled: ModelRegistry, name: string): string | undefined {
   return bundled.models.find((m) => isDatedOrBracketedForm(name, m.id))?.id
 }
 
+/** The shipped id `name` is when it is read the matcher's second way, with
+ *  each dot between two digits as a hyphen (dotsAsHyphens, 2.1.3-beta.3):
+ *  that id itself (`claude-opus-5.5` is `claude-opus-5-5`), or one it is a
+ *  dated or bracketed form of (`claude-opus-4.7-20260101`,
+ *  `claude-opus-4.7[1m]`). Undefined for a name with no such dot.
+ *
+ *  The matcher reads a name both ways against the ids
+ *  (longestIdNameStartsWith), so it puts such a name on that shipped entry by
+ *  an id match, which the app trusts for a label, a price and an effort list.
+ *  The name is the shipped model's as the same name written with a hyphen is,
+ *  and a new model is refused it in the same way. Only ids are read like
+ *  this: the matcher takes an alias as it is written. */
+function dottedFormOfShipped(bundled: ModelRegistry, name: string): string | undefined {
+  const hyphened = dotsAsHyphens(name)
+  if (hyphened === name) return undefined
+  return bundled.models.find((m) => m.id === hyphened)?.id ?? formOfShipped(bundled, hyphened)
+}
+
 /** The shipped entry that has `id` as its exact id or one of its aliases, or
  *  whose id `id` is a dated or bracketed form of (of ANY shipped id, not only the
- *  one the matcher placed it on). An id the bundled file only
- *  reaches by an id-prefix or a pattern (`claude-fable-5-3` is reached through
- *  `claude-fable-5`) is a new model's own name. */
+ *  one the matcher placed it on), or whose id `id` is, or is such a form of,
+ *  when it is read with a dot as a hyphen (dottedFormOfShipped). An id the
+ *  bundled file only reaches by an id-prefix or a pattern otherwise
+ *  (`claude-fable-5-3` is reached through `claude-fable-5`) is a new model's
+ *  own name. */
 function idHeldBy(bundled: ModelRegistry, id: string): string | undefined {
   const form = formOfShipped(bundled, id)
   if (form) return form
   const at = placedBy(bundled, id)
-  if (!at) return undefined
-  return at.kind === 'exact' || at.kind === 'alias' ? at.id : undefined
+  if (at && (at.kind === 'exact' || at.kind === 'alias')) return at.id
+  return dottedFormOfShipped(bundled, id)
+}
+
+/** The shipped id that keeps `aliasAsRead` (an alias with each dot between two
+ *  digits read as a hyphen, which starts with its model's id `own`) when the
+ *  shipped ids are read that way as well.
+ *
+ *  The matcher does not read an id that way. It finds an id in a name as the
+ *  id is written, and reads a dot in the name as a hyphen, never a hyphen as
+ *  a dot. So a shipped id written with a dot (`gpt-5.6-sol`) is not found in
+ *  the same name written with a hyphen: `gpt-5-6-sol` starts with no shipped
+ *  id, and only the catch-all pattern places it. An alias that starts with
+ *  its model's own id is let past a pattern, so without this check a new
+ *  `gpt-5.6` or `gpt-5-6` has `gpt-5-6-sol`: the longer shipped model's name
+ *  in the other spelling. Where a name goes is not changed here (`gpt-5-5`
+ *  is still not `gpt-5.5`, and a new model may have it as its id); what a
+ *  new model may list as an alias is.
+ *
+ *  The two rules that hold where the matcher does find a shipped id hold in
+ *  this reading too:
+ *   - a dated or bracketed form of a shipped id is that model's, however long
+ *     `own` is: `gpt-5-5-20260101` is not `gpt-5.5-`'s;
+ *   - of two ids that both start the alias, the shipped one keeps it unless
+ *     `own` is longer: `gpt-5-6-sol` is not `gpt-5.6`'s and `gpt-5-5-x` is
+ *     not `gpt-5-5`'s, while `gpt-5-5-pro` is `gpt-5.5-pro`'s. An id starts
+ *     a name as the matcher has it (longestIdNameStartsWith), not where the
+ *     number carries on: `gpt-5-55` is not held for `gpt-5.5`.
+ *
+ *  The second is asked only of a shipped id longer than the one the matcher
+ *  found in the alias (`found`, its length: 0 when only a pattern placed the
+ *  alias). The id the matcher did find is the caller's to hold against
+ *  `own`, so each of the two checks answers for its own ids. */
+function heldInHyphenSpelling(bundled: ModelRegistry, aliasAsRead: string, own: string, found: number): string | undefined {
+  const shipped = bundled.models.map((m) => ({ id: m.id, asRead: dotsAsHyphens(m.id) }))
+  const form = shipped.find((m) => isDatedOrBracketedForm(aliasAsRead, m.asRead))
+  if (form) return form.id
+  const start = longestIdNameStartsWith(aliasAsRead, shipped.map((m) => m.asRead))
+  if (start.length <= found || start.length < own.length) return undefined
+  return shipped.find((m) => m.asRead === start)?.id
 }
 
 /** The shipped entry that stops `alias` being the alias of the model `own`: one
  *  that has it as an exact id or an alias, or whose id it is a dated or
- *  bracketed form of, or one the bundled file reaches it on by an id-prefix or
- *  a pattern when it does not start with `own`'s id, or when it does but the
- *  shipped id starts with `own` too (`claude-opus-4-7[1m]` is not
- *  `claude-opus-4`'s). An alias that starts with its model's id
- *  (`claude-fable-5-3-20270101`, `claude-fable-5-3[1m]`) is that model's own
- *  name; one nothing places is free. */
+ *  bracketed form of, or whose id it is, or is such a form of, when it is
+ *  read with a dot as a hyphen (dottedFormOfShipped), or one the bundled file
+ *  reaches it on by an id-prefix or a pattern when it does not start with
+ *  `own`'s id, or when it does but the shipped id starts with `own` too
+ *  (`claude-opus-4-7[1m]` is not `claude-opus-4`'s). An alias that starts
+ *  with its model's id (`claude-fable-5-3-20270101`, `claude-fable-5-3[1m]`)
+ *  is that model's own name; one nothing places is free.
+ *
+ *  "Starts with" is asked as the matcher reads a name against the ids: of the
+ *  two as they are written, and of the two read with each dot between two
+ *  digits as a hyphen. So a model's own id written the other way is its own
+ *  name too: `claude-opus-5.7` and `claude-opus-5.7-20270101` on
+ *  `claude-opus-5-7`, `claude-opus-5-7` on `claude-opus-5.7`. Without that a
+ *  new model in a shipped family could not be given the name a gateway writes
+ *  for it: the name stayed on the older model whose id it starts with
+ *  (`claude-opus-5`), by a match the app trusts.
+ *
+ *  And an alias that starts with `own` is held against the shipped ids read
+ *  with a dot as a hyphen as well, which the matcher never does
+ *  (heldInHyphenSpelling): `gpt-5-6-sol` is not a new `gpt-5.6`'s. */
 function aliasHeldBy(bundled: ModelRegistry, alias: string, own: string): string | undefined {
   const form = formOfShipped(bundled, alias)
   if (form) return form
   const at = placedBy(bundled, alias)
+  if (at && (at.kind === 'exact' || at.kind === 'alias')) return at.id
+  const dotted = dottedFormOfShipped(bundled, alias)
+  if (dotted) return dotted
   if (!at) return undefined
-  if (at.kind === 'exact' || at.kind === 'alias') return at.id
-  return alias.startsWith(own) && !at.id.startsWith(own) ? undefined : at.id
+  const aliasAsRead = dotsAsHyphens(alias)
+  if (!alias.startsWith(own) && !aliasAsRead.startsWith(dotsAsHyphens(own))) return at.id
+  const spelled = heldInHyphenSpelling(bundled, aliasAsRead, own, at.kind === 'prefix' ? at.id.length : 0)
+  if (spelled) return spelled
+  // Whether the shipped id starts with `own` too is asked the same two ways,
+  // of each of the three names. Of `own` as the alias reads it, for the
+  // matcher may have found the shipped id in the alias read with a dot as a
+  // hyphen: `claude-opus-4.8-f` in `claude-opus-4.8-fast-x` is
+  // `claude-opus-4-8-f`, which the shipped `claude-opus-4-8-fast` starts
+  // with. And of the shipped id read that way as well, for it may be written
+  // with a dot where `own` has a hyphen: `gpt-5-5` does not own `gpt-5.5-x`,
+  // which carries on from the shipped `gpt-5.5`. So of two ids that are both
+  // a start of the alias, the shipped one keeps it unless `own` is longer.
+  const ownAsRead = aliasAsRead.slice(0, own.length)
+  const shippedStartsWithOwn = [at.id, dotsAsHyphens(at.id)].some((id) => id.startsWith(own) || id.startsWith(ownAsRead))
+  return shippedStartsWithOwn ? at.id : undefined
 }
 
 /**
@@ -279,6 +394,14 @@ export function validateModelData(value: unknown, bundled: ModelRegistry): Model
     // it does not start with the model's own id (or the shipped id starts with
     // it too); one that is the model's own name, and one nothing places is free. Exact ids and aliases are looked up first
     // (matchEntry), so a refused name would leave the shipped entry for the new one.
+    // The id and each alias are read as the matcher reads a name against the
+    // ids, as written and with each dot between two digits as a hyphen: a
+    // shipped id written with a dot, or a dated or [1m] form of it, is refused
+    // as the same name written with a hyphen is (dottedFormOfShipped), and an
+    // alias that is the model's own id written the other way is its own name
+    // (aliasHeldBy). An alias is held against the shipped ids read with a dot
+    // as a hyphen too: a shipped model's name written with a hyphen for its
+    // dot is not a new model's (heldInHyphenSpelling).
     const holder = base ? undefined : [idHeldBy(bundled, m.id), ...(m.aliases ?? []).map((a) => aliasHeldBy(bundled, a, m.id))].find((id) => id !== undefined)
     if (holder) return refuse(`models: ${m.id} has a name the build already places on ${holder}`)
     const had = new Set(base?.patterns ?? [])

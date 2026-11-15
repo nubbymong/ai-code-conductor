@@ -12,7 +12,7 @@
 // records each file it is asked about and answers from a list written here;
 // nothing starts.
 import { describe, it, expect, vi } from 'vitest'
-import { findOnWindowsPath, windowsPathFolders, withFullyQualifiedProgramLookup } from '../../../src/main/windows-programs'
+import { findOnWindowsPath, windowsPathFolders, withFullyQualifiedProgramLookup, ONE_FILE_UNREADABLE_CODES } from '../../../src/main/windows-programs'
 import { windowsPathFolderIsFullyQualified } from '../../../src/main/providers/windows-path-names'
 import { CLAUDE_WINDOWS_NAMES } from '../../../src/main/claude-cli-probe'
 
@@ -20,6 +20,7 @@ type Env = Record<string, string | undefined>
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const picker = require('../../../scripts/resume-picker.js') as {
   CLAUDE_WINDOWS_NAMES: readonly string[]
+  ONE_FILE_UNREADABLE_CODES: readonly string[]
   withFullyQualifiedProgramLookup: (env: Env, platform: string) => Env
   buildSpawnTarget: (cmd: string, args: string[], platform?: string, env?: Env, cwd?: string) => { file: string; argv: string[]; verbatim: boolean; env?: Env } | null
   resolveClaudeCmd: (platform?: string, env?: Env, isFile?: (p: string) => boolean) => string | null
@@ -104,14 +105,15 @@ describe('the picker reads PATH\'s folders by the app\'s own rule', () => {
   })
 })
 
-// A folder that does not answer: its check throws. Both walks then pass that
-// folder over for every later name; a file that is simply not there is no such
-// failure, so its folder is still asked for the next name.
+// A folder that does not answer: its check throws with a reason that says the
+// folder cannot be reached (here: it did not answer in time). Both walks then
+// pass that folder over for every later name; a file that is simply not there
+// is no such failure, so its folder is still asked for the next name.
 describe('a PATH folder that does not answer is asked once, as the app\'s walk asks it', () => {
   const ENV = { PATH: '\\\\down\\share;C:\\a;\\\\down\\share\\sub' }
   const throwing = (): { asked: string[]; isFile: (p: string) => boolean } => {
     const asked: string[] = []
-    return { asked, isFile: (p: string) => { asked.push(p); if (p.startsWith('\\\\down\\')) throw new Error('does not answer'); return false } }
+    return { asked, isFile: (p: string) => { asked.push(p); if (p.startsWith('\\\\down\\')) throw Object.assign(new Error('does not answer'), { code: 'ETIMEDOUT' }); return false } }
   }
 
   it('the picker checks the files the app\'s walk checks, a folder that throws once', () => {
@@ -130,7 +132,7 @@ describe('a PATH folder that does not answer is asked once, as the app\'s walk a
     const asked: string[] = []
     const stat = vi.spyOn(nodeFs, 'statSync').mockImplementation(((p: string) => {
       asked.push(p)
-      if (p.startsWith('\\\\down\\')) throw Object.assign(new Error('does not answer'), { code: 'EIO' })
+      if (p.startsWith('\\\\down\\')) throw Object.assign(new Error('does not answer'), { code: 'ETIMEDOUT' })
       if (p === 'C:\\a\\claude.cmd') return { isFile: () => true }
       throw Object.assign(new Error('not there'), { code: p.endsWith('sub\\claude.exe') ? 'ENOTDIR' : 'ENOENT' })
     }) as never)
@@ -148,7 +150,7 @@ describe('a PATH folder that does not answer is asked once, as the app\'s walk a
     const asked: string[] = []
     const stat = vi.spyOn(nodeFs, 'statSync').mockImplementation(((p: string) => {
       asked.push(p)
-      if (p.startsWith('\\\\down\\')) throw Object.assign(new Error('does not answer'), { code: 'EIO' })
+      if (p.startsWith('\\\\down\\')) throw Object.assign(new Error('does not answer'), { code: 'ETIMEDOUT' })
       if (p === 'C:\\a\\claude.bat') return { isFile: () => true }
       throw Object.assign(new Error('not there'), { code: 'ENOENT' })
     }) as never)
@@ -159,6 +161,148 @@ describe('a PATH folder that does not answer is asked once, as the app\'s walk a
         'C:\\b\\sub\\claude.cmd', 'C:\\a\\claude.cmd',
         'C:\\b\\sub\\claude.bat', 'C:\\a\\claude.bat',
       ])
+    } finally {
+      stat.mockRestore()
+    }
+  })
+})
+
+// One program file that cannot be read (access to it is denied, or it is in
+// use while an update replaces it) says nothing about the file beside it. The
+// app's walk passes that one file and still asks the folder for the next name,
+// for the short list of reasons known to be about one file
+// (windows-programs.ts ONE_FILE_UNREADABLE_CODES); for every other reason it
+// passes the folder, so a share that is down is asked once. The picker's copy
+// of the list has to be the same list, and give the same answer, or the list
+// would start another Claude Code than the one the app's check found.
+describe('which failed file check passes the folder, and which only the file: the picker\'s copy and the app\'s walk agree', () => {
+  const ENV = { PATH: 'C:\\first;C:\\later' }
+  /** The reasons known to be about the one file asked for: that file is passed. */
+  const ONE_FILE = ['EPERM', 'EACCES', 'EBUSY']
+  /** Every other reason passes the folder (null: an error with no code at all). */
+  const FOLDER_PASSED = [
+    'ETIMEDOUT', 'ENETDOWN', 'ENETUNREACH', 'ENONET', 'EHOSTDOWN', 'EHOSTUNREACH', 'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ENOTCONN',
+    'UNKNOWN', 'EIO', 'ELOOP', 'EINVAL', 'ENOTDIR', 'EISDIR', null,
+  ]
+
+  // The script cannot import the app's list, so it carries a copy. Mutation
+  // to prove this can fail: add a code to one list and not the other.
+  it('the picker\'s copy of the short list is the app\'s list, code for code', () => {
+    expect([...picker.ONE_FILE_UNREADABLE_CODES].sort()).toEqual([...ONE_FILE_UNREADABLE_CODES].sort())
+    expect([...picker.ONE_FILE_UNREADABLE_CODES].sort()).toEqual([...ONE_FILE].sort())
+    expect(new Set(picker.ONE_FILE_UNREADABLE_CODES).size).toBe(picker.ONE_FILE_UNREADABLE_CODES.length)
+  })
+
+  /** C:\first\claude.exe fails with `code`; claude.cmd is beside it, and in the later folder. */
+  const disk = (code: string | null): { asked: string[]; isFile: (p: string) => boolean } => {
+    const asked: string[] = []
+    return {
+      asked,
+      isFile: (p: string) => {
+        asked.push(p)
+        if (p === 'C:\\first\\claude.exe') throw Object.assign(new Error('the file check failed'), code == null ? {} : { code })
+        return p === 'C:\\first\\claude.cmd' || p === 'C:\\later\\claude.cmd'
+      },
+    }
+  }
+
+  // Mutation to prove this can fail: pass the folder for any failed check, in
+  // the picker alone or in both (the later folder's claude.cmd is then named).
+  it.each(ONE_FILE)('claude.exe cannot be read (%s): both find the claude.cmd beside it, asking the same files', (code) => {
+    const p = disk(code)
+    expect(picker.resolveClaudeCmd('win32', ENV, p.isFile)).toBe('C:\\first\\claude.cmd')
+    const a = disk(code)
+    expect(findOnWindowsPath(CLAUDE_WINDOWS_NAMES, ENV as NodeJS.ProcessEnv, a.isFile, 'name')).toBe('C:\\first\\claude.cmd')
+    expect(p.asked).toEqual(a.asked)
+    expect(p.asked).toEqual(['C:\\first\\claude.exe', 'C:\\later\\claude.exe', 'C:\\first\\claude.cmd'])
+  })
+
+  // Mutation to prove this can fail: pass only the one file for a reason that
+  // is not on the short list, in the picker alone or in both (a share that is
+  // down is then asked once for every name).
+  it.each(FOLDER_PASSED)('the file check fails for any other reason (%s): both pass the folder once and find the later folder\'s, asking the same files', (code) => {
+    const p = disk(code)
+    expect(picker.resolveClaudeCmd('win32', ENV, p.isFile)).toBe('C:\\later\\claude.cmd')
+    const a = disk(code)
+    expect(findOnWindowsPath(CLAUDE_WINDOWS_NAMES, ENV as NodeJS.ProcessEnv, a.isFile, 'name')).toBe('C:\\later\\claude.cmd')
+    expect(p.asked).toEqual(a.asked)
+    expect(p.asked).toEqual(['C:\\first\\claude.exe', 'C:\\later\\claude.exe', 'C:\\later\\claude.cmd'])
+  })
+
+  // A file that cannot be read ranks exactly as one that is not there, in a
+  // LATER folder too. The first folder holds claude.bat alone; the later one
+  // a claude.exe that cannot be read, and a claude.cmd. Both name the later
+  // folder's claude.cmd: what they name when that folder has no claude.exe
+  // at all. (Passing the whole later folder, as before, named the first
+  // folder's claude.bat, which is still the answer for any other reason.)
+  describe('a claude.exe in a later folder', () => {
+    const laterDisk = (code: string | null | 'absent'): { asked: string[]; isFile: (p: string) => boolean } => {
+      const asked: string[] = []
+      return {
+        asked,
+        isFile: (p: string) => {
+          asked.push(p)
+          if (p === 'C:\\later\\claude.exe' && code !== 'absent') throw Object.assign(new Error('the file check failed'), code == null ? {} : { code })
+          return p === 'C:\\first\\claude.bat' || p === 'C:\\later\\claude.cmd'
+        },
+      }
+    }
+
+    it.each(ONE_FILE)('that cannot be read (%s) ranks as one that is not there: both name the later folder\'s claude.cmd, asking the same files', (code) => {
+      const absent = laterDisk('absent')
+      expect(picker.resolveClaudeCmd('win32', ENV, absent.isFile)).toBe('C:\\later\\claude.cmd')
+      const p = laterDisk(code)
+      expect(picker.resolveClaudeCmd('win32', ENV, p.isFile)).toBe('C:\\later\\claude.cmd')
+      const a = laterDisk(code)
+      expect(findOnWindowsPath(CLAUDE_WINDOWS_NAMES, ENV as NodeJS.ProcessEnv, a.isFile, 'name')).toBe('C:\\later\\claude.cmd')
+      expect(p.asked).toEqual(absent.asked)
+      expect(a.asked).toEqual(absent.asked)
+      expect(p.asked).toEqual(['C:\\first\\claude.exe', 'C:\\later\\claude.exe', 'C:\\first\\claude.cmd', 'C:\\later\\claude.cmd'])
+    })
+
+    it.each(FOLDER_PASSED)('whose check fails for any other reason (%s) passes that folder: both name the first folder\'s claude.bat', (code) => {
+      const p = laterDisk(code)
+      expect(picker.resolveClaudeCmd('win32', ENV, p.isFile)).toBe('C:\\first\\claude.bat')
+      const a = laterDisk(code)
+      expect(findOnWindowsPath(CLAUDE_WINDOWS_NAMES, ENV as NodeJS.ProcessEnv, a.isFile, 'name')).toBe('C:\\first\\claude.bat')
+      expect(p.asked).toEqual(a.asked)
+      expect(p.asked).toEqual(['C:\\first\\claude.exe', 'C:\\later\\claude.exe', 'C:\\first\\claude.cmd', 'C:\\first\\claude.bat'])
+    })
+  })
+
+  it('the picker\'s own check: a claude.exe that cannot be read leaves its folder asked for claude.cmd', () => {
+    // The file checks are answered here: nothing on disk is read.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodeFs = require('fs') as typeof import('fs')
+    const asked: string[] = []
+    const stat = vi.spyOn(nodeFs, 'statSync').mockImplementation(((p: string) => {
+      asked.push(p)
+      if (p === 'C:\\first\\claude.exe') throw Object.assign(new Error('access is denied'), { code: 'EPERM' })
+      if (p === 'C:\\first\\claude.cmd' || p === 'C:\\later\\claude.cmd') return { isFile: () => true }
+      throw Object.assign(new Error('not there'), { code: 'ENOENT' })
+    }) as never)
+    try {
+      expect(picker.resolveClaudeCmd('win32', ENV)).toBe('C:\\first\\claude.cmd')
+      expect(asked).toEqual(['C:\\first\\claude.exe', 'C:\\later\\claude.exe', 'C:\\first\\claude.cmd'])
+    } finally {
+      stat.mockRestore()
+    }
+  })
+
+  it.each(['UNKNOWN', 'EIO'])('the picker\'s own check: a folder whose check fails with %s is asked once, and the later folder\'s claude.bat is found', (code) => {
+    // The file checks are answered here: nothing on disk is read.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodeFs = require('fs') as typeof import('fs')
+    const asked: string[] = []
+    const stat = vi.spyOn(nodeFs, 'statSync').mockImplementation(((p: string) => {
+      asked.push(p)
+      if (p.startsWith('C:\\first\\')) throw Object.assign(new Error('the folder did not answer'), { code })
+      if (p === 'C:\\later\\claude.bat') return { isFile: () => true }
+      throw Object.assign(new Error('not there'), { code: 'ENOENT' })
+    }) as never)
+    try {
+      expect(picker.resolveClaudeCmd('win32', ENV)).toBe('C:\\later\\claude.bat')
+      expect(asked).toEqual(['C:\\first\\claude.exe', 'C:\\later\\claude.exe', 'C:\\later\\claude.cmd', 'C:\\later\\claude.bat'])
     } finally {
       stat.mockRestore()
     }

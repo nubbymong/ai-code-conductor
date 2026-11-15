@@ -1,3 +1,4 @@
+import { longestIdNameStartsWith } from '../../shared/model-registry'
 import type { TkEvent } from './tk-types'
 
 /** A price-key list's lookup index: a Set for the exact hits, and each
@@ -10,7 +11,11 @@ const PRICE_MEMO_MAX = 10_000
 
 /** A Claude model's price key: its own id when priced, else the longest
  *  price key it starts with (a dated id takes its undated entry), else
- *  itself (no price). */
+ *  itself (no price). A key that stops inside a number is not one the model
+ *  starts with, and a model written with a dot is read with the dot as a
+ *  hyphen too (longestIdNameStartsWith, the model matcher's own rule): the
+ *  dated id of Fable 5 is not priced as Fable 5.2, and claude-opus-5.5 is
+ *  priced as Opus 5.5, not as Opus 5. */
 function toPriceModel(model: string, priceKeys: string[]): string {
   let index = priceKeyIndexes.get(priceKeys)
   if (!index) {
@@ -20,11 +25,7 @@ function toPriceModel(model: string, priceKeys: string[]): string {
   if (index.exact.has(model)) return model
   const known = index.memo.get(model)
   if (known !== undefined) return known
-  let best = ''
-  for (const k of priceKeys) {
-    if (model.startsWith(k) && k.length > best.length) best = k
-  }
-  const answer = best || model
+  const answer = longestIdNameStartsWith(model, priceKeys) || model
   if (index.memo.size < PRICE_MEMO_MAX) index.memo.set(model, answer)
   return answer
 }
