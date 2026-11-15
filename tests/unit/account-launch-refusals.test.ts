@@ -1,0 +1,189 @@
+// Three account and launch rules that sit in account-profiles.ts:
+//   - a Mac session on a Claude account other than the primary one is refused
+//     (profileLaunchRefusal, enforced by withProfileHome);
+//   - an account switched off is refused for a session (inactiveAccountRefusal);
+//   - git and npm are pinned to the real home's config only where that hides
+//     nothing (sharedConfigPins).
+// No profile home is built: profiles.json is written under a temp root, and the
+// platform is an argument, so every case runs on any OS.
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import type { AccountProfile } from '../../src/shared/account-types'
+import {
+  _setRootsForTest, upsertProfile, withProfileHome, profileLaunchRefusal, inactiveAccountRefusal, sharedConfigPins,
+  MAC_NON_PRIMARY_REFUSAL, MAC_PRIMARY_UNKNOWN_REFUSAL, MANAGED_LAUNCH_REFUSAL,
+} from '../../src/main/account-profiles'
+import { composeProviders } from '../../src/main/providers/compose'
+
+const profile = (over: Partial<AccountProfile>): AccountProfile => ({ id: 'p1', name: 'Work', accountEmail: 'a@example.test', createdAt: 0, ...over })
+
+describe('profileLaunchRefusal: a Mac session runs on the primary account only', () => {
+  const list = [profile({ id: 'p1', isPrimary: true }), profile({ id: 'p2' })]
+
+  it('refuses a profile that is not the primary one on macOS, with a sentence that says what to do', () => {
+    const refusal = profileLaunchRefusal('p2', 'darwin', () => list)
+    expect(refusal).toBe(MAC_NON_PRIMARY_REFUSAL)
+    expect(refusal).toMatch(/normal Claude sign-in/)
+    expect(refusal).toMatch(/Switch the tab/)
+  })
+
+  it('lets the primary account run on macOS', () => {
+    expect(profileLaunchRefusal('p1', 'darwin', () => list)).toBeNull()
+  })
+
+  it('has no macOS rule on Windows or Linux', () => {
+    for (const platform of ['win32', 'linux'] as const) expect(profileLaunchRefusal('p2', platform, () => list)).toBeNull()
+  })
+
+  it('refuses when it cannot tell which account is primary, rather than letting any account run', () => {
+    expect(profileLaunchRefusal('p1', 'darwin', () => null)).toBe(MAC_PRIMARY_UNKNOWN_REFUSAL)
+    expect(profileLaunchRefusal('p1', 'darwin', () => [profile({ id: 'p1' })])).toBe(MAC_PRIMARY_UNKNOWN_REFUSAL)
+    expect(profileLaunchRefusal('p1', 'darwin', () => { throw new Error('boom') })).toBe(MAC_PRIMARY_UNKNOWN_REFUSAL)
+  })
+
+  it('says nothing off macOS even when the list cannot be read', () => {
+    expect(profileLaunchRefusal('p1', 'win32', () => null)).toBeNull()
+  })
+})
+
+describe('withProfileHome enforces the macOS rule before composing anything', () => {
+  let tmp = ''
+  // A platform-native fake home whose last segment is the profile id.
+  const homeOf = (id: string): string => path.resolve(`/r/account-profiles/${id}`)
+  beforeAll(() => { composeProviders() })
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-launch-refusal-'))
+    _setRootsForTest({ resourcesDir: path.join(tmp, 'resources'), sharedRoot: path.join(tmp, 'shared') })
+    upsertProfile(profile({ id: 'p1', isPrimary: true }))
+    upsertProfile(profile({ id: 'p2' }))
+  })
+  afterEach(() => {
+    _setRootsForTest(null)
+    try { fs.rmSync(tmp, { recursive: true, force: true }) } catch { /* ignore */ }
+  })
+
+  it('throws the managed-launch refusal, with the sentence, for a non-primary account on macOS', () => {
+    const launch = () => withProfileHome({ PATH: '/x' }, homeOf('p2'), undefined, 'darwin')
+    expect(launch).toThrow(MANAGED_LAUNCH_REFUSAL)
+    expect(launch).toThrow(MAC_NON_PRIMARY_REFUSAL)
+  })
+
+  it('does not refuse the same account off macOS', () => {
+    for (const platform of ['win32', 'linux'] as const) {
+      expect(() => withProfileHome({ PATH: '/x' }, homeOf('p2'), undefined, platform), platform).not.toThrow()
+    }
+  })
+
+  it('does not refuse the primary account on macOS', () => {
+    expect(() => withProfileHome({ PATH: '/x' }, homeOf('p1'), undefined, 'darwin')).not.toThrow()
+  })
+})
+
+describe('inactiveAccountRefusal: a switched-off account starts no session', () => {
+  it('refuses an inactive account, names it and says how to move the tab to another', () => {
+    const refusal = inactiveAccountRefusal('p2', () => [profile({ id: 'p2', name: 'Side project', active: false })])
+    expect(refusal).toContain('"Side project"')
+    expect(refusal).toMatch(/switched off/)
+    expect(refusal).toMatch(/Switch Account/)
+    expect(refusal).toMatch(/Settings, Accounts/)
+  })
+
+  it('lets an active account, and one that never recorded the flag, start', () => {
+    expect(inactiveAccountRefusal('p1', () => [profile({ id: 'p1', active: true })])).toBeNull()
+    expect(inactiveAccountRefusal('p1', () => [profile({ id: 'p1' })])).toBeNull()
+  })
+
+  it('never refuses the primary account, even if the file marks it inactive', () => {
+    expect(inactiveAccountRefusal('p1', () => [profile({ id: 'p1', isPrimary: true, active: false })])).toBeNull()
+  })
+
+  it('leaves an account that is not in the list to the missing-account refusal', () => {
+    expect(inactiveAccountRefusal('p9', () => [profile({ id: 'p2', active: false })])).toBeNull()
+    expect(inactiveAccountRefusal('p9', () => [])).toBeNull()
+  })
+
+  it('reads the saved list by default', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-inactive-refusal-'))
+    _setRootsForTest({ resourcesDir: path.join(tmp, 'resources'), sharedRoot: path.join(tmp, 'shared') })
+    try {
+      upsertProfile(profile({ id: 'p2', name: 'Parked', active: false }))
+      expect(inactiveAccountRefusal('p2')).toContain('"Parked"')
+    } finally {
+      _setRootsForTest(null)
+      try { fs.rmSync(tmp, { recursive: true, force: true }) } catch { /* ignore */ }
+    }
+  })
+})
+
+describe('sharedConfigPins: git and npm config pinned to the real home only where that hides nothing', () => {
+  let home = ''
+  const touch = (...parts: string[]): void => {
+    const file = path.join(home, ...parts)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, '')
+  }
+  beforeEach(() => { home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-config-pins-')) })
+  afterEach(() => { try { fs.rmSync(home, { recursive: true, force: true }) } catch { /* ignore */ } })
+
+  it('pins neither with neither file there', () => {
+    expect(sharedConfigPins(home, {})).toEqual({})
+  })
+
+  it('pins ~/.gitconfig when it is the only git config', () => {
+    touch('.gitconfig')
+    expect(sharedConfigPins(home, {})).toEqual({ GIT_CONFIG_GLOBAL: path.join(home, '.gitconfig') })
+  })
+
+  it('leaves git unpinned when the config is kept only in ~/.config/git/config', () => {
+    touch('.config', 'git', 'config')
+    expect(sharedConfigPins(home, {}).GIT_CONFIG_GLOBAL).toBeUndefined()
+  })
+
+  it('leaves git unpinned when both files exist, so git reads both as a normal terminal does', () => {
+    touch('.gitconfig')
+    touch('.config', 'git', 'config')
+    expect(sharedConfigPins(home, {}).GIT_CONFIG_GLOBAL).toBeUndefined()
+  })
+
+  it('leaves git unpinned when XDG_CONFIG_HOME holds the config', () => {
+    touch('.gitconfig')
+    touch('xdg', 'git', 'config')
+    expect(sharedConfigPins(home, { XDG_CONFIG_HOME: path.join(home, 'xdg') }).GIT_CONFIG_GLOBAL).toBeUndefined()
+  })
+
+  it('still pins ~/.gitconfig when XDG_CONFIG_HOME names a folder with no git config', () => {
+    touch('.gitconfig')
+    expect(sharedConfigPins(home, { XDG_CONFIG_HOME: path.join(home, 'xdg') }).GIT_CONFIG_GLOBAL).toBe(path.join(home, '.gitconfig'))
+  })
+
+  it('pins ~/.npmrc only when it exists', () => {
+    expect(sharedConfigPins(home, {}).npm_config_userconfig).toBeUndefined()
+    touch('.npmrc')
+    expect(sharedConfigPins(home, {}).npm_config_userconfig).toBe(path.join(home, '.npmrc'))
+  })
+
+  it('treats a file the check cannot ask about as absent', () => {
+    expect(sharedConfigPins(home, {}, () => { throw new Error('denied') })).toEqual({})
+  })
+
+  describe('as a managed launch composes it', () => {
+    const FAKE_HOME = path.resolve('/r/account-profiles/p1')
+    beforeAll(() => { composeProviders() })
+    afterEach(() => { vi.restoreAllMocks() })
+
+    it('carries the pin when ~/.gitconfig is the only config, and drops it when a config is kept in the XDG place', () => {
+      vi.spyOn(os, 'homedir').mockReturnValue(home)
+      touch('.gitconfig')
+      touch('.npmrc')
+      const pinned = withProfileHome({ PATH: '/x' }, FAKE_HOME)
+      expect(pinned.GIT_CONFIG_GLOBAL).toBe(path.join(home, '.gitconfig'))
+      expect(pinned.npm_config_userconfig).toBe(path.join(home, '.npmrc'))
+      touch('.config', 'git', 'config')
+      const both = withProfileHome({ PATH: '/x' }, FAKE_HOME)
+      expect(both.GIT_CONFIG_GLOBAL).toBeUndefined()
+      expect(both.npm_config_userconfig).toBe(path.join(home, '.npmrc'))
+    })
+  })
+})

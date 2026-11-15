@@ -1953,3 +1953,17 @@ describe('2.1.1: the stable entry and its known issues', () => {
     expect(rows().find((d) => d.startsWith('Code review now works both ways:'))).toContain('a Codex session can ask for a Claude review, as a Claude session already could for a Codex review')
   })
 })
+
+// 2.1.3-beta.5: tmux persistence has no copy for 32-bit ARM or FreeBSD hosts, so
+// the entry says what happens and the workaround (planning #307, B16).
+describe('2.1.3-beta.5: hosts with no tmux copy to fetch', () => {
+  const k = APP_KNOWLEDGE_SECTIONS.find((x) => x.id === 'known-issues')!.body
+  it('says 32-bit ARM and FreeBSD hosts run an SSH Persistent session without tmux persistence, and how to get it', () => {
+    expect(k).toContain('A 32-bit ARM host (an older Raspberry Pi, for example) or a FreeBSD host runs an SSH Persistent session without tmux persistence.')
+    expect(k).toContain('starting it again picks the conversation up with --continue')
+    expect(k).toContain("Workaround: install tmux from the host's own packages")
+  })
+  it('says a host that already has tmux installed is unaffected', () => {
+    expect(k).toContain('A host that already has tmux installed works as any other.')
+  })
+})

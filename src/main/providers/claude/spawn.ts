@@ -115,6 +115,28 @@ export function resolveClaudeBinary(legacyVersion?: LegacyVersion, env: NodeJS.P
   throw new Error(why)
 }
 
+/** The protective CLAUDE_CODE_* variables an elevated shell keeps (the launch
+ *  stamps them for every local session kind). sudo resets the environment, so
+ *  they would be dropped; they are handed on through `env NAME=value`, which
+ *  sudo runs as the command. Only these four, only when set, and only a plain
+ *  value: they are not secrets, and everything else the launch carries
+ *  (command and terminal secrets included) stays OFF the command line, where
+ *  `ps` shows it to every user. Empty when none is set (the user opted out),
+ *  so the shell then starts as `sudo <shell> -l` as before. */
+const ELEVATED_KEPT_VARIABLES: readonly string[] = [
+  'CLAUDE_CODE_DISABLE_MOUSE',
+  'CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN',
+  'CLAUDE_CODE_DISABLE_MOUSE_CLICKS',
+  'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS',
+]
+export function elevatedKeptVariables(env: Readonly<Record<string, string | undefined>>): string[] {
+  const pairs = ELEVATED_KEPT_VARIABLES.flatMap((name) => {
+    const value = env[name]
+    return typeof value === 'string' && /^[A-Za-z0-9_.-]{1,32}$/.test(value) ? [`${name}=${value}`] : []
+  })
+  return pairs.length ? ['env', ...pairs] : []
+}
+
 /**
  * Build the bare shell + env for a local Claude (or shell-only) PTY spawn.
  *
@@ -270,7 +292,7 @@ export function buildClaudeLocalSpawn(
       if (!gsudo) throw new Error(GSUDO_NOT_FOUND)
       return { cmd: gsudo, args: [shell, ...shellArgs], env: tabEnv }
     }
-    return { cmd: 'sudo', args: [shell, ...shellArgs], env: tabEnv }
+    return { cmd: 'sudo', args: [...elevatedKeptVariables(tabEnv), shell, ...shellArgs], env: tabEnv }
   }
 
   if (opts.shellOnly) {

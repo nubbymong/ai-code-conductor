@@ -158,8 +158,10 @@ describe('C1: local Claude spawn resolves a profile and isolates it through USER
     expect(env.CLAUDE_CONFIG_DIR).toBeUndefined()
     expect(env.FROM_PROVIDER).toBe('1') // the provider env is extended, not replaced
     expect(env.CCC_CONFIG_DIR).toBe(getConfigDir())
-    expect(env.GIT_CONFIG_GLOBAL).toBe(path.join(os.homedir(), '.gitconfig'))
-    expect(env.npm_config_userconfig).toBe(path.join(os.homedir(), '.npmrc'))
+    // The real home's git and npm config, pinned only where that hides nothing (sharedConfigPins).
+    const pins = profiles.sharedConfigPins(os.homedir(), { PATH: providerEnv.PATH })
+    expect(env.GIT_CONFIG_GLOBAL).toBe(pins.GIT_CONFIG_GLOBAL)
+    expect(env.npm_config_userconfig).toBe(pins.npm_config_userconfig)
     if (process.platform === 'linux') expect(env.HOME).toBe(profiles.getProfileConfigDir(workId))
     else expect(env.HOME).toBeUndefined()
   })

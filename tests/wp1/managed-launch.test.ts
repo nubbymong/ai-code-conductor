@@ -1360,12 +1360,14 @@ describe('the profile settings copy on disk', () => {
 describe('the launch paths', () => {
   let withProfileHome: typeof import('../../src/main/account-profiles').withProfileHome
   let profileRealmConfigRoot: typeof import('../../src/main/account-profiles').profileRealmConfigRoot
+  let sharedConfigPins: typeof import('../../src/main/account-profiles').sharedConfigPins
 
   beforeAll(async () => {
     composeProviders()
     const m = await import('../../src/main/account-profiles')
     withProfileHome = m.withProfileHome
     profileRealmConfigRoot = m.profileRealmConfigRoot
+    sharedConfigPins = m.sharedConfigPins
   })
 
   const HOME = path.resolve('/r/account-profiles/p1')
@@ -3322,8 +3324,10 @@ describe('the launch paths', () => {
   it('still composes the launch variables it owned before, unchanged', () => {
     const env = withProfileHome({ PATH: '/x' }, HOME)
     expect(env.USERPROFILE).toBe(HOME)
-    expect(env.GIT_CONFIG_GLOBAL).toBe(path.join(os.homedir(), '.gitconfig'))
-    expect(env.npm_config_userconfig).toBe(path.join(os.homedir(), '.npmrc'))
+    // git and npm read the real home's config, pinned only where that hides nothing (sharedConfigPins).
+    const pins = sharedConfigPins(os.homedir(), { PATH: '/x' })
+    expect(env.GIT_CONFIG_GLOBAL).toBe(pins.GIT_CONFIG_GLOBAL)
+    expect(env.npm_config_userconfig).toBe(pins.npm_config_userconfig)
     expect(env.PATH).toBe(`/x${path.delimiter}${path.join(HOME, '.local', 'bin')}`)
     // The lever that never isolated identity is still never set.
     expect(env.CLAUDE_CONFIG_DIR).toBeUndefined()

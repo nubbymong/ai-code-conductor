@@ -77,7 +77,7 @@ describe('buildClaudeLocalSpawn -- the launch shell', () => {
     for (const s of ['/opt/homebrew/bin/fish', '/usr/local/bin/pwsh']) {
       process.env.SHELL = s
       expect(buildClaudeLocalSpawn({ ...BASE_OPTS, shellOnly: true }), s).toMatchObject({ cmd: s, args: ['-l'] })
-      expect(buildClaudeLocalSpawn({ ...BASE_OPTS, shellOnly: true, elevated: true }), s).toMatchObject({ cmd: 'sudo', args: [s, '-l'] })
+      expect(buildClaudeLocalSpawn({ ...BASE_OPTS, shellOnly: true, elevated: true }), s).toMatchObject({ cmd: 'sudo', args: ['env', 'CLAUDE_CODE_DISABLE_MOUSE=1', 'CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1', 'CLAUDE_CODE_DISABLE_MOUSE_CLICKS=1', 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1', s, '-l'] })
     }
   })
 
@@ -100,7 +100,7 @@ describe('buildClaudeLocalSpawn -- the launch shell', () => {
   it('the same shell reaches the shell-only and elevated launches', () => {
     host.present = new Set(['/bin/zsh'])
     expect(buildClaudeLocalSpawn({ ...BASE_OPTS, shellOnly: true })).toMatchObject({ cmd: '/bin/zsh', args: ['-l'] })
-    expect(buildClaudeLocalSpawn({ ...BASE_OPTS, shellOnly: true, elevated: true })).toMatchObject({ cmd: 'sudo', args: ['/bin/zsh', '-l'] })
+    expect(buildClaudeLocalSpawn({ ...BASE_OPTS, shellOnly: true, elevated: true })).toMatchObject({ cmd: 'sudo', args: ['env', 'CLAUDE_CODE_DISABLE_MOUSE=1', 'CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1', 'CLAUDE_CODE_DISABLE_MOUSE_CLICKS=1', 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1', '/bin/zsh', '-l'] })
   })
 
   it('Windows never consults the login shell: PowerShell by its full path in the system folder', () => {

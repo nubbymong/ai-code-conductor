@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
 import { withProfileHome } from '../../src/main/pty-manager'
+import { sharedConfigPins } from '../../src/main/account-profiles'
 import { composeProviders } from '../../src/main/providers/compose'
 
 // withProfileHome takes the Claude package's OWN policy -- the ambient
@@ -22,9 +23,11 @@ describe('withProfileHome', () => {
   it('sets USERPROFILE to the fake home and points git/npm at the real home', () => {
     const env = withProfileHome({ PATH: '/x' }, HOME)
     expect(env.USERPROFILE).toBe(HOME)
-    // git/npm belt-and-suspenders -> real home
-    expect(env.GIT_CONFIG_GLOBAL).toBe(path.join(os.homedir(), '.gitconfig'))
-    expect(env.npm_config_userconfig).toBe(path.join(os.homedir(), '.npmrc'))
+    // git/npm belt-and-suspenders -> real home, pinned only where that hides
+    // nothing (sharedConfigPins, tested in account-launch-refusals.test.ts)
+    const pins = sharedConfigPins(os.homedir(), { PATH: '/x' })
+    expect(env.GIT_CONFIG_GLOBAL).toBe(pins.GIT_CONFIG_GLOBAL)
+    expect(env.npm_config_userconfig).toBe(pins.npm_config_userconfig)
     // It must NOT set the old CLAUDE_CONFIG_DIR lever (that never isolated identity).
     expect(env.CLAUDE_CONFIG_DIR).toBeUndefined()
   })
