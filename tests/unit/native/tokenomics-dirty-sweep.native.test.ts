@@ -44,7 +44,7 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   }
 
   beforeEach(async () => {
-    tmp = realFs.mkdtempSync(path.join(os.tmpdir(), 'tkd-'))
+    tmp = realFs.realpathSync.native(realFs.mkdtempSync(path.join(os.tmpdir(), 'tkd-')))
     claudeDir = path.join(tmp, 'claude')
     realFs.mkdirSync(path.join(claudeDir, 'F--proj'), { recursive: true })
     for (let i = 0; i < 5; i++) realFs.writeFileSync(path.join(claudeDir, 'F--proj', `s${i}.jsonl`), line(`init-${i}`))
@@ -201,7 +201,7 @@ describe('tokenomics worker: the mark of what was read, across a restart', () =>
   }
 
   beforeEach(async () => {
-    tmp = realFs.mkdtempSync(path.join(os.tmpdir(), 'tkmark-'))
+    tmp = realFs.realpathSync.native(realFs.mkdtempSync(path.join(os.tmpdir(), 'tkmark-')))
     claudeDir = path.join(tmp, 'claude')
     dbPath = path.join(tmp, 'tk.db')
     realFs.mkdirSync(path.join(claudeDir, 'F--proj'), { recursive: true })

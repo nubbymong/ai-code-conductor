@@ -56,6 +56,9 @@ vi.mock('../../../src/main/tokenomics/tk-db', () => {
       eventCount: () => db.events,
       upsertConfigs: () => {},
       setSessionAccount: () => {},
+      // As the database: the paths with a progress row, and those rows deleted.
+      listFilePaths: () => [...db.cursors.keys()],
+      deleteFileRows: (paths: string[]) => { let n = 0; for (const p of paths) if (db.cursors.delete(p)) n++; return n },
       queryAccounts: () => [],
       close: () => {},
     }),
@@ -81,7 +84,7 @@ describe('the one-off re-read waits for the account folders (defect 4)', () => {
   let tmp: string
   let stop: (() => void) | null = null
   beforeEach(() => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tkorder-'))
+    tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'tkorder-')))
     db.cursors.clear(); db.meta.clear(); db.read.clear(); db.events = 0
   })
   afterEach(() => {

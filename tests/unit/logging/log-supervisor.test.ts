@@ -11,20 +11,24 @@ import type { DiagnosticsSnapshot } from '../../../src/shared/service-health'
  *    emit worker->main messages (emitToMain).
  *  - `triggerExit()` fires the registered onExit callback (simulates a crash).
  *  - `killed` reflects transport.kill(). */
-function makeFakeWorker(): {
+function makeFakeWorker(opts?: { pid?: () => number | null | undefined; withSpawn?: boolean }): {
   worker: ForkedTranscriptsWorker
   transport: FakeTranscriptsWorkerTransport
   emit: (m: FromTranscriptsWorker) => void
   posts: ToTranscriptsWorker[]
   triggerExit: () => void
+  /** The utility process has spawned: the handle's spawn callback fires. */
+  triggerSpawn: () => void
 } {
   const transport = new FakeTranscriptsWorkerTransport()
   let exitCb: (() => void) | null = null
+  let spawnCb: (() => void) | null = null
   const worker: ForkedTranscriptsWorker = {
     transport,
     kill: () => transport.kill(),
     onExit: (cb: () => void) => { exitCb = cb },
-    pid: 4242,
+    pid: (opts?.pid ?? (() => 4242)) as () => number | null,
+    ...(opts?.withSpawn ? { onSpawn: (cb: () => void) => { spawnCb = cb } } : {}),
   }
   return {
     worker,
@@ -32,6 +36,7 @@ function makeFakeWorker(): {
     emit: (m) => transport.emitToMain(m),
     posts: transport.workerMessages,
     triggerExit: () => exitCb?.(),
+    triggerSpawn: () => spawnCb?.(),
   }
 }
 
@@ -45,11 +50,11 @@ interface Harness {
   tick: (ms: number) => void
 }
 
-function makeHarness(opts?: { maxRestarts?: number; bufferCapBytes?: number; notIndexedSnapshot?: () => { conversations: Record<string, Array<[number, number | null]>>; before: number | null } }): Harness {
+function makeHarness(opts?: { maxRestarts?: number; bufferCapBytes?: number; notIndexedSnapshot?: () => { conversations: Record<string, Array<[number, number | null]>>; before: number | null }; worker?: Parameters<typeof makeFakeWorker>[0] }): Harness {
   let clock = 1000
   const workers: Array<ReturnType<typeof makeFakeWorker>> = []
   const forkSpy = vi.fn(() => {
-    const w = makeFakeWorker()
+    const w = makeFakeWorker(opts?.worker)
     workers.push(w)
     return w.worker
   })
@@ -112,6 +117,77 @@ describe('LogSupervisor', () => {
     // The fake worker reports pid 4242 (makeFakeWorker); it should appear without
     // waiting for ready (logging has no bound message — we read the fork pid).
     expect(h.sup.getDiagnosticsSnapshot().services[0].pid).toBe(4242)
+  })
+
+  // 2.1.3-beta.5 (aicc_planning#312): a utility process has no pid when fork()
+  // returns, so the card read "-" for the life of the worker. The pid is asked
+  // when the row is built, as the Tokenomics worker's is.
+  describe('the worker pid is read when the row is built, not once at fork (#312)', () => {
+    /** A pid the process only gets once it has spawned. */
+    function lateWorker() {
+      const state: { pid: number | undefined } = { pid: undefined }
+      const h = makeHarness({ worker: { pid: () => state.pid, withSpawn: true } })
+      return { h, state }
+    }
+    const pidOf = (h: Harness): number | null => h.sup.getDiagnosticsSnapshot().services[0].pid
+
+    it('shows no pid at fork, then the pid on the next row once the process has one', () => {
+      const { h, state } = lateWorker()
+      h.sup.start()
+      expect(pidOf(h)).toBeNull()
+      state.pid = 5150
+      expect(pidOf(h)).toBe(5150)
+    })
+
+    it('pushes the row the moment the process spawns', () => {
+      const { h, state } = lateWorker()
+      h.sup.start()
+      h.emitted.length = 0
+      state.pid = 5150
+      h.current().triggerSpawn()
+      expect(lastSnapshot(h.emitted)?.services[0].pid).toBe(5150)
+    })
+
+    it('a handle that cannot say when it spawned shows the pid by the next health beat', () => {
+      const state: { pid: number | undefined } = { pid: undefined }
+      const h = makeHarness({ worker: { pid: () => state.pid } })
+      h.sup.start()
+      h.current().emit({ type: 'ready' })
+      expect(lastSnapshot(h.emitted)?.services[0].pid).toBeNull()
+      state.pid = 6001
+      h.current().emit({ type: 'health', inFlight: 0, tailing: 0, messagesTotal: 0, dbBytes: 0 })
+      expect(lastSnapshot(h.emitted)?.services[0].pid).toBe(6001)
+    })
+
+    it('a spawn reported by a worker that has been replaced pushes nothing', () => {
+      const { h, state } = lateWorker()
+      h.sup.start()
+      const first = h.current()
+      first.triggerExit()
+      vi.advanceTimersByTime(60_000)
+      h.emitted.length = 0
+      state.pid = 5150
+      first.triggerSpawn()
+      expect(h.emitted).toEqual([])
+    })
+
+    it('null for a failed fork, for a pid that is not a process id, and when asking throws', () => {
+      let calls = 0
+      const h = makeHarness({ worker: { pid: () => { calls++; if (calls === 1) throw new Error('gone'); return calls === 2 ? 0 : -3 } } })
+      h.sup.start()
+      expect(pidOf(h)).toBeNull() // threw
+      expect(pidOf(h)).toBeNull() // 0
+      expect(pidOf(h)).toBeNull() // negative
+    })
+
+    it('null once the worker has exited', () => {
+      const { h, state } = lateWorker()
+      state.pid = 5150
+      h.sup.start()
+      expect(pidOf(h)).toBe(5150)
+      h.current().triggerExit()
+      expect(pidOf(h)).toBeNull()
+    })
   })
 
   it('computes throughputPerSec from successive health beats (0 on the first)', () => {

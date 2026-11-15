@@ -19,7 +19,7 @@ function harness(opts: { maxRestarts?: number; stableResetMs?: number; killExits
     const t = new FakeTranscriptsWorkerTransport()
     const kid: Kid = { t, exit: () => {}, kills: 0 }
     kids.push(kid)
-    return { transport: t, kill: () => { kid.kills++; if (killExits) kid.exit() }, onExit: (cb: () => void) => { kid.exit = cb }, pid: 4242 }
+    return { transport: t, kill: () => { kid.kills++; if (killExits) kid.exit() }, onExit: (cb: () => void) => { kid.exit = cb }, pid: () => 4242 }
   })
   const sup = new LogSupervisor({
     forkChild: fork, dbPath: '/tmp/fake-transcripts.db',

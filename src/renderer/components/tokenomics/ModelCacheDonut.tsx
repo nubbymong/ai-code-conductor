@@ -107,9 +107,10 @@ interface Props {
 }
 
 /** The models with no price (usage track MP12, Q1.4): listed under the
- *  legend as "no price", never as a $0 slice. */
+ *  legend as "no price", never as a $0 slice. A model with no tokens in these
+ *  figures is not listed (there is nothing for its missing price to leave out). */
 export function noPriceModels(modelSplit: TkSummary['modelSplit'], registry?: ModelRegistry): Array<{ label: string; color: string }> {
-  return (modelSplit ?? []).filter((m) => m.costUsd === null).map((m) => ({ label: getModelShort(m.model, registry), color: getModelColor(m.model, registry) }))
+  return (modelSplit ?? []).filter((m) => m.costUsd === null && m.tokens > 0).map((m) => ({ label: getModelShort(m.model, registry), color: getModelColor(m.model, registry) }))
 }
 
 export function ModelCacheDonut({ modelSplit, cacheSplit }: Props) {

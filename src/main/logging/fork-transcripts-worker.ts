@@ -8,10 +8,16 @@ export interface ForkedTranscriptsWorker {
   transport: TranscriptsWorkerTransport
   kill: () => void
   onExit: (cb: () => void) => void
-  /** OS pid of the forked utility process, surfaced for the diagnostics pill so
-   *  the Session-logging card shows a real PID (hooks does this via its `bound`
-   *  message). null only if the platform/fork did not expose one. */
-  pid: number | null
+  /** The OS pid of the forked utility process as it is now, for the Session
+   *  logging card. A utility process has no pid until it has spawned, which is
+   *  after fork() returns, so this is asked each time (the way the Tokenomics
+   *  worker's pid is) and answers null before spawn, after exit and when the
+   *  fork failed. */
+  pid: () => number | null
+  /** Called once when the process has spawned, so the supervisor can show the
+   *  pid the moment it exists. Optional: a handle without it is read on the
+   *  next health beat instead. */
+  onSpawn?: (cb: () => void) => void
 }
 
 /** Fork the transcripts worker (out/main/transcripts-worker.js) as an Electron
@@ -29,8 +35,13 @@ export function forkTranscriptsWorker(): ForkedTranscriptsWorker {
       proc.on('message', (m) => handler(m as FromTranscriptsWorker)),
     kill: () => { try { proc.kill() } catch { /* already dead */ } },
   }
-  // utilityProcess exposes .pid once the child is spawned (a number), but it can
-  // be undefined very early / on a failed fork — normalise to null for the type.
-  const pid = typeof proc.pid === 'number' ? proc.pid : null
-  return { transport, kill: transport.kill, onExit: (cb) => proc.once('exit', cb), pid }
+  return {
+    transport,
+    kill: transport.kill,
+    onExit: (cb) => proc.once('exit', cb),
+    // Read each time it is asked: utilityProcess exposes .pid only once the
+    // child has spawned, which is after fork() returns.
+    pid: () => (typeof proc.pid === 'number' ? proc.pid : null),
+    onSpawn: (cb) => proc.once('spawn', cb),
+  }
 }

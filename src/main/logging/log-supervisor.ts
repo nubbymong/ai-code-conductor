@@ -131,7 +131,21 @@ export class LogSupervisor {
   }
 
   getDiagnosticsSnapshot(): DiagnosticsSnapshot {
-    return { capturedAt: this.now(), services: [{ ...this.health }], log: [...this.log] }
+    return { capturedAt: this.now(), services: [{ ...this.health, pid: this.workerPid() }], log: [...this.log] }
+  }
+
+  /** The worker's OS pid as it is now. A utility process has none until it has
+   *  spawned (after the fork call returns), so it is asked at each snapshot,
+   *  not once at fork. None while the worker is down or when the fork failed. */
+  private workerPid(): number | null {
+    const state = this.health.state
+    if (!this.worker || (state !== 'starting' && state !== 'restarting' && state !== 'listening')) return null
+    try {
+      const pid = this.worker.pid()
+      return typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 0 ? pid : null
+    } catch {
+      return null
+    }
   }
 
   private appendLog(level: ServiceLogEntry['level'], code: string, message: string): void {
@@ -164,14 +178,15 @@ export class LogSupervisor {
     // Fresh worker = fresh messagesTotal counter; forget the prior throughput
     // sample so the next health beat starts a clean interval (no negative rate).
     this.prevThroughput = null
-    // Surface the forked worker's OS pid on the diagnostics pill (hooks does this
-    // via its `bound` message; the transcripts worker has no bind, so we read the
-    // utilityProcess pid directly at fork — covers initial start AND each restart).
-    // A forked worker is a live process but has not opened the DB: it has its
-    // pid and no uptime until it reports ready.
+    // The forked worker's OS pid is read when the row is built (see
+    // workerPid), because a utility process has none yet at fork; the spawn
+    // event pushes the row the moment it exists. A forked worker is a live
+    // process but has not opened the DB: it has no uptime until it reports ready.
+    try {
+      w.onSpawn?.(() => { if (this.worker === w) this.pushHealth() })
+    } catch { /* a handle that cannot report spawn is read on the next beat */ }
     this.health = {
       ...this.health,
-      pid: w.pid,
       startedAt: null,
       state: this.sup.getRestarts() > 0 ? 'restarting' : 'starting',
     }

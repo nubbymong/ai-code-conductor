@@ -71,7 +71,7 @@ describe('tokenomics codex ingest hardening', () => {
   let tmp: string
   let workers: { stop: () => void }[]
   const track = <T extends { stop: () => void }>(w: T): T => { workers.push(w); return w }
-  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tkh-')); workers = [] })
+  beforeEach(() => { tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'tkh-'))); workers = [] })
   afterEach(() => {
     for (const w of workers) { try { w.stop() } catch { /* already stopped */ } }
     fs.rmSync(tmp, { recursive: true, force: true })

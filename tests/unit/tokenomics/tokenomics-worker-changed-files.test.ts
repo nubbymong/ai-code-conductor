@@ -128,6 +128,9 @@ vi.mock('../../../src/main/tokenomics/tk-db', () => ({
       for (const [p, c] of db.cursors) db.cursors.set(p, { ...c, lastOffset: 0, scannedTo: 0, readMark: '', codexSessionId: '', codexTurns: 0 })
       return db.cursors.size
     },
+    // As the database: the paths with a progress row, and those rows deleted.
+    listFilePaths: () => [...db.cursors.keys()],
+    deleteFileRows: (paths: string[]) => { let n = 0; for (const p of paths) if (db.cursors.delete(p)) n++; return n },
     querySummary: (_pricing: unknown, filter: unknown) => { db.queries.push(['summary', filter]); return {} },
     querySessions: (_pricing: unknown, query: unknown) => { db.queries.push(['sessions', query]); return { rows: [], nextCursor: null } },
     querySessionDetail: (_pricing: unknown, sessionId: string, leftOut: unknown) => { db.queries.push(['session-detail', sessionId, leftOut]); return null },
@@ -366,7 +369,7 @@ describe('tokenomics worker: changed-files sweep (#302)', () => {
   }
 
   beforeEach(() => {
-    tmp = realFs.mkdtempSync(path.join(os.tmpdir(), 'tkchanged-'))
+    tmp = realFs.realpathSync.native(realFs.mkdtempSync(path.join(os.tmpdir(), 'tkchanged-')))
     claudeDir = path.join(tmp, 'claude')
     codexDir = path.join(tmp, 'codex')
     realFs.mkdirSync(path.join(claudeDir, 'F--proj'), { recursive: true })
