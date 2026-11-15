@@ -28,9 +28,9 @@
 //    written on that line (a list, or a `new Set(` of one).
 // A constant, a name's or a list's, counts in the file that declares it and
 // in every file that imports it, by that name or under another
-// (`import { A as B }`), wherever under src/main or src/shared it is exported
-// from. The import is matched by the constant's name, not by the file the
-// import names.
+// (`import { A as B }`: in that file it is `B`, and `A` is not counted),
+// wherever under src/main or src/shared it is exported from. The import is
+// matched by the constant's name, not by the file the import names.
 //
 // An id defaulted to a name is any of:
 //  - anything that ends in an identifier, `)` or `]`, then `??`, `||`, `??=`
@@ -625,15 +625,27 @@ describe('a constant one file exports, in the files that import it', () => {
     expect(scanWith(commented)).toEqual([])
   })
 
-  it('a file that imports it under another name is counted where it uses that name, and not where it uses the first', () => {
-    const aliased = { file: 'src/main/aliased.ts', text: `import { THE_ID as DEFAULT_ID } from './ids'\nif (p === DEFAULT_ID) {}\nif (q === THE_ID) {}` }
-    expect(scanWith(aliased)).toEqual([{ file: 'src/main/aliased.ts', comparisons: 1, rederivations: 0 }])
+  // One import under another name, in two files that each compare with one
+  // of the two words, so each word is held by itself: in one file together, a
+  // scan that took the constant by the name it was exported under, and not by
+  // the one this file knows it by, would count one comparison all the same.
+  const UNDER_ANOTHER_NAME = `import { THE_ID as DEFAULT_ID } from './ids'`
+
+  it('a file that imports it under another name is counted where it compares with that name', () => {
+    const byItsNameHere = { file: 'src/main/aliased.ts', text: `${UNDER_ANOTHER_NAME}\nif (p === DEFAULT_ID) {}` }
+    expect(scanWith(byItsNameHere)).toEqual([{ file: 'src/main/aliased.ts', comparisons: 1, rederivations: 0 }])
   })
 
-  it('a list another file exports is counted where it is asked, by name or under another', () => {
+  it('and is not counted where it compares with the name the constant was exported under, which is no name of it there', () => {
+    const byItsFirstName = { file: 'src/main/aliased-first-name.ts', text: `${UNDER_ANOTHER_NAME}\nif (q === THE_ID) {}` }
+    expect(scanWith(byItsFirstName)).toEqual([])
+  })
+
+  it('a list another file exports is counted where it is asked, by name or under another, and not by its first name where it is imported under another', () => {
     const byName = { file: 'src/main/list-by-name.ts', text: `import { KNOWN } from './ids'\nif (KNOWN.includes(p)) {}` }
     const aliased = { file: 'src/main/list-aliased.ts', text: `import { KNOWN as ALL } from './ids'\nif ((ALL as readonly string[]).indexOf(p) < 0) {}` }
-    expect(scanWith(byName, aliased)).toEqual([
+    const byItsFirstName = { file: 'src/main/list-aliased-first-name.ts', text: `import { KNOWN as ALL } from './ids'\nif (KNOWN.includes(p)) {}` }
+    expect(scanWith(byName, aliased, byItsFirstName)).toEqual([
       { file: 'src/main/list-aliased.ts', comparisons: 1, rederivations: 0 },
       { file: 'src/main/list-by-name.ts', comparisons: 1, rederivations: 0 },
     ])
