@@ -231,7 +231,12 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
    *  (verifyCodexExecutable), and reads the file straight after it answers.
    *  A CLI setup has not proved, or may not use, is refused with no lookup.
    *  A caller with a last word of its own before a start (a cancel, a rule
-   *  asked again) asks it once this has answered, never before. */
+   *  asked again) asks it once this has answered, never before.
+   *
+   *  A re-check in setup can clear or replace the package's proof while the
+   *  lookup is pending, so the proof is read again once the lookup has
+   *  answered: the answer stands only if it is still the same file and
+   *  version, and still one this app may use. */
   async function currentExecutable(): Promise<CheckedExecutable> {
     let p: CodexDiscovery | null
     try { p = deps.proven() } catch { p = null }
@@ -239,7 +244,11 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
     if (!codexCompatibilityAllowsUse(p.compatibility)) return refuse('cli-unavailable', CLI_TOO_OLD)
     try {
       const check = await verifyCodexExecutable(p.identity, deps.executablePorts)
-      return check && check.ok && typeof check.executable === 'string' ? { ok: true, executable: check.executable } : refuse('cli-unavailable', CLI_CHANGED)
+      if (!(check && check.ok && typeof check.executable === 'string')) return refuse('cli-unavailable', CLI_CHANGED)
+      let now: CodexDiscovery | null
+      try { now = deps.proven() } catch { now = null }
+      if (!sameExecutable(p, now) || !codexCompatibilityAllowsUse(now.compatibility)) return refuse('cli-unavailable', CLI_CHANGED)
+      return { ok: true, executable: check.executable }
     } catch {
       return refuse('cli-unavailable', CLI_CHANGED)
     }
@@ -366,13 +375,19 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
     void Promise.all(r.kills).then(letGo, letGo)
   }
 
-  /** The same executable, proved the same way: identity and version, and
-   *  still `supported` (usage track MP7 round 1, C-F1). */
-  function sameProven(a: CodexDiscovery, b: CodexDiscovery | null): boolean {
-    if (!b || b.state !== 'found' || b.compatibility !== 'supported' || b.version !== a.version || !a.identity || !b.identity) return false
+  /** `b` is still found and is the same executable as `a`: every part of its
+   *  identity, and the version. */
+  function sameExecutable(a: CodexDiscovery, b: CodexDiscovery | null): b is CodexDiscovery {
+    if (!b || b.state !== 'found' || b.version !== a.version || !a.identity || !b.identity) return false
     const x = a.identity
     const y = b.identity
     return x.path === y.path && x.size === y.size && x.mtimeMs === y.mtimeMs && x.ctimeMs === y.ctimeMs && x.dev === y.dev && x.ino === y.ino
+  }
+
+  /** The same executable, proved the same way: identity and version, and
+   *  still `supported` (usage track MP7 round 1, C-F1). */
+  function sameProven(a: CodexDiscovery, b: CodexDiscovery | null): boolean {
+    return sameExecutable(a, b) && b.compatibility === 'supported'
   }
 
   /** One helper run for readUsage, in a realm prepared and held. `exe` is

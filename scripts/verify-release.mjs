@@ -133,15 +133,19 @@ export function classifyCombo(c) {
   return 'PASS'
 }
 
-/** Roll combos + vitest tally into a gate verdict. Gate fails on any FAIL row
- *  or a real vitest assertion failure; WARN rows do not fail it. */
-export function summarizeGate(parsed) {
+/** Roll combos + vitest tally + the live process's exit code into a gate
+ *  verdict. Gate fails on any FAIL row, a real vitest assertion failure, or a
+ *  non-zero exit: with several packs in one run, one can fail collection or
+ *  setup (no report lines, no failed-test tally) while another passes, so the
+ *  parsed rows alone can read as a pass. WARN rows do not fail it. */
+export function summarizeGate(parsed, exitCode = 0) {
   const rows = parsed.combos.map((c) => ({ ...c, verdict: classifyCombo(c) }))
   const fails = rows.filter((r) => r.verdict === 'FAIL')
   const warns = rows.filter((r) => r.verdict === 'WARN')
   const vitestFailed = parsed.summary ? parsed.summary.failed : 0
-  const ok = fails.length === 0 && vitestFailed === 0 && rows.length > 0
-  return { ok, rows, fails, warns, vitestFailed, summary: parsed.summary }
+  const exitFailed = exitCode !== 0
+  const ok = fails.length === 0 && vitestFailed === 0 && !exitFailed && rows.length > 0
+  return { ok, rows, fails, warns, vitestFailed, exitFailed, exitCode, summary: parsed.summary }
 }
 
 // ── Orchestration (not exported) ─────────────────────────────────────────────
@@ -206,7 +210,7 @@ async function main() {
   const live = await run(process.execPath, args, { capture: true, env: { CCC_LIVE_DUMP: dump } })
 
   const parsed = parseLiveMatrixOutput(live.out)
-  const gate = summarizeGate(parsed)
+  const gate = summarizeGate(parsed, live.code)
 
   banner('Live matrix result')
   if (gate.rows.length === 0) {
@@ -225,10 +229,11 @@ async function main() {
   console.log(`dump: ${dump}`)
 
   if (!gate.ok) {
-    console.error(`\n❌ RELEASE GATE FAILED — ${gate.fails.length} FAIL row(s), vitest ${gate.vitestFailed} failed.`)
+    const exit = gate.exitFailed ? `; the live run exited with code ${gate.exitCode} (a pack failed outside the parsed reports: collection, setup or a crash)` : ''
+    console.error(`\n❌ RELEASE GATE FAILED — ${gate.fails.length} FAIL row(s), vitest ${gate.vitestFailed} failed${exit}.`)
     process.exit(1)
   }
-  console.log(`\n✅ RELEASE GATE PASSED — ${gate.rows.length} combos, ${gate.rows.filter((r) => r.verdict === 'PASS').length} full / ${gate.warns.length} warn, live=${live.code === 0 ? 'clean' : 'non-zero'}.`)
+  console.log(`\n✅ RELEASE GATE PASSED — ${gate.rows.length} combos, ${gate.rows.filter((r) => r.verdict === 'PASS').length} full / ${gate.warns.length} warn, live exit 0.`)
   process.exit(0)
 }
 

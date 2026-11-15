@@ -140,6 +140,34 @@ describe('summarizeGate', () => {
     expect(gate.rows.filter((r) => r.verdict === 'PASS')).toHaveLength(2)
   })
 
+  // Several packs run in one vitest process. One can fail collection or setup
+  // (no report lines, no failed-test tally) while another passes cleanly, so the
+  // parsed rows alone read as a pass. The process exit code is the other half.
+  it('fails the gate on a non-zero live exit even when every parsed row passed', () => {
+    const clean = [
+      'T7 windows payload: account=user1@example.com buckets=Fable:93% 5h=0 wk=100',
+      'T7 windows: updates=1 sids=["x"] wrapped=false states=[] paneLen=1',
+      'Tests  1 passed (1)',
+    ].join('\n')
+    const gate = summarizeGate(parseLiveMatrixOutput(clean), 1)
+    expect(gate.fails).toHaveLength(0)
+    expect(gate.vitestFailed).toBe(0)
+    expect(gate.exitFailed).toBe(true)
+    expect(gate.exitCode).toBe(1)
+    expect(gate.ok).toBe(false)
+  })
+
+  it('passes the gate on a zero live exit with every parsed row passing', () => {
+    const clean = [
+      'T7 windows payload: account=user1@example.com buckets=Fable:93% 5h=0 wk=100',
+      'T7 windows: updates=1 sids=["x"] wrapped=false states=[] paneLen=1',
+      'Tests  1 passed (1)',
+    ].join('\n')
+    const gate = summarizeGate(parseLiveMatrixOutput(clean), 0)
+    expect(gate.exitFailed).toBe(false)
+    expect(gate.ok).toBe(true)
+  })
+
   it('is not OK when nothing parsed (spawn/config error)', () => {
     const gate = summarizeGate(parseLiveMatrixOutput('random noise, no report lines'))
     expect(gate.ok).toBe(false)

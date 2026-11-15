@@ -392,10 +392,138 @@ describe('Codex browser and device sign-in (WP1.20)', () => {
 
   it('the executable is re-verified before every run, not once per operation', async () => {
     let n = 0
-    const w = world({ proven: () => (n++ < 3 ? PROVEN : null) })
-    // prepare (1), the status before (2), the login (3); the status after finds no proof.
+    const w = world({ proven: () => (n++ < 6 ? PROVEN : null) })
+    // Each check reads the proof twice (before the lookup, and again after it):
+    // prepare (1, 2), the status before (3, 4), the login (5, 6); the status after finds no proof.
     expect(await w.ops.login(MANAGED, 'device')).toMatchObject({ ok: false, code: 'cli-unavailable' })
     expect(argsOf(w.runs)).toEqual(['login status', 'login --device-auth'])
+  })
+
+  // The lookup of the executable is asked off the main thread and waited for,
+  // so a re-check in setup can clear or replace the proof while it is pending.
+  // The answer to the earlier proof must not be used: the proof is read again
+  // once the lookup has answered. Each operation checks the executable more
+  // than once; the held check below is the LAST one before the CLI starts,
+  // the one nothing after it re-reads.
+  describe('the proof is read again after the executable lookup answers', () => {
+    /** A world whose `holdCall`th executable lookup waits until `resume()`
+     *  (the others answer at once); `proof.now` is what the package holds. */
+    function pending(holdCall: number, first: CodexDiscovery | null = PROVEN) {
+      const proof: { now: CodexDiscovery | null } = { now: first }
+      let calls = 0
+      let resume: () => void = () => {}
+      const held = new Promise<void>((res) => { resume = res })
+      let reached: () => void = () => {}
+      const lookupReached = new Promise<void>((res) => { reached = res })
+      const w = world({
+        proven: () => {
+          if (proof.now === undefined) throw new Error('proof unreadable')
+          return proof.now
+        },
+        executablePorts: {
+          resolve: () => IDENT.path,
+          lookUp: async () => {
+            calls++
+            if (calls === holdCall) { reached(); await held }
+            return IDENT.path
+          },
+          realpath: (p) => p,
+          stat: () => ({ ...IDENT, isFile: true }),
+          platform: 'win32',
+        },
+      })
+      return { w, proof, lookupReached, resume: () => resume() }
+    }
+
+    it('a proof cleared while the lookup before a run is pending is refused, and nothing runs', async () => {
+      const t = pending(2)
+      const status = t.w.ops.status(MANAGED)
+      await t.lookupReached
+      t.proof.now = null
+      t.resume()
+      expect(await status).toMatchObject({ ok: false, state: 'error', code: 'cli-unavailable', message: expect.stringContaining('changed or moved') })
+      expect(t.w.runs).toEqual([])
+    })
+
+    it('a sign-in, a sign-out and a launch preparation are refused the same way', async () => {
+      const login = pending(3)
+      const signIn = login.w.ops.login(MANAGED, 'device')
+      await login.lookupReached
+      login.proof.now = null
+      login.resume()
+      expect(await signIn).toMatchObject({ ok: false, code: 'cli-unavailable' })
+      // Only the status read before the sign-in ran.
+      expect(argsOf(login.w.runs)).toEqual(['login status'])
+
+      const logout = pending(2)
+      const signOut = logout.w.ops.logout(MANAGED)
+      await logout.lookupReached
+      logout.proof.now = null
+      logout.resume()
+      expect(await signOut).toMatchObject({ ok: false, code: 'cli-unavailable' })
+      expect(logout.w.runs).toEqual([])
+
+      const launch = pending(2)
+      const prepared = launch.w.ops.prepareLaunch(MANAGED)
+      await launch.lookupReached
+      launch.proof.now = null
+      launch.resume()
+      expect(await prepared).toMatchObject({ ok: false, code: 'cli-unavailable' })
+    })
+
+    it('a proof replaced while the lookup is pending is refused unless it is the same file and version, still usable', async () => {
+      const replaced: Array<[string, CodexDiscovery]> = [
+        ['no longer found', { ...PROVEN, state: 'invalid' }],
+        ['no identity', { ...PROVEN, identity: undefined }],
+        ['too old now', { ...PROVEN, compatibility: 'too-old' }],
+        ['unproven version now', { ...PROVEN, compatibility: 'unknown' }],
+        ['another file id', { ...PROVEN, identity: { ...IDENT, ino: '3' } }],
+        ['another device', { ...PROVEN, identity: { ...IDENT, dev: '8' } }],
+        ['another size', { ...PROVEN, identity: { ...IDENT, size: 101 } }],
+        ['another modified time', { ...PROVEN, identity: { ...IDENT, mtimeMs: 7 } }],
+        ['another change time', { ...PROVEN, identity: { ...IDENT, ctimeMs: 8 } }],
+        ['another path', { ...PROVEN, identity: { ...IDENT, path: 'C:\\Other\\codex.exe' } }],
+        ['another version', { ...PROVEN, version: '0.156.0' }],
+      ]
+      for (const [why, next] of replaced) {
+        const t = pending(2)
+        const status = t.w.ops.status(MANAGED)
+        await t.lookupReached
+        t.proof.now = next
+        t.resume()
+        expect(await status, why).toMatchObject({ ok: false, state: 'error', code: 'cli-unavailable' })
+        expect(t.w.runs, why).toEqual([])
+      }
+    })
+
+    it('a proof that cannot be read after the lookup is refused', async () => {
+      const t = pending(2)
+      const status = t.w.ops.status(MANAGED)
+      await t.lookupReached
+      t.proof.now = undefined as never
+      t.resume()
+      expect(await status).toMatchObject({ ok: false, state: 'error', code: 'cli-unavailable' })
+      expect(t.w.runs).toEqual([])
+    })
+
+    it('the same proof, even a fresh copy of it, lets the run go ahead', async () => {
+      const t = pending(2)
+      const status = t.w.ops.status(MANAGED)
+      await t.lookupReached
+      t.proof.now = { ...PROVEN, identity: { ...IDENT } }
+      t.resume()
+      expect(await status).toEqual({ ok: true, state: 'signed-out' })
+      expect(argsOf(t.w.runs)).toEqual(['login status'])
+    })
+
+    it('a CLI newer than tested, the same file and version, still runs', async () => {
+      const t = pending(2)
+      const status = t.w.ops.status(MANAGED)
+      await t.lookupReached
+      t.proof.now = { ...PROVEN, compatibility: 'too-new' }
+      t.resume()
+      expect(await status).toMatchObject({ ok: true })
+    })
   })
 
   it('one sign-in or sign-out at a time per realm FOLDER (by file identity, however it is spelled); another folder is independent', async () => {
