@@ -19,7 +19,7 @@
 //! stops mirroring once `out.bin` reaches the ring size.
 
 use crate::hello::valid_sid;
-use crate::holder::Holder;
+use crate::holder::{Attachment, Holder};
 use crate::json::Value;
 use crate::pty::PtySize;
 use std::fs::{self, File, OpenOptions};
@@ -57,6 +57,32 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// Mirror an attachment into `out_path`: first what the ring already held when
+/// it attached (the child starts before the mirror attaches, so a banner
+/// printed in that window sits in the replay, not in the live stream), then
+/// every live chunk, until `cap` bytes are written.
+pub fn start_mirror(attachment: Attachment, out_path: &Path, cap: u64) -> io::Result<thread::JoinHandle<()>> {
+    let mut file = OpenOptions::new().append(true).create(true).open(out_path)?;
+    let mut total = 0u64;
+    if !attachment.replay.bytes.is_empty() {
+        file.write_all(&attachment.replay.bytes)?;
+        file.flush()?;
+        total = attachment.replay.bytes.len() as u64;
+    }
+    let live = attachment.live;
+    Ok(thread::spawn(move || {
+        while let Ok(chunk) = live.recv() {
+            if total + chunk.len() as u64 > cap {
+                break;
+            }
+            if file.write_all(&chunk).is_err() || file.flush().is_err() {
+                break;
+            }
+            total += chunk.len() as u64;
+        }
+    }))
+}
+
 /// Hold `argv` on a terminal, in this process, until it exits or `end` is run.
 /// Returns the exit code of the holder itself (0 when it did its job).
 pub fn run_hold(opts: HoldOptions) -> io::Result<i32> {
@@ -84,24 +110,7 @@ pub fn run_hold(opts: HoldOptions) -> io::Result<i32> {
 
     // The mirror is the terminal slot's one client: it appends every byte to out.bin.
     let attachment = holder.attach(0).map_err(|_| bad_input("the ring is not empty at start"))?;
-    let out_path = opts.dir.join(OUT_FILE);
-    let cap = opts.ring_bytes as u64;
-    let mirror = thread::spawn(move || {
-        let mut file = match OpenOptions::new().append(true).open(&out_path) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        let mut total = 0u64;
-        while let Ok(chunk) = attachment.live.recv() {
-            if total + chunk.len() as u64 > cap {
-                break;
-            }
-            if file.write_all(&chunk).is_err() || file.flush().is_err() {
-                break;
-            }
-            total += chunk.len() as u64;
-        }
-    });
+    let mirror = start_mirror(attachment, &opts.dir.join(OUT_FILE), opts.ring_bytes as u64)?;
 
     let in_path = opts.dir.join(IN_FILE);
     let stop_path = opts.dir.join(STOP_FILE);

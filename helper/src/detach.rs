@@ -28,9 +28,30 @@ pub fn spawn_detached(program: &Path, args: &[String]) -> io::Result<u32> {
     Ok(child.id())
 }
 
+/// std starts a child with handle inheritance on, so a holder started with
+/// `Stdio::null()` would still inherit the starter's own standard pipes if the
+/// starter was run with them piped. The caller would then wait for end of
+/// file on those pipes until the holder ends. Clearing the inherit flag on the
+/// starter's three standard handles stops that; printing to them still works.
+#[cfg(windows)]
+fn stop_inheriting_std_handles() {
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+    for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        let handle = unsafe { GetStdHandle(id) };
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            continue;
+        }
+        unsafe {
+            SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+        }
+    }
+}
+
 #[cfg(windows)]
 pub fn spawn_detached(program: &Path, args: &[String]) -> io::Result<u32> {
     use std::os::windows::process::CommandExt;
+    stop_inheriting_std_handles();
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;

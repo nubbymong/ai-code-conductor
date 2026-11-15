@@ -211,19 +211,19 @@ try {
 
   # ---- 4. the installer runs silently over the app --------------------------
   Write-Step ("running the installer silently: {0} {1}" -f $Installer, ($InstallerArgs -join ' '))
-  $installer = Start-Process -FilePath $Installer -ArgumentList $InstallerArgs -PassThru
-  $finished = $installer.WaitForExit($InstallerTimeoutSec * 1000)
+  $installerProc = Start-Process -FilePath $Installer -ArgumentList $InstallerArgs -PassThru
+  $finished = $installerProc.WaitForExit($InstallerTimeoutSec * 1000)
   $result.installer_finished = $finished
-  $result.installer_exit_code = if ($finished) { $installer.ExitCode } else { $null }
+  $result.installer_exit_code = if ($finished) { $installerProc.ExitCode } else { $null }
   if (-not $finished) {
-    try { $installer.Kill() } catch { }
+    try { $installerProc.Kill() } catch { }
     Require $false ("the installer did not finish within $InstallerTimeoutSec seconds")
   }
   Start-Sleep -Seconds 3
   $result.holder_alive_after_installer = Test-Alive $holderId
   $result.child_alive_after_installer = Test-Alive $childId
   Write-Step ("after the installer: exit code {0}, holder alive {1}, child alive {2}" -f $result.installer_exit_code, $result.holder_alive_after_installer, $result.child_alive_after_installer)
-  Require ($finished -and ($installer.ExitCode -eq 0)) 'the installer did not finish with exit code 0 (the survival answer below is not about a clean install)'
+  Require ($finished -and ($installerProc.ExitCode -eq 0)) 'the installer did not finish with exit code 0 (the survival answer below is not about a clean install)'
   Require $result.holder_alive_after_installer 'the holder did not survive the installer'
   Require $result.child_alive_after_installer 'the held child did not survive the installer'
   $result.helper_file_still_there = (Test-Path -LiteralPath $Helper)

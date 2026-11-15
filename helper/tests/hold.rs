@@ -160,3 +160,37 @@ fn a_terminal_can_be_resized_and_a_missing_program_is_an_error() {
     assert!(Holder::start(&["aicc-no-such-program-0001".to_string()], PtySize::default(), 1024).is_err());
     assert!(Holder::start(&[], PtySize::default(), 1024).is_err());
 }
+
+#[test]
+fn the_mirror_writes_what_the_ring_held_before_it_attached_then_the_live_output() {
+    let h = start(64 * 1024);
+    // The banner is in the ring BEFORE the mirror attaches: this is the window
+    // a holder is in between starting the child and attaching its mirror.
+    assert!(h.wait_for_text("FAKE-CLI READY", WAIT), "banner never arrived");
+    let out = std::env::temp_dir().join(format!("aicc-helper-mirror-{}.bin", std::process::id()));
+    let _ = std::fs::remove_file(&out);
+    let attachment = h.attach(0).expect("attach");
+    assert!(text(&attachment.replay.bytes).contains("FAKE-CLI READY"), "the banner must be in the replay, not the live stream");
+    let mirror = aicc_helper::dirhold::start_mirror(attachment, &out, 64 * 1024).expect("start the mirror");
+    h.write_input(b"after-attach\r").expect("type");
+    let deadline = std::time::Instant::now() + WAIT;
+    let mut written = String::new();
+    while std::time::Instant::now() < deadline {
+        written = text(&std::fs::read(&out).unwrap_or_default());
+        if written.contains("echo: after-attach") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // A Windows terminal may print setup escapes before the banner, so the order is checked, not the first byte.
+    let banner_at = written.find("FAKE-CLI READY");
+    assert!(banner_at.is_some(), "out.bin lost the banner that was in the ring before the mirror attached: {written:?}");
+    assert!(written.contains("echo: after-attach"), "live output missing: {written:?}");
+    assert!(banner_at < written.find("echo: after-attach"), "the banner must come before the live output: {written:?}");
+    assert_eq!(written.matches("FAKE-CLI READY").count(), 1, "the banner was written twice: {written:?}");
+    h.kill();
+    drop(h);
+    // Not joined: on Windows the output ends only when the pseudoconsole closes.
+    drop(mirror);
+    let _ = std::fs::remove_file(&out);
+}

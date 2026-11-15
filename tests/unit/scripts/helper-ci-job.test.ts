@@ -56,15 +56,28 @@ describe('ci.yml: the Helper job exists, on the three OSes, and is not a require
     expect(ci.jobs.test.strategy?.matrix.os).toEqual(OSES)
   })
 
-  it('the job always starts on a pull request or a push: its only condition is the event', () => {
-    const on = (event: string, extra: Record<string, unknown> = {}) => evalIf(job.if, { github: { event_name: event, event: { pull_request: { labels: [] }, ...extra } } })
-    expect(on('pull_request')).toBe(true)
-    expect(on('push')).toBe(true)
-    expect(on('workflow_dispatch')).toBe(false)
+  it('the job starts on a pull request or a push; its only conditions are the event and the Test jobs label and edit rule, never the paths', () => {
+    const on = (event: string, action = 'opened', extra: Record<string, unknown> = {}) => evalIf(job.if, { github: { event_name: event, event: { action, pull_request: { labels: [] }, ...extra } } })
+    expect(on('pull_request', 'opened')).toBe(true)
+    expect(on('pull_request', 'synchronize')).toBe(true)
+    expect(on('pull_request', 'reopened')).toBe(true)
+    expect(on('push', '')).toBe(true)
+    expect(on('workflow_dispatch', '')).toBe(false)
     expect(String(job.if)).not.toMatch(/scope|paths|needs\.|labels|helper\//)
     expect(job.needs).toBeUndefined()
     expect(job['continue-on-error']).toBeUndefined()
     expect(job.permissions).toEqual({ contents: 'read' })
+  })
+
+  it('a label change other than ci-run and an edit that is not a base change do not start three runners; ci-run and a base change do', () => {
+    const on = (action: string, extra: Record<string, unknown>) => evalIf(job.if, { github: { event_name: 'pull_request', event: { action, pull_request: { labels: [] }, ...extra } } })
+    expect(on('labeled', { label: { name: 'desktop-tested' } })).toBe(false)
+    expect(on('unlabeled', { label: { name: 'ci-run' } })).toBe(false)
+    expect(on('edited', { changes: { title: { from: 'old' } } })).toBe(false)
+    expect(on('edited', {})).toBe(false)
+    // `ci-run` added replaces the in-flight run of the same group, so it must still build.
+    expect(on('labeled', { label: { name: 'ci-run' } })).toBe(true)
+    expect(on('edited', { changes: { base: { ref: { from: 'main' } } } })).toBe(true)
   })
 })
 

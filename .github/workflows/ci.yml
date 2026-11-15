@@ -554,8 +554,15 @@ jobs:
   # will run on, and uploads the Windows build for probe P7
   # (helper/probes/p7-windows-survival.ps1).
   #
+  # Its job condition is the Test jobs' event rule and nothing else: it starts on
+  # a push, and on a pull request except for a label change other than `ci-run`
+  # and an edit that is not a base change, which change no code and would only
+  # rebuild three runners (the `ci-run` label is kept so the run that replaces
+  # an in-flight one in the same group still builds). The paths are never part
+  # of it.
+  #
   # It decides INSIDE the job, exactly as the Test jobs do (change-scope.mjs):
-  # the job always starts on all three runners, scripts/ci/helper-scope.mjs says
+  # on the events that start it, the job starts on all three runners, scripts/ci/helper-scope.mjs says
   # whether a helper path (or this workflow) changed, and every step after it
   # carries `steps.scope.outputs.helper != 'false'` - only the literal 'false'
   # skips. A job-level path filter is never used here. The Test (os) jobs above
@@ -570,7 +577,12 @@ jobs:
   # Actions are pinned by commit (threat model 3.10); the comment names the tag.
   helper:
     name: Helper (${{ matrix.os }})
-    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'unlabeled' &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+       (github.event.action != 'edited' || github.event.changes.base.ref.from != ''))
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     permissions:

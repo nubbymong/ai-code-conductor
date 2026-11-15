@@ -31,6 +31,31 @@ fn helper(args: &[&str]) -> Ran {
     Ran { ok: out.status.success(), stdout: String::from_utf8_lossy(&out.stdout).into_owned(), stderr: String::from_utf8_lossy(&out.stderr).into_owned() }
 }
 
+/// Run `hold --detach` with its output going to files, not pipes. The holder
+/// outlives this call, so a pipe would stay open until it ends and a reader
+/// waiting for end of file would wait with it. Files do not have that problem,
+/// and the helper also clears inheritance on its own standard handles.
+fn helper_detaching(args: &[&str], tag: &str) -> Ran {
+    let base = std::env::temp_dir().join(format!("aicc-helper-detach-{tag}-{}", std::process::id()));
+    let out_path = base.with_extension("out");
+    let err_path = base.with_extension("err");
+    let status = Command::new(HELPER)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(fs::File::create(&out_path).expect("a file for stdout"))
+        .stderr(fs::File::create(&err_path).expect("a file for stderr"))
+        .status()
+        .expect("run the helper");
+    let ran = Ran {
+        ok: status.success(),
+        stdout: fs::read_to_string(&out_path).unwrap_or_default(),
+        stderr: fs::read_to_string(&err_path).unwrap_or_default(),
+    };
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_file(&err_path);
+    ran
+}
+
 fn as_json(ran: &Ran) -> Value {
     json::parse(ran.stdout.trim().as_bytes()).unwrap_or_else(|e| panic!("stdout is not JSON ({e:?}): {:?} / stderr {:?}", ran.stdout, ran.stderr))
 }
@@ -117,7 +142,7 @@ fn a_holder_started_by_one_process_is_attached_to_by_others_and_replays() {
 fn hold_detach_starts_a_holder_that_keeps_running_after_the_command_returns() {
     let dir = session_dir("detach");
     let dir_arg = dir.to_string_lossy().into_owned();
-    let started = helper(&["hold", "--detach", "--dir", &dir_arg, "--session", "probe-0002", "--", FAKE]);
+    let started = helper_detaching(&["hold", "--detach", "--dir", &dir_arg, "--session", "probe-0002", "--", FAKE], "keeps");
     assert!(started.ok, "{}", started.stderr);
     let info = as_json(&started);
     let holder_pid = field(&info, "holder_pid").as_u64().expect("holder_pid");
@@ -137,7 +162,7 @@ fn hold_detach_starts_a_holder_that_keeps_running_after_the_command_returns() {
 fn the_holder_exits_when_the_child_does_and_says_so() {
     let dir = session_dir("exit");
     let dir_arg = dir.to_string_lossy().into_owned();
-    let started = helper(&["hold", "--detach", "--dir", &dir_arg, "--session", "probe-0003", "--", FAKE]);
+    let started = helper_detaching(&["hold", "--detach", "--dir", &dir_arg, "--session", "probe-0003", "--", FAKE], "exit");
     assert!(started.ok, "{}", started.stderr);
     let sent = helper(&["attach", "--dir", &dir_arg, "--send", "quit", "--wait-ms", "5000"]);
     assert!(sent.ok, "{}", sent.stderr);

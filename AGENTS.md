@@ -95,6 +95,7 @@ npm run test         # both
 - **Renderer** (`src/renderer/`): React 19 SPA with Zustand stores, xterm.js terminals, Tailwind CSS v4
 - **Preload** (`src/preload/`): IPC bridge - all renderer↔main communication goes through typed channels
 - **Shared** (`src/shared/`): Types and IPC channel constants used by both processes
+- **Helper** (`helper/`): the dormant Rust session helper (ADR-029, ADR-030). Its own Cargo project, not shipped and not started by the app; built and tested by the `Helper (os)` CI job. See `helper/README.md`
 
 ### Key patterns
 
