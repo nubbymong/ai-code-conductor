@@ -7,11 +7,24 @@ use aicc_helper::json::{self, Value};
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const HELPER: &str = env!("CARGO_BIN_EXE_aicc-helper");
 const FAKE: &str = env!("CARGO_BIN_EXE_aicc-fake-cli");
 const NONCE: &str = "0123456789abcdef0123456789abcdef";
+
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+/// Every test here starts processes, one at a time. On Windows a child
+/// inherits every inheritable handle in the parent, so a test that starts a
+/// holder while another test thread is mid-spawn could carry that thread's
+/// pipe ends into the holder, and that thread would then wait for the holder
+/// to end. Taking this lock first keeps the spawns apart. A test that failed
+/// while holding it must not stop the others, so a poisoned lock is reused.
+fn one_at_a_time() -> MutexGuard<'static, ()> {
+    ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn session_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("aicc-helper-test-{name}-{}", std::process::id()));
@@ -77,6 +90,7 @@ fn field<'a>(v: &'a Value, key: &str) -> &'a Value {
 
 #[test]
 fn a_holder_started_by_one_process_is_attached_to_by_others_and_replays() {
+    let _serial = one_at_a_time();
     let dir = session_dir("hold");
     let dir_arg = dir.to_string_lossy().into_owned();
     let mut holder = Command::new(HELPER)
@@ -140,6 +154,7 @@ fn a_holder_started_by_one_process_is_attached_to_by_others_and_replays() {
 
 #[test]
 fn hold_detach_starts_a_holder_that_keeps_running_after_the_command_returns() {
+    let _serial = one_at_a_time();
     let dir = session_dir("detach");
     let dir_arg = dir.to_string_lossy().into_owned();
     let started = helper_detaching(&["hold", "--detach", "--dir", &dir_arg, "--session", "probe-0002", "--", FAKE], "keeps");
@@ -160,6 +175,7 @@ fn hold_detach_starts_a_holder_that_keeps_running_after_the_command_returns() {
 
 #[test]
 fn the_holder_exits_when_the_child_does_and_says_so() {
+    let _serial = one_at_a_time();
     let dir = session_dir("exit");
     let dir_arg = dir.to_string_lossy().into_owned();
     let started = helper_detaching(&["hold", "--detach", "--dir", &dir_arg, "--session", "probe-0003", "--", FAKE], "exit");
@@ -180,6 +196,7 @@ fn the_holder_exits_when_the_child_does_and_says_so() {
 
 #[test]
 fn selftest_passes_and_prints_one_result_line() {
+    let _serial = one_at_a_time();
     let ran = helper(&["selftest", "--nonce", NONCE]);
     assert!(ran.ok, "selftest failed: {} / {}", ran.stdout, ran.stderr);
     let line = ran.stdout.trim();
@@ -194,6 +211,7 @@ fn selftest_passes_and_prints_one_result_line() {
 
 #[test]
 fn hello_prints_a_line_the_parser_accepts() {
+    let _serial = one_at_a_time();
     let ran = helper(&["hello", "--nonce", NONCE, "--session", "sess-0001", "--state", "new"]);
     assert!(ran.ok, "{}", ran.stderr);
     let parsed = aicc_helper::hello::parse_hello_line(ran.stdout.trim(), NONCE, "sess-0001").expect("the hello reads");
