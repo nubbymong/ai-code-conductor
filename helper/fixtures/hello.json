@@ -1,0 +1,267 @@
+{
+  "_doc": "Hello line vectors for docs/remote/helper-protocol.md sections 6 and 7. A hello that cannot be used fails as no-hello.",
+  "version": 1,
+  "expected_nonce": "0123456789abcdef0123456789abcdef",
+  "expected_sid": "sess-0001",
+  "valid": [
+    {
+      "name": "a new session",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{\"version\":\"0.1.0\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"new\"}}",
+      "expect": {
+        "proto": [
+          1
+        ],
+        "helper_version": "0.1.0",
+        "sha256": null,
+        "os": "linux",
+        "arch": "x86_64",
+        "caps": [
+          "core"
+        ],
+        "sid": "sess-0001",
+        "state": "new"
+      }
+    },
+    {
+      "name": "with the helper hash and a live session",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{\"version\":\"0.1.0\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"live\"}}",
+      "expect": {
+        "proto": [
+          1
+        ],
+        "helper_version": "0.1.0",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "os": "linux",
+        "arch": "x86_64",
+        "caps": [
+          "core"
+        ],
+        "sid": "sess-0001",
+        "state": "live"
+      }
+    },
+    {
+      "name": "unknown fields are ignored",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{\"version\":\"0.1.0\",\"extra\":true},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"new\",\"more\":\"x\"},\"future\":[1,2]}",
+      "expect": {
+        "proto": [
+          1
+        ],
+        "helper_version": "0.1.0",
+        "sha256": null,
+        "os": "linux",
+        "arch": "x86_64",
+        "caps": [
+          "core"
+        ],
+        "sid": "sess-0001",
+        "state": "new"
+      }
+    },
+    {
+      "name": "several protocol versions and no capabilities",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1,2],\"helper\":{\"version\":\"0.1.0\"},\"os\":\"windows\",\"arch\":\"aarch64\",\"caps\":[],\"session\":{\"sid\":\"sess-0001\",\"state\":\"new\"}}",
+      "expect": {
+        "proto": [
+          1,
+          2
+        ],
+        "helper_version": "0.1.0",
+        "sha256": null,
+        "os": "windows",
+        "arch": "aarch64",
+        "caps": [],
+        "sid": "sess-0001",
+        "state": "new"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "another session id",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{\"version\":\"0.1.0\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0002\",\"state\":\"new\"}}",
+      "error": "no-hello",
+      "why": "the sid must be the one asked for"
+    },
+    {
+      "name": "another nonce",
+      "line": "AICC-HELLO ffffffffffffffffffffffffffffffff {\"proto\":[1],\"helper\":{\"version\":\"0.1.0\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"new\"}}",
+      "error": "no-hello",
+      "why": "the nonce must be the exec's"
+    },
+    {
+      "name": "no proto",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"helper\":{\"version\":\"0.1.0\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"new\"}}",
+      "error": "no-hello",
+      "why": "broken schema"
+    },
+    {
+      "name": "empty proto",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[],\"helper\":{\"version\":\"0.1.0\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"new\"}}",
+      "error": "no-hello",
+      "why": "broken schema"
+    },
+    {
+      "name": "proto holds a string",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[\"1\"],\"helper\":{\"version\":\"0.1.0\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"new\"}}",
+      "error": "no-hello",
+      "why": "broken schema"
+    },
+    {
+      "name": "unknown state",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{\"version\":\"0.1.0\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"running\"}}",
+      "error": "no-hello",
+      "why": "the state is one of the seven"
+    },
+    {
+      "name": "sid that breaks its pattern",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{\"version\":\"0.1.0\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"short\",\"state\":\"new\"}}",
+      "error": "no-hello",
+      "why": "sid pattern"
+    },
+    {
+      "name": "sha256 in capitals",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{\"version\":\"0.1.0\",\"sha256\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"new\"}}",
+      "error": "no-hello",
+      "why": "lower-case hex only"
+    },
+    {
+      "name": "missing helper version",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"new\"}}",
+      "error": "no-hello",
+      "why": "broken schema"
+    },
+    {
+      "name": "not JSON after the nonce",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {not json",
+      "error": "no-hello",
+      "why": "does not read"
+    },
+    {
+      "name": "no JSON at all",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef",
+      "error": "no-hello",
+      "why": "nothing after the nonce"
+    },
+    {
+      "name": "another marker",
+      "line": "AICC-RESULT 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{\"version\":\"0.1.0\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"new\"}}",
+      "error": "no-hello",
+      "why": "not a hello line"
+    },
+    {
+      "name": "over 4 KiB",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{\"version\":\"vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\"},\"os\":\"linux\",\"arch\":\"x86_64\",\"caps\":[\"core\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"new\"}}",
+      "error": "no-hello",
+      "why": "a hello line is at most 4 KiB"
+    }
+  ],
+  "ack": {
+    "valid": [
+      {
+        "name": "version 1 with core",
+        "json": "{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\"]}",
+        "expect": {
+          "proto": 1,
+          "caps": [
+            "core"
+          ]
+        }
+      },
+      {
+        "name": "no capabilities",
+        "json": "{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[]}",
+        "expect": {
+          "proto": 1,
+          "caps": []
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "name": "wrong type",
+        "json": "{\"t\":\"ping\",\"proto\":1,\"caps\":[]}"
+      },
+      {
+        "name": "proto is a string",
+        "json": "{\"t\":\"hello.ack\",\"proto\":\"1\",\"caps\":[]}"
+      },
+      {
+        "name": "no caps",
+        "json": "{\"t\":\"hello.ack\",\"proto\":1}"
+      }
+    ]
+  },
+  "proto_choice": [
+    {
+      "app": [
+        1
+      ],
+      "helper": [
+        1
+      ],
+      "chosen": 1
+    },
+    {
+      "app": [
+        1,
+        2
+      ],
+      "helper": [
+        1
+      ],
+      "chosen": 1
+    },
+    {
+      "app": [
+        1,
+        2,
+        3
+      ],
+      "helper": [
+        2,
+        3
+      ],
+      "chosen": 3
+    },
+    {
+      "app": [
+        2
+      ],
+      "helper": [
+        1
+      ],
+      "chosen": null
+    }
+  ],
+  "sid": {
+    "valid": [
+      "abcdefg1",
+      "sess-0001",
+      "A_b-c_d-e",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "invalid": [
+      "abcdefg",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "-bcdefgh1",
+      "_bcdefgh1",
+      "abcdefg.",
+      "abc defg1",
+      ""
+    ]
+  },
+  "nonce": {
+    "valid": [
+      "0123456789abcdef0123456789abcdef",
+      "00000000000000000000000000000000"
+    ],
+    "invalid": [
+      "0000000000000000000000000000000",
+      "000000000000000000000000000000000",
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "gggggggggggggggggggggggggggggggg",
+      ""
+    ]
+  }
+}

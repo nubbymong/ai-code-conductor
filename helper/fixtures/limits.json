@@ -1,0 +1,46 @@
+{
+  "_doc": "The numbers of docs/remote/helper-protocol.md the helper and the app both hold. tests/unit/scripts/helper-fixtures.test.ts checks them against the document; helper/tests/fixtures.rs against the constants in src/.",
+  "version": 1,
+  "frame": {
+    "length_prefix_bytes": 4,
+    "kind_bytes": 1,
+    "channel_bytes": 4,
+    "min_rest": 5,
+    "json_helper_to_app": 1048576,
+    "json_app_to_helper": 16777216,
+    "raw": 65536,
+    "json_depth": 32
+  },
+  "hello_line": 4096,
+  "result_line": 1048576,
+  "error_text_chars": 512,
+  "ring_bytes": 2097152,
+  "sid_pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$",
+  "nonce_pattern": "^[0-9a-f]{32}$",
+  "states": [
+    "new",
+    "live",
+    "unmanaged",
+    "stale",
+    "orphaned",
+    "elsewhere",
+    "unknown"
+  ],
+  "error_codes": [
+    "bad-frame",
+    "unknown-type",
+    "proto-mismatch",
+    "no-hello",
+    "hash-mismatch",
+    "replaced",
+    "bad-field",
+    "too-large",
+    "busy",
+    "not-found",
+    "not-connected",
+    "denied",
+    "timeout",
+    "io",
+    "internal"
+  ]
+}

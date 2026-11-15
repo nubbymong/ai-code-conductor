@@ -1,0 +1,153 @@
+{
+  "_doc": "Frame vectors for docs/remote/helper-protocol.md section 6. Read by helper/tests/fixtures.rs and tests/unit/scripts/helper-fixtures.test.ts. hex is the whole frame. error is the protocol code the reader must answer: bad-frame, or io for a stream that ends inside a frame.",
+  "version": 1,
+  "valid": [
+    {
+      "name": "ping, app to helper",
+      "flow": "app_to_helper",
+      "kind": "json",
+      "channel": 0,
+      "payload_text": "{\"t\":\"ping\",\"id\":2}",
+      "hex": "0000001800000000007b2274223a2270696e67222c226964223a327d"
+    },
+    {
+      "name": "pong, helper to app",
+      "flow": "helper_to_app",
+      "kind": "json",
+      "channel": 0,
+      "payload_text": "{\"t\":\"pong\",\"re\":2}",
+      "hex": "0000001800000000007b2274223a22706f6e67222c227265223a327d"
+    },
+    {
+      "name": "error text with a non-ASCII character",
+      "flow": "helper_to_app",
+      "kind": "json",
+      "channel": 0,
+      "payload_text": "{\"t\":\"error\",\"re\":4,\"code\":\"io\",\"text\":\"café\"}",
+      "hex": "0000003400000000007b2274223a226572726f72222c227265223a342c22636f6465223a22696f222c2274657874223a22636166c3a9227d"
+    },
+    {
+      "name": "session.attach, with the sequence it last saw",
+      "flow": "app_to_helper",
+      "kind": "json",
+      "channel": 0,
+      "payload_text": "{\"t\":\"session.attach\",\"id\":6,\"since_seq\":0}",
+      "hex": "0000003000000000007b2274223a2273657373696f6e2e617474616368222c226964223a362c2273696e63655f736571223a307d"
+    },
+    {
+      "name": "session.attached answers the ring offsets",
+      "flow": "helper_to_app",
+      "kind": "json",
+      "channel": 0,
+      "payload_text": "{\"t\":\"session.attached\",\"re\":6,\"ring_start\":0,\"ring_end\":1048576}",
+      "hex": "0000004600000000007b2274223a2273657373696f6e2e6174746163686564222c227265223a362c2272696e675f7374617274223a302c2272696e675f656e64223a313034383537367d"
+    },
+    {
+      "name": "raw bytes on channel 3",
+      "flow": "app_to_helper",
+      "kind": "raw",
+      "channel": 3,
+      "payload_hex": "00010203ff",
+      "hex": "0000000a010000000300010203ff"
+    },
+    {
+      "name": "raw bytes on the largest channel id",
+      "flow": "helper_to_app",
+      "kind": "raw",
+      "channel": 4294967295,
+      "payload_hex": "deadbeef",
+      "hex": "0000000901ffffffffdeadbeef"
+    },
+    {
+      "name": "an empty raw frame is the smallest frame",
+      "flow": "app_to_helper",
+      "kind": "raw",
+      "channel": 1,
+      "payload_hex": "",
+      "hex": "000000050100000001"
+    },
+    {
+      "name": "JSON nested to exactly 32 levels",
+      "flow": "app_to_helper",
+      "kind": "json",
+      "channel": 0,
+      "payload_text": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "hex": "0000004500000000005b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "length 0",
+      "flow": "app_to_helper",
+      "hex": "00000000",
+      "error": "bad-frame"
+    },
+    {
+      "name": "length 4, one short of the smallest frame",
+      "flow": "app_to_helper",
+      "hex": "00000004",
+      "error": "bad-frame"
+    },
+    {
+      "name": "length ffffffff",
+      "flow": "app_to_helper",
+      "hex": "ffffffff",
+      "error": "bad-frame"
+    },
+    {
+      "name": "unknown kind 2",
+      "flow": "app_to_helper",
+      "hex": "000000050200000000",
+      "error": "bad-frame"
+    },
+    {
+      "name": "JSON that does not read",
+      "flow": "app_to_helper",
+      "hex": "0000000a00000000007b2274223a",
+      "error": "bad-frame"
+    },
+    {
+      "name": "JSON nested 33 levels",
+      "flow": "app_to_helper",
+      "hex": "0000004700000000005b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+      "error": "bad-frame"
+    },
+    {
+      "name": "JSON over 1 MiB helper to app, refused on the length alone",
+      "flow": "helper_to_app",
+      "hex": "001000060000000000",
+      "error": "bad-frame",
+      "note": "no payload follows: the length is checked before anything is read"
+    },
+    {
+      "name": "the same length app to helper is allowed, so the stream is simply cut short",
+      "flow": "app_to_helper",
+      "hex": "001000060000000000",
+      "error": "io"
+    },
+    {
+      "name": "JSON over 16 MiB app to helper, refused on the length alone",
+      "flow": "app_to_helper",
+      "hex": "010000060000000000",
+      "error": "bad-frame"
+    },
+    {
+      "name": "raw over 64 KiB helper to app",
+      "flow": "helper_to_app",
+      "hex": "000100060100000000",
+      "error": "bad-frame"
+    },
+    {
+      "name": "raw over 64 KiB app to helper",
+      "flow": "app_to_helper",
+      "hex": "000100060100000000",
+      "error": "bad-frame"
+    },
+    {
+      "name": "payload shorter than its length",
+      "flow": "app_to_helper",
+      "hex": "0000000d00000000007b227422",
+      "error": "io"
+    }
+  ]
+}
