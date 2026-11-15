@@ -122,6 +122,9 @@ function systemScreenPermission(mainWindow: BrowserWindow): ScreenPermissionDeps
       return canOpen && answer.response === 0
     },
     open: (url) => shell.openExternal(url),
+    prompt: async () => {
+      await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } })
+    },
   }
 }
 

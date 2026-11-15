@@ -51,11 +51,12 @@ type Deps = import('../../../src/main/screenshot-permission').ScreenPermissionDe
 const win = { isDestroyed: () => false } as never
 
 /** A permission state to test with, and what was asked of it. */
-function fake(status: string, over: Partial<Deps> = {}, answer = false) {
-  const calls = { status: 0, asked: [] as Array<{ message: string; canOpen: boolean }>, opened: [] as string[] }
+function fake(status: string, over: Partial<Deps> = {}, answer = false, statusAfterPrompt?: string) {
+  const calls = { status: 0, prompted: 0, asked: [] as Array<{ message: string; canOpen: boolean }>, opened: [] as string[] }
   const deps: Deps = {
     platform: 'darwin',
-    status: () => { calls.status++; return status },
+    status: () => { calls.status++; return calls.prompted > 0 && statusAfterPrompt !== undefined ? statusAfterPrompt : status },
+    prompt: async () => { calls.prompted++ },
     ask: async (message, canOpen) => { calls.asked.push({ message, canOpen }); return answer },
     open: (url) => { calls.opened.push(url) },
     ...over,
@@ -76,14 +77,43 @@ describe('screenCaptureAllowed: the Screen Recording permission on macOS', () =>
     expect(calls.asked).toEqual([])
   })
 
-  it('says so and does not capture when it is denied, not decided, or unknown', async () => {
-    for (const status of ['denied', 'not-determined', 'unknown']) {
+  it('lets the capture start, with no message, when the app has not been asked yet, so macOS shows its own prompt', async () => {
+    for (const status of ['not-determined', 'unknown']) {
       const { deps, calls } = fake(status)
-      expect(await screenCaptureAllowed(deps), status).toBe(false)
-      expect(calls.asked, status).toEqual([{ message: SCREEN_RECORDING_NEEDED_MESSAGE, canOpen: true }])
+      expect(await screenCaptureAllowed(deps), status).toBe(true)
+      expect(calls.asked, status).toEqual([])
+      expect(calls.prompted, status).toBe(0)
     }
+  })
+
+  it('makes one capture request, then says so and does not capture, when the denial still stands', async () => {
+    const { deps, calls } = fake('denied')
+    expect(await screenCaptureAllowed(deps)).toBe(false)
+    expect(calls.prompted).toBe(1)
+    expect(calls.asked).toEqual([{ message: SCREEN_RECORDING_NEEDED_MESSAGE, canOpen: true }])
     expect(SCREEN_RECORDING_NEEDED_MESSAGE).toMatch(/Screen Recording/)
     expect(SCREEN_RECORDING_NEEDED_MESSAGE).toMatch(/System Settings, Privacy and Security/)
+  })
+
+  it('shows no message when the request leaves the permission granted or still to be decided', async () => {
+    for (const after of ['granted', 'not-determined']) {
+      const { deps, calls } = fake('denied', {}, false, after)
+      expect(await screenCaptureAllowed(deps), after).toBe(true)
+      expect(calls.prompted, after).toBe(1)
+      expect(calls.asked, after).toEqual([])
+    }
+  })
+
+  it('still shows the message when the capture request itself fails', async () => {
+    const { deps, calls } = fake('denied', { prompt: async () => { throw new Error('no capture') } })
+    expect(await screenCaptureAllowed(deps)).toBe(false)
+    expect(calls.asked).toHaveLength(1)
+  })
+
+  it('makes no capture request for a policy block', async () => {
+    const { deps, calls } = fake('restricted')
+    expect(await screenCaptureAllowed(deps)).toBe(false)
+    expect(calls.prompted).toBe(0)
   })
 
   it('opens System Settings at the Screen Recording pane when the user chooses to', async () => {
@@ -138,6 +168,13 @@ describe('captureRectangle with the permission check and a throwing capture', ()
     const { deps } = fake('granted')
     expect(await captureRectangle(win, deps)).toBeNull() // the stand-in answers cancel
     expect(lib.startCalls).toBe(1)
+  })
+
+  it('starts the capture, with no message, when the app has never asked for the permission', async () => {
+    const { deps, calls } = fake('not-determined')
+    expect(await captureRectangle(win, deps)).toBeNull() // the stand-in answers cancel
+    expect(lib.startCalls).toBe(1)
+    expect(calls.asked).toEqual([])
   })
 
   it('answers nothing, not an error, when the capture library cannot be started', async () => {

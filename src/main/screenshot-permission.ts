@@ -35,15 +35,22 @@ export interface ScreenPermissionDeps {
   ask: (message: string, canOpen: boolean) => Promise<boolean>
   /** Opens the Screen Recording pane. */
   open: (url: string) => Promise<void> | void
+  /** Makes one tiny screen capture request so macOS lists the app under Screen Recording (and, the
+   *  first time ever, shows its own permission prompt). */
+  prompt: () => Promise<void>
 }
 
 /**
  * Whether Snap may start a capture. True off macOS (the permission is the
  * system's there and cannot be asked ahead), and on macOS when the system says
- * it is granted, or cannot say (a failed read must not stop a capture that may
- * well work; the capture itself is guarded). Otherwise the user is told and the
- * answer is false. Never throws: a dialog that fails to show is logged and
- * still answers false.
+ * it is granted, has not been asked yet ('not-determined': the capture itself
+ * makes macOS show its own permission prompt, and the app only appears in the
+ * Screen Recording list once it has tried), or cannot say (a failed read must
+ * not stop a capture that may well work; the capture itself is guarded). A
+ * 'denied' answer first makes one small capture request so the app is in the
+ * list and macOS can prompt if it never has, then reads the permission again;
+ * only a denial that still stands gets the message and the Settings link.
+ * Never throws: a dialog that fails to show is logged and still answers false.
  */
 export async function screenCaptureAllowed(deps: ScreenPermissionDeps): Promise<boolean> {
   if (deps.platform !== 'darwin') return true
@@ -54,7 +61,16 @@ export async function screenCaptureAllowed(deps: ScreenPermissionDeps): Promise<
     logWarn(`[screenshot] the Screen Recording permission could not be read (${err instanceof Error ? err.name : 'error'}); capturing anyway`)
     return true
   }
-  if (status === 'granted') return true
+  if (status === 'granted' || status === 'not-determined' || status === 'unknown') return true
+  if (status === 'denied') {
+    try {
+      await deps.prompt()
+      status = deps.status()
+    } catch (err) {
+      logWarn(`[screenshot] the Screen Recording request could not be made (${err instanceof Error ? err.name : 'error'})`)
+    }
+    if (status === 'granted' || status === 'not-determined' || status === 'unknown') return true
+  }
   const restricted = status === 'restricted'
   try {
     const openIt = await deps.ask(restricted ? SCREEN_RECORDING_RESTRICTED_MESSAGE : SCREEN_RECORDING_NEEDED_MESSAGE, !restricted)
