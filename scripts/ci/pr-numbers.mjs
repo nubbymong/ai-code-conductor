@@ -160,7 +160,8 @@ export function renderSummary(r) {
   if (r.matrixState === 'check') rows.push('', `Run \`npm run test:live:ssh\` (one combo at a time, and report the matrix in the PR) if the SSH branch, the sentinel parsers or the statusline routing of ${code(PTY_MANAGER)} changed. A change to its local branch or its length does not owe it (AGENTS.md, "SSH statusline changes need the live SSH matrix").`)
   if (r.matrixOwed) rows.push('', 'Run `npm run test:live:ssh` one combo at a time and report the matrix in the PR before merge (AGENTS.md, "SSH statusline changes need the live SSH matrix").')
   if (r.override && r.exceeds) rows.push('', `The ${code(OVERRIDE_LABEL)} label is on this PR, so growing ${code(PTY_MANAGER)} past ${r.cap} lines does not fail the job. Say in the PR why the file could not be smaller.`)
-  else if (r.override) rows.push('', `The ${code(OVERRIDE_LABEL)} label is on this PR; it is not needed here.`)
+  // When the file could not be read the label is the only reason the job passes, so it is never called unneeded then.
+  else if (r.override && r.ptyLines !== null) rows.push('', `The ${code(OVERRIDE_LABEL)} label is on this PR; it is not needed here.`)
   if (r.lowerTheCap) rows.push('', `${code(PTY_MANAGER)} is now ${r.ptyLines} lines, under the cap of ${r.cap}: lower ${code('PTY_MANAGER_LINE_CAP')} in ${code('scripts/ci/pr-numbers.mjs')} to ${r.ptyLines} so it only goes down.`)
   return rows.join('\n') + '\n'
 }

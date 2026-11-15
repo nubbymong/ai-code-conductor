@@ -197,6 +197,14 @@ describe('pr-numbers: the cap on pty-manager.ts', () => {
     expect(text).toContain(`The \`${OVERRIDE_LABEL}\` label is on this PR; it is not needed here.`)
   })
 
+  it('the label is never called unneeded when the file could not be read, because then it is what passes the job', () => {
+    const r = report({ ptyLines: null, baseLines: null, labels: [OVERRIDE_LABEL] })
+    expect(r.failed).toBe(false)
+    const text = renderSummary(r)
+    expect(text).toContain(`could not read the file (${OVERRIDE_LABEL} label: passing)`)
+    expect(text).not.toContain('it is not needed here')
+  })
+
   it('a file already over the cap is not blamed on a PR that leaves it alone or shortens it', () => {
     expect(report({ paths: ['README.md'], ptyLines: CAP + 40, baseLines: CAP + 40 }).failed).toBe(false)
     const shorter = report({ paths: [PTY_MANAGER], ptyLines: CAP + 10, baseLines: CAP + 40 })
