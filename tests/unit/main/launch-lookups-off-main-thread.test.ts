@@ -281,6 +281,11 @@ describe('the login shell asked for its PATH (macOS and Linux, a user whose shel
   const answerShell = async (stdout = REPORTED): Promise<void> => {
     for (const cb of h.shellHeld.splice(0)) cb(null, stdout)
     await flush()
+    // The look for claude in the answered PATH stats real folders (real I/O the
+    // fake timers do not drive), so wait for the answer to be kept rather than
+    // for a fixed number of ticks, which a loaded machine outruns.
+    await vi.waitFor(() => { expect(probe.recentClaudeInLoginShellPath(FISH, 'linux')).not.toBeUndefined() })
+    await flush()
   }
 
   // Mutation to prove this can fail: start the login shell in place (execFileSync).
