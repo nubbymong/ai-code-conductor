@@ -197,7 +197,10 @@ Rows are numbered so that "does not own" can name the owner.
   where it stopped, and a manual Rescan reads everything again. A walk depth
   changes only if the measurement shows it helps.
 - **D19 Quit.** Quitting types `/exit` only into a session where the app
-  started the CLI. Every other tab is closed, which detaches.
+  started the CLI. Every other tab is closed, which detaches. A session the
+  app wrapped in its own tmux session (SSH Persistent) is detached on quit,
+  never sent `/exit`, whoever started the CLI in it: D13 and Q9 keep it
+  running.
 - **D20 Sessions the app did not start.** No new option. Attaching to a tmux
   session started elsewhere already works as a Terminal only SSH config whose
   post-connect command is the attach command. On the helper path the same
@@ -353,7 +356,8 @@ otherwise carried from earlier measurement.
   the saved-config mapping suite run in CI or on test machines only and ship
   nothing to users.
 - **Gates that stay.** Every slice that touches an ADR-009 path takes the
-  pass; docs-only, CI-only and default-flip slices do not, and an unsure case
+  pass, a default flip included when what it switches on is such a path. A
+  docs-only or CI-only slice outside those paths does not, and an unsure case
   fails closed. For beta releases the owner decided on 2026-11-15 that the
   pass may be owed at merge: every owed pass runs in one security round
   before the stable release, and nothing reaches stable with a pass owed.
