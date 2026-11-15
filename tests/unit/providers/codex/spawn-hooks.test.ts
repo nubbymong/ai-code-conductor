@@ -18,7 +18,7 @@ import { tmpdir } from 'os'
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>()
-  return { ...actual, execSync: vi.fn(() => (process.platform === 'win32' ? 'C:\\node\\node.exe\n' : '/usr/local/bin/node\n')) }
+  return { ...actual, execFile: vi.fn((_f: unknown, _a: unknown, _o: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => { cb(null, '/usr/local/bin/node\n', ''); return { stdin: { end: () => {} } } }) }
 })
 // The disk, for the picker route's node lookup on Windows: one fixed node.exe
 // (named in the picker launches' PATH below) answers as a file; every other
@@ -68,9 +68,13 @@ vi.mock('../../../../src/main/config-manager', async (importOriginal) => ({
 
 import { CodexProvider } from '../../../../src/main/providers/codex'
 import { codexHookCommand, codexHookConfigArgs, codexPlainWrapperDir, __setCodexLocalAppDataForTests, __resetCodexHookFoldersForTests, CODEX_HOOK_FILE_ENV, CODEX_HOOK_FOLDERS_RETRY_MS } from '../../../../src/main/providers/codex/hooks'
-import { codexCmdExeTarget, CODEX_OPEN_ELSEWHERE_ENV } from '../../../../src/main/providers/codex/spawn'
+import { codexCmdExeTarget, CODEX_OPEN_ELSEWHERE_ENV, warmNodeExeOnPosix } from '../../../../src/main/providers/codex/spawn'
 import { __markScriptFoldersCheckedForTests, __resetScriptFoldersForTests, secureScriptFolders, scriptFoldersDeployed } from '../../../../src/main/script-folders'
 import { deployScriptFile } from '../../../../src/main/script-deploy'
+
+// macOS and Linux (2.1.3-beta.5): the picker's node comes from the answer kept by
+// the one login-shell question asked off the main thread; the fake answers it.
+await warmNodeExeOnPosix({ platform: 'linux' })
 
 const TEST_PREFIX = 'p310-spawn-hooks-'
 const made: string[] = []

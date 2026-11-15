@@ -17,7 +17,7 @@ vi.mock('os', async (importOriginal) => {
 })
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>()
-  return { ...actual, execSync: vi.fn(() => '/usr/local/bin/node\n') }
+  return { ...actual, execFile: vi.fn((_f: unknown, _a: unknown, _o: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => { cb(null, '/usr/local/bin/node\n', ''); return { stdin: { end: () => {} } } }) }
 })
 // The disk, for the picker's node lookup on a Windows runner (it follows
 // process.platform): one fixed node.exe, named in the launches' PATH below,
@@ -63,7 +63,7 @@ vi.mock('../../../../src/main/providers/codex/telemetry', async (importOriginal)
 })
 
 import { CodexProvider } from '../../../../src/main/providers/codex'
-import { __resetNodeExeCache } from '../../../../src/main/providers/codex/spawn'
+import { __resetNodeExeCache, warmNodeExeOnPosix } from '../../../../src/main/providers/codex/spawn'
 import { __markScriptFoldersCheckedForTests } from '../../../../src/main/script-folders'
 import { watchAndClaimRollout } from '../../../../src/main/providers/codex/telemetry'
 import { codexFolderIdentity } from '../../../../src/main/providers/codex/rollout-lookup'
@@ -100,8 +100,10 @@ function deployPicker(): string {
   return res
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   __resetNodeExeCache()
+  // 2.1.3-beta.5: the one login-shell question, asked off the main thread before a launch.
+  await warmNodeExeOnPosix({ platform: 'linux' })
 })
 afterEach(() => {
   delete (globalThis as any).__p35ResourcesDir

@@ -14,7 +14,7 @@ import { providerLaunchRefusal } from '../provider-launch-gate'
 import { claimConfigLaunch, settleConfigLaunch, discardConfigLaunch, noteConfigLaunchPreparation, type ConfigLaunchTicket } from '../launch-one-at-a-time'
 import { isPartnerPtyId } from '../../shared/multi-spawn-rule'
 import type { AccountLease, AccountsService } from '../providers/core'
-import { providerCapability, tryGetProviderPackage } from '../providers/core'
+import { providerCapability, tryGetProvider, tryGetProviderPackage } from '../providers/core'
 import type { ConversationCarryNotice } from '../../shared/providers'
 import { forgetCanvasMarkers } from '../canvas/canvas-marker-delivery'
 import { logUserInput, isDebugModeEnabled } from '../debug-capture'
@@ -1096,9 +1096,9 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
         // once, here, off the event loop, and the launch reads the answer kept
         // (providers/codex/spawn.ts resolveNodeExe), where it used to start
         // the shell in place and hold the main process for as long as its
-        // start-up files took. Loaded when needed: nothing is asked on Windows.
+        // start-up files took. Asked through the provider, nothing on Windows.
         if (!options?.ssh && options?.useResumePicker === true && process.platform !== 'win32') {
-          await (await import('../providers/codex/spawn')).warmNodeExeOnPosix()
+          await tryGetProvider('codex')?.warmResumeListNode?.()
         }
       }
 

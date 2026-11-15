@@ -9,7 +9,7 @@
  *    not elevated, nothing is held.
  * 2. On macOS and Linux a Codex launch that opens the resume list waits, before
  *    it starts, for the question to the login shell about node
- *    (providers/codex/spawn.ts warmNodeExeOnPosix), asked off the event loop. A
+ *    (the Codex provider's warmResumeListNode), asked off the event loop. A
  *    launch that opens no resume list does not ask it.
  *
  * The look itself and the warm-up are covered where they live
@@ -94,10 +94,12 @@ vi.mock('../../../src/main/gsudo-lookup', async (importOriginal) => ({
   gsudoAnswerKept: () => looks.gsudoKept,
   gsudoLookAnswered: () => { looks.gsudoAsked++; return looks.gsudoEnds },
 }))
-// The handler loads this module only when a launch needs it, and only for this
-// one function; the real module is not loaded.
-vi.mock('../../../src/main/providers/codex/spawn', () => ({
-  warmNodeExeOnPosix: () => { looks.nodeAsked++; return looks.nodeEnds },
+// The handler asks the Codex provider (through the core registry, never the
+// package's own modules) for the node question; the provider is a stand-in
+// that counts it and answers when the test says.
+vi.mock('../../../src/main/providers/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/providers/core')>()),
+  tryGetProvider: (id: string) => (id === 'codex' ? { warmResumeListNode: () => { looks.nodeAsked++; return looks.nodeEnds } } : null),
 }))
 
 const { registerPtyHandlers } = await import('../../../src/main/ipc/pty-handlers')
