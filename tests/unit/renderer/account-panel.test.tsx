@@ -438,6 +438,72 @@ describe('AccountPanel', () => {
   })
 })
 
+// A save that main refused has already left its reason in the store's
+// saveError, which the settings page shows. The control that started the save
+// has nothing more to do with it, and must not leave the rejection unhandled.
+describe('AccountPanel: a refused save is not left as an unhandled rejection', () => {
+  /** A store action that is refused, and what it was called with. A plain
+   *  function, not vi.fn: a mock function watches the promise it returns,
+   *  which would count as handling the rejection this is here to catch. */
+  function refused() {
+    const calls: unknown[][] = []
+    const action = (...args: unknown[]): Promise<void> => {
+      calls.push(args)
+      return Promise.reject(new Error('the change was refused'))
+    }
+    return Object.assign(action, { calls })
+  }
+
+  /** Clicks, lets the process report any rejection nobody handled, and returns them. */
+  async function unhandledAfterClick(target: HTMLElement): Promise<unknown[]> {
+    const seen: unknown[] = []
+    const note = (reason: unknown) => { seen.push(reason) }
+    process.on('unhandledRejection', note)
+    try {
+      act(() => {
+        target.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+      await flush()
+      for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 0))
+    } finally {
+      process.off('unhandledRejection', note)
+    }
+    return seen
+  }
+
+  it('a feature toggle', async () => {
+    const setProfileFeature = refused()
+    const b = makeProfile('b', CAPS_NO_PLAN, allOn)
+    seedGitHub(makeConfig([b]), { setProfileFeature: setProfileFeature as never })
+    const r = render(<AccountPanel profile={b} index={0} />)
+    expect(await unhandledAfterClick(switchFor(r.container, 'AI credits usage'))).toEqual([])
+    expect(setProfileFeature.calls).toEqual([['b', 'aiCredits', false]])
+    r.unmount()
+  })
+
+  it('Apply to all accounts', async () => {
+    const applyProfileToAll = refused()
+    const a = makeProfile('a', FULL_CAPS, allOn)
+    const b = makeProfile('b', CAPS_NO_PLAN, allOn)
+    seedGitHub(makeConfig([a, b]), { applyProfileToAll: applyProfileToAll as never })
+    const r = render(<AccountPanel profile={a} index={0} />)
+    expect(await unhandledAfterClick(buttonByText(r.container, 'Apply to all accounts')!)).toEqual([])
+    expect(applyProfileToAll.calls).toEqual([['a']])
+    r.unmount()
+  })
+
+  it('Remove', async () => {
+    const removeProfile = refused()
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const a = makeProfile('a', FULL_CAPS, allOn)
+    seedGitHub(makeConfig([a]), { removeProfile: removeProfile as never })
+    const r = render(<AccountPanel profile={a} index={0} />)
+    expect(await unhandledAfterClick(buttonByText(r.container, 'Remove')!)).toEqual([])
+    expect(removeProfile.calls).toEqual([['a']])
+    r.unmount()
+  })
+})
+
 describe('AccountsSection', () => {
   it('renders the empty card when there are no profiles', () => {
     seedGitHub(makeConfig([]))

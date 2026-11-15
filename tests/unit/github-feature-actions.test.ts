@@ -2,9 +2,9 @@
 // Renderer store actions for per-account feature toggles. Mocks the preload
 // surface; asserts WHICH IPC each action uses (profile patch vs config
 // update) because routing is the safety property here — per-account toggle
-// writes MUST go through the profile-patch IPC (updateProfile), never a
-// wholesale authProfiles write through updateConfig (which shallow-merges and
-// could drop tokenCiphertext).
+// writes MUST go through the profile-patch IPC (updateProfile), never through
+// updateConfig, which carries the settings only: main takes no account from
+// it.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useGitHubStore } from '../../src/renderer/stores/githubStore'
 import { useSettingsStore } from '../../src/renderer/stores/settingsStore'
@@ -24,10 +24,12 @@ const updateConfigMock = vi.fn().mockImplementation(async (patch: Record<string,
   transcriptScanningOptIn: false,
   ...patch,
 }))
-// loadConfig() re-hydrates after every write. Return null so the store falls
-// back to emptyGitHubConfig() — the actions complete; we assert on the routing
-// mocks above, not on post-refresh state.
-const getConfigMock = vi.fn().mockResolvedValue(null)
+// loadConfig() re-hydrates after every write. Answer "no file yet" (no config,
+// and the read did not fail) so the store falls back to emptyGitHubConfig() —
+// the actions complete; we assert on the routing mocks above, not on
+// post-refresh state.
+const NO_FILE = { config: null, readFailed: false }
+const getConfigMock = vi.fn().mockResolvedValue(NO_FILE)
 
 ;(globalThis as any).window = (globalThis as any).window ?? {}
 ;(globalThis as any).window.electronAPI = {
@@ -104,7 +106,8 @@ beforeEach(() => {
     transcriptScanningOptIn: false,
     ...patch,
   }))
-  getConfigMock.mockClear().mockResolvedValue(null)
+  getConfigMock.mockClear().mockResolvedValue(NO_FILE)
+  useGitHubStore.setState({ saveError: null, configUnread: false } as never)
 })
 
 describe('per-account feature actions', () => {
@@ -183,7 +186,7 @@ describe('per-account feature actions', () => {
     // Backing store the deferred mocks read/write. getConfig (loadConfig) reads
     // it; updateProfile applies featureToggles into it when its deferred resolves.
     let backing = makeConfig([{ id: 'a', toggles: { ...allOn } }])
-    getConfigMock.mockImplementation(async () => backing)
+    getConfigMock.mockImplementation(async () => ({ config: backing, readFailed: false }))
 
     const deferred: Array<{ resolve: () => void; apply: () => void }> = []
     updateProfileMock.mockImplementation((id: string, patch: { featureToggles: Record<GitHubAuthFeatureKey, boolean> }) => {
