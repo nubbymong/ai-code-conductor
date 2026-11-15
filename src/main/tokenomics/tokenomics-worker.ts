@@ -1147,7 +1147,9 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
         if (++done % YIELD_EVERY === 0) { await new Promise<void>((r) => setImmediate(r)); if (!db) return }
       }
       if (!db) return
-      if (sweepPending) fullSweepDue = true
+      // A reported transcript left part-read: the folders are not trusted at
+      // the full walk that follows, so it lists them again.
+      if (sweepPending) { fullSweepDue = true; subagentFolders = new Map() }
       if (settleDue()) await settleAccounts('incremental')
       if (!db) return
       // Not drained while a Rescan waits for its pass (2.1.3-beta.4): this

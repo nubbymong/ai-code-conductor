@@ -111,6 +111,8 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
   const unresolvable = new Set<string>()
   /** Files whose next open fails, once. */
   const openFailsOnce = new Set<string>()
+  /** The callbacks the worker gave each folder watcher, to report a write by hand. */
+  let watchCallbacks: Array<{ dir: string; cb: (event: string, filename: string) => void }> = []
 
   const wrapped = new Proxy(realFs, {
     get(target, prop) {
@@ -129,7 +131,10 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
           if (openFailsOnce.delete(String(p))) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
           return realFs.openSync(p, flags)
         }
-        case 'watch': return () => ({ close() {}, on() {} })
+        case 'watch': return (dir: string, _o: unknown, cb?: (event: string, filename: string) => void) => {
+          if (cb) watchCallbacks.push({ dir: String(dir), cb })
+          return { close() {}, on() {} }
+        }
         case 'realpathSync': return Object.assign((p: string): string => realFs.realpathSync(p), {
           native: (p: string): string => {
             if (unresolvable.has(p)) throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' })
@@ -209,7 +214,7 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
     db.cursors.clear(); db.meta.clear(); db.events = 0; db.failNextSetMeta = false; db.deleteCalls = []; db.failNextList = false
     clearCounts()
     completes = 0; infos = []; warnings = []; errors = []; waiters = []; transport = null
-    listFails.clear(); realPaths.clear(); unresolvable.clear(); openFailsOnce.clear()
+    listFails.clear(); realPaths.clear(); unresolvable.clear(); openFailsOnce.clear(); watchCallbacks = []
   })
   afterEach(() => {
     try { stopWorker?.() } catch { /* stopped */ }
@@ -484,6 +489,28 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
       for (let i = 0; i < 30 && (db.cursors.get(big)?.lastOffset ?? 0) < size; i++) await fullPass()
       expect(db.cursors.get(big)?.lastOffset).toBe(size)
       expect(db.events).toBe(4 + count)
+    })
+
+    it('a transcript the watcher reported and one budget did not finish is read to its end at the next walks though its folder has not changed', async () => {
+      plantSubagents()
+      const oneLine = Buffer.byteLength(line('x'))
+      // A budget of about twenty lines: the first walk reads everything and remembers the folder.
+      await start(undefined, oneLine * 20)
+      expect(db.cursors.has(agent('agent-a'))).toBe(true)
+      // The transcript grows in place by three budgets; its folder is not touched.
+      const count = 60
+      realFs.appendFileSync(agent('agent-a'), Array.from({ length: count }, (_, i) => line(`grow-${i}`)).join(''))
+      const size = realFs.statSync(agent('agent-a')).size
+      // The watcher reports it: the reported read stops at the budget.
+      const reported = nextSweep('the reported read')
+      for (const w of watchCallbacks) if (w.dir === claudeDir) w.cb('change', path.relative(claudeDir, agent('agent-a')))
+      await reported
+      await settle()
+      expect(db.cursors.get(agent('agent-a'))?.lastOffset ?? 0).toBeLessThan(size)
+      // The full walks that follow list the folder again and finish it.
+      for (let i = 0; i < 30 && (db.cursors.get(agent('agent-a'))?.lastOffset ?? 0) < size; i++) await fullPass()
+      expect(db.cursors.get(agent('agent-a'))?.lastOffset).toBe(size)
+      expect(db.events).toBe(5 + count)
     })
 
     it('a transcript that could not be opened is tried again at the next walk though its folder has not changed', async () => {

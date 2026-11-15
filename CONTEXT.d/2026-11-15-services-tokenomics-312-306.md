@@ -34,7 +34,7 @@ One branch, four items carried from the beta 4 planning records (aicc_planning #
 
 The first walk after the worker starts, a Rescan and a re-index read every folder. Depth stays 12.
 
-Nothing is remembered from a pass that left work behind: a transcript longer than one budget (the next pass follows at once), one that could not be opened or read, or a pass that threw. The next walk then lists every folder again, and folders are remembered only after a pass that read everything, so a transcript is never stranded part-read.
+Nothing is remembered from a pass that left work behind: a transcript longer than one budget (the next pass follows at once), one that could not be opened or read, or a pass that threw, and a read of reported transcripts that stopped at the budget. A file that stays unreadable anywhere in the tree keeps this off, which costs speed only. The next walk then lists every folder again, and folders are remembered only after a pass that read everything, so a transcript is never stranded part-read.
 
 **Scope, stated plainly.** A transcript that only grows in place does not change its folder. Those depend on the watcher and on the 5 s timer's size checks of the 200 transcripts written last, no longer on the 5 minute full walk's per-file check. A Rescan reads everything.
 
@@ -42,7 +42,7 @@ Nothing is remembered from a pass that left work behind: a transcript longer tha
 
 - `tests/unit/logging/log-supervisor.test.ts`: the PID is asked when the row is built, pushed on spawn, null before spawn, for a failed fork, a bad value, a throw and after exit.
 - `tests/unit/renderer/tokenomics-mp12.test.tsx`: no notice and no legend row for a model with no tokens; a model with tokens still named.
-- `tests/unit/tokenomics/tokenomics-worker-prune.test.ts`: realpath at open, the drop (with batches, rollout rows, rows under another path), no drop after a folder that would not list, a root that would not list, a missing root, an empty root, a pass that threw or a failed row listing, a row written since the pass began kept; unchanged subagent folders not listed, an added transcript read, a deeper change found, a transcript over one budget read to its end and one that failed to open read at the next walk (folder unchanged), a fresh folder not trusted, Rescan, re-index and a restart reading everything.
+- `tests/unit/tokenomics/tokenomics-worker-prune.test.ts`: realpath at open, the drop (with batches, rollout rows, rows under another path), no drop after a folder that would not list, a root that would not list, a missing root, an empty root, a pass that threw or a failed row listing, a row written since the pass began kept; unchanged subagent folders not listed, an added transcript read, a deeper change found, a transcript over one budget read to its end, one the watcher reported that a budget did not finish, and one that failed to open read at the next walk (folder unchanged), a fresh folder not trusted, Rescan, re-index and a restart reading everything.
 - `tests/unit/native/tk-db-prune.native.test.ts`: the two database methods, and events untouched. Native tests do not run on the dev host; CI runs it.
 
 ### Not in this change
