@@ -54,11 +54,11 @@ export default function AccountLaunchGate({ suppressed = false }: { suppressed?:
   const lastUsedAccountId = useSettingsStore((s) => s.settings.lastUsedAccountId)
   const theme = useResolvedTheme()
   // Only active accounts are selectable at launch: an inactive account has been
-  // parked and must not be chosen for a new session. The session's own pinned
-  // account stays selectable so a session already on it can relaunch, and the
+  // parked and must not be chosen for a session, a restored one included: main
+  // refuses a session on a switched-off account (inactiveAccountRefusal), so
+  // offering the session's own parked account would be a dead choice. The
   // primary is always active, so it is always a valid fallback.
-  const isSelectable = (p: (typeof profiles)[number]) =>
-    isAccountActive(p) || p.id === pending?.currentProfileId
+  const isSelectable = (p: (typeof profiles)[number]) => isAccountActive(p)
   // If nothing is selectable (a no-primary install where every remaining account
   // was parked, e.g. after deleting the last active one) fall back to all
   // profiles rather than a dead, empty picker -- a choice beats no choice.
@@ -69,8 +69,9 @@ export default function AccountLaunchGate({ suppressed = false }: { suppressed?:
   // it still EXISTS (#446): the 'ask' resume path routes an already-pinned
   // profileId through this gate, and a session pinned to a since-DELETED account
   // would otherwise pre-select an id with no matching <option> — a blank
-  // dropdown. A missing pin falls through to primary/first, same as no pin.
-  const pinnedStillExists = !!pending?.currentProfileId && profiles.some((p) => p.id === pending.currentProfileId)
+  // dropdown. A missing pin falls through to primary/first, same as no pin, and
+  // so does a pin to an account that is switched off (it is not in the list).
+  const pinnedStillExists = !!pending?.currentProfileId && selectableProfiles.some((p) => p.id === pending.currentProfileId)
   const defaultSelectedId = () =>
     (pinnedStillExists ? pending!.currentProfileId : undefined) ?? profiles.find((p) => p.isPrimary)?.id ?? selectableProfiles[0]?.id ?? ''
   const [selected, setSelected] = useState<string>(defaultSelectedId())
@@ -100,17 +101,19 @@ export default function AccountLaunchGate({ suppressed = false }: { suppressed?:
   //   - A RESUMED session: "This session's account", the account THAT session
   //     last ran on (utils/sessionLaunch resumedSessionOwnAccount), never the
   //     global one. A multi-session resume answers one picker per session in
-  //     turn, so the global value names the session answered just before. The
-  //     session's own pin always passes isSelectable, and the primary is always
-  //     active, so a parked pin still shows. A pin to a removed account shows
-  //     no row, only a notice, and the dropdown falls back as above.
+  //     turn, so the global value names the session answered just before. A pin
+  //     to a removed or a switched-off account shows no row, only a notice, and
+  //     the dropdown falls back as above (main refuses a session on either).
   const own = isRestore ? resumedSessionOwnAccount(pending.currentProfileId, profiles) : undefined
   const ownProfile = own?.id ? profiles.find((p) => p.id === own.id && isSelectable(p)) : undefined
   const ownIsPrimaryFallback = !!ownProfile && !pending.currentProfileId
+  const ownIsSwitchedOff = !!own?.id && profiles.some((p) => p.id === own.id && !isAccountActive(p))
   const ownNotice = isRestore && !ownProfile
     ? (own?.gone
         ? 'The account this session last ran on is no longer set up here. Choose one to start it.'
-        : 'No account was saved with this session. Choose one to start it.')
+        : ownIsSwitchedOff
+          ? 'The account this session last ran on is switched off. Choose another to start it.'
+          : 'No account was saved with this session. Choose one to start it.')
     : ''
   const lastUsedProfile = lastUsedAccountId
     ? profiles.find((p) => p.id === lastUsedAccountId && isSelectable(p))

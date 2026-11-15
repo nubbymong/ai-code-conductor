@@ -269,10 +269,15 @@ export function sameDirectory(a: string, b: string, platform: NodeJS.Platform = 
  *  answers with the real one, so the rollout may record either. Callers try
  *  the exact spelling first; this is the second look. Never true when either
  *  folder cannot be resolved (it does not exist, or access was refused), and
- *  case-folded on Windows as sameDirectory does. `real` is a parameter so the
- *  rule tests without a link. */
+ *  case-folded on Windows as sameDirectory does. Only for two absolute paths
+ *  on a local path: a relative spelling has no fixed folder, and a network
+ *  share (a \\server\share or //server/share path) can hold the call up for
+ *  as long as the share takes to time out, on the main thread, so neither is
+ *  looked at. `real` is a parameter so the rule tests without a link. */
 export function sameFolderByRealPath(a: string, b: string, real: (p: string) => string = (p) => fs.realpathSync.native(p)): boolean {
   if (!a || !b) return false
+  const absolute = /^(?:[A-Za-z]:[\\/]|\/(?![\\/]))/
+  if (!absolute.test(a) || !absolute.test(b)) return false
   try {
     return sameDirectory(real(a), real(b))
   } catch {

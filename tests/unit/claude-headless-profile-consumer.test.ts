@@ -252,7 +252,9 @@ describe('spawnClaudeHeadless -- a REFUSED managed launch settles like every oth
     gate.refuse = true
     const res = await spawnClaudeHeadless(['-p'], 10_000, 'prompt', HOME)
     expect(res.code).toBe(1)
-    expect(res.stderr).toContain('refusing a managed Claude launch')
+    // The sentence a user reads: the log marker in front of it is dropped.
+    expect(res.stderr).toContain("The project's own settings could redirect this account")
+    expect(res.stderr).not.toContain('refusing a managed Claude launch')
     expect(res.stderr).toContain('settings.json: apiKeyHelper')
     expect(spawnCalls, 'a refused launch still spawned the CLI').toHaveLength(0)
     expect(hasTransientProfileConsumer(PROFILE), 'the profile hold leaked past the refusal').toBe(false)
@@ -263,7 +265,7 @@ describe('spawnClaudeHeadless -- a REFUSED managed launch settles like every oth
     _resetProjectScanStateForTest()   // the MISS: the gate is awaited, then spawnNow refuses
     const res = await spawnClaudeHeadless(['-p'], 10_000, 'prompt', HOME)
     expect(res.code).toBe(1)
-    expect(res.stderr).toContain('refusing a managed Claude launch')
+    expect(res.stderr).toContain("The project's own settings could redirect this account")
     expect(spawnCalls).toHaveLength(0)
     expect(hasTransientProfileConsumer(PROFILE)).toBe(false)
   })

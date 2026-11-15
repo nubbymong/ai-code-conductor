@@ -255,20 +255,34 @@ describe('logoutClaudeCli: the CLI\'s own sign-out in exactly this profile\'s ho
     }
   })
 
-  it('macOS: every profile runs on the Mac\'s one sign-in, so every sign-out needs the acknowledgement, and HOME stays the real home', async () => {
-    // Any profile, the primary or not, and whatever the profile list says.
+  it('macOS: only the primary account runs the CLI, so its sign-out needs the acknowledgement and HOME stays the real home', async () => {
     const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
     const runner = fakeRunner()
     try {
-      expect(await logoutClaudeCli(ID, { runner })).toEqual({ ran: false, after: null, refused: 'computer-sign-in' })
+      expect(await logoutClaudeCli(PRIMARY, { runner })).toEqual({ ran: false, after: null, refused: 'computer-sign-in' })
       expect(runner.calls).toEqual([])
-      expect(await logoutClaudeCli(ID, { runner, acknowledgeComputerSignIn: true })).toMatchObject({ ran: true })
+      expect(await logoutClaudeCli(PRIMARY, { runner, acknowledgeComputerSignIn: true })).toMatchObject({ ran: true })
     } finally {
       Object.defineProperty(process, 'platform', realPlatform)
     }
     expect(runner.calls).toHaveLength(2)
-    for (const c of runner.calls) expect(c.env.HOME).not.toBe(home(ID))
+    for (const c of runner.calls) expect(c.env.HOME).not.toBe(home(PRIMARY))
+  })
+
+  it('macOS: another account is refused up front, before the acknowledgement is asked for and with nothing run', async () => {
+    // The CLI there runs as the Mac's own sign-in whatever the account, so
+    // signing the other account out would sign that one out.
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    const runner = fakeRunner()
+    try {
+      expect(await logoutClaudeCli(ID, { runner })).toEqual({ ran: false, after: null, refused: 'mac-not-primary' })
+      expect(await logoutClaudeCli(ID, { runner, acknowledgeComputerSignIn: true })).toEqual({ ran: false, after: null, refused: 'mac-not-primary' })
+    } finally {
+      Object.defineProperty(process, 'platform', realPlatform)
+    }
+    expect(runner.calls).toEqual([])
   })
 
   it('holds the profile for the whole run (past the 30 s default bound), waits for a token rotation in flight, and lets go after', async () => {

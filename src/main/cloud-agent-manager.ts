@@ -13,7 +13,7 @@ import * as path from 'path'
 import { createReadFailureLatch, loadConfigLatched, saveConfigLatched, mergeById } from './persist-latch'
 import { logInfo, logWarn, logError } from './debug-logger'
 import { LEGACY_PIN_NOT_USED } from '../shared/legacy-version'
-import { getProfileConfigDir, getPrimaryProfileId, setupProfileLinks, listProfiles, isValidProfileId, startProfileStepsPending, startProfileStepsSettled, profileCredentialFoldersChecked, checkProfileCredentialFolders } from './account-profiles'
+import { getProfileConfigDir, getPrimaryProfileId, setupProfileLinks, listProfiles, isValidProfileId, startProfileStepsPending, startProfileStepsSettled, profileCredentialFoldersChecked, checkProfileCredentialFolders, inactiveAccountRefusal, launchRefusalText, MANAGED_LAUNCH_REFUSAL } from './account-profiles'
 import { withProfileHome } from './pty-manager'
 import { gateManagedLaunch } from './managed-launch-diagnostics'
 import type { ProjectGateResult, ProviderLaunchRefused, ProviderId } from '../shared/providers'
@@ -22,7 +22,7 @@ import { providerLaunchRefusal } from './provider-launch-gate'
 import { getAccountsService } from './provider-accounts'
 import { tryGetProviderPackage } from './providers/core'
 import type { AccountLease, PreparedLaunchResult } from './providers/core'
-import type { CloudAgentCodexOptions } from '../shared/types'
+import type { CloudAgentCodexOptions, CloudAgentRequestRejected } from '../shared/types'
 import { stripSpoofableText } from '../shared/safe-text'
 import { randomId } from '../shared/id'
 import { systemTool, windowsStartCommand } from './windows-programs'
@@ -103,6 +103,12 @@ async function resolveAgentEnv(profileId: string | undefined, projectPath: strin
   }
 
   if (!resolvedProfileId) return { env: baseEnv, resolvedProfileId: null }
+
+  // An account switched off never runs an agent, however its id arrived: a
+  // retry reads the agent's saved account, which may have been switched off
+  // since. Refused with the sentence (the caller answers it as `rejected`).
+  const switchedOff = inactiveAccountRefusal(resolvedProfileId)
+  if (switchedOff) throw new Error(`${MANAGED_LAUNCH_REFUSAL}: ${switchedOff}`)
 
   if (!profileCredentialFoldersChecked(resolvedProfileId)) await checkProfileCredentialFolders(resolvedProfileId)
   try { setupProfileLinks(resolvedProfileId) } catch (e) { logWarn(`[cloud-agent] home refresh failed for ${resolvedProfileId}: ${e}`) }
@@ -275,7 +281,7 @@ export interface DispatchAgentParams {
   codexOptions?: CloudAgentCodexOptions
 }
 
-export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudAgentData | ProviderLaunchRefused> {
+export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudAgentData | ProviderLaunchRefused | CloudAgentRequestRejected> {
   // P4.5: an agent of another provider runs through that provider's package.
   if (agentProvider(params) !== 'claude') return dispatchBackgroundAgent(agentProvider(params), params)
   // WP2: a cloud agent is a Claude Code run, so none starts while Claude Code
@@ -305,7 +311,20 @@ export async function dispatchAgent(params: DispatchAgentParams): Promise<CloudA
     //
     // The agent runs the installed Claude Code (below), so the preflight
     // checks the floor against that one.
-    ;({ env: spawnEnvVars, resolvedProfileId, accountEmail } = await resolveAgentEnv(params.profileId, params.projectPath, projectGate))
+    try {
+      ;({ env: spawnEnvVars, resolvedProfileId, accountEmail } = await resolveAgentEnv(params.profileId, params.projectPath, projectGate))
+    } catch (e) {
+      // A managed-launch refusal (an account switched off, a non-primary
+      // account on a Mac, the project gate, the host control) is answered as
+      // `rejected`, the banner the Cloud Agents page shows. Thrown, it only
+      // reached the page's console and Run did nothing. No agent record exists.
+      const message = (e as Error)?.message ?? String(e)
+      if (message.includes(MANAGED_LAUNCH_REFUSAL)) {
+        logWarn(`[cloud-agent] not started: ${message}`)
+        return { rejected: launchRefusalText(message) }
+      }
+      throw e
+    }
 
     agent = {
       id: generateId(),
@@ -887,7 +906,7 @@ export function removeAgent(id: string): { ok: boolean; removed: boolean; error?
  *  The skip-permissions choice is per run and never kept, so a retry runs
  *  with the default. `acknowledgeRealmOnly`: this one retry may use the
  *  agent's unverified sign-in (asked again for every launch; never stored). */
-export async function retryAgent(id: string, opts: { acknowledgeRealmOnly?: boolean } = {}): Promise<CloudAgentData | null | ProviderLaunchRefused> {
+export async function retryAgent(id: string, opts: { acknowledgeRealmOnly?: boolean } = {}): Promise<CloudAgentData | null | ProviderLaunchRefused | CloudAgentRequestRejected> {
   const agent = agents.find(a => a.id === id)
   if (!agent) return null
 

@@ -16,7 +16,7 @@
  *   watchAndClaimRollout    -- 250ms-poll claim + 500ms-poll tail pipeline
  */
 
-import { readdirSync, lstatSync, unlinkSync, rmdirSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants, promises as fsp } from 'fs'
+import { readdirSync, lstatSync, realpathSync, unlinkSync, rmdirSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants, promises as fsp } from 'fs'
 import type { FileHandle } from 'fs/promises'
 import { join, relative, isAbsolute, sep, dirname, basename } from 'path'
 import { computeCodexCostUsd } from './pricing'
@@ -827,7 +827,20 @@ export function watchAndClaimRollout(
 
   /** Whether a folder a rollout (or another launch) names is this session's:
    *  the exact spelling first, then by real path (a symlinked folder). */
-  const sameSessionFolder = (cwd: string): boolean => cwd === sessionCwd || sameFolderByRealPath(cwd, sessionCwd)
+  const realPaths = new Map<string, string | null>()
+  /** Each folder is resolved on disk once per watch (the session's own folder
+   *  once, however many rollouts are looked at); a failure is kept too, so a
+   *  folder that cannot be resolved is not asked about again. */
+  const realOnce = (p: string): string => {
+    let v = realPaths.get(p)
+    if (v === undefined) {
+      try { v = realpathSync.native(p) } catch { v = null }
+      realPaths.set(p, v)
+    }
+    if (v === null) throw new Error('not resolvable')
+    return v
+  }
+  const sameSessionFolder = (cwd: string): boolean => cwd === sessionCwd || sameFolderByRealPath(cwd, sessionCwd, realOnce)
 
   let claimedPath: string | null = null
   let intervalHandle: ReturnType<typeof setInterval> | null = null

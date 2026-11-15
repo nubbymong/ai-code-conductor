@@ -12,10 +12,11 @@ import os from 'node:os'
 import path from 'node:path'
 import type { AccountProfile } from '../../src/shared/account-types'
 import {
-  _setRootsForTest, upsertProfile, withProfileHome, profileLaunchRefusal, inactiveAccountRefusal, sharedConfigPins,
+  _setRootsForTest, upsertProfile, withProfileHome, profileLaunchRefusal, inactiveAccountRefusal, assertAccountActive, launchRefusalText, sharedConfigPins,
   MAC_NON_PRIMARY_REFUSAL, MAC_PRIMARY_UNKNOWN_REFUSAL, MANAGED_LAUNCH_REFUSAL,
 } from '../../src/main/account-profiles'
 import { composeProviders } from '../../src/main/providers/compose'
+import { APP_KNOWLEDGE_SECTIONS } from '../../src/shared/app-knowledge'
 
 const profile = (over: Partial<AccountProfile>): AccountProfile => ({ id: 'p1', name: 'Work', accountEmail: 'a@example.test', createdAt: 0, ...over })
 
@@ -26,7 +27,9 @@ describe('profileLaunchRefusal: a Mac session runs on the primary account only',
     const refusal = profileLaunchRefusal('p2', 'darwin', () => list)
     expect(refusal).toBe(MAC_NON_PRIMARY_REFUSAL)
     expect(refusal).toMatch(/normal Claude sign-in/)
-    expect(refusal).toMatch(/Switch the tab/)
+    expect(refusal).toMatch(/Choose your primary account/)
+    // Nothing in it is about a tab: an Insights run and a cloud agent read it too.
+    expect(refusal).not.toMatch(/tab|session/i)
   })
 
   it('lets the primary account run on macOS', () => {
@@ -104,6 +107,11 @@ describe('inactiveAccountRefusal: a switched-off account starts no session', () 
     expect(inactiveAccountRefusal('p9', () => [])).toBeNull()
   })
 
+  it('has a sentence that fits a tab, an agent and an Insights run alike', () => {
+    const refusal = inactiveAccountRefusal('p2', () => [profile({ id: 'p2', name: 'Side project', active: false })])!
+    expect(refusal).toMatch(/^The Claude account "Side project" is switched off, so nothing was started on it\./)
+  })
+
   it('reads the saved list by default', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-inactive-refusal-'))
     _setRootsForTest({ resourcesDir: path.join(tmp, 'resources'), sharedRoot: path.join(tmp, 'shared') })
@@ -114,6 +122,52 @@ describe('inactiveAccountRefusal: a switched-off account starts no session', () 
       _setRootsForTest(null)
       try { fs.rmSync(tmp, { recursive: true, force: true }) } catch { /* ignore */ }
     }
+  })
+})
+
+describe('Ask Conductor and the Feature Guide quote the sentences users are shown', () => {
+  const known = APP_KNOWLEDGE_SECTIONS.find((x) => x.id === 'known-issues')!.body
+  it('knows the Mac refusal, word for word, and that the account shows as not checked', () => {
+    expect(known).toContain(MAC_NON_PRIMARY_REFUSAL)
+    expect(known).toContain('such an account shows as not checked on this Mac, not as signed out')
+  })
+  it('knows the switched-off refusal, word for word with the account name as NAME', () => {
+    const sentence = inactiveAccountRefusal('p2', () => [profile({ id: 'p2', name: 'NAME', active: false })])!
+    expect(known).toContain(sentence)
+    expect(known).toContain("Workaround: use Switch Account in the tab's right-click menu")
+  })
+})
+
+describe('assertAccountActive: the one call a launch makes', () => {
+  let tmp = ''
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-assert-active-'))
+    _setRootsForTest({ resourcesDir: path.join(tmp, 'resources'), sharedRoot: path.join(tmp, 'shared') })
+    upsertProfile(profile({ id: 'p2', name: 'Parked', active: false }))
+    upsertProfile(profile({ id: 'p3', name: 'On' }))
+  })
+  afterEach(() => {
+    _setRootsForTest(null)
+    try { fs.rmSync(tmp, { recursive: true, force: true }) } catch { /* ignore */ }
+  })
+
+  it('throws the sentence for a switched-off account', () => {
+    expect(() => assertAccountActive('p2', 'session-1')).toThrow(/"Parked" is switched off/)
+  })
+
+  it('does nothing for an active account', () => {
+    expect(() => assertAccountActive('p3', 'session-1')).not.toThrow()
+  })
+})
+
+describe('launchRefusalText: a refusal as a user reads it', () => {
+  it('drops the log marker and starts with a capital letter', () => {
+    expect(launchRefusalText(`${MANAGED_LAUNCH_REFUSAL}: the project's own settings could redirect this account`)).toBe("The project's own settings could redirect this account")
+    expect(launchRefusalText(`${MANAGED_LAUNCH_REFUSAL}: ${MAC_NON_PRIMARY_REFUSAL}`)).toBe(MAC_NON_PRIMARY_REFUSAL)
+  })
+
+  it('leaves any other message as it is', () => {
+    expect(launchRefusalText('Unknown error')).toBe('Unknown error')
   })
 })
 

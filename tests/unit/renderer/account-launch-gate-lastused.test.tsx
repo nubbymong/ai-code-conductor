@@ -117,15 +117,16 @@ describe('AccountLaunchGate: Most recent line (new session)', () => {
     expect(q('[data-testid="account-launch-lastused-use"]')).toBeNull()
   })
 
-  it('still shows a parked last-used account IF it is the session’s own pinned account (relaunch stays possible)', () => {
-    // isSelectable keeps the session's currently pinned account selectable even
-    // when parked, so a session already on it can relaunch — the Last used line
-    // must follow the same rule, not a blanket active-only one.
+  it('does not show a parked last-used account even when it is the session’s own pinned account (main refuses it)', () => {
+    // A session on a switched-off account is refused in main, so the picker
+    // offers it nowhere: not in the list and not in the Last used line.
     profilesState.profiles = [profile({ id: 'primary', isPrimary: true }), profile({ id: 'p-pinned', accountEmail: 'pinned@b.co', active: false })]
     settingsState.settings.lastUsedAccountId = 'p-pinned'
     gateState.queue = [{ sessionId: 's1', sessionLabel: 'web', currentProfileId: 'p-pinned', resolve: () => {} }]
     render()
-    expect(q('[data-testid="account-launch-lastused"]')).not.toBeNull()
+    expect(q('[data-testid="account-launch-lastused"]')).toBeNull()
+    expect(container.querySelector('option[value="p-pinned"]')).toBeNull()
+    expect((q('[data-testid="account-launch-select"]') as HTMLSelectElement).value).toBe('primary')
   })
 
   it('does not show the line when there is no last-used account, or it was deleted', () => {
@@ -277,16 +278,16 @@ describe("AccountLaunchGate: a RESUMED session shows its own account (O9)", () =
     expect(container.textContent).not.toContain('(this session)')
   })
 
-  it('(g) a PARKED pin on a resume still shows as the session\'s own account', () => {
+  it('(g) a PARKED pin on a resume is not offered; a notice says it is switched off and the dropdown falls back', () => {
     profilesState.profiles = [profile({ id: 'primary', name: 'Primary acct', accountEmail: 'primary@b.co', isPrimary: true }), profile({ id: 'p-parked', name: 'Parked acct', accountEmail: 'parked@b.co', active: false }), profile({ id: 'p3', name: 'Third acct', accountEmail: 'three@b.co' })]
     settingsState.settings.lastUsedAccountId = 'p3'
     gateState.queue = [{ sessionId: 's1', sessionLabel: 'web', currentProfileId: 'p-parked', resolve: () => {} }]
     gateState.restored = ['s1']
     render()
-    expect(row()!.textContent).toContain('Parked acct')
-    expect(row()!.getAttribute('data-kind')).toBe('own')
-    expect(row()!.textContent).not.toContain('Third acct')
-    expect(select().value).toBe('p-parked')
+    expect(row()).toBeNull()
+    expect(q('[data-testid="account-launch-own-notice"]')!.textContent).toBe('The account this session last ran on is switched off. Choose another to start it.')
+    expect(container.querySelector('option[value="p-parked"]')).toBeNull()
+    expect(select().value).toBe('primary')
   })
 
   it('(h) the session\'s own option carries "(this session)" in the dropdown, and only that one', () => {

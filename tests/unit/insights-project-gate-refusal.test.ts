@@ -20,7 +20,7 @@ const h = vi.hoisted(() => ({
   resourcesDir: '',
   installPath: '',
   profileDir: {} as Record<string, string>,
-  profiles: [] as Array<{ id: string; name?: string; accountEmail: string; isPrimary?: boolean }>,
+  profiles: [] as Array<{ id: string; name?: string; accountEmail: string; isPrimary?: boolean; active?: boolean }>,
   ptySpawns: 0,
   headlessRuns: 0,
 }))
@@ -113,10 +113,33 @@ describe('the project-settings gate on the insights run', () => {
     const run = getCatalogue().runs.find((r) => r.id === id)!
     expect(run.status).toBe('failed')
     // The refusal is VISIBLE on the run, file and key named -- and never the value.
-    expect(run.error).toContain(MANAGED_LAUNCH_REFUSAL)
+    // The sentence a user reads: the log marker in front of it is dropped.
+    expect(run.error).toContain("The project's own settings could redirect this account")
+    expect(run.error).not.toContain(MANAGED_LAUNCH_REFUSAL)
     expect(run.error).toContain('settings.json: apiKeyHelper')
     expect(run.error).not.toContain('evil.example')
     // Nothing leaks past the refusal: the lock and the profile hold are released.
+    expect(isRunning('a')).toBe(false)
+    expect(hasTransientProfileConsumer('a')).toBe(false)
+  })
+
+  it('REFUSES a run named for an account switched off, with the sentence on the run, and starts nothing', async () => {
+    seed('a', 'a@example.com')
+    // The account is not the primary one (the primary is never switched off) and is switched off.
+    h.profiles[0].isPrimary = false
+    h.profiles[0].active = false
+    h.profiles.push({ id: 'main', name: 'Main', accountEmail: 'm@example.com', isPrimary: true })
+    h.profileDir.main = join(tmpRoot, 'profiles', 'main')
+    mkdirSync(h.profileDir.main, { recursive: true })
+
+    const id = await runInsights(getWin, { profileId: 'a' })
+
+    expect(h.ptySpawns, 'the /insights PTY was spawned for a switched-off account').toBe(0)
+    expect(h.headlessRuns).toBe(0)
+    const run = getCatalogue().runs.find((r) => r.id === id)!
+    expect(run.status).toBe('failed')
+    expect(run.error).toMatch(/^The Claude account "Acct A" is switched off, so nothing was started on it\./)
+    expect(run.error).not.toContain(MANAGED_LAUNCH_REFUSAL)
     expect(isRunning('a')).toBe(false)
     expect(hasTransientProfileConsumer('a')).toBe(false)
   })

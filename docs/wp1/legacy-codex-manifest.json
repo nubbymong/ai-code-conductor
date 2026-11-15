@@ -5006,7 +5006,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 52
+      "lineCount": 54
     },
     {
       "path": "tests/unit/main/service-status-providers.test.ts",
@@ -5736,6 +5736,24 @@
         "P13"
       ],
       "lineCount": 12
+    },
+    {
+      "path": "tests/unit/providers/codex/telemetry-symlink-real.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "tests/unit/providers/codex/telemetry-symlinked-folder.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 6
     },
     {
       "path": "tests/unit/providers/codex/telemetry.test.ts",

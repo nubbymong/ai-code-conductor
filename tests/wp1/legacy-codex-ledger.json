@@ -8216,6 +8216,30 @@
       "note": "created by WP2 PR 3 P3.7; the running-time store is replaced by vi.mock to throw on demand; real files in a temp folder, no Codex process"
     },
     {
+      "path": "tests/unit/providers/codex/telemetry-symlink-real.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.5 test (tests/unit/providers/codex/telemetry-symlink-real.test.ts): a Codex session started in a real symlinked folder is claimed by its real path (WP1.68)",
+      "note": "created by the 2.1.3-beta.5 accounts and sessions track; makes a real symlink in a temp folder, no Codex process"
+    },
+    {
+      "path": "tests/unit/providers/codex/telemetry-symlinked-folder.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.5 test (tests/unit/providers/codex/telemetry-symlinked-folder.test.ts): a rollout that records the real folder of a symlinked session folder is claimed, and a folder that cannot be resolved is not (WP1.68)",
+      "note": "created by the 2.1.3-beta.5 accounts and sessions track; the real-path lookup is a stand-in, no link and no Codex process"
+    },
+    {
       "path": "tests/unit/providers/codex/telemetry.test.ts",
       "predicates": [
         "P01",

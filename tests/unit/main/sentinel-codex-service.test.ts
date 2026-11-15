@@ -133,6 +133,8 @@ vi.mock('../../../src/main/account-profiles', () => ({
   profileCredentialFoldersChecked: () => true,
   checkProfileCredentialFolders: async () => {},
   listProfiles: () => claudeAccounts.list,
+  // No account here is switched off (the refusal has its own case in sentinel-unreachable-timing).
+  inactiveAccountRefusal: () => null,
   // Round 3: the default account's Claude folder is this suite's own.
   sharedRoot: () => path.join(dir, 'shared-claude'),
 }))

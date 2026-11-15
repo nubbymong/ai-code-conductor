@@ -12,9 +12,12 @@ import { join, dirname, basename } from 'path'
 import { tmpdir } from 'os'
 
 const realOf = new Map<string, string>()
+/** Every folder the system was asked the real path of. */
+const lookups: string[] = []
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>()
   const native = ((p: unknown, o?: unknown) => {
+    lookups.push(String(p))
     const mapped = realOf.get(String(p))
     return mapped !== undefined ? mapped : (actual.realpathSync.native as (a: unknown, b?: unknown) => string)(p, o)
   }) as typeof actual.realpathSync.native
@@ -31,6 +34,7 @@ const temps: string[] = []
 afterEach(() => {
   vi.useRealTimers()
   realOf.clear()
+  lookups.length = 0
   // Only a folder this file made (its own prefix, directly in the temp folder) is removed.
   for (const t of temps.splice(0)) if (dirname(t) === tmpdir() && /^ccc-test-codex-symfolder-/.test(basename(t))) rmSync(t, { recursive: true, force: true })
 })
@@ -40,7 +44,7 @@ const tokenLine = (iso: string, input: number) =>
   JSON.stringify({ timestamp: iso, type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: input, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0, total_tokens: input + 1 } }, rate_limits: null } })
 
 /** A realm with one new rollout recording `recordedCwd`, written after the watch starts. */
-async function run(sessionCwd: string, recordedCwd: string): Promise<{ claims: string[]; inputTokens: number | undefined }> {
+async function run(sessionCwd: string, recordedCwd: string, alsoRecorded: string[] = []): Promise<{ claims: string[]; inputTokens: number | undefined }> {
   vi.useFakeTimers()
   const base = mkdtempSync(join(tmpdir(), 'ccc-test-codex-symfolder-'))
   temps.push(base)
@@ -55,6 +59,11 @@ async function run(sessionCwd: string, recordedCwd: string): Promise<{ claims: s
   const iso = new Date().toISOString()
   const meta = JSON.stringify({ timestamp: iso, type: 'session_meta', payload: { id: ID, timestamp: iso, cwd: recordedCwd, cli_version: '0.155.1' } })
   writeFileSync(join(dir, `rollout-${iso.slice(0, 19).replace(/:/g, '-')}-${ID}.jsonl`), [meta, tokenLine(iso, 42)].join('\n') + '\n')
+  // Further rollouts of other conversations in the same day folder, recording other folders.
+  alsoRecorded.forEach((cwd, i) => {
+    const other = JSON.stringify({ timestamp: iso, type: 'session_meta', payload: { id: ID.replace(/1$/, String(2 + i)), timestamp: iso, cwd, cli_version: '0.155.1' } })
+    writeFileSync(join(dir, `rollout-${iso.slice(0, 19).replace(/:/g, '-')}-${ID.replace(/1$/, String(2 + i))}.jsonl`), other + '\n')
+  })
   await vi.advanceTimersByTimeAsync(3_000)
   src.stop()
   return { claims, inputTokens: updates.at(-1)?.inputTokens }
@@ -95,5 +104,28 @@ describe('a session in a symlinked folder is found by the real folder its rollou
     realOf.set(LINK, REAL)
     const r = await run(LINK, '/gone/elsewhere')
     expect(r.claims).toEqual([])
+  })
+
+  it('asks the system about a folder once per watch, however many rollouts record it or the session', async () => {
+    realOf.set(LINK, REAL)
+    realOf.set(REAL, REAL)
+    realOf.set('/real/other', '/real/other')
+    const r = await run(LINK, '/real/other', ['/real/other', '/real/other'])
+    expect(r.claims).toEqual([])
+    expect(lookups.filter((p) => p === LINK)).toHaveLength(1)
+    expect(lookups.filter((p) => p === '/real/other')).toHaveLength(1)
+  })
+
+  it('does not ask the system about a relative folder or one on a network share (a slow share would hold the main thread)', async () => {
+    realOf.set(LINK, REAL)
+    for (const recorded of ['relative/demo', '\\\\server\\share\\demo', '//server/share/demo']) {
+      const r = await run(LINK, recorded)
+      expect(r.claims, recorded).toEqual([])
+    }
+    // The session's own folder is a link, but nothing recorded was a folder worth resolving.
+    expect(lookups).toEqual([])
+    const unc = await run('\\\\server\\share\\demo', REAL)
+    expect(unc.claims).toEqual([])
+    expect(lookups).toEqual([])
   })
 })

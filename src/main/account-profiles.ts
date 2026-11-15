@@ -29,6 +29,7 @@ import { canonicaliseEmail } from '../shared/account-chip-color'
 import { lowerAsciiLetters } from '../shared/profile-id'
 import type { AccountProfile } from '../shared/account-types'
 import { isAccountActive } from '../shared/account-types'
+import { MANAGED_LAUNCH_REFUSAL, launchRefusalText } from './launch-refusal'
 import type { ProjectGateResult } from '../shared/providers'
 
 // Shared-directory names junctioned from a profile back to the shared root.
@@ -3557,10 +3558,10 @@ export function captureDetectedAccount(profileId: string, name?: string): Accoun
  * choke point makes "every managed launch is reported" the same kind of fact as
  * "every managed launch is hardened".
  */
-/** Prefix every managed-launch refusal carries, so a caller can tell an
- *  ISOLATION FAULT apart from an ordinary failure (a missing CLI, a timeout)
- *  instead of swallowing both in one bare catch (adversarial review, MAJOR 7). */
-export const MANAGED_LAUNCH_REFUSAL = '[profiles] refusing a managed Claude launch'
+/** MANAGED_LAUNCH_REFUSAL, the prefix every managed-launch refusal carries, and
+ *  launchRefusalText live in launch-refusal.ts (no imports, so claude-headless
+ *  can use them too). */
+export { MANAGED_LAUNCH_REFUSAL, launchRefusalText }
 
 /** Who is launching, for the preflight report.
  *
@@ -3800,11 +3801,15 @@ function macNotPrimary(profileId: string, platform: NodeJS.Platform, read: () =>
  *  told. A session cannot run as that account there (the login keychain is
  *  found through $HOME and is shared, so the CLI would run as the Mac's own
  *  sign-in under the other account's name), so it starts nothing. */
-export const MAC_NON_PRIMARY_REFUSAL = 'On a Mac, a Claude session can only run on your normal Claude sign-in, so this account cannot start it. Switch the tab to your primary account and start it again.'
+export const MAC_NON_PRIMARY_REFUSAL = 'On a Mac, only your normal Claude sign-in can be used, so this account cannot start it. Choose your primary account and try again.'
+
+/** What the account's sign-in check says on a Mac for an account other than
+ *  the primary one: an expected state, not a fault and not "signed out". */
+export const MAC_NOT_CHECKABLE = 'On a Mac, only your normal Claude sign-in can be checked here, so this account is not checked.'
 
 /** What a macOS launch is told when it cannot tell which account is the
  *  normal sign-in (profiles.json unreadable, or no primary recorded). */
-export const MAC_PRIMARY_UNKNOWN_REFUSAL = 'This app could not tell which Claude account is your normal sign-in on this Mac, so it did not start the session. Check Settings, Accounts, then start it again.'
+export const MAC_PRIMARY_UNKNOWN_REFUSAL = 'This app could not tell which Claude account is your normal sign-in on this Mac, so it did not start. Check Settings, Accounts, then try again.'
 
 /** Why a session in this profile home must not start on this platform, or
  *  null when it may. The launch counterpart of profileReviewRefusal, reading
@@ -3835,7 +3840,19 @@ export function inactiveAccountRefusal(profileId: string, list: () => AccountPro
   const p = list().find((x) => x && x.id === profileId)
   if (!p || isAccountActive(p)) return null
   const name = typeof p.name === 'string' && p.name.trim() ? `"${p.name.trim()}"` : 'this account'
-  return `The Claude account ${name} is switched off, so this session did not start on it. Use Switch Account in the tab's right-click menu to move it to another account, or switch ${name} back on in Settings, Accounts.`
+  return `The Claude account ${name} is switched off, so nothing was started on it. Choose another account (for a tab, use Switch Account in its right-click menu), or switch ${name} back on in Settings, Accounts.`
+}
+
+/** The one call a launch makes to refuse a switched-off account: logs the
+ *  refusal and throws the sentence. Applies to a Claude session wherever its
+ *  account id arrives from (a restored tab, a saved session; the picker only
+ *  hides the account). A launch that names no account session has nothing to
+ *  refuse, so its caller does not ask. */
+export function assertAccountActive(profileId: string, sessionId: string): void {
+  const why = inactiveAccountRefusal(profileId)
+  if (!why) return
+  logWarn(`[profiles] session ${sessionId}: the account it names is switched off; the session is not started`)
+  throw new Error(why)
 }
 
 /** The profile-home composition of withProfileHome, for a reviewer launch the

@@ -32,7 +32,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { logError, logInfo, logWarn } from '../debug-logger'
 import { gateManagedLaunch, peekGateVerdict } from '../managed-launch-diagnostics'
-import { getProfileConfigDir, getProfilesRoot, getPrimaryProfileId, withProfileHome, readProfilesStrict, removeProfileIdentityCredentials, checkProfileCredentialFolders, profileCredentialFoldersChecked, MANAGED_LAUNCH_REFUSAL } from '../account-profiles'
+import { getProfileConfigDir, getProfilesRoot, getPrimaryProfileId, withProfileHome, readProfilesStrict, removeProfileIdentityCredentials, checkProfileCredentialFolders, profileCredentialFoldersChecked, profileLaunchRefusal, MAC_NON_PRIMARY_REFUSAL, MAC_NOT_CHECKABLE, MANAGED_LAUNCH_REFUSAL } from '../account-profiles'
 import { acquireProfileConsumer, holdProfileForRun, pendingProfileRefresh } from '../profile-consumers'
 import { isProfileInUseByLiveSession, sessionsOnProfile } from '../claude-account-identity'
 import { DEFAULT_CLI_AUTH_METHOD, PROFILE_ID_RE, isCliAuthMethod, type CliAuthMethod } from '../../shared/account-web-session'
@@ -292,6 +292,12 @@ async function readClaudeCliAuthUncached(profileId: string, runner?: ClaudeCliAu
     : acquireProfileConsumer(profileId, { maxAgeMs: STATUS_TIMEOUT_MS + FIRST_START_CALLER_BOUND_MS + CLI_HOLD_GRACE_MS })
   let kill: Promise<void> | undefined
   try {
+    // On a Mac only the primary account's sign-in can be read (every
+    // profile's CLI would answer with the Mac's own sign-in). The other
+    // accounts are not checked, which is neither a fault nor "signed out":
+    // answered before any wait, and before the credential file is looked at
+    // (on a Mac the sign-in is in the keychain, so its absence says nothing).
+    if (profileLaunchRefusal(profileId) === MAC_NON_PRIMARY_REFUSAL) return { authenticated: false, notChecked: MAC_NOT_CHECKABLE }
     const rotation = pendingProfileRefresh(profileId)
     if (rotation) await rotation
     // The project gate for the directory the CLI runs in (the one this probe
@@ -372,6 +378,8 @@ async function readClaudeCliAuthUncached(profileId: string, runner?: ClaudeCliAu
     // it reads a file rather than launching the CLI, so it cannot act as the
     // wrong account -- but the silence was not.
     const message = (e as Error)?.message ?? String(e)
+    // A Mac's other accounts are an expected state, not a fault: say so.
+    if (message.includes(MAC_NON_PRIMARY_REFUSAL)) return { authenticated: false, notChecked: MAC_NOT_CHECKABLE }
     if (message.includes(MANAGED_LAUNCH_REFUSAL)) {
       logWarn(`[account-web] profile ${profileId}: the CLI auth probe was refused -- ${message}. Falling back to the credential file; this is an isolation fault, not a missing CLI.`)
     }
@@ -410,7 +418,7 @@ async function readClaudeCliAuthUncached(profileId: string, runner?: ClaudeCliAu
 export interface ClaudeCliLogoutResult {
   ran: boolean
   after: ClaudeCliAuthStatus | null
-  refused?: 'invalid-profile' | 'in-use' | 'no-home' | 'project-gate' | 'host-control' | 'cli-unavailable' | 'computer-sign-in'
+  refused?: 'invalid-profile' | 'in-use' | 'no-home' | 'project-gate' | 'host-control' | 'cli-unavailable' | 'computer-sign-in' | 'mac-not-primary'
   timedOut?: boolean
 }
 
@@ -473,6 +481,10 @@ const refusedLogout = (refused: NonNullable<ClaudeCliLogoutResult['refused']>): 
  */
 export async function logoutClaudeCli(profileId: string, opts: ClaudeCliLogoutOptions = {}): Promise<ClaudeCliLogoutResult> {
   if (!PROFILE_ID_RE.test(profileId)) return refusedLogout('invalid-profile')
+  // On a Mac only the primary account runs the CLI at all, so the sign-out of
+  // another account is refused up front, before the user is asked to confirm
+  // something that cannot happen.
+  if (profileLaunchRefusal(profileId) === MAC_NON_PRIMARY_REFUSAL) return refusedLogout('mac-not-primary')
   if (opts.acknowledgeComputerSignIn !== true && profileSharesComputerSignIn(profileId)) return refusedLogout('computer-sign-in')
   const runner = opts.runner
   if (!runner) return refusedLogout('cli-unavailable')
@@ -513,6 +525,7 @@ async function runLogout(profileId: string, runner: ClaudeCliAuthRunner): Promis
       env = Object.assign(withProfileHome({ ...process.env } as Record<string, string>, home, { launchId: 'auth-logout', cwd: runner.cwd, probe: true, projectGate }), process.platform === 'darwin' ? {} : { HOME: home })
     } catch (e) {
       logWarn(`[account-web] profile ${profileId}: the CLI sign-out was refused -- ${(e as Error)?.message ?? String(e)}. Nothing was run.`)
+      if (((e as Error)?.message ?? '').includes(MAC_NON_PRIMARY_REFUSAL)) return refusedLogout('mac-not-primary')
       // The project gate's refusal, or the environment could not be
       // hardened: each says its own reason to the user.
       return refusedLogout(projectGate?.status === 'refused' ? 'project-gate' : 'host-control')
