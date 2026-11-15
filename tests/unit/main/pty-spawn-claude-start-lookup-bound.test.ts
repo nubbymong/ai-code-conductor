@@ -510,9 +510,19 @@ describe('a local Claude Code launch with no answer about Claude Code to read, t
   it('off Windows nothing is held and nothing is walked, though main has started and no answer is kept', async () => {
     // On a Windows host the platform is a stand-in; elsewhere it is the host's own.
     if (process.platform === 'win32') Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
-    armClaudeLaunchWalk()
-    expect(await now(outcome(spawn({}, S, { cwd: '/w', useResumePicker: true })))).toBe('started')
-    expect(preparations).toBe(0)
-    expect(walk.asked).toEqual([])
+    // A user of an sh-family login shell: nothing of its own to ask for (one
+    // of another family is held for its PATH, 2.1.3-beta.5). The host's own
+    // SHELL is never read.
+    const savedShell = process.env.SHELL
+    process.env.SHELL = '/bin/zsh'
+    try {
+      armClaudeLaunchWalk()
+      expect(await now(outcome(spawn({}, S, { cwd: '/w', useResumePicker: true })))).toBe('started')
+      expect(preparations).toBe(0)
+      expect(walk.asked).toEqual([])
+    } finally {
+      if (savedShell === undefined) delete process.env.SHELL
+      else process.env.SHELL = savedShell
+    }
   })
 })

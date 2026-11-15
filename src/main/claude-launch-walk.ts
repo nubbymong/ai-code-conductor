@@ -58,17 +58,25 @@
 // old as the answer, found or not, so without this wait they would miss a
 // Claude Code installed since that walk, for up to a minute.
 //
+// Off Windows (2.1.3-beta.5), a user whose login shell is not of the sh family
+// has a launcher that carries the PATH that shell builds; the launch waits for
+// that question, asked off the event loop, instead of starting the shell in
+// place, where its start-up files hold the main process for as long as they
+// take. A user of an sh-family shell is never asked.
+//
 // Nothing is held while a recent answer is kept (the usual case: the launch
-// goes straight on, as before), off Windows, or before main has started
-// (armClaudeLaunchWalk, at start: a unit test that drives pty:spawn alone
-// holds nothing and walks nothing).
+// goes straight on, as before), for a user whose shell has no answer to ask
+// for, or before main has started (armClaudeLaunchWalk, at start: a unit test
+// that drives pty:spawn alone holds nothing and walks nothing). From the
+// start of main on, a launch that was asked for in the moment between never
+// walks PATH in place either (launch-lookups-armed.ts): it takes "no answer
+// yet", and the look it started is read by the next launch.
 
-import { claudeOnWindowsKnown, claudeOnWindowsPathAnswered } from './claude-cli-probe'
+import { claudeInLoginShellPathAsync, claudeOnWindowsKnown, claudeOnWindowsPathAnswered, recentClaudeInLoginShellPath } from './claude-cli-probe'
 import { pickerNodeAnswerKept, pickerNodeLookAnswered } from './spawn-claude-command'
 import { windowsEnvValue } from './windows-programs'
-
-/** Main has started (claude-start-lookup.ts startClaudeAtBoot). */
-let armed = false
+import { loginShellWithOwnPath } from './login-shell'
+import { armLaunchLookups, launchLookupsArmed, _resetLaunchLookupsArmedForTest } from './launch-lookups-armed'
 
 /** How many times one wait looks at PATH: PATH can be brought up to date
  *  while it waits (windows-path-refresh.ts), and the answer a walk keeps is
@@ -80,7 +88,7 @@ const LAUNCH_WALK_ROUNDS = 3
  *  walk made off the event loop. Main calls it once, at start, on every
  *  platform. */
 export function armClaudeLaunchWalk(): void {
-  armed = true
+  armLaunchLookups()
 }
 
 /** Whether a local Claude Code launch asked for now has a walk of PATH to
@@ -91,8 +99,22 @@ export function armClaudeLaunchWalk(): void {
  *  node.exe is kept. Reads no file and starts nothing: the PowerShell
  *  profile is not asked for this. */
 export function claudeLaunchWalkPending(resumeList: boolean, env: NodeJS.ProcessEnv = process.env, platform: string = process.platform): boolean {
-  if (!armed || platform !== 'win32') return false
+  if (!launchLookupsArmed()) return false
+  if (platform !== 'win32') return loginShellAnswerPending(env, platform)
   return !claudeOnWindowsKnown(env) || (resumeList && !pickerNodeAnswerKept(env))
+}
+
+/** macOS and Linux, 2.1.3-beta.5: a user whose login shell is not of the sh
+ *  family (fish, say) has a launcher that carries the PATH that shell builds
+ *  (providers/claude/spawn.ts), which the shell is asked for. The launch
+ *  reads the answer kept (claude-cli-probe.ts recentClaudeInLoginShellPath);
+ *  with none, it waits for the question asked off the event loop, as on
+ *  Windows it waits for the walk of PATH, rather than hold the main process
+ *  for as long as the shell's own start-up files take. A sh-family user is
+ *  never asked. Reads no file and starts nothing. */
+function loginShellAnswerPending(env: NodeJS.ProcessEnv, platform: string): boolean {
+  const p = platform as NodeJS.Platform
+  return loginShellWithOwnPath(env, p) !== null && recentClaudeInLoginShellPath(env, p) === undefined
 }
 
 /** The look for node.exe a launch that opens the resume list waits for. A
@@ -105,8 +127,8 @@ async function nodeLookAnswered(env: NodeJS.ProcessEnv): Promise<void> {
 /** A local Claude Code launch: wait for the walks claudeLaunchWalkPending
  *  names now, made off the event loop. At once when it names none: the
  *  answers are kept by now (the start's walk or another launch's ended
- *  meanwhile), or nothing is ever walked here (off Windows, before main has
- *  started). Each walk is waited for until it ends or until its own deadline
+ *  meanwhile), or nothing is ever walked here (before main has
+ *  started, or off Windows for a user whose login shell is of the sh family). Each walk is waited for until it ends or until its own deadline
  *  passes (windows-programs.ts WINDOWS_PATH_WALK_WAIT_MS, from the walk's
  *  start), whichever is first; launches asked for together wait for the one
  *  walk. A walk past its deadline keeps no answer, and the launch is then
@@ -122,6 +144,12 @@ async function nodeLookAnswered(env: NodeJS.ProcessEnv): Promise<void> {
  *  resolves as it did before. */
 export async function awaitClaudeLaunchWalk(resumeList: boolean, env: NodeJS.ProcessEnv = process.env, platform: string = process.platform): Promise<void> {
   try {
+    if (platform !== 'win32') {
+      // The login shell's question, asked once off the event loop (bounded by
+      // its own timeout); its answer, or that it gave none, is kept.
+      if (claudeLaunchWalkPending(resumeList, env, platform)) await claudeInLoginShellPathAsync(env, platform as NodeJS.Platform)
+      return
+    }
     for (let round = 0; round < LAUNCH_WALK_ROUNDS; round++) {
       if (!claudeLaunchWalkPending(resumeList, env, platform)) return
       const pathValue = windowsEnvValue(env, 'PATH') ?? ''
@@ -136,5 +164,5 @@ export async function awaitClaudeLaunchWalk(resumeList: boolean, env: NodeJS.Pro
 
 /** Test seam: as before main has started. */
 export function _resetClaudeLaunchWalkForTest(): void {
-  armed = false
+  _resetLaunchLookupsArmedForTest()
 }

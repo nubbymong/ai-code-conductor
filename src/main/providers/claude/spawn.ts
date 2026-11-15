@@ -2,7 +2,9 @@ import * as os from 'os'
 import { commandSecretEnvName } from '../../../shared/command-secret'
 import { AGENTS_ENV, askPromptEnvValue } from '../../terminal-launch-line'
 import { findOnWindowsPath, windowsEnvValue, withFullyQualifiedProgramLookup } from '../../windows-programs'
-import { CLAUDE_NOT_ON_PATH, CLAUDE_PATH_NOT_ANSWERING, CLAUDE_WINDOWS_NAMES, claudeFromPowerShellProfileForLaunch, claudeInLoginShellPathForLaunch, claudeOnWindowsPathUnanswered, claudeOnWindowsPathWalkedRecently, recentClaudeInLoginShellPath, recentClaudeOnWindows, recordClaudeOnWindows } from '../../claude-cli-probe'
+import { CLAUDE_LOOKUP_UNDER_WAY, CLAUDE_NOT_ON_PATH, CLAUDE_PATH_NOT_ANSWERING, CLAUDE_WINDOWS_NAMES, claudeFromPowerShellProfileForLaunch, claudeInLoginShellPathForLaunch, claudeOnWindowsPathAnswered, claudeOnWindowsPathUnanswered, claudeOnWindowsPathWalkedRecently, recentClaudeInLoginShellPath, recentClaudeOnWindows, recordClaudeOnWindows } from '../../claude-cli-probe'
+import { launchLookupsArmed } from '../../launch-lookups-armed'
+import { GSUDO_NOT_FOUND, GSUDO_LOOKUP_UNDER_WAY, recentGsudo, warmGsudo } from '../../gsudo-lookup'
 import { LEGACY_PIN_NOT_USED } from '../../../shared/legacy-version'
 import { logInfo } from '../../debug-logger'
 import { localSessionShell, shFamilyLoginShell } from '../../login-shell'
@@ -58,6 +60,18 @@ export function findClaudeOnWindows(env: NodeJS.ProcessEnv = process.env, stat?:
   // The walk of this PATH off the event loop is past its deadline, a folder
   // still unanswered: no answer, and none is made here.
   if (claudeOnWindowsPathUnanswered(env)) return null
+  // 2.1.3-beta.5: from the start of main on, PATH is never walked here
+  // either. The walk shared by every caller, made off the event loop (one
+  // stat at a time, claude-cli-probe.ts sharedClaudeWalk), is started and
+  // keeps its answer for the next launch; this one has none. A launch is held
+  // for that walk before it gets here (claude-launch-walk.ts), so this is a
+  // launch asked for in the moment between. Before main has started no
+  // launch is asked for, and a unit test that drives one has nothing to wait
+  // for: it walks in place, as before.
+  if (launchLookupsArmed()) {
+    void claudeOnWindowsPathAnswered(env)
+    return null
+  }
   const found = findOnWindowsPath(CLAUDE_WINDOWS_NAMES, env, stat, 'name')
   recordClaudeOnWindows(windowsEnvValue(env, 'PATH') ?? '', found, Date.now())
   if (found) return found
@@ -94,7 +108,9 @@ export function resolveClaudeBinary(legacyVersion?: LegacyVersion, env: NodeJS.P
   // "none" under a minute old kept: a launch held for a new walk is waiting
   // to learn whether that still holds (a Claude Code installed since), and
   // that walk has not said.
-  const why = claudeOnWindowsPathUnanswered(env) ? CLAUDE_PATH_NOT_ANSWERING : CLAUDE_NOT_ON_PATH
+  const why = claudeOnWindowsPathUnanswered(env) ? CLAUDE_PATH_NOT_ANSWERING
+    : launchLookupsArmed() && !claudeOnWindowsPathWalkedRecently(env) ? CLAUDE_LOOKUP_UNDER_WAY
+    : CLAUDE_NOT_ON_PATH
   logInfo(`[claude-provider] ${why}`)
   throw new Error(why)
 }
@@ -241,8 +257,17 @@ export function buildClaudeLocalSpawn(
     // Windows: gsudo by the full path found in PATH's folders, never by name;
     // without it no elevated terminal starts.
     if (os.platform() === 'win32') {
-      const gsudo = findOnWindowsPath(['gsudo.exe'], source)
-      if (!gsudo) throw new Error('An elevated terminal needs gsudo, which was not found in a folder PATH names (gsudo.exe)')
+      // 2.1.3-beta.5: the answer of the look made once, off the event loop,
+      // before the launch (gsudo-lookup.ts; ipc/pty-handlers.ts holds the
+      // launch for it). With none kept, PATH is not walked here from the
+      // start of main on: the look is started for the next try.
+      const kept = recentGsudo(source)
+      if (kept === undefined && launchLookupsArmed()) {
+        warmGsudo(source)
+        throw new Error(GSUDO_LOOKUP_UNDER_WAY)
+      }
+      const gsudo = kept !== undefined ? kept : findOnWindowsPath(['gsudo.exe'], source)
+      if (!gsudo) throw new Error(GSUDO_NOT_FOUND)
       return { cmd: gsudo, args: [shell, ...shellArgs], env: tabEnv }
     }
     return { cmd: 'sudo', args: [shell, ...shellArgs], env: tabEnv }

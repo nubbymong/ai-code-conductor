@@ -91,7 +91,7 @@ import * as osMod from 'os'
 import { execFile, execFileSync, execSync } from 'child_process'
 import { watchAndClaimRollout } from '../../../../src/main/providers/codex/telemetry'
 import { CodexProvider, createCodexLiveUsage } from '../../../../src/main/providers/codex'
-import { resolveCodexBinary, resolveCodexBinaryAsync, resolveNodeExe, __resetNodeExeCache, codexCmdExeTarget, getCodexResumePickerPath } from '../../../../src/main/providers/codex/spawn'
+import { resolveCodexBinary, resolveCodexBinaryAsync, resolveNodeExe, warmNodeExeOnPosix, __resetNodeExeCache, codexCmdExeTarget, getCodexResumePickerPath } from '../../../../src/main/providers/codex/spawn'
 import { __markScriptFoldersCheckedForTests, __resetScriptFoldersForTests, secureScriptFolders, scriptFoldersDeployed } from '../../../../src/main/script-folders'
 import { deployScriptFile, _resetScriptDeployWarningForTest } from '../../../../src/main/script-deploy'
 
@@ -122,6 +122,8 @@ describe('CodexProvider', () => {
     vi.mocked(osMod.platform).mockReturnValue('linux' as NodeJS.Platform)
     vi.mocked(execSync).mockReturnValue('/mock/path/codex\n' as any)
     vi.mocked(execFileSync).mockReturnValue('/mock/path/codex\n' as any)
+    __resetNodeExeCache()
+    shellNamesMockCodex()
   })
 
   afterEach(() => {
@@ -140,36 +142,54 @@ describe('CodexProvider', () => {
    *  process's own. */
   const SHELL_ENV = { SHELL: '/bin/zsh', PATH: '/usr/bin', HOME: '/home/someone' }
 
-  it('resolveCodexBinary (the lookup in place) returns a cmd path when codex is found', () => {
+  /** The child_process.execFile stand-in every case starts from: the login
+   *  shell names /mock/path/codex. */
+  const shellNamesMockCodex = (): void => {
+    vi.mocked(execFile).mockImplementation(((_file: string, _args: readonly string[], _opts: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+      cb(null, '/mock/path/codex\n', '')
+      return { stdin: { end: () => {} } }
+    }) as never)
+  }
+
+  // 2.1.3-beta.5: resolveCodexBinary starts no process on macOS and Linux (it
+  // started the login shell in place, execFileSync, and held the main process
+  // for as long as its start-up files took, up to 8 s). It answers what the
+  // lookup off the main thread last kept. Mutation to prove this can fail:
+  // start the login shell again in resolveCodexBinary.
+  it('resolveCodexBinary starts no process: it answers what the lookup off the main thread last kept, and none before', async () => {
+    shellNamesMockCodex()
+    vi.mocked(execFile).mockClear()
+    expect(resolveCodexBinary({ env: SHELL_ENV })).toBeNull()
+    await resolveCodexBinaryAsync({ env: SHELL_ENV })
+    vi.mocked(execFile).mockClear()
     const r = resolveCodexBinary({ env: SHELL_ENV })
     expect(r).not.toBeNull()
     expect(r?.cmd).toMatch(/codex/i)
-  })
-
-  // Mutation to prove this can fail: start any other program than the login
-  // shell itself, or give it another argument list.
-  it('the lookup in place starts the login shell itself: its name as written, an argument list, the home folder, and the environment handed in', () => {
-    // A shell at a path with a space in it is still one program name.
-    const env = { ...SHELL_ENV, SHELL: '/opt/my shells/zsh' }
-    vi.mocked(execSync).mockClear()
-    vi.mocked(execFileSync).mockClear()
-    expect(resolveCodexBinary({ env })).toEqual({ cmd: '/mock/path/codex', args: [] })
-    expect(execFileSync).toHaveBeenCalledTimes(1)
-    const [file, args, opts] = vi.mocked(execFileSync).mock.calls[0] as unknown as [string, string[], { env: unknown; cwd: string; timeout: number; shell?: unknown }]
-    expect(file).toBe('/opt/my shells/zsh')
-    expect(args).toEqual(['-l', '-c', 'which codex'])
-    expect(opts.env).toEqual(env)
-    expect(opts.cwd).toBe(osMod.homedir())
-    expect(opts.timeout).toBe(8000)
-    expect(opts.shell).toBeUndefined()
-    // Nothing else is started.
+    expect(execFile).not.toHaveBeenCalled()
+    expect(execFileSync).not.toHaveBeenCalled()
     expect(execSync).not.toHaveBeenCalled()
   })
 
-  it('with no SHELL in the environment the lookup asks the login shell every other check asks (zsh on macOS)', () => {
-    vi.mocked(execFileSync).mockClear()
-    resolveCodexBinary({ platform: 'darwin', env: { PATH: '/usr/bin' } })
-    expect(vi.mocked(execFileSync).mock.calls[0][0]).toBe('/bin/zsh')
+  it('the answer kept is for the login shell and the PATH it was asked under, and a lookup that found none keeps that', async () => {
+    shellNamesMockCodex()
+    await resolveCodexBinaryAsync({ env: SHELL_ENV })
+    expect(resolveCodexBinary({ env: SHELL_ENV })).toEqual({ cmd: '/mock/path/codex', args: [] })
+    expect(resolveCodexBinary({ env: { ...SHELL_ENV, SHELL: '/bin/bash' } })).toBeNull()
+    expect(resolveCodexBinary({ env: { ...SHELL_ENV, PATH: '/elsewhere' } })).toBeNull()
+    // The next lookup replaces it: the shell now finds none.
+    vi.mocked(execFile).mockImplementation(((_f: string, _a: readonly string[], _o: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+      cb(Object.assign(new Error('exit 1'), { code: 1 }), '', '')
+      return { stdin: { end: () => {} } }
+    }) as never)
+    await resolveCodexBinaryAsync({ env: SHELL_ENV })
+    expect(resolveCodexBinary({ env: SHELL_ENV })).toBeNull()
+    shellNamesMockCodex()
+  })
+
+  it('with no SHELL in the environment the lookup asks the login shell every other check asks (zsh on macOS)', async () => {
+    vi.mocked(execFile).mockClear()
+    await resolveCodexBinaryAsync({ platform: 'darwin', env: { PATH: '/usr/bin' } })
+    expect(vi.mocked(execFile).mock.calls[0][0]).toBe('/bin/zsh')
   })
 
   it('resolveBinary and resumeCommand refuse without looking anything up: a Codex launch runs only what its managed launch proved', () => {
@@ -180,10 +200,14 @@ describe('CodexProvider', () => {
     expect(execSync).not.toHaveBeenCalled()
   })
 
-  it('resolveCodexBinary returns null when codex is not on PATH', () => {
-    vi.mocked(execFileSync).mockImplementation(() => { throw new Error('not found') })
-    const r = resolveCodexBinary({ env: SHELL_ENV })
-    expect(r).toBeNull()
+  it('resolveCodexBinary returns null when codex is not on PATH', async () => {
+    vi.mocked(execFile).mockImplementation(((_f: string, _a: readonly string[], _o: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+      cb(new Error('not found'), '', '')
+      return { stdin: { end: () => {} } }
+    }) as never)
+    expect(await resolveCodexBinaryAsync({ env: SHELL_ENV })).toBeNull()
+    expect(resolveCodexBinary({ env: SHELL_ENV })).toBeNull()
+    shellNamesMockCodex()
   })
 
   // The CLI check's lookup (discovery), off the main thread: the same login
@@ -219,15 +243,6 @@ describe('CodexProvider', () => {
       expect(ended).toEqual(['input ended'])
       expect(execSync).not.toHaveBeenCalled()
       expect(execFileSync).not.toHaveBeenCalled()
-    })
-
-    it('asks the same shell in the same way as the lookup in place', async () => {
-      const { asked } = shellAnswers((done) => done(null, '/usr/local/bin/codex\n', ''))
-      vi.mocked(execFileSync).mockClear()
-      await resolveCodexBinaryAsync({ env: SHELL_ENV })
-      resolveCodexBinary({ env: SHELL_ENV })
-      const [file, args, opts] = vi.mocked(execFileSync).mock.calls[0] as unknown as [string, string[], { env: unknown; cwd: unknown; timeout: unknown }]
-      expect({ file, args, env: opts.env, cwd: opts.cwd, timeout: opts.timeout, shell: undefined }).toEqual(asked[0])
     })
 
     it('is null when the shell finds none, prints no absolute path, or fails', async () => {
@@ -543,7 +558,7 @@ describe('CodexProvider', () => {
       __resetNodeExeCache()
     })
 
-    it('swaps cmd to node + picker when useResumePicker=true and script is deployed, handing it the proven executable', () => {
+    it('swaps cmd to node + picker when useResumePicker=true and script is deployed, handing it the proven executable', async () => {
       const { mkdtempSync, mkdirSync, writeFileSync } = require('fs') as typeof import('fs')
       const { tmpdir } = require('os') as typeof import('os')
       const { join } = require('path') as typeof import('path')
@@ -552,13 +567,16 @@ describe('CodexProvider', () => {
       writeFileSync(join(dir, 'scripts', 'codex-resume-picker.js'), '// stub', { mode: 0o600 })
       setMockResourcesDir(dir)
 
-      // POSIX now resolves node via a login shell (a Finder/Dock-launched app
-      // inherits launchd's minimal PATH, so bare 'node' can fail under PTY).
-      vi.mocked(execSync).mockImplementation((cmd: any) => {
-        const s = String(cmd)
-        if (s.includes('which node')) return '/usr/local/bin/node\n' as any
-        throw new Error(`unexpected: ${s}`)
-      })
+      // POSIX resolves node via a login shell (a Finder/Dock-launched app
+      // inherits launchd's minimal PATH, so bare 'node' can fail under PTY),
+      // asked once off the main thread before the launch (warmNodeExeOnPosix)
+      // and read by the launch.
+      vi.mocked(execFile).mockImplementation(((_file: string, args: readonly string[], _opts: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+        if (String(args[2]).includes('which node')) cb(null, '/usr/local/bin/node\n', '')
+        else cb(null, '/mock/path/codex\n', '')
+        return { stdin: { end: () => {} } }
+      }) as never)
+      await warmNodeExeOnPosix({ platform: 'linux', env: { SHELL: '/bin/zsh', PATH: '/usr/bin', HOME: '/home/someone' } })
 
       // The launch is built for Linux (process.platform, which decides both
       // its route and its picker's node lookup), so the full path comes from
@@ -672,20 +690,52 @@ describe('CodexProvider', () => {
       expect(vi.mocked(execSync)).not.toHaveBeenCalled()
     })
 
-    it('resolveNodeExe resolves node via a login shell on non-win32 (launchd minimal-PATH hazard)', () => {
+    it('resolveNodeExe resolves node via a login shell on non-win32 (launchd minimal-PATH hazard), asked off the main thread', async () => {
       vi.mocked(osMod.platform).mockReturnValue('linux' as NodeJS.Platform)
-      vi.mocked(execSync).mockImplementation((cmd: any) => {
-        const s = String(cmd)
-        if (s.includes('-l -c') && s.includes('which node')) return '/opt/homebrew/bin/node\n' as any
-        throw new Error(`unexpected: ${s}`)
-      })
+      const asked: Array<{ file: string; args: readonly string[] }> = []
+      vi.mocked(execFile).mockImplementation(((file: string, args: readonly string[], _opts: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+        asked.push({ file, args })
+        cb(null, 'a line a profile printed\n/opt/homebrew/bin/node\n', '')
+        return { stdin: { end: () => {} } }
+      }) as never)
+      // Before the look has an answer: the bare name, and no process started
+      // by this call.
+      expect(resolveNodeExe()).toBe('node')
+      expect(asked).toEqual([])
+      expect(execSync).not.toHaveBeenCalled()
+      await warmNodeExeOnPosix({ platform: 'linux', env: { SHELL: '/opt/my shells/zsh', PATH: '/usr/bin', HOME: '/home/someone' } })
+      // The shell itself is started: its name as written, an argument list.
+      expect(asked).toEqual([{ file: '/opt/my shells/zsh', args: ['-l', '-c', 'which node'] }])
       expect(resolveNodeExe()).toBe('/opt/homebrew/bin/node')
+      // One answer kept: no question asked again.
+      await warmNodeExeOnPosix({ platform: 'linux' })
+      expect(asked).toHaveLength(1)
+      expect(execSync).not.toHaveBeenCalled()
     })
 
-    it('resolveNodeExe falls back to bare "node" on non-win32 when the login-shell probe fails', () => {
+    it('resolveNodeExe is the bare "node" on non-win32 while the login shell names none, and the look is made once at a time', async () => {
       vi.mocked(osMod.platform).mockReturnValue('linux' as NodeJS.Platform)
-      vi.mocked(execSync).mockImplementation(() => { throw new Error('not found') })
+      let asks = 0
+      // A login shell that is slow to start: it answers when the case says.
+      const slow: Array<() => void> = []
+      vi.mocked(execFile).mockImplementation(((_f: string, _a: readonly string[], _o: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+        asks++
+        slow.push(() => cb(new Error('not found'), '', ''))
+        return { stdin: { end: () => {} } }
+      }) as never)
+      const env = { SHELL: '/bin/zsh', PATH: '/usr/bin', HOME: '/home/someone' }
+      const both = Promise.all([warmNodeExeOnPosix({ platform: 'linux', env }), warmNodeExeOnPosix({ platform: 'linux', env })])
+      // While the shell is still starting, the launch's own answer is not
+      // waited for: the bare name, at once, and no second question.
       expect(resolveNodeExe()).toBe('node')
+      expect(asks).toBe(1)
+      for (const answer of slow.splice(0)) answer()
+      await both
+      expect(asks).toBe(1)
+      expect(resolveNodeExe()).toBe('node')
+      // Nothing is asked on Windows.
+      await warmNodeExeOnPosix({ platform: 'win32', env })
+      expect(asks).toBe(1)
     })
 
     // What sits at the picker's path, or at the helper lib the picker loads,

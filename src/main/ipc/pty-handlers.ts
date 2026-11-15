@@ -53,6 +53,8 @@ import { startProfileStepsPending, startProfileStepsSettled } from '../account-p
 import { scriptFoldersPending, awaitScriptFolders } from '../script-folders'
 import { claudeStartLookupPending, awaitClaudeStartLookup } from '../claude-start-lookup'
 import { claudeLaunchWalkPending, awaitClaudeLaunchWalk } from '../claude-launch-walk'
+import { gsudoAnswerKept, gsudoLookAnswered } from '../gsudo-lookup'
+import { launchLookupsArmed } from '../launch-lookups-armed'
 
 /** SSH options as received from the renderer (no passwords — only configId) */
 interface RendererSSHOptions {
@@ -920,7 +922,15 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     const localClaudeLaunch = launchProvider === 'claude' && !options?.ssh
     const opensResumeList = options?.useResumePicker === true
     const holdForClaudeLookup = localClaudeLaunch && (claudeStartLookupPending() || claudeLaunchWalkPending(opensResumeList))
-    const preparation = codexSession || askSpawn || holdForStartSteps || holdForScripts || holdForClaudeLookup ? beginSpawnPreparation(win, sessionId, options?.shellOnly ? null : (options?.provider ?? 'claude')) : null
+    // 2.1.3-beta.5: an elevated terminal on Windows starts gsudo by its full
+    // path. With no answer about gsudo.exe kept, it waits, bounded, as a
+    // prepared spawn, for the look made once off the event loop (gsudo-lookup.ts),
+    // so PATH is not walked for it in place, where a folder on a share that
+    // does not answer holds the whole main process.
+    const elevatedWindowsShell = options?.shellOnly === true && !options.ssh && process.platform === 'win32'
+      && ((options as { elevated?: boolean }).elevated ?? options.terminalOptions?.elevated) === true
+    const holdForGsudo = elevatedWindowsShell && launchLookupsArmed() && !gsudoAnswerKept()
+    const preparation = codexSession || askSpawn || holdForStartSteps || holdForScripts || holdForClaudeLookup || holdForGsudo ? beginSpawnPreparation(win, sessionId, options?.shellOnly ? null : (options?.provider ?? 'claude')) : null
     // PR-level ADR-009 round 1 (B1): once that preparation is cancelled or
     // superseded, this spawn's ticket stops counting as one under way.
     if (preparation) noteConfigLaunchPreparation(configClaim.ticket, () => preparation.current)
@@ -1081,6 +1091,15 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
         // Round 5 (G4): only while the Hooks gateway listens (otherwise the
         // launch gets no hooks whatever the folders).
         if (!options?.ssh && getGateway()?.status()?.listening === true) await awaitCodexHookFolders()
+        // 2.1.3-beta.5: on macOS and Linux a launch that opens the resume list
+        // runs it on the node the user's login shell names. That shell is asked
+        // once, here, off the event loop, and the launch reads the answer kept
+        // (providers/codex/spawn.ts resolveNodeExe), where it used to start
+        // the shell in place and hold the main process for as long as its
+        // start-up files took. Loaded when needed: nothing is asked on Windows.
+        if (!options?.ssh && options?.useResumePicker === true && process.platform !== 'win32') {
+          await (await import('../providers/codex/spawn')).warmNodeExeOnPosix()
+        }
       }
 
       // The start's profile steps (holdForStartSteps above), and the scripts
@@ -1099,6 +1118,10 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
       // wait after the other, never side by side: the start's own first,
       // then this.
       if (preparation && localClaudeLaunch) await awaitClaudeLaunchWalk(opensResumeList)
+      // The elevated terminal's look for gsudo.exe (holdForGsudo above),
+      // bounded by its own deadline; past it the launch is refused by
+      // buildClaudeLocalSpawn, never by a walk in place.
+      if (holdForGsudo) await gsudoLookAnswered()
 
       // Closed, swept or superseded while it was prepared: start nothing, and
       // SAY so. The renderer holds any pty:exit that arrives while its own
