@@ -6,7 +6,12 @@
 //   - does the PR touch any of the eight files of the live SSH blast radius
 //     (the list in AGENTS.md, "SSH statusline changes need the live SSH matrix")?
 //   - how long is src/main/pty-manager.ts, against its cap?
-//   - is the live SSH matrix owed ("live SSH matrix: owed" / "not owed")?
+//   - is the live SSH matrix owed ("live SSH matrix: owed" / "check" / "not owed")?
+//     pty-manager.ts is in the radius only for its SSH branch, its sentinel
+//     parsers and its statusline routing (AGENTS.md), so a PR whose only radius
+//     hit is that file gets "check", not "owed": the author decides, and an
+//     unsure author runs it. Any of the other seven files, or paths that could
+//     not be read, is "owed".
 //
 // The job FAILS only when pty-manager.ts grows past the cap. A PR that has to
 // (an SSH fix that cannot be smaller) carries the `cap-override` label and the
@@ -20,8 +25,12 @@
 // CI checked out, as in scripts/ci/change-scope.mjs. Anything this cannot read
 // for certain is treated as touched (fail closed): matrix owed, cap checked.
 //
-// The cap is today's length. It may only go down: a PR that shortens
-// pty-manager.ts lowers PTY_MANAGER_LINE_CAP with it (the summary says when).
+// The cap is the length of pty-manager.ts on beta when this check was added
+// (ADR-030 gives the number once). PTY_MANAGER_LINE_CAP below is the ONE source
+// of truth for it; nothing else in the repo restates the number. It may only go
+// down: a PR that shortens pty-manager.ts should lower the constant with it.
+// That is a reminder (a summary line and a warning annotation), not enforced:
+// the job fails only for growing past the cap.
 // The radius list is held in tests/unit/scripts/pr-numbers.test.ts against the
 // list in AGENTS.md, so the two cannot drift.
 //
@@ -48,8 +57,9 @@ export const RADIUS_FILES = [
 ]
 export const PTY_MANAGER = 'src/main/pty-manager.ts'
 /**
- * The most lines pty-manager.ts may have. ADR-030 first said 8,128; #681 had
- * already taken it to 8,366 before this check existed, so 8,366 is the cap.
+ * The most lines pty-manager.ts may have: its length on beta when this check
+ * was added (ADR-030 states the starting value). Lower it, never raise it,
+ * whenever a PR shortens the file.
  */
 export const PTY_MANAGER_LINE_CAP = 8366
 /** The PR label that lets pty-manager.ts grow past the cap. */
@@ -76,6 +86,9 @@ export function buildReport({ paths, ptyLines, baseLines, labels }) {
   const hits = known ? RADIUS_FILES.filter((f) => paths.includes(f)) : []
   // Unreadable paths fail closed: the matrix is owed and pty-manager.ts counts as touched.
   const touchesRadius = known ? hits.length > 0 : true
+  // pty-manager.ts alone is "check": the radius covers only part of that file (AGENTS.md).
+  const ptyOnly = known && hits.length === 1 && hits[0] === PTY_MANAGER
+  const matrixState = !touchesRadius ? 'not owed' : ptyOnly ? 'check' : 'owed'
   const ptyTouched = known ? paths.includes(PTY_MANAGER) : true
   const override = Array.isArray(labels) && labels.includes(OVERRIDE_LABEL)
 
@@ -108,7 +121,8 @@ export function buildReport({ paths, ptyLines, baseLines, labels }) {
     capVerdict,
     // The cap is today's length and only goes down: a shorter file lowers it.
     lowerTheCap: !unreadable && overBy < 0 && ptyTouched && ptyLines > 0,
-    matrixOwed: touchesRadius,
+    matrixState,
+    matrixOwed: matrixState === 'owed',
   }
 }
 
@@ -125,7 +139,11 @@ export function renderSummary(r) {
     r.ptyLines === null
       ? 'unreadable'
       : `${r.ptyLines} lines, cap ${r.cap}` + (r.baseLines === null ? '' : `, ${r.ptyLines - r.baseLines >= 0 ? '+' : ''}${r.ptyLines - r.baseLines} against the base (${r.baseLines})`)
-  const matrix = r.matrixOwed ? 'live SSH matrix: owed' : 'live SSH matrix: not owed'
+  const matrix = r.matrixState === 'check' ? 'live SSH matrix: check (pty-manager.ts only)' : `live SSH matrix: ${r.matrixState}`
+  const matrixCell =
+    r.matrixState === 'check'
+      ? `owed only if this PR changes the SSH branch, the sentinel parsers or the statusline routing of ${code(PTY_MANAGER)} (AGENTS.md); not owed for its local branch or the line cap. Unsure: run it (fail closed).`
+      : r.matrixState
   const rows = [
     '### PR numbers',
     '',
@@ -134,10 +152,11 @@ export function renderSummary(r) {
     `| Touches the SSH blast radius | ${radiusCell} |`,
     `| ${code(PTY_MANAGER)} length | ${lengthCell} |`,
     `| Cap | ${r.capVerdict} |`,
-    `| Live SSH matrix | ${r.matrixOwed ? 'owed' : 'not owed'} |`,
+    `| Live SSH matrix | ${matrixCell} |`,
     '',
     `**${matrix}**`,
   ]
+  if (r.matrixState === 'check') rows.push('', `Run \`npm run test:live:ssh\` (one combo at a time, and report the matrix in the PR) if the SSH branch, the sentinel parsers or the statusline routing of ${code(PTY_MANAGER)} changed. A change to its local branch or its length does not owe it (AGENTS.md, "SSH statusline changes need the live SSH matrix").`)
   if (r.matrixOwed) rows.push('', 'Run `npm run test:live:ssh` one combo at a time and report the matrix in the PR before merge (AGENTS.md, "SSH statusline changes need the live SSH matrix").')
   if (r.override && r.exceeds) rows.push('', `The ${code(OVERRIDE_LABEL)} label is on this PR, so growing ${code(PTY_MANAGER)} past ${r.cap} lines does not fail the job. Say in the PR why the file could not be smaller.`)
   else if (r.override) rows.push('', `The ${code(OVERRIDE_LABEL)} label is on this PR; it is not needed here.`)
@@ -192,7 +211,9 @@ export function main(env = process.env, io = {}) {
     ptyLines = countLines(readFile(PTY_MANAGER))
   } catch (err) {
     // A PR that deletes the file (the remote deletion, ADR-030) leaves nothing over the cap.
-    ptyLines = err && err.code === 'ENOENT' ? 0 : null
+    // Absent counts as deleted only when the changed paths say the PR removed it; a file that is
+    // missing for any other reason (the job started in the wrong folder) is unreadable and fails.
+    ptyLines = err && err.code === 'ENOENT' && Array.isArray(paths) && paths.includes(PTY_MANAGER) ? 0 : null
   }
   // The base's length is only needed to tell "grew" from "did not", when the file is over the cap.
   const base = baseCommit(runGit)
@@ -213,6 +234,8 @@ export function main(env = process.env, io = {}) {
   const summary = renderSummary(report)
   log(summary)
   if (env.GITHUB_STEP_SUMMARY) write(env.GITHUB_STEP_SUMMARY, summary + '\n')
+  // A reminder, not a failure: a shorter file should lower the cap in the same PR.
+  if (report.lowerTheCap) log(`::warning title=lower the pty-manager.ts cap::${PTY_MANAGER} is ${report.ptyLines} lines, under the cap of ${report.cap}. Lower PTY_MANAGER_LINE_CAP in scripts/ci/pr-numbers.mjs to ${report.ptyLines}.`)
   if (report.failed) {
     log(`::error title=pty-manager.ts is over its cap::${PTY_MANAGER} is ${report.ptyLines === null ? 'unreadable' : `${report.ptyLines} lines; the cap is ${report.cap}`}. Make it shorter, or add the ${OVERRIDE_LABEL} label and say why in the PR.`)
     return 1

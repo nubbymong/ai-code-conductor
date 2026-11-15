@@ -42,17 +42,19 @@ describe('pr-numbers: the radius list is the one in AGENTS.md', () => {
   })
 })
 
-describe('pr-numbers: the cap and ADR-030', () => {
-  it('the cap is 8,366, the length #681 left, and ADR-030 says so with one sentence about #681', () => {
-    expect(CAP).toBe(8366)
-    const adr = read('architecture/decisions/2026-11-15-adr-030-one-session-helper-on-every-machine.md')
-    const shown = CAP.toLocaleString('en-US')
-    expect(shown).toBe('8,366')
-    expect(adr).toContain(`\`src/main/pty-manager.ts\` (${shown} lines)`)
-    expect(adr).toContain(`Capped at ${shown}`)
-    expect(adr).not.toMatch(/Capped at 8,128/)
+describe('pr-numbers: the cap has one source of truth', () => {
+  const adr = read('architecture/decisions/2026-11-15-adr-030-one-session-helper-on-every-machine.md')
+
+  it('PTY_MANAGER_LINE_CAP is a positive whole number, and ADR-030 points at it instead of repeating it', () => {
+    expect(Number.isInteger(CAP) && CAP > 0).toBe(true)
+    expect(adr).toContain('`PTY_MANAGER_LINE_CAP` in `scripts/ci/pr-numbers.mjs` is the one source of the number')
+    // The ADR states the starting value once, dated, and nothing else in it carries a cap number.
+    expect(adr.match(/\d,\d{3} on 2026-11-15/g)?.length).toBe(1)
+    expect(adr).not.toMatch(/Capped at \d/)
+  })
+
+  it('ADR-030 keeps the old 8,128 only inside the sentence about #681', () => {
     expect(adr).not.toContain('(8,128 lines)')
-    // The old number survives only inside the sentence that explains the change.
     expect(adr.match(/8,128/g)?.length).toBe(1)
     expect(adr).toMatch(/#681 raised it from 8,128 before the check existed/)
   })
@@ -99,15 +101,39 @@ describe('pr-numbers: the table over fixed path lists', () => {
     expect(text).toContain('npm run test:live:ssh')
   })
 
-  it('each of the eight files, on its own, makes the matrix owed; a look-alike path does not', () => {
+  it('each of the seven other files, on its own, makes the matrix owed; pty-manager.ts alone makes it "check"; a look-alike path does not', () => {
     for (const f of RADIUS_FILES) {
       const r = report({ paths: [f] })
-      expect(r.matrixOwed, f).toBe(true)
       expect(r.hits, f).toEqual([f])
+      if (f === PTY_MANAGER) {
+        expect(r.matrixState, f).toBe('check')
+        expect(r.matrixOwed, f).toBe(false)
+      } else {
+        expect(r.matrixState, f).toBe('owed')
+        expect(r.matrixOwed, f).toBe(true)
+      }
     }
     for (const p of ['src/main/ssh-tmux.ts.orig', 'src/main/ssh-tmux-other.ts', 'src/renderer/ssh-tmux.ts', 'src/main/providers/other/ui-detection.ts', 'docs/src/main/ansi-strip.ts', 'src/main/ansi-strip.test.ts']) {
       expect(report({ paths: [p] }).matrixOwed, p).toBe(false)
     }
+  })
+
+  it('pty-manager.ts alone says check, with the scoped wording, and no instruction to run the matrix outright', () => {
+    const r = report({ paths: [PTY_MANAGER, 'tests/unit/pty-manager.test.ts'] })
+    expect(r.matrixState).toBe('check')
+    const text = renderSummary(r)
+    expect(text).toContain('**live SSH matrix: check (pty-manager.ts only)**')
+    expect(text).toContain('| Live SSH matrix | owed only if this PR changes the SSH branch, the sentinel parsers or the statusline routing of `src/main/pty-manager.ts` (AGENTS.md); not owed for its local branch or the line cap. Unsure: run it (fail closed). |')
+    expect(text).toContain('if the SSH branch, the sentinel parsers or the statusline routing of `src/main/pty-manager.ts` changed')
+    expect(text).not.toContain('**live SSH matrix: owed**')
+    expect(text).not.toContain('before merge (AGENTS.md')
+  })
+
+  it('pty-manager.ts with any other radius file, or with unreadable paths, is owed', () => {
+    expect(report({ paths: [PTY_MANAGER, 'src/main/ansi-strip.ts'] }).matrixState).toBe('owed')
+    expect(report({ paths: [PTY_MANAGER, 'src/main/ansi-strip.ts'] }).matrixOwed).toBe(true)
+    expect(report({ paths: null }).matrixState).toBe('owed')
+    expect(renderSummary(report({ paths: [PTY_MANAGER, 'src/main/ssh-tmux.ts'] }))).toContain('**live SSH matrix: owed**')
   })
 
   it('lists several hits in the order the radius lists them', () => {
@@ -123,7 +149,7 @@ describe('pr-numbers: the cap on pty-manager.ts', () => {
     expect(r.exceeds).toBe(true)
     expect(r.failed).toBe(true)
     expect(r.overBy).toBe(1)
-    expect(r.matrixOwed).toBe(true)
+    expect(r.matrixState).toBe('check')
     const text = renderSummary(r)
     expect(text).toContain('FAIL: over the cap by 1')
     expect(text).toContain(OVERRIDE_LABEL)
@@ -290,6 +316,19 @@ describe('pr-numbers: main() in a job', () => {
     const gone = run({ paths: [PTY_MANAGER], lines: 0, readFails: 'ENOENT', baseLines: CAP })
     expect(gone.code).toBe(0)
     expect(gone.writes[0][1]).toContain('| Cap | ')
+    // Absent but not in the changed paths (the job started in the wrong folder): unreadable, so it fails.
+    expect(run({ paths: ['README.md'], lines: 0, readFails: 'ENOENT', baseLines: CAP }).code).toBe(1)
+    // Absent and the changed paths could not be read either: fails closed.
+    expect(run({ paths: [], lines: 0, readFails: 'ENOENT', gitFails: true }).code).toBe(1)
+  })
+
+  it('a PR that shortens pty-manager.ts passes, and says to lower the cap in the summary and in a warning annotation', () => {
+    const r = run({ paths: [PTY_MANAGER], lines: CAP - 7, baseLines: CAP })
+    expect(r.code).toBe(0)
+    expect(r.writes[0][1]).toContain(`to ${CAP - 7} so it only goes down`)
+    expect(r.logs.join('\n')).toContain(`::warning title=lower the pty-manager.ts cap::`)
+    // No warning when nothing needs lowering.
+    expect(run({ paths: ['README.md'], lines: CAP }).logs.join('\n')).not.toContain('::warning')
   })
 
   it('writes no summary file when the runner gives none, and still prints the table', () => {
