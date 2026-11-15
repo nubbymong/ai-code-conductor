@@ -771,20 +771,33 @@ function loginShellAnswerKey(shell: string, env: NodeJS.ProcessEnv): string {
   return `${shell}\0${env.PATH ?? ''}`
 }
 
+/** The question under way, by the login shell and PATH it was asked for: one
+ *  at a time, so a shell that is slow to start is asked once, not once more by
+ *  each caller (several tabs restored together, a launch and the CLI check)
+ *  while it works. Every caller of claudeInLoginShellPathAsync joins it. */
+let loginShellLookInFlight: { key: string; run: Promise<ClaudeInLoginShellPath | null> } | null = null
+
 /** The user's login shell's PATH and the Claude Code in it, asked off the
  *  event loop; null when the login shell is of the sh family (or on Windows)
- *  or gave no answer. The answer is kept for recentClaudeInLoginShellPath. */
-export async function claudeInLoginShellPathAsync(
+ *  or gave no answer. The answer is kept for recentClaudeInLoginShellPath. A
+ *  caller asking while the same question is under way joins it. */
+export function claudeInLoginShellPathAsync(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = os.platform(),
   now: () => number = Date.now,
 ): Promise<ClaudeInLoginShellPath | null> {
   const shell = loginShellWithOwnPath(env, platform)
-  if (!shell) return null
-  const path = await loginShellPathAsync(shell, env)
-  const answer = path ? { path, claude: await findOnPosixPathAsync('claude', path) } : null
-  lastLoginShellAnswer = { key: loginShellAnswerKey(shell, env), answer, at: now() }
-  return answer
+  if (!shell) return Promise.resolve(null)
+  const key = loginShellAnswerKey(shell, env)
+  if (loginShellLookInFlight?.key === key) return loginShellLookInFlight.run
+  const run: Promise<ClaudeInLoginShellPath | null> = (async () => {
+    const path = await loginShellPathAsync(shell, env)
+    const answer = path ? { path, claude: await findOnPosixPathAsync('claude', path) } : null
+    lastLoginShellAnswer = { key, answer, at: now() }
+    return answer
+  })().finally(() => { if (loginShellLookInFlight?.run === run) loginShellLookInFlight = null })
+  loginShellLookInFlight = { key, run }
+  return run
 }
 
 /** The answer claudeInLoginShellPathAsync (or a launch) got less than
@@ -801,11 +814,6 @@ export function recentClaudeInLoginShellPath(
   const age = now() - lastLoginShellAnswer.at
   return age >= 0 && age < CLAUDE_LOOKUP_REUSE_MS ? lastLoginShellAnswer.answer : undefined
 }
-
-/** The question the launch started off the event loop, by the login shell
- *  and PATH it was asked for: one at a time, so a shell that is slow to start
- *  is asked once, not once more by each launch while it works. */
-let loginShellLookInFlight: { key: string; run: Promise<ClaudeInLoginShellPath | null> } | null = null
 
 /** For the session launch, which cannot wait: the recent answer, else none
  *  (2.1.3-beta.5). The login shell is never asked in place: that held the
@@ -826,13 +834,8 @@ export function claudeInLoginShellPathForLaunch(
   if (!shell) return null
   const recent = recentClaudeInLoginShellPath(env, platform, now)
   if (recent !== undefined) return recent
-  const key = loginShellAnswerKey(shell, env)
-  if (loginShellLookInFlight?.key !== key) {
-    const run: Promise<ClaudeInLoginShellPath | null> = claudeInLoginShellPathAsync(env, platform, now)
-      .catch(() => null)
-      .finally(() => { if (loginShellLookInFlight?.run === run) loginShellLookInFlight = null })
-    loginShellLookInFlight = { key, run }
-  }
+  // Joins the question under way, or starts it; the answer is read by the next launch.
+  claudeInLoginShellPathAsync(env, platform, now).catch(() => { /* no answer is kept */ })
   return null
 }
 
