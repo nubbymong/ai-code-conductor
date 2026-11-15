@@ -378,6 +378,7 @@
 .ob-root .oo-btn { border: 0; background: none; color: var(--text-muted); font: inherit; font-size: 13.5px; font-weight: 680; padding: 7px 20px; border-radius: 8px; cursor: pointer; transition: .14s; }
 .ob-root .oo-btn.on { background: var(--ob); color: var(--ob-on, #04121f); }
 .ob-root .oo-btn.oo-off.on { background: var(--border-strong); color: var(--text-primary); }
+.ob-root .oo-btn:disabled { opacity: .6; cursor: default; }
 .ob-root .sl-offnote { display: flex; gap: 12px; align-items: flex-start; padding: 15px 18px; border: 1px dashed var(--border-strong); border-radius: 12px; background: var(--surface-stage); max-width: 760px; margin: 14px auto 0; }
 .ob-root .off-ic { width: 28px; height: 28px; border-radius: 8px; background: var(--surface-overlay); color: var(--text-muted); display: grid; place-items: center; font-size: 15px; flex: none; }
 .ob-root .sl-offnote b { font-size: 14px; color: var(--text-primary); }

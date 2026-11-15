@@ -60,8 +60,8 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
   // Why Next did not move on: the sentence its save was refused with, or
   // null. Shown below the page, outside the part that is dimmed while GitHub
   // is Off, and gone when the next action starts. Once Next has been refused,
-  // "Skip for now" stays on offer for as long as the page is open, and is held
-  // with Next while a save is on its way.
+  // "Skip for now" stays on offer for as long as the page is open. While a
+  // save is on its way, Skip and the GitHub On and Off are held with Next.
   const [notSaved, setNotSaved] = useState<string | null>(null)
   const [skipOffered, setSkipOffered] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -231,7 +231,15 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
     if (savingRef.current) return
     onNext()
   }
-  const setMaster = (on: boolean) => setLocalMaster(on)
+  // Not while a save is on its way either: that save carries the master as
+  // it was shown when Next was pressed, and the page moves on once it is made,
+  // so a choice made meanwhile would be shown and then dropped. On and Off are
+  // disabled then, and a press that arrives before the page has drawn them so
+  // stops here.
+  const setMaster = (on: boolean) => {
+    if (savingRef.current) return
+    setLocalMaster(on)
+  }
 
   const oauthScopes =
     oauthMode === 'private'
@@ -460,12 +468,18 @@ export function GitHubStep({ onNext, onBack }: { onNext: () => void; onBack: () 
         </button>
         <div className="feat-onoff">
           <span className="oo-lbl">GitHub</span>
-          <button className={masterOn ? 'oo-btn on' : 'oo-btn'} onClick={() => setMaster(true)} type="button">
+          <button
+            className={masterOn ? 'oo-btn on' : 'oo-btn'}
+            onClick={() => setMaster(true)}
+            disabled={saving}
+            type="button"
+          >
             On
           </button>
           <button
             className={masterOn ? 'oo-btn oo-off' : 'oo-btn oo-off on'}
             onClick={() => setMaster(false)}
+            disabled={saving}
             type="button"
           >
             Off

@@ -9,7 +9,8 @@
  *     user set it there or the shown value was read from the file.
  *   - The set-up page's Next waits for its save. A refused save is said on
  *     the page and the page stays; "Skip for now", offered then, moves on
- *     with nothing saved, and is held while a save is on its way.
+ *     with nothing saved. While a save is on its way, Skip and the GitHub
+ *     On and Off are held with Next.
  *   - A control that starts a save does not leave a refused save as an
  *     unhandled rejection: the reason is already on the page.
  *   - The add-account dialog and the device sign-in show main's sentence for
@@ -449,6 +450,76 @@ describe('a page opened while github-config.json did not read', () => {
       await settle()
       expect(onNext).toHaveBeenCalledTimes(1)
       expect(alerts()).toEqual([])
+    })
+
+    /** Which of the GitHub On and Off the page shows as chosen. */
+    const masterShown = (page: ParentNode): 'On' | 'Off' =>
+      buttonByText(page, 'On').classList.contains('on') ? 'On' : 'Off'
+
+    it('the GitHub On and Off are held while Next is saving, and can be set again once that save has ended', async () => {
+      let refuseSave: (reason: Error) => void = () => {}
+      github.updateConfig.mockImplementationOnce(
+        () => new Promise<GitHubConfig>((_finish, refuse) => { refuseSave = refuse }),
+      )
+      const onNext = vi.fn()
+      const page = render(<GitHubStep onNext={onNext} onBack={() => {}} />)
+      await settle()
+      expect(masterShown(page)).toBe('On')
+      expect(buttonByText(page, 'On').disabled).toBe(false)
+      expect(buttonByText(page, 'Off').disabled).toBe(false)
+
+      click(buttonContaining(page, 'Next'))
+      await settle()
+      expect(github.updateConfig).toHaveBeenCalledWith({ seenOnboardingVersion: APP_VERSION, enabledByDefault: true })
+      expect(buttonByText(page, 'On').disabled).toBe(true)
+      expect(buttonByText(page, 'Off').disabled).toBe(true)
+      click(buttonByText(page, 'Off'))
+      await settle()
+      expect(masterShown(page)).toBe('On')
+
+      // That save is refused: the page stays, and the choice is the user's again.
+      await act(async () => { refuseSave(new Error(GITHUB_CONFIG_NOT_SAVED)) })
+      await settle()
+      expect(onNext).not.toHaveBeenCalled()
+      expect(buttonByText(page, 'On').disabled).toBe(false)
+      expect(buttonByText(page, 'Off').disabled).toBe(false)
+      click(buttonByText(page, 'Off'))
+      expect(masterShown(page)).toBe('Off')
+
+      click(buttonContaining(page, 'Next'))
+      await settle()
+      expect(github.updateConfig).toHaveBeenCalledTimes(2)
+      expect(github.updateConfig).toHaveBeenLastCalledWith({ seenOnboardingVersion: APP_VERSION, enabledByDefault: false })
+      expect(onNext).toHaveBeenCalledTimes(1)
+    })
+
+    it('Off pressed with Next, before the page has drawn it held, is not taken: the page moves on showing what it saved', async () => {
+      let finishSave: (config: GitHubConfig) => void = () => {}
+      github.updateConfig.mockImplementationOnce(() => new Promise<GitHubConfig>((finish) => { finishSave = finish }))
+      const onNext = vi.fn()
+      const page = render(<GitHubStep onNext={onNext} onBack={() => {}} />)
+      await settle()
+
+      // Both presses arrive before the page is drawn again.
+      const next = buttonContaining(page, 'Next')
+      const off = buttonByText(page, 'Off')
+      let heldWhenPressed: boolean | undefined
+      act(() => {
+        next.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        heldWhenPressed = off.disabled
+        off.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+      await settle()
+      // The press did reach an Off that was not yet drawn as held.
+      expect(heldWhenPressed).toBe(false)
+      expect(github.updateConfig).toHaveBeenCalledTimes(1)
+      expect(github.updateConfig).toHaveBeenCalledWith({ seenOnboardingVersion: APP_VERSION, enabledByDefault: true })
+      expect(masterShown(page)).toBe('On')
+
+      await act(async () => { finishSave(savedConfig()) })
+      await settle()
+      expect(masterShown(page)).toBe('On')
+      expect(onNext).toHaveBeenCalledTimes(1)
     })
 
     it('Back pressed while the save is on its way: the flow is not moved on from under the user', async () => {
