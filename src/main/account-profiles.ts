@@ -3890,7 +3890,7 @@ export function inactiveAccountRefusal(profileId: string, list: () => AccountPro
   const p = list().find((x) => x && x.id === profileId)
   if (!p || isAccountActive(p)) return null
   const name = typeof p.name === 'string' && p.name.trim() ? `"${p.name.trim()}"` : 'this account'
-  return `The Claude account ${name} is switched off, so nothing was started on it. Choose another account (for a tab, use Switch Account in its right-click menu), or switch ${name} back on in Settings, Accounts.`
+  return `The Claude account ${name} is inactive, so nothing was started on it. Choose another account (for a tab, use Switch Account in its right-click menu), or use Make active on ${name} in Settings, Accounts.`
 }
 
 /** The one call a launch makes to refuse a switched-off account: logs the

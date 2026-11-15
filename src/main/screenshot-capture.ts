@@ -103,7 +103,7 @@ function getScreenshotsInstance(): Screenshots {
 
 /** The real system behind the Screen Recording check: the permission state, the
  *  message dialog (on the app window when there is one) and System Settings. */
-function systemScreenPermission(mainWindow: BrowserWindow): ScreenPermissionDeps {
+function systemScreenPermission(mainWindow: BrowserWindow | null): ScreenPermissionDeps {
   return {
     platform: process.platform,
     status: () => systemPreferences.getMediaAccessStatus('screen'),
@@ -246,10 +246,15 @@ export async function captureWindow(sourceId: string): Promise<string | null> {
 }
 
 /**
- * List available windows for capture.
+ * List available windows for capture. On macOS the Screen Recording permission
+ * is checked first, as for a region (captureRectangle): without it the user is
+ * told and offered System Settings, and the list is empty, instead of a picker
+ * of blank or desktop-only thumbnails. `mainWindow` is the message's parent;
+ * `permission` is a parameter for tests, and the app passes none.
  */
-export async function listWindows(): Promise<Array<{ id: string; name: string; thumbnail: string }>> {
+export async function listWindows(mainWindow: BrowserWindow | null = null, permission?: ScreenPermissionDeps): Promise<Array<{ id: string; name: string; thumbnail: string }>> {
   try {
+    if (!(await screenCaptureAllowed(permission ?? systemScreenPermission(mainWindow)))) return []
     const sources = await desktopCapturer.getSources({
       types: ['window'],
       thumbnailSize: { width: 200, height: 150 }

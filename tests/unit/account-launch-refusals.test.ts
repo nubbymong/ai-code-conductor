@@ -128,9 +128,10 @@ describe('inactiveAccountRefusal: a switched-off account starts no session', () 
   it('refuses an inactive account, names it and says how to move the tab to another', () => {
     const refusal = inactiveAccountRefusal('p2', () => [profile({ id: 'p2', name: 'Side project', active: false })])
     expect(refusal).toContain('"Side project"')
-    expect(refusal).toMatch(/switched off/)
+    expect(refusal).toMatch(/is inactive/)
     expect(refusal).toMatch(/Switch Account/)
-    expect(refusal).toMatch(/Settings, Accounts/)
+    // The control the Accounts menu shows, by its own label (AccountsPanel: Make active).
+    expect(refusal).toMatch(/use Make active on "Side project" in Settings, Accounts/)
   })
 
   it('lets an active account, and one that never recorded the flag, start', () => {
@@ -149,7 +150,7 @@ describe('inactiveAccountRefusal: a switched-off account starts no session', () 
 
   it('has a sentence that fits a tab, an agent and an Insights run alike', () => {
     const refusal = inactiveAccountRefusal('p2', () => [profile({ id: 'p2', name: 'Side project', active: false })])!
-    expect(refusal).toMatch(/^The Claude account "Side project" is switched off, so nothing was started on it\./)
+    expect(refusal).toMatch(/^The Claude account "Side project" is inactive, so nothing was started on it\./)
   })
 
   it('reads the saved list by default', () => {
@@ -192,7 +193,7 @@ describe('assertAccountActive: the one call a launch makes', () => {
   })
 
   it('throws the sentence for a switched-off account', () => {
-    expect(() => assertAccountActive('p2', 'session-1')).toThrow(/"Parked" is switched off/)
+    expect(() => assertAccountActive('p2', 'session-1')).toThrow(/"Parked" is inactive/)
   })
 
   it('does nothing for an active account', () => {

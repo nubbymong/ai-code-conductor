@@ -281,6 +281,9 @@ describe('a Restart whose project settings refuse the account', () => {
     await aMoment()
     expect(h.ptys, 'nothing started').toHaveLength(1)
     expect(terminal('replaced-gate')).toContain('settings.json: apiKeyHelper')
+    // The sentence a user reads, capitalised, without the log marker in front of it.
+    expect(terminal('replaced-gate')).toContain("The project's own settings could redirect this account")
+    expect(terminal('replaced-gate')).not.toContain('[profiles]')
     expect(payloads.findIndex(([c]) => c === 'pty:data:replaced-gate')).toBeLessThan(payloads.findIndex(([c]) => c === 'pty:exit:replaced-gate'))
     expect(sent('pty:exit:replaced-gate'), 'exactly one exit').toHaveLength(1)
     expect(consumers.profileConsumerCount(id)).toBe(0)
