@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "03d23ba2d6d02792aeb297b936df2967ba1b3e0ae8d9a0213fc88f2a4402ff05",
-  "manifestHead": "e9eb48959f3345cc14d851906d86075077b17fe3",
+  "manifestPathDigest": "9d1f45febc317fcbe89098e673b3f02166db703ec3f84c8e84d19e37cddb3e0a",
+  "manifestHead": "aa5c38f25786e588a67d5ebb4b90b0d4d96004e3",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -6907,6 +6907,18 @@
       "disposition": "added",
       "evidence": "new test for WP2 PR 4 fix pass 13 (cdde4930): with the real spawnPty and the real MCP record, a session id launched on Codex and relaunched on Claude (and the other way round) is recorded as its new assistant's, the record is released when its process ends, a same-assistant relaunch keeps it and no other session is touched (WP1.68); tests/unit/main/pty-mcp-provider-revive.test.ts, tests/unit/main/conductor-mcp-provider-binding.test.ts; WP2 PR 4 fix pass 13c (36229fd5): the replaced process exits late after a relaunch on the other assistant, in both directions, and the new record stands",
       "note": "created by fix pass 13; node-pty faked, nothing spawned"
+    },
+    {
+      "path": "tests/unit/main/pty-quit-exit-keys-local.test.ts",
+      "predicates": [
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new test for 2.1.3-beta.4 (a quit types the exit keys only into a terminal the app started a CLI in): with the real spawnPty and gracefulExitPty over the real registry, a local Codex session, like a local Claude Code session, still gets Escape, Ctrl-C and /exit on quit, and a terminal tab gets none (WP1.68); tests/unit/main/pty-quit-exit-keys-local.test.ts",
+      "note": "the Codex package registered as the app ships it with a stand-in session and a stand-in prepared launch; node-pty faked, nothing started"
     },
     {
       "path": "tests/unit/main/pty-session-liveness.test.ts",

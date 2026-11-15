@@ -52,7 +52,7 @@ import { getConductorMcpPort, issueMcpSessionToken } from './conductor-mcp-serve
 import { conductorToolsMasterOn } from './conductor-tools-switch'
 import { buildSshArgs, buildSshExecArgs } from './ssh-args'
 import { getRemoteMcpPort } from './ssh-remote-port'
-import { partnerFolderLine, partnerPromptTail, isPartnerShellPrompt, partnerRecentOutput, partnerRecentText, PARTNER_BARE_PROMPT_RE, isPartnerUserInput } from './ssh-partner-folder'
+import { partnerFolderLine, partnerPromptTail, isPartnerShellPrompt, partnerRecentOutput, partnerRecentText, PARTNER_BARE_PROMPT_RE, PARTNER_SIGN_IN_RE, isPartnerUserInput } from './ssh-partner-folder'
 import { resolveHostColorScheme, colorFgBgEnvToken } from './providers/host-color-scheme'
 import { getProvider, providerCapability } from './providers'
 import { isSshCapable } from './providers/types'
@@ -185,6 +185,12 @@ interface PtySession {
   /** The agent CLI this PTY runs, or null for a plain shell (WP2: a
    *  provider switch-off must see running sessions). */
   agent?: 'claude' | 'codex' | null
+  /** The app itself started a CLI in this terminal: a local session of an
+   *  assistant, or an SSH session whose launch line the app typed
+   *  (writeClaudeCmd), until the SSH flow sees that CLI end at the shell (its
+   *  "claude exited to shell" step). Only these get the exit keys when the
+   *  app quits (gracefulExitPty); every other terminal is just closed. */
+  appStartedCli: boolean
 }
 
 // Buffer writes for PTYs that haven't spawned yet (e.g., partner terminal initially hidden)
@@ -3411,6 +3417,116 @@ function spawnPtyResolved(
     let inInnerShell = false
     let currentFlowState: SshFlowState = 'connecting'
     let currentFlowInfo: string | undefined = undefined
+    // A Terminal only tab is a terminal: nothing is launched in it, so its
+    // post-connect command needs no click, and nothing is offered once that
+    // command is done.
+    const terminalOnly = options?.shellOnly === true
+    // What typing that command without a click is decided on. Kept only for a
+    // Terminal only tab with a post-connect command, and only until the
+    // command is typed or offered (the data handler's own step):
+    //  - the tab's recent raw output and the prompt its last read with text
+    //    ended in, read exactly as the partner's folder line reads them
+    //    (partnerRecentOutput, partnerPromptTail);
+    //  - whether that last prompt is a sign-in prompt, so what the user types
+    //    there is its answer and not typing at the shell;
+    //  - whether the unasked write is given up for this connection (the user
+    //    typed into the tab, or the write was withdrawn at its moment);
+    //  - whether a write decided without a click is still to come (the 200 ms
+    //    between the decision and the write, writePostCommand).
+    let unaskedRecent = ''
+    let unaskedTail = ''
+    let unaskedSignInWaiting = false
+    let unaskedGivenUp = false
+    let unaskedWritePending = false
+    /** Whether the tab is at a shell prompt its post-connect command may be
+     *  typed into without a click. The partner folder line's own check, whole:
+     *  the last prompt read has a shell prompt's shape (the partner's pattern,
+     *  which also knows zsh's `%`, so the idle fallback types on a zsh host
+     *  and not into the silence after a sign-in banner), and neither it nor
+     *  the tab's recent output (the prompt's own line across reads, and the
+     *  line above it) names a sign-in word (isPartnerShellPrompt), so a
+     *  sign-in prompt a read boundary split, or one with its words on the
+     *  line above a bare prompt, is refused. From a password this flow typed
+     *  itself on, a bare sigil is refused too (PARTNER_BARE_PROMPT_RE): it
+     *  may be a second sign-in step. Never after the user has typed into the
+     *  tab (noteUserInput: the echo of a key can read as a prompt), and never
+     *  with a CLI screen showing. Accepted, as for the partner: the sign-in
+     *  check is a word list, so a prompt that ends like a shell's and names
+     *  none of its words (a host menu, a code prompt in other words) is a
+     *  match. */
+    const atShellPromptForUnasked = (): boolean =>
+      !unaskedGivenUp && !claudeRunning
+      && unaskedTail !== ''
+      && isPartnerShellPrompt(unaskedTail, partnerRecentText(unaskedRecent))
+      && !(passwordSent && PARTNER_BARE_PROMPT_RE.test(unaskedTail))
+    /** Whether a Terminal only tab types its post-connect command by itself
+     *  now that login is detected, instead of offering it: only from
+     *  connecting, and only at a shell prompt (atShellPromptForUnasked, asked
+     *  again at the moment of the write). Anywhere else the offer stays, as
+     *  for every other config, and the user runs the command with one click
+     *  once signed in. */
+    const runsPostCommandUnasked = (): boolean =>
+      terminalOnly && currentFlowState === 'connecting' && atShellPromptForUnasked()
+    // The post-connect phase of a Terminal only tab has an end, whatever the
+    // command attached the tab to. A command that attaches to something busy
+    // (a tmux session with work in progress) never goes quiet and may never
+    // show a prompt the flow knows, so neither the idle step nor the prompt
+    // step would ever close the phase. Two things do: this deadline, counted
+    // from the moment the command is typed, and a CLI screen showing in the
+    // tab (the data handler's detection). Each runs the step the idle path
+    // runs when it cannot tell where the command landed (endPostCommandPhase),
+    // so the tab is the user's terminal from then on and the flow does
+    // nothing more in it by itself.
+    const POST_PHASE_DEADLINE_MS = 15000
+    let postPhaseDeadlineHandle: ReturnType<typeof setTimeout> | null = null
+    const clearPostPhaseDeadline = (): void => {
+      if (postPhaseDeadlineHandle) {
+        clearTimeout(postPhaseDeadlineHandle)
+        postPhaseDeadlineHandle = null
+      }
+    }
+    /** Where the flow goes once the post-connect command is done. A config
+     *  that starts a CLI is asked whether to launch it (`info` says what is
+     *  known of where the command landed). A Terminal only tab is asked
+     *  nothing: it is the user's terminal from here, as after a Skip, so a
+     *  container shell they leave by hand raises nothing either. */
+    const afterPostCommand = (info: string): void => {
+      if (terminalOnly) {
+        clearPostPhaseDeadline()
+        entrySkipped = true
+        setFlowState('shell-only')
+        return
+      }
+      setFlowState('awaiting-claude', info)
+    }
+    /** End a Terminal only tab's post-connect phase now (its deadline, or a
+     *  CLI screen showing). Nothing for any other config, before the command
+     *  is typed, once the phase is already over, or over a failed container
+     *  entry, whose message with Run again and Skip stays. Otherwise the same
+     *  step as the idle path's when it cannot tell where the command landed:
+     *  the result is marked unverified and the tab becomes a terminal, so
+     *  nothing the flow types by itself (the saved sudo answer included)
+     *  follows it. */
+    const endPostCommandPhase = (why: string): void => {
+      clearPostPhaseDeadline()
+      if (!terminalOnly || !postCommandWritten || postCommandShellReady || runtimeEntryFailed) return
+      postCommandShellReady = true
+      entryUnverified = true
+      clearSshLineBuffer(sessionId, 'runtime')
+      logInfo(`[ssh] ${sessionId}: the post-connect phase of this Terminal only tab is over (${why}) -- the tab is a terminal from here`)
+      // The state moves only from the phase's own state: one the tab left
+      // some other way (a Skip sent while the command ran) is kept.
+      if (currentFlowState === 'running-postcommand') afterPostCommand(SSH_ENTRY.UNVERIFIED)
+      else entrySkipped = true
+    }
+    const armPostPhaseDeadline = (): void => {
+      clearPostPhaseDeadline()
+      postPhaseDeadlineHandle = setTimeout(() => {
+        postPhaseDeadlineHandle = null
+        if (destroyed) return
+        endPostCommandPhase(`${POST_PHASE_DEADLINE_MS}ms after the command was typed`)
+      }, POST_PHASE_DEADLINE_MS)
+    }
     // #86: the line an SSH session's partner shell gets at its first prompt
     // (null for any other session, and for a partner with nothing to type),
     // whether it was considered yet (once, on reaching its shell, or at the
@@ -3606,8 +3722,10 @@ function spawnPtyResolved(
             return
           }
           logInfo(`[ssh] ${sessionId}: idle ${IDLE_FALLBACK_MS}ms → advancing from connecting`)
-          if (postCommand) setFlowState('awaiting-postcommand', 'idle-fallback')
-          else if (options?.shellOnly) setFlowState('shell-only', 'idle-fallback')
+          if (postCommand) {
+            if (runsPostCommandUnasked()) writePostCommand(true)
+            else setFlowState('awaiting-postcommand', 'idle-fallback')
+          } else if (options?.shellOnly) setFlowState('shell-only', 'idle-fallback')
           else setFlowState('awaiting-claude', 'host (fallback)')
           return
         }
@@ -3731,8 +3849,8 @@ function spawnPtyResolved(
           entryUnverified = true
           entrySkipped = false // the flow is live again, like the IN promotion
           clearSshLineBuffer(sessionId, 'runtime')
-          logInfo(`[ssh] ${sessionId}: idle after postCommand -- entry could not be verified, asking for explicit consent before any launch`)
-          setFlowState('awaiting-claude', SSH_ENTRY.UNVERIFIED)
+          logInfo(`[ssh] ${sessionId}: idle after postCommand -- entry could not be verified, ${terminalOnly ? 'nothing is launched in a Terminal only tab' : 'asking for explicit consent before any launch'}`)
+          afterPostCommand(SSH_ENTRY.UNVERIFIED)
           return
         }
 
@@ -3789,6 +3907,12 @@ function spawnPtyResolved(
           if (claudeProvider.looksLikeShellPromptTail(recentSshTail)) {
             logError(`[ssh] ${sessionId}: idle after claudeCmd but pane is a bare shell → claude exited (not latching claude-running)`)
             setFlowState('failed', 'claude exited to shell')
+            // The CLI the app started has ended, and the tab is a plain remote
+            // shell again: whatever the user starts in it by hand is theirs,
+            // so a quit closes the tab and types no exit keys into it
+            // (gracefulExitPty).
+            const ended = ptySessions.get(sessionId)
+            if (ended?.ptyProcess === ptyProcess) ended.appStartedCli = false
             return
           }
           logInfo(`[ssh] ${sessionId}: idle after claudeCmd → assuming claude-running (fallback)`)
@@ -4156,9 +4280,13 @@ function spawnPtyResolved(
       setFlowState('failed', reason)
     }
 
-    const writePostCommand = () => {
+    /** Type the post-connect command, 200 ms from now. `unasked` is true only
+     *  when a Terminal only tab's flow decided it without a click
+     *  (runsPostCommandUnasked); that write is checked again at its moment. */
+    const writePostCommand = (unasked = false) => {
       if (postCommandSent || !postCommand) return
       postCommandSent = true
+      unaskedWritePending = unasked
       // rc.15 review R1 round 3 (spec MAJOR): a Skip given at the post-command
       // offer must not stand the after-entry watch down for the attempt that
       // follows it -- every attempt starts watched.
@@ -4186,6 +4314,32 @@ function spawnPtyResolved(
       logInfo(`[ssh] ${sessionId}: writing post-command`)
       setTimeout(() => {
         if (destroyed) return
+        if (unasked) {
+          // Decided without a click 200 ms ago: asked again now, on everything
+          // read and typed since. A sign-in prompt that arrived meanwhile (the
+          // earlier read only ended like a shell prompt), a key the user
+          // typed, or a CLI screen showing: nothing is typed, the attempt is
+          // withdrawn as if never started, and the offer appears as for every
+          // other config. It is not tried again without a click on this
+          // connection. A Skip, a CLI screen or an end inside the window has
+          // moved the state off running-postcommand: that hands the terminal to
+          // the user, so nothing is typed even when the prompt is still valid.
+          unaskedWritePending = false
+          if (currentFlowState !== 'running-postcommand' || !atShellPromptForUnasked()) {
+            postCommandSent = false
+            unaskedGivenUp = true
+            if (entryNonce !== null) {
+              entryNonce = null
+              sshEntryNonceBySession.delete(sessionId)
+            }
+            logInfo(`[ssh] ${sessionId}: the tab is not at a shell prompt at the moment of typing -- the post-connect command is offered, not typed`)
+            // Only this attempt's own state moves to the offer. A CLI screen
+            // showing, a Skip, or an ended connection inside the window has
+            // already set the state, and it is left alone.
+            if (currentFlowState === 'running-postcommand') setFlowState('awaiting-postcommand')
+            return
+          }
+        }
         postCommandWritten = true
         // Drop the host output accumulated while capturing the host prompt
         // below; the entry watch must see only the post-command's own output.
@@ -4197,6 +4351,9 @@ function spawnPtyResolved(
         // running-postcommand with an inert overlay; arm it here so the
         // silence cap below can fire (rc.14 review F1 round 2).
         armIdleFallback()
+        // A Terminal only tab's post-connect phase ends at its deadline at the
+        // latest, however the command was started (endPostCommandPhase).
+        if (terminalOnly) armPostPhaseDeadline()
       }, 200)
     }
 
@@ -4399,6 +4556,10 @@ function spawnPtyResolved(
           ptyProcess.write(cmdToWrite + '\r')
           // The command is out: only now does the after-entry watch stand down.
           claudeWritten = true
+          // From here the CLI in this terminal is one the app started, so a
+          // quit ends it with the exit keys (gracefulExitPty).
+          const live = ptySessions.get(sessionId)
+          if (live?.ptyProcess === ptyProcess) live.appStartedCli = true
           // Follow-up adversarial pass (fail-posture MAJOR): arm the
           // wrapped-launch watchdog only once the wrapped command has actually
           // been written -- see tmuxLaunchWatchUntil's doc comment.
@@ -4888,6 +5049,28 @@ function spawnPtyResolved(
     const flowController: SshFlowController = {
       getState: () => ({ state: currentFlowState, info: currentFlowInfo }),
       noteUserInput: (data: string) => {
+        // A Terminal only tab's post-connect command is typed into the tab's
+        // input too, so the same rule holds for it until it is typed or
+        // offered: once the user has typed there, it could only land on their
+        // line (a zsh host waits 1.5 s at its prompt, and the echo of "cd ~"
+        // reads as a prompt) or follow keys they typed ahead. The unasked
+        // write is given up for this connection and the offer appears in its
+        // place. One exception: what is typed while a sign-in prompt is the
+        // last prompt read is that prompt's answer (a password typed by hand),
+        // up to its Enter, and does not count; a host that signs in that way
+        // still gets its command typed at the shell prompt that follows.
+        // Accepted: an answer to any other question asked before the shell (a
+        // first connection's host key question) counts, and that connection
+        // gets the offer.
+        if (terminalOnly && postCommand && !unaskedGivenUp && !postCommandWritten
+            && (currentFlowState === 'connecting' || unaskedWritePending) && isPartnerUserInput(data)) {
+          if (unaskedSignInWaiting) {
+            if (/[\r\n]/.test(data)) unaskedSignInWaiting = false
+          } else {
+            unaskedGivenUp = true
+            logInfo(`[ssh] ${sessionId}: input typed into the tab before its post-connect command; the command is offered, not typed`)
+          }
+        }
         // #86: the folder line is typed into the partner's input, so once the
         // user has typed anything there (a key, an arrow, a paste, a password
         // typed by hand) it could only land on their line or follow keys they
@@ -5130,6 +5313,8 @@ function spawnPtyResolved(
         // write. Its callback is destroyed-gated too; cleared here so no ladder
         // timer outlives teardown.
         cancelDeferredEntryWrite()
+        // A Terminal only tab's post-connect deadline, the same way.
+        clearPostPhaseDeadline()
         // #242 finding F3 (adversarial review round 4, MAJOR): stagingTimeoutHandle
         // was the one timer on this ladder NOT cleared here -- it outlives
         // session teardown and, unguarded, drives a full claude-launch write
@@ -5239,6 +5424,10 @@ function spawnPtyResolved(
             setupTimeoutHandle = null
           }
           logInfo(`[ssh] ${sessionId}: Claude UI detected — claudeRunning latched`)
+          // A Terminal only tab whose post-connect command attached it to a
+          // pane that shows a CLI: its post-connect phase ends here, at once
+          // (nothing for any other config).
+          endPostCommandPhase('a CLI screen is showing')
           if (currentFlowState !== 'claude-running') setFlowState('claude-running')
         }
       }
@@ -5482,6 +5671,21 @@ function spawnPtyResolved(
         partnerPromptNow = tail !== '' && isPartnerShellPrompt(tail, partnerRecentText(partnerRecent))
           && !(passwordSent && PARTNER_BARE_PROMPT_RE.test(tail))
       }
+      // The same reading for a Terminal only tab's post-connect command, kept
+      // until the command is typed or offered: through connecting, and through
+      // the 200 ms between an unasked decision and its write, which asks again
+      // (atShellPromptForUnasked). The prompt is sticky across a read that
+      // ends in no text (a bare line break, a pure repaint), as
+      // lastPromptLineSeen is, because the idle fallback decides 1.5 s after
+      // the last read, whatever that read was.
+      if (terminalOnly && postCommand && !unaskedGivenUp && (currentFlowState === 'connecting' || unaskedWritePending)) {
+        unaskedRecent = partnerRecentOutput(unaskedRecent, data)
+        const tail = partnerPromptTail(data)
+        if (tail !== '') {
+          unaskedTail = tail
+          unaskedSignInWaiting = PASSWORD_PROMPT_RE.test(tail) || PARTNER_SIGN_IN_RE.test(tail)
+        }
+      }
       // rc.14 review F1 round 2: remember the HOST shell's prompt while we are
       // still on the host, so the entry watch below can recognise it coming
       // back. Frozen once the post-command has been written (nothing after that
@@ -5585,7 +5789,7 @@ function spawnPtyResolved(
             afterEntryTrailingLine = ''
             clearSshLineBuffer(sessionId, 'runtime')
             logInfo(`[ssh] ${sessionId}: container entry proven by this attempt's sentinel -> inner shell ready`)
-            setFlowState('awaiting-claude', SSH_ENTRY.INNER)
+            afterPostCommand(SSH_ENTRY.INNER)
             // No return: the rest of the chunk is judged with inInnerShell set.
           }
         }
@@ -5704,6 +5908,11 @@ function spawnPtyResolved(
         // and names no sign-in word ("Response> ") is a prompt match, the
         // word-list gap recorded at PARTNER_SIGN_IN_RE.
         partnerRecent = ''
+        // The same for a Terminal only tab's post-connect command, whose check
+        // reads its own copy; and the prompt this flow answers is not one the
+        // user is answering (noteUserInput).
+        unaskedRecent = ''
+        unaskedSignInWaiting = false
         setTimeout(() => {
           ptyProcess.write(password + '\r')
         }, 100)
@@ -5725,7 +5934,14 @@ function spawnPtyResolved(
       // rc.15 review R1 (spec review): an UNVERIFIED entry (start -ai, free
       // text) is past the host's own sudo too -- whatever is attached printed
       // that prompt, and it gets no host secret either.
-      if (!sudoPasswordSent && sudoPassword && postCommandSent && !claudeSent && !inInnerShell && !entryUnverified && !containerEverEntered) {
+      // For a Terminal only tab, whose command can be decided without a click:
+      // only once the command has actually been typed (the sudo this answers is
+      // the command's own), never while a CLI screen is showing (from that point
+      // the flow types nothing by itself), and never after its post-connect
+      // phase has ended (endPostCommandPhase). A config that starts a CLI keeps
+      // this step exactly as it was.
+      if (!sudoPasswordSent && sudoPassword && postCommandSent && !claudeSent && !inInnerShell && !entryUnverified && !containerEverEntered
+          && (!terminalOnly || (!claudeRunning && postCommandWritten))) {
         const promptLine = promptLineNow
         if (promptLine && SUDO_PROMPT_RE.test(promptLine)) {
           sudoPasswordSent = true
@@ -5735,8 +5951,10 @@ function spawnPtyResolved(
             // 100ms between the prompt and this write means the host sudo secret
             // must not land -- in a container that has since proven itself, or a
             // host the flow has since left. The pre-schedule gate above is not
-            // enough because IN can arrive inside this window.
-            if (containerEverEntered || runtimeEntryFailed) return
+            // enough because IN can arrive inside this window. The same for a
+            // Terminal only tab's CLI screen that showed, or phase that ended,
+            // inside it.
+            if (containerEverEntered || runtimeEntryFailed || (terminalOnly && (claudeRunning || postCommandShellReady))) return
             ptyProcess.write(sudoPassword + '\r')
           }, 100)
           return
@@ -5777,7 +5995,8 @@ function spawnPtyResolved(
         && (currentFlowState === 'connecting' || currentFlowState === 'skipped')
       ) {
         if (postCommand) {
-          setFlowState('awaiting-postcommand')
+          if (runsPostCommandUnasked()) writePostCommand(true)
+          else setFlowState('awaiting-postcommand')
         } else if (options?.shellOnly) {
           setFlowState('shell-only')
           // #86: the partner's folder line, typed only here: the partner
@@ -5863,7 +6082,7 @@ function spawnPtyResolved(
         entryUnverified = true
         entrySkipped = false // the flow is live again, like the IN promotion
         clearSshLineBuffer(sessionId, 'runtime')
-        setFlowState('awaiting-claude', SSH_ENTRY.UNVERIFIED)
+        afterPostCommand(SSH_ENTRY.UNVERIFIED)
         return
       }
 
@@ -7100,7 +7319,10 @@ function spawnPtyResolved(
     }
   }
 
-  ptySessions.set(sessionId, { ptyProcess, sessionId, agent: options?.shellOnly ? null : (options?.provider ?? 'claude') })
+  // appStartedCli: a local provider session starts its CLI here (localLaunch is
+  // null for a terminal tab and for SSH). An SSH session's turns true only
+  // when the flow types the launch line (writeClaudeCmd).
+  ptySessions.set(sessionId, { ptyProcess, sessionId, agent: options?.shellOnly ? null : (options?.provider ?? 'claude'), appStartedCli: localLaunch !== null })
   // P3.15 rounds 3 and 4 (K1, P4): every session's PTY, of every kind: an
   // error on its input or its output never quits the app.
   guardSessionPty(win, sessionId, ptyProcess)
@@ -8034,8 +8256,10 @@ export function killAllPty(): void {
 }
 
 /**
- * Gracefully exit a Claude session by sending /exit command.
- * Returns a promise that resolves when the PTY exits, or rejects on timeout.
+ * End a session when the app quits: /exit for a CLI the app started, a plain
+ * close for every other terminal, a detach for a tmux-persistent remote.
+ * Returns a promise that resolves when the PTY exits, or after the timeout's
+ * forced kill.
  */
 export function gracefulExitPty(sessionId: string, timeoutMs = 5000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -8067,6 +8291,20 @@ export function gracefulExitPty(sessionId: string, timeoutMs = 5000): Promise<vo
     // (adversarial review, 2026-08-18). The onExit listener above resolves.
     if (sshTmuxWrappedBySession.has(sessionId)) {
       logInfo(`[pty-manager] ${sessionId} is tmux-persistent -- detaching (no /exit) so the remote survives app quit`)
+      try { entry.ptyProcess.kill() } catch { /* already gone */ }
+      return
+    }
+
+    // Only a terminal the app itself started a CLI in gets the exit keys (a
+    // local session of an assistant, or an SSH session whose launch line the
+    // app typed). Anything else is a terminal the user drives: a Terminal only
+    // tab, a partner terminal, an SSH tab still waiting at its prompt or taken
+    // over with Skip. Escape, Ctrl-C and /exit typed there land in whatever
+    // the user is running (a tmux session they attached to gets its CLI
+    // ended). Closing the PTY drops the connection instead, which leaves
+    // whatever runs on the far side as a closed terminal leaves it.
+    if (!entry.appStartedCli) {
+      logInfo(`[pty-manager] ${sessionId} runs no CLI the app started -- closing it (no exit keys)`)
       try { entry.ptyProcess.kill() } catch { /* already gone */ }
       return
     }

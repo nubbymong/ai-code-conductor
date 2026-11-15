@@ -370,8 +370,9 @@ export async function closeWithNoSessions(deps: {
  * The close dialog's "Close sessions" / "Don't save" path. rc.15 review R6
  * (aicc_planning#53 adjacent): the dialog says the sessions will be closed, and
  * on macOS the window closing does not quit the app -- so the sessions are
- * ENDED here, the way Save ends them (session.gracefulExit: local sessions get
- * /exit, tmux-persistent remotes detach), before the window is allowed to go.
+ * ENDED here, the way Save ends them (session.gracefulExit: a session the app
+ * started a CLI in gets /exit, tmux-persistent remotes detach, every other
+ * terminal is closed), before the window is allowed to go.
  * Main's window-all-closed then sweeps any straggler. A teardown error never
  * strands the close. Returns false when the close itself failed (the caller
  * leaves the closing state).

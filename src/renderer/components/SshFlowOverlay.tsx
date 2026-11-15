@@ -169,6 +169,11 @@ export default function SshFlowOverlay({ sessionId, hasPostCommand, shellOnly, e
   ) {
     return null
   }
+  // A Terminal only tab is a terminal while its post-connect command runs too:
+  // the command and its output are on screen, and nothing follows it to wait
+  // for. A command that attaches to something busy (a tmux session with work
+  // in progress) never goes quiet, so a "Running..." card would sit over it.
+  if (shellOnly && state === 'running-postcommand') return null
 
   const isRunning = state === 'running-postcommand' || state === 'running-setup' || state === 'running-claude'
   const isAwaitingPostCommand = state === 'awaiting-postcommand'
