@@ -72,6 +72,7 @@ export const trainingSteps: TrainingStep[] = [
       '**Starting effort** is a config field (low, medium, high, xhigh, max, ultracode; a Codex config offers the levels its model runs); change it live in Claude with `/effort`. The card shows the current level',
       'Connection is three cards, not a checkbox: **Local**, **SSH**, **SSH Persistent** -- one config form, full Claude support on all three',
       'An SSH config also has a **Runtime** section: run on the host, or **in a Docker container** the app execs into for you (engine, name, optional directory, sudo)',
+      '**Terminal only over SSH** is a terminal and nothing more: an **After connecting, run** command is typed by itself at the first shell prompt, with no launch questions, and quitting closes Terminal only tabs and partner terminals without typing into them',
       '**Allow Multi Spawn** decides whether the config can run more than one session at a time. Off by default: its row then gets a copy count you can launch several at once from, and without it a running config declines a second launch and says so',
     ],
     howToTrigger: [
@@ -94,6 +95,7 @@ export const trainingSteps: TrainingStep[] = [
         'Pick a **starting model** per config; the dropdown lists what is currently available, newest first',
         '**Starting effort** is a config field, with the levels the config\'s model runs; on a running Codex session the **model pill** opens Codex\'s own model and effort picker. The card shows the current level',
         'Codex sessions run on this computer only in this release; a Terminal only config can also connect over **SSH**',
+        '**Terminal only over SSH** is a terminal and nothing more: an **After connecting, run** command is typed by itself at the first shell prompt, with no launch questions, and quitting closes Terminal only tabs and partner terminals without typing into them',
         '**Allow Multi Spawn** decides whether the config can run more than one session at a time. Off by default: its row then gets a copy count you can launch several at once from, and without it a running config declines a second launch and says so',
       ],
       bullets: [
@@ -632,10 +634,13 @@ export const trainingSteps: TrainingStep[] = [
       '**Filters** -- provider, account, config, date range (7d / 30d / all), and a free-text search over model and project',
       'A model with no price yet reads **no price**, never $0, and a notice names it',
       'Pricing from BerriAI`s LiteLLM (cached 24h); a green nav badge shows when the index is fresh',
+      '**Cost or Tokens** -- token counts sit beside the costs, and the chart switches between the two, so usage with no price shows too',
+      '**A service you control** -- Settings, General, Tokenomics switches the indexer off (nothing is read, what was recorded stays) and on again (it catches up); **Rescan** reads every transcript again without removing anything; accounts can be left out of the figures',
     ],
     howToTrigger: [
       { label: 'Open', value: 'Click  $  in the sidebar nav' },
       { label: 'Filter', value: 'Header -> provider / account / date / model / project' },
+      { label: 'Switch off', value: 'Settings → General → Tokenomics' },
     ],
     proTip:
       'Filter by account to see which login is burning the budget, or by model to compare what each model costs across the same projects. Life-to-date may read lower than the old page -- the rebuild dedups and prices at current rates.',
@@ -645,6 +650,7 @@ export const trainingSteps: TrainingStep[] = [
       '**Filter** by provider, account, date, model, or project',
       'A model with no price reads **no price**, never $0',
       'Cost computed at query time from **live pricing** over a deduped index of every transcript',
+      'Token counts beside the costs, a **Cost or Tokens** chart switch, and **Rescan**; switch the indexer off in Settings, General, Tokenomics',
     ],
     screenshotFilename: 'step-tokenomics.jpg',
   },
@@ -746,15 +752,17 @@ export const trainingSteps: TrainingStep[] = [
     summary:
       'Every preference you can set lives here, organised in a left rail. Sandboxed renderer + signed updates + zod-validated IPC keep the app safe; the visible knobs let you tune everything else.',
     highlights: [
-      'General -- default working dir, machine name, update channel, security toggles',
+      'General -- default working dir, machine name, update channel, security toggles, and the Tokenomics switch (the usage index can be switched off)',
       'Accounts -- the Providers card (Claude Code and Codex on or off) and every Claude and Codex account',
       'Status Line -- toggle each element of the in-terminal status bar + font + size',
       'Shortcuts -- rebind every keyboard shortcut',
       'GitHub -- sign in (OAuth / PAT / gh CLI) and configure per-session integration',
       'About -- version, build time, replay training, view What\'s New',
+      'Services -- the **Services** pill in the title bar opens a card for each background service (hooks gateway, session logging, Tokenomics, Watchdog, MCP server) with its real state and a Restart where one makes sense',
     ],
     howToTrigger: [
       { label: 'Open', value: 'Click  ⚙  in the sidebar nav' },
+      { label: 'Services', value: 'Title bar → Services pill' },
       { label: 'Replay tour', value: 'About → Replay Training' },
       { label: 'What\'s new', value: 'About → View full changelog' },
     ],
