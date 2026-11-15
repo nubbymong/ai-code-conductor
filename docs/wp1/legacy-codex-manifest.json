@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-14T05:06:08.523Z",
-  "head": "6a45533b5fafb2be1233d20072d8249cabb4e2c0",
-  "tree": "bd07729a69d03314e869f6bc558ff34fb428cd2b",
+  "generatedAt": "2026-11-14T18:06:38.764Z",
+  "head": "e9eb48959f3345cc14d851906d86075077b17fe3",
+  "tree": "6c93e30f0bf3422767fc91c2023e7c8966f0d86b",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3161,
-  "excludedFileCount": 463,
-  "scannedFileCount": 2698,
+  "trackedFileCount": 3175,
+  "excludedFileCount": 467,
+  "scannedFileCount": 2708,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 897,
-  "pathDigest": "3d3b8b10fc2d6f68c2e4ddc657b23e2a9b983a0b1b261ad7c4b795922535a14d",
+  "matchedPathCount": 899,
+  "pathDigest": "03d23ba2d6d02792aeb297b936df2967ba1b3e0ae8d9a0213fc88f2a4402ff05",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1551,7 +1551,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 69
+      "lineCount": 73
     },
     {
       "path": "src/main/watchdog/codex-patterns.ts",
@@ -5108,7 +5108,7 @@
         "P05",
         "P13"
       ],
-      "lineCount": 6
+      "lineCount": 10
     },
     {
       "path": "tests/unit/model-data-schema.test.ts",
@@ -5116,7 +5116,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 28
+      "lineCount": 30
     },
     {
       "path": "tests/unit/model-picker-rows.test.ts",
@@ -5169,6 +5169,13 @@
         "P13"
       ],
       "lineCount": 11
+    },
+    {
+      "path": "tests/unit/native/tokenomics-dirty-sweep.native.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 1
     },
     {
       "path": "tests/unit/native/tokenomics-reindex-307.native.test.ts",
@@ -7256,6 +7263,13 @@
         "P13"
       ],
       "lineCount": 7
+    },
+    {
+      "path": "tests/unit/tokenomics/tokenomics-worker-changed-files.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 11
     },
     {
       "path": "tests/unit/tokenomics/tokenomics-worker-reread-order.test.ts",

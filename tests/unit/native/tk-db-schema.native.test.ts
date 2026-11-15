@@ -26,6 +26,20 @@ describe('tk-db schema', () => {
     const db = openTkDb(':memory:')
     expect(db.eventCount()).toBe(0)
   })
+
+  // The mark of the bytes a file was read up to: the worker writes it and
+  // checks it before it reads on (a file made again at the same path).
+  it('a cursor keeps the mark it is written with, alone or with its rows; one written with none has none', () => {
+    const db = openTkDb(':memory:')
+    db.setFileCursor({ path: '/a.jsonl', size: 100, mtime: 5, lastOffset: 80, lastIngestedAt: 1, readMark: '80:80:80:' + 'a'.repeat(32) })
+    expect(db.getFileCursor('/a.jsonl')).toMatchObject({ lastOffset: 80, readMark: '80:80:80:' + 'a'.repeat(32) })
+    db.insertEventsWithCursor([], { path: '/a.jsonl', size: 200, mtime: 6, lastOffset: 150, lastIngestedAt: 2, readMark: '150:150:150:' + 'b'.repeat(32) })
+    expect(db.getFileCursor('/a.jsonl')).toMatchObject({ lastOffset: 150, readMark: '150:150:150:' + 'b'.repeat(32) })
+    db.setFileCursor({ path: '/a.jsonl', size: 200, mtime: 6, lastOffset: 150, lastIngestedAt: 3 })
+    expect(db.getFileCursor('/a.jsonl')?.readMark).toBe('')
+    db.setFileCursor({ path: '/new.jsonl', size: 10, mtime: 1, lastOffset: 10, lastIngestedAt: 1 })
+    expect(db.getFileCursor('/new.jsonl')?.readMark).toBe('')
+  })
 })
 
 // Usage track MP9: schema v2, whose usage each row is.
@@ -123,6 +137,20 @@ describe('tk-db schema v2 (usage track MP9)', () => {
     again.close()
     const third = open(p)
     expect(third.getFileCursor('C:/codex/sessions/rollout-2026-06-01T10-00-00-a.jsonl')?.lastOffset).toBe(50)
+  })
+
+  it('a database from before the mark was kept gains the column: its cursors keep their offsets and have no mark', () => {
+    const p = path.join(tmp, 'v1.db')
+    seedV1(p)
+    const db = open(p)
+    expect(cols(db, 'tk_files').map((c) => c.name)).toContain('readMark')
+    expect(db.getFileCursor('C:/claude/p/s.jsonl')).toMatchObject({ lastOffset: 100, scannedTo: 100, readMark: '' })
+    db.setFileCursor({ path: 'C:/claude/p/s.jsonl', size: 150, mtime: 2, lastOffset: 150, lastIngestedAt: 2, scannedTo: 150, readMark: '150:150:150:' + 'c'.repeat(32) })
+    db.close()
+    // Once only, and what was written stays.
+    const again = open(p)
+    expect(cols(again, 'tk_files').filter((c) => c.name === 'readMark')).toHaveLength(1)
+    expect(again.getFileCursor('C:/claude/p/s.jsonl')).toMatchObject({ lastOffset: 150, readMark: '150:150:150:' + 'c'.repeat(32) })
   })
 
   it('stamps at ingest; a row stored before its account was known is stamped by its re-read, and never re-stamped once known', () => {

@@ -130,6 +130,28 @@ describe('a downgrade and back (usage track MP9 round 1, Q-1)', () => {
     expect(released.insertEvents([xev(3)])).toBe(1)
   })
 
+  // The released build names its own columns, so the mark this build keeps
+  // on a cursor is nothing it reads or writes: it moves the offset and the
+  // mark stays, of the earlier offset, which the worker checks where the mark
+  // says its bytes end.
+  it('the released build reads and moves a cursor this build marked, and stores its own; the mark stays as this build wrote it', () => {
+    const p = path.join(tmp, 'tk.db')
+    const F = 'C:/claude/p/s.jsonl'
+    const mark = '100:100:100:' + 'a'.repeat(32)
+    const mine = open(p)
+    mine.setFileCursor({ path: F, size: 100, mtime: 1, lastOffset: 100, lastIngestedAt: 1, scannedTo: 100, readMark: mark })
+    mine.close()
+    const released = openReleased(p)
+    expect(released.getFileCursor(F)).toMatchObject({ size: 100, lastOffset: 100, scannedTo: 100 })
+    released.setFileCursor({ path: F, size: 150, mtime: 2, lastOffset: 150, lastIngestedAt: 2, scannedTo: 150 })
+    released.setFileCursor({ path: 'C:/claude/p/new.jsonl', size: 10, mtime: 2, lastOffset: 10, lastIngestedAt: 2 })
+    expect(released.getFileCursor(F)).toMatchObject({ size: 150, lastOffset: 150 })
+    released.close()
+    const again = open(p)
+    expect(again.getFileCursor(F)).toMatchObject({ lastOffset: 150, scannedTo: 150, readMark: mark })
+    expect(again.getFileCursor('C:/claude/p/new.jsonl')).toMatchObject({ lastOffset: 10, readMark: '' })
+  })
+
   it('this build\'s own rows never look like the released build\'s', () => {
     const p = path.join(tmp, 'tk.db')
     const mine = open(p)
