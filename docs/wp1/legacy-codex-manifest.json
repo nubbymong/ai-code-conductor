@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-15T15:55:51.152Z",
-  "head": "166b1133559a145f69d62d6a5c9b3d33cf7e55ba",
-  "tree": "e465331eefb24fc32d46d7f63621262016040d77",
+  "generatedAt": "2026-11-15T17:19:55.225Z",
+  "head": "5253afe0f3cbaf3570e86c2561bf1f210884059f",
+  "tree": "9a17cbc291740bccc70580b3707adb879c3c558b",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,10 +116,10 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3234,
-  "excludedFileCount": 481,
-  "scannedFileCount": 2753,
-  "unscopedFileCount": 15,
+  "trackedFileCount": 3276,
+  "excludedFileCount": 484,
+  "scannedFileCount": 2792,
+  "unscopedFileCount": 42,
   "unscoped": [
     ".claude/settings.json",
     ".claude/skills/LoopReady/SKILL.md",
@@ -133,14 +133,41 @@
     ".vscode/settings.json",
     "LICENSE",
     "NOTICE",
+    "helper/Cargo.lock",
+    "helper/Cargo.toml",
+    "helper/README.md",
+    "helper/fixtures/frames.json",
+    "helper/fixtures/hello.json",
+    "helper/fixtures/limits.json",
+    "helper/probes/README.md",
+    "helper/probes/p7-windows-survival.ps1",
+    "helper/rust-toolchain.toml",
+    "helper/src/bin/aicc-fake-cli.rs",
+    "helper/src/cmdline.rs",
+    "helper/src/detach.rs",
+    "helper/src/dirhold.rs",
+    "helper/src/frame.rs",
+    "helper/src/hello.rs",
+    "helper/src/holder.rs",
+    "helper/src/json.rs",
+    "helper/src/lib.rs",
+    "helper/src/main.rs",
+    "helper/src/pty/mod.rs",
+    "helper/src/pty/unix.rs",
+    "helper/src/pty/windows.rs",
+    "helper/src/ring.rs",
+    "helper/src/selftest.rs",
+    "helper/tests/fixtures.rs",
+    "helper/tests/hold.rs",
+    "helper/tests/probe_transport.rs",
     "test/minimal/index.html",
     "test/minimal/main.js",
     "test/minimal/preload.js"
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 906,
-  "pathDigest": "b902df9ef946f73e989aa08d9e1a50277142d5cb7734de66acce86eb7e49b768",
+  "matchedPathCount": 908,
+  "pathDigest": "e804f4988e46956ed0e2e7f8f05db399e0f13aefb8c97af7add5b7976ce2ce0a",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -858,7 +885,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 113
+      "lineCount": 116
     },
     {
       "path": "src/main/ipc/tokenomics2-handlers.ts",
@@ -1295,7 +1322,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 184
+      "lineCount": 198
     },
     {
       "path": "src/main/providers/codex/telemetry.ts",
@@ -1369,7 +1396,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 37
+      "lineCount": 38
     },
     {
       "path": "src/main/pty-input-guard.ts",
@@ -4637,6 +4664,13 @@
       "lineCount": 6
     },
     {
+      "path": "tests/unit/main/launch-lookups-off-main-thread.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 1
+    },
+    {
       "path": "tests/unit/main/launch-one-at-a-time.test.ts",
       "predicates": [
         "P13"
@@ -4841,6 +4875,14 @@
       "lineCount": 4
     },
     {
+      "path": "tests/unit/main/pty-spawn-launch-lookups-held.test.ts",
+      "predicates": [
+        "P07",
+        "P13"
+      ],
+      "lineCount": 16
+    },
+    {
       "path": "tests/unit/main/pty-spawn-one-at-a-time-rights.test.ts",
       "predicates": [
         "P07",
@@ -5000,7 +5042,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 24
+      "lineCount": 21
     },
     {
       "path": "tests/unit/main/ssh-end-remote-password.test.ts",
@@ -5570,7 +5612,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 63
+      "lineCount": 64
     },
     {
       "path": "tests/unit/providers/codex/spawn-hooks.test.ts",
@@ -5620,7 +5662,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 328
+      "lineCount": 353
     },
     {
       "path": "tests/unit/providers/codex/telemetry-bounded-reads.test.ts",

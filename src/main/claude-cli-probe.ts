@@ -2,7 +2,7 @@ import { execFile, type ChildProcess } from 'child_process'
 import * as os from 'os'
 import { isAbsolute, posix } from 'path'
 import { logInfo } from './debug-logger'
-import { findOnPosixPath, findOnPosixPathAsync, loginShellPathAsync, loginShellPathSync, loginShellWithOwnPath, shFamilyLoginShell } from './login-shell'
+import { findOnPosixPathAsync, loginShellPathAsync, loginShellWithOwnPath, shFamilyLoginShell } from './login-shell'
 import { findOnWindowsPathAsync, findWithPowerShellProfile, folderFileTest, isRegularFileAsync, pathWalkDeadline, windowsEnvValue, windowsPathRefreshCount, withPathWalkDeadline, type PathWalkInFlight, type PowerShellProfileLookup } from './windows-programs'
 
 /**
@@ -192,6 +192,14 @@ export const CLAUDE_NOT_ON_PATH = `Claude Code was not found in a folder PATH na
  *  starts nothing, and never the Claude Code of a later folder. */
 export const CLAUDE_PATH_NOT_ANSWERING = 'Claude Code was not started: a folder PATH names did not answer in time (a network share that cannot be reached, for example), so the app cannot tell which Claude Code PATH names first. Try again in a moment, or take that folder out of PATH.'
 
+/** What a launch says when it was asked for before the walk of PATH for
+ *  Claude Code had an answer to read (2.1.3-beta.5): the walk is made off the
+ *  event loop, one launch at a time is held for it (claude-launch-walk.ts),
+ *  and this one was asked for in the moment between. Not the not-found
+ *  message: the walk has not said Claude Code is missing. The launch starts
+ *  nothing; the walk goes on, and the next launch reads its answer. */
+export const CLAUDE_LOOKUP_UNDER_WAY = 'Claude Code was not started: the app was still looking for it in the folders PATH names. Try again in a moment.'
+
 /** How long an answer of findClaudeOnWindowsAsync is reused by
  *  recentClaudeOnWindows. The CLI check asks every 30 s while the app runs. */
 export const CLAUDE_LOOKUP_REUSE_MS = 60_000
@@ -210,6 +218,9 @@ const RECENT_LOOKUPS_KEPT = 8
 const walksInFlight = new Map<string, PathWalkInFlight<string | null>>()
 /** Moved by the test seam, so a walk still under way from an earlier case keeps nothing. */
 let walkEpoch = 0
+/** The PATH values whose last walk failed (it threw) with no answer since, and
+ *  when. A failure older than CLAUDE_LOOKUP_REUSE_MS is not counted. */
+const failedWalks = new Map<string, number>()
 
 /** The walk of `env`'s PATH under way, or a new one. The walk asks every
  *  folder in PATH's order and waits for each answer, however long one takes
@@ -229,8 +240,21 @@ function sharedClaudeWalk(env: NodeJS.ProcessEnv, now: () => number): PathWalkIn
   // wait for is a walk that kept no answer.
   const run: Promise<string | null> = new Promise<string | null>((resolve) => { resolve(findOnWindowsPathAsync(CLAUDE_WINDOWS_NAMES, env, folderFileTest(undefined, deadline), 'name')) })
     .then((found) => {
-      if (epoch === walkEpoch) recordClaudeOnWindows(pathValue, found, now())
+      if (epoch === walkEpoch) { failedWalks.delete(pathValue); recordClaudeOnWindows(pathValue, found, now()) }
       return found
+    }, (err: unknown) => {
+      // A walk that failed has no answer, and the launch is told to try
+      // again. One that fails twice in a row for the same PATH keeps "none":
+      // the launch then says Claude Code was not found, not "try again" for
+      // ever, and the PATH is walked again once that answer is a minute old.
+      // A failure more than a minute old is not the first of two in a row.
+      if (epoch === walkEpoch) {
+        const at = now()
+        const before = failedWalks.get(pathValue)
+        if (before !== undefined && at - before < CLAUDE_LOOKUP_REUSE_MS) { failedWalks.delete(pathValue); recordClaudeOnWindows(pathValue, null, at) } else failedWalks.set(pathValue, at)
+        logInfo(`[claude-provider] the walk of PATH for Claude Code failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      throw err
     })
     .finally(() => { if (walksInFlight.get(pathValue)?.run === run) walksInFlight.delete(pathValue) })
   const walk = withPathWalkDeadline(run, deadline)
@@ -549,6 +573,7 @@ export function _resetClaudeWindowsLookupForTest(): void {
   recentLookups.clear()
   for (const walk of walksInFlight.values()) walk.forget()
   walksInFlight.clear()
+  failedWalks.clear()
   walkEpoch += 1
   profileKept = null
   profileInFlight = null
@@ -746,20 +771,33 @@ function loginShellAnswerKey(shell: string, env: NodeJS.ProcessEnv): string {
   return `${shell}\0${env.PATH ?? ''}`
 }
 
+/** The question under way, by the login shell and PATH it was asked for: one
+ *  at a time, so a shell that is slow to start is asked once, not once more by
+ *  each caller (several tabs restored together, a launch and the CLI check)
+ *  while it works. Every caller of claudeInLoginShellPathAsync joins it. */
+let loginShellLookInFlight: { key: string; run: Promise<ClaudeInLoginShellPath | null> } | null = null
+
 /** The user's login shell's PATH and the Claude Code in it, asked off the
  *  event loop; null when the login shell is of the sh family (or on Windows)
- *  or gave no answer. The answer is kept for recentClaudeInLoginShellPath. */
-export async function claudeInLoginShellPathAsync(
+ *  or gave no answer. The answer is kept for recentClaudeInLoginShellPath. A
+ *  caller asking while the same question is under way joins it. */
+export function claudeInLoginShellPathAsync(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = os.platform(),
   now: () => number = Date.now,
 ): Promise<ClaudeInLoginShellPath | null> {
   const shell = loginShellWithOwnPath(env, platform)
-  if (!shell) return null
-  const path = await loginShellPathAsync(shell, env)
-  const answer = path ? { path, claude: await findOnPosixPathAsync('claude', path) } : null
-  lastLoginShellAnswer = { key: loginShellAnswerKey(shell, env), answer, at: now() }
-  return answer
+  if (!shell) return Promise.resolve(null)
+  const key = loginShellAnswerKey(shell, env)
+  if (loginShellLookInFlight?.key === key) return loginShellLookInFlight.run
+  const run: Promise<ClaudeInLoginShellPath | null> = (async () => {
+    const path = await loginShellPathAsync(shell, env)
+    const answer = path ? { path, claude: await findOnPosixPathAsync('claude', path) } : null
+    lastLoginShellAnswer = { key, answer, at: now() }
+    return answer
+  })().finally(() => { if (loginShellLookInFlight?.run === run) loginShellLookInFlight = null })
+  loginShellLookInFlight = { key, run }
+  return run
 }
 
 /** The answer claudeInLoginShellPathAsync (or a launch) got less than
@@ -777,9 +815,15 @@ export function recentClaudeInLoginShellPath(
   return age >= 0 && age < CLAUDE_LOOKUP_REUSE_MS ? lastLoginShellAnswer.answer : undefined
 }
 
-/** For the session launch, which cannot wait: the recent answer, else the
- *  login shell asked on the event loop (bounded; its answer, or that it gave
- *  none, is kept, so this runs at most once per answer's life). Null as
+/** For the session launch, which cannot wait: the recent answer, else none
+ *  (2.1.3-beta.5). The login shell is never asked in place: that held the
+ *  whole main process for as long as its start-up files took (up to 3 s).
+ *  A launch is held for the question first, asked off the event loop
+ *  (claude-launch-walk.ts), so this normally has the answer; one asked at the
+ *  moment the answer ran out starts the question for the next launch, and
+ *  names no Claude Code: its launcher is then a login shell that builds its
+ *  own PATH, as for a user of an sh-family shell (providers/claude/spawn.ts).
+ *  The answer, or that the shell gave none, is kept. Null as
  *  claudeInLoginShellPathAsync. */
 export function claudeInLoginShellPathForLaunch(
   env: NodeJS.ProcessEnv = process.env,
@@ -790,13 +834,14 @@ export function claudeInLoginShellPathForLaunch(
   if (!shell) return null
   const recent = recentClaudeInLoginShellPath(env, platform, now)
   if (recent !== undefined) return recent
-  const path = loginShellPathSync(shell, env)
-  const answer = path ? { path, claude: findOnPosixPath('claude', path) } : null
-  lastLoginShellAnswer = { key: loginShellAnswerKey(shell, env), answer, at: now() }
-  return answer
+  // Joins the question under way, or starts it; the answer is read by the next launch.
+  claudeInLoginShellPathAsync(env, platform, now).catch(() => { /* no answer is kept */ })
+  return null
 }
 
-/** Test seam: forget the last login-shell answer. */
+/** Test seam: forget the last login-shell answer, and the question in flight
+ *  (one still running lands its answer when it ends). */
 export function _resetClaudeLoginShellLookupForTest(): void {
   lastLoginShellAnswer = null
+  loginShellLookInFlight = null
 }

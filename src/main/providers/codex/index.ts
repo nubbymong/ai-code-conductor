@@ -7,7 +7,7 @@ import type { AllowanceReading } from '../../../shared/usage-types'
 import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/providers'
 import type { ProviderPackage, ProviderPricingOperations, RealmRef } from '../core'
 import { CODEX_ENABLEMENT } from './enablement'
-import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir } from './spawn'
+import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, warmNodeExeOnPosix } from './spawn'
 import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText } from './session-screen'
 import { detectCodexUi } from './ui-detection'
 import { watchAndClaimRollout } from './telemetry'
@@ -288,6 +288,12 @@ export class CodexProvider implements SessionProvider {
       logWarn(`[codex] hooks: preparing the hook folders failed (${(err as Error)?.message ?? err}); Codex sessions get no hooks for now`)
       return false
     }
+  }
+
+  /** 2.1.3-beta.5: the one login-shell question for the resume list's node,
+   *  asked off the event loop before a launch (spawn.ts warmNodeExeOnPosix). */
+  warmResumeListNode(): Promise<void> {
+    return warmNodeExeOnPosix()
   }
 
   /** P3.10: the session's hook file, for its launch's hooks; round 1 (A5):

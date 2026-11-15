@@ -98,7 +98,7 @@ const { WINDOWS_PATH_WALK_WAIT_MS, _resetFolderFileTestForTest } = await import(
 const {
   claudeOnWindowsPathAsync, findClaudeOnWindowsAsync, recordClaudeOnWindows, recentClaudeOnWindows, claudeOnWindowsPathWalkedRecently, claudeOnWindowsPathUnanswered,
   setClaudeProfileLookupAllowed, startClaudeProfileLookup,
-  CLAUDE_NOT_ON_PATH, CLAUDE_PATH_NOT_ANSWERING, CLAUDE_LOOKUP_REUSE_MS, _resetClaudeWindowsLookupForTest,
+  CLAUDE_NOT_ON_PATH, CLAUDE_PATH_NOT_ANSWERING, CLAUDE_LOOKUP_UNDER_WAY, CLAUDE_LOOKUP_REUSE_MS, _resetClaudeWindowsLookupForTest,
 } = await import('../../../src/main/claude-cli-probe')
 const {
   buildClaudeLaunchCommand, launchStartsPicker, pickerNodeAnswerKept, pickerNodeLookAnswered, warmPickerNodeOnWindows,
@@ -666,7 +666,7 @@ describe('what a launch that waited for no walk still does', () => {
 
 describe('the wait itself (awaitClaudeLaunchWalk)', () => {
   // Mutation to prove this can fail: let a failed walk reject the wait.
-  it('never rejects: a walk that fails keeps no answer, and the launch then resolves as it did before', async () => {
+  it('never rejects: a walk that fails keeps no answer, and the launch then walks nothing in place (it starts the walk again and says the look is still under way)', async () => {
     process.env.PATH = `${TOOLS};${NPM}`
     h.present = files(`${NPM}\\claude.cmd`)
     h.walkThrows = true
@@ -674,9 +674,53 @@ describe('the wait itself (awaitClaudeLaunchWalk)', () => {
     await expect(awaitClaudeLaunchWalk(true)).resolves.toBeUndefined()
     expect(h.walks.sort()).toEqual([CLAUDE_NAMES, 'node.exe'])
     expect(recentClaudeOnWindows(process.env)).toBeNull()
-    expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
-    expect(h.walksInPlace).toEqual([CLAUDE_NAMES])
     expect(vi.getTimerCount()).toBe(0)
+    // 2.1.3-beta.5: the launch no longer walks PATH in place as a last resort.
+    // Mutation to prove this can fail: walk in place after main has started.
+    h.walks.length = 0
+    expect(() => launch()).toThrow(CLAUDE_LOOKUP_UNDER_WAY)
+    expect(h.walksInPlace).toEqual([])
+    // The walk the launch started is the shared one, off the event loop.
+    expect(h.walks).toEqual([CLAUDE_NAMES])
+  })
+
+  // Mutation to prove this can fail: keep no answer for a walk that fails
+  // twice (the launch is then told to try again for ever).
+  it('a walk that fails twice in a row for the same PATH keeps none: the launch then says Claude Code was not found, and does not start another walk', async () => {
+    process.env.PATH = `${TOOLS};${NPM}`
+    h.present = files(`${NPM}\\claude.cmd`)
+    h.walkThrows = true
+    armClaudeLaunchWalk()
+    // The first failure: no answer, try again.
+    await awaitClaudeLaunchWalk(false)
+    expect(() => launch()).toThrow(CLAUDE_LOOKUP_UNDER_WAY)
+    // The walk that launch started fails too (the second in a row).
+    await flush()
+    h.walks.length = 0
+    expect(() => launch()).toThrow(CLAUDE_NOT_ON_PATH)
+    expect(h.walks).toEqual([])
+    expect(h.walksInPlace).toEqual([])
+    // A walk that succeeds clears the count: the next failure is the first again.
+    h.walkThrows = false
+    recordClaudeOnWindows(process.env.PATH, null, Date.now() - CLAUDE_LOOKUP_REUSE_MS)
+    await awaitClaudeLaunchWalk(false)
+    expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
+  })
+
+  // Mutation to prove this can fail: count a failure however old it is.
+  it('two failures more than a minute apart are not two in a row: the launch is told to try again, not that Claude Code was not found', async () => {
+    process.env.PATH = `${TOOLS};${NPM}`
+    h.present = files(`${NPM}\\claude.cmd`)
+    h.walkThrows = true
+    armClaudeLaunchWalk()
+    // The first failure: no answer, try again.
+    await awaitClaudeLaunchWalk(false)
+    // The next launch comes a good while later, and its walk fails too: the first of a new pair.
+    await vi.advanceTimersByTimeAsync(CLAUDE_LOOKUP_REUSE_MS + 1)
+    expect(() => launch()).toThrow(CLAUDE_LOOKUP_UNDER_WAY)
+    await flush()
+    expect(() => launch()).toThrow(CLAUDE_LOOKUP_UNDER_WAY)
+    expect(h.walksInPlace).toEqual([])
   })
 
   // PATH is brought up to date while the app runs (the refresh at start, a
@@ -737,12 +781,13 @@ describe('when a launch is held for the walk', () => {
     expect(claudeLaunchWalkPending(false, process.env, 'win32')).toBe(true)
   })
 
-  it('never off Windows', async () => {
+  it('never off Windows for a user whose login shell is of the sh family (it has no PATH of its own to ask for)', async () => {
     process.env.PATH = `${GONE};${NPM}`
     armClaudeLaunchWalk()
+    const env = { PATH: process.env.PATH, SHELL: '/bin/zsh', HOME: '/home/someone' }
     for (const platform of ['linux', 'darwin']) {
-      expect(claudeLaunchWalkPending(true, process.env, platform)).toBe(false)
-      expect(await ended(awaitClaudeLaunchWalk(true, process.env, platform))).toBe(true)
+      expect(claudeLaunchWalkPending(true, env, platform)).toBe(false)
+      expect(await ended(awaitClaudeLaunchWalk(true, env, platform))).toBe(true)
     }
     expect(h.walks).toEqual([])
   })

@@ -43,6 +43,7 @@ import { CMD_EXE_LINE_LIMIT, PS_LEGACY_ARGUMENT_PASSING, agentsRef, askPromptRef
 import { escapeForCwdQuote, quoteArgForShell } from '../shared/shell-quote'
 import { findOnWindowsPath, findOnWindowsPathAsync, folderFileTest, pathWalkDeadline, windowsEnvValue, withPathWalkDeadline, type PathWalkInFlight } from './windows-programs'
 import { logInfo } from './debug-logger'
+import { launchLookupsArmed } from './launch-lookups-armed'
 
 export interface BuildClaudeLaunchCommandOptions {
   /** 'win32' produces a PowerShell command; anything else produces a POSIX sh command. */
@@ -500,6 +501,12 @@ export const CLAUDE_RESUME_LIST_SKIPPED_NODE_PATH = 'Node.js was found, but its 
  *  and nothing is walked in place. */
 export const CLAUDE_RESUME_LIST_SKIPPED_PATH_NOT_ANSWERING = 'A folder PATH names did not answer in time, so Node.js (node.exe) could not be looked for, the resume list was skipped and Claude Code starts directly'
 
+/** (2.1.3-beta.5) What the log says when a launch asked for the resume list
+ *  before the look for node.exe had an answer to read: the look is made off the
+ *  event loop and a launch is held for it, so this is a launch asked for in
+ *  the moment between. The resume list is left out for this launch. */
+export const CLAUDE_RESUME_LIST_SKIPPED_LOOKING = 'Node.js (node.exe) was still being looked for in the folders PATH names, so the resume list was skipped and Claude Code starts directly'
+
 /** What a macOS or Linux session prints, in the session itself, when its
  *  shell finds no node and Claude Code starts without the resume list
  *  (buildClaudeLaunchCommand). ASCII, with no single quote: the line carries
@@ -727,11 +734,22 @@ export function pickerNodeAnswerKept(env: NodeJS.ProcessEnv = process.env): bool
  * registry and adds the new folder (windows-path-refresh.ts). After either,
  * PATH reads differently and the next launch asks again.
  */
-function pickerNodeOnWindows(): string | null {
+function pickerNodeOnWindows(): string | null | undefined {
   const pathValue = windowsEnvValue(process.env, 'PATH') ?? ''
   const now = performance.now()
   const recent = recentPickerNodeAnswer(pathValue, now)
   if (recent !== undefined) return recent
+  // 2.1.3-beta.5: from the start of main on, PATH is not walked here: the
+  // look off the event loop (warmPickerNodeOnWindows) is started, and keeps
+  // its answer for the next launch. A launch that opens the resume list is
+  // held for it first (claude-launch-walk.ts), so this is one asked for in
+  // the moment between: no answer yet (undefined), and the resume list is
+  // left out for this one. Before main has started no launch is asked for,
+  // and a unit test that drives one walks in place, as before.
+  if (launchLookupsArmed()) {
+    try { void warmPickerNodeOnWindows(process.env) } catch { /* no look began: a later launch asks again */ }
+    return undefined
+  }
   const exe = findOnWindowsPath([PICKER_NODE_FILE], process.env)
   pickerNodeAnswer = { path: pathValue, exe, at: now }
   return exe
@@ -747,6 +765,7 @@ function pickerNodeOnWindows(): string | null {
 function windowsPickerNode(): { exe: string; skipped: null } | { exe: null; skipped: string } {
   if (pickerNodeLookUnanswered()) return { exe: null, skipped: CLAUDE_RESUME_LIST_SKIPPED_PATH_NOT_ANSWERING }
   const exe = pickerNodeOnWindows()
+  if (exe === undefined) return { exe: null, skipped: CLAUDE_RESUME_LIST_SKIPPED_LOOKING }
   if (exe === null) return { exe: null, skipped: CLAUDE_RESUME_LIST_SKIPPED_NO_NODE }
   if (PICKER_NODE_UNSTARTABLE_RE.test(exe)) return { exe: null, skipped: CLAUDE_RESUME_LIST_SKIPPED_NODE_PATH }
   return { exe, skipped: null }

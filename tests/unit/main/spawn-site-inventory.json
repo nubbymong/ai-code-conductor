@@ -198,11 +198,6 @@
    "how": "not-windows",
    "reason": "macOS and Linux only: the user's login shell (outside the sh family) asked for the PATH it builds."
   },
-  "src/main/login-shell.ts :: execFileSync(run.file": {
-   "count": 1,
-   "how": "not-windows",
-   "reason": "macOS and Linux only: the user's login shell (outside the sh family) asked for the PATH it builds, bounded."
-  },
   "src/main/owner-only-folders.ts :: execFile(path.win32.join(systemFolder(), `${program}.exe`)": {
    "count": 1,
    "how": "system-folder",
@@ -254,19 +249,9 @@
    "reason": "macOS and Linux only: the user's login shell asked for its PATH (codexLoginShellPath answers null on Windows)."
   },
   "src/main/providers/codex/spawn.ts :: execFile(run.file": {
-   "count": 1,
+   "count": 2,
    "how": "not-windows",
-   "reason": "macOS and Linux only (inside the non-Windows branch): the user's login shell, started itself with an argument list (login-shell.ts loginShellRun), asked where codex is, off the main thread, for the CLI check and the check before a use."
-  },
-  "src/main/providers/codex/spawn.ts :: execFileSync(run.file": {
-   "count": 1,
-   "how": "not-windows",
-   "reason": "macOS and Linux only (inside the non-Windows branch): the user's login shell, started itself with an argument list (login-shell.ts loginShellRun), asked where codex is."
-  },
-  "src/main/providers/codex/spawn.ts :: execSync(`${shell} -l -c 'which node'`": {
-   "count": 1,
-   "how": "not-windows",
-   "reason": "macOS and Linux only (inside the non-Windows branch): the user's login shell asked where node is."
+   "reason": "macOS and Linux only (inside the non-Windows branch): the user's login shell, started itself with an argument list (login-shell.ts loginShellRun), asked where codex is (for the CLI check and the check before a use) and where node is (for the resume list, before a launch that opens it), both off the main thread; the answers are kept and no launch asks the shell in place."
   },
   "src/main/pty-manager.ts :: execFile(git": {
    "count": 1,

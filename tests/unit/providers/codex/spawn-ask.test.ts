@@ -27,7 +27,7 @@ vi.mock('../../../../src/main/ipc/setup-handlers', () => ({ getResourcesDirector
 // The picker's node lookup, answered without starting anything.
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>()
-  return { ...actual, execSync: vi.fn(() => (process.platform === 'win32' ? 'C:\\node\\node.exe\r\n' : '/usr/local/bin/node\n')) }
+  return { ...actual, execFile: vi.fn((_f: unknown, _a: unknown, _o: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => { cb(null, '/usr/local/bin/node\n', ''); return { stdin: { end: () => {} } } }) }
 })
 // The disk, for the picker route's node lookup on Windows: one fixed node.exe
 // (named in the picker launches' PATH below) answers as a file; every other
@@ -50,7 +50,10 @@ vi.mock('../../../../src/main/conductor-mcp-server', () => ({
 vi.mock('../../../../src/main/config-manager', () => ({ readConfig: () => ({}), readConfigChecked: () => ({ outcome: 'absent', value: null }), getConfigDir: () => '/cfg' }))
 vi.mock('../../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
-const { buildCodexSpawn, ASK_PROJECT_DOC_MAX_BYTES_CEILING, nodePtyWindowsCommandLine, splitWindowsCommandLine } = await import('../../../../src/main/providers/codex/spawn')
+const { buildCodexSpawn, ASK_PROJECT_DOC_MAX_BYTES_CEILING, nodePtyWindowsCommandLine, splitWindowsCommandLine, warmNodeExeOnPosix } = await import('../../../../src/main/providers/codex/spawn')
+// macOS and Linux (2.1.3-beta.5): the picker's node comes from the answer kept by
+// the one login-shell question asked off the main thread; the fake answers it.
+await warmNodeExeOnPosix({ platform: 'linux' })
 // node-pty's own Windows quoting (pure JS; nothing native is loaded by it).
 const { argsToCommandLine } = createRequire(path.join(process.cwd(), 'package.json'))('node-pty/lib/windowsPtyAgent.js') as { argsToCommandLine: (file: string, args: string[]) => string }
 const { askConductorProjectDocMaxBytes } = await import('../../../../src/main/help-workspace')

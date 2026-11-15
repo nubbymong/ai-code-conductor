@@ -258,6 +258,12 @@ export interface SessionProvider {
    *  one PowerShell call). A no-op while they are still ready. Resolves
    *  whether the launch's hook folder is ready. Never throws. */
   prepareHookFolders?(resourcesDir: string, secureFolders: (dirs: readonly string[]) => Promise<ReadonlyArray<{ dir: string; ok: boolean; detail?: string }>>): Promise<boolean>
+  /** Optional -- Codex (2.1.3-beta.5): on macOS and Linux a launch that opens
+   *  the resume list runs it on the node the user's login shell names. This
+   *  asks that shell once, off the event loop, and keeps the answer for the
+   *  launch to read, so no launch starts the shell in place. A no-op on
+   *  Windows and once an answer is kept. Never rejects. */
+  warmResumeListNode?(): Promise<void>
   /** Optional -- Codex (P3.10): write the session's hook file (the Hooks
    *  gateway's port, the session id and its token, owner-only, in a folder
    *  made for the launch inside the app's own data folder, P3.10 round 1)

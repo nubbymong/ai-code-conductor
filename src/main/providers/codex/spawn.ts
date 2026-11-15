@@ -1,7 +1,7 @@
 import * as os from 'os'
 import * as fs from 'fs'
 import * as path from 'path'
-import { execFile, execFileSync, execSync } from 'child_process'
+import { execFile } from 'child_process'
 import { sandboxFor, approvalFor } from './permissions'
 import { getResourcesDirectory, getDataDirectory } from '../../ipc/setup-handlers'
 import type { SpawnOptions, ProviderSpawnCommand, PickFolderIdentity } from '../types'
@@ -71,6 +71,21 @@ function winEnvValue(env: Readonly<Record<string, string | undefined>>, name: st
   return key ? env[key] : undefined
 }
 
+/** The last answer the login shell gave to "where is codex" (macOS and Linux),
+ *  by the shell and PATH it was asked under; `found` null when it named none.
+ *  Kept by resolveCodexBinaryAsync, read by resolveCodexBinary. */
+let keptPosixCodex: { key: string; found: { cmd: string; args: string[] } | null } | null = null
+
+function posixCodexKey(run: { file: string; env: NodeJS.ProcessEnv }): string {
+  return `${run.file}\0${run.env.PATH ?? ''}`
+}
+
+/** The kept answer for this lookup's login shell and PATH, or null. */
+function keptPosixCodexAnswer(lookup: CodexBinaryLookup): { cmd: string; args: string[] } | null {
+  const run = codexLoginShellQuestion(lookup)
+  return keptPosixCodex && keptPosixCodex.key === posixCodexKey(run) ? keptPosixCodex.found : null
+}
+
 /** What one look at a candidate found: a regular file, nothing there, or a
  *  folder that could not be reached (asked nothing more in that lookup). */
 export type CodexCandidateStat = 'file' | 'none' | 'unreachable'
@@ -112,24 +127,12 @@ const diskStat = (p: string): CodexCandidateStat => {
 
 export function resolveCodexBinary(lookup: CodexBinaryLookup = {}): { cmd: string; args: string[] } | null {
   if ((lookup.platform ?? os.platform()) !== 'win32') {
-    // Probe through a LOGIN shell and keep the absolute path: a Finder/Dock
-    // launched app inherits launchd's minimal PATH (no Homebrew/npm-global),
-    // so both a bare `which codex` probe and a later bare-'codex' spawn fail
-    // even though the user's terminal finds it. Matches cli:check's login-
-    // shell approach for claude. The shell is started itself, with an
-    // argument list and the lookup's environment (codexLoginShellQuestion).
-    try {
-      const run = codexLoginShellQuestion(lookup)
-      const out = execFileSync(run.file, run.args, {
-        cwd: run.cwd,
-        env: run.env,
-        encoding: 'utf-8',
-        timeout: 8000,
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      return codexFromLoginShell(String(out ?? ''))
-    } catch { return null }
+    // macOS and Linux (2.1.3-beta.5): the login shell is never asked in place
+    // (execFileSync held the whole main process for as long as its start-up
+    // files took, up to 8 s). The answer the question made off the main
+    // thread last got (resolveCodexBinaryAsync, which the CLI check asks) is
+    // the answer here, and none until it has got one.
+    return keptPosixCodexAnswer(lookup)
   }
   // Windows (owner, 2026-10-04): PATH order wins, as a terminal finds it.
   // The first PATH folder holding codex.exe or codex.cmd gives it, and within
@@ -218,6 +221,8 @@ export async function resolveCodexBinaryAsync(lookup: CodexBinaryLookupAsync = {
         const child = execFile(run.file, run.args, { cwd: run.cwd, env: run.env, encoding: 'utf-8', timeout: 8000, windowsHide: true }, (err, stdout) => {
           let found: { cmd: string; args: string[] } | null = null
           try { found = err ? null : codexFromLoginShell(String(stdout ?? '')) } catch { /* no answer */ }
+          // Kept for resolveCodexBinary (2.1.3-beta.5), which asks no process.
+          keptPosixCodex = { key: posixCodexKey(run), found }
           resolve(found)
         })
         try { child?.stdin?.end() } catch { /* already closed */ }
@@ -288,24 +293,14 @@ let cachedNodeExe: string | null = null
 let cachedWindowsNodeExe: { pathVar: string; exe: string } | null = null
 export function resolveNodeExe(lookup: NodeExeLookup = {}): string | null {
   if ((lookup.platform ?? os.platform()) !== 'win32') {
-    // Same launchd-minimal-PATH hazard as resolveCodexBinary: resolve the
-    // absolute node path via a login shell so PTY execvp doesn't depend on
-    // the GUI app's inherited PATH. Falls back to bare 'node'.
-    if (cachedNodeExe) return cachedNodeExe
-    try {
-      const shell = process.env.SHELL || '/bin/bash'
-      const out = execSync(`${shell} -l -c 'which node'`, {
-        encoding: 'utf-8',
-        timeout: 8000,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      const resolved = out.trim().split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('/')).pop()
-      if (resolved) {
-        cachedNodeExe = resolved
-        return resolved
-      }
-    } catch { /* fall through */ }
-    return 'node'
+    // Same launchd-minimal-PATH hazard as resolveCodexBinary: the absolute
+    // node path comes from a login shell so PTY execvp doesn't depend on
+    // the GUI app's inherited PATH. 2.1.3-beta.5: the shell is never asked in
+    // place (execSync held the whole main process for as long as its
+    // start-up files took, up to 8 s): the answer warmNodeExeOnPosix kept,
+    // which a launch that opens the resume list waits for first
+    // (ipc/pty-handlers.ts); the bare 'node' until there is one.
+    return cachedNodeExe ?? 'node'
   }
   const pathVar = winEnvValue(lookup.env ?? process.env, 'PATH') ?? ''
   if (cachedWindowsNodeExe && cachedWindowsNodeExe.pathVar === pathVar) return cachedWindowsNodeExe.exe
@@ -342,10 +337,42 @@ export function pickerNodeFor(env: Readonly<Record<string, string | undefined>>,
  *  directly because no node was found to run the list. */
 export const CODEX_RESUME_LIST_SKIPPED_NO_NODE = 'Node.js was not found, so the resume list was skipped and Codex starts directly'
 
-/** Test-only: reset the node.exe resolution cache. */
+/** macOS and Linux (2.1.3-beta.5): ask the login shell where node is, off the
+ *  main thread, and keep the answer for resolveNodeExe. One question at a
+ *  time; nothing at all once an answer is kept, and nothing on Windows. A
+ *  shell that named no node, or did not answer, leaves resolveNodeExe the
+ *  bare name, as before. Never rejects. */
+let nodeWarming: Promise<void> | null = null
+export function warmNodeExeOnPosix(lookup: { platform?: NodeJS.Platform; env?: Readonly<Record<string, string | undefined>> } = {}): Promise<void> {
+  const platform = lookup.platform ?? os.platform()
+  if (platform === 'win32' || cachedNodeExe) return Promise.resolve()
+  if (nodeWarming) return nodeWarming
+  const warming: Promise<void> = new Promise<void>((resolve) => {
+    try {
+      const env = (lookup.env ?? process.env) as NodeJS.ProcessEnv
+      const run = loginShellRun(defaultLoginShell(env, platform), 'which node', env)
+      const child = execFile(run.file, run.args, { cwd: run.cwd, env: run.env, encoding: 'utf-8', timeout: 8000, windowsHide: true }, (err, stdout) => {
+        try {
+          const resolved = err ? undefined : String(stdout ?? '').trim().split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('/')).pop()
+          if (resolved) cachedNodeExe = resolved
+        } catch { /* no answer */ }
+        resolve()
+      })
+      try { child?.stdin?.end() } catch { /* already closed */ }
+    } catch {
+      resolve()
+    }
+  }).finally(() => { if (nodeWarming === warming) nodeWarming = null })
+  nodeWarming = warming
+  return warming
+}
+
+/** Test-only: reset the node.exe resolution cache, and the kept answer about codex. */
 export function __resetNodeExeCache(): void {
   cachedNodeExe = null
   cachedWindowsNodeExe = null
+  nodeWarming = null
+  keptPosixCodex = null
 }
 
 /**

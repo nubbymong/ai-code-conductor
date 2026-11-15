@@ -101,7 +101,7 @@ type Steps = import('../../../src/main/claude-start-lookup').ClaudeStartLookupSt
 const { claudeCliProbeAllowed, setClaudeCliProbeAllowed, _resetClaudeCliVersionForTest } = await import('../../../src/main/claude-cli-version')
 const { refreshWindowsPath } = await import('../../../src/main/windows-path-refresh')
 const { POWERSHELL_PROFILE_LOOKUP_TIMEOUT_MS } = await import('../../../src/main/windows-programs')
-const { findClaudeOnWindowsAsync, claudeOnWindowsPathAsync, setClaudeProfileLookupAllowed, CLAUDE_NOT_ON_PATH, _resetClaudeCliProbeForTest, _resetClaudeWindowsLookupForTest, _resetClaudeLoginShellLookupForTest } =
+const { findClaudeOnWindowsAsync, claudeOnWindowsPathAsync, setClaudeProfileLookupAllowed, CLAUDE_NOT_ON_PATH, CLAUDE_LOOKUP_UNDER_WAY, _resetClaudeCliProbeForTest, _resetClaudeWindowsLookupForTest, _resetClaudeLoginShellLookupForTest } =
   await import('../../../src/main/claude-cli-probe')
 const { ClaudeProvider } = await import('../../../src/main/providers/claude')
 
@@ -288,7 +288,7 @@ describe('on Windows, at start, with Claude Code in a folder PATH already names'
   // place, before any window, and a PATH folder on a share that is down holds
   // such a file test for tens of seconds.
   // Mutation to prove this can fail: walk in place at start.
-  it('a walk that does not answer (a PATH folder on a share that is down) does not hold main: the call returns at once, and a launch waits its bound, then looks for itself as before the fix', async () => {
+  it('a walk that does not answer (a PATH folder on a share that is down) does not hold main: the call returns at once, and a launch waits its bound, then is refused rather than walk in place', async () => {
     process.env.PATH = `${SYSTEM};${NPM}`
     h.present = new Set([`${NPM}\\claude.cmd`.toLowerCase()])
     holdTheWalk()
@@ -305,9 +305,12 @@ describe('on Windows, at start, with Claude Code in a folder PATH already names'
     expect(claudeStartLookupPending(), 'the walk still has not answered').toBe(true)
     expect(versionProbe).not.toHaveBeenCalled()
     // Past the bound the launch resolves on what is known: no answer was
-    // kept, so it walks for itself, in place, as every launch did before.
-    expect(launch()).toEqual({ cmd: `${NPM}\\claude.cmd`, args: [] })
-    expect(h.walksInPlace).toBe(1)
+    // kept, and (2.1.3-beta.5) it walks nothing in place, where the folder
+    // that has not answered would hold the main process: it is refused, and
+    // the walk it joins goes on for the next launch. Mutation to prove this
+    // can fail: walk in place when the walk is not answered.
+    expect(() => launch()).toThrow(CLAUDE_LOOKUP_UNDER_WAY)
+    expect(h.walksInPlace).toBe(0)
     expect(startLog()).toEqual([LAUNCH_GAVE_UP])
   })
 })
@@ -1111,8 +1114,10 @@ describe('the walk of PATH at start (claude-cli-probe.ts claudeOnWindowsPathAsyn
     process.env.PATH = `${SYSTEM};${NPM};${LOCAL_BIN}`
     h.openWalk()
     expect(await walked).toBe(`${NPM}\\claude.cmd`)
-    // A launch on the PATH of now walks for itself: the kept answer is not for it.
-    expect(launch()).toEqual({ cmd: `${LOCAL_BIN}\\claude.exe`, args: [] })
-    expect(h.walksInPlace).toBe(1)
+    // A launch on the PATH of now has no answer to read: the kept answer is
+    // not for it. It walks nothing in place (2.1.3-beta.5); it starts the
+    // walk of that PATH off the event loop and is told the look is under way.
+    expect(() => launch()).toThrow(CLAUDE_LOOKUP_UNDER_WAY)
+    expect(h.walksInPlace).toBe(0)
   })
 })

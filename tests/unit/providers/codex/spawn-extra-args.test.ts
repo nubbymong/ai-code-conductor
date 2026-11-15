@@ -12,7 +12,7 @@ import { tmpdir } from 'os'
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>()
-  return { ...actual, execSync: vi.fn(() => (process.platform === 'win32' ? 'C:\\node\\node.exe\n' : '/usr/local/bin/node\n')) }
+  return { ...actual, execFile: vi.fn((_f: unknown, _a: unknown, _o: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => { cb(null, '/usr/local/bin/node\n', ''); return { stdin: { end: () => {} } } }) }
 })
 // The disk, for the picker route's node lookup on Windows: one fixed node.exe
 // (named in the picker launches' PATH below) answers as a file; every other
@@ -54,7 +54,12 @@ vi.mock('../../../../src/main/providers/codex/rollout-lookup', async (importOrig
 }))
 
 import { CodexProvider } from '../../../../src/main/providers/codex'
+import { warmNodeExeOnPosix } from '../../../../src/main/providers/codex/spawn'
 import { __markScriptFoldersCheckedForTests } from '../../../../src/main/script-folders'
+
+// macOS and Linux (2.1.3-beta.5): the picker's node comes from the answer kept by
+// the one login-shell question asked off the main thread; the fake answers it.
+await warmNodeExeOnPosix({ platform: 'linux' })
 
 const TEST_PREFIX = 'p311-extra-args-'
 const made: string[] = []

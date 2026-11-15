@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from 'child_process'
+import { execFile } from 'child_process'
 import { accessSync, constants as fsConstants, existsSync, statSync, promises as fsPromises } from 'fs'
 import { homedir } from 'os'
 import { posix as posixPath } from 'path'
@@ -162,19 +162,6 @@ export function loginShellPathAsync(shell: string, env: NodeJS.ProcessEnv, timeo
       resolve(null)
     }
   })
-}
-
-/** loginShellPathAsync, for a caller that cannot wait: on the event loop,
- *  bounded by `timeoutMs`. Callers keep its answer (claude-cli-probe.ts), so
- *  it runs at most once per answer's life. */
-export function loginShellPathSync(shell: string, env: NodeJS.ProcessEnv, timeoutMs = 3000): string | null {
-  const run = loginShellPathRun(shell, env)
-  try {
-    const out = execFileSync(run.file, run.args, { cwd: run.cwd, env: run.env, encoding: 'utf8', timeout: timeoutMs, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
-    return extractLoginShellPath(String(out ?? ''))
-  } catch {
-    return null
-  }
 }
 
 /** A plain program name (no separator, not `.` or `..`). */

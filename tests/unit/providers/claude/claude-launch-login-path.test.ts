@@ -148,8 +148,17 @@ afterEach(() => {
 })
 
 describe('a Claude session of a user whose login shell is not of the sh family', () => {
-  it('the launcher carries the PATH that login shell builds, reads no profile of its own, and the launch names the Claude Code found in it', () => {
+  // A launch never starts the login shell in place (it would hold the main
+  // process for as long as the shell's start-up files take). pty:spawn holds
+  // it while the question is asked off the event loop
+  // (claude-launch-walk.ts), so the launch is built with the answer kept; these
+  // cases ask the question first, as that hold does.
+  const loginQuestions = () => h.async.filter((c) => c.args[0] === '-l' && c.args[2] === LOGIN_SHELL_PATH_COMMAND)
+  const prepare = (source: NodeJS.ProcessEnv) => claudeInLoginShellPathAsync(source, h.platform)
+
+  it('the launcher carries the PATH that login shell builds, reads no profile of its own, and the launch names the Claude Code found in it', async () => {
     const source = { SHELL: FISH, PATH: APP_PATH, HOME: '/home/u' }
+    await prepare(source)
     expect(buildClaudeLocalSpawn({ ...BASE_OPTS }, source)).toEqual({
       cmd: '/bin/zsh',
       args: [],
@@ -157,44 +166,82 @@ describe('a Claude session of a user whose login shell is not of the sh family',
     })
     expect(resolveClaudeBinary(undefined, source)).toEqual({ cmd: '/Users/u/.local/bin/claude', args: [] })
     // The question went to the user's own login shell, as a login shell, from
-    // the home folder, and a launch waits at most 3 s for its answer.
-    expect(h.sync).toHaveLength(1)
-    expect(h.sync[0].file).toBe(FISH)
-    expect(h.sync[0].args).toEqual(['-l', '-c', LOGIN_SHELL_PATH_COMMAND])
-    expect(h.sync[0].opts).toMatchObject({ cwd: '/home/u', env: source, timeout: 3000 })
+    // the home folder, off the event loop, and waits at most 8 s for its answer.
+    expect(h.sync).toEqual([])
+    expect(loginQuestions()).toHaveLength(1)
+    expect(h.async[0].file).toBe(FISH)
+    expect(h.async[0].args).toEqual(['-l', '-c', LOGIN_SHELL_PATH_COMMAND])
+    expect(h.async[0].opts).toMatchObject({ cwd: '/home/u', env: source, timeout: 8000 })
     expect(source).toEqual({ SHELL: FISH, PATH: APP_PATH, HOME: '/home/u' })
   })
 
-  it('a PowerShell user on Linux gets the same, under bash', () => {
+  it('a PowerShell user on Linux gets the same, under bash', async () => {
     h.platform = 'linux'
     const source = { SHELL: '/usr/bin/pwsh', PATH: APP_PATH }
+    await prepare(source)
     expect(buildClaudeLocalSpawn({ ...BASE_OPTS }, source)).toMatchObject({ cmd: '/bin/bash', args: [], env: { PATH: OWN_PATH_ABSOLUTE } })
     expect(resolveClaudeBinary(undefined, source).cmd).toBe('/Users/u/.local/bin/claude')
-    expect(h.sync.map((c) => [c.file, c.args])).toEqual([['/usr/bin/pwsh', ['-l', '-c', LOGIN_SHELL_PATH_COMMAND]]])
+    expect(h.sync).toEqual([])
+    expect(loginQuestions().map((c) => [c.file, c.args])).toEqual([['/usr/bin/pwsh', ['-l', '-c', LOGIN_SHELL_PATH_COMMAND]]])
   })
 
-  it('no answer from that login shell, or no Claude Code in its PATH: the sh-family login shell builds the PATH, and Claude Code is named as before', () => {
+  it('a launch with no answer kept starts no shell in place: it takes the sh-family login shell\'s own PATH, and the question it started is read by the next launch', async () => {
+    const source = { SHELL: FISH, PATH: APP_PATH }
+    expect(buildClaudeLocalSpawn({ ...BASE_OPTS }, source)).toEqual({ cmd: '/bin/zsh', args: ['-l'], env: { ...source, ...APP_OWNED } })
+    expect(resolveClaudeBinary(undefined, source)).toEqual({ cmd: 'claude', args: [] })
+    expect(h.sync).toEqual([])
+    await new Promise((r) => setTimeout(r, 0))
+    expect(loginQuestions()).toHaveLength(1)
+    expect(h.sync).toEqual([])
+    expect(buildClaudeLocalSpawn({ ...BASE_OPTS }, source)).toMatchObject({ args: [], env: { PATH: OWN_PATH_ABSOLUTE } })
+    expect(resolveClaudeBinary(undefined, source).cmd).toBe('/Users/u/.local/bin/claude')
+    expect(loginQuestions()).toHaveLength(1)
+    expect(h.sync).toEqual([])
+  })
+
+  it('launches asked for together while the shell is slow share one question, a cold launch and a prepared one alike', async () => {
+    const source = { SHELL: FISH, PATH: APP_PATH }
+    const prepared = [prepare(source), prepare({ ...source }), prepare({ ...source })]
+    buildClaudeLocalSpawn({ ...BASE_OPTS }, source)
+    buildClaudeLocalSpawn({ ...BASE_OPTS }, { ...source })
+    const answers = await Promise.all(prepared)
+    expect(answers[1]).toBe(answers[0])
+    expect(answers[2]).toBe(answers[0])
+    expect(answers[0]).toEqual({ path: OWN_PATH_ABSOLUTE, claude: '/Users/u/.local/bin/claude' })
+    expect(loginQuestions()).toHaveLength(1)
+    expect(h.sync).toEqual([])
+    // The question ended: a later one (another PATH here) is its own.
+    await prepare({ SHELL: FISH, PATH: '/usr/bin' })
+    expect(loginQuestions()).toHaveLength(2)
+  })
+
+  it('no answer from that login shell, or no Claude Code in its PATH: the sh-family login shell builds the PATH, and Claude Code is named as before', async () => {
     const source = { SHELL: FISH, PATH: APP_PATH }
     h.loginShellOut = new Error('timed out')
+    await prepare(source)
     expect(buildClaudeLocalSpawn({ ...BASE_OPTS }, source)).toEqual({ cmd: '/bin/zsh', args: ['-l'], env: { ...source, ...APP_OWNED } })
     expect(resolveClaudeBinary(undefined, source)).toEqual({ cmd: 'claude', args: [] })
     _resetClaudeLoginShellLookupForTest()
     h.loginShellOut = answered('/usr/bin:/bin')
+    await prepare(source)
     expect(buildClaudeLocalSpawn({ ...BASE_OPTS }, source)).toEqual({ cmd: '/bin/zsh', args: ['-l'], env: { ...source, ...APP_OWNED } })
     expect(resolveClaudeBinary(undefined, source)).toEqual({ cmd: 'claude', args: [] })
+    expect(h.sync).toEqual([])
   })
 
-  it('a Claude Code only in a relative entry of that PATH is never named', () => {
+  it('a Claude Code only in a relative entry of that PATH is never named', async () => {
     h.runnable = new Set(['rel/bin/claude'])
     const source = { SHELL: FISH, PATH: APP_PATH }
+    await prepare(source)
     expect(buildClaudeLocalSpawn({ ...BASE_OPTS }, source)).toMatchObject({ args: ['-l'], env: { PATH: APP_PATH } })
     expect(resolveClaudeBinary(undefined, source).cmd).toBe('claude')
   })
 
-  it('a file in that PATH that nobody may run is passed over for the next folder\'s', () => {
+  it('a file in that PATH that nobody may run is passed over for the next folder\'s', async () => {
     h.runnable = new Set(['/opt/homebrew/bin/claude'])
     h.plain = new Set(['/Users/u/.local/bin/claude'])
     const source = { SHELL: FISH, PATH: APP_PATH }
+    await prepare(source)
     buildClaudeLocalSpawn({ ...BASE_OPTS }, source)
     expect(resolveClaudeBinary(undefined, source).cmd).toBe('/opt/homebrew/bin/claude')
   })
@@ -203,23 +250,27 @@ describe('a Claude session of a user whose login shell is not of the sh family',
     h.runnable = new Set(['/opt/homebrew/bin/claude'])
     h.othersOnly = new Set(['/Users/u/.local/bin/claude'])
     const source = { SHELL: FISH, PATH: APP_PATH }
+    await prepare(source)
     buildClaudeLocalSpawn({ ...BASE_OPTS }, source)
     expect(resolveClaudeBinary(undefined, source).cmd).toBe('/opt/homebrew/bin/claude')
     _resetClaudeLoginShellLookupForTest()
     expect(await claudeInLoginShellPathAsync(source, 'darwin')).toEqual({ path: OWN_PATH_ABSOLUTE, claude: '/opt/homebrew/bin/claude' })
   })
 
-  it('the login shell is asked once per answer\'s life: a second launch reuses it, and one a minute later asks again', () => {
+  it('the login shell is asked once per answer\'s life: a second launch reuses it, and one a minute later asks again, off the event loop', async () => {
     const source = { SHELL: FISH, PATH: APP_PATH }
     let now = 1_000_000
     vi.spyOn(Date, 'now').mockImplementation(() => now)
+    await prepare(source)
     buildClaudeLocalSpawn({ ...BASE_OPTS }, source)
     h.loginShellOut = new Error('a second question would fail')
     expect(buildClaudeLocalSpawn({ ...BASE_OPTS }, source)).toMatchObject({ args: [], env: { PATH: OWN_PATH_ABSOLUTE } })
-    expect(h.sync).toHaveLength(1)
+    expect(loginQuestions()).toHaveLength(1)
     now += CLAUDE_LOOKUP_REUSE_MS
     expect(buildClaudeLocalSpawn({ ...BASE_OPTS }, source)).toMatchObject({ args: ['-l'] })
-    expect(h.sync).toHaveLength(2)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(loginQuestions()).toHaveLength(2)
+    expect(h.sync).toEqual([])
   })
 
   it('a sh-family login shell, a terminal tab and an elevated tab ask nothing and keep what they had', () => {
@@ -245,6 +296,10 @@ describe('the CLI checks ask what the launch will run', () => {
 
   it('the CLI check: Claude Code in that login shell\'s PATH is installed, with no other question asked', async () => {
     registerCliHandlers()
+    // Registration starts the question off the event loop, and the check joins
+    // it (one question for both); settle it, then let the check ask afresh.
+    await new Promise((r) => setTimeout(r, 0))
+    _resetClaudeLoginShellLookupForTest()
     const check = h.handlers.get(IPC.CLI_CHECK)!
     h.async.length = 0
     expect(await check()).toBe(true)
@@ -256,6 +311,8 @@ describe('the CLI checks ask what the launch will run', () => {
     h.which.set('/bin/zsh', '/usr/local/bin/claude')
     h.which.set(FISH, '/somewhere/claude')
     registerCliHandlers()
+    await new Promise((r) => setTimeout(r, 0))
+    _resetClaudeLoginShellLookupForTest()
     const check = h.handlers.get(IPC.CLI_CHECK)!
     h.async.length = 0
     expect(await check()).toBe(true)
