@@ -34,7 +34,18 @@ vi.mock('../../../src/main/session-registry', () => ({ updateSessionMeta: () => 
 vi.mock('../../../src/main/channel-emitters', () => ({ emitPrMerged: () => {} }))
 vi.mock('../../../src/main/active-session', () => ({ setActiveSessionId: () => {} }))
 vi.mock('../../../src/main/github/github-config-store', () => ({
-  GitHubConfigStore: class { async read() { return null } async write() {} },
+  GitHubConfigStore: class {
+    async read() { return null }
+    async readState() { return { config: null, readFailed: false } }
+    async lookupState() { return { config: null, readFailed: false } }
+    endFailedReadHold() {}
+    async readForWrite() { return null }
+    async write() {}
+  },
+  GitHubConfigUnreadableError: class extends Error {},
+  GitHubConfigWriteError: class extends Error {},
+  GITHUB_CONFIG_UNREADABLE: 'the settings file could not be read',
+  GITHUB_CONFIG_NOT_SAVED: 'the settings file could not be saved',
 }))
 vi.mock('../../../src/main/github/cache/cache-store', () => ({
   CacheStore: class { async load() { return { repos: {} } } async save() {} },

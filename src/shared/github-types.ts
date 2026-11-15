@@ -105,6 +105,36 @@ export interface GitHubConfig {
   seenOnboardingVersion?: string
 }
 
+/**
+ * A change to the GitHub settings, as the renderer sends it
+ * (GITHUB_CONFIG_UPDATE): the settings only. The accounts, the default
+ * account and the schema version are not in it; they have their own channels,
+ * and main leaves any other key out (github-settings-patch.ts).
+ *
+ * A sub-map carries only the keys that changed. Main puts them on top of the
+ * map in the file, so a change to one sync interval or one toggle never
+ * rewrites the others from whatever the page happened to be showing.
+ */
+export interface GitHubSettingsPatch {
+  enabledByDefault?: boolean
+  transcriptScanningOptIn?: boolean
+  seenOnboardingVersion?: string
+  syncIntervals?: Partial<GitHubSyncIntervals>
+  appWideToggles?: Partial<Record<GitHubAppWideFeatureKey, boolean>>
+  featureDefaults?: Partial<Record<GitHubAuthFeatureKey, boolean>>
+}
+
+/**
+ * What the settings pages get when they ask for the config (GITHUB_CONFIG_GET
+ * asked with `readState`): the config, or null, and whether github-config.json
+ * is there but did not read. `config: null, readFailed: false` is "no file
+ * yet"; `readFailed: true` means the settings shown are not the saved ones.
+ */
+export interface GitHubConfigReadState {
+  config: GitHubConfig | null
+  readFailed: boolean
+}
+
 export interface SessionGitHubIntegration {
   enabled: boolean
   repoUrl?: string

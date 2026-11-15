@@ -1,4 +1,5 @@
 import { useGitHubStore } from '../../../stores/githubStore'
+import { quietly } from './quietly'
 
 export default function PrivacySettings() {
   const config = useGitHubStore((s) => s.config)
@@ -14,7 +15,7 @@ export default function PrivacySettings() {
             type="checkbox"
             checked={config.transcriptScanningOptIn}
             onChange={(e) =>
-              void updateConfig({ transcriptScanningOptIn: e.target.checked })
+              quietly(updateConfig({ transcriptScanningOptIn: e.target.checked }))
             }
             className="mt-1"
           />

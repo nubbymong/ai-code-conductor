@@ -128,9 +128,12 @@ export default function OAuthDeviceFlow({ flow, onDone, onCancel }: Props) {
               {copied ? 'Copied' : 'Copy'}
             </DialogButton>
           </div>
-          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            Waiting for you to complete auth in the browser
-          </div>
+          {/* The sign-in is over once it has an error: it is not waiting. */}
+          {!error && (
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Waiting for you to complete auth in the browser
+            </div>
+          )}
           {error && (
             <div className="text-xs mt-2" style={{ color: 'var(--status-danger)' }} role="alert" aria-live="polite">
               Error: {error}

@@ -5,7 +5,13 @@ import { DEFAULT_AUTH_FEATURE_TOGGLES, emptyGitHubConfig } from '../../../shared
 import { AsyncMutex } from '../async-mutex'
 
 export interface AuthProfileStoreIO {
+  /** For a caller that only reads: null when there is no file, and null when
+   *  the file did not read. */
   readConfig(): Promise<GitHubConfig | null>
+  /** For a caller that will save the result back: null ONLY when there is no
+   *  file yet. A file that is there but did not read must be raised as an
+   *  error (GitHubConfigStore.readForWrite), never answered null. */
+  readConfigForWrite(): Promise<GitHubConfig | null>
   writeConfig(config: GitHubConfig): Promise<void>
 }
 
@@ -84,14 +90,61 @@ export class AuthProfileStore {
 
   constructor(private io: AuthProfileStoreIO) {}
 
+  /** The config for the READERS below (getToken, listProfiles): an empty one
+   *  when there is no file and when the file did not read. Never saved back. */
   private async load(): Promise<GitHubConfig> {
     return (await this.io.readConfig()) ?? emptyGitHubConfig()
   }
 
-  async addProfile(input: AddProfileInput): Promise<string> {
+  /**
+   * The config a WRITER edits and saves back: an empty one only when there is
+   * no file yet. A file that did not read is the read's own error, and the
+   * writer stops there with nothing written. Every writer below starts from
+   * this, never from `load()`, whose empty answer for a file that did not
+   * read must not be saved.
+   */
+  private async loadForWrite(): Promise<GitHubConfig> {
+    return (await this.io.readConfigForWrite()) ?? emptyGitHubConfig()
+  }
+
+  /**
+   * A change to the file that is not a profile edit (the settings patch, the
+   * start-up migration), under the same lock as the profile writers, so that
+   * neither can save over a change the other made in between its own read and
+   * write. `edit` gets the file as a writer reads it (null: no file yet) and
+   * returns what to save, or null to save nothing. A file that did not read is
+   * the read's error: `edit` is not run and nothing is written.
+   */
+  async editConfig(
+    edit: (current: GitHubConfig | null) => GitHubConfig | null,
+  ): Promise<GitHubConfig | null> {
+    return this.mutex.run(async () => {
+      const next = edit(await this.io.readConfigForWrite())
+      if (next) await this.io.writeConfig(next)
+      return next
+    })
+  }
+
+  /**
+   * Add an account. With `replaceSameAccount` (the device sign-in), a sign-in
+   * for an account that is already saved REPLACES the saved one: every other
+   * oauth profile with the same username is removed, and the newest of them
+   * hands its per-account featureToggles to the new profile.
+   *
+   * The new profile is otherwise seeded from featureDefaults, which is the
+   * GLOBAL intent, not this account's. The old profile's map IS the user's
+   * intent for this account, so it wins when present; a sign-in must not put
+   * an account's toggles back to the defaults.
+   *
+   * The add and the replace are ONE read and ONE write under the lock. A file
+   * that did not read refuses the whole sign-in before anything is written,
+   * and a save that fails leaves the file as it was, so the account is never
+   * saved twice and a refusal never follows a change.
+   */
+  async addProfile(input: AddProfileInput, opts?: { replaceSameAccount?: boolean }): Promise<string> {
     return this.mutex.run(async () => {
       const id = randomUUID()
-      const config = await this.load()
+      const config = await this.loadForWrite()
 
       let tokenCiphertext: string | undefined
       if (input.kind !== 'gh-cli') {
@@ -132,6 +185,20 @@ export class AuthProfileStore {
         // to the constant for pre-migration / first-launch configs.
         featureToggles: { ...(config.featureDefaults ?? DEFAULT_AUTH_FEATURE_TOGGLES) },
       }
+
+      if (opts?.replaceSameAccount && input.kind === 'oauth') {
+        let carried: AuthProfile['featureToggles']
+        for (const [pid, p] of Object.entries(config.authProfiles)) {
+          if (pid === id || p.kind !== 'oauth' || p.username !== input.username) continue
+          // Newest old profile wins if there were somehow several; the loop order
+          // is insertion order, so the last match is the most recently added.
+          if (p.featureToggles) carried = p.featureToggles
+          delete config.authProfiles[pid]
+          if (config.defaultAuthProfileId === pid) config.defaultAuthProfileId = undefined
+        }
+        if (carried) config.authProfiles[id].featureToggles = { ...carried }
+      }
+
       await this.io.writeConfig(config)
       return id
     })
@@ -157,53 +224,16 @@ export class AuthProfileStore {
 
   async removeProfile(id: string): Promise<void> {
     await this.mutex.run(async () => {
-      const config = await this.load()
+      const config = await this.loadForWrite()
       delete config.authProfiles[id]
       if (config.defaultAuthProfileId === id) config.defaultAuthProfileId = undefined
       await this.io.writeConfig(config)
     })
   }
 
-  /**
-   * Re-auth dedupe for the SAME GitHub account: after a fresh oauth profile
-   * (`newId`) is added, this carries the user's per-account featureToggles from
-   * the OLD same-username profile(s) onto the new one and removes the olds — all
-   * in ONE transaction so the new profile is never observed with the wrong
-   * toggles and a concurrent reader can't see a half-applied state.
-   *
-   * The new profile was just seeded from featureDefaults (addProfile), which is
-   * the GLOBAL intent, not this account's. The old profile's map IS the user's
-   * intent for this account, so it always wins when present. Without this, a
-   * re-auth silently reverts per-account toggles to the master defaults.
-   */
-  async replaceSameAccountOAuth(newId: string, username: string): Promise<void> {
-    await this.mutex.run(async () => {
-      const config = await this.load()
-      const fresh = config.authProfiles[newId]
-      if (!fresh) return
-      let carried: AuthProfile['featureToggles']
-      let removedAny = false
-      for (const [pid, p] of Object.entries(config.authProfiles)) {
-        if (pid === newId || p.kind !== 'oauth' || p.username !== username) continue
-        // Newest old profile wins if there were somehow several; the loop order
-        // is insertion order, so the last match is the most recently added.
-        if (p.featureToggles) carried = p.featureToggles
-        delete config.authProfiles[pid]
-        if (config.defaultAuthProfileId === pid) config.defaultAuthProfileId = undefined
-        removedAny = true
-      }
-      // First-ever auth for this account: nothing replaced, nothing to write.
-      if (!removedAny) return
-      if (carried) {
-        config.authProfiles[newId] = { ...fresh, featureToggles: { ...carried } }
-      }
-      await this.io.writeConfig(config)
-    })
-  }
-
   async updateProfile(id: string, patch: ProfilePatch): Promise<void> {
     await this.mutex.run(async () => {
-      const config = await this.load()
+      const config = await this.loadForWrite()
       const existing = config.authProfiles[id]
       if (!existing) throw new Error(`Profile not found: ${id}`)
       // Strip all immutable-by-design fields even if a caller bypassed the
@@ -225,7 +255,7 @@ export class AuthProfileStore {
 
   async rotateToken(id: string, rawToken: string): Promise<void> {
     await this.mutex.run(async () => {
-      const config = await this.load()
+      const config = await this.loadForWrite()
       const existing = config.authProfiles[id]
       if (!existing) throw new Error(`Profile not found: ${id}`)
       if (existing.kind === 'gh-cli') {

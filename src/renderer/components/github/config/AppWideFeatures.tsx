@@ -5,6 +5,7 @@
 // behave identically. These write the root-level appWideToggles map via
 // setAppWideToggle (never a per-profile patch).
 import { useGitHubStore } from '../../../stores/githubStore'
+import { quietly } from './quietly'
 import ToggleSwitch from './ToggleSwitch'
 import { Chip } from './github-feature-meta'
 import type { GitHubAppWideFeatureKey } from '../../../../shared/github-types'
@@ -46,7 +47,7 @@ export default function AppWideFeatures() {
                 <ToggleSwitch
                   state={on ? 'on' : 'off'}
                   label={meta.label}
-                  onToggle={() => void setAppWideToggle(key, !on)}
+                  onToggle={() => quietly(setAppWideToggle(key, !on))}
                 />
               </div>
             </div>

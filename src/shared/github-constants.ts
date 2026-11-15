@@ -124,6 +124,24 @@ export const FINEGRAINED_PERMISSION_CAPABILITIES: Record<string, Capability[]> =
 export const GITHUB_CONFIG_SCHEMA_VERSION = 1
 export const GITHUB_CACHE_SCHEMA_VERSION = 1
 
+// What the user is told when github-config.json is there but did not read, so
+// a change to the GitHub accounts or settings was refused: the file's name and
+// the name of its folder inside the app's own resources folder, never a full
+// path, and the two ways out. The one copy of the sentence: main refuses with
+// it (github-config-store.ts) and the settings pages show it when they open on
+// such a file (githubStore.ts).
+export const GITHUB_CONFIG_UNREADABLE =
+  'The GitHub settings file (github-config.json) could not be read, so nothing was changed. ' +
+  'Close other programs that may be using it, or move github-config.json out of the CONFIG folder ' +
+  'in the AI Code Conductor resources folder and sign in to GitHub again.'
+
+// What the user is told when the file read but the save of a change failed.
+// The save stages a copy and renames it over the file, so a save that failed
+// left the file as it was. What failed, with its path, goes to the log only.
+export const GITHUB_CONFIG_NOT_SAVED =
+  'The GitHub settings file (github-config.json) could not be saved, so nothing was changed. ' +
+  'Close other programs that may be using it and try again.'
+
 // First-launch / no-config-file default. Seeds the new toggle fields
 // (appWideToggles, featureDefaults) from their default constants, so new
 // configs are born already-migrated; the shape migration only runs for
