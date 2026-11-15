@@ -305,6 +305,9 @@
   background: color-mix(in srgb, var(--status-warning) 8%, transparent); }
 .ob-root .wn-warn-h { font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
   color: var(--status-warning); margin: 0 0 6px; }
+/* Focus lands here by script when Skip turns the user back to the warnings
+   (WhatsNewV2Step). It is a heading, not a control, so it draws no ring. */
+.ob-root .wn-warn-h:focus { outline: none; }
 .ob-root .wn-warn-rel + .wn-warn-rel { margin-top: 10px; }
 .ob-root .wn-warn-v { font-size: 12px; font-weight: 650; color: var(--text-primary); margin: 0 0 4px; }
 .ob-root .wn-warn ul { margin: 0; padding-left: 18px; list-style: disc; }

@@ -553,9 +553,23 @@ export function WhatsNewV2Step({
   useEffect(() => {
     if (pageIx === summaryIx) summaryShown.current = true
   }, [pageIx, summaryIx])
+  // The button that sent the user to the summary keeps focus, and the block
+  // that appeared is not what a screen reader is at. So when leaving is turned
+  // back to the summary, focus goes to the warnings heading once it renders:
+  // it is named by the block, and the next Skip is then a deliberate one. A
+  // summary opened any other way moves no focus.
+  const warningsHeading = useRef<HTMLHeadingElement>(null)
+  const focusWarnings = useRef(false)
+  useEffect(() => {
+    if (pageIx !== summaryIx || !focusWarnings.current) return
+    focusWarnings.current = false
+    warningsHeading.current?.focus()
+  }, [pageIx, summaryIx])
   const leave = () => {
-    if (warnings.length > 0 && !summaryShown.current) setPageIx(summaryIx)
-    else onNext()
+    if (warnings.length > 0 && !summaryShown.current) {
+      focusWarnings.current = pageIx !== summaryIx
+      setPageIx(summaryIx)
+    } else onNext()
   }
   const jumpTo = (id: string) => {
     const ix = showcases.findIndex((p) => p.id === id)
@@ -573,7 +587,7 @@ export function WhatsNewV2Step({
 
             {warnings.length > 0 && (
               <div className="wn-warn" role="note" aria-labelledby={warningsLabelId} data-ux-id="whatsnew-warnings">
-                <h3 className="wn-warn-h" id={warningsLabelId}>Warnings</h3>
+                <h3 className="wn-warn-h" id={warningsLabelId} ref={warningsHeading} tabIndex={-1}>Warnings</h3>
                 {warnings.map((release) => (
                   <div className="wn-warn-rel" key={release.version} data-ux-id={`whatsnew-summary-warnings-${release.version}`}>
                     <h4 className="wn-warn-v">Version {release.version}</h4>

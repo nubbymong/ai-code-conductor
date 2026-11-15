@@ -20,6 +20,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
+import * as fs from 'fs'
+import * as path from 'path'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -266,5 +268,96 @@ describe('the run cannot be left before the warnings were on screen', () => {
     expect(q('whatsnew-skip'), 'this run has pages behind the summary').not.toBeNull()
     click(q('whatsnew-skip'))
     expect(nexts).toBe(1)
+  })
+})
+
+describe('the redirect to the warnings is announced by moving focus to them', () => {
+  // The button that was pressed stays where it is, so without a move a screen
+  // reader user hears nothing about the block that appeared above it, and
+  // pressing the same button again leaves without meeting it.
+  const fromBeforeRename = () => render({ anchor: BEFORE_RENAME, seenVersion: BEFORE_RENAME })
+  const dots = () => Array.from(q('whatsnew-dots')!.querySelectorAll('button')) as HTMLElement[]
+  const focusOn = (el: Element | null) => { act(() => { (el as HTMLElement).focus() }) }
+  /** The heading that names the warnings block. */
+  const warningsHeading = () => document.getElementById(q('whatsnew-warnings')!.getAttribute('aria-labelledby') ?? '')
+
+  it('Skip on the page before the summary puts focus on the warnings heading', () => {
+    fromBeforeRename()
+    focusOn(q('whatsnew-skip'))
+    expect(document.activeElement).toBe(q('whatsnew-skip'))
+    click(q('whatsnew-skip'))
+    expect(nexts, 'the run was left before the warnings were shown').toBe(0)
+    const heading = warningsHeading()
+    expect(heading, 'no warnings heading on the summary').not.toBeNull()
+    expect(heading!.textContent).toBe('Warnings')
+    // Reachable by script, never a stop of its own in the Tab order.
+    expect(heading!.getAttribute('tabindex')).toBe('-1')
+    expect(document.activeElement, 'focus stayed on the footer button').toBe(heading)
+  })
+
+  it('leaving from the last page after jumping past the summary does the same', () => {
+    fromBeforeRename()
+    focusOn(dots()[dots().length - 1])
+    click(dots()[dots().length - 1])
+    expect(q('whatsnew-warnings')).toBeNull()
+    focusOn(q('whatsnew-cta'))
+    click(q('whatsnew-cta'))
+    expect(nexts, 'the run was left before the warnings were shown').toBe(0)
+    expect(document.activeElement).toBe(warningsHeading())
+    expect(document.activeElement).not.toBe(q('whatsnew-cta'))
+  })
+
+  it('a run that opens on the summary, warnings showing, leaves focus where it was', () => {
+    render({ anchor: '2.1.0', seenVersion: '2.1.0' })
+    expect(q('whatsnew-warnings')).not.toBeNull()
+    focusOn(q('whatsnew-cta'))
+    expect(document.activeElement).toBe(q('whatsnew-cta'))
+    expect(document.activeElement).not.toBe(warningsHeading())
+  })
+
+  it('opening the summary by its dot, with no Skip redirect, moves no focus', () => {
+    fromBeforeRename()
+    focusOn(q('whatsnew-dot-summary'))
+    click(q('whatsnew-dot-summary'))
+    expect(q('whatsnew-warnings')).not.toBeNull()
+    expect(document.activeElement).toBe(q('whatsnew-dot-summary'))
+    expect(document.activeElement).not.toBe(warningsHeading())
+  })
+
+  it('opening the summary with Next, with no Skip redirect, moves no focus', () => {
+    fromBeforeRename()
+    focusOn(q('whatsnew-cta'))
+    click(q('whatsnew-cta'))
+    expect(q('whatsnew-warnings')).not.toBeNull()
+    expect(document.activeElement).toBe(q('whatsnew-cta'))
+  })
+
+  it('moves focus once: coming back to the summary later does not pull it to the heading again', () => {
+    fromBeforeRename()
+    click(q('whatsnew-skip'))
+    expect(document.activeElement).toBe(warningsHeading())
+    focusOn(dots()[dots().length - 1])
+    click(dots()[dots().length - 1])
+    expect(q('whatsnew-warnings')).toBeNull()
+    focusOn(q('whatsnew-dot-summary'))
+    click(q('whatsnew-dot-summary'))
+    expect(q('whatsnew-warnings')).not.toBeNull()
+    expect(document.activeElement).toBe(q('whatsnew-dot-summary'))
+  })
+
+  it('with no warnings, Skip on the page before the summary moves no focus', () => {
+    ;(globalThis as any).__APP_VERSION__ = QUIET_BETA
+    fromBeforeRename()
+    focusOn(q('whatsnew-skip'))
+    click(q('whatsnew-skip'))
+    expect(nexts).toBe(1)
+    expect(document.activeElement).toBe(q('whatsnew-skip'))
+  })
+
+  it('the focused heading draws no outline, so the page looks as it did', () => {
+    // jsdom paints nothing; pin the declaration. A heading is not a control,
+    // and a ring around it after a keyboard Skip would be a new look.
+    const css = fs.readFileSync(path.resolve(__dirname, '../../../src/renderer/onboarding/onboarding.css'), 'utf-8')
+    expect(/\.ob-root \.wn-warn-h:focus \{ outline: none; \}/.test(css), 'no outline-off rule for the warnings heading').toBe(true)
   })
 })
