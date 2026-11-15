@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > A steadier release. Your saved GitHub accounts are no longer wiped when their settings file cannot be read, long pastes keep emoji whole, the usage index reads far less from disk, a launch refused after a wait now says why, and model names with dates or dots resolve to the right model.
 
 ### Changed
-- The usage index (Tokenomics) now reads only the Claude Code transcripts that changed, instead of walking every transcript every few seconds. That means lower CPU and disk use, mostly on Windows. New writes are picked up within 5 seconds, also after a restart.
+- The usage index (Tokenomics) now reads only the Claude Code transcripts that changed, instead of walking every transcript every few seconds. That means lower CPU and disk use, mostly on Windows. New writes usually show within 5 seconds, also after a restart, and the full walk every 5 minutes still finds a change the app was not told about.
 - KaTeX, which draws the maths in diagrams, is updated to the patched 0.18 line, and the docs now name the current versions of the stack.
 
 ### Fixed
