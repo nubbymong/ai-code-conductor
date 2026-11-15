@@ -21,6 +21,23 @@ export interface ChangelogEntry {
 // a backtick in a comment opens a phantom string and the parse fails.
 export const changelog: ChangelogEntry[] = [
   {
+    version: '2.1.3-beta.3',
+    date: '2026-11-15',
+    highlights: 'A steadier release. Your saved GitHub accounts are no longer wiped when their settings file cannot be read, long pastes keep emoji whole, the usage index reads far less from disk, a launch refused after a wait now says why, and model names with dates or dots resolve to the right model.',
+    changes: [
+      { type: 'fix', description: 'Your saved GitHub accounts and settings are no longer wiped when github-config.json cannot be read, for example because another program has it locked, it is damaged, or a newer version of the app wrote it. The change is now refused and the app says what to do: close other programs that may be using the file, or move it out of the CONFIG folder and sign in again. The file is now saved so only you can read it. In first-run setup, the GitHub step\'s Next waits for its save and offers Skip for now when the save was refused.' },
+      { type: 'fix', description: 'Long pastes keep emoji whole. Before, an emoji could be split where a long paste was cut into pieces.' },
+      { type: 'fix', description: 'On Windows, one locked or unreadable claude.exe (permission denied, or in use) next to a claude.cmd no longer hides its whole PATH folder, so Claude Code still starts. A folder that is really unreachable is still skipped once.' },
+      { type: 'improvement', description: 'The usage index (Tokenomics) now reads only the Claude Code transcripts that changed, instead of walking every transcript every few seconds. That means lower CPU and disk use, mostly on Windows. New writes are picked up within 5 seconds, also after a restart.' },
+      { type: 'fix', description: 'A transcript or Codex session file that is deleted and created again is now counted in full.' },
+      { type: 'fix', description: 'A Claude Code launch on an account that waits for a sign-in refresh or for the check of the project settings now asks again when the wait ends whether its assistant is still switched on. If it is off by then, or the app cannot read whether it is on, nothing starts and the tab says why.' },
+      { type: 'fix', description: 'A Restart or Switch Account whose launch is refused after it waited now writes the reason into the tab before its session ends. Before, the session could end without saying why.' },
+      { type: 'fix', description: 'Model names written with a dot, such as claude-opus-4.7 or claude-opus-5.5, and the dated name of Fable 5 (claude-fable-5-20260101) now resolve to the right model, label and price. Behind a gateway prefix, such as anthropic/claude-opus-4.7, the model and label are now right as well.' },
+      { type: 'fix', description: 'The model file the app fetches can no longer take over the name of a model that came with the app, however the name is spelled.' },
+      { type: 'improvement', description: 'KaTeX, which draws the maths in diagrams, is updated to the patched 0.18 line, and the docs now name the current versions of the stack.' },
+    ],
+  },
+  {
     version: '2.1.3-beta.2',
     date: '2026-11-15',
     highlights: 'A small steadier release. On Windows, a network share in PATH that does not answer no longer freezes the app when a session starts, the Services panel\'s hooks counters keep moving after you turn hooks off and on, and an older Claude model used through Amazon Bedrock or Google Vertex is named and priced as itself.',
