@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { SERVICE_ID } from '../../shared/service-health'
 import type {
   DiagnosticsSnapshot,
   ServiceHealth,
+  ServiceId,
+  ServiceMeasured,
   ServiceLogEntry,
   PtyIntegritySnapshot,
   WatchdogMonitorSnapshot,
@@ -9,10 +12,9 @@ import type {
 import { DialogButton } from './ui/Dialog'
 
 // No \u{...} escapes in JSX (esbuild). U+21BB CLOCKWISE OPEN CIRCLE ARROW,
-// U+29C9 TWO JOINED SQUARES, U+25CB WHITE CIRCLE.
+// U+29C9 TWO JOINED SQUARES.
 const RESTART_GLYPH = String.fromCodePoint(0x21bb)
 const COPY_GLYPH = String.fromCodePoint(0x29c9)
-const HOLLOW = String.fromCodePoint(0x25cb)
 
 // #360: the panel is anchored chrome, not a modal, so it keeps its own
 // positioning and its `role="dialog"` host element — only the colours move onto
@@ -69,23 +71,86 @@ function Metric({ label, value }: { label: string; value: React.ReactNode }) {
 // Per-card restart gating. Preserves the original hooks rule (a supervised
 // gateway that fell back to in-process cannot be restarted in place — relaunch),
 // while letting other services (watchdog, logging) restart when running. A
-// stopped service is never restartable.
+// stopped service is never restartable. The MCP server has no restart of its
+// own (the service registry answers 'not-restartable' for it): it lives inside
+// the app and the open sessions hold connections to it.
 function restartInfoFor(s: ServiceHealth): { disabled: boolean; title: string } {
   if (s.state === 'stopped') {
-    return { disabled: true, title: s.id === 'hooks' ? 'Hooks are disabled in Settings' : `${s.label} is stopped` }
+    return { disabled: true, title: s.id === SERVICE_ID.hooks ? 'Hooks are disabled in Settings' : `${s.label} is stopped` }
   }
-  if (s.id === 'hooks' && s.host === 'in-process-fallback') {
+  if (s.id === SERVICE_ID.hooks && s.host === 'in-process-fallback') {
     return { disabled: true, title: 'Relaunch the app to retry the supervised gateway' }
   }
-  if (s.id === 'watchdog') return { disabled: false, title: 'Restart the watchdog (re-arms watchers on the next session)' }
+  if (s.id === SERVICE_ID.mcp) {
+    return { disabled: true, title: 'The MCP server runs inside the app. Relaunch the app to restart it' }
+  }
+  if (s.id === SERVICE_ID.watchdog) return { disabled: false, title: 'Restart the watchdog (re-arms watchers on the next session)' }
   return { disabled: false, title: `Restart ${s.label}` }
+}
+
+// The counters a card can show. A row carries a slot for every one of them,
+// but not every service keeps every one: a card shows only what its row keeps,
+// so a figure nobody counts is never shown as a real zero. The main loop's own
+// stalls are stamped on every row, so they are not in this list: they show
+// whenever a card has counters at all.
+type Counter = 'pid' | 'uptime' | 'inFlight' | 'restarts' | 'events' | 'trimmed' | 'throughput' | 'childStalls'
+const EVERY_COUNTER: readonly Counter[] = ['pid', 'uptime', 'inFlight', 'restarts', 'events', 'trimmed', 'throughput', 'childStalls']
+// One entry per registered row (the type makes a new row state its own).
+const COUNTERS_KEPT: Record<ServiceId, readonly Counter[]> = {
+  // The gateway's child reports all of them, its own event-loop stalls included.
+  hooks: EVERY_COUNTER,
+  // The logging worker reports no event-loop stalls of its own.
+  logging: ['pid', 'uptime', 'inFlight', 'restarts', 'events', 'trimmed', 'throughput'],
+  // The usage index: how long the current worker has been ready, the queries
+  // not answered yet, its restarts and its event count. Its worker's process
+  // id is not known here, and nothing counts a trim, a rate or the worker's
+  // stalls.
+  tokenomics: ['uptime', 'inFlight', 'restarts', 'events'],
+  // The Watchdog runs inside the app: no process of its own, and a restart of
+  // it is not counted. In-flight is the sessions waiting out a retry.
+  watchdog: ['uptime', 'inFlight', 'events'],
+  // The MCP server row says only whether it is listening and on which port.
+  mcp: [],
+}
+function countersKept(s: ServiceHealth): readonly Counter[] {
+  // A row this panel does not know is shown in full, as a supervised child is.
+  const kept = Object.prototype.hasOwnProperty.call(COUNTERS_KEPT, s.id) ? COUNTERS_KEPT[s.id as ServiceId] : EVERY_COUNTER
+  // A row that runs inside the app has no child of its own, whatever its id: no
+  // process id, and no child stalls. The hooks gateway is the one row that can
+  // move there (it falls back to the main process).
+  if (s.host === 'in-process' || s.host === 'in-process-fallback') return kept.filter((c) => c !== 'pid' && c !== 'childStalls')
+  return kept
+}
+
+// The measured cost of a service, when something measured it: only the figures
+// the row was given, then how long ago they were taken. Nothing is shown for a
+// row with no figures.
+function measuredCells(m: ServiceMeasured | undefined): Array<{ label: string; value: string }> {
+  if (!m) return []
+  const cells: Array<{ label: string; value: string }> = []
+  if (typeof m.cpuPercent === 'number' && Number.isFinite(m.cpuPercent)) {
+    cells.push({ label: 'CPU', value: `${m.cpuPercent.toFixed(1)}%` })
+  }
+  if (typeof m.filesTouchedLastScan === 'number' && Number.isFinite(m.filesTouchedLastScan)) {
+    cells.push({ label: 'Files/scan', value: String(m.filesTouchedLastScan) })
+  }
+  if (cells.length === 0) return []
+  if (typeof m.sampledAt === 'number' && Number.isFinite(m.sampledAt) && m.sampledAt > 0) {
+    cells.push({ label: 'Measured', value: `${uptime(m.sampledAt)} ago` })
+  }
+  return cells
 }
 
 function ServiceCard({ s, onRestart }: { s: ServiceHealth; onRestart: (id: string) => void }) {
   const r = restartInfoFor(s)
+  // Only the counters this row keeps (none at all for the MCP server).
+  const kept = countersKept(s)
+  const keeps = (c: Counter) => kept.includes(c)
+  const showCounters = kept.length > 0
+  const measured = measuredCells(s.measured)
   return (
-    <div className={CARD_CLASS} style={CARD_STYLE}>
-      <div className="flex items-center gap-1.5 mb-2">
+    <div className={CARD_CLASS} style={CARD_STYLE} data-service-id={s.id}>
+      <div className={`flex items-center gap-1.5${showCounters || measured.length > 0 ? ' mb-2' : ''}`}>
         <span
           className="w-2 h-2 rounded-full"
           style={{ background: STATE_DOT[s.state] ?? 'var(--text-muted)' }}
@@ -94,8 +159,10 @@ function ServiceCard({ s, onRestart }: { s: ServiceHealth; onRestart: (id: strin
           {s.label}
         </span>
         <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+          {/* Hooks stop only when switched off in Settings; any other row
+              that is not running says just that. */}
           {s.state === 'stopped'
-            ? 'disabled'
+            ? (s.id === SERVICE_ID.hooks ? 'disabled' : 'stopped')
             : `${s.host}${s.port ? ` :${s.port}` : ''}${s.state !== 'listening' ? ` (${s.state})` : ''}`}
         </span>
         <button
@@ -112,19 +179,35 @@ function ServiceCard({ s, onRestart }: { s: ServiceHealth; onRestart: (id: strin
           {RESTART_GLYPH} Restart
         </button>
       </div>
-      <div className="grid grid-cols-4 gap-x-2 gap-y-1.5">
-        <Metric label="PID" value={s.pid ?? '-'} />
-        <Metric label="Uptime" value={uptime(s.startedAt)} />
-        <Metric label="In-flight" value={s.inFlight} />
-        <Metric label="Restarts" value={s.restartCount} />
-        <Metric label="Events" value={s.eventsTotal} />
-        <Metric label="Trimmed" value={s.dropsTotal} />
-        {/* throughputPerSec is events/sec computed from successive health beats
-            (0 when idle — honest, not '-'); Jank m/c = main-loop / child-loop
-            stall samples in the last 60s. Both are now instrumented end to end. */}
-        <Metric label="Thrput/s" value={s.throughputPerSec.toFixed(1)} />
-        <Metric label="Jank m/c" value={`${s.mainLoopStallsLastMin}/${s.childLoopStallsLastMin}`} />
-      </div>
+      {showCounters && (
+        <div className="grid grid-cols-4 gap-x-2 gap-y-1.5" data-counters>
+          {keeps('pid') && <Metric label="PID" value={s.pid ?? '-'} />}
+          {keeps('uptime') && <Metric label="Uptime" value={uptime(s.startedAt)} />}
+          {keeps('inFlight') && <Metric label="In-flight" value={s.inFlight} />}
+          {keeps('restarts') && <Metric label="Restarts" value={s.restartCount} />}
+          {keeps('events') && <Metric label="Events" value={s.eventsTotal} />}
+          {keeps('trimmed') && <Metric label="Trimmed" value={s.dropsTotal} />}
+          {/* throughputPerSec is events/sec computed from successive health beats
+              (0 when idle: honest, not '-'). */}
+          {keeps('throughput') && <Metric label="Thrput/s" value={s.throughputPerSec.toFixed(1)} />}
+          {/* Jank = event-loop stall samples in the last 60s: the main loop's
+              (m), and the child's own (c) for a row whose child reports them. */}
+          {keeps('childStalls')
+            ? <Metric label="Jank m/c" value={`${s.mainLoopStallsLastMin}/${s.childLoopStallsLastMin}`} />
+            : <Metric label="Jank m" value={s.mainLoopStallsLastMin} />}
+        </div>
+      )}
+      {measured.length > 0 && (
+        <div
+          className={`grid grid-cols-4 gap-x-2 gap-y-1.5${showCounters ? ' mt-1.5' : ''}`}
+          data-measured
+          title="Measured cost of this service"
+        >
+          {measured.map((m) => (
+            <Metric key={m.label} label={m.label} value={m.value} />
+          ))}
+        </div>
+      )}
       {s.lastError && (
         <div className="mt-2 text-[10px] break-words" style={{ color: 'var(--status-danger)' }}>
           last error: {s.lastError.message}
@@ -137,7 +220,9 @@ function ServiceCard({ s, onRestart }: { s: ServiceHealth; onRestart: (id: strin
 function LogTail({ log }: { log: ServiceLogEntry[] }) {
   return (
     <div
-      className="rounded border max-h-32 overflow-y-auto p-1.5 font-mono text-[10px] leading-snug"
+      // shrink-0: a scrolling box may otherwise be squeezed to nothing before
+      // the panel itself starts to scroll.
+      className="rounded border max-h-32 shrink-0 overflow-y-auto p-1.5 font-mono text-[10px] leading-snug"
       style={CARD_STYLE}
     >
       {log.length === 0 ? (
@@ -263,9 +348,9 @@ export default function ConductorServicesPanel({ open = true, onClose }: { open?
   }, [onClose])
 
   const services = snap?.services ?? []
-  // Per-card restart: each ServiceCard passes its own s.id (routing + disable
-  // gating live in buildRestart / restartInfoFor), so every service — hooks,
-  // logging, watchdog — is individually restartable.
+  // Per-card restart: each ServiceCard passes its own s.id (routing lives in
+  // main's service registry, disable gating in restartInfoFor), so every
+  // service that has a restart is individually restartable.
   const handleRestart = (id: string) => { void window.electronAPI.serviceHealth.restart(id) }
   // BUG-2: the copy gave no feedback, so it read as a no-op even on success.
   // Flip to a brief "Copied" state and surface real failures.
@@ -291,7 +376,10 @@ export default function ConductorServicesPanel({ open = true, onClose }: { open?
       ref={ref}
       role="dialog"
       aria-label="Services diagnostics"
-      className={`absolute right-0 top-full mt-1.5 z-50 w-80 rounded-lg border shadow-xl p-3 flex flex-col gap-2.5 transition-all duration-200 ease-out ${
+      // One card per registered service: with every section present the panel
+      // can be taller than a small window, so it scrolls inside the window
+      // instead of running off its bottom edge.
+      className={`absolute right-0 top-full mt-1.5 z-50 w-80 max-h-[calc(100vh-4rem)] overflow-y-auto rounded-lg border shadow-xl p-3 flex flex-col gap-2.5 transition-all duration-200 ease-out ${
         entered ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-1'
       }`}
       style={{
@@ -306,19 +394,6 @@ export default function ConductorServicesPanel({ open = true, onClose }: { open?
       <LogTail log={snap?.log ?? []} />
       {snap?.pty && <PtySection pty={snap.pty} />}
       {snap?.watchdog && snap.watchdog.activeSessions > 0 && <WatchdogSection watchdog={snap.watchdog} />}
-      <div
-        className="rounded border px-2.5 py-1.5 text-[11px] flex items-center gap-1.5"
-        style={{
-          borderColor: 'var(--border-subtle)',
-          background: 'var(--surface-sunken)',
-          color: 'var(--text-muted)',
-        }}
-        title="MCP relocation is a future phase"
-      >
-        <span>{HOLLOW}</span>
-        <span>MCP server</span>
-        <span style={{ color: 'var(--text-muted)' }}>in-process :19333 (next phase)</span>
-      </div>
       <div className="flex items-center gap-2 pt-0.5">
         {/* Restart moved onto each card (the watchdog needs its own), keeping
             its destructive read through --status-danger — BUG-3's regression

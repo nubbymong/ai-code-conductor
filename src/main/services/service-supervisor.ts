@@ -9,7 +9,7 @@
  */
 import { HooksGatewayProxy } from './hooks-gateway-proxy'
 import { Supervisor } from './supervisor'
-import { createInitialHealth, computeThroughput } from '../../shared/service-health'
+import { createInitialHealth, computeThroughput, SERVICE_ID, SERVICE_LABEL } from '../../shared/service-health'
 import { IPC } from '../../shared/ipc-channels'
 import type { ServiceHealth, ServiceLogEntry, DiagnosticsSnapshot, ThroughputSample } from '../../shared/service-health'
 import type { ChildTransport, FromChildMessage } from './service-transport'
@@ -35,10 +35,15 @@ export interface ServiceSupervisorOptions {
 
 const LOG_CAP = 200
 
+/** What the row shows while no child is up: no process id, no uptime and no
+ *  event-loop stalls of its own. A child's figures are never carried over to
+ *  the next one, or to a row that is down or on its way back. */
+const NO_CHILD = { pid: null, startedAt: null, childLoopStallsLastMin: 0 } as const
+
 export class ServiceSupervisor {
   private opts: ServiceSupervisorOptions
   private now: () => number
-  private health: ServiceHealth = createInitialHealth('hooks', 'Hooks gateway')
+  private health: ServiceHealth = createInitialHealth(SERVICE_ID.hooks, SERVICE_LABEL.hooks, 'utility-process')
   // Last (eventsTotal, ts) sample throughput was computed against — see
   // computeThroughput. Reset to null on respawn so a restart's counter reset
   // can't read as a negative/huge rate.
@@ -79,7 +84,7 @@ export class ServiceSupervisor {
   getProxy(): HooksGatewayProxy | null { return this.proxy }
 
   private appendLog(level: ServiceLogEntry['level'], code: string, message: string): void {
-    this.log.push({ ts: this.now(), serviceId: 'hooks', level, code, message })
+    this.log.push({ ts: this.now(), serviceId: SERVICE_ID.hooks, level, code, message })
     if (this.log.length > LOG_CAP) this.log.splice(0, this.log.length - LOG_CAP)
   }
 
@@ -116,7 +121,7 @@ export class ServiceSupervisor {
         host: 'utility-process',
         port: m.port,
         pid: m.pid,
-        startedAt: this.health.startedAt ?? this.now(),
+        startedAt: this.now(),   // this child's: each bound starts the uptime over
       }
       this.appendLog('info', 'bound', `bound :${m.port} pid=${m.pid}`)
       this.pushHealth()
@@ -222,7 +227,7 @@ export class ServiceSupervisor {
    *  onExit, but the supervisor ignores a non-current child's exit so no spurious
    *  extra spawn occurs. */
   manualRestart(serviceId: string): { ok: boolean; reason?: string } {
-    if (serviceId !== 'hooks') return { ok: false, reason: 'unknown-service' }
+    if (serviceId !== SERVICE_ID.hooks) return { ok: false, reason: 'unknown-service' }
     if (this.sup.isShuttingDown()) return { ok: false, reason: 'shutting-down' }
     if (this.proxy?.isInProcessFallback()) return { ok: false, reason: 'fallback' } // live revert deferred (spec §7)
     // Turned off in Settings (B8): a restart must not turn it back on.
@@ -262,7 +267,8 @@ export class ServiceSupervisor {
     // Turned on again in Settings is a fresh start, not a restart, even when
     // earlier crashes are still counted.
     const restart = this.sup.getRestarts() > 0 && !this.turningOn
-    this.health = { ...this.health, state: restart ? 'restarting' : 'starting' }
+    // The new child has bound nothing yet, so the one before it is not shown.
+    this.health = { ...this.health, ...NO_CHILD, state: restart ? 'restarting' : 'starting' }
     this.appendLog('info', 'child-up', `hooks child forked (${this.turningOn ? 'turned on' : `restart ${this.sup.getRestarts()}`})`)
     this.pushHealth()
     void this.proxy.start()
@@ -271,8 +277,10 @@ export class ServiceSupervisor {
   private onChildExit(forkError?: Error): void {
     // Turned off (B8): the supervisor leaves it down, so this is not a crash
     // on its way to a restart. It stays shown as stopped.
+    // In all three cases below no child is up: the row shows no process id, no
+    // uptime and no stalls (its restart count, last error and event count stay).
     if (!this.sup.isWanted()) {
-      this.health = { ...this.health, state: 'stopped' }
+      this.health = { ...this.health, ...NO_CHILD, state: 'stopped' }
       this.appendLog('info', 'exited-while-off', 'hooks child exited while turned off; not restarted')
       this.pushHealth()
       return
@@ -280,10 +288,10 @@ export class ServiceSupervisor {
     if (forkError) {
       // The fork itself failed (a restart, or turned on again): shown as a
       // crash with the reason; the supervisor's backoff tries the next one.
-      this.health = { ...this.health, state: 'crashed', lastError: { message: `fork failed: ${forkError.message}`, ts: this.now() } }
+      this.health = { ...this.health, ...NO_CHILD, state: 'crashed', lastError: { message: `fork failed: ${forkError.message}`, ts: this.now() } }
       this.appendLog('error', 'fork-failed', `hooks child could not be forked: ${forkError.message}`)
     } else {
-      this.health = { ...this.health, state: 'crashed', lastError: { message: 'child exited', ts: this.now() } }
+      this.health = { ...this.health, ...NO_CHILD, state: 'crashed', lastError: { message: 'child exited', ts: this.now() } }
       this.appendLog('error', 'crashed', 'hooks child exited unexpectedly')
     }
     this.pushHealth()
@@ -293,7 +301,9 @@ export class ServiceSupervisor {
   private activateFallback(): void {
     this.appendLog('warn', 'fallback', 'falling open to in-process gateway')
     this.child?.kill()   // free the port BEFORE the in-process gateway binds (mutual exclusion)
-    this.health = { ...this.health, host: 'in-process-fallback', state: 'degraded', restartCount: this.sup.getRestarts() }
+    // The child is gone: its process id, its uptime and its event-loop stalls
+    // are not the in-process gateway's, so the row stops showing them.
+    this.health = { ...this.health, ...NO_CHILD, host: 'in-process-fallback', state: 'degraded', restartCount: this.sup.getRestarts() }
     this.proxy?.failOpen()
     this.pushHealth()
   }

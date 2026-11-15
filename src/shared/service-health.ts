@@ -1,6 +1,43 @@
 export type ServiceState =
   | 'starting' | 'listening' | 'degraded' | 'restarting' | 'crashed' | 'stopped'
-export type ServiceHost = 'utility-process' | 'in-process-fallback'
+/** Where a service runs. Each row states its own; there is no default.
+ *  - utility-process: its own child process, forked and watched by a supervisor.
+ *  - in-process: inside the app's main process.
+ *  - in-process-fallback: a utility-process service whose child could not be
+ *    kept up, now running inside the main process instead (the hooks gateway).
+ *  - helper: kept for the per-machine helper. No row uses it yet. */
+export type ServiceHost = 'utility-process' | 'in-process' | 'in-process-fallback' | 'helper'
+
+/** The ids of the rows the service registry lists, in the order it lists them. */
+export const SERVICE_ID = {
+  hooks: 'hooks',
+  logging: 'logging',
+  tokenomics: 'tokenomics',
+  watchdog: 'watchdog',
+  mcp: 'mcp',
+} as const
+export type ServiceId = (typeof SERVICE_ID)[keyof typeof SERVICE_ID]
+
+/** The name each row shows. Kept in one place, so a row reads the same whether
+ *  its owner wrote it or the registry did (for a service that is not there). */
+export const SERVICE_LABEL: Record<ServiceId, string> = {
+  hooks: 'Hooks gateway',
+  logging: 'Session logging',
+  tokenomics: 'Tokenomics',
+  watchdog: 'Watchdog',
+  mcp: 'MCP server',
+}
+
+/** What a service was measured to cost, when something measures it. Each
+ *  figure is optional: a row shows only the ones it was given. */
+export interface ServiceMeasured {
+  /** Share of one CPU core the service used over the sample, in percent. */
+  cpuPercent?: number
+  /** Files the service's last scan of the disk touched. */
+  filesTouchedLastScan?: number
+  /** When the figures were taken (ms since the epoch). */
+  sampledAt: number
+}
 
 export interface ServiceHealth {
   id: string
@@ -24,6 +61,8 @@ export interface ServiceHealth {
   // last worker health beat (the worker is synchronous, so a beat == a flush point).
   dbBytes?: number
   lastFlushAt?: number
+  /** Measured cost, OPTIONAL: absent until something measures this service. */
+  measured?: ServiceMeasured
 }
 
 export interface ServiceLogEntry {
@@ -112,9 +151,11 @@ export interface PtyIntegrityReport {
   generation?: string
 }
 
-export function createInitialHealth(id: string, label: string): ServiceHealth {
+/** A fresh row. The caller says where the service runs, so a row never shows
+ *  a host it did not state. */
+export function createInitialHealth(id: string, label: string, host: ServiceHost): ServiceHealth {
   return {
-    id, label, host: 'in-process-fallback', state: 'starting',
+    id, label, host, state: 'starting',
     port: null, pid: null, startedAt: null,
     inFlight: 0, eventsTotal: 0, dropsTotal: 0, throughputPerSec: 0,
     restartCount: 0, lastError: null,

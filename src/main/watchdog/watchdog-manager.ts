@@ -24,7 +24,7 @@ import { logInfo, logWarn, logError } from '../debug-logger'
 import { IPC } from '../../shared/ipc-channels'
 import type { HookEvent } from '../../shared/hook-types'
 import { stallsLastMin as readMainLoopStalls } from '../services/loop-stall-monitor'
-import { createInitialHealth } from '../../shared/service-health'
+import { createInitialHealth, SERVICE_ID, SERVICE_LABEL } from '../../shared/service-health'
 import type { DiagnosticsSnapshot, WatchdogMonitorSnapshot, WatchdogSessionMonitor } from '../../shared/service-health'
 
 // Only a usage-limit-scale tail is needed for detection (mirrors
@@ -849,7 +849,7 @@ export class WatchdogManager {
    *  pane read (paneHasMonitors) runs once per push, not twice. */
   getDiagnosticsSnapshot(mon: WatchdogMonitorSnapshot = this.getMonitorSnapshot()): DiagnosticsSnapshot {
     const now = this.now()
-    const health = createInitialHealth('watchdog', 'Watchdog')
+    const health = createInitialHealth(SERVICE_ID.watchdog, SERVICE_LABEL.watchdog, 'in-process')
     health.state = this.entries.size > 0 ? 'listening' : 'stopped'
     health.startedAt = this.startedAt
     health.inFlight = mon.waitingSessions
@@ -863,7 +863,7 @@ export class WatchdogManager {
    *  next PTY spawn, so a manual restart tears down current watchers under the
    *  current settings rather than resurrecting mid-session give-up latches. */
   manualRestart(serviceId: string): { ok: boolean; reason?: string } {
-    if (serviceId !== 'watchdog') return { ok: false, reason: 'unknown-service' }
+    if (serviceId !== SERVICE_ID.watchdog) return { ok: false, reason: 'unknown-service' }
     this.disposeAll()
     return { ok: true }
   }

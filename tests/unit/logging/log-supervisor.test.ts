@@ -96,6 +96,16 @@ describe('LogSupervisor', () => {
     expect(h.sup.getDiagnosticsSnapshot().services[0].state).toBe('starting')
   })
 
+  it('the logging row is a utility process from the start, before the worker is ready', () => {
+    // There is no in-process logging, so the row never reads as a fallback.
+    const h = makeHarness()
+    expect(h.sup.getDiagnosticsSnapshot().services[0].host).toBe('utility-process')
+    h.sup.start()
+    const svc = h.sup.getDiagnosticsSnapshot().services[0]
+    expect(svc.state).toBe('starting')
+    expect(svc.host).toBe('utility-process')
+  })
+
   it('surfaces the forked worker pid onto the diagnostics pill at fork', () => {
     const h = makeHarness()
     h.sup.start()
@@ -247,6 +257,57 @@ describe('LogSupervisor', () => {
     expect(h.sup.getDiagnosticsSnapshot().services[0].restartCount).toBe(1)
     // the fresh worker is told to re-open the DB (it re-reconciles itself)
     expect(h.current().posts).toContainEqual({ type: 'open', dbPath: '/tmp/fake-transcripts.db' })
+  })
+
+  describe('the row follows the current worker', () => {
+    const row = (h: Harness) => h.sup.getDiagnosticsSnapshot().services[0]
+
+    it('a crash leaves no pid or uptime; the next worker has its pid but no uptime until ready', () => {
+      const h = makeHarness()
+      h.sup.start()
+      expect([row(h).pid, row(h).startedAt]).toEqual([4242, null])   // forked, not ready: a live process, no uptime yet
+      h.current().emit({ type: 'ready' })
+      expect(row(h).startedAt).toBe(1000)
+      h.tick(4000)
+      h.current().triggerExit()
+      expect(row(h)).toMatchObject({ state: 'crashed', pid: null, startedAt: null, lastError: { message: 'worker exited' } })
+      vi.advanceTimersByTime(300)   // first backoff: the next worker is forked, not ready yet
+      expect(row(h)).toMatchObject({ state: 'restarting', pid: 4242, startedAt: null, restartCount: 1 })
+      h.tick(2000)
+      h.current().emit({ type: 'ready' })
+      expect(row(h)).toMatchObject({ state: 'listening', startedAt: 7000 })
+    })
+
+    it('a manual restart shows the new worker with no uptime until it is ready', () => {
+      const h = makeHarness()
+      h.sup.start()
+      h.current().emit({ type: 'ready' })
+      h.tick(3000)
+      expect(h.sup.manualRestart('logging')).toEqual({ ok: true })
+      expect(row(h)).toMatchObject({ state: 'starting', pid: 4242, startedAt: null })
+      h.tick(1000)
+      h.current().emit({ type: 'ready' })
+      expect(row(h).startedAt).toBe(5000)
+    })
+
+    it('a fork that fails leaves no pid or uptime of the worker it was to replace', () => {
+      const h = makeHarness()
+      h.sup.start()
+      h.current().emit({ type: 'ready' })
+      h.forkSpy.mockImplementationOnce(() => { throw new Error('spawn refused') })
+      h.sup.manualRestart('logging')
+      expect(row(h)).toMatchObject({ state: 'crashed', pid: null, startedAt: null, lastError: { message: 'fork failed: spawn refused' } })
+    })
+
+    it('a worker that never recovers is degraded with no pid or uptime, and a manual restart brings the pid back but not the uptime', () => {
+      const h = makeHarness({ maxRestarts: 1 })
+      h.sup.start()
+      h.current().emit({ type: 'ready' })
+      for (let i = 0; i < 2; i++) { h.current().triggerExit(); vi.advanceTimersByTime(5000) }
+      expect(row(h)).toMatchObject({ state: 'degraded', pid: null, startedAt: null })
+      h.sup.manualRestart('logging')
+      expect(row(h)).toMatchObject({ state: 'starting', pid: 4242, startedAt: null })
+    })
   })
 
   it('reaches degraded permanently after maxRestarts (no in-process fallback / no further forks)', () => {

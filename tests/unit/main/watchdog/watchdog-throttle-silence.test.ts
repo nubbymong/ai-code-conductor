@@ -248,6 +248,14 @@ describe('watchdog services-view snapshots', () => {
     expect(snap.services[0].state).toBe('stopped')
   })
 
+  it('the watchdog row says it runs inside the main process, watching or not', () => {
+    // It has no child and never fell back from one, so it is not a fallback.
+    const m = new WatchdogManager(makeHost())
+    expect(m.getDiagnosticsSnapshot().services[0].host).toBe('in-process')
+    m.startWatchdog('s1')
+    expect(m.getDiagnosticsSnapshot().services[0].host).toBe('in-process')
+  })
+
   it('counts state-change events into eventsTotal (the arm-time push included)', () => {
     const m = new WatchdogManager(makeHost())
     m.startWatchdog('s1')

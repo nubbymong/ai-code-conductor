@@ -3,6 +3,8 @@ import { TokenomicsSupervisor } from '../../../src/main/tokenomics/tk-supervisor
 import { FakeTkWorkerTransport } from '../../../src/main/tokenomics/tk-worker-transport'
 import type { ToTkWorker } from '../../../src/main/tokenomics/tk-worker-transport'
 import type { ForkedTkWorker } from '../../../src/main/tokenomics/fork-tokenomics-worker'
+import { IPC } from '../../../src/shared/ipc-channels'
+import type { DiagnosticsSnapshot } from '../../../src/shared/service-health'
 
 // The service's own lines in the main debug log, kept out of the real logger.
 const logs = vi.hoisted(() => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
@@ -232,12 +234,12 @@ describe('TokenomicsSupervisor', () => {
 
 // The usage index on the one supervisor (planning #307, B9): its while-down
 // buffer is bounded, and its restart budget is given back after a period of
-// stable running (it had no way back at all: it has no manual restart).
+// stable running (it had no way back at all then: it had no manual restart).
 const STABLE_MS = 5 * 60_000
 
 interface Kid { t: FakeTkWorkerTransport; got: ToTkWorker[]; exit: () => void; kills: number }
 
-function harness(opts: { maxRestarts?: number; stableResetMs?: number; autoReady?: boolean } = {}) {
+function harness(opts: { maxRestarts?: number; stableResetMs?: number; autoReady?: boolean; now?: () => number; emit?: (channel: string, payload: unknown) => void } = {}) {
   const { autoReady = true, ...supOpts } = opts
   const kids: Kid[] = []
   const fork = vi.fn((): ForkedTkWorker => {
@@ -347,7 +349,7 @@ describe('usage index: the restart budget recovers (B9)', () => {
     expect(h.fork).toHaveBeenCalledTimes(3)
     await expect(h.sup.query('summary', {})).rejects.toThrow('degraded=true')
     vi.advanceTimersByTime(10 * STABLE_MS)
-    expect(h.fork).toHaveBeenCalledTimes(3)   // degraded is for the run
+    expect(h.fork).toHaveBeenCalledTimes(3)   // degraded until a restart is asked for
   })
 
   it('a worker that never becomes ready gives nothing back', () => {
@@ -460,5 +462,245 @@ describe('usage index: what it says in the debug log', () => {
     vi.advanceTimersByTime(1000)                    // the second step of the backoff
     expect(h.fork).toHaveBeenCalledTimes(3)
     await expect(h.sup.query('summary', {})).resolves.toEqual([{ ok: 'summary' }])
+  })
+})
+
+// The usage index as one row in the service registry
+// (src/main/services/service-registry.ts): where the worker is now, told to
+// the Services view when it changes.
+const rowOf = (sup: TokenomicsSupervisor) => sup.getDiagnosticsSnapshot().services[0]
+
+describe('usage index: its Services row', () => {
+  let h: ReturnType<typeof harness> | undefined
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => { h?.sup.shutdown(); h = undefined; vi.useRealTimers() })
+
+  it('is one Tokenomics row on a utility process, with no log of its own', () => {
+    h = harness()
+    const snap = h.sup.getDiagnosticsSnapshot()
+    expect(snap.services).toHaveLength(1)
+    expect(snap.log).toEqual([])
+    const r = snap.services[0]
+    expect([r.id, r.label, r.host]).toEqual(['tokenomics', 'Tokenomics', 'utility-process'])
+  })
+
+  it('reads stopped before it is started, starting once forked, listening once ready, stopped after shutdown', () => {
+    const t = new FakeTkWorkerTransport()
+    const sup = new TokenomicsSupervisor({ forkChild: (() => ({ transport: t, kill: () => {}, onExit: () => {} })) as any, ...baseOpts(), now: () => 5000 })
+    expect(rowOf(sup).state).toBe('stopped')
+    sup.start()
+    expect([rowOf(sup).state, rowOf(sup).startedAt]).toEqual(['starting', null])
+    t.emitToMain({ type: 'ready', firstIndexComplete: true, eventsTotal: 4200 })
+    const r = rowOf(sup)
+    expect([r.state, r.startedAt, r.eventsTotal, r.lastHeartbeatAt, r.lastError]).toEqual(['listening', 5000, 4200, 5000, null])
+    sup.shutdown()
+    expect(rowOf(sup).state).toBe('stopped')
+  })
+
+  it('reads crashed with the reason while the worker is down, and restarting once the next is forked', () => {
+    h = harness({ autoReady: false })
+    h.ready()
+    h.last().exit()
+    let r = rowOf(h.sup)
+    expect([r.state, r.lastError?.message]).toEqual(['crashed', 'worker exited'])
+    vi.advanceTimersByTime(300)                     // the backoff forks the next
+    r = rowOf(h.sup)
+    expect([r.state, r.restartCount]).toEqual(['restarting', 1])
+    h.ready()
+    expect(rowOf(h.sup).state).toBe('listening')
+  })
+
+  it('its start time is the ready time of the current worker: each ready sets it, and a worker that is down or not ready has none', () => {
+    let clock = 1000
+    h = harness({ autoReady: false, now: () => clock })
+    expect(rowOf(h.sup).startedAt).toBeNull()       // forked, not ready yet
+    h.ready()
+    expect(rowOf(h.sup).startedAt).toBe(1000)
+    clock = 5000
+    h.last().exit()                                 // crashed: no worker, so no age to show
+    expect(rowOf(h.sup).startedAt).toBeNull()
+    vi.advanceTimersByTime(300)                     // the next is forked, and is not ready yet
+    expect(rowOf(h.sup).startedAt).toBeNull()
+    clock = 6000
+    h.ready()                                       // a crash restart starts the age over
+    expect(rowOf(h.sup).startedAt).toBe(6000)
+    clock = 9000
+    expect(h.sup.manualRestart('tokenomics')).toEqual({ ok: true })
+    expect(rowOf(h.sup).startedAt).toBeNull()       // a manual restart does too, from the press
+    clock = 9500
+    h.ready()
+    expect(rowOf(h.sup).startedAt).toBe(9500)
+  })
+
+  it('reads degraded once the restart budget is spent', () => {
+    h = harness({ maxRestarts: 1, autoReady: false })
+    h.last().exit(); vi.advanceTimersByTime(300)    // the one restart
+    h.last().exit(); vi.advanceTimersByTime(60_000)
+    expect(h.fork).toHaveBeenCalledTimes(2)
+    expect(rowOf(h.sup).state).toBe('degraded')
+  })
+
+  it('reads degraded, with the worker\'s own error, when the worker is alive but never ready', () => {
+    h = harness({ autoReady: false })
+    h.last().t.emitToMain({ type: 'error', message: 'open failed: disk I/O error' })
+    const r = rowOf(h.sup)
+    expect([r.state, r.lastError?.message]).toEqual(['degraded', 'open failed: disk I/O error'])
+  })
+
+  it('an error from a worker that is listening leaves the row listening, with the error shown', () => {
+    h = harness()
+    h.last().t.emitToMain({ type: 'error', message: 'worker handling failed: x' })
+    const r = rowOf(h.sup)
+    expect([r.state, r.lastError?.message]).toEqual(['listening', 'worker handling failed: x'])
+  })
+
+  it('tells the Services view each time the row changes, and only on that channel', () => {
+    const pushed: string[] = []
+    const channels = new Set<string>()
+    h = harness({
+      autoReady: false,
+      emit: (channel, payload) => { channels.add(channel); pushed.push((payload as DiagnosticsSnapshot).services[0].state) },
+    })
+    expect(pushed).toEqual(['starting'])
+    h.ready()
+    expect(pushed).toEqual(['starting', 'listening'])
+    h.last().exit()
+    expect(pushed.at(-1)).toBe('crashed')
+    vi.advanceTimersByTime(300)
+    expect(pushed.at(-1)).toBe('restarting')
+    h.last().t.emitToMain({ type: 'error', message: 'open failed' })
+    expect(pushed.at(-1)).toBe('degraded')
+    expect([...channels]).toEqual([IPC.SERVICE_HEALTH_UPDATE])
+  })
+
+  it('a window that is gone does not break the service', async () => {
+    h = harness({ emit: () => { throw new Error('window gone') } })
+    await expect(h.sup.query('summary', {})).resolves.toEqual([{ ok: 'summary' }])
+    h.last().exit(); vi.advanceTimersByTime(300)
+    expect(h.fork).toHaveBeenCalledTimes(2)
+  })
+
+  it('counts the queries the worker has not answered yet as in flight', async () => {
+    h = harness()
+    expect(rowOf(h.sup).inFlight).toBe(0)
+    h.last().t.onWorker(() => {})                   // from here the worker answers nothing
+    const first = h.sup.query('summary', {})
+    const second = h.sup.query('by-model', {})
+    // Each is rejected below; a failed expectation must not leave one unhandled.
+    first.catch(() => {}); second.catch(() => {})
+    expect(rowOf(h.sup).inFlight).toBe(2)
+    h.sup.shutdown()                                // both are rejected
+    await expect(first).rejects.toThrow('shut down')
+    await expect(second).rejects.toThrow('shut down')
+    expect(rowOf(h.sup).inFlight).toBe(0)
+  })
+
+  it('shutdown tells the Services view the row is stopped', () => {
+    const pushed: string[] = []
+    h = harness({ emit: (_channel, payload) => { pushed.push((payload as DiagnosticsSnapshot).services[0].state) } })
+    pushed.length = 0
+    h.sup.shutdown()
+    expect(pushed).toEqual(['stopped'])
+  })
+})
+
+// Until the registry there was no way back for a usage index that ran out of
+// restarts: it stayed degraded until the app was relaunched.
+describe('usage index: a restart asked for from the Services panel', () => {
+  let h: ReturnType<typeof harness> | undefined
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => { h?.sup.shutdown(); h = undefined; vi.useRealTimers() })
+
+  it('answers unknown-service for any id but its own, and restarts nothing', () => {
+    h = harness()
+    for (const id of ['hooks', 'logging', 'watchdog', '', 'Tokenomics']) {
+      expect(h.sup.manualRestart(id)).toEqual({ ok: false, reason: 'unknown-service' })
+    }
+    expect(h.fork).toHaveBeenCalledTimes(1)
+    expect(h.kids[0].kills).toBe(0)
+  })
+
+  it('replaces the worker: the old one is killed, the new one is opened, and queries work again', async () => {
+    h = harness()
+    expect(h.sup.manualRestart('tokenomics')).toEqual({ ok: true })
+    expect(h.fork).toHaveBeenCalledTimes(2)
+    expect(h.kids[0].kills).toBe(1)
+    expect(h.kids[1].got[0]).toMatchObject({ type: 'open', dbPath: ':memory:' })
+    expect(rowOf(h.sup).state).toBe('listening')
+    await expect(h.sup.query('summary', {})).resolves.toEqual([{ ok: 'summary' }])
+  })
+
+  it('rejects at once the queries the old worker had not answered', async () => {
+    h = harness()
+    h.kids[0].t.onWorker(() => {})                  // from here the first worker answers nothing
+    const unanswered = h.sup.query('summary', {})
+    h.sup.manualRestart('tokenomics')
+    await expect(unanswered).rejects.toThrow('tokenomics worker restarted')
+  })
+
+  it('revives an index whose restart budget was spent, with the budget whole again', async () => {
+    h = harness({ maxRestarts: 1 })
+    h.last().exit(); vi.advanceTimersByTime(300)    // the one restart
+    h.last().exit(); vi.advanceTimersByTime(60_000)
+    expect(rowOf(h.sup).state).toBe('degraded')
+    await expect(h.sup.query('summary', {})).rejects.toThrow('degraded=true')
+    expect(h.sup.manualRestart('tokenomics')).toEqual({ ok: true })
+    const r = rowOf(h.sup)
+    expect([r.state, r.restartCount]).toEqual(['listening', 0])
+    await expect(h.sup.query('summary', {})).resolves.toEqual([{ ok: 'summary' }])
+    h.last().exit(); vi.advanceTimersByTime(300)    // a later crash is restarted again
+    expect(h.fork).toHaveBeenCalledTimes(4)
+  })
+
+  it('is declined while shutting down, and forks nothing', () => {
+    h = harness()
+    h.sup.shutdown()
+    expect(h.sup.manualRestart('tokenomics')).toEqual({ ok: false, reason: 'shutting-down' })
+    expect(h.fork).toHaveBeenCalledTimes(1)
+  })
+
+  it('is refused on a supervisor that was never started, as its stopped row says, and forks nothing', () => {
+    const fork = vi.fn()
+    const pushed: unknown[] = []
+    const sup = new TokenomicsSupervisor({ forkChild: fork as never, ...baseOpts(), emit: (_channel, payload) => { pushed.push(payload) } })
+    try {
+      expect(rowOf(sup).state).toBe('stopped')
+      expect(sup.manualRestart('tokenomics')).toEqual({ ok: false, reason: 'stopped' })
+      expect(fork).not.toHaveBeenCalled()
+      expect(rowOf(sup).state).toBe('stopped')
+      expect(pushed).toEqual([])
+    } finally {
+      sup.shutdown()
+    }
+  })
+
+  it('when the new fork fails the row reads crashed with the reason, and the backoff forks the next', () => {
+    h = harness()
+    h.fork.mockImplementationOnce(() => { throw new Error('no fork') })
+    expect(h.sup.manualRestart('tokenomics')).toEqual({ ok: true })
+    const r = rowOf(h.sup)
+    expect([r.state, r.lastError?.message]).toEqual(['crashed', 'fork failed: no fork'])
+    vi.advanceTimersByTime(300)
+    expect(rowOf(h.sup).state).toBe('listening')
+  })
+
+  it('a replaced worker\'s late error is not held against the new one', () => {
+    h = harness({ autoReady: false })
+    h.ready()
+    h.sup.manualRestart('tokenomics')               // worker 2 is forked, not ready yet
+    h.kids[0].t.emitToMain({ type: 'error', message: 'late, from the old worker' })
+    expect(h.sup.getIndexStatus().error).toBeNull()
+    const r = rowOf(h.sup)
+    expect([r.state, r.lastError]).toEqual(['starting', null])
+  })
+
+  it('tells the Services view the row changed', () => {
+    const pushed: string[] = []
+    h = harness({ autoReady: false, emit: (_channel, payload) => { pushed.push((payload as DiagnosticsSnapshot).services[0].state) } })
+    h.ready()
+    pushed.length = 0
+    h.sup.manualRestart('tokenomics')
+    expect(pushed.length).toBeGreaterThan(0)
+    expect(pushed.at(-1)).toBe('starting')
   })
 })

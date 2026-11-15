@@ -403,7 +403,7 @@ describe('hooks service: a replaced child\'s late bound', () => {
     expect(h.health().restartCount).toBe(3)
     h.emitted.length = 0
     h.kids[2].t.emitToParent({ type: 'bound', port: 19431, pid: 99 })   // a child that has already been replaced
-    expect(h.health()).toMatchObject({ state: 'restarting', pid: 7, port: 19430 })
+    expect(h.health()).toMatchObject({ state: 'restarting', pid: null, startedAt: null, port: 19430 })
     expect(h.proxy.status().listening).toBe(false)
     expect(h.emitted).toEqual([])
     vi.advanceTimersByTime(STABLE_MS + 10)
@@ -416,7 +416,7 @@ describe('hooks service: a replaced child\'s late bound', () => {
     h.bound()
     expect(h.sup.manualRestart('hooks')).toEqual({ ok: true })
     h.kids[0].t.emitToParent({ type: 'bound', port: 19431, pid: 99 })
-    expect(h.health()).toMatchObject({ state: 'starting', pid: 7 })
+    expect(h.health()).toMatchObject({ state: 'starting', pid: null, startedAt: null })
     expect(h.proxy.status().listening).toBe(false)
     h.bound()                                           // the current child's own report is taken
     expect(h.health().state).toBe('listening')
