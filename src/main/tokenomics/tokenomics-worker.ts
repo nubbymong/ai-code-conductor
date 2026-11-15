@@ -566,7 +566,15 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
 
   function ingestClaudeFile(file: string): number {
     let st: nodeFs.Stats
-    try { st = fs.statSync(file) } catch { return 0 }
+    try { st = fs.statSync(file) } catch (err) {
+      // A transcript that is gone is done with (its folder changed too, so it
+      // is listed again). Any other failure (a file in use, a share that does
+      // not answer) may pass: it is work outstanding, so no folder is
+      // remembered over it and the next walk asks again.
+      const code = (err as { code?: unknown } | null)?.code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') { sweepFailed.add(file); logw('warn', `stat failed for ${file}: ${String(err)}`) }
+      return 0
+    }
     const cursor = db!.getFileCursor(file)
     let offset = cursor ? cursor.lastOffset : 0
     if (cursor && st.size < cursor.lastOffset) offset = 0 // truncated/rotated -> re-read
@@ -1141,15 +1149,21 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
       const files = [...dirtyClaude]
       dirtyClaude.clear()
       let done = 0
+      let failedNow = false
       for (const f of files) {
         sweepFailed.delete(f) // tried again now; it goes back in if it fails
         ingestClaudeFile(f)
+        if (sweepFailed.has(f)) failedNow = true
         if (++done % YIELD_EVERY === 0) { await new Promise<void>((r) => setImmediate(r)); if (!db) return }
       }
       if (!db) return
       // A reported transcript left part-read: the folders are not trusted at
       // the full walk that follows, so it lists them again.
       if (sweepPending) { fullSweepDue = true; subagentFolders = new Map() }
+      // One that could not be opened or read: the full walk clears the failure
+      // before it starts, so without this it would skip the folder the
+      // transcript is in and never ask for it again.
+      if (failedNow) subagentFolders = new Map()
       if (settleDue()) await settleAccounts('incremental')
       if (!db) return
       // Not drained while a Rescan waits for its pass (2.1.3-beta.4): this
@@ -1345,6 +1359,12 @@ export function createTokenomicsWorker(host: TkWorkerHostTransport, deps: TkWork
     let due = false
     for (const [dir, perFile] of named) {
       if (watchers.has(dir) || !fs.existsSync(dir)) continue
+      // The Claude folder has no watcher (it failed, or is being attached
+      // again): a transcript grown in place while none ran was reported to no
+      // one, and its folder did not change, so no folder is remembered. The
+      // walk that follows (this one makes it due) lists every folder, and so
+      // does each one while the folder cannot be watched.
+      if (dir === claudeDir) subagentFolders = new Map()
       const wch = watchDir(dir, perFile)
       if (wch) watchers.set(dir, wch)
       due = true

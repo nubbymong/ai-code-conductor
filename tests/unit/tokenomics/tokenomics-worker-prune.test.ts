@@ -113,6 +113,12 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
   const openFailsOnce = new Set<string>()
   /** The callbacks the worker gave each folder watcher, to report a write by hand. */
   let watchCallbacks: Array<{ dir: string; cb: (event: string, filename: string) => void }> = []
+  /** The error callbacks of the watchers, to break one by hand. */
+  let watchErrors: Array<{ dir: string; cb: (err: unknown) => void }> = []
+  /** Folders whose watcher cannot be made. */
+  const watchFails = new Set<string>()
+  /** Files whose next size check fails, once, with an error that is not "gone". */
+  const statFailsOnce = new Set<string>()
 
   const wrapped = new Proxy(realFs, {
     get(target, prop) {
@@ -124,6 +130,7 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
         }
         case 'statSync': return (p: string, o?: unknown) => {
           statted.push(String(p))
+          if (statFailsOnce.delete(String(p))) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
           return (realFs.statSync as (p: string, o?: unknown) => unknown)(p, o)
         }
         case 'openSync': return (p: string, flags: string) => {
@@ -132,8 +139,9 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
           return realFs.openSync(p, flags)
         }
         case 'watch': return (dir: string, _o: unknown, cb?: (event: string, filename: string) => void) => {
+          if (watchFails.has(String(dir))) throw Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' })
           if (cb) watchCallbacks.push({ dir: String(dir), cb })
-          return { close() {}, on() {} }
+          return { close() {}, on(ev: string, errCb: (err: unknown) => void) { if (ev === 'error') watchErrors.push({ dir: String(dir), cb: errCb }) } }
         }
         case 'realpathSync': return Object.assign((p: string): string => realFs.realpathSync(p), {
           native: (p: string): string => {
@@ -214,7 +222,7 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
     db.cursors.clear(); db.meta.clear(); db.events = 0; db.failNextSetMeta = false; db.deleteCalls = []; db.failNextList = false
     clearCounts()
     completes = 0; infos = []; warnings = []; errors = []; waiters = []; transport = null
-    listFails.clear(); realPaths.clear(); unresolvable.clear(); openFailsOnce.clear(); watchCallbacks = []
+    listFails.clear(); realPaths.clear(); unresolvable.clear(); openFailsOnce.clear(); watchCallbacks = []; watchErrors = []; watchFails.clear(); statFailsOnce.clear()
   })
   afterEach(() => {
     try { stopWorker?.() } catch { /* stopped */ }
@@ -522,6 +530,99 @@ describe('tokenomics worker: dead progress rows and subagent folders (#306)', ()
       expect(opened.filter((p) => p === agent('agent-a')).length).toBeGreaterThanOrEqual(2)
       expect(db.cursors.has(agent('agent-a'))).toBe(true)
       expect(db.events).toBe(5)
+    })
+
+    it('a transcript the watcher reported, that could not be opened, is tried again at the next walk though its folder has not changed', async () => {
+      plantSubagents()
+      await start()
+      expect(db.cursors.has(agent('agent-a'))).toBe(true)
+      // It grows in place (its folder is not touched), is reported, and the read fails.
+      realFs.appendFileSync(agent('agent-a'), line('grown'))
+      const size = realFs.statSync(agent('agent-a')).size
+      openFailsOnce.add(agent('agent-a'))
+      const reported = nextSweep('the reported read')
+      for (const w of watchCallbacks) if (w.dir === claudeDir) w.cb('change', path.relative(claudeDir, agent('agent-a')))
+      await reported
+      await settle()
+      expect(db.cursors.get(agent('agent-a'))?.lastOffset ?? 0).toBeLessThan(size)
+      // The full walk clears the failure as it starts: it has to list the folder to find the transcript again.
+      await fullPass()
+      expect(db.cursors.get(agent('agent-a'))?.lastOffset).toBe(size)
+      expect(db.events).toBe(6)
+    })
+
+    it('a transcript whose size could not be asked, in a folder that was listed, is asked about again at the next walk', async () => {
+      plantSubagents()
+      await start()
+      // A transcript is added and the folder left alone for a while after: it is listed, remembered...
+      make(agent('agent-b'), 'sub-b')
+      age(subs())
+      // ...except that the size of the new transcript cannot be asked this once.
+      statFailsOnce.add(agent('agent-b'))
+      await fullPass()
+      expect(db.cursors.has(agent('agent-b'))).toBe(false)
+      expect(warnings.some((m) => /stat failed for/.test(m))).toBe(true)
+      clearCounts()
+      await fullPass()
+      expect(listed).toContain(subs())
+      expect(db.cursors.has(agent('agent-b'))).toBe(true)
+      expect(db.events).toBe(6)
+    })
+
+    it('a transcript that is gone when its size is asked is no failure', async () => {
+      plantSubagents()
+      await start()
+      make(agent('agent-b'), 'sub-b')
+      age(subs())
+      realFs.rmSync(agent('agent-a'))
+      await fullPass()
+      expect(warnings.filter((m) => /stat failed for/.test(m))).toEqual([])
+    })
+
+    describe('a Claude folder with no watcher is read in full, whatever was remembered', () => {
+      /** A transcript grows in place: its folder, remembered as it was, does not change. */
+      function growInPlace(id: string): number {
+        realFs.appendFileSync(agent('agent-a'), line(id))
+        return realFs.statSync(agent('agent-a')).size
+      }
+
+      it('the watcher fails and is made again: what was written while it was down is read at that walk', async () => {
+        plantSubagents()
+        await start()
+        // Remembered: an unchanged folder is not listed at a walk.
+        clearCounts()
+        await fullPass()
+        expect(listed).not.toContain(subs())
+        // The watcher breaks, and a transcript grows while none runs.
+        const broken = watchErrors.filter((w) => w.dir === claudeDir)
+        expect(broken.length).toBeGreaterThan(0)
+        for (const w of broken) w.cb(new Error('the watcher broke'))
+        const size = growInPlace('while-down')
+        clearCounts()
+        await fullPass()
+        // The walk that sees it made again lists the folder and reads the growth.
+        expect(listed).toContain(subs())
+        expect(db.cursors.get(agent('agent-a'))?.lastOffset).toBe(size)
+        expect(db.events).toBe(6)
+      })
+
+      it('the watcher cannot be made again: every walk lists the folders, so each write is read', async () => {
+        plantSubagents()
+        await start()
+        await fullPass()
+        for (const w of watchErrors.filter((x) => x.dir === claudeDir)) w.cb(new Error('the watcher broke'))
+        watchFails.add(claudeDir)
+        let size = growInPlace('down-1')
+        await fullPass()
+        expect(db.cursors.get(agent('agent-a'))?.lastOffset).toBe(size)
+        // The next walk would have found the folder as the one before left it.
+        size = growInPlace('down-2')
+        clearCounts()
+        await fullPass()
+        expect(listed).toContain(subs())
+        expect(db.cursors.get(agent('agent-a'))?.lastOffset).toBe(size)
+        expect(db.events).toBe(7)
+      })
     })
 
     it('a transcript removed from a remembered folder changes it, so the folder is listed and the transcript\'s row is dropped', async () => {
