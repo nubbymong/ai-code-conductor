@@ -16,6 +16,15 @@
  *
  * changelog.ts entries carry typed changes: 'feature' | 'fix' | 'improvement'.
  * We map those to Keep-a-Changelog section headings (Added / Fixed / Changed).
+ *
+ * An entry may also carry `warnings`: plain sentences a user should read before
+ * relying on that release. They are written FIRST in the release's block, under
+ * a "Warnings" heading, in CHANGELOG.md and in the release notes alike. A
+ * release with no warnings renders exactly as it did before warnings existed.
+ *
+ * Exit codes: 0 done; 1 CHANGELOG.md is stale (--check), or the changelog
+ * could not be read; 2 --notes without a version; 3 a release's "warnings"
+ * value is not a list of sentences (EXIT_BAD_WARNINGS, below).
  */
 
 const fs = require('fs')
@@ -141,6 +150,48 @@ function loadChangelog() {
   return entries
 }
 
+// The heading the warnings of a release are written under. It is the first
+// thing in the release's block, so nobody reads the changes before them.
+const WARNINGS_HEADING = 'Warnings'
+
+// The exit code of a run that met a "warnings" value it cannot print. It has
+// a code no other failure uses because the release workflow tells it apart:
+// its notes step falls back to a short release body when the generator fails
+// for any other reason, and stops the release on this one, so a release never
+// goes out with its warnings missing (.github/workflows/release.yml,
+// "Generate release notes"; a test pins the two together).
+const EXIT_BAD_WARNINGS = 3
+const BAD_WARNINGS = 'BAD_WARNINGS'
+
+/**
+ * The warnings of one entry, ready to print: one line each (line breaks and
+ * runs of spaces folded), blank ones dropped. Empty when the entry has none.
+ *
+ * A value that is not a list of strings is refused by name. Dropping it would
+ * be quiet, and a warning that does not print is the one failure this field
+ * cannot afford. The typecheck catches it in changelog.ts; this catches
+ * whatever gets past the typecheck.
+ */
+function warningsOf(entry) {
+  if (entry.warnings === undefined) return []
+  if (!Array.isArray(entry.warnings) || entry.warnings.some((w) => typeof w !== 'string')) {
+    const err = new Error(`Changelog entry ${entry.version}: "warnings" must be a list of sentences (strings).`)
+    err.code = BAD_WARNINGS
+    throw err
+  }
+  return entry.warnings.map((w) => w.replace(/\s+/g, ' ').trim()).filter((w) => w.length > 0)
+}
+
+/** Render the warnings block for one entry (shared by file + notes). */
+function renderWarnings(entry) {
+  const warnings = warningsOf(entry)
+  if (warnings.length === 0) return []
+  const lines = [`### ${WARNINGS_HEADING}`]
+  for (const w of warnings) lines.push(`- ${w}`)
+  lines.push('')
+  return lines
+}
+
 /** Render the grouped change sections for one entry (shared by file + notes). */
 function renderSections(entry) {
   const lines = []
@@ -172,6 +223,7 @@ function renderChangelog(entries) {
   for (const entry of entries) {
     out.push(`## [${entry.version}] - ${entry.date}`)
     out.push('')
+    out.push(...renderWarnings(entry))
     if (entry.highlights) {
       out.push(`> ${entry.highlights}`)
       out.push('')
@@ -193,6 +245,7 @@ function renderNotes(entries, version) {
   const entry = entries.find((e) => e.version === version)
   if (!entry) return ''
   const out = []
+  out.push(...renderWarnings(entry))
   if (entry.highlights) {
     out.push(entry.highlights)
     out.push('')
@@ -239,7 +292,27 @@ function main() {
   console.log(`Wrote ${path.relative(PROJECT_ROOT, OUTPUT)} (${entries.length} versions).`)
 }
 
-main()
+/**
+ * Run the command line (`run`, by default main) and return its exit code.
+ *
+ * A "warnings" value that cannot be printed ends the run with
+ * EXIT_BAD_WARNINGS and one line on stderr naming the release. Every other
+ * failure is thrown on, so it ends the process the way it always did.
+ */
+function runCli(run = main) {
+  try {
+    run()
+    return 0
+  } catch (err) {
+    if (!err || err.code !== BAD_WARNINGS) throw err
+    console.error(err.message)
+    return EXIT_BAD_WARNINGS
+  }
+}
 
-// Pure-logic export for unit testing.
-module.exports = { sliceArrayLiteral }
+// Run only when started directly (`node scripts/gen-changelog.js`), so a test
+// that loads this file for its pure functions does not rewrite CHANGELOG.md.
+if (require.main === module) process.exitCode = runCli()
+
+// Pure-logic exports for unit testing.
+module.exports = { sliceArrayLiteral, renderChangelog, renderNotes, runCli, EXIT_BAD_WARNINGS }

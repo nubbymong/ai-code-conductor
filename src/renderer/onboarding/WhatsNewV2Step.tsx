@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { releaseLine } from '../utils/versionLabel'
 import { compareVersions, finalRelease } from '../../shared/version-order'
 import { useSettingsStore } from '../stores/settingsStore'
 import { changelog, type ChangelogEntry } from '../changelog'
-import { entriesSince, newSince } from './upgrade-flow'
+import { entriesSince, newSince, releaseWarnings } from './upgrade-flow'
 import { showcasesFor, ShowcasePage } from './showcase-pages'
 import { ShowcaseVignette } from './ShowcaseVignette'
 import { RenamePageView } from './RenamePage'
@@ -327,10 +327,59 @@ export function fixesAndPolish(entries: readonly ChangelogEntry[], currentVersio
   return { heading: 'This update', items: [{ since: currentVersion, title: 'Fixes and polish.', desc }] }
 }
 
-/** The changelog entries the fixes-only line counts (see fixesAndPolish). */
+/** The changelog entries the fixes-only line counts (see fixesAndPolish),
+ *  and the releases whose warnings the summary lists (summaryWarnings): those
+ *  since `anchor`, or the running build's own entry when there is none. */
 export function fixesEntries(entries: readonly ChangelogEntry[], anchor: string | undefined, currentVersion: string): ChangelogEntry[] {
   const since = entriesSince(entries, anchor, currentVersion)
   return since.length > 0 ? since : entries.filter((e) => compareVersions(e.version, currentVersion) === 0)
+}
+
+/** The warnings of one release, as the summary page lists them. */
+export interface SummaryWarningGroup {
+  version: string
+  warnings: string[]
+}
+
+/**
+ * The warnings the summary page shows first (`ChangelogEntry.warnings`), for
+ * an upgrader: those of the release now running, and those of every release
+ * passed over on the way to it, newest first, each under its version. Someone
+ * who goes from beta.3 straight to beta.5 never ran beta.4, and its warnings
+ * were shown to them nowhere else.
+ *
+ * "Passed over" is every release newer than `seenVersion`: the version whose
+ * notes the user last saw, never newer than the last build that ran
+ * (seenVersionFor; the harness reads it from the boot snapshot). NOT the
+ * anchor: a tester's anchor is the last final release (whatsNewAnchorFor), so
+ * "since the anchor" would bring an earlier beta's warnings back on every
+ * later beta. When that version is not known, or nothing lies between it and
+ * this build (the same build again, a step back to an older build), the
+ * running release's own warnings are shown, as its notes are (fixesEntries).
+ *
+ * A sentence that a newer release repeats is shown once, under the newest
+ * release that carries it: a warning that still applies is restated in each
+ * release, and reading it twice says nothing more.
+ *
+ * A fresh install gets none: its page introduces the app, and a warning is
+ * told against the version a user came from. Every release's warnings stay in
+ * the Feature Guide's release history, each under its own version.
+ */
+export function summaryWarnings(
+  entries: readonly ChangelogEntry[],
+  currentVersion: string,
+  fresh: boolean,
+  seenVersion?: string,
+): SummaryWarningGroup[] {
+  if (fresh) return []
+  const told = new Set<string>()
+  const groups: SummaryWarningGroup[] = []
+  for (const release of fixesEntries(entries, seenVersion, currentVersion)) {
+    const warnings = releaseWarnings(release).filter((w) => !told.has(w))
+    for (const w of warnings) told.add(w)
+    if (warnings.length > 0) groups.push({ version: release.version, warnings })
+  }
+  return groups
 }
 
 /** What the summary page shows: its sections, the showcase pages behind it,
@@ -445,6 +494,7 @@ export function WhatsNewV2Step({
   hint = 'The next pages set these up, one at a time.',
   fresh = false,
   anchor,
+  seenVersion,
 }: {
   onNext: () => void
   /** Footer CTA. The harness passes "Continue" when this page ends the run —
@@ -459,6 +509,11 @@ export function WhatsNewV2Step({
    *  for the run from the boot snapshot. Never read from the live stamp: a
    *  stamp landing mid-run would reshape the pages under the user. */
   anchor?: string
+  /** The version whose notes this user last saw (seenVersionFor), fixed by
+   *  the harness for the run like the anchor. The warnings of every release
+   *  newer than it are shown (summaryWarnings); absent, the running
+   *  release's only. */
+  seenVersion?: string
 }) {
   const current = runningVersion()
   // P3.4 (row 14): with Claude Code off (or setup found no Claude Code and
@@ -478,6 +533,10 @@ export function WhatsNewV2Step({
   // no dots, no skip, the harness CTA; and a fixes-only update has none.
   const { sections, showcases, fixesOnly } = summaryContent(view, changelog, current)
   const count = sections.reduce((n, s) => n + s.items.length, 0)
+  // Warnings lead the summary: the running release's, and those of the
+  // releases passed over on the way to it (summaryWarnings).
+  const warnings = summaryWarnings(changelog, current, fresh, seenVersion)
+  const warningsLabelId = useId()
   // #525: pre-rename upgraders AND fresh installs (owner call, canvas R1)
   // open on the rename/roadmap page. The 2.0 line predates both the rename
   // and the roadmap, so it never shows it.
@@ -486,6 +545,32 @@ export function WhatsNewV2Step({
   const [pageIx, setPageIx] = useState(0)
   const total = prelude + 1 + showcases.length
   const isLast = pageIx === total - 1
+  // The run is not left before its warnings were on screen. The summary is
+  // not always the first page (the page ahead of it has a Skip of its own),
+  // and the dots can jump past it: leaving then lands on the summary once,
+  // and leaves from there. With no warnings, leaving is what it always was.
+  const summaryShown = useRef(false)
+  useEffect(() => {
+    if (pageIx === summaryIx) summaryShown.current = true
+  }, [pageIx, summaryIx])
+  // The button that sent the user to the summary keeps focus, and the block
+  // that appeared is not what a screen reader is at. So when leaving is turned
+  // back to the summary, focus goes to the warnings heading once it renders:
+  // it is named by the block, and the next Skip is then a deliberate one. A
+  // summary opened any other way moves no focus.
+  const warningsHeading = useRef<HTMLHeadingElement>(null)
+  const focusWarnings = useRef(false)
+  useEffect(() => {
+    if (pageIx !== summaryIx || !focusWarnings.current) return
+    focusWarnings.current = false
+    warningsHeading.current?.focus()
+  }, [pageIx, summaryIx])
+  const leave = () => {
+    if (warnings.length > 0 && !summaryShown.current) {
+      focusWarnings.current = pageIx !== summaryIx
+      setPageIx(summaryIx)
+    } else onNext()
+  }
   const jumpTo = (id: string) => {
     const ix = showcases.findIndex((p) => p.id === id)
     if (ix >= 0) setPageIx(summaryIx + 1 + ix)
@@ -499,6 +584,22 @@ export function WhatsNewV2Step({
           <div className="p2-inner" style={{ width: 'min(920px, 95vw)' }}>
             <h2 className="h2" data-ux-id="whatsnew-heading">{fresh ? <>What you&apos;re getting</> : whatsNewHeading(anchor, current)}</h2>
             <p className="p2-sub" data-ux-id="whatsnew-sub">{whatsNewSubLine(count, showcases.length, fixesOnly)}</p>
+
+            {warnings.length > 0 && (
+              <div className="wn-warn" role="note" aria-labelledby={warningsLabelId} data-ux-id="whatsnew-warnings">
+                <h3 className="wn-warn-h" id={warningsLabelId} ref={warningsHeading} tabIndex={-1}>Warnings</h3>
+                {warnings.map((release) => (
+                  <div className="wn-warn-rel" key={release.version} data-ux-id={`whatsnew-summary-warnings-${release.version}`}>
+                    <h4 className="wn-warn-v">Version {release.version}</h4>
+                    <ul>
+                      {release.warnings.map((warning, i) => (
+                        <li key={i}>{warning}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="wn-sections" data-ux-id="whatsnew-sections">
               {sections.map((s) => (
@@ -556,13 +657,13 @@ export function WhatsNewV2Step({
           </div>
         )}
         {!isLast && (
-          <button type="button" className="skip wn-skip" onClick={onNext} data-ux-id="whatsnew-skip">
+          <button type="button" className="skip wn-skip" onClick={leave} data-ux-id="whatsnew-skip">
             Skip the showcase
           </button>
         )}
         <button
           className="cta"
-          onClick={() => (isLast ? onNext() : setPageIx(pageIx + 1))}
+          onClick={() => (isLast ? leave() : setPageIx(pageIx + 1))}
           type="button"
           data-ux-id="whatsnew-cta"
         >

@@ -312,6 +312,16 @@ The changelog is **generated**, not hand-edited. The single source of truth is
 
 - When your change is user-facing, add an entry to the top of the array in
   `src/renderer/changelog.ts` (type: `feature` | `fix` | `improvement`).
+- A release may also carry `warnings`, an optional list on its entry. A warning
+  is a plain sentence about a risk or a step the user must take: what changes
+  for them, a known risk and what to do about it, how to go back. No Markdown.
+  Warnings are shown first, ahead of the highlights and the changes, in What's
+  New, in `CHANGELOG.md`, in the GitHub release notes and on the summary a user
+  sees after an update. That summary also lists the warnings of every release
+  the user passed over on the way, each under its version, while the notes of
+  one release show only its own. So restate a warning in each later release it
+  still applies to (the summary shows a repeated sentence once), and leave the
+  field out when a release has none.
 - Run `npm run changelog` to regenerate the root `CHANGELOG.md`, and commit both files.
 - CI (`Changelog in sync`) fails if `CHANGELOG.md` is stale — run
   `npm run changelog:check` locally to verify.

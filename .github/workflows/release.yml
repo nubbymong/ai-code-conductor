@@ -597,12 +597,15 @@ jobs:
 
       # Derive the release body from src/renderer/changelog.ts (the single
       # source of truth). Empty output = no changelog entry for this version;
-      # the create step then falls back to the checksums-only note.
+      # the create step then falls back to the checksums-only note. One
+      # generator failure is not let through to that fallback: exit code 3, a
+      # "warnings" value in this version's entry that cannot be printed. The
+      # step fails on it, so a release never goes out with its warnings missing.
       - name: Generate release notes
         id: notes
         run: |
           VERSION="${{ needs.build-windows.outputs.version }}"
-          node scripts/gen-changelog.js --notes "$VERSION" > RELEASE_NOTES.md || true
+          node scripts/gen-changelog.js --notes "$VERSION" > RELEASE_NOTES.md || [ "$?" -ne 3 ]
           if [ -s RELEASE_NOTES.md ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
             echo "Release notes for v${VERSION}:"
