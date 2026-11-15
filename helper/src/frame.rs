@@ -117,6 +117,10 @@ impl From<io::Error> for FrameError {
 pub fn encode(frame: &Frame, flow: Direction) -> Result<Vec<u8>, FrameError> {
     let (kind, payload) = match &frame.body {
         Body::Json(value) => {
+            // The same depth limit the reader applies, checked before writing.
+            if !value.fits_depth(json::MAX_DEPTH) {
+                return Err(FrameError::BadFrame("JSON deeper than 32"));
+            }
             let text = value.to_json().into_bytes();
             if text.len() > flow.max_json() {
                 return Err(FrameError::BadFrame("JSON payload over the limit"));
@@ -231,6 +235,16 @@ mod tests {
         assert_eq!(&bytes[5..9], &[0, 0, 0, 0]);
         assert_eq!(&bytes[9..], payload);
         assert_eq!(decode(&bytes, Direction::AppToHelper).unwrap(), ping());
+    }
+
+    #[test]
+    fn a_message_the_reader_would_refuse_for_depth_is_not_encoded() {
+        let nest = |n: usize| Frame::json(0, (0..n).fold(Value::Null, |inner, _| Value::Arr(vec![inner])));
+        for flow in [Direction::AppToHelper, Direction::HelperToApp] {
+            let ok = encode(&nest(32), flow).expect("depth 32 encodes");
+            assert_eq!(decode(&ok, flow).unwrap(), nest(32));
+            assert!(matches!(encode(&nest(33), flow), Err(FrameError::BadFrame(_))), "depth 33 must not encode");
+        }
     }
 
     #[test]

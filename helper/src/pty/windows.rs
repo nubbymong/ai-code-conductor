@@ -26,6 +26,10 @@ use windows_sys::Win32::System::Threading::{
 const ATTR_PSEUDOCONSOLE: usize = 0x0002_0016;
 /// `EXTENDED_STARTUPINFO_PRESENT`.
 const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
+/// `STARTF_USESTDHANDLES`.
+const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
+/// `INVALID_HANDLE_VALUE` (-1) as an integer, converted with `as` at the use.
+const INVALID_HANDLE: usize = usize::MAX;
 
 pub struct Pty {
     pseudo_console: usize,
@@ -111,6 +115,14 @@ impl Pty {
 
             let mut startup: STARTUPINFOEXW = std::mem::zeroed();
             startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+            // Name the standard handles explicitly, as invalid, so the child
+            // takes them from the pseudoconsole. Without this, a parent whose
+            // own standard handles are redirected (CI, the app) hands them down
+            // and the child writes to the parent's stdout, never to the pty.
+            startup.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+            startup.StartupInfo.hStdInput = INVALID_HANDLE as HANDLE;
+            startup.StartupInfo.hStdOutput = INVALID_HANDLE as HANDLE;
+            startup.StartupInfo.hStdError = INVALID_HANDLE as HANDLE;
             startup.lpAttributeList = list as _;
             let mut info: PROCESS_INFORMATION = std::mem::zeroed();
             let mut cmdline: Vec<u16> = std::ffi::OsStr::new(&build_command_line(argv)).encode_wide().chain(std::iter::once(0)).collect();

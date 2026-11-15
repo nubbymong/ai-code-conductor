@@ -13,14 +13,29 @@
 use crate::pty::{Pty, PtySize};
 use crate::ring::{Replay, Ring, RingError};
 use std::io::{self, Read};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// How many output chunks an attachment may leave unread. A chunk is at most 16
+/// KiB, so this caps what a client that stops reading can make the holder keep.
+/// A client that falls this far behind is disconnected and recovers by
+/// attaching again from the offset it last saw (the ring replays the rest).
+pub const LIVE_QUEUE_CHUNKS: usize = 256;
+
+/// Hand `chunk` to an attachment without ever waiting. False means the
+/// attachment is gone or too far behind and should be let go.
+fn offer(tx: &SyncSender<Vec<u8>>, chunk: Vec<u8>) -> bool {
+    match tx.try_send(chunk) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => false,
+    }
+}
+
 struct State {
     ring: Ring,
-    terminal: Option<Sender<Vec<u8>>>,
+    terminal: Option<SyncSender<Vec<u8>>>,
     exit_code: Option<i32>,
     output_ended: bool,
 }
@@ -76,7 +91,7 @@ impl Holder {
                 let mut st = lock(&out_shared.state);
                 st.ring.push(&buf[..n]);
                 let gone = match &st.terminal {
-                    Some(tx) => tx.send(buf[..n].to_vec()).is_err(),
+                    Some(tx) => !offer(tx, buf[..n].to_vec()),
                     None => false,
                 };
                 if gone {
@@ -136,7 +151,7 @@ impl Holder {
     pub fn attach(&self, from: u64) -> Result<Attachment, RingError> {
         let mut st = lock(&self.shared.state);
         let replay = st.ring.replay_from(from)?;
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(LIVE_QUEUE_CHUNKS);
         if st.output_ended {
             // Nothing more will come: leave the channel closed.
             drop(tx);
@@ -205,5 +220,29 @@ impl Drop for Holder {
         // A holder that is dropped ends its child; the process that wants the
         // child to outlive it never drops the holder (it runs `hold`).
         lock(&self.pty).kill();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_full_queue_is_refused_without_waiting_and_a_closed_one_too() {
+        let (tx, rx) = mpsc::sync_channel(2);
+        assert!(offer(&tx, vec![1]));
+        assert!(offer(&tx, vec![2]));
+        // The third does not block: it reports that the attachment is behind.
+        assert!(!offer(&tx, vec![3]));
+        // Once the reader catches up, offers are taken again.
+        assert_eq!(rx.recv().unwrap(), vec![1]);
+        assert!(offer(&tx, vec![4]));
+        drop(rx);
+        assert!(!offer(&tx, vec![5]));
+    }
+
+    #[test]
+    fn the_queue_is_bounded() {
+        assert!(LIVE_QUEUE_CHUNKS > 0 && LIVE_QUEUE_CHUNKS <= 1024);
     }
 }

@@ -206,6 +206,7 @@ try {
   $result.holder_alive_after_app_quit = Test-Alive $holderId
   $result.child_alive_after_app_quit = Test-Alive $childId
   Write-Step ("after the app quit: holder alive {0}, child alive {1}" -f $result.holder_alive_after_app_quit, $result.child_alive_after_app_quit)
+  Require $result.parent_gone 'the stand-in app was still running after taskkill, so survival after the app quit was not tested'
   Require $result.holder_alive_after_app_quit 'the holder did not survive the app quitting'
   Require $result.child_alive_after_app_quit 'the held child did not survive the app quitting'
 

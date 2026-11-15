@@ -48,6 +48,12 @@ describe('probe P7: no local variable reuses a parameter name in another case', 
     expect(clashes, `locals that collide with a parameter: ${JSON.stringify(clashes)}`).toEqual([])
   })
 
+  it('requires the stand-in app to be gone before it accepts the survival answer', () => {
+    // If taskkill fails the app lives on, and "the holder survived" would prove nothing.
+    expect(script).toMatch(/\$result\.parent_gone = /)
+    expect(script).toMatch(/Require \$result\.parent_gone /)
+  })
+
   it('keeps the installer process in its own variable', () => {
     expect(script).toMatch(/\$installerProc = Start-Process/)
     expect(script).not.toMatch(/\$installer\.(WaitForExit|ExitCode|Kill)/)

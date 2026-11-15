@@ -85,6 +85,16 @@ impl Value {
         }
     }
 
+    /// True when arrays and objects nest at most `limit` levels deep. It stops
+    /// at the limit, so a hostile or runaway value costs no deep recursion.
+    pub fn fits_depth(&self, limit: usize) -> bool {
+        match self {
+            Value::Arr(items) => limit > 0 && items.iter().all(|v| v.fits_depth(limit - 1)),
+            Value::Obj(members) => limit > 0 && members.iter().all(|(_, v)| v.fits_depth(limit - 1)),
+            _ => true,
+        }
+    }
+
     /// Compact JSON text.
     pub fn to_json(&self) -> String {
         let mut out = String::new();
@@ -424,6 +434,17 @@ mod tests {
         let objs = |n: usize| format!("{}1{}", "{\"a\":".repeat(n), "}".repeat(n));
         assert!(parse(objs(32).as_bytes()).is_ok());
         assert_eq!(parse(objs(33).as_bytes()), Err(JsonError::TooDeep));
+    }
+
+    #[test]
+    fn fits_depth_agrees_with_the_reader() {
+        let nest = |n: usize| (0..n).fold(Value::Null, |inner, _| Value::Arr(vec![inner]));
+        assert!(nest(0).fits_depth(MAX_DEPTH));
+        assert!(nest(32).fits_depth(MAX_DEPTH));
+        assert!(!nest(33).fits_depth(MAX_DEPTH));
+        let objs = |n: usize| (0..n).fold(Value::Null, |inner, _| Value::Obj(vec![("a".to_string(), inner)]));
+        assert!(objs(32).fits_depth(MAX_DEPTH));
+        assert!(!objs(33).fits_depth(MAX_DEPTH));
     }
 
     #[test]

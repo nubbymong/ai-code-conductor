@@ -38,12 +38,19 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${re}$`)
 }
 
-type Entry = { list: 'files' | 'extraResources' | 'extraFiles'; value: string }
+/**
+ * `value` is the path or glob. For a FileSet object it is the source root
+ * (`from`, the project root when omitted) and `filter` is the list of globs,
+ * relative to that root, that pick files under it (electron-builder's default
+ * is everything).
+ */
+type Entry = { list: 'files' | 'extraResources' | 'extraFiles'; value: string; fileSet?: { filter: string[] } }
 
 /**
  * Every path or glob a `files`, `extraResources` or `extraFiles` list names,
  * anywhere under `build` (the platform sections too). An entry is a string, or
- * a { from, to } object whose `from` is what gets copied.
+ * a { from, to, filter } FileSet object: `from` is the source root that gets
+ * copied and `filter` narrows what under it.
  */
 function packagingEntries(node: unknown, out: Entry[] = []): Entry[] {
   if (Array.isArray(node)) node.forEach((n) => packagingEntries(n, out))
@@ -52,12 +59,41 @@ function packagingEntries(node: unknown, out: Entry[] = []): Entry[] {
       if (k === 'files' || k === 'extraResources' || k === 'extraFiles') {
         for (const item of ([] as unknown[]).concat(v)) {
           if (typeof item === 'string') out.push({ list: k, value: item })
-          else if (item && typeof item === 'object' && typeof (item as { from?: unknown }).from === 'string') out.push({ list: k, value: (item as { from: string }).from })
+          else if (item && typeof item === 'object') {
+            const set = item as { from?: unknown; filter?: unknown }
+            const filter = ([] as unknown[]).concat(set.filter ?? []).filter((f): f is string => typeof f === 'string')
+            out.push({ list: k, value: typeof set.from === 'string' ? set.from : '.', fileSet: { filter: filter.length > 0 ? filter : ['**/*'] } })
+          }
         }
       } else packagingEntries(v, out)
     }
   }
   return out
+}
+
+/** A project-relative path as electron-builder reads it: forward slashes, no `./`, no trailing slash. */
+const normPath = (p: string): string => p.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '').replace(/\/+$/, '')
+
+/**
+ * Would this packaging entry take `file` (a project-relative path)? A string
+ * is a path or glob. A FileSet takes what is under its source root and matches
+ * one of its filters, judged against the path relative to that root. Negated
+ * filters are ignored, so the answer errs towards "it would ship".
+ */
+function takes(entry: Entry, file: string): boolean {
+  const root = normPath(entry.value)
+  if (!entry.fileSet) {
+    if (entry.value.startsWith('!')) return false
+    // A path or glob; a bare folder name takes everything under it.
+    return globToRegExp(root).test(file) || globToRegExp(`${root}/**`).test(file)
+  }
+  const filters = entry.fileSet.filter.filter((f) => !f.startsWith('!'))
+  if (root === '' || root === '.') return filters.some((f) => globToRegExp(normPath(f)).test(file))
+  if (root.includes('*')) return globToRegExp(root).test(file) || globToRegExp(`${root}/**`).test(file)
+  if (file === root) return true
+  if (!file.startsWith(`${root}/`)) return false
+  const rel = file.slice(root.length + 1)
+  return filters.some((f) => globToRegExp(normPath(f)).test(rel))
 }
 
 /** A path the helper folder holds, or will hold. */
@@ -97,22 +133,44 @@ describe('the dormant Rust helper is not in the installer', () => {
   })
 
   it('no `files` entry of the installer matches a path in helper/', () => {
-    const globs = entries.filter((e) => e.list === 'files').map((e) => e.value)
-    expect(globs.length).toBeGreaterThan(0)
-    for (const glob of globs.filter((g) => !g.startsWith('!'))) {
-      const re = globToRegExp(glob)
-      for (const file of HELPER_FILES) expect(re.test(file), `"${glob}" would package ${file}`).toBe(false)
+    const listed = entries.filter((e) => e.list === 'files')
+    expect(listed.length).toBeGreaterThan(0)
+    for (const entry of listed) {
+      for (const file of HELPER_FILES) expect(takes(entry, file), `${JSON.stringify(entry)} would package ${file}`).toBe(false)
     }
   })
 
   it('no extraResources or extraFiles entry names helper/', () => {
-    const copied = entries.filter((e) => e.list !== 'files').map((e) => e.value)
+    const copied = entries.filter((e) => e.list !== 'files')
     expect(copied.length).toBeGreaterThan(0)
-    for (const value of copied) {
-      const norm = value.replace(/\\/g, '/').replace(/^\.\//, '')
-      expect(norm.startsWith('helper'), `${value} reaches into helper/`).toBe(false)
-      for (const file of HELPER_FILES) expect(globToRegExp(norm).test(file), `${value} would copy ${file}`).toBe(false)
+    for (const entry of copied) {
+      expect(normPath(entry.value).startsWith('helper'), `${entry.value} reaches into helper/`).toBe(false)
+      for (const file of HELPER_FILES) expect(takes(entry, file), `${JSON.stringify(entry)} would copy ${file}`).toBe(false)
     }
+  })
+
+  it('FileSet objects keep their source root and filter, and the check judges them (a flattened `from` once matched nothing)', () => {
+    const read = (files: unknown[]): Entry[] => packagingEntries({ files })
+    // The case that slipped past a guard that only read the root as a glob:
+    const [whole] = read([{ from: 'helper', to: 'helper', filter: ['**/*'] }])
+    expect(whole.fileSet?.filter).toEqual(['**/*'])
+    for (const file of HELPER_FILES) expect(takes(whole, file), file).toBe(true)
+    // No filter means everything under the root; a bare filter object means the project root.
+    const [noFilter] = read([{ from: 'helper' }])
+    expect(takes(noFilter, 'helper/src/main.rs')).toBe(true)
+    const [rootSet] = read([{ filter: ['helper/**'] }])
+    expect(takes(rootSet, 'helper/Cargo.toml')).toBe(true)
+    expect(takes(rootSet, 'out/main/index.js')).toBe(false)
+    // A narrower root or filter is judged against the path under that root.
+    const [sub] = read([{ from: 'helper/src', filter: ['**/*.rs'] }])
+    expect(takes(sub, 'helper/src/pty/windows.rs')).toBe(true)
+    expect(takes(sub, 'helper/Cargo.toml')).toBe(false)
+    // Roots that are not the helper stay clear of it, and a string path to the folder is caught.
+    const [resources] = read([{ from: 'resources', to: 'res', filter: ['**/*'] }])
+    for (const file of HELPER_FILES) expect(takes(resources, file), file).toBe(false)
+    const [folder] = read(['helper'])
+    expect(takes(folder, 'helper/Cargo.toml')).toBe(true)
+    expect(takes(read(['!helper/**'])[0], 'helper/Cargo.toml')).toBe(false)
   })
 
   it('every file the helper job and the probe need is tracked, not caught by an ignore rule (*.ps1 is ignored repo-wide)', () => {

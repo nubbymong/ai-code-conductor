@@ -10,7 +10,7 @@ use crate::holder::Holder;
 use crate::json::Value;
 use crate::pty::PtySize;
 use crate::ring::Ring;
-use std::io::{Read, Write};
+use std::io::{BufRead, Write};
 use std::path::Path;
 use std::time::Duration;
 
@@ -80,19 +80,33 @@ fn ring_offsets() -> Result<(), String> {
     Ok(())
 }
 
+/// What the `__echo` child prints before each line it answers.
+const REPLY_MARKER: &str = "aicc-selftest-reply:";
+
+/// The reply the child gives to the text the round trip types.
+fn expected_reply() -> String {
+    format!("{REPLY_MARKER}selftest-ping")
+}
+
+/// True when `text` holds the child's reply (not merely the typed text).
+fn reply_seen(text: &str) -> bool {
+    text.contains(&expected_reply())
+}
+
 /// A terminal round trip: run this program's own `__echo` child on a terminal,
-/// type into it, see the echo, detach, attach again and be replayed.
+/// type into it, see the child's reply, detach, attach again and be replayed.
 fn terminal_round_trip(exe: &Path) -> Result<(), String> {
     let argv = vec![exe.to_string_lossy().into_owned(), "__echo".to_string()];
     let holder = Holder::start(&argv, PtySize::default(), 64 * 1024).map_err(|e| format!("could not start a terminal: {e}"))?;
     let result = (|| -> Result<(), String> {
         holder.write_input(b"selftest-ping\r").map_err(|e| format!("could not write to the terminal: {e}"))?;
-        if !holder.wait_for_text("selftest-ping", Duration::from_secs(15)) {
-            return Err("the typed text never came back from the terminal".to_string());
+        // The child's own reply, not the terminal's echo of the typed text.
+        if !holder.wait_for_text(&expected_reply(), Duration::from_secs(15)) {
+            return Err("the child's reply never came back from the terminal".to_string());
         }
         holder.detach();
         let attachment = holder.attach(0).map_err(|_| "attach from offset 0 failed".to_string())?;
-        if !String::from_utf8_lossy(&attachment.replay.bytes).contains("selftest-ping") {
+        if !reply_seen(&String::from_utf8_lossy(&attachment.replay.bytes)) {
             return Err("attaching again did not replay the earlier output".to_string());
         }
         Ok(())
@@ -132,17 +146,45 @@ pub fn report(checks: &[Check]) -> Value {
     ])
 }
 
-/// The child the terminal round trip runs: copies its input to its output.
+/// The child the terminal round trip runs: answers each line it is given with
+/// `REPLY_MARKER` and the line. The marker is its own text, so it never appears
+/// just because the terminal echoes what was typed (a Unix terminal does).
 pub fn echo_child() -> std::io::Result<()> {
-    let mut stdin = std::io::stdin().lock();
-    let mut stdout = std::io::stdout().lock();
-    let mut buf = [0u8; 1024];
+    serve(std::io::stdin().lock(), std::io::stdout().lock())
+}
+
+fn serve<R: BufRead, W: Write>(mut input: R, mut output: W) -> std::io::Result<()> {
+    let mut line = String::new();
     loop {
-        let n = stdin.read(&mut buf)?;
-        if n == 0 {
+        line.clear();
+        if input.read_line(&mut line)? == 0 {
             return Ok(());
         }
-        stdout.write_all(&buf[..n])?;
-        stdout.flush()?;
+        let text = line.trim_end_matches(|c| c == '\r' || c == '\n');
+        write!(output, "{REPLY_MARKER}{text}\r\n")?;
+        output.flush()?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_child_answers_each_line_with_its_own_marker() {
+        let mut out = Vec::new();
+        serve(std::io::Cursor::new(b"selftest-ping\r\nnext\n".to_vec()), &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text, "aicc-selftest-reply:selftest-ping\r\naicc-selftest-reply:next\r\n");
+        assert!(reply_seen(&text));
+    }
+
+    #[test]
+    fn a_child_that_never_answers_fails_even_when_the_terminal_echoes() {
+        // What a Unix terminal shows with a child that reads and writes nothing.
+        assert!(!reply_seen("selftest-ping\r\n"));
+        assert!(!reply_seen(""));
+        // A different reply does not count either.
+        assert!(!reply_seen("aicc-selftest-reply:other\r\n"));
     }
 }
