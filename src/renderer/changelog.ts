@@ -1,12 +1,32 @@
 /**
  * Changelog for What's New modal
  * Add new releases at the top of the array
+ *
+ * A release may carry `warnings` (the field below). A warning is a plain
+ * sentence about a risk or a step the user must take, and warnings are shown
+ * first, ahead of everything else the release says. CONTRIBUTING.md
+ * ("Changelog & Release Notes") has the rules for writing an entry.
  */
 
 export interface ChangelogEntry {
   version: string
   date: string  // YYYY-MM-DD format
   highlights?: string  // Brief summary shown prominently
+  /**
+   * Things a user should know before relying on this release. A warning is a
+   * plain sentence about a risk or a step the user must take: what changes
+   * for them, a known risk and what to do about it, how to go back. One
+   * sentence (or a short run of them) per item, no Markdown. Shown FIRST and
+   * marked as warnings in What's New, in CHANGELOG.md, in the GitHub release
+   * notes and on the summary shown after an update.
+   *
+   * That summary also lists the warnings of every release the user passed
+   * over on the way, each under its version; the notes of one release show
+   * only its own. So restate a warning in each later release it still applies
+   * to (the summary shows a repeated sentence once). Leave the field out when
+   * a release has none.
+   */
+  warnings?: string[]
   changes: {
     type: 'feature' | 'fix' | 'improvement'
     description: string

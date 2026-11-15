@@ -80,6 +80,10 @@ interface RunShape {
   /** Where What's New diffs from (whatsNewAnchorFor), fixed for the run.
    *  Undefined on a fresh install. */
   whatsNewAnchor?: string
+  /** The version whose notes the user last saw, fixed for the run: the
+   *  anchor is made from it, and the notes page shows the warnings of every
+   *  release newer than it. Undefined on a fresh install. */
+  seenVersion?: string
 }
 
 /**
@@ -148,6 +152,7 @@ const PAGES: BuiltStep[] = [
       <WhatsNewV2Step
         onNext={nav.onNext}
         anchor={run.whatsNewAnchor}
+        seenVersion={run.seenVersion}
         // The page's own footer promised "the next pages set these up", which
         // is a lie on the common upgrade where nothing new needs setting up.
         ctaLabel={run.isLast ? 'Continue' : 'Set it up →'}
@@ -407,7 +412,7 @@ export function OnboardingHarness({
     version, setVersion, stepAside: () => setAside(true), returns,
     requestCodexSession: () => { codexSessionRequested.current = true },
   }
-  const run: RunShape = { whatsNewOnly, isLast, isFirst, whatsNewAnchor }
+  const run: RunShape = { whatsNewOnly, isLast, isFirst, whatsNewAnchor, seenVersion: seen }
   return (
     <>
       <OnboardingShell phase={step.phase} isNew={newIds.has(step.id)} showPhases={!whatsNewOnly && !codexSetupOnly} hidden={aside}>

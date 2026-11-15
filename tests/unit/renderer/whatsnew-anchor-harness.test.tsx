@@ -18,6 +18,8 @@
  *   - each link (boot value, clamp, running build) is pinned by a value that
  *     does not floor to 2.1.0, so cutting it fails a test;
  *   - the setup pages new since (stepsNewSince) use the same boot value;
+ *   - the notes page is also handed the seen version itself, not the anchor:
+ *     it shows the warnings of the releases passed over since that version;
  *   - O3: the last page's hint names the Codex question when it follows,
  *     and never says "Nothing to set up";
  *   - App captures the boot value before it stamps, and hands it over.
@@ -35,8 +37,8 @@ const CURRENT = '2.1.1-beta.3'
 
 // The notes page as a stand-in that shows what the harness handed it.
 vi.mock('../../../src/renderer/onboarding/WhatsNewV2Step', () => ({
-  WhatsNewV2Step: (props: { onNext: () => void; anchor?: string; hint?: string; fresh?: boolean }) => (
-    <div data-testid="page" data-page={props.fresh ? 'whatsNewV2Fresh' : 'whatsNewV2'} data-anchor={props.anchor ?? '(none)'} data-hint={props.hint ?? ''}>
+  WhatsNewV2Step: (props: { onNext: () => void; anchor?: string; seenVersion?: string; hint?: string; fresh?: boolean }) => (
+    <div data-testid="page" data-page={props.fresh ? 'whatsNewV2Fresh' : 'whatsNewV2'} data-anchor={props.anchor ?? '(none)'} data-seen={props.seenVersion ?? '(none)'} data-hint={props.hint ?? ''}>
       <button type="button" data-testid="stub-next" onClick={() => props.onNext()}>Next</button>
     </div>
   ),
@@ -156,6 +158,26 @@ describe('the notes run diffs from the boot snapshot', () => {
     ;(globalThis as any).__APP_VERSION__ = '2.1.1'
     await mountNotes('2.1.1-beta.3')
     expect(notes().getAttribute('data-anchor')).toBe('2.1.0')
+  })
+
+  it('the page is handed the seen version itself, not the anchor made from it', async () => {
+    // A tester who last saw beta.2 anchors at 2.1.0 for the summary lines, and
+    // is still someone who has seen beta.2: the warnings of the releases after
+    // beta.2 are the ones they were never shown.
+    await mountNotes('2.1.1-beta.2')
+    expect(notes().getAttribute('data-anchor')).toBe('2.1.0')
+    expect(notes().getAttribute('data-seen')).toBe('2.1.1-beta.2')
+  })
+
+  it('the seen version comes from the boot value, not from the live, already stamped meta', async () => {
+    await mountNotes('2.0.0')
+    expect(notes().getAttribute('data-seen')).toBe('2.0.0')
+  })
+
+  it('with no boot value, the seen version is the live meta, clamped to what last ran (#369)', async () => {
+    useAppMetaStore.setState({ meta: { lastSeenVersion: CURRENT, lastRunVersion: '2.1.1-beta.1' } })
+    await mountNotes()
+    expect(notes().getAttribute('data-seen')).toBe('2.1.1-beta.1')
   })
 
   it('the setup pages new since use the same boot value (stepsNewSince)', async () => {

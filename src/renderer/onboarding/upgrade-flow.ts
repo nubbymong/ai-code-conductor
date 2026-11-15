@@ -186,6 +186,21 @@ export function entriesSince<T extends VersionedEntry>(
 }
 
 /**
+ * The warnings of one release (`ChangelogEntry.warnings`), ready to show: one
+ * line each, with line breaks and runs of spaces folded and blank ones
+ * dropped, in the order they were written. Empty when the release has none.
+ *
+ * scripts/gen-changelog.js folds them the same way for CHANGELOG.md and the
+ * GitHub release notes, so the app and the notes say the same sentences.
+ *
+ * It lives here, not in changelog.ts, because the caller supplies the entry:
+ * a test hands it a history of its own without loading the real changelog.
+ */
+export function releaseWarnings(entry: { warnings?: readonly string[] }): string[] {
+  return (entry.warnings ?? []).map((w) => w.replace(/\s+/g, ' ').trim()).filter((w) => w.length > 0)
+}
+
+/**
  * The newest FINAL release in `releases` that is older than `version`, or
  * undefined when there is none. Prereleases and unreadable entries are
  * skipped: `lastFinalBefore('2.1.1', changelog)` is `2.1.0`, never
