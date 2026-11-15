@@ -374,15 +374,27 @@ describe('a Restart is not the session\'s end on the Services page (P3.16a round
   })
 
   // A Restart whose next launch is refused before it starts anything (its
-  // assistant is not one the app can start) is followed by no process. The
-  // exit of the process the Restart ended is then the session's end: one
-  // "session ended", and the session is listed no more. Each way a local
-  // launch starts refuses in the same place, so each is held here.
-  // Mutation to prove this can fail: leave the Restart's mark in place when
-  // the launch is refused.
+  // assistant is not one the app can start) is followed by no process, and
+  // the session ends on the Services page: one "session ended", and it is
+  // listed no more. Which of the two is the end depends on the order they
+  // come in. The refusal first: the exit of the process the Restart ended.
+  // That exit first (it starts the count again, for the launch that may
+  // follow): the refusal. Each way a local launch starts refuses in the same
+  // place, so each is held here, in each order; and the close of the tab
+  // after it logs no second end.
+  // Mutations to prove these can fail: leave the Restart's mark in place when
+  // the launch is refused; end nothing at a refusal that finds no mark; end
+  // the session at every refusal, mark or not; end it at a refusal that finds
+  // a process running, or another launch of the session being prepared.
   describe('a Restart whose next launch is refused', () => {
     const refused = () => ({ ...spawnOptions(), provider: 'elsewhere' }) as unknown as Parameters<typeof spawnPty>[2]
     const NOT_STARTED = /is not one this app can start/
+    /** The tab is closed: whatever came before, no further "session ended". */
+    const closedLogsNoSecondEnd = (): void => {
+      killPty(SID, { reason: 'close' })
+      expect(ends(), 'one end, the close included').toHaveLength(1)
+      expect(row()).toBeUndefined()
+    }
 
     it('a launch asked for directly: the ended process\'s exit is the session\'s end', () => {
       spawn()
@@ -394,6 +406,28 @@ describe('a Restart is not the session\'s end on the Services page (P3.16a round
       exitOf(0)
       expect(ends()).toHaveLength(1)
       expect(row()).toBeUndefined()
+      closedLogsNoSecondEnd()
+    })
+
+    it('a launch asked for directly, the ended process having reported its end first: the refusal is the session\'s end', () => {
+      spawn()
+      report(0)
+      killPty(SID, { reason: 'restart' })
+      // A launch may follow: the count starts again, quietly.
+      exitOf(0)
+      expect(ends()).toEqual([])
+      expect(row()).toMatchObject({ bytesFromPty: 0, bytesReceived: 0, byteGap: 0 })
+      expect(() => spawnPty(fakeWin, SID, refused())).toThrow(NOT_STARTED)
+      expect(h.procs, 'nothing new started').toHaveLength(1)
+      expect(ends()).toHaveLength(1)
+      expect(row()).toBeUndefined()
+      // The terminal's late report lists it no more, and a launch refused
+      // again logs no second end.
+      report(0)
+      expect(row()).toBeUndefined()
+      expect(() => spawnPty(fakeWin, SID, refused())).toThrow(NOT_STARTED)
+      expect(ends()).toHaveLength(1)
+      closedLogsNoSecondEnd()
     })
 
     it('a launch prepared first: the same, when the ended process reports its end after the refusal', () => {
@@ -403,9 +437,11 @@ describe('a Restart is not the session\'s end on the Services page (P3.16a round
       const prep = beginSpawnPreparation(fakeWin, SID, null)
       expect(() => prep.spawn(refused())).toThrow(NOT_STARTED)
       expect(h.procs, 'nothing new started').toHaveLength(1)
+      expect(ends(), 'the session ends when its process does').toEqual([])
       exitOf(0)
       expect(ends()).toHaveLength(1)
       expect(row()).toBeUndefined()
+      closedLogsNoSecondEnd()
     })
 
     it('a launch prepared first: the same, when the ended process reported its end while the launch was prepared', () => {
@@ -420,6 +456,39 @@ describe('a Restart is not the session\'s end on the Services page (P3.16a round
       expect(h.procs, 'nothing new started').toHaveLength(1)
       expect(ends()).toHaveLength(1)
       expect(row()).toBeUndefined()
+      closedLogsNoSecondEnd()
+    })
+
+    it('a launch prepared first: the same, when the ended process had reported its end before the launch was prepared', () => {
+      spawn()
+      report(0)
+      killPty(SID, { reason: 'restart' })
+      exitOf(0)
+      expect(ends()).toEqual([])
+      const prep = beginSpawnPreparation(fakeWin, SID, null)
+      expect(ends(), 'a launch being prepared may follow').toEqual([])
+      expect(() => prep.spawn(refused())).toThrow(NOT_STARTED)
+      expect(h.procs, 'nothing new started').toHaveLength(1)
+      expect(ends()).toHaveLength(1)
+      expect(row()).toBeUndefined()
+      closedLogsNoSecondEnd()
+    })
+
+    it('a refused launch while another launch of the tab is being prepared is not the session\'s end: the prepared one is its next process', () => {
+      spawn()
+      report(0)
+      killPty(SID, { reason: 'restart' })
+      exitOf(0)
+      const prep = beginSpawnPreparation(fakeWin, SID, null)
+      expect(() => spawnPty(fakeWin, SID, refused())).toThrow(NOT_STARTED)
+      expect(prep.current, 'the refused launch took no prepared one\'s place').toBe(true)
+      expect(ends()).toEqual([])
+      expect(row()).toMatchObject({ bytesFromPty: 0, bytesReceived: 0, byteGap: 0 })
+      const second = spawn(SID, () => prep.spawn(spawnOptions()))
+      second.data('z'.repeat(40))
+      report(40)
+      expect(ends()).toEqual([])
+      expect(row()).toMatchObject({ bytesFromPty: 40, bytesReceived: 40, byteGap: 0 })
     })
 
     it('a refused launch with no Restart before it leaves the running session\'s count as it was', () => {
@@ -447,6 +516,25 @@ describe('a Restart is not the session\'s end on the Services page (P3.16a round
       report(40)
       expect(ends()).toHaveLength(1)
       expect(row()).toMatchObject({ bytesFromPty: 40, bytesReceived: 40, byteGap: 0 })
+    })
+
+    it('the same after a refusal that was itself the session\'s end: the tab is listed again from its next process\'s first output', () => {
+      spawn()
+      report(0)
+      killPty(SID, { reason: 'restart' })
+      exitOf(0)
+      expect(() => spawnPty(fakeWin, SID, refused())).toThrow(NOT_STARTED)
+      expect(ends()).toHaveLength(1)
+      expect(row()).toBeUndefined()
+      killPty(SID, { reason: 'restart' })
+      const second = spawn()
+      second.data('z'.repeat(40))
+      report(40)
+      expect(ends()).toHaveLength(1)
+      expect(row()).toMatchObject({ bytesFromPty: 40, bytesReceived: 40, byteGap: 0 })
+      // That process's own end is the session's next end.
+      exitOf(1)
+      expect(ends()).toHaveLength(2)
     })
   })
 })

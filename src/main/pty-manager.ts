@@ -2502,19 +2502,34 @@ function localLaunchFor(options: SpawnPtyOptions | undefined): LocalLaunch | nul
  * Restart's mark is cleared for every launch that does (restartKills). So a
  * refused one clears it here: no process follows the one the Restart ended,
  * and that process's exit is the session's end on the Services page, with
- * its event, and not a count started again. An SSH launch and a terminal tab
- * are answered "none" without a throw, so nothing is cleared for them here.
+ * its event, and not a count started again.
+ *
+ * When that exit came first it took the mark, and started the count again
+ * for the launch that was to follow. The refusal then finds no mark, and
+ * nothing of the session left that could end it later (no running process,
+ * no other launch of it waiting on a profile refresh or a preparation), so
+ * the refusal is the session's end there. Either order, one end: the
+ * monitor logs an end only for a session it lists, so a session that was
+ * never listed, or whose end is already logged, gets none here. A refused
+ * launch that finds a process running, or another launch of the session
+ * waiting, has taken neither's place and ends nothing.
+ *
+ * An SSH launch and a terminal tab are answered "none" without a throw, so
+ * nothing is cleared or ended for them here.
  *
  * The re-entry after a wait asks through here like the others. The pass that
  * parked it cleared the mark, and the kill that sets one cancels the wait, so
- * there is none to clear by then; it asks here so that every caller reads the
- * same.
+ * there is none to clear by then, and its own wait is over: one refused here
+ * ends the session as above, once, whether or not the process it replaced
+ * has reported its end.
  */
 function localLaunchForSpawn(sessionId: string, options: SpawnPtyOptions | undefined): LocalLaunch | null {
   try {
     return localLaunchFor(options)
   } catch (err) {
-    restartKills.delete(sessionId)
+    if (!restartKills.delete(sessionId) && !ptySessions.has(sessionId) && !refreshWaitSpawns.has(sessionId)) {
+      getPtyIntegrityMonitor()?.endSession(sessionId)
+    }
     throw err
   }
 }
