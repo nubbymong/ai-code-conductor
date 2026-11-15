@@ -312,17 +312,21 @@ describe('a fetched file is held to a strict shape', () => {
     expect(r).toEqual({ ok: false, reason: 'models: claude-opus-6 has a pattern the build already has on claude-opus-5-5' })
   })
 
-  it('a new model with a pattern of its own is taken, and a name no entry lists stays with the build\'s entry and its price', () => {
+  it('a new model with a pattern of its own is taken with its dated id, and a name no entry lists stays with the build\'s entry and its price', () => {
     const r = validateModelData(file((f) => { f.models.unshift(NEW_OPUS) }), bundled)
     expect(r.ok ? 'ok' : r.reason).toBe('ok')
     const merged = mergeModelData(bundled, r.ok ? r.data : null, '2026-11-14')
     expect(resolveModelInfo(merged, 'claude-opus-6')).toMatchObject({ id: 'claude-opus-6', matchKind: 'exact', label: 'Opus 6' })
-    // The new model is its exact id (and its aliases). A name the build
-    // already places, a dated or a partner platform's form of the new id
-    // among them, stays where the build has it: the file never moves one
-    // (tests/unit/model-data-resolution-rule.test.ts).
     const shippedPrice = bundled.models.find((m) => m.id === 'claude-opus-5-5')?.fallbackPricing
-    for (const name of ['claude-opus-6-20270101', 'anthropic.claude-opus-6-v1:0', 'anthropic.claude-opus-9-v1:0', 'Opus 9 (1M context)']) {
+    // The new model is its exact id (and its aliases), and its own id with a
+    // date after it (2.1.3-beta.4): the build alone puts that name on the
+    // entry with the family's plain pattern, at that entry's price.
+    expect(resolveModelInfo(bundled, 'claude-opus-6-20270101')).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern', fallbackPricing: shippedPrice })
+    expect(resolveModelInfo(merged, 'claude-opus-6-20270101')).toMatchObject({ id: 'claude-opus-6', matchKind: 'prefix', label: 'Opus 6', fallbackPricing: NEW_OPUS.fallbackPricing })
+    // Any other name the build already places, a partner platform's form of
+    // the new id among them, stays where the build has it: the file never
+    // moves one (tests/unit/model-data-resolution-rule.test.ts).
+    for (const name of ['anthropic.claude-opus-6-v1:0', 'anthropic.claude-opus-9-v1:0', 'Opus 9 (1M context)']) {
       const info = resolveModelInfo(merged, name)
       expect(info, name).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern' })
       expect(info.fallbackPricing, name).toEqual(shippedPrice)

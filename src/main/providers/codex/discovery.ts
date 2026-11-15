@@ -41,6 +41,13 @@ export interface CodexFileStat { size: number; mtimeMs: number; ctimeMs: number;
 export interface CodexDiscoveryDeps {
   /** The executable a session would run (PATH / login-shell resolution). */
   resolve(): string | null
+  /** The same lookup made off the main thread. The check (discoverCodex, at
+   *  start-up and at each later check) and the pre-use check
+   *  (verifyCodexExecutable, before a sign-in, a launch, a usage read or a
+   *  model list read) both ask this one when it is given and wait for it,
+   *  so a PATH folder that does not answer, or a slow login shell, does not
+   *  hold the main process. Absent: `resolve` is asked. */
+  lookUp?(): Promise<string | null>
   /** Canonical path; throws when it does not exist. */
   realpath(p: string): string
   /** Throws when it cannot be read. */
@@ -95,7 +102,12 @@ export async function discoverCodex(deps: CodexDiscoveryDeps): Promise<CodexDisc
   const checkedAt = deps.now()
   const base = { checkedAt, compatibility: 'unknown' as Compatibility }
   let resolved: string | null
-  try { resolved = deps.resolve() } catch { resolved = null }
+  try {
+    const found = deps.lookUp ? await deps.lookUp() : deps.resolve()
+    resolved = typeof found === 'string' ? found : null
+  } catch {
+    resolved = null
+  }
   if (!resolved) return { ...base, state: 'missing', detail: 'the Codex CLI was not found on PATH' }
   let canonical: string
   let st: CodexFileStat
@@ -159,10 +171,23 @@ export type CodexExecutableCheck =
  *  elsewhere) or a changed file identity (replaced in place, even with its
  *  size and modification time preserved) blocks until the user re-checks. On
  *  success it returns the canonical path, and the caller runs exactly that
- *  path -- it never resolves a second time. */
-export function verifyCodexExecutable(recorded: CodexExecutableIdentity, deps: Pick<CodexDiscoveryDeps, 'resolve' | 'realpath' | 'stat' | 'platform'>): CodexExecutableCheck {
+ *  path -- it never resolves a second time.
+ *
+ *  The lookup is the one made off the main thread when it is given
+ *  (`lookUp`), and it is waited for here; `resolve` is asked when it is not.
+ *  The file is read (its real path and its identity) straight after the
+ *  lookup has answered, with nothing waited for in between, and the check
+ *  answers in that turn. A caller with a last word of its own before a
+ *  start (a cancel, a rule asked again) asks it after this check has
+ *  answered, never before: the lookup can take seconds. */
+export async function verifyCodexExecutable(recorded: CodexExecutableIdentity, deps: Pick<CodexDiscoveryDeps, 'resolve' | 'lookUp' | 'realpath' | 'stat' | 'platform'>): Promise<CodexExecutableCheck> {
   let resolved: string | null
-  try { resolved = deps.resolve() } catch { resolved = null }
+  try {
+    const found = deps.lookUp ? await deps.lookUp() : deps.resolve()
+    resolved = typeof found === 'string' ? found : null
+  } catch {
+    resolved = null
+  }
   if (!resolved) return { ok: false, reason: 'missing', detail: 'the Codex CLI is no longer on PATH' }
   let canonical: string
   let st: CodexFileStat

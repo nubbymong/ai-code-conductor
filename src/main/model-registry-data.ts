@@ -25,12 +25,16 @@
 //    entry stands for, and cannot have them (the next rule), so it is a
 //    mistake in the file and the log says so;
 //  - THE RULE: a file never changes what a name the build already places
-//    resolves to. A shipped model's patterns, aliases and family are always
-//    the bundled file's (the file's are left out; its label, prices and other
-//    fields are used), and a name is tried against the shipped entries, in
-//    the bundled file's order, before a model only the file has
-//    (mergeModelData here, matchEntry in model-registry.ts). So a model the
-//    file adds is its exact id and its aliases, and beyond those only a name
+//    resolves to, beyond the names that are a new model's own. A shipped
+//    model's patterns, aliases and family are always the bundled file's (the
+//    file's are left out; its label, prices and other fields are used), and
+//    a name is tried against the shipped entries, in the bundled file's
+//    order, before a model only the file has (mergeModelData here, matchEntry
+//    in model-registry.ts). So a model the file adds is its exact id and its
+//    aliases; then its own id in another form (a date or a context size
+//    after it, its version written with a dot), where no shipped id starts
+//    that name and the file could have listed it as an alias (2.1.3-beta.4,
+//    matchByOwnForm in model-registry.ts); and beyond those only a name
 //    nothing shipped places;
 //  - and a model the build does not ship takes no name the bundled file
 //    alone gives to one of its own entries: its ID is refused when the
@@ -68,7 +72,7 @@
 // model-registry-service.ts puts it to use.
 import { z } from 'zod'
 import {
-  dotsAsHyphens, familyProvider, followsModelPickerRule, literalPattern, longestIdNameStartsWith, resolveModelInfo,
+  dotsAsHyphens, familyProvider, followsModelPickerRule, isDatedOrBracketedForm, literalPattern, longestIdNameStartsWith, resolveModelInfo,
   type EffortLevelSpec, type ModelEntry, type ModelMatchKind, type ModelProvider, type ModelRegistry, type OverlayModelEntry,
 } from '../shared/model-registry'
 import { stripSpoofableText } from '../shared/safe-text'
@@ -178,15 +182,6 @@ function placedBy(bundled: ModelRegistry, name: string): { id: string; kind: Mod
   return at.known && at.matchKind ? { id: at.id, kind: at.matchKind } : undefined
 }
 
-/** Whether `name` is the shipped id `shipped` with a date (`-YYYYMMDD...`) or a
- *  context size (`[1m]`) after it: that shipped model's own name. */
-function isDatedOrBracketedForm(name: string, shipped: string): boolean {
-  if (!name.startsWith(shipped)) return false
-  const rest = name.slice(shipped.length)
-  // The '[' branch is defence in depth: the picker rule may already refuse such a name.
-  return /^-\d{8}/.test(rest) || rest.startsWith('[')
-}
-
 /** The shipped id `name` is a dated or bracketed form of, whichever entry the
  *  matcher placed it on: `claude-fable-5-20260101` is `claude-fable-5`'s, though
  *  it starts with `claude-fable-5-2` as well. (The matcher puts it on
@@ -232,8 +227,15 @@ function dottedFormOfShipped(bundled: ModelRegistry, name: string): string | und
  *  when it is read with a dot as a hyphen (dottedFormOfShipped). An id the
  *  bundled file only reaches by an id-prefix or a pattern otherwise
  *  (`claude-fable-5-3` is reached through `claude-fable-5`) is a new model's
- *  own name. */
-function idHeldBy(bundled: ModelRegistry, id: string): string | undefined {
+ *  own name.
+ *
+ *  Exported for the check on an entry proposed to the registry
+ *  (sentinel/sentinel-apply.ts), which holds the proposed id and each alias
+ *  to this rule against every entry the registry has, not the bundled file
+ *  alone. Every entry it is handed has an id: the bundled file's all do,
+ *  and that check hands over the registry's usable entries only
+ *  (shared/model-registry.ts usableEntries). */
+export function idHeldBy(bundled: ModelRegistry, id: string): string | undefined {
   const form = formOfShipped(bundled, id)
   if (form) return form
   const at = placedBy(bundled, id)
@@ -453,13 +455,13 @@ function joinByValue<T extends { value: string }>(file: readonly T[], bundled: r
  *    build may well have other patterns on a model this build ships, and
  *    refusing it would lock this build out of every later file. Its family
  *    is the bundled file's in the same way: a name placed by a pattern goes
- *    to an entry of the family its first match is in (matchByPrefixOrPattern),
+ *    to an entry of the family its first match is in (matchByPattern),
  *    so a shipped model given another family would be passed over there, and
  *    the names its own pattern places would go to another entry. And the
  *    result carries the bundled file's own order (`shippedOrder`, in memory
  *    only), which a name is placed by, a model only the file has being
- *    tried last (matchEntry). The order of `models`, which is the pickers',
- *    is still the file's.
+ *    tried last, but for its own id in another form (matchEntry). The order
+ *    of `models`, which is the pickers', is still the file's.
  *  - Whether a model the bundled file carries is offered in a picker is the
  *    bundled file's to say (`pickable`), so the file cannot hide one, nor
  *    offer the catch-all entry that is not a model.

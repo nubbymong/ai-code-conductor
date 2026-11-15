@@ -1,7 +1,7 @@
 import * as os from 'os'
 import * as fs from 'fs'
 import * as path from 'path'
-import { execSync } from 'child_process'
+import { execFile, execFileSync, execSync } from 'child_process'
 import { sandboxFor, approvalFor } from './permissions'
 import { getResourcesDirectory, getDataDirectory } from '../../ipc/setup-handlers'
 import type { SpawnOptions, ProviderSpawnCommand, PickFolderIdentity } from '../types'
@@ -18,8 +18,8 @@ import { codexExtraArgsProblem, codexExtraArgWords } from '../../../shared/extra
 import { logInfo, logWarn } from '../../debug-logger'
 import { isPlainScriptFile, isRealScriptFolder, deployFailedThisRun } from '../../script-deploy'
 import { checkDeployedScript, scriptFolderRefusal } from '../../script-folders'
-import { findOnPosixPath } from '../../login-shell'
-import { oneFileCannotBeRead } from '../../windows-programs'
+import { defaultLoginShell, findOnPosixPath, loginShellRun } from '../../login-shell'
+import { oneFileCannotBeRead, pathWalkDeadline, sharedFileLook, type PathWalkDeadline } from '../../windows-programs'
 
 /** The two forms a Codex install puts on PATH on Windows: `listed`, the ones
  *  PATHEXT lists, in its order (Windows' own default when it is unset), as a
@@ -78,7 +78,9 @@ export type CodexCandidateStat = 'file' | 'none' | 'unreachable'
 export interface CodexBinaryLookup {
   /** Default: this machine's. */
   platform?: NodeJS.Platform
-  /** Default: this process's environment (Windows: its PATH and PATHEXT). */
+  /** Default: this process's environment (Windows: its PATH and PATHEXT;
+   *  macOS and Linux: its SHELL, and the environment the login shell is
+   *  started with). */
   env?: Readonly<Record<string, string | undefined>>
   /** Whether a regular file is there (links followed as a terminal follows
    *  them). Default: statFile. */
@@ -114,17 +116,19 @@ export function resolveCodexBinary(lookup: CodexBinaryLookup = {}): { cmd: strin
     // launched app inherits launchd's minimal PATH (no Homebrew/npm-global),
     // so both a bare `which codex` probe and a later bare-'codex' spawn fail
     // even though the user's terminal finds it. Matches cli:check's login-
-    // shell approach for claude.
+    // shell approach for claude. The shell is started itself, with an
+    // argument list and the lookup's environment (codexLoginShellQuestion).
     try {
-      const shell = process.env.SHELL || '/bin/bash'
-      const out = execSync(`${shell} -l -c 'which codex'`, {
+      const run = codexLoginShellQuestion(lookup)
+      const out = execFileSync(run.file, run.args, {
+        cwd: run.cwd,
+        env: run.env,
         encoding: 'utf-8',
         timeout: 8000,
+        windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
-      const resolved = out.trim().split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('/')).pop()
-      if (resolved) return { cmd: resolved, args: [] }
-      return null
+      return codexFromLoginShell(String(out ?? ''))
     } catch { return null }
   }
   // Windows (owner, 2026-10-04): PATH order wins, as a terminal finds it.
@@ -155,6 +159,99 @@ export function resolveCodexBinary(lookup: CodexBinaryLookup = {}): { cmd: strin
     }
   }
   return null
+}
+
+/** How the login shell is asked where the program is, on macOS and Linux:
+ *  the user's login shell (login-shell.ts defaultLoginShell, read from the
+ *  lookup's environment), started itself with an argument list, in the home
+ *  folder, with that environment (login-shell.ts loginShellRun). One form
+ *  for the lookup made in place and the one made off the main thread. */
+function codexLoginShellQuestion(lookup: { platform?: NodeJS.Platform; env?: Readonly<Record<string, string | undefined>> }): ReturnType<typeof loginShellRun> {
+  const env = (lookup.env ?? process.env) as NodeJS.ProcessEnv
+  return loginShellRun(defaultLoginShell(env, lookup.platform ?? os.platform()), 'which codex', env)
+}
+
+/** What the login shell's answer to `which codex` names: the last line that
+ *  is an absolute path, or null. One reading for the lookup made in place
+ *  and the one made off the main thread. */
+function codexFromLoginShell(out: string): { cmd: string; args: string[] } | null {
+  const resolved = out.trim().split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('/')).pop()
+  return resolved ? { cmd: resolved, args: [] } : null
+}
+
+export interface CodexBinaryLookupAsync {
+  /** Default: this machine's. */
+  platform?: NodeJS.Platform
+  /** Default: this process's environment (Windows: its PATH and PATHEXT;
+   *  macOS and Linux: its SHELL, and the environment the login shell is
+   *  started with). */
+  env?: Readonly<Record<string, string | undefined>>
+  /** What one look at a candidate found. Default: diskStat's reading, off
+   *  the main thread, through the shared file test (windows-programs.ts
+   *  sharedFileLook): one test at a time in a folder across every walk of
+   *  PATH the app makes off the event loop, so a share that is down holds
+   *  one thread for all of them, with the deadline of the walk that asks. */
+  statFile?: (p: string) => Promise<CodexCandidateStat>
+}
+
+/**
+ * resolveCodexBinary's lookup, made off the main thread: the same folders,
+ * the same two passes and the same answer, for a caller that can wait. The
+ * CLI check asks this way (discovery, at start-up and at each later check),
+ * so a PATH folder on a share that does not answer, or a login shell that is
+ * slow to start, no longer holds the main process while the app starts.
+ *
+ * Windows: the walk above, one file test at a time through the shared file
+ * test. macOS and Linux: the same question put to the same login shell, not
+ * waited for in place; nothing is typed into that shell, so its input ends
+ * at once, as with the question asked in place.
+ *
+ * The check made just before a sign-in, a launch, a usage read or a model
+ * list read asks this way too, and waits for the answer (discovery.ts
+ * verifyCodexExecutable).
+ */
+export async function resolveCodexBinaryAsync(lookup: CodexBinaryLookupAsync = {}): Promise<{ cmd: string; args: string[] } | null> {
+  if ((lookup.platform ?? os.platform()) !== 'win32') {
+    return new Promise((resolve) => {
+      try {
+        const run = codexLoginShellQuestion(lookup)
+        const child = execFile(run.file, run.args, { cwd: run.cwd, env: run.env, encoding: 'utf-8', timeout: 8000, windowsHide: true }, (err, stdout) => {
+          let found: { cmd: string; args: string[] } | null = null
+          try { found = err ? null : codexFromLoginShell(String(stdout ?? '')) } catch { /* no answer */ }
+          resolve(found)
+        })
+        try { child?.stdin?.end() } catch { /* already closed */ }
+      } catch {
+        resolve(null)
+      }
+    })
+  }
+  const env = lookup.env ?? process.env
+  const deadline = lookup.statFile ? null : pathWalkDeadline()
+  const stat = lookup.statFile ?? sharedFileLook(deadline as PathWalkDeadline)
+  try {
+    const { listed, unlisted } = codexWindowsForms(winEnvValue(env, 'PATHEXT'))
+    const folders = codexWindowsPathFolders(winEnvValue(env, 'PATH'))
+    const unreachable = new Set<string>()
+    for (const forms of [listed, unlisted]) {
+      for (const dir of folders) {
+        if (unreachable.has(dir)) continue
+        for (const name of forms) {
+          const candidate = path.win32.join(dir, name)
+          const found = await stat(candidate)
+          if (found === 'file') return { cmd: candidate, args: [] }
+          if (found === 'unreachable') {
+            unreachable.add(dir)
+            break
+          }
+        }
+      }
+    }
+    return null
+  } finally {
+    // The walk has ended: its timer is dropped with it.
+    deadline?.clear()
+  }
 }
 
 /** Where the resume picker's node is looked for (tests pass their own). */

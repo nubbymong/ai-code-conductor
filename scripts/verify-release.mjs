@@ -20,9 +20,14 @@
 //  - The live pack lives in tests/live/ and is matched ONLY by
 //    --config vitest.live.config.ts. Run without that flag and vitest silently
 //    finds 0 tests (the default config excludes tests/live).
-//  - We target tests/live/ssh-statusline.live.ts SPECIFICALLY. The live config
-//    also globs tests/live/ssh-multisession.live.ts, whose "-R port coexistence"
-//    test fails in a headless runner for an UNRELATED reason: it reuses the real
+//  - We target the statusline packs SPECIFICALLY: one file per target host,
+//    tests/live/ssh-statusline-<host>.live.ts (the matrix was one file,
+//    ssh-statusline.live.ts, until it was split into a lane per host). They
+//    are found by name when the gate runs (liveStatuslinePacks) and run under
+//    the live config, as `npm run test:live:ssh` runs them, lanes in parallel.
+//    The live config also globs tests/live/ssh-multisession*.live.ts, whose
+//    "-R port coexistence" test fails in a headless runner for an UNRELATED
+//    reason: it reuses the real
 //    force-TTY (`-t`) ssh argv under spawnSync (no tty), so its preflight gets
 //    "Pseudo-terminal will not be allocated..." instead of its PREFLIGHT marker.
 //    That is not a harmonise/statusline failure, so it must not pollute this gate.
@@ -37,15 +42,37 @@
 //    account shows Fable:93% on Pi/WINDOWS_2/Rocky. So empty buckets
 //    are WARN, never FAIL.
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const REPO = fileURLToPath(new URL('..', import.meta.url))
-const STATUSLINE_PACK = 'tests/live/ssh-statusline.live.ts'
-const HOSTS_FILE = join(REPO, 'tests', 'live', 'hosts.local.json')
+const LIVE_DIR = join(REPO, 'tests', 'live')
+const HOSTS_FILE = join(LIVE_DIR, 'hosts.local.json')
 const VITEST = join(REPO, 'node_modules', 'vitest', 'vitest.mjs')
+
+// ── The packs the live step runs ─────────────────────────────────────────────
+
+/** A statusline pack's file name: one lane per target host. */
+const STATUSLINE_PACK_NAME = /^ssh-statusline-[A-Za-z0-9_.-]+\.live\.ts$/
+
+/** The statusline packs among `names` (the file names in tests/live), as
+ *  repo-relative paths in name order. Nothing else the live config globs is
+ *  among them (the multisession packs, the harness). Pure. */
+export function statuslinePacks(names) {
+  return names.filter((n) => STATUSLINE_PACK_NAME.test(n)).sort().map((n) => `tests/live/${n}`)
+}
+
+/** The statusline packs that are in tests/live now: what the live step
+ *  hands to vitest. Empty when the folder cannot be listed. */
+export function liveStatuslinePacks(dir = LIVE_DIR) {
+  try {
+    return statuslinePacks(readdirSync(dir))
+  } catch {
+    return []
+  }
+}
 
 // ── Pure, unit-tested parsing ────────────────────────────────────────────────
 
@@ -164,11 +191,17 @@ async function main() {
     process.exit(liveOnly ? 0 : 0)
   }
 
+  const packs = liveStatuslinePacks()
+  if (packs.length === 0) {
+    console.error('❌ no statusline pack found in tests/live (ssh-statusline-<host>.live.ts): nothing to run.')
+    process.exit(1)
+  }
+
   const dump = mkdtempSync(join(tmpdir(), 'ccc-verify-dump-'))
   // Smoke: skip the two 480s tmux-reattach combos via a negative-lookahead
   // testNamePattern. `node vitest.mjs` (not npx/.cmd) means this regex reaches
   // vitest literally, no shell interpretation.
-  const args = [VITEST, 'run', '--config', 'vitest.live.config.ts', STATUSLINE_PACK]
+  const args = [VITEST, 'run', '--config', 'vitest.live.config.ts', ...packs]
   if (!full) args.push('-t', '^(?!.*reattach)')
   const live = await run(process.execPath, args, { capture: true, env: { CCC_LIVE_DUMP: dump } })
 

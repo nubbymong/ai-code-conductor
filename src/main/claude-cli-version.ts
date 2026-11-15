@@ -24,12 +24,11 @@
 // silent pass. The probe runs at boot, and again on demand when something asks
 // and the answer is still unknown.
 import { execFile, type ChildProcess } from 'node:child_process'
-import fs from 'node:fs'
 import path from 'node:path'
 import { logInfo, logWarn } from './debug-logger'
 import { CLAUDE_PROFILE_PROBE, claudeFromPowerShellProfile, probeClaudeCli, setClaudeProfileLookupAllowed, type ClaudeCliProbe } from './claude-cli-probe'
 import { windowsFolderAsRun, windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
-import { oneFileCannotBeRead } from './windows-programs'
+import { pathWalkDeadline, sharedFileLook } from './windows-programs'
 import { claudeVersionRunEnv } from './providers/review-support'
 import { warmFirstStart } from './first-start-warmup'
 import { timedStart } from './main-thread-ops'
@@ -115,7 +114,15 @@ function isWindowsAbsolute(p: string | undefined): p is string {
  *  ASYNC, one stat at a time: a PATH entry on a dead network share can hold a
  *  stat for tens of seconds, which must not be the main process's event loop;
  *  and a folder that could not be reached at all is not asked again for the
- *  next name.
+ *  next name. The probe's own file test is the shared one, read as a walk
+ *  with a loop of its own reads it (windows-programs.ts sharedFileLook), so
+ *  it keeps to one test at a time in a folder with every other walk.
+ *
+ *  A file that cannot be read ranks exactly as one that is not there, in a
+ *  later folder too: with claude.bat alone in the first folder, and a
+ *  claude.exe that cannot be read beside a claude.cmd in the second, the
+ *  second folder's claude.cmd is the answer, as when that folder has no
+ *  claude.exe at all (windows-programs.ts findOnWindowsPath).
  *
  *  Exported for the test. */
 export async function findClaudeOnWindowsPath(
@@ -138,31 +145,6 @@ export async function findClaudeOnWindowsPath(
     }
   }
   return null
-}
-
-/** `none` for an answer that says the file is not there (or is not a file),
- *  and for a failure known to be about this one file (windows-programs.ts
- *  oneFileCannotBeRead): access to it is denied, or it is in use while an
- *  update replaces it. That passes the one file, and the walk still asks the
- *  folder for the next name (claude.cmd beside a claude.exe that cannot be
- *  read), as the launch's own walk does. `unreachable` for anything else --
- *  a share that did not answer, whatever reason its file test ends with --
- *  so the walk stops asking that folder, and a share that is down is waited
- *  for once, not once for each name.
- *
- *  A file that cannot be read so ranks exactly as one that is not there, in
- *  a later folder too: with claude.bat alone in the first folder, and a
- *  claude.exe that cannot be read beside a claude.cmd in the second, the
- *  second folder's claude.cmd is the answer, as when that folder has no
- *  claude.exe at all (windows-programs.ts findOnWindowsPath). */
-async function statRegularFile(p: string): Promise<'file' | 'none' | 'unreachable'> {
-  try {
-    return (await fs.promises.stat(p)).isFile() ? 'file' : 'none'
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException)?.code
-    if (code === 'ENOENT' || code === 'ENOTDIR') return 'none'
-    return oneFileCannotBeRead(e) ? 'none' : 'unreachable'
-  }
 }
 
 /** How to run `<resolved> --version`, or why it will not be run.
@@ -260,7 +242,14 @@ function abandonProbe(child: ChildProcess | undefined, exited: boolean, viaCmd: 
  *  shares), so the version is known for the Claude Code a session runs. */
 async function resolveForVersionProbe(): Promise<ClaudeCliProbe> {
   if (process.platform !== 'win32') return probeClaudeCli()
-  const found = await findClaudeOnWindowsPath(process.env.PATH, statRegularFile)
+  const deadline = pathWalkDeadline()
+  let found: string | null
+  try {
+    found = await findClaudeOnWindowsPath(process.env.PATH, sharedFileLook(deadline))
+  } finally {
+    // The walk has ended: its timer is dropped with it.
+    deadline.clear()
+  }
   const probe = 'PATH walk (claude.exe, claude.cmd, claude.bat)'
   if (found) return { installed: true, path: found, probe }
   const viaProfile = await claudeFromPowerShellProfile()

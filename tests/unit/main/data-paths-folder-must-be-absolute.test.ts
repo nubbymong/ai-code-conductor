@@ -10,7 +10,8 @@
 // The REAL data-paths and the REAL registry run here, with the platform
 // forced to Windows or to Linux. reg.exe is never started (child_process is
 // replaced outright), folder creation is a stub that records what it was
-// asked, and the macOS/Linux config file lives in memory. The folders are
+// asked, and the macOS/Linux config file lives in memory (it is saved as a
+// staged copy renamed over it: both steps are recorded). The folders are
 // literals that read the same on every host; whether one is a full path is
 // judged by the forced platform's rules, not the host's.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -35,6 +36,10 @@ vi.mock('fs', async (importOriginal) => {
     existsSync: vi.fn(() => false),
     readFileSync: vi.fn(() => { throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' }) }),
     writeFileSync: vi.fn((p: import('fs').PathOrFileDescriptor) => { h.configWrites.push(String(p)) }),
+    lstatSync: vi.fn(() => { throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' }) }),
+    readdirSync: vi.fn(() => []),
+    renameSync: vi.fn((_from: import('fs').PathLike, to: import('fs').PathLike) => { h.configWrites.push(String(to)) }),
+    unlinkSync: vi.fn(),
   }
   return { ...real, ...stub, default: { ...real, ...stub } }
 })

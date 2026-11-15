@@ -654,11 +654,15 @@ export interface ElectronAPI {
     isComplete: () => Promise<boolean>
     getDefaultDataDir: () => Promise<string>
     selectDataDir: () => Promise<string | null>
-    setDataDir: (dir: string) => Promise<boolean>
+    /** true once saved, and only then. Not saved: false, or null when the
+     *  reason is that the settings file did not read
+     *  (shared/setup-folder-save.ts). Neither reads as true. */
+    setDataDir: (dir: string) => Promise<import('../../shared/setup-folder-save').FolderSaveAnswer>
     getDataDir: () => Promise<string>
     getResourcesDir: () => Promise<string>
     selectResourcesDir: () => Promise<string | null>
-    setResourcesDir: (dir: string) => Promise<boolean>
+    /** As setDataDir. */
+    setResourcesDir: (dir: string) => Promise<import('../../shared/setup-folder-save').FolderSaveAnswer>
     isCliReady: () => Promise<boolean>
     probeCli: () => Promise<{ installed: boolean; path?: string; probe: string; pathHint?: PathHintView }>
     /** null: closed, or asked for again, before it started (nothing started). */

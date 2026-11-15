@@ -2,13 +2,47 @@
 // Fixtures are real report() lines captured from the live SSH matrix, so the
 // gate's PASS/WARN/FAIL logic is pinned without needing the fleet.
 import { describe, it, expect } from 'vitest'
+import { existsSync, readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
   stripAnsi,
   parseBuckets,
   parseLiveMatrixOutput,
   classifyCombo,
   summarizeGate,
+  statuslinePacks,
+  liveStatuslinePacks,
 } from '../../scripts/verify-release.mjs'
+
+const ROOT = resolve(__dirname, '..', '..')
+
+// The live step runs the statusline packs: one file per target host
+// (tests/live/ssh-statusline-<host>.live.ts), found by name when the gate
+// runs, and nothing else the live config globs. Reads file names only;
+// nothing is started.
+describe('the packs the live step runs', () => {
+  it('one pack per target host by its name, in name order, and nothing else in the folder', () => {
+    expect(statuslinePacks([
+      'statusline-harness.ts', 'ssh-statusline-two.live.ts', 'ssh-multisession.live.ts', 'hosts.example.json',
+      'ssh-statusline-one.live.ts', 'ssh-multisession-repro.live.ts', 'ssh-statusline.live.ts', 'ssh-statusline-one.live.ts.bak',
+    ])).toEqual(['tests/live/ssh-statusline-one.live.ts', 'tests/live/ssh-statusline-two.live.ts'])
+    expect(statuslinePacks([])).toEqual([])
+  })
+
+  // Mutation to prove this can fail: name a pack that is not in tests/live.
+  it('every pack it hands to the run is a file in tests/live, and there is at least one', () => {
+    const packs = liveStatuslinePacks()
+    expect(packs.length).toBeGreaterThan(0)
+    for (const pack of packs) expect(existsSync(resolve(ROOT, pack)), pack).toBe(true)
+    // Each statusline lane in the folder is among them.
+    const lanes = readdirSync(resolve(ROOT, 'tests', 'live')).filter((n) => n.startsWith('ssh-statusline-') && n.endsWith('.live.ts'))
+    expect(packs).toEqual(lanes.sort().map((n) => `tests/live/${n}`))
+  })
+
+  it('a folder that cannot be listed gives no pack', () => {
+    expect(liveStatuslinePacks(resolve(ROOT, 'tests', 'live', 'no-such-folder'))).toEqual([])
+  })
+})
 
 // A realistic slice of the pack's stdout: a full PASS (Fable present, account set),
 // a WARN (statusline+account but no buckets — a host whose token is empty), and a

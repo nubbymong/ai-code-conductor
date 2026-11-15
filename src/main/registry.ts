@@ -7,8 +7,10 @@
  * reads from the new key first, falls back to the old key, and auto-migrates
  * values it finds in the old key to the new key.
  *
- * On macOS/Linux: Uses a JSON file at ~/.claude-conductor/platform-config.json
- * as a cross-platform fallback store.
+ * On macOS/Linux: a JSON file under the home folder, platform-config.json in
+ * ~/.ai-code-conductor (or ~/.claude-conductor on an older install), read and
+ * written by platform-config-store.ts: a file that is there but did not read
+ * is refused and kept, never replaced by an empty one.
  *
  * The startup function `migrateRegistryKeys()` copies ALL values from the
  * old key to the new key (if the old key still exists) and then deletes it,
@@ -16,10 +18,8 @@
  * On non-Windows platforms it is a no-op.
  */
 import { execFileSync } from 'child_process'
-import { homedir } from 'os'
-import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { logInfo, logWarn } from './debug-logger'
+import { readPlatformConfigValue, writePlatformConfigValue } from './platform-config-store'
 import { systemTool } from './windows-programs'
 
 // Read order: current brand first, then each legacy key in reverse age. Writes
@@ -35,62 +35,20 @@ const LEGACY_KEYS = ['Software\\Claude Command Center', 'Software\\Claude Conduc
 const OLD_KEY = 'Software\\Claude Conductor'
 const NEW_KEY = BRAND_KEY
 
-// --- Cross-platform JSON fallback (macOS / Linux) ---
-
-// macOS/Linux stand-in for the Windows registry. Same rule as the data
-// directory: a fresh install writes under the current brand, an install that
-// already has a config file keeps using it (moving it would strand the pointer
-// to the user's data directory).
-const BRAND_FALLBACK_DIR = join(homedir(), '.ai-code-conductor')
-const LEGACY_FALLBACK_DIRS = [join(homedir(), '.claude-conductor')]
-
-function fallbackConfigPaths(): { dir: string; file: string } {
-  const brandFile = join(BRAND_FALLBACK_DIR, 'platform-config.json')
-  if (existsSync(brandFile)) return { dir: BRAND_FALLBACK_DIR, file: brandFile }
-  for (const dir of LEGACY_FALLBACK_DIRS) {
-    const file = join(dir, 'platform-config.json')
-    if (existsSync(file)) return { dir, file }
-  }
-  return { dir: BRAND_FALLBACK_DIR, file: brandFile }
-}
-
-function readFallbackConfig(): Record<string, string> {
-  try {
-    const { file } = fallbackConfigPaths()
-    if (existsSync(file)) {
-      return JSON.parse(readFileSync(file, 'utf-8'))
-    }
-  } catch {}
-  return {}
-}
-
-/** Save the config file; true once it is written. False when its folder
- *  could not be created or the file could not be written (a read-only or
- *  full home folder), so the caller can say the value was not saved. */
-function writeFallbackConfig(config: Record<string, string>): boolean {
-  try {
-    const { dir, file } = fallbackConfigPaths()
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    writeFileSync(file, JSON.stringify(config, null, 2))
-    return true
-  } catch (err) {
-    logWarn(`[registry] Could not save the platform config file: ${err instanceof Error ? err.message : String(err)}`)
-    return false
-  }
-}
-
 // --- Public API ---
 
 /**
  * Read a registry value (Windows) or JSON config value (macOS/Linux).
  * On Windows, tries the new key first then falls back to the old key.
  * If found under the old key, auto-migrates the value to the new key.
+ * On macOS and Linux a config file that is there but did not read answers
+ * the value last read or written in this run, or null when there is none
+ * (platform-config-store.ts).
  */
 export function readRegistry(valueName: string): string | null {
   if (process.platform !== 'win32') {
-    // Cross-platform fallback: read from JSON file
-    const config = readFallbackConfig()
-    return config[valueName] ?? null
+    // macOS and Linux: the config file under the home folder.
+    return readPlatformConfigValue(valueName)
   }
 
   // Current brand key wins.
@@ -115,15 +73,14 @@ export function readRegistry(valueName: string): string | null {
  * Write a registry value (Windows) or JSON config value (macOS/Linux).
  * True only once the value is saved: on macOS and Linux a config file that
  * could not be written answers false, as a value reg.exe did not save does
- * on Windows.
+ * on Windows. So does a config file that is there but did not read: nothing
+ * is saved over it, and it is left as it is (platform-config-store.ts).
  */
 export function writeRegistry(valueName: string, value: string): boolean {
   if (process.platform !== 'win32') {
-    // Cross-platform fallback: write to JSON file
+    // macOS and Linux: the config file under the home folder.
     try {
-      const config = readFallbackConfig()
-      config[valueName] = value
-      return writeFallbackConfig(config)
+      return writePlatformConfigValue(valueName, value)
     } catch {
       return false
     }

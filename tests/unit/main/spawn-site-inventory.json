@@ -253,10 +253,15 @@
    "how": "not-windows",
    "reason": "macOS and Linux only: the user's login shell asked for its PATH (codexLoginShellPath answers null on Windows)."
   },
-  "src/main/providers/codex/spawn.ts :: execSync(`${shell} -l -c 'which codex'`": {
+  "src/main/providers/codex/spawn.ts :: execFile(run.file": {
    "count": 1,
    "how": "not-windows",
-   "reason": "macOS and Linux only (inside the non-Windows branch): the user's login shell asked where codex is."
+   "reason": "macOS and Linux only (inside the non-Windows branch): the user's login shell, started itself with an argument list (login-shell.ts loginShellRun), asked where codex is, off the main thread, for the CLI check and the check before a use."
+  },
+  "src/main/providers/codex/spawn.ts :: execFileSync(run.file": {
+   "count": 1,
+   "how": "not-windows",
+   "reason": "macOS and Linux only (inside the non-Windows branch): the user's login shell, started itself with an argument list (login-shell.ts loginShellRun), asked where codex is."
   },
   "src/main/providers/codex/spawn.ts :: execSync(`${shell} -l -c 'which node'`": {
    "count": 1,

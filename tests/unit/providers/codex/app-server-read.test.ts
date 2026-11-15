@@ -91,7 +91,7 @@ function helper(o: { home?: (env: Record<string, string>) => string; stay?: bool
   }
 }
 
-function setup(o: { version?: string; compatibility?: string; helper?: Helper; env?: Record<string, string>; proven?: () => CodexDiscovery | null; beforeEnv?: () => void } = {}) {
+function setup(o: { version?: string; compatibility?: string; helper?: Helper; env?: Record<string, string>; proven?: () => CodexDiscovery | null; beforeEnv?: () => void; lookUp?: () => Promise<string | null> } = {}) {
   const fr = fakeRun(o.helper ?? helper())
   const locks = createCodexRealmLocks()
   const deps: CodexAuthDeps = {
@@ -101,7 +101,11 @@ function setup(o: { version?: string; compatibility?: string; helper?: Helper; e
     },
     realmIdentity: (home) => ({ canonical: home, dev: '9', ino: String(home.length), isDirectory: true }),
     proven: o.proven ?? (() => proven(o.version ?? '0.155.1', o.compatibility ?? 'supported')),
-    executablePorts: { resolve: () => EXE, realpath: (p) => p, stat: () => STAT, platform: 'win32' },
+    // With `lookUp`, the lookup made off the main thread: the one in place
+    // then names another file, so an answer from it would be refused.
+    executablePorts: o.lookUp
+      ? { resolve: () => 'C:\\elsewhere\\codex.exe', lookUp: o.lookUp, realpath: (p) => p, stat: () => STAT, platform: 'win32' }
+      : { resolve: () => EXE, realpath: (p) => p, stat: () => STAT, platform: 'win32' },
     baseEnv: async () => { o.beforeEnv?.(); return { PATH: 'C:\\Tools', SystemRoot: 'C:\\Windows', OPENAI_API_KEY: 'sk-ambient-0000000000000000', CODEX_HOME: EXT, ...o.env } },
     run: fr.run as unknown as CodexAuthDeps['run'],
     envFilePresent: () => false,
@@ -400,6 +404,63 @@ describe('readUsage: the last word before the spawn, and the chain end (MP8)', (
     expect(r.ok).toBe(true)
     expect(asked).toBe(1)
     expect(passedAtSpawn).toBe(false)
+  })
+
+  // The executable check before a run waits for the lookup, which is made
+  // off the main thread. The last words come after that wait.
+  // Mutation to prove this can fail: make the executable check inside the
+  // run, after the last words (a wait then stands between them and the spawn).
+  it('the executable is looked up off the main thread and waited for; mayStart is asked only once it has answered, with nothing awaited between it and the spawn', async () => {
+    const order: string[] = []
+    let lookups = 0
+    let answer: (found: string | null) => void = () => {}
+    // The first lookup is the realm's own check; the second is this run's.
+    const t = setup({ lookUp: () => { order.push('lookup'); return ++lookups < 2 ? Promise.resolve(EXE) : new Promise((resolve) => { answer = resolve }) } })
+    let turnPassed = false
+    let passedAtSpawn: boolean | null = null
+    const run = t.run.getMockImplementation()!
+    t.run.mockImplementation((cmd, opts) => { order.push('spawn'); passedAtSpawn = turnPassed; return run(cmd, opts) })
+    const reading = t.ops.readUsage({ authRealmId: MANAGED }, {
+      mayStart: () => { order.push('mayStart'); queueMicrotask(() => { turnPassed = true }); return true },
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    // The run's lookup has not answered: no last word yet, and no helper.
+    expect(order).toEqual(['lookup', 'lookup'])
+    answer(EXE)
+    expect((await reading).ok).toBe(true)
+    expect(order).toEqual(['lookup', 'lookup', 'mayStart', 'spawn'])
+    expect(passedAtSpawn).toBe(false)
+    expect(t.runs[0].cmd.file).toBe(EXE)
+  })
+
+  it('a run\'s lookup that names another file, or none, starts no helper', async () => {
+    for (const found of ['C:\\elsewhere\\codex.exe', null]) {
+      let lookups = 0
+      // Only the second lookup, the first run's own, gives that answer.
+      const t = setup({ lookUp: async () => (++lookups === 2 ? found : EXE) })
+      expect((await t.ops.readUsage({ authRealmId: MANAGED })).ok, String(found)).toBe(false)
+      expect(t.runs, String(found)).toHaveLength(0)
+      // The one helper slot and the realm are let go: the next read runs.
+      await new Promise((r) => setTimeout(r, 0))
+      expect((await t.ops.readUsage({ authRealmId: MANAGED })).ok, String(found)).toBe(true)
+      expect(t.runs, String(found)).toHaveLength(1)
+    }
+  })
+
+  // Mutation to prove this can fail: ask about the stop only before the
+  // executable check.
+  it('a status check stopped while its executable is looked up starts no CLI and answers cancelled', async () => {
+    let lookups = 0
+    let answer: (found: string | null) => void = () => {}
+    const t = setup({ lookUp: () => (++lookups < 2 ? Promise.resolve(EXE) : new Promise((resolve) => { answer = resolve })) })
+    const stop = new AbortController()
+    const checking = t.ops.status({ authRealmId: MANAGED }, { signal: stop.signal })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(lookups).toBe(2)
+    stop.abort()
+    answer(EXE)
+    expect(await checking).toMatchObject({ ok: false, code: 'cancelled', state: 'error' })
+    expect(t.runs).toHaveLength(0)
   })
 
   it('onEnded settles only once the stopped helper\'s kill has finished; it is not called when nothing was held', async () => {

@@ -183,7 +183,7 @@ export function literalPattern(p: unknown): { text: string; atStart: boolean } |
  * the registry cannot place — used to take the whole footer down with a
  * `TypeError: m.patterns is not iterable` (ADR-009 MAJOR-2 on #404).
  */
-function usableEntries(registry: ModelRegistry): ModelEntry[] {
+export function usableEntries(registry: ModelRegistry): ModelEntry[] {
   return (registry?.models ?? []).filter(
     (m): m is ModelEntry => !!m && typeof m.id === 'string' && m.id.length > 0,
   )
@@ -196,16 +196,19 @@ function isModelDataEntry(m: ModelEntry): boolean {
 
 /**
  * The entries a name is tried against when it is no entry's id or alias, as
- * two lists: the first is tried in full before the second (2.1.3-beta.1).
+ * two lists: the first is tried in full before the second (2.1.3-beta.1),
+ * but for a name that is the own id, in another form, of a model in the
+ * second (matchByOwnForm, 2.1.3-beta.4).
  *
  * The rule: a fetched model file never changes what a name the build already
- * places resolves to. So the second list is the models only the fetched file
- * has, and the first is every other entry: the shipped ones in the bundled
- * file's order (`shippedOrder`; the fetched file's own order is the pickers',
- * not this one's), then the user's and Sentinel's own additions in list
- * order, which is where they stand without model data. With no model data in
- * use the first list is `models` as it is (no order is given, and the sort
- * below is stable, so it moves nothing).
+ * places resolves to, beyond the names that are a new model's own. So the
+ * second list is the models only the fetched file has, and the first is
+ * every other entry: the shipped ones in the bundled file's order
+ * (`shippedOrder`; the fetched file's own order is the pickers', not this
+ * one's), then the user's and Sentinel's own additions in list order, which
+ * is where they stand without model data. With no model data in use the
+ * first list is `models` as it is (no order is given, and the sort below is
+ * stable, so it moves nothing).
  */
 function entriesByStanding(registry: ModelRegistry, models: ModelEntry[]): [ModelEntry[], ModelEntry[]] {
   const order = Array.isArray(registry?.shippedOrder) ? registry.shippedOrder : []
@@ -233,9 +236,17 @@ function matchEntry(
   const alias = models.find((m) => Array.isArray(m.aliases) && m.aliases.includes(raw))
   if (alias) return { entry: alias, kind: 'alias' }
   // 3 and 4, first over every entry that is not the fetched model file's own
-  // addition; such an addition only places a name none of those does.
+  // addition. Such an addition places a name none of those does, and, ahead
+  // of their patterns, a name that is its own id in another form
+  // (matchByOwnForm). A name a standing id starts is never looked at again.
   const [standing, added] = entriesByStanding(registry, models)
-  return matchByPrefixOrPattern(standing, raw) ?? matchByPrefixOrPattern(added, raw)
+  const byStandingId = matchByIdStart(standing, raw)
+  if (byStandingId) return byStandingId
+  const byStandingPattern = matchByPattern(standing, raw)
+  return matchByOwnForm(added, standing, raw, byStandingPattern?.entry ?? null)
+    ?? byStandingPattern
+    ?? matchByIdStart(added, raw)
+    ?? matchByPattern(added, raw)
 }
 
 /**
@@ -285,16 +296,18 @@ function longestIdOfReading(reading: string, ids: readonly string[]): string {
  * written with a dot goes to the entry the same name written with a hyphen
  * goes to.
  *
- * That holds for those models, and no further. A model only a fetched model
- * file has is tried after every standing entry (matchEntry), so a name that
- * is no entry's id or alias goes to a standing entry that places it before
- * the fetched one's id is looked at: with a fetched `claude-opus-6-1`,
- * `claude-opus-6.1` is not that model, it goes to the entry with the family's
- * plain pattern, where the build alone puts it. (The file may list that name
- * as an alias of its model, and an alias is looked up before this step:
- * aliasHeldBy in model-registry-data.ts.) And an id that is itself written
- * with a dot is not the same id written with a hyphen (`gpt-5.5` is a model,
- * `gpt-5-5` is not).
+ * That holds for those models. A model only a fetched model file has is
+ * tried after the ids of every standing entry (matchEntry), so a name a
+ * standing id starts stays with that entry: with a fetched
+ * `claude-opus-5-7`, `claude-opus-5.7` is still Opus 5's. (The file may list
+ * that name as an alias of its model, and an alias is looked up before this
+ * step: aliasHeldBy in model-registry-data.ts.) A name no standing id starts
+ * is the fetched model's when it is that model's own id written this way,
+ * ahead of a standing entry's pattern (matchByOwnForm): with a fetched
+ * `claude-opus-6-1`, `claude-opus-6.1` is that model, not the entry with the
+ * family's plain pattern. And an id that is itself written with a dot is not
+ * the same id written with a hyphen (`gpt-5.5` is a model, `gpt-5-5` is
+ * not).
  *
  * The longest id of either reading takes the name; of two as long, the one
  * the name as written starts with. An id is compared as it is written, so one
@@ -316,7 +329,8 @@ export function longestIdNameStartsWith(name: string, ids: readonly string[]): s
   return second.length > asWritten.length ? second : asWritten
 }
 
-function matchByPrefixOrPattern(
+/** Step 3: the entry of `models` with the longest id the name starts with. */
+function matchByIdStart(
   models: ModelEntry[],
   raw: string,
 ): { entry: ModelEntry; kind: ModelMatchKind } | null {
@@ -326,7 +340,117 @@ function matchByPrefixOrPattern(
   //    (longestIdNameStartsWith). Of entries with that id, the first.
   const id = longestIdNameStartsWith(raw, models.map((m) => m.id))
   const prefix = id ? models.find((m) => m.id === id) : undefined
-  if (prefix) return { entry: prefix, kind: 'prefix' }
+  return prefix ? { entry: prefix, kind: 'prefix' } : null
+}
+
+/**
+ * Whether `name` is `id` with a date (`-YYYYMMDD...`) or a context size
+ * (`[1m]`) after it: that id's model under its own name.
+ *
+ * One rule, two readers: the check on a fetched model file refuses a new
+ * model such a form of a shipped id (model-registry-data.ts), and the
+ * matcher gives a model only the fetched file has such a form of its own id
+ * (matchByOwnForm).
+ */
+export function isDatedOrBracketedForm(name: string, id: string): boolean {
+  if (!name.startsWith(id)) return false
+  const rest = name.slice(id.length)
+  // The '[' branch is defence in depth: the picker rule may already refuse such a name.
+  return /^-\d{8}/.test(rest) || rest.startsWith('[')
+}
+
+/**
+ * Whether a standing entry keeps a name that is, in another form, the own id
+ * `own` of a model only the fetched model file has (matchByOwnForm).
+ * `hyphened` is the name with each dot between two digits as a hyphen;
+ * `patternHit` the standing entry a pattern places the name on, if one does.
+ *
+ * The two holds are the ones the check on a fetched file applies to an
+ * alias that starts with its model's own id (aliasHeldBy in
+ * model-registry-data.ts), so the matcher gives a new model no name its
+ * file could not have listed:
+ *
+ *  - The standing entry the pattern step places the name on has an id that
+ *    starts with `own` too, as written or as the name reads it: the longer
+ *    standing id keeps the name (`claude-haiku-5-20270101` stays where the
+ *    build has it beside a fetched `claude-haiku-5`, because that is
+ *    `claude-haiku-5-5`).
+ *  - A standing id written with a dot, read with that dot as a hyphen, has
+ *    the name: as a dated or bracketed form of it, or as an id at least as
+ *    long as `own` that the name starts with. The id step never reads an id
+ *    that way, so it did not find it: beside the shipped `gpt-5.5`, a
+ *    fetched `gpt-5-5` is not given `gpt-5-5-20260101`. (A standing id with
+ *    no such dot was the id step's to find, which comes first.)
+ */
+function standingKeepsName(hyphened: string, own: string, standing: ModelEntry[], patternHit: ModelEntry | null): boolean {
+  if (patternHit) {
+    const ownAsRead = hyphened.slice(0, own.length)
+    for (const id of [patternHit.id, dotsAsHyphens(patternHit.id)]) {
+      if (id.startsWith(own) || id.startsWith(ownAsRead)) return true
+    }
+  }
+  for (const s of standing) {
+    const spelled = dotsAsHyphens(s.id)
+    if (spelled === s.id) continue
+    if (isDatedOrBracketedForm(hyphened, spelled)) return true
+    if (spelled.length >= own.length && nameStartsWithId(hyphened, spelled)) return true
+  }
+  return false
+}
+
+/**
+ * Between the two halves of the standing list: the model only the fetched
+ * model file has (`added`) whose own id the name is, in another form
+ * (2.1.3-beta.4). Asked only of a name no standing id starts.
+ *
+ * Such a model was tried after every standing entry, patterns included. So
+ * in a family the build ships, its dated id (`claude-opus-6-1-20270101`),
+ * its id with a context size (`claude-opus-6-1[1m]`) and its id with the
+ * version written with a dot (`claude-opus-6.1`) all went to the entry with
+ * the family's plain pattern, by a pattern: the new model's own label, price
+ * and effort list were not used for them, unless its file listed each of
+ * those names as an alias.
+ *
+ * The forms are the ones a shipped id already has by the id step: the id
+ * with a date or a context size after it (isDatedOrBracketedForm), the name
+ * read as written or with each dot between two digits as a hyphen, and the
+ * id itself in that second reading. Of two models, the one with the longer
+ * id; of two as long, the one the name as written starts with. Nothing else
+ * moves: a name that only starts with the id
+ * (`claude-opus-6-1-fast`, a partner platform's `claude-opus-6-1@20270101`)
+ * stays where it was, and so does every name a standing entry keeps
+ * (standingKeepsName). The match is by an id, so it is one the app trusts
+ * for a label, a price and an effort list, as a shipped model's dated id is.
+ */
+function matchByOwnForm(
+  added: ModelEntry[],
+  standing: ModelEntry[],
+  raw: string,
+  patternHit: ModelEntry | null,
+): { entry: ModelEntry; kind: ModelMatchKind } | null {
+  if (added.length === 0) return null
+  const hyphened = dotsAsHyphens(raw)
+  let best: ModelEntry | null = null
+  // Whether `best` has the name as it is written, not only as it reads.
+  let bestAsWritten = false
+  for (const m of added) {
+    const asWritten = isDatedOrBracketedForm(raw, m.id)
+    if (!asWritten && hyphened !== m.id && !isDatedOrBracketedForm(hyphened, m.id)) continue
+    // The longer id; of two as long, the one the name as written starts with
+    // (the tie rule of longestIdNameStartsWith).
+    if (best && (m.id.length < best.id.length || (m.id.length === best.id.length && (bestAsWritten || !asWritten)))) continue
+    if (standingKeepsName(hyphened, m.id, standing, patternHit)) continue
+    best = m
+    bestAsWritten = asWritten
+  }
+  return best ? { entry: best, kind: 'prefix' } : null
+}
+
+/** Step 4: the entry of `models` whose pattern places the name. */
+function matchByPattern(
+  models: ModelEntry[],
+  raw: string,
+): { entry: ModelEntry; kind: ModelMatchKind } | null {
   // 4. first pattern match in the order given, as before: it settles the
   //    family the name is in, and whether the name is a shipped entry's or
   //    one of the user's or Sentinel's own. Then, among the entries of that
@@ -398,7 +522,7 @@ function textReach(lower: string, text: string, atStart: boolean): number {
  * no name moves to another family, and an entry the user or Sentinel added
  * (one with a `provenance`) takes no name from a shipped entry, nor a shipped
  * entry one from it. Within that family and origin, the entry that covers the
- * most of the name now takes it (matchByPrefixOrPattern):
+ * most of the name now takes it (matchByPattern):
  *
  *  - A pattern that is text counts its length: a plain pattern, and one that
  *    is text but not plain (a capital, a space: a hand-edited overlay only).

@@ -428,6 +428,40 @@ export function folderFileTest(stat: (p: string) => Promise<boolean> = isRegular
   return ask
 }
 
+/** What one look at a candidate found, for a walk of PATH that keeps a loop
+ *  of its own: a regular file, nothing there, or a folder that could not be
+ *  reached (the walk asks it nothing more). */
+export type SharedFileLook = 'file' | 'none' | 'unreachable'
+
+/** The shared file test (folderFileTest, with the walk's own `deadline`),
+ *  read as a walk that keeps a loop of its own reads it: the Claude Code
+ *  version probe (claude-cli-version.ts) and the other provider's program
+ *  lookup made off the main thread. One copy of the reading for both.
+ *
+ *  `file` for a regular file. `none` for an answer that says the file is not
+ *  there (or is not a file), and for a failure known to be about this one
+ *  file (oneFileCannotBeRead): access to it is denied, or it is in use while
+ *  an update replaces it. That passes the one file, and the walk still asks
+ *  the folder for its next name. `unreachable` for anything else, a share
+ *  that did not answer, whatever reason its file test ends with: the walk
+ *  stops asking that folder, so a share that is down is waited for once, not
+ *  once for each name.
+ *
+ *  The test is one at a time in a folder across every walk of PATH the app
+ *  makes off the event loop, so a share that is down holds one thread for
+ *  all of them. The walk waits behind another walk's test in a folder until
+ *  `deadline`, and then makes its own. */
+export function sharedFileLook(deadline: PathWalkDeadline): (p: string) => Promise<SharedFileLook> {
+  const test = folderFileTest(undefined, deadline)
+  return async (p) => {
+    try {
+      return (await test(p)) ? 'file' : 'none'
+    } catch (error) {
+      return oneFileCannotBeRead(error) ? 'none' : 'unreachable'
+    }
+  }
+}
+
 /** Test seam: no folder has a test outstanding. */
 export function _resetFolderFileTestForTest(): void {
   folderTests = new WeakMap()
@@ -530,24 +564,56 @@ export function findOnWindowsPath(
  *  a dead share can hold a stat for tens of seconds, which must not be the
  *  main process's. A rejected stat is read by the same rule: it marks the
  *  folder unreachable, unless the reason is known to be about that one file
- *  (oneFileCannotBeRead), which passes the file only. */
+ *  (oneFileCannotBeRead), which passes the file only.
+ *
+ *  The one shared lookup for every walk of PATH made off the event loop.
+ *  With no `stat` of the caller's own, the file tests are the shared ones
+ *  (folderFileTest): one at a time in each folder, across every walk that
+ *  asks this way. That is each of the app's walks for a program (git, the
+ *  GitHub CLI, npm, the Node.js tools check, the Claude Code version probe)
+ *  and, through the same file test, the walk for Claude Code and the look
+ *  for node.exe. So a folder on a share that is down holds one of the few
+ *  threads file tests share, not one for each walk; a walk that asks for a
+ *  file another walk is asking for takes that answer; and a walk that waited
+ *  there for another file passes the folder without a test of its own once
+ *  the first one says the folder cannot be reached. Before, only the last
+ *  two walks kept to that, and each other walk held a thread of its own
+ *  there (planning #310, item 5).
+ *
+ *  PATH's order holds as before: the walk waits for each folder's answer,
+ *  however long it takes, and never goes past a folder that has not
+ *  answered. It waits behind ANOTHER walk's test in a folder until a
+ *  deadline of its own (WINDOWS_PATH_WALK_WAIT_MS from its start), and then
+ *  makes its own test there, as the walk for Claude Code does: a test left
+ *  from before a share came back does not hold it for longer.
+ *
+ *  A `stat` the caller hands in is used as it is given, with no sharing. */
 export async function findOnWindowsPathAsync(
   names: readonly string[],
   env: NodeJS.ProcessEnv,
-  stat: (p: string) => Promise<boolean> = isRegularFileAsync,
+  stat?: (p: string) => Promise<boolean>,
   order: WindowsPathOrder = 'folder',
 ): Promise<string | null> {
   assertPlainNames(names)
+  // No file test of the caller's own: the shared one, with this walk's own
+  // deadline for a wait behind another walk's test.
+  const deadline = stat ? null : pathWalkDeadline()
+  const test = stat ?? folderFileTest(undefined, deadline ?? undefined)
   const unreachable = new Set<string>()
-  for (const [dir, file] of candidates(windowsPathFolders(env), names, order)) {
-    if (unreachable.has(dir)) continue
-    try {
-      if ((await stat(file)) === true) return file
-    } catch (error) {
-      if (!oneFileCannotBeRead(error)) unreachable.add(dir)
+  try {
+    for (const [dir, file] of candidates(windowsPathFolders(env), names, order)) {
+      if (unreachable.has(dir)) continue
+      try {
+        if ((await test(file)) === true) return file
+      } catch (error) {
+        if (!oneFileCannotBeRead(error)) unreachable.add(dir)
+      }
     }
+    return null
+  } finally {
+    // The walk has ended: its timer is dropped with it.
+    deadline?.clear()
   }
-  return null
 }
 
 /** How a batch file found by its full path is started: the system cmd.exe,

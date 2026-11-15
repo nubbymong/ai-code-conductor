@@ -158,6 +158,40 @@ describe('readCodexModelCatalogue: the proven CLI, a fixed command, an empty hom
     expect(r.runs[0].opts.openStdin).toBeUndefined()
   })
 
+  // Mutation to prove this can fail: ask the lookup in place in the pre-use check.
+  it('the executable is looked up off the main thread, before the run and after it, and the read waits for each answer: nothing runs until the first has answered', async () => {
+    const r = rig()
+    const asked: string[] = []
+    const answers: Array<(found: string | null) => void> = []
+    r.deps.executablePorts = {
+      ...r.deps.executablePorts,
+      resolve: () => { asked.push('in place'); return 'C:\\elsewhere\\codex.exe' },
+      lookUp: () => { asked.push('off the main thread'); return new Promise((resolve) => { answers.push(resolve) }) },
+    }
+    let done = false
+    const reading = readCodexModelCatalogue(r.deps).finally(() => { done = true })
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    expect(asked).toEqual(['off the main thread'])
+    expect(r.runs).toHaveLength(0)
+    answers[0](WIN_EXE)
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    // The run has started, and the check after it is waiting for its lookup.
+    expect(r.runs).toHaveLength(1)
+    expect(asked).toEqual(['off the main thread', 'off the main thread'])
+    expect(done).toBe(false)
+    answers[1](WIN_EXE)
+    expect(await reading).toMatchObject({ ok: true, version: '0.155.1' })
+  })
+
+  it('a lookup off the main thread that names another file, or none, is an executable that changed, and nothing runs', async () => {
+    for (const found of ['C:\\elsewhere\\codex.exe', null]) {
+      const r = rig()
+      r.deps.executablePorts = { ...r.deps.executablePorts, lookUp: async () => found }
+      expect(await readCodexModelCatalogue(r.deps), String(found)).toMatchObject({ ok: false, code: 'executable-changed' })
+      expect(r.runs, String(found)).toHaveLength(0)
+    }
+  })
+
   it("the home is a fresh empty folder made for the read (never ~/.codex or an account's), removed after it", async () => {
     const r = rig()
     await readCodexModelCatalogue(r.deps)

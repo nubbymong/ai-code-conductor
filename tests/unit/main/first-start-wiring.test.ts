@@ -29,6 +29,8 @@ vi.mock('../../../src/main/first-start-warmup', () => ({
 vi.mock('../../../src/main/providers/codex/spawn', async (orig) => ({
   ...(await orig<typeof import('../../../src/main/providers/codex/spawn')>()),
   resolveCodexBinary: () => (h.exe ? { cmd: h.exe, args: [] } : null),
+  // The check's own lookup, which it makes off the main thread.
+  resolveCodexBinaryAsync: async () => (h.exe ? { cmd: h.exe, args: [] } : null),
 }))
 vi.mock('../../../src/main/providers/codex/cli-runner', async (orig) => ({
   ...(await orig<typeof import('../../../src/main/providers/codex/cli-runner')>()),

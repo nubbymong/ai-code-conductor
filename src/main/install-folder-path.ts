@@ -63,7 +63,7 @@ import {
   type RegistryPaths, type UserPathAppendResult,
 } from './windows-registry-path'
 import { mergeWindowsPath, windowsPathKey } from './windows-path-refresh'
-import { findOnWindowsPathAsync } from './windows-programs'
+import { findOnWindowsPathAsync, folderFileTest, pathWalkDeadline } from './windows-programs'
 import { CLAUDE_WINDOWS_NAMES } from './claude-cli-probe'
 import { defaultLoginShell } from './login-shell'
 import { logInfo } from './debug-logger'
@@ -157,8 +157,24 @@ export function installFolderDeps(): InstallFolderDeps {
         return 'none'
       }
     },
+    // On Windows through the shared file test (windows-programs.ts
+    // folderFileTest): this is the test the walk of the registry's PATH
+    // folders makes, and it keeps to one test at a time in a folder with
+    // every other walk of PATH (waiting behind another walk's test for the
+    // time a walk waits, then making its own). A failure of any kind is
+    // "not a file", as before.
     isFile: async (p) => {
-      try { return (await fs.promises.stat(p)).isFile() } catch { return false }
+      if (process.platform !== 'win32') {
+        try { return (await fs.promises.stat(p)).isFile() } catch { return false }
+      }
+      const deadline = pathWalkDeadline()
+      try {
+        return await folderFileTest(undefined, deadline)(p)
+      } catch {
+        return false
+      } finally {
+        deadline.clear()
+      }
     },
     readRegistry: () => readRegistryPaths(),
     appendUserPath: (folder) => appendFolderToUserPath(folder),

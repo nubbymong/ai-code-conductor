@@ -92,8 +92,10 @@ export interface CodexAuthDeps {
   folderFs?: FolderCheckFs
   /** The executable setup last proved, or null when it has not. */
   proven(): CodexDiscovery | null
-  /** How to re-resolve and re-read it now (the discovery ports). */
-  executablePorts: Pick<CodexDiscoveryDeps, 'resolve' | 'realpath' | 'stat' | 'platform'>
+  /** How to re-resolve and re-read it now (the discovery ports). The
+   *  lookup made off the main thread (`lookUp`) is the one asked, and waited
+   *  for, when it is given; `resolve` when it is not. */
+  executablePorts: Pick<CodexDiscoveryDeps, 'resolve' | 'lookUp' | 'realpath' | 'stat' | 'platform'>
   /** The environment to allowlist from (on macOS and Linux with the login
    *  shell's PATH). */
   baseEnv(): Promise<Readonly<Record<string, string | undefined>>>
@@ -152,6 +154,9 @@ const MSG: Readonly<Record<AuthFailureCode, string>> = {
 }
 const CLI_TOO_OLD = 'This Codex CLI version cannot be used for sign-in. Update it, then check it again in setup.'
 const CLI_CHANGED = 'The Codex CLI changed or moved since setup checked it. Check it again in setup.'
+
+/** What the check made before each run answers: the path to run, or why not. */
+type CheckedExecutable = { ok: true; executable: string } | Refusal
 const SIGNED_IN_ANYWAY = 'Codex reports this account signed in regardless; check it before you use it.'
 
 type Refusal = { ok: false; code: AuthFailureCode; message: string }
@@ -219,14 +224,21 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
   // Usage track MP7 (ADR-022, bound 4): one app-server helper at a time.
   let usageReadRunning = false
 
-  /** The executable setup proved, re-verified now; the path to run. */
-  function currentExecutable(): { ok: true; executable: string } | Refusal {
+  /** The executable setup proved, re-verified now; the path to run. Never
+   *  rejects.
+   *
+   *  The check waits for the lookup, which is made off the main thread
+   *  (verifyCodexExecutable), and reads the file straight after it answers.
+   *  A CLI setup has not proved, or may not use, is refused with no lookup.
+   *  A caller with a last word of its own before a start (a cancel, a rule
+   *  asked again) asks it once this has answered, never before. */
+  async function currentExecutable(): Promise<CheckedExecutable> {
     let p: CodexDiscovery | null
     try { p = deps.proven() } catch { p = null }
     if (!p || p.state !== 'found' || !p.identity) return refuse('cli-unavailable')
     if (!codexCompatibilityAllowsUse(p.compatibility)) return refuse('cli-unavailable', CLI_TOO_OLD)
     try {
-      const check = verifyCodexExecutable(p.identity, deps.executablePorts)
+      const check = await verifyCodexExecutable(p.identity, deps.executablePorts)
       return check && check.ok && typeof check.executable === 'string' ? { ok: true, executable: check.executable } : refuse('cli-unavailable', CLI_CHANGED)
     } catch {
       return refuse('cli-unavailable', CLI_CHANGED)
@@ -259,7 +271,7 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
     let fsid: CodexRealmIdentity
     try { fsid = deps.realmIdentity(where.home) } catch { return refuse('realm-unavailable') }
     if (!fsid || fsid.isDirectory !== true || typeof fsid.canonical !== 'string' || !(await ownRealPath(fsid.canonical, where.home))) return refuse('realm-unavailable')
-    const exe = currentExecutable()
+    const exe = await currentExecutable()
     if (!exe.ok) return exe
     // Every run in a managed folder, a sign-out included (review round 2):
     // the CLI loads a .env there whatever it was started for.
@@ -274,9 +286,13 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
     return { ok: true, home: where.home, canonical: fsid.canonical, ownership, lock: codexRealmLockKey(fsid.canonical, fsid.dev, fsid.ino), base, kills: [] }
   }
 
-  /** One run, from the executable re-verified for THIS run. */
-  async function run(r: Ready, op: CodexCliOperation, opts: Omit<CodexRunOptions, 'env'>): Promise<CodexRunResult | Refusal> {
-    const exe = currentExecutable()
+  /** One run, from the executable re-verified for THIS run: `exe` is that
+   *  check's answer (currentExecutable), made by the caller. The check waits
+   *  for the lookup, so the caller makes it first and asks any last word of
+   *  its own once it has answered; from there to the start of the CLI
+   *  nothing is awaited here. A check that refused is answered as it is,
+   *  and nothing starts. */
+  async function run(r: Ready, exe: CheckedExecutable, op: CodexCliOperation, opts: Omit<CodexRunOptions, 'env'>): Promise<CodexRunResult | Refusal> {
     if (!exe.ok) return exe
     try {
       const cmd = codexCommandLine(exe.executable, op, platform, codexShellEnv(r.base, platform))
@@ -290,12 +306,19 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
     }
   }
 
-  async function readStatus(r: Ready, signal?: AbortSignal): Promise<Observed> {
-    // Checked last, just before the run: a check stopped while its
-    // environment was prepared (a login shell's look-up) starts no CLI; one
-    // stopped while it runs is stopped by the runner.
+  /** `mayStart`, when given, is the caller's rule for starting a CLI (a
+   *  sign-in's): asked once the executable check has answered, and a no
+   *  starts nothing. */
+  async function readStatus(r: Ready, signal?: AbortSignal, mayStart?: () => boolean): Promise<Observed> {
     if (signal?.aborted) return { ...refuse('cancelled'), state: 'error' }
-    const out = await run(r, 'status', { timeoutMs: STATUS_TIMEOUT_MS, ...(signal ? { signal } : {}) })
+    const exe = await currentExecutable()
+    // Checked last, just before the run: a check stopped while its
+    // environment was prepared (a login shell's look-up) or while the
+    // executable was looked up starts no CLI; one stopped while it runs is
+    // stopped by the runner.
+    if (signal?.aborted) return { ...refuse('cancelled'), state: 'error' }
+    if (mayStart && !mayStart()) return { ...refuse('not-started'), state: 'error' }
+    const out = await run(r, exe, 'status', { timeoutMs: STATUS_TIMEOUT_MS, ...(signal ? { signal } : {}) })
     if (isRefusal(out)) return { ...out, state: 'error' }
     if (out.timedOut) return { ...refuse('timed-out'), state: 'error' }
     if (out.spawnError) return { ...refuse('not-started'), state: 'error' }
@@ -352,8 +375,9 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
     return x.path === y.path && x.size === y.size && x.mtimeMs === y.mtimeMs && x.ctimeMs === y.ctimeMs && x.dev === y.dev && x.ino === y.ino
   }
 
-  /** One helper run for readUsage, in a realm prepared and held. */
-  async function runUsageRead(r: Ready, version: string, signal: AbortSignal | undefined): Promise<AppServerVerdict> {
+  /** One helper run for readUsage, in a realm prepared and held. `exe` is
+   *  the executable check readUsage made before its last words. */
+  async function runUsageRead(r: Ready, exe: CheckedExecutable, version: string, signal: AbortSignal | undefined): Promise<AppServerVerdict> {
     const stop = new AbortController()
     const onAbort = () => stop.abort()
     if (signal) signal.addEventListener('abort', onAbort, { once: true })
@@ -378,7 +402,7 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
     ;(initTimer as unknown as { unref?: () => void }).unref?.()
     try {
       if (signal?.aborted) { client.ended('cancelled'); return client.verdict as AppServerVerdict }
-      const out = await run(r, 'app-server', {
+      const out = await run(r, exe, 'app-server', {
         timeoutMs: APP_SERVER_READ_DEADLINE_MS,
         signal: stop.signal,
         maxOutput: APP_SERVER_MAX_LINE,
@@ -414,7 +438,7 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
       try {
         const r = await prepare(realm, 'launch')
         if (isRefusal(r)) return r
-        const exe = currentExecutable()
+        const exe = await currentExecutable()
         if (!exe.ok) return exe
         return {
           ok: true, home: r.home, executable: exe.executable, baseEnv: r.base,
@@ -483,8 +507,9 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
      * CODEX_HOME is the realm, and the environment is the allowlisted one.
      * The executable discovery proved is captured once, and the helper
      * starts only if discovery still names that same executable and version
-     * (still `supported`), asked in the same turn as the spawn's own
-     * executable check; the helper must then report that version itself.
+     * (still `supported`), asked once the run's own executable check has
+     * answered (that check waits for the lookup) and in the same turn as
+     * the spawn; the helper must then report that version itself.
      * The realm is held with its sign-in lock (as a sign-in or sign-out
      * holds it): a status check still runs beside the read, while a sign-in,
      * a sign-out or a folder removal meeting it is refused as busy (the
@@ -525,12 +550,16 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
           if (r.ownership !== 'conductor-managed') { free(); return refused('external-realm') }
           const release = holdRealm(r, 'exclusive')
           if (isRefusal(release)) { free(); return refused(release.code) }
+          // The executable is re-checked here, for this run. The check
+          // waits for the lookup, so it comes before the last words: nothing
+          // may be awaited between them and the spawn. A check that refused
+          // is answered by the run, which then starts nothing.
+          const exe = await currentExecutable()
           // The last words, asked with nothing awaited between them and the
-          // spawn in runUsageRead (whose run() re-checks the executable in
-          // this same turn): discovery still names the executable captured
-          // above, at the same version, still supported (C-F1); then the
-          // caller's (MP8: the account still closed, the provider still on,
-          // its record still allowing a read).
+          // spawn in runUsageRead: discovery still names the executable
+          // captured above, at the same version, still supported (C-F1);
+          // then the caller's (MP8: the account still closed, the provider
+          // still on, its record still allowing a read).
           let same = false
           try { same = sameProven(pinned, deps.proven()) } catch { same = false }
           if (!same) { release(); free(); return refused('version') }
@@ -542,7 +571,7 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
           const settled = new Promise<void>((resolve) => { ended = resolve })
           try { opts.onEnded?.(settled) } catch { /* the caller's hook never stops the read */ }
           try {
-            return await runUsageRead(r, version, signal)
+            return await runUsageRead(r, exe, version, signal)
           } finally {
             handedOff = true
             releaseAfterKills(r, () => { release(); free(); ended() })
@@ -581,7 +610,7 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
         const release = holdRealm(r)
         if (isRefusal(release)) return release
         try {
-          const out = await run(r, 'logout', { timeoutMs: LOGOUT_TIMEOUT_MS })
+          const out = await run(r, await currentExecutable(), 'logout', { timeoutMs: LOGOUT_TIMEOUT_MS })
           if (isRefusal(out)) return out
           // A failure after the CLI ran says so (ran): whatever the read-back
           // then gave, the realm may have changed (review round 3, C3).
@@ -641,11 +670,15 @@ export function createCodexAuthOperations(deps: CodexAuthDeps): CodexAuthOperati
         const mayStart = () => { try { return input?.mayStart ? input.mayStart() === true : true } catch { return false } }
         try {
           if (!mayStart()) return refuse('not-started')
-          const before = await readStatus(r)
+          const before = await readStatus(r, undefined, mayStart)
           if (before.state === 'signed-in') return { ...refuse('already-signed-in'), state: 'signed-in', credential: credentialOf(before.via) }
           if (before.state !== 'signed-out') return refuse(before.code, before.message)
           if (!mayStart()) return refuse('not-started')
-          const out = await run(r, spec.op, {
+          // The executable check waits for the lookup: the rule is asked
+          // once more after it, right before the CLI starts.
+          const exe = await currentExecutable()
+          if (!mayStart()) return refuse('not-started')
+          const out = await run(r, exe, spec.op, {
             timeoutMs: spec.timeoutMs,
             signal: input?.signal,
             onOutput: (text, stream) => (stream === 'stderr' ? display.stderr : display.stdout).push(text),
