@@ -11,6 +11,7 @@ import {
 import { redactTokens } from './security/token-redactor'
 import { AsyncMutex } from './async-mutex'
 import { atomicWriteSecure } from '../account-profiles'
+import { failureKind } from '../failure-kind'
 
 const FILENAME = 'github-config.json'
 
@@ -69,24 +70,12 @@ export class GitHubConfigWriteError extends Error {
   }
 }
 
-/**
- * What the log says about a read that failed: the kind of failure, never the
- * error's own text. A JSON error's text quotes the characters around the place
- * the parse stopped, which in this file can be a token's ciphertext, and a
- * file error's text carries the full path. The kind is also what tells one
- * failure from the next for the once-per-kind log (warnOnce).
- */
-function failureKind(err: unknown): string {
-  if (err instanceof SyntaxError) return 'not valid JSON'
-  const e = err as { name?: unknown; code?: unknown } | null
-  // An error's name and errno code are short words (Error, EBUSY); anything
-  // else in their place is left out.
-  const word = (v: unknown): string | null =>
-    typeof v === 'string' && /^[A-Za-z0-9_]{1,40}$/.test(v) ? v : null
-  const name = word(e?.name) ?? 'Error'
-  const code = word(e?.code)
-  return code ? `${name} ${code}` : name
-}
+// What the log says about a read that failed is the kind of failure
+// (failure-kind.ts), never the error's own text: a JSON error's text quotes
+// the characters around the place the parse stopped, which in this file can
+// be a token's ciphertext, and a file error's text carries the full path.
+// The kind is also what tells one failure from the next for the
+// once-per-kind log (warnOnce).
 
 /**
  * Sanitizes an untrusted schemaVersion value for use in a backup filename.

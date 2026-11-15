@@ -32,12 +32,25 @@
  * shipped gpt-5.6-sol, and is not a new gpt-5.6's or gpt-5-6's.
  * A file with a refused name is refused whole.
  *
+ * A model only the file has is also its own id in another form
+ * (2.1.3-beta.4, matchByOwnForm in model-registry.ts): with a date or a
+ * context size after it, or with its version written with a dot
+ * (claude-opus-6-1-20270101, claude-opus-6-1[1m], claude-opus-6.1). Such a
+ * name went to the entry with the family's plain pattern, unless the file
+ * listed it as an alias. It is the model's by its id now, when the build
+ * alone places the name only by a pattern (or not at all) and the file could
+ * have listed it as an alias by the rule above. A name a shipped id starts
+ * stays with that shipped entry, and so does one a shipped entry keeps by
+ * that rule (gpt-5-5-20260101 beside a new gpt-5-5).
+ *
  * A property test: a fixed list of names against a set of fetched files that
  * try to take names. Most pass every check and are put to use; one that is
  * refused is not used at all, as in the app. For every name, the registry
- * with the file says what the registry without it says, but for two cases: a
- * name that is the id or an alias of a model only the file has, and that is its
- * own by the rule above (isFilesOwn), is that model; and a name
+ * with the file says what the registry without it says, but for three cases:
+ * a name that is the id or an alias of a model only the file has, and that is
+ * its own by the rule above (isFilesOwn), is that model; a name that is such
+ * a model's own id in another form (isOwnForm), and that the file could have
+ * listed, is that model by its id; and a name
  * nothing places without the file may be placed by such a model (that is how
  * a new family is added). Pure: no file, no network.
  */
@@ -302,6 +315,15 @@ const HOSTILE: [string, (f: Loose) => void, string?][] = [
   ['a new model (gpt-5) with names whose number carries on past a shipped id written with a hyphen', (f) => {
     f.models.unshift({ id: 'gpt-5', patterns: [], aliases: ['gpt-5-55', 'gpt-5-2025-08-07'], family: 'codex', label: 'GPT-5' })
   }],
+  // 2.1.3-beta.4: a model only the file has is its own id with a date or a
+  // context size after it, with no alias listed. Not where a shipped entry
+  // keeps the name: these two files are in use, and take nothing by it.
+  ['a new model (gpt-5-5, the shipped gpt-5.5 written with a hyphen) that lists no alias: its dated name is the shipped model\'s spelling', (f) => {
+    f.models.unshift({ id: 'gpt-5-5', patterns: [], family: 'codex', label: 'GPT-5-5' })
+  }],
+  ['a new model (claude-haiku-5) that lists no alias, whose id starts the id of the shipped entry with its family\'s plain pattern', (f) => {
+    f.models.unshift({ id: 'claude-haiku-5', patterns: [], family: 'haiku', label: 'Haiku 5', fallbackPricing: HIGH })
+  }],
 ]
 
 /** The validated file, as the service would put it to use. */
@@ -411,6 +433,24 @@ const isFilesOwn = (name: string, kind: 'exact' | 'alias', modelId: string): boo
   return ![at.id, hyphens(at.id)].some((id) => id.startsWith(modelId) || id.startsWith(ownAsRead))
 }
 
+/** Whether a name is a model's own id in another form (2.1.3-beta.4): the id
+ *  with a date or a context size after it, the name read as written or with
+ *  each dot between two digits as a hyphen, or the id itself in that second
+ *  reading. (Written out here, not taken from the code under test.) */
+const isOwnForm = (name: string, modelId: string): boolean => {
+  const hyphened = name.replace(/(\d)\.(?=\d)/g, '$1-')
+  const formOf = (reading: string) => reading.startsWith(modelId) && /^(-\d{8}|\[)/.test(reading.slice(modelId.length))
+  return (hyphened !== name && hyphened === modelId) || formOf(name) || formOf(hyphened)
+}
+
+/** The forms of an id the property test asks about: dated, with a context
+ *  size, and each of those with the first two-part version written with a
+ *  dot. */
+const formsOf = (id: string): string[] => {
+  const dotted = id.replace(/(\d)-(\d)/, '$1.$2')
+  return [`${id}-20270101`, `${id}[1m]`, dotted, `${dotted}-20270101`, `${dotted}[1m]`]
+}
+
 /**
  * The names a fetched file changed against the rule. `written` is the file
  * as it came, `used` whether it was put to use (a refused file is not),
@@ -427,7 +467,7 @@ function namesTaken(written: Loose, used: boolean, merged: ModelRegistry, alone:
   for (const m of added) own.set(m.id, { id: m.id, kind: 'exact' })
 
   const wrong: string[] = []
-  for (const name of [...NAMES, ...own.keys()]) {
+  for (const name of new Set([...NAMES, ...own.keys(), ...added.flatMap((m) => formsOf(m.id))])) {
     const got = placed(merged, name)
     const mine = own.get(name)
     // The file's own: when the file is in use, and the name is its own by
@@ -437,6 +477,16 @@ function namesTaken(written: Loose, used: boolean, merged: ModelRegistry, alone:
       continue
     }
     const want = placed(alone, name)
+    // The file's own id in another form: when the file is in use, nothing
+    // without it places the name by an id, and the file could have listed
+    // the name as an alias of that model. Of two such models, the longer id.
+    const form = used && !mine && (!want.known || want.matchKind === 'pattern')
+      ? added.filter((m) => isOwnForm(name, m.id) && isFilesOwn(name, 'alias', m.id)).sort((a, b) => b.id.length - a.id.length)[0]
+      : undefined
+    if (form) {
+      if (got.id !== form.id || got.matchKind !== 'prefix') wrong.push(`${name}: ${got.id} (${got.matchKind}), not the file's own ${form.id} by its id`)
+      continue
+    }
     if (JSON.stringify(got) === JSON.stringify(want)) continue
     // A name nothing places without the file may go to a model only the file has.
     if (used && !want.known && addedIds.has(got.id) && (got.matchKind === 'pattern' || got.matchKind === 'prefix')) continue
@@ -452,6 +502,19 @@ describe('a fetched model file never changes what a name the build already place
     expect(NAMES.length).toBeGreaterThan(200)
   })
 
+  it('the files in use hold models whose own id in another form the build places by a pattern, by an id it starts with, and as a shipped id', () => {
+    const kinds = new Set<string>()
+    for (const [, change] of HOSTILE) {
+      const { written, data } = fetched(change)
+      if (!data) continue
+      const shipped = new Set(bundled.models.map((m) => m.id))
+      for (const m of written.models.filter((x: Loose) => !shipped.has(x.id))) {
+        for (const name of formsOf(m.id)) if (isOwnForm(name, m.id)) kinds.add(String(placed(bundled, name).matchKind))
+      }
+    }
+    expect([...kinds].sort()).toEqual(['exact', 'pattern', 'prefix'])
+  })
+
   it.each(HOSTILE)('%s', (_what, change, refusedFor) => {
     const { written, data, reason } = fetched(change)
     expect(namesTaken(written, data !== null, inUse(data), bundled)).toEqual([])
@@ -465,7 +528,7 @@ describe('a fetched model file never changes what a name the build already place
   it('the files that are refused are the ones after a shipped id or alias, or an alias the build places and the new id does not start; the others are in use', () => {
     const refused = HOSTILE.filter(([, , refusedFor]) => refusedFor !== undefined)
     expect(refused).toHaveLength(29)
-    expect(HOSTILE.length - refused.length).toBe(30)
+    expect(HOSTILE.length - refused.length).toBe(32)
     for (const [what, change] of HOSTILE) expect(fetched(change).data === null, what).toBe(refused.some(([w]) => w === what))
   })
 
@@ -477,6 +540,8 @@ describe('a fetched model file never changes what a name the build already place
       expect(placed(registry, name), name).toEqual(placed(bundled, name))
     }
     expect(placed(registry, 'claude-thinking-7')).toMatchObject({ id: 'claude-opus-9', matchKind: 'pattern' })
+    // Its own id with a date after it is its own name, ahead of a pattern.
+    expect(placed(registry, 'claude-opus-9-20990101')).toMatchObject({ id: 'claude-opus-9', matchKind: 'prefix' })
   })
 
   it('a shipped model\'s patterns, aliases and family are the bundled file\'s, whatever the fetched file gives it', () => {
@@ -582,45 +647,127 @@ describe('a model only the fetched file has', () => {
     }
   })
 
-  it('a new version of a shipped family is its exact id and its aliases; every other name stays where the build has it', () => {
+  it('a new version of a shipped family is its exact id, its aliases, and its id with a date or a context size after it; every other name stays where the build has it', () => {
     const merged = inUse(checked((f) => {
       f.models.unshift({ id: 'claude-opus-6', patterns: ['opus-6'], aliases: ['claude-opus-6[1m]'], family: 'opus', label: 'Opus 6', fallbackPricing: HIGH })
     }))
     expect(placed(merged, 'claude-opus-6')).toMatchObject({ id: 'claude-opus-6', matchKind: 'exact', label: 'Opus 6' })
     expect(placed(merged, 'claude-opus-6[1m]')).toMatchObject({ id: 'claude-opus-6', matchKind: 'alias' })
-    for (const name of ['claude-opus-6-20270101', 'anthropic.claude-opus-6-v1:0', 'Opus 6 (1M context)']) {
+    // Its dated id, which the file does not list: the family's plain pattern
+    // took it (Opus 5.5, by a pattern). It is the new model's, by its id.
+    for (const name of ['claude-opus-6-20270101', 'claude-opus-6-20270101-v2']) {
+      expect(placed(bundled, name), name).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern' })
+      expect(placed(merged, name), name).toMatchObject({ id: 'claude-opus-6', matchKind: 'prefix', label: 'Opus 6', fallbackPricing: HIGH })
+    }
+    // A name that only starts with its id, or holds it behind a platform's
+    // own name, is not such a form and stays where the build has it.
+    for (const name of ['claude-opus-6-1', 'claude-opus-6-fast', 'claude-opus-6@20270101', 'claude-opus-6-2027', 'anthropic.claude-opus-6-v1:0', 'Opus 6 (1M context)']) {
       expect(placed(merged, name), name).toEqual(placed(bundled, name))
+      expect(placed(merged, name), name).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern' })
     }
   })
 
   // 2.1.3-beta.3: a shipped model written with a dot (claude-opus-5.5) goes to
-  // the entry the same name written with a hyphen goes to. That is not so for
-  // a model only the fetched file has: a name that is no entry's id or alias
-  // is tried against every standing entry first (matchEntry), so the family's
-  // plain pattern takes it before the new model's id is looked at.
-  it('written with a dot, a new version of a shipped family is not the new model unless the file lists that name: the family\'s plain pattern takes it first', () => {
+  // the entry the same name written with a hyphen goes to. For a model only
+  // the fetched file has that was not so: every standing entry was tried
+  // first, patterns included, so the family's plain pattern took the dotted
+  // name, and the dated one, before the new model's id was looked at.
+  // 2.1.3-beta.4: the new model's own id in another form comes before a
+  // standing entry's pattern.
+  it('written with a dot or with a date, a new version of a shipped family is the new model, by its id: the family\'s plain pattern does not take the name first', () => {
     const merged = inUse(checked((f) => {
       f.models.unshift({ id: 'claude-opus-6-1', patterns: ['opus-6-1'], family: 'opus', label: 'Opus 6.1', fallbackPricing: HIGH })
     }))
     // Its id as the file writes it is the new model.
     expect(placed(merged, 'claude-opus-6-1')).toMatchObject({ id: 'claude-opus-6-1', matchKind: 'exact', label: 'Opus 6.1' })
-    // The same id written with a dot is where the build alone puts it: on the
-    // entry with the family's plain pattern, as the dated id is in either
-    // spelling. So a dot and a hyphen do not go to the same entry here.
-    for (const name of ['claude-opus-6.1', 'claude-opus-6.1-20270101', 'claude-opus-6-1-20270101', 'anthropic/claude-opus-6.1']) {
-      expect(placed(merged, name), name).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern' })
+    // The same id written with a dot, and its dated and [1m] forms in either
+    // spelling: the build alone puts them on the entry with the family's
+    // plain pattern. They are the new model's, so a dot and a hyphen go to
+    // the same entry here too.
+    for (const name of ['claude-opus-6.1', 'claude-opus-6.1-20270101', 'claude-opus-6-1-20270101', 'claude-opus-6-1[1m]', 'claude-opus-6.1[1m]']) {
+      expect(placed(bundled, name), name).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern' })
+      expect(placed(merged, name), name).toMatchObject({ id: 'claude-opus-6-1', matchKind: 'prefix', label: 'Opus 6.1', fallbackPricing: HIGH })
+    }
+    // Another version is not this model: the number carries on, or a third
+    // part follows. Nor is a name that only starts with the id.
+    for (const name of ['claude-opus-6.15', 'claude-opus-6-15', 'claude-opus-6.1.1', 'claude-opus-6-1-1', 'claude-opus-6-1-fast', 'claude-opus-6.1-fast']) {
       expect(placed(merged, name), name).toEqual(placed(bundled, name))
     }
-    // The file's way to make the dotted name the new model is to list it as
-    // an alias: it is the model's own id written the other way, so its own.
+    // Behind a gateway's name no id starts the name: a pattern places it, and
+    // there the new model is still tried after every standing entry.
+    expect(placed(merged, 'anthropic/claude-opus-6.1')).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern' })
+    expect(placed(merged, 'anthropic/claude-opus-6.1')).toEqual(placed(bundled, 'anthropic/claude-opus-6.1'))
+    // A name the file lists as an alias is still the model by that alias.
     const listed = inUse(checked((f) => {
       f.models.unshift({ id: 'claude-opus-6-1', patterns: ['opus-6-1'], aliases: ['claude-opus-6.1'], family: 'opus', label: 'Opus 6.1', fallbackPricing: HIGH })
     }))
     expect(placed(listed, 'claude-opus-6.1')).toMatchObject({ id: 'claude-opus-6-1', matchKind: 'alias', label: 'Opus 6.1' })
-    // Only the name it lists: the others stay where the build has them.
-    for (const name of ['claude-opus-6.1-20270101', 'claude-opus-6-1-20270101', 'anthropic/claude-opus-6.1']) {
-      expect(placed(listed, name), name).toEqual(placed(bundled, name))
+    for (const name of ['claude-opus-6.1-20270101', 'claude-opus-6-1-20270101']) {
+      expect(placed(listed, name), name).toMatchObject({ id: 'claude-opus-6-1', matchKind: 'prefix' })
     }
+    expect(placed(listed, 'anthropic/claude-opus-6.1')).toEqual(placed(bundled, 'anthropic/claude-opus-6.1'))
+  })
+
+  it('a name a shipped id starts stays with that shipped entry, whatever form of a new model\'s id it is', () => {
+    // claude-opus-5-7 is reached through the shipped claude-opus-5, by its id:
+    // a match the build already trusts, which a fetched file does not change.
+    const merged = inUse(checked((f) => {
+      f.models.unshift({ id: 'claude-opus-5-7', patterns: [], family: 'opus', label: 'Opus 5.7', fallbackPricing: HIGH })
+    }))
+    for (const name of ['claude-opus-5-7-20270101', 'claude-opus-5-7[1m]', 'claude-opus-5.7', 'claude-opus-5.7-20270101']) {
+      expect(placed(bundled, name), name).toMatchObject({ id: 'claude-opus-5', matchKind: 'prefix' })
+      expect(placed(merged, name), name).toEqual(placed(bundled, name))
+    }
+  })
+
+  it('a new model whose id is a shipped id written with a hyphen is not given that shipped model\'s dated name', () => {
+    const merged = inUse(checked((f) => { f.models.unshift({ id: 'gpt-5-5', patterns: [], family: 'codex', label: 'GPT-5-5' }) }))
+    expect(placed(merged, 'gpt-5-5')).toMatchObject({ id: 'gpt-5-5', matchKind: 'exact' })
+    // The shipped gpt-5.5 read with its dot as a hyphen has these names: the
+    // file could not list them as aliases, and the matcher does not give
+    // them either. They stay with the catch-all pattern.
+    for (const name of ['gpt-5-5-20260101', 'gpt-5-5[1m]']) {
+      expect(placed(merged, name), name).toMatchObject({ id: 'codex-family', matchKind: 'pattern' })
+      expect(placed(merged, name), name).toEqual(placed(bundled, name))
+    }
+    for (const name of ['gpt-5.5', 'gpt-5.5-20260101']) expect(placed(merged, name), name).toEqual(placed(bundled, name))
+    // A new model beside it, with no shipped id in its spelling, has its own.
+    const other = inUse(checked((f) => { f.models.unshift({ id: 'gpt-5.6', patterns: [], family: 'codex', label: 'GPT-5.6' }) }))
+    for (const name of ['gpt-5.6-20270101', 'gpt-5.6[1m]']) {
+      expect(placed(bundled, name), name).toMatchObject({ id: 'codex-family', matchKind: 'pattern' })
+      expect(placed(other, name), name).toMatchObject({ id: 'gpt-5.6', matchKind: 'prefix', label: 'GPT-5.6' })
+    }
+    for (const name of ['gpt-5.6-sol', 'gpt-5.6-sol-20270101', 'gpt-5-6-sol']) expect(placed(other, name), name).toEqual(placed(bundled, name))
+  })
+
+  it('a new model whose id starts the id of the shipped entry a pattern places the name on is not given the name', () => {
+    // claude-haiku-5-20270101 is placed by the plain pattern of claude-haiku-5-5,
+    // whose id starts with claude-haiku-5 too: the longer shipped id keeps it,
+    // as it would keep that name from the file's alias list.
+    const merged = inUse(checked((f) => { f.models.unshift({ id: 'claude-haiku-5', patterns: [], family: 'haiku', label: 'Haiku 5', fallbackPricing: HIGH }) }))
+    expect(placed(merged, 'claude-haiku-5')).toMatchObject({ id: 'claude-haiku-5', matchKind: 'exact' })
+    for (const name of ['claude-haiku-5-20270101', 'claude-haiku-5[1m]']) {
+      expect(placed(merged, name), name).toMatchObject({ id: 'claude-haiku-5-5', matchKind: 'pattern' })
+      expect(placed(merged, name), name).toEqual(placed(bundled, name))
+    }
+  })
+
+  it('of two new models whose ids read the same, the one the name as written starts with has it; of two that both start it, the longer', () => {
+    const merged = inUse(checked((f) => {
+      // The id written with a hyphen is listed ahead of the one with a dot.
+      f.models.unshift({ id: 'claude-opus-6.1', patterns: [], family: 'opus', label: 'Opus 6.1 (dot)', fallbackPricing: HIGH })
+      f.models.unshift({ id: 'claude-opus-6-1', patterns: [], family: 'opus', label: 'Opus 6.1 (hyphen)', fallbackPricing: HIGH })
+      f.models.unshift({ id: 'claude-opus-6', patterns: [], family: 'opus', label: 'Opus 6', fallbackPricing: HIGH })
+      f.models.unshift({ id: 'claude-opus-6-20270101', patterns: [], family: 'opus', label: 'Opus 6 (dated)', fallbackPricing: HIGH })
+    }))
+    expect(placed(merged, 'claude-opus-6.1-20270101')).toMatchObject({ id: 'claude-opus-6.1', matchKind: 'prefix' })
+    expect(placed(merged, 'claude-opus-6-1-20270101')).toMatchObject({ id: 'claude-opus-6-1', matchKind: 'prefix' })
+    expect(placed(merged, 'claude-opus-6-1[1m]')).toMatchObject({ id: 'claude-opus-6-1', matchKind: 'prefix' })
+    expect(placed(merged, 'claude-opus-6.1[1m]')).toMatchObject({ id: 'claude-opus-6.1', matchKind: 'prefix' })
+    // The dated id that is itself a model, and a date after that.
+    expect(placed(merged, 'claude-opus-6-20270101')).toMatchObject({ id: 'claude-opus-6-20270101', matchKind: 'exact' })
+    expect(placed(merged, 'claude-opus-6-20270101-20280101')).toMatchObject({ id: 'claude-opus-6-20270101', matchKind: 'prefix' })
+    expect(placed(merged, 'claude-opus-6-20280101')).toMatchObject({ id: 'claude-opus-6', matchKind: 'prefix' })
   })
 
   it('written with a dot, a model of a family nothing shipped places is the new model, by its id', () => {
@@ -660,6 +807,26 @@ describe('the user\'s own overlay keeps its place', () => {
       const { written, data } = fetched(change)
       expect(namesTaken(written, data !== null, inUse(data, OVERLAY), alone), what).toEqual([])
     }
+  })
+
+  it('an id comes before a pattern for the user\'s own entries too: a new model\'s dated id is not held by a pattern of the user\'s', () => {
+    // A family nothing shipped places, so the user's pattern is the first to
+    // match a name in it (a shipped entry's pattern would come before it).
+    const data = checked((f) => {
+      f.families.zeta = { label: 'zeta', color: '#336699' }
+      f.models.unshift({ id: 'claude-zeta-1', patterns: ['zeta-1'], family: 'zeta', label: 'Zeta 1' })
+    })
+    const overlay: RegistryOverlay = { models: [user({ id: 'my-zeta', patterns: ['zeta'], label: 'My Zeta' })] }
+    const alone = inUse(null, overlay)
+    const merged = inUse(data, overlay)
+    for (const name of ['claude-zeta-1', 'claude-zeta-1-20270101', 'claude-zeta-1-fast']) {
+      expect(placed(alone, name), name).toMatchObject({ id: 'my-zeta', matchKind: 'pattern' })
+    }
+    // The exact id was the fetched model's already; its dated id now is too.
+    expect(placed(merged, 'claude-zeta-1')).toMatchObject({ id: 'claude-zeta-1', matchKind: 'exact' })
+    expect(placed(merged, 'claude-zeta-1-20270101')).toMatchObject({ id: 'claude-zeta-1', matchKind: 'prefix' })
+    // A name that is not such a form stays with the user's pattern.
+    expect(placed(merged, 'claude-zeta-1-fast')).toEqual(placed(alone, 'claude-zeta-1-fast'))
   })
 
   it('the user\'s own copy of a model only the fetched file has is the user\'s: it is tried with the shipped entries', () => {

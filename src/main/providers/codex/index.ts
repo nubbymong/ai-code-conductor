@@ -7,7 +7,7 @@ import type { AllowanceReading } from '../../../shared/usage-types'
 import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/providers'
 import type { ProviderPackage, ProviderPricingOperations, RealmRef } from '../core'
 import { CODEX_ENABLEMENT } from './enablement'
-import { resolveCodexBinary, buildCodexSpawn, codexHookDataDir } from './spawn'
+import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir } from './spawn'
 import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText } from './session-screen'
 import { detectCodexUi } from './ui-detection'
 import { watchAndClaimRollout } from './telemetry'
@@ -669,10 +669,15 @@ function testAuthPorts(ports: CodexPackageDeps['authPorts']): Partial<CodexAuthD
 }
 
 /** Re-resolving and re-reading the executable: the session resolver and the
- *  filesystem, shared by discovery and the pre-use re-verification. */
-function realExecutablePorts(platform: NodeJS.Platform): Pick<CodexDiscoveryDeps, 'resolve' | 'realpath' | 'stat' | 'platform'> {
+ *  filesystem, shared by discovery and the pre-use re-verification. Both
+ *  ask the lookup made off the main thread (`lookUp`) and wait for it, so a
+ *  PATH folder that does not answer, or a slow login shell, does not hold
+ *  the main process; `resolve`, the same lookup made in place, is what the
+ *  ports answer with when no `lookUp` is given. */
+function realExecutablePorts(platform: NodeJS.Platform): Pick<CodexDiscoveryDeps, 'resolve' | 'lookUp' | 'realpath' | 'stat' | 'platform'> {
   return {
     resolve: () => resolveCodexBinary()?.cmd ?? null,
+    lookUp: async () => (await resolveCodexBinaryAsync())?.cmd ?? null,
     realpath: (p) => fs.realpathSync.native(p),
     stat: (p) => {
       // bigint: NTFS file ids exceed 2^53; times come back in whole ms.
@@ -786,6 +791,7 @@ async function realDiscoveryDeps(): Promise<CodexDiscoveryDeps> {
   const platform = process.platform
   const runDeps = defaultCodexRunDeps(platform)
   return {
+    // The lookup is the one made off the main thread (realExecutablePorts).
     ...realExecutablePorts(platform),
     run: (cmd, env) => runCodexCli(cmd, { env, timeoutMs: 10_000 }, runDeps),
     // ADR-025: the `--version` run's own environment, as it is about to get it.

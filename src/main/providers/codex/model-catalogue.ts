@@ -39,8 +39,10 @@ export const CODEX_CATALOGUE_LABEL_MAX = 64
 export interface CodexCatalogueDeps {
   /** The CLI discovery last proved: the package's own record, never a caller's. */
   proven(): CodexDiscovery | null
-  /** Re-resolving and re-reading the executable, as a launch does. */
-  executablePorts: Pick<CodexDiscoveryDeps, 'resolve' | 'realpath' | 'stat' | 'platform'>
+  /** Re-resolving and re-reading the executable, as a launch does: through
+   *  the lookup made off the main thread (`lookUp`) when it is given, which
+   *  is waited for. */
+  executablePorts: Pick<CodexDiscoveryDeps, 'resolve' | 'lookUp' | 'realpath' | 'stat' | 'platform'>
   /** The environment the allowlist is taken from (the login shell's PATH on macOS and Linux). */
   baseEnv(): Promise<Readonly<Record<string, string | undefined>>>
   run(cmd: CodexCommand, opts: CodexRunOptions): Promise<CodexRunResult>
@@ -96,8 +98,10 @@ export async function readCodexModelCatalogue(deps: CodexCatalogueDeps, opts: { 
   const platform = deps.executablePorts.platform
   let base: Readonly<Record<string, string | undefined>>
   try { base = await deps.baseEnv() } catch { return fail('not-started', 'the environment for the Codex CLI could not be prepared') }
-  // Checked as late as possible: the file that runs is the one proved.
-  const check = verifyCodexExecutable(identity, deps.executablePorts)
+  // Checked as late as possible: the file that runs is the one proved. The
+  // check waits for the lookup (off the main thread) and reads the file
+  // straight after it answers; nothing below waits before the run.
+  const check = await verifyCodexExecutable(identity, deps.executablePorts)
   if (!check.ok) return fail('executable-changed', check.detail)
   let scratch: { home: string; dispose(): void }
   try { scratch = deps.scratchHome() } catch { return fail('not-started', 'no empty folder could be made for the read') }
@@ -120,7 +124,7 @@ export async function readCodexModelCatalogue(deps: CodexCatalogueDeps, opts: { 
     if (r.truncated) return fail('unreadable', 'the Codex CLI printed more than this app reads')
     // The list is that version's only if the file that answered is still the
     // one proved.
-    const after = verifyCodexExecutable(identity, deps.executablePorts)
+    const after = await verifyCodexExecutable(identity, deps.executablePorts)
     if (!after.ok) return fail('executable-changed', after.detail)
     const models = parseCodexModelCatalogue(r.stdout)
     if (!models) return fail('unreadable', 'the Codex CLI did not print a model list this app reads')

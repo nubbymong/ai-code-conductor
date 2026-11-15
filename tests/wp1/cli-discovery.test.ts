@@ -1237,18 +1237,18 @@ describe('executable re-verification before use (WP1.49)', () => {
   const st = { size: 100, mtimeMs: 5.9, ctimeMs: 6.1, dev: '1', ino: '2', isFile: true }
   const base = { resolve: () => 'C:\\npm\\codex.cmd', realpath: (p: string) => p, stat: () => st, platform: 'win32' as const }
 
-  it('the same file at the same path passes (case-insensitively on Windows) and returns the path to run', () => {
-    expect(verifyCodexExecutable(recorded, base)).toEqual({ ok: true, executable: 'C:\\npm\\codex.cmd' })
-    expect(verifyCodexExecutable(recorded, { ...base, resolve: () => 'c:\\NPM\\codex.cmd' })).toEqual({ ok: true, executable: 'c:\\NPM\\codex.cmd' })
+  it('the same file at the same path passes (case-insensitively on Windows) and returns the path to run', async () => {
+    expect(await verifyCodexExecutable(recorded, base)).toEqual({ ok: true, executable: 'C:\\npm\\codex.cmd' })
+    expect(await verifyCodexExecutable(recorded, { ...base, resolve: () => 'c:\\NPM\\codex.cmd' })).toEqual({ ok: true, executable: 'c:\\NPM\\codex.cmd' })
   })
 
-  it('a shadowing executable, a replaced file (even with size and mtime kept) or a vanished one blocks', () => {
-    expect(verifyCodexExecutable(recorded, { ...base, resolve: () => 'C:\\evil\\codex.cmd' })).toMatchObject({ ok: false, reason: 'moved' })
-    expect(verifyCodexExecutable(recorded, { ...base, stat: () => ({ ...st, size: 101 }) })).toMatchObject({ ok: false, reason: 'replaced' })
-    expect(verifyCodexExecutable(recorded, { ...base, stat: () => ({ ...st, ino: '9' }) })).toMatchObject({ ok: false, reason: 'replaced' })
-    expect(verifyCodexExecutable(recorded, { ...base, stat: () => ({ ...st, ctimeMs: 60 }) })).toMatchObject({ ok: false, reason: 'replaced' })
-    expect(verifyCodexExecutable(recorded, { ...base, resolve: () => null })).toMatchObject({ ok: false, reason: 'missing' })
-    expect(verifyCodexExecutable({ ...recorded, path: '/usr/bin/codex' }, { ...base, platform: 'linux', resolve: () => '/usr/bin/Codex' })).toMatchObject({ ok: false, reason: 'moved' })
+  it('a shadowing executable, a replaced file (even with size and mtime kept) or a vanished one blocks', async () => {
+    expect(await verifyCodexExecutable(recorded, { ...base, resolve: () => 'C:\\evil\\codex.cmd' })).toMatchObject({ ok: false, reason: 'moved' })
+    expect(await verifyCodexExecutable(recorded, { ...base, stat: () => ({ ...st, size: 101 }) })).toMatchObject({ ok: false, reason: 'replaced' })
+    expect(await verifyCodexExecutable(recorded, { ...base, stat: () => ({ ...st, ino: '9' }) })).toMatchObject({ ok: false, reason: 'replaced' })
+    expect(await verifyCodexExecutable(recorded, { ...base, stat: () => ({ ...st, ctimeMs: 60 }) })).toMatchObject({ ok: false, reason: 'replaced' })
+    expect(await verifyCodexExecutable(recorded, { ...base, resolve: () => null })).toMatchObject({ ok: false, reason: 'missing' })
+    expect(await verifyCodexExecutable({ ...recorded, path: '/usr/bin/codex' }, { ...base, platform: 'linux', resolve: () => '/usr/bin/Codex' })).toMatchObject({ ok: false, reason: 'moved' })
   })
 })
 

@@ -2,8 +2,9 @@
 // observed patches go through the SAME path — both fully untrusted. Apply itself
 // delegates to model-registry-service.applyOverlayEntry (atomic write + hot
 // reload) — this module only decides whether a proposal is safe.
-import { followsModelPickerRule } from '../../shared/model-registry'
+import { followsModelPickerRule, usableEntries } from '../../shared/model-registry'
 import type { ModelRegistry, OverlayModelEntry } from '../../shared/model-registry'
+import { idHeldBy } from '../model-registry-data'
 import { stripSpoofableText } from '../../shared/safe-text'
 
 const MAX_SANE_PER_1M_USD = 1000
@@ -24,7 +25,12 @@ function patternHits(pattern: string, candidate: string): boolean {
   return candidate.toLowerCase().includes(pattern.toLowerCase())
 }
 
-export function validateProposal(registry: ModelRegistry, entry: OverlayModelEntry): { ok: boolean; error?: string } {
+export function validateProposal(given: ModelRegistry, entry: OverlayModelEntry): { ok: boolean; error?: string } {
+  // The registry as the matcher reads it: its entries with an id
+  // (usableEntries). The user's own file is merged in as it is written, so
+  // an entry there may have no id, or be no entry at all; the matcher passes
+  // such a one over, and so does every check below.
+  const registry: ModelRegistry = { ...given, models: usableEntries(given) }
   if (!entry.id || !entry.label || !entry.family) return { ok: false, error: 'id, label, family are required' }
   if (typeof entry.id !== 'string' || typeof entry.label !== 'string' || typeof entry.family !== 'string') {
     return { ok: false, error: 'id, label, family must be text' }
@@ -48,6 +54,19 @@ export function validateProposal(registry: ModelRegistry, entry: OverlayModelEnt
   for (const a of entry.aliases ?? []) {
     const clash = registry.models.find((m) => m.id !== entry.id && (m.id === a || m.aliases?.includes(a)))
     if (clash) return { ok: false, error: `alias "${a}" collides with already-known model ${clash.id}` }
+  }
+  // The proposed id and each alias are held to the fetched-file name rule
+  // (idHeldBy, model-registry-data.ts), asked of every entry the registry
+  // has. A name is refused when it is a known id or alias, a known id with a
+  // date or a context size after it (claude-opus-4-8-20260301,
+  // claude-opus-4-8[1m]), or one of those with its version written with a
+  // dot (claude-opus-5.5), and the refusal names the model that has the
+  // name. A new version the registry reaches only by a shorter id or by a
+  // pattern (claude-opus-5-7, claude-opus-6) is not such a name: that is how
+  // a model is added.
+  for (const name of [entry.id, ...(entry.aliases ?? [])]) {
+    const holder = idHeldBy(registry, name)
+    if (holder) return { ok: false, error: `"${name}" is a name the registry already gives to ${shown(holder)}` }
   }
   if (!entry.patterns?.length) return { ok: false, error: 'at least one pattern required' }
   for (const p of entry.patterns) {

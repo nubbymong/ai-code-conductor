@@ -16,6 +16,7 @@ import {
 } from './ui/Dialog'
 import { noteClaudeMissingAtSetup, type FirstRunOutcome } from '../onboarding/provider-choice'
 import { launchRefusalOf } from '../../shared/providers'
+import { SETTINGS_FILE_UNREADABLE, SETTINGS_FILE_UNREADABLE_TEXT, type FolderSaveAnswer } from '../../shared/setup-folder-save'
 import type { InstallRecipeView, PathHintView } from '../../shared/providers'
 import { claudeCodeInstallCommand } from '../utils/claudeInstallCommand'
 import { providerAccountActions } from '../stores/providerAccountsStore'
@@ -54,8 +55,13 @@ type CliProbe = { installed: boolean; path?: string; probe: string; pathHint?: P
  *  ran, which is then left to finish. */
 type SetupInstall = { id: string; recipe: RunnableRecipe; ended: boolean; exitCode?: number; checking: boolean; checkedWhileRunning?: boolean; foundWhileRunning?: boolean }
 
-/** What the folder step says when main did not save one of its folders. */
-function folderNotSaved(which: 'data' | 'resources'): string {
+/** What the folder step says when main did not save one of its folders.
+ *  `answer` is what main said: false, or null (SETTINGS_FILE_UNREADABLE)
+ *  when the reason is the app's settings file, not the folder. Another
+ *  folder would not be saved either then, so the step says what to do about
+ *  the file. */
+function folderNotSaved(which: 'data' | 'resources', answer: FolderSaveAnswer): string {
+  if (answer === SETTINGS_FILE_UNREADABLE) return `The ${which} directory could not be saved. ${SETTINGS_FILE_UNREADABLE_TEXT}`
   return `The ${which} directory could not be saved. The folder could not be created, or its path cannot be stored as written. Choose another folder and press Continue again.`
 }
 
@@ -485,8 +491,12 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
   // not create, one that is not a full path, or one the registry (on macOS
   // and Linux, the config file) did not save, answers false (a call that
   // fails outright counts the same); the folder step then stays and says
-  // which folder, and nothing after it is tried. The message is cleared at
-  // each press, so it is never left from an earlier one.
+  // which folder, and nothing after it is tried. On macOS and Linux main
+  // answers null in place of false when the config file is there but could
+  // not be read: the step then says to repair or remove that file. Only
+  // true is "saved": any other answer that is not null, text included,
+  // counts as false. The message is cleared at each press, so it is never
+  // left from an earlier one.
   //
   // While a press's saves are out, the step is held: a second press does
   // nothing, and Continue, both folder fields and both Browse buttons are
@@ -499,15 +509,22 @@ export default function SetupDialog({ onComplete, initialStep }: Props) {
     setSavingFolders(true)
     try {
       setFolderError(null)
-      const saved = async (save: () => Promise<boolean>) => {
-        try { return (await save()) === true } catch { return false }
+      const saved = async (save: () => Promise<FolderSaveAnswer>): Promise<FolderSaveAnswer> => {
+        try {
+          const answer = await save()
+          return answer === true || answer === SETTINGS_FILE_UNREADABLE ? answer : false
+        } catch {
+          return false
+        }
       }
-      if (!(await saved(() => window.electronAPI.setup.setDataDir(dataDir)))) {
-        if (mountedRef.current) setFolderError(folderNotSaved('data'))
+      const data = await saved(() => window.electronAPI.setup.setDataDir(dataDir))
+      if (data !== true) {
+        if (mountedRef.current) setFolderError(folderNotSaved('data', data))
         return
       }
-      if (!(await saved(() => window.electronAPI.setup.setResourcesDir(resourcesDir)))) {
-        if (mountedRef.current) setFolderError(folderNotSaved('resources'))
+      const resources = await saved(() => window.electronAPI.setup.setResourcesDir(resourcesDir))
+      if (resources !== true) {
+        if (mountedRef.current) setFolderError(folderNotSaved('resources', resources))
         return
       }
       // Re-arm the CLI gate: coming back to step 2 always re-probes, so a user who

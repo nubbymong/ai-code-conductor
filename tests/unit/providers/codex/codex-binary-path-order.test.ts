@@ -9,7 +9,7 @@
 // program, asks a folder that could not be read nothing more, and starts no
 // process and no shell. The file system is a fixed set of paths, so nothing
 // on this machine is looked up.
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 vi.mock('os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('os')>()
@@ -46,7 +46,8 @@ vi.mock('fs', async (importOriginal) => {
 })
 
 const { execSync } = await import('child_process')
-const { resolveCodexBinary } = await import('../../../../src/main/providers/codex/spawn')
+const { resolveCodexBinary, resolveCodexBinaryAsync } = await import('../../../../src/main/providers/codex/spawn')
+const { findOnWindowsPathAsync, folderFileTest, WINDOWS_PATH_WALK_WAIT_MS, _resetFolderFileTestForTest } = await import('../../../../src/main/windows-programs')
 
 const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC'
 let asked: string[]
@@ -252,5 +253,158 @@ describe('one program file that cannot be read does not hide the one beside it',
   it.each(['ENOENT', 'ENOTDIR'])('[host] a file that is not there (%s) is "no such file", as before: its folder is still asked for the other form', (code) => {
     madeUp.files.set(`${FIRST}\\codex.exe`, code).set(`${FIRST}\\codex.cmd`, true).set(`${LATER}\\codex.exe`, true)
     expect(lookUp()?.cmd).toBe(`${FIRST}\\codex.cmd`)
+  })
+})
+
+// The same lookup made off the main thread (resolveCodexBinaryAsync), which
+// the CLI check asks at start-up and at each later check. The same folders,
+// the same two passes, the same answer; its own file test is the shared one
+// (windows-programs.ts folderFileTest), so it keeps to one test at a time in
+// a folder with every other walk of PATH. The check just before a sign-in or
+// a launch asks this lookup too, and waits for it; the lookup above, made in
+// place, is what the ports answer with when they are given no other.
+describe('the lookup made off the main thread gives the answer the lookup in place gives', () => {
+  const FIRST = `${madeUp.root}first`
+  const LATER = `${madeUp.root}later`
+  /** A stand-in disk for both lookups: the same files, the same dead folders. */
+  const both = async (env: Record<string, string>, unreachable: string[], ...files: string[]) => {
+    const set = new Set(files.map((f) => f.toLowerCase()))
+    const dead = unreachable.map((d) => d.toLowerCase())
+    const look = (p: string): 'file' | 'none' | 'unreachable' =>
+      dead.some((d) => p.toLowerCase().startsWith(`${d}\\`)) ? 'unreachable' : set.has(p.toLowerCase()) ? 'file' : 'none'
+    const inPlaceAsked: string[] = []
+    const offThreadAsked: string[] = []
+    const inPlace = resolveCodexBinary({ platform: 'win32', env, statFile: (p: string) => { inPlaceAsked.push(p); return look(p) } })
+    const offThread = await resolveCodexBinaryAsync({ platform: 'win32', env, statFile: async (p: string) => { offThreadAsked.push(p); return look(p) } })
+    // The same answer, from the same files asked for in the same order.
+    expect(offThread).toEqual(inPlace)
+    expect(offThreadAsked).toEqual(inPlaceAsked)
+    return offThread
+  }
+
+  it.each([
+    ['an earlier .cmd wins over a later .exe', { PATH: 'C:\\earlier;C:\\later', PATHEXT: DEFAULT_PATHEXT }, [], ['C:\\earlier\\codex.cmd', 'C:\\later\\codex.exe'], 'C:\\earlier\\codex.cmd'],
+    ['both in one entry: PATHEXT order decides', { PATH: 'C:\\npm', PATHEXT: '.COM;.CMD;.EXE' }, [], ['C:\\npm\\codex.exe', 'C:\\npm\\codex.cmd'], 'C:\\npm\\codex.cmd'],
+    ['no PATHEXT at all', { PATH: 'C:\\npm' }, [], ['C:\\npm\\codex.exe', 'C:\\npm\\codex.cmd'], 'C:\\npm\\codex.exe'],
+    ['a form PATHEXT does not list never wins over a listed one later in PATH', { PATH: 'C:\\earlier;C:\\later', PATHEXT: '.EXE' }, [], ['C:\\earlier\\codex.cmd', 'C:\\later\\codex.exe'], 'C:\\later\\codex.exe'],
+    ['a form PATHEXT does not list is found once no entry holds a listed one', { PATH: 'C:\\earlier;C:\\later', PATHEXT: '.EXE' }, [], ['C:\\later\\codex.cmd'], 'C:\\later\\codex.cmd'],
+    ['a relative entry and the current folder are never read', { PATH: '.;bin;C:\\npm', PATHEXT: DEFAULT_PATHEXT }, [], ['codex.exe', 'bin\\codex.exe', 'C:\\npm\\codex.cmd'], 'C:\\npm\\codex.cmd'],
+    ['a quoted entry is read without its quotes', { PATH: '"C:\\Program Files\\tools";C:\\npm', PATHEXT: DEFAULT_PATHEXT }, [], ['C:\\Program Files\\tools\\codex.exe'], 'C:\\Program Files\\tools\\codex.exe'],
+    ['a folder that cannot be reached is asked once, in neither pass again', { PATH: 'D:\\dead;C:\\npm', PATHEXT: '.EXE' }, ['D:\\dead'], ['D:\\dead\\codex.exe', 'C:\\npm\\codex.cmd'], 'C:\\npm\\codex.cmd'],
+    ['nothing anywhere', { PATH: 'C:\\a;C:\\b', PATHEXT: DEFAULT_PATHEXT }, [], [], null],
+    ['no PATH', {}, [], ['C:\\npm\\codex.exe'], null],
+  ] as Array<[string, Record<string, string>, string[], string[], string | null]>)('[host] %s', async (_what, env, dead, files, want) => {
+    expect((await both(env, dead, ...files))?.cmd ?? null).toBe(want)
+  })
+
+  describe('its own file test is the shared one', () => {
+    let nodeFs: typeof import('node:fs')
+    let held: Array<{ file: string; end: (answer: true | string) => void }>
+    let statSpy: { mockRestore: () => void }
+    const lookUp = (pathValue: string = `${FIRST};${LATER}`) => resolveCodexBinaryAsync({ platform: 'win32', env: { PATH: pathValue, PATHEXT: DEFAULT_PATHEXT } })
+    const settle = async (): Promise<void> => { for (let i = 0; i < 20; i++) await new Promise<void>((r) => setImmediate(r)) }
+
+    beforeEach(async () => {
+      nodeFs = (await import('node:fs')).default
+      _resetFolderFileTestForTest()
+      madeUp.files.clear()
+      madeUp.asked.length = 0
+      held = []
+      const realStat = nodeFs.promises.stat.bind(nodeFs.promises) as (p: unknown, o?: unknown) => Promise<unknown>
+      statSpy = vi.spyOn(nodeFs.promises, 'stat').mockImplementation(((p: unknown, o?: unknown) => {
+        if (typeof p !== 'string' || !p.startsWith(madeUp.root)) return realStat(p, o)
+        madeUp.asked.push(p)
+        const answer = madeUp.files.get(p)
+        if (answer === true) return Promise.resolve({ isFile: () => true })
+        if (answer !== 'HELD') return Promise.reject(Object.assign(new Error('the file test failed'), { code: answer ?? 'ENOENT' }))
+        return new Promise((resolve, reject) => {
+          held.push({ file: p, end: (a) => (a === true ? resolve({ isFile: () => true }) : reject(Object.assign(new Error('the file test failed'), { code: a }))) })
+        })
+      }) as never)
+    })
+    afterEach(async () => {
+      for (const h of held.splice(0)) h.end('ENETUNREACH')
+      await settle()
+      statSpy.mockRestore()
+    })
+
+    it.each(['EPERM', 'EACCES', 'EBUSY'])('[host] the .exe cannot be read (%s): the .cmd beside it is found, not a later folder\'s .exe', async (code) => {
+      madeUp.files.set(`${FIRST}\\codex.exe`, code).set(`${FIRST}\\codex.cmd`, true).set(`${LATER}\\codex.exe`, true)
+      expect((await lookUp())?.cmd).toBe(`${FIRST}\\codex.cmd`)
+      expect(madeUp.asked).toEqual([`${FIRST}\\codex.exe`, `${FIRST}\\codex.cmd`])
+    })
+
+    it.each(['EHOSTUNREACH', 'ETIMEDOUT', 'UNKNOWN', 'EIO'])('[host] a folder whose file test fails for any other reason (%s) is passed once, in both passes', async (code) => {
+      madeUp.files.set(`${FIRST}\\codex.exe`, code).set(`${FIRST}\\codex.cmd`, true).set(`${LATER}\\codex.cmd`, true)
+      expect((await resolveCodexBinaryAsync({ platform: 'win32', env: { PATH: `${FIRST};${LATER}`, PATHEXT: '.COM;.EXE' } }))?.cmd).toBe(`${LATER}\\codex.cmd`)
+      expect(madeUp.asked.filter((p) => p.startsWith(FIRST))).toEqual([`${FIRST}\\codex.exe`])
+    })
+
+    // Mutation to prove this can fail: give the lookup a file test of its own.
+    it('[host] it makes no test of its own in a folder another walk is waiting on, and never goes past that folder', async () => {
+      madeUp.files.set(`${FIRST}\\gh.exe`, 'HELD').set(`${LATER}\\codex.exe`, true)
+      const other = findOnWindowsPathAsync(['gh.exe'], { PATH: `${FIRST};${LATER}` })
+      await settle()
+      const lookup = lookUp()
+      await settle()
+      // One test is out in the folder that has not answered, and nothing later was asked.
+      expect(madeUp.asked).toEqual([`${FIRST}\\gh.exe`])
+      // It says at last that it cannot be reached: that is this lookup's answer for the folder too.
+      for (const h of held.splice(0)) h.end('ENETUNREACH')
+      expect((await lookup)?.cmd).toBe(`${LATER}\\codex.exe`)
+      expect(await other).toBeNull()
+      expect(madeUp.asked.filter((p) => p.startsWith(FIRST))).toEqual([`${FIRST}\\gh.exe`])
+    })
+
+    describe('it waits behind another walk\'s test until its own deadline, and no longer', () => {
+      /** Lets every step that can run now, run (the timers are stand-ins). */
+      const flush = async (): Promise<void> => { for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0) }
+      beforeEach(() => { vi.useFakeTimers() })
+      afterEach(async () => {
+        for (const h of held.splice(0)) h.end('ENETUNREACH')
+        await flush()
+        vi.useRealTimers()
+      })
+
+      // Mutation to prove this can fail: give the lookup's file test no deadline.
+      it('[host] no test of its own and nothing past the folder before the deadline; its own test in the folder at the deadline, whose answer is the folder\'s', async () => {
+        madeUp.files.set(`${FIRST}\\other.exe`, 'HELD').set(`${FIRST}\\codex.exe`, 'HELD').set(`${LATER}\\codex.exe`, true)
+        // Another walk's test in the folder, for another file, with no deadline: it sets no timer.
+        void folderFileTest()(`${FIRST}\\other.exe`).catch(() => false)
+        await flush()
+        const lookup = lookUp()
+        await flush()
+        expect(madeUp.asked).toEqual([`${FIRST}\\other.exe`])
+
+        await vi.advanceTimersByTimeAsync(WINDOWS_PATH_WALK_WAIT_MS - 1)
+        expect(madeUp.asked).toEqual([`${FIRST}\\other.exe`])
+
+        await vi.advanceTimersByTimeAsync(1)
+        await flush()
+        expect(madeUp.asked).toEqual([`${FIRST}\\other.exe`, `${FIRST}\\codex.exe`])
+        expect(held).toHaveLength(2)
+
+        const own = held.findIndex((h) => h.file === `${FIRST}\\codex.exe`)
+        held.splice(own, 1)[0].end(true)
+        expect((await lookup)?.cmd).toBe(`${FIRST}\\codex.exe`)
+        expect(madeUp.asked.filter((p) => p.startsWith(LATER))).toEqual([])
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      // Mutation to prove this can fail: leave the lookup's timer running when its walk ends.
+      it('[host] a lookup that ends before its deadline leaves no timer behind', async () => {
+        madeUp.files.set(`${FIRST}\\codex.exe`, true)
+        const lookup = lookUp()
+        expect(vi.getTimerCount()).toBe(1)
+        expect((await lookup)?.cmd).toBe(`${FIRST}\\codex.exe`)
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it('[host] a lookup with a file test handed in sets no timer', async () => {
+        const lookup = resolveCodexBinaryAsync({ platform: 'win32', env: { PATH: FIRST, PATHEXT: DEFAULT_PATHEXT }, statFile: async () => 'file' })
+        expect(vi.getTimerCount()).toBe(0)
+        expect((await lookup)?.cmd).toBe(`${FIRST}\\codex.exe`)
+      })
+    })
   })
 })

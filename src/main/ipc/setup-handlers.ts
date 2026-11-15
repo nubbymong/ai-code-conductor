@@ -26,8 +26,32 @@ import {
   setResourcesDirectory,
   isDataDirFromRegistry,
 } from '../data-paths'
+import { platformConfigUnreadable } from '../platform-config-store'
+import { SETTINGS_FILE_UNREADABLE, type FolderSaveAnswer } from '../../shared/setup-folder-save'
 
 export { getDataDirectory, getResourcesDirectory } from '../data-paths'
+
+/**
+ * What the folder step of first-run setup is answered for a save: true once
+ * the folder is saved, and only then. When it was not, the answer says so
+ * (false), or, on macOS and Linux, says that the reason is the settings file
+ * the folders are saved in, which is there but did not read
+ * (platform-config-store.ts): null, SETTINGS_FILE_UNREADABLE. That file is
+ * left as it is, so another folder would not be saved either, and the step
+ * tells the user to repair or remove the file. Asked of the file as it is
+ * now, after the save was refused. Never null on Windows, where the folders
+ * are saved in the registry.
+ *
+ * Neither answer for a save that was refused reads as true
+ * (shared/setup-folder-save.ts).
+ */
+export function folderSaveAnswer(saved: boolean, platform: NodeJS.Platform = process.platform): FolderSaveAnswer {
+  if (saved === true) return true
+  if (platform === 'win32') return false
+  let unreadable = false
+  try { unreadable = platformConfigUnreadable() } catch { /* not known: the plain answer */ }
+  return unreadable ? SETTINGS_FILE_UNREADABLE : false
+}
 
 /**
  * The environment the first-run Claude Code setup terminal runs under: `env`,
@@ -141,7 +165,7 @@ export function registerSetupHandlers(): void {
   })
 
   ipcMain.handle('setup:setDataDir', async (_event, dataDir: string) => {
-    return setDataDirectory(dataDir)
+    return folderSaveAnswer(setDataDirectory(dataDir))
   })
 
   ipcMain.handle('setup:getDataDir', async () => {
@@ -165,7 +189,7 @@ export function registerSetupHandlers(): void {
   })
 
   ipcMain.handle('setup:setResourcesDir', async (_event, resourcesDir: string) => {
-    return setResourcesDirectory(resourcesDir)
+    return folderSaveAnswer(setResourcesDirectory(resourcesDir))
   })
 
   ipcMain.handle('setup:isCliReady', async () => {

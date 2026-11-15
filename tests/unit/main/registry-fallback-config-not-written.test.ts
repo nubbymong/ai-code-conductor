@@ -7,8 +7,11 @@
 // of reporting the folder as set.
 //
 // Nothing is written to disk: fs is replaced by an in-memory stand-in for the
-// four calls registry.ts and data-paths.ts make, and the platform is forced
-// to Linux. The folders are literals that read the same on every host.
+// calls registry.ts, platform-config-store.ts, atomic-write.ts and
+// data-paths.ts make, and the platform is forced to Linux. The folders are
+// literals that read the same on every host. The config file is saved as a
+// staged copy renamed over it (tests/unit/main/platform-config-strict-store.test.ts),
+// so the write that is refused here is the staged copy's.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
 
@@ -37,6 +40,18 @@ vi.mock('fs', async (importOriginal) => {
       if (h.writeFails) throw fail(h.writeFails)
       h.files.set(String(p), String(data))
     }),
+    lstatSync: vi.fn((p: import('fs').PathLike) => {
+      if (!h.files.has(String(p)) && !h.dirs.has(String(p))) throw fail('ENOENT')
+      return { isSymbolicLink: () => false, mtimeMs: Date.now() }
+    }),
+    readdirSync: vi.fn(() => []),
+    renameSync: vi.fn((from: import('fs').PathLike, to: import('fs').PathLike) => {
+      const text = h.files.get(String(from))
+      if (text === undefined) throw fail('ENOENT')
+      h.files.set(String(to), text)
+      h.files.delete(String(from))
+    }),
+    unlinkSync: vi.fn((p: import('fs').PathLike) => { h.files.delete(String(p)) }),
     mkdirSync: vi.fn((p: import('fs').PathLike) => {
       const dir = String(p)
       if (h.configDirFails && /[\\/]\.ai-code-conductor$/.test(dir)) throw fail(h.configDirFails)
@@ -85,9 +100,11 @@ describe('macOS/Linux: a config file that could not be written is not answered a
       h.writes.length = 0
       expect(registry.writeRegistry('DataDirectory', '/ccc-test/data'), code).toBe(false)
       expect(h.writes, code).toHaveLength(1)
-      expect(h.writes[0], code).toMatch(/platform-config\.json$/)
+      // The staged copy beside the config file, never the file itself.
+      expect(h.writes[0], code).toMatch(/platform-config\.json\.[0-9a-f-]{36}\.tmp$/)
     }
     expect(registry.readRegistry('DataDirectory')).toBeNull()
+    expect([...h.files.keys()]).toEqual([])
   })
 
   // Mutation to prove this can fail: catch the folder's error apart from the write's and go on.

@@ -133,11 +133,20 @@ export function loginShellWithOwnPath(
   return isShFamilyShell(shell) ? null : shell
 }
 
-/** How the PATH question is put to `shell`: as a login shell (`-l`), the
- *  command as one argument, started directly (no shell parses `shell`), in
- *  the home folder, with `env`. */
+/** How one question is put to `shell`, a login shell: the shell itself is
+ *  the program that is started, by its name as it is written, with an
+ *  argument list (`-l`, `-c` and `command` as one argument), in the home
+ *  folder, with `env` as its whole environment. It is started directly (no
+ *  shell parses `shell`). One form for every question the app asks a login
+ *  shell this way (the PATH it builds, here; where a program is, in the
+ *  providers). */
+export function loginShellRun(shell: string, command: string, env: NodeJS.ProcessEnv): { file: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
+  return { file: shell, args: ['-l', '-c', command], cwd: homedir(), env }
+}
+
+/** How the PATH question is put to `shell` (loginShellRun). */
 function loginShellPathRun(shell: string, env: NodeJS.ProcessEnv): { file: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
-  return { file: shell, args: ['-l', '-c', LOGIN_SHELL_PATH_COMMAND], cwd: homedir(), env }
+  return loginShellRun(shell, LOGIN_SHELL_PATH_COMMAND, env)
 }
 
 /** The PATH `shell` (a login shell outside the sh family) builds, asked off

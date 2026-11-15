@@ -20,9 +20,14 @@
 //  - The live pack lives in tests/live/ and is matched ONLY by
 //    --config vitest.live.config.ts. Run without that flag and vitest silently
 //    finds 0 tests (the default config excludes tests/live).
-//  - We target tests/live/ssh-statusline.live.ts SPECIFICALLY. The live config
-//    also globs tests/live/ssh-multisession.live.ts, whose "-R port coexistence"
-//    test fails in a headless runner for an UNRELATED reason: it reuses the real
+//  - We target the statusline packs SPECIFICALLY: one file per target host,
+//    tests/live/ssh-statusline-<host>.live.ts (the matrix was one file,
+//    ssh-statusline.live.ts, until it was split into a lane per host). They
+//    are found by name when the gate runs (liveStatuslinePacks) and run under
+//    the live config, as `npm run test:live:ssh` runs them, lanes in parallel.
+//    The live config also globs tests/live/ssh-multisession*.live.ts, whose
+//    "-R port coexistence" test fails in a headless runner for an UNRELATED
+//    reason: it reuses the real
 //    force-TTY (`-t`) ssh argv under spawnSync (no tty), so its preflight gets
 //    "Pseudo-terminal will not be allocated..." instead of its PREFLIGHT marker.
 //    That is not a harmonise/statusline failure, so it must not pollute this gate.
@@ -37,15 +42,37 @@
 //    account shows Fable:93% on Pi/WINDOWS_2/Rocky. So empty buckets
 //    are WARN, never FAIL.
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const REPO = fileURLToPath(new URL('..', import.meta.url))
-const STATUSLINE_PACK = 'tests/live/ssh-statusline.live.ts'
-const HOSTS_FILE = join(REPO, 'tests', 'live', 'hosts.local.json')
+const LIVE_DIR = join(REPO, 'tests', 'live')
+const HOSTS_FILE = join(LIVE_DIR, 'hosts.local.json')
 const VITEST = join(REPO, 'node_modules', 'vitest', 'vitest.mjs')
+
+// ── The packs the live step runs ─────────────────────────────────────────────
+
+/** A statusline pack's file name: one lane per target host. */
+const STATUSLINE_PACK_NAME = /^ssh-statusline-[A-Za-z0-9_.-]+\.live\.ts$/
+
+/** The statusline packs among `names` (the file names in tests/live), as
+ *  repo-relative paths in name order. Nothing else the live config globs is
+ *  among them (the multisession packs, the harness). Pure. */
+export function statuslinePacks(names) {
+  return names.filter((n) => STATUSLINE_PACK_NAME.test(n)).sort().map((n) => `tests/live/${n}`)
+}
+
+/** The statusline packs that are in tests/live now: what the live step
+ *  hands to vitest. Empty when the folder cannot be listed. */
+export function liveStatuslinePacks(dir = LIVE_DIR) {
+  try {
+    return statuslinePacks(readdirSync(dir))
+  } catch {
+    return []
+  }
+}
 
 // ── Pure, unit-tested parsing ────────────────────────────────────────────────
 
@@ -106,15 +133,19 @@ export function classifyCombo(c) {
   return 'PASS'
 }
 
-/** Roll combos + vitest tally into a gate verdict. Gate fails on any FAIL row
- *  or a real vitest assertion failure; WARN rows do not fail it. */
-export function summarizeGate(parsed) {
+/** Roll combos + vitest tally + the live process's exit code into a gate
+ *  verdict. Gate fails on any FAIL row, a real vitest assertion failure, or a
+ *  non-zero exit: with several packs in one run, one can fail collection or
+ *  setup (no report lines, no failed-test tally) while another passes, so the
+ *  parsed rows alone can read as a pass. WARN rows do not fail it. */
+export function summarizeGate(parsed, exitCode = 0) {
   const rows = parsed.combos.map((c) => ({ ...c, verdict: classifyCombo(c) }))
   const fails = rows.filter((r) => r.verdict === 'FAIL')
   const warns = rows.filter((r) => r.verdict === 'WARN')
   const vitestFailed = parsed.summary ? parsed.summary.failed : 0
-  const ok = fails.length === 0 && vitestFailed === 0 && rows.length > 0
-  return { ok, rows, fails, warns, vitestFailed, summary: parsed.summary }
+  const exitFailed = exitCode !== 0
+  const ok = fails.length === 0 && vitestFailed === 0 && !exitFailed && rows.length > 0
+  return { ok, rows, fails, warns, vitestFailed, exitFailed, exitCode, summary: parsed.summary }
 }
 
 // ── Orchestration (not exported) ─────────────────────────────────────────────
@@ -164,16 +195,22 @@ async function main() {
     process.exit(liveOnly ? 0 : 0)
   }
 
+  const packs = liveStatuslinePacks()
+  if (packs.length === 0) {
+    console.error('❌ no statusline pack found in tests/live (ssh-statusline-<host>.live.ts): nothing to run.')
+    process.exit(1)
+  }
+
   const dump = mkdtempSync(join(tmpdir(), 'ccc-verify-dump-'))
   // Smoke: skip the two 480s tmux-reattach combos via a negative-lookahead
   // testNamePattern. `node vitest.mjs` (not npx/.cmd) means this regex reaches
   // vitest literally, no shell interpretation.
-  const args = [VITEST, 'run', '--config', 'vitest.live.config.ts', STATUSLINE_PACK]
+  const args = [VITEST, 'run', '--config', 'vitest.live.config.ts', ...packs]
   if (!full) args.push('-t', '^(?!.*reattach)')
   const live = await run(process.execPath, args, { capture: true, env: { CCC_LIVE_DUMP: dump } })
 
   const parsed = parseLiveMatrixOutput(live.out)
-  const gate = summarizeGate(parsed)
+  const gate = summarizeGate(parsed, live.code)
 
   banner('Live matrix result')
   if (gate.rows.length === 0) {
@@ -192,10 +229,11 @@ async function main() {
   console.log(`dump: ${dump}`)
 
   if (!gate.ok) {
-    console.error(`\n❌ RELEASE GATE FAILED — ${gate.fails.length} FAIL row(s), vitest ${gate.vitestFailed} failed.`)
+    const exit = gate.exitFailed ? `; the live run exited with code ${gate.exitCode} (a pack failed outside the parsed reports: collection, setup or a crash)` : ''
+    console.error(`\n❌ RELEASE GATE FAILED — ${gate.fails.length} FAIL row(s), vitest ${gate.vitestFailed} failed${exit}.`)
     process.exit(1)
   }
-  console.log(`\n✅ RELEASE GATE PASSED — ${gate.rows.length} combos, ${gate.rows.filter((r) => r.verdict === 'PASS').length} full / ${gate.warns.length} warn, live=${live.code === 0 ? 'clean' : 'non-zero'}.`)
+  console.log(`\n✅ RELEASE GATE PASSED — ${gate.rows.length} combos, ${gate.rows.filter((r) => r.verdict === 'PASS').length} full / ${gate.warns.length} warn, live exit 0.`)
   process.exit(0)
 }
 
