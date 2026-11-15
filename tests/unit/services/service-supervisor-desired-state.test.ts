@@ -105,6 +105,28 @@ describe('hooks service: desired state (B8)', () => {
     expect((await p).listening).toBe(true)
   })
 
+  it('the same child bound again after off and on keeps its uptime; a replacement starts it over', async () => {
+    vi.setSystemTime(1000)
+    h = harness()
+    h.bound()
+    expect(h.health().startedAt).toBe(1000)
+    vi.advanceTimersByTime(5000)
+    await h.proxy.stop()                  // off: the child lives on, so its age is kept
+    expect(h.health().startedAt).toBe(1000)
+    const p = h.proxy.start()             // on: the same child is told to start again
+    vi.advanceTimersByTime(7000)
+    h.bound()                             // ...and reports bound a second time
+    expect(h.fork).toHaveBeenCalledTimes(1)
+    expect(h.health()).toMatchObject({ state: 'listening', startedAt: 1000 })
+    await p
+    h.kids[0].exit()                      // a real replacement: the clock starts over
+    vi.advanceTimersByTime(300)
+    expect(h.health().startedAt).toBeNull()
+    vi.advanceTimersByTime(2000)
+    h.bound()
+    expect(h.health().startedAt).toBe(1000 + 5000 + 7000 + 300 + 2000)
+  })
+
   it('turned on again after a crash while off: a fresh child, secrets first, started once', async () => {
     h = harness()
     const secret = h.proxy.registerSession('s1')

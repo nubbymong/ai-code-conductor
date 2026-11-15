@@ -43,6 +43,8 @@ export interface TkIndexCompleteEvent { firstIndex: boolean; drained: boolean; f
  *  oldest dropped. */
 const SESSION_ACCOUNTS_KEPT = 4096
 const DEFAULT_QUERY_TIMEOUT_MS = 15_000
+/** Counter changes (Events, In-flight) reach the Services view at most this often. */
+const COALESCE_MS = 250
 
 export class TokenomicsSupervisor {
   private worker: ForkedTkWorker | null = null
@@ -86,6 +88,9 @@ export class TokenomicsSupervisor {
   private readyAt: number | null = null
   private lastHeardAt = 0
   private lastExit: { message: string; ts: number } | null = null
+  /** The window that coalesces counter-driven row pushes (schedulePush). */
+  private coalesceTimer: ReturnType<typeof setTimeout> | null = null
+  private coalesceDirty = false
 
   constructor(private opts: TokenomicsSupervisorOptions) {
     this.realmDirsKnown = Array.isArray(opts.codexRealmSessionsDirs)
@@ -162,34 +167,49 @@ export class TokenomicsSupervisor {
         return
       }
       case 'index-progress': {
+        if (from !== this.worker) return
         this.lastAccountReread = m.accountReread ?? null
         this.lastProgress = { filesDone: m.filesDone, filesTotal: m.filesTotal, eventsIngested: m.eventsIngested, phase: m.phase, accountReread: this.lastAccountReread }
         for (const cb of this.progressSubs) { try { cb(this.lastProgress) } catch { /* ignore */ } }
         return
       }
       case 'index-complete': {
+        // A replaced worker's late completion is not the current worker's state.
+        if (from !== this.worker) return
         // A sweep FINISHING is not a first index. With a per-tick byte budget a
         // multi-GB rollout needs tens of sweeps, so latching on the message
         // itself put the dashboard up over a fraction of the user's spend and
         // called it complete. `drained` is the worker saying every file it
         // visited was actually read to the end.
         if (m.drained) this.firstIndexComplete = true
+        const eventsChanged = this.lastEventsTotal !== m.eventsTotal
         this.lastEventsTotal = m.eventsTotal
         this.lastFilesFailed = m.filesFailed
         this.lastIndexAt = this.now()
         for (const cb of this.completeSubs) { try { cb({ firstIndex: m.firstIndex, drained: m.drained, filesFailed: m.filesFailed, eventsTotal: m.eventsTotal }) } catch { /* ignore */ } }
+        if (eventsChanged) this.schedulePush()
         return
       }
-      case 'health': { this.lastEventsTotal = m.eventsTotal; return }
+      case 'health': {
+        // Only the current worker's counters are the row's.
+        if (from !== this.worker) return
+        const eventsChanged = this.lastEventsTotal !== m.eventsTotal
+        this.lastEventsTotal = m.eventsTotal
+        if (eventsChanged) this.schedulePush()
+        return
+      }
+      // An answer is matched by its request id, and a restart or an exit rejects
+      // every pending query at once (ids are never reused), so a replaced worker
+      // can settle nothing that is still pending: no identity check is needed.
       case 'query-result': {
         const p = this.pending.get(m.id)
-        if (p) { this.pending.delete(m.id); clearTimeout(p.timer); p.resolve(m.rows) }
+        if (p) { this.pending.delete(m.id); clearTimeout(p.timer); p.resolve(m.rows); this.schedulePush() }
         return
       }
       case 'error': {
         if (m.id !== undefined) {
           const p = this.pending.get(m.id)
-          if (p) { this.pending.delete(m.id); clearTimeout(p.timer); p.reject(new Error(m.message)) }
+          if (p) { this.pending.delete(m.id); clearTimeout(p.timer); p.reject(new Error(m.message)); this.schedulePush() }
           return
         }
         // Uncorrelated error: the worker stays alive (e.g. a failed DB open never
@@ -222,9 +242,15 @@ export class TokenomicsSupervisor {
     const id = this.nextId++
     return new Promise<unknown[]>((resolve, reject) => {
       const timeoutMs = this.opts.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS
-      const timer = setTimeout(() => { if (this.pending.delete(id)) reject(new Error(`tokenomics query timed out after ${timeoutMs}ms (kind=${kind})`)) }, timeoutMs)
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) {
+          reject(new Error(`tokenomics query timed out after ${timeoutMs}ms (kind=${kind})`))
+          this.schedulePush()
+        }
+      }, timeoutMs)
       ;(timer as unknown as { unref?: () => void }).unref?.()
       this.pending.set(id, { resolve, reject, timer })
+      this.schedulePush()
       this.worker!.transport.post({ type: 'query', id, kind, args })
     })
   }
@@ -317,6 +343,30 @@ export class TokenomicsSupervisor {
     try { this.opts.emit(IPC.SERVICE_HEALTH_UPDATE, this.getDiagnosticsSnapshot()) } catch { /* window gone */ }
   }
 
+  /** Tell the Services view the row changed because a counter did (Events, In-flight),
+   *  at most once per COALESCE_MS. The first change goes out at once; changes inside
+   *  the window are held and sent together when it ends, so the last value always
+   *  lands and a burst of queries is two pushes, not one per query. */
+  private schedulePush(): void {
+    if (this.sup.isShuttingDown()) return
+    if (this.coalesceTimer) { this.coalesceDirty = true; return }
+    this.pushHealth()
+    this.openCoalesceWindow()
+  }
+
+  private openCoalesceWindow(): void {
+    const timer = setTimeout(() => {
+      this.coalesceTimer = null
+      if (!this.coalesceDirty) return
+      this.coalesceDirty = false
+      if (this.sup.isShuttingDown()) return
+      this.pushHealth()
+      this.openCoalesceWindow()
+    }, COALESCE_MS)
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    this.coalesceTimer = timer
+  }
+
   /** A restart asked for from the Services panel. The restart budget and the
    *  backoff start over (a spent budget is forgiven), the worker is replaced,
    *  and the new one is sent `open` again, so it re-opens the index and picks
@@ -361,6 +411,11 @@ export class TokenomicsSupervisor {
     try { this.worker?.kill() } catch { /* ignore */ }
     this.worker = null
     this.listening = false
+    // The supervisor's shutdown suppresses the exit callback that clears this,
+    // so clear it here: a stopped row shows no uptime.
+    this.readyAt = null
+    if (this.coalesceTimer) { clearTimeout(this.coalesceTimer); this.coalesceTimer = null }
+    this.coalesceDirty = false
     // The row reads stopped from here. Say so: nothing else would tell the
     // Services view when the service is shut down while the app keeps running.
     this.pushHealth()

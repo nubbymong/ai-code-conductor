@@ -121,7 +121,10 @@ export class ServiceSupervisor {
         host: 'utility-process',
         port: m.port,
         pid: m.pid,
-        startedAt: this.now(),   // this child's: each bound starts the uptime over
+        // This child's age. A second bound from the same child (turned off and
+        // on again) is not a new process, so a start time already held is kept;
+        // NO_CHILD clears it on every exit and respawn, so a replacement starts over.
+        startedAt: this.health.startedAt ?? this.now(),
       }
       this.appendLog('info', 'bound', `bound :${m.port} pid=${m.pid}`)
       this.pushHealth()

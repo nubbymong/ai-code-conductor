@@ -704,3 +704,133 @@ describe('usage index: a restart asked for from the Services panel', () => {
     expect(pushed.at(-1)).toBe('starting')
   })
 })
+
+// Review round on the registry PR: what a replaced worker may still change, how
+// the row follows the counters, and what a shut down worker leaves on the row.
+// Answers to queries are keyed by request id, and a restart or exit rejects every
+// pending query at once (ids are never reused), so a replaced worker cannot
+// settle one that is still pending: those messages need no identity check.
+describe('usage index: a replaced worker\'s late messages', () => {
+  let h: ReturnType<typeof harness> | undefined
+  beforeEach(() => { vi.useFakeTimers(); logs.logInfo.mockClear() })
+  afterEach(() => { h?.sup.shutdown(); h = undefined; vi.useRealTimers() })
+
+  it('a late health, progress or completion changes nothing and tells nobody; its log lines are still forwarded', () => {
+    const pushed: DiagnosticsSnapshot[] = []
+    h = harness({ autoReady: false, emit: (_c, payload) => { pushed.push(payload as DiagnosticsSnapshot) } })
+    h.ready()
+    h.sup.manualRestart('tokenomics')               // worker 2 is forked
+    h.ready()                                       // and ready
+    const progress = vi.fn(); const complete = vi.fn()
+    h.sup.onIndexProgress(progress); h.sup.onIndexComplete(complete)
+    pushed.length = 0
+    const old = h.kids[0].t
+    old.emitToMain({ type: 'health', eventsTotal: 999, filesTracked: 1, dbBytes: 1 })
+    old.emitToMain({ type: 'index-progress', filesDone: 9, filesTotal: 9, eventsIngested: 9, phase: 'initial' })
+    old.emitToMain({ type: 'index-complete', firstIndex: true, drained: true, filesFailed: 3, eventsTotal: 777 })
+    vi.advanceTimersByTime(1000)
+    expect(progress).not.toHaveBeenCalled()
+    expect(complete).not.toHaveBeenCalled()
+    expect(h.sup.getIndexStatus()).toMatchObject({ eventsTotal: 0, filesDone: 0, filesFailed: 0, lastIndexAt: null, firstIndexComplete: false })
+    expect(rowOf(h.sup).eventsTotal).toBe(0)
+    expect(pushed).toEqual([])
+    old.emitToMain({ type: 'log', entry: { level: 'info', message: 'late line' } })
+    expect(logs.logInfo).toHaveBeenCalledWith('[tokenomics worker]', 'late line')
+  })
+
+  it('the current worker\'s own health and completion are taken as before', () => {
+    h = harness()
+    h.last().t.emitToMain({ type: 'health', eventsTotal: 40, filesTracked: 1, dbBytes: 1 })
+    expect(rowOf(h.sup).eventsTotal).toBe(40)
+    h.last().t.emitToMain({ type: 'index-complete', firstIndex: true, drained: true, filesFailed: 0, eventsTotal: 55 })
+    expect(h.sup.getIndexStatus().eventsTotal).toBe(55)
+  })
+})
+
+describe('usage index: its row follows the counters', () => {
+  let h: ReturnType<typeof harness> | undefined
+  let pushed: DiagnosticsSnapshot[] = []
+  const emit = (_c: string, payload: unknown) => { pushed.push(payload as DiagnosticsSnapshot) }
+  const lastRow = () => pushed[pushed.length - 1].services[0]
+  beforeEach(() => { vi.useFakeTimers(); pushed = [] })
+  afterEach(() => { h?.sup.shutdown(); h = undefined; vi.useRealTimers() })
+
+  it('a changed Events count from health or a completed sweep is pushed, an unchanged one is not', () => {
+    h = harness({ emit })
+    vi.advanceTimersByTime(1000)
+    pushed.length = 0
+    h.last().t.emitToMain({ type: 'health', eventsTotal: 50, filesTracked: 1, dbBytes: 1 })
+    expect(pushed).toHaveLength(1)
+    expect(lastRow().eventsTotal).toBe(50)
+    vi.advanceTimersByTime(1000)
+    h.last().t.emitToMain({ type: 'health', eventsTotal: 50, filesTracked: 1, dbBytes: 1 })
+    expect(pushed).toHaveLength(1)                  // same count: nothing to say
+    h.last().t.emitToMain({ type: 'index-complete', firstIndex: false, drained: true, filesFailed: 0, eventsTotal: 80 })
+    expect(pushed).toHaveLength(2)
+    expect(lastRow().eventsTotal).toBe(80)
+  })
+
+  it('a burst of queries is one push now and one trailing push with the last value, and the answers likewise', () => {
+    h = harness({ emit })
+    h.last().t.onWorker(() => {})                   // from here the worker answers nothing
+    vi.advanceTimersByTime(1000)
+    pushed.length = 0
+    for (let i = 0; i < 5; i++) h.sup.query('summary', {}).catch(() => {})
+    expect(pushed).toHaveLength(1)
+    expect(lastRow().inFlight).toBe(1)
+    vi.advanceTimersByTime(249)
+    expect(pushed).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(pushed).toHaveLength(2)                  // the trailing push carries the last value
+    expect(lastRow().inFlight).toBe(5)
+    for (let id = 1; id <= 5; id++) h.last().t.emitToMain({ type: 'query-result', id, rows: [] })
+    expect(pushed).toHaveLength(2)                  // inside the window: held
+    vi.advanceTimersByTime(250)
+    expect(pushed).toHaveLength(3)
+    expect(lastRow().inFlight).toBe(0)
+    vi.advanceTimersByTime(5000)
+    expect(pushed).toHaveLength(3)                  // nothing more to say, nothing pushed
+  })
+
+  it('a query that fails or times out is pushed too', async () => {
+    h = harness({ emit, queryTimeoutMs: 30 })
+    h.last().t.onWorker(() => {})
+    vi.advanceTimersByTime(1000)
+    const failing = h.sup.query('summary', {}).catch(() => {})
+    expect(lastRow().inFlight).toBe(1)
+    vi.advanceTimersByTime(20)                      // inside the query's timeout
+    h.last().t.emitToMain({ type: 'error', id: 1, message: 'boom' })
+    await failing
+    vi.advanceTimersByTime(250)
+    expect(lastRow().inFlight).toBe(0)
+    vi.advanceTimersByTime(1000)
+    const timing = h.sup.query('summary', {}).catch(() => {})
+    expect(lastRow().inFlight).toBe(1)
+    vi.advanceTimersByTime(30)                      // timed out
+    await timing
+    vi.advanceTimersByTime(250)
+    expect(lastRow().inFlight).toBe(0)
+  })
+
+  it('shutdown clears the pending push, and nothing is pushed after it', () => {
+    h = harness({ emit })
+    h.last().t.onWorker(() => {})
+    vi.advanceTimersByTime(1000)
+    h.sup.query('summary', {}).catch(() => {})
+    h.sup.query('summary', {}).catch(() => {})      // a trailing push is waiting
+    h.sup.shutdown()
+    const n = pushed.length
+    expect(lastRow().state).toBe('stopped')
+    vi.advanceTimersByTime(STABLE_MS)
+    expect(pushed).toHaveLength(n)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a shut down worker leaves no uptime on the row, and the stopped push says so', () => {
+    h = harness({ emit })
+    expect(rowOf(h.sup).startedAt).not.toBeNull()
+    h.sup.shutdown()
+    expect(rowOf(h.sup)).toMatchObject({ state: 'stopped', startedAt: null })
+    expect(lastRow()).toMatchObject({ state: 'stopped', startedAt: null })
+  })
+})
