@@ -341,3 +341,36 @@ describe("SshFlowOverlay when main refuses the launch", () => {
     expect(container.querySelector('[data-testid="ssh-claude-off"]')).toBeNull()
   })
 })
+
+// A Terminal only SSH tab is a terminal while its post-connect command runs:
+// main types the command by itself, and a command that attaches to something
+// busy never goes quiet, so the "Running post-connect command" card would sit
+// over the terminal for as long as the work lasts.
+describe('SshFlowOverlay while the post-connect command runs', () => {
+  const cfg = { host: 'h', port: 22, username: 'u', remotePath: '~', postCommand: 'tmux attach -t work' }
+  const RUNNING = 'Running post-connect command'
+
+  // Mutation to prove this can fail: show the card for every session.
+  it('a Terminal only tab shows no card', async () => {
+    setSession(cfg)
+    await act(async () => { root.render(<SshFlowOverlay sessionId="s1" hasPostCommand shellOnly enabled />) })
+    await act(async () => { flowCb?.({ state: 'running-postcommand' }) })
+    expect(container.textContent).toBe('')
+  })
+
+  it('a config that starts Claude still shows it', async () => {
+    setSession(cfg)
+    await act(async () => { root.render(<SshFlowOverlay sessionId="s1" hasPostCommand shellOnly={false} enabled />) })
+    await act(async () => { flowCb?.({ state: 'running-postcommand' }) })
+    expect(container.textContent).toContain(RUNNING)
+  })
+
+  it('a Terminal only tab still shows a failed container entry, and the offer where main keeps one', async () => {
+    setSession(cfg)
+    await act(async () => { root.render(<SshFlowOverlay sessionId="s1" hasPostCommand shellOnly enabled />) })
+    await act(async () => { flowCb?.({ state: 'awaiting-postcommand' }) })
+    expect(container.textContent).toContain('Run post-connect command')
+    await act(async () => { flowCb?.({ state: 'failed', info: 'container entry failed' }) })
+    expect(container.querySelector('[data-testid="ssh-run-post-command-again"]')).not.toBeNull()
+  })
+})

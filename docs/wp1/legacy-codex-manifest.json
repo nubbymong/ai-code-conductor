@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-14T18:06:38.764Z",
-  "head": "e9eb48959f3345cc14d851906d86075077b17fe3",
-  "tree": "6c93e30f0bf3422767fc91c2023e7c8966f0d86b",
+  "generatedAt": "2026-11-15T08:40:49.918Z",
+  "head": "aa5c38f25786e588a67d5ebb4b90b0d4d96004e3",
+  "tree": "be0a80245d28f6f90c60460620ff3b6ed0f86e10",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3175,
-  "excludedFileCount": 467,
-  "scannedFileCount": 2708,
+  "trackedFileCount": 3197,
+  "excludedFileCount": 473,
+  "scannedFileCount": 2724,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 899,
-  "pathDigest": "03d23ba2d6d02792aeb297b936df2967ba1b3e0ae8d9a0213fc88f2a4402ff05",
+  "matchedPathCount": 900,
+  "pathDigest": "9d1f45febc317fcbe89098e673b3f02166db703ec3f84c8e84d19e37cddb3e0a",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -807,7 +807,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 17
+      "lineCount": 16
     },
     {
       "path": "src/main/ipc/codex-review-handlers.ts",
@@ -858,7 +858,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 119
+      "lineCount": 113
     },
     {
       "path": "src/main/ipc/tokenomics2-handlers.ts",
@@ -1386,7 +1386,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 450,
+      "lineCount": 447,
       "truncated": true
     },
     {
@@ -3764,7 +3764,7 @@
         "P05",
         "P13"
       ],
-      "lineCount": 70
+      "lineCount": 82
     },
     {
       "path": "tests/unit/codex-web-boundary.test.ts",
@@ -4811,6 +4811,15 @@
       "lineCount": 29
     },
     {
+      "path": "tests/unit/main/pty-quit-exit-keys-local.test.ts",
+      "predicates": [
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 17
+    },
+    {
       "path": "tests/unit/main/pty-session-liveness.test.ts",
       "predicates": [
         "P13"
@@ -5108,7 +5117,7 @@
         "P05",
         "P13"
       ],
-      "lineCount": 10
+      "lineCount": 21
     },
     {
       "path": "tests/unit/model-data-schema.test.ts",
@@ -5116,7 +5125,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 30
+      "lineCount": 47
     },
     {
       "path": "tests/unit/model-picker-rows.test.ts",
@@ -5131,7 +5140,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 5
+      "lineCount": 11
     },
     {
       "path": "tests/unit/native/tk-db-codex-exact-price.native.test.ts",
@@ -5175,7 +5184,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 1
+      "lineCount": 2
     },
     {
       "path": "tests/unit/native/tokenomics-reindex-307.native.test.ts",
@@ -5321,7 +5330,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 62
+      "lineCount": 79
     },
     {
       "path": "tests/unit/providers/codex/codex-discovery-path-names.test.ts",
@@ -7269,7 +7278,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 11
+      "lineCount": 41
     },
     {
       "path": "tests/unit/tokenomics/tokenomics-worker-reread-order.test.ts",
