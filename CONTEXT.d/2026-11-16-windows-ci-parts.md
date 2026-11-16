@@ -37,8 +37,9 @@ the 2,514 s of summed file time.
   vitest's own JSON reporter).
 - Timeouts are new: 30 minutes on each part and on the build job, 10 on
   `Test (windows-2025)`. The old Windows job had none (GitHub's default is six
-  hours); a part takes 7 to 9 minutes, so 30 is about four times that. A part
-  that times out fails the check.
+  hours); a part takes under 10 minutes (4.9 to 9.0 on the runs of the final
+  design), so 30 is more than three times the slowest. A part that times out
+  fails the check.
 - On a release/* PR the installer is now packaged, checked and uploaded by
   `test-windows-build`, which runs beside the unit parts and does not wait for
   them. So an installer artifact can exist on a red run; before, the steps ran
@@ -80,7 +81,10 @@ the 2,514 s of summed file time.
   (418 s measured against 279 for the first, 268 to 273 against 201 to 211
   for the others).
   The table now holds that run's own times (418, 360, 274, 273, 269, 268, 89,
-  78 and 55 s), which plan 496 / 504 / 542 / 542 s.
+  78 and 55 s), which plan 496 / 504 / 542 / 542 s. The next run (43798392240)
+  measured 416 / 374 / 332 / 653 s: the same files vary by up to 40 percent
+  from run to run (the agents file took 274 s, then 165), so the plan is only
+  as good as the runner allows, and each part's summary shows the drift.
 - Inside a split run the heavy files also start first. The first weighted run
   (43788398848) placed them as planned but still took 11.7 minutes in part 2:
   vitest with no cache starts the largest files first, the split launcher

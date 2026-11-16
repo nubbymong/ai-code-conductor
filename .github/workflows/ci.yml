@@ -340,7 +340,7 @@ jobs:
   # a label change or an edit, they report their names unexpanded and the
   # results already in the PR's list stand.
   #
-  # Each job has a timeout: a part takes 7 to 9 minutes and the build about
+  # Each job has a timeout: a part takes under 10 minutes and the build about
   # 2, so 30 minutes (10 for the check, which takes seconds) stops a hung job
   # long before GitHub's default of six hours. A part that times out fails
   # the check.
