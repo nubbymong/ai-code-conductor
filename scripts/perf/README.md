@@ -12,6 +12,14 @@ desktop with WebGL terminals. The fake Claude CLI is not Claude Code: it writes 
 2 s and sends no hook events. Defender is on, but the VM does not reproduce a desktop's file churn;
 I/O operations per second is the proxy (read and write operations, pipes and sockets included).
 
+Two CPU sources. Windows charges a process's user and kernel time at the clock tick (15.6 ms), so a
+process that runs in short bursts woken by timers is undercounted: on the VM the app window's renderer
+read 1.2 % from Windows while its main thread alone was measured 3.7 % busy (CDP task time). For the
+app's own processes (main, renderers, GPU, network, the three service workers) the report takes the
+mean from the app's own figure, `app.getAppMetrics()` at both ends of each window (and at the A/B's
+start, switch and end); the Windows samples give the other processes, every p95, memory, handles and
+I/O.
+
 ## The parts
 
 | File | Does |

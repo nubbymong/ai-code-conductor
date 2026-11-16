@@ -221,7 +221,10 @@ async function abTest(phase, runRec) {
   const s = sampler(`${phase.tag}-ab`, 2 * phase.ab + 2)
   let switchAt = null
   const from = Date.now()
-  const [result, samplerExit] = await Promise.all([cdp.reducedMotionAB(phase.ab, (t) => { switchAt = t }, PORT).catch((e) => ({ error: e.message })), s.child.done])
+  // main's process figures at the start, the switch and the end: each half's CPU from the app's own figures.
+  const snap = () => mainInspector.snapshot(INSPECT).catch((e) => ({ error: e.message }))
+  const marks = { start: snap, switch: () => { switchAt = Date.now(); return snap() }, end: snap }
+  const [result, samplerExit] = await Promise.all([cdp.reducedMotionAB(phase.ab, marks, PORT).catch((e) => ({ error: e.message })), s.child.done])
   writeJson(`ab-${phase.tag}.json`, { tag: phase.tag, from, switchAt, to: Date.now(), samples: s.file, samplerExit, result })
   if (samplerExit !== 0) throw new Error(`A/B ${phase.tag}: the process sampler exited ${samplerExit}`)
   runRec.ab.push({ tag: phase.tag, file: `ab-${phase.tag}.json` })
@@ -296,6 +299,8 @@ async function cli() {
   if (!opts.prepare) S.ensureMarker(stage.ROOT, { create: false })
   if (appProcesses()) throw new S.StageRefusal('an app instance is already running: one app at a time')
   for (const p of [PORT, INSPECT]) { const o = S.portOwnerPid(p); if (o !== null) throw new S.StageRefusal(`port ${p} is in use (pid ${o})`) }
+  // The sampler appends: a results folder from an earlier run would mix two runs' samples.
+  if (opts.out && fs.existsSync(opts.out) && fs.readdirSync(opts.out).length) throw new S.StageRefusal(`the results folder ${opts.out} is not empty: give a new one`)
   if (opts.prepare) {
     if (!opts.appVersion) throw new S.StageRefusal('--prepare needs --app-version (the installed build)')
     const args = ['--app-version', opts.appVersion, '--dom-terminals']

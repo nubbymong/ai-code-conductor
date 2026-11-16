@@ -26,6 +26,7 @@ const C = req('./lib/classify-process.cjs') as {
   findMainPid: (procs: Proc[], recorded?: number) => number | null
   processTree: (procs: Proc[], root: number) => Set<number>
   switchValue: (cmd: string, name: string) => string | null
+  roleOfAppMetric: (m: { pid: number; type: string; name?: string | null; serviceName?: string | null }, ctx?: Record<string, unknown>) => string
   ROLE_LABEL: Record<string, string>
 }
 const A = req('./lib/aggregate.cjs') as {
@@ -89,6 +90,21 @@ describe('roles from real command lines', () => {
   it('names a second renderer (another window) apart from the app window', () => {
     const other = { pid: 115, name: 'AI Code Conductor.exe', cmd: VM.renderer.replace('--renderer-client-id=4', '--renderer-client-id=9') }
     expect(C.classifyProcess(other, ctx)).toBe('renderer-other')
+  })
+
+  it("names the app's own process list in the same roles", () => {
+    // The entries as app.getAppMetrics gave them on the VM (2.1.3-beta.6).
+    const list: Array<[string, { pid: number; type: string; name?: string | null; serviceName?: string | null }]> = [
+      ['main', { pid: 100, type: 'Browser', name: null, serviceName: null }],
+      ['gpu', { pid: 111, type: 'GPU', name: null, serviceName: 'GPU' }],
+      ['network', { pid: 112, type: 'Utility', name: 'Network Service', serviceName: 'network.mojom.NetworkService' }],
+      ['renderer', { pid: 110, type: 'Tab', name: null, serviceName: null }],
+      ['renderer-other', { pid: 115, type: 'Tab', name: null, serviceName: null }],
+      ['utility:ccc-tokenomics', { pid: 120, type: 'Utility', name: 'ccc-tokenomics', serviceName: 'node.mojom.NodeService' }],
+      ['utility:ccc-transcripts', { pid: 121, type: 'Utility', name: null, serviceName: 'node.mojom.NodeService' }], // named by its Services row
+      ['utility', { pid: 129, type: 'Utility', name: 'Node Utility Process', serviceName: 'node.mojom.NodeService' }],
+    ]
+    for (const [role, m] of list) expect(C.roleOfAppMetric(m, ctx), `${m.type} ${m.pid}`).toBe(role)
   })
 
   it('names the harness by pid before anything else', () => {

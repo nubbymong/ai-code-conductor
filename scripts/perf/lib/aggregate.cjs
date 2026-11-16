@@ -1,13 +1,21 @@
 // Performance harness: the arithmetic (scripts/perf, see README.md).
 //
-// Pure functions: the samples sample-processes.ps1 writes, the renderer's
-// Performance.getMetrics readings, the main process's event loop readings and
-// V8 CPU profiles in, numbers and tables out. Nothing here reads the disk, so
-// the unit suite runs it on any machine (tests/unit/scripts/perf-aggregate.test.ts).
+// Pure functions: the samples sample-processes.ps1 writes, the app's own
+// process figures, the renderer's Performance.getMetrics readings and V8 CPU
+// profiles in, numbers and tables out. Nothing here reads the disk, so the
+// unit suite runs it on any machine (tests/unit/scripts/perf-aggregate.test.ts).
 //
 // CPU is a percent of ONE core (100 = one core busy for the whole interval),
 // as Task Manager's per-process column is not: divide by the core count the
 // sample header records for a share of the machine.
+//
+// Two CPU sources, because Windows charges a process's user and kernel time
+// at the clock tick (15.6 ms): a process that runs in short bursts woken by
+// timers is undercounted, by several times on the VM (the app window's
+// renderer read 1.2 % while its main thread alone was measured 3.7 % busy).
+// For the app's own processes the mean comes from the app's figure
+// (app.getAppMetrics cumulative CPU between the window's two snapshots,
+// appCpuByRole); the Windows samples give everything else, and the p95.
 'use strict'
 
 const MB = 1024 * 1024
@@ -158,6 +166,31 @@ function summarizeByRole(rows, { from = -Infinity, to = Infinity, roleOf }) {
       threads: mean(a.threads),
     }
   })
+}
+
+/**
+ * CPU per role from two readings of the app's own process list
+ * (app.getAppMetrics: { t, appMetrics: [{ pid, creationTime, cpuSec }] },
+ * cpuSec cumulative), in percent of one core over the time between them,
+ * summed per role. A process counts only when both readings hold it (same
+ * pid and start time): one that started or ended between them is left out.
+ * roleOf(metric) names a process's role (null leaves it out).
+ */
+function appCpuByRole(a, b, roleOf) {
+  const out = new Map()
+  if (!a || !b || !Array.isArray(a.appMetrics) || !Array.isArray(b.appMetrics)) return out
+  const wall = (b.t - a.t) / 1000
+  if (!(wall > 0)) return out
+  const key = (m) => `${m.pid}@${Math.round(Number(m.creationTime) || 0)}`
+  const before = new Map(a.appMetrics.map((m) => [key(m), m]))
+  for (const m of b.appMetrics) {
+    const p = before.get(key(m))
+    if (!p || !Number.isFinite(m.cpuSec) || !Number.isFinite(p.cpuSec) || m.cpuSec < p.cpuSec) continue
+    const role = roleOf(m)
+    if (role == null) continue
+    out.set(role, (out.get(role) || 0) + ((m.cpuSec - p.cpuSec) / wall) * 100)
+  }
+  return out
 }
 
 /** Performance.getMetrics as a name -> value object (it comes as a list). */
@@ -332,6 +365,6 @@ function fixed(v, d = 1) {
 
 module.exports = {
   MB, normalizeRow, parseSampleText, procKey, cpuPercent, ratePerSec, mean, percentile, summarizeByRole,
-  metricsObject, perfMetricsDelta, profileSelfTimes, attributeProfile, frameLabel,
+  appCpuByRole, metricsObject, perfMetricsDelta, profileSelfTimes, attributeProfile, frameLabel,
   topLevelName, topLevelNamer, markdownTable, fixed,
 }

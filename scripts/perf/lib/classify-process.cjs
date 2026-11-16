@@ -176,4 +176,23 @@ function contextFrom({ appMetrics = [], webContents = [], services = [], stageRo
   return { utilityNames, appRendererPids, stageRoot, harnessPids: harnessPids || new Set() }
 }
 
-module.exports = { UTILITY_SERVICES, ROLE_LABEL, switchValue, classifyProcess, findMainPid, processTree, contextFrom }
+/** The role of one entry of the app's own process list (app.getAppMetrics:
+ *  { pid, type: Browser | Tab | GPU | Utility | ..., name, serviceName }), in
+ *  the same terms as classifyProcess. ctx as contextFrom gives it. */
+function roleOfAppMetric(m, ctx = {}) {
+  const type = String((m && m.type) || '')
+  if (type === 'Browser') return 'main'
+  if (type === 'GPU') return 'gpu'
+  if (type === 'Tab') {
+    if (!ctx.appRendererPids || ctx.appRendererPids.size === 0) return 'renderer'
+    return ctx.appRendererPids.has(m.pid) ? 'renderer' : 'renderer-other'
+  }
+  if (type === 'Utility') {
+    if (String(m.serviceName || '') === 'network.mojom.NetworkService') return 'network'
+    const named = (ctx.utilityNames && ctx.utilityNames.get(m.pid)) || m.name
+    return Object.values(UTILITY_SERVICES).includes(named) ? 'utility:' + named : 'utility'
+  }
+  return 'other'
+}
+
+module.exports = { UTILITY_SERVICES, ROLE_LABEL, switchValue, classifyProcess, findMainPid, processTree, contextFrom, roleOfAppMetric }

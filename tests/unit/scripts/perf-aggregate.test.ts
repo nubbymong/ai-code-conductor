@@ -26,6 +26,7 @@ const A = req('./lib/aggregate.cjs') as {
   percentile: (values: number[], p: number) => number | null
   summarizeByRole: (rows: Row[], o: { from?: number; to?: number; roleOf: (r: Row) => string | null }) => RoleSummary[]
   perfMetricsDelta: (a: unknown, b: unknown) => Record<string, number> | null
+  appCpuByRole: (a: unknown, b: unknown, roleOf: (m: { pid: number; type: string; name?: string }) => string | null) => Map<string, number>
   markdownTable: (cols: Array<{ label: string; get: (r: unknown) => unknown; align?: string }>, rows: unknown[]) => string
 }
 const Cl = req('./lib/classify-process.cjs') as {
@@ -152,6 +153,39 @@ describe('real sample lines from the VM', () => {
     expect(cpu['utility:ccc-tokenomics']).toBeCloseTo(3, 6)
     expect(cpu['fake-claude']).toBeCloseTo(1, 6)
     expect(roles.find((r) => r.role === 'main')!.ioOpsPerSec).toBeCloseTo(30, 6)
+  })
+})
+
+describe("CPU from the app's own process figures", () => {
+  // Two app.getAppMetrics snapshots 60 s apart (cumulative CPU seconds), as main-inspector takes them.
+  const snap = (t: number, list: Array<[number, string, string | null, number, number]>) => ({ t, appMetrics: list.map(([pid, type, name, creationTime, cpuSec]) => ({ pid, type, name, creationTime, cpuSec })) })
+  const a = snap(t0, [[100, 'Browser', null, 1_000.25, 3], [110, 'Tab', null, 1_100.5, 12], [120, 'Utility', 'ccc-tokenomics', 1_200, 1], [121, 'Utility', 'ccc-transcripts', 1_210, 1], [130, 'Utility', 'ccc-hooks-gateway', 1_300, 2]])
+  const b = snap(t0 + 60_000, [
+    [100, 'Browser', null, 1_000.25, 3.6], // 0.6 s in 60 s: 1 %
+    [110, 'Tab', null, 1_100.5, 16.8], // 4.8 s: 8 %
+    [120, 'Utility', 'ccc-tokenomics', 1_200, 1.12], // 0.12 s: 0.2 %
+    [121, 'Utility', 'ccc-transcripts', 1_210, 1.06], // 0.06 s: 0.1 %
+    [130, 'Utility', 'ccc-hooks-gateway', 59_000, 2.9], // restarted between the snapshots (same pid, new start time): left out, not read as +0.9 s
+    [140, 'Utility', 'ccc-other', 30_000, 9], // started between the snapshots: left out
+  ])
+  const roleOf = (m: { type: string; name?: string }) => (m.type === 'Browser' ? 'main' : m.type === 'Tab' ? 'renderer' : m.name === 'ccc-transcripts' ? 'logging' : m.name === 'ccc-tokenomics' ? 'logging' : m.name || null)
+
+  it('is the cumulative CPU between the snapshots over the time between them, summed per role', () => {
+    const cpu = A.appCpuByRole(a, b, roleOf)
+    expect(cpu.get('main')).toBeCloseTo(1, 6)
+    expect(cpu.get('renderer')).toBeCloseTo(8, 6)
+    expect(cpu.get('logging')).toBeCloseTo(0.3, 6)
+  })
+
+  it('leaves out a process that started, or restarted with the same pid, between the snapshots', () => {
+    const cpu = A.appCpuByRole(a, b, roleOf)
+    expect(cpu.has('ccc-hooks-gateway')).toBe(false)
+    expect(cpu.has('ccc-other')).toBe(false)
+  })
+
+  it('reads nothing from a failed snapshot or no time between them', () => {
+    expect(A.appCpuByRole({ error: 'no inspector' }, b, roleOf).size).toBe(0)
+    expect(A.appCpuByRole(a, { ...a }, roleOf).size).toBe(0)
   })
 })
 

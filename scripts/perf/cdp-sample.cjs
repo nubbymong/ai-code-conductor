@@ -152,25 +152,30 @@ async function profile(seconds, p = port()) {
 /**
  * The reduced-motion A/B: the same held session measures `seconds` as the
  * page is, then `seconds` with prefers-reduced-motion: reduce emulated (the
- * app's always-on sidebar animations stop under it). onSwitch(t) is told the
- * moment the second half starts, so the process samples can be split there.
+ * app's always-on sidebar animations stop under it). marks.start, .switch and
+ * .end (async, optional) are called at the start, the moment the second half
+ * starts and the end, and what they return is kept (run-matrix takes main's
+ * process figures there, so each half has its own CPU).
  */
-async function reducedMotionAB(seconds, onSwitch, p = port()) {
+async function reducedMotionAB(seconds, marks = {}, p = port()) {
   return withPage(async (cdp) => {
+    const mark = async (name) => (typeof marks[name] === 'function' ? marks[name]() : null)
     await cdp.send('Performance.enable', { timeDomain: 'timeTicks' })
     const read = async () => ({ t: Date.now(), metrics: (await cdp.send('Performance.getMetrics')).metrics })
+    const at = { start: await mark('start') }
     const a0 = await read()
     await sleep(seconds * 1000)
     const a1 = await read()
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
     const matches = await evaluate(cdp, `matchMedia('(prefers-reduced-motion: reduce)').matches`)
-    if (onSwitch) onSwitch(Date.now())
+    at.switch = await mark('switch')
     const b0 = await read()
     await sleep(seconds * 1000)
     const b1 = await read()
+    at.end = await mark('end')
     await cdp.send('Emulation.setEmulatedMedia', { features: [] }).catch(() => {})
     await cdp.send('Performance.disable').catch(() => {})
-    return { kind: 'reduced-motion-ab', seconds, reduceMatched: matches, asIs: { start: a0, end: a1 }, reduced: { start: b0, end: b1 } }
+    return { kind: 'reduced-motion-ab', seconds, reduceMatched: matches, asIs: { start: a0, end: a1 }, reduced: { start: b0, end: b1 }, marks: at }
   }, p)
 }
 
