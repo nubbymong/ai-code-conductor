@@ -619,7 +619,10 @@ mod tests {
         let user = UserSid::current().unwrap();
         let descriptor = security_descriptor(&user_only_sddl(&user.to_text().unwrap())).unwrap();
         let l = Listener { endpoint, name, user, descriptor, pending: Mutex::new(None) };
-        let e = l.instance(false).expect_err("an instance of a pipe anyone may open was used");
+        let e = match l.instance(false) {
+            Ok(_) => panic!("an instance of a pipe anyone may open was used"),
+            Err(e) => e,
+        };
         assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{e:?}");
         assert!(l.accept().is_err(), "an accept handed out an instance of that pipe");
         // A later instance of the holder's own pipe is used.

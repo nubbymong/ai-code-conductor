@@ -142,7 +142,7 @@ impl Stream {
     }
 
     /// Write all of `buf` within `limit` in all, however slowly the peer
-    /// reads. Each send takes only what fits at once (`MSG_DONTWAIT`, which
+    /// reads. Each send takes only what fits at once (`send_now`, which
     /// leaves the descriptor blocking for a reader on another clone), and a
     /// wait for room waits only for the time that is left. A socket's own
     /// send timeout cannot do this: it limits each wait inside one write, so
@@ -153,19 +153,15 @@ impl Stream {
         let fd = self.inner.as_raw_fd();
         let mut rest = buf;
         while !rest.is_empty() {
-            let n = unsafe { libc::send(fd, rest.as_ptr().cast(), rest.len(), libc::MSG_DONTWAIT | SEND_FLAGS) };
-            if n > 0 {
-                rest = &rest[n as usize..];
-                continue;
+            if Instant::now() >= deadline {
+                return Err(too_slow());
             }
-            if n == 0 {
-                return Err(io::Error::new(io::ErrorKind::WriteZero, "the connection took no bytes"));
-            }
-            let e = io::Error::last_os_error();
-            match e.raw_os_error() {
-                Some(libc::EINTR) => {}
-                Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK => wait_writable(fd, deadline)?,
-                _ => return Err(e),
+            match send_now(fd, rest) {
+                Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "the connection took no bytes")),
+                Ok(n) => rest = &rest[n..],
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => wait_writable(fd, deadline)?,
+                Err(e) => return Err(e),
             }
         }
         Ok(())
@@ -243,12 +239,66 @@ impl Write for Stream {
     }
 }
 
+fn too_slow() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "the peer did not take the message in time")
+}
+
+/// One send of what fits now, without waiting for room: `WouldBlock` when
+/// nothing fits.
+#[cfg(not(target_vendor = "apple"))]
+fn send_now(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
+    let n = unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len(), libc::MSG_DONTWAIT | SEND_FLAGS) };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(n as usize)
+}
+
+/// One send of what fits now, without waiting for room: `WouldBlock` when
+/// nothing fits. macOS does not honour `MSG_DONTWAIT` on a send: a blocking
+/// send waits for room as often as it needs, each wait under the socket's
+/// own timeout, so a peer that reads a little at a time keeps one send going
+/// (a 16 MiB message took 12 minutes in CI). A socket that polls writable has
+/// room for at least its low-water mark, and a send of no more than that
+/// never waits; so this asks without waiting and sends that much.
+#[cfg(target_vendor = "apple")]
+fn send_now(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
+    let mut p = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+    let ready = unsafe { libc::poll(&mut p, 1, 0) };
+    if ready < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if ready == 0 {
+        return Err(io::Error::from(io::ErrorKind::WouldBlock));
+    }
+    // Room, or an error or a hang-up, which the send reports.
+    let n = unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len().min(low_water(fd)), SEND_FLAGS) };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(n as usize)
+}
+
+/// The socket's send low-water mark: the room it has whenever it polls
+/// writable (2048 bytes unless set). 1 if it cannot be read, which is slow
+/// but never waits.
+#[cfg(target_vendor = "apple")]
+fn low_water(fd: RawFd) -> usize {
+    let mut v: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    let rc = unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_SNDLOWAT, (&mut v as *mut libc::c_int).cast(), &mut len) };
+    if rc < 0 || v < 1 {
+        return 1;
+    }
+    v as usize
+}
+
 /// Wait until `fd` can take more bytes, by `deadline`.
 fn wait_writable(fd: RawFd, deadline: Instant) -> io::Result<()> {
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "the peer did not take the message in time"));
+            return Err(too_slow());
         }
         let mut p = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
         let ms = left.as_millis().clamp(1, i32::MAX as u128) as libc::c_int;
@@ -651,8 +701,9 @@ mod tests {
     /// Connect until the listener's queue is full; the connections taken.
     #[cfg(any(target_os = "linux", target_vendor = "apple"))]
     fn fill_the_queue(l: &Listener) -> Vec<Stream> {
-        // The smallest backlog: one connection may wait to be accepted.
-        assert_eq!(unsafe { libc::listen(l.inner.as_raw_fd(), 0) }, 0);
+        // A small backlog: a connection or two may wait to be accepted.
+        // Not 0: macOS takes a backlog of 0 as its largest.
+        assert_eq!(unsafe { libc::listen(l.inner.as_raw_fd(), 1) }, 0);
         let endpoint = l.endpoint().to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -670,8 +721,6 @@ mod tests {
         });
         let (taken, e) = rx.recv_timeout(Duration::from_secs(20)).expect("a connect waited on a full backlog");
         let e = e.unwrap_or_else(|| panic!("{} connections and the backlog never filled", taken.len()));
-        // Linux queues one connection on a backlog of 0; macOS may queue none.
-        #[cfg(target_os = "linux")]
         assert!(!taken.is_empty(), "not even the first connection was taken: {e:?}");
         assert!(super::super::is_timeout(&e), "{e:?}");
         assert!(!super::super::means_gone(&e), "a full backlog is not a gone holder: {e:?}");

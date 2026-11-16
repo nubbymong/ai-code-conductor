@@ -382,10 +382,15 @@ fn a_detached_holder_is_listed_launched_attached_again_and_ended() {
     expect_error(&first.call(launch_msg_with(id, FAKE, &work, vec![("A".to_string(), "b".to_string())])), "busy");
     record_becomes(&store_dir, sid, "child running", |r| r.child == "running");
     // Over 64 KiB of JSON once the session is launched: refused on its
-    // header, and the connection closed; the session goes on.
+    // length alone, and the connection closed; the session goes on. Only the
+    // length and the head are sent: a holder that refuses a frame does not
+    // read the rest, and a small socket buffer (macOS) would hold up a write
+    // of all of it.
     let mut big = App::connect(&rec, true);
     let id = big.id();
-    big.client.send(msg("ping", id, vec![("pad", Value::Str("x".repeat(70_000)))])).expect("send");
+    let whole = frame::encode(&Frame::json(0, msg("ping", id, vec![("pad", Value::Str("x".repeat(70_000)))])), Direction::AppToHelper).expect("encode");
+    assert!(whole.len() > 70_000);
+    big.client.send_bytes(&whole[..9]).expect("send");
     big.error("bad-frame");
     assert!(big.closed(), "a frame over the limit left its connection open");
 
