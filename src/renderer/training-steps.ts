@@ -657,6 +657,39 @@ export const trainingSteps: TrainingStep[] = [
     screenshotFilename: 'step-tokenomics.jpg',
   },
   {
+    // 2.1.3-beta.6. Pinned at 2.1.3: nothing opens the tour by itself after an
+    // update (see the comment on the provider-accounts card), so the pin only
+    // sets the guide's "since" chip and the Feature tour's order.
+    id: 'machines',
+    title: 'Machines',
+    sinceVersion: '2.1.3',
+    section: 'admin',
+    summary:
+      'One card for **This computer** and its **session helper**, a small program that comes with the app: what it is doing, its version, its self-test, and the terminals it holds. With **Plain terminals through the session helper** on (Settings, General; a preview, off by default), a Terminal only tab on this computer and the partner terminal of a session on this computer run inside the helper, so on Windows they keep running if the app crashes.',
+    highlights: [
+      'The helper reads **Off**, **Not installed**, **Starting**, **Ready** or **Failed**, and a failure comes with its reason',
+      'Its version and its last **self-test**, with the time it ran; **Run self-test** runs it again',
+      'Each held terminal: its name, plain or partner, when it started, and whether the app is attached or it is **waiting for the app**',
+      '**Re-attach** connects a waiting terminal again, and opens a Terminal only tab for one no tab shows; **End** stops one after you confirm',
+      'After a crash on Windows, open the app within two minutes and resume your sessions: each held terminal shows again in its tab, with what it printed meanwhile. Quitting normally ends them',
+      'SSH tabs and their partner terminals, a terminal run as administrator, and the tabs the app opens for a sign-in or to install or update a program start as before',
+      'The page reads when you open it, when you come back to its tab and on **Refresh**',
+    ],
+    howToTrigger: [
+      { label: 'Open', value: 'Left rail -> Machines, beside Tokenomics' },
+      { label: 'Switch on', value: 'Settings -> General -> Plain terminals through the session helper' },
+      { label: 'Services', value: 'Title bar -> Services pill -> Session helper' },
+    ],
+    proTip:
+      'Surviving a crash is for Windows in this beta, and not where the Machines page says Windows keeps the helper inside the app\'s own job: there a held terminal ends with the app. On macOS and Linux a plain terminal works through the helper, but surviving a crash is not promised there yet.',
+    bullets: [
+      '**This computer** and its **session helper**: state, version and self-test',
+      'The terminals the helper holds, each with **Re-attach** and **End**',
+      'Switch it on in **Settings, General, Plain terminals through the session helper** (a preview, off by default)',
+    ],
+    screenshotFilename: 'step-machines.jpg',
+  },
+  {
     id: 'memory-visualiser',
     title: 'Memory',
     sinceVersion: '1.5.38',

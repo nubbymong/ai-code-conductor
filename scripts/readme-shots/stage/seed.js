@@ -5,6 +5,16 @@
 //   CCC_STAGE_ROOT=<root> node seed.js --app-version 2.1.1-beta.2   stage everything (app closed)
 //   CCC_STAGE_ROOT=<root> node seed.js --restore                    undo it (and the C:\dev projects)
 //
+// --helper-terminals also switches on "Plain terminals through the session
+// helper" (Settings, General), so the restored Terminal only tab (infra) starts
+// inside the session helper and the Machines page lists it. The Feature Guide
+// run uses it; the README run does not.
+//
+// --dom-terminals turns the terminal's GPU rendering off (Settings, Terminal),
+// so xterm draws with its DOM renderer. For a run started from SSH: the app is
+// then in session 0, where the WebGL renderer draws the terminal text in a sans
+// font, not JetBrains Mono (VM, 2.1.3-beta.6). The DOM renderer draws it right.
+//
 // Everything is written inside CCC_STAGE_ROOT, one throwaway folder that
 // carries this tool's marker (stage-root.js: made only in an absent or empty
 // folder, checked before anything is written, renamed or deleted; the root may
@@ -39,6 +49,8 @@ const argv = process.argv.slice(2)
 const flag = (name) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined }
 const RESTORE = argv.includes('--restore')
 const APP_VERSION = flag('--app-version') || '2.1.0-beta.15'
+const HELPER_TERMINALS = argv.includes('--helper-terminals')
+const DOM_TERMINALS = argv.includes('--dom-terminals')
 
 // The guard, before anything else touches the file system (exit 2, fail closed).
 let STAGE
@@ -261,6 +273,12 @@ function seedConfig() {
     statusLineEnabled: true, conductorToolsEnabled: true, codexEnabled: true, sentinelEnabled: false,
     githubAiUsageEnabled: false, theme: 'dark', debugMode: false, hooksEnabled: true,
     defaultModel: 'fable', configPanelPinned: true,
+    // 2.1.3-beta.6: off unless --helper-terminals (the Machines image).
+    plainTerminalsThroughHelper: HELPER_TERMINALS,
+    // --dom-terminals: GPU rendering off. gpuDefaultOnMigrated keeps the app's
+    // one-time default-on migration from turning it back on.
+    terminal: { ...(settings.terminal || {}), gpuRendering: !DOM_TERMINALS },
+    gpuDefaultOnMigrated: true,
   })
   writeJson(`${CONFIG}/settings.json`, settings)
 

@@ -9,7 +9,7 @@ import {
 
 describe('training-steps', () => {
   describe('trainingSteps array', () => {
-    it('has exactly 24 steps', () => {
+    it('has exactly 25 steps', () => {
       // v1.5.12 added dynamic-workflows; permission-tray step removed with the
       // feature; v2-readiness added multi-account + sentinel steps (16 -> 18);
       // v2.0.0 added the ai-usage-meter step (18 -> 19); the Agent Canvas got
@@ -22,8 +22,9 @@ describe('training-steps', () => {
       // provider (2.1.1) added two surfaces with no card: the Providers and
       // Accounts page, and code review in both directions (21 -> 23). Cloud
       // Agents, without a card since the Agent Hub's left, got one of its own
-      // (the owner's 2026-10-04 answer; 23 -> 24).
-      expect(trainingSteps).toHaveLength(24)
+      // (the owner's 2026-10-04 answer; 23 -> 24). The Machines page
+      // (2.1.3-beta.6) got a card of its own (24 -> 25).
+      expect(trainingSteps).toHaveLength(25)
     })
 
     it('every step has required fields', () => {
@@ -102,7 +103,7 @@ describe('training-steps', () => {
       expect(step.screenshotFilename).toMatch(/\.jpg$/)
     })
 
-    it('is surfaced to beta users who already ran the 2.1 tour, with only the other 2.1.1 cards', () => {
+    it('is surfaced to beta users who already ran the 2.1 tour, with only the other 2.1.1 cards and the 2.1.3 Machines card', () => {
       // The whole point of the entry. A user who finished the 2.1 tour holds
       // lastTrainingVersion '2.1.0'; getNewSteps keeps sinceVersion > that, so
       // the card has to sit ABOVE 2.1.0 or shouldShowTraining() stays false and
@@ -111,8 +112,10 @@ describe('training-steps', () => {
       // cards are a proportionate interruption, replaying the 2.1 set is not.
       // They stay at 2.1.1, not above it: see the comment on the Providers and
       // Accounts card for why a higher pin would hold the boot chain instead.
-      // Cloud Agents joined them (the owner's 2026-10-04 answer).
-      expect(getNewSteps('2.1.0').map((s) => s.id)).toEqual(['provider-accounts', 'ask-conductor', 'code-review', 'cloud-agents'])
+      // Cloud Agents joined them (the owner's 2026-10-04 answer). The 2.1.3
+      // Machines card joins them too: it is newer than 2.1.0, and nothing opens
+      // the tour by itself after an update, so its pin interrupts no one.
+      expect(getNewSteps('2.1.0').map((s) => s.id)).toEqual(['provider-accounts', 'ask-conductor', 'code-review', 'cloud-agents', 'machines'])
       // Users arriving from 2.0.x get it as part of the normal backlog.
       expect(getNewSteps('2.0.0').map((s) => s.id)).toContain('ask-conductor')
     })
@@ -138,7 +141,8 @@ describe('training-steps', () => {
   // 2.1.1 cards.
   describe('the tour version compare reads a prerelease as its release', () => {
     it('a stamp of 2.1.1-beta.2 has seen the 2.1.1 cards; a 2.1.0 one has not', () => {
-      expect(getNewSteps('2.1.1-beta.2')).toEqual([])
+      // Only the cards pinned above 2.1.1 remain (the 2.1.3 Machines card).
+      expect(getNewSteps('2.1.1-beta.2').map((s) => s.id)).toEqual(['machines'])
       expect(getNewSteps('2.1.0').map((s) => s.sinceVersion)).toContain('2.1.1')
       expect(getNewSteps('2.1.0-rc.10').map((s) => s.sinceVersion)).toContain('2.1.1')
     })
