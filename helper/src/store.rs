@@ -575,9 +575,11 @@ mod tests {
     /// to a full queue, so that endpoint gives no clear answer; if the
     /// holder's id has been given to another process, the start time tells.
     /// Linux reads no start (its boot time moves with the clock), so there a
-    /// record whose endpoint gives no clear answer is always kept.
+    /// record whose endpoint gives no clear answer is always kept. A crashed
+    /// holder's socket on Linux is refused, which is stale already
+    /// (`transport/unix.rs` tests that).
     #[test]
-    fn a_record_whose_process_id_now_names_a_later_process_is_stale_when_its_endpoint_gives_no_answer() {
+    fn a_record_whose_endpoint_gives_no_answer_is_stale_by_a_later_start_only_where_a_start_is_read() {
         let reads_start = cfg!(any(target_vendor = "apple", windows));
         let store = scratch("reused");
         prepare(&store).unwrap();
