@@ -226,7 +226,12 @@ describe('Sidebar panel tabs (two-mode left panel)', () => {
       const icon = tab.querySelector('svg') as SVGElement
       const iconCls = (icon.getAttribute('class') ?? '').split(/\s+/)
       expect(iconCls).toContain('shrink-0')
-      expect(iconCls.some((c) => /^@max-\[\d+(\.\d+)?rem\]\/panel-tabs:hidden$/.test(c)), `${id} icon hides below a rem width`).toBe(true)
+      const hide = iconCls.find((c) => /^@max-\[\d+(\.\d+)?rem\]\/panel-tabs:hidden$/.test(c))
+      expect(hide, `${id} icon hides below a rem width`).toBeTruthy()
+      // Below the same width the tab's padding and gap tighten, so the label
+      // keeps the room the icon gave up.
+      const at = hide!.slice(0, hide!.indexOf(':') + 1)
+      expect(cls, `${id} tab tightens below ${at}`).toEqual(expect.arrayContaining([`${at}px-0.5`, `${at}gap-1`]))
     }
   })
 })
