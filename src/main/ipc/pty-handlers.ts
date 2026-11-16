@@ -1100,6 +1100,22 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
         if (!options?.ssh && options?.useResumePicker === true && process.platform !== 'win32') {
           await tryGetProvider('codex')?.warmResumeListNode?.()
         }
+        // 2.1.3-beta.6: a launch that resumes a conversation compares the
+        // folder it ran in with the tab's folder by real path too (a
+        // symlinked folder, a Windows junction). The disk is asked here, off
+        // the event loop and bounded, and the launch reads the answer kept
+        // (providers/codex/rollout-lookup.ts warmCodexResume): the builder
+        // never asks for a real path in place. The conversation is the one
+        // pty-manager resumes: the request's own, else on a restart the one
+        // the tab is on (never after the picker, or a respawn that starts a
+        // new conversation). Best-effort: with no answer kept the launch
+        // compares the exact spelling, as before.
+        if (!options?.ssh && options?.isAsk !== true) {
+          try {
+            const resumeTarget = options?.resume ?? (options?.useResumePicker || carry?.fresh === true ? undefined : getKeptCodexConversation(sessionId))
+            if (resumeTarget) await tryGetProvider('codex')?.warmResumeLookup?.(resumeTarget, prepared.sessionsDir)
+          } catch { /* the exact spelling then */ }
+        }
       }
 
       // The start's profile steps (holdForStartSteps above), and the scripts

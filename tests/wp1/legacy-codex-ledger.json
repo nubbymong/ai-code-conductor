@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "fb471dd3f58e60fb8442ec1f80a5f68b0ab26bad6fa2f096a49f529a71a44510",
-  "manifestHead": "6cd51363d4b7a39c3d4e66dafe3e1568331f1bc8",
+  "manifestPathDigest": "5ba6d9cfba39a4e87e686adf8e052a6c13f2ae52ef268e9c8a4a263f04878887",
+  "manifestHead": "cacf63a30b0347dbd1ee7efb0e811d3f89c23dba",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -7979,6 +7979,28 @@
       "note": "the real-link cases; the host-safe ones are in resume-picker-deploy.test.ts, spawn.test.ts and script-deploy-folder.test.ts"
     },
     {
+      "path": "tests/unit/providers/codex/resume-real-path-links.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.6 test (tests/unit/providers/codex/resume-real-path-links.test.ts; host quarantine, CI and the VM only): with a real symbolic link (macOS, Linux) or a real junction (Windows), a Codex conversation recorded under the real folder or under the link is resumed in the folder the tab kept, the resume list offers it, a link whose folder is gone falls back to the spelling, and neither makes the synchronous real-path call (WP1.68)",
+      "note": "created by the 2.1.3-beta.6 section E track; the real-link cases, the host-safe ones are in resume-real-path.test.ts and codex-resume-picker-real-path.test.ts; no Codex process"
+    },
+    {
+      "path": "tests/unit/providers/codex/resume-real-path.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.6 test (tests/unit/providers/codex/resume-real-path.test.ts): a Codex conversation recorded under the real folder or the link of a symlinked folder is resumed in the folder the tab kept, by real path asked off the main thread; a folder that cannot be resolved, answers too late, is relative or is a share is compared by its spelling, each folder is asked once, and no synchronous real-path call is made (WP1.68)",
+      "note": "created by the 2.1.3-beta.6 section E track; the real-path lookup is a stand-in, no link and no Codex process"
+    },
+    {
       "path": "tests/unit/providers/codex/rollout-lookup.test.ts",
       "predicates": [
         "P01",
@@ -10162,6 +10184,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.10 round 1 test (tests/unit/scripts/codex-resume-picker-open-elsewhere.test.ts): the Codex resume picker marks a conversation another open tab is on and says so when Codex refuses its resume, rather than that it is gone; Codex never gets the list (V2) (WP1.68); tests/unit/scripts/codex-resume-picker-open-elsewhere.test.ts",
       "note": "created by WP2 PR 3 P3.10 round 1"
+    },
+    {
+      "path": "tests/unit/scripts/codex-resume-picker-real-path.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.6 test (tests/unit/scripts/codex-resume-picker-real-path.test.ts): the Codex resume list offers a conversation recorded under the real folder or the link of a symlinked folder, tagged with the worktree it is the same folder as; an unresolvable, slow, relative or share folder is compared by its spelling, each folder is asked once, and the list is what the spelling walk lists otherwise (WP1.68)",
+      "note": "created by the 2.1.3-beta.6 section E track; the real-path lookup is a stand-in, no link and no Codex process"
     },
     {
       "path": "tests/unit/scripts/codex-resume-picker-worktrees.test.ts",
