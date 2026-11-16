@@ -1056,7 +1056,7 @@ export default function Sidebar({ currentView, onViewChange, collapsed, onShowAc
           tabIndex={panelTab === 'saved' ? 0 : -1}
           onClick={() => selectPanelTab('saved')}
           className={`${PANEL_TAB_CLASS} ${
-            panelTab === 'saved' ?'bg-surface0 border border-surface1 text-text' : 'border border-transparent text-overlay1 hover:text-text'
+            panelTab === 'saved' ? 'bg-surface0 border border-surface1 text-text' : 'border border-transparent text-overlay1 hover:text-text'
           }`}
           data-testid="panel-tab-saved"
           /* The tour's "Saved configs live here" anchor: on the always-mounted
@@ -1069,7 +1069,7 @@ export default function Sidebar({ currentView, onViewChange, collapsed, onShowAc
             <line x1="4" y1="7" x2="20" y2="7" /><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="17" x2="20" y2="17" />
             <circle cx="9" cy="7" r="1.6" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="8" cy="17" r="1.6" fill="currentColor" stroke="none" />
           </svg>
-          <span className="min-w-0 truncate" data-testid="panel-tab-saved-label">Saved</span>
+          <span className="min-w-0 truncate" title="Saved" data-testid="panel-tab-saved-label">Saved</span>
           <span data-testid="panel-tab-saved-count" className={`shrink-0 text-[10px] rounded-full px-1.5 py-0.5 ${panelTab === 'saved' ? 'bg-blue/20 text-blue' : 'bg-surface0 text-overlay1'}`}>{configs.length}</span>
         </button>
         <button
@@ -1081,14 +1081,14 @@ export default function Sidebar({ currentView, onViewChange, collapsed, onShowAc
           tabIndex={panelTab === 'running' ? 0 : -1}
           onClick={() => selectPanelTab('running')}
           className={`${PANEL_TAB_CLASS} ${
-            panelTab === 'running' ?'bg-surface0 border border-surface1 text-text' : 'border border-transparent text-overlay1 hover:text-text'
+            panelTab === 'running' ? 'bg-surface0 border border-surface1 text-text' : 'border border-transparent text-overlay1 hover:text-text'
           }`}
           data-testid="panel-tab-running"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`${PANEL_TAB_ICON_CLASS}${panelTab === 'running' ? ' text-blue' : ''}`}>
             <path d="M3 12h4l2 6 4-14 2 8h6" />
           </svg>
-          <span className="min-w-0 truncate" data-testid="panel-tab-running-label">Running</span>
+          <span className="min-w-0 truncate" title="Running" data-testid="panel-tab-running-label">Running</span>
           <span data-testid="panel-tab-running-count" className={`shrink-0 text-[10px] rounded-full px-1.5 py-0.5 ${panelTab === 'running' ? 'bg-blue/20 text-blue' : 'bg-surface0 text-overlay1'}`}>{sessions.length}</span>
         </button>
       </div>

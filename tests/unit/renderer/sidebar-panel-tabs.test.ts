@@ -220,6 +220,8 @@ describe('Sidebar panel tabs (two-mode left panel)', () => {
       expect(label, `${id} label span`).toBeTruthy()
       expect(label.className.split(/\s+/)).toEqual(expect.arrayContaining(['min-w-0', 'truncate']))
       expect(label.textContent).toBe(id === 'saved' ? 'Saved' : 'Running')
+      // A truncated label still shows its whole name on hover.
+      expect(label.getAttribute('title'), `${id} label title`).toBe(label.textContent)
       const count = tab.querySelector(`[data-testid="panel-tab-${id}-count"]`) as HTMLElement
       expect(count, `${id} count badge`).toBeTruthy()
       expect(count.className.split(/\s+/)).toContain('shrink-0')
