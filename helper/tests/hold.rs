@@ -258,6 +258,12 @@ fn input_the_program_never_reads_is_refused_and_never_holds_up_the_end() {
 fn when_the_first_process_exits_the_rest_of_its_tree_goes_with_it() {
     let h = start(64 * 1024);
     assert!(h.wait_for_text("FAKE-CLI READY", WAIT));
+    // On Unix the plain grandchild shares the first process's group, which a
+    // closed terminal's hangup reaches anyway; a job of its own, deaf to
+    // hangups, is reached only by ending the whole session.
+    #[cfg(unix)]
+    let grandchild = start_grandchild_with(&h, "spawn-own-group");
+    #[cfg(windows)]
     let grandchild = start_grandchild(&h);
     h.write_input(b"exit 4\r").expect("type");
     assert_eq!(h.wait_exit(WAIT), Some(4));
@@ -271,7 +277,7 @@ fn a_launch_gets_its_folder_and_exactly_its_own_environment() {
     let dir_name = dir.file_name().unwrap().to_string_lossy().into_owned();
     // Keep what a program needs to start; leave out one other variable of
     // this process, which the child must then not have.
-    let keep = ["PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE", "COMSPEC"];
+    let keep = ["PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE", "COMSPEC", "TERM"];
     let vars: Vec<(String, String)> = std::env::vars().filter(|(k, _)| !k.is_empty() && !k.contains('=')).collect();
     let dropped = vars.iter().map(|(k, _)| k.clone()).find(|k| !keep.contains(&k.to_uppercase().as_str())).expect("a variable to leave out");
     let mut env: Vec<(String, String)> = vars.into_iter().filter(|(k, _)| *k != dropped).collect();

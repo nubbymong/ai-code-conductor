@@ -9,6 +9,13 @@
 //! `proc_listallpids`. A process that left the session on purpose (a daemon
 //! that called setsid) is beyond it, as it is beyond a closed terminal.
 //!
+//! The session's id is the child's pid, so it is safe to signal only while
+//! that id cannot name anyone else: while the child has not been reaped, or
+//! while anything is still in its session (the kernel gives no new process an
+//! id that a live group or session still carries). Once the child has been
+//! reaped and its session is empty, or has been sent a kill, `end_tree` never
+//! signals that id again, however often it is called.
+//!
 //! Unsafe code sits only in the modules that call the C library or the
 //! Windows API where `std` has no safe form; the library denies it elsewhere.
 #![allow(unsafe_code)]
@@ -27,6 +34,13 @@ const DEFAULT_TERM: &str = "xterm-256color";
 pub struct Pty {
     master: File,
     child: Child,
+    /// Set once the child has been reaped and nothing of its session can be
+    /// left (seen empty, or every member sent a kill): from then on its id
+    /// may name an unrelated process, and nothing is sent to it.
+    tree_gone: bool,
+    /// How a signal reaches the session: always `signal_session`; a test
+    /// records what is sent through it.
+    signal: fn(libc::pid_t, libc::c_int),
 }
 
 fn winsize(size: PtySize) -> libc::winsize {
@@ -113,8 +127,11 @@ impl Pty {
         // `cmd` still holds the parent's copies of the slave; drop them so the
         // reader sees the end when the child is gone.
         drop(cmd);
-        let reader = master.try_clone()?;
-        Ok((Pty { master, child }, Box::new(reader)))
+        // The terminal owns the child from here, so a failure below ends it
+        // (`Drop`) instead of leaving it running unheld.
+        let pty = Pty { master, child, tree_gone: false, signal: signal_session };
+        let reader = pty.master.try_clone()?;
+        Ok((pty, Box::new(reader)))
     }
 
     /// A second handle on the master side, for a thread that writes alone.
@@ -148,37 +165,60 @@ impl Pty {
     }
 
     /// End the whole tree: hang up the child's session, give it `grace` to
-    /// go, then kill whatever is left of it.
+    /// go, then kill whatever is left of it. Once the tree is gone this does
+    /// nothing (see the module comment).
     pub fn end_tree(&mut self, grace: Duration) {
+        if self.tree_gone {
+            return;
+        }
         let sid = self.child.id() as libc::pid_t;
         // The session and its first group are the child's own (setsid above);
         // never signal group 0 (our own) or 1.
         if sid <= 1 {
+            self.tree_gone = true;
             return;
         }
-        signal_session(sid, libc::SIGHUP);
-        signal_session(sid, libc::SIGCONT);
+        if self.over(sid) {
+            // The child went and took its tree with it: nothing to send.
+            return;
+        }
+        (self.signal)(sid, libc::SIGHUP);
+        (self.signal)(sid, libc::SIGCONT);
         let deadline = Instant::now() + grace;
-        loop {
-            // Reap the first process as it goes, so it does not linger as a
-            // zombie that keeps the group alive.
-            let _ = self.child.try_wait();
-            if !session_left(sid) {
-                break;
-            }
-            if Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        signal_session(sid, libc::SIGKILL);
-        let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
-            match self.child.try_wait() {
-                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-                _ => break,
+            std::thread::sleep(Duration::from_millis(20));
+            if self.over(sid) {
+                // Gone after the hangup: no kill follows.
+                return;
             }
         }
+        (self.signal)(sid, libc::SIGKILL);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !self.reaped() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Everything left in the session has been sent a kill, which cannot
+        // be caught: once the child is reaped, nothing more could be sent
+        // that is sure to reach only this tree.
+        if self.reaped() {
+            self.tree_gone = true;
+        }
+    }
+
+    /// True once the child has exited and been reaped (std keeps its status,
+    /// so this reaps it at most once).
+    fn reaped(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
+    /// Reap the child if it has exited, so it does not linger as a zombie
+    /// that keeps its group alive. True, and remembered, once it has been
+    /// reaped and nothing is left in its session.
+    fn over(&mut self, sid: libc::pid_t) -> bool {
+        if self.reaped() && !session_left(sid) {
+            self.tree_gone = true;
+        }
+        self.tree_gone
     }
 
     /// End the tree at once.
@@ -262,5 +302,60 @@ impl Drop for Pty {
         if let Ok(None) = self.child.try_wait() {
             self.kill();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Every signal the tests below sent, by session.
+    static SENT: Mutex<Vec<(libc::pid_t, libc::c_int)>> = Mutex::new(Vec::new());
+
+    fn record(sid: libc::pid_t, sig: libc::c_int) {
+        SENT.lock().unwrap_or_else(|p| p.into_inner()).push((sid, sig));
+        signal_session(sid, sig);
+    }
+
+    fn sent_to(sid: libc::pid_t) -> Vec<libc::c_int> {
+        SENT.lock().unwrap_or_else(|p| p.into_inner()).iter().filter(|(s, _)| *s == sid).map(|(_, sig)| *sig).collect()
+    }
+
+    fn start(script: &str) -> Pty {
+        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()];
+        let (mut pty, _reader) = Pty::spawn(&argv, PtySize::default()).expect("a shell starts on a terminal");
+        pty.signal = record;
+        pty
+    }
+
+    #[test]
+    fn a_session_that_is_over_is_never_signalled() {
+        let mut pty = start("exit 0");
+        let sid = pty.pid() as libc::pid_t;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while pty.try_wait().expect("wait").is_none() {
+            assert!(Instant::now() < deadline, "the shell never exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // The child is reaped and its session is empty, so its id may name
+        // another process by now: every end after this sends nothing.
+        pty.end_tree(Duration::from_secs(2));
+        pty.end_tree(Duration::from_secs(2));
+        pty.kill();
+        assert_eq!(sent_to(sid), Vec::<libc::c_int>::new(), "a session that was over was signalled");
+    }
+
+    #[test]
+    fn a_running_session_is_ended_once_and_never_signalled_after() {
+        let mut pty = start("sleep 60");
+        let sid = pty.pid() as libc::pid_t;
+        pty.end_tree(Duration::from_secs(2));
+        let first = sent_to(sid);
+        assert!(first.contains(&libc::SIGHUP), "no hangup was sent: {first:?}");
+        assert!(pty.try_wait().expect("wait").is_some(), "the shell outlived the end");
+        pty.end_tree(Duration::from_secs(2));
+        pty.kill();
+        assert_eq!(sent_to(sid), first, "an ended session was signalled again");
     }
 }

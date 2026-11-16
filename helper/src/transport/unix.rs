@@ -19,6 +19,14 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// Flags for every send besides `MSG_DONTWAIT`: Linux can refuse to raise
+/// SIGPIPE per call. Elsewhere a Rust program ignores SIGPIPE, and a client's
+/// socket on macOS carries `SO_NOSIGPIPE` as well.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SEND_FLAGS: libc::c_int = libc::MSG_NOSIGNAL;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+const SEND_FLAGS: libc::c_int = 0;
+
 fn euid() -> u32 {
     unsafe { libc::geteuid() }
 }
@@ -31,6 +39,11 @@ pub fn run_dir() -> PathBuf {
 /// True when a connection from `peer_uid` may be served by a holder running as `me`.
 pub fn peer_allowed(peer_uid: u32, me: u32) -> bool {
     peer_uid == me
+}
+
+/// The check every listener applies to a peer: the same user as this process.
+fn same_user(peer_uid: u32) -> bool {
+    peer_allowed(peer_uid, euid())
 }
 
 fn refused(what: String) -> io::Error {
@@ -78,58 +91,80 @@ pub fn prepare_run_dir(dir: &Path) -> io::Result<()> {
     check_dir(dir)
 }
 
-/// The peer's user id and, where the OS says, its process id.
+/// The peer's user id.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn peer_cred(fd: libc::c_int) -> io::Result<(u32, Option<u32>)> {
+fn peer_uid(fd: libc::c_int) -> io::Result<u32> {
     let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     let rc = unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut libc::ucred as *mut libc::c_void, &mut len) };
     if rc != 0 {
         return Err(io::Error::last_os_error());
     }
-    let pid = if cred.pid > 0 { Some(cred.pid as u32) } else { None };
-    Ok((cred.uid, pid))
+    Ok(cred.uid)
 }
 
 #[cfg(target_vendor = "apple")]
-fn peer_cred(fd: libc::c_int) -> io::Result<(u32, Option<u32>)> {
+fn peer_uid(fd: libc::c_int) -> io::Result<u32> {
     let mut uid: libc::uid_t = 0;
     let mut gid: libc::gid_t = 0;
     if unsafe { libc::getpeereid(fd, &mut uid, &mut gid) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    let mut pid: libc::pid_t = 0;
-    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
-    let rc = unsafe { libc::getsockopt(fd, libc::SOL_LOCAL, libc::LOCAL_PEERPID, &mut pid as *mut libc::pid_t as *mut libc::c_void, &mut len) };
-    let pid = if rc == 0 && pid > 0 { Some(pid as u32) } else { None };
-    Ok((uid, pid))
+    Ok(uid)
 }
 
 /// Any other Unix: the peer cannot be checked, so no connection is served.
 #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
-fn peer_cred(_fd: libc::c_int) -> io::Result<(u32, Option<u32>)> {
+fn peer_uid(_fd: libc::c_int) -> io::Result<u32> {
     Err(io::Error::new(io::ErrorKind::Unsupported, "this OS cannot say who the peer is"))
 }
 
 pub struct Stream {
     inner: UnixStream,
-    peer_pid: Option<u32>,
 }
 
 impl Stream {
-    fn new(inner: UnixStream, peer_pid: Option<u32>) -> io::Result<Stream> {
+    fn new(inner: UnixStream) -> io::Result<Stream> {
+        // For a plain `write` (a client's). The holder writes with
+        // `write_all_within`, whose limit is for the whole message.
         inner.set_write_timeout(Some(WRITE_TIMEOUT))?;
-        Ok(Stream { inner, peer_pid })
+        Ok(Stream { inner })
     }
 
     /// A second handle on the same connection, for another thread.
     pub fn try_clone(&self) -> io::Result<Stream> {
-        Ok(Stream { inner: self.inner.try_clone()?, peer_pid: self.peer_pid })
+        Ok(Stream { inner: self.inner.try_clone()? })
     }
 
     /// None waits for ever. A read that waited this long fails with a timeout.
     pub fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
         self.inner.set_read_timeout(timeout)
+    }
+
+    /// Write all of `buf` within `limit` in all, however slowly the peer
+    /// reads. Each send takes only what fits at once (`send_now`, which
+    /// leaves the descriptor blocking for a reader on another clone), and a
+    /// wait for room waits only for the time that is left. A socket's own
+    /// send timeout cannot do this: it limits each wait inside one write, so
+    /// a peer that takes a little at a time could stretch one message far
+    /// past it.
+    pub fn write_all_within(&mut self, buf: &[u8], limit: Duration) -> io::Result<()> {
+        let deadline = Instant::now() + limit;
+        let fd = self.inner.as_raw_fd();
+        let mut rest = buf;
+        while !rest.is_empty() {
+            if Instant::now() >= deadline {
+                return Err(too_slow());
+            }
+            match send_now(fd, rest) {
+                Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "the connection took no bytes")),
+                Ok(n) => rest = &rest[n..],
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => wait_writable(fd, deadline)?,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
     }
 
     /// End the connection both ways at once. A blocked reader on any clone
@@ -144,21 +179,24 @@ impl Stream {
 
     /// End the connection after what was written: the peer reads it, then the
     /// end of the stream. The cut both ways, which also wakes a reader blocked
-    /// on this side, comes `LINGER` later.
+    /// on this side, comes `LINGER` later; if no thread can be made to wait
+    /// for that, it comes at once.
     pub fn close_after_writes(&self) {
         unsafe {
             libc::shutdown(self.inner.as_raw_fd(), libc::SHUT_WR);
         }
-        match self.inner.try_clone() {
-            Ok(late) => {
-                std::thread::spawn(move || {
-                    std::thread::sleep(super::LINGER);
-                    unsafe {
-                        libc::shutdown(late.as_raw_fd(), libc::SHUT_RDWR);
-                    }
-                });
+        let late = match self.inner.try_clone() {
+            Ok(late) => late,
+            Err(_) => return self.shutdown(),
+        };
+        let started = std::thread::Builder::new().spawn(move || {
+            std::thread::sleep(super::LINGER);
+            unsafe {
+                libc::shutdown(late.as_raw_fd(), libc::SHUT_RDWR);
             }
-            Err(_) => self.shutdown(),
+        });
+        if started.is_err() {
+            self.shutdown();
         }
     }
 
@@ -183,11 +221,6 @@ impl Stream {
             }
         }
     }
-
-    /// The peer's process id, where the OS reports it.
-    pub fn peer_pid(&self) -> Option<u32> {
-        self.peer_pid
-    }
 }
 
 impl Read for Stream {
@@ -206,6 +239,84 @@ impl Write for Stream {
     }
 }
 
+fn too_slow() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "the peer did not take the message in time")
+}
+
+/// One send of what fits now, without waiting for room: `WouldBlock` when
+/// nothing fits.
+#[cfg(not(target_vendor = "apple"))]
+fn send_now(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
+    let n = unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len(), libc::MSG_DONTWAIT | SEND_FLAGS) };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(n as usize)
+}
+
+/// One send of what fits now, without waiting for room: `WouldBlock` when
+/// nothing fits. macOS does not honour `MSG_DONTWAIT` on a send: a blocking
+/// send waits for room as often as it needs, each wait under the socket's
+/// own timeout, so a peer that reads a little at a time keeps one send going
+/// (a 16 MiB message took 12 minutes in CI). A socket that polls writable has
+/// room for at least its low-water mark, and a send of no more than that
+/// never waits; so this asks without waiting and sends that much.
+#[cfg(target_vendor = "apple")]
+fn send_now(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
+    let mut p = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+    let ready = unsafe { libc::poll(&mut p, 1, 0) };
+    if ready < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if ready == 0 {
+        return Err(io::Error::from(io::ErrorKind::WouldBlock));
+    }
+    // Room, or an error or a hang-up, which the send reports.
+    let n = unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len().min(low_water(fd)), SEND_FLAGS) };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(n as usize)
+}
+
+/// The socket's send low-water mark: the room it has whenever it polls
+/// writable (2048 bytes unless set). 1 if it cannot be read, which is slow
+/// but never waits.
+#[cfg(target_vendor = "apple")]
+fn low_water(fd: RawFd) -> usize {
+    let mut v: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    let rc = unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_SNDLOWAT, (&mut v as *mut libc::c_int).cast(), &mut len) };
+    if rc < 0 || v < 1 {
+        return 1;
+    }
+    v as usize
+}
+
+/// Wait until `fd` can take more bytes, by `deadline`.
+fn wait_writable(fd: RawFd, deadline: Instant) -> io::Result<()> {
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(too_slow());
+        }
+        let mut p = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+        let ms = left.as_millis().clamp(1, i32::MAX as u128) as libc::c_int;
+        let n = unsafe { libc::poll(&mut p, 1, ms) };
+        if n < 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e);
+        }
+        if n > 0 {
+            // Room, or an error or a hang-up, which the next send reports.
+            return Ok(());
+        }
+    }
+}
+
 pub struct Listener {
     inner: UnixListener,
     path: PathBuf,
@@ -213,6 +324,9 @@ pub struct Listener {
     /// Device and inode of the socket file we bound, so `remove` never
     /// deletes a file someone put in its place.
     id: (u64, u64),
+    /// Whether a peer with this user id is served: always `same_user`; a
+    /// test swaps it to show that a refused peer is closed unread.
+    peer_ok: fn(u32) -> bool,
 }
 
 fn endpoint_dir(path: &Path) -> io::Result<&Path> {
@@ -221,6 +335,17 @@ fn endpoint_dir(path: &Path) -> io::Result<&Path> {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not this user's run folder", dir.display())));
     }
     Ok(dir)
+}
+
+/// Bind a socket at `path` that is 0600 from the moment it exists. The umask
+/// is the process's, so it is put back at once.
+fn bind_private(path: &Path) -> io::Result<UnixListener> {
+    let old = unsafe { libc::umask(0o177) };
+    let bound = UnixListener::bind(path);
+    unsafe {
+        libc::umask(old);
+    }
+    bound
 }
 
 impl Listener {
@@ -236,17 +361,17 @@ impl Listener {
         let path = PathBuf::from(endpoint);
         let dir = endpoint_dir(&path)?;
         prepare_run_dir(dir)?;
-        // 0600 from the moment the file exists. The umask is the process's,
-        // so it is put back at once.
-        let old = unsafe { libc::umask(0o177) };
-        let bound = UnixListener::bind(&path);
-        unsafe {
-            libc::umask(old);
-        }
-        let inner = bound?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-        let md = fs::symlink_metadata(&path)?;
-        Ok(Listener { inner, path, endpoint: endpoint.to_string(), id: (md.dev(), md.ino()) })
+        let inner = bind_private(&path)?;
+        // The file is ours from here: a failure below removes it again.
+        let id = match fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).and_then(|()| fs::symlink_metadata(&path)) {
+            Ok(md) => (md.dev(), md.ino()),
+            Err(e) => {
+                drop(inner);
+                let _ = fs::remove_file(&path);
+                return Err(e);
+            }
+        };
+        Ok(Listener { inner, path, endpoint: endpoint.to_string(), id, peer_ok: same_user })
     }
 
     pub fn endpoint(&self) -> &str {
@@ -257,8 +382,8 @@ impl Listener {
     pub fn accept(&self) -> io::Result<Stream> {
         loop {
             let (s, _) = self.inner.accept()?;
-            match peer_cred(s.as_raw_fd()) {
-                Ok((uid, pid)) if peer_allowed(uid, euid()) => return Stream::new(s, pid),
+            match peer_uid(s.as_raw_fd()) {
+                Ok(uid) if (self.peer_ok)(uid) => return Stream::new(s),
                 _ => drop(s),
             }
         }
@@ -359,12 +484,13 @@ fn wait_connected(fd: RawFd, deadline: Instant) -> io::Result<()> {
     }
 }
 
-/// Connect to the socket at `path` within `timeout`. A blocking connect on
-/// Linux waits for as long as the listener's backlog is full (a holder that
-/// is stopped or stuck). This socket is nonblocking while it connects, so
-/// that case answers at once and is tried again until `timeout`, then fails
-/// as a timeout, which proves nothing about the holder (`means_gone`).
-fn connect_within(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
+/// One connect to the socket at `path`, done by `deadline`. A blocking
+/// connect on Linux waits for as long as the listener's backlog is full (a
+/// holder that is stopped or stuck). This socket is nonblocking while it
+/// connects, so that case answers at once and is tried again until the
+/// deadline, then fails as a timeout, which proves nothing about the holder
+/// (`means_gone`).
+fn connect_once(path: &Path, deadline: Instant) -> io::Result<UnixStream> {
     let bytes = path.as_os_str().as_bytes();
     let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     if bytes.len() >= addr.sun_path.len() {
@@ -379,14 +505,24 @@ fn connect_within(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
     {
         addr.sun_len = len as u8;
     }
-    let raw = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    // Closed on exec from its first moment where the OS can do that, so a
+    // process another thread starts meanwhile never carries it; macOS has
+    // no such flag, and it is set just after instead.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let kind = libc::SOCK_STREAM;
+    let raw = unsafe { libc::socket(libc::AF_UNIX, kind, 0) };
     if raw < 0 {
         return Err(io::Error::last_os_error());
     }
     // Owned from here, so every return below closes it.
     let fd = unsafe { OwnedFd::from_raw_fd(raw) };
-    unsafe {
-        libc::fcntl(raw, libc::F_SETFD, libc::FD_CLOEXEC);
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        unsafe {
+            libc::fcntl(raw, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
     }
     #[cfg(target_vendor = "apple")]
     {
@@ -400,7 +536,6 @@ fn connect_within(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
     if flags < 0 || unsafe { libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(io::Error::last_os_error());
     }
-    let deadline = Instant::now() + timeout;
     loop {
         let rc = unsafe { libc::connect(raw, (&addr as *const libc::sockaddr_un).cast(), len) };
         if rc == 0 {
@@ -430,9 +565,37 @@ fn connect_within(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
     Ok(UnixStream::from(fd))
 }
 
-/// Connect to a holder's endpoint within `timeout`. `NotFound` or
-/// `ConnectionRefused` mean no holder listens there; a timeout means no clear
-/// answer.
+/// Connect within `timeout`.
+#[cfg(not(target_vendor = "apple"))]
+fn connect_within(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
+    connect_once(path, Instant::now() + timeout)
+}
+
+/// Connect within `timeout`. macOS refuses a connection to a socket whose
+/// listen queue is full exactly as it refuses one with nothing listening
+/// (`ECONNREFUSED`), so a refusal is tried again, on a new socket each time,
+/// until `timeout`, and is then a timeout: no clear answer, never "nothing
+/// there". A socket file with nothing on it (its holder died) is told apart
+/// by the record's process id, which list mode checks first.
+#[cfg(target_vendor = "apple")]
+fn connect_within(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match connect_once(path, deadline) {
+            Err(e) if e.raw_os_error() == Some(libc::ECONNREFUSED) => {
+                if Instant::now() >= deadline {
+                    return Err(timed_out());
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Connect to a holder's endpoint within `timeout`. `NotFound` (and, on
+/// Linux, `ConnectionRefused`) mean no holder listens there; a timeout means
+/// no clear answer.
 pub fn connect(endpoint: &str, timeout: Duration) -> io::Result<Stream> {
     let path = Path::new(endpoint);
     check_dir(endpoint_dir(path)?)?;
@@ -441,16 +604,17 @@ pub fn connect(endpoint: &str, timeout: Duration) -> io::Result<Stream> {
         return Err(refused(format!("{endpoint} is not a socket of this user")));
     }
     let s = connect_within(path, timeout)?;
-    let (uid, pid) = peer_cred(s.as_raw_fd())?;
-    if !peer_allowed(uid, euid()) {
+    if !peer_allowed(peer_uid(s.as_raw_fd())?, euid()) {
         return Err(refused("the holder on that socket runs as another user".to_string()));
     }
-    Stream::new(s, pid)
+    Stream::new(s)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     fn scratch(name: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("aicc-transport-{name}-{}", std::process::id()));
@@ -464,6 +628,39 @@ mod tests {
         assert!(peer_allowed(501, 501));
         assert!(!peer_allowed(0, 501), "not even root");
         assert!(!peer_allowed(502, 501));
+    }
+
+    static REFUSED_ONE: AtomicBool = AtomicBool::new(false);
+
+    /// Refuses the first peer it is asked about, then serves every one.
+    fn refuse_the_first(_uid: u32) -> bool {
+        REFUSED_ONE.swap(true, Ordering::SeqCst)
+    }
+
+    /// The listener's own check is what decides: a peer it refuses is closed
+    /// before a byte is written, and the next one is served.
+    #[test]
+    fn a_peer_the_check_refuses_is_closed_before_a_byte_is_written() {
+        let mut l = Listener::bind("transport-peer-01").unwrap();
+        assert!((l.peer_ok)(euid()), "a listener serves its own user");
+        assert!(!(l.peer_ok)(euid().wrapping_add(1)), "a listener serves another user");
+        l.peer_ok = refuse_the_first;
+        let l = Arc::new(l);
+        let server = Arc::clone(&l);
+        let served = std::thread::spawn(move || {
+            let mut s = server.accept().expect("the second peer is served");
+            s.write_all_within(b"served", Duration::from_secs(5)).expect("write");
+            s.close_after_writes();
+        });
+        let mut buf = [0u8; 16];
+        let mut first = connect(l.endpoint(), Duration::from_secs(5)).expect("connect");
+        first.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        assert_eq!(first.read(&mut buf).expect("read"), 0, "a refused peer was written to");
+        let mut second = connect(l.endpoint(), Duration::from_secs(5)).expect("connect");
+        second.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let n = second.read(&mut buf).expect("read");
+        assert_eq!(&buf[..n], b"served");
+        served.join().unwrap();
     }
 
     #[test]
@@ -501,14 +698,12 @@ mod tests {
         assert!(connect(&elsewhere.to_string_lossy(), Duration::from_secs(1)).is_err());
     }
 
-    /// A holder that has stopped taking connections fills its backlog. Linux
-    /// would make a blocking connect wait for as long as that lasts.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_connect_to_a_full_backlog_times_out_instead_of_waiting() {
-        let l = Listener::bind("transport-full-01").unwrap();
-        // The smallest backlog: one connection may wait to be accepted.
-        assert_eq!(unsafe { libc::listen(l.inner.as_raw_fd(), 0) }, 0);
+    /// Connect until the listener's queue is full; the connections taken.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    fn fill_the_queue(l: &Listener) -> Vec<Stream> {
+        // A small backlog: a connection or two may wait to be accepted.
+        // Not 0: macOS takes a backlog of 0 as its largest.
+        assert_eq!(unsafe { libc::listen(l.inner.as_raw_fd(), 1) }, 0);
         let endpoint = l.endpoint().to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -517,26 +712,111 @@ mod tests {
                 match connect(&endpoint, Duration::from_millis(300)) {
                     Ok(s) => waiting.push(s),
                     Err(e) => {
-                        let _ = tx.send((waiting.len(), Some(e)));
+                        let _ = tx.send((waiting, Some(e)));
                         return;
                     }
                 }
             }
-            let _ = tx.send((waiting.len(), None));
+            let _ = tx.send((waiting, None));
         });
         let (taken, e) = rx.recv_timeout(Duration::from_secs(20)).expect("a connect waited on a full backlog");
-        let e = e.unwrap_or_else(|| panic!("{taken} connections and the backlog never filled"));
-        assert!(taken >= 1, "not even the first connection was taken: {e:?}");
+        let e = e.unwrap_or_else(|| panic!("{} connections and the backlog never filled", taken.len()));
+        assert!(!taken.is_empty(), "not even the first connection was taken: {e:?}");
         assert!(super::super::is_timeout(&e), "{e:?}");
         assert!(!super::super::means_gone(&e), "a full backlog is not a gone holder: {e:?}");
+        taken
+    }
+
+    /// A holder that has stopped taking connections fills its backlog. Linux
+    /// would make a blocking connect wait for as long as that lasts; macOS
+    /// refuses the connection as if nothing listened there.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[test]
+    fn a_connect_to_a_full_backlog_times_out_instead_of_waiting_or_refusing() {
+        let l = Listener::bind("transport-full-01").unwrap();
+        drop(fill_the_queue(&l));
         drop(l);
     }
 
+    /// List mode keeps the record and the socket of a live holder whose
+    /// backlog is full: that is no answer, never a gone holder.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
     #[test]
-    fn a_bound_socket_is_private_and_its_name_cannot_be_bound_twice() {
+    fn list_mode_keeps_the_record_and_the_socket_of_a_holder_with_a_full_backlog() {
+        let l = Listener::bind("transport-full-02").unwrap();
+        let waiting = fill_the_queue(&l);
+        let store = std::env::temp_dir().join(format!("aicc-transport-store-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&store);
+        crate::store::prepare(&store).unwrap();
+        let rec = crate::store::Record {
+            session: "transport-full-02".to_string(),
+            label: String::new(),
+            pid: std::process::id(),
+            endpoint: l.endpoint().to_string(),
+            nonce: "0123456789abcdef0123456789abcdef".to_string(),
+            helper: "0.1.0".to_string(),
+            started: 0,
+            away: 120,
+            attached: false,
+            child: "waiting".to_string(),
+            code: None,
+        };
+        crate::store::write(&store, &rec).unwrap();
+        let listing = crate::store::list(&store, crate::client::probe).unwrap();
+        assert_eq!(listing.sessions, vec![rec], "the record of a live holder was not listed");
+        assert_eq!(listing.removed, 0);
+        assert!(Path::new(l.endpoint()).exists(), "list mode removed a live holder's socket");
+        drop(waiting);
+        drop(l);
+        fs::remove_dir_all(&store).unwrap();
+    }
+
+    #[test]
+    fn a_message_to_a_peer_that_takes_a_little_at_a_time_stops_at_its_deadline() {
+        let (mine, theirs) = UnixStream::pair().unwrap();
+        let mut s = Stream::new(mine).unwrap();
+        // 64 KiB every 300 ms: each wait for room is short, the whole message is not.
+        let reader = std::thread::spawn(move || {
+            let mut theirs = theirs;
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                std::thread::sleep(Duration::from_millis(300));
+                match theirs.read(&mut buf) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+            }
+        });
+        let started = Instant::now();
+        let e = s.write_all_within(&vec![7u8; 16 * 1024 * 1024], Duration::from_secs(1)).expect_err("16 MiB went to a peer taking about 200 KiB a second");
+        let took = started.elapsed();
+        assert!(super::super::is_timeout(&e), "{e:?}");
+        assert!(took < Duration::from_secs(3), "one message stretched its 1 second limit to {took:?}");
+        s.shutdown();
+        drop(s);
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn a_socket_is_0600_from_its_bind_and_a_file_in_its_place_is_never_removed() {
+        let dir = run_dir();
+        prepare_run_dir(&dir).unwrap();
+        let path = dir.join(format!("umask-check-{}.sock", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let raw = bind_private(&path).unwrap();
+        // Before anything sets its mode: the umask alone made it private.
+        assert_eq!(fs::symlink_metadata(&path).unwrap().mode() & 0o777, 0o600);
+        // Nothing listens on it now, and it is still never bound over.
+        drop(raw);
+        assert!(Listener::bind_at(&path.to_string_lossy()).is_err(), "a bind over a socket file that was there");
+        assert!(path.exists(), "the bind removed a file that was there");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_bound_socket_is_private_and_goes_with_its_listener() {
         let l = Listener::bind("transport-0001").unwrap();
         l.check_private().unwrap();
-        assert!(Listener::bind_at(l.endpoint()).is_err(), "a second bind over a live socket");
         let path = PathBuf::from(l.endpoint());
         drop(l);
         assert!(!path.exists(), "the socket file stays after the listener is gone");

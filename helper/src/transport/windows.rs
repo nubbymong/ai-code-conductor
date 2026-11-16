@@ -5,7 +5,12 @@
 //! (and no inherited entry) can open it. Remote clients are refused, the first
 //! instance is made with `FILE_FLAG_FIRST_PIPE_INSTANCE` (a name someone else
 //! already made fails the bind), and a next instance is made before a
-//! connected one is handed out, so a client never finds the name missing.
+//! connected one is handed out, so a client never finds the name missing. An
+//! instance a failed connect leaves is reset and kept listening for the same
+//! reason. Every later instance shares the first one's security descriptor,
+//! so each is checked to carry the user-only list before it is used: should
+//! the name ever pass to a pipe someone else made, the holder refuses to join
+//! it.
 //!
 //! The handles are overlapped. A handle opened for plain blocking I/O lets
 //! one call at a time through, so a thread waiting to read would hold up a
@@ -39,7 +44,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{CreateEventW, GetCurrentProcess, OpenProcessToken, WaitForSingleObject};
@@ -166,7 +171,9 @@ fn security_descriptor(sddl: &str) -> io::Result<LocalBox> {
 
 /// Run one overlapped call and wait for it: until it completes, the
 /// connection is shut down, or `limit` passes. A call that completed while it
-/// was being cancelled still counts.
+/// was being cancelled still counts. The system writes into the `OVERLAPPED`
+/// while the call runs, so it is reached only through the one raw pointer
+/// the call was given, never through a reference.
 fn overlapped(handle: HANDLE, closed: &AtomicBool, limit: Option<Duration>, start: impl FnOnce(*mut OVERLAPPED) -> i32) -> io::Result<u32> {
     let event = new_event()?;
     let mut ov: OVERLAPPED = unsafe { std::mem::zeroed() };
@@ -179,7 +186,11 @@ fn overlapped(handle: HANDLE, closed: &AtomicBool, limit: Option<Duration>, star
         }
         let deadline = limit.map(|d| Instant::now() + d);
         loop {
-            if unsafe { WaitForSingleObject(event.0, POLL) } == WAIT_OBJECT_0 {
+            let wait = match deadline {
+                Some(d) => d.saturating_duration_since(Instant::now()).as_millis().clamp(1, u128::from(POLL)) as u32,
+                None => POLL,
+            };
+            if unsafe { WaitForSingleObject(event.0, wait) } == WAIT_OBJECT_0 {
                 break;
             }
             let shut = closed.load(Ordering::SeqCst);
@@ -187,9 +198,9 @@ fn overlapped(handle: HANDLE, closed: &AtomicBool, limit: Option<Duration>, star
             if shut || expired {
                 let mut n: u32 = 0;
                 unsafe {
-                    CancelIoEx(handle, &ov);
+                    CancelIoEx(handle, ov_ptr);
                     // Wait for the cancel to land: `ov` must outlive the call.
-                    if GetOverlappedResult(handle, &ov, &mut n, 1) != 0 {
+                    if GetOverlappedResult(handle, ov_ptr, &mut n, 1) != 0 {
                         return Ok(n);
                     }
                 }
@@ -202,7 +213,7 @@ fn overlapped(handle: HANDLE, closed: &AtomicBool, limit: Option<Duration>, star
         }
     }
     let mut n: u32 = 0;
-    if unsafe { GetOverlappedResult(handle, &ov, &mut n, 0) } == 0 {
+    if unsafe { GetOverlappedResult(handle, ov_ptr, &mut n, 0) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(n)
@@ -227,18 +238,47 @@ struct Inner {
 pub struct Stream {
     inner: Arc<Inner>,
     read_timeout: Option<Duration>,
-    peer_pid: Option<u32>,
 }
 
 impl Stream {
-    fn from_handle(handle: Handle, peer_pid: Option<u32>) -> Stream {
-        Stream { inner: Arc::new(Inner { handle, closed: AtomicBool::new(false) }), read_timeout: None, peer_pid }
+    fn from_handle(handle: Handle) -> Stream {
+        Stream { inner: Arc::new(Inner { handle, closed: AtomicBool::new(false) }), read_timeout: None }
     }
 
     /// A second handle on the same connection, for another thread. Its read
     /// timeout starts unset.
     pub fn try_clone(&self) -> io::Result<Stream> {
-        Ok(Stream { inner: Arc::clone(&self.inner), read_timeout: None, peer_pid: self.peer_pid })
+        Ok(Stream { inner: Arc::clone(&self.inner), read_timeout: None })
+    }
+
+    /// One write of `buf`, done within `limit`; how much it took.
+    fn write_once(&self, buf: &[u8], limit: Duration) -> io::Result<usize> {
+        if self.inner.closed.load(Ordering::SeqCst) {
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "the connection was shut down"));
+        }
+        let h = self.inner.handle.0;
+        let len = buf.len().min(u32::MAX as usize) as u32;
+        let ptr = buf.as_ptr();
+        let n = overlapped(h, &self.inner.closed, Some(limit), |ov| unsafe { WriteFile(h, ptr, len, std::ptr::null_mut(), ov) })?;
+        Ok(n as usize)
+    }
+
+    /// Write all of `buf` within `limit` in all, however slowly the peer
+    /// reads: each write waits only for the time that is left.
+    pub fn write_all_within(&mut self, buf: &[u8], limit: Duration) -> io::Result<()> {
+        let deadline = Instant::now() + limit;
+        let mut rest = buf;
+        while !rest.is_empty() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "the peer did not take the message in time"));
+            }
+            match self.write_once(rest, left)? {
+                0 => return Err(io::Error::new(io::ErrorKind::WriteZero, "the connection took no bytes")),
+                n => rest = &rest[n..],
+            }
+        }
+        Ok(())
     }
 
     /// None waits for ever. A read that waited this long fails with a timeout.
@@ -266,11 +306,6 @@ impl Stream {
     /// The Unix transport waits here for the peer to close; a pipe does not
     /// lose what was written when the holder exits, so nothing waits.
     pub fn wait_peer_close(&self, _max: Duration) {}
-
-    /// On a client, the holder's process id as the pipe reports it.
-    pub fn peer_pid(&self) -> Option<u32> {
-        self.peer_pid
-    }
 }
 
 impl Read for Stream {
@@ -294,14 +329,7 @@ impl Write for Stream {
         if buf.is_empty() {
             return Ok(0);
         }
-        if self.inner.closed.load(Ordering::SeqCst) {
-            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "the connection was shut down"));
-        }
-        let h = self.inner.handle.0;
-        let len = buf.len().min(u32::MAX as usize) as u32;
-        let ptr = buf.as_ptr();
-        let n = overlapped(h, &self.inner.closed, Some(WRITE_TIMEOUT), |ov| unsafe { WriteFile(h, ptr, len, std::ptr::null_mut(), ov) })?;
-        Ok(n as usize)
+        self.write_once(buf, WRITE_TIMEOUT)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -339,22 +367,17 @@ impl Listener {
         Ok(l)
     }
 
+    /// A new instance of the pipe. A later one joins the pipe the name
+    /// names and takes on that pipe's security descriptor, not the one it is
+    /// made with, so it is used only if that descriptor is the user-only one.
     fn instance(&self, first: bool) -> io::Result<Handle> {
-        let attrs = SECURITY_ATTRIBUTES {
-            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: self.descriptor.0,
-            bInheritHandle: 0,
-        };
-        let mut open_mode = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED;
-        if first {
-            open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
+        let h = make_instance(&self.name, &self.descriptor, first)?;
+        if !first {
+            if let Err(why) = user_only(h.0, &self.user) {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("the pipe's name is held by a pipe that is not private: {why}")));
+            }
         }
-        let pipe_mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS;
-        let h = unsafe { CreateNamedPipeW(self.name.as_ptr(), open_mode, pipe_mode, PIPE_UNLIMITED_INSTANCES, PIPE_BUFFER, PIPE_BUFFER, 0, &attrs) };
-        if h == INVALID_HANDLE_VALUE {
-            return Err(os_error("CreateNamedPipeW"));
-        }
-        Ok(Handle(h))
+        Ok(h)
     }
 
     pub fn endpoint(&self) -> &str {
@@ -369,77 +392,32 @@ impl Listener {
             Some(h) => h,
             None => self.instance(false)?,
         };
-        let event = new_event()?;
-        let mut ov: OVERLAPPED = unsafe { std::mem::zeroed() };
-        ov.hEvent = event.0;
-        if unsafe { ConnectNamedPipe(h.0, &mut ov) } == 0 {
-            match unsafe { GetLastError() } {
-                // A client came between making the instance and this call.
-                ERROR_PIPE_CONNECTED => {}
-                ERROR_IO_PENDING => {
-                    let mut n: u32 = 0;
-                    if unsafe { GetOverlappedResult(h.0, &ov, &mut n, 1) } == 0 {
-                        return Err(os_error("ConnectNamedPipe"));
-                    }
-                }
-                code => return Err(io::Error::from_raw_os_error(code as i32)),
-            }
+        if let Err(e) = connect_client(&h) {
+            // Reset and kept listening, so the name stays while the holder
+            // lives. One that cannot be reset is replaced, but only by an
+            // instance that was made: until then it keeps the name.
+            let keep = if unsafe { DisconnectNamedPipe(h.0) } != 0 {
+                h
+            } else {
+                self.instance(false).unwrap_or(h)
+            };
+            *crate::holder::lock(&self.pending) = Some(keep);
+            return Err(e);
         }
         // Keep one instance listening before handing this one out. If that
         // fails, the next accept makes one.
         let next = self.instance(false).ok();
         *crate::holder::lock(&self.pending) = next;
-        Ok(Stream::from_handle(h, None))
+        Ok(Stream::from_handle(h))
     }
 
     /// The pipe's access list has exactly one entry: allow, the current user.
     pub fn check_private(&self) -> Result<(), String> {
         let guard = crate::holder::lock(&self.pending);
-        let h = match guard.as_ref() {
-            Some(h) => h.0,
-            None => return Err("no instance to read the access list from".to_string()),
-        };
-        unsafe {
-            let mut dacl: *mut ACL = std::ptr::null_mut();
-            let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-            let rc = GetSecurityInfo(
-                h,
-                SE_KERNEL_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut dacl,
-                std::ptr::null_mut(),
-                &mut sd,
-            );
-            if rc != 0 {
-                return Err(format!("GetSecurityInfo failed: {rc}"));
-            }
-            let _owned = LocalBox(sd);
-            if dacl.is_null() {
-                return Err("the pipe has no access list (anyone may open it)".to_string());
-            }
-            let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
-            if GetAclInformation(dacl, &mut info as *mut ACL_SIZE_INFORMATION as *mut c_void, std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32, AclSizeInformation) == 0 {
-                return Err("GetAclInformation failed".to_string());
-            }
-            if info.AceCount != 1 {
-                return Err(format!("the access list has {} entries, not 1", info.AceCount));
-            }
-            let mut ace: *mut c_void = std::ptr::null_mut();
-            if GetAce(dacl, 0, &mut ace) == 0 || ace.is_null() {
-                return Err("GetAce failed".to_string());
-            }
-            let ace = ace as *const ACCESS_ALLOWED_ACE;
-            if (*ace).Header.AceType != ACCESS_ALLOWED_ACE_TYPE {
-                return Err(format!("the entry is of type {}, not allow", (*ace).Header.AceType));
-            }
-            let sid = std::ptr::addr_of!((*ace).SidStart) as *mut c_void;
-            if EqualSid(sid, self.user.sid()) == 0 {
-                return Err("the entry names another account".to_string());
-            }
+        match guard.as_ref() {
+            Some(h) => user_only(h.0, &self.user),
+            None => Err("no instance to read the access list from".to_string()),
         }
-        Ok(())
     }
 
     /// Nothing to refresh on Windows.
@@ -447,6 +425,104 @@ impl Listener {
 
     /// Nothing to remove on Windows: the name goes with the last handle.
     pub fn remove(&self) {}
+}
+
+/// Make one instance of the pipe `name` with `descriptor`.
+fn make_instance(name: &[u16], descriptor: &LocalBox, first: bool) -> io::Result<Handle> {
+    let attrs = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: 0,
+    };
+    let mut open_mode = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED;
+    if first {
+        open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
+    }
+    let pipe_mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS;
+    let h = unsafe { CreateNamedPipeW(name.as_ptr(), open_mode, pipe_mode, PIPE_UNLIMITED_INSTANCES, PIPE_BUFFER, PIPE_BUFFER, 0, &attrs) };
+    if h == INVALID_HANDLE_VALUE {
+        return Err(os_error("CreateNamedPipeW"));
+    }
+    Ok(Handle(h))
+}
+
+/// Wait on instance `h` until a client is connected to it. A client that
+/// opened it and closed it again before this call leaves it needing a reset
+/// first (`ERROR_NO_DATA`): it is reset and waits again, so a client that
+/// came and went never stops the holder listening.
+fn connect_client(h: &Handle) -> io::Result<()> {
+    loop {
+        let event = new_event()?;
+        let mut ov: OVERLAPPED = unsafe { std::mem::zeroed() };
+        ov.hEvent = event.0;
+        let ov_ptr: *mut OVERLAPPED = &mut ov;
+        if unsafe { ConnectNamedPipe(h.0, ov_ptr) } != 0 {
+            return Ok(());
+        }
+        match unsafe { GetLastError() } {
+            // A client came between making the instance and this call.
+            ERROR_PIPE_CONNECTED => return Ok(()),
+            ERROR_IO_PENDING => {
+                let mut n: u32 = 0;
+                // `ov` outlives the wait, which lasts until a client comes.
+                if unsafe { GetOverlappedResult(h.0, ov_ptr, &mut n, 1) } == 0 {
+                    return Err(os_error("ConnectNamedPipe"));
+                }
+                return Ok(());
+            }
+            ERROR_NO_DATA => {
+                if unsafe { DisconnectNamedPipe(h.0) } == 0 {
+                    return Err(os_error("DisconnectNamedPipe"));
+                }
+            }
+            code => return Err(io::Error::from_raw_os_error(code as i32)),
+        }
+    }
+}
+
+/// The access list of the pipe behind `h` has exactly one entry: allow, `user`.
+fn user_only(h: HANDLE, user: &UserSid) -> Result<(), String> {
+    unsafe {
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        let rc = GetSecurityInfo(
+            h,
+            SE_KERNEL_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut sd,
+        );
+        if rc != 0 {
+            return Err(format!("GetSecurityInfo failed: {rc}"));
+        }
+        let _owned = LocalBox(sd);
+        if dacl.is_null() {
+            return Err("the pipe has no access list (anyone may open it)".to_string());
+        }
+        let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
+        if GetAclInformation(dacl, &mut info as *mut ACL_SIZE_INFORMATION as *mut c_void, std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32, AclSizeInformation) == 0 {
+            return Err("GetAclInformation failed".to_string());
+        }
+        if info.AceCount != 1 {
+            return Err(format!("the access list has {} entries, not 1", info.AceCount));
+        }
+        let mut ace: *mut c_void = std::ptr::null_mut();
+        if GetAce(dacl, 0, &mut ace) == 0 || ace.is_null() {
+            return Err("GetAce failed".to_string());
+        }
+        let ace = ace as *const ACCESS_ALLOWED_ACE;
+        if (*ace).Header.AceType != ACCESS_ALLOWED_ACE_TYPE {
+            return Err(format!("the entry is of type {}, not allow", (*ace).Header.AceType));
+        }
+        let sid = std::ptr::addr_of!((*ace).SidStart) as *mut c_void;
+        if EqualSid(sid, user.sid()) == 0 {
+            return Err("the entry names another account".to_string());
+        }
+    }
+    Ok(())
 }
 
 /// Nothing to remove on Windows: a pipe's name goes with its last handle.
@@ -474,10 +550,7 @@ pub fn connect(endpoint: &str, timeout: Duration) -> io::Result<Stream> {
             )
         };
         if h != INVALID_HANDLE_VALUE {
-            let h = Handle(h);
-            let mut pid: u32 = 0;
-            let peer = if unsafe { GetNamedPipeServerProcessId(h.0, &mut pid) } != 0 { Some(pid) } else { None };
-            return Ok(Stream::from_handle(h, peer));
+            return Ok(Stream::from_handle(Handle(h)));
         }
         let err = unsafe { GetLastError() };
         let now = Instant::now();
@@ -495,6 +568,7 @@ pub fn connect(endpoint: &str, timeout: Duration) -> io::Result<Stream> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
 
     #[test]
     fn the_descriptor_names_one_allow_entry_for_one_account() {
@@ -515,5 +589,74 @@ mod tests {
             Err(e) => assert!(super::super::means_gone(&e), "{e:?}"),
             Ok(_) => panic!("connected to a pipe that does not exist"),
         }
+    }
+
+    #[test]
+    fn a_client_that_came_and_went_before_the_accept_does_not_stop_the_listening() {
+        let l = Arc::new(Listener::bind("transport-came-01").unwrap());
+        // A client opens the waiting instance and closes it before any accept.
+        drop(connect(l.endpoint(), Duration::from_secs(5)).expect("connect"));
+        let server = Arc::clone(&l);
+        let served = std::thread::spawn(move || {
+            let mut s = server.accept().expect("the next client is accepted");
+            s.write_all_within(b"served", Duration::from_secs(5)).expect("write");
+        });
+        let mut c = connect(l.endpoint(), Duration::from_secs(10)).expect("the name is still there for the next client");
+        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let mut buf = [0u8; 16];
+        let n = c.read(&mut buf).expect("read");
+        assert_eq!(&buf[..n], b"served");
+        served.join().unwrap();
+    }
+
+    #[test]
+    fn a_later_instance_of_a_pipe_someone_else_made_is_refused() {
+        let endpoint = format!(r"\\.\pipe\aicc-helper-transport-squat-01-{}", crate::random::hex(16).unwrap());
+        let name = wide(&endpoint);
+        // A pipe of that name that anyone may open, made first.
+        let open = security_descriptor("D:P(A;;GA;;;WD)").unwrap();
+        let _theirs = make_instance(&name, &open, true).unwrap();
+        let user = UserSid::current().unwrap();
+        let descriptor = security_descriptor(&user_only_sddl(&user.to_text().unwrap())).unwrap();
+        let l = Listener { endpoint, name, user, descriptor, pending: Mutex::new(None) };
+        let e = match l.instance(false) {
+            Ok(_) => panic!("an instance of a pipe anyone may open was used"),
+            Err(e) => e,
+        };
+        assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{e:?}");
+        assert!(l.accept().is_err(), "an accept handed out an instance of that pipe");
+        // A later instance of the holder's own pipe is used.
+        let mine = Listener::bind("transport-squat-02").unwrap();
+        assert!(mine.instance(false).is_ok());
+    }
+
+    #[test]
+    fn a_message_to_a_peer_that_takes_a_little_at_a_time_stops_at_its_deadline() {
+        let l = Arc::new(Listener::bind("transport-slow-01").unwrap());
+        let server = Arc::clone(&l);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut s = server.accept().expect("accept");
+            let started = Instant::now();
+            let r = s.write_all_within(&vec![7u8; 16 * 1024 * 1024], Duration::from_secs(1));
+            let _ = tx.send((r, started.elapsed()));
+        });
+        let mut c = connect(l.endpoint(), Duration::from_secs(10)).expect("connect");
+        // 64 KiB every 300 ms: each wait for room is short, the whole message is not.
+        let reader = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                std::thread::sleep(Duration::from_millis(300));
+                match c.read(&mut buf) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+            }
+        });
+        let (r, took) = rx.recv_timeout(Duration::from_secs(20)).expect("the write waited past its limit");
+        let e = r.expect_err("16 MiB went to a peer taking about 200 KiB a second");
+        assert!(super::super::is_timeout(&e), "{e:?}");
+        assert!(took < Duration::from_secs(3), "one message stretched its 1 second limit to {took:?}");
+        reader.join().unwrap();
     }
 }

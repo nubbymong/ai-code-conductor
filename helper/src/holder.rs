@@ -10,9 +10,10 @@
 //! learns it was replaced.
 //!
 //! When the first process exits, the holder ends what is left of its tree,
-//! lets the last output drain (at most `DRAIN`), and only then reports the
-//! exit code and closes the live channel. So a client that sees the channel
-//! close with `exit_code()` set has had every byte of output first.
+//! lets the last output drain, and only then reports the exit code and closes
+//! the live channel. So a client that sees the channel close with
+//! `exit_code()` set has had every byte the terminal gave up within `DRAIN`
+//! (2 s) of the exit; output still coming after that is not waited for.
 
 use crate::pty::{Pty, PtySize, SpawnOptions};
 use crate::ring::{Replay, Ring, RingError};
@@ -107,11 +108,27 @@ impl Holder {
         });
         let pty = Arc::new(Mutex::new(pty));
 
+        // The threads start in this order, the one that watches the child
+        // last, and none of the earlier ones holds the terminal: so if a
+        // thread cannot be made, the start fails (rather than a panic) and the
+        // terminal and its child go with it (`Pty`'s drop).
+
+        // Input: in order, one frame at a time. A failed write (the terminal
+        // is gone) ends the thread, and later input is refused as closed.
+        let (input, queued) = mpsc::sync_channel::<Vec<u8>>(INPUT_QUEUE_FRAMES);
+        thread::Builder::new().spawn(move || {
+            while let Ok(bytes) = queued.recv() {
+                if writer.write_all(&bytes).and_then(|_| writer.flush()).is_err() {
+                    return;
+                }
+            }
+        })?;
+
         // Output: everything the child writes goes into the ring first, then to
         // the attached client, in one critical section so a replay and the live
         // stream never overlap or leave a gap.
         let out_shared = Arc::clone(&shared);
-        thread::spawn(move || {
+        thread::Builder::new().spawn(move || {
             let mut buf = vec![0u8; 16 * 1024];
             loop {
                 let n = match reader.read(&mut buf) {
@@ -131,13 +148,13 @@ impl Holder {
             // The live channel stays open: it closes once the exit is known,
             // so a client never sees it close before the code is set.
             lock(&out_shared.state).output_ended = true;
-        });
+        })?;
 
         // Exit: the child is watched by polling. On Windows the output pipe does
         // not end when the child does, so the reader cannot be the signal.
         let watch_shared = Arc::clone(&shared);
         let watch_pty = Arc::clone(&pty);
-        thread::spawn(move || {
+        thread::Builder::new().spawn(move || {
             let code = loop {
                 let status = lock(&watch_pty).try_wait();
                 match status {
@@ -162,18 +179,7 @@ impl Holder {
             st.exit_code = Some(code);
             // Dropping the sender closes the live channel after the last chunk.
             st.terminal = None;
-        });
-
-        // Input: in order, one frame at a time. A failed write (the terminal
-        // is gone) ends the thread, and later input is refused as closed.
-        let (input, queued) = mpsc::sync_channel::<Vec<u8>>(INPUT_QUEUE_FRAMES);
-        thread::spawn(move || {
-            while let Ok(bytes) = queued.recv() {
-                if writer.write_all(&bytes).and_then(|_| writer.flush()).is_err() {
-                    return;
-                }
-            }
-        });
+        })?;
 
         Ok(Holder { shared, pty, input: Mutex::new(input), pid })
     }
