@@ -773,6 +773,52 @@ mod tests {
         fs::remove_dir_all(&store).unwrap();
     }
 
+    /// A crashed holder leaves its socket file with nothing listening on it,
+    /// and its process id may name another process by then. Linux refuses a
+    /// connect there, which means the holder is gone: the probe says so
+    /// although the record's id runs, and list mode removes the record and
+    /// the socket file. Linux reads no start time, so this refusal is the one
+    /// thing that clears such a record there.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn list_mode_removes_the_record_and_the_socket_a_crashed_holder_left_on_linux() {
+        let sid = "transport-dead-01";
+        prepare_run_dir(&run_dir()).unwrap();
+        let random = crate::random::hex(super::super::ENDPOINT_RANDOM_HEX / 2).unwrap();
+        let endpoint = super::super::endpoint_name(sid, &random);
+        let path = PathBuf::from(&endpoint);
+        // Bound, then dropped as a crash drops it: the file stays, unheard.
+        drop(bind_private(&path).unwrap());
+        assert!(fs::symlink_metadata(&path).unwrap().file_type().is_socket(), "the socket file went with its listener");
+        let store = std::env::temp_dir().join(format!("aicc-transport-crashed-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&store);
+        crate::store::prepare(&store).unwrap();
+        let rec = crate::store::Record {
+            session: sid.to_string(),
+            label: String::new(),
+            // This test's own id, which runs: the id was given to another process.
+            pid: std::process::id(),
+            endpoint: endpoint.clone(),
+            nonce: "0123456789abcdef0123456789abcdef".to_string(),
+            helper: "0.1.0".to_string(),
+            // Written after this process started, so no start-time rule
+            // could take it for stale: only the refusal can.
+            started: crate::store::now_ms(),
+            away: 120,
+            attached: false,
+            child: "running".to_string(),
+            code: None,
+        };
+        assert_eq!(crate::client::probe(&rec), crate::store::Probe::Gone, "a refused connect was not read as a gone holder");
+        crate::store::write(&store, &rec).unwrap();
+        let listing = crate::store::list(&store, crate::client::probe).unwrap();
+        assert!(listing.sessions.is_empty(), "a crashed holder's record was listed: {:?}", listing.sessions);
+        assert_eq!(listing.removed, 1);
+        assert!(crate::store::read(&store, sid).is_none(), "list mode kept a crashed holder's record");
+        assert!(!path.exists(), "list mode kept a crashed holder's socket file");
+        fs::remove_dir_all(&store).unwrap();
+    }
+
     #[test]
     fn a_message_to_a_peer_that_takes_a_little_at_a_time_stops_at_its_deadline() {
         let (mine, theirs) = UnixStream::pair().unwrap();
