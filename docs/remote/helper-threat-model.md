@@ -91,13 +91,6 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   app writes nothing to the endpoint before that hello has been read. This
   catches a corrupted or swapped copy; like the remote case it does not stop
   the same user, who can already run any program as themselves.
-- **A holder keeps none of the app's open handles (This computer, from
-  2.1.3-beta.7).** The app's starter (`hold --detach`) is given every handle
-  the app lets a child inherit, and the holder outlives the app. On Windows
-  the starter starts the holder with a handle list naming only the holder's
-  standard error pipe; on macOS and Linux the holder closes every descriptor
-  from 3 up before it serves (`helper/src/detach.rs`, tested by
-  `a_detached_holder_keeps_none_of_its_starters_handles`).
 - **macOS entitlements of the shipped helper.** electron-builder signs every
   Mach-O in the bundle with `entitlementsInherit`, which is the app's own
   `build/entitlements.mac.plist`: allow-jit, allow-unsigned-executable-memory,
@@ -360,6 +353,22 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   anything, the app confirms it covers the pinned key, helper hash and
   placement list in use, or asks again. No field the app treats as a local
   path ever holds a host-supplied path.
+
+### 3.13 What a holder on this computer keeps open
+
+- **A holder keeps none of the app's open handles (from 2.1.3-beta.7).** The
+  app's starter (`hold --detach`) is given every handle the app lets a child
+  inherit, and the holder outlives the app. On Windows the starter starts the
+  holder with a handle list naming only the holder's standard error pipe,
+  both when the holder leaves the starter's job and when the job keeps it. On
+  macOS and Linux the holder closes every descriptor from 3 up before it
+  serves: with `close_range` on Linux, else from `/proc/self/fd` or
+  `/dev/fd`, else every number up to the higher of its descriptor limits, at
+  most 1,048,576 (`helper/src/detach.rs`). Tested by
+  `a_detached_holder_keeps_none_of_its_starters_handles`, the in-job start's
+  own test, and a test of each way of closing.
+- The holder also runs in the store folder, never the app's, so it keeps no
+  folder of the app's open (protocol 15).
 
 ## 4 Review
 

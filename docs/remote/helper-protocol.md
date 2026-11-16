@@ -494,7 +494,10 @@ exits the same way. `--away` is 1 to 86400 seconds, default 120;
 characters, none of them a control character. Each option is given at most
 once; an unknown one fails. `--detach` makes the store folder if it is missing
 (and checks it, as below), then starts the holder in it, with the store named
-by its full path, so the holder keeps no folder of the app's open.
+by its full path, so the holder keeps no folder of the app's open. The holder
+keeps none of the app's handles either: on Windows it is started with a
+handle list that names only its standard error pipe, and on macOS and Linux it
+closes every descriptor from 3 up as it starts.
 
 The holder runs in a new session (Unix `setsid`). On Windows it runs as a
 detached process outside the app's job when that job lets a process leave it;
