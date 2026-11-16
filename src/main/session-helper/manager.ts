@@ -239,7 +239,8 @@ export class SessionHelperManager implements MachinesSource {
 
   private async bringUp(crashed: boolean): Promise<void> {
     const info = await this.installed()
-    if (!info) return
+    // A quit that began meanwhile has ended everything: nothing more to bring up.
+    if (!info || this.quitting) return
     let records: HolderRecord[] = []
     let listed = false
     try {
@@ -248,6 +249,7 @@ export class SessionHelperManager implements MachinesSource {
     } catch (err) {
       this.deps.log(`[session-helper] the held terminals could not be listed: ${message(err)}`)
     }
+    if (this.quitting) return
     if (crashed) {
       // Every held terminal at once: a holder nobody attaches to ends itself
       // two minutes after the app went. The keepers started from the store's
@@ -297,6 +299,8 @@ export class SessionHelperManager implements MachinesSource {
       const version = v.code === 0 ? parseVersionLine(v.stdout) : null
       if (!version) throw new InstallError(HELPER_SENTENCES.noVersion)
       this.version = version
+      // No copy is made once a quit began.
+      if (this.quitting) return null
       this.info = await installHelperCopy({ bundled, root: this.root, version, sha256, platform: this.deps.platform })
       this.deps.log(`[session-helper] helper ${version} ready in ${this.info.folder}`)
       return this.info
@@ -326,6 +330,7 @@ export class SessionHelperManager implements MachinesSource {
     const now = this.info
     if (!info || !now) throw new Error(this.detail ?? HELPER_SENTENCES.notInstalled)
     if (await copyMatches(now.exe, now.sha256)) return now.exe
+    if (this.quitting) throw new Error('The app is quitting.')
     if (!this.recopying) {
       this.deps.log('[session-helper] the helper copy does not match the installed helper; copying it again')
       const again = installHelperCopy({ bundled: this.deps.bundled, root: this.root, version: now.version, sha256: now.sha256, platform: this.deps.platform })

@@ -47,6 +47,8 @@ let bundled: string
 let root: string
 let helper: FakeHelper
 const managers: SessionHelperManager[] = []
+/** Every start a test began, awaited or not: the teardown waits for them. */
+const starts: Promise<unknown>[] = []
 
 function makeManager(over: Partial<ConstructorParameters<typeof SessionHelperManager>[0]> = {}): SessionHelperManager {
   const m = new SessionHelperManager({
@@ -54,6 +56,12 @@ function makeManager(over: Partial<ConstructorParameters<typeof SessionHelperMan
     spawnDirect: (file, args, o) => ptySpawn(file, args, o), newTabId: () => 'newtab0123456789abcdef01', ...over,
   })
   managers.push(m)
+  const start = m.start.bind(m)
+  m.start = (o) => {
+    const p = start(o)
+    starts.push(p)
+    return p
+  }
   return m
 }
 
@@ -68,11 +76,19 @@ beforeEach(() => {
   helper = new FakeHelper()
 })
 
-afterEach(() => {
-  for (const m of managers.splice(0)) { try { m.shutdown() } catch { /* done */ } }
+afterEach(async () => {
+  const quits = managers.splice(0).map((m) => { try { return m.shutdown() } catch { return null } })
   setSessionHelper(null)
   for (const h of helper.holders.values()) h.dropAll()
-  rmSync(dir, { recursive: true, force: true })
+  // The managers' own work (a start still copying, a self-test still hashing)
+  // settles first: on Windows a file still open keeps its folder in use.
+  let timer: NodeJS.Timeout | undefined
+  await Promise.race([
+    Promise.allSettled([...quits, ...starts.splice(0)]),
+    new Promise<void>((r) => { timer = setTimeout(r, 3000) }),
+  ]).finally(() => clearTimeout(timer))
+  // A self-test started before the quit may still be closing its file.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 })
 })
 
 async function started(m: SessionHelperManager, atStartup = true): Promise<SessionHelperManager> {
@@ -184,6 +200,25 @@ describe('the branch: on, a plain or partner terminal goes through a holder', ()
 })
 
 describe('the helper copy: checked before every holder start', () => {
+  it('a quit while the helper is being set up: no copy is made, and it never reads ready', async () => {
+    let answer!: () => void
+    let asked = false
+    const gate = new Promise<void>((r) => { answer = r })
+    const m = makeManager({
+      exec: async (file, args) => {
+        if (args[0] === 'version') { asked = true; await gate }
+        return helper.exec(file, args)
+      },
+    })
+    const starting = m.start({ atStartup: true })
+    await until(() => asked, 'the version question')
+    expect(m.shutdown()).toBeNull()
+    answer()
+    await starting
+    expect(readdirSync(root).filter((n) => /^0\.1\.0-[0-9a-f]{12}$/.test(n))).toEqual([])
+    expect(m.serviceState().state).not.toBe('ready')
+  })
+
   it('is copied into a version folder outside the install folder, and matches', async () => {
     const m = await started(makeManager())
     const status = await m.status()
