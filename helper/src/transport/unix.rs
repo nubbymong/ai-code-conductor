@@ -568,7 +568,11 @@ fn connect_once(path: &Path, deadline: Instant) -> io::Result<UnixStream> {
 /// Connect within `timeout`.
 #[cfg(not(target_vendor = "apple"))]
 fn connect_within(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
-    connect_once(path, Instant::now() + timeout)
+    // MUTANT for one CI run, reverted next: a refusal read as no clear answer.
+    match connect_once(path, Instant::now() + timeout) {
+        Err(e) if e.raw_os_error() == Some(libc::ECONNREFUSED) => Err(timed_out()),
+        other => other,
+    }
 }
 
 /// Connect within `timeout`. macOS refuses a connection to a socket whose
