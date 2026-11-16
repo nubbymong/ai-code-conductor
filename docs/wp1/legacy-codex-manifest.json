@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-15T18:00:07.283Z",
-  "head": "6cd51363d4b7a39c3d4e66dafe3e1568331f1bc8",
-  "tree": "5c167582f50d0034ff20d23b6e24584f55fc5630",
+  "generatedAt": "2026-11-16T04:53:23.019Z",
+  "head": "eef1f5e4dcf9eabe0aadbbc7cadff809f124fba2",
+  "tree": "ed8414a62952228984750817f217b612e5ad7d9e",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3284,
-  "excludedFileCount": 485,
-  "scannedFileCount": 2799,
+  "trackedFileCount": 3295,
+  "excludedFileCount": 488,
+  "scannedFileCount": 2807,
   "unscopedFileCount": 42,
   "unscoped": [
     ".claude/settings.json",
@@ -166,8 +166,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 910,
-  "pathDigest": "fb471dd3f58e60fb8442ec1f80a5f68b0ab26bad6fa2f096a49f529a71a44510",
+  "matchedPathCount": 915,
+  "pathDigest": "aedc96fb91213a0021bcc478b49b7977d6e9e6ae40a9f398ac6d8fd65d1696f8",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -356,7 +356,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 32
+      "lineCount": 34
     },
     {
       "path": "scripts/readme-shots/README.md",
@@ -885,7 +885,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 116
+      "lineCount": 119
     },
     {
       "path": "src/main/ipc/tokenomics2-handlers.ts",
@@ -1192,7 +1192,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 288
+      "lineCount": 291
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -1304,7 +1304,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 33
+      "lineCount": 63
     },
     {
       "path": "src/main/providers/codex/session-screen.ts",
@@ -1396,7 +1396,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 38
+      "lineCount": 39
     },
     {
       "path": "src/main/pty-input-guard.ts",
@@ -4710,7 +4710,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 1
+      "lineCount": 2
     },
     {
       "path": "tests/unit/main/provider-account-usage.test.ts",
@@ -4938,6 +4938,15 @@
         "P13"
       ],
       "lineCount": 21
+    },
+    {
+      "path": "tests/unit/main/pty-spawn-warms-codex-resume.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 27
     },
     {
       "path": "tests/unit/main/pty-ssh-color-query-passthrough.test.ts",
@@ -5556,6 +5565,32 @@
         "P13"
       ],
       "lineCount": 29
+    },
+    {
+      "path": "tests/unit/providers/codex/resume-real-path-links.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 19
+    },
+    {
+      "path": "tests/unit/providers/codex/resume-real-path.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 94
+    },
+    {
+      "path": "tests/unit/providers/codex/resume-warm-wiring.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 33
     },
     {
       "path": "tests/unit/providers/codex/rollout-lookup.test.ts",
@@ -7150,6 +7185,14 @@
         "P13"
       ],
       "lineCount": 12
+    },
+    {
+      "path": "tests/unit/scripts/codex-resume-picker-real-path.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 3
     },
     {
       "path": "tests/unit/scripts/codex-resume-picker-worktrees.test.ts",

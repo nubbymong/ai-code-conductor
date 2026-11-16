@@ -11,6 +11,7 @@ import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHook
 import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText } from './session-screen'
 import { detectCodexUi } from './ui-detection'
 import { watchAndClaimRollout } from './telemetry'
+import { warmCodexResume } from './rollout-lookup'
 import { deployCodexResumePickerScript } from './resume-picker'
 import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand } from './hooks'
 import type { SecureHookFolders } from './hooks'
@@ -294,6 +295,13 @@ export class CodexProvider implements SessionProvider {
    *  asked off the event loop before a launch (spawn.ts warmNodeExeOnPosix). */
   warmResumeListNode(): Promise<void> {
     return warmNodeExeOnPosix()
+  }
+
+  /** 2.1.3-beta.6: the folders of a resumed conversation compared by real
+   *  path, and the tab's folder checked, asked of the disk off the event loop
+   *  before the launch (rollout-lookup.ts warmCodexResume). */
+  warmResumeLookup(target: { uuid: string; cwd: string }, sessionsDir: string, sessionId?: string, configuredCwd?: string): Promise<void> {
+    return warmCodexResume(target, { sessionsDir, ...(sessionId !== undefined ? { sessionId } : {}), ...(configuredCwd !== undefined ? { configuredCwd } : {}) })
   }
 
   /** P3.10: the session's hook file, for its launch's hooks; round 1 (A5):

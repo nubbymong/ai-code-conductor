@@ -68,7 +68,13 @@ async function main() {
   // Every git worktree of the project, as Claude's picker lists them (P3.5).
   const worktrees = lib.listWorktrees(cwd)
   const hasWorktrees = worktrees.some((w) => !w.isMain)
-  const conversations = lib.walkRollouts(home, 30, worktrees)
+  // 2.1.3-beta.6: a conversation recorded under the real folder of a
+  // symlinked (or junctioned) folder is listed too; the real paths are asked
+  // of the disk off this loop, bounded, and a folder that cannot be resolved
+  // is compared by its spelling. The walk does not reject on that, so there is
+  // no second walk to fall back to: anything else it throws is what main()'s
+  // catch below already turns into a fresh launch.
+  const conversations = await lib.walkRolloutsAsync(home, 30, worktrees)
 
   if (conversations.length === 0) {
     launchCodex(null)

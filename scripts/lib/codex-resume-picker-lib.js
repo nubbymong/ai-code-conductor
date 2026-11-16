@@ -188,17 +188,28 @@ function dayFolders(sessionsDir, maxDays, now) {
   }
   return out
 }
-function walkRollouts(home, maxDays, where, platform) {
-  const plat = platform || process.platform
-  const worktrees = typeof where === 'string'
+
+// 2.1.3-beta.6: a conversation started in a symlinked folder (or a Windows
+// junction) records the link or the real folder, and git names a worktree by
+// the other. walkRolloutsAsync lists such a conversation too: where the
+// spelling does not match, it compares the folders' real paths, asked of the
+// disk with fs.promises.realpath (never the synchronous call), bounded, and
+// once per folder. walkRollouts is the spelling-only walk it builds on; the
+// picker does not fall back to it (a throw ends in main().catch, a fresh launch).
+function worktreesOf(where) {
+  return typeof where === 'string'
     ? [{ path: where, branch: null, isMain: true }]
     : (Array.isArray(where) ? where.filter((w) => w && typeof w.path === 'string' && w.path) : [])
+}
+
+// Every readable rollout head the walk reaches, newest day folder first, and
+// within a day newest file first: { fp, mtime, parsed }. The two walks below
+// take from it until they have MAX_LISTED.
+function* rolloutHeads(home, maxDays) {
   const sessionsDir = path.join(home, 'sessions')
-  if (!isRealFolder(sessionsDir)) return []
-  const matches = []
+  if (!isRealFolder(sessionsDir)) return
 
   for (const dayDir of dayFolders(sessionsDir, maxDays, Date.now())) {
-    if (matches.length >= MAX_LISTED) break
     // Real folders only, at every level (P3.5 fix round 1): a year, month or
     // day folder that is a link or junction is not entered.
     if (!realFolderChain(sessionsDir, dayDir)) continue
@@ -222,7 +233,6 @@ function walkRollouts(home, maxDays, where, platform) {
     dayEntries.sort((a, b) => b.mtime - a.mtime)
 
     for (const { fp, mtime } of dayEntries) {
-      if (matches.length >= MAX_LISTED) break
       let buf
       let fd = null
       try {
@@ -239,15 +249,147 @@ function walkRollouts(home, maxDays, where, platform) {
       }
       const parsed = parseRollout(buf.toString('utf-8'))
       if (!parsed) continue
-      const wt = worktrees.find((w) => samePath(w.path, parsed.cwd, plat))
-      if (!wt) continue
-      // P3.12 (row 32): the name the app wrote next to the rollout, if any.
-      const name = readRolloutName(fp)
-      matches.push({ id: parsed.id, cwd: parsed.cwd, model: parsed.model, effort: parsed.effort, label: parsed.label, mtime, sourceCwd: wt.path, worktreeLabel: worktreeLabelFor(wt), ...(name ? { name } : {}) })
+      yield { fp, mtime, parsed }
     }
+  }
+}
+
+// One listed conversation: the rollout head and the worktree it belongs to.
+function listedConversation(head, wt) {
+  // P3.12 (row 32): the name the app wrote next to the rollout, if any.
+  const name = readRolloutName(head.fp)
+  const parsed = head.parsed
+  return { id: parsed.id, cwd: parsed.cwd, model: parsed.model, effort: parsed.effort, label: parsed.label, mtime: head.mtime, sourceCwd: wt.path, worktreeLabel: worktreeLabelFor(wt), ...(name ? { name } : {}) }
+}
+
+function walkRollouts(home, maxDays, where, platform) {
+  const plat = platform || process.platform
+  const worktrees = worktreesOf(where)
+  const matches = []
+
+  for (const head of rolloutHeads(home, maxDays)) {
+    const wt = worktrees.find((w) => samePath(w.path, head.parsed.cwd, plat))
+    if (!wt) continue
+    matches.push(listedConversation(head, wt))
+    if (matches.length >= MAX_LISTED) break
   }
 
   // Final sort across days
+  matches.sort((a, b) => b.mtime - a.mtime)
+  return matches.slice(0, MAX_LISTED)
+}
+
+// How long the walk waits for ONE folder's real path before it goes on with
+// the spelling alone. A folder on this computer answers in well under a
+// millisecond; a mapped drive that is down can take far longer. The wait only
+// ends the waiting: the disk call runs to its own end, off the picker's loop.
+const REAL_PATH_WAIT_MS = 1500
+
+// An absolute path on a local drive or root: a drive letter or one leading
+// slash. Not a relative spelling and not a network share (\\server\share,
+// //server/share): a share that does not answer holds the call for as long as
+// it takes to time out. Mirrors isLocalAbsolutePath in
+// src/main/providers/codex/rollout-lookup.ts.
+function isLocalAbsolute(p) {
+  return typeof p === 'string' && /^(?:[A-Za-z]:[\\/]|\/(?![\\/]))/.test(p)
+}
+
+// The mount roots on macOS and Linux, each with how many path segments name
+// one mount under it (/Volumes/Disk, /mnt/share, /media/user/Disk,
+// /run/media/user/Disk). A path under none of them is on the root disk.
+const MOUNT_ROOTS = [
+  { root: ['volumes'], depth: 2 },
+  { root: ['mnt'], depth: 2 },
+  { root: ['net'], depth: 2 },
+  { root: ['media'], depth: 3 },
+  { root: ['run', 'media'], depth: 4 },
+]
+
+// The disk a local absolute spelling is on, for remembering that it did not
+// answer: its drive letter on Windows, its mount on macOS and Linux (so one
+// stale network mount does not silence the folders on the root disk), else '/'.
+// A key finer than the real disk only means one more bounded wait; a coarser
+// one would silence a disk that is up because another is down. Mirrors
+// codexDriveKeyOf in src/main/providers/codex/rollout-lookup.ts.
+function realPathDriveOf(p) {
+  if (/^[A-Za-z]:/.test(p)) return p.slice(0, 2).toLowerCase()
+  const segments = p.split(/[\\/]+/).filter(Boolean).map((s) => s.toLowerCase())
+  for (const m of MOUNT_ROOTS) {
+    if (m.root.every((s, i) => segments[i] === s)) return '/' + segments.slice(0, Math.min(m.depth, segments.length)).join('/')
+  }
+  return '/'
+}
+
+// The real path of a folder for ONE walk: asked once per spelling (a failure
+// is kept too), off the loop, each wait bounded. Null for a folder it cannot
+// give (relative, a share, missing, refused, or no answer in time). Once a
+// folder has not answered in time, no NEW folder on the same drive (on macOS
+// and Linux, the same mount: realPathDriveOf) is asked, so a drive that is
+// down is waited for once; an answer already had is still given. Never
+// rejects. `deps` (realpath, waitMs) is for tests.
+function realPathLookup(deps) {
+  const realpath = (deps && deps.realpath) || ((p) => fs.promises.realpath(p))
+  const waitMs = deps && typeof deps.waitMs === 'number' ? deps.waitMs : REAL_PATH_WAIT_MS
+  const asked = new Map()
+  const silent = new Set()
+  const driveOf = realPathDriveOf
+  return (p) => {
+    if (!isLocalAbsolute(p)) return Promise.resolve(null)
+    let answer = asked.get(p)
+    if (!answer) {
+      const drive = driveOf(p)
+      if (silent.has(drive)) return Promise.resolve(null)
+      const run = Promise.resolve()
+        .then(() => realpath(p))
+        .then((real) => (typeof real === 'string' && real !== '' ? real : null), () => null)
+      answer = new Promise((resolve) => {
+        const timer = setTimeout(() => { silent.add(drive); resolve(null) }, waitMs)
+        if (typeof timer.unref === 'function') timer.unref()
+        run.then((real) => { clearTimeout(timer); resolve(real) })
+      })
+      asked.set(p, answer)
+    }
+    return answer
+  }
+}
+
+// walkRollouts, and where a rollout's folder is not a worktree by its
+// spelling, by real path: the folder the rollout records and the worktree
+// resolve to one real folder. Same results otherwise (same order, same
+// bound). Never rejects on a folder it cannot resolve; that folder is
+// compared by its spelling alone.
+async function walkRolloutsAsync(home, maxDays, where, platform, deps) {
+  const plat = platform || process.platform
+  const worktrees = worktreesOf(where)
+  const real = realPathLookup(deps)
+  // Each worktree's real path, once, together: asked only when a rollout does
+  // not match a worktree by spelling, so a walk whose rollouts all do asks the
+  // disk nothing.
+  let worktreeRealPaths = null
+  const worktreeReal = async () => {
+    if (!worktreeRealPaths) worktreeRealPaths = Promise.all(worktrees.map(async (w) => [w.path, await real(w.path)])).then((pairs) => new Map(pairs))
+    return worktreeRealPaths
+  }
+  const matches = []
+
+  for (const head of rolloutHeads(home, maxDays)) {
+    let wt = worktrees.find((w) => samePath(w.path, head.parsed.cwd, plat))
+    if (!wt) {
+      const realOf = await worktreeReal()
+      // The folder the rollout records is a worktree's real folder (the
+      // worktree is the link): known by now, no more disk calls.
+      wt = worktrees.find((w) => { const r = realOf.get(w.path); return !!r && samePath(r, head.parsed.cwd, plat) })
+      if (!wt) {
+        // Or the rollout records a link: its real folder, asked of the disk.
+        const recordedReal = await real(head.parsed.cwd)
+        if (recordedReal) wt = worktrees.find((w) => samePath(realOf.get(w.path) || w.path, recordedReal, plat))
+      }
+    }
+    if (!wt) continue
+    matches.push(listedConversation(head, wt))
+    if (matches.length >= MAX_LISTED) break
+  }
+
   matches.sort((a, b) => b.mtime - a.mtime)
   return matches.slice(0, MAX_LISTED)
 }
@@ -787,7 +929,7 @@ function isResumeId(id) {
 }
 
 module.exports = {
-  parseRollout, walkRollouts, buildResumeArgs, shouldFallback, shouldUseShell, launchTarget, launchRefusal, isResumeId,
+  parseRollout, walkRollouts, walkRolloutsAsync, realPathLookup, realPathDriveOf, buildResumeArgs, shouldFallback, shouldUseShell, launchTarget, launchRefusal, isResumeId,
   samePath, parseWorktrees, listWorktrees, worktreeLabelFor, displayText, buildPickerRows, loadWorkNames, readRolloutName, pickDecision, writePick, recordPick, folderIdOf, childEnv, isDirectory, resolveRetargetCwd, timeAgo,
   openElsewhereIds, fallbackNotice,
 }

@@ -74,12 +74,52 @@ export function isHomeOrAncestor(cwd: string): boolean {
     }
     return false
   }
-  // Fallback for a path that doesn't exist on disk (statSync failed): a
-  // normalised string comparison. resolveCwd would already have mapped a
-  // non-existent path to home before this is reached, so this is belt-and-braces.
+  return homeOrAncestorByName(dir, home)
+}
+
+/**
+ * The fallback of isHomeOrAncestor for a path that doesn't exist on disk (its
+ * stat failed): a normalised string comparison. resolveCwd would already have
+ * mapped a non-existent path to home before this is reached, so this is
+ * belt-and-braces. One copy, for the synchronous check and the asynchronous one.
+ */
+function homeOrAncestorByName(dir: string, home: string): boolean {
   const norm = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p)
   const h = norm(home), d = norm(dir)
   if (d === h) return true
   const rel = path.relative(d, h)
   return rel !== '' && rel.split(path.sep)[0] !== '..' && !path.isAbsolute(rel)
+}
+
+/**
+ * isHomeOrAncestor, answered off the main thread (2.1.3-beta.6): the same rule
+ * (both sides canonicalised, then compared by filesystem identity along home's
+ * parents, the name comparison for a path that cannot be statted), asked with
+ * fs.promises (its realpath has the semantics of realpath.native) so a folder
+ * on a drive that is down holds a thread, not the Electron main process. The
+ * caller bounds the wait. Keep the two in step: tests/unit/main/
+ * path-utils-home.test.ts checks them against each other.
+ */
+export async function isHomeOrAncestorAsync(cwd: string): Promise<boolean> {
+  const real = async (p: string): Promise<string> => {
+    try { return await fs.promises.realpath(p) } catch { return path.resolve(p) }
+  }
+  const idOf = async (p: string): Promise<string | null> => {
+    try { const s = await fs.promises.stat(p, { bigint: true }); return `${s.dev}:${s.ino}` } catch { return null }
+  }
+  const [home, dir] = await Promise.all([real(os.homedir()), real(cwd)])
+  const dirId = await idOf(dir)
+  if (dirId != null) {
+    // Walk home up to the filesystem root; dir matches home itself or any
+    // ancestor of home when their identities are equal.
+    let cur = home
+    while (true) {
+      if ((await idOf(cur)) === dirId) return true
+      const parent = path.dirname(cur)
+      if (parent === cur) break
+      cur = parent
+    }
+    return false
+  }
+  return homeOrAncestorByName(dir, home)
 }
