@@ -371,7 +371,8 @@ describe('ci.yml: a docs-only change skips the suite on Windows and macOS, and t
   it('the required checks are reported once each, by the Test jobs, and no job is skipped for its paths', () => {
     expect(test.name).toBe('Test (${{ matrix.os }})')
     expect(test.strategy?.matrix.os).toEqual(['macos-latest', 'ubuntu-latest'])
-    expect(winTest.name).toBe('Test (windows-2025)')
+    expect(winTest.name).toBe('Test (${{ matrix.os }})')
+    expect(winTest.strategy?.matrix.os).toEqual(['windows-2025'])
     expect(allNames.filter((n) => n.name === 'Test (windows-2025)').map((n) => n.id)).toEqual(['test-windows'])
     expect(allNames.filter((n) => n.name === 'Test (macos-latest)').map((n) => n.id)).toEqual(['test'])
     for (const check of REQUIRED_CHECKS) expect(allNames.filter((n) => n.name === check), check).toHaveLength(1)
@@ -384,6 +385,24 @@ describe('ci.yml: a docs-only change skips the suite on Windows and macOS, and t
     // No job's own condition knows anything of paths: the decision is taken inside each job.
     for (const [id, job] of [...SCOPED, ['test-windows', winTest] as [string, Job]]) expect(String(job.if), id).not.toMatch(/scope|paths|needs\./)
     for (const [id, job] of SCOPED) expect(job.needs, id).toBeUndefined()
+  })
+
+  it('a Test job skipped as a whole reports no Test name: each is named from its matrix', () => {
+    // A job skipped by its condition (a label change, an edit) reports its name
+    // unexpanded, and GitHub counts a skipped check as passed. A plain
+    // `Test (windows-2025)` skipped on a label change would stand over a red one.
+    const testJobs = Object.entries(ci.jobs).filter(([, job]) => reportedNames(job).some((n) => n.startsWith('Test (')))
+    expect(testJobs.map(([id]) => id).sort()).toEqual(['test', 'test-windows'])
+    for (const [id, job] of testJobs) {
+      expect(job.name, id).toBe('Test (${{ matrix.os }})')
+      expect(REQUIRED_CHECKS, id).not.toContain(job.name)
+      expect(TEST_JOB_RE.test(job.name!), id).toBe(false)
+    }
+    // And no job with a plain name looks like a Test job.
+    for (const [id, job] of Object.entries(ci.jobs)) {
+      const raw = job.name ?? id
+      if (!raw.includes('${{')) expect(raw.startsWith('Test ('), id).toBe(false)
+    }
   })
 
   it('each job that runs the suite checks out the merge commit with its base, decides the scope, and every later step obeys it', () => {
@@ -531,8 +550,9 @@ describe('ci.yml: Windows runs in parts side by side, and Test (windows-2025) pa
 
   it('Test (windows-2025) needs every part and the build, starts whatever they ended with, and otherwise starts as the Test jobs do', () => {
     expect(winTest.needs).toEqual(['test-windows-part', 'test-windows-build'])
-    // always(): a job whose need failed is skipped by default, and a skipped job reports as passed.
-    expect(norm(winTest.if)).toBe(`always() && (${norm(test.if)})`)
+    // !cancelled(): a job whose need failed is skipped by default, and a skipped job reports as passed.
+    // Not always(): that also starts it in a run cancelled as a whole, and leaves a failed check behind.
+    expect(norm(winTest.if)).toBe(`!cancelled() && (${norm(test.if)})`)
     for (const id of ['test-windows-part', 'test-windows-build']) expect(norm(ci.jobs[id].if), id).toBe(norm(test.if))
     expect(winTest['runs-on']).toBe('ubuntu-latest')
     expect(winTest.permissions).toEqual({ contents: 'read' })

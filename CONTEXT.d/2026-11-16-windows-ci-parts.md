@@ -20,10 +20,16 @@ summed file time.
   Windows runs `test-windows-part` (four parts, `vitest run --shard=i/4`, the
   count being the matrix size) and `test-windows-build` (typecheck, native
   tests, build, and the release/* installer once) side by side. The job named
-  `Test (windows-2025)` needs them, starts with `always()`, and passes only when
-  each ended `success` (`scripts/ci/all-parts-passed.mjs`): failed, cancelled,
-  timed out or skipped is red. It ends with the `Tested tree` step, so the
-  required check names and the beta release's green-CI reuse are unchanged.
+  `Test (windows-2025)` needs them, starts with `!cancelled()`, and passes only
+  when each ended `success` (`scripts/ci/all-parts-passed.mjs`): failed,
+  cancelled, timed out or skipped is red. It ends with the `Tested tree` step,
+  so the required check names and the beta release's green-CI reuse are
+  unchanged. It is a matrix of one named `Test (${{ matrix.os }})`: the first
+  push gave it a plain name, and a label change then reported a skipped
+  `Test (windows-2025)`, which GitHub counts as passed. A matrix job skipped as
+  a whole reports its name unexpanded instead. `always()` was dropped too,
+  because it started the job in a run cancelled as a whole, which left a
+  failed check behind.
   Each part's summary lists its 15 slowest files
   (`scripts/ci/slow-test-files.mjs`, from vitest's own JSON reporter).
 - The launcher lookup file is split into a shared harness and four files, one

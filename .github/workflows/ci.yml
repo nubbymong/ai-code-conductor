@@ -473,13 +473,21 @@ jobs:
           retention-days: 14
 
   # The required check `Test (windows-2025)`, for the Windows jobs above. It
-  # needs every one of them and starts whatever they ended with (`always()`:
-  # without it, a part that failed would leave this job skipped, and a skipped
-  # job reports as passed). scripts/ci/all-parts-passed.mjs then passes only
-  # when each of them passed: a part that failed, was cancelled, timed out or
-  # was skipped fails it, and so does a run cancelled as a whole. Its event
-  # rule is otherwise the Test jobs', so on a label change or an edit it is
-  # skipped with them and the results already reported for the commit stand.
+  # needs every one of them and starts whatever they ended with
+  # (`!cancelled()`: without it, a part that failed would leave this job
+  # skipped, and a skipped job reports as passed).
+  # scripts/ci/all-parts-passed.mjs then passes only when each of them passed:
+  # a part that failed, was cancelled, timed out or was skipped fails it. A run
+  # cancelled as a whole (a newer push or run replaced it) does not start it,
+  # so it leaves no failed check behind. Its event rule is otherwise the Test
+  # jobs', so on a label change or an edit it is skipped with them and the
+  # results already reported for the commit stand.
+  #
+  # It is a matrix of one, named from `matrix.os` as the `test` job is, for
+  # that skip: a job skipped by its condition reports its name unexpanded, and
+  # GitHub counts a skipped check as passed. With a plain name, a label change
+  # would report a skipped `Test (windows-2025)` over a red one. `os` only
+  # names the check; the job runs on Linux (below).
   #
   # It ends, as the Test jobs do, with the step named after the tree under
   # test, which a beta release reads to reuse this run (ADR-028, rule 4;
@@ -492,13 +500,16 @@ jobs:
   test-windows:
     needs: [test-windows-part, test-windows-build]
     if: |
-      always() &&
+      !cancelled() &&
       (github.event_name == 'push' ||
        (contains(github.event.pull_request.labels.*.name, 'ci-run') &&
         github.event.action != 'unlabeled' &&
         (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
         (github.event.action != 'edited' || github.event.changes.base.ref.from != '')))
-    name: Test (windows-2025)
+    name: Test (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [windows-2025]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
