@@ -194,7 +194,8 @@ function dayFolders(sessionsDir, maxDays, now) {
 // the other. walkRolloutsAsync lists such a conversation too: where the
 // spelling does not match, it compares the folders' real paths, asked of the
 // disk with fs.promises.realpath (never the synchronous call), bounded, and
-// once per folder. walkRollouts is the spelling-only walk it falls back to.
+// once per folder. walkRollouts is the spelling-only walk it builds on; the
+// picker does not fall back to it (a throw ends in main().catch, a fresh launch).
 function worktreesOf(where) {
   return typeof where === 'string'
     ? [{ path: where, branch: null, isMain: true }]
