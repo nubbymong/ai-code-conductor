@@ -238,7 +238,8 @@ export const IPC = {
 
   // Machines page (2.1.3-beta.6): This computer's session helper and the
   // terminals it holds. All four are renderer -> main invokes; the page reads
-  // on open, on Refresh and after each action, so there is no push.
+  // on open, when its tab comes back to the front, on Refresh and after each
+  // action, so there is no push.
   MACHINES_STATUS: 'machines:status',              // -> MachineStatus (never rejects; a helper that cannot answer reads failed)
   MACHINES_SELF_TEST: 'machines:selfTest',         // -> SelfTestResult
   MACHINES_END_SESSION: 'machines:endSession',     // (id: string) -> { ok, message? }

@@ -2,7 +2,8 @@ import { ipcMain } from 'electron'
 import type { BrowserWindow, IpcMainInvokeEvent } from 'electron'
 import { IPC } from '../../shared/ipc-channels'
 import {
-  MAX_HELD_SESSION_ID_LENGTH,
+  HELD_SESSION_ID,
+  MACHINES_NO_ANSWER,
   type MachineActionResult,
   type MachineStatus,
   type MachinesSource,
@@ -21,22 +22,22 @@ import { appWindowSender } from './trusted-sender'
  * or does not answer in time reads as a helper that did not answer, in a plain
  * sentence, so a broken helper shows on the page instead of hanging it.
  *
- * End and Re-attach act on a terminal, so they answer only the app's own
- * window (trusted-sender.ts) and only for an id of a plausible shape.
+ * Every door answers only the app's own window (trusted-sender.ts); End and
+ * Re-attach also need an id of the session-id shape (HELD_SESSION_ID).
  */
 
-/** The sentences the page shows when the helper setting is off (the default source's). */
-export const MACHINES_OFF_DETAIL = 'The "Plain terminals through the session helper" setting is off.'
+/** The sentences the default source gives when the helper setting is off. The page's own
+ *  Off sentence already says where to switch it on, so the status carries no detail. */
 export const MACHINES_OFF_SELF_TEST = 'The session helper is off, so there is nothing to test.'
 export const MACHINES_OFF_END = 'The session helper is off, so it holds no terminal to end.'
 export const MACHINES_OFF_REATTACH = 'The session helper is off, so it holds no terminal to re-attach.'
 
-/** Sentences for what goes wrong between the page and the source. */
-export const MACHINES_NO_ANSWER = 'The session helper did not answer.'
+/** Sentences for what goes wrong between the page and the source. The no-answer one is
+ *  shared with the page (src/shared/machines.ts). */
 export const MACHINES_BAD_ID = 'That is not a terminal the session helper holds.'
 export const MACHINES_NOT_APP = 'Only the app window can ask the session helper.'
 
-/** How long the page waits for each door before it reads the helper as silent. */
+/** How long main waits for the source on each door before it reads the helper as silent. */
 export const MACHINES_STATUS_TIMEOUT_MS = 8_000
 export const MACHINES_ACTION_TIMEOUT_MS = 15_000
 export const MACHINES_SELF_TEST_TIMEOUT_MS = 30_000
@@ -47,7 +48,7 @@ export function defaultMachinesSource(): MachinesSource {
     status: async () => ({
       id: 'this-computer',
       name: 'This computer',
-      helper: { state: 'off', detail: MACHINES_OFF_DETAIL },
+      helper: { state: 'off' },
       sessions: [],
     }),
     runSelfTest: async () => ({ ok: false, at: Date.now(), detail: MACHINES_OFF_SELF_TEST }),
@@ -89,21 +90,20 @@ async function answer<T>(label: string, ms: number, call: () => Promise<T>, onFa
 }
 
 function isHeldSessionId(id: unknown): id is string {
-  return typeof id === 'string' && id.length > 0 && id.length <= MAX_HELD_SESSION_ID_LENGTH
+  return typeof id === 'string' && HELD_SESSION_ID.test(id)
 }
 
 /**
  * Register the four Machines doors. `getSource` is read on every call.
- * `getWindow`, when given, limits every door to the app's own window, its main
- * frame; the app always passes it (index.ts), and only a unit test of the
- * source wiring leaves it out.
+ * `getWindow` is required: every door answers only the app's own window, its
+ * main frame, as every other handler that acts for the app does.
  */
 export function registerMachinesHandlers(
   getSource: () => MachinesSource,
-  getWindow?: () => BrowserWindow | null,
+  getWindow: () => BrowserWindow | null,
 ): void {
-  const trusted = getWindow ? appWindowSender(getWindow) : null
-  const fromApp = (event: IpcMainInvokeEvent): boolean => (trusted ? trusted(event) : true)
+  const trusted = appWindowSender(getWindow)
+  const fromApp = (event: IpcMainInvokeEvent): boolean => trusted(event)
 
   ipcMain.handle(IPC.MACHINES_STATUS, async (event): Promise<MachineStatus> => {
     if (!fromApp(event)) {

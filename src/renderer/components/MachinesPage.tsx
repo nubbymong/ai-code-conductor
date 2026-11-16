@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import PageFrame from './PageFrame'
 import { DialogButton } from './ui/Dialog'
-import type { HeldSession, HelperState, MachineStatus, SelfTestResult } from '../../shared/machines'
+import { MACHINES_NO_ANSWER, type HeldSession, type HelperState, type MachineStatus, type SelfTestResult } from '../../shared/machines'
 
 // The Machines page (2.1.3-beta.6, plan section C): one card, This computer.
 // It shows what the session helper is doing and the terminals it holds, and
 // lets you run the helper's self-test, re-attach a terminal and end one. It
-// reads on open, on Refresh and after each action; nothing is pushed to it.
+// reads on open, each time its tab comes back to the front, on Refresh and
+// after each action; nothing is pushed to it.
 
 const headerIcon = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -40,12 +41,19 @@ const STATE_SENTENCE: Record<HelperState, string> = {
   failed: 'The session helper failed.',
 }
 
-const NO_ANSWER = 'The session helper did not answer.'
 const EMPTY_LIST = 'The session helper holds no terminals right now.'
+// An empty list from a helper that is starting, failed or unknown is not the same as
+// "holds none": the helper may well hold terminals it cannot list yet.
+const LIST_UNAVAILABLE = 'The list of held terminals is not available until the session helper is ready.'
 
-/** Self-test and the actions need a helper that is running (or one to retry after a failure). */
+/** The self-test needs a helper that is running (or one to retry after a failure). */
 function canAct(state: HelperState): boolean {
   return state === 'ready' || state === 'failed'
+}
+
+/** States in which an empty list truly means "none held": the helper is ready, or it is off or not installed. */
+function listIsKnown(state: HelperState | undefined): boolean {
+  return state === 'ready' || state === 'off' || state === 'not-installed'
 }
 
 /** "10:32" for today, "Nov 15, 10:32" for another day, and a plain fallback for a bad number. */
@@ -59,7 +67,7 @@ function formatWhen(ms: number, now: number = Date.now()): string {
 
 /** What a held terminal is doing, in plain words. */
 function sessionStateText(s: Pick<HeldSession, 'attached' | 'tabOpen'>): string {
-  if (s.attached) return s.tabOpen ? 'Attached to the app' : 'Attached to the app, no tab open'
+  if (s.attached) return s.tabOpen ? 'Attached to the app' : 'Attached to the app. No tab shows it.'
   return s.tabOpen ? 'Waiting for the app' : 'Waiting for the app. No tab shows it.'
 }
 
@@ -100,15 +108,25 @@ function SessionRow({
 }) {
   const warnId = useId()
   const rowRef = useRef<HTMLLIElement>(null)
-  const wasConfirming = useRef(false)
-  // Keyboard and screen-reader users keep their place: the question opens on its
-  // safe answer (Keep it), and backing out puts focus back on this row's End.
+  const backedOut = useRef(false)
+  // Keyboard and screen-reader users keep their place. The question opens on its
+  // safe answer (Keep it). Backing out (and only that) puts focus back on this
+  // row's End. The question closing for any other reason, such as another row's
+  // End being pressed or End being confirmed, never takes focus: where focus goes
+  // after a confirmed End is the page's business (it lands on the list heading).
   useEffect(() => {
     const row = rowRef.current
-    if (confirming) row?.querySelector<HTMLElement>('[data-machines-keep]')?.focus()
-    else if (wasConfirming.current) row?.querySelector<HTMLElement>('[data-machines-end]')?.focus()
-    wasConfirming.current = confirming
+    if (confirming) {
+      row?.querySelector<HTMLElement>('[data-machines-keep]')?.focus()
+    } else if (backedOut.current) {
+      backedOut.current = false
+      row?.querySelector<HTMLElement>('[data-machines-end]')?.focus()
+    }
   }, [confirming])
+  const keepIt = () => {
+    backedOut.current = true
+    onCancelEnd()
+  }
   return (
     <li
       ref={rowRef}
@@ -121,7 +139,7 @@ function SessionRow({
         <div className="min-w-0 flex-1">
           <div className="text-sm text-text truncate" title={session.label}>{session.label}</div>
           <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-            {kindText(session.kind)} · Started {formatWhen(session.startedAt)}
+            {kindText(session.kind)} · Started at {formatWhen(session.startedAt)}
           </div>
           <div
             className="text-[11px] mt-0.5"
@@ -166,10 +184,11 @@ function SessionRow({
           <span id={warnId} className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>
             End this terminal? Whatever is running in it stops, and its scrollback is lost.
           </span>
-          <DialogButton variant="danger-solid" onClick={onConfirmEnd} disabled={busy} aria-label={`Yes, end ${session.label}`} aria-describedby={warnId}>
+          {/* The name starts with the visible words, so "click End terminal" finds it (WCAG 2.5.3). */}
+          <DialogButton variant="danger-solid" onClick={onConfirmEnd} disabled={busy} aria-label={`End terminal ${session.label}`} aria-describedby={warnId}>
             End terminal
           </DialogButton>
-          <DialogButton variant="ghost" onClick={onCancelEnd} disabled={busy} data-machines-keep="" aria-describedby={warnId}>
+          <DialogButton variant="ghost" onClick={keepIt} disabled={busy} data-machines-keep="" aria-describedby={warnId}>
             Keep it
           </DialogButton>
         </div>
@@ -189,6 +208,10 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
   const mounted = useRef(true)
   // Newest read wins: an answer that arrives after a later read began is dropped.
   const readSeq = useRef(0)
+  // After a confirmed End the row (and the button that had focus) is gone; focus then
+  // goes to the list heading, once the action has finished and the controls are back.
+  const listHeading = useRef<HTMLHeadingElement>(null)
+  const focusListWhenDone = useRef(false)
 
   const refresh = useCallback(async () => {
     const seq = ++readSeq.current
@@ -197,6 +220,11 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
       if (!mounted.current || seq !== readSeq.current) return
       setStatus(next)
       setReadFailed(false)
+      // A self-test this page ran says nothing about a helper that is no longer running
+      // (switched off, not installed, starting again): drop it, so the card does not
+      // show "Passed" next to a helper that is off. The helper's own report stays.
+      const st = next?.helper?.state
+      if (st !== 'ready' && st !== 'failed') setRanSelfTest(undefined)
     } catch {
       if (!mounted.current || seq !== readSeq.current) return
       setReadFailed(true)
@@ -215,6 +243,13 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
     if (active) void refresh()
   }, [active, refresh])
 
+  useEffect(() => {
+    if (busy === null && focusListWhenDone.current) {
+      focusListWhenDone.current = false
+      listHeading.current?.focus()
+    }
+  }, [busy])
+
   const run = useCallback(async (key: string, work: () => Promise<void>) => {
     setBusy(key)
     setNotice(null)
@@ -231,7 +266,7 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
     try {
       result = await window.electronAPI.machines.runSelfTest()
     } catch {
-      result = { ok: false, at: Date.now(), detail: NO_ANSWER }
+      result = { ok: false, at: Date.now(), detail: MACHINES_NO_ANSWER }
     }
     if (mounted.current) setRanSelfTest(result)
   })
@@ -245,13 +280,14 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
       text = r.ok ? `Attached ${s.label} to the app.` : (r.message ?? `Could not attach ${s.label}.`)
     } catch {
       ok = false
-      text = NO_ANSWER
+      text = MACHINES_NO_ANSWER
     }
     if (mounted.current) setNotice({ ok, text })
   })
 
   const onEnd = (s: HeldSession) => {
     setConfirmEndId(null)
+    focusListWhenDone.current = true
     return run(`end:${s.id}`, async () => {
       let text: string
       let ok: boolean
@@ -261,7 +297,7 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
         text = r.ok ? `Ended ${s.label}.` : (r.message ?? `Could not end ${s.label}.`)
       } catch {
         ok = false
-        text = NO_ANSWER
+        text = MACHINES_NO_ANSWER
       }
       if (mounted.current) setNotice({ ok, text })
     })
@@ -271,6 +307,7 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
   const state: HelperState | undefined = helper?.state
   const rawSessions: unknown = status?.sessions
   const sessions: HeldSession[] = Array.isArray(rawSessions) ? (rawSessions as HeldSession[]) : []
+  const emptyListText = listIsKnown(state) ? EMPTY_LIST : LIST_UNAVAILABLE
   const selfTest = newer(helper?.selfTest, ranSelfTest)
   const stateText = state ? (STATE_SENTENCE[state] ?? 'The session helper is in a state this version does not know.') : ''
   const stateColor = state ? (STATE_COLOR[state] ?? 'var(--text-muted)') : 'var(--text-muted)'
@@ -324,7 +361,7 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
             <>
               <div>
                 <p className="text-xs" style={{ color: 'var(--text-primary)' }} data-testid="machines-state-text">{stateText}</p>
-                {helper?.detail && state !== 'off' && (
+                {helper?.detail && (
                   <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }} data-testid="machines-detail">{helper.detail}</p>
                 )}
               </div>
@@ -351,9 +388,16 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
               </dl>
 
               <div>
-                <h3 className="text-[10px] uppercase tracking-wider font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>Held terminals</h3>
+                <h3
+                  ref={listHeading}
+                  tabIndex={-1}
+                  className="text-[10px] uppercase tracking-wider font-semibold mb-2 outline-none"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  Held terminals
+                </h3>
                 {sessions.length === 0 ? (
-                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }} data-testid="machines-empty">{EMPTY_LIST}</p>
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }} data-testid="machines-empty">{emptyListText}</p>
                 ) : (
                   <ul className="space-y-2">
                     {sessions.map((s) => (
@@ -370,21 +414,20 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
                     ))}
                   </ul>
                 )}
+                {/* A live region that stays mounted (so a screen reader announces what an
+                    action reports) and in the accessibility tree. It sits in this block,
+                    not as the card's last child, so the card's spacing gives an empty one
+                    no room. */}
+                <div role="status" aria-live="polite" data-testid="machines-notice">
+                  {notice && (
+                    <p className="text-xs mt-2" style={{ color: notice.ok ? 'var(--status-success)' : 'var(--status-danger)' }}>
+                      {notice.text}
+                    </p>
+                  )}
+                </div>
               </div>
             </>
           )}
-
-          {/* Always mounted so a screen reader announces what an action reports;
-              empty it takes no room. */}
-          <p
-            role="status"
-            aria-live="polite"
-            className="text-xs empty:hidden"
-            data-testid="machines-notice"
-            style={{ color: notice?.ok ? 'var(--status-success)' : 'var(--status-danger)' }}
-          >
-            {notice?.text}
-          </p>
         </section>
       </div>
     </PageFrame>

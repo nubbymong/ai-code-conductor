@@ -20,6 +20,8 @@ const { default: MachinesPage } = await import('../../../src/renderer/components
 
 const OFF_SENTENCE = 'The session helper is off. Switch it on in Settings, General, Plain terminals through the session helper.'
 const EMPTY_SENTENCE = 'The session helper holds no terminals right now.'
+const UNAVAILABLE_SENTENCE = 'The list of held terminals is not available until the session helper is ready.'
+const NO_ANSWER_SENTENCE = 'The session helper did not answer.'
 
 const held = (over: Partial<HeldSession> = {}): HeldSession => ({
   id: 'held-1', kind: 'plain', label: 'build watcher', startedAt: Date.now() - 5 * 60_000, attached: true, tabOpen: true, ...over,
@@ -76,6 +78,7 @@ beforeEach(() => {
   root = createRoot(container)
 })
 afterEach(() => {
+  vi.useRealTimers()
   act(() => root.unmount())
   container.remove()
   delete (window as any).electronAPI
@@ -103,16 +106,23 @@ describe('Machines page: what it shows for each helper state', () => {
   })
 
   it('off: says how to switch it on, lists nothing and cannot run the self-test', async () => {
-    install(status({ state: 'off', version: undefined, detail: 'The setting is off.' }))
+    install(status({ state: 'off', version: undefined }))
     await open()
     expect(byTestId('machines-state')?.textContent).toContain('Off')
     expect(byTestId('machines-state-text')?.textContent).toBe(OFF_SENTENCE)
-    // The sentence already says what to do; the source's own detail is not said twice.
+    // The default source gives no detail for Off: the sentence above already says it all.
     expect(byTestId('machines-detail')).toBeNull()
     expect(byTestId('machines-empty')?.textContent).toBe(EMPTY_SENTENCE)
     expect(byTestId('machines-version')?.textContent).toBe('Not known')
     expect(byText('Run self-test')?.disabled).toBe(true)
     expect(container.querySelectorAll('[data-testid="machines-session"]')).toHaveLength(0)
+  })
+
+  it('off with a detail of its own: the source\'s words are shown under the sentence, not hidden', async () => {
+    install(status({ state: 'off', detail: 'Turned off by a setting on this computer.' }))
+    await open()
+    expect(byTestId('machines-state-text')?.textContent).toBe(OFF_SENTENCE)
+    expect(byTestId('machines-detail')?.textContent).toBe('Turned off by a setting on this computer.')
   })
 
   it('not installed (the helper missing): says so, with its detail, and offers no self-test', async () => {
@@ -131,6 +141,9 @@ describe('Machines page: what it shows for each helper state', () => {
     expect(byTestId('machines-state')?.textContent).toContain('Starting')
     expect(byTestId('machines-state-text')?.textContent).toBe('The session helper is starting.')
     expect(byText('Run self-test')?.disabled).toBe(true)
+    // An empty list from a helper that is still starting is not "holds none".
+    expect(byTestId('machines-empty')?.textContent).toBe(UNAVAILABLE_SENTENCE)
+    expect(text()).not.toContain(EMPTY_SENTENCE)
   })
 
   it('ready with no terminal: the version, no self-test yet, one plain sentence for the empty list', async () => {
@@ -166,6 +179,39 @@ describe('Machines page: what it shows for each helper state', () => {
     expect(byLabel('End build watcher')?.disabled).toBe(false)
   })
 
+  it('attached to the app with no tab open: says so in two short sentences', async () => {
+    install(status({}, [held({ attached: true, tabOpen: false })]))
+    await open()
+    expect(byTestId('machines-session-state')?.textContent).toBe('Attached to the app. No tab shows it.')
+    expect(byLabel('Re-attach build watcher')?.disabled).toBe(true)
+  })
+
+  it('shows the start time alone for today, with the day for another day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 16, 12, 0, 0))
+    const today = new Date(2026, 10, 16, 9, 5, 0)
+    const earlier = new Date(2026, 10, 14, 9, 5, 0)
+    const time = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    const day = (d: Date) => d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+    install(status({}, [
+      held({ id: 'today', label: 'from today', startedAt: today.getTime() }),
+      held({ id: 'earlier', label: 'from two days ago', startedAt: earlier.getTime() }),
+    ]))
+    await open()
+    const rows = Array.from(container.querySelectorAll('[data-testid="machines-session"]')) as HTMLElement[]
+    expect(rows[0].textContent).toContain(`Started at ${time(today)}`)
+    expect(rows[0].textContent).not.toContain(day(today))
+    expect(rows[1].textContent).toContain(`Started at ${day(earlier)}, ${time(earlier)}`)
+  })
+
+  it('a start time that is not a number reads as an unknown time, not as "Invalid Date"', async () => {
+    install(status({}, [held({ startedAt: Number.NaN })]))
+    await open()
+    const row = byTestId('machines-session')!
+    expect(row.textContent).toContain('Started at an unknown time')
+    expect(row.textContent).not.toMatch(/Invalid|NaN/)
+  })
+
   it('a partner terminal is named as one, and every held terminal gets its own row', async () => {
     install(status({}, [
       held({ id: 'a', label: 'one', kind: 'partner' }),
@@ -187,6 +233,31 @@ describe('Machines page: what it shows for each helper state', () => {
     expect(byTestId('machines-detail')?.textContent).toBe('It stopped answering after the last update.')
     expect(byTestId('machines-self-test-result')?.textContent).toMatch(/^Failed at .+\. No reply\.$/)
     expect(byText('Run self-test')?.disabled).toBe(false)
+  })
+
+  it('failed with an empty list (what main sends when the helper does not answer) never says it holds no terminals', async () => {
+    // The helper may well still hold the terminal that survived a crash; the page cannot know.
+    install(status({ state: 'failed', version: undefined, detail: NO_ANSWER_SENTENCE }, []))
+    await open()
+    expect(byTestId('machines-detail')?.textContent).toBe(NO_ANSWER_SENTENCE)
+    expect(byTestId('machines-empty')?.textContent).toBe(UNAVAILABLE_SENTENCE)
+    expect(text()).not.toContain(EMPTY_SENTENCE)
+  })
+
+  it('failed that still lists terminals shows them, not the unavailable sentence', async () => {
+    install(status({ state: 'failed', detail: 'It stopped answering.' }, [held({ attached: false, tabOpen: false })]))
+    await open()
+    expect(container.querySelectorAll('[data-testid="machines-session"]')).toHaveLength(1)
+    expect(byTestId('machines-empty')).toBeNull()
+  })
+
+  it('a state this version does not know reads as unknown, says so, and offers nothing', async () => {
+    install(status({ state: 'weird' as any }))
+    await open()
+    expect(byTestId('machines-state')?.textContent).toContain('Unknown')
+    expect(byTestId('machines-state-text')?.textContent).toBe('The session helper is in a state this version does not know.')
+    expect(byText('Run self-test')?.disabled).toBe(true)
+    expect(byTestId('machines-empty')?.textContent).toBe(UNAVAILABLE_SENTENCE)
   })
 
   it('shows the self-test the helper reports, with its time', async () => {
@@ -249,10 +320,28 @@ describe('Machines page: Refresh and the actions', () => {
     await click(byText('Run self-test'))
     expect(byTestId('machines-self-test-result')?.textContent).toMatch(/^Failed at .+\. The check timed out\.$/)
     bridge.runSelfTest.mockRejectedValueOnce(new Error('gone'))
-    // Wait a tick so the throw's own timestamp is the newer one.
-    await new Promise((r) => setTimeout(r, 5))
     await click(byText('Run self-test'))
     expect(byTestId('machines-self-test-result')?.textContent).toMatch(/The session helper did not answer\.$/)
+  })
+
+  it('a self-test that passed is dropped once the helper is no longer running: Off never sits beside "Passed"', async () => {
+    install(status())
+    await open()
+    await click(byText('Run self-test'))
+    expect(byTestId('machines-self-test-result')?.textContent).toMatch(/^Passed at /)
+    // The helper is switched off (or restarts and reports nothing yet), then the page reads again.
+    bridge.status.mockResolvedValue(status({ state: 'off', version: undefined }))
+    await click(byLabel('Refresh'))
+    expect(byTestId('machines-state')?.textContent).toContain('Off')
+    expect(byTestId('machines-self-test-result')?.textContent).toBe('Not run yet.')
+  })
+
+  it('a self-test result stays while the helper is still running and a later read does not carry one', async () => {
+    install(status())
+    await open()
+    await click(byText('Run self-test'))
+    await click(byLabel('Refresh'))
+    expect(byTestId('machines-self-test-result')?.textContent).toMatch(/^Passed at /)
   })
 
   it('Re-attach calls the bridge with that terminal and reads the status again', async () => {
@@ -293,10 +382,10 @@ describe('Machines page: Refresh and the actions', () => {
     // Once it is ended, the helper holds nothing.
     bridge.status.mockResolvedValue(status({}, []))
     await click(byLabel('End build watcher'))
-    await click(byLabel('Yes, end build watcher'))
+    await click(byLabel('End terminal build watcher'))
     expect(bridge.endSession).toHaveBeenCalledTimes(1)
     expect(bridge.endSession).toHaveBeenCalledWith('to-end')
-    expect(bridge.status.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(bridge.status).toHaveBeenCalledTimes(2)
     expect(byTestId('machines-notice')?.textContent).toBe('Ended build watcher.')
     expect(byTestId('machines-end-confirm')).toBeNull()
     expect(byTestId('machines-empty')?.textContent).toBe(EMPTY_SENTENCE)
@@ -307,9 +396,34 @@ describe('Machines page: Refresh and the actions', () => {
     bridge.endSession.mockResolvedValueOnce({ ok: false, message: 'The helper could not stop it.' })
     await open()
     await click(byLabel('End build watcher'))
-    await click(byLabel('Yes, end build watcher'))
+    await click(byLabel('End terminal build watcher'))
     expect(byTestId('machines-notice')?.textContent).toBe('The helper could not stop it.')
     expect(container.querySelectorAll('[data-testid="machines-session"]')).toHaveLength(1)
+  })
+
+  it('a Re-attach whose bridge call throws says the helper did not answer, and the controls come back', async () => {
+    install(status({}, [held({ attached: false })]))
+    bridge.reattach.mockRejectedValueOnce(new Error('bridge gone'))
+    await open()
+    await click(byLabel('Re-attach build watcher'))
+    expect(byTestId('machines-notice')?.textContent).toBe(NO_ANSWER_SENTENCE)
+    expect(byLabel('Re-attach build watcher')?.disabled).toBe(false)
+    expect(byLabel('End build watcher')?.disabled).toBe(false)
+    expect(byText('Run self-test')?.disabled).toBe(false)
+    expect(bridge.status).toHaveBeenCalledTimes(2)
+  })
+
+  it('an End whose bridge call throws says the helper did not answer, keeps the terminal and brings the controls back', async () => {
+    install(status({}, [held({ id: 'stays-listed' })]))
+    bridge.endSession.mockRejectedValueOnce(new Error('bridge gone'))
+    await open()
+    await click(byLabel('End build watcher'))
+    await click(byLabel('End terminal build watcher'))
+    expect(byTestId('machines-notice')?.textContent).toBe(NO_ANSWER_SENTENCE)
+    expect(container.querySelectorAll('[data-testid="machines-session"]')).toHaveLength(1)
+    expect(byTestId('machines-end-confirm')).toBeNull()
+    expect(byLabel('End build watcher')?.disabled).toBe(false)
+    expect(bridge.status).toHaveBeenCalledTimes(2)
   })
 
   it('holds every control while an action is running, so a second click cannot double it', async () => {
@@ -359,6 +473,53 @@ describe('Machines page: staying true to what is on screen', () => {
     expect(document.activeElement).toBe(byLabel('End build watcher'))
   })
 
+  it('after End is confirmed, focus lands on the list heading, not on the page body', async () => {
+    install(status({}, [held({ id: 'to-end' })]))
+    await open()
+    bridge.status.mockResolvedValue(status({}, []))
+    byLabel('End build watcher')!.focus()
+    await click(byLabel('End build watcher'))
+    await click(byLabel('End terminal build watcher'))
+    expect(byTestId('machines-session')).toBeNull()
+    const focused = document.activeElement as HTMLElement
+    expect(focused).not.toBe(document.body)
+    expect(container.contains(focused)).toBe(true)
+    expect(focused.tagName).toBe('H3')
+    expect(focused.textContent).toBe('Held terminals')
+  })
+
+  it('after an End that was refused, focus also lands on the heading, and the terminal is still listed', async () => {
+    install(status({}, [held({ id: 'stuck-one' })]))
+    bridge.endSession.mockResolvedValueOnce({ ok: false, message: 'The helper could not stop it.' })
+    await open()
+    await click(byLabel('End build watcher'))
+    await click(byLabel('End terminal build watcher'))
+    expect((document.activeElement as HTMLElement).textContent).toBe('Held terminals')
+    expect(byLabel('End build watcher')).toBeTruthy()
+  })
+
+  it('opening the question on the first row while the second row\'s is open puts focus on the first row\'s Keep it', async () => {
+    install(status({}, [held({ id: 'row-one', label: 'first' }), held({ id: 'row-two', label: 'second' })]))
+    await open()
+    // Open the second row's question first, then the first row's. The old code handed
+    // focus back to the second row's End when its question closed, after the first
+    // row had taken it.
+    await click(byLabel('End second'))
+    await click(byLabel('End first'))
+    const first = container.querySelector('[data-session-id="row-one"]') as HTMLElement
+    expect(first.querySelector('[data-testid="machines-end-confirm"]')).toBeTruthy()
+    expect(document.activeElement).toBe(first.querySelector('[data-machines-keep]'))
+    expect(container.querySelectorAll('[data-testid="machines-end-confirm"]')).toHaveLength(1)
+  })
+
+  it('Keep it on one row puts focus back on that row\'s own End, not on another row\'s', async () => {
+    install(status({}, [held({ id: 'row-one', label: 'first' }), held({ id: 'row-two', label: 'second' })]))
+    await open()
+    await click(byLabel('End second'))
+    await click(byText('Keep it'))
+    expect(document.activeElement).toBe(byLabel('End second'))
+  })
+
   it('ties the warning to the question and to both of its buttons', async () => {
     install(status({}, [held()]))
     await open()
@@ -367,7 +528,7 @@ describe('Machines page: staying true to what is on screen', () => {
     const id = group.getAttribute('aria-describedby')!
     expect(id).toBeTruthy()
     expect(document.getElementById(id)?.textContent).toContain('End this terminal?')
-    expect(byLabel('Yes, end build watcher')?.getAttribute('aria-describedby')).toBe(id)
+    expect(byLabel('End terminal build watcher')?.getAttribute('aria-describedby')).toBe(id)
     expect(byText('Keep it')?.getAttribute('aria-describedby')).toBe(id)
   })
 
@@ -384,12 +545,19 @@ describe('Machines page: staying true to what is on screen', () => {
     expect(region!.textContent).toMatch(/Passed at /)
   })
 
-  it('keeps the action notice region mounted, empty and hidden until an action reports', async () => {
+  it('keeps the action notice region mounted, in the accessibility tree and out of the card\'s spacing, until an action reports', async () => {
     install(status({}, [held({ attached: false })]))
     await open()
     const notice = byTestId('machines-notice')!
     expect(notice.getAttribute('role')).toBe('status')
+    expect(notice.getAttribute('aria-live')).toBe('polite')
     expect(notice.textContent).toBe('')
+    // Never display:none while empty (that takes it out of the accessibility tree and a
+    // screen reader would miss the first notice), and never the card's last child (the
+    // card's space-y would then leave an empty gap under the list).
+    expect(notice.className).not.toMatch(/hidden/)
+    expect(notice.parentElement).not.toBe(container.querySelector('section'))
+    expect(notice.nextElementSibling).toBeNull()
     await click(byLabel('Re-attach build watcher'))
     expect(byTestId('machines-notice')).toBe(notice)
     expect(notice.textContent).toContain('build watcher')

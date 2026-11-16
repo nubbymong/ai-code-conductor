@@ -67,5 +67,14 @@ export interface MachinesSource {
   reattach(id: string): Promise<MachineActionResult>
 }
 
-/** The longest session id the actions accept; a longer string is never a held id. */
-export const MAX_HELD_SESSION_ID_LENGTH = 200
+/**
+ * The shape of a held terminal's id. It is the session id the helper protocol
+ * fixes (docs/remote/helper-protocol.md, section 1). End and Re-attach hand the
+ * same string to the helper (`end --session <sid>`), so nothing else (a space,
+ * a control character, a leading dash, a newline, a longer string) is ever a
+ * held id. A source must hand the page ids of this shape.
+ */
+export const HELD_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$/
+
+/** What the page says when the source throws or stays silent. Main and the page both use it. */
+export const MACHINES_NO_ANSWER = 'The session helper did not answer.'

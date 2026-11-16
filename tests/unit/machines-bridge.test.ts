@@ -1,8 +1,8 @@
 // The Machines page's bridge (2.1.3-beta.6, plan section C.1): the four channel
 // names are pinned (a rename breaks the preload, the typings and the handlers
-// together), every channel value stays unique, and each preload method invokes
-// exactly its own channel with the caller's argument unchanged and hands back
-// what main answers.
+// together), and each preload method invokes exactly its own channel with the
+// caller's argument unchanged and hands back what main answers. (That every IPC
+// value is unique is pinned once, for all channels, in ipc-channels-channels.test.ts.)
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { IPC } from '../../src/shared/ipc-channels'
 
@@ -36,11 +36,6 @@ describe('Machines channel names', () => {
     expect(ipc.MACHINES_SELF_TEST).toBe('machines:selfTest')
     expect(ipc.MACHINES_END_SESSION).toBe('machines:endSession')
     expect(ipc.MACHINES_REATTACH).toBe('machines:reattach')
-  })
-
-  it('keeps every channel value unique', () => {
-    const values = Object.values(IPC)
-    expect(new Set(values).size).toBe(values.length)
   })
 })
 
