@@ -95,8 +95,9 @@ const BINDINGS = 'bindings.json'
 
 /** The variables a helper command gets: what the system itself needs to run
  *  a program, nothing of the app's own. A launched terminal gets its full
- *  environment in the launch frame, never from here. */
-const HELPER_ENV_NAMES = ['SystemRoot', 'SYSTEMROOT', 'windir', 'SystemDrive', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'LOCALAPPDATA', 'PATH', 'Path', 'LANG', 'LC_ALL', 'USER', 'LOGNAME']
+ *  environment in the launch frame, never from here. No home folder either:
+ *  every folder the helper uses is named on its command line. */
+const HELPER_ENV_NAMES = ['SystemRoot', 'SYSTEMROOT', 'windir', 'SystemDrive', 'TEMP', 'TMP', 'TMPDIR', 'LOCALAPPDATA', 'PATH', 'Path', 'LANG', 'LC_ALL', 'USER', 'LOGNAME']
 
 function helperEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
