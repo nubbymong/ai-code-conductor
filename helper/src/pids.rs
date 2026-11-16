@@ -5,12 +5,15 @@
 #![allow(unsafe_code)]
 
 /// How much later than a record's `started` the process with its id may have
-/// started and still be taken for its holder. A holder starts before it
-/// writes its record, so its own start is never later; the slack is for a
-/// clock that was set meanwhile (Linux works a start out from the boot time,
-/// which moves with the clock) and for start times kept to the second. Ids
-/// are handed out in turn on macOS and Linux, so one given out again within
-/// a minute is not likely.
+/// started and still be taken for its holder. Only macOS and Windows read a
+/// start (`started_ms`): each stamps a process with the time it started, and
+/// no later change to the clock moves that stamp. A holder starts before it
+/// writes its record, so its own stamp is never later than the record's
+/// `started`, unless the clock was set back in the moment between the two;
+/// the slack covers such a step of up to a minute. The cost: a process that
+/// got the id within a minute of the record being written is not caught.
+/// macOS hands ids out in turn, so that is not likely, and on Windows a
+/// crashed holder's pipe is gone, which already marks its record stale.
 pub const START_SLACK_MS: u64 = 60_000;
 
 /// True while a process with this id exists. A process of another user that
@@ -52,41 +55,57 @@ pub fn started_after(pid: u32, ms: u64) -> bool {
     started_ms(pid).map_or(false, |start| start > ms.saturating_add(START_SLACK_MS))
 }
 
-/// When the process with this id started, in milliseconds since 1970 (UTC).
-/// Linux: field 22 of `/proc/<pid>/stat`, in clock ticks after the boot,
-/// plus the boot time in `/proc/stat`.
-#[cfg(target_os = "linux")]
-pub fn started_ms(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // The fields after the name (in brackets, which may hold spaces and
-    // brackets itself) start at field 3, so field 22 is the 20th of them.
-    let ticks: u64 = stat[stat.rfind(')')? + 1..].split_whitespace().nth(19)?.parse().ok()?;
-    let boot_secs: u64 = std::fs::read_to_string("/proc/stat").ok()?.lines().find_map(|l| l.strip_prefix("btime "))?.trim().parse().ok()?;
-    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-    if hz <= 0 {
-        return None;
-    }
-    boot_secs.checked_mul(1000)?.checked_add(ticks.checked_mul(1000)? / hz as u64)
+/// `struct kinfo_proc` from `<sys/sysctl.h>` on 64-bit macOS, which libc does
+/// not declare for Apple: the fields up to `kp_proc.p_pid`, then the rest as
+/// bytes. `kp_proc` starts with a union of two pointers and the start time,
+/// 16 bytes either way. The whole struct is 648 bytes; `started_ms` checks
+/// that the kernel returned exactly that much and the asked-for id.
+#[cfg(target_vendor = "apple")]
+#[repr(C)]
+struct KinfoProc {
+    p_starttime: libc::timeval,
+    _p_vmspace: usize,
+    _p_sigacts: usize,
+    _p_flag: libc::c_int,
+    _p_stat: libc::c_char,
+    p_pid: libc::pid_t,
+    _rest: [u8; 648 - 44],
 }
 
+#[cfg(target_vendor = "apple")]
+const _: () = assert!(std::mem::size_of::<KinfoProc>() == 648);
+
 /// When the process with this id started, in milliseconds since 1970 (UTC).
-/// macOS keeps it with the process (`proc_pidinfo`, `PROC_PIDTBSDINFO`).
+/// macOS stamps it on the process when it starts. It is read with the
+/// `kern.proc.pid.<pid>` sysctl, as `ps` does, which any user may read for
+/// any process; `proc_pidinfo` refuses another user's process, and a reused
+/// id often names one of root's.
 #[cfg(target_vendor = "apple")]
 pub fn started_ms(pid: u32) -> Option<u64> {
     if pid == 0 || pid > i32::MAX as u32 {
         return None;
     }
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let got = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
-    if got != size {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid as libc::c_int];
+    let mut info = KinfoProc { p_starttime: libc::timeval { tv_sec: 0, tv_usec: 0 }, _p_vmspace: 0, _p_sigacts: 0, _p_flag: 0, _p_stat: 0, p_pid: 0, _rest: [0; 648 - 44] };
+    let mut len: libc::size_t = std::mem::size_of::<KinfoProc>();
+    let got = unsafe { libc::sysctl(mib.as_mut_ptr(), mib.len() as libc::c_uint, (&mut info as *mut KinfoProc).cast(), &mut len, std::ptr::null_mut(), 0) };
+    // No such process gives 0 bytes.
+    if got != 0 || len != std::mem::size_of::<KinfoProc>() || info.p_pid != pid as libc::pid_t {
         return None;
     }
-    info.pbi_start_tvsec.checked_mul(1000)?.checked_add(info.pbi_start_tvusec / 1000)
+    let secs = u64::try_from(info.p_starttime.tv_sec).ok()?;
+    let micros = u64::try_from(info.p_starttime.tv_usec).ok()?;
+    secs.checked_mul(1000)?.checked_add(micros / 1000)
 }
 
-/// Not read on any other Unix.
-#[cfg(all(unix, not(any(target_os = "linux", target_vendor = "apple"))))]
+/// Not read on Linux or any other Unix, so the start-time rule
+/// (`store::holder_gone`) does nothing there. Linux gives a start only as
+/// ticks after the boot, and the boot time those would be added to moves
+/// with every change to the clock: after the clock is set forward, a live
+/// holder would read as started after its own record. Linux does not need
+/// the rule: a crashed holder's socket there is refused or missing, and
+/// either already marks its record stale.
+#[cfg(all(unix, not(target_vendor = "apple")))]
 pub fn started_ms(_pid: u32) -> Option<u64> {
     None
 }
