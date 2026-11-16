@@ -16,11 +16,19 @@ pub const PROBE_CONNECT: Duration = Duration::from_secs(2);
 pub const PROBE_HELLO: Duration = Duration::from_secs(3);
 
 /// Read one line ending in `\n`, a byte at a time so nothing after it is
-/// taken from the stream. `max` bytes at most, the line end not counted.
-pub fn read_line(stream: &mut Stream, max: usize) -> io::Result<String> {
+/// taken from the stream. `max` bytes at most, the line end not counted. The
+/// whole line must come within `timeout`: each read waits only for what is
+/// left, so a peer sending a byte now and then cannot stretch it.
+pub fn read_line(stream: &mut Stream, max: usize, timeout: Duration) -> io::Result<String> {
+    let deadline = Instant::now() + timeout;
     let mut line: Vec<u8> = Vec::new();
     let mut byte = [0u8; 1];
     loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "no whole line in time"));
+        }
+        stream.set_read_timeout(Some(left.max(Duration::from_millis(1))))?;
         match stream.read(&mut byte) {
             Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "the stream ended before a line end")),
             Ok(_) => {}
@@ -69,8 +77,7 @@ impl Client {
     /// Connect and read the hello. It must carry `nonce` and `sid`.
     pub fn connect(endpoint: &str, nonce: &str, sid: &str, timeout: Duration) -> io::Result<Client> {
         let mut stream = transport::connect(endpoint, timeout)?;
-        stream.set_read_timeout(Some(timeout))?;
-        let line = read_line(&mut stream, MAX_HELLO_LINE)?;
+        let line = read_line(&mut stream, MAX_HELLO_LINE, timeout)?;
         let hello = hello::parse_hello_line(&line, nonce, sid).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {}", e.code, e.why)))?;
         Ok(Client { stream, hello, buf: Vec::new(), eof: false })
     }
@@ -144,10 +151,7 @@ pub fn probe(rec: &Record) -> Probe {
         Err(e) if transport::means_gone(&e) => return Probe::Gone,
         Err(_) => return Probe::Unknown,
     };
-    if stream.set_read_timeout(Some(PROBE_HELLO)).is_err() {
-        return Probe::Unknown;
-    }
-    let line = match read_line(&mut stream, MAX_HELLO_LINE) {
+    let line = match read_line(&mut stream, MAX_HELLO_LINE, PROBE_HELLO) {
         Ok(l) => l,
         Err(_) => return Probe::Unknown,
     };
@@ -158,5 +162,45 @@ pub fn probe(rec: &Record) -> Probe {
         Ok(_) => Probe::Live,
         // Something answered that does not know the record's nonce.
         Err(_) => Probe::Gone,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::Listener;
+    use std::sync::{mpsc, Arc};
+
+    #[test]
+    fn a_hello_sent_a_byte_at_a_time_is_given_up_at_its_deadline() {
+        let listener = Arc::new(Listener::bind("client-drip-01").expect("listen"));
+        let server = Arc::clone(&listener);
+        std::thread::spawn(move || {
+            if let Ok(mut s) = server.accept() {
+                // A byte every 200 ms and never a line end, until the client goes.
+                while s.write_all(b"x").and_then(|_| s.flush()).is_ok() {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            }
+        });
+        let rec = Record {
+            session: "client-drip-01".to_string(),
+            label: String::new(),
+            pid: std::process::id(),
+            endpoint: listener.endpoint().to_string(),
+            nonce: "0123456789abcdef0123456789abcdef".to_string(),
+            helper: "0.1.0".to_string(),
+            started: 0,
+            away: 120,
+            attached: false,
+            child: "waiting".to_string(),
+            code: None,
+        };
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(probe(&rec));
+        });
+        let answer = rx.recv_timeout(PROBE_CONNECT + PROBE_HELLO + Duration::from_secs(4)).expect("the probe kept reading past its deadline");
+        assert_eq!(answer, Probe::Unknown);
     }
 }

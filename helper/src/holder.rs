@@ -16,7 +16,7 @@
 
 use crate::pty::{Pty, PtySize, SpawnOptions};
 use crate::ring::{Replay, Ring, RingError};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -27,6 +27,12 @@ use std::time::{Duration, Instant};
 /// A client that falls this far behind is disconnected and recovers by
 /// attaching again from the offset it last saw (the ring replays the rest).
 pub const LIVE_QUEUE_CHUNKS: usize = 256;
+
+/// Input frames waiting for the program to read them. A frame is at most 64
+/// KiB. A program that stops reading fills this, and later input is refused
+/// at once instead of waited on, so nothing that ends the session can be held
+/// up behind a write the program will never take.
+pub const INPUT_QUEUE_FRAMES: usize = 64;
 
 /// How long the rest of the tree has after a hangup before it is killed.
 pub const END_GRACE: Duration = Duration::from_secs(2);
@@ -66,6 +72,9 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct Holder {
     shared: Arc<Shared>,
     pty: Arc<Mutex<Pty>>,
+    /// To the input thread, which alone writes to the terminal, with its own
+    /// handle: a write the program does not read never holds `pty`.
+    input: Mutex<SyncSender<Vec<u8>>>,
     pid: u32,
 }
 
@@ -92,6 +101,7 @@ impl Holder {
     pub fn start_with(opts: &SpawnOptions, ring_bytes: usize) -> io::Result<Holder> {
         let (pty, mut reader) = Pty::spawn_with(opts)?;
         let pid = pty.pid();
+        let mut writer = pty.input_writer()?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State { ring: Ring::new(ring_bytes), terminal: None, exit_code: None, output_ended: false }),
         });
@@ -154,7 +164,18 @@ impl Holder {
             st.terminal = None;
         });
 
-        Ok(Holder { shared, pty, pid })
+        // Input: in order, one frame at a time. A failed write (the terminal
+        // is gone) ends the thread, and later input is refused as closed.
+        let (input, queued) = mpsc::sync_channel::<Vec<u8>>(INPUT_QUEUE_FRAMES);
+        thread::spawn(move || {
+            while let Ok(bytes) = queued.recv() {
+                if writer.write_all(&bytes).and_then(|_| writer.flush()).is_err() {
+                    return;
+                }
+            }
+        });
+
+        Ok(Holder { shared, pty, input: Mutex::new(input), pid })
     }
 
     /// The child's process id.
@@ -162,8 +183,15 @@ impl Holder {
         self.pid
     }
 
+    /// Queue `bytes` for the program, never waiting. `WouldBlock` means the
+    /// program has stopped reading and `INPUT_QUEUE_FRAMES` are already
+    /// waiting: these bytes were not taken. `BrokenPipe`: the terminal is gone.
     pub fn write_input(&self, bytes: &[u8]) -> io::Result<()> {
-        lock(&self.pty).write_input(bytes)
+        match lock(&self.input).try_send(bytes.to_vec()) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(io::Error::new(io::ErrorKind::WouldBlock, "the program is not reading its input")),
+            Err(TrySendError::Disconnected(_)) => Err(io::Error::new(io::ErrorKind::BrokenPipe, "the terminal is closed")),
+        }
     }
 
     pub fn resize(&self, size: PtySize) -> io::Result<()> {

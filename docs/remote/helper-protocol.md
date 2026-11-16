@@ -530,15 +530,26 @@ out of range, or an endpoint that is not its session's. The record says where
 to connect; only the hello proves it: the app connects, and the hello must
 carry the record's `nonce` and `session`.
 
+The store's lock file, `<store>/.lock`, is never removed. It is held with the
+OS's own file lock while a holder checks for a live holder of its session and
+writes its record, while list mode removes a stale record, and while a holder
+removes its own. So of two holders started for one session at the same moment
+one finds the other's record and live endpoint and exits, and list mode never
+removes a record that a new holder wrote in place of the stale one it asked
+about.
+
 **List mode.** `aicc-helper list --store <folder>` prints one line,
 `{"v":1,"sessions":[...],"removed":<n>,"skipped":<n>}`, fields in that order;
 `sessions` holds records, oldest `started` first, then by session id. A record
 whose holder process is not running, or whose endpoint has nothing on it or
 answers without the record's nonce, is stale: it is removed with its socket file
-and counted in `removed`. A file named like a record that is not a version 1
-record is left alone and counted in `skipped`. A temporary file older than
+and counted in `removed`, under the store's lock and only if the record is
+still the one it found stale. A file named like a record that is not a version
+1 record is left alone and counted in `skipped`. A temporary file older than
 60 s is removed. A holder that does not answer in time (2 s to connect, 3 s for
-the hello) is kept and listed. A missing store lists nothing and is not made.
+the whole hello line) is kept and listed; so is one whose socket takes no more
+connections (a full backlog is a timeout, never "nothing there"). A missing
+store lists nothing and is not made.
 The app uses list mode at start-up, to attach every held terminal again, and
 for the Machines page.
 
@@ -550,12 +561,14 @@ not offer; `local` allows the messages below. Another type gets `unknown-type`,
 another version `proto-mismatch`, anything else `bad-field`, then the holder
 closes the connection. With no `hello.ack` in 10 s it sends `timeout` and
 closes; after that, with no frame from the app in 60 s it sends `timeout` and
-closes (the app pings every 15 s). At most 16 connections at once: the next one
-gets the hello, `busy`, and is closed. When the holder closes a connection after
-a last message (an `error`, `term.detached`, `term.ended`), it stops writing
-first, so the app reads that message and then the end of the stream; the app
-then closes its end (the holder cuts the connection 2 s later regardless). A write that has not finished in 5 s
-closes the connection. A type the connection does not allow gets
+closes (the app pings every 15 s). Each limit is for the whole frame: one sent
+a byte at a time must still be whole in time. At most 16 connections at once:
+the next one gets the hello, `busy`, and is closed. When the holder closes a
+connection after a last message (an `error`, `term.detached`, `term.ended`),
+it stops writing first, so the app reads that message and then the end of the
+stream; the app then closes its end (the holder cuts the connection 2 s later
+regardless). A write that has not finished in 5 s closes the connection. A
+type the connection does not allow gets
 `unknown-type` and a close; 20 `bad-field` or `too-large` replies in 60 s are
 allowed, the next one closes.
 
@@ -584,17 +597,25 @@ its fields; `code` is present only once the program has exited.
   `ring_end` is `bad-field`; older than the ring holds is answered from
   `ring_start` with `truncated` true. Typed input goes to the holder as raw
   frames on channel 1, accepted only from the attached connection: raw bytes on
-  any other connection or channel are `bad-frame` and a close. A newer attach,
-  from any connection, takes the terminal: the older connection gets `replaced`
-  and is closed. A connection that falls 256 chunks behind the output gets
+  any other connection or channel are `bad-frame` and a close. Typed input is
+  queued for the program and never waited on: while at most 64 frames of typed
+  input wait (the program has stopped reading), more gets `busy` and is not
+  taken. A newer attach, from any connection, takes the terminal: the older
+  connection gets `replaced` and is closed. An attach again on the same
+  connection drops what was still queued for the earlier one: after its reply
+  comes only the output from its `from`. Nothing live follows `term.detached`
+  or `term.ended`. A connection that falls 256 chunks behind the output gets
   `busy` and is closed; it attaches again from the last offset it saw. After
   the program has exited an attach still replays, with `running` false and
   `code`, and nothing live follows.
 - **The whole tree.** On Windows the program starts suspended inside a job
   object that ends every process in it when the job closes, so its children
   are ended with it, even if the holder itself is killed. On macOS and Linux it
-  leads a new session and process group; ending sends hangup to the group, and
-  kill after 2 s. When the program exits on its own, the rest of its tree is
+  leads a new session and process group; ending sends hangup to that group and
+  to every other process in the session (a shell puts each job in a group of
+  its own), and kill after 2 s. A process that left the session itself (a
+  daemon that called setsid) is not reached, as a closed terminal would not
+  reach it. When the program exits on its own, the rest of its tree is
   ended the same way; the holder stays, so the app can read the last output and
   the exit code.
 - **The away clock.** With no connection attached, the holder ends its session

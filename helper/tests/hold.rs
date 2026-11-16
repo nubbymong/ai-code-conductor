@@ -6,7 +6,8 @@ use aicc_helper::holder::Holder;
 use aicc_helper::pids;
 use aicc_helper::pty::{PtySize, SpawnOptions};
 use aicc_helper::ring::RingError;
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::Arc;
 use std::time::Duration;
 
 const FAKE: &str = env!("CARGO_BIN_EXE_aicc-fake-cli");
@@ -176,7 +177,12 @@ fn gone(pid: u32, within: Duration) -> bool {
 
 /// Have the fake CLI start a sleeping copy of itself; its process id.
 fn start_grandchild(h: &Holder) -> u32 {
-    h.write_input(b"spawn-grandchild\r").expect("type");
+    start_grandchild_with(h, "spawn-grandchild")
+}
+
+/// The same, with the fake CLI command `command`.
+fn start_grandchild_with(h: &Holder, command: &str) -> u32 {
+    h.write_input(format!("{command}\r").as_bytes()).expect("type");
     assert!(h.wait_for_text("grandchild: ", WAIT), "the fake CLI never started its grandchild");
     let all = text(&h.snapshot());
     let at = all.find("grandchild: ").expect("the line") + "grandchild: ".len();
@@ -195,6 +201,57 @@ fn ending_the_session_ends_the_whole_tree() {
     assert!(h.end().is_some(), "no exit code after the end");
     assert!(gone(child, WAIT), "the first process outlived the end");
     assert!(gone(grandchild, WAIT), "the grandchild outlived the end of its session");
+}
+
+/// A shell puts each job in a process group of its own, in the same session;
+/// a job may also ignore the hangup. Ending the session still ends it.
+#[cfg(unix)]
+#[test]
+fn ending_the_session_ends_a_job_in_a_process_group_of_its_own() {
+    let h = start(64 * 1024);
+    assert!(h.wait_for_text("FAKE-CLI READY", WAIT));
+    let job = start_grandchild_with(&h, "spawn-own-group");
+    assert!(h.end().is_some(), "no exit code after the end");
+    assert!(gone(job, WAIT), "a job in its own process group, deaf to hangups, outlived the end of its session");
+}
+
+#[test]
+fn input_the_program_never_reads_is_refused_and_never_holds_up_the_end() {
+    // A program that never reads its input.
+    let argv = [FAKE.to_string(), "--sleep".to_string(), "600".to_string()];
+    let h = Arc::new(Holder::start(&argv, PtySize::default(), 64 * 1024).expect("the fake CLI starts on a terminal"));
+    // Whole lines, so a terminal keeps them for a reader instead of
+    // dropping an over-long line.
+    let lines = format!("{}\r", "a".repeat(99)).repeat(160);
+    let writer = Arc::clone(&h);
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut refused = 0usize;
+        for _ in 0..128 {
+            match writer.write_input(lines.as_bytes()) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => refused += 1,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("{e:?}")));
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(Ok(refused));
+    });
+    let refused = rx.recv_timeout(Duration::from_secs(10)).expect("typing waited for a program that does not read").expect("typing failed");
+    // Linux holds up a terminal's writer once the unread input fills the
+    // terminal, so there the queue fills and the rest is refused.
+    #[cfg(target_os = "linux")]
+    assert!(refused > 0, "two megabytes of unread input were all taken");
+    let _ = refused;
+    let ender = Arc::clone(&h);
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(ender.end());
+    });
+    let code = rx.recv_timeout(WAIT).expect("the end waited behind input the program never read");
+    assert!(code.is_some(), "no exit code after the end");
 }
 
 #[test]

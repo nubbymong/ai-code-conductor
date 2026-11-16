@@ -12,12 +12,12 @@ use super::WRITE_TIMEOUT;
 use std::ffi::CString;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn euid() -> u32 {
     unsafe { libc::geteuid() }
@@ -323,17 +323,124 @@ pub fn remove_stale_endpoint(endpoint: &str) {
     }
 }
 
-/// Connect to a holder's endpoint. `NotFound` or `ConnectionRefused` mean no
-/// holder listens there. The timeout is not needed: a local connect answers
-/// at once.
-pub fn connect(endpoint: &str, _timeout: Duration) -> io::Result<Stream> {
+fn timed_out() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "the holder did not take the connection in time")
+}
+
+/// Wait until a connect in progress on `fd` has finished, by `deadline`.
+fn wait_connected(fd: RawFd, deadline: Instant) -> io::Result<()> {
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(timed_out());
+        }
+        let mut p = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+        let ms = left.as_millis().clamp(1, i32::MAX as u128) as libc::c_int;
+        let n = unsafe { libc::poll(&mut p, 1, ms) };
+        if n < 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e);
+        }
+        if n == 0 {
+            continue;
+        }
+        let mut err: libc::c_int = 0;
+        let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        if unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_ERROR, (&mut err as *mut libc::c_int).cast(), &mut len) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if err != 0 {
+            return Err(io::Error::from_raw_os_error(err));
+        }
+        return Ok(());
+    }
+}
+
+/// Connect to the socket at `path` within `timeout`. A blocking connect on
+/// Linux waits for as long as the listener's backlog is full (a holder that
+/// is stopped or stuck). This socket is nonblocking while it connects, so
+/// that case answers at once and is tried again until `timeout`, then fails
+/// as a timeout, which proves nothing about the holder (`means_gone`).
+fn connect_within(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
+    let bytes = path.as_os_str().as_bytes();
+    let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    if bytes.len() >= addr.sun_path.len() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "the socket path is too long"));
+    }
+    addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (dst, src) in addr.sun_path.iter_mut().zip(bytes) {
+        *dst = *src as libc::c_char;
+    }
+    let len = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1) as libc::socklen_t;
+    #[cfg(target_vendor = "apple")]
+    {
+        addr.sun_len = len as u8;
+    }
+    let raw = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    if raw < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // Owned from here, so every return below closes it.
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    unsafe {
+        libc::fcntl(raw, libc::F_SETFD, libc::FD_CLOEXEC);
+    }
+    #[cfg(target_vendor = "apple")]
+    {
+        // A write to a closed peer fails instead of raising SIGPIPE.
+        let one: libc::c_int = 1;
+        unsafe {
+            libc::setsockopt(raw, libc::SOL_SOCKET, libc::SO_NOSIGPIPE, (&one as *const libc::c_int).cast(), std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+        }
+    }
+    let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        let rc = unsafe { libc::connect(raw, (&addr as *const libc::sockaddr_un).cast(), len) };
+        if rc == 0 {
+            break;
+        }
+        let err = io::Error::last_os_error();
+        match err.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EISCONN) => break,
+            // Linux: the backlog is full and nothing was started. Again soon.
+            Some(libc::EAGAIN) => {
+                if Instant::now() >= deadline {
+                    return Err(timed_out());
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Some(libc::EINPROGRESS) | Some(libc::EALREADY) => {
+                wait_connected(raw, deadline)?;
+                break;
+            }
+            _ => return Err(err),
+        }
+    }
+    if unsafe { libc::fcntl(raw, libc::F_SETFL, flags) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(UnixStream::from(fd))
+}
+
+/// Connect to a holder's endpoint within `timeout`. `NotFound` or
+/// `ConnectionRefused` mean no holder listens there; a timeout means no clear
+/// answer.
+pub fn connect(endpoint: &str, timeout: Duration) -> io::Result<Stream> {
     let path = Path::new(endpoint);
     check_dir(endpoint_dir(path)?)?;
     let md = fs::symlink_metadata(path)?;
     if !md.file_type().is_socket() || md.uid() != euid() {
         return Err(refused(format!("{endpoint} is not a socket of this user")));
     }
-    let s = UnixStream::connect(path)?;
+    let s = connect_within(path, timeout)?;
     let (uid, pid) = peer_cred(s.as_raw_fd())?;
     if !peer_allowed(uid, euid()) {
         return Err(refused("the holder on that socket runs as another user".to_string()));
@@ -392,6 +499,37 @@ mod tests {
         let elsewhere = std::env::temp_dir().join("aicc-elsewhere-sess-0001-0123456789abcdef.sock");
         assert!(Listener::bind_at(&elsewhere.to_string_lossy()).is_err());
         assert!(connect(&elsewhere.to_string_lossy(), Duration::from_secs(1)).is_err());
+    }
+
+    /// A holder that has stopped taking connections fills its backlog. Linux
+    /// would make a blocking connect wait for as long as that lasts.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_connect_to_a_full_backlog_times_out_instead_of_waiting() {
+        let l = Listener::bind("transport-full-01").unwrap();
+        // The smallest backlog: one connection may wait to be accepted.
+        assert_eq!(unsafe { libc::listen(l.inner.as_raw_fd(), 0) }, 0);
+        let endpoint = l.endpoint().to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut waiting = Vec::new();
+            for _ in 0..64 {
+                match connect(&endpoint, Duration::from_millis(300)) {
+                    Ok(s) => waiting.push(s),
+                    Err(e) => {
+                        let _ = tx.send((waiting.len(), Some(e)));
+                        return;
+                    }
+                }
+            }
+            let _ = tx.send((waiting.len(), None));
+        });
+        let (taken, e) = rx.recv_timeout(Duration::from_secs(20)).expect("a connect waited on a full backlog");
+        let e = e.unwrap_or_else(|| panic!("{taken} connections and the backlog never filled"));
+        assert!(taken >= 1, "not even the first connection was taken: {e:?}");
+        assert!(super::super::is_timeout(&e), "{e:?}");
+        assert!(!super::super::means_gone(&e), "a full backlog is not a gone holder: {e:?}");
+        drop(l);
     }
 
     #[test]

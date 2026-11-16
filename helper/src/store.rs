@@ -6,13 +6,20 @@
 //! one, so a reader never sees half of it. On Unix the store is 0700 and each
 //! record 0600. The format carries its own version (`v`); a file that is not
 //! a version 1 record is never removed by list mode, only counted as skipped.
+//!
+//! The store's lock file (`.lock`, never removed) is held, with the OS's own
+//! file lock, while a holder checks for a live holder of its session and
+//! writes its record, while list mode removes a stale record, and while a
+//! holder removes its own. So two holders started for one session at the same
+//! moment cannot both write a record, and list mode never removes a record
+//! that a new holder put in place of the stale one it looked at.
 
 use crate::hello::{valid_nonce, valid_sid};
 use crate::json::{self, Value};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const RECORD_VERSION: u64 = 1;
 pub const MAX_LABEL_CHARS: usize = 128;
@@ -23,6 +30,10 @@ pub const MAX_AWAY_SECS: u64 = 86_400;
 pub const CHILD_STATES: [&str; 3] = ["waiting", "running", "exited"];
 /// A temporary file older than this was left by a write that never finished.
 const TMP_MAX_AGE: Duration = Duration::from_secs(60);
+/// The store's lock file. Its name is not a record's, so list mode passes it by.
+pub const LOCK_FILE: &str = ".lock";
+/// How long to wait for the store's lock before giving up.
+pub const LOCK_WAIT: Duration = Duration::from_secs(10);
 
 const FIELDS: [&str; 12] = ["v", "session", "label", "pid", "endpoint", "nonce", "helper", "started", "away", "attached", "child", "code"];
 
@@ -173,6 +184,43 @@ pub fn prepare(store: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// The store's lock, held until this is dropped.
+pub struct StoreLock {
+    file: fs::File,
+}
+
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+/// Take the store's lock, waiting up to `LOCK_WAIT` for whoever has it.
+pub fn lock(store: &Path) -> io::Result<StoreLock> {
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let file = opts.open(store.join(LOCK_FILE))?;
+    let deadline = Instant::now() + LOCK_WAIT;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(StoreLock { file }),
+            Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Err(fs::TryLockError::WouldBlock) => return Err(io::Error::new(io::ErrorKind::TimedOut, "the session store stayed locked")),
+            Err(fs::TryLockError::Error(e)) => return Err(e),
+        }
+    }
+}
+
+/// True when `a` and `b` were written by the same holder.
+fn same_holder(a: &Record, b: &Record) -> bool {
+    a.pid == b.pid && a.nonce == b.nonce && a.endpoint == b.endpoint
+}
+
 /// Write `rec` whole: a temporary file first, then a rename over the old one.
 pub fn write(store: &Path, rec: &Record) -> io::Result<()> {
     let path = record_path(store, &rec.session);
@@ -211,8 +259,10 @@ pub fn read(store: &Path, sid: &str) -> Option<Result<Record, String>> {
     })
 }
 
-/// Remove the record of `sid` if it is still the one holder `pid` wrote.
+/// Remove the record of `sid` if it is still the one holder `pid` wrote. The
+/// store's lock is taken when it can be; the record goes either way.
 pub fn remove(store: &Path, sid: &str, pid: u32) {
+    let _lock = lock(store).ok();
     if let Some(Ok(rec)) = read(store, sid) {
         if rec.pid == pid {
             let _ = fs::remove_file(record_path(store, sid));
@@ -289,8 +339,9 @@ fn is_tmp_name(name: &str) -> bool {
 
 /// Every session in `store`. A record whose holder is gone (its process is
 /// not running, or its endpoint has nothing on it or answers as someone
-/// else) is removed with its socket file. Sessions are sorted by start time,
-/// then session id. A missing store lists nothing and is not made.
+/// else) is removed with its socket file, under the store's lock and only if
+/// the record is still the one found stale. Sessions are sorted by start
+/// time, then session id. A missing store lists nothing and is not made.
 pub fn list(store: &Path, probe: impl Fn(&Record) -> Probe) -> io::Result<Listing> {
     let mut listing = Listing { sessions: Vec::new(), removed: 0, skipped: 0 };
     let entries = match fs::read_dir(store) {
@@ -327,13 +378,32 @@ pub fn list(store: &Path, probe: impl Fn(&Record) -> Probe) -> io::Result<Listin
             Some(Ok(r)) => r,
         };
         let stale = !crate::pids::alive(rec.pid) || probe(&rec) == Probe::Gone;
-        if stale {
-            if fs::remove_file(record_path(store, sid)).is_ok() {
-                listing.removed += 1;
-            }
-            crate::transport::remove_stale_endpoint(&rec.endpoint);
-        } else {
+        if !stale {
             listing.sessions.push(rec);
+            continue;
+        }
+        // The probe took time without the lock; a holder started meanwhile
+        // may have replaced the record. Look again under the lock.
+        let _lock = match lock(store) {
+            Ok(l) => l,
+            // Busy for that long: leave it for the next listing.
+            Err(_) => continue,
+        };
+        match read(store, sid) {
+            Some(Ok(now)) if same_holder(&now, &rec) => {
+                if fs::remove_file(record_path(store, sid)).is_ok() {
+                    listing.removed += 1;
+                }
+                crate::transport::remove_stale_endpoint(&rec.endpoint);
+            }
+            // A new holder's record, written under the lock just now.
+            Some(Ok(now)) => {
+                if crate::pids::alive(now.pid) {
+                    listing.sessions.push(now);
+                }
+            }
+            Some(Err(_)) => listing.skipped += 1,
+            None => {}
         }
     }
     listing.sessions.sort_by(|a, b| a.started.cmp(&b.started).then_with(|| a.session.cmp(&b.session)));
@@ -463,6 +533,48 @@ mod tests {
         let listing = list(&store, |_| Probe::Gone).unwrap();
         assert_eq!((listing.sessions.len(), listing.removed), (0, 1));
         drop(child);
+        fs::remove_dir_all(&store).unwrap();
+    }
+
+    #[test]
+    fn list_never_removes_a_record_a_new_holder_wrote_while_the_old_one_was_probed() {
+        let store = scratch("replaced");
+        prepare(&store).unwrap();
+        let old = sample("list-swap-01");
+        write(&store, &old).unwrap();
+        let mut new = sample("list-swap-01");
+        new.nonce = "fedcba9876543210fedcba9876543210".to_string();
+        new.started += 1;
+        let listing = list(&store, |r| {
+            assert_eq!(r, &old, "the probe is asked about the record it found");
+            // A new holder replaces the record while the old one is asked.
+            write(&store, &new).unwrap();
+            Probe::Gone
+        })
+        .unwrap();
+        assert_eq!(listing.removed, 0, "the new holder's record was removed as stale");
+        assert_eq!(read(&store, "list-swap-01").expect("a record").expect("it reads"), new);
+        assert_eq!(listing.sessions, vec![new.clone()], "the new holder is listed");
+        fs::remove_dir_all(&store).unwrap();
+    }
+
+    #[test]
+    fn the_store_lock_is_held_by_one_at_a_time() {
+        let store = scratch("lock");
+        prepare(&store).unwrap();
+        let first = lock(&store).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let other = store.clone();
+        std::thread::spawn(move || {
+            let asked = Instant::now();
+            let second = lock(&other);
+            let _ = tx.send((second.is_ok(), asked.elapsed()));
+        });
+        std::thread::sleep(Duration::from_millis(400));
+        drop(first);
+        let (ok, waited) = rx.recv_timeout(LOCK_WAIT).expect("the second lock never came");
+        assert!(ok, "the second lock failed");
+        assert!(waited >= Duration::from_millis(300), "the second lock did not wait for the first: {waited:?}");
         fs::remove_dir_all(&store).unwrap();
     }
 

@@ -1,9 +1,13 @@
 //! The Unix terminal: `openpty`, the child on the slave side with a new
 //! session and the slave as its controlling terminal.
 //!
-//! The new session is also a new process group whose id is the child's pid,
-//! so `end_tree` reaches everything the child started that stayed in it: a
-//! hangup first, as a closed terminal would send, then a kill.
+//! The new session is also a new process group whose id is the child's pid.
+//! `end_tree` reaches that group and every other process still in the
+//! session (a job-control shell puts each job in a group of its own, inside
+//! the same session): a hangup first, as a closed terminal would send, then a
+//! kill. Linux finds the session's processes in /proc, macOS with
+//! `proc_listallpids`. A process that left the session on purpose (a daemon
+//! that called setsid) is beyond it, as it is beyond a closed terminal.
 //!
 //! Unsafe code sits only in the modules that call the C library or the
 //! Windows API where `std` has no safe form; the library denies it elsewhere.
@@ -11,7 +15,7 @@
 
 use super::{check_argv, check_cwd, check_env, PtySize, SpawnOptions};
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::os::fd::FromRawFd;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, Stdio};
@@ -113,9 +117,9 @@ impl Pty {
         Ok((Pty { master, child }, Box::new(reader)))
     }
 
-    pub fn write_input(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.master.write_all(bytes)?;
-        self.master.flush()
+    /// A second handle on the master side, for a thread that writes alone.
+    pub fn input_writer(&self) -> io::Result<File> {
+        self.master.try_clone()
     }
 
     pub fn resize(&self, size: PtySize) -> io::Result<()> {
@@ -143,25 +147,23 @@ impl Pty {
         }
     }
 
-    /// End the whole tree: hang up the child's process group, give it `grace`
-    /// to go, then kill whatever is left of it.
+    /// End the whole tree: hang up the child's session, give it `grace` to
+    /// go, then kill whatever is left of it.
     pub fn end_tree(&mut self, grace: Duration) {
-        let pgid = self.child.id() as libc::pid_t;
-        // The group is the child's own (setsid above); never signal group 0
-        // (our own) or 1.
-        if pgid <= 1 {
+        let sid = self.child.id() as libc::pid_t;
+        // The session and its first group are the child's own (setsid above);
+        // never signal group 0 (our own) or 1.
+        if sid <= 1 {
             return;
         }
-        unsafe {
-            libc::killpg(pgid, libc::SIGHUP);
-            libc::killpg(pgid, libc::SIGCONT);
-        }
+        signal_session(sid, libc::SIGHUP);
+        signal_session(sid, libc::SIGCONT);
         let deadline = Instant::now() + grace;
         loop {
             // Reap the first process as it goes, so it does not linger as a
             // zombie that keeps the group alive.
             let _ = self.child.try_wait();
-            if unsafe { libc::killpg(pgid, 0) } != 0 {
+            if !session_left(sid) {
                 break;
             }
             if Instant::now() >= deadline {
@@ -169,9 +171,7 @@ impl Pty {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        unsafe {
-            libc::killpg(pgid, libc::SIGKILL);
-        }
+        signal_session(sid, libc::SIGKILL);
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             match self.child.try_wait() {
@@ -189,6 +189,72 @@ impl Pty {
     /// Nothing to do on Unix: the reader ends when the last process holding
     /// the terminal is gone.
     pub fn close_output(&mut self) {}
+}
+
+/// The processes in session `sid`, other than this one.
+#[cfg(target_os = "linux")]
+fn session_members(sid: libc::pid_t) -> Vec<libc::pid_t> {
+    let me = std::process::id() as libc::pid_t;
+    let mut out = Vec::new();
+    if let Ok(dir) = std::fs::read_dir("/proc") {
+        for entry in dir.flatten() {
+            let pid = match entry.file_name().to_str().and_then(|n| n.parse::<libc::pid_t>().ok()) {
+                Some(p) => p,
+                None => continue,
+            };
+            if pid > 1 && pid != me && unsafe { libc::getsid(pid) } == sid {
+                out.push(pid);
+            }
+        }
+    }
+    out
+}
+
+/// The processes in session `sid`, other than this one.
+#[cfg(target_vendor = "apple")]
+fn session_members(sid: libc::pid_t) -> Vec<libc::pid_t> {
+    let me = std::process::id() as libc::pid_t;
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if count <= 0 {
+        return Vec::new();
+    }
+    // Room for processes started since the count.
+    let mut pids: Vec<libc::pid_t> = vec![0; count as usize + 256];
+    let bytes = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
+    let got = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+    if got <= 0 {
+        return Vec::new();
+    }
+    pids.truncate((got as usize).min(pids.len()));
+    pids.retain(|&pid| pid > 1 && pid != me && unsafe { libc::getsid(pid) } == sid);
+    pids
+}
+
+/// Elsewhere only the first group is reached.
+#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+fn session_members(_sid: libc::pid_t) -> Vec<libc::pid_t> {
+    Vec::new()
+}
+
+/// Send `sig` to the session's first group and to every other process in it.
+fn signal_session(sid: libc::pid_t, sig: libc::c_int) {
+    unsafe {
+        libc::killpg(sid, sig);
+    }
+    for pid in session_members(sid) {
+        unsafe {
+            libc::kill(pid, sig);
+        }
+    }
+}
+
+/// True while anything of the session runs: its first group, or another
+/// process in it that is not a zombie waiting to be reaped.
+fn session_left(sid: libc::pid_t) -> bool {
+    if unsafe { libc::killpg(sid, 0) } == 0 {
+        return true;
+    }
+    session_members(sid).into_iter().any(|pid| crate::pids::alive(pid as u32))
 }
 
 impl Drop for Pty {

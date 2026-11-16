@@ -10,8 +10,9 @@
 //! attached to the terminal, counted from the holder's start and from every
 //! detach or dropped connection. Ending ends the whole process tree.
 //!
-//! Locks: the serve state first, then the holder's own (never the other way),
-//! and nothing is written to a connection while the serve state is held.
+//! Locks: a connection's stream gate (`Conn::live`) first, then the serve
+//! state, then the holder's own (never the other way), and nothing is written
+//! to a connection while the serve state is held.
 
 use crate::frame::{self, Body, Direction, Frame, FrameError};
 use crate::hello::{self, Hello, LOCAL_CAPS, PROTO_VERSIONS};
@@ -23,7 +24,7 @@ use crate::ring::RingError;
 use crate::store::{self, Record};
 use crate::transport::{self, Listener, Stream};
 use std::collections::VecDeque;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -61,6 +62,13 @@ struct Conn {
     id: u64,
     writer: Mutex<Stream>,
     closer: Stream,
+    /// The attach whose output this connection carries now (0: none). An
+    /// attach sets it, and sends its reply and replay, under this lock; a
+    /// forwarder sends each live chunk under it, and only while it still
+    /// names the forwarder's own attach. So output queued for an older attach
+    /// never follows a newer attach's reply, and a detach or a replacement
+    /// stops it before saying so.
+    live: Mutex<u64>,
 }
 
 impl Conn {
@@ -110,6 +118,24 @@ struct State {
     attach_gen: u64,
     /// Since when nobody has been attached; None while someone is.
     away_since: Option<Instant>,
+}
+
+/// A stream read that must finish by `until`: each read waits only for what
+/// is left, so a frame sent a byte at a time cannot stretch a limit.
+struct Deadline<'a> {
+    stream: &'a mut Stream,
+    until: Instant,
+}
+
+impl Read for Deadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the frame did not arrive in time"));
+        }
+        self.stream.set_read_timeout(Some(left.max(Duration::from_millis(1))))?;
+        self.stream.read(buf)
+    }
 }
 
 struct Serve {
@@ -215,8 +241,12 @@ impl Serve {
                 Some(c) => vec![("code", code_value(c))],
                 None => vec![],
             };
+            // No live output after the reply.
+            let mut live = lock(&conn.live);
+            *live = 0;
             let _ = conn.send_json(reply("term.ended", re, more));
             conn.closer.close_after_writes();
+            drop(live);
         }
         store::remove(&self.opts.store, &self.opts.sid, std::process::id());
         self.listener.remove();
@@ -262,7 +292,7 @@ impl Serve {
             _ => return,
         };
         let mut reader = stream;
-        let conn = Arc::new(Conn { id, writer: Mutex::new(writer), closer });
+        let conn = Arc::new(Conn { id, writer: Mutex::new(writer), closer, live: Mutex::new(0) });
         let admitted = {
             let mut st = lock(&self.state);
             if st.conns >= MAX_CONNECTIONS {
@@ -299,10 +329,11 @@ impl Serve {
         })
     }
 
-    /// Read a frame; on anything but a frame, say why (when there is a why)
-    /// and return None, which closes the connection.
-    fn next_frame(&self, conn: &Conn, reader: &mut Stream, waited: &str) -> Option<Frame> {
-        match frame::read_frame(reader, Direction::AppToHelper) {
+    /// Read a whole frame within `limit`; on anything but a frame, say why
+    /// (when there is a why) and return None, which closes the connection.
+    fn next_frame(&self, conn: &Conn, reader: &mut Stream, limit: Duration, waited: &str) -> Option<Frame> {
+        let mut timed = Deadline { stream: reader, until: Instant::now() + limit };
+        match frame::read_frame(&mut timed, Direction::AppToHelper) {
             Ok(Some(f)) => Some(f),
             Ok(None) => None,
             Err(FrameError::BadFrame(why)) => {
@@ -325,10 +356,7 @@ impl Serve {
         if conn.send_bytes(format!("{line}\n").as_bytes()).is_err() {
             return;
         }
-        if reader.set_read_timeout(Some(ACK_TIMEOUT)).is_err() {
-            return;
-        }
-        let first = match self.next_frame(conn, reader, "no hello.ack in 10 seconds") {
+        let first = match self.next_frame(conn, reader, ACK_TIMEOUT, "no hello.ack in 10 seconds") {
             Some(f) => f,
             None => return,
         };
@@ -345,12 +373,9 @@ impl Serve {
                 return;
             }
         };
-        if reader.set_read_timeout(Some(IDLE_TIMEOUT)).is_err() {
-            return;
-        }
         let mut refusals: VecDeque<Instant> = VecDeque::new();
         loop {
-            let f = match self.next_frame(conn, reader, "no frame from the app in 60 seconds") {
+            let f = match self.next_frame(conn, reader, IDLE_TIMEOUT, "no frame from the app in 60 seconds") {
                 Some(f) => f,
                 None => return,
             };
@@ -361,7 +386,13 @@ impl Serve {
                         return;
                     }
                     if let Some(h) = self.holder() {
-                        let _ = h.write_input(&bytes);
+                        // Input is queued, never waited on. A program that has
+                        // stopped reading gets no more, and the app is told.
+                        if let Err(e) = h.write_input(&bytes) {
+                            if e.kind() == io::ErrorKind::WouldBlock {
+                                let _ = conn.send_error(None, request::CODE_BUSY, "the program is not reading its input; these bytes were not taken");
+                            }
+                        }
                     }
                 }
                 Body::Json(v) => {
@@ -450,7 +481,11 @@ impl Serve {
                     return Flow::Continue;
                 }
                 self.update_record(|r| r.attached = false);
+                // No live output after the reply.
+                let mut live = lock(&conn.live);
+                *live = 0;
                 let _ = conn.send_json(reply("term.detached", id, vec![]));
+                drop(live);
                 Flow::Close
             }
             Request::End { id } => self.finish(Some((&**conn, id))),
@@ -510,8 +545,11 @@ impl Serve {
             }
         };
         if let Some(old) = old {
+            let mut live = lock(&old.live);
+            *live = 0;
             let _ = old.send_error(None, request::CODE_REPLACED, "a newer connection attached to this terminal");
             old.closer.close_after_writes();
+            drop(live);
         }
         self.update_record(|r| r.attached = true);
         let r = &attachment.replay;
@@ -525,8 +563,19 @@ impl Serve {
         if let Some(code) = attachment.exit_code {
             more.push(("code", code_value(code)));
         }
-        if conn.send_json(reply("term.attached", id, more)).is_err() || conn.send_terminal(&attachment.replay.bytes).is_err() {
-            return Flow::Close;
+        {
+            // From here this connection carries this attach only: output an
+            // earlier attach of its own still had queued is dropped (the
+            // replay covers it from `from`), never sent after this reply.
+            let mut live = lock(&conn.live);
+            if !self.is_current(conn, gen) {
+                // Another connection attached meanwhile and tells this one so.
+                return Flow::Continue;
+            }
+            *live = gen;
+            if conn.send_json(reply("term.attached", id, more)).is_err() || conn.send_terminal(&attachment.replay.bytes).is_err() {
+                return Flow::Close;
+            }
         }
         if attachment.exit_code.is_some() {
             // Over before this attach: the reply said so, and nothing follows.
@@ -534,16 +583,23 @@ impl Serve {
         }
         let serve = Arc::clone(self);
         let conn = Arc::clone(conn);
-        let live = attachment.live;
+        let queue = attachment.live;
         thread::spawn(move || {
-            while let Ok(chunk) = live.recv() {
+            while let Ok(chunk) = queue.recv() {
+                let live = lock(&conn.live);
+                if *live != gen {
+                    // A newer attach, a detach or a replacement: not ours now.
+                    return;
+                }
                 if conn.send_terminal(&chunk).is_err() {
                     return;
                 }
+                drop(live);
             }
             // The channel closed: detached, replaced, the session over, or
             // this connection fell too far behind.
-            if serve.ending.load(Ordering::SeqCst) || !serve.is_current(&conn, gen) {
+            let live = lock(&conn.live);
+            if *live != gen || serve.ending.load(Ordering::SeqCst) || !serve.is_current(&conn, gen) {
                 return;
             }
             match holder.exit_code() {
@@ -555,6 +611,7 @@ impl Serve {
                     conn.closer.close_after_writes();
                 }
             }
+            drop(live);
         });
         Flow::Continue
     }
@@ -595,6 +652,11 @@ pub fn run(opts: Options) -> io::Result<()> {
         return Err(invalid("away must be 1 to 86400 seconds"));
     }
     store::prepare(&opts.store)?;
+    // From the check to the written record under the store's lock: a second
+    // holder for this session started at the same moment then finds this
+    // one's record and its live endpoint, and list mode never removes a
+    // record this one has just put in place of a stale one.
+    let store_lock = store::lock(&opts.store)?;
     if let Some(Ok(existing)) = store::read(&opts.store, &opts.sid) {
         if crate::pids::alive(existing.pid) && crate::client::probe(&existing) != store::Probe::Gone {
             return Err(io::Error::new(io::ErrorKind::AlreadyExists, "a holder for this session is already running"));
@@ -616,6 +678,7 @@ pub fn run(opts: Options) -> io::Result<()> {
         code: None,
     };
     store::write(&opts.store, &record)?;
+    drop(store_lock);
     let serve = Arc::new(Serve {
         opts,
         nonce,

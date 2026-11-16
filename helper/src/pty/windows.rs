@@ -17,7 +17,7 @@ use super::{check_argv, check_cwd, check_env, PtySize, SpawnOptions};
 use crate::cmdline::build_command_line;
 use std::ffi::c_void;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::time::Duration;
@@ -272,9 +272,9 @@ impl Pty {
         }
     }
 
-    pub fn write_input(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.input.write_all(bytes)?;
-        self.input.flush()
+    /// A second handle on the input pipe, for a thread that writes alone.
+    pub fn input_writer(&self) -> io::Result<File> {
+        self.input.try_clone()
     }
 
     pub fn resize(&self, size: PtySize) -> io::Result<()> {

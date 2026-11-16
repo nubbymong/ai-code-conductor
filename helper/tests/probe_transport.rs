@@ -7,7 +7,7 @@
 //! that stands in for "the app reconnects to a holder after a crash".
 
 use aicc_helper::client::Client;
-use aicc_helper::frame::{Body, Frame};
+use aicc_helper::frame::{self, Body, Direction, Frame};
 use aicc_helper::json::{self, Value};
 use aicc_helper::pids;
 use aicc_helper::store::{self, Listing, Record};
@@ -605,6 +605,145 @@ fn the_holder_refuses_what_the_protocol_refuses() {
     assert!(extra.closed());
     drop(held);
     std::thread::sleep(Duration::from_secs(1));
+    end(&rec);
+    let _ = fs::remove_dir_all(&store_dir);
+}
+
+/// Lines the fake CLI floods the terminal with: more than the connection
+/// itself buffers on each OS (a Linux socket takes about 200 KB, a macOS one
+/// about 16 KB, the pipe 64 KiB), so with the app not reading for a moment
+/// output queues up in the holder for the attach, and fewer than would fill
+/// that queue.
+#[cfg(target_os = "linux")]
+const FLOOD_LINES: u32 = 24_000;
+#[cfg(target_vendor = "apple")]
+const FLOOD_LINES: u32 = 5_000;
+#[cfg(windows)]
+const FLOOD_LINES: u32 = 10_000;
+
+#[test]
+fn attaching_again_on_the_same_connection_carries_the_new_attach_only() {
+    let _serial = one_at_a_time();
+    let store_dir = temp_dir("store-again");
+    let work = temp_dir("work-again");
+    let rec = hold(&store_dir, "probe-0007", 60);
+    let mut app = App::connect(&rec, true);
+    let id = app.id();
+    expect_t(&app.call(launch_msg(id, FAKE, &work)), "term.launched");
+    let id = app.id();
+    expect_t(&app.call(msg("term.attach", id, vec![("from", Value::uint(0))])), "term.attached");
+    app.wait_text("FAKE-CLI READY");
+    app.type_line(&format!("flood {FLOOD_LINES}"));
+    // Not reading for a moment: the connection fills, the rest queues.
+    std::thread::sleep(Duration::from_millis(800));
+    let again = app.id();
+    app.client.send(msg("term.attach", again, vec![("from", Value::uint(0))])).expect("attach again");
+    // Everything after the second reply belongs to the second attach: the
+    // output from 0, in order, with nothing the first attach had queued.
+    let until = Instant::now() + WAIT;
+    let mut after: Option<Vec<u8>> = None;
+    loop {
+        if after.as_ref().map_or(false, |a| String::from_utf8_lossy(a).contains("flood done")) {
+            break;
+        }
+        let left = until.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "the flood never finished after the second attach");
+        match app.client.recv(left) {
+            Ok(Some(Frame { channel: 1, body: Body::Raw(bytes) })) => {
+                if let Some(a) = after.as_mut() {
+                    a.extend_from_slice(&bytes);
+                }
+            }
+            Ok(Some(Frame { channel: 0, body: Body::Json(v) })) if v.get("re").and_then(Value::as_u64) == Some(again) => {
+                expect_t(&v, "term.attached");
+                assert_eq!(field(&v, "from").as_u64(), Some(0));
+                after = Some(Vec::new());
+            }
+            other => panic!("not the flood or the second reply: {other:?}"),
+        }
+    }
+    let after = after.expect("the second reply");
+    // A fresh connection's replay from 0 is the output itself.
+    let mut check = App::connect(&rec, true);
+    let id = check.id();
+    let attached = check.call(msg("term.attach", id, vec![("from", Value::uint(0))]));
+    expect_t(&attached, "term.attached");
+    assert_eq!(field(&attached, "truncated").as_bool(), Some(false), "the ring did not hold the flood");
+    let ring_end = field(&attached, "ring_end").as_u64().expect("ring_end") as usize;
+    let until = Instant::now() + WAIT;
+    while check.screen.len() < ring_end {
+        assert!(check.pump(until), "the replay never came whole");
+    }
+    let output = &check.screen[..ring_end];
+    if !output.starts_with(&after) {
+        let at = output.iter().zip(&after).position(|(a, b)| a != b).unwrap_or(output.len().min(after.len()));
+        panic!(
+            "after the second reply the stream is not the output from 0: it differs at byte {at} of {} (output {} bytes): {:?}",
+            after.len(),
+            output.len(),
+            String::from_utf8_lossy(&after[at.saturating_sub(40)..(at + 40).min(after.len())])
+        );
+    }
+    drop(app);
+    drop(check);
+    end(&rec);
+    let _ = fs::remove_dir_all(&store_dir);
+    let _ = fs::remove_dir_all(&work);
+}
+
+#[test]
+fn of_two_holders_started_at_once_for_one_session_exactly_one_runs() {
+    let _serial = one_at_a_time();
+    let store_dir = temp_dir("store-race");
+    let store_arg = store_dir.to_string_lossy().into_owned();
+    let starts: Vec<_> = (0..2)
+        .map(|i| {
+            let store_arg = store_arg.clone();
+            std::thread::spawn(move || {
+                helper_detaching(&["hold", "--detach", "--store", &store_arg, "--session", "probe-0008", "--away", "30"], &format!("race{i}"))
+            })
+        })
+        .collect();
+    let ran: Vec<Ran> = starts.into_iter().map(|t| t.join().expect("a start")).collect();
+    let told: Vec<(bool, &str, &str)> = ran.iter().map(|r| (r.ok, r.stdout.as_str(), r.stderr.as_str())).collect();
+    let won: Vec<&Ran> = ran.iter().filter(|r| r.ok).collect();
+    assert_eq!(won.len(), 1, "both or neither started: {told:?}");
+    let rec = Record::from_value(&as_json(won[0])).unwrap_or_else(|e| panic!("the winner printed a record that does not read ({e}): {told:?}"));
+    let listed = list(&store_dir);
+    assert_eq!(listed.sessions.len(), 1, "{:?}", listed.sessions);
+    assert_eq!(listed.sessions[0].pid, rec.pid, "the record is not the running holder's");
+    end(&rec);
+    let _ = fs::remove_dir_all(&store_dir);
+}
+
+#[test]
+fn a_frame_sent_a_byte_at_a_time_must_still_come_whole_in_time() {
+    let _serial = one_at_a_time();
+    let store_dir = temp_dir("store-slow");
+    let rec = hold(&store_dir, "probe-0009", 60);
+    let mut app = App::connect(&rec, false);
+    let started = Instant::now();
+    // A whole ack, a byte every 2 seconds: each read is quick, the frame is not.
+    let ack = frame::encode(&Frame::json(0, aicc_helper::hello::ack_message(1, &["core", "local"])), Direction::AppToHelper).expect("encode");
+    let mut told: Option<Value> = None;
+    for byte in &ack {
+        if started.elapsed() > Duration::from_secs(20) {
+            break;
+        }
+        let _ = app.client.send_bytes(&[*byte]);
+        match app.client.recv(Duration::from_secs(2)) {
+            Ok(Some(Frame { body: Body::Json(v), .. })) => {
+                told = Some(v);
+                break;
+            }
+            Ok(None) => break,
+            _ => {}
+        }
+    }
+    let told = told.unwrap_or_else(|| panic!("no timeout after {:?} of a frame a byte at a time", started.elapsed()));
+    expect_error(&told, "timeout");
+    assert!(started.elapsed() < Duration::from_secs(16), "the 10 second limit stretched to {:?}", started.elapsed());
+    assert!(app.closed());
     end(&rec);
     let _ = fs::remove_dir_all(&store_dir);
 }
