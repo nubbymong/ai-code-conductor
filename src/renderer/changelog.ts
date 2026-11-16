@@ -42,7 +42,7 @@ export interface ChangelogEntry {
 export const changelog: ChangelogEntry[] = [
   {
     version: '2.1.3-beta.5',
-    date: '2026-11-15',
+    date: '2026-11-16',
     highlights: 'An inactive account, or on a Mac one that is not your normal sign-in, now says so instead of starting a session on the wrong login. Snap asks for Screen Recording first on a Mac, launches stop holding the app while it looks for Claude Code, node and gsudo, and Tokenomics sheds dead rows and no longer shows a phantom no-price model.',
     warnings: [
       'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',
