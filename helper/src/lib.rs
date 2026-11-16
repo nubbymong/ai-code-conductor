@@ -22,6 +22,8 @@ pub mod selftest;
 pub mod serve;
 pub mod store;
 pub mod transport;
+#[cfg(windows)]
+mod winproc;
 
 /// The helper's version, from Cargo.toml.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

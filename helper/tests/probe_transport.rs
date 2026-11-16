@@ -13,9 +13,10 @@ use aicc_helper::pids;
 use aicc_helper::store::{self, Listing, Record};
 use aicc_helper::transport;
 use std::fs;
+use std::io::{PipeReader, PipeWriter, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{mpsc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const HELPER: &str = env!("CARGO_BIN_EXE_aicc-helper");
@@ -65,7 +66,8 @@ fn helper(args: &[&str]) -> Ran {
 /// Run `hold --detach` with its output going to files, not pipes. The holder
 /// outlives this call, so a pipe would stay open until it ends and a reader
 /// waiting for end of file would wait with it. Files do not have that problem,
-/// and the helper also clears inheritance on its own standard handles.
+/// and the holder also keeps none of its starter's handles (see
+/// `a_detached_holder_keeps_none_of_its_starters_handles`).
 fn helper_detaching(args: &[&str], tag: &str) -> Ran {
     let base = std::env::temp_dir().join(format!("aicc-helper-detach-{tag}-{}", std::process::id()));
     let out_path = base.with_extension("out");
@@ -107,7 +109,26 @@ fn hold(store_dir: &Path, sid: &str, away: u64) -> Record {
     let away_arg = away.to_string();
     let ran = helper_detaching(&["hold", "--detach", "--store", &store_arg, "--session", sid, "--label", "Test terminal", "--away", &away_arg], sid);
     assert!(ran.ok, "hold --detach failed: {} / {}", ran.stdout, ran.stderr);
-    Record::from_value(&as_json(&ran)).unwrap_or_else(|e| panic!("hold printed a record that does not read ({e}): {}", ran.stdout))
+    let rec = record_of(&ran);
+    // Which way `hold --detach` started the holder (`detach.rs`): out of this
+    // process's job, or, where the job forbids that, inside it with a note on
+    // stderr. The note must say where the holder is, and a test process in no
+    // job starts it the first way.
+    #[cfg(windows)]
+    {
+        let inside = win::in_a_job(rec.pid);
+        let noted = ran.stderr.contains(IN_JOB_NOTE);
+        if inside != noted || (inside && !win::this_process_in_a_job()) {
+            end_quietly(&rec);
+            panic!("the holder (process {}) is {}in a job, and hold --detach said: {:?}", rec.pid, if inside { "" } else { "not " }, ran.stderr);
+        }
+    }
+    rec
+}
+
+/// The record `hold --detach` printed.
+fn record_of(ran: &Ran) -> Record {
+    Record::from_value(&as_json(ran)).unwrap_or_else(|e| panic!("hold printed a record that does not read ({e}): {} / {}", ran.stdout, ran.stderr))
 }
 
 fn list(store_dir: &Path) -> Listing {
@@ -751,6 +772,471 @@ fn of_two_holders_started_at_once_for_one_session_exactly_one_runs() {
     assert_eq!(listed.sessions[0].pid, rec.pid, "the record is not the running holder's");
     end(&rec);
     let _ = fs::remove_dir_all(&store_dir);
+}
+
+/// Let the children this test starts inherit `end`, the way every handle the
+/// app lets a child inherit reaches the `hold --detach` it starts.
+#[cfg(windows)]
+fn inheritable(end: PipeWriter) -> PipeWriter {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
+    let ok = unsafe { SetHandleInformation(end.as_raw_handle() as HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+    assert_ne!(ok, 0, "make the pipe end inheritable: {}", std::io::Error::last_os_error());
+    end
+}
+
+#[cfg(unix)]
+fn inheritable(end: PipeWriter) -> PipeWriter {
+    use std::os::fd::AsRawFd;
+    // Clear close-on-exec, which std sets on every descriptor it makes.
+    let ok = unsafe { libc::fcntl(end.as_raw_fd(), libc::F_SETFD, 0) };
+    assert_eq!(ok, 0, "make the pipe end inheritable: {}", std::io::Error::last_os_error());
+    end
+}
+
+/// Read `end` on a thread of its own. The channel gets how the read ended:
+/// `Ok(0)` is end of file with nothing read, which comes once every write end
+/// of the pipe is closed. Nothing writes to it, so anything else is a fault.
+fn end_of_file(mut end: PipeReader) -> mpsc::Receiver<std::io::Result<usize>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut got = Vec::new();
+        let _ = tx.send(end.read_to_end(&mut got));
+    });
+    rx
+}
+
+/// A child this test started, ended and waited for when dropped, so a test
+/// that fails leaves it running no longer than the test.
+struct Running(std::process::Child);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A test's store folder, removed when dropped.
+struct Store(PathBuf);
+
+impl Store {
+    fn new(name: &str) -> Store {
+        Store(temp_dir(name))
+    }
+}
+
+impl Drop for Store {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A holder this test started, ended when dropped if it still runs. Declared
+/// after its `Store`, so it is dropped first.
+struct Held(Record);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        end_quietly(&self.0);
+    }
+}
+
+/// End a holder that still runs, without a panic: clean-up for a test that
+/// may already be failing.
+fn end_quietly(rec: &Record) {
+    if !pids::alive(rec.pid) {
+        return;
+    }
+    if let Ok(mut client) = Client::to_record(rec, WAIT) {
+        if client.ack().is_ok() && client.send(msg("term.end", 2, vec![])).is_ok() {
+            let _ = gone(rec.pid, WAIT);
+        }
+    }
+}
+
+/// What became of a pipe end a `hold --detach` was given.
+struct Passed {
+    /// The control kept the pipe open while it ran, so a handle that was
+    /// passed on can be seen.
+    control_held: bool,
+    /// How reading the pipe ended once only the holder could still hold it;
+    /// `None` when it had not ended 2 s later.
+    end: Option<std::io::Result<usize>>,
+}
+
+impl Passed {
+    fn ended(&self) -> Result<(), String> {
+        ended_cleanly(&self.end)
+    }
+}
+
+/// Ok when a read from `end_of_file` came to the end of the pipe with nothing
+/// written: every write end is closed. `None` is a read that had not ended.
+fn ended_cleanly(end: &Option<std::io::Result<usize>>) -> Result<(), String> {
+    match end {
+        Some(Ok(0)) => Ok(()),
+        Some(Ok(n)) => Err(format!("{n} bytes came down a pipe nothing writes to")),
+        Some(Err(e)) => Err(format!("reading the pipe failed: {e}")),
+        None => Err("it was still open 2 s after every other end had closed".to_string()),
+    }
+}
+
+/// Give `start` (a `hold --detach`) an inheritable pipe end, the way every
+/// handle the app lets a child inherit reaches it. Then a plain child is
+/// given the same end, as the control; this test closes its own end; the
+/// control must keep the pipe open, and once the control is gone only the
+/// holder could.
+fn given_a_pipe<R>(start: impl FnOnce() -> R) -> (R, Passed) {
+    let (read_end, write_end) = std::io::pipe().expect("a pipe");
+    let write_end = inheritable(write_end);
+    let ended = end_of_file(read_end);
+    let started = start();
+    // Started once `hold --detach` has exited. It is still given the end,
+    // because this test holds it until the next line.
+    let control = Running(Command::new(FAKE).args(["--sleep", "20"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("start the fake CLI"));
+    drop(write_end);
+    let early = ended.recv_timeout(Duration::from_millis(500));
+    drop(control);
+    let control_held = early.is_err();
+    let end = match early {
+        Ok(read) => Some(read),
+        Err(_) => ended.recv_timeout(Duration::from_secs(2)).ok(),
+    };
+    (started, Passed { control_held, end })
+}
+
+#[test]
+fn a_detached_holder_keeps_none_of_its_starters_handles() {
+    let _serial = one_at_a_time();
+    let store = Store::new("store-handles");
+    let (held, passed) = given_a_pipe(|| Held(hold(&store.0, "probe-0010", 60)));
+    let pid = held.0.pid;
+    assert!(passed.control_held, "the pipe ended while a child that inherited it still ran: this test cannot see a handle that was passed on");
+    if let Err(why) = passed.ended() {
+        panic!("the holder (process {pid}) kept the pipe its starter was given open: {why}");
+    }
+    assert!(pids::alive(pid), "the holder (process {pid}) was not running");
+    let listed = list(&store.0);
+    assert_eq!(listed.sessions.iter().map(|s| s.pid).collect::<Vec<_>>(), vec![pid], "list mode did not show the holder");
+}
+
+/// What `hold --detach` says on stderr when the holder could not leave its
+/// starter's job (`main.rs`).
+#[cfg(windows)]
+const IN_JOB_NOTE: &str = "the holder runs inside the job";
+
+/// Windows only: jobs, and `hold --detach` started inside one, for the
+/// holder's way out of its starter's job (`detach.rs`, probe P7).
+#[cfg(windows)]
+mod win {
+    use super::Ran;
+    use std::ffi::c_void;
+    use std::fs;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{CloseHandle, SetHandleInformation, BOOL, HANDLE, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, GetCurrentProcess, GetExitCodeProcess, OpenProcess, ResumeThread, TerminateProcess, WaitForSingleObject,
+        PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, STARTUPINFOW,
+    };
+
+    /// `CREATE_SUSPENDED`: the starter runs only once it is in the job.
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    /// `STARTF_USESTDHANDLES`.
+    const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
+
+    fn last_error() -> std::io::Error {
+        std::io::Error::last_os_error()
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    /// A job this test made. Closing it ends every process still in it.
+    pub struct Job(HANDLE);
+
+    impl Job {
+        /// `may_leave`: whether a process in it may start a child outside it.
+        pub fn new(may_leave: bool) -> Job {
+            unsafe {
+                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                assert!(!handle.is_null(), "make a job: {}", last_error());
+                let job = Job(handle);
+                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | if may_leave { JOB_OBJECT_LIMIT_BREAKAWAY_OK } else { 0 };
+                let ok = SetInformationJobObject(
+                    job.0,
+                    JobObjectExtendedLimitInformation,
+                    &limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION as *const c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                assert_ne!(ok, 0, "set the job's limits: {}", last_error());
+                job
+            }
+        }
+
+        /// Whether process `pid` is in this job.
+        pub fn holds(&self, pid: u32) -> bool {
+            in_job(pid, self.0)
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+
+    /// Whether process `pid` is in `job`, or in any job when `job` is null.
+    fn in_job(pid: u32, job: HANDLE) -> bool {
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            assert!(!process.is_null(), "open process {pid}: {}", last_error());
+            let mut inside: BOOL = 0;
+            let ok = IsProcessInJob(process, job, &mut inside);
+            let e = last_error();
+            CloseHandle(process);
+            assert_ne!(ok, 0, "ask whether process {pid} is in a job: {e}");
+            inside != 0
+        }
+    }
+
+    /// Whether process `pid` is in any job.
+    pub fn in_a_job(pid: u32) -> bool {
+        in_job(pid, std::ptr::null_mut())
+    }
+
+    /// Whether this test process is in a job: a CI runner may start it in one.
+    pub fn this_process_in_a_job() -> bool {
+        let mut inside: BOOL = 0;
+        let ok = unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut inside) };
+        assert_ne!(ok, 0, "ask whether this process is in a job: {}", last_error());
+        inside != 0
+    }
+
+    fn inherit(file: &fs::File) {
+        let ok = unsafe { SetHandleInformation(file.as_raw_handle() as HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+        assert_ne!(ok, 0, "make a file handle inheritable: {}", last_error());
+    }
+
+    /// Run the helper with `args` as a process in `job` from its first
+    /// instruction: started suspended with every handle this process lets a
+    /// child inherit (as the app starts `hold --detach`), put in the job,
+    /// then let run. Its output goes to files, as in `helper_detaching`.
+    pub fn run_in_job(job: &Job, args: &[&str], tag: &str) -> Ran {
+        let base = std::env::temp_dir().join(format!("aicc-helper-job-{tag}-{}", std::process::id()));
+        let out_path = base.with_extension("out");
+        let err_path = base.with_extension("err");
+        let out = fs::File::create(&out_path).expect("a file for stdout");
+        let err = fs::File::create(&err_path).expect("a file for stderr");
+        inherit(&out);
+        inherit(&err);
+        let mut words = vec![super::HELPER.to_string()];
+        words.extend(args.iter().map(|a| a.to_string()));
+        let mut line = wide(&aicc_helper::cmdline::build_command_line(&words));
+        let app = wide(super::HELPER);
+        let code = unsafe {
+            let mut startup: STARTUPINFOW = std::mem::zeroed();
+            startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+            startup.dwFlags = STARTF_USESTDHANDLES;
+            startup.hStdOutput = out.as_raw_handle() as HANDLE;
+            startup.hStdError = err.as_raw_handle() as HANDLE;
+            let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+            let ok = CreateProcessW(
+                app.as_ptr(),
+                line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+                CREATE_SUSPENDED,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut info,
+            );
+            assert_ne!(ok, 0, "start hold --detach: {}", last_error());
+            if AssignProcessToJobObject(job.0, info.hProcess) == 0 {
+                let e = last_error();
+                TerminateProcess(info.hProcess, 1);
+                CloseHandle(info.hThread);
+                CloseHandle(info.hProcess);
+                panic!("put hold --detach in the job: {e}");
+            }
+            if ResumeThread(info.hThread) == u32::MAX {
+                let e = last_error();
+                TerminateProcess(info.hProcess, 1);
+                CloseHandle(info.hThread);
+                CloseHandle(info.hProcess);
+                panic!("let hold --detach run: {e}");
+            }
+            CloseHandle(info.hThread);
+            // WAIT_OBJECT_0 is 0: it exited in time.
+            let exited = WaitForSingleObject(info.hProcess, 30_000) == 0;
+            if !exited {
+                TerminateProcess(info.hProcess, 1);
+            }
+            let mut code: u32 = 1;
+            GetExitCodeProcess(info.hProcess, &mut code);
+            CloseHandle(info.hProcess);
+            if exited {
+                Some(code as i32)
+            } else {
+                None
+            }
+        };
+        drop(out);
+        drop(err);
+        let ran = Ran {
+            ok: code == Some(0),
+            code,
+            stdout: fs::read_to_string(&out_path).unwrap_or_default(),
+            stderr: fs::read_to_string(&err_path).unwrap_or_default(),
+        };
+        let _ = fs::remove_file(&out_path);
+        let _ = fs::remove_file(&err_path);
+        ran
+    }
+}
+
+/// The retry inside the starter's job (`detach.rs`, probe P7): the job
+/// forbids leaving it, so the first start, which asks to leave, is refused
+/// and the second starts the holder inside the job. That start too must hand
+/// the holder none of its starter's handles.
+#[cfg(windows)]
+#[test]
+fn inside_a_job_that_forbids_leaving_it_the_holder_runs_in_the_job_and_keeps_none_of_its_starters_handles() {
+    let _serial = one_at_a_time();
+    let store = Store::new("store-in-job");
+    let job = win::Job::new(false);
+    let store_arg = store.0.to_string_lossy().into_owned();
+    let args: &[&str] = &["hold", "--detach", "--store", &store_arg, "--session", "probe-0011", "--label", "Test terminal", "--away", "60"];
+    let (ran, passed) = given_a_pipe(|| win::run_in_job(&job, args, "in-job"));
+    assert!(ran.ok, "hold --detach inside a job failed ({:?}): {} / {}", ran.code, ran.stdout, ran.stderr);
+    let held = Held(record_of(&ran));
+    let pid = held.0.pid;
+    assert!(ran.stderr.contains(IN_JOB_NOTE), "hold --detach did not say the holder runs inside the job: {:?}", ran.stderr);
+    assert!(job.holds(pid), "the holder (process {pid}) is not in the job its starter ran in");
+    assert!(passed.control_held, "the pipe ended while a child that inherited it still ran: this test cannot see a handle that was passed on");
+    if let Err(why) = passed.ended() {
+        panic!("the holder (process {pid}), started inside the job, kept the pipe its starter was given open: {why}");
+    }
+    assert!(pids::alive(pid), "the holder (process {pid}) was not running");
+}
+
+/// The first start (`detach.rs`): a job that lets a process leave it keeps
+/// no holder, and `hold --detach` says nothing about a job.
+#[cfg(windows)]
+#[test]
+fn inside_a_job_that_lets_a_process_leave_it_the_holder_leaves_the_job() {
+    let _serial = one_at_a_time();
+    let store = Store::new("store-leave-job");
+    let job = win::Job::new(true);
+    let store_arg = store.0.to_string_lossy().into_owned();
+    let args: &[&str] = &["hold", "--detach", "--store", &store_arg, "--session", "probe-0012", "--label", "Test terminal", "--away", "60"];
+    let ran = win::run_in_job(&job, args, "leave-job");
+    assert!(ran.ok, "hold --detach inside a job failed ({:?}): {} / {}", ran.code, ran.stdout, ran.stderr);
+    let held = Held(record_of(&ran));
+    let pid = held.0.pid;
+    let inside = job.holds(pid);
+    let noted = ran.stderr.contains(IN_JOB_NOTE);
+    if win::this_process_in_a_job() {
+        // A job around this test may itself forbid leaving it; then the
+        // holder stays, and the note must say so.
+        assert_eq!(noted, inside, "the holder (process {pid}) is {}in the job, and hold --detach said: {:?}", if inside { "" } else { "not " }, ran.stderr);
+    } else {
+        assert!(!inside, "the holder (process {pid}) stayed in a job that lets a process leave it");
+        assert!(!noted, "hold --detach said the holder runs inside the job: {:?}", ran.stderr);
+    }
+    assert!(pids::alive(pid), "the holder (process {pid}) was not running");
+}
+
+/// A copy of the pipe end at a number above the soft limit set next: a
+/// starter may lower its limit after it opened a descriptor, and the holder
+/// must close that one too.
+#[cfg(unix)]
+const HIGH_FD: i32 = 200;
+#[cfg(unix)]
+const LOWERED_SOFT_LIMIT: libc::rlim_t = 64;
+
+/// Run `aicc-helper __close-check <way>` given an inheritable pipe end, at
+/// its own number and copied to `HIGH_FD`, with the soft limit lowered below
+/// that copy. Ok once the pipe has ended while the check still runs. The
+/// child holds the pipe until it closes it: the copy is made in the child
+/// itself, so there is no control to run here.
+#[cfg(unix)]
+fn close_check(way: &str) -> Result<(), String> {
+    use std::io::BufRead;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+    let (read_end, write_end) = std::io::pipe().expect("a pipe");
+    let write_end = inheritable(write_end);
+    let fd = write_end.as_raw_fd();
+    let ended = end_of_file(read_end);
+    let mut cmd = Command::new(HELPER);
+    cmd.args(["__close-check", way]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    // In the child between fork and exec, so only calls that are safe there.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::dup2(fd, HIGH_FD) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+            if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            limit.rlim_cur = LOWERED_SOFT_LIMIT;
+            if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut check = Running(cmd.spawn().expect("start __close-check"));
+    drop(write_end);
+    let stdout = check.0.stdout.take().expect("its stdout");
+    let (tx, said) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = std::io::BufReader::new(stdout).read_line(&mut line);
+        let _ = tx.send(line);
+    });
+    let line = said.recv_timeout(Duration::from_secs(20)).unwrap_or_default();
+    if line.trim() != "closed" {
+        let status = check.0.try_wait();
+        return Err(format!("it did not say closed: {line:?} (exit {status:?})"));
+    }
+    let end = ended.recv_timeout(Duration::from_secs(2)).ok();
+    let still_running = matches!(check.0.try_wait(), Ok(None));
+    // Its standard input ends, and so does it.
+    drop(check.0.stdin.take());
+    ended_cleanly(&end)?;
+    if !still_running {
+        return Err("it exited before the pipe could be seen to end while it ran".to_string());
+    }
+    Ok(())
+}
+
+/// `hold`'s first step on macOS and Linux (`detach.rs`), each way it can
+/// take: every descriptor from 3 up that the starter was given is closed.
+#[cfg(unix)]
+#[test]
+fn each_way_of_closing_inherited_descriptors_closes_them_all() {
+    let _serial = one_at_a_time();
+    let mut ways = vec!["best", "listing", "every-number"];
+    // Every Linux runner's kernel has `close_range` (5.9 and later).
+    if cfg!(target_os = "linux") {
+        ways.push("range");
+    }
+    let failed: Vec<String> = ways.iter().filter_map(|way| close_check(way).err().map(|why| format!("{way}: {why}"))).collect();
+    assert!(failed.is_empty(), "a descriptor the holder was given stayed open: {failed:?}");
 }
 
 #[test]

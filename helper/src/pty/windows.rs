@@ -15,6 +15,7 @@
 
 use super::{check_argv, check_cwd, check_env, PtySize, SpawnOptions};
 use crate::cmdline::build_command_line;
+use crate::winproc::{self, close, os_error, wide, AttrList, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES};
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::{self, Read};
@@ -29,20 +30,13 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList, ResumeThread, TerminateProcess,
-    UpdateProcThreadAttribute, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOEXW,
+    CreateProcessW, ResumeThread, TerminateProcess, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOEXW,
 };
 
-/// `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`: attribute 22, input only.
-const ATTR_PSEUDOCONSOLE: usize = 0x0002_0016;
-/// `EXTENDED_STARTUPINFO_PRESENT`.
-const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
 /// `CREATE_SUSPENDED`: the child runs only once it is in the job.
 const CREATE_SUSPENDED: u32 = 0x0000_0004;
 /// `CREATE_UNICODE_ENVIRONMENT`: the environment block is UTF-16.
 const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
-/// `STARTF_USESTDHANDLES`.
-const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
 /// `INVALID_HANDLE_VALUE` (-1) as an integer, converted with `as` at the use.
 const INVALID_HANDLE: usize = usize::MAX;
 /// How long `end_tree` waits for the first process to be gone.
@@ -60,19 +54,6 @@ pub struct Pty {
 
 fn coord(size: PtySize) -> COORD {
     COORD { X: size.cols as i16, Y: size.rows as i16 }
-}
-
-fn os_error(what: &str) -> io::Error {
-    let e = io::Error::last_os_error();
-    io::Error::new(e.kind(), format!("{what}: {e}"))
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
-}
-
-unsafe fn close(handle: usize) {
-    CloseHandle(handle as HANDLE);
 }
 
 /// The block `CreateProcessW` takes with `CREATE_UNICODE_ENVIRONMENT`:
@@ -176,31 +157,13 @@ impl Pty {
             }
 
             // The attribute list that attaches the child to the pseudoconsole.
-            let mut list_bytes: usize = 0;
-            InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut list_bytes);
-            // Pointer-aligned storage, as the API requires.
-            let mut storage: Vec<usize> = vec![0; list_bytes / std::mem::size_of::<usize>() + 1];
-            let list = storage.as_mut_ptr() as *mut c_void;
-            if InitializeProcThreadAttributeList(list as _, 1, 0, &mut list_bytes) == 0 {
-                let e = os_error("InitializeProcThreadAttributeList");
-                undo(hpc, in_write as usize, out_read as usize, job);
-                return Err(e);
-            }
-            if UpdateProcThreadAttribute(
-                list as _,
-                0,
-                ATTR_PSEUDOCONSOLE,
-                hpc as *const c_void,
-                std::mem::size_of::<HPCON>(),
-                std::ptr::null_mut(),
-                std::ptr::null(),
-            ) == 0
-            {
-                let e = os_error("UpdateProcThreadAttribute");
-                DeleteProcThreadAttributeList(list as _);
-                undo(hpc, in_write as usize, out_read as usize, job);
-                return Err(e);
-            }
+            let mut attrs = match AttrList::pseudoconsole(hpc) {
+                Ok(attrs) => attrs,
+                Err(e) => {
+                    undo(hpc, in_write as usize, out_read as usize, job);
+                    return Err(e);
+                }
+            };
 
             let mut startup: STARTUPINFOEXW = std::mem::zeroed();
             startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
@@ -212,7 +175,7 @@ impl Pty {
             startup.StartupInfo.hStdInput = INVALID_HANDLE as HANDLE;
             startup.StartupInfo.hStdOutput = INVALID_HANDLE as HANDLE;
             startup.StartupInfo.hStdError = INVALID_HANDLE as HANDLE;
-            startup.lpAttributeList = list as _;
+            startup.lpAttributeList = attrs.as_ptr() as _;
             let mut info: PROCESS_INFORMATION = std::mem::zeroed();
             let mut flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED;
             if block.is_some() {
@@ -239,8 +202,7 @@ impl Pty {
                 &mut info,
             );
             let created = if ok == 0 { Some(os_error("CreateProcessW")) } else { None };
-            DeleteProcThreadAttributeList(list as _);
-            drop(storage);
+            drop(attrs);
             if let Some(e) = created {
                 undo(hpc, in_write as usize, out_read as usize, job);
                 return Err(e);
@@ -298,18 +260,11 @@ impl Pty {
         if let Some(code) = self.exit {
             return Ok(Some(code));
         }
-        unsafe {
-            // WAIT_OBJECT_0 is 0; any other answer (timeout included) is "still running".
-            if WaitForSingleObject(self.process as HANDLE, 0) != 0 {
-                return Ok(None);
-            }
-            let mut code: u32 = 0;
-            if GetExitCodeProcess(self.process as HANDLE, &mut code) == 0 {
-                return Err(os_error("GetExitCodeProcess"));
-            }
+        // A wait that fails is an error, never "still running".
+        if let Some(code) = winproc::exit_code(self.process)? {
             self.exit = Some(code as i32);
-            Ok(self.exit)
         }
+        Ok(self.exit)
     }
 
     /// End the whole tree: every process in the session's job, the first one
