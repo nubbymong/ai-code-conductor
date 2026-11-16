@@ -22,6 +22,7 @@ type Flow = 'app_to_helper' | 'helper_to_app'
 const frames = json('helper/fixtures/frames.json')
 const hello = json('helper/fixtures/hello.json')
 const limits = json('helper/fixtures/limits.json')
+const local = json('helper/fixtures/local.json')
 
 // ── a reference reader, from section 6 of the protocol ────────────────────────
 type Decoded = { error: 'bad-frame' | 'io' } | { kind: 0 | 1; channel: number; payload: Buffer }
@@ -225,5 +226,252 @@ describe('helper fixtures: limits are the ones the protocol and the helper state
     const listed = [...states![2].matchAll(/"([a-z]+)"/g)].map((m) => m[1])
     expect(listed).toEqual(limits.states)
     expect(Number(states![1])).toBe(limits.states.length)
+  })
+})
+
+// ── the local transport: a reference reader from section 15 ──────────────────
+// Written from the document, not from helper/src/request.rs or store.rs, so a
+// vector is checked twice. The app's own client (next slice) must agree with it.
+type Os = 'unix' | 'windows'
+const OSES: Os[] = ['unix', 'windows']
+const L = local.limits
+const appliesOn = (v: { os?: Os }, os: Os) => v.os === undefined || v.os === os
+const chars = (s: string) => [...s].length
+const isId = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0 && (n as number) % 2 === 0
+const isOffset = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0
+const isCells = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= L.term_cells
+const sameKeys = (keys: string[], want: string[]) => keys.length === want.length && want.every((k) => keys.includes(k))
+const CONTROL = /\p{Cc}/u
+
+function isAbsolute(p: string, os: Os): boolean {
+  if (os === 'unix') return p.startsWith('/')
+  // A drive and a separator, or a \\server\share path.
+  return /^[A-Za-z]:[\\/]/.test(p) || /^\\\\[^\\]+\\[^\\]+/.test(p)
+}
+
+const LOCAL_FIELDS: Record<string, string[]> = {
+  ping: ['t', 'id'],
+  'term.launch': ['t', 'id', 'argv', 'cwd', 'env', 'cols', 'rows'],
+  'term.attach': ['t', 'id', 'from'],
+  'term.resize': ['t', 'id', 'cols', 'rows'],
+  'term.detach': ['t', 'id'],
+  'term.end': ['t', 'id'],
+}
+
+type Answer = { error: string } | Record<string, unknown>
+function refLaunch(v: any, os: Os): Answer {
+  const bad = { error: 'bad-field' }
+  const big = { error: 'too-large' }
+  if (!Array.isArray(v.argv) || v.argv.length === 0) return bad
+  if (v.argv.length > L.argv_items) return big
+  for (const a of v.argv) {
+    if (typeof a !== 'string') return bad
+    if (chars(a) > L.arg_chars) return big
+    if (a.includes('\0')) return bad
+  }
+  if (!isAbsolute(v.argv[0], os)) return bad
+  if (typeof v.cwd !== 'string') return bad
+  if (chars(v.cwd) > L.cwd_chars) return big
+  if (v.cwd.includes('\0') || !isAbsolute(v.cwd, os)) return bad
+  if (v.env === null || typeof v.env !== 'object' || Array.isArray(v.env)) return bad
+  const entries = Object.entries(v.env)
+  if (entries.length > L.env_entries) return big
+  const folded = new Set<string>()
+  for (const [name, value] of entries) {
+    if (name.length === 0) return bad
+    if (chars(name) > L.env_name_chars) return big
+    if (name.includes('=') || name.includes('\0')) return bad
+    if (typeof value !== 'string') return bad
+    if (chars(value) > L.env_value_chars) return big
+    if (value.includes('\0')) return bad
+    if (folded.has(name.toUpperCase())) return bad
+    folded.add(name.toUpperCase())
+  }
+  if (!isCells(v.cols) || !isCells(v.rows)) return bad
+  return { type: 'term.launch', id: v.id, argv: v.argv, cwd: v.cwd, env: entries, cols: v.cols, rows: v.rows }
+}
+
+/** A control message as a connection that acked `local` reads it. */
+function refRequest(textIn: string, os: Os): Answer {
+  const bad = { error: 'bad-field' }
+  const v = JSON.parse(textIn)
+  if (v === null || typeof v !== 'object' || Array.isArray(v) || typeof v.t !== 'string') return bad
+  const keys = Object.keys(v)
+  if (v.t === 'error') {
+    const want = 're' in v ? ['t', 're', 'code', 'text'] : ['t', 'code', 'text']
+    const ok = sameKeys(keys, want) && typeof v.code === 'string' && v.code.length >= 1 && v.code.length <= 32 && typeof v.text === 'string' && chars(v.text) <= limits.error_text_chars && (!('re' in v) || isOffset(v.re))
+    return ok ? { type: 'error' } : bad
+  }
+  const fields = LOCAL_FIELDS[v.t]
+  if (!fields) return { error: 'unknown-type' }
+  if (!isId(v.id) || !sameKeys(keys, fields)) return bad
+  switch (v.t) {
+    case 'term.launch':
+      return refLaunch(v, os)
+    case 'term.attach':
+      return isOffset(v.from) ? { type: v.t, id: v.id, from: v.from } : bad
+    case 'term.resize':
+      return isCells(v.cols) && isCells(v.rows) ? { type: v.t, id: v.id, cols: v.cols, rows: v.rows } : bad
+    default:
+      return { type: v.t, id: v.id }
+  }
+}
+
+function refEndpoint(e: string, sid: string, os: Os): boolean {
+  if (!new RegExp(limits.sid_pattern).test(sid)) return false
+  const random = new RegExp(`^[0-9a-f]{${L.endpoint_random_hex[os]}}$`)
+  if (os === 'windows') {
+    const prefix = `\\\\.\\pipe\\aicc-helper-${sid}-`
+    return e.startsWith(prefix) && random.test(e.slice(prefix.length))
+  }
+  const m = /^\/tmp\/aicc-([0-9]{1,10})\/(.*)\.sock$/.exec(e)
+  return !!m && m[2].startsWith(`${sid}-`) && random.test(m[2].slice(sid.length + 1))
+}
+
+function refRecord(r: any, os: Os): boolean {
+  if (r === null || typeof r !== 'object' || Array.isArray(r)) return false
+  if (!sameKeys(Object.keys(r), local.record_fields)) return false
+  if (r.v !== 1) return false
+  if (typeof r.session !== 'string' || !new RegExp(limits.sid_pattern).test(r.session)) return false
+  if (typeof r.label !== 'string' || chars(r.label) > L.label_chars || CONTROL.test(r.label)) return false
+  if (!Number.isInteger(r.pid) || r.pid < 1 || r.pid > 2 ** 32 - 1) return false
+  if (typeof r.endpoint !== 'string' || !refEndpoint(r.endpoint, r.session, os)) return false
+  if (typeof r.nonce !== 'string' || !new RegExp(limits.nonce_pattern).test(r.nonce)) return false
+  if (typeof r.helper !== 'string' || r.helper.length === 0 || chars(r.helper) > 64 || CONTROL.test(r.helper)) return false
+  if (!isOffset(r.started)) return false
+  if (!Number.isInteger(r.away) || r.away < 1 || r.away > L.away_max_secs) return false
+  if (typeof r.attached !== 'boolean' || !local.child_states.includes(r.child)) return false
+  // An exit code is the OS's: signed on Unix, either reading of 32 bits on Windows.
+  if (r.child === 'exited') return Number.isInteger(r.code) && r.code >= -(2 ** 31) && r.code <= 2 ** 32 - 1
+  return r.code === null
+}
+
+function refListing(line: string, os: Os): boolean {
+  const v = JSON.parse(line)
+  if (v === null || typeof v !== 'object' || JSON.stringify(Object.keys(v)) !== JSON.stringify(['v', 'sessions', 'removed', 'skipped'])) return false
+  return v.v === 1 && Array.isArray(v.sessions) && isOffset(v.removed) && isOffset(v.skipped) && v.sessions.every((r: unknown) => refRecord(r, os))
+}
+
+describe('helper fixtures: the local transport (section 15)', () => {
+  it('every request reads as its vector says, on each OS it applies to', () => {
+    expect(local.version).toBe(1)
+    expect(local.requests.valid.length).toBeGreaterThanOrEqual(12)
+    expect(local.requests.invalid.length).toBeGreaterThanOrEqual(30)
+    const names = [...local.requests.valid, ...local.requests.invalid].map((v: { name: string }) => v.name)
+    expect(new Set(names).size, 'names are unique').toBe(names.length)
+    for (const os of OSES) {
+      for (const v of local.requests.valid.filter((x: { os?: Os }) => appliesOn(x, os))) expect(refRequest(v.json, os), `${os}: ${v.name}`).toEqual(v.expect)
+      for (const v of local.requests.invalid.filter((x: { os?: Os }) => appliesOn(x, os))) {
+        expect(limits.error_codes, `${v.name}: a protocol error code`).toContain(v.error)
+        expect(refRequest(v.json, os), `${os}: ${v.name}`).toEqual({ error: v.error })
+      }
+    }
+    // Every limit is met at its edge, and refused one past it.
+    const all = local.requests.invalid.map((v: { name: string }) => v.name).join(' | ')
+    for (const needle of ['257 arguments', 'over 8192 characters', 'over 4096 characters', 'over 255 characters', '1001 rows', '0 columns', '2^53', 'differ only in case', 'by name, not path']) expect(all, needle).toContain(needle)
+    expect(local.requests.valid.some((v: { name: string }) => v.name.includes('256 arguments'))).toBe(true)
+  })
+
+  it('the launch frame is the bytes an independent encoder writes', () => {
+    const f = local.launch_frame
+    const d = refDecode(f.hex, f.flow)
+    expect('error' in d).toBe(false)
+    if ('error' in d) return
+    expect([d.kind, d.channel]).toEqual([0, 0])
+    expect(d.payload.toString('utf8')).toBe(f.payload_text)
+    expect(refEncode(0, 0, Buffer.from(f.payload_text, 'utf8'))).toBe(f.hex)
+    expect(refRequest(f.payload_text, 'unix')).toMatchObject({ type: 'term.launch' })
+  })
+
+  it('records and listings: strict, and valid ones are compact with their fields in order', () => {
+    for (const os of OSES) {
+      for (const v of local.records.valid.filter((x: { os?: Os }) => appliesOn(x, os))) {
+        expect(refRecord(v.record, os), `${os}: ${v.name}`).toBe(true)
+        expect(Object.keys(v.record), v.name).toEqual(local.record_fields)
+      }
+      for (const v of local.records.invalid.filter((x: { os?: Os }) => appliesOn(x, os))) expect(refRecord(v.record, os), `${os}: ${v.name}`).toBe(false)
+      for (const v of local.listing.valid.filter((x: { os?: Os }) => appliesOn(x, os))) {
+        expect(refListing(v.line, os), `${os}: ${v.name}`).toBe(true)
+        expect(JSON.stringify(JSON.parse(v.line)), `${v.name} is compact`).toBe(v.line)
+      }
+      for (const v of local.listing.invalid.filter((x: { os?: Os }) => appliesOn(x, os))) expect(refListing(v.line, os), `${os}: ${v.name}`).toBe(false)
+    }
+    expect(local.records.valid.some((v: { os?: Os }) => v.os === 'windows')).toBe(true)
+    expect(local.child_states).toEqual(['waiting', 'running', 'exited'])
+  })
+
+  it('endpoints: only this shape, on each OS', () => {
+    for (const os of OSES) {
+      for (const e of local.endpoint[os].valid) expect(refEndpoint(e, local.endpoint.sid, os), `${os}: ${e}`).toBe(true)
+      for (const e of local.endpoint[os].invalid) expect(refEndpoint(e, local.endpoint.sid, os), `${os}: ${e}`).toBe(false)
+    }
+  })
+
+  const doc = text('docs/remote/helper-protocol.md').replace(/\s+/g, ' ')
+  const section = doc.slice(doc.indexOf('## 15 Local transport'))
+
+  it('the numbers are the ones section 15 states', () => {
+    expect(doc).toContain('## 15 Local transport (protocol change 1)')
+    expect(section).toContain('`argv` holds 1 to 256 strings of at most 8192 characters')
+    expect(section).toContain('`cwd` is an absolute path of at most 4096 characters')
+    expect(section).toContain('It has at most 1024 entries; a name is 1 to 255 characters with no `=` or NUL character, a value at most 32767 characters')
+    expect(section).toContain('`cols` and `rows` are whole numbers from 1 to 1000')
+    expect(section).toContain('`--away` is 1 to 86400 seconds, default 120')
+    expect(section).toContain('a label is at most 128 characters')
+    expect(section).toContain('At most 16 connections at once')
+    expect(section).toContain('With no `hello.ack` in 10 s')
+    expect(section).toContain('with no frame from the app in 60 s')
+    expect(section).toContain('A write that has not finished in 5 s closes the connection')
+    expect(section).toContain('20 `bad-field` or `too-large` replies in 60 s are allowed')
+    expect(section).toContain('`caps` is `["core","local"]`')
+    expect(section).toContain('`\\\\.\\pipe\\aicc-helper-<sid>-<32 hex>`')
+    expect(section).toContain('`/tmp/aicc-<uid>/<sid>-<16 hex>.sock`')
+    expect(section).toContain('`D:P(A;;GA;;;<the user\'s SID>)`')
+    for (const f of local.record_fields) expect(section, f).toContain(`\`${f}\``)
+    for (const s of local.child_states) expect(section, s).toContain(`\`${s}\``)
+    for (const t of Object.keys(LOCAL_FIELDS).filter((t) => t !== 'ping')) expect(section, t).toContain(`\`${t}\``)
+    expect(local.caps).toEqual(['core', 'local'])
+    expect(L).toMatchObject({ argv_items: 256, arg_chars: 8192, cwd_chars: 4096, env_entries: 1024, env_name_chars: 255, env_value_chars: 32767, term_cells: 1000, label_chars: 128, away_default_secs: 120, away_max_secs: 86400, connections: 16, ack_timeout_secs: 10, idle_timeout_secs: 60, write_timeout_secs: 5, refusals_per_minute: 20, terminal_channel: 1 })
+    expect(L.endpoint_random_hex).toEqual({ windows: 32, unix: 16 })
+    expect(L.max_safe_integer).toBe(Number.MAX_SAFE_INTEGER)
+  })
+
+  it('the helper source holds the same numbers', () => {
+    const src = (file: string) => text(file)
+    const num = (file: string, name: string): number => {
+      const m = new RegExp(`const ${name}: \\w+ = ([0-9_]+);`).exec(src(file))
+      if (!m) throw new Error(`${name} not found in ${file}`)
+      return Number(m[1].replace(/_/g, ''))
+    }
+    const secs = (file: string, name: string): number => {
+      const m = new RegExp(`const ${name}: Duration = Duration::from_secs\\((\\d+)\\);`).exec(src(file))
+      if (!m) throw new Error(`${name} not found in ${file}`)
+      return Number(m[1])
+    }
+    expect(num('helper/src/request.rs', 'MAX_ARGV_ITEMS')).toBe(L.argv_items)
+    expect(num('helper/src/request.rs', 'MAX_ARG_CHARS')).toBe(L.arg_chars)
+    expect(num('helper/src/request.rs', 'MAX_CWD_CHARS')).toBe(L.cwd_chars)
+    expect(num('helper/src/request.rs', 'MAX_ENV_ENTRIES')).toBe(L.env_entries)
+    expect(num('helper/src/request.rs', 'MAX_ENV_NAME_CHARS')).toBe(L.env_name_chars)
+    expect(num('helper/src/request.rs', 'MAX_ENV_VALUE_CHARS')).toBe(L.env_value_chars)
+    expect(num('helper/src/request.rs', 'MAX_TERM_CELLS')).toBe(L.term_cells)
+    expect(num('helper/src/request.rs', 'MAX_SAFE_INTEGER')).toBe(L.max_safe_integer)
+    expect(num('helper/src/store.rs', 'MAX_LABEL_CHARS')).toBe(L.label_chars)
+    expect(num('helper/src/store.rs', 'DEFAULT_AWAY_SECS')).toBe(L.away_default_secs)
+    expect(num('helper/src/store.rs', 'MAX_AWAY_SECS')).toBe(L.away_max_secs)
+    expect(num('helper/src/serve.rs', 'MAX_CONNECTIONS')).toBe(L.connections)
+    expect(num('helper/src/serve.rs', 'REFUSALS_PER_MINUTE')).toBe(L.refusals_per_minute)
+    expect(num('helper/src/serve.rs', 'TERMINAL_CHANNEL')).toBe(L.terminal_channel)
+    expect(num('helper/src/holder.rs', 'LIVE_QUEUE_CHUNKS')).toBe(256)
+    expect(section).toContain('falls 256 chunks behind')
+    expect(secs('helper/src/serve.rs', 'ACK_TIMEOUT')).toBe(L.ack_timeout_secs)
+    expect(secs('helper/src/serve.rs', 'IDLE_TIMEOUT')).toBe(L.idle_timeout_secs)
+    expect(secs('helper/src/transport/mod.rs', 'WRITE_TIMEOUT')).toBe(L.write_timeout_secs)
+    const hex = [...src('helper/src/transport/mod.rs').matchAll(/#\[cfg\((windows|unix)\)\]\npub const ENDPOINT_RANDOM_HEX: usize = (\d+);/g)].map((m) => [m[1], Number(m[2])])
+    expect(Object.fromEntries(hex)).toEqual(L.endpoint_random_hex)
+    expect(/pub const LOCAL_CAPS: \[&str; 2\] = \["core", "local"\];/.test(src('helper/src/hello.rs'))).toBe(true)
+    const fields = /const FIELDS: \[&str; (\d+)\] = \[([^\]]*)\];/.exec(src('helper/src/store.rs'))
+    expect(fields, 'FIELDS in store.rs').not.toBeNull()
+    expect([...fields![2].matchAll(/"([a-z]+)"/g)].map((m) => m[1])).toEqual(local.record_fields)
   })
 })

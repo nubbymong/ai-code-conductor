@@ -4,6 +4,11 @@
   app quitting and the installer running over the app, on Windows?
 
 .DESCRIPTION
+  Answered and superseded: P7 ran on 2026-11-15 against the 2.1.3-beta.5
+  skeleton (result in ADR-030). It drives the file-based commands of that
+  skeleton (hold --dir, attach, end), which beta 6 replaced with the local
+  transport; run it with the helper-windows artifact of a 2.1.3-beta.5 build.
+
   Decision it feeds: ADR-030 (probe table), and with it how beta 6 starts the
   helper holding local sessions. The helper is dormant today; this probe uses
   the skeleton's holder with the fake CLI as the held child, so no real CLI,

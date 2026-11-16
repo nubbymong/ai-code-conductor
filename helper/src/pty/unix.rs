@@ -1,16 +1,24 @@
 //! The Unix terminal: `openpty`, the child on the slave side with a new
 //! session and the slave as its controlling terminal.
 //!
-//! The only unsafe code in the helper sits in this file, the Windows one and
-//! `detach.rs`: calls into the C library that have no safe form in `std`.
+//! The new session is also a new process group whose id is the child's pid,
+//! so `end_tree` reaches everything the child started that stayed in it: a
+//! hangup first, as a closed terminal would send, then a kill.
+//!
+//! Unsafe code sits only in the modules that call the C library or the
+//! Windows API where `std` has no safe form; the library denies it elsewhere.
 #![allow(unsafe_code)]
 
-use super::{check_argv, PtySize};
+use super::{check_argv, check_cwd, check_env, PtySize, SpawnOptions};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::FromRawFd;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// What a launch adds when its environment has no `TERM`.
+const DEFAULT_TERM: &str = "xterm-256color";
 
 pub struct Pty {
     master: File,
@@ -22,11 +30,22 @@ fn winsize(size: PtySize) -> libc::winsize {
 }
 
 impl Pty {
+    /// Start `argv` with the holder's own folder and environment.
     pub fn spawn(argv: &[String], size: PtySize) -> io::Result<(Pty, Box<dyn Read + Send>)> {
-        check_argv(argv)?;
+        Pty::spawn_with(&SpawnOptions { argv, cwd: None, env: None, size })
+    }
+
+    pub fn spawn_with(opts: &SpawnOptions) -> io::Result<(Pty, Box<dyn Read + Send>)> {
+        check_argv(opts.argv)?;
+        if let Some(env) = opts.env {
+            check_env(env)?;
+        }
+        if let Some(cwd) = opts.cwd {
+            check_cwd(cwd)?;
+        }
         let mut master_fd: libc::c_int = -1;
         let mut slave_fd: libc::c_int = -1;
-        let ws = winsize(size);
+        let ws = winsize(opts.size);
         // The null terminal settings and the window size are passed as the
         // pointer types every libc version of `openpty` accepts.
         let rc = unsafe {
@@ -50,10 +69,26 @@ impl Pty {
             libc::fcntl(slave_fd, libc::F_SETFD, libc::FD_CLOEXEC);
         }
 
+        let argv = opts.argv;
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..]);
-        if std::env::var_os("TERM").is_none() {
-            cmd.env("TERM", "xterm-256color");
+        match opts.env {
+            Some(env) => {
+                // The launch's environment is the child's whole environment.
+                cmd.env_clear();
+                cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+                if !env.iter().any(|(k, _)| k == "TERM") {
+                    cmd.env("TERM", DEFAULT_TERM);
+                }
+            }
+            None => {
+                if std::env::var_os("TERM").is_none() {
+                    cmd.env("TERM", DEFAULT_TERM);
+                }
+            }
+        }
+        if let Some(cwd) = opts.cwd {
+            cmd.current_dir(cwd);
         }
         cmd.stdin(Stdio::from(slave.try_clone()?));
         cmd.stdout(Stdio::from(slave.try_clone()?));
@@ -108,10 +143,52 @@ impl Pty {
         }
     }
 
-    pub fn kill(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+    /// End the whole tree: hang up the child's process group, give it `grace`
+    /// to go, then kill whatever is left of it.
+    pub fn end_tree(&mut self, grace: Duration) {
+        let pgid = self.child.id() as libc::pid_t;
+        // The group is the child's own (setsid above); never signal group 0
+        // (our own) or 1.
+        if pgid <= 1 {
+            return;
+        }
+        unsafe {
+            libc::killpg(pgid, libc::SIGHUP);
+            libc::killpg(pgid, libc::SIGCONT);
+        }
+        let deadline = Instant::now() + grace;
+        loop {
+            // Reap the first process as it goes, so it does not linger as a
+            // zombie that keeps the group alive.
+            let _ = self.child.try_wait();
+            if unsafe { libc::killpg(pgid, 0) } != 0 {
+                break;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            match self.child.try_wait() {
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                _ => break,
+            }
+        }
     }
+
+    /// End the tree at once.
+    pub fn kill(&mut self) {
+        self.end_tree(Duration::ZERO);
+    }
+
+    /// Nothing to do on Unix: the reader ends when the last process holding
+    /// the terminal is gone.
+    pub fn close_output(&mut self) {}
 }
 
 impl Drop for Pty {

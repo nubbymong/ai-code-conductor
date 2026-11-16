@@ -1,16 +1,19 @@
 //! Start a copy of a program that outlives the process that started it: the
 //! holder is that program (protocol section 5: "only the holder outlives a
-//! connection"). Whether it also outlives the app being closed and the
-//! installer running over the app, on Windows, is probe P7
-//! (helper/probes/p7-windows-survival.ps1).
+//! connection"). On Windows the copy leaves the starter's job when the job
+//! allows it; probe P7 (helper/probes/p7-windows-survival.ps1) showed a
+//! holder started this way outlives the app and the installer.
+//!
+//! The child is returned, never waited for by the caller once it is up, so
+//! `hold --detach` can tell a holder that failed at once from one that runs.
 #![allow(unsafe_code)]
 
 use std::io;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 #[cfg(unix)]
-pub fn spawn_detached(program: &Path, args: &[String]) -> io::Result<u32> {
+pub fn spawn_detached(program: &Path, args: &[String]) -> io::Result<Child> {
     use std::os::unix::process::CommandExt;
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -23,9 +26,7 @@ pub fn spawn_detached(program: &Path, args: &[String]) -> io::Result<u32> {
             Ok(())
         });
     }
-    let child = cmd.spawn()?;
-    // The child is not waited for: it is meant to outlive us.
-    Ok(child.id())
+    cmd.spawn()
 }
 
 /// std starts a child with handle inheritance on, so a holder started with
@@ -49,23 +50,23 @@ fn stop_inheriting_std_handles() {
 }
 
 #[cfg(windows)]
-pub fn spawn_detached(program: &Path, args: &[String]) -> io::Result<u32> {
+pub fn spawn_detached(program: &Path, args: &[String]) -> io::Result<Child> {
     use std::os::windows::process::CommandExt;
     stop_inheriting_std_handles();
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-    let attempt = |flags: u32| -> io::Result<u32> {
+    let attempt = |flags: u32| -> io::Result<Child> {
         let mut cmd = Command::new(program);
         cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         cmd.creation_flags(flags);
-        Ok(cmd.spawn()?.id())
+        cmd.spawn()
     };
     // Leave the parent's job if it allows that, so ending the job does not end
     // the holder; a job that forbids it refuses the flag, and the holder then
-    // starts without it (probe P7 reports what happened).
+    // starts without it.
     match attempt(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB) {
-        Ok(pid) => Ok(pid),
+        Ok(child) => Ok(child),
         Err(_) => attempt(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP),
     }
 }

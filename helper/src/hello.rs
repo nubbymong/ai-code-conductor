@@ -22,8 +22,11 @@ pub const MAX_RESULT_LINE: usize = 1024 * 1024;
 pub const MAX_ERROR_TEXT_CHARS: usize = 512;
 /// The protocol version this helper speaks.
 pub const PROTO_VERSIONS: [u64; 1] = [1];
-/// The capabilities of this skeleton: the frozen core only.
+/// The capabilities of the one-shot `hello` command: the frozen core only.
 pub const CAPS: [&str; 1] = ["core"];
+/// The capabilities a holder offers on its local pipe or socket: the frozen
+/// core, and `local` for the terminal messages of protocol section 15.
+pub const LOCAL_CAPS: [&str; 2] = ["core", "local"];
 
 /// What a session can be when the helper answers (section 7).
 pub const STATES: [&str; 7] = ["new", "live", "unmanaged", "stale", "orphaned", "elsewhere", "unknown"];

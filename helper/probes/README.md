@@ -55,6 +55,15 @@ fail, 2 could not run.
 - **Everything survived but replay failed:** a ring or transport problem, not a
   survival problem; it does not change the answer to P7.
 
-The probe uses the skeleton's file-based transport (`src/dirhold.rs`), not the
-real local transport, so it answers the survival and replay question only.
-Record the result in ADR-030's probe table.
+The probe uses the skeleton's file-based transport, not the real local
+transport, so it answers the survival and replay question only. Record the
+result in ADR-030's probe table.
+
+## Status: answered, and superseded
+
+P7 ran on 2026-11-15 against the 2.1.3-beta.5 skeleton; the answer is in
+ADR-030's probe table. In beta 6 the local transport (protocol section 15)
+replaced the file-based one, and the `hold --dir`, `attach` and `end` commands
+this script drives are gone. To run it again, use the `helper-windows` artifact
+of a 2.1.3-beta.5 build. Survival over the new transport is covered by
+`tests/probe_transport.rs` in CI, short of the installer step.

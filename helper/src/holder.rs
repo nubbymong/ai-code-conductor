@@ -1,16 +1,20 @@
 //! The holder: owns one terminal with one child, keeps an output ring, and lets
-//! a terminal client attach, detach and attach again (protocol section 5).
+//! a terminal client attach, detach and attach again (protocol sections 5 and
+//! 15).
 //!
-//! This skeleton holds everything in one process and hands an attachment out
-//! as a replay plus a live channel. The local transport that would carry
-//! attachments between processes (a socket, a named pipe) is a later slice;
-//! `dirhold.rs` is the stand-in the probes use.
+//! This is the terminal half. `serve.rs` puts it behind the local pipe or
+//! socket; the tests also drive it in one process.
 //!
 //! Slots: the holder has a terminal slot. The newest `attach` takes it; the one
 //! it replaced has its live channel closed, which is how an older connection
 //! learns it was replaced.
+//!
+//! When the first process exits, the holder ends what is left of its tree,
+//! lets the last output drain (at most `DRAIN`), and only then reports the
+//! exit code and closes the live channel. So a client that sees the channel
+//! close with `exit_code()` set has had every byte of output first.
 
-use crate::pty::{Pty, PtySize};
+use crate::pty::{Pty, PtySize, SpawnOptions};
 use crate::ring::{Replay, Ring, RingError};
 use std::io::{self, Read};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
@@ -24,6 +28,12 @@ use std::time::{Duration, Instant};
 /// attaching again from the offset it last saw (the ring replays the rest).
 pub const LIVE_QUEUE_CHUNKS: usize = 256;
 
+/// How long the rest of the tree has after a hangup before it is killed.
+pub const END_GRACE: Duration = Duration::from_secs(2);
+
+/// How long the last output may take to drain once the first process exited.
+pub const DRAIN: Duration = Duration::from_secs(2);
+
 /// Hand `chunk` to an attachment without ever waiting. False means the
 /// attachment is gone or too far behind and should be let go.
 fn offer(tx: &SyncSender<Vec<u8>>, chunk: Vec<u8>) -> bool {
@@ -36,6 +46,7 @@ fn offer(tx: &SyncSender<Vec<u8>>, chunk: Vec<u8>) -> bool {
 struct State {
     ring: Ring,
     terminal: Option<SyncSender<Vec<u8>>>,
+    /// Set once the first process has exited AND the output has drained.
     exit_code: Option<i32>,
     output_ended: bool,
 }
@@ -44,7 +55,7 @@ struct Shared {
     state: Mutex<State>,
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // A panicked thread must not take the holder down with it.
     match m.lock() {
         Ok(g) => g,
@@ -61,16 +72,25 @@ pub struct Holder {
 /// What `attach` hands the client: what it missed, then what comes next.
 pub struct Attachment {
     pub replay: Replay,
-    /// New output as it arrives. It closes when the session's output ends or
-    /// when a newer attachment replaced this one.
+    /// New output as it arrives. It closes when the session is over (then
+    /// `Holder::exit_code` is set), when a newer attachment replaced this one,
+    /// or when this one fell `LIVE_QUEUE_CHUNKS` behind.
     pub live: Receiver<Vec<u8>>,
+    /// Set when the session was already over at the attach: then `live` is
+    /// closed from the start and `replay` holds the last of the output.
+    pub exit_code: Option<i32>,
 }
 
 impl Holder {
-    /// Start `argv` on a new terminal and hold it. `ring_bytes` is the size of
-    /// the output ring.
+    /// Start `argv` on a new terminal with the holder's own folder and
+    /// environment, and hold it. `ring_bytes` is the size of the output ring.
     pub fn start(argv: &[String], size: PtySize, ring_bytes: usize) -> io::Result<Holder> {
-        let (pty, mut reader) = Pty::spawn(argv, size)?;
+        Holder::start_with(&SpawnOptions { argv, cwd: None, env: None, size }, ring_bytes)
+    }
+
+    /// Start what `opts` names on a new terminal and hold it.
+    pub fn start_with(opts: &SpawnOptions, ring_bytes: usize) -> io::Result<Holder> {
+        let (pty, mut reader) = Pty::spawn_with(opts)?;
         let pid = pty.pid();
         let shared = Arc::new(Shared {
             state: Mutex::new(State { ring: Ring::new(ring_bytes), terminal: None, exit_code: None, output_ended: false }),
@@ -98,30 +118,40 @@ impl Holder {
                     st.terminal = None;
                 }
             }
-            let mut st = lock(&out_shared.state);
-            st.output_ended = true;
-            // Dropping the sender closes the live channel: the output is over.
-            st.terminal = None;
+            // The live channel stays open: it closes once the exit is known,
+            // so a client never sees it close before the code is set.
+            lock(&out_shared.state).output_ended = true;
         });
 
         // Exit: the child is watched by polling. On Windows the output pipe does
         // not end when the child does, so the reader cannot be the signal.
         let watch_shared = Arc::clone(&shared);
         let watch_pty = Arc::clone(&pty);
-        thread::spawn(move || loop {
-            let status = lock(&watch_pty).try_wait();
-            match status {
-                Ok(Some(code)) => {
-                    lock(&watch_shared.state).exit_code = Some(code);
-                    return;
+        thread::spawn(move || {
+            let code = loop {
+                let status = lock(&watch_pty).try_wait();
+                match status {
+                    Ok(Some(code)) => break code,
+                    Ok(None) => {}
+                    Err(_) => break -1,
                 }
-                Ok(None) => {}
-                Err(_) => {
-                    lock(&watch_shared.state).exit_code = Some(-1);
-                    return;
-                }
+                thread::sleep(Duration::from_millis(25));
+            };
+            // The first process is gone: end what it left behind on the
+            // terminal, then close the terminal so the output can end.
+            {
+                let mut p = lock(&watch_pty);
+                p.end_tree(END_GRACE);
+                p.close_output();
             }
-            thread::sleep(Duration::from_millis(25));
+            let deadline = Instant::now() + DRAIN;
+            while !lock(&watch_shared.state).output_ended && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            let mut st = lock(&watch_shared.state);
+            st.exit_code = Some(code);
+            // Dropping the sender closes the live channel after the last chunk.
+            st.terminal = None;
         });
 
         Ok(Holder { shared, pty, pid })
@@ -152,13 +182,15 @@ impl Holder {
         let mut st = lock(&self.shared.state);
         let replay = st.ring.replay_from(from)?;
         let (tx, rx) = mpsc::sync_channel(LIVE_QUEUE_CHUNKS);
-        if st.output_ended {
-            // Nothing more will come: leave the channel closed.
+        let exit_code = st.exit_code;
+        if exit_code.is_some() {
+            // The session is over and its output drained: nothing more will come.
             drop(tx);
+            st.terminal = None;
         } else {
             st.terminal = Some(tx);
         }
-        Ok(Attachment { replay, live: rx })
+        Ok(Attachment { replay, live: rx, exit_code })
     }
 
     /// Leave the terminal slot without touching the session: the child keeps
@@ -167,7 +199,7 @@ impl Holder {
         lock(&self.shared.state).terminal = None;
     }
 
-    /// The child's exit code, once it has exited.
+    /// The child's exit code, once it has exited and its output has drained.
     pub fn exit_code(&self) -> Option<i32> {
         lock(&self.shared.state).exit_code
     }
@@ -186,7 +218,18 @@ impl Holder {
         }
     }
 
-    /// Stop the child.
+    /// End the session: the whole tree, a hangup first and a kill after
+    /// `END_GRACE`. Returns the exit code once known (at most a few seconds).
+    pub fn end(&self) -> Option<i32> {
+        {
+            let mut p = lock(&self.pty);
+            p.end_tree(END_GRACE);
+            p.close_output();
+        }
+        self.wait_exit(END_GRACE + DRAIN + Duration::from_secs(2))
+    }
+
+    /// Stop the child and its tree at once.
     pub fn kill(&self) {
         lock(&self.pty).kill();
     }
@@ -218,7 +261,7 @@ impl Holder {
 impl Drop for Holder {
     fn drop(&mut self) {
         // A holder that is dropped ends its child; the process that wants the
-        // child to outlive it never drops the holder (it runs `hold`).
+        // child to outlive a connection keeps the holder (`serve.rs`).
         lock(&self.pty).kill();
     }
 }
@@ -242,7 +285,8 @@ mod tests {
     }
 
     #[test]
-    fn the_queue_is_bounded() {
+    fn the_queue_and_the_waits_are_bounded() {
         assert!(LIVE_QUEUE_CHUNKS > 0 && LIVE_QUEUE_CHUNKS <= 1024);
+        assert!(END_GRACE <= Duration::from_secs(5) && DRAIN <= Duration::from_secs(5));
     }
 }

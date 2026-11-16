@@ -85,6 +85,29 @@ impl Value {
         }
     }
 
+    /// An integer written with digits only, after an optional minus sign (no
+    /// point or exponent): an exit code.
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            Value::Num(n) => {
+                let digits = n.strip_prefix('-').unwrap_or(n);
+                if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                    return None;
+                }
+                n.parse::<i64>().ok()
+            }
+            _ => None,
+        }
+    }
+
+    /// The names of an object's members, in order; None for anything else.
+    pub fn keys(&self) -> Option<Vec<&str>> {
+        match self {
+            Value::Obj(members) => Some(members.iter().map(|(k, _)| k.as_str()).collect()),
+            _ => None,
+        }
+    }
+
     /// True when arrays and objects nest at most `limit` levels deep. It stops
     /// at the limit, so a hostile or runaway value costs no deep recursion.
     pub fn fits_depth(&self, limit: usize) -> bool {

@@ -1,17 +1,21 @@
 //! The self-test (protocol section 13: a self-test of the codec, the ring and a
-//! terminal round trip, run after install and before the first session).
+//! terminal round trip, run after install and before the first session; and,
+//! from section 15, a round trip over the local pipe or socket).
 //!
 //! It prints one `AICC-RESULT <nonce> <json>` line; the exit status is 0 only
 //! when every check passed.
 
-use crate::frame::{self, Direction, Frame};
-use crate::hello::{self, Hello, CAPS};
+use crate::client::Client;
+use crate::frame::{self, Body, Direction, Frame};
+use crate::hello::{self, Hello, CAPS, LOCAL_CAPS};
 use crate::holder::Holder;
 use crate::json::Value;
 use crate::pty::PtySize;
 use crate::ring::Ring;
+use crate::transport::Listener;
 use std::io::{BufRead, Write};
 use std::path::Path;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 pub struct Check {
@@ -115,12 +119,70 @@ fn terminal_round_trip(exe: &Path) -> Result<(), String> {
     result
 }
 
+/// The listening side of the transport round trip: one connection, a hello,
+/// one ping answered with a pong.
+fn answer_one(listener: &Listener, nonce: &str, sid: &str) -> Result<(), String> {
+    let mut s = listener.accept().map_err(|e| format!("accept failed: {e}"))?;
+    let line = hello::hello_line(&Hello {
+        nonce,
+        helper_version: env!("CARGO_PKG_VERSION"),
+        sha256: None,
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        caps: &LOCAL_CAPS,
+        sid,
+        state: "new",
+    })
+    .map_err(|e| e.why)?;
+    s.write_all(format!("{line}\n").as_bytes()).map_err(|e| format!("could not write the hello: {e}"))?;
+    s.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
+    let f = frame::read_frame(&mut s, Direction::AppToHelper).map_err(|e| e.to_string())?.ok_or("the client closed before its ping")?;
+    let id = match &f.body {
+        Body::Json(v) if v.get("t").and_then(Value::as_str) == Some("ping") => v.get("id").and_then(Value::as_u64).ok_or("the ping has no id")?,
+        _ => return Err("the first frame was not a ping".to_string()),
+    };
+    let pong = Frame::json(0, Value::obj(vec![("t", Value::str("pong")), ("re", Value::uint(id))]));
+    let bytes = frame::encode(&pong, Direction::HelperToApp).map_err(|e| e.to_string())?;
+    s.write_all(&bytes).map_err(|e| format!("could not write the pong: {e}"))?;
+    Ok(())
+}
+
+/// A round trip over the local transport: listen on a private endpoint
+/// (checked: user only), connect to it, read the hello, ping and be answered.
+fn transport_round_trip() -> Result<(), String> {
+    let sid = "selftest-0001";
+    let listener = Arc::new(Listener::bind(sid).map_err(|e| format!("could not listen: {e}"))?);
+    let result = (|| -> Result<(), String> {
+        listener.check_private()?;
+        let nonce = crate::random::hex(16).map_err(|e| e.to_string())?;
+        let (done_tx, done_rx) = mpsc::channel();
+        let server = Arc::clone(&listener);
+        let server_nonce = nonce.clone();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(answer_one(&server, &server_nonce, sid));
+        });
+        let mut c = Client::connect(listener.endpoint(), &nonce, sid, Duration::from_secs(10)).map_err(|e| format!("could not connect: {e}"))?;
+        c.send(Value::obj(vec![("t", Value::str("ping")), ("id", Value::uint(2))])).map_err(|e| e.to_string())?;
+        let answer = c.recv(Duration::from_secs(10)).map_err(|e| format!("no answer: {e}"))?;
+        let pong = matches!(&answer, Some(Frame { body: Body::Json(v), .. })
+            if v.get("t").and_then(Value::as_str) == Some("pong") && v.get("re").and_then(Value::as_u64) == Some(2));
+        if !pong {
+            return Err("the answer was not the pong".to_string());
+        }
+        // The listening side reports too; it is not waited for without limit.
+        done_rx.recv_timeout(Duration::from_secs(10)).map_err(|_| "the listening side did not finish".to_string())?
+    })();
+    listener.remove();
+    result
+}
+
 pub fn run(exe: &Path) -> Vec<Check> {
     vec![
         check("frame-codec", frame_round_trip()),
         check("hello", hello_round_trip()),
         check("ring", ring_offsets()),
         check("terminal-hold-attach", terminal_round_trip(exe)),
+        check("local-transport", transport_round_trip()),
     ]
 }
 

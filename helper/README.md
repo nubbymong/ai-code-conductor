@@ -17,16 +17,19 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | JSON | `src/json.rs` | A small reader and writer (depth limit 32), so there is no JSON crate |
 | Hello | `src/hello.rs` | `AICC-HELLO <nonce> <json>`, `hello.ack`, version choice, `error`, `AICC-RESULT` lines |
 | Output ring | `src/ring.rs` | Bytes at fixed offsets, a 2 MiB window, replay from an offset, "too short" reported |
-| Terminal | `src/pty/` | openpty on Unix, ConPTY on Windows |
-| Holder | `src/holder.rs` | Holds one terminal and child; attach, detach, re-attach with replay; the newest attach replaces the older |
-| Self-test | `src/selftest.rs` | Codec, hello, ring and a terminal round trip, one `AICC-RESULT` line |
-| Probe transport | `src/dirhold.rs`, `src/detach.rs` | `hold`, `attach`, `end` through files in a folder, so a probe can attach from another process. A stand-in for the local socket or named pipe, which is a later slice |
+| Terminal | `src/pty/` | openpty on Unix, ConPTY on Windows; the program's folder and whole environment; a job object on Windows, a process group on Unix |
+| Holder | `src/holder.rs` | Holds one terminal and child; attach, detach, re-attach with replay; the newest attach replaces the older; ends the whole process tree |
+| Local transport | `src/transport/` | One endpoint per holder that only this user can reach: a named pipe on Windows, a Unix socket in a private folder elsewhere |
+| Holder process | `src/serve.rs`, `src/request.rs`, `src/detach.rs` | `hold`: the hello, the `term.*` messages, the away clock; started detached so it outlives the app |
+| Records and list | `src/store.rs`, `src/client.rs`, `src/pids.rs` | Each holder's record in the store folder; `list` finds every session and removes stale records |
+| Self-test | `src/selftest.rs` | Codec, hello, ring, a terminal round trip and a round trip over the local transport, one `AICC-RESULT` line |
 | Fake CLI | `src/bin/aicc-fake-cli.rs` | A stand-in provider CLI for tests and probes |
-| Fixtures | `fixtures/*.json` | Frame, hello and limit vectors read by the Rust tests and by `tests/unit/scripts/helper-fixtures.test.ts` |
+| Fixtures | `fixtures/*.json` | Frame, hello, limit and local transport vectors read by the Rust tests and by `tests/unit/scripts/helper-fixtures.test.ts` |
 
-Not in it yet: signing, the hash manifest, seccomp, the local socket or named
-pipe, the event spool and `since_seq`, `serve`, `emit`, `mcp`, and anything the
-app calls. Those are later slices.
+The local transport is protocol section 15. Not in it yet: signing, the hash
+manifest, seccomp, the event spool and `since_seq`, the remote `serve`, `emit`,
+`mcp`, and the app side (the app does not start a holder yet). Those are later
+slices.
 
 ## Commands
 
@@ -34,10 +37,14 @@ app calls. Those are later slices.
 aicc-helper version
 aicc-helper hello --nonce <32 hex> --session <sid> [--state new] [--sha256 <64 hex>]
 aicc-helper selftest [--nonce <32 hex>]
-aicc-helper hold --dir <folder> --session <sid> [--detach] -- <program> [args...]
-aicc-helper attach --dir <folder> [--from <offset>] [--send <text>] [--wait-ms N]
-aicc-helper end --dir <folder>
+aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes <n>] [--detach]
+aicc-helper list --store <folder>
 ```
+
+`hold --detach` prints the holder's record as one JSON line once the holder
+listens; the app then connects to the record's endpoint, launches the program
+with `term.launch` and attaches with `term.attach`. `list` prints every session
+in the store, as protocol section 15 describes.
 
 ## Building and testing
 

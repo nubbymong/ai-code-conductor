@@ -2,23 +2,34 @@
 //! attached to it. Two anonymous pipes carry the bytes: the child's input
 //! comes from `in_*`, its output goes to `out_*`.
 //!
+//! The child starts suspended, is put in a job object the holder owns, and
+//! only then runs, so nothing it starts can leave the job: `end_tree` ends the
+//! job and with it the whole tree. The job ends its processes when its last
+//! handle closes, so a holder that dies takes its session with it. The holder
+//! itself is never put in a job (probe P7).
+//!
 //! Handle types differ between `windows-sys` versions (an integer or a
 //! pointer), so handles are held as `usize` and converted with `as` at each
 //! call, which both forms accept.
 #![allow(unsafe_code)]
 
-use super::{check_argv, PtySize};
+use super::{check_argv, check_cwd, check_env, PtySize, SpawnOptions};
 use crate::cmdline::build_command_line;
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
+use std::time::Duration;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Console::{ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON};
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList, TerminateProcess,
+    CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList, ResumeThread, TerminateProcess,
     UpdateProcThreadAttribute, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOEXW,
 };
 
@@ -26,14 +37,22 @@ use windows_sys::Win32::System::Threading::{
 const ATTR_PSEUDOCONSOLE: usize = 0x0002_0016;
 /// `EXTENDED_STARTUPINFO_PRESENT`.
 const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
+/// `CREATE_SUSPENDED`: the child runs only once it is in the job.
+const CREATE_SUSPENDED: u32 = 0x0000_0004;
+/// `CREATE_UNICODE_ENVIRONMENT`: the environment block is UTF-16.
+const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
 /// `STARTF_USESTDHANDLES`.
 const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
 /// `INVALID_HANDLE_VALUE` (-1) as an integer, converted with `as` at the use.
 const INVALID_HANDLE: usize = usize::MAX;
+/// How long `end_tree` waits for the first process to be gone.
+const END_WAIT_MS: u32 = 5000;
 
 pub struct Pty {
+    /// The pseudoconsole; 0 once it is closed.
     pseudo_console: usize,
     process: usize,
+    job: usize,
     pid: u32,
     input: File,
     exit: Option<i32>,
@@ -48,30 +67,103 @@ fn os_error(what: &str) -> io::Error {
     io::Error::new(e.kind(), format!("{what}: {e}"))
 }
 
+fn wide(s: &str) -> Vec<u16> {
+    std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+}
+
 unsafe fn close(handle: usize) {
     CloseHandle(handle as HANDLE);
 }
 
+/// The block `CreateProcessW` takes with `CREATE_UNICODE_ENVIRONMENT`:
+/// `NAME=value` strings, each ended by a NUL, sorted by name without regard
+/// to case as Windows expects, then one more NUL.
+pub(crate) fn env_block(env: &[(String, String)]) -> Vec<u16> {
+    let mut pairs: Vec<&(String, String)> = env.iter().collect();
+    pairs.sort_by_cached_key(|pair| pair.0.to_uppercase());
+    let mut block: Vec<u16> = Vec::new();
+    for pair in pairs {
+        block.extend(std::ffi::OsStr::new(&pair.0).encode_wide());
+        block.push(u16::from(b'='));
+        block.extend(std::ffi::OsStr::new(&pair.1).encode_wide());
+        block.push(0);
+    }
+    if block.is_empty() {
+        // An empty block is two NULs.
+        block.push(0);
+    }
+    block.push(0);
+    block
+}
+
+/// A job object that ends its processes when its last handle closes.
+unsafe fn new_job() -> io::Result<usize> {
+    let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+    if job.is_null() {
+        return Err(os_error("CreateJobObjectW"));
+    }
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    let ok = SetInformationJobObject(
+        job,
+        JobObjectExtendedLimitInformation,
+        &limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION as *const c_void,
+        std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+    );
+    if ok == 0 {
+        let e = os_error("SetInformationJobObject");
+        CloseHandle(job);
+        return Err(e);
+    }
+    Ok(job as usize)
+}
+
+/// Undo a start that failed after the pseudoconsole was made.
+unsafe fn undo(hpc: HPCON, in_write: usize, out_read: usize, job: usize) {
+    ClosePseudoConsole(hpc);
+    close(in_write);
+    close(out_read);
+    close(job);
+}
+
 impl Pty {
+    /// Start `argv` with the holder's own folder and environment.
     pub fn spawn(argv: &[String], size: PtySize) -> io::Result<(Pty, Box<dyn Read + Send>)> {
-        check_argv(argv)?;
+        Pty::spawn_with(&SpawnOptions { argv, cwd: None, env: None, size })
+    }
+
+    pub fn spawn_with(opts: &SpawnOptions) -> io::Result<(Pty, Box<dyn Read + Send>)> {
+        check_argv(opts.argv)?;
+        if let Some(env) = opts.env {
+            check_env(env)?;
+        }
+        if let Some(cwd) = opts.cwd {
+            check_cwd(cwd)?;
+        }
+        let mut cmdline: Vec<u16> = wide(&build_command_line(opts.argv));
+        let cwd: Option<Vec<u16>> = opts.cwd.map(wide);
+        let block: Option<Vec<u16>> = opts.env.map(env_block);
         unsafe {
+            let job = new_job()?;
             let mut in_read: HANDLE = std::mem::zeroed();
             let mut in_write: HANDLE = std::mem::zeroed();
             let mut out_read: HANDLE = std::mem::zeroed();
             let mut out_write: HANDLE = std::mem::zeroed();
             if CreatePipe(&mut in_read, &mut in_write, std::ptr::null(), 0) == 0 {
-                return Err(os_error("CreatePipe (input)"));
+                let e = os_error("CreatePipe (input)");
+                close(job);
+                return Err(e);
             }
             if CreatePipe(&mut out_read, &mut out_write, std::ptr::null(), 0) == 0 {
                 let e = os_error("CreatePipe (output)");
                 close(in_read as usize);
                 close(in_write as usize);
+                close(job);
                 return Err(e);
             }
 
             let mut hpc: HPCON = std::mem::zeroed();
-            let hr = CreatePseudoConsole(coord(size), in_read, out_write, 0, &mut hpc);
+            let hr = CreatePseudoConsole(coord(opts.size), in_read, out_write, 0, &mut hpc);
             // The pseudoconsole holds its own ends now; ours are closed so the
             // pipes end when it does.
             close(in_read as usize);
@@ -79,6 +171,7 @@ impl Pty {
             if hr != 0 {
                 close(in_write as usize);
                 close(out_read as usize);
+                close(job);
                 return Err(io::Error::new(io::ErrorKind::Other, format!("CreatePseudoConsole failed: 0x{:08x}", hr as u32)));
             }
 
@@ -90,9 +183,7 @@ impl Pty {
             let list = storage.as_mut_ptr() as *mut c_void;
             if InitializeProcThreadAttributeList(list as _, 1, 0, &mut list_bytes) == 0 {
                 let e = os_error("InitializeProcThreadAttributeList");
-                ClosePseudoConsole(hpc);
-                close(in_write as usize);
-                close(out_read as usize);
+                undo(hpc, in_write as usize, out_read as usize, job);
                 return Err(e);
             }
             if UpdateProcThreadAttribute(
@@ -107,9 +198,7 @@ impl Pty {
             {
                 let e = os_error("UpdateProcThreadAttribute");
                 DeleteProcThreadAttributeList(list as _);
-                ClosePseudoConsole(hpc);
-                close(in_write as usize);
-                close(out_read as usize);
+                undo(hpc, in_write as usize, out_read as usize, job);
                 return Err(e);
             }
 
@@ -125,32 +214,60 @@ impl Pty {
             startup.StartupInfo.hStdError = INVALID_HANDLE as HANDLE;
             startup.lpAttributeList = list as _;
             let mut info: PROCESS_INFORMATION = std::mem::zeroed();
-            let mut cmdline: Vec<u16> = std::ffi::OsStr::new(&build_command_line(argv)).encode_wide().chain(std::iter::once(0)).collect();
+            let mut flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED;
+            if block.is_some() {
+                flags |= CREATE_UNICODE_ENVIRONMENT;
+            }
+            let env_ptr: *const c_void = match &block {
+                Some(b) => b.as_ptr() as *const c_void,
+                None => std::ptr::null(),
+            };
+            let cwd_ptr: *const u16 = match &cwd {
+                Some(c) => c.as_ptr(),
+                None => std::ptr::null(),
+            };
             let ok = CreateProcessW(
                 std::ptr::null(),
                 cmdline.as_mut_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
                 0,
-                EXTENDED_STARTUPINFO_PRESENT,
-                std::ptr::null(),
-                std::ptr::null(),
+                flags,
+                env_ptr,
+                cwd_ptr,
                 &startup.StartupInfo,
                 &mut info,
             );
             let created = if ok == 0 { Some(os_error("CreateProcessW")) } else { None };
             DeleteProcThreadAttributeList(list as _);
+            drop(storage);
             if let Some(e) = created {
-                ClosePseudoConsole(hpc);
-                close(in_write as usize);
-                close(out_read as usize);
+                undo(hpc, in_write as usize, out_read as usize, job);
+                return Err(e);
+            }
+            // Into the job while it is still suspended, so not even its first
+            // child can start outside it.
+            if AssignProcessToJobObject(job as HANDLE, info.hProcess) == 0 {
+                let e = os_error("AssignProcessToJobObject");
+                TerminateProcess(info.hProcess, 1);
+                close(info.hThread as usize);
+                close(info.hProcess as usize);
+                undo(hpc, in_write as usize, out_read as usize, job);
+                return Err(e);
+            }
+            if ResumeThread(info.hThread) == u32::MAX {
+                let e = os_error("ResumeThread");
+                TerminateJobObject(job as HANDLE, 1);
+                close(info.hThread as usize);
+                close(info.hProcess as usize);
+                undo(hpc, in_write as usize, out_read as usize, job);
                 return Err(e);
             }
             close(info.hThread as usize);
 
             let reader = File::from_raw_handle(out_read as RawHandle);
             let input = File::from_raw_handle(in_write as RawHandle);
-            let pty = Pty { pseudo_console: hpc as usize, process: info.hProcess as usize, pid: info.dwProcessId, input, exit: None };
+            let pty = Pty { pseudo_console: hpc as usize, process: info.hProcess as usize, job, pid: info.dwProcessId, input, exit: None };
             Ok((pty, Box::new(reader)))
         }
     }
@@ -161,6 +278,10 @@ impl Pty {
     }
 
     pub fn resize(&self, size: PtySize) -> io::Result<()> {
+        if self.pseudo_console == 0 {
+            // The session is over; there is no terminal left to size.
+            return Ok(());
+        }
         let hr = unsafe { ResizePseudoConsole(self.pseudo_console as HPCON, coord(size)) };
         if hr != 0 {
             return Err(io::Error::new(io::ErrorKind::Other, format!("ResizePseudoConsole failed: 0x{:08x}", hr as u32)));
@@ -191,9 +312,28 @@ impl Pty {
         }
     }
 
-    pub fn kill(&mut self) {
+    /// End the whole tree: every process in the session's job, the first one
+    /// and everything it started. A console tree has no hangup to send first,
+    /// so `grace` is not used here.
+    pub fn end_tree(&mut self, _grace: Duration) {
         unsafe {
-            TerminateProcess(self.process as HANDLE, 1);
+            TerminateJobObject(self.job as HANDLE, 1);
+            WaitForSingleObject(self.process as HANDLE, END_WAIT_MS);
+        }
+    }
+
+    /// End the tree at once.
+    pub fn kill(&mut self) {
+        self.end_tree(Duration::ZERO);
+    }
+
+    /// Close the pseudoconsole: the output pipe ends, and with it the reader.
+    pub fn close_output(&mut self) {
+        if self.pseudo_console != 0 {
+            unsafe {
+                ClosePseudoConsole(self.pseudo_console as HPCON);
+            }
+            self.pseudo_console = 0;
         }
     }
 }
@@ -201,12 +341,30 @@ impl Pty {
 impl Drop for Pty {
     fn drop(&mut self) {
         unsafe {
-            if self.exit.is_none() {
-                TerminateProcess(self.process as HANDLE, 1);
-            }
-            // Closing the pseudoconsole ends the output pipe, which ends the reader.
-            ClosePseudoConsole(self.pseudo_console as HPCON);
-            close(self.process);
+            TerminateJobObject(self.job as HANDLE, 1);
         }
+        // Closing the pseudoconsole ends the output pipe, which ends the reader.
+        self.close_output();
+        unsafe {
+            close(self.process);
+            close(self.job);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(block: &[u16]) -> String {
+        String::from_utf16_lossy(block)
+    }
+
+    #[test]
+    fn the_environment_block_is_sorted_without_case_and_ends_with_two_nuls() {
+        let env = vec![("b".to_string(), "2".to_string()), ("A".to_string(), "1=one".to_string()), ("Path".to_string(), "C:\\x".to_string())];
+        let block = env_block(&env);
+        assert_eq!(text(&block), "A=1=one\0b=2\0Path=C:\\x\0\0");
+        assert_eq!(env_block(&[]), vec![0, 0], "an empty block is two NULs");
     }
 }

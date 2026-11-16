@@ -1,41 +1,82 @@
-//! `aicc-helper`: the skeleton's command line. Nothing starts this in the app
-//! yet; the commands exist for the self-test, the tests and the probes.
+//! `aicc-helper`: the session helper's command line. Nothing in the app starts
+//! it yet (that is the next slice); the commands exist for the self-test, the
+//! tests and the app's coming session client.
 //!
 //! ```text
 //! aicc-helper version
 //! aicc-helper hello --nonce <32 hex> --session <sid> [--state <state>] [--sha256 <64 hex>]
 //! aicc-helper selftest [--nonce <32 hex>]
-//! aicc-helper hold --dir <folder> --session <sid> [--cols N] [--rows N] [--ring-bytes N] [--detach] -- <program> [args...]
-//! aicc-helper attach --dir <folder> [--from <offset>] [--send <text>] [--wait-ms N]
-//! aicc-helper end --dir <folder>
+//! aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes N] [--detach]
+//! aicc-helper list --store <folder>
 //! ```
+//!
+//! `hold` runs one holder (protocol section 15). With `--detach` it starts the
+//! holder as a process of its own, waits until it has written its record,
+//! prints that record as one JSON line and exits. `list` prints every session
+//! in the store as one JSON line, removing the records of holders that are gone.
 #![deny(unsafe_code)]
 
-use aicc_helper::dirhold::{self, HoldOptions, HOLDER_FILE};
 use aicc_helper::hello::{self, Hello, CAPS};
-use aicc_helper::json::Value;
-use aicc_helper::pty::PtySize;
 use aicc_helper::ring::DEFAULT_RING_BYTES;
-use aicc_helper::{detach, selftest, VERSION};
-use std::path::PathBuf;
+use aicc_helper::serve::{self, Options};
+use aicc_helper::store::{self, DEFAULT_AWAY_SECS, MAX_AWAY_SECS};
+use aicc_helper::{client, detach, selftest, VERSION};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | attach | end> [options]";
+const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list> [options]";
+/// The ring is 1 KiB to 64 MiB; the protocol's default is 2 MiB.
+const MIN_RING_BYTES: usize = 1024;
+const MAX_RING_BYTES: usize = 64 * 1024 * 1024;
+/// How long `hold --detach` waits for the holder's record.
+const DETACH_WAIT: Duration = Duration::from_secs(15);
 
-fn opt(args: &[String], name: &str) -> Option<String> {
-    let at = args.iter().position(|a| a == name)?;
-    args.get(at + 1).cloned()
+/// Options as given: each known option once, nothing unknown.
+struct Args {
+    values: Vec<(String, String)>,
+    flags: Vec<String>,
 }
 
-fn flag(args: &[String], name: &str) -> bool {
-    args.iter().any(|a| a == name)
-}
+impl Args {
+    fn parse(args: &[String], with_value: &[&str], flags: &[&str]) -> Result<Args, String> {
+        let mut out = Args { values: Vec::new(), flags: Vec::new() };
+        let mut i = 0;
+        while i < args.len() {
+            let a = args[i].as_str();
+            if with_value.contains(&a) {
+                let v = args.get(i + 1).ok_or(format!("{a} needs a value"))?;
+                if out.get(a).is_some() {
+                    return Err(format!("{a} is given twice"));
+                }
+                out.values.push((a.to_string(), v.clone()));
+                i += 2;
+            } else if flags.contains(&a) {
+                if out.flag(a) {
+                    return Err(format!("{a} is given twice"));
+                }
+                out.flags.push(a.to_string());
+                i += 1;
+            } else {
+                return Err(format!("unknown option {a}"));
+            }
+        }
+        Ok(out)
+    }
 
-fn number<T: std::str::FromStr>(args: &[String], name: &str, default: T) -> Result<T, String> {
-    match opt(args, name) {
-        None => Ok(default),
-        Some(text) => text.parse::<T>().map_err(|_| format!("{name} needs a number")),
+    fn get(&self, name: &str) -> Option<&str> {
+        self.values.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+
+    fn flag(&self, name: &str) -> bool {
+        self.flags.iter().any(|f| f == name)
+    }
+
+    fn number<T: std::str::FromStr>(&self, name: &str, default: T) -> Result<T, String> {
+        match self.get(name) {
+            None => Ok(default),
+            Some(text) => text.parse::<T>().map_err(|_| format!("{name} needs a whole number")),
+        }
     }
 }
 
@@ -65,8 +106,7 @@ fn main() -> ExitCode {
         "hello" => cmd_hello(rest),
         "selftest" => cmd_selftest(rest),
         "hold" => cmd_hold(rest),
-        "attach" => cmd_attach(rest),
-        "end" => cmd_end(rest),
+        "list" => cmd_list(rest),
         // The child the self-test holds on a terminal; not a public command.
         "__echo" => match selftest::echo_child() {
             Ok(()) => ExitCode::SUCCESS,
@@ -77,25 +117,27 @@ fn main() -> ExitCode {
 }
 
 fn cmd_hello(args: &[String]) -> ExitCode {
-    let nonce = match opt(args, "--nonce") {
+    let a = match Args::parse(args, &["--nonce", "--session", "--state", "--sha256"], &[]) {
+        Ok(a) => a,
+        Err(e) => return usage(&e),
+    };
+    let nonce = match a.get("--nonce") {
         Some(n) => n,
         None => return usage("hello needs --nonce"),
     };
-    let sid = match opt(args, "--session") {
+    let sid = match a.get("--session") {
         Some(s) => s,
         None => return usage("hello needs --session"),
     };
-    let state = opt(args, "--state").unwrap_or_else(|| "new".to_string());
-    let sha = opt(args, "--sha256");
     let h = Hello {
-        nonce: &nonce,
+        nonce,
         helper_version: VERSION,
-        sha256: sha.as_deref(),
+        sha256: a.get("--sha256"),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         caps: &CAPS,
-        sid: &sid,
-        state: &state,
+        sid,
+        state: a.get("--state").unwrap_or("new"),
     };
     match hello::hello_line(&h) {
         Ok(line) => {
@@ -107,7 +149,11 @@ fn cmd_hello(args: &[String]) -> ExitCode {
 }
 
 fn cmd_selftest(args: &[String]) -> ExitCode {
-    let nonce = opt(args, "--nonce").unwrap_or_else(|| "0".repeat(32));
+    let a = match Args::parse(args, &["--nonce"], &[]) {
+        Ok(a) => a,
+        Err(e) => return usage(&e),
+    };
+    let nonce = a.get("--nonce").map(str::to_string).unwrap_or_else(|| "0".repeat(32));
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => return fail(&format!("cannot find this program: {e}")),
@@ -126,100 +172,100 @@ fn cmd_selftest(args: &[String]) -> ExitCode {
 }
 
 fn cmd_hold(args: &[String]) -> ExitCode {
-    let split = args.iter().position(|a| a == "--");
-    let (own, program) = match split {
-        Some(i) => (&args[..i], args[i + 1..].to_vec()),
-        None => return usage("hold needs -- <program> [args...]"),
+    let a = match Args::parse(args, &["--store", "--session", "--label", "--away", "--ring-bytes"], &["--detach"]) {
+        Ok(a) => a,
+        Err(e) => return usage(&e),
     };
-    if program.is_empty() {
-        return usage("hold needs a program after --");
-    }
-    let dir = match opt(own, "--dir") {
-        Some(d) => PathBuf::from(d),
-        None => return usage("hold needs --dir"),
+    let store_dir = match a.get("--store") {
+        Some(s) if !s.is_empty() => PathBuf::from(s),
+        _ => return usage("hold needs --store"),
     };
-    let sid = match opt(own, "--session") {
-        Some(s) => s,
+    let sid = match a.get("--session") {
+        Some(s) if hello::valid_sid(s) => s.to_string(),
+        Some(_) => return usage("--session breaks the session id pattern"),
         None => return usage("hold needs --session"),
     };
-    let cols = match number::<u16>(own, "--cols", 80) {
-        Ok(v) => v,
-        Err(e) => return usage(&e),
-    };
-    let rows = match number::<u16>(own, "--rows", 24) {
-        Ok(v) => v,
-        Err(e) => return usage(&e),
-    };
-    let ring_bytes = match number::<usize>(own, "--ring-bytes", DEFAULT_RING_BYTES) {
-        Ok(v) => v,
-        Err(e) => return usage(&e),
-    };
-
-    if flag(own, "--detach") {
-        // Start this same command again, detached, and report once it is up.
-        let exe = match std::env::current_exe() {
-            Ok(p) => p,
-            Err(e) => return fail(&format!("cannot find this program: {e}")),
-        };
-        let mut again: Vec<String> = vec!["hold".to_string()];
-        again.extend(own.iter().filter(|a| a.as_str() != "--detach").cloned());
-        again.push("--".to_string());
-        again.extend(program);
-        let _ = std::fs::remove_file(dir.join(HOLDER_FILE));
-        let started = match detach::spawn_detached(&exe, &again) {
-            Ok(pid) => pid,
-            Err(e) => return fail(&format!("could not start the holder: {e}")),
-        };
-        let deadline = Instant::now() + Duration::from_secs(15);
-        while Instant::now() < deadline {
-            if let Ok(text) = std::fs::read_to_string(dir.join(HOLDER_FILE)) {
-                println!("{text}");
-                return ExitCode::SUCCESS;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        return fail(&format!("the holder (process {started}) did not write {HOLDER_FILE} in 15 seconds"));
+    let label = a.get("--label").unwrap_or("").to_string();
+    if !store::valid_label(&label) {
+        return usage("--label is over 128 characters or holds a control character");
     }
+    let away = match a.number::<u64>("--away", DEFAULT_AWAY_SECS) {
+        Ok(v) if (1..=MAX_AWAY_SECS).contains(&v) => v,
+        Ok(_) => return usage("--away must be 1 to 86400 seconds"),
+        Err(e) => return usage(&e),
+    };
+    let ring_bytes = match a.number::<usize>("--ring-bytes", DEFAULT_RING_BYTES) {
+        Ok(v) if (MIN_RING_BYTES..=MAX_RING_BYTES).contains(&v) => v,
+        Ok(_) => return usage("--ring-bytes must be 1 KiB to 64 MiB"),
+        Err(e) => return usage(&e),
+    };
 
-    let opts = HoldOptions { dir, sid, argv: program, size: PtySize { cols, rows }, ring_bytes };
-    match dirhold::run_hold(opts) {
-        Ok(code) => ExitCode::from(code as u8),
+    if a.flag("--detach") {
+        return detached(&store_dir, &sid, &label, away, ring_bytes);
+    }
+    let opts = Options { store: store_dir, sid, label, away: Duration::from_secs(away), ring_bytes };
+    match serve::run(opts) {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(&format!("hold failed: {e}")),
     }
 }
 
-fn cmd_attach(args: &[String]) -> ExitCode {
-    let dir = match opt(args, "--dir") {
-        Some(d) => PathBuf::from(d),
-        None => return usage("attach needs --dir"),
+/// Start the same holder as a process of its own and report it once its
+/// record is written.
+fn detached(store_dir: &Path, sid: &str, label: &str, away: u64, ring_bytes: usize) -> ExitCode {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => return fail(&format!("cannot find this program: {e}")),
     };
-    let from = match number::<u64>(args, "--from", 0) {
-        Ok(v) => v,
-        Err(e) => return usage(&e),
+    let again: Vec<String> = vec![
+        "hold".to_string(),
+        "--store".to_string(),
+        store_dir.to_string_lossy().into_owned(),
+        "--session".to_string(),
+        sid.to_string(),
+        "--label".to_string(),
+        label.to_string(),
+        "--away".to_string(),
+        away.to_string(),
+        "--ring-bytes".to_string(),
+        ring_bytes.to_string(),
+    ];
+    let mut child = match detach::spawn_detached(&exe, &again) {
+        Ok(c) => c,
+        Err(e) => return fail(&format!("could not start the holder: {e}")),
     };
-    let wait_ms = match number::<u64>(args, "--wait-ms", 0) {
-        Ok(v) => v,
-        Err(e) => return usage(&e),
-    };
-    let send = opt(args, "--send");
-    match dirhold::run_attach(&dir, from, send.as_deref(), wait_ms) {
-        Ok(report) => {
-            let body: Value = report.to_value();
-            println!("{}", body.to_json());
-            ExitCode::SUCCESS
+    let pid = child.id();
+    let deadline = Instant::now() + DETACH_WAIT;
+    while Instant::now() < deadline {
+        if let Some(Ok(rec)) = store::read(store_dir, sid) {
+            if rec.pid == pid {
+                println!("{}", rec.to_json());
+                return ExitCode::SUCCESS;
+            }
         }
-        Err(e) => fail(&format!("attach failed: {e}")),
+        if let Ok(Some(status)) = child.try_wait() {
+            return fail(&format!("the holder (process {pid}) exited before it was ready: {status}"));
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
+    let _ = child.kill();
+    fail(&format!("the holder (process {pid}) did not write its record in 15 seconds"))
 }
 
-fn cmd_end(args: &[String]) -> ExitCode {
-    let dir = match opt(args, "--dir") {
-        Some(d) => PathBuf::from(d),
-        None => return usage("end needs --dir"),
+fn cmd_list(args: &[String]) -> ExitCode {
+    let a = match Args::parse(args, &["--store"], &[]) {
+        Ok(a) => a,
+        Err(e) => return usage(&e),
     };
-    match dirhold::run_end(&dir) {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => fail("the holder did not finish in time"),
-        Err(e) => fail(&format!("end failed: {e}")),
+    let store_dir = match a.get("--store") {
+        Some(s) if !s.is_empty() => PathBuf::from(s),
+        _ => return usage("list needs --store"),
+    };
+    match store::list(&store_dir, client::probe) {
+        Ok(listing) => {
+            println!("{}", listing.to_json());
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&format!("list failed: {e}")),
     }
 }
