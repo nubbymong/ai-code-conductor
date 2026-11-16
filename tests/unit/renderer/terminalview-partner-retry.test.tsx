@@ -168,8 +168,12 @@ Element.prototype.getBoundingClientRect = function () {
 class RO { observe() {} unobserve() {} disconnect() {} }
 ;(globalThis as any).ResizeObserver = RO
 ;(window as any).ResizeObserver = RO
+// The terminal font is already loaded (check() true), as it is for every
+// terminal after the first, so the view starts on its first frame (#313: only
+// a terminal built before its font has loaded waits for it; that wait is
+// covered in terminalview-font-wait.test.tsx).
 if (!(document as any).fonts) {
-  Object.defineProperty(document, 'fonts', { value: { ready: Promise.resolve(), load: () => Promise.resolve([]) }, configurable: true })
+  Object.defineProperty(document, 'fonts', { value: { ready: Promise.resolve(), load: () => Promise.resolve([]), check: () => true }, configurable: true })
 }
 
 let rafQueue: FrameRequestCallback[] = []

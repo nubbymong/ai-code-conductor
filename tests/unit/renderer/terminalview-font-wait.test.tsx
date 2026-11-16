@@ -5,7 +5,9 @@
  * never see a stand-in face. jsdom has no fonts or canvas: document.fonts.load
  * is a controlled promise here, and the proof is when `new Terminal` runs.
  * Before the fix the terminal was built on the first animation frame, whatever
- * the font was doing. Harness: the terminalview-focus-handoff mocks.
+ * the font was doing. The cases for an already loaded face and for a page
+ * without document.fonts.load guard that unchanged fast path, so they pass on
+ * the old view by design. Harness: the terminalview-focus-handoff mocks.
  */
 import React from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -56,7 +58,9 @@ const H = vi.hoisted(() => {
     activeSessionId: 's-1',
     updateSession: () => {},
   }
-  return { MockTerminal, sessionState }
+  // The terminal settings TerminalView reads (empty: every default).
+  const settingsState: { settings: { terminal: Record<string, unknown> } } = { settings: { terminal: {} } }
+  return { MockTerminal, sessionState, settingsState }
 })
 
 vi.mock('@xterm/xterm/css/xterm.css', () => ({ default: {} }))
@@ -114,7 +118,7 @@ vi.mock('../../../src/renderer/utils/resumePicker', () => ({ shouldUseResumePick
 vi.mock('../../../src/renderer/utils/sessionLaunch', () => ({ shouldGateAccountChoice: () => false, formatSpawnError: () => '' }))
 vi.mock('../../../src/renderer/components/TerminalContextMenu', () => ({ default: () => null }))
 vi.mock('../../../src/renderer/stores/settingsStore', () => {
-  const st = { settings: { terminal: {} } }
+  const st = H.settingsState
   return {
     useSettingsStore: Object.assign((sel: any) => sel(st), { getState: () => st }),
     DEFAULT_TERMINAL_SETTINGS: {},
@@ -196,6 +200,8 @@ const { TERMINAL_FONT_WAIT_CAP_MS, TERMINAL_FONT_FALLBACKS } = await import('../
 let container: HTMLDivElement
 let root: Root
 const mount = () => act(() => { root.render(React.createElement(TerminalView as any, { sessionId: 's-1', isActive: true })) })
+/** The face specs a built terminal draws, from the options it was given. */
+const facesOf = (o: any) => [`${o.fontWeight} ${o.fontSize}px ${o.fontFamily}`, `${o.fontWeightBold} ${o.fontSize}px ${o.fontFamily}`]
 
 beforeEach(() => {
   rafQueue = []
@@ -203,6 +209,7 @@ beforeEach(() => {
   pending = []
   fontsImpl = controlledFonts()
   installRaf()
+  H.settingsState.settings.terminal = {}
   H.MockTerminal.last = null
   H.MockTerminal.built = 0
   H.MockTerminal.fits = 0
@@ -225,14 +232,29 @@ describe('TerminalView waits for the terminal font before building the terminal 
     expect(H.MockTerminal.built).toBe(0)
   })
 
-  it('builds the terminal once the faces have loaded', async () => {
+  it('builds the terminal once the faces have loaded, with the very faces it waited for', async () => {
     mount()
     await settle()
     expect(H.MockTerminal.built).toBe(0)
     pending.forEach((d) => d.resolve([]))
     await settle()
     expect(H.MockTerminal.built).toBe(1)
-    expect(H.MockTerminal.last.options.fontFamily).toBe(TERMINAL_FONT_FALLBACKS)
+    const o = H.MockTerminal.last.options
+    expect(o.fontFamily).toBe(TERMINAL_FONT_FALLBACKS)
+    // The size and both weights xterm (and so the atlas) draws are the ones
+    // the wait loaded: one source, so a changed default cannot split them.
+    expect(facesOf(o)).toEqual(loadCalls)
+  })
+
+  it('with a chosen family, size and weight, waits for those faces and builds with them', async () => {
+    H.settingsState.settings.terminal = { fontFamily: 'Fira Code', fontSize: 15, fontWeight: 400 }
+    mount()
+    await settle()
+    expect(loadCalls).toEqual([`400 15px 'Fira Code', ${TERMINAL_FONT_FALLBACKS}`, `700 15px 'Fira Code', ${TERMINAL_FONT_FALLBACKS}`])
+    pending.forEach((d) => d.resolve([]))
+    await settle()
+    expect(H.MockTerminal.built).toBe(1)
+    expect(facesOf(H.MockTerminal.last.options)).toEqual(loadCalls)
   })
 
   it('a load that fails still starts the terminal', async () => {
@@ -303,20 +325,45 @@ describe('TerminalView waits for the terminal font before building the terminal 
     expect(H.MockTerminal.built).toBe(1)
   })
 
-  it('without document.fonts.load the terminal is built on the first frames, as before', async () => {
+  it('without document.fonts.load the terminal is built on the first frame, as before', async () => {
+    // Guards the unchanged fast path at the view (the branch itself is pinned
+    // in terminal-font.test.ts, terminalFontReady).
     fontsImpl = { ready: Promise.resolve() }
     mount()
-    await settle()
+    expect(rafQueue).toHaveLength(1) // queued during the mount itself, as before #313
+    await act(async () => { flushRaf() })
     expect(H.MockTerminal.built).toBe(1)
   })
 
-  it('a view torn down while waiting builds no terminal when the font arrives', async () => {
+  it('a view torn down while it waits cancels the wait: neither the font nor the cap queues a frame after', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     mount()
     await settle()
-    act(() => { root.unmount() })
-    pending.forEach((d) => d.resolve([]))
-    await settle()
     expect(H.MockTerminal.built).toBe(0)
+    act(() => { root.unmount() })
+    flushRaf()
+    expect(rafQueue).toHaveLength(0)
+    pending.forEach((d) => d.resolve([]))
+    vi.advanceTimersByTime(TERMINAL_FONT_WAIT_CAP_MS)
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+    expect(rafQueue, 'no initTerminal frame after teardown').toHaveLength(0)
+    expect(H.MockTerminal.built).toBe(0)
+    root = createRoot(container)
+  })
+
+  it('a view torn down before its first fit cancels the capped fonts.ready wait: no fit frame after', async () => {
+    fontsImpl = { ...controlledFonts(), ready: new Promise(() => {}), check: () => true }
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    mount()
+    await act(async () => { flushRaf() })
+    expect(H.MockTerminal.built).toBe(1)
+    act(() => { root.unmount() })
+    flushRaf()
+    expect(rafQueue).toHaveLength(0)
+    vi.advanceTimersByTime(TERMINAL_FONT_WAIT_CAP_MS)
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+    expect(rafQueue, 'no fitAndSpawn frame after teardown').toHaveLength(0)
+    expect(H.MockTerminal.fits).toBe(0)
     root = createRoot(container)
   })
 })
