@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import PageFrame from './PageFrame'
 import { DialogButton } from './ui/Dialog'
 import type { HeldSession, HelperState, MachineStatus, SelfTestResult } from '../../shared/machines'
@@ -98,8 +98,20 @@ function SessionRow({
   onConfirmEnd: () => void
   onCancelEnd: () => void
 }) {
+  const warnId = useId()
+  const rowRef = useRef<HTMLLIElement>(null)
+  const wasConfirming = useRef(false)
+  // Keyboard and screen-reader users keep their place: the question opens on its
+  // safe answer (Keep it), and backing out puts focus back on this row's End.
+  useEffect(() => {
+    const row = rowRef.current
+    if (confirming) row?.querySelector<HTMLElement>('[data-machines-keep]')?.focus()
+    else if (wasConfirming.current) row?.querySelector<HTMLElement>('[data-machines-end]')?.focus()
+    wasConfirming.current = confirming
+  }, [confirming])
   return (
     <li
+      ref={rowRef}
       className="rounded-lg px-3 py-2.5 flex flex-col gap-2"
       style={{ background: 'var(--surface-base)', border: '1px solid var(--border-subtle)' }}
       data-testid="machines-session"
@@ -135,6 +147,7 @@ function SessionRow({
               onClick={onAskEnd}
               disabled={busy}
               aria-label={`End ${session.label}`}
+              data-machines-end=""
             >
               End
             </DialogButton>
@@ -145,17 +158,18 @@ function SessionRow({
         <div
           role="group"
           aria-label={`Confirm ending ${session.label}`}
+          aria-describedby={warnId}
           className="flex items-center gap-2 flex-wrap rounded-md px-2.5 py-2"
           style={{ background: 'color-mix(in srgb, var(--status-danger) 9%, transparent)', border: '1px solid color-mix(in srgb, var(--status-danger) 40%, transparent)' }}
           data-testid="machines-end-confirm"
         >
-          <span className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>
+          <span id={warnId} className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>
             End this terminal? Whatever is running in it stops, and its scrollback is lost.
           </span>
-          <DialogButton variant="danger-solid" onClick={onConfirmEnd} disabled={busy} aria-label={`Yes, end ${session.label}`}>
+          <DialogButton variant="danger-solid" onClick={onConfirmEnd} disabled={busy} aria-label={`Yes, end ${session.label}`} aria-describedby={warnId}>
             End terminal
           </DialogButton>
-          <DialogButton variant="ghost" onClick={onCancelEnd} disabled={busy}>
+          <DialogButton variant="ghost" onClick={onCancelEnd} disabled={busy} data-machines-keep="" aria-describedby={warnId}>
             Keep it
           </DialogButton>
         </div>
@@ -164,7 +178,7 @@ function SessionRow({
   )
 }
 
-export default function MachinesPage() {
+export default function MachinesPage({ active = true }: { active?: boolean }) {
   const [status, setStatus] = useState<MachineStatus | null>(null)
   const [readFailed, setReadFailed] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
@@ -191,9 +205,15 @@ export default function MachinesPage() {
 
   useEffect(() => {
     mounted.current = true
-    void refresh()
     return () => { mounted.current = false }
-  }, [refresh])
+  }, [])
+
+  // Read on open, and again each time the tab comes back to the front: the app
+  // keeps an open page mounted while another tab is showing, so mounting alone
+  // would leave the list as old as the last visit.
+  useEffect(() => {
+    if (active) void refresh()
+  }, [active, refresh])
 
   const run = useCallback(async (key: string, work: () => Promise<void>) => {
     setBusy(key)
@@ -314,7 +334,11 @@ export default function MachinesPage() {
                 <dd style={{ color: 'var(--text-primary)' }} data-testid="machines-version">{helper?.version ? helper.version : 'Not known'}</dd>
                 <dt style={{ color: 'var(--text-muted)' }}>Self-test</dt>
                 <dd className="flex items-center gap-2 flex-wrap">
-                  <SelfTestLine result={selfTest} />
+                  {/* A live region that is always there, so a finished (or failed) self-test is
+                      announced without moving focus. */}
+                  <span role="status" aria-live="polite">
+                    <SelfTestLine result={selfTest} />
+                  </span>
                   <DialogButton
                     variant="secondary"
                     onClick={() => { void onSelfTest() }}
@@ -350,16 +374,17 @@ export default function MachinesPage() {
             </>
           )}
 
-          {notice && (
-            <p
-              role="status"
-              className="text-xs"
-              data-testid="machines-notice"
-              style={{ color: notice.ok ? 'var(--status-success)' : 'var(--status-danger)' }}
-            >
-              {notice.text}
-            </p>
-          )}
+          {/* Always mounted so a screen reader announces what an action reports;
+              empty it takes no room. */}
+          <p
+            role="status"
+            aria-live="polite"
+            className="text-xs empty:hidden"
+            data-testid="machines-notice"
+            style={{ color: notice?.ok ? 'var(--status-success)' : 'var(--status-danger)' }}
+          >
+            {notice?.text}
+          </p>
         </section>
       </div>
     </PageFrame>

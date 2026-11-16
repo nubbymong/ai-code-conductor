@@ -54,8 +54,8 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() })
 }
 
-async function open(): Promise<void> {
-  await act(async () => { root.render(<MachinesPage />) })
+async function open(active = true): Promise<void> {
+  await act(async () => { root.render(<MachinesPage active={active} />) })
   await flush()
 }
 
@@ -325,5 +325,73 @@ describe('Machines page: Refresh and the actions', () => {
     await flush()
     expect(byLabel('End build watcher')?.disabled).toBe(false)
     expect(bridge.reattach).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Machines page: staying true to what is on screen', () => {
+  it('reads again each time its tab comes back to the front, not only when it mounts', async () => {
+    install(status())
+    await open(true)
+    expect(bridge.status).toHaveBeenCalledTimes(1)
+    // Another tab takes the front: the page stays mounted and reads nothing.
+    await open(false)
+    expect(bridge.status).toHaveBeenCalledTimes(1)
+    // It comes back: the list is read again.
+    bridge.status.mockResolvedValue(status({}, [held({ label: 'started meanwhile' })]))
+    await open(true)
+    expect(bridge.status).toHaveBeenCalledTimes(2)
+    expect(text()).toContain('started meanwhile')
+  })
+
+  it('does not read at all while it is mounted behind another tab', async () => {
+    install(status())
+    await open(false)
+    expect(bridge.status).not.toHaveBeenCalled()
+  })
+
+  it('opening the End question puts focus on Keep it, and backing out puts it back on End', async () => {
+    install(status({}, [held()]))
+    await open()
+    byLabel('End build watcher')!.focus()
+    await click(byLabel('End build watcher'))
+    expect(document.activeElement).toBe(byText('Keep it'))
+    await click(byText('Keep it'))
+    expect(document.activeElement).toBe(byLabel('End build watcher'))
+  })
+
+  it('ties the warning to the question and to both of its buttons', async () => {
+    install(status({}, [held()]))
+    await open()
+    await click(byLabel('End build watcher'))
+    const group = byTestId('machines-end-confirm')!
+    const id = group.getAttribute('aria-describedby')!
+    expect(id).toBeTruthy()
+    expect(document.getElementById(id)?.textContent).toContain('End this terminal?')
+    expect(byLabel('Yes, end build watcher')?.getAttribute('aria-describedby')).toBe(id)
+    expect(byText('Keep it')?.getAttribute('aria-describedby')).toBe(id)
+  })
+
+  it('announces a finished self-test: its result sits in a live region that was already there', async () => {
+    install(status())
+    await open()
+    const before = byTestId('machines-self-test-result')!
+    const region = before.closest('[role="status"]')
+    expect(region, 'the self-test result is inside a status region').toBeTruthy()
+    expect(region!.getAttribute('aria-live')).toBe('polite')
+    await click(byText('Run self-test'))
+    // The same region element is still there, now holding the answer.
+    expect(byTestId('machines-self-test-result')!.closest('[role="status"]')).toBe(region)
+    expect(region!.textContent).toMatch(/Passed at /)
+  })
+
+  it('keeps the action notice region mounted, empty and hidden until an action reports', async () => {
+    install(status({}, [held({ attached: false })]))
+    await open()
+    const notice = byTestId('machines-notice')!
+    expect(notice.getAttribute('role')).toBe('status')
+    expect(notice.textContent).toBe('')
+    await click(byLabel('Re-attach build watcher'))
+    expect(byTestId('machines-notice')).toBe(notice)
+    expect(notice.textContent).toContain('build watcher')
   })
 })
