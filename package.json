@@ -152,8 +152,11 @@
       },
       "extraResources": [
         {
-          "from": "helper/target/release/aicc-helper.exe",
-          "to": "helper/aicc-helper.exe"
+          "from": "helper/target/release",
+          "to": "helper",
+          "filter": [
+            "aicc-helper.exe"
+          ]
         }
       ]
     },

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'child_process'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, statSync } from 'fs'
 import { resolve } from 'path'
 // js-yaml comes in with electron-builder and is pinned in package.json's
 // overrides; nothing is installed for this test.
@@ -118,13 +118,24 @@ const HELPER_FILES = [
   'helper/target/release/aicc-fake-cli.exe',
   'helper/target/release/aicc-helper.d',
   'helper/target/release/aicc-helper.pdb',
+  'helper/target/release/aicc_helper.pdb',
+  'helper/target/release/deps/aicc_helper-0123456789abcdef.exe',
+  'helper/target/release/build/aicc-helper-0123456789abcdef/output',
 ]
 
-/** The one file each platform ships, and where it lands under resources/. */
+/**
+ * The one file each platform ships (`file`), and the packaging entry that puts
+ * it under resources/helper/ (`entry`). Windows uses a FOLDER entry with a
+ * filter, not a single-file entry: electron-builder copies a single-file
+ * extraResources entry straight across (app-builder-lib fileMatcher copyFiles,
+ * the `fromStat.isFile()` branch) and never runs it through the transformer
+ * that signs each .exe, so 2.1.3-beta.6's first release build packaged an
+ * unsigned helper and failed its Verify Windows signature step.
+ */
 const SHIPPED = {
-  win: { from: 'helper/target/release/aicc-helper.exe', to: 'helper/aicc-helper.exe' },
-  mac: { from: 'helper/target/release/aicc-helper', to: 'helper/aicc-helper' },
-  linux: { from: 'helper/target/release/aicc-helper', to: 'helper/aicc-helper' },
+  win: { entry: { from: 'helper/target/release', to: 'helper', filter: ['aicc-helper.exe'] }, file: 'helper/target/release/aicc-helper.exe' },
+  mac: { entry: { from: 'helper/target/release/aicc-helper', to: 'helper/aicc-helper' }, file: 'helper/target/release/aicc-helper' },
+  linux: { entry: { from: 'helper/target/release/aicc-helper', to: 'helper/aicc-helper' }, file: 'helper/target/release/aicc-helper' },
 } as const
 
 describe('the installer ships the release session helper and nothing else of helper/', () => {
@@ -150,15 +161,29 @@ describe('the installer ships the release session helper and nothing else of hel
     expect(globToRegExp('**/*').test('helper/Cargo.toml')).toBe(true)
   })
 
-  it('each platform copies exactly its release helper to resources/helper/, as a plain file entry', () => {
+  it('each platform copies exactly its release helper to resources/helper/ (Windows by a folder entry, so it is signed)', () => {
     for (const [platform, want] of Object.entries(SHIPPED)) {
       const section = packagingEntries(pkg.build[platform]).filter((e) => e.list !== 'files')
       const helperEntries = section.filter((e) => normPath(e.value).startsWith('helper'))
       expect(helperEntries, platform).toHaveLength(1)
-      const raw = ([] as unknown[]).concat(pkg.build[platform].extraResources ?? []).find((x) => !!x && typeof x === 'object' && (x as { from?: string }).from === want.from)
-      expect(raw, platform).toEqual(want)
+      const raw = ([] as unknown[]).concat(pkg.build[platform].extraResources ?? []).find((x) => !!x && typeof x === 'object' && (x as { from?: string }).from === want.entry.from)
+      expect(raw, platform).toEqual(want.entry)
+      expect(takes(helperEntries[0], want.file), platform).toBe(true)
       expect(pkg.build[platform].extraFiles, platform).toBeUndefined()
     }
+  })
+
+  it('the Windows helper entry is one electron-builder signs: a folder, not a single file', () => {
+    const raw = ([] as unknown[]).concat(pkg.build.win.extraResources ?? []).find((x) => !!x && typeof x === 'object' && normPath(String((x as { from?: string }).from)).startsWith('helper')) as { from: string; filter?: string[] }
+    expect(raw).toBeDefined()
+    // A `from` that names the .exe itself takes the unsigned single-file path.
+    expect(raw.from.endsWith('.exe')).toBe(false)
+    expect(existsSync(resolve(ROOT, raw.from)) ? statSync(resolve(ROOT, raw.from)).isDirectory() : true, 'from must be a folder when it exists').toBe(true)
+    expect(raw.filter).toEqual(['aicc-helper.exe'])
+    // Three win settings would stop the extraResources signer for this entry too.
+    expect(pkg.build.win.signExecutable, 'signExecutable false stops the extraResources signer').not.toBe(false)
+    expect(pkg.build.win.signAndEditExecutable, 'signAndEditExecutable false stops it too').not.toBe(false)
+    expect(pkg.build.win.signExts, 'signExts can exclude .exe').toBeUndefined()
   })
 
   it('the helper is not in the top-level lists, which every platform shares (one platform\'s program would reach the others)', () => {
@@ -173,7 +198,7 @@ describe('the installer ships the release session helper and nothing else of hel
     const listed = entries.filter((e) => e.list === 'files')
     expect(listed.length).toBeGreaterThan(0)
     for (const entry of listed) {
-      for (const file of [...HELPER_FILES, SHIPPED.win.from, SHIPPED.mac.from]) expect(takes(entry, file), `${JSON.stringify(entry)} would package ${file}`).toBe(false)
+      for (const file of [...HELPER_FILES, SHIPPED.win.file, SHIPPED.mac.file]) expect(takes(entry, file), `${JSON.stringify(entry)} would package ${file}`).toBe(false)
     }
   })
 
@@ -184,8 +209,8 @@ describe('the installer ships the release session helper and nothing else of hel
       for (const file of HELPER_FILES) expect(takes(entry, file), `${JSON.stringify(entry)} would copy ${file}`).toBe(false)
     }
     // And the release helper is taken, so the check above is not vacuous.
-    expect(copied.some((e) => takes(e, SHIPPED.win.from))).toBe(true)
-    expect(copied.some((e) => takes(e, SHIPPED.mac.from))).toBe(true)
+    expect(copied.some((e) => takes(e, SHIPPED.win.file))).toBe(true)
+    expect(copied.some((e) => takes(e, SHIPPED.mac.file))).toBe(true)
   })
 
   it('FileSet objects keep their source root and filter, and the check judges them (a flattened `from` once matched nothing)', () => {
@@ -210,10 +235,12 @@ describe('the installer ships the release session helper and nothing else of hel
     const [folder] = read(['helper'])
     expect(takes(folder, 'helper/Cargo.toml')).toBe(true)
     expect(takes(read(['!helper/**'])[0], 'helper/Cargo.toml')).toBe(false)
-    // The one file a platform ships takes that file and nothing else.
-    const [one] = read([SHIPPED.win])
-    expect(takes(one, SHIPPED.win.from)).toBe(true)
-    for (const file of HELPER_FILES) expect(takes(one, file), file).toBe(false)
+    // Each platform's entry takes its one file and nothing else.
+    for (const want of Object.values(SHIPPED)) {
+      const [one] = read([want.entry])
+      expect(takes(one, want.file)).toBe(true)
+      for (const file of HELPER_FILES) expect(takes(one, file), file).toBe(false)
+    }
   })
 
   it('every file the helper job and the probe need is tracked, not caught by an ignore rule (*.ps1 is ignored repo-wide)', () => {

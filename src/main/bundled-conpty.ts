@@ -7,7 +7,7 @@
  * starts the OpenConsole.exe beside it (the console host Windows Terminal
  * ships). conpty.dll carries Microsoft's signature; in a signed release
  * electron-builder signs OpenConsole.exe again with the app's certificate, as
- * it signs every executable it packages. The console host built into Windows
+ * it signs every .exe under resources/app.asar.unpacked. The console host built into Windows
  * (on the P3.15 VM, build 22621) repaints a full-screen program's scrolling
  * output in place, so the terminal fed by it keeps no scrollback; the bundled
  * one passes the scrolling through (the P3.15 VM run: 38 lines kept against
