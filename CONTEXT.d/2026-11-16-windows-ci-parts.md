@@ -37,9 +37,9 @@ the 2,514 s of summed file time.
   vitest's own JSON reporter).
 - Timeouts are new: 30 minutes on each part and on the build job, 10 on
   `Test (windows-2025)`. The old Windows job had none (GitHub's default is six
-  hours); a part takes under 10 minutes (4.9 to 9.0 on the runs of the final
-  design), so 30 is more than three times the slowest. A part that times out
-  fails the check.
+  hours); a part takes under 10 minutes (4.8 to 9.0 since the slow files
+  start first), so 30 is more than three times the slowest. A part that
+  times out fails the check.
 - On a release/* PR the installer is now packaged, checked and uploaded by
   `test-windows-build`, which runs beside the unit parts and does not wait for
   them. So an installer artifact can exist on a red run; before, the steps ran
