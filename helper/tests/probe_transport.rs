@@ -1230,7 +1230,11 @@ fn close_check(way: &str) -> Result<(), String> {
 #[test]
 fn each_way_of_closing_inherited_descriptors_closes_them_all() {
     let _serial = one_at_a_time();
-    let ways = ["best", "listing", "every-number"];
+    let mut ways = vec!["best", "listing", "every-number"];
+    // Every Linux runner's kernel has `close_range` (5.9 and later).
+    if cfg!(target_os = "linux") {
+        ways.push("range");
+    }
     let failed: Vec<String> = ways.iter().filter_map(|way| close_check(way).err().map(|why| format!("{way}: {why}"))).collect();
     assert!(failed.is_empty(), "a descriptor the holder was given stayed open: {failed:?}");
 }

@@ -15,11 +15,13 @@
 //! `hold --detach` with every handle it lets a child inherit, and the holder
 //! outlives the app, so a handle passed on would stay open for as long as
 //! the holder runs. On Windows the copy is started with a list of the handles
-//! it may inherit, which names only its standard error pipe. On macOS and
-//! Linux the holder closes every descriptor from 3 up as it starts
-//! (`close_inherited_descriptors`). That is done in the holder and not
-//! between fork and exec, so the pipe std uses to report a failed exec keeps
-//! working.
+//! it may inherit, which names only its standard error pipe; both starts, out
+//! of the starter's job and inside it, use that list. On macOS and Linux the
+//! holder closes every descriptor from 3 up as it starts
+//! (`close_inherited_descriptors`): with `close_range` on Linux, else from
+//! the system's listing, else every number up to its limits. That is done in
+//! the holder and not between fork and exec, so the pipe std uses to report
+//! a failed exec keeps working.
 //!
 //! The child is returned, never waited for by the caller once it is up, so
 //! `hold --detach` can tell a holder that failed at once from one that runs.
@@ -51,6 +53,8 @@ pub struct DetachedChild {
     pid: u32,
 }
 
+/// Start `program` with `args` in `dir` as a copy that outlives this process
+/// (see the module comment).
 #[cfg(unix)]
 pub fn spawn_detached(program: &Path, args: &[String], dir: &Path) -> io::Result<Detached> {
     use std::os::unix::process::CommandExt;
@@ -93,22 +97,32 @@ impl DetachedChild {
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloseWay {
+    /// Linux `close_range` (kernel 5.9 and later): every descriptor from 3 up
+    /// in one call, with nothing to list and no upper bound.
+    Range,
     /// Every descriptor in the system's listing: `/proc/self/fd` on Linux,
     /// `/dev/fd` elsewhere.
     Listing,
-    /// Every number from 3 up to the soft limit on open descriptors, at most
-    /// 65,536.
+    /// Every number from 3 up to the higher of the soft and hard limits on
+    /// open descriptors, at most `MAX_EVERY_NUMBER`.
     EveryNumber,
 }
+
+/// Where the every-number way stops when the limits are higher, or have no
+/// bound. Only a descriptor above this number, on a system with neither
+/// `close_range` nor a listing, can stay open.
+#[cfg(unix)]
+pub const MAX_EVERY_NUMBER: i32 = 1 << 20;
 
 #[cfg(unix)]
 impl CloseWay {
     /// Every way, in the order the holder tries them.
-    pub const ALL: [CloseWay; 2] = [CloseWay::Listing, CloseWay::EveryNumber];
+    pub const ALL: [CloseWay; 3] = [CloseWay::Range, CloseWay::Listing, CloseWay::EveryNumber];
 
     /// The way a name on the command line means.
     pub fn named(name: &str) -> Option<CloseWay> {
         match name {
+            "range" => Some(CloseWay::Range),
             "listing" => Some(CloseWay::Listing),
             "every-number" => Some(CloseWay::EveryNumber),
             _ => None,
@@ -135,6 +149,7 @@ pub fn close_inherited_descriptors() {
 #[cfg(unix)]
 pub fn close_descriptors(way: CloseWay) -> bool {
     match way {
+        CloseWay::Range => close_range_from_3(),
         CloseWay::Listing => match open_descriptors() {
             Some(fds) => {
                 for fd in fds.into_iter().filter(|fd| *fd > 2) {
@@ -175,62 +190,71 @@ fn open_descriptors() -> Option<Vec<i32>> {
     Some(fds)
 }
 
-/// Where closing every number stops when there is no listing: the soft limit
-/// on open descriptors, at most 65,536.
+/// Close every descriptor from 3 up with Linux `close_range`; false when the
+/// kernel does not have it (before 5.9).
+#[cfg(target_os = "linux")]
+fn close_range_from_3() -> bool {
+    let first: libc::c_uint = 3;
+    let last = libc::c_uint::MAX;
+    let flags: libc::c_uint = 0;
+    unsafe { libc::syscall(libc::SYS_close_range, first, last, flags) == 0 }
+}
+
+/// macOS has no `close_range`.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn close_range_from_3() -> bool {
+    false
+}
+
+/// Where closing every number stops: the higher of the soft and hard limits
+/// on open descriptors, at most `MAX_EVERY_NUMBER`. Not the soft limit alone,
+/// because a starter may lower it after it opened a descriptor above it.
 #[cfg(unix)]
 fn descriptor_limit() -> i32 {
     let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
-    let soft = if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0 { limit.rlim_cur } else { 1024 };
-    soft.min(65_536) as i32
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        return MAX_EVERY_NUMBER;
+    }
+    limit.rlim_cur.max(limit.rlim_max).min(MAX_EVERY_NUMBER as libc::rlim_t) as i32
 }
 
 #[cfg(windows)]
 mod win {
     use super::{Detached, DetachedChild};
     use crate::cmdline::build_command_line;
-    use std::ffi::{c_void, OsStr};
+    use crate::winproc::{self, close, os_error, wide, AttrList, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES};
+    use std::ffi::OsStr;
     use std::fs::File;
     use std::io;
-    use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{FromRawHandle, RawHandle};
     use std::os::windows::process::ExitStatusExt;
     use std::path::Path;
     use std::process::ExitStatus;
-    use windows_sys::Win32::Foundation::{CloseHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::Foundation::{SetHandleInformation, BOOL, HANDLE, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
     use windows_sys::Win32::System::Pipes::CreatePipe;
-    use windows_sys::Win32::System::Threading::{
-        CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList, TerminateProcess,
-        UpdateProcThreadAttribute, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOEXW,
-    };
+    use windows_sys::Win32::System::Threading::{CreateProcessW, TerminateProcess, PROCESS_INFORMATION, STARTUPINFOEXW};
 
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-    /// `STARTF_USESTDHANDLES`.
-    const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
-    /// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`: attribute 2, input only.
-    const ATTR_HANDLE_LIST: usize = 0x0002_0002;
 
-    fn os_error(what: &str) -> io::Error {
-        let e = io::Error::last_os_error();
-        io::Error::new(e.kind(), format!("{what}: {e}"))
-    }
-
-    fn wide(s: &OsStr) -> Vec<u16> {
-        s.encode_wide().chain(std::iter::once(0)).collect()
-    }
-
-    unsafe fn close(handle: usize) {
-        CloseHandle(handle as HANDLE);
-    }
-
+    /// Start `program` with `args` in `dir` as a copy that outlives this
+    /// process (see the module comment).
+    ///
+    /// Call it only while no other thread of this process starts a child.
+    /// The write end of the copy's standard error pipe is inheritable while
+    /// the copy starts, and std's `Command` takes a lock of its own for that
+    /// moment that this code cannot take. A child another thread started then
+    /// would inherit that end and keep the pipe open, and the starter would
+    /// lose the copy's words if it failed before it was ready. The only
+    /// caller, `hold --detach`, starts nothing else.
     pub fn spawn_detached(program: &Path, args: &[String], dir: &Path) -> io::Result<Detached> {
         let mut words = vec![program.to_string_lossy().into_owned()];
         words.extend(args.iter().cloned());
         let cmdline = build_command_line(&words);
-        let app = wide(program.as_os_str());
-        let cwd = wide(dir.as_os_str());
+        let app = wide(program);
+        let cwd = wide(dir);
         unsafe {
             let mut err_read: HANDLE = std::mem::zeroed();
             let mut err_write: HANDLE = std::mem::zeroed();
@@ -238,7 +262,8 @@ mod win {
                 return Err(os_error("CreatePipe (standard error)"));
             }
             let (err_read, err_write) = (err_read as usize, err_write as usize);
-            // A handle in the list must be inheritable; only this end is.
+            // A handle in the list must be inheritable; only this end is, and
+            // only until it is closed below.
             if SetHandleInformation(err_write as HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
                 let e = os_error("SetHandleInformation");
                 close(err_read);
@@ -266,47 +291,28 @@ mod win {
     /// and nothing else: the process handle, its id, and whether it is still
     /// in the starter's job.
     unsafe fn start(app: &[u16], cmdline: &str, cwd: &[u16], err_write: usize) -> io::Result<(usize, u32, bool)> {
-        let mut list_bytes: usize = 0;
-        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut list_bytes);
-        // Pointer-aligned storage, as the API requires.
-        let mut storage: Vec<usize> = vec![0; list_bytes / std::mem::size_of::<usize>() + 1];
-        let list = storage.as_mut_ptr() as *mut c_void;
-        if InitializeProcThreadAttributeList(list as _, 1, 0, &mut list_bytes) == 0 {
-            return Err(os_error("InitializeProcThreadAttributeList"));
-        }
-        // The list keeps a pointer to this array, so it lives until the list is deleted.
-        let inherit: [HANDLE; 1] = [err_write as HANDLE];
-        if UpdateProcThreadAttribute(
-            list as _,
-            0,
-            ATTR_HANDLE_LIST,
-            inherit.as_ptr() as *const c_void,
-            std::mem::size_of_val(&inherit),
-            std::ptr::null_mut(),
-            std::ptr::null(),
-        ) == 0
-        {
-            let e = os_error("UpdateProcThreadAttribute");
-            DeleteProcThreadAttributeList(list as _);
-            return Err(e);
-        }
+        let mut attrs = AttrList::handle_list(&[err_write])?;
         let mut startup: STARTUPINFOEXW = std::mem::zeroed();
         startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
         // Standard input and output are left null: the copy has none, and
         // writing to a null standard handle is quietly dropped.
         startup.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
         startup.StartupInfo.hStdError = err_write as HANDLE;
-        startup.lpAttributeList = list as _;
+        startup.lpAttributeList = attrs.as_ptr() as _;
         // Leave the starter's job if it allows that, so ending the job does
         // not end the holder; a job that forbids it refuses the flag, and the
-        // holder then starts without it, inside the job.
+        // holder then starts without it, inside the job. Both starts use the
+        // same handle list.
         let flags = EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
         let created = match create(app, cmdline, cwd, &startup, flags | CREATE_BREAKAWAY_FROM_JOB) {
             Ok(info) => Ok((info, false)),
-            Err(_) => create(app, cmdline, cwd, &startup, flags).map(|info| (info, true)),
+            // After the second start, whether the copy is in a job is asked,
+            // not taken from which start worked: the first can fail for a
+            // reason that is not the job. If the answer cannot be had, the
+            // refusal is the best guess.
+            Err(_) => create(app, cmdline, cwd, &startup, flags).map(|info| (info, in_a_job(info.hProcess as usize).unwrap_or(true))),
         };
-        DeleteProcThreadAttributeList(list as _);
-        drop(storage);
+        drop(attrs);
         let (info, in_starters_job) = created?;
         close(info.hThread as usize);
         Ok((info.hProcess as usize, info.dwProcessId, in_starters_job))
@@ -335,28 +341,35 @@ mod win {
         Ok(info)
     }
 
+    /// Whether `process` runs inside any job.
+    fn in_a_job(process: usize) -> io::Result<bool> {
+        let mut inside: BOOL = 0;
+        if unsafe { IsProcessInJob(process as HANDLE, std::ptr::null_mut(), &mut inside) } == 0 {
+            return Err(os_error("IsProcessInJob"));
+        }
+        Ok(inside != 0)
+    }
+
     impl DetachedChild {
         pub fn id(&self) -> u32 {
             self.pid
         }
 
+        /// As std's `Child::try_wait`: `None` while the copy runs, and an
+        /// error when the wait itself fails.
         pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-            unsafe {
-                // WAIT_OBJECT_0 is 0; any other answer (timeout included) is "still running".
-                if WaitForSingleObject(self.process as HANDLE, 0) != 0 {
-                    return Ok(None);
-                }
-                let mut code: u32 = 0;
-                if GetExitCodeProcess(self.process as HANDLE, &mut code) == 0 {
-                    return Err(os_error("GetExitCodeProcess"));
-                }
-                Ok(Some(ExitStatus::from_raw(code)))
-            }
+            Ok(winproc::exit_code(self.process)?.map(ExitStatus::from_raw))
         }
 
+        /// As std's `Child::kill`: a copy that has already exited is not an
+        /// error.
         pub fn kill(&mut self) -> io::Result<()> {
             if unsafe { TerminateProcess(self.process as HANDLE, 1) } == 0 {
-                return Err(os_error("TerminateProcess"));
+                let e = os_error("TerminateProcess");
+                if let Ok(Some(_)) = winproc::exit_code(self.process) {
+                    return Ok(());
+                }
+                return Err(e);
             }
             Ok(())
         }

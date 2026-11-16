@@ -223,7 +223,7 @@ fn cmd_hold(args: &[String]) -> ExitCode {
     // but its standard error (`detach.rs`).
     #[cfg(unix)]
     detach::close_inherited_descriptors();
-    let opts =Options { store: store_dir, sid, label, away: Duration::from_secs(away), ring_bytes };
+    let opts = Options { store: store_dir, sid, label, away: Duration::from_secs(away), ring_bytes };
     match serve::run(opts) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if serve::already_running(&e) => {
@@ -264,6 +264,8 @@ fn detached(store_dir: &Path, sid: &str, label: &str, away: u64, ring_bytes: usi
         "--ring-bytes".to_string(),
         ring_bytes.to_string(),
     ];
+    // No other thread of this process starts a child while this runs, as
+    // `spawn_detached` needs on Windows: the reader below starts after it.
     let started = match detach::spawn_detached(&exe, &again, &store_dir) {
         Ok(d) => d,
         Err(e) => return fail(&format!("could not start the holder: {e}")),
