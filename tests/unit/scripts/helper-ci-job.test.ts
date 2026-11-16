@@ -51,9 +51,11 @@ describe('ci.yml: the Helper job exists, on the three OSes, and is not a require
       expect(REQUIRED_CHECKS).not.toContain(name)
       expect(name.startsWith('Test (')).toBe(false)
     }
-    // And the Test jobs keep their names, so the required checks still report.
+    // And the Test jobs keep their names, so the required checks still report
+    // (Windows runs in parts; its check is the job named after it).
     expect(ci.jobs.test.name).toBe('Test (${{ matrix.os }})')
-    expect(ci.jobs.test.strategy?.matrix.os).toEqual(OSES)
+    expect(ci.jobs.test.strategy?.matrix.os).toEqual(['macos-latest', 'ubuntu-latest'])
+    expect(ci.jobs['test-windows'].name).toBe('Test (windows-2025)')
   })
 
   it('the job starts on a pull request or a push; its only conditions are the event and the Test jobs label and edit rule, never the paths', () => {

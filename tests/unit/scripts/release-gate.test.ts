@@ -890,8 +890,12 @@ describe('release-gate carry-forward (check 5)', () => {
     const named = ci.findIndex((l) => l.trim() === 'name: Test (${{ matrix.os }})')
     expect(named, 'ci.yml has no Test (matrix.os) job').toBeGreaterThan(0)
     const oses = /^\s*os:\s*\[(.+)\]\s*$/.exec(ci.slice(named).find((l) => /^\s*os:\s*\[/.test(l)) ?? '')?.[1].split(',').map((s) => s.trim()) ?? []
-    expect(oses.length).toBe(3)
-    expect(oses.map((os) => TEST_JOB_RE.exec(`Test (${os})`)?.[1]).sort()).toEqual([...TEST_OS_FAMILIES].sort())
+    // macOS and Linux from the matrix; Windows runs in parts, and the job that
+    // stands for them carries the Test name (ci.yml, `test-windows`).
+    expect(oses).toEqual(['macos-latest', 'ubuntu-latest'])
+    const windows = ci.filter((l) => /^ {4}name: Test \(windows-[A-Za-z0-9.-]+\)$/.test(l)).map((l) => l.trim().slice('name: '.length))
+    expect(windows).toEqual(['Test (windows-2025)'])
+    expect([...oses.map((os) => `Test (${os})`), ...windows].map((n) => TEST_JOB_RE.exec(n)?.[1]).sort()).toEqual([...TEST_OS_FAMILIES].sort())
     const script = readFileSync(resolve(__dirname, '../../../.claude/skills/adversarial-review/adv-marker.sh'), 'utf-8')
     const format = /printf '(ADVERSARIAL-REVIEW v1 [^']+)'/.exec(script)?.[1]
     expect(format).toBe('ADVERSARIAL-REVIEW v1 | %s | pr=#%s | head=%s | content=%s | ')

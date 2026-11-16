@@ -7,6 +7,8 @@ import yaml from 'js-yaml'
 import { evalExpr, evalIf, evalValue, type GhaContext } from '../../helpers/gha-expr'
 import { testedTreeStep, CI_WORKFLOW_PATH, REUSE_PR_BASES } from '../../../scripts/ci/reuse-green-ci.mjs'
 import { main as gateMain, GATE_LABELS } from '../../../scripts/ci/desktop-gate.mjs'
+import { main as partsMain } from '../../../scripts/ci/all-parts-passed.mjs'
+import { TEST_JOB_RE } from '../../../scripts/release-gate.mjs'
 
 /**
  * The fast beta cadence (ADR-028), as the workflows carry it out. The
@@ -18,7 +20,7 @@ import { main as gateMain, GATE_LABELS } from '../../../scripts/ci/desktop-gate.
 const ROOT = resolve(__dirname, '../../..')
 const read = (p: string) => readFileSync(resolve(ROOT, p), 'utf-8').replace(/\r\n/g, '\n')
 type Step = { name?: string; id?: string; if?: unknown; uses?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown>; shell?: string; 'continue-on-error'?: unknown }
-type Job = { name?: string; if?: unknown; needs?: string | string[]; steps: Step[]; permissions?: Record<string, string>; outputs?: Record<string, string>; strategy?: { matrix: Record<string, unknown> }; 'runs-on'?: string; 'continue-on-error'?: unknown; concurrency?: unknown }
+type Job = { name?: string; if?: unknown; needs?: string | string[]; steps: Step[]; permissions?: Record<string, string>; outputs?: Record<string, string>; strategy?: { matrix: Record<string, unknown>; 'fail-fast'?: boolean }; 'runs-on'?: string; 'continue-on-error'?: unknown; concurrency?: unknown; 'timeout-minutes'?: number }
 type Workflow = { on: Record<string, any>; jobs: Record<string, Job>; concurrency?: { group: string; 'cancel-in-progress': unknown }; permissions?: Record<string, string> }
 const load = (p: string) => yaml.load(read(p)) as Workflow
 
@@ -77,6 +79,7 @@ describe('the expression evaluator the workflow tests stand on', () => {
     expect(evalExpr("steps.missing.outputs.v == ''", ctx)).toBe(true)
     expect(evalExpr("!inputs.on", ctx)).toBe(false)
     expect(evalExpr("format('a-{0}-{1}', 7, 'b')", ctx)).toBe('a-7-b')
+    expect(JSON.parse(String(evalExpr("toJSON(steps)", ctx)))).toEqual({ a: { outputs: { v: 'true' } } })
     expect(evalExpr("startsWith('release/x', 'release/') && !cancelled()", ctx)).toBe(true)
     expect(evalExpr("'it''s'", ctx)).toBe("it's")
     expect(evalValue("${{ inputs.on && 'yes' || 'no' }}", ctx)).toBe('yes')
@@ -186,7 +189,7 @@ describe('ci.yml: a newer run supersedes the older one, and only where that is s
 })
 
 describe('ci.yml: a label change does not restart the tests', () => {
-  const MATRIX_JOBS = ['test', 'codex-conformance']
+  const MATRIX_JOBS = ['test', 'test-windows-part', 'test-windows-build', 'test-windows', 'codex-conformance']
 
   it('the OS matrices run on a push, on a PR event that carries ci-run, and when ci-run is added: on no other label change', () => {
     for (const job of MATRIX_JOBS) {
@@ -207,7 +210,7 @@ describe('ci.yml: a label change does not restart the tests', () => {
       expect(runs(job, retargeted('beta', { labels: ['ci-run'], base: 'main' })), `${job}: base changed`).toBe(true)
       expect(runs(job, retargeted('beta', { labels: [], base: 'main' })), `${job}: base changed, no ci-run`).toBe(false)
     }
-    expect(runs('test', dispatch())).toBe(false)
+    for (const job of ['test', 'test-windows-part', 'test-windows-build', 'test-windows']) expect(runs(job, dispatch()), job).toBe(false)
     expect(runs('codex-conformance', dispatch())).toBe(true)
   })
 
@@ -344,67 +347,112 @@ describe('ci.yml: the Desktop test gate is at release level on beta, and pre-rel
 
 describe('ci.yml: a docs-only change skips the suite on Windows and macOS, and the required checks still report', () => {
   const test = ci.jobs.test
-  const oses = (test.strategy?.matrix.os ?? []) as string[]
+  const part = ci.jobs['test-windows-part']
+  const build = ci.jobs['test-windows-build']
+  const winTest = ci.jobs['test-windows']
+  /** The jobs that decide the scope themselves and gate every later step on it. */
+  const SCOPED: Array<[string, Job]> = [['test', test], ['test-windows-part', part], ['test-windows-build', build]]
   const stepCtx = (suite: string | undefined, os: string, headRef = 'fix/thing'): GhaContext => ({
     github: { event_name: 'pull_request', head_ref: headRef, sha: 'a'.repeat(40) },
-    runner: { os }, matrix: { os: os === 'Windows' ? 'windows-2025' : os === 'macOS' ? 'macos-latest' : 'ubuntu-latest' },
+    runner: { os, temp: 'D:\\a\\_temp' }, matrix: { os: os === 'Windows' ? 'windows-2025' : os === 'macOS' ? 'macos-latest' : 'ubuntu-latest', part: 2 }, strategy: { 'job-total': 4 },
     steps: { scope: { outputs: suite === undefined ? {} : { suite } }, tree: { outputs: { sha: 'b'.repeat(40) } } },
   })
+  /** Every name a job reports: one per matrix combination. */
+  const reportedNames = (job: Job): string[] => {
+    let combos: Array<Record<string, unknown>> = [{}]
+    for (const [k, v] of Object.entries(job.strategy?.matrix ?? {})) combos = combos.flatMap((c) => (Array.isArray(v) ? v : [v]).map((x) => ({ ...c, [k]: x })))
+    const name = job.name ?? ''
+    // A plain name is not an expression: only a name with ${{ }} in it is evaluated.
+    return combos.map((matrix) => (name.includes('${{') ? String(evalValue(name, { matrix, strategy: { 'job-total': combos.length } })) : name))
+  }
+  const allNames = Object.entries(ci.jobs).flatMap(([id, job]) => reportedNames(job).map((name) => ({ id, name })))
+  const TEST_JOBS = ['Test (macos-latest)', 'Test (ubuntu-latest)', 'Test (windows-2025)']
 
-  it('the required checks are the names the Test matrix reports, and the job is never skipped for its paths', () => {
+  it('the required checks are reported once each, by the Test jobs, and no job is skipped for its paths', () => {
     expect(test.name).toBe('Test (${{ matrix.os }})')
-    const reported = oses.map((os) => String(evalValue(test.name, { matrix: { os } })))
-    for (const check of REQUIRED_CHECKS) expect(reported, check).toContain(check)
-    // The job's own condition knows nothing of paths: the decision is taken inside it.
-    expect(String(test.if)).not.toMatch(/scope|paths|needs\./)
-    expect(test.needs).toBeUndefined()
+    expect(test.strategy?.matrix.os).toEqual(['macos-latest', 'ubuntu-latest'])
+    expect(winTest.name).toBe('Test (windows-2025)')
+    expect(allNames.filter((n) => n.name === 'Test (windows-2025)').map((n) => n.id)).toEqual(['test-windows'])
+    expect(allNames.filter((n) => n.name === 'Test (macos-latest)').map((n) => n.id)).toEqual(['test'])
+    for (const check of REQUIRED_CHECKS) expect(allNames.filter((n) => n.name === check), check).toHaveLength(1)
+    // The release gate and the green-run reuse read every job TEST_JOB_RE
+    // matches, and the reuse reads a job named "Test (..." as a run that ran
+    // the tests: exactly the three Test jobs, one per OS. The Windows parts
+    // and the build are named apart.
+    expect(allNames.filter((n) => TEST_JOB_RE.test(n.name)).map((n) => n.name).sort()).toEqual(TEST_JOBS)
+    expect(allNames.filter((n) => n.name.startsWith('Test (')).map((n) => n.name).sort()).toEqual(TEST_JOBS)
+    // No job's own condition knows anything of paths: the decision is taken inside each job.
+    for (const [id, job] of [...SCOPED, ['test-windows', winTest] as [string, Job]]) expect(String(job.if), id).not.toMatch(/scope|paths|needs\./)
+    for (const [id, job] of SCOPED) expect(job.needs, id).toBeUndefined()
   })
 
-  it('the job checks out the merge commit with its base, decides the scope, and every later step obeys it', () => {
-    const [checkout, scope, ...rest] = test.steps
-    expect(checkout.uses).toMatch(/^actions\/checkout@/)
-    // Depth 2: the merge commit and its parents, so the diff against the base can be read.
-    expect(checkout.with).toEqual({ 'fetch-depth': 2 })
-    expect(checkout.if).toBeUndefined()
-    expect(scope.id).toBe('scope')
-    expect(scope.run).toBe('node scripts/ci/change-scope.mjs')
-    expect(scope.if).toBeUndefined()
-    expect(scope['continue-on-error']).toBeUndefined()
-    expect(rest.length).toBeGreaterThan(8)
-    for (const step of rest) {
-      const label = step.name ?? step.uses ?? step.run
-      expect(step.if, `"${label}" has no condition`).toBeDefined()
-      for (const os of ['Windows', 'macOS', 'Linux']) {
-        // Skipped on the literal 'false', whatever else the step asks for.
-        expect(evalIf(step.if, stepCtx('false', os)), `"${label}" on ${os}, suite=false`).toBe(false)
-        expect(evalIf(step.if, stepCtx('false', os, 'release/v2.1.3')), `"${label}" on ${os}, suite=false, release branch`).toBe(false)
-        // And only on it: 'true', and an output that was never written, leave
-        // the step to its own condition (fail closed: the suite runs).
-        expect(evalIf(step.if, stepCtx(undefined, os)), `"${label}" on ${os}, no output`).toBe(evalIf(step.if, stepCtx('true', os)))
-        expect(evalIf(step.if, stepCtx(undefined, os, 'release/v2.1.3')), `"${label}" on ${os}, no output, release branch`).toBe(evalIf(step.if, stepCtx('true', os, 'release/v2.1.3')))
+  it('each job that runs the suite checks out the merge commit with its base, decides the scope, and every later step obeys it', () => {
+    for (const [id, job] of SCOPED) {
+      const [checkout, scope, ...rest] = job.steps
+      expect(checkout.uses, id).toMatch(/^actions\/checkout@/)
+      // Depth 2: the merge commit and its parents, so the diff against the base can be read.
+      expect(checkout.with, id).toEqual({ 'fetch-depth': 2 })
+      expect(checkout.if, id).toBeUndefined()
+      expect(scope.id, id).toBe('scope')
+      expect(scope.run, id).toBe('node scripts/ci/change-scope.mjs')
+      expect(scope.if, id).toBeUndefined()
+      expect(scope['continue-on-error'], id).toBeUndefined()
+      expect(rest.length, id).toBeGreaterThan(4)
+      for (const step of rest) {
+        const label = `${id}: ${step.name ?? step.uses ?? step.run}`
+        expect(step.if, `"${label}" has no condition`).toBeDefined()
+        for (const os of ['Windows', 'macOS', 'Linux']) {
+          // Skipped on the literal 'false', whatever else the step asks for.
+          expect(evalIf(step.if, stepCtx('false', os)), `"${label}" on ${os}, suite=false`).toBe(false)
+          expect(evalIf(step.if, stepCtx('false', os, 'release/v2.1.3')), `"${label}" on ${os}, suite=false, release branch`).toBe(false)
+          // And only on it: 'true', and an output that was never written, leave
+          // the step to its own condition (fail closed: the suite runs).
+          expect(evalIf(step.if, stepCtx(undefined, os)), `"${label}" on ${os}, no output`).toBe(evalIf(step.if, stepCtx('true', os)))
+          expect(evalIf(step.if, stepCtx(undefined, os, 'release/v2.1.3')), `"${label}" on ${os}, no output, release branch`).toBe(evalIf(step.if, stepCtx('true', os, 'release/v2.1.3')))
+        }
       }
     }
   })
 
-  it('with the suite on, the steps run where they ran before', () => {
-    const on = (name: string, os: string, headRef?: string) => evalIf(test.steps.find((s) => s.name === name)!.if, stepCtx('true', os, headRef))
-    for (const os of ['Windows', 'macOS', 'Linux']) {
-      for (const name of ['Install dependencies', 'Install Electron binary', 'Typecheck', 'Fetch the WP1 ledger\'s bound commit', 'Unit tests', 'Unit tests (native / SQLite under Electron-as-Node)', 'Build']) expect(on(name, os), `${name} on ${os}`).toBe(true)
+  it('with the suite on, the steps run where they ran before: macOS and Linux in one job, Windows in the parts and the build', () => {
+    const on = (job: Job, name: string, os: string, headRef?: string) => {
+      const step = job.steps.find((s) => s.name === name)
+      expect(step, `no step "${name}"`).toBeDefined()
+      return evalIf(step!.if, stepCtx('true', os, headRef))
     }
-    expect(on('Rebuild native modules', 'Windows')).toBe(false)
-    expect(on('Rebuild native modules', 'macOS')).toBe(true)
-    expect(on('Rebuild native modules', 'Linux')).toBe(true)
-    expect(on('Package Windows installer (release/* branches only)', 'Windows', 'release/v2.1.3')).toBe(true)
-    expect(on('Package Windows installer (release/* branches only)', 'Windows')).toBe(false)
-    expect(on('Package Windows installer (release/* branches only)', 'macOS', 'release/v2.1.3')).toBe(false)
-    expect(on('Package macOS DMG (release/* branches only)', 'macOS', 'release/v2.1.3')).toBe(true)
-    expect(on('Upload Windows installer', 'Windows', 'release/v2.1.3')).toBe(true)
-    expect(on('Upload macOS DMG', 'Linux', 'release/v2.1.3')).toBe(false)
+    const SUITE = ['Install dependencies', 'Install Electron binary', 'Typecheck', 'Fetch the WP1 ledger\'s bound commit', 'Unit tests', 'Unit tests (native / SQLite under Electron-as-Node)', 'Build']
+    for (const os of ['macOS', 'Linux']) for (const name of SUITE) expect(on(test, name, os), `${name} on ${os}`).toBe(true)
+    expect(on(test, 'Rebuild native modules', 'macOS')).toBe(true)
+    expect(on(test, 'Rebuild native modules', 'Linux')).toBe(true)
+    // Windows: each of those steps in exactly one of its two jobs, and no native rebuild.
+    const PART = ['Install dependencies', 'Install Electron binary', 'Fetch the WP1 ledger\'s bound commit', 'Unit tests']
+    const BUILD = ['Install dependencies', 'Install Electron binary', 'Typecheck', 'Unit tests (native / SQLite under Electron-as-Node)', 'Build']
+    for (const name of PART) expect(on(part, name, 'Windows'), `part: ${name}`).toBe(true)
+    for (const name of BUILD) expect(on(build, name, 'Windows'), `build: ${name}`).toBe(true)
+    for (const name of SUITE) expect(PART.includes(name) || BUILD.includes(name), name).toBe(true)
+    for (const name of ['Typecheck', 'Unit tests (native / SQLite under Electron-as-Node)', 'Build']) expect(part.steps.some((s) => s.name === name), `part: ${name}`).toBe(false)
+    for (const name of ['Fetch the WP1 ledger\'s bound commit', 'Unit tests']) expect(build.steps.some((s) => s.name === name), `build: ${name}`).toBe(false)
+    for (const job of [part, build]) expect(job.steps.some((s) => s.name === 'Rebuild native modules')).toBe(false)
+    // The installers: macOS in the test job, Windows in the build job, each on a release/* branch only.
+    expect(on(build, 'Package Windows installer (release/* branches only)', 'Windows', 'release/v2.1.3')).toBe(true)
+    expect(on(build, 'Package Windows installer (release/* branches only)', 'Windows')).toBe(false)
+    expect(on(build, 'Verify native modules unpacked (release/* branches only)', 'Windows', 'release/v2.1.3')).toBe(true)
+    expect(on(build, 'Verify native modules unpacked (release/* branches only)', 'Windows')).toBe(false)
+    expect(on(build, 'Upload Windows installer', 'Windows', 'release/v2.1.3')).toBe(true)
+    expect(on(build, 'Upload Windows installer', 'Windows')).toBe(false)
+    expect(on(test, 'Package macOS DMG (release/* branches only)', 'macOS', 'release/v2.1.3')).toBe(true)
+    expect(on(test, 'Package macOS DMG (release/* branches only)', 'macOS')).toBe(false)
+    expect(on(test, 'Upload macOS DMG', 'Linux', 'release/v2.1.3')).toBe(false)
+    // Each installer step is in one job of the workflow, so a release/* PR packages each once.
+    for (const name of ['Package Windows installer (release/* branches only)', 'Verify native modules unpacked (release/* branches only)', 'Upload Windows installer', 'Package macOS DMG (release/* branches only)', 'Upload macOS DMG']) {
+      expect(Object.values(ci.jobs).flatMap((j) => j.steps.filter((s) => s.name === name)), name).toHaveLength(1)
+    }
     expect(test.steps.find((s) => s.name === 'Unit tests')!.run).toBe('npx vitest run')
     expect(test.steps.find((s) => s.name === 'Unit tests')!.env).toBeUndefined()
+    expect(part.steps.find((s) => s.name === 'Unit tests')!.env).toBeUndefined()
   })
 
-  it('the job ends by naming the tree it tested, after the suite and the build, and only when the suite ran', () => {
+  it('the Test jobs end by naming the tree they tested, after the suite and the build, and only when the suite ran', () => {
     const names = test.steps.map((s) => s.name)
     const read = test.steps[test.steps.length - 2]
     const last = test.steps[test.steps.length - 1]
@@ -420,8 +468,107 @@ describe('ci.yml: a docs-only change skips the suite on Windows and macOS, and t
     for (const s of [read, last]) {
       expect(String(s.if)).not.toMatch(/always\(\)|failure\(\)|cancelled\(\)/)
       expect(s['continue-on-error']).toBeUndefined()
-      expect(evalIf(s.if, stepCtx('false', 'Windows'))).toBe(false)
+      expect(evalIf(s.if, stepCtx('false', 'macOS'))).toBe(false)
     }
+    // Test (windows-2025): the check of every part, then the same two steps,
+    // gated on what the check read from the parts.
+    expect(winTest.steps.map((s) => s.id ?? s.uses?.replace(/@.*/, ''))).toEqual(['actions/checkout', 'parts', 'tree', undefined])
+    const [checkout, parts, winRead, winLast] = winTest.steps
+    expect(checkout.with).toEqual({ 'persist-credentials': false })
+    expect(parts.run).toBe('node scripts/ci/all-parts-passed.mjs')
+    expect(winRead.run).toBe(read.run)
+    expect(winRead.shell).toBe('bash')
+    expect(winLast.name).toBe(last.name)
+    const winCtx = (suite: string | undefined): GhaContext => ({ steps: { parts: { outputs: suite === undefined ? {} : { suite } }, tree: { outputs: { sha: 'c'.repeat(40) } } } })
+    expect(evalValue(winLast.name, winCtx('true'))).toBe(testedTreeStep('c'.repeat(40)))
+    for (const s of [checkout, parts]) expect(s.if, s.name ?? s.uses).toBeUndefined()
+    for (const s of [winRead, winLast]) {
+      expect(String(s.if)).not.toMatch(/always\(\)|failure\(\)|cancelled\(\)/)
+      expect(s['continue-on-error']).toBeUndefined()
+      expect(evalIf(s.if, winCtx('true'))).toBe(true)
+      expect(evalIf(s.if, winCtx('false'))).toBe(false)
+    }
+  })
+})
+
+describe('ci.yml: Windows runs in parts side by side, and Test (windows-2025) passes only when every part did', () => {
+  const test = ci.jobs.test
+  const part = ci.jobs['test-windows-part']
+  const build = ci.jobs['test-windows-build']
+  const winTest = ci.jobs['test-windows']
+  const parts = (part.strategy?.matrix.part ?? []) as number[]
+  const norm = (s: unknown) => String(s).replace(/\s+/g, ' ').trim()
+
+  it('four parts, numbered 1 to 4, each running its share of the whole suite with nothing filtered out', () => {
+    expect(parts).toEqual([1, 2, 3, 4])
+    expect(part.strategy?.['fail-fast']).toBe(false)
+    const ctx = (p: number): GhaContext => ({ matrix: { part: p }, strategy: { 'job-total': parts.length }, runner: { temp: 'D:\\a\\_temp' } })
+    expect(parts.map((p) => evalValue(part.name, ctx(p)))).toEqual(['Test part 1 of 4 (windows-2025)', 'Test part 2 of 4 (windows-2025)', 'Test part 3 of 4 (windows-2025)', 'Test part 4 of 4 (windows-2025)'])
+    const unit = part.steps.find((s) => s.name === 'Unit tests')!
+    // The count is the matrix size, so a part added to the matrix splits the suite one more way.
+    expect(unit.run).toContain('--shard=${{ matrix.part }}/${{ strategy.job-total }}')
+    for (const p of parts) {
+      const cmd = String(evalValue(unit.run, ctx(p)))
+      expect(cmd.startsWith(`npx vitest run --shard=${p}/4 `), cmd).toBe(true)
+      // Past the shard, reporters only: vitest's two defaults on Actions and its JSON report. No file filter, no -t.
+      expect(cmd.slice(`npx vitest run --shard=${p}/4 `.length).split(' ')).toEqual(['--reporter=default', '--reporter=github-actions', '--reporter=json', '--outputFile.json=D:\\a\\_temp/vitest-part.json'])
+    }
+    // The summary reads the report the suite wrote, and runs after a failed suite too.
+    const slow = part.steps[part.steps.length - 1]
+    expect(slow.name).toBe('Slowest test files in this part')
+    expect(String(evalValue(slow.run, ctx(3)))).toBe('node scripts/ci/slow-test-files.mjs "D:\\a\\_temp/vitest-part.json" 15 "part 3 of 4"')
+    expect(String(slow.if)).toMatch(/!cancelled\(\)/)
+    expect(slow['continue-on-error']).toBeUndefined()
+    for (const [id, job] of [['test-windows-part', part], ['test-windows-build', build]] as Array<[string, Job]>) {
+      expect(job['runs-on'], id).toBe('windows-2025')
+      expect(job.outputs, id).toEqual({ suite: '${{ steps.scope.outputs.suite }}' })
+    }
+    for (const [id, job] of [['test-windows-part', part], ['test-windows-build', build], ['test-windows', winTest]] as Array<[string, Job]>) {
+      expect(job['timeout-minutes'], id).toBeGreaterThan(0)
+      expect(job['timeout-minutes'], id).toBeLessThanOrEqual(30)
+    }
+  })
+
+  it('Test (windows-2025) needs every part and the build, starts whatever they ended with, and otherwise starts as the Test jobs do', () => {
+    expect(winTest.needs).toEqual(['test-windows-part', 'test-windows-build'])
+    // always(): a job whose need failed is skipped by default, and a skipped job reports as passed.
+    expect(norm(winTest.if)).toBe(`always() && (${norm(test.if)})`)
+    for (const id of ['test-windows-part', 'test-windows-build']) expect(norm(ci.jobs[id].if), id).toBe(norm(test.if))
+    expect(winTest['runs-on']).toBe('ubuntu-latest')
+    expect(winTest.permissions).toEqual({ contents: 'read' })
+    expect(winTest['continue-on-error']).toBeUndefined()
+    const step = winTest.steps.find((s) => s.id === 'parts')!
+    expect(step.env).toEqual({ NEEDS: '${{ toJSON(needs) }}', EXPECT: 'test-windows-part test-windows-build' })
+    expect(step.env!.EXPECT.split(' ')).toEqual(winTest.needs)
+    expect(step['continue-on-error']).toBeUndefined()
+  })
+
+  it('passes only when every part and the build passed, for each result a job can end with', () => {
+    const step = winTest.steps.find((s) => s.id === 'parts')!
+    /** The step as GitHub runs it: its env evaluated against `needs`, then the script, with that env and nothing else. */
+    const decide = (needs: Record<string, unknown>) => {
+      const env: Record<string, string> = {}
+      // An env value is text, with only its ${{ }} parts evaluated.
+      for (const [k, v] of Object.entries(step.env ?? {})) env[k] = v.includes('${{') ? String(evalValue(v, { needs }) ?? '') : v
+      const out: string[] = []
+      const code = partsMain({ ...env, GITHUB_OUTPUT: 'out.txt' }, { log: () => {}, write: (_f: string, t: string) => { out.push(t) } })
+      return { code, out: out.join('') }
+    }
+    const need = (result: string, suite = 'true') => ({ result, outputs: { suite } })
+    const RESULTS = ['success', 'failure', 'cancelled', 'skipped']
+    for (const a of RESULTS) {
+      for (const b of RESULTS) {
+        const r = decide({ 'test-windows-part': need(a), 'test-windows-build': need(b) })
+        expect(r.code, `parts ${a}, build ${b}`).toBe(a === 'success' && b === 'success' ? 0 : 1)
+        expect(r.out, `parts ${a}, build ${b}`).toBe(a === 'success' && b === 'success' ? 'suite=true\n' : '')
+      }
+    }
+    // A documentation-only change: every part skipped the suite and passed, so the check passes and names no tree.
+    expect(decide({ 'test-windows-part': need('success', 'false'), 'test-windows-build': need('success', 'false') })).toEqual({ code: 0, out: 'suite=false\n' })
+    // Parts that disagree on the scope, a part missing, or an extra one: red.
+    expect(decide({ 'test-windows-part': need('success', 'false'), 'test-windows-build': need('success') }).code).toBe(1)
+    expect(decide({ 'test-windows-part': need('success') }).code).toBe(1)
+    expect(decide({ 'test-windows-part': need('success'), 'test-windows-build': need('success'), other: need('success') }).code).toBe(1)
   })
 })
 
@@ -490,12 +637,18 @@ describe('release.yml: a beta release reuses green CI for the same tree; a stabl
     // protected; ci.yml runs on PRs into each of them.
     for (const base of REUSE_PR_BASES) expect(ci.on.pull_request.branches, base).toContain(base)
     expect(REUSE_PR_BASES.some((b) => /[*?]|release/.test(b))).toBe(false)
+    // Linux: the Test job's own runner and command.
     const ciOses = ci.jobs.test.strategy!.matrix.os as string[]
     const ciSuite = ci.jobs.test.steps.find((s) => s.name === 'Unit tests')!
-    for (const id of ['build-windows', 'build-linux']) {
-      expect(ciOses, id).toContain(release.jobs[id]['runs-on'])
-      expect(suiteStepsOf(id)[0].run).toBe(ciSuite.run)
-    }
+    expect(ciOses).toContain(release.jobs['build-linux']['runs-on'])
+    expect(suiteStepsOf('build-linux')[0].run).toBe(ciSuite.run)
+    // Windows: the parts' runner, and the release's command split into the
+    // parts' shards, with reporters added and nothing filtered out (the parts
+    // describe above pins the rest of the command).
+    const part = ci.jobs['test-windows-part']
+    expect(part['runs-on']).toBe(release.jobs['build-windows']['runs-on'])
+    const partRun = part.steps.find((s) => s.name === 'Unit tests')!.run!
+    expect(partRun.startsWith(`${suiteStepsOf('build-windows')[0].run} --shard=\${{ matrix.part }}/\${{ strategy.job-total }} --reporter=`), partRun).toBe(true)
   })
 })
 
