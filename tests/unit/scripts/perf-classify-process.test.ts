@@ -31,7 +31,7 @@ const C = req('./lib/classify-process.cjs') as {
 const A = req('./lib/aggregate.cjs') as {
   attributeProfile: (profile: unknown, map: unknown, o?: Record<string, unknown>) => { totalMs: number; idleMs: number; gcMs: number; unattributedMs: number; byService: Record<string, number>; topUnattributed: Array<{ frame: string; ms: number }> }
   topLevelName: (lines: string[], line: number) => string
-  topLevelNamer: (text: string, urlEnd?: string) => (cf: { url?: string; lineNumber?: number }) => string
+  topLevelNamer: (files: Record<string, string>) => (cf: { url?: string; lineNumber?: number }) => string
 }
 const SERVICE_MAP = JSON.parse(readFileSync(join(PERF, 'service-map.json'), 'utf8'))
 
@@ -152,11 +152,16 @@ describe('main-process attribution with the committed service map', () => {
     '  });',                                               // 27
     '}',                                                   // 28
   ].join('\n')
+  // A chunk the bundler split out (out/main/chunks), as the real build has.
+  const CHUNK = ['"use strict";', 'class LoopStallMonitor {', '  tick() {', '    this.prune(Date.now());', '  }', '}'].join('\n')
+  const SOURCES = { 'index.js': BUNDLE, 'chunks/loop-stall-monitor-DTsNW8F7.js': CHUNK }
   const URL = 'file:///C:/Users/User/AppData/Local/Programs/AI%20Code%20Conductor/resources/app.asar/out/main/index.js'
+  const CHUNK_URL = URL.replace('index.js', 'chunks/loop-stall-monitor-DTsNW8F7.js')
   const f = (functionName: string, lineNumber: number, url = URL) => ({ functionName, url, lineNumber, columnNumber: 0, scriptId: '1' })
   const profile = {
     nodes: [
-      { id: 1, callFrame: f('(root)', -1, ''), children: [2, 9, 12, 13, 20] },
+      { id: 1, callFrame: f('(root)', -1, ''), children: [2, 9, 12, 13, 20, 30] },
+      { id: 30, callFrame: f('tick', 2, CHUNK_URL), children: [] }, // a method in a chunk
       { id: 2, callFrame: f('processTimers', 500, 'node:internal/timers'), children: [3] },
       { id: 3, callFrame: f('listOnTimeout', 520, 'node:internal/timers'), children: [4] },
       { id: 4, callFrame: f('', 17), children: [5] },              // the statusline poll arrow
@@ -170,8 +175,8 @@ describe('main-process attribution with the committed service map', () => {
       { id: 23, callFrame: f('', 11), children: [] },              // forEach arrow inside the method
     ],
     // Each sample lasts until the next one (timeDeltas[i + 1], microseconds).
-    samples: [5, 5, 9, 9, 9, 22, 23, 13, 12, 20, 5],
-    timeDeltas: [0, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
+    samples: [5, 5, 9, 9, 9, 22, 23, 13, 12, 20, 30, 5],
+    timeDeltas: [0, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
   }
 
   it('names each frame by the top-level function or class it sits in', () => {
@@ -181,21 +186,27 @@ describe('main-process attribution with the committed service map', () => {
     expect(A.topLevelName(lines, 2)).toBe('stripAnsi')
     expect(A.topLevelName(lines, 26)).toBe('registerPtyHandlers')
     expect(A.topLevelName(lines, 1)).toBe('electron')
+    const topOf = A.topLevelNamer(SOURCES)
+    expect(topOf(f('', 17))).toBe('startStatuslineWatcher') // the url's %20 read as a space
+    expect(topOf(f('tick', 2, CHUNK_URL))).toBe('LoopStallMonitor')
+    expect(topOf(f('readFileSync', 400, 'node:fs'))).toBe('')
   })
 
   it('attributes the self time to services, the nearest matching frame first', () => {
-    const r = A.attributeProfile(profile, SERVICE_MAP, { topOf: A.topLevelNamer(BUNDLE) })
+    const r = A.attributeProfile(profile, SERVICE_MAP, { topOf: A.topLevelNamer(SOURCES) })
     // readFileSync under the statusline arrow: 2 samples of 1 ms (the last sample counts nothing).
     expect(r.byService.statusline).toBeCloseTo(2, 6)
     // stripAnsi 1 ms + the forEach arrow 1 ms; the IPC handler above them is farther away.
     expect(r.byService.watchdog).toBeCloseTo(2, 6)
     // the IPC handler's own frame.
     expect(r.byService['ipc-handlers']).toBeCloseTo(1, 6)
+    // the chunk's method, by the class it sits in.
+    expect(r.byService['services-panel']).toBeCloseTo(1, 6)
     expect(r.idleMs).toBeCloseTo(3, 6)
     expect(r.gcMs).toBeCloseTo(1, 6)
     expect(r.unattributedMs).toBeCloseTo(1, 6)
     expect(r.topUnattributed[0].frame).toMatch(/^unrelatedThing .*index\.js:22$/)
-    expect(r.totalMs).toBeCloseTo(10, 6)
+    expect(r.totalMs).toBeCloseTo(11, 6)
   })
 
   it('attributes nothing to a service when the bundle source is missing (names alone)', () => {

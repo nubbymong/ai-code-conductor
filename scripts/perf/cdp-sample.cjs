@@ -3,14 +3,16 @@
 //
 // Raw CDP over Node's own WebSocket (Node 22 and later), not Playwright: nothing to install on the VM,
 // and no domain is switched on beyond the ones a reading needs (Playwright enables several on attach).
-// Reads only, except two things a reading needs: the reduced-motion A/B sets an emulated media feature
-// for its second half (CDP drops it when the session detaches), and `resume` presses the start-up
-// prompt's Resume button, as a person would.
+// Reads only, except what a run needs: the reduced-motion A/B sets an emulated media feature for its
+// second half (CDP drops it when the session detaches), `resume` presses the start-up prompt's Resume
+// button and `open` clicks each session card once, as a person would (a resumed tab starts its
+// terminal only when it is first opened).
 //
 //   node cdp-sample.cjs window <seconds> <out.json>     Performance.getMetrics over one held session, plus the Services rows
 //   node cdp-sample.cjs profile <seconds> <out.cpuprofile>
 //   node cdp-sample.cjs ab <seconds> <out.json>         the same window twice: as is, then prefers-reduced-motion: reduce
 //   node cdp-sample.cjs resume [timeoutSec]             press Resume on the "Resume previous sessions?" prompt
+//   node cdp-sample.cjs open <n>                        open every resumed session once; wait for n terminals
 //   env CCC_PERF_PORT (default 9333)
 'use strict'
 
@@ -195,17 +197,35 @@ async function resume(timeoutSec = 90, p = port()) {
   return last || { shown: false }
 }
 
+/**
+ * Open every resumed session once. A resumed tab starts its terminal only
+ * when it is first opened, so Resume alone starts one. This clicks each
+ * session card on the Running tab in turn (stepMs apart), then the first
+ * again, and waits until `expected` terminals are mounted (or timeoutSec).
+ */
+async function openAllSessions(expected, { stepMs = 1200, timeoutSec = 180 } = {}, p = port()) {
+  const cards = await withPage((cdp) => evaluate(cdp, `(async () => {
+    const tab = document.querySelector('[data-testid="panel-tab-running"]'); if (tab) tab.click();
+    await new Promise((r) => setTimeout(r, 800));
+    const cards = [...document.querySelectorAll('button.session-card')];
+    for (const c of cards) { c.click(); await new Promise((r) => setTimeout(r, ${Number(stepMs)})) }
+    if (cards[0]) cards[0].click();
+    return cards.length;
+  })()`), p)
+  const deadline = Date.now() + timeoutSec * 1000
+  let s = null
+  while (Date.now() < deadline) {
+    s = await state(p).catch(() => null)
+    if (s && s.terminals >= expected) break
+    await sleep(3000)
+  }
+  return { cards, terminals: s ? s.terminals : null, runningTab: s ? s.runningTab : null }
+}
+
 /** The page's state now (a short connection). */
 async function state(p = port()) { return withPage((cdp) => pageState(cdp), p) }
 
-/** The browser-level target's process list (cpuTime per process), when the app's CDP offers it. */
-async function processInfo(p = port()) {
-  const v = await getJson(`http://127.0.0.1:${p}/json/version`)
-  const cdp = await Cdp.connect(v.webSocketDebuggerUrl)
-  try { return (await cdp.send('SystemInfo.getProcessInfo')).processInfo } finally { cdp.close() }
-}
-
-module.exports = { Cdp, getJson, appPage, evaluate, measureWindow, profile, reducedMotionAB, resume, state, processInfo, sleep }
+module.exports = { Cdp, getJson, appPage, evaluate, measureWindow, profile, reducedMotionAB, resume, openAllSessions, state, sleep }
 
 if (require.main === module) {
   const [cmd, a1, a2] = process.argv.slice(2)
@@ -215,8 +235,9 @@ if (require.main === module) {
     profile: async () => write(a2, await profile(Number(a1) || 60)),
     ab: async () => write(a2, await reducedMotionAB(Number(a1) || 60)),
     resume: async () => console.log(JSON.stringify(await resume(Number(a1) || 90))),
+    open: async () => console.log(JSON.stringify(await openAllSessions(Number(a1) || 1))),
     state: async () => console.log(JSON.stringify(await state(), null, 1)),
   }[cmd]
-  if (!run) { console.error('usage: node cdp-sample.cjs window|profile|ab <seconds> <out> | resume [timeoutSec] | state'); process.exit(64) }
+  if (!run) { console.error('usage: node cdp-sample.cjs window|profile|ab <seconds> <out> | resume [timeoutSec] | open <n> | state'); process.exit(64) }
   run().then(() => process.exit(0), (e) => { console.error(e && e.stack ? e.stack : e); process.exit(1) })
 }

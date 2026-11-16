@@ -160,16 +160,6 @@ function summarizeByRole(rows, { from = -Infinity, to = Infinity, roleOf }) {
   })
 }
 
-/** The main process's event loop busy share between two readings of
- *  performance.eventLoopUtilization() ({ idle, active } in ms), in percent. */
-function eventLoopUtilization(a, b) {
-  if (!a || !b) return null
-  const active = b.active - a.active
-  const idle = b.idle - a.idle
-  if (!(active + idle > 0) || active < 0 || idle < 0) return null
-  return (active / (active + idle)) * 100
-}
-
 /** Performance.getMetrics as a name -> value object (it comes as a list). */
 function metricsObject(m) {
   if (!m) return {}
@@ -307,17 +297,22 @@ function topLevelName(lines, line, maxScan = 40000) {
   return ''
 }
 
-/** topOf for attributeProfile and frameLabel: frames of the bundle whose
- *  source is `text` (its url ends with `urlEnd`) get their top-level name;
- *  other frames none. Memoized per line. */
-function topLevelNamer(text, urlEnd = 'out/main/index.js') {
-  const lines = String(text || '').split(/\r?\n/)
+/** topOf for attributeProfile and frameLabel, over the bundle's files
+ *  ({ 'index.js': text, 'chunks/<name>.js': text }, as main-inspector reads
+ *  them from out/main): a frame whose script url ends with out/main/<file>
+ *  gets its top-level name in that file; other frames none. Memoized. */
+function topLevelNamer(files, base = 'out/main/') {
+  const lines = new Map(Object.entries(files || {}).map(([k, text]) => [base + k.replace(/\\/g, '/'), String(text || '').split(/\r?\n/)]))
   const memo = new Map()
   return (cf) => {
-    if (!cf || !String(cf.url || '').replace(/\\/g, '/').endsWith(urlEnd)) return ''
-    const l = cf.lineNumber
-    if (!memo.has(l)) memo.set(l, topLevelName(lines, l))
-    return memo.get(l)
+    if (!cf || !cf.url) return ''
+    const url = decodeURI(String(cf.url)).replace(/\\/g, '/')
+    const key = `${url}:${cf.lineNumber}`
+    if (memo.has(key)) return memo.get(key)
+    let name = ''
+    for (const [suffix, l] of lines) if (url.endsWith('/' + suffix)) { name = topLevelName(l, cf.lineNumber); break }
+    memo.set(key, name)
+    return name
   }
 }
 
@@ -337,6 +332,6 @@ function fixed(v, d = 1) {
 
 module.exports = {
   MB, normalizeRow, parseSampleText, procKey, cpuPercent, ratePerSec, mean, percentile, summarizeByRole,
-  eventLoopUtilization, metricsObject, perfMetricsDelta, profileSelfTimes, attributeProfile, frameLabel,
+  metricsObject, perfMetricsDelta, profileSelfTimes, attributeProfile, frameLabel,
   topLevelName, topLevelNamer, markdownTable, fixed,
 }

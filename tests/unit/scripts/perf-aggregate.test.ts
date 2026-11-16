@@ -3,7 +3,7 @@
  * CPU percent from two cumulative CPU-time samples of the same process, the
  * p95 over a window, a reused pid (same pid, new start time) never read as
  * the old process's counters going on, I/O operations per second from
- * cumulative counters, and the renderer and main-loop deltas.
+ * cumulative counters, and the renderer's metric deltas.
  *
  * Pure functions on in-memory rows: nothing is read from or written to disk,
  * nothing is started. The process rows carry real command lines from the
@@ -24,7 +24,6 @@ const A = req('./lib/aggregate.cjs') as {
   ratePerSec: (a: number, b: number, dtMs: number) => number | null
   percentile: (values: number[], p: number) => number | null
   summarizeByRole: (rows: Row[], o: { from?: number; to?: number; roleOf: (r: Row) => string | null }) => RoleSummary[]
-  eventLoopUtilization: (a: { idle: number; active: number }, b: { idle: number; active: number }) => number | null
   perfMetricsDelta: (a: unknown, b: unknown) => Record<string, number> | null
   markdownTable: (cols: Array<{ label: string; get: (r: unknown) => unknown; align?: string }>, rows: unknown[]) => string
 }
@@ -162,7 +161,7 @@ describe('real sample lines from the VM', () => {
   })
 })
 
-describe('renderer and main event loop deltas', () => {
+describe('the renderer between two Performance.getMetrics readings', () => {
   it('reads the renderer main thread busy share from TaskDuration over Timestamp', () => {
     const a = [{ name: 'Timestamp', value: 1000 }, { name: 'TaskDuration', value: 10 }, { name: 'ScriptDuration', value: 4 }, { name: 'LayoutCount', value: 100 }, { name: 'RecalcStyleCount', value: 50 }, { name: 'LayoutDuration', value: 1 }, { name: 'RecalcStyleDuration', value: 1 }]
     const b = [{ name: 'Timestamp', value: 1060 }, { name: 'TaskDuration', value: 22 }, { name: 'ScriptDuration', value: 7 }, { name: 'LayoutCount', value: 160 }, { name: 'RecalcStyleCount', value: 650 }, { name: 'LayoutDuration', value: 1.6 }, { name: 'RecalcStyleDuration', value: 2.2 }, { name: 'JSHeapUsedSize', value: 50 * 1024 * 1024 }]
@@ -176,9 +175,8 @@ describe('renderer and main event loop deltas', () => {
     expect(d.heapMb).toBeCloseTo(50, 6)
   })
 
-  it('reads the main event loop busy share between two cumulative readings', () => {
-    expect(A.eventLoopUtilization({ idle: 1_000, active: 500 }, { idle: 9_000, active: 2_500 })).toBeCloseTo(20, 6)
-    expect(A.eventLoopUtilization({ idle: 1_000, active: 500 }, { idle: 1_000, active: 500 })).toBeNull()
+  it('is null when no time passed between the readings', () => {
+    expect(A.perfMetricsDelta([{ name: 'Timestamp', value: 5 }], [{ name: 'Timestamp', value: 5 }])).toBeNull()
   })
 })
 

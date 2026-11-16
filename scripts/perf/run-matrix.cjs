@@ -9,7 +9,8 @@
 //
 // For each N (default 1, 10, 25) it writes N sessions (gen-sessions.cjs), starts the app
 // (scripts/readme-shots/stage/launch.js: isolated environment, --remote-debugging-port and --inspect),
-// presses Resume, waits for things to settle, and measures an idle window; then switches the fake CLIs
+// presses Resume, opens each session once (a resumed tab starts its terminal only when it is first
+// opened), waits for things to settle, and measures an idle window; then switches the fake CLIs
 // to busy, starts the transcript writer (load-sidecar.cjs), settles again and measures a busy window.
 // A window is: the process sampler (sample-processes.ps1) every --interval seconds, the renderer's
 // Performance metrics over one held CDP session (cdp-sample.cjs), and main's event loop and process
@@ -196,8 +197,8 @@ async function measureWindow(run, phase, runRec) {
 
 async function profiles(phase, runRec) {
   log(`profiles ${phase.tag}: ${phase.profile} s`)
-  if (!fs.existsSync(path.join(OUT, 'main-bundle.js'))) {
-    try { const src = await mainInspector.source(INSPECT); fs.writeFileSync(path.join(OUT, 'main-bundle.js'), src.text || ''); record.mainBundle = src.file; save() } catch (e) { log('  main source not read: ' + e.message) }
+  if (!fs.existsSync(path.join(OUT, 'main-sources.json'))) {
+    try { const src = await mainInspector.sources(INSPECT); writeJson('main-sources.json', src.files); record.mainDir = src.dir; save() } catch (e) { log('  main sources not read: ' + e.message) }
   }
   const [r, m] = await Promise.all([
     cdp.profile(phase.profile, PORT).catch((e) => ({ error: e.message })),
@@ -237,6 +238,9 @@ async function doRun(run, stage) {
     await sleep(5000)
     runRec.resume = await cdp.resume(120, PORT)
     log('  resume: ' + JSON.stringify(runRec.resume))
+    // A resumed tab starts its terminal only when it is first opened.
+    runRec.opened = await cdp.openAllSessions(run.n, {}, PORT).catch((e) => ({ error: e.message }))
+    log('  opened: ' + JSON.stringify(runRec.opened))
     for (let i = 0; i < run.phases.length; i++) {
       const phase = run.phases[i]
       if (i > 0 && phase.mode !== run.phases[i - 1].mode) gen(['--mode', phase.mode])

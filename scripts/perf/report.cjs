@@ -98,8 +98,8 @@ function main() {
   const mi = argv.indexOf('--service-map')
   const serviceMap = JSON.parse(fs.readFileSync(mi >= 0 ? argv[mi + 1] : path.join(__dirname, 'service-map.json'), 'utf8'))
   const record = JSON.parse(fs.readFileSync(path.join(dir, 'run.json'), 'utf8'))
-  const bundleFile = path.join(dir, 'main-bundle.js')
-  const topOf = fs.existsSync(bundleFile) ? A.topLevelNamer(fs.readFileSync(bundleFile, 'utf8')) : null
+  const sourcesFile = path.join(dir, 'main-sources.json')
+  const topOf = fs.existsSync(sourcesFile) ? A.topLevelNamer(JSON.parse(fs.readFileSync(sourcesFile, 'utf8'))) : null
   const json = { appVersion: record.options && record.options.appVersion, started: record.started, finished: record.finished, aborted: record.aborted || null, windows: [], profiles: [], ab: [] }
   const md = []
   const f1 = (v) => A.fixed(v, 1)
@@ -112,12 +112,13 @@ function main() {
       const a = analyseWindow(dir, w, record, runRec)
       header = header || a.header
       const sessions = (a.roles.find((r) => r.role === 'fake-claude') || {}).processes || 0
-      json.windows.push({ tag: w.tag, n: w.n, mode: w.mode, off: w.off, from: w.from, to: w.to, sessionsLive: sessions, roles: a.roles, groups: a.groups, renderer: rendererDelta(w), mainEventLoopBusyPct: A.eventLoopUtilization(w.mainStart && w.mainStart.elu, w.mainEnd && w.mainEnd.elu), appMetrics: appMetricsCpu(w), services: serviceRows(w), timers: (w.mainEnd && w.mainEnd.timers) || [], resources: (w.mainEnd && w.mainEnd.resources) || {}, mainMem: w.mainEnd && w.mainEnd.mem, page: w.renderer && w.renderer.end && w.renderer.end.page ? { terminals: w.renderer.end.page.terminals, runningTab: w.renderer.end.page.runningTab } : null, errors: runRec.errors })
+      json.windows.push({ tag: w.tag, n: w.n, mode: w.mode, off: w.off, from: w.from, to: w.to, sessionsLive: sessions, roles: a.roles, groups: a.groups, renderer: rendererDelta(w), appMetrics: appMetricsCpu(w), services: serviceRows(w), resources: (w.mainEnd && w.mainEnd.resources) || {}, mainMem: w.mainEnd && w.mainEnd.mem, page: w.renderer && w.renderer.end && w.renderer.end.page ? { terminals: w.renderer.end.page.terminals, runningTab: w.renderer.end.page.runningTab } : null, errors: runRec.errors })
     }
     for (const p of runRec.profiles) {
       const main = p.main ? A.attributeProfile(JSON.parse(fs.readFileSync(path.join(dir, p.main), 'utf8')), serviceMap, { topOf }) : null
       const renderer = p.renderer ? A.attributeProfile(JSON.parse(fs.readFileSync(path.join(dir, p.renderer), 'utf8')), { services: [] }, {}) : null
-      json.profiles.push({ tag: p.tag, main, renderer })
+      const busyPct = (x) => (x && x.totalMs > 0 ? ((x.totalMs - x.idleMs) / x.totalMs) * 100 : null)
+      json.profiles.push({ tag: p.tag, mainBusyPct: busyPct(main), rendererBusyPct: busyPct(renderer), main, renderer })
     }
     for (const abRef of runRec.ab) {
       const ab = JSON.parse(fs.readFileSync(path.join(dir, abRef.file), 'utf8'))
@@ -159,7 +160,8 @@ function main() {
   }
   for (const role of roles) pivotRows.push({ label: roleLabel(role), ...Object.fromEntries(cells.map((wnd) => [wnd.tag, f1((wnd.roles.find((x) => x.role === role) || {}).cpuMean)])) })
   pivotRows.push({ label: 'Sessions live (fake CLI processes)', ...Object.fromEntries(cells.map((wnd) => [wnd.tag, String(wnd.sessionsLive)])) })
-  pivotRows.push({ label: 'Main event loop busy %', ...Object.fromEntries(cells.map((wnd) => [wnd.tag, f1(wnd.mainEventLoopBusyPct)])) })
+  const profileOf = (tag) => json.profiles.find((p) => p.tag === tag) || {}
+  pivotRows.push({ label: 'Main thread busy % (CPU profile, where taken)', ...Object.fromEntries(cells.map((wnd) => [wnd.tag, f1(profileOf(wnd.tag).mainBusyPct)])) })
   pivotRows.push({ label: 'Renderer main thread busy % (CDP task time)', ...Object.fromEntries(cells.map((wnd) => [wnd.tag, f1(wnd.renderer && wnd.renderer.taskBusyPct)])) })
   md.push(A.markdownTable(pivotCols, pivotRows))
   md.push('')
@@ -181,7 +183,6 @@ function main() {
     ], wnd.roles))
     const r = wnd.renderer
     const notes = []
-    notes.push(`main event loop busy ${f1(wnd.mainEventLoopBusyPct)} %`)
     if (r) notes.push(`renderer: main thread busy ${f1(r.taskBusyPct)} % (script ${f1(r.scriptBusyPct)} %), ${f1(r.layoutsPerSec)} layouts/s, ${f1(r.recalcStylesPerSec)} style recalcs/s, JS heap ${f0(r.heapMb)} MB, ${f0(r.nodes)} DOM nodes`)
     if (wnd.page) notes.push(`page: ${wnd.page.terminals} terminals, Running tab "${wnd.page.runningTab}"`)
     if (wnd.mainMem) notes.push(`main JS heap ${f0(wnd.mainMem.heapUsedMb)} MB`)
@@ -211,7 +212,7 @@ function main() {
       const busy = p.main.totalMs - p.main.idleMs
       const secs = p.main.totalMs / 1000
       md.push('')
-      md.push(`### ${p.tag}`)
+      md.push(`### ${p.tag}: main thread busy ${f1(p.mainBusyPct)} %`)
       md.push('')
       const rows = Object.entries(p.main.byService).map(([id, ms]) => ({ id, ms }))
       rows.push({ id: '(not attributed)', ms: p.main.unattributedMs }, { id: '(garbage collection)', ms: p.main.gcMs }, { id: '(program: native, outside JS)', ms: p.main.programMs })
@@ -231,7 +232,7 @@ function main() {
       if (!p.renderer) continue
       const secs = p.renderer.totalMs / 1000
       md.push('')
-      md.push(`### ${p.tag}: busy ${A.fixed((p.renderer.totalMs - p.renderer.idleMs) / secs / 10, 1)} % of the thread (GC ${A.fixed(p.renderer.gcMs / secs, 1)} ms/s, native ${A.fixed(p.renderer.programMs / secs, 1)} ms/s)`)
+      md.push(`### ${p.tag}: busy ${f1(p.rendererBusyPct)} % of the thread (GC ${A.fixed(p.renderer.gcMs / secs, 1)} ms/s, native ${A.fixed(p.renderer.programMs / secs, 1)} ms/s)`)
       md.push('')
       md.push(A.markdownTable([
         { label: 'Frame', align: 'left', get: (r) => r.frame },
@@ -272,23 +273,9 @@ function main() {
       { label: 'Saved vs all on', get: (w2) => w2 === ref ? '-' : f1(appCpu(ref) - appCpu(w2)) },
       { label: 'Main %', get: (w2) => f1(roleCpu(w2, 'main')) },
       { label: 'Renderer %', get: (w2) => f1(roleCpu(w2, 'renderer')) },
-      { label: 'Main event loop busy %', get: (w2) => f1(w2.mainEventLoopBusyPct) },
+      { label: 'GPU %', get: (w2) => f1(roleCpu(w2, 'gpu')) },
       { label: 'Sessions live', get: (w2) => w2.sessionsLive },
     ], abl))
-  }
-
-  const timers = cells.length ? cells[cells.length - 1].timers : []
-  if (timers.length) {
-    md.push('')
-    md.push(`## Repeating timers in main (${cells[cells.length - 1].tag}, at the window's end)`)
-    md.push('')
-    const rep = timers.filter((t) => t.repeat).sort((a, b) => a.ms - b.ms)
-    md.push(A.markdownTable([
-      { label: 'Every ms', get: (t) => t.ms },
-      { label: 'Callback', align: 'left', get: (t) => (t.name ? t.name + ': ' : '') + t.source.slice(0, 110) },
-    ], rep))
-    md.push('')
-    md.push(`${timers.length - rep.length} one-shot timers were pending as well.`)
   }
 
   fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify(json, null, 1))

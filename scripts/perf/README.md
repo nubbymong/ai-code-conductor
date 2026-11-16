@@ -21,8 +21,8 @@ I/O operations per second is the proxy (read and write operations, pipes and soc
 | `load-sidecar.cjs` | While busy, appends one transcript line per session every 5 s, so Tokenomics and session logging have work. |
 | `sample-processes.ps1` | Every 5 s: CPU time, private bytes, working set, handles, threads and I/O counts per process (Win32_Process). Read-only. |
 | `cdp-sample.cjs` | The app window over CDP (raw WebSocket, no Playwright): Performance metrics over one held session, a renderer CPU profile, the `prefers-reduced-motion` A/B, the Services rows, and the Resume press at start-up. |
-| `main-inspector.cjs` | The main process over its Node inspector: event loop use, `app.getAppMetrics()` (it names each service worker by the serviceName it was forked with; their command lines are identical), which process draws which window, the live timers, and a main CPU profile. |
-| `service-map.json` | Which main-process code is which service, by function name or the top-level function or class it sits in (main is bundled but not minified). |
+| `main-inspector.cjs` | The main process over its Node inspector: `app.getAppMetrics()` (it names each service worker by the serviceName it was forked with; their command lines are identical), which process draws which window, a main CPU profile, and the bundle's files for naming its frames. Electron runs Node's loop inside its own, so `performance.eventLoopUtilization()` reads zero in main; the profile's busy share is the main thread figure. |
+| `service-map.json` | Which main-process code is which service, by function name or the top-level function or class it sits in (main is bundled into `out/main/index.js` and chunks, but not minified). |
 | `report.cjs` | Turns a results folder into `report.md` and `report.json`. Runs anywhere. |
 | `lib/aggregate.cjs`, `lib/classify-process.cjs` | The arithmetic and the process roles. Unit-tested on any machine (`tests/unit/scripts/perf-*.test.ts`). |
 
@@ -33,7 +33,8 @@ isolated environment, and `fake-claude.js` draws the sessions. `fake-claude.js` 
 
 ## The grid
 
-For each N in 1, 10 and 25: write the sessions, start the app, press Resume, settle 5 min, measure an
+For each N in 1, 10 and 25: write the sessions, start the app, press Resume and open each session once
+(a resumed tab starts its terminal only when it is first opened), settle 5 min, measure an
 idle window of 3 min; switch the fake CLIs to busy and start the transcript writer, settle 90 s,
 measure a busy window of 3 min; stop the app. At N=25 each window is followed by a 60 s renderer and
 main CPU profile and a 2 x 60 s reduced-motion A/B. Then four ablation runs at N=25 busy: all services
@@ -70,7 +71,8 @@ Afterwards undo the staging as the README pipeline does: `seed.js --restore` (it
 ## What the report holds
 
 - CPU per process for every window (mean, % of one core), with app and terminal totals, sessions live,
-  main event loop busy share and renderer main thread busy share (CDP task time).
+  main thread busy share (CPU profile, where one was taken) and renderer main thread busy share (CDP
+  task time).
 - Each window in detail: CPU mean and p95, private MB, I/O ops/s, handles and threads per process; the
   renderer's layouts and style recalculations per second, heap and DOM size; the Services rows (state,
   events per second, the Tokenomics row's own CPU figure).
@@ -79,4 +81,3 @@ Afterwards undo the staging as the README pipeline does: `seed.js --restore` (it
 - The reduced-motion A/B: renderer and GPU CPU with the always-on sidebar animations running and
   stopped.
 - The ablations: app CPU with each service off against all on.
-- The repeating timers in main, with their periods.
