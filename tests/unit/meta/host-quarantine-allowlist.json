@@ -332,6 +332,22 @@
       "reason": "Through app code it writes the session hooks file; on Windows that runs icacls on folders under the test's temp root. One run on the test VM started: icacls.exe (2)."
     },
     {
+      "path": "tests/unit/main/spawn-claude-launcher-lookup-powershell-2.test.ts",
+      "reason": "Part 2 of the launcher lookup checks: through spawn-claude-launcher-lookup-powershell-harness.ts (which carries the header itself) it starts Windows PowerShell 5.1, PowerShell 7 when present, and cmd.exe stand-ins, on Windows. The file holds no child_process import of its own, so the rules cannot see it."
+    },
+    {
+      "path": "tests/unit/main/spawn-claude-launcher-lookup-powershell-3.test.ts",
+      "reason": "Part 3 of the launcher lookup checks: through spawn-claude-launcher-lookup-powershell-harness.ts (which carries the header itself) it starts Windows PowerShell 5.1, PowerShell 7 when present, and cmd.exe stand-ins, on Windows. The file holds no child_process import of its own, so the rules cannot see it."
+    },
+    {
+      "path": "tests/unit/main/spawn-claude-launcher-lookup-powershell-4.test.ts",
+      "reason": "Part 4 of the launcher lookup checks: through spawn-claude-launcher-lookup-powershell-harness.ts (which carries the header itself) it starts Windows PowerShell 5.1, PowerShell 7 when present, and cmd.exe stand-ins, on Windows. The file holds no child_process import of its own, so the rules cannot see it."
+    },
+    {
+      "path": "tests/unit/main/spawn-claude-launcher-lookup-powershell.test.ts",
+      "reason": "Part 1 of the launcher lookup checks: through spawn-claude-launcher-lookup-powershell-harness.ts (which carries the header itself) it starts Windows PowerShell 5.1, PowerShell 7 when present, and cmd.exe stand-ins, on Windows. The file holds no child_process import of its own, so the rules cannot see it."
+    },
+    {
       "path": "tests/unit/pr600-r10-force-ui.test.tsx",
       "reason": "Through app code it makes the app's install secret on its first canvas or record write, which saves the app's config; on Windows that runs icacls on folders under the test's temp root. One run on the test VM started: icacls.exe (2)."
     },

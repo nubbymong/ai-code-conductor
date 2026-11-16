@@ -376,7 +376,9 @@ describe('ci.yml: the PR numbers job always runs on a pull request and decides i
     expect(job.name).toBe('PR numbers')
     expect(REQUIRED_CHECKS).not.toContain(job.name)
     expect(ci.jobs.test.name).toBe('Test (${{ matrix.os }})')
-    expect(ci.jobs.test.strategy?.matrix.os).toEqual(['windows-2025', 'macos-latest', 'ubuntu-latest'])
+    expect(ci.jobs.test.strategy?.matrix.os).toEqual(['macos-latest', 'ubuntu-latest'])
+    expect(ci.jobs['test-windows'].name).toBe('Test (${{ matrix.os }})')
+    expect(ci.jobs['test-windows'].strategy?.matrix.os).toEqual(['windows-2025'])
     expect(job.permissions).toEqual({ contents: 'read' })
   })
 
