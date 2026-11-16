@@ -278,7 +278,9 @@ async function doRun(run, stage) {
     log(`run ${run.id} failed: ${e.message}`)
   } finally {
     await stopSidecar()
-    try { launch(['stop']) } catch (e) { runRec.errors.push(e.message) }
+    // launch.js stop's taskkill of the app's tree exits non-zero when a process of the tree is
+    // already gone by the time it is reached (every stop on the VM did); waitClean decides.
+    try { launch(['stop']) } catch (e) { runRec.stopWarning = e.message }
     runRec.ended = Date.now()
     save()
   }
