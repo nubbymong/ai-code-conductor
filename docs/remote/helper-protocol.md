@@ -588,13 +588,24 @@ the whole hello line) is kept and listed; so is one whose socket takes no more
 connections (a full backlog is a timeout, never "nothing there"). On Linux a
 refused connection means nothing listens. macOS refuses a connection to a full
 queue exactly as one to a socket with nothing on it, so there a refusal is
-tried again until the 2 s are up and then counts as no answer. A record whose
-endpoint gives no answer is still stale when its process id now names a
-process that started more than 60 s after the record's `started`: a holder
-starts before it writes its record, so that id has been given to another
-process. The 60 s allow for a clock set meanwhile and for start times the OS
-keeps to the second. A holder started for the session treats such a record
-the same way, and replaces it. A missing store lists nothing and is not made.
+tried again until the 2 s are up and then counts as no answer. On macOS and
+Windows, a record whose endpoint gives no answer is still stale when its
+process id now names a process that started more than 60 s after the record's
+`started`: a holder starts before it writes its record, so that id has been
+given to another process. A holder started for the session treats such a
+record the same way, and replaces it. Both OSes stamp a process with the time
+it started, and no later change to the clock moves that stamp. macOS gives it
+to any user for any process, root's included (the `kern.proc.pid` sysctl, as
+`ps` reads it). The 60 s allow for the clock being set back in the moment
+between a holder's start and its record. On macOS a process that got the id
+within those 60 s is not caught: the record stays listed, and a holder started
+for the session exits 3. macOS hands ids out in turn, so that is not likely.
+On Windows a crashed holder's pipe is gone, which is already stale. Linux does
+not use this rule. It gives a start only as ticks after the boot, and the boot
+time moves with every change to the clock, so after the clock is set forward a
+live holder could read as started after its own record. It does not need the
+rule either: a crashed holder's socket there is refused or missing, and both
+are stale. A missing store lists nothing and is not made.
 The app uses list mode at start-up, to attach every held terminal again, and
 for the Machines page.
 

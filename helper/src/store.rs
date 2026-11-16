@@ -339,12 +339,13 @@ fn is_tmp_name(name: &str) -> bool {
 }
 
 /// Whether the holder that wrote `rec` is gone: its process is not running;
-/// or its endpoint has nothing on it or answers as someone else; or, when
-/// the endpoint gives no clear answer, its process id names a process that
-/// started after the record was written (`pids::started_after`): a holder
-/// starts before it writes its record, so the id has been given to another
-/// process. A holder that answers is never gone. `probe` is asked only
-/// while the process id runs.
+/// or its endpoint has nothing on it or answers as someone else; or, on
+/// macOS and Windows when the endpoint gives no clear answer, its process id
+/// names a process that started after the record was written
+/// (`pids::started_after`): a holder starts before it writes its record, so
+/// the id has been given to another process. Linux reads no start, so there
+/// an endpoint with no clear answer always keeps its record. A holder that
+/// answers is never gone. `probe` is asked only while the process id runs.
 pub fn holder_gone(rec: &Record, probe: impl FnOnce(&Record) -> Probe) -> bool {
     if !crate::pids::alive(rec.pid) {
         return true;
@@ -573,9 +574,11 @@ mod tests {
     /// macOS refuses a connect to a crashed holder's socket as it refuses one
     /// to a full queue, so that endpoint gives no clear answer; if the
     /// holder's id has been given to another process, the start time tells.
-    #[cfg(any(target_os = "linux", target_vendor = "apple", windows))]
+    /// Linux reads no start (its boot time moves with the clock), so there a
+    /// record whose endpoint gives no clear answer is always kept.
     #[test]
     fn a_record_whose_process_id_now_names_a_later_process_is_stale_when_its_endpoint_gives_no_answer() {
+        let reads_start = cfg!(any(target_vendor = "apple", windows));
         let store = scratch("reused");
         prepare(&store).unwrap();
         // This test process holds the id, and it started long after 1970.
@@ -588,15 +591,21 @@ mod tests {
         for r in [&reused, &kept, &answers] {
             write(&store, r).unwrap();
         }
-        assert!(holder_gone(&reused, |_| Probe::Unknown));
+        assert_eq!(holder_gone(&reused, |_| Probe::Unknown), reads_start, "the start-time rule ran where it should not, or not where it should");
         assert!(!holder_gone(&kept, |_| Probe::Unknown), "a process that started before its record was taken for another");
         assert!(!holder_gone(&answers, |_| Probe::Live), "a holder that answers was taken for gone");
         assert!(holder_gone(&kept, |_| Probe::Gone));
         let listing = list(&store, |r| if r.session == "list-answers" { Probe::Live } else { Probe::Unknown }).unwrap();
         let names: Vec<&str> = listing.sessions.iter().map(|r| r.session.as_str()).collect();
-        assert_eq!(names, vec!["list-answers", "list-kept-01"]);
-        assert_eq!(listing.removed, 1);
-        assert!(read(&store, "list-reused-1").is_none(), "the record of a reused id was kept");
+        if reads_start {
+            assert_eq!(names, vec!["list-answers", "list-kept-01"]);
+            assert_eq!(listing.removed, 1);
+            assert!(read(&store, "list-reused-1").is_none(), "the record of a reused id was kept");
+        } else {
+            assert_eq!(names, vec!["list-answers", "list-reused-1", "list-kept-01"]);
+            assert_eq!(listing.removed, 0);
+            assert!(read(&store, "list-reused-1").is_some(), "a record whose endpoint gave no clear answer was removed on Linux");
+        }
         fs::remove_dir_all(&store).unwrap();
     }
 
