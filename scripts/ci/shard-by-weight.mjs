@@ -14,8 +14,15 @@
 // one part. Each Windows CI part lists its slowest files in its summary, so a
 // weight that drifts shows there.
 //
-// Used only by vitest.config.ts's sequencer, which vitest calls only under
-// --shard: the Windows CI parts. The release workflow runs the suite whole.
+// Inside a part the heavy files also start first, heaviest first
+// (heavyFirst): vitest, with no cache of earlier runs, starts the largest
+// files first, and the split launcher files are a few lines each, so they
+// started last and set the end of their part (316 s into part 2 of run
+// 43788398848, then 314 s more).
+//
+// Used only by vitest.config.ts's sequencer, and only for a split run
+// (--shard): the Windows CI parts. The release workflow runs the suite whole,
+// in vitest's own order.
 import { createHash } from 'node:crypto'
 
 /** Seconds per file on the windows-2025 runner: the mean of the two runs of
@@ -79,4 +86,14 @@ export function pathsOfPart(paths, index, count, weights = HEAVY_TEST_FILES) {
     .map(({ p }) => p)
   const [start, end] = shardRange(light.length, index, count)
   return [...mine, ...light.slice(start, end)]
+}
+
+/**
+ * `items` in the order a part runs them: the heavy ones first, heaviest
+ * first, then every other one in the order given. Nothing is added or lost.
+ */
+export function heavyFirst(items, pathOf, weights = HEAVY_TEST_FILES) {
+  const weightOf = (it) => weights.get(pathOf(it)) ?? 0
+  const heavy = items.filter((it) => weightOf(it) > 0).sort((a, b) => weightOf(b) - weightOf(a) || byText(pathOf(a), pathOf(b)))
+  return [...heavy, ...items.filter((it) => weightOf(it) <= 0)]
 }

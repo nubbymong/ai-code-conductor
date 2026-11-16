@@ -53,6 +53,11 @@ summed file time.
   the light split matches vitest's file for file. Only `--shard` runs use it,
   and only the Windows CI parts pass `--shard`: release.yml runs the suite
   whole.
+- Inside a split run the heavy files also start first. The first weighted run
+  (43788398848) placed them as planned but still took 11.7 minutes in part 2:
+  vitest with no cache starts the largest files first, the split launcher
+  files are a few lines each, and the first of them started 316 s into the
+  suite and ran 314 s more. A run that is not split keeps vitest's order.
 
 **Not changed.** release.yml (it reads `TEST_JOB_RE` names and the `Tested
 tree` step, both kept), the Helper job, macOS and Linux. The beta release still

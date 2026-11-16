@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { existsSync, readdirSync } from 'fs'
 import { resolve } from 'path'
 import { BaseSequencer } from 'vitest/node'
-import { HEAVY_TEST_FILES, pathsOfPart, shardRange } from '../../../scripts/ci/shard-by-weight.mjs'
+import { HEAVY_TEST_FILES, heavyFirst, pathsOfPart, shardRange } from '../../../scripts/ci/shard-by-weight.mjs'
 import config, { WeightedShardSequencer } from '../../../vitest.config'
 
 /**
@@ -97,13 +97,38 @@ describe('shard-by-weight: each part of a split run, and no file lost', () => {
     expect(() => pathsOfPart('a.test.ts' as never, 1, 2)).toThrow(/not a list/)
     expect(pathsOfPart([], 2, 4)).toEqual([])
   })
+
+  it('inside a part, the heavy files start first, heaviest first, and the rest keep their order', () => {
+    const part = pathsOfPart(files, 2, 4)
+    const given = [...part].reverse()
+    const ordered = heavyFirst(given, (p: string) => p)
+    expect([...ordered].sort()).toEqual([...part].sort())
+    const heavy = given.filter((p) => HEAVY_TEST_FILES.has(p))
+    expect(heavy.length).toBeGreaterThan(0)
+    expect(ordered.slice(0, heavy.length)).toEqual([...heavy].sort((a, b) => HEAVY_TEST_FILES.get(b)! - HEAVY_TEST_FILES.get(a)!))
+    expect(ordered.slice(heavy.length)).toEqual(given.filter((p) => !HEAVY_TEST_FILES.has(p)))
+    expect(heavyFirst([], (p: string) => p)).toEqual([])
+  })
 })
 
 describe('vitest.config.ts: a split run uses this split, and the order stays vitest\'s', () => {
-  it('the config names the sequencer, which leaves the order inside a part to vitest', () => {
+  it('the config names the sequencer; a run that is not split keeps vitest\'s order, a split one starts its heavy files first', async () => {
     expect(config.test?.sequence?.sequencer).toBe(WeightedShardSequencer)
     expect(Object.getPrototypeOf(WeightedShardSequencer)).toBe(BaseSequencer)
-    expect(Object.prototype.hasOwnProperty.call(WeightedShardSequencer.prototype, 'sort')).toBe(false)
+    // vitest's own order with no earlier run cached: the largest file first.
+    const files = suiteFiles()
+    const project = { name: '', config: { sequence: { groupOrder: 0 }, isolate: true } }
+    const specs = files.map((p, i) => ({ moduleId: `${SLASH_ROOT}/${p}`, project, size: (i * 7919) % 1543 }))
+    const ctx = (shard?: { index: number; count: number }) => ({
+      config: { root: ROOT, ...(shard ? { shard } : {}) },
+      cache: { getFileTestResults: () => undefined, getFileStats: (key: string) => ({ size: specs.find((s) => key.endsWith(s.moduleId.slice(SLASH_ROOT.length + 1)))!.size }) },
+    })
+    const theirs = await new BaseSequencer(ctx() as never).sort(specs as never)
+    expect(await new WeightedShardSequencer(ctx() as never).sort(specs as never)).toEqual(theirs)
+    const split = await new WeightedShardSequencer(ctx({ index: 1, count: 4 }) as never).sort(specs as never)
+    const pathOf = (s: { moduleId: string }) => s.moduleId.slice(SLASH_ROOT.length + 1)
+    expect(split).toEqual(heavyFirst(theirs, pathOf))
+    expect(split.slice(0, HEAVY_TEST_FILES.size).map(pathOf)).toEqual([...HEAVY_TEST_FILES.keys()])
   })
 
   it('maps vitest\'s files to repository paths, and gives back the same file objects', async () => {

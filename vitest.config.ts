@@ -2,20 +2,28 @@ import { defineConfig, configDefaults } from 'vitest/config'
 import { BaseSequencer, type TestSpecification } from 'vitest/node'
 import { relative, resolve, sep } from 'path'
 import { canvasBridgePlugin } from './scripts/vite-plugin-canvas-bridge.mjs'
-import { pathsOfPart } from './scripts/ci/shard-by-weight.mjs'
+import { heavyFirst, pathsOfPart } from './scripts/ci/shard-by-weight.mjs'
 
 /** `--shard=i/n`, which only the Windows CI parts pass (ci.yml): the few files
  *  that start many Windows PowerShell processes are spread across the parts by
- *  weight, and every other file is split as vitest splits it
- *  (scripts/ci/shard-by-weight.mjs). The order inside a part is vitest's own.
- *  vitest calls this only under --shard. */
+ *  weight, and every other file is split as vitest splits it; inside a part
+ *  those files start first (scripts/ci/shard-by-weight.mjs). A run that is not
+ *  split keeps vitest's own order, untouched. */
 export class WeightedShardSequencer extends BaseSequencer {
+  private pathOf(spec: TestSpecification): string {
+    return relative(this.ctx.config.root, spec.moduleId).split(sep).join('/')
+  }
+
   async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
-    const { root, shard } = this.ctx.config
+    const { shard } = this.ctx.config
     if (!shard) return files
-    const pathOf = (spec: TestSpecification) => relative(root, spec.moduleId).split(sep).join('/')
-    const chosen = new Set(pathsOfPart([...new Set(files.map(pathOf))], shard.index, shard.count))
-    return files.filter((spec) => chosen.has(pathOf(spec)))
+    const chosen = new Set(pathsOfPart([...new Set(files.map((f) => this.pathOf(f)))], shard.index, shard.count))
+    return files.filter((spec) => chosen.has(this.pathOf(spec)))
+  }
+
+  async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    const sorted = await super.sort(files)
+    return this.ctx.config.shard ? heavyFirst(sorted, (f: TestSpecification) => this.pathOf(f)) : sorted
   }
 }
 
