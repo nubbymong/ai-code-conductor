@@ -118,6 +118,9 @@ const HELPER_FILES = [
   'helper/target/release/aicc-fake-cli.exe',
   'helper/target/release/aicc-helper.d',
   'helper/target/release/aicc-helper.pdb',
+  'helper/target/release/aicc_helper.pdb',
+  'helper/target/release/deps/aicc_helper-0123456789abcdef.exe',
+  'helper/target/release/build/aicc-helper-0123456789abcdef/output',
 ]
 
 /**
@@ -126,7 +129,7 @@ const HELPER_FILES = [
  * filter, not a single-file entry: electron-builder copies a single-file
  * extraResources entry straight across (app-builder-lib fileMatcher copyFiles,
  * the `fromStat.isFile()` branch) and never runs it through the transformer
- * that signs each .exe, so 2.1.3-beta.6's first release build shipped an
+ * that signs each .exe, so 2.1.3-beta.6's first release build packaged an
  * unsigned helper and failed its Verify Windows signature step.
  */
 const SHIPPED = {
@@ -177,6 +180,10 @@ describe('the installer ships the release session helper and nothing else of hel
     expect(raw.from.endsWith('.exe')).toBe(false)
     expect(existsSync(resolve(ROOT, raw.from)) ? statSync(resolve(ROOT, raw.from)).isDirectory() : true, 'from must be a folder when it exists').toBe(true)
     expect(raw.filter).toEqual(['aicc-helper.exe'])
+    // Three win settings would stop the extraResources signer for this entry too.
+    expect(pkg.build.win.signExecutable, 'signExecutable false stops the extraResources signer').not.toBe(false)
+    expect(pkg.build.win.signAndEditExecutable, 'signAndEditExecutable false stops it too').not.toBe(false)
+    expect(pkg.build.win.signExts, 'signExts can exclude .exe').toBeUndefined()
   })
 
   it('the helper is not in the top-level lists, which every platform shares (one platform\'s program would reach the others)', () => {

@@ -1,0 +1,7 @@
+## 2026-11-16 -- Sign the bundled session helper on Windows (2.1.3-beta.6 release fix)
+
+**Problem.** The first 2.1.3-beta.6 release run (43928102821) failed at Verify Windows signature: the installer was signed, but `resources/helper/aicc-helper.exe` was NotSigned. Nothing was published.
+
+**Cause.** electron-builder copies a single-file `extraResources` entry straight across (app-builder-lib `fileMatcher.js` `copyFiles`, the `fromStat.isFile()` branch) and never runs it through the transformer that signs each `.exe`. `signApp` signs only the app folder root and `resources/app.asar.unpacked`, and `elevate.exe` is signed by its own call in the NSIS target, so nothing else could reach `resources/helper`. `ci.yml` never signs, so only a release build could show it. The earlier note (2026-11-16-helper-plain-terminals.md) that electron-builder signs the helper on Windows was not true until this fix.
+
+**Change.** `build.win.extraResources` lists the helper as a folder entry (`from: helper/target/release`, `to: helper`, `filter: [aicc-helper.exe]`), which goes through FileCopier and is signed after the copy. Same destination, so `verify:helper` and the app's paths are unchanged. The app hashes the bundled helper at run time (`session-helper/manager.ts` `sha256File`), so signing does not break the per-user copy check. `helper-packaging.test.ts` pins the folder entry and the win settings that would turn the signer off; its new assertions fail on the old single-file entry. Comments in `release.yml` and `bundled-conpty.ts` now say when electron-builder signs.

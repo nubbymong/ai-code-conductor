@@ -354,10 +354,13 @@ jobs:
             Write-Host "  signer:    $($sig.SignerCertificate.Subject)"
             Write-Host "  timestamp: $($sig.TimeStamperCertificate.Subject)"
             # The session helper the installer carries (resources/helper) is
-            # signed with the app. electron-builder signs an .exe only when a
-            # FOLDER entry copies it; a single-file extraResources entry is
+            # signed with the app. For extraResources, electron-builder signs a
+            # copied .exe only when the entry is a FOLDER; a single-file entry is
             # copied without signing (app-builder-lib fileMatcher copyFiles),
-            # which shipped 2.1.3-beta.6's first build unsigned. So package.json
+            # and signApp itself signs only the app folder root and
+            # resources/app.asar.unpacked, never resources/helper. That left the
+            # helper unsigned in 2.1.3-beta.6's first release build (run
+            # 43928102821 stopped here; nothing was published). So package.json
             # lists the helper as a folder entry with a filter.
             # The same leaf and the same timestamp rule as the installer.
             $helpers = @(Get-ChildItem -Path dist -Directory -Filter '*unpacked' | ForEach-Object { Join-Path $_.FullName 'resources/helper/aicc-helper.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
