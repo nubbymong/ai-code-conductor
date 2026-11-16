@@ -2795,7 +2795,7 @@ function spawnPtyResolved(
     cols?: number
     rows?: number
     ssh?: SSHOptions
-    shellOnly?: boolean
+    shellOnly?: boolean; plainTerminal?: boolean // plainTerminal: a Terminal only tab or a partner terminal, which the session helper may carry
     /** Terminal-only launcher: command + args run once when the shell opens.
      *  `noCommandSecrets` marks the install or update tab the app opens to run
      *  its own line (openCommandTerminal). */
@@ -6740,7 +6740,7 @@ function spawnPtyResolved(
     if (shellOnly) {
       logInfo(`[pty-manager] Launching shell-only PTY: ${spawnCmd} ${spawnArgs.join(' ')} cwd=${describePathForLog(resolvedCwd)}${options?.elevated ? ' (elevated)' : ''}`)
 
-      ptyProcess = spawnPlainPty({ sessionId, elevated: (options?.elevated ?? options?.terminalOptions?.elevated) === true }, spawnCmd, spawnArgs, {
+      ptyProcess = spawnPlainPty({ sessionId, elevated: (options?.elevated ?? options?.terminalOptions?.elevated) === true, plain: options?.plainTerminal === true }, spawnCmd, spawnArgs, {
         name: 'xterm-256color',
         cols,
         rows,
@@ -6787,8 +6787,8 @@ function spawnPtyResolved(
       launchWriteScheduled = true
       launchPendingSessions.add(sessionId)
       setTimeout(() => whenHeldKnown(ptyProcess, (held) => {
-        // Liveness guard: a kill / Restart / app-quit can land inside this 300ms
-        // window — writing to a dead or already-replaced PTY here would throw
+        // Liveness guard: a kill / Restart / app-quit can land in this wait (300ms, then
+        // whether a take-over held) — writing to a dead or already-replaced PTY here would throw
         // inside the timer (uncaught in main). Only write when our PTY is still
         // the registered one.
         if (ptySessions.get(sessionId)?.ptyProcess !== ptyProcess) { abandonLaunchHold(); return }

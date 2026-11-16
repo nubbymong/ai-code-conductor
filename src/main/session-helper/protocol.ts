@@ -4,7 +4,7 @@
  * section 15 the local transport).
  *
  * Pure: no sockets, no files, no Electron. The connection
- * (holder-connection.ts) and the manager (session-helper.ts) build on it. The
+ * (connection.ts) and the manager (manager.ts) build on it. The
  * helper's own Rust code and the shared vectors in helper/fixtures/*.json fix
  * every rule here; tests/unit/main/session-helper-protocol.test.ts runs this
  * file against those vectors, so a change on the helper's side shows up here
@@ -39,8 +39,9 @@ export const HELLO_STATES: readonly string[] = ['new', 'live', 'unmanaged', 'sta
 export const SID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$/
 export const NONCE_RE = /^[0-9a-f]{32}$/
 export const SHA256_RE = /^[0-9a-f]{64}$/
-/** A helper folder on any machine: `<version>-<first 12 hex of its SHA-256>` (section 4). */
-export const HELPER_FOLDER_RE = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?-[0-9a-f]{12}$/
+/** A helper folder on any machine: `<version>-<first 12 hex of its SHA-256>`
+ *  (section 4). The first group is the version. */
+export const HELPER_FOLDER_RE = /^([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?)-[0-9a-f]{12}$/
 
 /** Section 15's launch limits. */
 export const LAUNCH_LIMITS = {

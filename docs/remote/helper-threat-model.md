@@ -75,8 +75,12 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   user (section 2). `emit`, `mcp` and `askpass` are not hash-checked. macOS
   helpers are signed (Windows at R13); Linux relies on the manifest.
 - **This computer (2.1.3-beta.6, plain and partner terminals).** There is no
-  host and no manifest here: the trust anchor is the helper installed with the
-  signed app (`resources/helper/`, signed with the app on Windows and macOS).
+  host and no manifest here: the compiled-in hash manifest in the point above
+  is for remote machines, and on This computer the trust anchor is the signed install
+  plus the hash check below: the helper installed with the signed app
+  (`resources/helper/`, signed with the app on Windows and macOS; the release
+  workflow checks the helper's own signature, signer and timestamp on Windows,
+  and its signature, team and hardened runtime on macOS).
   The app copies it into a per-user folder outside the install folder (so an
   update can replace the installed file while holders run from the copy), in a
   folder named for its version and hash. Before every run of the copy (each
@@ -87,6 +91,17 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   app writes nothing to the endpoint before that hello has been read. This
   catches a corrupted or swapped copy; like the remote case it does not stop
   the same user, who can already run any program as themselves.
+- **macOS entitlements of the shipped helper.** electron-builder signs every
+  Mach-O in the bundle with `entitlementsInherit`, which is the app's own
+  `build/entitlements.mac.plist`: allow-jit, allow-unsigned-executable-memory,
+  allow-dyld-environment-variables, network.client, network.server and
+  files.user-selected.read-write. The helper needs none of them, and
+  electron-builder has no per-file entitlements, so the helper carries the
+  app's set. Signing the helper on its own with no entitlements is a follow-up.
+  What it opens is a same-user concern (section 2): the app starts the helper
+  with a short, fixed environment (`HELPER_ENV_NAMES` in
+  `src/main/session-helper/manager.ts`), and the helper's own source has no
+  network code (checked by the Helper job).
 
 ### 3.2 Downgrade
 

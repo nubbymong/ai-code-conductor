@@ -240,6 +240,8 @@ export interface ElectronAPI {
         remoteOs?: 'auto' | 'unix' | 'windows'
       }
       shellOnly?: boolean
+      /** A Terminal only tab or a partner terminal: the session helper may carry it (2.1.3-beta.6). */
+      plainTerminal?: boolean
       elevated?: boolean
       terminalOptions?: { command?: string; args?: string; hasSecretArg?: boolean; elevated?: boolean; noCommandSecrets?: boolean }
       configId?: string

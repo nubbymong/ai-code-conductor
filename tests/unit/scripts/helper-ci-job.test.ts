@@ -8,7 +8,7 @@ import { evalIf, evalValue, type GhaContext } from '../../helpers/gha-expr'
 
 /**
  * The Helper (os) job of ci.yml, as the workflow carries it out. It builds the
- * dormant Rust session helper, is NOT a required check, decides inside the job
+ * Rust session helper the installer ships, is NOT a required check, decides inside the job
  * (the way the Test jobs do) and so can never leave a check waiting. Its
  * conditions are EVALUATED here, not matched as text.
  */

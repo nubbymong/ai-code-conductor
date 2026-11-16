@@ -16,6 +16,11 @@ import type { HeldSession, MachineStatus, SelfTestResult } from '../../../src/sh
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
+// Re-attach hands the helper's tab answer to the tab helper (its own test is
+// held-terminal-tab.test.ts); here it is watched, and answers as asked.
+const showTab = vi.hoisted(() => vi.fn((_tab: unknown) => true))
+vi.mock('../../../src/renderer/utils/heldTerminalTab', () => ({ showHeldTerminalTab: showTab }))
+
 const { default: MachinesPage } = await import('../../../src/renderer/components/MachinesPage')
 
 const OFF_SENTENCE = 'The session helper is off. Switch it on in Settings, General, Plain terminals through the session helper.'
@@ -352,6 +357,29 @@ describe('Machines page: Refresh and the actions', () => {
     expect(bridge.reattach).toHaveBeenCalledWith('left-over')
     expect(bridge.status).toHaveBeenCalledTimes(2)
     expect(byTestId('machines-notice')?.textContent).toContain('build watcher')
+  })
+
+  it('Re-attach shows the tab the helper named: the new Terminal only tab bound to it', async () => {
+    showTab.mockClear()
+    install(status({}, [held({ id: 'left-over', attached: false, tabOpen: false })]))
+    const tab = { id: 'newtab0123456789abcdef01', label: 'build watcher', open: true, partner: false }
+    bridge.reattach.mockResolvedValueOnce({ ok: true, tab })
+    await open()
+    await click(byLabel('Re-attach build watcher'))
+    expect(showTab).toHaveBeenCalledTimes(1)
+    expect(showTab).toHaveBeenCalledWith(tab)
+    expect(byTestId('machines-notice')?.textContent).toBe('Attached build watcher to the app.')
+  })
+
+  it('Re-attach whose tab cannot be shown says so', async () => {
+    showTab.mockClear()
+    showTab.mockReturnValueOnce(false)
+    install(status({}, [held({ id: 'left-over', attached: false, tabOpen: false })]))
+    bridge.reattach.mockResolvedValueOnce({ ok: true, tab: { id: 'not a tab id', label: 'x', open: true, partner: false } })
+    await open()
+    await click(byLabel('Re-attach build watcher'))
+    expect(showTab).toHaveBeenCalledTimes(1)
+    expect(byTestId('machines-notice')?.textContent).toBe('Could not attach build watcher.')
   })
 
   it('Re-attach that is refused says why, in the source\'s own words', async () => {

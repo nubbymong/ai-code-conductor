@@ -10,7 +10,7 @@
   transport; run it with the helper-windows artifact of a 2.1.3-beta.5 build.
 
   Decision it feeds: ADR-030 (probe table), and with it how beta 6 starts the
-  helper holding local sessions. The helper is dormant today; this probe uses
+  helper holding local sessions. The helper was not shipped yet when it ran; this probe uses
   the skeleton's holder with the fake CLI as the held child, so no real CLI,
   no sign-in and no network are involved.
 

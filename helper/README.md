@@ -32,10 +32,11 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | Fake CLI | `src/bin/aicc-fake-cli.rs` | A stand-in provider CLI for tests and probes |
 | Fixtures | `fixtures/*.json` | Frame, hello, limit and local transport vectors read by the Rust tests and by `tests/unit/scripts/helper-fixtures.test.ts` |
 
-The local transport is protocol section 15. Not in it yet: signing, the hash
-manifest, seccomp, the event spool and `since_seq`, the remote `serve`, `emit`
-and `mcp`. Those are later slices. The app side for This computer is in
-`src/main/session-helper/`.
+The local transport is protocol section 15. The release build ships in the
+installers (`resources/helper/`), signed with the app on Windows and macOS.
+Not in it yet: the hash manifest, seccomp, the event spool and `since_seq`, the
+remote `serve`, `emit` and `mcp`. Those are later slices. The app side for
+This computer is in `src/main/session-helper/`.
 
 ## Commands
 

@@ -12,7 +12,10 @@
  *
  * Off (the default), nothing here runs and every terminal starts exactly as
  * before: spawnPlainPty is then node-pty's own spawn with the same arguments.
- * Agent sessions (every provider CLI) and SSH sessions never come here.
+ * Only a terminal the renderer marks plain (a Terminal only tab, a partner
+ * terminal) comes here: agent sessions (every provider CLI), SSH sessions and
+ * the app's own shell tabs (a sign-in, an install or update command, the
+ * first-run install terminal) never do.
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -50,6 +53,14 @@ export interface ExecResult {
 type SpawnArgs = string[] | string
 type SpawnOptions = pty.IPtyForkOptions | pty.IWindowsPtyForkOptions
 
+/** What the PTY manager says of a terminal it starts. `plain`: a Terminal only
+ *  tab or a partner terminal, the only ones the helper may carry. */
+export interface PlainSpawnContext {
+  sessionId: string
+  elevated?: boolean
+  plain?: boolean
+}
+
 export interface SessionHelperDeps {
   platform?: NodeJS.Platform
   /** The per-user folder (install.ts helperRootDir). */
@@ -60,6 +71,8 @@ export interface SessionHelperDeps {
   spawnDirect?: (file: string, args: SpawnArgs, opts: SpawnOptions) => IPty
   openStream?: ConnectionOptions['openStream']
   checkEndpointFolder?: ConnectionOptions['checkEndpointFolder']
+  /** How long a holder may take to answer a request (tests shorten it). */
+  replyTimeoutMs?: number
   newTabId?: () => string
   log?: (message: string) => void
   now?: () => number
@@ -83,13 +96,25 @@ export const HELPER_SENTENCES = {
   noAnswer: 'The session helper did not answer.',
   selfTestOff: 'The session helper is off, so there is nothing to test.',
   selfTestUnavailable: 'The session helper cannot run its self-test now.',
+  insideJob: 'Windows keeps the session helper inside the app\'s own job here, so a held terminal ends when the app does and does not survive a crash.',
+  offNothingToEnd: 'The session helper is off, so it holds no terminal to end.',
+  offNothingToReattach: 'The session helper is off, so it holds no terminal to re-attach.',
 } as const
+
+/** The Machines page's line while the switch is off and terminals are still held. */
+export function offStillHoldingSentence(n: number): string {
+  return `Switched off. It still holds ${n === 1 ? '1 terminal' : `${n} terminals`} until ${n === 1 ? 'its tab closes' : 'their tabs close'} or you end ${n === 1 ? 'it' : 'them'} here.`
+}
 
 const VERSION_TIMEOUT_MS = 10_000
 const HOLD_TIMEOUT_MS = 20_000
 const LIST_TIMEOUT_MS = 15_000
 const SELF_TEST_TIMEOUT_MS = 25_000
 const ENDING_WAIT_MS = 5_000
+/** A copy that could not be put in place is tried again by a terminal started this long after. */
+const INSTALL_RETRY_AFTER_MS = 60_000
+/** `hold`'s exit status when a holder for the session runs already (protocol 15). */
+const EXIT_ALREADY_RUNNING = 3
 const MARKER = 'app-running.json'
 const BINDINGS = 'bindings.json'
 
@@ -133,6 +158,8 @@ export class SessionHelperManager implements MachinesSource {
 
   private enabled = false
   private started = false
+  /** This run began after a crash: what the store holds is kept, not ended. */
+  private afterCrash = false
   /** A normal quit has begun: nothing new is held or kept. */
   private quitting = false
   private state: HelperState = 'off'
@@ -142,12 +169,16 @@ export class SessionHelperManager implements MachinesSource {
   private lastError: { message: string; ts: number } | null = null
   private info: InstalledHelper | null = null
   private installing: Promise<InstalledHelper | null> | null = null
+  /** When a copy that could not be put in place may be tried again; null: not that failure. */
+  private installRetryAt: number | null = null
   /** One copy made again at a time: every caller that found a mismatch waits for it. */
   private recopying: Promise<InstalledHelper> | null = null
+  /** `hold` said Windows keeps its holders inside the app's job (no crash survival). */
+  private insideJob = false
   /** Held terminals a tab may take over: left by a crash, or named by Re-attach. */
   private readonly adoptable = new Map<string, HolderRecord>()
   /** Connections that keep a crash's held terminals alive until a tab takes them. */
-  private readonly keepers = new Map<string, { conn?: HolderConnection; ready: Promise<void> }>()
+  private readonly keepers = new Map<string, { record: HolderRecord; conn?: HolderConnection; ready: Promise<void> }>()
   /** The app's terminals through the helper, by session id. */
   private readonly live = new Map<string, HelperPty>()
   private readonly endings = new Map<string, Promise<void>>()
@@ -184,6 +215,11 @@ export class SessionHelperManager implements MachinesSource {
     return this.enabled
   }
 
+  /** True when a held terminal waits for the tab with this app id. */
+  holdsFor(appPtyId: string): boolean {
+    return this.adoptable.has(this.sidFor(appPtyId))
+  }
+
   /**
    * Switch on (at start-up, or when the setting is turned on). What runs
    * synchronously decides, before any tab can ask, which held terminals a
@@ -192,16 +228,23 @@ export class SessionHelperManager implements MachinesSource {
   start(opts: { atStartup: boolean }): Promise<void> {
     this.enabled = true
     if (this.started) {
-      // Switched on again. A helper that could not be set up is tried again.
-      if (this.info || this.state === 'starting') {
+      if (this.state === 'starting') {
         this.changed()
         return Promise.resolve()
       }
+      if (this.info) {
+        // Set up already. One that failed its own self-test is tested again.
+        if (this.state === 'failed') void this.runSelfTest().catch(() => { /* recorded in runSelfTest */ })
+        this.changed()
+        return Promise.resolve()
+      }
+      // A helper that could not be set up is tried again.
       this.installing = null
+      this.installRetryAt = null
       this.state = 'starting'
       this.detail = undefined
       this.changed()
-      return this.bringUp(false)
+      return this.bringUp(this.afterCrash)
     }
     this.started = true
     this.state = 'starting'
@@ -214,6 +257,7 @@ export class SessionHelperManager implements MachinesSource {
     } catch (err) {
       this.deps.log(`[session-helper] the helper folder could not be prepared: ${message(err)}`)
     }
+    this.afterCrash = crashed
     if (crashed) {
       this.loadBindings()
       // Kept at once, before the copy and the listing: each record's own hello
@@ -231,7 +275,8 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   /** Switch off: new terminals start the usual way. Terminals already through
-   *  the helper keep running until their tabs close. */
+   *  the helper keep running until their tabs close, and a held terminal a
+   *  restored tab comes back to is still shown again. */
   stopRouting(): void {
     this.enabled = false
     this.changed()
@@ -266,16 +311,19 @@ export class SessionHelperManager implements MachinesSource {
         this.saveBindings()
       }
     } else {
-      // Left by a normal quit that could not end them: ended now.
-      await Promise.allSettled(records.filter((r) => !this.live.has(r.session)).map((r) => this.endRecord(r)))
+      // Left by a normal quit that could not end them: ended now. A terminal
+      // this run holds or keeps for a tab is not one of those.
+      const left = records.filter((r) => !this.live.has(r.session) && !this.keepers.has(r.session) && !this.adoptable.has(r.session))
+      await Promise.allSettled(left.map((r) => this.endRecord(r)))
     }
     if (!this.info) return
     this.state = 'ready'
     this.changed()
     void this.runSelfTest().catch(() => { /* recorded in runSelfTest */ })
-    const inUse = new Set(this.listing.map((r) => r.helper))
-    inUse.add(info.version)
-    const removed = await removeOldVersionFolders(this.root, info.folder, inUse)
+    // A folder of another version a listed holder runs is kept; every other
+    // old folder goes (see removeOldVersionFolders).
+    const otherVersions = new Set([...this.listing, ...this.heldRecords()].map((r) => r.helper).filter((v) => v !== info.version))
+    const removed = await removeOldVersionFolders(this.root, info.folder, otherVersions)
     if (removed.length > 0) this.deps.log(`[session-helper] removed old helper folder(s): ${removed.join(', ')}`)
   }
 
@@ -302,21 +350,38 @@ export class SessionHelperManager implements MachinesSource {
       // No copy is made once a quit began.
       if (this.quitting) return null
       this.info = await installHelperCopy({ bundled, root: this.root, version, sha256, platform: this.deps.platform })
+      this.installRetryAt = null
       this.deps.log(`[session-helper] helper ${version} ready in ${this.info.folder}`)
       return this.info
     } catch (err) {
-      this.fail(err instanceof InstallError ? err.message : `The session helper could not be set up: ${message(err)}`)
+      this.fail(err instanceof InstallError ? err.message : `The session helper could not be set up: ${message(err)}`, 'failed', err)
       return null
     }
   }
 
-  private fail(detail: string, state: HelperState = 'failed'): void {
+  private fail(detail: string, state: HelperState = 'failed', cause?: unknown): void {
     this.state = state
     this.detail = detail
     this.info = null
+    // A copy that could not be put in place (a file another program still
+    // had open) is tried again by a later terminal.
+    this.installRetryAt = cause instanceof InstallError && cause.kind === 'copy' ? this.deps.now() + INSTALL_RETRY_AFTER_MS : null
     this.lastError = { message: detail, ts: this.deps.now() }
     this.deps.log(`[session-helper] ${detail}`)
     this.changed()
+  }
+
+  /** A later terminal tries again a copy that could not be put in place. */
+  private retryInstallIfDue(): void {
+    if (this.state !== 'failed' || this.info || this.installRetryAt === null || this.quitting) return
+    if (this.deps.now() < this.installRetryAt) return
+    this.deps.log('[session-helper] trying the helper copy again')
+    this.installRetryAt = null
+    this.installing = null
+    this.state = 'starting'
+    this.detail = undefined
+    this.changed()
+    void this.bringUp(this.afterCrash)
   }
 
   /**
@@ -341,7 +406,7 @@ export class SessionHelperManager implements MachinesSource {
       this.info = await this.recopying
       return this.info.exe
     } catch (err) {
-      if (this.info) this.fail(err instanceof InstallError ? err.message : message(err))
+      if (this.info) this.fail(err instanceof InstallError ? err.message : message(err), 'failed', err)
       throw err
     }
   }
@@ -361,29 +426,40 @@ export class SessionHelperManager implements MachinesSource {
   /**
    * A plain or partner terminal: through a holder when the setting is on and
    * the helper can carry it, else node-pty's spawn with these same arguments.
+   * A held terminal waiting for this tab is shown again whatever the state:
+   * taking it over runs no copy of the helper and launches nothing.
    */
-  spawn(ctx: { sessionId: string; elevated?: boolean }, file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
+  spawn(ctx: PlainSpawnContext, file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
     const direct = () => this.deps.spawnDirect(file, args, opts)
-    if (!this.enabled || (this.state !== 'starting' && this.state !== 'ready')) return direct()
+    if (ctx.plain !== true || typeof args === 'string' || !APP_PTY_ID_RE.test(ctx.sessionId)) return direct()
+    const sid = this.sidFor(ctx.sessionId)
+    const adopt = this.quitting || this.live.has(sid) ? undefined : this.adoptable.get(sid)
+    if (adopt) {
+      this.adoptable.delete(sid)
+      return this.track(new HelperPty({ sid, label: ctx.sessionId, spec: this.launchSpec(file, args, opts), adopt, driver: this.driver(direct, false) }), ctx.sessionId)
+    }
+    if (!this.enabled || this.quitting) return direct()
+    this.retryInstallIfDue()
+    if (this.state !== 'starting' && this.state !== 'ready') return direct()
     // An elevated tab runs its shell under gsudo or sudo, which ask for a
     // password at their own console: left the usual way, also when only the
     // program says so.
     if (ctx.elevated || /^g?sudo(\.exe)?$/i.test(file.split(/[\\/]/).pop() ?? '')) return direct()
-    if (typeof args === 'string' || !APP_PTY_ID_RE.test(ctx.sessionId)) return direct()
     const spec = this.launchSpec(file, args, opts)
     const refused = checkLaunch(spec, this.os)
     if (refused) {
       this.deps.log(`[session-helper] ${ctx.sessionId}: started the usual way, because the helper would refuse ${refused.why}`)
       return direct()
     }
-    const sid = this.sidFor(ctx.sessionId)
-    const adopt = this.live.has(sid) ? undefined : this.adoptable.get(sid)
-    if (adopt) this.adoptable.delete(sid)
-    const wrapper = new HelperPty({ sid, label: ctx.sessionId, spec, adopt, driver: this.driver(direct, !adopt) })
+    return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver: this.driver(direct, true) }), ctx.sessionId)
+  }
+
+  private track(wrapper: HelperPty, appId: string): HelperPty {
+    const sid = wrapper.sid
     this.live.set(sid, wrapper)
     void wrapper.ended.then(() => {
       if (this.live.get(sid) === wrapper) this.live.delete(sid)
-      for (const [appId, bound] of [...this.bindings]) if (bound === sid && appId === ctx.sessionId) this.bindings.delete(appId)
+      for (const [bound, s] of [...this.bindings]) if (s === sid && bound === appId) this.bindings.delete(bound)
       this.saveBindings()
       this.changed()
     })
@@ -414,7 +490,19 @@ export class SessionHelperManager implements MachinesSource {
       },
       attachedChanged: () => this.changed(),
       log: (m) => this.deps.log(m),
+      now: () => this.deps.now(),
     }
+  }
+
+  private open(record: HolderRecord, sha256?: string): Promise<HolderConnection> {
+    return HolderConnection.open({
+      record,
+      os: this.os,
+      sha256,
+      openStream: this.deps.openStream,
+      checkEndpointFolder: this.deps.checkEndpointFolder,
+      replyTimeoutMs: this.deps.replyTimeoutMs,
+    })
   }
 
   private async hold(sid: string, label: string): Promise<HolderRecord> {
@@ -422,11 +510,30 @@ export class SessionHelperManager implements MachinesSource {
     if (previous) await Promise.race([previous, new Promise((r) => setTimeout(r, ENDING_WAIT_MS))])
     const exe = await this.checkedExe()
     // A holder of this session nobody is taking over (a terminal this run
-    // could not end): ended first, so the new one can start.
+    // could not end): ended first, so the new one can start. One that does not
+    // answer is gone, and `hold` replaces its record.
     const left = this.readStoreRecords().find((r) => r.session === sid)
-    if (left) await this.endRecord(left)
+    if (left) {
+      try {
+        await this.endRecord(left)
+      } catch (err) {
+        this.deps.log(`[session-helper] ${sid}: the holder left for this terminal did not answer (${message(err)}); starting a new one`)
+      }
+    }
     const r = await this.deps.exec(exe, ['hold', '--store', this.store, '--session', sid, '--label', label, '--detach'], HOLD_TIMEOUT_MS)
+    if (r.code === EXIT_ALREADY_RUNNING) {
+      // A holder of this session runs already: the app connects to it (section 15).
+      const running = this.readStoreRecords().find((x) => x.session === sid)
+      if (running) return running
+      throw new Error('a holder for this terminal runs already, and its record cannot be read')
+    }
     if (r.code !== 0) throw new Error(firstLine(r.stderr) || `the helper exited with ${r.code}`)
+    if (/does not let a process leave/.test(r.stderr) && !this.insideJob) {
+      // The holder runs, but inside the app's job: it ends with the app.
+      this.insideJob = true
+      this.deps.log(`[session-helper] ${firstLine(r.stderr)}`)
+      this.changed()
+    }
     let record: HolderRecord | null = null
     try {
       record = readRecord(JSON.parse(lastLine(r.stdout)), this.os)
@@ -439,23 +546,17 @@ export class SessionHelperManager implements MachinesSource {
     // A keeper attaches first; the tab's attach then replaces it, never the other way.
     const keeper = this.keepers.get(record.session)
     if (keeper) await keeper.ready
-    return HolderConnection.open({
-      record,
-      os: this.os,
-      sha256: checkHash ? this.info?.sha256 : undefined,
-      openStream: this.deps.openStream,
-      checkEndpointFolder: this.deps.checkEndpointFolder,
-    })
+    return this.open(record, checkHash ? this.info?.sha256 : undefined)
   }
 
   /** Keep a held terminal alive (attached, output dropped) until a tab takes it. */
   private keep(record: HolderRecord): void {
     const sid = record.session
     if (this.quitting || this.keepers.has(sid)) return
-    const entry: { conn?: HolderConnection; ready: Promise<void> } = { ready: Promise.resolve() }
+    const entry: { record: HolderRecord; conn?: HolderConnection; ready: Promise<void> } = { record, ready: Promise.resolve() }
     entry.ready = (async () => {
       try {
-        const conn = await HolderConnection.open({ record, os: this.os, openStream: this.deps.openStream, checkEndpointFolder: this.deps.checkEndpointFolder })
+        const conn = await this.open(record)
         entry.conn = conn
         conn.on('close', () => {
           if (this.keepers.get(sid) === entry) this.keepers.delete(sid)
@@ -483,7 +584,7 @@ export class SessionHelperManager implements MachinesSource {
     let conn: HolderConnection | undefined
     try {
       if (keeper) await keeper.ready
-      conn = keeper?.conn && !keeper.conn.isClosed ? keeper.conn : await HolderConnection.open({ record, os: this.os, openStream: this.deps.openStream, checkEndpointFolder: this.deps.checkEndpointFolder })
+      conn = keeper?.conn && !keeper.conn.isClosed ? keeper.conn : await this.open(record)
       await conn.request({ t: 'term.end' })
     } finally {
       conn?.close()
@@ -523,21 +624,41 @@ export class SessionHelperManager implements MachinesSource {
     return this.listing
   }
 
+  /** The held terminals this run knows without asking the helper: taken over
+   *  by a tab, through it now, or kept for a tab. Oldest first. */
+  private heldRecords(): HolderRecord[] {
+    const by = new Map<string, HolderRecord>()
+    for (const [sid, w] of this.live) if (w.throughHelper && w.heldRecord) by.set(sid, w.heldRecord)
+    for (const [sid, k] of this.keepers) if (!by.has(sid)) by.set(sid, k.record)
+    for (const [sid, r] of this.adoptable) if (!by.has(sid)) by.set(sid, r)
+    return [...by.values()].sort((a, b) => a.started - b.started || (a.session < b.session ? -1 : 1))
+  }
+
+  /** The ids of the terminals the helper holds for this run now. */
+  private heldIds(): Set<string> {
+    const held = new Set<string>([...this.adoptable.keys(), ...this.keepers.keys()])
+    for (const [sid, w] of this.live) if (w.throughHelper) held.add(sid)
+    return held
+  }
+
   /**
    * At a normal quit: every terminal through the helper is ended. The end
    * messages go now; the answer settles once each holder said it ended (a
    * terminal still starting, or a keeper still connecting, is ended as soon
    * as it is up). The caller bounds the wait. The running mark goes at once:
    * this was a normal quit, so the next start ends anything left instead of
-   * taking it over. Null when there was nothing to end.
+   * taking it over. Null when nothing went through the helper.
    */
   shutdown(): Promise<void> | null {
     this.quitting = true
     this.enabled = false
     const waits: Promise<unknown>[] = []
     for (const w of this.live.values()) {
+      // Every one is ended; only one through a holder is waited for (one that
+      // fell back to the usual way ends with the app, as any terminal does).
+      const through = w.throughHelper
       try { w.kill() } catch { /* already gone */ }
-      waits.push(w.ended)
+      if (through) waits.push(w.ended)
     }
     for (const [sid, k] of this.keepers) {
       waits.push(k.ready.then(async () => {
@@ -559,9 +680,9 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   serviceState(): SessionHelperServiceState {
-    const held = new Set<string>([...this.adoptable.keys(), ...this.keepers.keys()])
-    for (const [sid, w] of this.live) if (w.throughHelper) held.add(sid)
-    return { state: this.enabled ? this.state : 'off', held: held.size, lastError: this.lastError }
+    const held = this.heldIds().size
+    // Switched off with terminals still held: the helper is still at work for them.
+    return { state: this.enabled || held > 0 ? this.state : 'off', held, lastError: this.lastError }
   }
 
   // ── the Machines page ──────────────────────────────────────────────────────
@@ -588,24 +709,39 @@ export class SessionHelperManager implements MachinesSource {
     }
   }
 
-  async status(): Promise<MachineStatus> {
-    const base = { id: 'this-computer' as const, name: 'This computer' }
-    if (!this.enabled) return { ...base, helper: { state: 'off' }, sessions: [] }
-    let sessions: HeldSession[] = []
+  /** The held terminals: the helper's listing, or (when it cannot be read) what this run knows. */
+  private async heldListing(): Promise<HolderRecord[]> {
     if (this.info) {
       try {
-        sessions = (await this.list()).map((r) => this.toHeld(r))
+        return await this.list()
       } catch (err) {
         this.deps.log(`[session-helper] list failed: ${message(err)}`)
       }
     }
+    return this.heldRecords()
+  }
+
+  private knownRecord(id: string): HolderRecord | undefined {
+    return this.listing.find((r) => r.session === id) ?? this.heldRecords().find((r) => r.session === id)
+  }
+
+  async status(): Promise<MachineStatus> {
+    const base = { id: 'this-computer' as const, name: 'This computer' }
+    const heldNow = this.heldIds().size
+    if (!this.enabled && heldNow === 0) return { ...base, helper: { state: 'off' }, sessions: [] }
+    const sessions = (await this.heldListing()).map((r) => this.toHeld(r))
+    const detail = [
+      this.detail,
+      this.insideJob ? HELPER_SENTENCES.insideJob : undefined,
+      !this.enabled ? offStillHoldingSentence(Math.max(heldNow, sessions.length)) : undefined,
+    ].filter(Boolean).join(' ')
     return {
       ...base,
       helper: {
-        state: this.state,
+        state: this.enabled ? this.state : 'off',
         ...(this.version ? { version: this.version } : {}),
         ...(this.selfTest ? { selfTest: this.selfTest } : {}),
-        ...(this.detail ? { detail: this.detail } : {}),
+        ...(detail ? { detail } : {}),
       },
       sessions,
     }
@@ -644,15 +780,15 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   async endSession(id: string): Promise<MachineActionResult> {
-    if (!this.enabled) return { ok: false, message: 'The session helper is off, so it holds no terminal to end.' }
+    if (!this.enabled && !this.heldIds().has(id)) return { ok: false, message: HELPER_SENTENCES.offNothingToEnd }
     const w = this.live.get(id)
     if (w && w.throughHelper) {
       w.kill()
       await Promise.race([w.ended, new Promise((r) => setTimeout(r, ENDING_WAIT_MS))])
       return { ok: true }
     }
-    let record = this.listing.find((r) => r.session === id) ?? this.adoptable.get(id)
-    if (!record) {
+    let record = this.knownRecord(id)
+    if (!record && this.enabled) {
       try { record = (await this.list()).find((r) => r.session === id) } catch { /* below */ }
     }
     if (!record) return { ok: false, message: HELPER_SENTENCES.notHeld }
@@ -669,11 +805,8 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   async reattach(id: string): Promise<MachineActionResult> {
-    if (!this.enabled) return { ok: false, message: 'The session helper is off, so it holds no terminal to re-attach.' }
-    let record: HolderRecord | undefined
-    try {
-      record = (await this.list()).find((r) => r.session === id)
-    } catch { /* below */ }
+    if (!this.enabled && !this.heldIds().has(id)) return { ok: false, message: HELPER_SENTENCES.offNothingToReattach }
+    const record = (await this.heldListing()).find((r) => r.session === id)
     if (!record) return { ok: false, message: HELPER_SENTENCES.notHeld }
     const held = this.toHeld(record)
     if (held.attached) return { ok: false, message: HELPER_SENTENCES.alreadyShowing }
@@ -726,12 +859,13 @@ export function getSessionHelper(): SessionHelperManager | null {
 }
 
 /**
- * The PTY manager's spawn for a plain or partner terminal. With the setting
- * off (or no helper this run), exactly node-pty's spawn with these arguments.
+ * The PTY manager's spawn for a shell-only terminal. Exactly node-pty's spawn
+ * with these arguments unless it is a plain terminal (`ctx.plain`) and the
+ * helper is on, or holds a terminal this tab comes back to.
  */
-export function spawnPlainPty(ctx: { sessionId: string; elevated?: boolean }, file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
+export function spawnPlainPty(ctx: PlainSpawnContext, file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
   const m = current
-  if (!m || !m.isEnabled()) return pty.spawn(file, args, opts)
+  if (!m || ctx.plain !== true || (!m.isEnabled() && !m.holdsFor(ctx.sessionId))) return pty.spawn(file, args, opts)
   return m.spawn(ctx, file, args, opts)
 }
 

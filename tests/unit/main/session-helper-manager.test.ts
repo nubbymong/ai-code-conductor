@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readdirSync } from 'fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { IPty } from 'node-pty'
@@ -9,7 +9,7 @@ import type { IPty } from 'node-pty'
 const ptySpawn = vi.hoisted(() => vi.fn())
 vi.mock('node-pty', () => ({ spawn: ptySpawn }))
 
-import { SessionHelperManager, setSessionHelper, spawnPlainPty, whenHeldKnown } from '../../../src/main/session-helper/manager'
+import { HELPER_SENTENCES, SessionHelperManager, offStillHoldingSentence, setSessionHelper, spawnPlainPty, whenHeldKnown } from '../../../src/main/session-helper/manager'
 import { HolderConnection } from '../../../src/main/session-helper/connection'
 import { HelperPty } from '../../../src/main/session-helper/helper-pty'
 import { heldSessionId } from '../../../src/main/session-helper/protocol'
@@ -50,11 +50,19 @@ const managers: SessionHelperManager[] = []
 /** Every start a test began, awaited or not: the teardown waits for them. */
 const starts: Promise<unknown>[] = []
 
+/** Managers whose app is gone (a crash): they reach no helper and no holder again. */
+const crashed = new WeakSet<SessionHelperManager>()
+
 function makeManager(over: Partial<ConstructorParameters<typeof SessionHelperManager>[0]> = {}): SessionHelperManager {
+  let self: SessionHelperManager | undefined
+  const alive = () => { if (self && crashed.has(self)) throw new Error('this app is gone') }
   const m = new SessionHelperManager({
-    platform: 'win32', root, bundled, exec: helper.exec, openStream: helper.openStream,
+    platform: 'win32', root, bundled,
+    exec: async (file, args) => { alive(); return helper.exec(file, args) },
+    openStream: async (endpoint) => { alive(); return helper.openStream(endpoint) },
     spawnDirect: (file, args, o) => ptySpawn(file, args, o), newTabId: () => 'newtab0123456789abcdef01', ...over,
   })
+  self = m
   managers.push(m)
   const start = m.start.bind(m)
   m.start = (o) => {
@@ -99,6 +107,14 @@ afterEach(async () => {
   }
 })
 
+/** The app is gone without a quit: its terminals cannot reach their holders
+ *  again, and every connection drops; the holders stay. */
+function crash(m: SessionHelperManager): void {
+  managers.splice(managers.indexOf(m), 1)
+  crashed.add(m)
+  for (const h of helper.holders.values()) h.dropAll()
+}
+
 async function started(m: SessionHelperManager, atStartup = true): Promise<SessionHelperManager> {
   await m.start({ atStartup })
   await until(() => m.serviceState().state === 'ready', 'the helper to be ready')
@@ -110,7 +126,7 @@ describe('the switch: off is exactly today\'s launch', () => {
     setSessionHelper(null)
     const o = opts()
     const args = ['-NoLogo']
-    spawnPlainPty({ sessionId: 'abcdef0123456789abcdef01' }, SHELL, args, o)
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef01' }, SHELL, args, o)
     expect(ptySpawn).toHaveBeenCalledTimes(1)
     expect(ptySpawn.mock.calls[0][0]).toBe(SHELL)
     expect(ptySpawn.mock.calls[0][1]).toBe(args)
@@ -123,7 +139,7 @@ describe('the switch: off is exactly today\'s launch', () => {
     m.stopRouting()
     const calls = helper.calls.length
     const o = opts()
-    const p = spawnPlainPty({ sessionId: 'abcdef0123456789abcdef01' }, SHELL, [], o)
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef01' }, SHELL, [], o)
     expect(p).not.toBeInstanceOf(HelperPty)
     expect(ptySpawn.mock.calls[0][2]).toBe(o)
     expect(helper.calls.length).toBe(calls)
@@ -135,7 +151,7 @@ describe('the branch: on, a plain or partner terminal goes through a holder', ()
   it('launches with the spawn\'s own argv, folder, environment and size, and the environment never on a command line', async () => {
     const m = await started(makeManager())
     setSessionHelper(m)
-    const p = spawnPlainPty({ sessionId: 'abcdef0123456789abcdef01' }, SHELL, ['-NoLogo'], opts())
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef01' }, SHELL, ['-NoLogo'], opts())
     expect(p).toBeInstanceOf(HelperPty)
     expect(ptySpawn).not.toHaveBeenCalled()
     const sid = heldSessionId('abcdef0123456789abcdef01')
@@ -162,12 +178,12 @@ describe('the branch: on, a plain or partner terminal goes through a holder', ()
   it('an elevated tab, a string argument line or an environment the holder would refuse goes the usual way', async () => {
     const m = await started(makeManager())
     setSessionHelper(m)
-    expect(spawnPlainPty({ sessionId: 'abcdef0123456789abcdef01', elevated: true }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
-    expect(spawnPlainPty({ sessionId: 'abcdef0123456789abcdef02' }, SHELL, '-NoLogo', opts())).not.toBeInstanceOf(HelperPty)
-    expect(spawnPlainPty({ sessionId: 'abcdef0123456789abcdef03' }, SHELL, [], opts({ env: { http_proxy: 'a', HTTP_PROXY: 'b' } }))).not.toBeInstanceOf(HelperPty)
-    expect(spawnPlainPty({ sessionId: 'abcdef0123456789abcdef04' }, 'powershell.exe', [], opts())).not.toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef01', elevated: true }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef02' }, SHELL, '-NoLogo', opts())).not.toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef03' }, SHELL, [], opts({ env: { http_proxy: 'a', HTTP_PROXY: 'b' } }))).not.toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef04' }, 'powershell.exe', [], opts())).not.toBeInstanceOf(HelperPty)
     // gsudo as the program is an elevated tab, even when the flag did not come along.
-    expect(spawnPlainPty({ sessionId: 'abcdef0123456789abcdef4a' }, 'C:\\Program Files\\gsudo\\Current\\gsudo.exe', [SHELL], opts())).not.toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef4a' }, 'C:\\Program Files\\gsudo\\Current\\gsudo.exe', [SHELL], opts())).not.toBeInstanceOf(HelperPty)
     expect(ptySpawn).toHaveBeenCalledTimes(5)
     expect(helper.holds()).toBe(0)
   })
@@ -180,7 +196,7 @@ describe('the branch: on, a plain or partner terminal goes through a holder', ()
     const sid = heldSessionId('abcdef0123456789abcdef05')
     // A holder that launched already (busy) refuses this launch.
     helper.holdBusy = true
-    const p = spawnPlainPty({ sessionId: 'abcdef0123456789abcdef05' }, SHELL, [], opts())
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef05' }, SHELL, [], opts())
     p.write('typed early\r')
     await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
     expect(writes).toEqual(['typed early\r'])
@@ -200,7 +216,7 @@ describe('the branch: on, a plain or partner terminal goes through a holder', ()
 
   it('a record from the helper that is not of this OS shape: nothing is started through it', async () => {
     const m = await started(makeManager({ platform: 'linux', checkEndpointFolder: () => null }))
-    const p = m.spawn({ sessionId: 'abcdef0123456789abcdef06' }, '/bin/bash', ['-l'], { name: 'xterm-256color', cols: 80, rows: 24, cwd: '/home/u', env: { PATH: '/bin' } })
+    const p = m.spawn({ plain: true, sessionId: 'abcdef0123456789abcdef06' }, '/bin/bash', ['-l'], { name: 'xterm-256color', cols: 80, rows: 24, cwd: '/home/u', env: { PATH: '/bin' } })
     expect(p).toBeInstanceOf(HelperPty)
     await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
     expect((p as HelperPty).throughHelper).toBe(false)
@@ -240,15 +256,23 @@ describe('the helper copy: checked before every holder start', () => {
   })
 
   it('a copy that no longer matches is made again once, and the terminal still goes through it', async () => {
-    const m = await started(makeManager())
+    // What the copy holds when the holder starts from it: the installed helper again.
+    const atHold: string[] = []
+    const m = await started(makeManager({
+      exec: async (file, args) => {
+        if (args[0] === 'hold') atHold.push(readFileSync(file, 'utf8'))
+        return helper.exec(file, args)
+      },
+    }))
     setSessionHelper(m)
     const folder = readdirSync(root).find((n) => /^0\.1\.0-/.test(n))!
     writeFileSync(join(root, folder, 'aicc-helper.exe'), 'MZ something else')
     const logs: string[] = []
     ;(m as unknown as { deps: { log: (s: string) => void } }).deps.log = (s) => logs.push(s)
-    const p = spawnPlainPty({ sessionId: 'abcdef0123456789abcdef07' }, SHELL, [], opts())
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef07' }, SHELL, [], opts())
     await until(() => helper.holds() === 1, `the hold (${logs.join(' | ')})`)
     expect(p).toBeInstanceOf(HelperPty)
+    expect(atHold).toEqual(['MZ the installed helper'])
     expect((await m.status()).helper.state).toBe('ready')
   })
 
@@ -259,7 +283,7 @@ describe('the helper copy: checked before every holder start', () => {
     writeFileSync(join(root, folder, 'aicc-helper.exe'), 'MZ something else')
     // The installed file changed under the app: the copy made again cannot match what was checked at start.
     writeFileSync(bundled, 'MZ replaced while running')
-    const p = spawnPlainPty({ sessionId: 'abcdef0123456789abcdef08' }, SHELL, [], opts())
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef08' }, SHELL, [], opts())
     await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
     expect(helper.holds()).toBe(0)
     expect((p as HelperPty).throughHelper).toBe(false)
@@ -267,7 +291,7 @@ describe('the helper copy: checked before every holder start', () => {
     expect(status.helper.state).toBe('failed')
     expect(status.helper.detail).toMatch(/does not match/)
     // And the next terminal does not even try.
-    expect(spawnPlainPty({ sessionId: 'abcdef0123456789abcdef09' }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef09' }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
   })
 
   it('no helper in the installation reads not installed; a failed self-test reads failed until one passes', async () => {
@@ -302,26 +326,24 @@ describe('a crash: held terminals come back', () => {
     // First run: a Terminal only tab and a partner terminal, then the app is gone.
     const first = await started(makeManager())
     setSessionHelper(first)
-    spawnPlainPty({ sessionId: 'abcdef0123456789abcdef10' }, SHELL, [], opts())
-    spawnPlainPty({ sessionId: 'abcdef0123456789abcdef11-partner' }, SHELL, [], opts())
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef10' }, SHELL, [], opts())
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef11-partner' }, SHELL, [], opts())
     const plain = heldSessionId('abcdef0123456789abcdef10')
     const partner = heldSessionId('abcdef0123456789abcdef11-partner')
     await until(() => !!helper.holders.get(plain)?.attached && !!helper.holders.get(partner)?.attached, 'both attached')
     helper.holders.get(plain)!.output('PS C:\\> echo before the crash\r\nbefore the crash\r\n')
-    managers.splice(managers.indexOf(first), 1) // no normal quit for this one
-    for (const h of helper.holders.values()) h.dropAll()
+    crash(first)
     expect(existsSync(join(root, 'app-running.json'))).toBe(true)
 
-    // Second run: every held terminal is attached at once, well inside two minutes.
-    const t0 = Date.now()
+    // Second run: every held terminal is attached at once, before any tab asks
+    // (the away clock itself is the holder's: helper/src/serve.rs tests it).
     const second = makeManager()
     setSessionHelper(second)
     void second.start({ atStartup: true })
     await until(() => helper.holders.get(plain)!.attaches === 2 && helper.holders.get(partner)!.attaches === 2, 'the keepers')
-    expect(Date.now() - t0).toBeLessThan(120_000)
 
     // The restored tab with the same id: its terminal again, not a new shell.
-    const p = spawnPlainPty({ sessionId: 'abcdef0123456789abcdef10' }, SHELL, [], opts())
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef10' }, SHELL, [], opts())
     const seen: string[] = []
     p.onData((d) => seen.push(d))
     // Not known until the take-over attached; then no launch line is typed.
@@ -338,28 +360,26 @@ describe('a crash: held terminals come back', () => {
   it('the held terminals are kept from their records at once, even when the listing fails', async () => {
     const first = await started(makeManager())
     setSessionHelper(first)
-    spawnPlainPty({ sessionId: 'abcdef0123456789abcdef20' }, SHELL, [], opts())
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef20' }, SHELL, [], opts())
     const sid = heldSessionId('abcdef0123456789abcdef20')
     await until(() => !!helper.holders.get(sid)?.attached, 'attached')
-    managers.splice(managers.indexOf(first), 1)
-    for (const h of helper.holders.values()) h.dropAll()
+    crash(first)
     helper.listFails = true
     const second = makeManager()
     setSessionHelper(second)
     void second.start({ atStartup: true })
     await until(() => helper.holders.get(sid)!.attaches === 2, 'the keeper')
-    const p = spawnPlainPty({ sessionId: 'abcdef0123456789abcdef20' }, SHELL, [], opts())
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef20' }, SHELL, [], opts())
     expect(await (p as HelperPty).adoption).toBe(true)
   })
 
   it('a take-over that cannot reach its holder: a new shell the usual way, and the launch lines are typed', async () => {
     const first = await started(makeManager())
     setSessionHelper(first)
-    spawnPlainPty({ sessionId: 'abcdef0123456789abcdef21' }, SHELL, [], opts())
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef21' }, SHELL, [], opts())
     const sid = heldSessionId('abcdef0123456789abcdef21')
     await until(() => !!helper.holders.get(sid)?.attached, 'attached')
-    managers.splice(managers.indexOf(first), 1)
-    for (const h of helper.holders.values()) h.dropAll()
+    crash(first)
     const second = makeManager()
     setSessionHelper(second)
     void second.start({ atStartup: true })
@@ -370,7 +390,7 @@ describe('a crash: held terminals come back', () => {
     h.dropAll()
     const writes: string[] = []
     ptySpawn.mockImplementation(() => ({ ...fakeDirect(), write: (d: string) => writes.push(d) }))
-    const p = spawnPlainPty({ sessionId: 'abcdef0123456789abcdef21' }, SHELL, [], opts())
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef21' }, SHELL, [], opts())
     expect(p).toBeInstanceOf(HelperPty)
     expect(await (p as HelperPty).adoption).toBe(false)
     expect(heldNow(p)).toBe(false)
@@ -405,12 +425,11 @@ describe('a crash: held terminals come back', () => {
   it('a held terminal no tab shows is listed tabless, and Re-attach opens a Terminal only tab bound to it', async () => {
     const first = await started(makeManager())
     setSessionHelper(first)
-    spawnPlainPty({ sessionId: 'abcdef0123456789abcdef12' }, SHELL, [], opts())
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef12' }, SHELL, [], opts())
     const sid = heldSessionId('abcdef0123456789abcdef12')
     await until(() => !!helper.holders.get(sid)?.attached, 'attached')
     helper.holders.get(sid)!.output('kept output\r\n')
-    managers.splice(managers.indexOf(first), 1)
-    for (const h of helper.holders.values()) h.dropAll()
+    crash(first)
 
     const second = await started(makeManager())
     setSessionHelper(second)
@@ -419,7 +438,7 @@ describe('a crash: held terminals come back', () => {
     expect(status.sessions).toEqual([{ id: sid, kind: 'plain', label: 'Terminal', startedAt: helper.holders.get(sid)!.started, attached: false, tabOpen: false }])
     const r = await second.reattach(sid)
     expect(r).toEqual({ ok: true, tab: { id: 'newtab0123456789abcdef01', label: 'Terminal', open: true, partner: false } })
-    const p = spawnPlainPty({ sessionId: 'newtab0123456789abcdef01' }, SHELL, [], opts())
+    const p = spawnPlainPty({ plain: true, sessionId: 'newtab0123456789abcdef01' }, SHELL, [], opts())
     const seen: string[] = []
     p.onData((d) => seen.push(d))
     expect(await (p as HelperPty).adoption).toBe(true)
@@ -436,11 +455,10 @@ describe('a crash: held terminals come back', () => {
   it('a partner terminal with its tab open: Re-attach brings that tab forward on its partner', async () => {
     const first = await started(makeManager())
     setSessionHelper(first)
-    spawnPlainPty({ sessionId: 'abcdef0123456789abcdef13-partner' }, SHELL, [], opts())
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef13-partner' }, SHELL, [], opts())
     const sid = heldSessionId('abcdef0123456789abcdef13-partner')
     await until(() => !!helper.holders.get(sid)?.attached, 'attached')
-    managers.splice(managers.indexOf(first), 1)
-    for (const h of helper.holders.values()) h.dropAll()
+    crash(first)
     const second = await started(makeManager())
     second.noteSavedTabs([{ id: 'abcdef0123456789abcdef13', label: 'API', customName: 'Payments' }])
     const status = await second.status()
@@ -453,7 +471,7 @@ describe('a normal quit ends every terminal through the helper', () => {
   it('ends the tabs\' holders and the kept ones, and removes the running mark', async () => {
     const m = await started(makeManager())
     setSessionHelper(m)
-    spawnPlainPty({ sessionId: 'abcdef0123456789abcdef14' }, SHELL, [], opts())
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef14' }, SHELL, [], opts())
     const sid = heldSessionId('abcdef0123456789abcdef14')
     await until(() => !!helper.holders.get(sid)?.attached, 'attached')
     const done = m.shutdown()
@@ -463,7 +481,7 @@ describe('a normal quit ends every terminal through the helper', () => {
     await done
     expect(helper.holders.get(sid)!.ended).toBe(true)
     // And nothing new goes through the helper after the quit began.
-    expect(spawnPlainPty({ sessionId: 'abcdef0123456789abcdef1f' }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef1f' }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
   })
 
   it('a quit with nothing through the helper waits for nothing', async () => {
@@ -474,11 +492,10 @@ describe('a normal quit ends every terminal through the helper', () => {
   it('a quit right after a crash start: the keepers still connecting are ended once they are up, and the quit\'s answer waits for them', async () => {
     const first = await started(makeManager())
     setSessionHelper(first)
-    spawnPlainPty({ sessionId: 'abcdef0123456789abcdef23' }, SHELL, [], opts())
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef23' }, SHELL, [], opts())
     const sid = heldSessionId('abcdef0123456789abcdef23')
     await until(() => !!helper.holders.get(sid)?.attached, 'attached')
-    managers.splice(managers.indexOf(first), 1)
-    for (const h of helper.holders.values()) h.dropAll()
+    crash(first)
     const second = makeManager()
     void second.start({ atStartup: true })
     // No wait: the keeper is still connecting.
@@ -491,7 +508,7 @@ describe('a normal quit ends every terminal through the helper', () => {
   it('a terminal still starting at the quit is ended once its holder is up', async () => {
     const m = await started(makeManager())
     setSessionHelper(m)
-    spawnPlainPty({ sessionId: 'abcdef0123456789abcdef24' }, SHELL, [], opts())
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef24' }, SHELL, [], opts())
     const sid = heldSessionId('abcdef0123456789abcdef24')
     const done = m.shutdown()
     expect(done).not.toBeNull()
@@ -502,12 +519,11 @@ describe('a normal quit ends every terminal through the helper', () => {
   it('one a normal quit could not reach is ended at the next start, not kept', async () => {
     const m = await started(makeManager())
     setSessionHelper(m)
-    spawnPlainPty({ sessionId: 'abcdef0123456789abcdef15' }, SHELL, [], opts())
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef15' }, SHELL, [], opts())
     const sid = heldSessionId('abcdef0123456789abcdef15')
     await until(() => !!helper.holders.get(sid)?.attached, 'attached')
     // The quit's end never arrived.
-    for (const h of helper.holders.values()) h.dropAll()
-    managers.splice(managers.indexOf(m), 1)
+    crash(m)
     rmSync(join(root, 'app-running.json'))
     const next = await started(makeManager())
     await until(() => helper.holders.get(sid)!.ended, 'the leftover to end')
@@ -517,7 +533,7 @@ describe('a normal quit ends every terminal through the helper', () => {
   it('a tab closed ends its holder; End on the page ends one too', async () => {
     const m = await started(makeManager())
     setSessionHelper(m)
-    const p = spawnPlainPty({ sessionId: 'abcdef0123456789abcdef16' }, SHELL, [], opts())
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef16' }, SHELL, [], opts())
     const sid = heldSessionId('abcdef0123456789abcdef16')
     await until(() => !!helper.holders.get(sid)?.attached, 'attached')
     const exits: number[] = []
@@ -526,7 +542,7 @@ describe('a normal quit ends every terminal through the helper', () => {
     p.kill()
     await until(() => helper.holders.get(sid)!.ended && exits.length === 1, 'the end')
 
-    const q = spawnPlainPty({ sessionId: 'abcdef0123456789abcdef17' }, SHELL, [], opts())
+    const q = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef17' }, SHELL, [], opts())
     const sid2 = heldSessionId('abcdef0123456789abcdef17')
     await until(() => !!helper.holders.get(sid2)?.attached, 'attached')
     const qExits: number[] = []
@@ -539,7 +555,7 @@ describe('a normal quit ends every terminal through the helper', () => {
   it('a program that ends by itself: the tab sees its exit code and the holder is ended', async () => {
     const m = await started(makeManager())
     setSessionHelper(m)
-    const p = spawnPlainPty({ sessionId: 'abcdef0123456789abcdef18' }, SHELL, [], opts())
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef18' }, SHELL, [], opts())
     const sid = heldSessionId('abcdef0123456789abcdef18')
     await until(() => !!helper.holders.get(sid)?.attached, 'attached')
     const exits: number[] = []
@@ -547,6 +563,147 @@ describe('a normal quit ends every terminal through the helper', () => {
     helper.holders.get(sid)!.exitChild(3)
     await until(() => exits.length === 1 && helper.holders.get(sid)!.ended, 'the exit')
     expect(exits).toEqual([3])
+  })
+})
+
+describe('which terminals, and the hold step', () => {
+  it('a terminal without the plain mark (a sign-in, an install or update command, the first-run install) starts the usual way with the helper on', async () => {
+    const m = await started(makeManager())
+    setSessionHelper(m)
+    expect(spawnPlainPty({ sessionId: 'abcdef0123456789abcdef40' }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ sessionId: 'abcdef0123456789abcdef41', plain: false }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+    expect(m.spawn({ sessionId: 'abcdef0123456789abcdef42' }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+    expect(ptySpawn).toHaveBeenCalledTimes(3)
+    expect(helper.holds()).toBe(0)
+  })
+
+  it('a holder that runs already for the terminal (hold exits 3) is used, not refused', async () => {
+    const m = await started(makeManager({
+      exec: async (file, args) => {
+        if (args[0] !== 'hold') return helper.exec(file, args)
+        // It started meanwhile: the helper says so and the app connects to it.
+        await helper.exec(file, args)
+        return { code: 3, stdout: '', stderr: 'aicc-helper: a holder for this session is already running\n' }
+      },
+    }))
+    setSessionHelper(m)
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef43' }, SHELL, [], opts())
+    const sid = heldSessionId('abcdef0123456789abcdef43')
+    await until(() => !!helper.holders.get(sid)?.attached, 'attached')
+    expect((p as HelperPty).throughHelper).toBe(true)
+    expect(ptySpawn).not.toHaveBeenCalled()
+  })
+
+  it('a record left for the terminal whose holder is gone does not stop a new holder', async () => {
+    const m = await started(makeManager())
+    setSessionHelper(m)
+    const sid = heldSessionId('abcdef0123456789abcdef44')
+    // Nobody answers at its endpoint.
+    new FakeHolder(sid, 'abcdef0123456789abcdef44', join(root, 'store')).writeRecord()
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef44' }, SHELL, [], opts())
+    await until(() => !!helper.holders.get(sid)?.attached, 'a new holder attached')
+    expect((p as HelperPty).throughHelper).toBe(true)
+    expect(ptySpawn).not.toHaveBeenCalled()
+  })
+
+  it('a holder Windows keeps inside the app\'s job: the page says a held terminal does not survive a crash', async () => {
+    helper.insideJob = true
+    const m = await started(makeManager())
+    setSessionHelper(m)
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef45' }, SHELL, [], opts())
+    await until(() => !!helper.holders.get(heldSessionId('abcdef0123456789abcdef45'))?.attached, 'attached')
+    expect((await m.status()).helper.detail).toBe(HELPER_SENTENCES.insideJob)
+  })
+
+  it('a copy that could not be put in place is tried again by a terminal started a minute later', async () => {
+    let now = 1_000_000
+    writeFileSync(join(dir, 'blocker'), 'a file where the folder should be')
+    const m = makeManager({ root: join(dir, 'blocker', 'helper'), now: () => now })
+    setSessionHelper(m)
+    await m.start({ atStartup: true })
+    await until(() => m.serviceState().state === 'failed', 'the failed copy')
+    expect((await m.status()).helper.detail).toMatch(/could not be copied into place/)
+    rmSync(join(dir, 'blocker'))
+    now += 30_000
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef46' }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+    now += 31_000
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef47' }, SHELL, [], opts())
+    expect(p).toBeInstanceOf(HelperPty)
+    await until(() => (p as HelperPty).isAttached, 'the terminal through the helper')
+    await until(() => m.serviceState().state === 'ready', 'ready after the second copy')
+  })
+
+  it('switching on again tests a helper that failed its self-test again, and a pass makes it ready', async () => {
+    helper.selfTestOk = false
+    const m = makeManager()
+    await m.start({ atStartup: true })
+    await until(() => m.serviceState().state === 'failed', 'the failed self-test')
+    m.stopRouting()
+    const selfTests = () => helper.calls.filter((c) => c.args[0] === 'selftest').length
+    const before = selfTests()
+    helper.selfTestOk = true
+    await m.start({ atStartup: false })
+    await until(() => m.serviceState().state === 'ready', 'ready after the new self-test')
+    expect(selfTests()).toBe(before + 1)
+  })
+
+  it('a quit waits only for terminals still through a holder, not for one that started the usual way', async () => {
+    const m = await started(makeManager())
+    setSessionHelper(m)
+    helper.holdBusy = true
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef48' }, SHELL, [], opts())
+    await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
+    expect((p as HelperPty).throughHelper).toBe(false)
+    expect(m.shutdown()).toBeNull()
+  })
+})
+
+describe('switched off, or not set up, while it holds terminals', () => {
+  it('switched off while it holds a terminal: the page lists it, End still works, and the Services row reads off only after', async () => {
+    const m = await started(makeManager())
+    setSessionHelper(m)
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef50' }, SHELL, [], opts())
+    const sid = heldSessionId('abcdef0123456789abcdef50')
+    await until(() => !!helper.holders.get(sid)?.attached, 'attached')
+    m.stopRouting()
+    expect(m.serviceState()).toMatchObject({ state: 'ready', held: 1 })
+    const s = await m.status()
+    expect(s.helper.state).toBe('off')
+    expect(s.helper.detail).toBe(offStillHoldingSentence(1))
+    expect(s.sessions.map((x) => x.id)).toEqual([sid])
+    // A new terminal starts the usual way meanwhile.
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef51' }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+    expect(await m.endSession(sid)).toEqual({ ok: true })
+    expect(helper.holders.get(sid)!.ended).toBe(true)
+    await until(() => m.serviceState().state === 'off', 'off once nothing is held')
+    expect(await m.status()).toEqual({ id: 'this-computer', name: 'This computer', helper: { state: 'off' }, sessions: [] })
+    expect(offStillHoldingSentence(2)).toBe('Switched off. It still holds 2 terminals until their tabs close or you end them here.')
+  })
+
+  it('after a crash with a helper that cannot be set up, a restored tab still shows its held terminal, and the page lists it', async () => {
+    const first = await started(makeManager())
+    setSessionHelper(first)
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef52' }, SHELL, [], opts())
+    const sid = heldSessionId('abcdef0123456789abcdef52')
+    await until(() => !!helper.holders.get(sid)?.attached, 'attached')
+    helper.holders.get(sid)!.output('still here\r\n')
+    crash(first)
+    // The installation lost its helper meanwhile.
+    rmSync(bundled)
+    const second = makeManager()
+    setSessionHelper(second)
+    void second.start({ atStartup: true })
+    await until(() => second.serviceState().state === 'not-installed', 'not installed')
+    await until(() => helper.holders.get(sid)!.attaches === 2, 'the keeper')
+    const s = await second.status()
+    expect(s.helper.state).toBe('not-installed')
+    expect(s.sessions.map((x) => x.id)).toEqual([sid])
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef52' }, SHELL, [], opts())
+    const seen: string[] = []
+    p.onData((d) => seen.push(d))
+    expect(await (p as HelperPty).adoption).toBe(true)
+    await until(() => seen.join('').includes('still here'), 'the replay')
+    expect(ptySpawn).not.toHaveBeenCalled()
   })
 })
 

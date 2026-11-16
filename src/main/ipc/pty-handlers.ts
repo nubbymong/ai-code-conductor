@@ -284,6 +284,12 @@ export const spawnOptionsSchema = z.object({
   rows: z.number().int().positive().optional(),
   ssh: sshSchema,
   shellOnly: z.boolean().optional(),
+  // 2.1.3-beta.6: a Terminal only tab or a partner terminal (TerminalView), the
+  // only shell the session helper may carry when its setting is on. A sign-in
+  // tab, an install or update command tab and the first-run install terminal
+  // leave it out, so they always start straight under the app. It only chooses
+  // between two ways of starting the same local shell.
+  plainTerminal: z.boolean().optional(),
   // Terminal-only launcher: a command the USER authored, typed into their own
   // shell on their own machine — running it IS the feature, so a charset guard
   // would be the wrong control (it is not a privilege boundary being crossed).
@@ -754,6 +760,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     rows?: number
     ssh?: RendererSSHOptions
     shellOnly?: boolean
+    /** A Terminal only tab or a partner terminal (spawnOptionsSchema.plainTerminal). */
+    plainTerminal?: boolean
     terminalOptions?: { command?: string; args?: string; hasSecretArg?: boolean; elevated?: boolean; noCommandSecrets?: boolean }
     /** Main-process only — resolved from the OS keychain below and explicitly
      *  cleared from whatever the renderer sent. Never accepted from outside. */

@@ -13,7 +13,7 @@ const ROOT = resolve(__dirname, '../../..')
 const src = readFileSync(resolve(ROOT, 'src/main/pty-manager.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 describe('pty-manager: where the session helper can start a terminal', () => {
-  it('spawnPlainPty is called once, in the shell-only branch, with the elevated flag from both places it can come from', () => {
+  it('spawnPlainPty is called once, in the shell-only branch, with the elevated flag from both places it can come from and the renderer\'s plain mark', () => {
     const calls = [...src.matchAll(/spawnPlainPty\(/g)].map((m) => m.index!)
     expect(calls).toHaveLength(1)
     const at = calls[0]
@@ -22,7 +22,26 @@ describe('pty-manager: where the session helper can start a terminal', () => {
     // No other branch opens between the shell-only test and the call.
     expect(src.slice(branch, at)).not.toMatch(/\} else/)
     expect(src.slice(branch, at)).toContain('Launching shell-only PTY')
-    expect(src.slice(at, at + 200)).toContain('spawnPlainPty({ sessionId, elevated: (options?.elevated ?? options?.terminalOptions?.elevated) === true }, spawnCmd, spawnArgs, {')
+    expect(src.slice(at, at + 250)).toContain('spawnPlainPty({ sessionId, elevated: (options?.elevated ?? options?.terminalOptions?.elevated) === true, plain: options?.plainTerminal === true }, spawnCmd, spawnArgs, {')
+    // The mark is declared on the spawn options, beside shellOnly.
+    expect(src).toContain('    shellOnly?: boolean; plainTerminal?: boolean // plainTerminal: a Terminal only tab or a partner terminal, which the session helper may carry\n')
+  })
+
+  it('only a Terminal only tab or a partner terminal is marked plain: the app\'s own sign-in, command and first-run install terminals are not', () => {
+    const view = readFileSync(resolve(ROOT, 'src/renderer/components/TerminalView.tsx'), 'utf8').replace(/\r\n/g, '\n')
+    expect(view).toContain('const plainTerminal = shellOnly === true && !ssh && !session?.needsLogin && !session?.transient\n')
+    expect(view).toMatch(/\.spawn\(sessionId, \{ cwd, cols, rows, ssh: sshWithReconnect, shellOnly, plainTerminal, /)
+    // The first-run install terminal spawns on its own and never asks for it.
+    const setup = readFileSync(resolve(ROOT, 'src/renderer/components/SetupDialog.tsx'), 'utf8')
+    expect(setup).toContain('window.electronAPI.pty.spawn(')
+    expect(setup).not.toContain('plainTerminal')
+    // The sign-in, re-auth and command tabs carry the marks TerminalView reads.
+    expect(readFileSync(resolve(ROOT, 'src/renderer/hooks/useAddAccount.ts'), 'utf8')).toContain('needsLogin: true')
+    expect(readFileSync(resolve(ROOT, 'src/renderer/hooks/useReauthAccount.ts'), 'utf8')).toContain('needsLogin: true')
+    expect(readFileSync(resolve(ROOT, 'src/renderer/utils/commandTerminal.ts'), 'utf8')).toContain('transient: true')
+    // And the spawn schema checks the mark is a boolean.
+    const handlers = readFileSync(resolve(ROOT, 'src/main/ipc/pty-handlers.ts'), 'utf8')
+    expect(handlers).toContain('  plainTerminal: z.boolean().optional(),')
   })
 
   it('a re-attached held terminal is not typed into, and one whose take-over failed is: the lines wait for the answer', () => {

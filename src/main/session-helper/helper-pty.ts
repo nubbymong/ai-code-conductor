@@ -13,6 +13,12 @@
  *  - launch: a new holder for a new terminal;
  *  - adopt: a holder that outlived the app (a crash), whose terminal the
  *    restored tab shows again, its scrollback first.
+ *
+ * A connection that drops while the terminal runs (the holder closes one that
+ * fell behind its output, section 15) is attached again from the last byte
+ * seen, a few times a minute at most. A terminal that cannot be shown any more
+ * reads as ended in its tab, and its holder is ended too, so no shell outlives
+ * its tab, unless another connection took it over.
  */
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
@@ -32,6 +38,8 @@ export interface HelperPtyDriver {
   /** This terminal is attached to its tab, or no longer is. */
   attachedChanged(sid: string, attached: boolean): void
   log(message: string): void
+  /** The clock for the attach-again budget. */
+  now?: () => number
 }
 
 export interface HelperPtyOptions {
@@ -45,10 +53,13 @@ export interface HelperPtyOptions {
 
 /** An exit code for a terminal whose holder could no longer be reached. */
 export const LOST_EXIT_CODE = -1
-/** Input kept while the terminal is still being attached. */
+/** Input kept while the terminal is first being attached. */
 const QUEUE_MAX_BYTES = 1024 * 1024
-/** Attaches again after the holder said this connection fell behind. */
-const REATTACH_TRIES = 3
+/** Attaches again after a connection dropped: at most this many in REATTACH_WINDOW_MS. */
+export const REATTACH_TRIES = 3
+export const REATTACH_WINDOW_MS = 60_000
+/** How long an end the app sends of its own accord may take. */
+const END_WAIT_MS = 3_000
 
 class Emitter<T> {
   private listeners: Array<(e: T) => void> = []
@@ -64,18 +75,20 @@ class Emitter<T> {
   }
 }
 
+type AttachMode = 'launch' | 'adopt' | 'again'
+
 export class HelperPty implements IPty {
   readonly sid: string
   readonly label: string
-  /** True when this terminal took over a holder that outlived the app. */
-  readonly adopted: boolean
   handleFlowControl = false
 
   private readonly spec: LaunchSpec
   private readonly driver: HelperPtyDriver
   private readonly dataEmitter = new Emitter<string>()
   private readonly exitEmitter = new Emitter<{ exitCode: number; signal?: number }>()
-  private decoder = new StringDecoder('utf8')
+  /** One decoder for the whole output, across attaches again, so a character
+   *  split at the cut is still whole. */
+  private readonly decoder = new StringDecoder('utf8')
   private record: HolderRecord | undefined
   private conn: HolderConnection | undefined
   private inner: IPty | undefined
@@ -86,11 +99,18 @@ export class HelperPty implements IPty {
   private sizeChanged = false
   private attached = false
   private everAttached = false
+  /** A term.attach waits for its reply: its failure decides what happens. */
+  private attaching = false
+  private reconnecting = false
   private exited = false
   private ending = false
+  /** The holder's end was sent (or tried) once already. */
+  private endStarted = false
+  /** Another connection took this terminal (`replaced`): it is theirs now. */
+  private replaced = false
   /** Ring offset of the next output byte, for an attach again. */
   private offset = 0
-  private reattaches = 0
+  private reattachTimes: number[] = []
   private resolveEnded!: () => void
   /** Settles once this terminal is over and its holder ended. */
   readonly ended: Promise<void>
@@ -111,7 +131,6 @@ export class HelperPty implements IPty {
     this.label = opts.label
     this.spec = opts.spec
     this.driver = opts.driver
-    this.adopted = !!opts.adopt
     this.record = opts.adopt
     this.size = { cols: opts.spec.cols, rows: opts.spec.rows }
     this.ended = new Promise<void>((r) => { this.resolveEnded = r })
@@ -141,13 +160,18 @@ export class HelperPty implements IPty {
   /** True while the terminal goes through a holder (not the usual way). */
   get throughHelper(): boolean { return !this.inner }
   get isAttached(): boolean { return this.attached && !this.exited }
+  /** The holder's record, once there is one. */
+  get heldRecord(): HolderRecord | undefined { return this.inner ? undefined : this.record }
 
   write(data: string | Buffer): void {
     if (this.exited) return
     if (this.inner) { this.inner.write(data); return }
     const bytes = typeof data === 'string' ? Buffer.from(data, 'utf8') : data
     if (this.attached && this.conn && !this.conn.isClosed) { this.conn.sendInput(bytes); return }
-    if (this.queuedBytes + bytes.length > QUEUE_MAX_BYTES) return
+    // Before the first attach the shell is not even there yet, so a runaway
+    // paste is cut short. Once attached, nothing typed is dropped: a gap in
+    // the input would reach the program.
+    if (!this.everAttached && this.queuedBytes + bytes.length > QUEUE_MAX_BYTES) return
     this.queued.push(bytes)
     this.queuedBytes += bytes.length
   }
@@ -169,10 +193,10 @@ export class HelperPty implements IPty {
   /** Ends the terminal: the holder ends the program's whole tree and exits. */
   kill(signal?: string): void {
     if (this.inner) { this.inner.kill(signal); return }
-    if (this.ending) return
-    this.ending = true
-    this.driver.ending(this.sid, this.ended)
-    // Before the holder is up, the start-up below sees `ending` and ends it.
+    if (this.ending || this.exited) return
+    this.markEnding()
+    // Up: ended now. Still starting, or attaching again: the step that brings
+    // the holder up sees `ending` and ends it.
     if (this.conn && !this.conn.isClosed) void this.endHolder(null)
   }
 
@@ -196,23 +220,26 @@ export class HelperPty implements IPty {
     }
     this.useConnection(conn)
     if (this.ending) { void this.endHolder(null); return }
+    const sent = { ...this.size }
     try {
       const launched = await conn.request({
         t: 'term.launch',
         argv: this.spec.argv,
         cwd: this.spec.cwd,
         env: this.spec.env,
-        cols: this.size.cols,
-        rows: this.size.rows,
+        cols: sent.cols,
+        rows: sent.rows,
       })
       if (typeof launched.pid === 'number') this.childPid = launched.pid
     } catch (err) {
       this.fallBack(`the holder refused the launch: ${(err as Error).message}`, record, conn)
       return
     }
-    if (this.ending) return
-    this.sizeChanged = false
-    await this.attach(conn, 0, false)
+    // A kill meanwhile sent the end already.
+    if (this.ending || this.exited) return
+    // A resize while the launch was on its way is sent once attached.
+    this.sizeChanged = this.size.cols !== sent.cols || this.size.rows !== sent.rows
+    await this.attach(conn, 0, 'launch')
   }
 
   private async runAdopt(record: HolderRecord): Promise<void> {
@@ -229,26 +256,41 @@ export class HelperPty implements IPty {
     this.queued = []
     this.queuedBytes = 0
     this.sizeChanged = true
-    await this.attach(conn, 0, true)
+    await this.attach(conn, 0, 'adopt')
   }
 
-  private async attach(conn: HolderConnection, from: number, fallBackOnFail: boolean): Promise<void> {
-    let received = 0
-    const counter = (b: Buffer) => { received += b.length }
-    conn.on('output', counter)
+  private async attach(conn: HolderConnection, from: number, mode: AttachMode): Promise<void> {
+    this.attaching = true
     let reply: Record<string, unknown>
     try {
-      reply = await conn.request({ t: 'term.attach', from })
+      reply = await conn.request({ t: 'term.attach', from }, (m) => {
+        // Before the replay that follows the reply: the offset starts where
+        // the holder starts, and a cut (the ring no longer holds `from`) ends
+        // a character split there.
+        const start = typeof m.from === 'number' ? m.from : from
+        if (start !== from) this.flushDecoder()
+        this.offset = start
+      })
     } catch (err) {
-      conn.off('output', counter)
-      if (fallBackOnFail) this.fallBack(`the held terminal could not be attached: ${(err as Error).message}`, undefined, conn)
-      else this.lost(`the terminal could not be attached: ${(err as Error).message}`)
+      this.attaching = false
+      const why = (err as Error).message
+      if (this.exited) return
+      if (this.ending) { if (!this.endStarted) void this.endHolder(null); return }
+      if (mode === 'adopt') { this.fallBack(`the held terminal could not be attached: ${why}`, undefined, conn); return }
+      // The connection dropped under the attach: tried again (within the budget).
+      if (conn.isClosed && !this.replaced) { void this.reconnect('the connection closed while it attached'); return }
+      this.giveUp(`the terminal could not be attached${mode === 'again' ? ' again' : ''}: ${why}`)
       return
     }
-    conn.off('output', counter)
-    if (this.ending || this.exited) return
-    const start = typeof reply.from === 'number' ? reply.from : from
-    this.offset = start + received
+    this.attaching = false
+    if (this.exited) return
+    if (this.ending) { if (!this.endStarted) void this.endHolder(null); return }
+    if (conn.isClosed) {
+      // It closed right after its reply: what the close found waiting is decided here.
+      if (this.replaced) this.giveUp('another connection took this terminal', false)
+      else void this.reconnect('the connection closed')
+      return
+    }
     this.attached = true
     this.everAttached = true
     this.resolveAdoption(true)
@@ -257,7 +299,7 @@ export class HelperPty implements IPty {
       // Over before this attach: the replay follows the reply, then nothing.
       const end = typeof reply.ring_end === 'number' ? reply.ring_end : this.offset
       const code = typeof reply.code === 'number' ? reply.code : 0
-      this.exitAfterReplay(end, code)
+      this.exitAfterReplay(conn, end, code)
       return
     }
     if (this.sizeChanged) this.sendResize()
@@ -272,54 +314,76 @@ export class HelperPty implements IPty {
   private useConnection(conn: HolderConnection): void {
     this.conn = conn
     conn.on('output', (bytes: Buffer) => {
-      if (this.conn !== conn) return
+      if (this.conn !== conn || this.exited) return
       this.offset += bytes.length
       const text = this.decoder.write(bytes)
       if (text) this.dataEmitter.fire(text)
     })
     conn.on('exit', (code: number | null) => {
-      if (this.conn !== conn) return
+      if (this.conn !== conn || this.exited) return
       this.finish(code ?? 0)
       void this.endHolder(code)
     })
     conn.on('notice', (code: string, text: string) => {
       if (this.conn !== conn) return
-      if (code === 'busy' && !this.ending && this.reattaches < REATTACH_TRIES) {
-        this.reattaches++
-        this.driver.log(`[session-helper] ${this.sid}: ${text}; attaching again from ${this.offset}`)
-        void this.reconnect()
+      if (code === 'replaced') {
+        this.replaced = true
+        this.driver.log(`[session-helper] ${this.sid}: another connection took this terminal`)
         return
       }
+      // Typed input the program did not take: the connection sends it again.
+      // Or this connection fell behind its output: the close comes next.
+      if (code === 'busy') return
       this.driver.log(`[session-helper] ${this.sid}: the holder said ${code}: ${text}`)
     })
     conn.on('close', () => {
       if (this.conn !== conn) return
       this.setDetached()
-      if (this.ending || this.exited) { this.resolveEnded(); return }
-      // Before the first attach a request is always waiting, and its
-      // failure decides what happens (the usual way, or an end).
-      if (this.reconnecting || !this.everAttached) return
-      this.lost('the holder closed the connection')
+      if (this.exited) return
+      if (this.ending) { if (!this.endStarted) void this.endHolder(null); return }
+      // A request waiting on this connection decides what happens (the usual
+      // way, an attach again, or an end).
+      if (this.attaching || !this.everAttached) return
+      if (this.replaced) { this.giveUp('another connection took this terminal', false); return }
+      void this.reconnect(conn.closedAfterBusy ? 'the connection fell behind its output' : 'the connection closed')
     })
   }
 
-  private reconnecting = false
-
-  private async reconnect(): Promise<void> {
+  /** Attach again on a new connection, from the last byte seen. */
+  private async reconnect(why: string): Promise<void> {
     const record = this.record
-    if (!record) return
+    const old = this.conn
+    const now = this.driver.now?.() ?? Date.now()
+    this.reattachTimes = this.reattachTimes.filter((t) => now - t < REATTACH_WINDOW_MS)
+    if (!record || this.reattachTimes.length >= REATTACH_TRIES) {
+      this.giveUp(`${why}, and it was attached again ${REATTACH_TRIES} times within a minute`)
+      return
+    }
+    this.reattachTimes.push(now)
+    this.driver.log(`[session-helper] ${this.sid}: ${why}; attaching again from ${this.offset}`)
     this.reconnecting = true
     this.setDetached()
+    // Typed and never sent goes first on the new connection; sent and not yet
+    // answered for is not sent twice (section 15: the replay shows what the
+    // program got).
+    const carried = old ? old.takeUnsent() : []
+    if (carried.length > 0) {
+      this.queued = [...carried, ...this.queued]
+      this.queuedBytes += carried.reduce((n, b) => n + b.length, 0)
+    }
+    let conn: HolderConnection
     try {
-      const conn = await this.driver.connect(record)
-      this.reconnecting = false
-      this.useConnection(conn)
-      this.decoder = new StringDecoder('utf8')
-      await this.attach(conn, this.offset, false)
+      conn = await this.driver.connect(record)
     } catch (err) {
       this.reconnecting = false
-      this.lost(`the terminal could not be attached again: ${(err as Error).message}`)
+      this.giveUp(`the terminal could not be attached again: ${(err as Error).message}`)
+      return
     }
+    this.reconnecting = false
+    if (this.exited) { conn.close(); return }
+    this.useConnection(conn)
+    if (this.ending) { void this.endHolder(null); return }
+    await this.attach(conn, this.offset, 'again')
   }
 
   private sendResize(): void {
@@ -336,36 +400,87 @@ export class HelperPty implements IPty {
   }
 
   /** The program ended while no tab showed it: show what it wrote, then end its holder. */
-  private exitAfterReplay(end: number, code: number): void {
+  private exitAfterReplay(conn: HolderConnection, end: number, code: number): void {
     let done = false
     const over = () => {
       if (done) return
       done = true
       clearTimeout(timer)
+      conn.off('output', check)
       void this.endHolder(code)
     }
     const timer = setTimeout(over, 500)
     const check = () => { if (this.offset >= end) over() }
-    this.conn?.on('output', check)
+    conn.on('output', check)
     check()
   }
 
+  private markEnding(): void {
+    if (this.ending) return
+    this.ending = true
+    this.driver.ending(this.sid, this.ended)
+  }
+
+  /** End the holder (its program's whole tree), then report the exit. */
   private async endHolder(code: number | null): Promise<void> {
+    this.markEnding()
+    if (this.endStarted) return
+    this.endStarted = true
     const conn = this.conn
-    if (!this.ending) {
-      this.ending = true
-      this.driver.ending(this.sid, this.ended)
-    }
-    let ended = code
-    if (conn && !conn.isClosed) {
-      try {
-        const reply = await conn.request({ t: 'term.end' })
-        if (typeof reply.code === 'number') ended = reply.code
-      } catch { /* the holder is gone already */ }
-      conn.close()
-    }
-    this.finish(ended ?? 0)
+    const said = await this.sendEnd(conn)
+    conn?.close()
+    this.finish(said ?? code ?? 0)
     this.resolveEnded()
+  }
+
+  /**
+   * Send the holder its end over `conn`, or over a connection of its own when
+   * that one is gone. Answers the code the holder reported; null when it did
+   * not answer within END_WAIT_MS (it is gone, or it ends by its away clock).
+   */
+  private async sendEnd(conn: HolderConnection | undefined): Promise<number | null> {
+    const record = this.record
+    const ask = async (): Promise<number | null> => {
+      let c = conn && !conn.isClosed ? conn : undefined
+      const own = !c
+      if (!c) {
+        if (!record) return null
+        c = await this.driver.connect(record)
+      }
+      try {
+        const reply = await c.request({ t: 'term.end' })
+        return typeof reply.code === 'number' ? reply.code : null
+      } finally {
+        if (own) c.close()
+      }
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([ask(), new Promise<null>((r) => { timer = setTimeout(() => r(null), END_WAIT_MS) })])
+    } catch {
+      return null
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * The terminal cannot be shown any more. The tab reads it as ended at once;
+   * its holder is ended too (unless another connection took it), so no shell
+   * outlives its tab, and `ended` settles once that is done.
+   */
+  private giveUp(why: string, endIt = true): void {
+    if (this.exited) return
+    this.driver.log(`[session-helper] ${this.sid}: ${why}`)
+    this.markEnding()
+    this.endStarted = true
+    const conn = this.conn
+    this.finish(LOST_EXIT_CODE)
+    const done: Promise<unknown> = endIt ? this.sendEnd(conn) : Promise.resolve()
+    void done.finally(() => {
+      conn?.close()
+      this.resolveEnded()
+    })
   }
 
   /** The usual way after all: node-pty, with what was queued for the holder. */
@@ -401,11 +516,9 @@ export class HelperPty implements IPty {
     for (const b of queued) inner.write(b.toString('utf8'))
   }
 
-  private lost(why: string): void {
-    if (this.exited) return
-    this.driver.log(`[session-helper] ${this.sid}: ${why}`)
-    this.finish(LOST_EXIT_CODE)
-    this.resolveEnded()
+  private flushDecoder(): void {
+    const rest = this.decoder.end()
+    if (rest) this.dataEmitter.fire(rest)
   }
 
   private finish(exitCode: number, signal?: number): void {
@@ -413,8 +526,7 @@ export class HelperPty implements IPty {
     this.exited = true
     this.resolveAdoption(true)
     this.setDetached()
-    const rest = this.decoder.end()
-    if (rest) this.dataEmitter.fire(rest)
+    this.flushDecoder()
     this.exitEmitter.fire(signal === undefined ? { exitCode } : { exitCode, signal })
   }
 }

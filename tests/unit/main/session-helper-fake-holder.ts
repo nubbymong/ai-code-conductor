@@ -4,6 +4,11 @@
  * in-memory stream, and the helper's one-shot commands (version, hold, list,
  * selftest) as an exec. Records are written to the real store folder the
  * manager reads, as the helper writes them.
+ *
+ * Typed input follows section 15's rule when `inputCapacity` is set: while
+ * the program is not reading, at most that many frames wait, and once one is
+ * refused (`busy`) every later frame on that connection is refused too, until
+ * the app's next ping.
  */
 import { randomBytes } from 'crypto'
 import * as fs from 'fs'
@@ -14,19 +19,33 @@ import type { ExecResult } from '../../../src/main/session-helper/manager'
 
 const hex = (bytes: number) => randomBytes(bytes).toString('hex')
 
-/** Two ends of one in-memory connection. */
+/**
+ * Two ends of one in-memory connection: the app's, then the holder's. The app
+ * destroying its end destroys the holder's too, with an AbortError the holder
+ * side (a stand-in) takes no notice of; the app's end gets no such listener,
+ * so an error the app leaves unhandled still fails the test.
+ */
 export function duplexPair(): [Duplex, Duplex] {
   const toB = new PassThrough()
   const toA = new PassThrough()
-  return [Duplex.from({ readable: toA, writable: toB }), Duplex.from({ readable: toB, writable: toA })]
+  const holderEnd = Duplex.from({ readable: toB, writable: toA })
+  holderEnd.on('error', () => { /* the app let go */ })
+  return [Duplex.from({ readable: toA, writable: toB }), holderEnd]
 }
 
 type Json = Record<string, unknown>
 
+/** What one connection carried from the app, in order: raw frames (their size),
+ *  control messages (their type), and the pongs the holder sent. */
+export type ConnEvent = { raw: number } | { t: string } | { pong: true }
+
 export class FakeConn {
   acked = false
   closed = false
+  /** Typed input is refused on this connection until the app's next ping. */
+  refusing = false
   readonly frames: Json[] = []
+  readonly log: ConnEvent[] = []
   constructor(readonly holder: FakeHolder, readonly end: Duplex) {}
   sendJson(v: Json): void { if (!this.closed) this.end.write(encodeJsonFrame(v)) }
   sendRaw(b: Buffer): void {
@@ -47,6 +66,8 @@ export class FakeHolder {
   readonly endpoint: string
   readonly pid = 30000 + Math.floor(Math.random() * 10000)
   readonly started = Date.now()
+  /** The helper version its record reports. */
+  helperVersion = '0.1.0'
   launch: Json | null = null
   child: 'waiting' | 'running' | 'exited' = 'waiting'
   code: number | null = null
@@ -54,10 +75,28 @@ export class FakeHolder {
   attached: FakeConn | null = null
   attaches = 0
   ended = false
+  /** The holder process is gone: nothing answers at its endpoint. */
+  gone = false
   readonly conns = new Set<FakeConn>()
   readonly requests: Json[] = []
+  /** What the program read, in order. */
   readonly input: Buffer[] = []
   size: { cols: number; rows: number } | null = null
+  /** Frames of typed input that may wait while the program is not reading; null: no limit. */
+  inputCapacity: number | null = null
+  /** Whether the program reads its input (with `inputCapacity` set). */
+  reading = true
+  private waitingInput: Buffer[] = []
+  /** `busy` answers to typed input, in all. */
+  busies = 0
+  /** Answers term.attach; false leaves it unanswered. */
+  answerAttach = true
+  /** Answers ping; false leaves it unanswered. */
+  answerPing = true
+  /** How long a pong waits. */
+  pongDelayMs = 0
+  /** Runs when a launch arrives, before its answer. */
+  onLaunch: (() => void) | null = null
 
   constructor(readonly sid: string, readonly label: string, readonly store: string) {
     this.endpoint = `\\\\.\\pipe\\aicc-helper-${sid}-${hex(16)}`
@@ -66,7 +105,7 @@ export class FakeHolder {
   record(): HolderRecord {
     return {
       v: 1, session: this.sid, label: this.label, pid: this.pid, endpoint: this.endpoint, nonce: this.nonce,
-      helper: '0.1.0', started: this.started, away: 120, attached: !!this.attached, child: this.child, code: this.code,
+      helper: this.helperVersion, started: this.started, away: 120, attached: !!this.attached, child: this.child, code: this.code,
     }
   }
 
@@ -80,17 +119,19 @@ export class FakeHolder {
     const [app, mine] = duplexPair()
     const conn = new FakeConn(this, mine)
     this.conns.add(conn)
-    const hello = { proto: [1], helper: { version: '0.1.0' }, os: 'windows', arch: 'x86_64', caps: ['core', 'local'], session: { sid: this.sid, state: this.launch ? 'live' : 'new' } }
+    const hello = { proto: [1], helper: { version: this.helperVersion }, os: 'windows', arch: 'x86_64', caps: ['core', 'local'], session: { sid: this.sid, state: this.launch ? 'live' : 'new' } }
     mine.write(`AICC-HELLO ${this.nonce} ${JSON.stringify(hello)}\n`)
     const reader = new FrameReader('app_to_helper')
     mine.on('data', (chunk: Buffer) => {
       for (const f of reader.push(chunk)) {
         if (f.kind === 1) {
-          if (conn === this.attached) this.input.push(f.bytes)
+          conn.log.push({ raw: f.bytes.length })
+          if (conn === this.attached) this.typed(conn, f.bytes)
           continue
         }
         const m = f.json as Json
         conn.frames.push(m)
+        conn.log.push({ t: String(m.t) })
         if (!conn.acked) {
           if (m.t !== 'hello.ack') { conn.close(); return }
           conn.acked = true
@@ -104,22 +145,46 @@ export class FakeHolder {
     return app
   }
 
+  /** One frame of typed input, offered to the program as the holder does. */
+  private typed(conn: FakeConn, bytes: Buffer): void {
+    if (this.inputCapacity === null) { this.input.push(bytes); return }
+    if (!conn.refusing && this.reading) { this.input.push(bytes); return }
+    if (!conn.refusing && this.waitingInput.length < this.inputCapacity) { this.waitingInput.push(bytes); return }
+    conn.refusing = true
+    this.busies++
+    conn.sendJson({ t: 'error', code: 'busy', text: 'the program is not reading its input; this frame and the ones after it until your next ping were not taken' })
+  }
+
+  /** The program starts reading again: what waited reaches it. */
+  startReading(): void {
+    this.reading = true
+    this.input.push(...this.waitingInput)
+    this.waitingInput = []
+  }
+
   private answer(conn: FakeConn, m: Json): void {
     const re = m.id
     const err = (code: string, text: string) => conn.sendJson({ t: 'error', re, code, text })
     switch (m.t) {
-      case 'ping':
-        conn.sendJson({ t: 'pong', re })
+      case 'ping': {
+        conn.refusing = false
+        if (!this.answerPing) return
+        const pong = () => { conn.log.push({ pong: true }); conn.sendJson({ t: 'pong', re }) }
+        if (this.pongDelayMs > 0) setTimeout(pong, this.pongDelayMs)
+        else pong()
         return
+      }
       case 'term.launch':
         if (this.launch) return err('busy', 'this holder has launched its session already')
         this.launch = m
         this.child = 'running'
         this.writeRecord()
+        this.onLaunch?.()
         conn.sendJson({ t: 'term.launched', re, pid: 4242 })
         return
       case 'term.attach': {
         if (!this.launch) return err('not-found', 'nothing launched')
+        if (!this.answerAttach) return
         const from = Number(m.from)
         if (from > this.ring.length) return err('bad-field', 'from is past the ring')
         if (this.attached && this.attached !== conn) {
@@ -152,7 +217,10 @@ export class FakeHolder {
 
   /** The program writes. */
   output(text: string): void {
-    const b = Buffer.from(text, 'utf8')
+    this.outputBytes(Buffer.from(text, 'utf8'))
+  }
+
+  outputBytes(b: Buffer): void {
     this.ring = Buffer.concat([this.ring, b])
     this.attached?.sendRaw(b)
   }
@@ -165,9 +233,23 @@ export class FakeHolder {
     this.attached?.sendJson({ t: 'term.exit', code })
   }
 
+  /** The attached connection fell 256 chunks behind: `busy`, then a close. */
+  fallBehind(): void {
+    const c = this.attached
+    if (!c) return
+    c.sendJson({ t: 'error', code: 'busy', text: 'this connection fell 256 chunks behind the output' })
+    c.close()
+  }
+
   /** The app is gone (a crash): every connection drops, the holder stays. */
   dropAll(): void {
     for (const c of [...this.conns]) c.close()
+  }
+
+  /** The holder process is killed: its connections drop and nothing answers again. */
+  vanish(): void {
+    this.gone = true
+    this.dropAll()
   }
 }
 
@@ -181,6 +263,8 @@ export class FakeHelper {
   holdBusy = false
   /** List mode fails (a slow holder ran it past its time). */
   listFails = false
+  /** `hold --detach` notes that the holder stays inside the app's job. */
+  insideJob = false
 
   exec = async (file: string, args: string[]): Promise<ExecResult> => {
     this.calls.push({ file, args })
@@ -190,16 +274,17 @@ export class FakeHelper {
     if (cmd === 'hold') {
       const sid = opt('--session')
       const existing = this.holders.get(sid)
-      if (existing && !existing.ended) return { code: 1, stdout: '', stderr: 'a holder for this session is already running\n' }
+      if (existing && !existing.ended && !existing.gone) return { code: 3, stdout: '', stderr: 'aicc-helper: a holder for this session is already running\n' }
       const h = new FakeHolder(sid, opt('--label'), opt('--store'))
       if (this.holdBusy) h.launch = { t: 'term.launch' }
       h.writeRecord()
       this.holders.set(sid, h)
-      return { code: 0, stdout: `${JSON.stringify(h.record())}\n`, stderr: '' }
+      const note = this.insideJob ? "aicc-helper: note: this process's job does not let a process leave it, so the holder runs inside the job and ends when the job does\n" : ''
+      return { code: 0, stdout: `${JSON.stringify(h.record())}\n`, stderr: note }
     }
     if (cmd === 'list') {
       if (this.listFails) return { code: null, stdout: '', stderr: 'timed out' }
-      const sessions = [...this.holders.values()].filter((h) => !h.ended).map((h) => h.record())
+      const sessions = [...this.holders.values()].filter((h) => !h.ended && !h.gone).map((h) => h.record())
       return { code: 0, stdout: `${JSON.stringify({ v: 1, sessions, removed: 0, skipped: 0 })}\n`, stderr: '' }
     }
     if (cmd === 'selftest') {
@@ -214,7 +299,7 @@ export class FakeHelper {
   }
 
   openStream = async (endpoint: string): Promise<Duplex> => {
-    const h = [...this.holders.values()].find((x) => x.endpoint === endpoint && !x.ended)
+    const h = [...this.holders.values()].find((x) => x.endpoint === endpoint && !x.ended && !x.gone)
     if (!h) throw new Error('no holder at that endpoint')
     return h.connect()
   }

@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
 import { resolve } from 'path'
+// js-yaml comes in with electron-builder and is pinned in package.json's
+// overrides; nothing is installed for this test.
+import yaml from 'js-yaml'
 
 /**
  * 2.1.3-beta.6 (plan section B): the installer ships the session helper, and
@@ -260,5 +263,34 @@ describe('the installer ships the release session helper and nothing else of hel
     }
     for (const b of builds) expect(wf.slice(b, b + 400)).toContain('cargo build --release --locked')
     expect(pkg.scripts['verify:helper']).toBe('node scripts/verify-bundled-helper.mjs')
+  })
+
+  it('a release/* test installer from ci.yml carries the helper too: built before it is packaged and checked after, under the same condition', () => {
+    type Step = { name?: string; if?: string; run?: string; 'working-directory'?: string }
+    const ci = yaml.load(readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf-8')) as { jobs: Record<string, { steps: Step[] }> }
+    for (const [job, pack] of [
+      ['test', 'npx electron-builder --mac'],
+      ['test-windows-build', 'npx electron-builder --win --config.npmRebuild=false'],
+    ] as const) {
+      const steps = ci.jobs[job].steps
+      const at = steps.findIndex((s) => s.run?.trim() === pack)
+      expect(at, `${job}: ${pack}`).toBeGreaterThan(0)
+      const cond = steps[at].if
+      expect(cond, job).toContain("startsWith(github.head_ref, 'release/')")
+      const build = steps.findIndex((s) => /cargo build --release --locked/.test(s.run ?? ''))
+      expect(build, `${job}: the helper build`).toBeGreaterThan(-1)
+      expect(build, `${job}: built before it is packaged`).toBeLessThan(at)
+      expect(steps[build]['working-directory'], job).toBe('helper')
+      expect(steps[build].if, job).toBe(cond)
+      const verify = steps.findIndex((s) => s.run?.trim() === 'npm run verify:helper')
+      expect(verify, `${job}: checked after it is packaged`).toBeGreaterThan(at)
+      expect(steps[verify].if, job).toBe(cond)
+    }
+  })
+
+  it('every packaging script checks the helper it packaged', () => {
+    for (const name of ['package', 'package:win', 'package:mac', 'package:linux']) {
+      expect(pkg.scripts[name], name).toMatch(/&& npm run verify:helper$/)
+    }
   })
 })
