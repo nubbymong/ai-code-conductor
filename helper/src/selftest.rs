@@ -144,6 +144,8 @@ fn answer_one(listener: &Listener, nonce: &str, sid: &str) -> Result<(), String>
     let pong = Frame::json(0, Value::obj(vec![("t", Value::str("pong")), ("re", Value::uint(id))]));
     let bytes = frame::encode(&pong, Direction::HelperToApp).map_err(|e| e.to_string())?;
     s.write_all(&bytes).map_err(|e| format!("could not write the pong: {e}"))?;
+    // Closing before the client has read the pong could cut it off.
+    s.wait_peer_close(Duration::from_secs(5));
     Ok(())
 }
 
@@ -169,6 +171,8 @@ fn transport_round_trip() -> Result<(), String> {
         if !pong {
             return Err("the answer was not the pong".to_string());
         }
+        // Closing tells the listening side the pong was read.
+        drop(c);
         // The listening side reports too; it is not waited for without limit.
         done_rx.recv_timeout(Duration::from_secs(10)).map_err(|_| "the listening side did not finish".to_string())?
     })();

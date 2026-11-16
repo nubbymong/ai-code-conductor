@@ -132,11 +132,55 @@ impl Stream {
         self.inner.set_read_timeout(timeout)
     }
 
-    /// End the connection both ways. A blocked reader on any clone wakes with
-    /// the end of the stream; what was already written still reaches the peer.
+    /// End the connection both ways at once. A blocked reader on any clone
+    /// wakes with the end of the stream. On macOS bytes the peer has not read
+    /// yet can be lost, so a connection that ends after a last message uses
+    /// `close_after_writes`.
     pub fn shutdown(&self) {
         unsafe {
             libc::shutdown(self.inner.as_raw_fd(), libc::SHUT_RDWR);
+        }
+    }
+
+    /// End the connection after what was written: the peer reads it, then the
+    /// end of the stream. The cut both ways, which also wakes a reader blocked
+    /// on this side, comes `LINGER` later.
+    pub fn close_after_writes(&self) {
+        unsafe {
+            libc::shutdown(self.inner.as_raw_fd(), libc::SHUT_WR);
+        }
+        match self.inner.try_clone() {
+            Ok(late) => {
+                std::thread::spawn(move || {
+                    std::thread::sleep(super::LINGER);
+                    unsafe {
+                        libc::shutdown(late.as_raw_fd(), libc::SHUT_RDWR);
+                    }
+                });
+            }
+            Err(_) => self.shutdown(),
+        }
+    }
+
+    /// Wait up to `max` for the peer to close its end, which it does once it
+    /// has read everything; what it still sends is read and dropped. Used
+    /// before the holder exits, so its last message is not cut off.
+    pub fn wait_peer_close(&self, max: Duration) {
+        let mut s = match self.inner.try_clone() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let deadline = std::time::Instant::now() + max;
+        let mut buf = [0u8; 4096];
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() || s.set_read_timeout(Some(left)).is_err() {
+                return;
+            }
+            match s.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
         }
     }
 

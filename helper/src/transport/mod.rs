@@ -33,6 +33,10 @@ pub use windows::{connect, remove_stale_endpoint, Listener, Stream};
 /// dropped: a client that stops reading cannot stall the holder.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a connection the holder closes stays open after its last write,
+/// so the peer can read that last message before the connection is cut.
+pub const LINGER: Duration = Duration::from_secs(2);
+
 /// Hex characters of randomness in an endpoint name.
 #[cfg(windows)]
 pub const ENDPOINT_RANDOM_HEX: usize = 32;

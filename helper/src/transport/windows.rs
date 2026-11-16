@@ -256,6 +256,17 @@ impl Stream {
         }
     }
 
+    /// End the connection after what was written. A pipe keeps what was
+    /// written for the client after the holder's handle closes, so this is
+    /// `shutdown`.
+    pub fn close_after_writes(&self) {
+        self.shutdown();
+    }
+
+    /// The Unix transport waits here for the peer to close; a pipe does not
+    /// lose what was written when the holder exits, so nothing waits.
+    pub fn wait_peer_close(&self, _max: Duration) {}
+
     /// On a client, the holder's process id as the pipe reports it.
     pub fn peer_pid(&self) -> Option<u32> {
         self.peer_pid

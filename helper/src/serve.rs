@@ -216,10 +216,14 @@ impl Serve {
                 None => vec![],
             };
             let _ = conn.send_json(reply("term.ended", re, more));
-            conn.closer.shutdown();
+            conn.closer.close_after_writes();
         }
         store::remove(&self.opts.store, &self.opts.sid, std::process::id());
         self.listener.remove();
+        if let Some((conn, _)) = requester {
+            // Exiting closes the connection; the app reads term.ended first.
+            conn.closer.wait_peer_close(transport::LINGER);
+        }
         std::process::exit(0);
     }
 
@@ -273,12 +277,12 @@ impl Serve {
                 let _ = conn.send_bytes(format!("{line}\n").as_bytes());
             }
             let _ = conn.send_error(None, request::CODE_BUSY, "this holder serves 16 connections at most");
-            conn.closer.shutdown();
+            conn.closer.close_after_writes();
             return;
         }
         self.converse(&conn, &mut reader);
         self.disconnected(&conn);
-        conn.closer.shutdown();
+        conn.closer.close_after_writes();
     }
 
     fn hello_line(&self) -> Result<String, hello::HelloError> {
@@ -507,7 +511,7 @@ impl Serve {
         };
         if let Some(old) = old {
             let _ = old.send_error(None, request::CODE_REPLACED, "a newer connection attached to this terminal");
-            old.closer.shutdown();
+            old.closer.close_after_writes();
         }
         self.update_record(|r| r.attached = true);
         let r = &attachment.replay;
@@ -548,7 +552,7 @@ impl Serve {
                 }
                 None => {
                     let _ = conn.send_error(None, request::CODE_BUSY, "this connection fell too far behind; attach again from the last offset it saw");
-                    conn.closer.shutdown();
+                    conn.closer.close_after_writes();
                 }
             }
         });

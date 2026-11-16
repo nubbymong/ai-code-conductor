@@ -551,7 +551,10 @@ another version `proto-mismatch`, anything else `bad-field`, then the holder
 closes the connection. With no `hello.ack` in 10 s it sends `timeout` and
 closes; after that, with no frame from the app in 60 s it sends `timeout` and
 closes (the app pings every 15 s). At most 16 connections at once: the next one
-gets the hello, `busy`, and is closed. A write that has not finished in 5 s
+gets the hello, `busy`, and is closed. When the holder closes a connection after
+a last message (an `error`, `term.detached`, `term.ended`), it stops writing
+first, so the app reads that message and then the end of the stream; the app
+then closes its end (the holder cuts the connection 2 s later regardless). A write that has not finished in 5 s
 closes the connection. A type the connection does not allow gets
 `unknown-type` and a close; 20 `bad-field` or `too-large` replies in 60 s are
 allowed, the next one closes.
