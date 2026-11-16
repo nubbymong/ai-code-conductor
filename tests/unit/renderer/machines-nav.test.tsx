@@ -101,6 +101,78 @@ describe('the expanded rail fits the sidebar (Machines made it one button longer
     }
   })
 
+  // Below about 258px the ten buttons are narrower than their 20px icon (with min-w-0 alone
+  // each is (W - 58) / 10 wide: 19.8 at 256, 17.2 at 230, 14.2 at 200), so the icon stuck out
+  // of its pill and the status dots, which sit on the pill's corner, landed on the icon.
+  // The fix has three parts, and each is pinned: a 2px gap (more room per button), an icon
+  // wrapper that may shrink (min-w-0), and an svg that scales down square with it.
+  const tokens = (el: Element | null | undefined) => (el?.getAttribute('class') ?? '').split(/\s+/).filter(Boolean)
+
+  it('every expanded button holds its icon in a wrapper that may shrink, and the svg scales down square inside it', () => {
+    useAccountProfilesStore.setState({ profiles: [profile('one'), profile('two')] as any })
+    act(() => root.render(React.createElement(SidebarNav, { ...props, onViewChange: () => {}, onShowAccountUsage: () => {} } as any)))
+    const buttons = railButtons()
+    expect(buttons.length).toBe(10)
+    for (const b of buttons) {
+      const name = b.getAttribute('aria-label') ?? ''
+      const svg = b.querySelector('svg')!
+      const wrapper = svg.parentElement!
+      // The icon sits in a wrapper inside the button, not straight in it, and not in the tooltip.
+      expect(wrapper.parentElement, name).toBe(b)
+      expect(wrapper.tagName, name).toBe('SPAN')
+      expect(wrapper.getAttribute('aria-hidden'), name).toBeNull()
+      // The wrapper can be narrower than the 20px svg; the svg never outgrows it and keeps its square.
+      expect(tokens(wrapper), name).toEqual(expect.arrayContaining(['min-w-0', '[&>svg]:max-w-full', '[&>svg]:h-auto']))
+      // h-auto follows the width through the viewBox, so the viewBox must be square.
+      expect(svg.getAttribute('viewBox'), name).toBe('0 0 24 24')
+      // A fixed height keeps the row 36px tall as the icon shrinks (it was py-2 round a 20px icon: 36px).
+      expect(tokens(b), name).toContain('h-9')
+      expect(tokens(b), name).not.toContain('py-2')
+    }
+  })
+
+  it('the expanded row uses a 2px gap, and with it every width the sidebar allows leaves each icon a whole pill', async () => {
+    useAccountProfilesStore.setState({ profiles: [profile('one'), profile('two')] as any })
+    act(() => root.render(React.createElement(SidebarNav, { ...props, onViewChange: () => {}, onShowAccountUsage: () => {} } as any)))
+    const rail = container.querySelector('[data-tour="nav-rail"]')!
+    expect(tokens(rail)).toContain('gap-0.5')
+    expect(tokens(rail)).not.toContain('gap-1')
+    // The divider is the one non-button child of the row; the row's padding is px-2.
+    expect(tokens(rail)).toContain('px-2')
+    expect(Array.from(rail.children).filter((c) => c.tagName !== 'BUTTON').length).toBe(1)
+
+    // The arithmetic from SidebarNav.tsx, redone from the real button count: sidebar width W,
+    // less the 1px border, the 16px of padding, the 1px divider and the gaps between the 11 items.
+    const { SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_DEFAULT } = await import('../../../src/renderer/components/sidebar/sessionsPanelState')
+    const items = railButtons().length + 1
+    const fixed = 1 + 16 + 1 + (items - 1) * 2
+    const pill = (w: number) => (w - fixed) / railButtons().length
+    expect(fixed).toBe(38)
+    expect(SIDEBAR_WIDTH_DEFAULT).toBe(256)
+    expect(SIDEBAR_WIDTH_MIN).toBe(200)
+    expect(pill(256)).toBeCloseTo(21.8, 5)
+    expect(pill(230)).toBeCloseTo(19.2, 5)
+    expect(pill(SIDEBAR_WIDTH_MIN)).toBeCloseTo(16.2, 5)
+    // The icon is as wide as its pill, up to its own 20px: 20, 19.2 and 16.2px at these three widths.
+    const icon = (w: number) => Math.min(20, pill(w))
+    expect([icon(256), icon(230), icon(SIDEBAR_WIDTH_MIN)].map((n) => Number(n.toFixed(1)))).toEqual([20, 19.2, 16.2])
+    // No allowed width squeezes the icon below 16px, so it stays a readable glyph.
+    expect(icon(SIDEBAR_WIDTH_MIN)).toBeGreaterThanOrEqual(16)
+  })
+
+  it('the Insights and Cloud Agents status dots belong to the button, so they stay on the pill corner while the icon shrinks', () => {
+    act(() => root.render(React.createElement(SidebarNav, { ...props, insightsStatus: 'running', insightsMessage: 'Working', cloudAgentRunning: 2, onViewChange: () => {} } as any)))
+    for (const view of ['nav-insights', 'nav-cloud-agents']) {
+      const b = container.querySelector(`[data-tour="${view}"]`)!
+      expect(tokens(b), view).toContain('relative')
+      const dots = Array.from(b.children).filter((c) => tokens(c).includes('-right-0.5') && tokens(c).includes('-top-0.5'))
+      expect(dots.length, view).toBe(1)
+      // A child of the button, a sibling of the icon wrapper, not inside it.
+      expect(dots[0].contains(b.querySelector('svg')), view).toBe(false)
+      expect(b.querySelector('svg')!.parentElement!.contains(dots[0]), view).toBe(false)
+    }
+  })
+
   it('the collapsed rail keeps its fixed square buttons', () => {
     useAccountProfilesStore.setState({ profiles: [profile('one'), profile('two')] as any })
     act(() => root.render(React.createElement(SidebarNav, { ...props, onViewChange: () => {}, onShowAccountUsage: () => {}, collapsed: true } as any)))
