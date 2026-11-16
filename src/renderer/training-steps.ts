@@ -576,7 +576,7 @@ export const trainingSteps: TrainingStep[] = [
       'Opens in the working directory locally; on an SSH session it runs on the host, in the config\'s remote folder once it recognises the host\'s shell prompt, if you have not typed in it first',
       'Quick command buttons can target the assistant or the partner explicitly',
       'Resize the split bar to favour whichever pane is active',
-      'With **Plain terminals through the session helper** on (Settings, General; a preview, off by default), a local session\'s partner terminal keeps running if the app crashes on Windows, and shows again in its session when you open the app again within two minutes',
+      'With **Plain terminals through the session helper** on (Settings, General; a preview, off by default), a local session\'s partner terminal keeps running if the app crashes on Windows, and shows again in its session when you open the app again within two minutes and resume your sessions',
     ],
     howToTrigger: [
       { label: 'Toggle', value: 'Partner button in the command bar' },
@@ -754,7 +754,7 @@ export const trainingSteps: TrainingStep[] = [
     summary:
       'Every preference you can set lives here, organised in a left rail. Sandboxed renderer + signed updates + zod-validated IPC keep the app safe; the visible knobs let you tune everything else.',
     highlights: [
-      'General -- default working dir, machine name, update channel, security toggles, the Tokenomics switch (the usage index can be switched off), and **Plain terminals through the session helper** (a preview, off by default), which keeps Terminal only tabs and partner terminals running if the app crashes on Windows; the **Machines** page shows the helper and what it holds',
+      'General -- default working dir, machine name, update channel, security toggles, the Tokenomics switch (the usage index can be switched off), and **Plain terminals through the session helper** (a preview, off by default), which keeps local Terminal only tabs and local partner terminals running if the app crashes on Windows; the **Machines** page shows the helper and what it holds',
       'Accounts -- the Providers card (Claude Code and Codex on or off) and every Claude and Codex account',
       'Status Line -- toggle each element of the in-terminal status bar + font + size',
       'Shortcuts -- rebind every keyboard shortcut',

@@ -67,7 +67,7 @@ export default function PageFrame({
   children,
 }: Props) {
   // Panels / admin-pages region scale + family (Font & Size page). Covers
-  // Settings, Tokenomics, Memory, Insights, Vision, Cloud Agents, Logs.
+  // Settings, Tokenomics, Memory, Insights, Vision, Cloud Agents, Logs, Machines.
   const panelType = useRegionTypography('panels')
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0" style={{ background: 'var(--surface-stage)', ...panelType }}>

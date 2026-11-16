@@ -1967,3 +1967,67 @@ describe('2.1.3-beta.5: hosts with no tmux copy to fetch', () => {
     expect(k).toContain('A host that already has tmux installed works as any other.')
   })
 })
+
+// 2.1.3-beta.6 user-facing sweep: the Machines page and the session helper
+// (#693, #697) and Codex resume by real folder (#696), said where a user looks,
+// so a later edit cannot drop them silently.
+describe('the 2.1.3-beta.6 sweep', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const tip = (id: string) => TIPS_LIBRARY.find((t) => t.id === id)!.variants.primary.body
+  const card = (id: string) => trainingSteps.find((s) => s.id === id)!.highlights.join('\n')
+  const entry = changelog.find((e) => e.version === '2.1.3-beta.6')!
+
+  it('the known issues cover a terminal that starts the usual way, a Failed helper and the folder an uninstall leaves', () => {
+    const k = body('known-issues')
+    expect(k).toContain('two variables whose names differ only in capitals')
+    expect(k).toContain('(more than 1024 variables, a name over 255 characters, or a value over 32767 characters)')
+    expect(k).toContain('the Machines page can read Failed, with the reason, and the Services pill in the title bar then reads Down, in red')
+    expect(k).toContain('or that it failed its own self-test')
+    expect(k).toContain('the Session helper card on the Services panel reads crashed, with the same reason')
+    expect(k).toContain('press Run self-test on the Machines page to test it again')
+    expect(k).toContain("leaves the session helper's own folder")
+    expect(k).toContain('delete only that helper folder. Leave the AI Code Conductor folder around it in place')
+  })
+
+  it('the Services section says the Session helper card reads crashed and turns the pill Down', () => {
+    const s = body('services')
+    expect(s).toContain('Session helper')
+    expect(s).toContain('it reads crashed, with the reason, while the helper is not installed or has failed, and the pill then reads Down')
+    expect(s).not.toContain('holder')
+  })
+
+  it('the Machines section says which terminals start inside the helper and which never do', () => {
+    const m = body('machines')
+    expect(m).toContain('a Terminal only tab on this computer and the partner terminal beside a session on this computer start inside the session helper')
+    expect(m).toContain('SSH sessions and their partner terminals, a terminal run as administrator')
+    expect(m).toContain("Where Windows keeps the session helper inside the app's own job")
+  })
+
+  it('the Codex section says a conversation in a linked folder resumes by the folder the link leads to', () => {
+    expect(body('codex')).toContain('reached through a link (a symbolic link, or a junction on Windows) counts as the folder the link leads to')
+  })
+
+  it('the tips name the Session helper card and what the setting does', () => {
+    expect(tip('tip.services-panel')).toContain('**Session helper**')
+    expect(tip('tip.services-panel')).not.toContain('holder')
+    expect(tip('tip.machines-page')).toContain('Terminal only tabs and partner terminals on this computer then keep running if the app crashes on Windows')
+  })
+
+  it('the Settings and Combined Mode cards name the setting', () => {
+    expect(card('settings')).toContain('Plain terminals through the session helper')
+    expect(card('settings')).toContain('local Terminal only tabs and local partner terminals')
+    expect(card('combined-mode')).toContain('Plain terminals through the session helper')
+  })
+
+  it('the release warning names what stays outside the helper, the job case and the way back', () => {
+    const w = entry.warnings!.join('\n')
+    expect(w).toContain('is a preview and is off by default')
+    expect(w).toContain('SSH tabs and their partner terminals, a terminal run as administrator')
+    expect(w).toContain("Where the Machines page says Windows keeps the helper inside the app's own job, such a terminal ends with the app instead.")
+    expect(w).toContain('surviving a crash is not promised there yet')
+    expect(w).toContain('To go back to 2.1.3-beta.5')
+    const services = entry.changes.find((c) => c.description.startsWith('The Services panel has a sixth card'))!.description
+    expect(services).toContain('so the Services pill reads Down')
+    expect(services).not.toContain('holder')
+  })
+})
