@@ -82,8 +82,7 @@ export default function HooksGatewaySection() {
           <p className="text-xs text-subtext0 mt-1 max-w-md">
             Loopback listener, on unless you turn it off, that receives tool-call, permission, and
             lifecycle events from your local Claude Code and Codex sessions. It drives the attention
-            indicator and is the foundation for upcoming desktop notifications and external
-            automations. No telemetry - listener is 127.0.0.1 only. This listener is not tunnelled
+            indicator. No telemetry - listener is 127.0.0.1 only. This listener is not tunnelled
             into SSH sessions: one started while this is on sends back only its attention events (Claude
             waiting on you), over its own terminal, and they light the indicator only while this
             is on. Codex asks you once per account to
@@ -130,15 +129,6 @@ export default function HooksGatewaySection() {
           onSave={savePort}
         />
       )}
-
-      <div className="pl-4 space-y-1 text-xs">
-        <label className="flex items-center gap-2 opacity-60">
-          <input type="checkbox" checked={false} disabled />
-          <span>
-            Desktop notifications <span className="text-overlay1">- on permission requests and stop failures (coming soon)</span>
-          </span>
-        </label>
-      </div>
     </section>
   )
 }
