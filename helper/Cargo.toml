@@ -20,7 +20,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.90"
 publish = false
-description = "Per-machine session helper: frame codec, hello line, output ring, PTY hold and attach"
+description = "Per-machine session helper: frame codec, hello line, output ring, PTY holder on a local pipe or socket"
 
 [lib]
 name = "aicc_helper"
@@ -39,11 +39,20 @@ path = "src/bin/aicc-fake-cli.rs"
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.172"
 
+# Features only switch on parts of the same crate: they add no package to
+# Cargo.lock. Authorization builds and reads the pipe's security descriptor,
+# Cryptography gives random endpoint names, FileSystem and IO carry the
+# overlapped named pipe, JobObjects ends a session's whole process tree.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.59.0", default-features = false, features = [
   "Win32_Foundation",
   "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Security_Cryptography",
+  "Win32_Storage_FileSystem",
   "Win32_System_Console",
+  "Win32_System_IO",
+  "Win32_System_JobObjects",
   "Win32_System_Pipes",
   "Win32_System_Threading",
 ] }

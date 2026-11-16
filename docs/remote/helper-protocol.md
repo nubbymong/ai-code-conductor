@@ -468,3 +468,255 @@ Tested under dash, bash, busybox sh and macOS sh (fixtures: ADR step R2).
   `SUDO_ASKPASS` to it, so every sudo question reaches the host-side `serve`.
 - **Removal** runs the removal script in every configured running container; a
   stopped one is listed as maybe holding a copy. **Pending probe P5.**
+
+## 15 Local transport (protocol change 1)
+
+The same helper holds terminals on the user's own computer, so a local session
+outlives an app crash (ADR-030). There is no ssh and no daemon: one holder
+process per session, each on its own endpoint, started by the app and found
+again through a record it writes. Frames (section 6), the hello (section 7),
+`ping`, `error` and the error codes are those of version 1; the `local`
+capability adds the messages below. Fixtures: `helper/fixtures/local.json`.
+
+**Starting a holder.** The app runs
+
+```
+aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes <n>] --detach
+```
+
+and reads one line from stdout: the holder's record (below). Exit 0 means the
+holder is running and listening. Exit 3 means a holder for that session is
+already running; it is left alone, and the app connects to it. Anything else
+failed, with a message on stderr, within 15 s; a holder that fails before it
+is ready says why, and `--detach` passes that on. `hold` without `--detach`
+exits the same way. `--away` is 1 to 86400 seconds, default 120;
+`--ring-bytes` 1 KiB to 64 MiB, default 2 MiB; a label is at most 128
+characters, none of them a control character. Each option is given at most
+once; an unknown one fails. `--detach` makes the store folder if it is missing
+(and checks it, as below), then starts the holder in it, with the store named
+by its full path, so the holder keeps no folder of the app's open.
+
+The holder runs in a new session (Unix `setsid`). On Windows it runs as a
+detached process outside the app's job when that job lets a process leave it;
+a job that does not keeps the holder inside it, and the holder then ends when
+the job does (`--detach` says so in a note on stderr). Nothing else tells the
+app whether a holder outlived it: list mode at start-up is the check.
+
+**Endpoint: only this user can connect.** No network socket is opened.
+
+- **Windows:** the named pipe `\\.\pipe\aicc-helper-<sid>-<32 hex>`. Its
+  security descriptor is `O:<the user's SID>D:P(A;;GA;;;<the user's SID>)`:
+  the current user owns it, and its list has one entry, that user, nothing
+  inherited. The owner counts as much as the list, since an owner may always
+  change the list. The first instance is made with
+  `FILE_FLAG_FIRST_PIPE_INSTANCE` (a name someone else made is never joined)
+  and every instance refuses remote clients. The holder keeps an instance
+  listening while it can, one that a client came to and left included. A
+  later instance takes on the pipe's descriptor, not its own, so the holder
+  joins a later instance only if the pipe's owner and its list are the
+  user's. The descriptor is the control. The holder never impersonates a
+  client. The helper's own client opens the pipe with
+  `SECURITY_IDENTIFICATION`; the app's client opens it at the level its
+  runtime chooses, which would matter only to a holder that impersonates.
+- **macOS and Linux:** the Unix socket `/tmp/aicc-<uid>/<sid>-<16 hex>.sock`,
+  at most 75 bytes (a 10-digit user id, a 32-character session id), under the
+  104 a socket path may have on macOS. The folder must be a real folder (not a
+  link) owned by the user and is set to exactly 0700; the socket is 0600 from
+  the moment it exists (it is bound under a umask of 0177). The holder serves
+  a connection only when the peer's user id is its own (`SO_PEERCRED` on
+  Linux, `getpeereid` on macOS; any other Unix serves none); one that is not is
+  closed before a byte is written.
+- **What a client checks before it writes anything.** On Unix, with `lstat`
+  (no link is followed): the folder is a folder, the user owns it, and its
+  mode has no bit for the group or others (`mode & 0o077` is 0); the socket is
+  a socket the user owns. The helper's own client also checks the peer's user
+  id; the app's client cannot read it, so it relies on the folder and on the
+  hello. On both OSes a client then reads the hello line and checks that it
+  carries the record's `nonce` and `session` before it sends its first frame;
+  a hello that does not marks a stale record, and the client closes without
+  writing.
+
+**The record.** `<store>/<sid>.json`, written whole (a temporary
+`<sid>.json.<pid>.tmp`, then a rename), 0600 in a 0700 store on Unix. Exactly
+these fields, in this order:
+
+| Field | Meaning |
+| --- | --- |
+| `v` | 1 |
+| `session`, `label` | the session id; the label given to `hold` |
+| `pid` | the holder's process id |
+| `endpoint` | the pipe or socket, of the shape above for this `session` |
+| `nonce` | 32 lower-case hex: what the holder's hello carries |
+| `helper` | the helper's version |
+| `started` | when the holder started, milliseconds since 1970 (UTC) |
+| `away` | the away clock, in seconds |
+| `attached` | whether a connection is attached to the terminal |
+| `child` | `waiting` (nothing launched), `running` or `exited` |
+| `code` | `null`, then the program's exit code once `child` is `exited` |
+
+Each field's range: `session` matches the session id pattern; `label` as
+above; `pid` 1 to 2^32 - 1; `helper` 1 to 64 characters, none a control
+character; `started` 0 to 2^53 - 1; `away` 1 to 86400; `code` a whole number
+from -2^31 to 2^32 - 1 (a Windows exit code is unsigned). A reader refuses a
+record with any other field set, a field of another type or out of range, or
+an endpoint that is not its session's. The record says where to connect; only
+the hello proves it: the app connects, and the hello must carry the record's
+`nonce` and `session`. `child` goes to `running` only from `waiting`, so an
+exit recorded first is never written over, and each write of `attached` says
+what is true at that moment.
+
+The store's lock file, `<store>/.lock`, is never removed. It is held with the
+OS's own file lock while a holder checks for a live holder of its session and
+writes its record, while list mode removes a stale record, and while a holder
+removes its own. So of two holders started for one session at the same moment
+one finds the other's record and live endpoint and exits, and list mode never
+removes a record that a new holder wrote in place of the stale one it asked
+about.
+
+**List mode.** `aicc-helper list --store <folder>` prints one line,
+`{"v":1,"sessions":[...],"removed":<n>,"skipped":<n>}`, fields in that order;
+`sessions` holds records, oldest `started` first, then by session id. This is
+a local command of its own: it takes no `--nonce` and prints no `AICC-RESULT`
+line, and the remote `list --nonce <n>` of section 4 is unchanged. A record
+whose holder process is not running, or whose endpoint has nothing on it or
+answers without the record's nonce, is stale: it is removed with its socket file
+and counted in `removed`, under the store's lock and only if the record is
+still the one it found stale. A file named like a record that is not a version
+1 record is left alone and counted in `skipped`. A temporary file older than
+60 s is removed. A holder that does not answer in time (2 s to connect, 3 s for
+the whole hello line) is kept and listed; so is one whose socket takes no more
+connections (a full backlog is a timeout, never "nothing there"). On Linux a
+refused connection means nothing listens. macOS refuses a connection to a full
+queue exactly as one to a socket with nothing on it, so there a refusal is
+tried again until the 2 s are up and then counts as no answer. On macOS and
+Windows, a record whose endpoint gives no answer is still stale when its
+process id now names a process that started more than 60 s after the record's
+`started`: a holder starts before it writes its record, so that id has been
+given to another process. A holder started for the session treats such a
+record the same way, and replaces it. Both OSes stamp a process with the time
+it started, and no later change to the clock moves that stamp. macOS gives it
+to any user for any process, root's included (the `kern.proc.pid` sysctl, as
+`ps` reads it). The 60 s allow for the clock being set back in the moment
+between a holder's start and its record. On macOS a process that got the id
+within those 60 s is not caught: the record stays listed, and a holder started
+for the session exits 3. macOS hands ids out in turn, so that is not likely.
+On Windows a crashed holder's pipe is gone, which is already stale. Linux does
+not use this rule. It gives a start only as ticks after the boot, and the boot
+time moves with every change to the clock, so after the clock is set forward a
+live holder could read as started after its own record. It does not need the
+rule either: a crashed holder's socket there is refused or missing, and both
+are stale. A missing store lists nothing and is not made.
+The app uses list mode at start-up, to attach every held terminal again, and
+for the Machines page.
+
+**A connection.** The holder first writes its hello line, then a line end:
+`caps` is `["core","local"]`, `session.state` is `new` before a launch and
+`live` after. The app's first frame must be a `hello.ack` with exactly `t`,
+`proto` and `caps`: `proto` 1, `caps` holding `core` and nothing the holder did
+not offer; `local` allows the messages below. A first frame that is raw, or
+JSON off channel 0, gets `bad-frame`; another type `unknown-type`, another
+version `proto-mismatch`, anything else `bad-field`; then the holder closes the
+connection. With no `hello.ack` in 10 s it sends `timeout` and
+closes; after that, with no frame from the app in 60 s it sends `timeout` and
+closes (the app pings every 15 s). Each limit is for the whole frame: one sent
+a byte at a time must still be whole in time. A frame's JSON is at most 4 KiB
+before the `hello.ack`, at most 64 KiB once the session is launched or a launch
+is under way, and otherwise 16 MiB as section 6 allows: a larger one is
+`bad-frame` and a close, refused on its header before its payload is read, and
+a payload's buffer grows only as its bytes arrive. At most 16 connections at
+once: the next one gets the hello, `busy`, and is closed. When the holder
+closes a connection after a last message (an `error`, `term.detached`,
+`term.ended`, `term.exit`), it stops writing first, so the app reads that
+message and then the end of the stream; the app then closes its end (the
+holder cuts the connection 2 s later regardless). A write that has not finished
+in 5 s closes the connection; the 5 s are for the whole message, however slowly
+the app reads it. A type the connection does not allow gets `unknown-type` and
+a close; 20 `bad-field` or `too-large` replies in 60 s are allowed, the next
+one closes.
+
+Which errors close the connection here (for the local transport this replaces
+the last column of section 8's table):
+
+| Error code | Closes |
+| --- | --- |
+| `bad-frame`, `unknown-type`, `proto-mismatch`, `replaced` | yes |
+| `timeout` | yes: no `hello.ack` in 10 s, or no frame in 60 s |
+| `bad-field` | yes for the first frame; otherwise no, within the budget of 20 in 60 s |
+| `too-large` | no, within that budget |
+| `busy` | yes when 16 connections are served already, the connection fell 256 chunks behind, or no thread could be started to carry its live output; no for typed input not taken or a second launch |
+| `not-found`, `not-connected`, `io` | no |
+
+| Type | Reply | Fields and rules |
+| --- | --- | --- |
+| `term.launch` | `term.launched` `{re, pid}` | `{id, argv, cwd, env, cols, rows}`; once per holder, then `busy`; a program that does not start gets `io`, and a later launch may try again; while the session is ending, `not-found` |
+| `term.attach` | `term.attached` `{re, from, ring_start, ring_end, truncated, running, code?}` | `{id, from}`; then the output from `from` on channel 1, then live output; before a launch, or while the session is ending, `not-found` |
+| `term.resize` | `term.resized` `{re}` | `{id, cols, rows}`; only the attached connection, else `not-connected` |
+| `term.detach` | `term.detached` `{re}` | `{id}`; only the attached connection, else `not-connected`; the holder then closes the connection and the session keeps running |
+| `term.end` | `term.ended` `{re, code?}` | `{id}`; ends the session's whole process tree, removes the record and the endpoint, and the holder exits; a `term.end` from another connection while the session is ending gets its own `term.ended` |
+| `term.exit` | none | `{code}`, from the holder to the attached connection, once: after the program's last output, and also when another connection ended the session, which then closes this one |
+
+Ids are even, as in section 9, and at most 2^53 - 1. Every message has exactly
+its fields; `code` is present only once the program has exited.
+
+- **Launch.** `argv` holds 1 to 256 strings of at most 8192 characters, none
+  with a NUL character; `argv[0]` is an absolute path (no search of `PATH`).
+  `cwd` is an absolute path of at most 4096 characters. `env` is an object of
+  strings and is the program's whole environment: nothing of the holder's own
+  is added, except `TERM=xterm-256color` on macOS and Linux when `env` has no
+  `TERM`. It has at most 1024 entries; a name is 1 to 255 characters with no
+  `=` or NUL character, a value at most 32767 characters with no NUL
+  character, and two names that differ only in case are refused on every OS.
+  `cols` and `rows` are whole numbers from 1 to 1000.
+- **Attach.** `from` is an offset in the output, as in section 11: past
+  `ring_end` is `bad-field`; older than the ring holds is answered from
+  `ring_start` with `truncated` true. Typed input goes to the holder as raw
+  frames on channel 1, accepted only from the attached connection: raw bytes on
+  any other connection or channel are `bad-frame` and a close. Typed input is
+  queued for the program and never waited on: while at most 64 frames of typed
+  input wait (the program has stopped reading), more gets `busy` and is not
+  taken. The program must never see input with a gap in it, so once one frame
+  is refused, every later raw frame on that connection is refused too, each
+  with a `busy` of its own, in order, until the app's next `ping`. The app
+  keeps each raw frame to at most 64 KiB, sends a `ping` after every 16 frames
+  or 1 MiB of typed input, and waits for its `pong` before it sends more.
+  When the `pong` comes, the number of `busy` replies before it is the number
+  of frames not taken, the last ones before the `ping`: the app sends them
+  again. When the stream ends before the `pong`, the app cannot tell which of
+  those frames were taken (a `busy` just before the end may be the one a
+  connection that fell behind gets, below, not a refusal of input). It sends
+  none of them again, so nothing is ever typed twice, and attaches again from
+  the last offset it saw: the replay shows what reached the program. A newer
+  attach, from any connection, takes the terminal: the older
+  connection gets `replaced` and is closed. An attach again on the same
+  connection drops what was still queued for the earlier one: after its reply
+  comes only the output from its `from`. Nothing live follows `term.detached`
+  or `term.ended`. A connection that falls 256 chunks behind the output gets
+  `busy` and is closed; it attaches again from the last offset it saw. After
+  the program has exited an attach still replays, with `running` false and
+  `code`, and nothing live follows.
+- **The whole tree.** On Windows the program starts suspended inside a job
+  object that ends every process in it when the job closes, so its children
+  are ended with it, even if the holder itself is killed. On macOS and Linux it
+  leads a new session and process group; ending sends hangup to that group and
+  to every other process in the session (a shell puts each job in a group of
+  its own), and kill after 2 s. A process that left the session itself (a
+  daemon that called setsid) is not reached, as a closed terminal would not
+  reach it. Once the program has been reaped and nothing is left in its
+  session (or all of it was sent a kill), the holder sends that session no
+  signal again: its id may by then name another process. When the program
+  exits on its own, the rest of its tree is ended the same way; that is a
+  choice, so that no process is left running with no terminal and no holder
+  to reach it. The holder stays, so the app can read the last output and the
+  exit code: it waits up to 2 s for the output that is still coming before it
+  reports the exit.
+- **The away clock.** With no connection attached, the holder ends its session
+  after `away` seconds, counted from its start, from each detach and from each
+  attached connection that drops. An attach stops the clock. The clock and an
+  attach or a launch are settled under one lock, so an attach at the moment the
+  clock runs out either stops it or gets `not-found`, never `term.attached` and
+  then the end. A holder that ends this way removes its record and its
+  endpoint, as `term.end` does.
+
+**Change.** The `hold` and `list` command lines and their exit codes, the
+record and the listing are frozen within version 1; new fields need a new
+record version or capability.

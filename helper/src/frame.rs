@@ -11,7 +11,10 @@
 //!
 //! Hard limits: JSON 1 MiB helper to app and 16 MiB app to helper; raw 64 KiB
 //! both ways; JSON depth 32. The reader refuses an oversize length before it
-//! allocates anything for it.
+//! allocates anything for it, and grows a payload's buffer only as its bytes
+//! arrive, so a length at the limit whose bytes never come costs nothing. A
+//! reader that knows only small messages can come holds JSON to a smaller
+//! limit (`read_frame_within`).
 
 use crate::json::{self, Value};
 use std::io::{self, Read};
@@ -23,6 +26,8 @@ pub const MIN_REST: u32 = 5;
 pub const MAX_JSON_HELPER_TO_APP: usize = 1024 * 1024;
 pub const MAX_JSON_APP_TO_HELPER: usize = 16 * 1024 * 1024;
 pub const MAX_RAW: usize = 64 * 1024;
+/// A payload's buffer starts at most this big and grows as its bytes arrive.
+const PAYLOAD_START: usize = 64 * 1024;
 
 pub const CODE_BAD_FRAME: &str = "bad-frame";
 pub const CODE_IO: &str = "io";
@@ -164,6 +169,14 @@ fn read_exact_or_eof<R: Read>(r: &mut R, buf: &mut [u8]) -> Result<bool, FrameEr
 
 /// Read one frame. `Ok(None)` is a clean end of the stream before a frame began.
 pub fn read_frame<R: Read>(r: &mut R, flow: Direction) -> Result<Option<Frame>, FrameError> {
+    read_frame_within(r, flow, flow.max_json())
+}
+
+/// Read one frame with its JSON held to `max_json` bytes, never more than
+/// `flow` allows. A raw frame keeps its own 64 KiB limit. A JSON frame over
+/// the limit is `bad-frame` on its header alone, before its payload is read.
+pub fn read_frame_within<R: Read>(r: &mut R, flow: Direction, max_json: usize) -> Result<Option<Frame>, FrameError> {
+    let max_json = max_json.min(flow.max_json());
     let mut len_bytes = [0u8; 4];
     if !read_exact_or_eof(r, &mut len_bytes)? {
         return Ok(None);
@@ -173,7 +186,7 @@ pub fn read_frame<R: Read>(r: &mut R, flow: Direction) -> Result<Option<Frame>, 
     if rest < MIN_REST {
         return Err(FrameError::BadFrame("length under 5"));
     }
-    let max_rest = MIN_REST as u64 + flow.max_json() as u64;
+    let max_rest = MIN_REST as u64 + max_json.max(MAX_RAW) as u64;
     if rest as u64 > max_rest {
         return Err(FrameError::BadFrame("length over the limit"));
     }
@@ -184,8 +197,10 @@ pub fn read_frame<R: Read>(r: &mut R, flow: Direction) -> Result<Option<Frame>, 
     let payload_len = (rest - MIN_REST) as usize;
     let body = match kind {
         KIND_JSON => {
-            let mut payload = vec![0u8; payload_len];
-            r.read_exact(&mut payload)?;
+            if payload_len > max_json {
+                return Err(FrameError::BadFrame("length over the limit"));
+            }
+            let payload = read_payload(r, payload_len)?;
             match json::parse(&payload) {
                 Ok(value) => Body::Json(value),
                 Err(json::JsonError::TooDeep) => return Err(FrameError::BadFrame("JSON deeper than 32")),
@@ -196,13 +211,21 @@ pub fn read_frame<R: Read>(r: &mut R, flow: Direction) -> Result<Option<Frame>, 
             if payload_len > MAX_RAW {
                 return Err(FrameError::BadFrame("raw payload over 64 KiB"));
             }
-            let mut payload = vec![0u8; payload_len];
-            r.read_exact(&mut payload)?;
-            Body::Raw(payload)
+            Body::Raw(read_payload(r, payload_len)?)
         }
         _ => return Err(FrameError::BadFrame("unknown kind")),
     };
     Ok(Some(Frame { channel, body }))
+}
+
+/// Exactly `len` bytes, the buffer growing as they arrive.
+fn read_payload<R: Read>(r: &mut R, len: usize) -> Result<Vec<u8>, FrameError> {
+    let mut payload = Vec::with_capacity(len.min(PAYLOAD_START));
+    r.by_ref().take(len as u64).read_to_end(&mut payload)?;
+    if payload.len() != len {
+        return Err(FrameError::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "stream ended inside a frame")));
+    }
+    Ok(payload)
 }
 
 /// Decode exactly one frame from `bytes`; bytes after it are an error.
@@ -308,6 +331,45 @@ mod tests {
         let mut bad = vec![0, 0, 0, 10, KIND_JSON, 0, 0, 0, 0];
         bad.extend_from_slice(b"{\"t\":");
         assert_eq!(decode(&bad, Direction::AppToHelper).unwrap_err().code(), CODE_BAD_FRAME);
+    }
+
+    /// A reader that notes the widest buffer it was handed.
+    struct Measured {
+        bytes: io::Cursor<Vec<u8>>,
+        widest: usize,
+    }
+
+    impl Read for Measured {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.widest = self.widest.max(buf.len());
+            self.bytes.read(buf)
+        }
+    }
+
+    #[test]
+    fn a_frame_whose_bytes_never_come_costs_only_what_came() {
+        // The most JSON an app may send is announced; ten bytes of it come, then the end.
+        let mut bytes = ((MIN_REST as usize + MAX_JSON_APP_TO_HELPER) as u32).to_be_bytes().to_vec();
+        bytes.extend_from_slice(&[KIND_JSON, 0, 0, 0, 0]);
+        bytes.extend_from_slice(b"[0,0,0,0,0");
+        let mut r = Measured { bytes: io::Cursor::new(bytes), widest: 0 };
+        assert_eq!(read_frame(&mut r, Direction::AppToHelper).unwrap_err().code(), CODE_IO);
+        assert!(r.widest <= PAYLOAD_START, "a buffer of {} bytes was made for the ten that came", r.widest);
+    }
+
+    #[test]
+    fn a_reader_may_hold_json_to_a_smaller_limit_and_raw_keeps_its_own() {
+        let small = 4096;
+        // A JSON string of 4096 x's is 4098 bytes with its quotes.
+        let bytes = encode(&Frame::json(0, Value::str(&"x".repeat(small))), Direction::AppToHelper).unwrap();
+        let header_only = read_frame_within(&mut io::Cursor::new(&bytes[..9]), Direction::AppToHelper, small).unwrap_err();
+        assert_eq!(header_only.code(), CODE_BAD_FRAME, "refused on the header, before its payload");
+        assert!(read_frame_within(&mut io::Cursor::new(&bytes[..]), Direction::AppToHelper, small + 2).unwrap().is_some());
+        let raw = encode(&Frame::raw(1, vec![0; MAX_RAW]), Direction::AppToHelper).unwrap();
+        assert!(read_frame_within(&mut io::Cursor::new(&raw[..]), Direction::AppToHelper, small).unwrap().is_some(), "a whole raw frame under a small JSON limit");
+        // Never more than the direction allows.
+        let over = ((MIN_REST as usize + MAX_JSON_HELPER_TO_APP + 1) as u32).to_be_bytes();
+        assert_eq!(read_frame_within(&mut io::Cursor::new(&over[..]), Direction::HelperToApp, usize::MAX).unwrap_err().code(), CODE_BAD_FRAME);
     }
 
     #[test]

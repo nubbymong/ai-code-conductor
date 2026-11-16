@@ -1,0 +1,1233 @@
+{
+  "_doc": "Local transport vectors for docs/remote/helper-protocol.md section 15. Read by helper/tests/fixtures.rs and tests/unit/scripts/helper-fixtures.test.ts. A vector tagged os applies on that OS only (windows, or unix for macOS and Linux); untagged ones apply on every OS. Requests are read as a connection that acked local reads them; a record or listing that is valid re-encodes to the same bytes.",
+  "version": 1,
+  "caps": [
+    "core",
+    "local"
+  ],
+  "limits": {
+    "argv_items": 256,
+    "arg_chars": 8192,
+    "cwd_chars": 4096,
+    "env_entries": 1024,
+    "env_name_chars": 255,
+    "env_value_chars": 32767,
+    "term_cells": 1000,
+    "max_safe_integer": 9007199254740991,
+    "label_chars": 128,
+    "away_default_secs": 120,
+    "away_max_secs": 86400,
+    "connections": 16,
+    "ack_timeout_secs": 10,
+    "idle_timeout_secs": 60,
+    "write_timeout_secs": 5,
+    "refusals_per_minute": 20,
+    "terminal_channel": 1,
+    "endpoint_random_hex": {
+      "windows": 32,
+      "unix": 16
+    }
+  },
+  "record_fields": [
+    "v",
+    "session",
+    "label",
+    "pid",
+    "endpoint",
+    "nonce",
+    "helper",
+    "started",
+    "away",
+    "attached",
+    "child",
+    "code"
+  ],
+  "child_states": [
+    "waiting",
+    "running",
+    "exited"
+  ],
+  "endpoint": {
+    "sid": "sess-0001",
+    "windows": {
+      "valid": [
+        "\\\\.\\pipe\\aicc-helper-sess-0001-0123456789abcdef0123456789abcdef"
+      ],
+      "invalid": [
+        "\\\\.\\pipe\\aicc-helper-sess-0001-0123456789ABCDEF0123456789ABCDEF",
+        "\\\\.\\pipe\\aicc-helper-sess-0001-123456789abcdef0123456789abcdef",
+        "\\\\.\\pipe\\aicc-helper-sess-0001-0123456789abcdef0123456789abcdef0",
+        "\\\\.\\pipe\\aicc-helper-sess-0002-0123456789abcdef0123456789abcdef",
+        "\\\\server\\pipe\\aicc-helper-sess-0001-0123456789abcdef0123456789abcdef",
+        "\\\\.\\pipe\\aicc-helper-sess-00010123456789abcdef0123456789abcdef",
+        "\\\\.\\pipe\\aicc-helper-sess-0001-0123456789abcdef0123456789abcdef\\x",
+        "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock"
+      ]
+    },
+    "unix": {
+      "valid": [
+        "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+        "/tmp/aicc-0/sess-0001-fedcba9876543210.sock",
+        "/tmp/aicc-4294967295/sess-0001-0123456789abcdef.sock"
+      ],
+      "invalid": [
+        "/tmp/aicc-/sess-0001-0123456789abcdef.sock",
+        "/tmp/aicc-12345678901/sess-0001-0123456789abcdef.sock",
+        "/tmp/aicc-10x0/sess-0001-0123456789abcdef.sock",
+        "/var/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+        "/tmp/aicc-1000/sess-0001-0123456789abcde.sock",
+        "/tmp/aicc-1000/sess-0001-0123456789ABCDEF.sock",
+        "/tmp/aicc-1000/sess-0002-0123456789abcdef.sock",
+        "/tmp/aicc-1000/sess-0001-0123456789abcdef.sockx",
+        "/tmp/aicc-1000/sub/sess-0001-0123456789abcdef.sock",
+        "\\\\.\\pipe\\aicc-helper-sess-0001-0123456789abcdef0123456789abcdef"
+      ]
+    }
+  },
+  "requests": {
+    "valid": [
+      {
+        "name": "ping",
+        "json": "{\"t\":\"ping\",\"id\":2}",
+        "expect": {
+          "type": "ping",
+          "id": 2
+        }
+      },
+      {
+        "name": "ping with id 0",
+        "json": "{\"t\":\"ping\",\"id\":0}",
+        "expect": {
+          "type": "ping",
+          "id": 0
+        }
+      },
+      {
+        "name": "an error from the app",
+        "json": "{\"t\":\"error\",\"code\":\"io\",\"text\":\"the view closed\"}",
+        "expect": {
+          "type": "error"
+        }
+      },
+      {
+        "name": "an error from the app with re",
+        "json": "{\"t\":\"error\",\"re\":3,\"code\":\"timeout\",\"text\":\"\"}",
+        "expect": {
+          "type": "error"
+        }
+      },
+      {
+        "name": "launch on macOS or Linux",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":4,\"argv\":[\"/usr/bin/env\",\"bash\",\"-l\"],\"cwd\":\"/home/user/project\",\"env\":{\"HOME\":\"/home/user\",\"PATH\":\"/usr/bin:/bin\",\"EMPTY\":\"\",\"EQ\":\"a=b\"},\"cols\":120,\"rows\":40}",
+        "expect": {
+          "type": "term.launch",
+          "id": 4,
+          "argv": [
+            "/usr/bin/env",
+            "bash",
+            "-l"
+          ],
+          "cwd": "/home/user/project",
+          "env": [
+            [
+              "HOME",
+              "/home/user"
+            ],
+            [
+              "PATH",
+              "/usr/bin:/bin"
+            ],
+            [
+              "EMPTY",
+              ""
+            ],
+            [
+              "EQ",
+              "a=b"
+            ]
+          ],
+          "cols": 120,
+          "rows": 40
+        }
+      },
+      {
+        "name": "launch on Windows",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":6,\"argv\":[\"C:\\\\Program Files\\\\Git\\\\bin\\\\bash.exe\",\"--login\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"Path\":\"C:\\\\Windows\\\\System32\",\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24}",
+        "expect": {
+          "type": "term.launch",
+          "id": 6,
+          "argv": [
+            "C:\\Program Files\\Git\\bin\\bash.exe",
+            "--login"
+          ],
+          "cwd": "C:\\Users\\user\\project",
+          "env": [
+            [
+              "Path",
+              "C:\\Windows\\System32"
+            ],
+            [
+              "SystemRoot",
+              "C:\\Windows"
+            ]
+          ],
+          "cols": 80,
+          "rows": 24
+        }
+      },
+      {
+        "name": "launch with an empty environment",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":8,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/\",\"env\":{},\"cols\":1,\"rows\":1000}",
+        "expect": {
+          "type": "term.launch",
+          "id": 8,
+          "argv": [
+            "/usr/bin/env"
+          ],
+          "cwd": "/",
+          "env": [],
+          "cols": 1,
+          "rows": 1000
+        }
+      },
+      {
+        "name": "launch with 256 arguments, the most allowed",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":10,\"argv\":[\"/usr/bin/env\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\"],\"cwd\":\"/home/user/project\",\"env\":{},\"cols\":80,\"rows\":24}",
+        "expect": {
+          "type": "term.launch",
+          "id": 10,
+          "argv": [
+            "/usr/bin/env",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a"
+          ],
+          "cwd": "/home/user/project",
+          "env": [],
+          "cols": 80,
+          "rows": 24
+        }
+      },
+      {
+        "name": "attach from 0",
+        "json": "{\"t\":\"term.attach\",\"id\":12,\"from\":0}",
+        "expect": {
+          "type": "term.attach",
+          "id": 12,
+          "from": 0
+        }
+      },
+      {
+        "name": "attach from 2^53 - 1",
+        "json": "{\"t\":\"term.attach\",\"id\":14,\"from\":9007199254740991}",
+        "expect": {
+          "type": "term.attach",
+          "id": 14,
+          "from": 9007199254740991
+        }
+      },
+      {
+        "name": "resize",
+        "json": "{\"t\":\"term.resize\",\"id\":16,\"cols\":1000,\"rows\":1}",
+        "expect": {
+          "type": "term.resize",
+          "id": 16,
+          "cols": 1000,
+          "rows": 1
+        }
+      },
+      {
+        "name": "detach",
+        "json": "{\"t\":\"term.detach\",\"id\":18}",
+        "expect": {
+          "type": "term.detach",
+          "id": 18
+        }
+      },
+      {
+        "name": "end",
+        "json": "{\"t\":\"term.end\",\"id\":9007199254740990}",
+        "expect": {
+          "type": "term.end",
+          "id": 9007199254740990
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "name": "an unknown type",
+        "json": "{\"t\":\"term.bogus\",\"id\":2}",
+        "error": "unknown-type"
+      },
+      {
+        "name": "a message of the remote protocol",
+        "json": "{\"t\":\"session.start\",\"id\":2}",
+        "error": "unknown-type"
+      },
+      {
+        "name": "no t",
+        "json": "{\"id\":2}",
+        "error": "bad-field"
+      },
+      {
+        "name": "not an object",
+        "json": "[]",
+        "error": "bad-field"
+      },
+      {
+        "name": "an odd id",
+        "json": "{\"t\":\"ping\",\"id\":3}",
+        "error": "bad-field"
+      },
+      {
+        "name": "an id over 2^53 - 1",
+        "json": "{\"t\":\"ping\",\"id\":9007199254740994}",
+        "error": "bad-field"
+      },
+      {
+        "name": "an id that is not whole",
+        "json": "{\"t\":\"ping\",\"id\":2.5}",
+        "error": "bad-field"
+      },
+      {
+        "name": "a negative id",
+        "json": "{\"t\":\"ping\",\"id\":-2}",
+        "error": "bad-field"
+      },
+      {
+        "name": "an extra field",
+        "json": "{\"t\":\"ping\",\"id\":2,\"x\":1}",
+        "error": "bad-field"
+      },
+      {
+        "name": "a missing field",
+        "json": "{\"t\":\"term.attach\",\"id\":2}",
+        "error": "bad-field"
+      },
+      {
+        "name": "an error from the app with an empty code",
+        "json": "{\"t\":\"error\",\"code\":\"\",\"text\":\"x\"}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with no arguments",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[],\"cwd\":\"/home/user/project\",\"env\":{},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with 257 arguments",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\",\"a\"],\"cwd\":\"/home/user/project\",\"env\":{},\"cols\":80,\"rows\":24}",
+        "error": "too-large"
+      },
+      {
+        "name": "launch with an argument over 8192 characters",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"],\"cwd\":\"/home/user/project\",\"env\":{},\"cols\":80,\"rows\":24}",
+        "error": "too-large"
+      },
+      {
+        "name": "launch with an argument that is not a string",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\",1],\"cwd\":\"/home/user/project\",\"env\":{},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with a NUL in an argument",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\",\"a\\u0000b\"],\"cwd\":\"/home/user/project\",\"env\":{},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch of a program by name, not path, on macOS or Linux",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"bash\"],\"cwd\":\"/home/user/project\",\"env\":{},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch of a program by name, not path, on Windows",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"bash.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch of a Unix path on Windows",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch in a relative folder",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"project\",\"env\":{},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch in a folder over 4096 characters",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"env\":{},\"cols\":80,\"rows\":24}",
+        "error": "too-large"
+      },
+      {
+        "name": "launch with env as an array",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/home/user/project\",\"env\":[],\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with an empty variable name",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/home/user/project\",\"env\":{\"\":\"x\"},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with = in a variable name",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/home/user/project\",\"env\":{\"A=B\":\"x\"},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with a variable name over 255 characters",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/home/user/project\",\"env\":{\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\":\"x\"},\"cols\":80,\"rows\":24}",
+        "error": "too-large"
+      },
+      {
+        "name": "launch with a value that is not a string",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/home/user/project\",\"env\":{\"A\":1},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with a NUL in a value",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/home/user/project\",\"env\":{\"A\":\"a\\u0000\"},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with two names that differ only in case",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/home/user/project\",\"env\":{\"Path\":\"a\",\"PATH\":\"b\"},\"cols\":80,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with 0 columns",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/home/user/project\",\"env\":{},\"cols\":0,\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with 1001 rows",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/home/user/project\",\"env\":{},\"cols\":80,\"rows\":1001}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with columns as a string",
+        "os": "unix",
+        "json": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\"],\"cwd\":\"/home/user/project\",\"env\":{},\"cols\":\"80\",\"rows\":24}",
+        "error": "bad-field"
+      },
+      {
+        "name": "attach from a negative offset",
+        "json": "{\"t\":\"term.attach\",\"id\":2,\"from\":-1}",
+        "error": "bad-field"
+      },
+      {
+        "name": "attach from 2^53",
+        "json": "{\"t\":\"term.attach\",\"id\":2,\"from\":9007199254740992}",
+        "error": "bad-field"
+      },
+      {
+        "name": "resize with no rows",
+        "json": "{\"t\":\"term.resize\",\"id\":2,\"cols\":80}",
+        "error": "bad-field"
+      }
+    ]
+  },
+  "launch_frame": {
+    "flow": "app_to_helper",
+    "hex": "000000a000000000007b2274223a227465726d2e6c61756e6368222c226964223a322c2261726776223a5b222f7573722f62696e2f656e76222c2262617368225d2c22637764223a222f686f6d652f757365722f70726f6a656374222c22656e76223a7b22484f4d45223a222f686f6d652f75736572222c2250415448223a222f7573722f62696e3a2f62696e227d2c22636f6c73223a38302c22726f7773223a32347d",
+    "payload_text": "{\"t\":\"term.launch\",\"id\":2,\"argv\":[\"/usr/bin/env\",\"bash\"],\"cwd\":\"/home/user/project\",\"env\":{\"HOME\":\"/home/user\",\"PATH\":\"/usr/bin:/bin\"},\"cols\":80,\"rows\":24}"
+  },
+  "records": {
+    "valid": [
+      {
+        "name": "a running session",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "nothing launched yet, no label, detached",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 86400,
+          "attached": false,
+          "child": "waiting",
+          "code": null
+        }
+      },
+      {
+        "name": "an exited session",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 1,
+          "attached": false,
+          "child": "exited",
+          "code": 3
+        }
+      },
+      {
+        "name": "a Windows session ended by Ctrl+C",
+        "os": "windows",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "\\\\.\\pipe\\aicc-helper-sess-0001-0123456789abcdef0123456789abcdef",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "exited",
+          "code": -1073741510
+        }
+      },
+      {
+        "name": "a Windows exit code read as unsigned",
+        "os": "windows",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "\\\\.\\pipe\\aicc-helper-sess-0001-0123456789abcdef0123456789abcdef",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "exited",
+          "code": 4294967295
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "name": "a missing field",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running"
+        }
+      },
+      {
+        "name": "an extra field",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null,
+          "x": 1
+        }
+      },
+      {
+        "name": "version 2",
+        "os": "unix",
+        "record": {
+          "v": 2,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a session id that breaks its pattern",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "bad id",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a label over 128 characters",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a label with a control character",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "a\nb",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "process id 0",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 0,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a process id over 2^32 - 1",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4294967296,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "another session's socket",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0002-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a socket outside the run folder",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/var/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a Windows pipe on macOS or Linux",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "\\\\.\\pipe\\aicc-helper-sess-0001-0123456789abcdef0123456789abcdef",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a Unix socket on Windows",
+        "os": "windows",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "an upper-case nonce",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789ABCDEF0123456789ABCDEF",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "no helper version",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a start time over 2^53 - 1",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 9007199254740992,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "an away clock of 0",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 0,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "an away clock over a day",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 86401,
+          "attached": true,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "attached as a string",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": "yes",
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "an unknown child state",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "dead",
+          "code": null
+        }
+      },
+      {
+        "name": "an exit code while running",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "running",
+          "code": 0
+        }
+      },
+      {
+        "name": "no exit code once exited",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "exited",
+          "code": null
+        }
+      },
+      {
+        "name": "an exit code that is not whole",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "attached": true,
+          "child": "exited",
+          "code": 1.5
+        }
+      }
+    ]
+  },
+  "listing": {
+    "valid": [
+      {
+        "name": "nothing held",
+        "line": "{\"v\":1,\"sessions\":[],\"removed\":0,\"skipped\":0}"
+      },
+      {
+        "name": "two sessions, one stale record removed",
+        "os": "unix",
+        "line": "{\"v\":1,\"sessions\":[{\"v\":1,\"session\":\"sess-0001\",\"label\":\"Terminal 1\",\"pid\":4242,\"endpoint\":\"/tmp/aicc-1000/sess-0001-0123456789abcdef.sock\",\"nonce\":\"0123456789abcdef0123456789abcdef\",\"helper\":\"0.1.0\",\"started\":1763251200000,\"away\":120,\"attached\":false,\"child\":\"running\",\"code\":null},{\"v\":1,\"session\":\"sess-0002\",\"label\":\"Terminal 1\",\"pid\":4242,\"endpoint\":\"/tmp/aicc-1000/sess-0002-fedcba9876543210.sock\",\"nonce\":\"0123456789abcdef0123456789abcdef\",\"helper\":\"0.1.0\",\"started\":1763251260000,\"away\":120,\"attached\":false,\"child\":\"exited\",\"code\":0}],\"removed\":1,\"skipped\":2}"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "fields out of order",
+        "line": "{\"v\":1,\"removed\":0,\"sessions\":[],\"skipped\":0}"
+      },
+      {
+        "name": "version 2",
+        "line": "{\"v\":2,\"sessions\":[],\"removed\":0,\"skipped\":0}"
+      },
+      {
+        "name": "a missing count",
+        "line": "{\"v\":1,\"sessions\":[],\"removed\":0}"
+      },
+      {
+        "name": "a session that does not read",
+        "os": "unix",
+        "line": "{\"v\":1,\"sessions\":[{\"v\":1,\"session\":\"sess-0001\",\"label\":\"Terminal 1\",\"pid\":4242,\"endpoint\":\"/tmp/aicc-1000/sess-0001-0123456789abcdef.sock\",\"nonce\":\"0123456789abcdef0123456789abcdef\",\"helper\":\"0.1.0\",\"started\":1763251200000,\"away\":0,\"attached\":true,\"child\":\"running\",\"code\":null}],\"removed\":0,\"skipped\":0}"
+      }
+    ]
+  }
+}

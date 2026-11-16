@@ -3,9 +3,11 @@
 //! mocks cannot show, so it runs on every OS in CI.
 
 use aicc_helper::holder::Holder;
-use aicc_helper::pty::PtySize;
+use aicc_helper::pids;
+use aicc_helper::pty::{PtySize, SpawnOptions};
 use aicc_helper::ring::RingError;
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::Arc;
 use std::time::Duration;
 
 const FAKE: &str = env!("CARGO_BIN_EXE_aicc-fake-cli");
@@ -161,36 +163,137 @@ fn a_terminal_can_be_resized_and_a_missing_program_is_an_error() {
     assert!(Holder::start(&[], PtySize::default(), 1024).is_err());
 }
 
-#[test]
-fn the_mirror_writes_what_the_ring_held_before_it_attached_then_the_live_output() {
-    let h = start(64 * 1024);
-    // The banner is in the ring BEFORE the mirror attaches: this is the window
-    // a holder is in between starting the child and attaching its mirror.
-    assert!(h.wait_for_text("FAKE-CLI READY", WAIT), "banner never arrived");
-    let out = std::env::temp_dir().join(format!("aicc-helper-mirror-{}.bin", std::process::id()));
-    let _ = std::fs::remove_file(&out);
-    let attachment = h.attach(0).expect("attach");
-    assert!(text(&attachment.replay.bytes).contains("FAKE-CLI READY"), "the banner must be in the replay, not the live stream");
-    let mirror = aicc_helper::dirhold::start_mirror(attachment, &out, 64 * 1024).expect("start the mirror");
-    h.write_input(b"after-attach\r").expect("type");
-    let deadline = std::time::Instant::now() + WAIT;
-    let mut written = String::new();
+/// True once `pid` is no longer running, within `within`.
+fn gone(pid: u32, within: Duration) -> bool {
+    let deadline = std::time::Instant::now() + within;
     while std::time::Instant::now() < deadline {
-        written = text(&std::fs::read(&out).unwrap_or_default());
-        if written.contains("echo: after-attach") {
-            break;
+        if !pids::alive(pid) {
+            return true;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    // A Windows terminal may print setup escapes before the banner, so the order is checked, not the first byte.
-    let banner_at = written.find("FAKE-CLI READY");
-    assert!(banner_at.is_some(), "out.bin lost the banner that was in the ring before the mirror attached: {written:?}");
-    assert!(written.contains("echo: after-attach"), "live output missing: {written:?}");
-    assert!(banner_at < written.find("echo: after-attach"), "the banner must come before the live output: {written:?}");
-    assert_eq!(written.matches("FAKE-CLI READY").count(), 1, "the banner was written twice: {written:?}");
+    !pids::alive(pid)
+}
+
+/// Have the fake CLI start a sleeping copy of itself; its process id.
+fn start_grandchild(h: &Holder) -> u32 {
+    start_grandchild_with(h, "spawn-grandchild")
+}
+
+/// The same, with the fake CLI command `command`.
+fn start_grandchild_with(h: &Holder, command: &str) -> u32 {
+    h.write_input(format!("{command}\r").as_bytes()).expect("type");
+    assert!(h.wait_for_text("grandchild: ", WAIT), "the fake CLI never started its grandchild");
+    let all = text(&h.snapshot());
+    let at = all.find("grandchild: ").expect("the line") + "grandchild: ".len();
+    let digits: String = all[at..].chars().take_while(char::is_ascii_digit).collect();
+    let pid: u32 = digits.parse().unwrap_or_else(|_| panic!("no process id after grandchild: {all:?}"));
+    assert!(pids::alive(pid), "the grandchild is not running");
+    pid
+}
+
+#[test]
+fn ending_the_session_ends_the_whole_tree() {
+    let h = start(64 * 1024);
+    assert!(h.wait_for_text("FAKE-CLI READY", WAIT));
+    let grandchild = start_grandchild(&h);
+    let child = h.child_pid();
+    assert!(h.end().is_some(), "no exit code after the end");
+    assert!(gone(child, WAIT), "the first process outlived the end");
+    assert!(gone(grandchild, WAIT), "the grandchild outlived the end of its session");
+}
+
+/// A shell puts each job in a process group of its own, in the same session;
+/// a job may also ignore the hangup. Ending the session still ends it.
+#[cfg(unix)]
+#[test]
+fn ending_the_session_ends_a_job_in_a_process_group_of_its_own() {
+    let h = start(64 * 1024);
+    assert!(h.wait_for_text("FAKE-CLI READY", WAIT));
+    let job = start_grandchild_with(&h, "spawn-own-group");
+    assert!(h.end().is_some(), "no exit code after the end");
+    assert!(gone(job, WAIT), "a job in its own process group, deaf to hangups, outlived the end of its session");
+}
+
+#[test]
+fn input_the_program_never_reads_is_refused_and_never_holds_up_the_end() {
+    // A program that never reads its input.
+    let argv = [FAKE.to_string(), "--sleep".to_string(), "600".to_string()];
+    let h = Arc::new(Holder::start(&argv, PtySize::default(), 64 * 1024).expect("the fake CLI starts on a terminal"));
+    // Whole lines, so a terminal keeps them for a reader instead of
+    // dropping an over-long line.
+    let lines = format!("{}\r", "a".repeat(99)).repeat(160);
+    let writer = Arc::clone(&h);
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut refused = 0usize;
+        for _ in 0..128 {
+            match writer.write_input(lines.as_bytes()) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => refused += 1,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("{e:?}")));
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(Ok(refused));
+    });
+    let refused = rx.recv_timeout(Duration::from_secs(10)).expect("typing waited for a program that does not read").expect("typing failed");
+    // Linux holds up a terminal's writer once the unread input fills the
+    // terminal, so there the queue fills and the rest is refused.
+    #[cfg(target_os = "linux")]
+    assert!(refused > 0, "two megabytes of unread input were all taken");
+    let _ = refused;
+    let ender = Arc::clone(&h);
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(ender.end());
+    });
+    let code = rx.recv_timeout(WAIT).expect("the end waited behind input the program never read");
+    assert!(code.is_some(), "no exit code after the end");
+}
+
+#[test]
+fn when_the_first_process_exits_the_rest_of_its_tree_goes_with_it() {
+    let h = start(64 * 1024);
+    assert!(h.wait_for_text("FAKE-CLI READY", WAIT));
+    // On Unix the plain grandchild shares the first process's group, which a
+    // closed terminal's hangup reaches anyway; a job of its own, deaf to
+    // hangups, is reached only by ending the whole session.
+    #[cfg(unix)]
+    let grandchild = start_grandchild_with(&h, "spawn-own-group");
+    #[cfg(windows)]
+    let grandchild = start_grandchild(&h);
+    h.write_input(b"exit 4\r").expect("type");
+    assert_eq!(h.wait_exit(WAIT), Some(4));
+    assert!(gone(grandchild, WAIT), "the grandchild outlived the first process");
+}
+
+#[test]
+fn a_launch_gets_its_folder_and_exactly_its_own_environment() {
+    let dir = std::env::temp_dir().join(format!("aicc-hold-cwd-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a folder");
+    let dir_name = dir.file_name().unwrap().to_string_lossy().into_owned();
+    // Keep what a program needs to start; leave out one other variable of
+    // this process, which the child must then not have.
+    let keep = ["PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE", "COMSPEC", "TERM"];
+    let vars: Vec<(String, String)> = std::env::vars().filter(|(k, _)| !k.is_empty() && !k.contains('=')).collect();
+    let dropped = vars.iter().map(|(k, _)| k.clone()).find(|k| !keep.contains(&k.to_uppercase().as_str())).expect("a variable to leave out");
+    let mut env: Vec<(String, String)> = vars.into_iter().filter(|(k, _)| *k != dropped).collect();
+    env.push(("AICC_TEST_VALUE".to_string(), "hello-env".to_string()));
+    let argv = vec![FAKE.to_string()];
+    let dir_text = dir.to_string_lossy().into_owned();
+    let opts = SpawnOptions { argv: argv.as_slice(), cwd: Some(dir_text.as_str()), env: Some(env.as_slice()), size: PtySize { cols: 250, rows: 24 } };
+    let h = Holder::start_with(&opts, 64 * 1024).expect("the fake CLI starts with a folder and an environment");
+    assert!(h.wait_for_text("FAKE-CLI READY", WAIT));
+    h.write_input(b"pwd\r").expect("type");
+    assert!(h.wait_for_text(&dir_name, WAIT), "the child is not in its folder: {:?}", text(&h.snapshot()));
+    h.write_input(b"env AICC_TEST_VALUE\r").expect("type");
+    assert!(h.wait_for_text("env AICC_TEST_VALUE=hello-env", WAIT), "the child lacks the launch's variable: {:?}", text(&h.snapshot()));
+    h.write_input(format!("env {dropped}\r").as_bytes()).expect("type");
+    assert!(h.wait_for_text(&format!("env {dropped} unset"), WAIT), "the child has a variable the launch left out: {:?}", text(&h.snapshot()));
     h.kill();
     drop(h);
-    // Not joined: on Windows the output ends only when the pseudoconsole closes.
-    drop(mirror);
-    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_dir_all(&dir);
 }
