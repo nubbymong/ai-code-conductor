@@ -46,8 +46,8 @@
       "reason": "Reads and parses source files only: the process calls the rules see are text inside its self-test strings, never run. No process starts."
     },
     {
-      "path": "tests/unit/scripts/helper-not-shipped.test.ts",
-      "reason": "Runs read-only git (check-ignore) against this checkout to see which helper files a rule ignores; changes nothing, makes no link and no folder."
+      "path": "tests/unit/scripts/helper-packaging.test.ts",
+      "reason": "Runs read-only git (check-ignore) against this checkout to see which helper files a rule ignores, and reads package.json and the release workflow; changes nothing, makes no link and no folder."
     },
     {
       "path": "tests/unit/scripts/mjs-eol.test.ts",

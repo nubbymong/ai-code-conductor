@@ -9,12 +9,13 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "package": "electron-vite build && electron-builder --win --dir --config.npmRebuild=false",
-    "package:win": "electron-vite build && electron-builder --win --config.npmRebuild=false",
+    "package": "electron-vite build && electron-builder --win --dir --config.npmRebuild=false && npm run verify:helper",
+    "package:win": "electron-vite build && electron-builder --win --config.npmRebuild=false && npm run verify:helper",
     "package:store": "electron-vite build && electron-builder --win appx --config.npmRebuild=false",
-    "package:mac": "electron-vite build && electron-builder --mac",
-    "package:linux": "electron-vite build && electron-builder --linux",
+    "package:mac": "electron-vite build && electron-builder --mac && npm run verify:helper",
+    "package:linux": "electron-vite build && electron-builder --linux && npm run verify:helper",
     "verify:package": "node scripts/verify-native-unpack.mjs",
+    "verify:helper": "node scripts/verify-bundled-helper.mjs",
     "test": "vitest run && npm run test:unit:native && npx playwright test",
     "test:unit": "vitest run",
     "test:unit:native": "node scripts/run-native-tests.mjs",
@@ -148,7 +149,13 @@
         ],
         "rfc3161TimeStampServer": "http://ts.ssl.com",
         "publisherName": "Nicholas Moger"
-      }
+      },
+      "extraResources": [
+        {
+          "from": "helper/target/release/aicc-helper.exe",
+          "to": "helper/aicc-helper.exe"
+        }
+      ]
     },
     "mac": {
       "executableName": "AI Code Conductor",
@@ -167,7 +174,13 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": true
+      "notarize": true,
+      "extraResources": [
+        {
+          "from": "helper/target/release/aicc-helper",
+          "to": "helper/aicc-helper"
+        }
+      ]
     },
     "linux": {
       "target": [
@@ -179,7 +192,13 @@
         }
       ],
       "category": "Development",
-      "artifactName": "AI-Code-Conductor-${version}-linux-${arch}.${ext}"
+      "artifactName": "AI-Code-Conductor-${version}-linux-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "helper/target/release/aicc-helper",
+          "to": "helper/aicc-helper"
+        }
+      ]
     },
     "dmg": {
       "sign": false,

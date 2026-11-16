@@ -280,7 +280,13 @@ export default function App() {
   // Settings, Accounts "Go to <session>" (P3.2, design 5.3): a refused
   // inactivate, archive or removal names the sessions holding the account;
   // each one's button brings its tab forward. A stale id is a no-op.
-  useEffect(() => listenGoToSession(() => setView('sessions')), [])
+  // The Machines page's Re-attach of a partner terminal shows that partner.
+  useEffect(() => listenGoToSession((id, opts) => {
+    setView('sessions')
+    if (!opts.partner) return
+    setPartnerActive((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
+    setPartnerEverActivated((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
+  }), [])
 
   const [showGuidedConfig, setShowGuidedConfig] = useState(false)
   /** The provider card the first-config dialog opens on. Set only by Hello

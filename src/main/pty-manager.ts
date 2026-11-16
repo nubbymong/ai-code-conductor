@@ -20,8 +20,8 @@ import {
 } from '../shared/container-command'
 import { SSH_ENTRY, type SshEntryFailureReason } from '../shared/ssh-entry'
 import type { SshRuntime, DetachedRemoteLiveness, SshEndRemoteOutcome, SshEndRemoteResult, SubmitTextResult, AskConductorNotice } from '../shared/types'
-import type { RealmOwnership, ProviderId } from '../shared/providers'
-import { isProviderId } from '../shared/providers'
+import { isProviderId, type RealmOwnership, type ProviderId } from '../shared/providers'
+import { spawnPlainPty, whenHeldKnown } from './session-helper/manager'
 import { IPC } from '../shared/ipc-channels'
 import { codexPromptKeeps } from '../shared/codex-screen'
 import { askConductorProjectDocMaxBytes } from './help-workspace'
@@ -2795,7 +2795,7 @@ function spawnPtyResolved(
     cols?: number
     rows?: number
     ssh?: SSHOptions
-    shellOnly?: boolean
+    shellOnly?: boolean; plainTerminal?: boolean // plainTerminal: a Terminal only tab or a partner terminal, which the session helper may carry
     /** Terminal-only launcher: command + args run once when the shell opens.
      *  `noCommandSecrets` marks the install or update tab the app opens to run
      *  its own line (openCommandTerminal). */
@@ -6740,7 +6740,7 @@ function spawnPtyResolved(
     if (shellOnly) {
       logInfo(`[pty-manager] Launching shell-only PTY: ${spawnCmd} ${spawnArgs.join(' ')} cwd=${describePathForLog(resolvedCwd)}${options?.elevated ? ' (elevated)' : ''}`)
 
-      ptyProcess = pty.spawn(spawnCmd, spawnArgs, {
+      ptyProcess = spawnPlainPty({ sessionId, elevated: (options?.elevated ?? options?.terminalOptions?.elevated) === true, plain: options?.plainTerminal === true }, spawnCmd, spawnArgs, {
         name: 'xterm-256color',
         cols,
         rows,
@@ -6776,7 +6776,7 @@ function spawnPtyResolved(
       // only into a sh-family shell. The tab's shell is the user's own login
       // shell (localSessionShell, as Alt+V classifies it; an elevated tab runs
       // the same shell under sudo); any other shell gets no line and starts in
-      // the folder anyway, the PTY's own working folder.
+      // the folder anyway, the PTY's own working folder. A held terminal this tab took over (the session helper) gets neither line.
       const typeCdLine = isWin || isShFamilyShell(localSessionShell(process.env, os.platform()))
 
       // Terminal-only first-run command. `{secret}` becomes a REFERENCE to the
@@ -6786,23 +6786,23 @@ function spawnPtyResolved(
 
       launchWriteScheduled = true
       launchPendingSessions.add(sessionId)
-      setTimeout(() => {
-        // Liveness guard: a kill / Restart / app-quit can land inside this 300ms
-        // window — writing to a dead or already-replaced PTY here would throw
+      setTimeout(() => whenHeldKnown(ptyProcess, (held) => {
+        // Liveness guard: a kill / Restart / app-quit can land in this wait (300ms, then
+        // whether a take-over held) — writing to a dead or already-replaced PTY here would throw
         // inside the timer (uncaught in main). Only write when our PTY is still
         // the registered one.
         if (ptySessions.get(sessionId)?.ptyProcess !== ptyProcess) { abandonLaunchHold(); return }
         try {
-          if (typeCdLine) ptyProcess.write(cdCmd + '\r')
+          if (typeCdLine && !held) ptyProcess.write(cdCmd + '\r')
           // Queued straight after the cd: the shell runs them in order, so the
           // command always starts in the configured directory.
-          if (launchLine) {
+          if (launchLine && !held) {
             logInfo(`[pty-manager] shell-only first-run command for ${sessionId}: ${launchLine}`)
             ptyProcess.write(launchLine + '\r')
           }
           releaseLaunchHold()
         } catch { abandonLaunchHold() /* session died mid-launch */ }
-      }, 300)
+      }), 300)
     } else {
       // Launch Claude Code interactive mode.
       // Spawn a shell first, explicitly cd to the project directory, then run claude.

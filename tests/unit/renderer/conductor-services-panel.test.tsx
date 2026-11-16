@@ -243,6 +243,20 @@ describe('ConductorServicesPanel', () => {
     expect(restartMock).not.toHaveBeenCalled()
   })
 
+  it('the Session helper card (2.1.3-beta.6) shows how many terminals it holds, and its Restart is disabled with the reason', async () => {
+    const helper = { ...createInitialHealth('helper', 'Session helper', 'helper'), state: 'listening' as ServiceState, heldSessions: 2 }
+    mockApi({ capturedAt: 1, services: [helper], log: [] })
+    const r = await renderPanel({ onClose: () => {} })
+    unmount = r.unmount
+    expect(counterLabels(r.container, 'helper')).toEqual(['Held', 'Jank m'])
+    expect(card(r.container, 'helper').querySelector('[data-counters]')?.textContent).toContain('2')
+    const btn = findButton(card(r.container, 'helper'), /Restart/i)
+    expect(btn.hasAttribute('disabled')).toBe(true)
+    expect(btn.getAttribute('title')).toMatch(/holder of its own/)
+    await act(async () => { btn.click() })
+    expect(restartMock).not.toHaveBeenCalled()
+  })
+
   // --- Stopped rows, and the rows the registry added ---
 
   it('a stopped hooks row reads disabled; any other stopped row reads stopped', async () => {

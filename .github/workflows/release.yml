@@ -227,6 +227,20 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The session helper ships in the installer as resources/helper/aicc-helper
+      # (.exe on Windows; plan 2.1.3-beta.6 section B). Built here, from the
+      # committed Cargo.lock with the pinned toolchain (helper/rust-toolchain.toml),
+      # before packaging so electron-builder signs it with the app.
+      - name: Build the session helper
+        shell: bash
+        working-directory: helper
+        env:
+          CARGO_TERM_COLOR: never
+          CARGO_INCREMENTAL: '0'
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo build --release --locked
+
       # ── Windows code signing: SSL.com eSigner CKA (cloud HSM) ──
       # The signing key lives in SSL.com's cloud HSM and never exists as a file
       # on the runner. CKA registers a Windows KSP so the key appears in the
@@ -307,6 +321,11 @@ jobs:
       - name: Verify native modules unpacked
         run: npm run verify:package
 
+      # The package carries the session helper and nothing else of helper/
+      # (scripts/verify-bundled-helper.mjs): a package without it fails here.
+      - name: Verify the session helper is packaged
+        run: npm run verify:helper
+
       # Fail loudly rather than ever ship unsigned again: a stable/beta release
       # with signing secrets missing is an error, not a fallback.
       # Template values (installer name, channel) are passed via env: rather than
@@ -334,6 +353,19 @@ jobs:
             Write-Host "Signed OK: $exe"
             Write-Host "  signer:    $($sig.SignerCertificate.Subject)"
             Write-Host "  timestamp: $($sig.TimeStamperCertificate.Subject)"
+            # The session helper the installer carries (resources/helper) is
+            # signed with the app: electron-builder signs every .exe it copies.
+            # The same leaf and the same timestamp rule as the installer.
+            $helpers = @(Get-ChildItem -Path dist -Directory -Filter '*unpacked' | ForEach-Object { Join-Path $_.FullName 'resources/helper/aicc-helper.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+            if ($helpers.Count -eq 0) { throw 'No packaged session helper under dist/*unpacked/resources/helper' }
+            foreach ($helper in $helpers) {
+              $hs = Get-AuthenticodeSignature $helper
+              if ($hs.Status -ne 'Valid') { throw "Signature on $helper is $($hs.Status): $($hs.StatusMessage)" }
+              if ($hs.SignerCertificate.Thumbprint -ne $env:SIGN_THUMBPRINT) { throw "Unexpected signer thumbprint $($hs.SignerCertificate.Thumbprint) on $helper, expected $env:SIGN_THUMBPRINT" }
+              if ($hs.SignerCertificate.Subject -notlike '*CN=Nicholas Moger*') { throw "Unexpected signer on ${helper}: $($hs.SignerCertificate.Subject)" }
+              if (-not $hs.TimeStamperCertificate) { throw "The signature on $helper carries no RFC3161 timestamp" }
+              Write-Host "Signed OK: $helper"
+            }
           } elseif ($env:CHANNEL -ne 'dev') {
             throw "Refusing to build an unsigned '$env:CHANNEL' release: signing secrets are not configured"
           } else {
@@ -440,6 +472,20 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The session helper ships in the installer as resources/helper/aicc-helper
+      # (.exe on Windows; plan 2.1.3-beta.6 section B). Built here, from the
+      # committed Cargo.lock with the pinned toolchain (helper/rust-toolchain.toml),
+      # before packaging so the app is signed and notarized with it inside.
+      - name: Build the session helper
+        shell: bash
+        working-directory: helper
+        env:
+          CARGO_TERM_COLOR: never
+          CARGO_INCREMENTAL: '0'
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo build --release --locked
+
       - name: Import signing certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -477,6 +523,40 @@ jobs:
 
       - name: Verify native modules unpacked
         run: npm run verify:package
+
+      # The package carries the session helper and nothing else of helper/
+      # (scripts/verify-bundled-helper.mjs): a package without it fails here.
+      - name: Verify the session helper is packaged
+        run: npm run verify:helper
+
+      # The session helper is signed with the app: electron-builder signs every
+      # Mach-O in the bundle, hardened runtime on, entitlementsInherit applied.
+      # A valid signature, the app's own team, and the hardened runtime.
+      - name: Verify the session helper's signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apps=(dist/mac*/*.app)
+          if [ ${#apps[@]} -eq 0 ]; then echo "::error::no packaged .app under dist/mac*"; exit 1; fi
+          for app in "${apps[@]}"; do
+            helper="$app/Contents/Resources/helper/aicc-helper"
+            if [ ! -f "$helper" ]; then echo "::error::$helper is missing"; exit 1; fi
+            codesign --verify --strict --verbose=2 "$helper"
+            app_info=$(codesign -dv "$app" 2>&1)
+            helper_info=$(codesign -dv "$helper" 2>&1)
+            app_team=$(sed -n 's/^TeamIdentifier=//p' <<< "$app_info")
+            helper_team=$(sed -n 's/^TeamIdentifier=//p' <<< "$helper_info")
+            if [ -z "$app_team" ] || [ "$app_team" = "not set" ] || [ "$helper_team" != "$app_team" ]; then
+              echo "::error::the session helper's team ($helper_team) is not the app's ($app_team)"
+              exit 1
+            fi
+            if ! grep -q '^CodeDirectory .*flags=.*runtime' <<< "$helper_info"; then
+              echo "::error::the session helper is not signed with the hardened runtime"
+              exit 1
+            fi
+            echo "Signed OK: $helper (team $helper_team)"
+          done
 
       - name: Determine DMG filename
         id: dmg
@@ -567,11 +647,30 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The session helper ships in the installer as resources/helper/aicc-helper
+      # (.exe on Windows; plan 2.1.3-beta.6 section B). Built here, from the
+      # committed Cargo.lock with the pinned toolchain (helper/rust-toolchain.toml),
+      # before packaging.
+      - name: Build the session helper
+        shell: bash
+        working-directory: helper
+        env:
+          CARGO_TERM_COLOR: never
+          CARGO_INCREMENTAL: '0'
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo build --release --locked
+
       - name: Package Linux AppImage
         run: npx electron-builder --linux --publish never
 
       - name: Verify native modules unpacked
         run: npm run verify:package
+
+      # The package carries the session helper and nothing else of helper/
+      # (scripts/verify-bundled-helper.mjs): a package without it fails here.
+      - name: Verify the session helper is packaged
+        run: npm run verify:helper
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v7

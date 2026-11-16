@@ -98,7 +98,7 @@ tests/live/hosts.local.json
 tests/live/fleet.local.json
 tests/live/results/
 
-# Rust session helper (helper/ is dormant, see helper/README.md): build output is ignored;
+# Rust session helper (see helper/README.md): build output is ignored;
 # the P7 probe is a PowerShell script, which the repo-wide *.ps1 rule above would hide.
 helper/target/
 !helper/probes/*.ps1

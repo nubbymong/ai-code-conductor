@@ -286,9 +286,28 @@ jobs:
       # Gate on runner.os, NOT a matrix image name: `matrix.os` carries whatever
       # image is pinned above, so a re-pin silently turns these steps off while
       # the job stays green.
+      #
+      # The installer carries the session helper (plan 2.1.3-beta.6 section B),
+      # built here as release.yml builds it, and the packaged copy is checked:
+      # a test installer without it would not be the one users get.
+      - name: Build the session helper (release/* branches only)
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'macOS' && startsWith(github.head_ref, 'release/')
+        shell: bash
+        working-directory: helper
+        env:
+          CARGO_TERM_COLOR: never
+          CARGO_INCREMENTAL: '0'
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo build --release --locked
+
       - name: Package macOS DMG (release/* branches only)
         if: steps.scope.outputs.suite != 'false' && runner.os == 'macOS' && startsWith(github.head_ref, 'release/')
         run: npx electron-builder --mac
+
+      - name: Verify the session helper is packaged (release/* branches only)
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'macOS' && startsWith(github.head_ref, 'release/')
+        run: npm run verify:helper
 
       - name: Upload macOS DMG
         if: steps.scope.outputs.suite != 'false' && runner.os == 'macOS' && startsWith(github.head_ref, 'release/')
@@ -479,6 +498,19 @@ jobs:
       # checked and uploaded here only. This job does not wait for the unit
       # parts, which run beside it, so on a red run the installer can still be
       # uploaded; `Test (windows-2025)` is what says whether the tree passed.
+      # The installer carries the session helper, built and checked as in the
+      # macOS half.
+      - name: Build the session helper (release/* branches only)
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
+        shell: bash
+        working-directory: helper
+        env:
+          CARGO_TERM_COLOR: never
+          CARGO_INCREMENTAL: '0'
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo build --release --locked
+
       - name: Package Windows installer (release/* branches only)
         if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         # --config.npmRebuild=false: Windows uses the prebuilds as-is (see above
@@ -488,6 +520,10 @@ jobs:
       - name: Verify native modules unpacked (release/* branches only)
         if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         run: npm run verify:package
+
+      - name: Verify the session helper is packaged (release/* branches only)
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
+        run: npm run verify:helper
 
       - name: Upload Windows installer
         if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
@@ -783,10 +819,12 @@ jobs:
         run: npx vitest run --config vitest.live.config.ts tests/live/ssh-multisession.live.ts
 
 
-  # The Rust session helper (helper/; ADR-029, ADR-030). Dormant: nothing ships
-  # it and the app does not start it, so this job is NOT a required check and
-  # nothing waits on it. It builds and tests the helper on the three OSes it
-  # will run on, and uploads the Windows build. Probe P7
+  # The Rust session helper (helper/; ADR-029, ADR-030). The installers carry
+  # its release build (release.yml builds it, and so do the release/* packaging
+  # steps above), and the app runs plain terminals through it only when the
+  # setting is on. This job is NOT a required check and nothing waits on it.
+  # It builds and tests the helper on the three OSes it runs on, and uploads
+  # the Windows build. Probe P7
   # (helper/probes/p7-windows-survival.ps1) is answered (2026-11-15, ADR-030);
   # its script rides in the artifact as the record of how, and it drives
   # commands this build no longer has, so running it again needs a

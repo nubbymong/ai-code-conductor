@@ -1,10 +1,16 @@
-# helper/ - the session helper (dormant skeleton)
+# helper/ - the session helper
 
-The Rust program that will hold a terminal session on every machine (ADR-029,
-ADR-030). **Nothing here ships.** It is not in the installer, the app does not
-start it, and no setting turns it on. It is a top-level folder on purpose, not
-under `src/` or `resources/`, so no packaging glob picks it up
-(`tests/unit/scripts/helper-not-shipped.test.ts` fails if one ever does).
+The Rust program that holds a terminal session on every machine (ADR-029,
+ADR-030). Since 2.1.3-beta.6 the installer ships one file of it: the release
+build (`target/release/aicc-helper`, `.exe` on Windows), which the release
+workflow builds before packaging and electron-builder copies to
+`resources/helper/`. On This computer the app runs it for plain and partner
+terminals when Settings has "Plain terminals through the session helper" on
+(off by default); the app side is `src/main/session-helper/`. Nothing else here
+ships. It is a top-level folder on purpose, not under `src/` or `resources/`,
+so no packaging glob picks it up (`tests/unit/scripts/helper-packaging.test.ts`
+fails if anything but the release program would, and
+`scripts/verify-bundled-helper.mjs` checks the packaged copy).
 
 The protocol it follows is `docs/remote/helper-protocol.md`; the rules for its
 build are in `docs/remote/helper-threat-model.md` 3.10.
@@ -26,10 +32,11 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | Fake CLI | `src/bin/aicc-fake-cli.rs` | A stand-in provider CLI for tests and probes |
 | Fixtures | `fixtures/*.json` | Frame, hello, limit and local transport vectors read by the Rust tests and by `tests/unit/scripts/helper-fixtures.test.ts` |
 
-The local transport is protocol section 15. Not in it yet: signing, the hash
-manifest, seccomp, the event spool and `since_seq`, the remote `serve`, `emit`,
-`mcp`, and the app side (the app does not start a holder yet). Those are later
-slices.
+The local transport is protocol section 15. The release build ships in the
+installers (`resources/helper/`), signed with the app on Windows and macOS.
+Not in it yet: the hash manifest, seccomp, the event spool and `since_seq`, the
+remote `serve`, `emit` and `mcp`. Those are later slices. The app side for
+This computer is in `src/main/session-helper/`.
 
 ## Commands
 

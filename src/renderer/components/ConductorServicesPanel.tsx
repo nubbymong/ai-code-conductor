@@ -85,6 +85,9 @@ function restartInfoFor(s: ServiceHealth): { disabled: boolean; title: string } 
     return { disabled: true, title: 'The MCP server runs inside the app. Relaunch the app to restart it' }
   }
   if (s.id === SERVICE_ID.watchdog) return { disabled: false, title: 'Restart the watchdog (re-arms watchers on the next session)' }
+  if (s.id === SERVICE_ID.helper) {
+    return { disabled: true, title: 'Each held terminal runs in a holder of its own, so the session helper has no restart' }
+  }
   return { disabled: false, title: `Restart ${s.label}` }
 }
 
@@ -93,7 +96,7 @@ function restartInfoFor(s: ServiceHealth): { disabled: boolean; title: string } 
 // so a figure nobody counts is never shown as a real zero. The main loop's own
 // stalls are stamped on every row, so they are not in this list: they show
 // whenever a card has counters at all.
-type Counter = 'pid' | 'uptime' | 'inFlight' | 'restarts' | 'events' | 'trimmed' | 'throughput' | 'childStalls'
+type Counter = 'pid' | 'uptime' | 'inFlight' | 'restarts' | 'events' | 'trimmed' | 'throughput' | 'childStalls' | 'held'
 const EVERY_COUNTER: readonly Counter[] = ['pid', 'uptime', 'inFlight', 'restarts', 'events', 'trimmed', 'throughput', 'childStalls']
 // One entry per registered row (the type makes a new row state its own).
 const COUNTERS_KEPT: Record<ServiceId, readonly Counter[]> = {
@@ -111,6 +114,8 @@ const COUNTERS_KEPT: Record<ServiceId, readonly Counter[]> = {
   watchdog: ['uptime', 'inFlight', 'events'],
   // The MCP server row says only whether it is listening and on which port.
   mcp: [],
+  // The session helper (2.1.3-beta.6): how many terminals it holds now.
+  helper: ['held'],
 }
 function countersKept(s: ServiceHealth): readonly Counter[] {
   // A row this panel does not know is shown in full, as a supervised child is.
@@ -182,6 +187,7 @@ function ServiceCard({ s, onRestart }: { s: ServiceHealth; onRestart: (id: strin
       {showCounters && (
         <div className="grid grid-cols-4 gap-x-2 gap-y-1.5" data-counters>
           {keeps('pid') && <Metric label="PID" value={s.pid ?? '-'} />}
+          {keeps('held') && <Metric label="Held" value={s.heldSessions ?? 0} />}
           {keeps('uptime') && <Metric label="Uptime" value={uptime(s.startedAt)} />}
           {keeps('inFlight') && <Metric label="In-flight" value={s.inFlight} />}
           {keeps('restarts') && <Metric label="Restarts" value={s.restartCount} />}

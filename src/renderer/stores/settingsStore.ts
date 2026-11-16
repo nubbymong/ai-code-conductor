@@ -398,6 +398,11 @@ export interface AppSettings {
    *  (wheel scroll unaffected) -- the clickable layer misfires inside xterm.
    *  Set true to restore CC's clickable prompts. New sessions only. */
   clickableQuestions?: boolean
+  /** 2.1.3-beta.6 (preview): a Terminal only tab and a partner terminal start
+   *  inside the session helper, so they survive an app crash. OFF by default
+   *  (absent/false). Claude Code, Codex and SSH sessions are not affected.
+   *  Applies to terminals opened after the change. */
+  plainTerminalsThroughHelper?: boolean
   /** v2.0.0-beta.3: disable Claude Code's background tasks/agents so a stray
    *  Ctrl+B (or /bg) can't detach and strand a session. Default-on (absent/true
    *  = disabled); set false to allow background agents. New sessions only. */
@@ -491,6 +496,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   tokenomicsEnabled: true,
   classicTerminalCopyPaste: true,
   clickableQuestions: false,
+  plainTerminalsThroughHelper: false,
   sentinelEnabled: false,
   sentinelAutoOpen: true,
   githubAiUsageEnabled: false,

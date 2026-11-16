@@ -264,9 +264,9 @@
    "reason": "ssh for an SSH session's separate End and liveness execs, argv only: on Windows ssh.exe by the full path found in PATH's fully qualified folders (sshProgram, findOnWindowsPath; none found: nothing starts, and the exec settles as failed or unverified); elsewhere ssh by name, as before."
   },
   "src/main/pty-manager.ts :: pty.spawn(spawnCmd": {
-   "count": 3,
+   "count": 2,
    "how": "full-path",
-   "reason": "A session's own program as its provider builds it: on Windows PowerShell by its full path in the system folder for a Claude session or a terminal tab, gsudo by the full path found in PATH's folders for an elevated tab, Codex or its cmd.exe line by full paths, and the Codex resume list's node by the full path found in PATH's fully qualified folders (none found: nothing starts). The install or update tab the app opens to type its own npm line starts with its program lookup kept to PATH's fully qualified folders and NoDefaultCurrentDirectoryInExePath set, so that npm.cmd and the node it starts by a bare name are found only there."
+   "reason": "A session's own program as its provider builds it: on Windows PowerShell by its full path in the system folder for a Claude session, Codex or its cmd.exe line by full paths, and the Codex resume list's node by the full path found in PATH's fully qualified folders (none found: nothing starts). Terminal tabs (PowerShell, gsudo for an elevated tab, and the install or update tab the app opens to type its own npm line) start through spawnPlainPty, whose sites are listed under src/main/session-helper/manager.ts."
   },
   "src/main/pty-manager.ts :: pty.spawn(sshBin": {
    "count": 1,
@@ -292,6 +292,21 @@
    "count": 1,
    "how": "app-path",
    "reason": "Electron's utility process running the app's own bundled script (hooks-host.js beside this module)."
+  },
+  "src/main/session-helper/manager.ts :: execFile(file": {
+   "count": 1,
+   "how": "app-path",
+   "reason": "The session helper by the full path of the copy the app itself put in place (the per-user helper folder, copied from the installed helper and its SHA-256 checked against the installed file before every run, checkedExe), arguments as a list, no shell, an allowlisted environment (helperEnv); a copy that does not match is copied again once, then nothing starts."
+  },
+  "src/main/session-helper/manager.ts :: m.spawn(ctx": {
+   "count": 1,
+   "how": "not-a-process",
+   "reason": "The session helper manager's own spawn: it starts a holder through execFile(file (the app-path site above) or the usual pty.spawn(file; no program is named here."
+  },
+  "src/main/session-helper/manager.ts :: pty.spawn(file": {
+   "count": 2,
+   "how": "full-path",
+   "reason": "A Terminal only tab or a partner terminal started the usual way: the very program, arguments and options pty-manager handed spawnPlainPty (on Windows PowerShell by its full path in the system folder, gsudo by the full path found in PATH's folders for an elevated tab, and the install or update tab's program lookup kept to PATH's fully qualified folders), when the session helper is off or cannot carry the terminal."
   },
   "src/main/tokenomics/fork-tokenomics-worker.ts :: utilityProcess.fork(entry": {
    "count": 1,

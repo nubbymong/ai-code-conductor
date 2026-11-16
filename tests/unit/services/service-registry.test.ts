@@ -16,7 +16,7 @@ import type {
   WatchdogMonitorSnapshot,
 } from '../../../src/shared/service-health'
 
-const ROW_ORDER = ['hooks', 'logging', 'tokenomics', 'watchdog', 'mcp']
+const ROW_ORDER = ['hooks', 'logging', 'tokenomics', 'watchdog', 'mcp', 'helper']
 
 function row(id: string, label: string, host: ServiceHost, state: ServiceState = 'listening'): ServiceHealth {
   return { ...createInitialHealth(id, label, host), state }
@@ -61,7 +61,7 @@ function sources(over: Partial<ServiceRegistrySources> = {}): ServiceRegistrySou
 
 describe('service registry: the rows', () => {
   it('pins the row ids the supervisors and the panel match on', () => {
-    expect(SERVICE_ID).toEqual({ hooks: 'hooks', logging: 'logging', tokenomics: 'tokenomics', watchdog: 'watchdog', mcp: 'mcp' })
+    expect(SERVICE_ID).toEqual({ hooks: 'hooks', logging: 'logging', tokenomics: 'tokenomics', watchdog: 'watchdog', mcp: 'mcp', helper: 'helper' })
   })
 
   it('lists one row per service in a fixed order, whatever is running', () => {
@@ -74,9 +74,10 @@ describe('service registry: the rows', () => {
       tokenomics: () => supervised(row('tokenomics', 'Tokenomics', 'utility-process')),
       watchdog: () => watchdog(),
       mcp: () => ({ running: true, port: 19333 }),
+      helper: () => ({ state: 'ready', held: 1, lastError: null }),
     }))
     expect(all.snapshot().services.map((s) => s.id)).toEqual(ROW_ORDER)
-    expect(all.snapshot().services.map((s) => s.state)).toEqual(['listening', 'listening', 'listening', 'listening', 'listening'])
+    expect(all.snapshot().services.map((s) => s.state)).toEqual(['listening', 'listening', 'listening', 'listening', 'listening', 'listening'])
   })
 
   it('a service that is not there to ask still has its row, and it reads stopped', () => {
@@ -87,6 +88,7 @@ describe('service registry: the rows', () => {
       ['tokenomics', 'Tokenomics', 'stopped'],
       ['watchdog', 'Watchdog', 'stopped'],
       ['mcp', 'MCP server', 'stopped'],
+      ['helper', 'Session helper', 'stopped'],
     ])
   })
 
@@ -135,6 +137,7 @@ describe('service registry: host kinds', () => {
       ['tokenomics', 'utility-process'],
       ['watchdog', 'in-process'],
       ['mcp', 'in-process'],
+      ['helper', 'helper'],
     ])
   })
 
@@ -151,9 +154,23 @@ describe('service registry: host kinds', () => {
     expect(fellBack.services.filter((x) => x.host === 'in-process-fallback').map((x) => x.id)).toEqual(['hooks'])
   })
 
-  it('no row uses the helper host yet', () => {
+  it('only the session helper row uses the helper host, and it reads stopped while the helper was never switched on', () => {
     const s = createServiceRegistry(sources({ watchdog: () => watchdog(), mcp: () => ({ running: true, port: 1 }) })).snapshot()
-    expect(s.services.some((x) => x.host === 'helper')).toBe(false)
+    expect(s.services.filter((x) => x.host === 'helper').map((x) => [x.id, x.label, x.state])).toEqual([['helper', 'Session helper', 'stopped']])
+  })
+
+  it('the session helper row: its state, how many terminals it holds, and no restart', () => {
+    let state: 'off' | 'starting' | 'ready' | 'failed' = 'starting'
+    const reg = createServiceRegistry(sources({ helper: () => ({ state, held: 3, lastError: { message: 'copy did not match', ts: 7 } }) }))
+    const read = () => reg.snapshot().services.find((x) => x.id === 'helper')!
+    expect([read().state, read().heldSessions, read().lastError]).toEqual(['starting', 3, null])
+    state = 'ready'
+    expect(read().state).toBe('listening')
+    state = 'failed'
+    expect([read().state, read().lastError]).toEqual(['crashed', { message: 'copy did not match', ts: 7 }])
+    state = 'off'
+    expect(read().state).toBe('stopped')
+    expect(reg.restart('helper').ok).toBe(false)
   })
 
   it('the Watchdog row is its manager\'s own, and its monitor snapshot is read once and rides along', () => {
@@ -203,9 +220,10 @@ describe('service registry: the MCP server row comes from the server\'s own stat
   it('is read on every snapshot, so the row follows the server', () => {
     let state = { running: false, port: 0 }
     const reg = createServiceRegistry(sources({ mcp: () => state }))
-    expect(reg.snapshot().services.at(-1)?.state).toBe('stopped')
+    const mcp = () => reg.snapshot().services.find((x) => x.id === 'mcp')
+    expect(mcp()?.state).toBe('stopped')
     state = { running: true, port: 19333 }
-    const r = reg.snapshot().services.at(-1)
+    const r = mcp()
     expect([r?.id, r?.state, r?.port]).toEqual(['mcp', 'listening', 19333])
   })
 })
@@ -220,6 +238,7 @@ describe('service registry: a source that cannot be read', () => {
     tokenomics: () => supervised(row('tokenomics', 'Tokenomics', 'utility-process')),
     watchdog: () => watchdog(),
     mcp: () => ({ running: true, port: 19333 }),
+    helper: () => ({ state: 'ready', held: 0, lastError: null }),
     now: () => 4321,
     ...over,
   }))
@@ -230,16 +249,17 @@ describe('service registry: a source that cannot be read', () => {
     ['tokenomics', 'Tokenomics', 'utility-process', { tokenomics: boom }],
     ['watchdog', 'Watchdog', 'in-process', { watchdog: () => ({ ...watchdog(), getMonitorSnapshot: boom }) }],
     ['mcp', 'MCP server', 'in-process', { mcp: boom }],
+    ['helper', 'Session helper', 'helper', { helper: boom }],
   ]
   for (const [id, label, host, over] of cases) {
-    it(`${id}: its row reads an error state with the reason, and the other four rows still arrive`, () => {
+    it(`${id}: its row reads an error state with the reason, and the other five rows still arrive`, () => {
       const s = running(over).snapshot()
       expect(s.services.map((x) => x.id)).toEqual(ROW_ORDER)
       const failed = s.services.find((x) => x.id === id)
       expect([failed?.label, failed?.host, failed?.state]).toEqual([label, host, 'crashed'])
       expect(failed?.lastError).toEqual({ message: 'row could not be read: boom', ts: 4321 })
       const others = s.services.filter((x) => x.id !== id)
-      expect(others).toHaveLength(4)
+      expect(others).toHaveLength(5)
       expect(others.map((x) => [x.state, x.lastError])).toEqual(others.map(() => ['listening', null]))
       // The Watchdog block rides on the Watchdog row: it is left out only with that row.
       expect(s.watchdog).toBe(id === 'watchdog' ? undefined : MON)

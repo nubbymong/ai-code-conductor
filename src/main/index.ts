@@ -81,6 +81,7 @@ import { registerGitHubHandlers } from './ipc/github-handlers'
 import { registerHooksHandlers } from './ipc/hooks-handlers'
 import { registerServiceHealthHandlers } from './ipc/service-health-handlers'
 import { registerMachinesHandlers, getMachinesSource } from './ipc/machines-handlers'
+import { initSessionHelper, applySessionHelperSettings, noteSessionHelperTabs, shutdownSessionHelper, holdQuitForSessionHelper, sessionHelperServiceState } from './session-helper/app-wiring'
 import { createServiceRegistry } from './services/service-registry'
 import { PtyIntegrityMonitor, setPtyIntegrityMonitor, getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
 import { registerProviderAccountsHandlers } from './ipc/provider-accounts-handlers'
@@ -282,6 +283,9 @@ function registerMainWindowIpc(): void {
 
   // Session state persistence IPC handlers
   ipcMain.handle('session:save', async (_event, state: SessionState) => {
+    // The session helper reads which tabs are open from the same set (the
+    // renderer saves it at once after a restore, and on every change).
+    try { noteSessionHelperTabs(state) } catch { /* the save goes on */ }
     return sessionDurability.saveEnriched(state)
   })
 
@@ -774,6 +778,9 @@ if (!gotTheLock) {
         // 2.1.3-beta.4: the Tokenomics switch stops or starts its worker at
         // once, and the accounts left out apply to the next query.
         try { applyTokenomicsSettings() } catch (err) { logError('[main] tokenomics settings apply failed:', err) }
+        // 2.1.3-beta.6: plain terminals through the session helper, switched
+        // for the next terminal at once.
+        try { applySessionHelperSettings() } catch (err) { logError('[main] session helper settings apply failed:', err) }
       },
       // P3.12 round 1 (V1): a config's own logging switch turned off stops
       // indexing its running session.
@@ -910,10 +917,15 @@ if (!gotTheLock) {
       // PTY-integrity monitor (D1 diagnostics). Lives in main; not a service
       // row, a block of its own in the same snapshot.
       pty: () => getPtyIntegrityMonitor()?.diagnostics() ?? null,
+      // The session helper (2.1.3-beta.6): its state and how many terminals it holds.
+      helper: () => sessionHelperServiceState(),
     })
     const pushDiagnostics = () => emitToWindow(IPC.SERVICE_HEALTH_UPDATE, serviceRegistry.snapshot())
     const ptyMonitor = new PtyIntegrityMonitor({ emit: pushDiagnostics })
     setPtyIntegrityMonitor(ptyMonitor)
+    // Before any tab can spawn (this callback runs through without a wait):
+    // with the setting on, terminals a crash left held are kept for their tabs.
+    try { initSessionHelper(pushDiagnostics) } catch (err) { logError('[main] session helper start failed:', err) }
     // Redirect ONLY SERVICE_HEALTH_UPDATE through the merge; every other channel
     // (HOOKS_STATUS, HOOKS_EVENT, ...) the supervisor/gateway emit passes through.
     const emitWithMerge = (channel: string, payload: unknown) =>
@@ -1241,6 +1253,9 @@ try { getWatchdogManager()?.disposeAll() } catch { /* never init */ }
     // throw, and runs before killAllPty so a throw there cannot skip it.
     killCliSetupPty()
     killAllPty()
+    // Every terminal through the session helper ends with a normal quit: the
+    // end messages go here, and will-quit waits (briefly) for their answers.
+    try { shutdownSessionHelper() } catch { /* never started */ }
     closeAllWebviews()
     closeAllAccountPanes()
     // Pull from the singleton barrel — `hooksGateway` declared inside the
@@ -1253,6 +1268,9 @@ try { getWatchdogManager()?.disposeAll() } catch { /* never init */ }
     closeDebugLogger()
   }
   app.on('before-quit', (e) => closeCoordinator.onBeforeQuit(() => e.preventDefault()))
+  // The session helper's holders answer their ends before the process goes
+  // (at most 1.5 s, only when terminals ran through it this run).
+  app.on('will-quit', (e) => holdQuitForSessionHelper(e))
 
   app.on('window-all-closed', () => {
     // On macOS, apps conventionally stay running when all windows are closed

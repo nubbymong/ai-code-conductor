@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import PageFrame from './PageFrame'
 import { DialogButton } from './ui/Dialog'
-import { MACHINES_NO_ANSWER, type HeldSession, type HelperState, type MachineStatus, type SelfTestResult } from '../../shared/machines'
+import { MACHINES_NO_ANSWER, type HeldSession, type HelperState, type MachineActionResult, type MachineStatus, type SelfTestResult } from '../../shared/machines'
+import { showHeldTerminalTab } from '../utils/heldTerminalTab'
 
 // The Machines page (2.1.3-beta.6, plan section C): one card, This computer.
 // It shows what the session helper is doing and the terminals it holds, and
@@ -275,9 +276,10 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
     let text: string
     let ok: boolean
     try {
-      const r = await window.electronAPI.machines.reattach(s.id)
-      ok = r.ok
-      text = r.ok ? `Attached ${s.label} to the app.` : (r.message ?? `Could not attach ${s.label}.`)
+      const r: MachineActionResult = await window.electronAPI.machines.reattach(s.id)
+      // The helper names the tab that shows it: the open one, or a new one.
+      ok = r.ok && showHeldTerminalTab(r.tab)
+      text = ok ? `Attached ${s.label} to the app.` : (r.message ?? `Could not attach ${s.label}.`)
     } catch {
       ok = false
       text = MACHINES_NO_ANSWER
