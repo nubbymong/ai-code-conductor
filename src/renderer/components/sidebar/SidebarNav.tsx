@@ -56,6 +56,17 @@ const navItems: { view: ViewType; icon: React.ReactNode; label: string }[] = [
     )
   },
   {
+    view: 'machines',
+    label: 'Machines',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2" />
+        <line x1="8" y1="21" x2="16" y2="21" />
+        <line x1="12" y1="17" x2="12" y2="21" />
+      </svg>
+    )
+  },
+  {
     view: 'vision',
     label: 'Conductor MCP',
     icon: (
@@ -102,6 +113,9 @@ const navItems: { view: ViewType; icon: React.ReactNode; label: string }[] = [
     )
   },
 ]
+
+// The pages in the rail's first group; every other nav item sits after the divider.
+const PRIMARY_VIEWS: readonly ViewType[] = ['cloud-agents', 'insights', 'tokenomics', 'machines']
 
 function NavButton({ item, currentView, onViewChange, insightsStatus, insightsMessage, cloudAgentRunning, visionRunning, serverRunning, tokenomicsIndexComplete, isCollapsed, loggingEnabled, tooltipAlign = 'start' }: {
   item: typeof navItems[0]
@@ -317,8 +331,8 @@ export default function SidebarNav({ currentView, onViewChange, insightsStatus, 
     </button>
   )
 
-  const primary = navItems.filter(i => ['cloud-agents', 'insights', 'tokenomics'].includes(i.view))
-  const system = navItems.filter(i => !['cloud-agents', 'insights', 'tokenomics'].includes(i.view))
+  const primary = navItems.filter(i => PRIMARY_VIEWS.includes(i.view))
+  const system = navItems.filter(i => !PRIMARY_VIEWS.includes(i.view))
   const renderItem = (item: typeof navItems[0], tooltipAlign: 'start' | 'end') => (
     <NavButton key={item.view} item={item} currentView={currentView} onViewChange={onViewChange}
       insightsStatus={insightsStatus} insightsMessage={insightsMessage} cloudAgentRunning={cloudAgentRunning}
@@ -333,14 +347,14 @@ export default function SidebarNav({ currentView, onViewChange, insightsStatus, 
         className="flex flex-col items-center gap-1 py-2 border-b border-surface0"
         style={{ background: 'var(--surface-chrome)', color: 'var(--text-on-chrome)' }}
       >
-        {navItems.filter(i => ['cloud-agents', 'insights', 'tokenomics'].includes(i.view)).map(item => (
+        {navItems.filter(i => PRIMARY_VIEWS.includes(i.view)).map(item => (
           <NavButton key={item.view} item={item} currentView={currentView} onViewChange={onViewChange}
             insightsStatus={insightsStatus} insightsMessage={insightsMessage} cloudAgentRunning={cloudAgentRunning}
             visionRunning={visionRunning} serverRunning={serverRunning} tokenomicsIndexComplete={tokenomicsIndexComplete}
             isCollapsed loggingEnabled={loggingEnabled} />
         ))}
         <span className="h-px w-6 my-1 bg-surface1" aria-hidden />
-        {navItems.filter(i => !['cloud-agents', 'insights', 'tokenomics'].includes(i.view)).map(item => (
+        {navItems.filter(i => !PRIMARY_VIEWS.includes(i.view)).map(item => (
           <NavButton key={item.view} item={item} currentView={currentView} onViewChange={onViewChange}
             insightsStatus={insightsStatus} insightsMessage={insightsMessage} cloudAgentRunning={cloudAgentRunning}
             visionRunning={visionRunning} serverRunning={serverRunning} tokenomicsIndexComplete={tokenomicsIndexComplete}

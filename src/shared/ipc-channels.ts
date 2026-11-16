@@ -236,6 +236,14 @@ export const IPC = {
   SERVICE_HEALTH_UPDATE: 'serviceHealth:update',
   SERVICE_RESTART: 'serviceHealth:restart',
 
+  // Machines page (2.1.3-beta.6): This computer's session helper and the
+  // terminals it holds. All four are renderer -> main invokes; the page reads
+  // on open, on Refresh and after each action, so there is no push.
+  MACHINES_STATUS: 'machines:status',              // -> MachineStatus (never rejects; a helper that cannot answer reads failed)
+  MACHINES_SELF_TEST: 'machines:selfTest',         // -> SelfTestResult
+  MACHINES_END_SESSION: 'machines:endSession',     // (id: string) -> { ok, message? }
+  MACHINES_REATTACH: 'machines:reattach',          // (id: string) -> { ok, message? }
+
   // CLI
   CLI_CHECK: 'cli:check',
   CLI_PATH: 'cli:path',

@@ -830,6 +830,13 @@ export interface ElectronAPI {
     restart: (serviceId: string) => Promise<{ ok: boolean; reason?: string }>
     onUpdate: (callback: (snap: import('../shared/service-health').DiagnosticsSnapshot) => void) => () => void
   }
+  /** The Machines page: This computer's session helper and the terminals it holds. */
+  machines: {
+    status: () => Promise<import('../shared/machines').MachineStatus>
+    runSelfTest: () => Promise<import('../shared/machines').SelfTestResult>
+    endSession: (id: string) => Promise<import('../shared/machines').MachineActionResult>
+    reattach: (id: string) => Promise<import('../shared/machines').MachineActionResult>
+  }
   cli: {
     check: () => Promise<boolean>
     path: () => Promise<string | null>
@@ -1396,6 +1403,16 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(IPC.SERVICE_RESTART, serviceId),
     onUpdate: (callback: (snap: import('../shared/service-health').DiagnosticsSnapshot) => void) =>
       onChannel(IPC.SERVICE_HEALTH_UPDATE, callback)
+  },
+  machines: {
+    status: (): Promise<import('../shared/machines').MachineStatus> =>
+      ipcRenderer.invoke(IPC.MACHINES_STATUS),
+    runSelfTest: (): Promise<import('../shared/machines').SelfTestResult> =>
+      ipcRenderer.invoke(IPC.MACHINES_SELF_TEST),
+    endSession: (id: string): Promise<import('../shared/machines').MachineActionResult> =>
+      ipcRenderer.invoke(IPC.MACHINES_END_SESSION, id),
+    reattach: (id: string): Promise<import('../shared/machines').MachineActionResult> =>
+      ipcRenderer.invoke(IPC.MACHINES_REATTACH, id),
   },
   cli: {
     check: () => ipcRenderer.invoke(IPC.CLI_CHECK),

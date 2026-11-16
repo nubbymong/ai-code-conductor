@@ -84,6 +84,7 @@ test.describe('Sessions View', () => {
 const RAIL_PAGES: Array<{ view: string; title: string }> = [
   { view: 'insights', title: 'Insights' },
   { view: 'tokenomics', title: 'Tokenomics' },
+  { view: 'machines', title: 'Machines' },
   { view: 'vision', title: 'Conductor MCP' },
   { view: 'memory', title: 'Memory' },
   { view: 'logs', title: 'Logs' },
