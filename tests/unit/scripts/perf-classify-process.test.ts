@@ -1,0 +1,206 @@
+/**
+ * [host] The performance harness's process roles and main-process service
+ * attribution (scripts/perf/lib/classify-process.cjs, scripts/perf/service-map.json,
+ * the attribution in scripts/perf/lib/aggregate.cjs).
+ *
+ * A table of real command lines from the Windows test VM (2.1.3-beta.6,
+ * installed app on a staging root) maps to roles; the three service workers,
+ * whose command lines are identical, are told apart by the app's own process
+ * list and its Services rows; a process tree never takes in a process with a
+ * stale parent id; and the committed service map attributes a canned V8
+ * profile of a main-like bundle to the expected services, nearest frame
+ * first. Pure functions on in-memory data: nothing is read but the service
+ * map, nothing is written or started.
+ */
+import { describe, it, expect } from 'vitest'
+import { createRequire } from 'module'
+import { readFileSync } from 'fs'
+import { join, resolve } from 'path'
+
+const PERF = resolve(__dirname, '..', '..', '..', 'scripts', 'perf')
+const req = createRequire(join(PERF, 'report.cjs'))
+type Proc = { pid: number; ppid?: number; name: string; cmd?: string; created?: number }
+const C = req('./lib/classify-process.cjs') as {
+  classifyProcess: (p: Proc, ctx?: Record<string, unknown>) => string
+  contextFrom: (o: Record<string, unknown>) => Record<string, unknown>
+  findMainPid: (procs: Proc[], recorded?: number) => number | null
+  processTree: (procs: Proc[], root: number) => Set<number>
+  switchValue: (cmd: string, name: string) => string | null
+  ROLE_LABEL: Record<string, string>
+}
+const A = req('./lib/aggregate.cjs') as {
+  attributeProfile: (profile: unknown, map: unknown, o?: Record<string, unknown>) => { totalMs: number; idleMs: number; gcMs: number; unattributedMs: number; byService: Record<string, number>; topUnattributed: Array<{ frame: string; ms: number }> }
+  topLevelName: (lines: string[], line: number) => string
+  topLevelNamer: (text: string, urlEnd?: string) => (cf: { url?: string; lineNumber?: number }) => string
+}
+const SERVICE_MAP = JSON.parse(readFileSync(join(PERF, 'service-map.json'), 'utf8'))
+
+const APP = 'C:\\Users\\User\\AppData\\Local\\Programs\\AI Code Conductor\\AI Code Conductor.exe'
+const STAGE = 'C:\\Users\\user\\b7p-stage'
+const UD = `--user-data-dir="${STAGE}\\data\\electron-userdata"`
+// Real command lines from the VM (2.1.3-beta.6).
+const LINES: Array<[string, Proc]> = [
+  ['main', { pid: 100, name: 'AI Code Conductor.exe', cmd: `"${APP}" --remote-debugging-port=9333 --inspect=9229 --user-data-dir=${STAGE}\\data\\electron-userdata` }],
+  ['renderer', { pid: 110, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=renderer ${UD} --standard-schemes=ccc-ux --app-path="C:\\Users\\User\\AppData\\Local\\Programs\\AI Code Conductor\\resources\\app.asar" --enable-sandbox --remote-debugging-port=9333 --lang=en-US --renderer-client-id=5 --mojo-platform-channel-handle=3184 /prefetch:1` }],
+  ['gpu', { pid: 111, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=gpu-process ${UD} --gpu-preferences=UAAAAAAAAADgAAAEAAAAAAAAAAAAAAAAAABgAAEAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA --mojo-platform-channel-handle=1940 /prefetch:2` }],
+  ['network', { pid: 112, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=none ${UD} --mojo-platform-channel-handle=2056 /prefetch:11` }],
+  ['crashpad', { pid: 113, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=crashpad-handler ${UD} /prefetch:4 --monitor-self-annotation=ptype=crashpad-handler "--database=${STAGE}\\data\\electron-userdata\\Crashpad" --url=https://f.a.k/e --annotation=_productName=AI Code Conductor` }],
+  ['utility:ccc-tokenomics', { pid: 120, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=utility --utility-sub-type=node.mojom.NodeService --lang=en-US --service-sandbox-type=none ${UD} --mojo-platform-channel-handle=2828 /prefetch:14` }],
+  ['utility:ccc-transcripts', { pid: 121, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=utility --utility-sub-type=node.mojom.NodeService --lang=en-US --service-sandbox-type=none ${UD} --mojo-platform-channel-handle=2840 /prefetch:14` }],
+  ['utility:ccc-hooks-gateway', { pid: 122, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=utility --utility-sub-type=node.mojom.NodeService --lang=en-US --service-sandbox-type=none ${UD} --mojo-platform-channel-handle=2852 /prefetch:14` }],
+  ['helper-hold', { pid: 130, name: 'aicc-helper.exe', cmd: `"C:\\Users\\User\\AppData\\Local\\Programs\\AI Code Conductor\\resources\\helper\\aicc-helper.exe" hold --store C:\\Users\\user\\b7p-stage\\data\\home\\AppData\\Local\\aicc-helper\\store --session 4f1c --label infra --away 120 --ring-bytes 1048576` }],
+  ['helper', { pid: 131, name: 'aicc-helper.exe', cmd: `"C:\\Users\\User\\AppData\\Local\\Programs\\AI Code Conductor\\resources\\helper\\aicc-helper.exe" hold --detach --store C:\\Users\\user\\b7p-stage\\data\\home\\AppData\\Local\\aicc-helper\\store --session 4f1c` }],
+  ['pty-host', { pid: 140, name: 'conhost.exe', cmd: '\\??\\C:\\Windows\\system32\\conhost.exe --headless --width 120 --height 30 --signal 0x9d8 --server 0x9cc' }],
+  ['shell', { pid: 141, name: 'powershell.exe', cmd: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo' }],
+  ['shell', { pid: 142, name: 'cmd.exe', cmd: `C:\\Windows\\system32\\cmd.exe /d /s /c ""${STAGE}\\data\\fake-bin\\claude.cmd" --resume 6d3f2a41-8c9e-4b17-9f52-0a1b2c3d4e5f"` }],
+  ['fake-claude', { pid: 143, name: 'node.exe', cmd: `node  "${STAGE}\\data\\fake-bin\\fake-claude.js" --resume 6d3f2a41-8c9e-4b17-9f52-0a1b2c3d4e5f` }],
+  ['vision-chrome', { pid: 150, name: 'chrome.exe', cmd: `"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222 --user-data-dir=${STAGE}\\data\\resources\\vision-profile --no-first-run` }],
+  ['chrome', { pid: 151, name: 'chrome.exe', cmd: '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --type=renderer' }],
+  ['defender', { pid: 160, name: 'MsMpEng.exe', cmd: '' }],
+  ['wmi', { pid: 161, name: 'WmiPrvSE.exe', cmd: 'C:\\Windows\\system32\\wbem\\wmiprvse.exe -secured -Embedding' }],
+]
+
+describe('roles from real command lines', () => {
+  const ctx = C.contextFrom({
+    // app.getAppMetrics names a utility process by the serviceName it was forked with...
+    appMetrics: [{ pid: 120, type: 'Utility', name: 'ccc-tokenomics' }, { pid: 112, type: 'Utility', name: 'Network Service' }, { pid: 110, type: 'Tab' }],
+    // ...and a Services row carries its worker's pid.
+    services: [{ id: 'logging', pid: 121 }, { id: 'hooks', pid: 122 }, { id: 'mcp', pid: null }],
+    webContents: [{ pid: 110, url: 'file:///C:/Users/User/AppData/Local/Programs/AI%20Code%20Conductor/resources/app.asar/out/renderer/index.html' }],
+    stageRoot: STAGE,
+  })
+
+  it.each(LINES)('%s', (role, proc) => {
+    expect(C.classifyProcess(proc, ctx)).toBe(role)
+    expect(C.ROLE_LABEL[role], `no label for ${role}`).toBeTruthy()
+  })
+
+  it('cannot tell the service workers apart by command line alone', () => {
+    const bare = C.contextFrom({})
+    for (const pid of [120, 121, 122]) expect(C.classifyProcess(LINES.find(([, p]) => p.pid === pid)![1], bare)).toBe('utility')
+  })
+
+  it('names a second renderer (another window) apart from the app window', () => {
+    const other = { pid: 115, name: 'AI Code Conductor.exe', cmd: LINES[1][1].cmd!.replace('--renderer-client-id=5', '--renderer-client-id=9') }
+    expect(C.classifyProcess(other, ctx)).toBe('renderer-other')
+  })
+
+  it('names the harness by pid before anything else', () => {
+    const h = C.contextFrom({ harnessPids: new Set([143]) })
+    expect(C.classifyProcess(LINES.find(([, p]) => p.pid === 143)![1], h)).toBe('harness')
+  })
+
+  it('reads a quoted switch value', () => {
+    expect(C.switchValue(`"${APP}" --type=renderer ${UD}`, 'user-data-dir')).toBe(`${STAGE}\\data\\electron-userdata`)
+    expect(C.switchValue(`"${APP}" --inspect=9229`, 'type')).toBeNull()
+  })
+})
+
+describe('the app tree', () => {
+  const procs: Proc[] = [
+    { pid: 100, ppid: 4, name: 'AI Code Conductor.exe', cmd: LINES[0][1].cmd, created: 1_000 },
+    { pid: 110, ppid: 100, name: 'AI Code Conductor.exe', cmd: LINES[1][1].cmd, created: 1_100 },
+    { pid: 141, ppid: 100, name: 'powershell.exe', created: 2_000 },
+    { pid: 142, ppid: 141, name: 'cmd.exe', created: 2_100 },
+    { pid: 143, ppid: 142, name: 'node.exe', created: 2_200 },
+    // A process whose parent id is 100 from before the app started: pid 100 was reused.
+    { pid: 900, ppid: 100, name: 'node.exe', created: 500 },
+    { pid: 901, ppid: 900, name: 'conhost.exe', created: 600 },
+  ]
+
+  it('finds the main process and takes in its descendants only', () => {
+    expect(C.findMainPid(procs)).toBe(100)
+    expect([...C.processTree(procs, 100)].sort()).toEqual([100, 110, 141, 142, 143])
+  })
+
+  it('prefers the recorded pid', () => {
+    expect(C.findMainPid(procs, 100)).toBe(100)
+    expect(C.findMainPid([...procs, { pid: 200, ppid: 4, name: 'AI Code Conductor.exe', cmd: `"${APP}"` }])).toBeNull()
+  })
+})
+
+describe('main-process attribution with the committed service map', () => {
+  // A main-like bundle: not minified, its indentation kept.
+  const BUNDLE = [
+    '"use strict";',                                       // 0
+    'const electron = require("electron");',               // 1
+    'function stripAnsi(s) {',                             // 2
+    '  return s.replace(/\\x1b\\[[0-9;]*m/g, "");',        // 3
+    '}',                                                   // 4
+    'class WatchdogManager {',                             // 5
+    '  constructor(host) {',                               // 6
+    '    this.host = host;',                               // 7
+    '  }',                                                 // 8
+    '  feedData(sessionId, data) {',                       // 9
+    '    const tail = stripAnsi(data);',                   // 10
+    '    this.entries.forEach((e) => {',                   // 11
+    '      e.feed(tail);',                                 // 12
+    '    });',                                             // 13
+    '  }',                                                 // 14
+    '}',                                                   // 15
+    'function startStatuslineWatcher(dir) {',              // 16
+    '  const pollTimer = setInterval(() => {',             // 17
+    '    fanOut(dir);',                                    // 18
+    '  }, 1e3);',                                          // 19
+    '}',                                                   // 20
+    'function unrelatedThing() {',                         // 21
+    '  return 1;',                                         // 22
+    '}',                                                   // 23
+    'function registerPtyHandlers(ipcMain) {',             // 24
+    '  ipcMain.handle("pty:write", async (_e, id, d) => {',// 25
+    '    return manager.feedData(id, d);',                 // 26
+    '  });',                                               // 27
+    '}',                                                   // 28
+  ].join('\n')
+  const URL = 'file:///C:/Users/User/AppData/Local/Programs/AI%20Code%20Conductor/resources/app.asar/out/main/index.js'
+  const f = (functionName: string, lineNumber: number, url = URL) => ({ functionName, url, lineNumber, columnNumber: 0, scriptId: '1' })
+  const profile = {
+    nodes: [
+      { id: 1, callFrame: f('(root)', -1, ''), children: [2, 9, 12, 13, 20] },
+      { id: 2, callFrame: f('processTimers', 500, 'node:internal/timers'), children: [3] },
+      { id: 3, callFrame: f('listOnTimeout', 520, 'node:internal/timers'), children: [4] },
+      { id: 4, callFrame: f('', 17), children: [5] },              // the statusline poll arrow
+      { id: 5, callFrame: f('readFileSync', 400, 'node:fs'), children: [] },
+      { id: 9, callFrame: f('(idle)', -1, ''), children: [] },
+      { id: 12, callFrame: f('(garbage collector)', -1, ''), children: [] },
+      { id: 13, callFrame: f('unrelatedThing', 21), children: [] },
+      { id: 20, callFrame: f('', 25), children: [21] },            // an IPC handler (ipc-handlers)...
+      { id: 21, callFrame: f('feedData', 9), children: [22, 23] }, // ...calling the Watchdog
+      { id: 22, callFrame: f('stripAnsi', 2), children: [] },
+      { id: 23, callFrame: f('', 11), children: [] },              // forEach arrow inside the method
+    ],
+    // Each sample lasts until the next one (timeDeltas[i + 1], microseconds).
+    samples: [5, 5, 9, 9, 9, 22, 23, 13, 12, 20, 5],
+    timeDeltas: [0, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
+  }
+
+  it('names each frame by the top-level function or class it sits in', () => {
+    const lines = BUNDLE.split('\n')
+    expect(A.topLevelName(lines, 17)).toBe('startStatuslineWatcher')
+    expect(A.topLevelName(lines, 11)).toBe('WatchdogManager')
+    expect(A.topLevelName(lines, 2)).toBe('stripAnsi')
+    expect(A.topLevelName(lines, 26)).toBe('registerPtyHandlers')
+    expect(A.topLevelName(lines, 1)).toBe('electron')
+  })
+
+  it('attributes the self time to services, the nearest matching frame first', () => {
+    const r = A.attributeProfile(profile, SERVICE_MAP, { topOf: A.topLevelNamer(BUNDLE) })
+    // readFileSync under the statusline arrow: 2 samples of 1 ms (the last sample counts nothing).
+    expect(r.byService.statusline).toBeCloseTo(2, 6)
+    // stripAnsi 1 ms + the forEach arrow 1 ms; the IPC handler above them is farther away.
+    expect(r.byService.watchdog).toBeCloseTo(2, 6)
+    // the IPC handler's own frame.
+    expect(r.byService['ipc-handlers']).toBeCloseTo(1, 6)
+    expect(r.idleMs).toBeCloseTo(3, 6)
+    expect(r.gcMs).toBeCloseTo(1, 6)
+    expect(r.unattributedMs).toBeCloseTo(1, 6)
+    expect(r.topUnattributed[0].frame).toMatch(/^unrelatedThing .*index\.js:22$/)
+    expect(r.totalMs).toBeCloseTo(10, 6)
+  })
+
+  it('attributes nothing to a service when the bundle source is missing (names alone)', () => {
+    const r = A.attributeProfile(profile, SERVICE_MAP, {})
+    expect(r.byService.statusline).toBeUndefined()
+    expect(r.byService.watchdog).toBeUndefined()
+  })
+})

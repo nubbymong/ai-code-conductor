@@ -51,6 +51,17 @@ const HOME = typeof STAGE.home === 'string' ? STAGE.home : ''
 const STATUS_DIR = process.env.CCC_FAKE_STATUS_DIR || (typeof STAGE.statusDir === 'string' ? STAGE.statusDir : '')
 const CCC_SESSION = process.env.CLAUDE_MULTI_SESSION_ID || null
 
+// The performance harness (scripts/perf/gen-sessions.cjs) sets `mode` in the
+// same file. idle: the conversation is drawn, then the CLI sits at its prompt
+// (no spinner) and writes its status file every 30 s. busy, and no mode at all
+// (the README pipeline): the spinner is redrawn every 120 ms and the status
+// file written every 2 s. Read again every 2 s, so a run can switch it while
+// the app runs.
+const readMode = () => {
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'fake-stage.json'), 'utf8')).mode === 'idle' ? 'idle' : 'busy' } catch { return 'busy' }
+}
+let mode = readMode()
+
 // ── terminal geometry + palette ────────────────────────────────────────────
 const cols = Math.max(60, Math.min(process.stdout.columns || 120, 160))
 const WRAP = cols - 2
@@ -203,7 +214,11 @@ function writeStatus() {
   process.stdin.on('data', (d) => { const s = String(d); if (s.includes('\x03') || s === 'q') process.exit(0) })
 
   writeStatus()
-  setInterval(writeStatus, 2000)
+  let statusAt = Date.now()
+  setInterval(() => {
+    mode = readMode()
+    if (Date.now() - statusAt >= (mode === 'idle' ? 30000 : 2000) - 100) { statusAt = Date.now(); writeStatus() }
+  }, 2000)
 
   header()
   let spinnerWord = 'Thinking'
@@ -216,7 +231,9 @@ function writeStatus() {
   }
   let tick = 0
   let tokens = 640
+  spinnerBlock(spinnerWord, tick, 4, tokens)
   setInterval(() => {
+    if (mode === 'idle') return
     tick++
     tokens += 7 + (tick % 5)
     spinnerBlock(spinnerWord, tick, Math.floor(tick * 0.12) + 4, tokens)

@@ -1,0 +1,76 @@
+{
+  "about": "Performance harness (scripts/perf): which main-process code belongs to which service, for report.cjs to attribute a main CPU profile. Main is bundled but neither minified nor source-mapped, so names are the only key. A frame matches a service when its own function name matches one of `functions`, the top-level function or class of the bundle it sits in matches one of `within`, or its script url matches one of `urls`. Walking from the sampled frame up through its callers, the nearest matching frame names the service; services are tried in this order. Names may carry a $N suffix where the bundler renamed a clash. Node and Electron internals are deliberately not services: a frame there takes the service of the app code that called it.",
+  "services": [
+    {
+      "id": "pty-output",
+      "label": "Terminal I/O (PTY data, writes, resizes)",
+      "within": ["^(?:spawnPtyResolved|spawnPty|writePty|writeChunked|writeEnvelopeChunked|pastePty|resizePty|guardSessionPty|extractSshOscSentinels|writeSubmittedLine|PasteQueue|PtyIntegrityMonitor)(?:\\$\\d+)?$"],
+      "urls": ["node-pty"]
+    },
+    {
+      "id": "watchdog",
+      "label": "Watchdog (screen reading per session)",
+      "within": ["^(?:WatchdogManager|SessionWatchdog|stripAnsi|contentTail|contentTailRange|hasActiveMonitors|toolEchoMask|isRateLimited|resumedAfterLimit|isRateLimitOptionsPrompt|detectOverload|overloadMatch|detectSafeguard|safeguardMatch|isWorking|isInternalRetry|findRateLimitMessage|canSendNow|hasClaudeInputChrome|clampAnsiChunk)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "statusline",
+      "label": "Statusline (status files to the session cards)",
+      "within": ["^(?:startStatuslineWatcher|fanOutStatusline|sweepStaleStatusFiles|isOwnSession|sanitiseUsageBuckets|sanitiseRateLimitExtra|sanitiseSentinelPayload|sanitiseRemoteAccountEmail|dispatchSSHStatuslineUpdate|healGlobalStatusline|cleanupStatusFile|getStatusDir)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "tokenomics",
+      "label": "Tokenomics (main side: supervisor, IPC)",
+      "within": ["^(?:TokenomicsSupervisor|noteTokenomicsSessionAccount|createTranscriptAttribution|profileOfTranscript|setLiveUsageTranscriptProfile)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "logging",
+      "label": "Session logging (main side: supervisor, transcript binding)",
+      "within": ["^(?:LogSupervisor|routeHookTranscriptPath|noteClaudeTranscript|noteClaudeFolder|initLogging|getTranscriptBinder)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "hooks",
+      "label": "Hooks gateway (main side: proxy, supervisor)",
+      "within": ["^(?:HooksGatewayProxy|HooksGateway|ServiceSupervisor|forkHooksChild)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "services-panel",
+      "label": "Services registry and monitors",
+      "within": ["^(?:createServiceRegistry|fromSnapshot|Supervisor|LoopStallMonitor|startJankDetector|reportIfStalled|registerServiceHealthHandlers)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "session-helper",
+      "label": "Session helper connection",
+      "within": ["^(?:SessionHelperManager|HolderConnection|HelperPty|FrameReader|initSessionHelper|sessionHelperServiceState)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "accounts",
+      "label": "Accounts (identity checks, usage)",
+      "within": ["^(?:AccountsService|AccountRegistryStore|recheckAllAsync|recheckAllAsyncInner|recheckSessionIdentityAsync|recheckSessionIdentity|recheckAll|followCredentialRotation|credentialRotationStamp|startWatchingAccountIdentity|RateLimitShield)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "github",
+      "label": "GitHub sync",
+      "within": ["^(?:SyncOrchestrator|NotificationsPoller|AiUsageScheduler|EtagCache|CacheStore|GitHubConfigStore)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "service-status",
+      "label": "Status page poller (the assistants' service status)",
+      "within": ["^(?:pollAll|pollSource|pollSwitched|parseComponents|startServiceStatusPoller|refreshServiceStatus|buildPayload)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "effort",
+      "label": "Effort tracker",
+      "within": ["^(?:startEffortTracker|pushEffort|effortFromEvent)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "vision",
+      "label": "Vision browser manager",
+      "within": ["^(?:VisionManager)(?:\\$\\d+)?$"]
+    },
+    {
+      "id": "ipc-handlers",
+      "label": "Renderer requests (IPC handlers)",
+      "within": ["^register\\w*Handlers(?:\\$\\d+)?$"]
+    }
+  ]
+}
