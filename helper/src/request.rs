@@ -335,6 +335,55 @@ mod tests {
         assert_eq!(code(&text), CODE_BAD_FIELD);
     }
 
+    /// A launch with `more` (one or more `"key":value` members) after `rows`.
+    fn launch_with(argv: &str, more: &str) -> String {
+        launch(argv, "{}").replace("\"rows\":24", &format!("\"rows\":24,{more}"))
+    }
+
+    #[test]
+    fn an_exact_command_line_and_the_bundled_conpty_are_for_windows_only() {
+        let p = format!("[\"{PROGRAM}\"]");
+        let line = launch_with(&p, &format!("\"line\":\"{PROGRAM} /d /s /c echo hi\""));
+        let bundled = launch_with(&p, "\"conpty\":\"bundled\"");
+        let both = launch_with(&p, &format!("\"conpty\":\"bundled\",\"line\":\"{PROGRAM} /c ver\""));
+        if cfg!(windows) {
+            for text in [&line, &bundled, &both] {
+                assert!(parsed(text).is_ok(), "refused on Windows: {text} ({:?})", parsed(text));
+            }
+        } else {
+            for text in [&line, &bundled, &both] {
+                assert_eq!(code(text), CODE_BAD_FIELD, "{text}");
+            }
+        }
+        // Not the bundled one, or not a string: refused on every OS.
+        for other in ["\"system\"", "\"BUNDLED\"", "\"\"", "true", "null", "1"] {
+            assert_eq!(code(&launch_with(&p, &format!("\"conpty\":{other}"))), CODE_BAD_FIELD, "conpty {other}");
+        }
+        for other in ["1", "null", "true", "[\"a\"]", "{}"] {
+            assert_eq!(code(&launch_with(&p, &format!("\"line\":{other}"))), CODE_BAD_FIELD, "line {other}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_exact_command_line_is_held_to_its_limits() {
+        let p = format!("[\"{PROGRAM}\"]");
+        let with_line = |line: &str| launch_with(&p, &format!("\"line\":\"{line}\""));
+        // The longest allowed, and one past it, counted in characters as
+        // every other limit is.
+        assert!(parsed(&with_line(&"a".repeat(32767))).is_ok(), "32767 characters refused");
+        assert!(parsed(&with_line(&"\u{e9}".repeat(32767))).is_ok(), "32767 two-byte characters refused");
+        assert_eq!(code(&with_line(&"a".repeat(32768))), CODE_TOO_LARGE);
+        assert_eq!(code(&with_line("a\\u0000b")), CODE_BAD_FIELD);
+        assert_eq!(code(&with_line("")), CODE_BAD_FIELD);
+        // With a line, argv holds the program alone: nothing says which wins.
+        let two = format!("[\"{PROGRAM}\",\"/c\"]");
+        assert_eq!(code(&launch_with(&two, "\"line\":\"cmd /c ver\"")), CODE_BAD_FIELD);
+        // Each field once.
+        assert_eq!(code(&launch_with(&p, "\"conpty\":\"bundled\",\"conpty\":\"bundled\"")), CODE_BAD_FIELD);
+        assert_eq!(code(&launch_with(&p, "\"line\":\"a\",\"line\":\"a\"")), CODE_BAD_FIELD);
+    }
+
     #[test]
     fn types_ids_and_fields_are_strict() {
         assert_eq!(parsed("{\"t\":\"ping\",\"id\":4}").unwrap(), Request::Ping { id: 4 });

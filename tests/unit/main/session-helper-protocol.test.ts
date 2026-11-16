@@ -53,7 +53,7 @@ describe('session helper protocol: the numbers are the helper\'s', () => {
     const L = local.limits
     expect(LAUNCH_LIMITS).toEqual({
       argvItems: L.argv_items, argChars: L.arg_chars, cwdChars: L.cwd_chars, envEntries: L.env_entries,
-      envNameChars: L.env_name_chars, envValueChars: L.env_value_chars, termCells: L.term_cells,
+      envNameChars: L.env_name_chars, envValueChars: L.env_value_chars, lineChars: L.line_chars, termCells: L.term_cells,
     })
   })
 })
@@ -145,21 +145,56 @@ describe('session helper protocol: records, listings and endpoints (section 15)'
 
   it('a launch the holder would refuse is refused here first, with the same code', () => {
     let checked = 0
+    let windowsFields = 0
     for (const os of OSES) {
       for (const v of [...local.requests.valid, ...local.requests.invalid]) {
         if (!appliesOn(v, os)) continue
         let m: Record<string, unknown>
         try { m = JSON.parse(v.json) } catch { continue }
         if (!m || m.t !== 'term.launch' || typeof m.id !== 'number') continue
-        const keys = Object.keys(m).sort().join(',')
-        if (keys !== 'argv,cols,cwd,env,id,rows,t') continue
+        // The launch's own fields, and the two Windows ones (protocol change
+        // 2); a vector with any other key is about the frame, not the launch.
+        const base = ['argv', 'cols', 'cwd', 'env', 'id', 'rows', 't']
+        const keys = Object.keys(m)
+        if (!base.every((k) => keys.includes(k)) || !keys.every((k) => base.includes(k) || k === 'line' || k === 'conpty')) continue
         const want = v.error ?? null
         const got = checkLaunch(m as never, os)
         expect(got ? got.code : null, `${os} ${v.name}`).toBe(want)
         checked++
+        if ('line' in m || 'conpty' in m) windowsFields++
       }
     }
     expect(checked).toBeGreaterThan(4)
+    // Both OSes see every vector of the Windows fields: refused on one, read on the other.
+    expect(windowsFields).toBeGreaterThanOrEqual(12)
+  })
+
+  it('an exact command line (`line`) is for Windows only, 1 to 32767 characters, with no NUL, and the program alone in argv', () => {
+    const cmd = 'C:\\Windows\\System32\\cmd.exe'
+    const spec = { argv: [cmd], cwd: 'C:\\Users\\u', env: { SystemRoot: 'C:\\Windows' }, cols: 80, rows: 24 }
+    const line = `${cmd} /d /v:off /s /c ""C:\\Users\\u\\AppData\\Roaming\\npm\\codex.cmd" resume"`
+    expect(checkLaunch({ ...spec, line }, 'windows')).toBeNull()
+    expect(checkLaunch({ ...spec, argv: ['/bin/sh'], cwd: '/home/u', line: '/bin/sh -c true' }, 'unix')?.code).toBe('bad-field')
+    // The longest allowed and one past it, counted in characters as every other limit is.
+    expect(checkLaunch({ ...spec, line: 'a'.repeat(LAUNCH_LIMITS.lineChars) }, 'windows')).toBeNull()
+    expect(checkLaunch({ ...spec, line: '\u00e9'.repeat(LAUNCH_LIMITS.lineChars) }, 'windows')).toBeNull()
+    expect(checkLaunch({ ...spec, line: 'a'.repeat(LAUNCH_LIMITS.lineChars + 1) }, 'windows')?.code).toBe('too-large')
+    expect(checkLaunch({ ...spec, line: `${cmd} /c a\0b` }, 'windows')?.code).toBe('bad-field')
+    expect(checkLaunch({ ...spec, line: '' }, 'windows')?.code).toBe('bad-field')
+    expect(checkLaunch({ ...spec, line: 7 } as never, 'windows')?.code).toBe('bad-field')
+    expect(checkLaunch({ ...spec, line: null } as never, 'windows')?.code).toBe('bad-field')
+    expect(checkLaunch({ ...spec, argv: [cmd, '/c'], line }, 'windows')?.code).toBe('bad-field')
+  })
+
+  it('the bundled ConPTY (`conpty: "bundled"`) is for Windows only, and no other value is', () => {
+    const spec = { argv: ['C:\\Windows\\System32\\cmd.exe'], cwd: 'C:\\Users\\u', env: {}, cols: 80, rows: 24 }
+    expect(checkLaunch({ ...spec, conpty: 'bundled' }, 'windows')).toBeNull()
+    expect(checkLaunch({ ...spec, argv: ['/bin/sh'], cwd: '/home/u', conpty: 'bundled' }, 'unix')?.code).toBe('bad-field')
+    for (const other of ['system', 'BUNDLED', '', true, null, 1]) {
+      expect(checkLaunch({ ...spec, conpty: other } as never, 'windows')?.code, String(other)).toBe('bad-field')
+    }
+    // Left out, the system ConPTY: the launch is as before.
+    expect(checkLaunch(spec, 'windows')).toBeNull()
   })
 
   it('names that differ only in case are refused on every OS (the app then starts the terminal the usual way)', () => {
