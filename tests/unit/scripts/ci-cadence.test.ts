@@ -403,6 +403,11 @@ describe('ci.yml: a docs-only change skips the suite on Windows and macOS, and t
       const raw = job.name ?? id
       if (!raw.includes('${{')) expect(raw.startsWith('Test ('), id).toBe(false)
     }
+    // The Windows parts and the build too: skipped on a label change, a plain
+    // name would show as skipped over the result the commit already has.
+    for (const id of ['test-windows-part', 'test-windows-build']) expect(ci.jobs[id].name, id).toMatch(/\$\{\{ matrix\.(part|os) \}\}/)
+    expect(ci.jobs['test-windows-build'].strategy?.matrix.os).toEqual(['windows-2025'])
+    expect(reportedNames(ci.jobs['test-windows-build'])).toEqual(['Build and native tests (windows-2025)'])
   })
 
   it('each job that runs the suite checks out the merge commit with its base, decides the scope, and every later step obeys it', () => {

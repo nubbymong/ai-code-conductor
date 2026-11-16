@@ -29,7 +29,8 @@ summed file time.
   `Test (windows-2025)`, which GitHub counts as passed. A matrix job skipped as
   a whole reports its name unexpanded instead. `always()` was dropped too,
   because it started the job in a run cancelled as a whole, which left a
-  failed check behind.
+  failed check behind. The build job is a matrix of one for the same reason:
+  not required, but its skipped copy showed over its earlier pass.
   Each part's summary lists its 15 slowest files
   (`scripts/ci/slow-test-files.mjs`, from vitest's own JSON reporter).
 - The launcher lookup file is split into a shared harness and four files, one

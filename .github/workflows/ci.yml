@@ -334,7 +334,10 @@ jobs:
   # Each decides the scope itself ("Decide the scope"), as the Test jobs do,
   # and starts on the same events. None of their names begins with `Test (`,
   # so the release gate and the green-run reuse (TEST_JOB_RE) read only
-  # `Test (windows-2025)`, which stands for them.
+  # `Test (windows-2025)`, which stands for them. Both are matrix jobs (the
+  # build a matrix of one, `os` naming it only) so that, skipped as a whole on
+  # a label change or an edit, they report their names unexpanded and the
+  # results already in the PR's list stand.
   #
   # windows-2025 pinned (not -latest): the windows-2025-vs2026 image that
   # windows-latest now redirects to ships ONLY Visual Studio 2026 ("18"), which
@@ -403,11 +406,14 @@ jobs:
        github.event.action != 'unlabeled' &&
        (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
        (github.event.action != 'edited' || github.event.changes.base.ref.from != ''))
-    name: Build and native tests (windows-2025)
+    name: Build and native tests (${{ matrix.os }})
     runs-on: windows-2025
     timeout-minutes: 30
     outputs:
       suite: ${{ steps.scope.outputs.suite }}
+    strategy:
+      matrix:
+        os: [windows-2025]
     steps:
       - uses: actions/checkout@v7
         with:
