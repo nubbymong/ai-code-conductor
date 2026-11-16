@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { decorateTerminalLinks, createLinkHoverControl, type LinkHoverControl } from './terminal/terminalLinks'
 import { installWebglWithRecovery, createAtlasResync, type WebglHandle } from './terminal/terminalWebgl'
+import { terminalFontFamily, terminalFontReady, terminalFontSpecs, waitForTerminalFont } from './terminal/terminalFont'
 import { atlasCoordinator } from './terminal/atlasCoordinator'
 import {
   createStaleGlyphRepainter,
@@ -659,8 +660,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       }
 
       const ts = useSettingsStore.getState().settings.terminal || DEFAULT_TERMINAL_SETTINGS
-      const fontFallbacks = "'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', Consolas, monospace"
-      const fontFamily = ts.fontFamily ? `'${ts.fontFamily}', ${fontFallbacks}` : fontFallbacks
+      const fontFamily = terminalFontFamily(ts.fontFamily)
 
       // Claude's TUI draws its own input cursor as a coloured cell at
       // the prompt position, and leaves xterm's real cursor wherever
@@ -1768,7 +1768,20 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       container.addEventListener('paste', handlePaste, true)
     }
 
-    requestAnimationFrame(initTerminal)
+    // #313: build the terminal only once its font has loaded (capped, never
+    // rejects), so xterm's cell measure and the WebGL glyph atlas never see a
+    // stand-in face (terminal/terminalFont.ts). A face that is already loaded
+    // (every terminal after the first) starts on the first frame as before.
+    // Only this first call can wait; initTerminal and everything after it run
+    // in the same order as before.
+    const fontSpecs = terminalFontSpecs(useSettingsStore.getState().settings.terminal || DEFAULT_TERMINAL_SETTINGS)
+    if (terminalFontReady(document.fonts, fontSpecs)) {
+      requestAnimationFrame(initTerminal)
+    } else {
+      void waitForTerminalFont(document.fonts, fontSpecs).then(() => {
+        if (!disposed) requestAnimationFrame(initTerminal)
+      })
+    }
 
     return () => {
       disposed = true
