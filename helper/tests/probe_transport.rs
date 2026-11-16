@@ -13,9 +13,10 @@ use aicc_helper::pids;
 use aicc_helper::store::{self, Listing, Record};
 use aicc_helper::transport;
 use std::fs;
+use std::io::{PipeReader, PipeWriter, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{mpsc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const HELPER: &str = env!("CARGO_BIN_EXE_aicc-helper");
@@ -751,6 +752,67 @@ fn of_two_holders_started_at_once_for_one_session_exactly_one_runs() {
     assert_eq!(listed.sessions[0].pid, rec.pid, "the record is not the running holder's");
     end(&rec);
     let _ = fs::remove_dir_all(&store_dir);
+}
+
+/// Let the children this test starts inherit `end`, the way every handle the
+/// app lets a child inherit reaches the `hold --detach` it starts.
+#[cfg(windows)]
+fn inheritable(end: PipeWriter) -> PipeWriter {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
+    let ok = unsafe { SetHandleInformation(end.as_raw_handle() as HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+    assert_ne!(ok, 0, "make the pipe end inheritable: {}", std::io::Error::last_os_error());
+    end
+}
+
+#[cfg(unix)]
+fn inheritable(end: PipeWriter) -> PipeWriter {
+    use std::os::fd::AsRawFd;
+    // Clear close-on-exec, which std sets on every descriptor it makes.
+    let ok = unsafe { libc::fcntl(end.as_raw_fd(), libc::F_SETFD, 0) };
+    assert_eq!(ok, 0, "make the pipe end inheritable: {}", std::io::Error::last_os_error());
+    end
+}
+
+/// Read `end` on a thread of its own; the channel gets a message once every
+/// write end of the pipe is closed. Nothing is ever written to it.
+fn end_of_file(mut end: PipeReader) -> mpsc::Receiver<()> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut got = Vec::new();
+        let _ = end.read_to_end(&mut got);
+        let _ = tx.send(());
+    });
+    rx
+}
+
+#[test]
+fn a_detached_holder_keeps_none_of_its_starters_handles() {
+    let _serial = one_at_a_time();
+    let store_dir = temp_dir("store-handles");
+    let (read_end, write_end) = std::io::pipe().expect("a pipe");
+    let write_end = inheritable(write_end);
+    let ended = end_of_file(read_end);
+    // A plain child given the same handles holds the pipe open while it runs,
+    // so the check below can see a handle that was passed on.
+    let mut plain = Command::new(FAKE).args(["--sleep", "60"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("start the fake CLI");
+    let rec = hold(&store_dir, "probe-0010", 60);
+    // `hold --detach` has exited; this test's own end goes too.
+    drop(write_end);
+    let control = ended.recv_timeout(Duration::from_millis(500));
+    let _ = plain.kill();
+    let _ = plain.wait();
+    // Now only the holder could keep the pipe open.
+    let eof = control.is_ok() || ended.recv_timeout(Duration::from_secs(2)).is_ok();
+    let listed = list(&store_dir);
+    let running = pids::alive(rec.pid);
+    // End the holder before any assert, so a failure leaves nothing running.
+    end(&rec);
+    let _ = fs::remove_dir_all(&store_dir);
+    assert!(control.is_err(), "the pipe ended while a child that inherited it still ran: this test cannot see a handle that was passed on");
+    assert!(eof, "the holder (process {}) kept the pipe its starter was given open", rec.pid);
+    assert!(running, "the holder (process {}) was not running", rec.pid);
+    assert_eq!(listed.sessions.iter().map(|s| s.pid).collect::<Vec<_>>(), vec![rec.pid], "list mode did not show the holder");
 }
 
 #[test]
