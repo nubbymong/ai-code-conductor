@@ -19,8 +19,10 @@ change inside it:
 - The same tree was tested several times. A PR ran the matrix; every label
   added to the PR (`desktop-tested`, `in-beta`, a release label) started the
   matrix again; the release then ran the suite once more on Windows and Linux
-  for a tree CI had already passed. The Windows suite alone takes about half
-  an hour.
+  for a tree CI had already passed. The Windows suite alone took about half
+  an hour in one job, as the release still runs it. Since 2.1.3-beta.6 CI
+  runs it in four parts side by side, and `Test (windows-2025)` reports about
+  8 to 10 minutes after the run starts.
 - A push to a PR did not stop the run on the commit it replaced.
 - The version bump was a PR of its own, with its own review, CI run and merge.
 - Every PR needed a desktop-test label (`desktop-tested`, `runtime-validated`

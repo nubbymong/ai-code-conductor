@@ -27,6 +27,7 @@ import GlobalLogsView from './components/GlobalLogsView'
 import InsightsPage from './components/InsightsPage'
 import CloudAgentsPage from './components/CloudAgentsPage'
 import TokenomicsPage from './components/TokenomicsPage'
+import MachinesPage from './components/MachinesPage'
 import ConductorMcpPage from './components/ConductorMcpPage'
 import MemoryPage from './components/MemoryPage'
 import SetupDialog from './components/SetupDialog'
@@ -977,6 +978,8 @@ export default function App() {
     if (v === 'insights') return <InsightsPage onNavigateToSessions={() => setView('sessions')} />
     if (v === 'cloud-agents') return <CloudAgentsPage />
     if (v === 'tokenomics') return <TokenomicsPage />
+    // The page stays mounted while another tab shows; `active` tells it to read again on its return.
+    if (v === 'machines') return <MachinesPage active={view === 'machines'} />
     if (v === 'vision') return <ConductorMcpPage />
     if (v === 'memory') return <MemoryPage
       onClose={() => setView('sessions')}

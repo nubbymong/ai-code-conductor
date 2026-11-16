@@ -54,7 +54,7 @@ const STEPS: TourStep[] = [
   {
     selector: '[data-tour="nav-rail"]',
     title: 'Everything has a home',
-    body: 'Cloud Agents, Insights, Tokenomics, Memory, Logs and the built-in tools (Conductor MCP) all live on this rail, with the Usage page for your accounts\' limits once you have two or more. Each opens a full page.',
+    body: 'Cloud Agents, Insights, Tokenomics, Machines, Memory, Logs and the built-in tools (Conductor MCP) all live on this rail, with the Usage page for your accounts\' limits once you have two or more. Each opens a full page.',
   },
   {
     // Anchored on the always-mounted Saved TAB, not the "+ New" button

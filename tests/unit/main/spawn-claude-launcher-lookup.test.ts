@@ -15,8 +15,8 @@
 //    still reads every argument as text.
 // The node.exe lookup is mocked: no PATH is walked and no process starts.
 // The same lines in real shells, with a launcher shaped like npm's:
-// spawn-claude-launcher-lookup-powershell.test.ts (quarantined to CI and the
-// test VM).
+// spawn-claude-launcher-lookup-powershell.test.ts and its parts -2, -3 and -4
+// (quarantined to CI and the test VM).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('../../../src/main/windows-programs', async (importOriginal) => {

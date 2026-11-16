@@ -783,6 +783,13 @@ export interface ElectronAPI {
     restart: (serviceId: string) => Promise<{ ok: boolean; reason?: string }>
     onUpdate: (callback: (snap: import('../../shared/service-health').DiagnosticsSnapshot) => void) => () => void
   }
+  /** The Machines page: This computer's session helper and the terminals it holds. */
+  machines: {
+    status: () => Promise<import('../../shared/machines').MachineStatus>
+    runSelfTest: () => Promise<import('../../shared/machines').SelfTestResult>
+    endSession: (id: string) => Promise<import('../../shared/machines').MachineActionResult>
+    reattach: (id: string) => Promise<import('../../shared/machines').MachineActionResult>
+  }
   cli: {
     check: () => Promise<boolean>
     path: () => Promise<string | null>
