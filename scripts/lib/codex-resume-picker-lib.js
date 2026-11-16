@@ -296,9 +296,9 @@ function isLocalAbsolute(p) {
 // The real path of a folder for ONE walk: asked once per spelling (a failure
 // is kept too), off the loop, each wait bounded. Null for a folder it cannot
 // give (relative, a share, missing, refused, or no answer in time). Once a
-// folder has not answered in time, the others on the same drive are not asked
-// (a drive that is down is waited for once). Never rejects. `deps` (realpath,
-// waitMs) is for tests.
+// folder has not answered in time, no NEW folder on the same drive is asked
+// (a drive that is down is waited for once); an answer already had is still
+// given. Never rejects. `deps` (realpath, waitMs) is for tests.
 function realPathLookup(deps) {
   const realpath = (deps && deps.realpath) || ((p) => fs.promises.realpath(p))
   const waitMs = deps && typeof deps.waitMs === 'number' ? deps.waitMs : REAL_PATH_WAIT_MS
@@ -307,10 +307,10 @@ function realPathLookup(deps) {
   const driveOf = (p) => (/^[A-Za-z]:/.test(p) ? p.slice(0, 2).toLowerCase() : '/')
   return (p) => {
     if (!isLocalAbsolute(p)) return Promise.resolve(null)
-    const drive = driveOf(p)
-    if (silent.has(drive)) return Promise.resolve(null)
     let answer = asked.get(p)
     if (!answer) {
+      const drive = driveOf(p)
+      if (silent.has(drive)) return Promise.resolve(null)
       const run = Promise.resolve()
         .then(() => realpath(p))
         .then((real) => (typeof real === 'string' && real !== '' ? real : null), () => null)
@@ -340,7 +340,11 @@ async function walkRolloutsAsync(home, maxDays, where, platform, deps) {
 
   for (const head of rolloutHeads(home, maxDays)) {
     let wt = worktrees.find((w) => samePath(w.path, head.parsed.cwd, plat))
+    // The folder the rollout records is a worktree's real folder (the worktree
+    // is the link): known already, no disk call.
+    if (!wt) wt = worktrees.find((w) => { const r = worktreeReal.get(w.path); return !!r && samePath(r, head.parsed.cwd, plat) })
     if (!wt) {
+      // Or the rollout records a link: its real folder, asked of the disk.
       const recordedReal = await real(head.parsed.cwd)
       if (recordedReal) wt = worktrees.find((w) => samePath(worktreeReal.get(w.path) || w.path, recordedReal, plat))
     }

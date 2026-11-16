@@ -141,6 +141,38 @@ describe('a folder whose real path cannot be had', () => {
   })
 })
 
+describe('a folder that did not answer in time', () => {
+  /** Answers the known folders, and never answers HUNG. */
+  const hangingOn = (hung: string, known: Record<string, string>) => vi.fn((p: string): Promise<string> => (p === hung ? new Promise<string>(() => {}) : p in known ? Promise.resolve(known[p]) : Promise.reject(new Error(`ENOENT: ${p}`))))
+  const HUNG = '/proj/hung'
+
+  it('does not hide a conversation recorded under the real folder the session\'s link is already known to have', async () => {
+    put(1, REAL, 30)
+    put(2, HUNG, 10)
+    const out = await lib.walkRolloutsAsync(home, 30, LINK, undefined, { realpath: hangingOn(HUNG, ALL_ONE_FOLDER), waitMs: 30 })
+    expect(out.map((c) => c.id)).toEqual([idOf(1)])
+  })
+
+  it('does not take back an answer already had: a link asked before is still resolved after it', async () => {
+    put(1, LINK2, 30)
+    put(2, HUNG, 20)
+    put(3, LINK2, 10)
+    const real = hangingOn(HUNG, ALL_ONE_FOLDER)
+    const out = await lib.walkRolloutsAsync(home, 30, REAL, undefined, { realpath: real, waitMs: 30 })
+    expect(out.map((c) => c.id)).toEqual([idOf(3), idOf(1)])
+    // The link was asked once; the folder that did not answer was asked once.
+    expect(real.mock.calls.map((c) => c[0]).sort()).toEqual([HUNG, LINK2, REAL].sort())
+  })
+
+  it('does not ask a new folder on the same drive once one has not answered', async () => {
+    put(1, OTHER, 30)
+    put(2, HUNG, 10)
+    const real = hangingOn(HUNG, ALL_ONE_FOLDER)
+    await lib.walkRolloutsAsync(home, 30, LINK, undefined, { realpath: real, waitMs: 30 })
+    expect(real.mock.calls.map((c) => c[0])).toEqual([LINK, HUNG])
+  })
+})
+
 describe('what the lookup asks the disk', () => {
   it('each folder once, however many rollouts name it', async () => {
     for (let n = 1; n <= 5; n++) put(n, OTHER)

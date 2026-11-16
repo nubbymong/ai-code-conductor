@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-16T03:09:46.770Z",
-  "head": "cacf63a30b0347dbd1ee7efb0e811d3f89c23dba",
-  "tree": "a00450a04933bdff5847ce751fe38444fde35979",
+  "generatedAt": "2026-11-16T03:40:00.884Z",
+  "head": "f4514798a4334d140573d2c5644eddcfc7f03bdb",
+  "tree": "4a7447386218fe3b9f83594d1b33dce04711148f",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3292,
-  "excludedFileCount": 487,
-  "scannedFileCount": 2805,
+  "trackedFileCount": 3294,
+  "excludedFileCount": 488,
+  "scannedFileCount": 2806,
   "unscopedFileCount": 42,
   "unscoped": [
     ".claude/settings.json",
@@ -166,8 +166,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 913,
-  "pathDigest": "5ba6d9cfba39a4e87e686adf8e052a6c13f2ae52ef268e9c8a4a263f04878887",
+  "matchedPathCount": 914,
+  "pathDigest": "0aa867f7b4065327874355a5d5ba8222cfe36c21cbdcc8c9ed19f996bbc34ccc",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -4938,6 +4938,15 @@
         "P13"
       ],
       "lineCount": 21
+    },
+    {
+      "path": "tests/unit/main/pty-spawn-warms-codex-resume.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 27
     },
     {
       "path": "tests/unit/main/pty-ssh-color-query-passthrough.test.ts",

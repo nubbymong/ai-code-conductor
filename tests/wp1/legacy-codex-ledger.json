@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "5ba6d9cfba39a4e87e686adf8e052a6c13f2ae52ef268e9c8a4a263f04878887",
-  "manifestHead": "cacf63a30b0347dbd1ee7efb0e811d3f89c23dba",
+  "manifestPathDigest": "0aa867f7b4065327874355a5d5ba8222cfe36c21cbdcc8c9ed19f996bbc34ccc",
+  "manifestHead": "f4514798a4334d140573d2c5644eddcfc7f03bdb",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -7093,6 +7093,18 @@
       "disposition": "added",
       "evidence": "new 2.1.1-beta.3 test (tests/unit/main/pty-spawn-waits-for-script-folders.test.ts): while the start's check of the resources folder's scripts folders and the deploys into them still run, a local Claude Code or Codex launch is held as a prepared spawn and starts once they have run; a close while it waits starts nothing; a launch over SSH or a terminal-only one is not held (WP1.68); tests/unit/main/pty-spawn-waits-for-script-folders.test.ts",
       "note": "created by the 2.1.1-beta.3 scripts folders change; the Codex launch case added in its review fix pass"
+    },
+    {
+      "path": "tests/unit/main/pty-spawn-warms-codex-resume.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.6 test (tests/unit/main/pty-spawn-warms-codex-resume.test.ts): through the real pty:spawn handler, a Codex launch that resumes a conversation (the request's own, else the kept one on a restart) waits for the provider's look at its folders by real path, with the launch's own sessions folder; the picker, a fresh respawn, SSH and Ask launches do not ask it, and a look that fails or is missing never stops the launch (WP1.68)",
+      "note": "created by the 2.1.3-beta.6 section E track; pty-manager and the accounts service are faked, no Codex process"
     },
     {
       "path": "tests/unit/main/pty-ssh-color-query-passthrough.test.ts",
