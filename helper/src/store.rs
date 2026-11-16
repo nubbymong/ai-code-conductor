@@ -164,7 +164,8 @@ fn euid() -> u32 {
 }
 
 /// Make the store folder if it is missing. On Unix it must be this user's,
-/// and is set to 0700.
+/// and its mode is set to exactly 0700 whenever it is anything else (open to
+/// others, or missing a bit the user needs).
 pub fn prepare(store: &Path) -> io::Result<()> {
     fs::create_dir_all(store)?;
     let md = fs::metadata(store)?;
@@ -177,7 +178,7 @@ pub fn prepare(store: &Path) -> io::Result<()> {
         if md.uid() != euid() {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("{} belongs to another user", store.display())));
         }
-        if md.mode() & 0o077 != 0 {
+        if md.mode() & 0o777 != 0o700 {
             fs::set_permissions(store, fs::Permissions::from_mode(0o700))?;
         }
     }
@@ -481,6 +482,22 @@ mod tests {
             write(&store, &r).unwrap();
             assert_eq!(fs::metadata(record_path(&store, "store-0002")).unwrap().mode() & 0o777, 0o600);
             assert_eq!(fs::metadata(&store).unwrap().mode() & 0o777, 0o700);
+        }
+        fs::remove_dir_all(&store).unwrap();
+    }
+
+    /// A store the user cannot write or enter (0500, say) is open to nobody
+    /// else and still unusable: it is set to exactly 0700 too.
+    #[cfg(unix)]
+    #[test]
+    fn a_store_of_any_other_mode_is_set_to_exactly_0700() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let store = scratch("mode");
+        prepare(&store).unwrap();
+        for mode in [0o500, 0o755, 0o710] {
+            fs::set_permissions(&store, fs::Permissions::from_mode(mode)).unwrap();
+            prepare(&store).unwrap();
+            assert_eq!(fs::metadata(&store).unwrap().mode() & 0o777, 0o700, "from {mode:o}");
         }
         fs::remove_dir_all(&store).unwrap();
     }

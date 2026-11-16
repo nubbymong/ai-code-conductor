@@ -17,7 +17,10 @@ pub fn alive(pid: u32) -> bool {
 }
 
 /// A process that has exited but not been reaped yet still answers signal 0.
-/// Linux says so in /proc; elsewhere the parent (or launchd) reaps at once.
+/// Linux says so in /proc. macOS has no /proc, so there such a process counts
+/// as running until its parent reaps it: a holder reaps its own child, and a
+/// process whose parent is gone is reaped by launchd, but a process whose
+/// parent is alive and does not reap it reads as alive.
 #[cfg(unix)]
 fn zombie(pid: u32) -> bool {
     match std::fs::read_to_string(format!("/proc/{pid}/stat")) {

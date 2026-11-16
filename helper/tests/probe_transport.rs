@@ -47,13 +47,19 @@ fn temp_dir(name: &str) -> PathBuf {
 
 struct Ran {
     ok: bool,
+    code: Option<i32>,
     stdout: String,
     stderr: String,
 }
 
 fn helper(args: &[&str]) -> Ran {
     let out = Command::new(HELPER).args(args).output().expect("run the helper");
-    Ran { ok: out.status.success(), stdout: String::from_utf8_lossy(&out.stdout).into_owned(), stderr: String::from_utf8_lossy(&out.stderr).into_owned() }
+    Ran {
+        ok: out.status.success(),
+        code: out.status.code(),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
 }
 
 /// Run `hold --detach` with its output going to files, not pipes. The holder
@@ -74,6 +80,7 @@ fn helper_detaching(args: &[&str], tag: &str) -> Ran {
         .expect("run the helper");
     let ran = Ran {
         ok: status.success(),
+        code: status.code(),
         stdout: fs::read_to_string(&out_path).unwrap_or_default(),
         stderr: fs::read_to_string(&err_path).unwrap_or_default(),
     };
@@ -145,7 +152,10 @@ fn launch_env() -> Vec<(String, String)> {
 }
 
 fn launch_msg(id: u64, program: &str, cwd: &Path) -> Value {
-    let env = launch_env();
+    launch_msg_with(id, program, cwd, launch_env())
+}
+
+fn launch_msg_with(id: u64, program: &str, cwd: &Path, env: Vec<(String, String)>) -> Value {
     msg(
         "term.launch",
         id,
@@ -366,9 +376,18 @@ fn a_detached_holder_is_listed_launched_attached_again_and_ended() {
     expect_t(&launched, "term.launched");
     let child = field(&launched, "pid").as_u64().expect("pid") as u32;
     assert!(pids::alive(child));
+    // A second launch is busy. It is kept small: once a session is launched
+    // a frame's JSON is at most 64 KiB, and this test's environment may be more.
     let id = first.id();
-    expect_error(&first.call(launch_msg(id, FAKE, &work)), "busy");
+    expect_error(&first.call(launch_msg_with(id, FAKE, &work, vec![("A".to_string(), "b".to_string())])), "busy");
     record_becomes(&store_dir, sid, "child running", |r| r.child == "running");
+    // Over 64 KiB of JSON once the session is launched: refused on its
+    // header, and the connection closed; the session goes on.
+    let mut big = App::connect(&rec, true);
+    let id = big.id();
+    big.client.send(msg("ping", id, vec![("pad", Value::Str("x".repeat(70_000)))])).expect("send");
+    big.error("bad-frame");
+    assert!(big.closed(), "a frame over the limit left its connection open");
 
     let id = first.id();
     let attached = first.call(msg("term.attach", id, vec![("from", Value::uint(0))]));
@@ -419,8 +438,16 @@ fn a_detached_holder_is_listed_launched_attached_again_and_ended() {
     expect_error(&third.call(msg("term.attach", id, vec![("from", Value::uint(999_999_999))])), "bad-field");
 
     // Ending ends the whole tree, the holder, its record and its endpoint.
-    let id = third.id();
-    expect_t(&third.call(msg("term.end", id, vec![])), "term.ended");
+    // It comes from a connection that is not attached: the attached one is
+    // told the program's end, and closed.
+    let mut fourth = App::connect(&rec, true);
+    let id = fourth.id();
+    let ended = fourth.call(msg("term.end", id, vec![]));
+    expect_t(&ended, "term.ended");
+    let exit = third.event("term.exit");
+    assert_eq!(exit.get("code").map(Value::to_json), ended.get("code").map(Value::to_json), "term.exit and term.ended differ: {} / {}", exit.to_json(), ended.to_json());
+    assert!(exit.get("code").is_some(), "the end of a launched session has an exit code: {}", ended.to_json());
+    assert!(third.closed(), "the attached connection stayed open after the end");
     assert!(gone(rec.pid, WAIT), "the holder outlived term.end");
     assert!(gone(child, WAIT), "the program outlived term.end");
     assert!(gone(grandchild, WAIT), "the program's own child outlived term.end");
@@ -554,6 +581,11 @@ fn a_second_holder_for_a_live_session_is_refused() {
     let store_arg = store_dir.to_string_lossy().into_owned();
     let twice = helper_detaching(&["hold", "--detach", "--store", &store_arg, "--session", "probe-0005"], "twice");
     assert!(!twice.ok, "a second holder started for a live session: {}", twice.stdout);
+    assert_eq!(twice.code, Some(3), "hold --detach for a live session: {}", twice.stderr);
+    assert!(twice.stderr.contains("already running"), "the holder's own reason was not passed on: {}", twice.stderr);
+    // Without --detach the same.
+    let plain = helper(&["hold", "--store", &store_arg, "--session", "probe-0005"]);
+    assert_eq!(plain.code, Some(3), "hold for a live session: {}", plain.stderr);
     assert_eq!(read_record(&store_dir, "probe-0005").pid, rec.pid, "the second holder replaced the live one's record");
     end(&rec);
     let _ = fs::remove_dir_all(&store_dir);

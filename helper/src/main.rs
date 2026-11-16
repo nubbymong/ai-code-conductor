@@ -11,9 +11,11 @@
 //! ```
 //!
 //! `hold` runs one holder (protocol section 15). With `--detach` it starts the
-//! holder as a process of its own, waits until it has written its record,
-//! prints that record as one JSON line and exits. `list` prints every session
-//! in the store as one JSON line, removing the records of holders that are gone.
+//! holder as a process of its own, in the store folder, waits until it has
+//! written its record, prints that record as one JSON line and exits. `hold`
+//! exits 3 when a holder for the session is already running, with or without
+//! `--detach`. `list` prints every session in the store as one JSON line,
+//! removing the records of holders that are gone.
 #![deny(unsafe_code)]
 
 use aicc_helper::hello::{self, Hello, CAPS};
@@ -21,8 +23,10 @@ use aicc_helper::ring::DEFAULT_RING_BYTES;
 use aicc_helper::serve::{self, Options};
 use aicc_helper::store::{self, DEFAULT_AWAY_SECS, MAX_AWAY_SECS};
 use aicc_helper::{client, detach, selftest, VERSION};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list> [options]";
@@ -31,6 +35,10 @@ const MIN_RING_BYTES: usize = 1024;
 const MAX_RING_BYTES: usize = 64 * 1024 * 1024;
 /// How long `hold --detach` waits for the holder's record.
 const DETACH_WAIT: Duration = Duration::from_secs(15);
+/// `hold`'s exit status when a holder for the session is already running.
+const EXIT_ALREADY_RUNNING: u8 = 3;
+/// The most of a failed holder's message `hold --detach` passes on.
+const MAX_HOLDER_MESSAGE: u64 = 4096;
 
 /// Options as given: each known option once, nothing unknown.
 struct Args {
@@ -206,6 +214,10 @@ fn cmd_hold(args: &[String]) -> ExitCode {
     let opts = Options { store: store_dir, sid, label, away: Duration::from_secs(away), ring_bytes };
     match serve::run(opts) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(e) if serve::already_running(&e) => {
+            eprintln!("aicc-helper: hold failed: {e}");
+            ExitCode::from(EXIT_ALREADY_RUNNING)
+        }
         Err(e) => fail(&format!("hold failed: {e}")),
     }
 }
@@ -217,6 +229,16 @@ fn detached(store_dir: &Path, sid: &str, label: &str, away: u64, ring_bytes: usi
         Ok(p) => p,
         Err(e) => return fail(&format!("cannot find this program: {e}")),
     };
+    // The holder runs in the store folder, so it keeps no folder of the
+    // caller's open; it is named by its full path, which reads the same from
+    // there.
+    let store_dir = match std::path::absolute(store_dir) {
+        Ok(p) => p,
+        Err(e) => return fail(&format!("cannot find the store {}: {e}", store_dir.display())),
+    };
+    if let Err(e) = store::prepare(&store_dir) {
+        return fail(&format!("the store {} cannot be used: {e}", store_dir.display()));
+    }
     let again: Vec<String> = vec![
         "hold".to_string(),
         "--store".to_string(),
@@ -230,21 +252,42 @@ fn detached(store_dir: &Path, sid: &str, label: &str, away: u64, ring_bytes: usi
         "--ring-bytes".to_string(),
         ring_bytes.to_string(),
     ];
-    let mut child = match detach::spawn_detached(&exe, &again) {
-        Ok(c) => c,
+    let started = match detach::spawn_detached(&exe, &again, &store_dir) {
+        Ok(d) => d,
         Err(e) => return fail(&format!("could not start the holder: {e}")),
     };
+    if started.in_starters_job {
+        eprintln!("aicc-helper: note: this process's job does not let a process leave it, so the holder runs inside the job and ends when the job does");
+    }
+    let mut child = started.child;
+    // What the holder says before it is ready: why it failed, if it does.
+    let (said_tx, said) = mpsc::channel();
+    if let Some(stderr) = child.stderr.take() {
+        let read = std::thread::Builder::new().spawn(move || {
+            let mut text = Vec::new();
+            let _ = stderr.take(MAX_HOLDER_MESSAGE).read_to_end(&mut text);
+            let _ = said_tx.send(text);
+        });
+        // Without a reader the failure is still reported, only without the
+        // holder's own words.
+        drop(read);
+    }
     let pid = child.id();
     let deadline = Instant::now() + DETACH_WAIT;
     while Instant::now() < deadline {
-        if let Some(Ok(rec)) = store::read(store_dir, sid) {
+        if let Some(Ok(rec)) = store::read(&store_dir, sid) {
             if rec.pid == pid {
                 println!("{}", rec.to_json());
                 return ExitCode::SUCCESS;
             }
         }
         if let Ok(Some(status)) = child.try_wait() {
-            return fail(&format!("the holder (process {pid}) exited before it was ready: {status}"));
+            let text = said.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
+            let text = String::from_utf8_lossy(&text);
+            let why = text.trim();
+            let why = if why.is_empty() { String::new() } else { format!(": {why}") };
+            eprintln!("aicc-helper: the holder (process {pid}) exited before it was ready ({status}){why}");
+            return if status.code() == Some(i32::from(EXIT_ALREADY_RUNNING)) { ExitCode::from(EXIT_ALREADY_RUNNING) } else { ExitCode::from(1) };
         }
         std::thread::sleep(Duration::from_millis(25));
     }

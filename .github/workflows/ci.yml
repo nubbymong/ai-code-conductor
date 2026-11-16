@@ -551,8 +551,11 @@ jobs:
   # The Rust session helper (helper/; ADR-029, ADR-030). Dormant: nothing ships
   # it and the app does not start it, so this job is NOT a required check and
   # nothing waits on it. It builds and tests the helper on the three OSes it
-  # will run on, and uploads the Windows build for probe P7
-  # (helper/probes/p7-windows-survival.ps1).
+  # will run on, and uploads the Windows build. Probe P7
+  # (helper/probes/p7-windows-survival.ps1) is answered (2026-11-15, ADR-030);
+  # its script rides in the artifact as the record of how, and it drives
+  # commands this build no longer has, so running it again needs a
+  # 2.1.3-beta.5 helper-windows artifact.
   #
   # Its job condition is the Test jobs' event rule and nothing else: it starts on
   # a push, and on a pull request except for a label change other than `ci-run`
@@ -685,7 +688,8 @@ jobs:
         timeout-minutes: 15
         run: cargo test --locked
 
-      # Probe P7 runs on the Windows VM from this artifact.
+      # The P7 script goes in as the record of how the probe ran (see the job's
+      # header); it needs a 2.1.3-beta.5 artifact to run again.
       - name: Build the Windows release binaries
         if: steps.scope.outputs.helper != 'false' && steps.lock.outputs.present == 'true' && runner.os == 'Windows'
         shell: bash

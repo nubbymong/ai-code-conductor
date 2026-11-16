@@ -87,11 +87,6 @@ impl Client {
         Client::connect(&rec.endpoint, &rec.nonce, &rec.session, timeout)
     }
 
-    /// The holder's process id, where the OS reports it.
-    pub fn peer_pid(&self) -> Option<u32> {
-        self.stream.peer_pid()
-    }
-
     /// Answer the hello as the app does: version 1, `core` and `local`.
     pub fn ack(&mut self) -> io::Result<()> {
         self.send(hello::ack_message(1, &LOCAL_CAPS))

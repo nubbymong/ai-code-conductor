@@ -13,9 +13,10 @@
 //!
 //! Both give the same `Listener` and `Stream` shape: `accept` returns a
 //! connection that already passed the checks, a `Stream` reads and writes
-//! bytes, can be cloned for a second thread, takes a read timeout, writes
-//! with a time limit of `WRITE_TIMEOUT`, and `shutdown` from any clone wakes a
-//! blocked reader.
+//! bytes, can be cloned for a second thread, takes a read timeout, writes a
+//! whole message within one time limit however slowly the peer reads
+//! (`write_all_within`; the holder uses `WRITE_TIMEOUT`), and `shutdown` from
+//! any clone wakes a blocked reader.
 
 use std::time::Duration;
 
@@ -97,6 +98,8 @@ pub fn valid_endpoint(endpoint: &str, sid: &str) -> bool {
 
 /// The error kinds that mean nothing listens on an endpoint: the holder is
 /// gone (or never was). Anything else, a timeout included, proves nothing.
+/// macOS gives a full listen queue the same refusal as an empty socket, so
+/// its connect turns a refusal into a timeout (`transport/unix.rs`).
 pub fn means_gone(e: &std::io::Error) -> bool {
     matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
 }
