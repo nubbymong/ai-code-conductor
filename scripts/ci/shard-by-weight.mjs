@@ -4,8 +4,8 @@
 // list into n runs of equal length. That is fair to files of equal weight,
 // and the Windows suite has a few that are not: each Windows PowerShell 5.1
 // start costs 18 to 30 s on the CI runner, and the files below start dozens.
-// They are about half of the suite's time, and the hash put three of them in
-// one part (12 minutes, against 3 for the lightest; PR #694).
+// They are about half of the suite's time, and the hash put five of them in
+// one part and none in another (12 minutes against 3; PR #694).
 //
 // So the files named below go first, heaviest first, each to the part with
 // the least weight so far. Every other file is split as vitest splits it:
@@ -25,19 +25,21 @@
 // in vitest's own order.
 import { createHash } from 'node:crypto'
 
-/** Seconds per file on the windows-2025 runner: the mean of the two runs of
- *  PR #694 (runs 43784524596 and 43786226921). Every other file took under
- *  30 s. Paths are as `git ls-files` prints them. */
+/** Seconds per file on the windows-2025 runner, rounded: as measured in run
+ *  43793925573 of PR #694 (each part's "Slowest test files" summary), the
+ *  first run with the launcher file split and the slow files started first.
+ *  Every other file took under 31 s. Heaviest first; paths are as
+ *  `git ls-files` prints them. */
 export const HEAVY_TEST_FILES = new Map([
-  ['tests/unit/main/spawn-claude-picker-node-powershell.test.ts', 363],
-  ['tests/unit/main/spawn-claude-launcher-lookup-powershell.test.ts', 279],
-  ['tests/unit/main/spawn-claude-agents-powershell.test.ts', 263],
-  ['tests/unit/main/spawn-claude-launcher-lookup-powershell-4.test.ts', 211],
-  ['tests/unit/main/spawn-claude-launcher-lookup-powershell-3.test.ts', 210],
-  ['tests/unit/main/spawn-claude-launcher-lookup-powershell-2.test.ts', 201],
-  ['tests/unit/main/owner-only-folders-real.test.ts', 92],
-  ['tests/unit/main/spawn-claude-user-args-powershell.test.ts', 72],
-  ['tests/wp1/fake-cli.test.ts', 54],
+  ['tests/unit/main/spawn-claude-launcher-lookup-powershell.test.ts', 418],
+  ['tests/unit/main/spawn-claude-picker-node-powershell.test.ts', 360],
+  ['tests/unit/main/spawn-claude-agents-powershell.test.ts', 274],
+  ['tests/unit/main/spawn-claude-launcher-lookup-powershell-2.test.ts', 273],
+  ['tests/unit/main/spawn-claude-launcher-lookup-powershell-3.test.ts', 269],
+  ['tests/unit/main/spawn-claude-launcher-lookup-powershell-4.test.ts', 268],
+  ['tests/unit/main/owner-only-folders-real.test.ts', 89],
+  ['tests/unit/main/spawn-claude-user-args-powershell.test.ts', 78],
+  ['tests/wp1/fake-cli.test.ts', 55],
 ])
 
 /** vitest's equal split: the [start, end) of part `index` (1-based) of `total`

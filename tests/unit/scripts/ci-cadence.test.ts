@@ -414,8 +414,10 @@ describe('ci.yml: a docs-only change skips the suite on Windows and macOS, and t
     for (const [id, job] of SCOPED) {
       const [checkout, scope, ...rest] = job.steps
       expect(checkout.uses, id).toMatch(/^actions\/checkout@/)
-      // Depth 2: the merge commit and its parents, so the diff against the base can be read.
-      expect(checkout.with, id).toEqual({ 'fetch-depth': 2 })
+      // Depth 2: the merge commit and its parents, so the diff against the base
+      // can be read. No git operation in these jobs needs the token, so it is
+      // not left in .git/config while the PR's code runs.
+      expect(checkout.with, id).toEqual({ 'fetch-depth': 2, 'persist-credentials': false })
       expect(checkout.if, id).toBeUndefined()
       expect(scope.id, id).toBe('scope')
       expect(scope.run, id).toBe('node scripts/ci/change-scope.mjs')
@@ -457,6 +459,14 @@ describe('ci.yml: a docs-only change skips the suite on Windows and macOS, and t
     for (const name of ['Typecheck', 'Unit tests (native / SQLite under Electron-as-Node)', 'Build']) expect(part.steps.some((s) => s.name === name), `part: ${name}`).toBe(false)
     for (const name of ['Fetch the WP1 ledger\'s bound commit', 'Unit tests']) expect(build.steps.some((s) => s.name === name), `build: ${name}`).toBe(false)
     for (const job of [part, build]) expect(job.steps.some((s) => s.name === 'Rebuild native modules')).toBe(false)
+    // Nothing on Windows compiles native code (npm ci --ignore-scripts, no
+    // rebuild, electron-builder --config.npmRebuild=false), so no Windows job
+    // sets up Python for node-gyp; macOS and Linux, which rebuild, still do.
+    const python = (job: Job) => job.steps.filter((s) => /^actions\/setup-python@/.test(s.uses ?? '') || /\bpip\b/.test(s.run ?? ''))
+    for (const [id, job] of [['test-windows-part', part], ['test-windows-build', build]] as Array<[string, Job]>) expect(python(job), id).toEqual([])
+    expect(python(test)).toHaveLength(2)
+    expect(build.steps.find((s) => s.name === 'Package Windows installer (release/* branches only)')!.run).toContain('--config.npmRebuild=false')
+    expect(build.steps.find((s) => s.name === 'Install dependencies')!.run).toBe('npm ci --ignore-scripts')
     // The installers: macOS in the test job, Windows in the build job, each on a release/* branch only.
     expect(on(build, 'Package Windows installer (release/* branches only)', 'Windows', 'release/v2.1.3')).toBe(true)
     expect(on(build, 'Package Windows installer (release/* branches only)', 'Windows')).toBe(false)
@@ -555,9 +565,12 @@ describe('ci.yml: Windows runs in parts side by side, and Test (windows-2025) pa
 
   it('Test (windows-2025) needs every part and the build, starts whatever they ended with, and otherwise starts as the Test jobs do', () => {
     expect(winTest.needs).toEqual(['test-windows-part', 'test-windows-build'])
-    // !cancelled(): a job whose need failed is skipped by default, and a skipped job reports as passed.
-    // Not always(): that also starts it in a run cancelled as a whole, and leaves a failed check behind.
-    expect(norm(winTest.if)).toBe(`!cancelled() && (${norm(test.if)})`)
+    // always(): a job whose need failed is skipped by default, and a skipped job reports as passed.
+    // Not !cancelled(): in a run cancelled as a whole that does not start the
+    // job, which can then report skipped, and skipped counts as passed. With
+    // always() it starts there too and fails (run 43784523959).
+    expect(norm(winTest.if)).toBe(`always() && (${norm(test.if)})`)
+    expect(String(winTest.if)).not.toMatch(/cancelled\(\)|success\(\)|failure\(\)/)
     for (const id of ['test-windows-part', 'test-windows-build']) expect(norm(ci.jobs[id].if), id).toBe(norm(test.if))
     expect(winTest['runs-on']).toBe('ubuntu-latest')
     expect(winTest.permissions).toEqual({ contents: 'read' })

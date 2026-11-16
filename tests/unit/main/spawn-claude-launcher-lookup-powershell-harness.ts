@@ -27,8 +27,11 @@
 // only. So the routes are spread over four files, and the CI parts can run
 // them side by side: the first route goes to part 1, the second to part 2,
 // and so on, round again from part 1 (routesOfPart). Part 1 also holds the
-// session folder checks. A route added to ROUTES lands in a part on its own:
-// no file needs to name it.
+// session folder checks. A route added to ROUTES lands in a part on its own,
+// as long as the four files call parts 1 to 4 of 4, once each, and there are
+// at least as many routes as parts: spawn-claude-launcher-lookup-parts.test.ts
+// checks both, host-safe, so a file deleted, renamed or miscounted fails CI
+// instead of dropping a route.
 import { describe, it, expect, afterAll } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
@@ -36,6 +39,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { buildClaudeLaunchCommand, LAUNCHER_PROGRAM_LOOKUP, _resetPickerNodeFoundForTest } from '../../../src/main/spawn-claude-command'
 import { isolatedProbeEnv } from '../../helpers/home-guard-core.mjs'
+import { itemsOfPart } from '../../helpers/items-of-part'
 
 const BS = String.fromCharCode(92)
 const SYSROOT = process.env.SystemRoot || process.env.SYSTEMROOT || `C:${BS}Windows`
@@ -108,8 +112,7 @@ const ROUTES: Array<[string, Partial<Parameters<typeof buildClaudeLaunchCommand>
 
 /** The routes part `part` of `parts` checks: every route is in exactly one part. */
 export function routesOfPart(part: number, parts: number): typeof ROUTES {
-  if (!Number.isInteger(parts) || parts < 1 || !Number.isInteger(part) || part < 1 || part > parts) throw new Error(`no part ${part} of ${parts}`)
-  return ROUTES.filter((_, i) => i % parts === part - 1)
+  return itemsOfPart(ROUTES, part, parts)
 }
 
 /** The launch line on each route of part `part` of `parts`, in each shell, after each profile. */

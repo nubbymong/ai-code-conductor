@@ -78,6 +78,15 @@ describe('all-parts-passed: the required check passes only when every part did',
     expect(run({ NEEDS: JSON.stringify(green()), GITHUB_OUTPUT: 'out' }).code).toBe(1)
     // The output is the decision the tree step reads: one that cannot be written is no pass.
     expect(run(env(green()), true).code).toBe(1)
+    // Nor one with nowhere to go: with no output the tree step would run, even
+    // on a documentation-only change that never ran the suite.
+    for (const suite of ['true', 'false']) {
+      const noOut = run({ NEEDS: JSON.stringify(green(suite)), EXPECT: EXPECT.join(' '), GITHUB_STEP_SUMMARY: 'sum' })
+      expect(noOut.code, `suite=${suite}`).toBe(1)
+      expect(noOut.logs, `suite=${suite}`).toContain('::error::GITHUB_OUTPUT is not set; the decision cannot be handed to the tree step')
+      expect(noOut.logs.some((l) => l.startsWith('Every Windows part passed')), `suite=${suite}`).toBe(false)
+    }
+    expect(run({ NEEDS: JSON.stringify(green()), EXPECT: EXPECT.join(' '), GITHUB_OUTPUT: '' }).code).toBe(1)
   })
 
   it('the summary names each job and why the check failed', () => {

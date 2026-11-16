@@ -4,8 +4,8 @@
 // suite with vitest --shard, and `test-windows-build` runs the typecheck, the
 // native tests, the build and, on a release/* branch, the installer. The job
 // named `Test (windows-2025)` needs all of them, starts whatever they ended
-// with (`always()`), and runs this, so the required check passes only when
-// every part did.
+// with (`always()`, a run cancelled as a whole included), and runs this, so
+// the required check passes only when every part did.
 //
 // It passes only when all of this holds:
 //   1. NEEDS (the job's `needs` context, as JSON) names exactly the jobs in
@@ -84,11 +84,15 @@ export function main(env = process.env, io = {}) {
     for (const p of d.problems) log(`::error::${p}`)
     return 1
   }
-  log(d.suite ? 'Every Windows part passed, and the suite ran.' : 'Every Windows part passed; the suite was skipped (documentation only).')
-  // No output, no pass: the tree step must never run on a decision that was not written.
-  if (env.GITHUB_OUTPUT) {
-    try { write(env.GITHUB_OUTPUT, `suite=${d.suite ? 'true' : 'false'}\n`) } catch (err) { log(`::error::could not write the step output: ${err && err.message}`); return 1 }
+  // No output, no pass: the tree step must never run on a decision that was
+  // not written. With no output, its condition (suite != 'false') would be
+  // true, and a run that skipped the suite would name a tree.
+  if (!env.GITHUB_OUTPUT) {
+    log('::error::GITHUB_OUTPUT is not set; the decision cannot be handed to the tree step')
+    return 1
   }
+  log(d.suite ? 'Every Windows part passed, and the suite ran.' : 'Every Windows part passed; the suite was skipped (documentation only).')
+  try { write(env.GITHUB_OUTPUT, `suite=${d.suite ? 'true' : 'false'}\n`) } catch (err) { log(`::error::could not write the step output: ${err && err.message}`); return 1 }
   return 0
 }
 

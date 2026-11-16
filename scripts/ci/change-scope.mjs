@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // CI runs only what a change touches (ADR-028, rule 6): the safe minimum.
 // A pull request that changes ONLY documentation skips the suite on Windows
-// and macOS. ci.yml's Test jobs run this right after checkout and gate every
-// later step on its `suite` output, so the job still starts, still ends green
-// and still reports under its own name: `Test (windows-2025)` and
-// `Test (macos-latest)` are required checks, and a job skipped as a whole
-// never reports them.
+// and macOS. In ci.yml the Test jobs on macOS and Linux, and the Windows
+// parts and build job, run this right after checkout and gate every later
+// step on its `suite` output, so each job still starts and still ends green.
+// `Test (macos-latest)` reports under the job's own name; `Test (windows-2025)`
+// is the job that reads the Windows jobs' `suite` outputs and reports for
+// them (scripts/ci/all-parts-passed.mjs). Both are required checks, and a job
+// skipped as a whole never reports them.
 //
 // The Linux job always runs the whole suite: some tests read the Markdown they
 // guard (AGENTS.md, the docs under docs/wp1/), so a docs-only change still gets
