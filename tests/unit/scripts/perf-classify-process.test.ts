@@ -10,7 +10,7 @@
  * stale parent id; and the committed service map attributes a canned V8
  * profile of a main-like bundle to the expected services, nearest frame
  * first. Pure functions on in-memory data: nothing is read but the service
- * map, nothing is written or started.
+ * map and the command-line fixture, nothing is written or started.
  */
 import { describe, it, expect } from 'vitest'
 import { createRequire } from 'module'
@@ -35,29 +35,35 @@ const A = req('./lib/aggregate.cjs') as {
 }
 const SERVICE_MAP = JSON.parse(readFileSync(join(PERF, 'service-map.json'), 'utf8'))
 
+// Real command lines from the VM (tests/fixtures/perf/vm-cmdlines.json): the
+// installed 2.1.3-beta.6 on a staging root.
+const VM = JSON.parse(readFileSync(resolve(__dirname, '..', '..', 'fixtures', 'perf', 'vm-cmdlines.json'), 'utf8')) as Record<string, string>
 const APP = 'C:\\Users\\User\\AppData\\Local\\Programs\\AI Code Conductor\\AI Code Conductor.exe'
-const STAGE = 'C:\\Users\\user\\b7p-stage'
+const STAGE = 'C:\\Users\\User\\b7p-smoke'
 const UD = `--user-data-dir="${STAGE}\\data\\electron-userdata"`
-// Real command lines from the VM (2.1.3-beta.6).
+// The helper is off in the harness runs, so its two lines are built from its
+// own argument order (helper/src/main.rs: `hold --detach` starts a holder,
+// which runs as `hold --store ... --session ...`); the other Chrome is a plain
+// one; Defender's command line is not readable.
+const HELPER = '"C:\\Users\\User\\AppData\\Local\\Programs\\AI Code Conductor\\resources\\helper\\aicc-helper.exe"'
 const LINES: Array<[string, Proc]> = [
-  ['main', { pid: 100, name: 'AI Code Conductor.exe', cmd: `"${APP}" --remote-debugging-port=9333 --inspect=9229 --user-data-dir=${STAGE}\\data\\electron-userdata` }],
-  ['renderer', { pid: 110, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=renderer ${UD} --standard-schemes=ccc-ux --app-path="C:\\Users\\User\\AppData\\Local\\Programs\\AI Code Conductor\\resources\\app.asar" --enable-sandbox --remote-debugging-port=9333 --lang=en-US --renderer-client-id=5 --mojo-platform-channel-handle=3184 /prefetch:1` }],
-  ['gpu', { pid: 111, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=gpu-process ${UD} --gpu-preferences=UAAAAAAAAADgAAAEAAAAAAAAAAAAAAAAAABgAAEAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA --mojo-platform-channel-handle=1940 /prefetch:2` }],
-  ['network', { pid: 112, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=none ${UD} --mojo-platform-channel-handle=2056 /prefetch:11` }],
-  ['crashpad', { pid: 113, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=crashpad-handler ${UD} /prefetch:4 --monitor-self-annotation=ptype=crashpad-handler "--database=${STAGE}\\data\\electron-userdata\\Crashpad" --url=https://f.a.k/e --annotation=_productName=AI Code Conductor` }],
-  ['utility:ccc-tokenomics', { pid: 120, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=utility --utility-sub-type=node.mojom.NodeService --lang=en-US --service-sandbox-type=none ${UD} --mojo-platform-channel-handle=2828 /prefetch:14` }],
-  ['utility:ccc-transcripts', { pid: 121, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=utility --utility-sub-type=node.mojom.NodeService --lang=en-US --service-sandbox-type=none ${UD} --mojo-platform-channel-handle=2840 /prefetch:14` }],
-  ['utility:ccc-hooks-gateway', { pid: 122, name: 'AI Code Conductor.exe', cmd: `"${APP}" --type=utility --utility-sub-type=node.mojom.NodeService --lang=en-US --service-sandbox-type=none ${UD} --mojo-platform-channel-handle=2852 /prefetch:14` }],
-  ['helper-hold', { pid: 130, name: 'aicc-helper.exe', cmd: `"C:\\Users\\User\\AppData\\Local\\Programs\\AI Code Conductor\\resources\\helper\\aicc-helper.exe" hold --store C:\\Users\\user\\b7p-stage\\data\\home\\AppData\\Local\\aicc-helper\\store --session 4f1c --label infra --away 120 --ring-bytes 1048576` }],
-  ['helper', { pid: 131, name: 'aicc-helper.exe', cmd: `"C:\\Users\\User\\AppData\\Local\\Programs\\AI Code Conductor\\resources\\helper\\aicc-helper.exe" hold --detach --store C:\\Users\\user\\b7p-stage\\data\\home\\AppData\\Local\\aicc-helper\\store --session 4f1c` }],
-  ['pty-host', { pid: 140, name: 'conhost.exe', cmd: '\\??\\C:\\Windows\\system32\\conhost.exe --headless --width 120 --height 30 --signal 0x9d8 --server 0x9cc' }],
-  ['shell', { pid: 141, name: 'powershell.exe', cmd: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo' }],
-  ['shell', { pid: 142, name: 'cmd.exe', cmd: `C:\\Windows\\system32\\cmd.exe /d /s /c ""${STAGE}\\data\\fake-bin\\claude.cmd" --resume 6d3f2a41-8c9e-4b17-9f52-0a1b2c3d4e5f"` }],
-  ['fake-claude', { pid: 143, name: 'node.exe', cmd: `node  "${STAGE}\\data\\fake-bin\\fake-claude.js" --resume 6d3f2a41-8c9e-4b17-9f52-0a1b2c3d4e5f` }],
-  ['vision-chrome', { pid: 150, name: 'chrome.exe', cmd: `"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222 --user-data-dir=${STAGE}\\data\\resources\\vision-profile --no-first-run` }],
+  ['main', { pid: 100, name: 'AI Code Conductor.exe', cmd: VM.main }],
+  ['renderer', { pid: 110, name: 'AI Code Conductor.exe', cmd: VM.renderer }],
+  ['gpu', { pid: 111, name: 'AI Code Conductor.exe', cmd: VM.gpu }],
+  ['network', { pid: 112, name: 'AI Code Conductor.exe', cmd: VM.network }],
+  ['utility:ccc-tokenomics', { pid: 120, name: 'AI Code Conductor.exe', cmd: VM.nodeService }],
+  ['utility:ccc-transcripts', { pid: 121, name: 'AI Code Conductor.exe', cmd: VM.nodeService }],
+  ['utility:ccc-hooks-gateway', { pid: 122, name: 'AI Code Conductor.exe', cmd: VM.nodeService }],
+  ['helper-hold', { pid: 130, name: 'aicc-helper.exe', cmd: `${HELPER} hold --store ${STAGE}\\data\\home\\AppData\\Local\\aicc-helper\\store --session 4f1c2b3a --label infra --away 120 --ring-bytes 1048576` }],
+  ['helper', { pid: 131, name: 'aicc-helper.exe', cmd: `${HELPER} hold --detach --store ${STAGE}\\data\\home\\AppData\\Local\\aicc-helper\\store --session 4f1c2b3a` }],
+  ['pty-host', { pid: 140, name: 'conhost.exe', cmd: VM.conhost }],
+  ['shell', { pid: 141, name: 'powershell.exe', cmd: VM.powershell }],
+  ['shell', { pid: 142, name: 'cmd.exe', cmd: VM.claudeCmd }],
+  ['fake-claude', { pid: 143, name: 'node.exe', cmd: VM.fakeClaude }],
+  ['vision-chrome', { pid: 150, name: 'chrome.exe', cmd: VM.visionChrome }],
   ['chrome', { pid: 151, name: 'chrome.exe', cmd: '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --type=renderer' }],
   ['defender', { pid: 160, name: 'MsMpEng.exe', cmd: '' }],
-  ['wmi', { pid: 161, name: 'WmiPrvSE.exe', cmd: 'C:\\Windows\\system32\\wbem\\wmiprvse.exe -secured -Embedding' }],
+  ['wmi', { pid: 161, name: 'WmiPrvSE.exe', cmd: VM.wmi }],
 ]
 
 describe('roles from real command lines', () => {
@@ -81,7 +87,7 @@ describe('roles from real command lines', () => {
   })
 
   it('names a second renderer (another window) apart from the app window', () => {
-    const other = { pid: 115, name: 'AI Code Conductor.exe', cmd: LINES[1][1].cmd!.replace('--renderer-client-id=5', '--renderer-client-id=9') }
+    const other = { pid: 115, name: 'AI Code Conductor.exe', cmd: VM.renderer.replace('--renderer-client-id=4', '--renderer-client-id=9') }
     expect(C.classifyProcess(other, ctx)).toBe('renderer-other')
   })
 
@@ -91,8 +97,9 @@ describe('roles from real command lines', () => {
   })
 
   it('reads a quoted switch value', () => {
-    expect(C.switchValue(`"${APP}" --type=renderer ${UD}`, 'user-data-dir')).toBe(`${STAGE}\\data\\electron-userdata`)
-    expect(C.switchValue(`"${APP}" --inspect=9229`, 'type')).toBeNull()
+    expect(C.switchValue(VM.renderer, 'user-data-dir')).toBe(`${STAGE}\\data\\electron-userdata`)
+    expect(C.switchValue(`"${APP}" --type=renderer ${UD}`, 'type')).toBe('renderer')
+    expect(C.switchValue(VM.main, 'type')).toBeNull()
   })
 })
 

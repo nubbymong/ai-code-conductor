@@ -5,12 +5,13 @@
  * the old process's counters going on, I/O operations per second from
  * cumulative counters, and the renderer's metric deltas.
  *
- * Pure functions on in-memory rows: nothing is read from or written to disk,
- * nothing is started. The process rows carry real command lines from the
- * Windows test VM (2.1.3-beta.6, installed app on a staging root).
+ * Pure functions on in-memory rows: nothing is written to disk and nothing
+ * is started; the one file read is the fixture of real command lines from
+ * the Windows test VM (2.1.3-beta.6, installed app on a staging root).
  */
 import { describe, it, expect } from 'vitest'
 import { createRequire } from 'module'
+import { readFileSync } from 'fs'
 import { join, resolve } from 'path'
 
 const PERF = resolve(__dirname, '..', '..', '..', 'scripts', 'perf')
@@ -32,16 +33,9 @@ const Cl = req('./lib/classify-process.cjs') as {
   contextFrom: (o: Record<string, unknown>) => Record<string, unknown>
 }
 
-// Real command lines from the VM (2.1.3-beta.6). The VM's generic account
-// folder is kept; the staging root is the harness's own folder there.
-const APP = 'C:\\Users\\User\\AppData\\Local\\Programs\\AI Code Conductor\\AI Code Conductor.exe'
-const CMD = {
-  main: `"${APP}" --remote-debugging-port=9333 --inspect=9229 --user-data-dir=C:\\Users\\user\\b7p-stage\\data\\electron-userdata`,
-  renderer: `"${APP}" --type=renderer --user-data-dir="C:\\Users\\user\\b7p-stage\\data\\electron-userdata" --standard-schemes=ccc-ux --secure-schemes=ccc-ux --app-user-model-id=com.claudeconductor.app --app-path="C:\\Users\\User\\AppData\\Local\\Programs\\AI Code Conductor\\resources\\app.asar" --enable-sandbox --remote-debugging-port=9333 --lang=en-US --device-scale-factor=1 --num-raster-threads=2 --renderer-client-id=5 --mojo-platform-channel-handle=3184 --field-trial-handle=1948,i,1,262144 /prefetch:1`,
-  gpu: `"${APP}" --type=gpu-process --user-data-dir="C:\\Users\\user\\b7p-stage\\data\\electron-userdata" --gpu-preferences=UAAAAAAAAADgAAAEAAAAAAAAAAAAAAAAAABgAAEAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA --mojo-platform-channel-handle=1940 --field-trial-handle=1948,i,1,262144 /prefetch:2`,
-  utility: `"${APP}" --type=utility --utility-sub-type=node.mojom.NodeService --lang=en-US --service-sandbox-type=none --user-data-dir="C:\\Users\\user\\b7p-stage\\data\\electron-userdata" --mojo-platform-channel-handle=2828 --field-trial-handle=1948,i,1,262144 /prefetch:14`,
-  fake: `node  "C:\\Users\\user\\b7p-stage\\data\\fake-bin\\fake-claude.js" --resume 6d3f2a41-8c9e-4b17-9f52-0a1b2c3d4e5f`,
-}
+// Real command lines from the VM (tests/fixtures/perf/vm-cmdlines.json).
+const VM = JSON.parse(readFileSync(resolve(__dirname, '..', '..', 'fixtures', 'perf', 'vm-cmdlines.json'), 'utf8')) as Record<string, string>
+const CMD = { main: VM.main, renderer: VM.renderer, gpu: VM.gpu, utility: VM.nodeService, fake: VM.fakeClaude }
 
 let t0 = 1_763_330_000_000
 const row = (o: Partial<Row> & { t: number; pid: number; cpuSec: number }): Row => ({

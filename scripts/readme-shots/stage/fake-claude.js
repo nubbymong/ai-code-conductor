@@ -39,21 +39,27 @@ if (argv.includes('-p') || argv.includes('--print')) { process.stdout.write('{}\
 
 const resumeUuid = argAfter('--resume')
 
-const session = C.SESSIONS.find((s) => s.resumeUuid && s.resumeUuid === resumeUuid) || C.SESSIONS.find((s) => s.scenario === 'promo')
-const scenario = C.SCENARIOS[session.scenario]
-const account = C.ACCOUNTS.find((a) => a.key === session.accountKey)
-
 // The staging's home (where seed.js wrote the transcripts) and its status
 // folder, from the file seed.js wrote beside this one. No default: without it
 // no status file is written, never one into a real install's resources.
 const STAGE = (() => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'fake-stage.json'), 'utf8')) } catch { return {} } })()
+// The performance harness's copies of the seeded sessions (scripts/perf/
+// gen-sessions.cjs) resume conversations content.js does not know: `copies`
+// maps each to the seeded conversation it was made from, so a copy draws that
+// one's scenario and status, while its status names its own transcript.
+const COPIES = STAGE.copies && typeof STAGE.copies === 'object' ? STAGE.copies : {}
+const templateUuid = resumeUuid && typeof COPIES[resumeUuid] === 'string' ? COPIES[resumeUuid] : resumeUuid
+
+const session = C.SESSIONS.find((s) => s.resumeUuid && s.resumeUuid === templateUuid) || C.SESSIONS.find((s) => s.scenario === 'promo')
+const scenario = C.SCENARIOS[session.scenario]
+const account = C.ACCOUNTS.find((a) => a.key === session.accountKey)
 const HOME = typeof STAGE.home === 'string' ? STAGE.home : ''
 const STATUS_DIR = process.env.CCC_FAKE_STATUS_DIR || (typeof STAGE.statusDir === 'string' ? STAGE.statusDir : '')
 const CCC_SESSION = process.env.CLAUDE_MULTI_SESSION_ID || null
 
 // The performance harness (scripts/perf/gen-sessions.cjs) sets `mode` in the
 // same file. idle: the conversation is drawn, then the CLI sits at its prompt
-// (no spinner) and writes its status file every 30 s. busy, and no mode at all
+// (no working line) and writes its status file every 30 s. busy, and no mode at all
 // (the README pipeline): the spinner is redrawn every 120 ms and the status
 // file written every 2 s. Read again every 2 s, so a run can switch it while
 // the app runs.
@@ -172,15 +178,17 @@ function doneLine(dur) {
   out(`${ORANGE}✻${RESET} ${DIM}Baked for ${dur}${RESET}\n`)
 }
 
-// The resting state: spinner + prompt box + hint. Redrawn in place every tick.
+// The bottom of the screen: the working line (spinner, "esc to interrupt"), or
+// a blank line where it stands while the CLI rests at its prompt, then the
+// prompt box and the hint. Redrawn in place every tick.
 const GLYPHS = ['✻', '✢', '✳', '✶', '✽', '✻']
 let spinnerDrawn = false
-function spinnerBlock(word, tick, seconds, tokens) {
+function spinnerBlock(word, tick, seconds, tokens, working = true) {
   const g = GLYPHS[tick % GLYPHS.length]
   const tok = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens)
   const rule = `${DIM}${'─'.repeat(WRAP)}${RESET}`
   const lines = [
-    `${ORANGE}${g}${RESET} ${TEXT}${word}…${RESET} ${DIM}(${seconds}s · ↑ ${tok} tokens · esc to interrupt)${RESET}`,
+    working ? `${ORANGE}${g}${RESET} ${TEXT}${word}…${RESET} ${DIM}(${seconds}s · ↑ ${tok} tokens · esc to interrupt)${RESET}` : '',
     '',
     rule,
     `${TEXT}>${RESET} `,
@@ -200,6 +208,8 @@ function writeStatus() {
     const seconds = Math.round((Date.now() - t0) / 1000)
     const data = C.statusFor(session, Date.now(), HOME, { seconds, ctxPlus: Math.floor(seconds / 45) })
     data.sessionId = CCC_SESSION
+    // A copy's own conversation, not the one it was made from.
+    if (resumeUuid && resumeUuid !== session.resumeUuid && typeof data.transcriptPath === 'string') data.transcriptPath = data.transcriptPath.split(session.resumeUuid).join(resumeUuid)
     fs.mkdirSync(STATUS_DIR, { recursive: true })
     const file = path.join(STATUS_DIR, `${CCC_SESSION}.json`)
     fs.writeFileSync(file + '.tmp', JSON.stringify(data))
@@ -231,9 +241,15 @@ function writeStatus() {
   }
   let tick = 0
   let tokens = 640
-  spinnerBlock(spinnerWord, tick, 4, tokens)
+  let working = mode !== 'idle'
+  spinnerBlock(spinnerWord, tick, 4, tokens, working)
   setInterval(() => {
-    if (mode === 'idle') return
+    if (mode === 'idle') {
+      // Resting at the prompt: the working line goes once, then nothing is drawn.
+      if (working) { working = false; spinnerBlock(spinnerWord, tick, 4, tokens, false) }
+      return
+    }
+    working = true
     tick++
     tokens += 7 + (tick % 5)
     spinnerBlock(spinnerWord, tick, Math.floor(tick * 0.12) + 4, tokens)

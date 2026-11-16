@@ -116,7 +116,11 @@ function main(argv, env) {
   const sessions = planned.map((p) => p.session)
   writeJson(stateFile, { sessions, activeSessionId: sessions[0].id, savedAt: Date.now() - 60 * 1000 })
   writeJson(path.join(stage.RUNNER, 'perf-sessions.json'), { n, at: new Date().toISOString(), sessions: record })
-  console.log(`${n} Claude sessions written (${templates.length} seeded, ${n - Math.min(n, templates.length)} copies; ${record.filter((r) => r.transcript).length} with a transcript)`)
+  // The fake CLI draws a copy as the seeded session it was made from, and names its own transcript.
+  const fakeStage = path.join(stage.NPM_BIN, 'fake-stage.json')
+  if (!fs.existsSync(fakeStage)) throw new S.StageRefusal(`no ${fakeStage}: seed the root first`)
+  writeJson(fakeStage, { ...readJson(fakeStage), copies: Object.fromEntries(planned.filter((p) => p.from).map((p) => [p.session.resumeUuid, p.from])) })
+  console.log(`${n} Claude sessions written (${Math.min(n, templates.length)} seeded, ${n - Math.min(n, templates.length)} copies; ${record.filter((r) => r.transcript).length} with a transcript)`)
 }
 
 module.exports = { planSessions, claudeTemplates, sessionIdFor, uuidFor, OFF_SETTING }

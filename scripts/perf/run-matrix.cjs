@@ -30,7 +30,7 @@
 //   --sidecar-ms 5000    one transcript line per session per this many ms while busy
 //   --out <folder>       default <root>/perf-out/<time>
 //   --dry-run            print the plan and its length, start nothing
-//   env CCC_PERF_PORT (9333), CCC_PERF_INSPECT_PORT (9229; launch.js's)
+//   env CCC_PERF_PORT (9333); main's inspector is launch.js's fixed 9229
 'use strict'
 
 const fs = require('fs')
@@ -92,15 +92,14 @@ function planSeconds(runs, o) {
 
 module.exports = { parseOptions, planMatrix, planSeconds }
 
-if (require.main !== module) return
-
 const S = require(path.join(STAGE_DIR, 'stage-root.js'))
 const cdp = require('./cdp-sample.cjs')
 const mainInspector = require('./main-inspector.cjs')
 
-const opts = parseOptions(process.argv.slice(2))
+let opts = null
 const PORT = Number(process.env.CCC_PERF_PORT) || 9333
-const INSPECT = Number(process.env.CCC_PERF_INSPECT_PORT) || 9229
+// launch.js starts main with its default inspector port; it takes no option for it.
+const INSPECT = 9229
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-')
 
@@ -136,14 +135,19 @@ function appProcesses() {
   return out.split(/\r?\n/).filter((l) => /AI Code Conductor\.exe/i.test(l)).length
 }
 
-/** Processes this run left: started since `sinceMs`, with the staging root on their command line. */
-function leftovers(stage, sinceMs) {
+/** Processes started since `sinceMs` whose command line names the staging root (the app, its
+ *  terminals' CLIs, the vision browser on the staging profile), with their start times. */
+function stagedProcesses(stage, sinceMs) {
   const ps = `Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -and $_.CreationDate.ToUniversalTime() -ge [DateTime]::Parse('${new Date(sinceMs).toISOString()}').ToUniversalTime() } | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; name = $_.Name; created = $_.CreationDate.ToUniversalTime().ToString('o'); cmd = "$($_.CommandLine)" } } | ConvertTo-Json -Compress`
   let rows = []
   try { const t = execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], { encoding: 'utf8', windowsHide: true, timeout: 60000 }).trim(); rows = t ? [].concat(JSON.parse(t)) : [] } catch (e) { log('  could not list processes: ' + e.message) }
   const root = stage.ROOT.toLowerCase()
-  return rows.filter((r) => r.pid !== process.pid && String(r.cmd).toLowerCase().includes(root) && !/run-matrix\.cjs|sample-processes\.ps1/i.test(r.cmd))
+  return rows.filter((r) => /^(AI Code Conductor|aicc-helper|node|cmd|conhost|chrome)\.exe$/i.test(r.name) && String(r.cmd).toLowerCase().includes(root) && !/scripts[\\/]perf[\\/]/i.test(r.cmd))
 }
+const leftovers = stagedProcesses
+
+/** The fake Claude CLIs running now for this run (one per live session). */
+const liveSessions = (stage, sinceMs) => stagedProcesses(stage, sinceMs).filter((r) => /^node\.exe$/i.test(r.name) && /fake-claude\.js/i.test(r.cmd)).length
 
 /** Stop one leftover, only if it is still the same process (pid and start time). */
 function stopLeftover(r) {
@@ -186,10 +190,12 @@ async function measureWindow(run, phase, runRec) {
   const mainStart = await mainInspector.snapshot(INSPECT).catch((e) => ({ error: e.message }))
   const s = sampler(tag, phase.window)
   const from = Date.now()
-  const [renderer] = await Promise.all([cdp.measureWindow(phase.window, PORT).catch((e) => ({ error: e.message })), s.child.done])
+  const [renderer, samplerExit] = await Promise.all([cdp.measureWindow(phase.window, PORT).catch((e) => ({ error: e.message })), s.child.done])
   const mainEnd = await mainInspector.snapshot(INSPECT).catch((e) => ({ error: e.message }))
-  const w = { tag, run: run.id, n: run.n, mode: phase.mode, off: run.off, from, to: Date.now(), samples: s.file, renderer, mainStart, mainEnd }
+  const w = { tag, run: run.id, n: run.n, mode: phase.mode, off: run.off, from, to: Date.now(), samples: s.file, samplerExit, renderer, mainStart, mainEnd }
   writeJson(`window-${tag}.json`, w)
+  // A window whose sampler failed has no process figures: it is kept on disk but not reported.
+  if (samplerExit !== 0) throw new Error(`window ${tag}: the process sampler exited ${samplerExit}`)
   runRec.windows.push({ tag, mode: phase.mode, file: `window-${tag}.json` })
   if (renderer.error) log(`  renderer window failed: ${renderer.error}`)
   save()
@@ -215,8 +221,9 @@ async function abTest(phase, runRec) {
   const s = sampler(`${phase.tag}-ab`, 2 * phase.ab + 2)
   let switchAt = null
   const from = Date.now()
-  const [result] = await Promise.all([cdp.reducedMotionAB(phase.ab, (t) => { switchAt = t }, PORT).catch((e) => ({ error: e.message })), s.child.done])
-  writeJson(`ab-${phase.tag}.json`, { tag: phase.tag, from, switchAt, to: Date.now(), samples: s.file, result })
+  const [result, samplerExit] = await Promise.all([cdp.reducedMotionAB(phase.ab, (t) => { switchAt = t }, PORT).catch((e) => ({ error: e.message })), s.child.done])
+  writeJson(`ab-${phase.tag}.json`, { tag: phase.tag, from, switchAt, to: Date.now(), samples: s.file, samplerExit, result })
+  if (samplerExit !== 0) throw new Error(`A/B ${phase.tag}: the process sampler exited ${samplerExit}`)
   runRec.ab.push({ tag: phase.tag, file: `ab-${phase.tag}.json` })
   if (result.error) log('  A/B failed: ' + result.error)
   save()
@@ -241,6 +248,12 @@ async function doRun(run, stage) {
     // A resumed tab starts its terminal only when it is first opened.
     runRec.opened = await cdp.openAllSessions(run.n, {}, PORT).catch((e) => ({ error: e.message }))
     log('  opened: ' + JSON.stringify(runRec.opened))
+    // Measured only with every session's CLI running: a terminal on the page is not proof of one.
+    let live = 0
+    for (let i = 0; i < 24 && live < run.n; i++) { live = liveSessions(stage, runRec.started); if (live < run.n) await sleep(5000) }
+    runRec.liveSessions = live
+    log(`  live sessions (fake CLI processes): ${live} of ${run.n}`)
+    if (live < run.n) throw new Error(`only ${live} of ${run.n} sessions started`)
     for (let i = 0; i < run.phases.length; i++) {
       const phase = run.phases[i]
       if (i > 0 && phase.mode !== run.phases[i - 1].mode) gen(['--mode', phase.mode])
@@ -269,7 +282,8 @@ async function doRun(run, stage) {
   await waitClean(stage, runRec.started)
 }
 
-;(async () => {
+async function cli() {
+  opts = parseOptions(process.argv.slice(2))
   const runs = planMatrix(opts)
   const mins = Math.round(planSeconds(runs, opts) / 60)
   if (opts.dryRun) {
@@ -311,8 +325,12 @@ async function doRun(run, stage) {
     save()
     log(`DONE ${record.aborted ? 'aborted' : 'complete'}: node scripts/perf/report.cjs "${OUT}"`)
   }
-})().catch((e) => {
-  if (e instanceof S.StageRefusal) { console.error('refusing: ' + e.message); process.exit(2) }
-  console.error(e && e.stack ? e.stack : e)
-  process.exit(1)
-})
+}
+
+if (require.main === module) {
+  cli().catch((e) => {
+    if (e instanceof S.StageRefusal) { console.error('refusing: ' + e.message); process.exit(2) }
+    console.error(e && e.stack ? e.stack : e)
+    process.exit(1)
+  })
+}
