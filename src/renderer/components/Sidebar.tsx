@@ -88,9 +88,11 @@ interface Props {
  *  about 6px a digit, the icon 13px. Icon, label and a two-digit count fit a
  *  tab when the row is at least about 13.75rem wide (the default 256px sidebar
  *  at scale 1.0 gives 14.9rem). Below the same width the tab's padding and gap
- *  tighten too, so the label keeps what room there is (scale 1.3 at 200px:
- *  "Saved" whole, "Runni..." rather than "Ru..."). Literal class names, so
- *  Tailwind's scanner sees them. */
+ *  tighten too, which gives each label about 8px more. Measured at scale 1.3
+ *  and 200px: "Saved" whole, and "Running" shows 51 of its 62px, so it reads
+ *  "Run..." (the full name is the label's title). Every other scale and width
+ *  the VM measured shows both labels whole. Literal class names, so Tailwind's
+ *  scanner sees them. */
 const PANEL_TAB_ICON_CLASS = 'shrink-0 @max-[13.75rem]/panel-tabs:hidden'
 const PANEL_TAB_CLASS = 'flex-1 min-w-0 h-8 px-1 @max-[13.75rem]/panel-tabs:px-0.5 rounded-lg flex items-center justify-center gap-1.5 @max-[13.75rem]/panel-tabs:gap-1 text-xs font-semibold transition-colors focus-ring'
 
