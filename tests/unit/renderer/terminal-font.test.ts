@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   TERMINAL_FONT_FALLBACKS,
   TERMINAL_FONT_WAIT_CAP_MS,
+  onFontsReady,
   terminalFontFamily,
   terminalFontReady,
   terminalFontSpecs,
@@ -72,6 +73,41 @@ describe('terminal font (#313)', () => {
     await expect(waitForTerminalFont(undefined, ['a'])).resolves.toBeUndefined()
     await expect(waitForTerminalFont({}, ['a'])).resolves.toBeUndefined()
     await expect(waitForTerminalFont({ load: () => Promise.resolve() }, [])).resolves.toBeUndefined()
+  })
+
+  it('onFontsReady runs once when ready settles, and clears its cap timer', async () => {
+    const T = timers()
+    const run = vi.fn()
+    onFontsReady({ ready: Promise.resolve() }, run, 1500, T.t)
+    expect(run).not.toHaveBeenCalled()
+    await Promise.resolve()
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(T.cleared).toEqual(['timer-1'])
+    T.fire()
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('onFontsReady runs once after the cap when ready never settles, and once on a rejected ready', async () => {
+    const T = timers()
+    const run = vi.fn()
+    onFontsReady({ ready: new Promise(() => {}) }, run, TERMINAL_FONT_WAIT_CAP_MS, T.t)
+    await Promise.resolve()
+    expect(run).not.toHaveBeenCalled()
+    T.fire()
+    expect(run).toHaveBeenCalledTimes(1)
+    const R = timers()
+    const run2 = vi.fn()
+    onFontsReady({ ready: Promise.reject(new Error('x')) }, run2, 1500, R.t)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(run2).toHaveBeenCalledTimes(1)
+  })
+
+  it('onFontsReady with no ready at all runs at once', () => {
+    const run = vi.fn()
+    onFontsReady(undefined, run, 1500, timers().t)
+    onFontsReady({}, run, 1500, timers().t)
+    expect(run).toHaveBeenCalledTimes(2)
   })
 
   it('ready: only when every face checks loaded, or the page cannot load fonts on request', () => {

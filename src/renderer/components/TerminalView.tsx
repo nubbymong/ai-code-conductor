@@ -6,7 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { decorateTerminalLinks, createLinkHoverControl, type LinkHoverControl } from './terminal/terminalLinks'
 import { installWebglWithRecovery, createAtlasResync, type WebglHandle } from './terminal/terminalWebgl'
-import { terminalFontFamily, terminalFontReady, terminalFontSpecs, waitForTerminalFont } from './terminal/terminalFont'
+import { onFontsReady, terminalFontFamily, terminalFontReady, terminalFontSpecs, waitForTerminalFont } from './terminal/terminalFont'
 import { atlasCoordinator } from './terminal/atlasCoordinator'
 import {
   createStaleGlyphRepainter,
@@ -1325,7 +1325,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
 
       // Wait for custom fonts, then fit + spawn. document.fonts.ready resolves
       // immediately if all fonts are already loaded, so no delay for subsequent sessions.
-      document.fonts.ready.then(() => {
+      // #313: capped like the font wait before initTerminal, so a font load
+      // that never ends cannot leave the session without its fit and PTY.
+      onFontsReady(document.fonts, () => {
         // One more frame to let the browser apply the font to the terminal element
         requestAnimationFrame(fitAndSpawn)
       })

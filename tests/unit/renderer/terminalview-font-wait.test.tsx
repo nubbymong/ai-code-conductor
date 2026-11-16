@@ -18,6 +18,7 @@ const H = vi.hoisted(() => {
   class MockTerminal {
     static last: any = null
     static built = 0
+    static fits = 0
     options: any
     cols = 80
     rows = 24
@@ -60,7 +61,7 @@ const H = vi.hoisted(() => {
 
 vi.mock('@xterm/xterm/css/xterm.css', () => ({ default: {} }))
 vi.mock('@xterm/xterm', () => ({ Terminal: H.MockTerminal }))
-vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} proposeDimensions() { return { cols: 80, rows: 24 } } } }))
+vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() { H.MockTerminal.fits++ } proposeDimensions() { return { cols: 80, rows: 24 } } } }))
 vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }))
 vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: class {} }))
 vi.mock('../../../src/renderer/components/terminal/terminalWebgl', () => ({
@@ -204,6 +205,7 @@ beforeEach(() => {
   installRaf()
   H.MockTerminal.last = null
   H.MockTerminal.built = 0
+  H.MockTerminal.fits = 0
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -251,6 +253,35 @@ describe('TerminalView waits for the terminal font before building the terminal 
     vi.advanceTimersByTime(1)
     await settle()
     expect(H.MockTerminal.built).toBe(1)
+  })
+
+  it('a load AND a document.fonts.ready that never end: built after one cap, fitted after the next (Copilot, PR 702)', async () => {
+    // ready waits for every font the page is loading, so a stalled load keeps
+    // it pending too. The fit and PTY start after initTerminal must not wait
+    // on it for ever.
+    fontsImpl = { ...controlledFonts(), ready: new Promise(() => {}) }
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    mount()
+    await settle()
+    vi.advanceTimersByTime(TERMINAL_FONT_WAIT_CAP_MS)
+    await settle()
+    expect(H.MockTerminal.built).toBe(1)
+    expect(H.MockTerminal.fits).toBe(0)
+    vi.advanceTimersByTime(TERMINAL_FONT_WAIT_CAP_MS - 1)
+    await settle()
+    expect(H.MockTerminal.fits).toBe(0)
+    vi.advanceTimersByTime(1)
+    await settle()
+    expect(H.MockTerminal.fits).toBe(1)
+  })
+
+  it('a ready that settles fits on the next frame, without waiting for the cap', async () => {
+    mount()
+    await settle()
+    pending.forEach((d) => d.resolve([]))
+    await settle()
+    expect(H.MockTerminal.built).toBe(1)
+    expect(H.MockTerminal.fits).toBe(1)
   })
 
   it('a face that is already loaded starts the terminal on the first frame, with no load and no wait', async () => {

@@ -77,6 +77,33 @@ const defaultTimers: Timers = {
 }
 
 /**
+ * Calls `run` once: when `fonts.ready` settles, or after `capMs`, whichever is
+ * first. `ready` waits for EVERY font the page is loading, so one stalled load
+ * would otherwise hold a terminal's first fit and PTY start for good (the wait
+ * before the terminal is built is capped; this one must be too). `run` is
+ * called straight from `ready`'s callback, as the unbounded wait did, so the
+ * usual case keeps its timing. No `ready` at all runs it at once.
+ */
+export function onFontsReady(
+  fonts: { ready?: PromiseLike<unknown> } | null | undefined,
+  run: () => void,
+  capMs: number = TERMINAL_FONT_WAIT_CAP_MS,
+  timers: Timers = defaultTimers,
+): void {
+  let done = false
+  const fire = () => {
+    if (done) return
+    done = true
+    timers.clearTimeout(timer)
+    run()
+  }
+  const timer = timers.setTimeout(fire, capMs)
+  const ready = fonts?.ready
+  if (ready && typeof ready.then === 'function') ready.then(fire, fire)
+  else fire()
+}
+
+/**
  * Resolves once every spec's faces have loaded, or after `capMs`, whichever is
  * first. Never rejects: a failed or impossible load (no document.fonts, a spec
  * the browser refuses) resolves at once, so the terminal still starts.
