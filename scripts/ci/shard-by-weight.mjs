@@ -26,8 +26,8 @@
 import { createHash } from 'node:crypto'
 
 /** Seconds per file on the windows-2025 runner, rounded: as measured in run
- *  43793925573 of PR #694 (each part's "Slowest test files" summary), the
- *  first run with the launcher file split and the slow files started first.
+ *  43793925573 of PR #694 (each part's "Slowest test files" summary), a run
+ *  with the launcher file split and the slow files started first.
  *  Every other file took under 31 s. Heaviest first; paths are as
  *  `git ls-files` prints them. */
 export const HEAVY_TEST_FILES = new Map([
