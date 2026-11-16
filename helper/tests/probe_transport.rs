@@ -1011,9 +1011,11 @@ fn on_the_bundled_conpty_with_no_usable_conpty_dll_beside_the_holder_a_launch_an
     let sid = "probe-0022";
     let held = Held(hold_from(&exe, &store.0, sid, 60));
     let mut app = App::connect(&held.0, true);
+    // The program writes this file in its own folder (the launch's cwd), by
+    // a relative name, so no path with a space in it can send it elsewhere.
     let marker = store.0.join("started.txt");
     let cmd = cmd_exe();
-    let writes_marker = format!("echo started>{}", marker.display());
+    let writes_marker = "echo started>started.txt";
     let conpty = bin.0.join("conpty");
     // Each way it is unusable: no conpty folder, a conpty.dll with no
     // OpenConsole.exe beside it, and files that are not programs.
@@ -1024,7 +1026,7 @@ fn on_the_bundled_conpty_with_no_usable_conpty_dll_beside_the_holder_a_launch_an
             fs::write(conpty.join(f), b"not a program").expect("a stand-in file");
         }
         let id = app.id();
-        let answer = app.call(launch_msg_more(id, &[&cmd, "/d", "/c", &writes_marker], &store.0, vec![("conpty", Value::str("bundled"))]));
+        let answer = app.call(launch_msg_more(id, &[&cmd, "/d", "/c", writes_marker], &store.0, vec![("conpty", Value::str("bundled"))]));
         expect_error(&answer, "io");
         let text = answer.get("text").and_then(Value::as_str).unwrap_or("");
         assert!(text.contains("bundled ConPTY"), "{way}: the answer does not say why: {text:?}");
@@ -1032,12 +1034,16 @@ fn on_the_bundled_conpty_with_no_usable_conpty_dll_beside_the_holder_a_launch_an
     }
     std::thread::sleep(Duration::from_millis(500));
     assert!(!marker.exists(), "a launch answered io and still ran its program");
-    // Nothing was started, so the holder still takes a launch.
+    // Nothing was started, so the holder still takes a launch: the same one
+    // on the system ConPTY, which does write the file, so its absence above
+    // is the program not having run.
     let id = app.id();
-    expect_t(&app.call(launch_msg(id, FAKE, &store.0)), "term.launched");
-    let id = app.id();
-    expect_t(&app.call(msg("term.attach", id, vec![("from", Value::uint(0))])), "term.attached");
-    app.wait_text("FAKE-CLI READY");
+    expect_t(&app.call(launch_msg_more(id, &[&cmd, "/d", "/c", writes_marker], &store.0, vec![])), "term.launched");
+    let deadline = Instant::now() + WAIT;
+    while !marker.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(marker.exists(), "the same launch on the system ConPTY did not write {}", marker.display());
 }
 
 /// What `hold --detach` says on stderr when the holder could not leave its
