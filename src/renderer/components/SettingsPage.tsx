@@ -613,6 +613,19 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
                     <span className="block text-[10px] text-[var(--text-muted)]">Stops a stray Ctrl+B (or /bg) from detaching a session into a background agent and stranding your conversation. On by default. Turn off only if you deliberately use Claude Code background agents. Applies to newly-launched sessions.</span>
                   </span>
                 </label>
+                {/* 2.1.3-beta.6 (plan section B): the session helper, a preview. */}
+                <label className="flex items-start gap-2 text-sm text-subtext0 cursor-pointer mt-2" data-testid="setting-plain-terminals-helper">
+                  <input
+                    type="checkbox"
+                    checked={settings.plainTerminalsThroughHelper === true}
+                    onChange={(e) => save({ plainTerminalsThroughHelper: e.target.checked })}
+                    className="mt-0.5 rounded border-surface1"
+                  />
+                  <span>
+                    Plain terminals through the session helper
+                    <span className="block text-[10px] text-[var(--text-muted)]">Preview, off by default. A Terminal only tab and the partner terminal start inside the session helper, so they keep running if the app crashes and come back with their tabs when it starts again. Claude Code, Codex and SSH sessions are not affected. Quitting normally ends them. Applies to terminals opened after the change. The Machines page shows the helper and what it holds.</span>
+                  </span>
+                </label>
                 <p className="text-[11px] text-[var(--text-muted)] mt-2 leading-relaxed">
                   Terminal settings apply to new terminals. Restart sessions for changes to take effect.
                 </p>

@@ -227,6 +227,20 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The session helper ships in the installer as resources/helper/aicc-helper
+      # (.exe on Windows; plan 2.1.3-beta.6 section B). Built here, from the
+      # committed Cargo.lock with the pinned toolchain (helper/rust-toolchain.toml),
+      # before packaging so electron-builder signs it with the app.
+      - name: Build the session helper
+        shell: bash
+        working-directory: helper
+        env:
+          CARGO_TERM_COLOR: never
+          CARGO_INCREMENTAL: '0'
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo build --release --locked
+
       # ── Windows code signing: SSL.com eSigner CKA (cloud HSM) ──
       # The signing key lives in SSL.com's cloud HSM and never exists as a file
       # on the runner. CKA registers a Windows KSP so the key appears in the
@@ -306,6 +320,11 @@ jobs:
       # the package that ships (scripts/verify-native-unpack.mjs).
       - name: Verify native modules unpacked
         run: npm run verify:package
+
+      # The package carries the session helper and nothing else of helper/
+      # (scripts/verify-bundled-helper.mjs): a package without it fails here.
+      - name: Verify the session helper is packaged
+        run: npm run verify:helper
 
       # Fail loudly rather than ever ship unsigned again: a stable/beta release
       # with signing secrets missing is an error, not a fallback.
@@ -440,6 +459,20 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The session helper ships in the installer as resources/helper/aicc-helper
+      # (.exe on Windows; plan 2.1.3-beta.6 section B). Built here, from the
+      # committed Cargo.lock with the pinned toolchain (helper/rust-toolchain.toml),
+      # before packaging so the app is signed and notarized with it inside.
+      - name: Build the session helper
+        shell: bash
+        working-directory: helper
+        env:
+          CARGO_TERM_COLOR: never
+          CARGO_INCREMENTAL: '0'
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo build --release --locked
+
       - name: Import signing certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -477,6 +510,11 @@ jobs:
 
       - name: Verify native modules unpacked
         run: npm run verify:package
+
+      # The package carries the session helper and nothing else of helper/
+      # (scripts/verify-bundled-helper.mjs): a package without it fails here.
+      - name: Verify the session helper is packaged
+        run: npm run verify:helper
 
       - name: Determine DMG filename
         id: dmg
@@ -567,11 +605,30 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The session helper ships in the installer as resources/helper/aicc-helper
+      # (.exe on Windows; plan 2.1.3-beta.6 section B). Built here, from the
+      # committed Cargo.lock with the pinned toolchain (helper/rust-toolchain.toml),
+      # before packaging.
+      - name: Build the session helper
+        shell: bash
+        working-directory: helper
+        env:
+          CARGO_TERM_COLOR: never
+          CARGO_INCREMENTAL: '0'
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo build --release --locked
+
       - name: Package Linux AppImage
         run: npx electron-builder --linux --publish never
 
       - name: Verify native modules unpacked
         run: npm run verify:package
+
+      # The package carries the session helper and nothing else of helper/
+      # (scripts/verify-bundled-helper.mjs): a package without it fails here.
+      - name: Verify the session helper is packaged
+        run: npm run verify:helper
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v7

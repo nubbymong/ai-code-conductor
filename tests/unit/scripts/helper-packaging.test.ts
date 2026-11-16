@@ -4,15 +4,19 @@ import { existsSync, readFileSync } from 'fs'
 import { resolve } from 'path'
 
 /**
- * The Rust session helper (helper/) is dormant: the installer must not carry
- * it. package.json's `build.files` is a whitelist and `extraResources` /
- * `extraFiles` copy named files, so a helper/ that sits at the top level is
- * not packaged. This fails the moment any of those lists would take it, or the
- * folder moves under resources/ (which `resources/**\/*` ships whole).
+ * 2.1.3-beta.6 (plan section B): the installer ships the session helper, and
+ * only it. Each platform section of package.json's `build` copies the one
+ * release program the release workflow builds in helper/
+ * (helper/target/release/aicc-helper, with .exe on Windows) to
+ * resources/helper/, and nothing else of helper/ (its source, fixtures,
+ * probes, the fake CLI or a debug build) reaches the installer.
+ * `build.files` is a whitelist and `extraResources` / `extraFiles` copy named
+ * files, so a helper/ at the top level is packaged only by those entries.
+ * scripts/verify-bundled-helper.mjs then checks the packaged copy itself.
  */
 
 const ROOT = resolve(__dirname, '../../..')
-const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf-8')) as { build: Record<string, unknown> }
+const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf-8')) as { build: Record<string, Record<string, unknown>>; scripts: Record<string, string> }
 
 /** electron-builder's file globs, enough for the patterns this repo uses: `**` crosses folders, `*` does not. */
 function globToRegExp(pattern: string): RegExp {
@@ -96,7 +100,7 @@ function takes(entry: Entry, file: string): boolean {
   return filters.some((f) => globToRegExp(normPath(f)).test(rel))
 }
 
-/** A path the helper folder holds, or will hold. */
+/** A path the helper folder holds, or will hold, that must never ship. */
 const HELPER_FILES = [
   'helper/Cargo.toml',
   'helper/Cargo.lock',
@@ -105,11 +109,22 @@ const HELPER_FILES = [
   'helper/src/pty/windows.rs',
   'helper/fixtures/frames.json',
   'helper/probes/p7-windows-survival.ps1',
-  'helper/target/release/aicc-helper',
-  'helper/target/release/aicc-helper.exe',
+  'helper/target/debug/aicc-helper',
+  'helper/target/debug/aicc-helper.exe',
+  'helper/target/release/aicc-fake-cli',
+  'helper/target/release/aicc-fake-cli.exe',
+  'helper/target/release/aicc-helper.d',
+  'helper/target/release/aicc-helper.pdb',
 ]
 
-describe('the dormant Rust helper is not in the installer', () => {
+/** The one file each platform ships, and where it lands under resources/. */
+const SHIPPED = {
+  win: { from: 'helper/target/release/aicc-helper.exe', to: 'helper/aicc-helper.exe' },
+  mac: { from: 'helper/target/release/aicc-helper', to: 'helper/aicc-helper' },
+  linux: { from: 'helper/target/release/aicc-helper', to: 'helper/aicc-helper' },
+} as const
+
+describe('the installer ships the release session helper and nothing else of helper/', () => {
   const entries = packagingEntries(pkg.build)
 
   it('the packaging lists are read (a vacuous pass is no pass)', () => {
@@ -132,21 +147,42 @@ describe('the dormant Rust helper is not in the installer', () => {
     expect(globToRegExp('**/*').test('helper/Cargo.toml')).toBe(true)
   })
 
-  it('no `files` entry of the installer matches a path in helper/', () => {
-    const listed = entries.filter((e) => e.list === 'files')
-    expect(listed.length).toBeGreaterThan(0)
-    for (const entry of listed) {
-      for (const file of HELPER_FILES) expect(takes(entry, file), `${JSON.stringify(entry)} would package ${file}`).toBe(false)
+  it('each platform copies exactly its release helper to resources/helper/, as a plain file entry', () => {
+    for (const [platform, want] of Object.entries(SHIPPED)) {
+      const section = packagingEntries(pkg.build[platform]).filter((e) => e.list !== 'files')
+      const helperEntries = section.filter((e) => normPath(e.value).startsWith('helper'))
+      expect(helperEntries, platform).toHaveLength(1)
+      const raw = ([] as unknown[]).concat(pkg.build[platform].extraResources ?? []).find((x) => !!x && typeof x === 'object' && (x as { from?: string }).from === want.from)
+      expect(raw, platform).toEqual(want)
+      expect(pkg.build[platform].extraFiles, platform).toBeUndefined()
     }
   })
 
-  it('no extraResources or extraFiles entry names helper/', () => {
+  it('the helper is not in the top-level lists, which every platform shares (one platform\'s program would reach the others)', () => {
+    for (const list of ['files', 'extraResources', 'extraFiles'] as const) {
+      for (const entry of packagingEntries({ [list]: pkg.build[list] ?? [] })) {
+        expect(normPath(entry.value).startsWith('helper'), `${entry.value} reaches into helper/`).toBe(false)
+      }
+    }
+  })
+
+  it('no `files` entry of the installer matches a path in helper/, the shipped program included (it goes outside the app archive)', () => {
+    const listed = entries.filter((e) => e.list === 'files')
+    expect(listed.length).toBeGreaterThan(0)
+    for (const entry of listed) {
+      for (const file of [...HELPER_FILES, SHIPPED.win.from, SHIPPED.mac.from]) expect(takes(entry, file), `${JSON.stringify(entry)} would package ${file}`).toBe(false)
+    }
+  })
+
+  it('no extraResources or extraFiles entry takes anything of helper/ but the release helper', () => {
     const copied = entries.filter((e) => e.list !== 'files')
     expect(copied.length).toBeGreaterThan(0)
     for (const entry of copied) {
-      expect(normPath(entry.value).startsWith('helper'), `${entry.value} reaches into helper/`).toBe(false)
       for (const file of HELPER_FILES) expect(takes(entry, file), `${JSON.stringify(entry)} would copy ${file}`).toBe(false)
     }
+    // And the release helper is taken, so the check above is not vacuous.
+    expect(copied.some((e) => takes(e, SHIPPED.win.from))).toBe(true)
+    expect(copied.some((e) => takes(e, SHIPPED.mac.from))).toBe(true)
   })
 
   it('FileSet objects keep their source root and filter, and the check judges them (a flattened `from` once matched nothing)', () => {
@@ -171,6 +207,10 @@ describe('the dormant Rust helper is not in the installer', () => {
     const [folder] = read(['helper'])
     expect(takes(folder, 'helper/Cargo.toml')).toBe(true)
     expect(takes(read(['!helper/**'])[0], 'helper/Cargo.toml')).toBe(false)
+    // The one file a platform ships takes that file and nothing else.
+    const [one] = read([SHIPPED.win])
+    expect(takes(one, SHIPPED.win.from)).toBe(true)
+    for (const file of HELPER_FILES) expect(takes(one, file), file).toBe(false)
   })
 
   it('every file the helper job and the probe need is tracked, not caught by an ignore rule (*.ps1 is ignored repo-wide)', () => {
@@ -192,5 +232,33 @@ describe('the dormant Rust helper is not in the installer', () => {
   it('helper/ is a top-level folder, not under resources/ or src/ (resources/ ships whole)', () => {
     expect(existsSync(resolve(ROOT, 'helper/Cargo.toml'))).toBe(true)
     for (const bad of ['resources/helper', 'src/helper', 'src/main/helper', 'build/helper']) expect(existsSync(resolve(ROOT, bad)), bad).toBe(false)
+  })
+
+  it('each packaging job builds the helper before it packages, and checks what it packaged', () => {
+    const wf = readFileSync(resolve(ROOT, '.github/workflows/release.yml'), 'utf-8').replace(/\r\n/g, '\n')
+    const builds = [...wf.matchAll(/- name: Build the session helper\n/g)].map((m) => m.index!)
+    expect(builds).toHaveLength(3)
+    for (const [job, pack] of [
+      ['build-windows', 'npx electron-builder --win --publish never'],
+      ['build-macos', 'npx electron-builder --mac dmg --publish never'],
+      ['build-linux', 'npx electron-builder --linux --publish never'],
+    ]) {
+      const jobStart = wf.indexOf(`\n  ${job}:\n`)
+      expect(jobStart, job).toBeGreaterThan(0)
+      const nextJob = /\n {2}[a-z0-9-]+:\n/g
+      nextJob.lastIndex = jobStart + 1
+      const jobEnd = nextJob.exec(wf)?.index ?? wf.length
+      const at = wf.indexOf(pack, jobStart)
+      expect(at > jobStart && at < jobEnd, `${job}: ${pack}`).toBe(true)
+      // A helper build sits in this job, before its packaging step.
+      expect(builds.some((b) => b > jobStart && b < at), job).toBe(true)
+      // And the packaged copy is checked in this job, after the native module check.
+      const native = wf.indexOf('run: npm run verify:package', at)
+      const verify = wf.indexOf('run: npm run verify:helper', at)
+      expect(native > at && native < jobEnd, `${job}: verify:package`).toBe(true)
+      expect(verify > native && verify < jobEnd, `${job}: verify:helper`).toBe(true)
+    }
+    for (const b of builds) expect(wf.slice(b, b + 400)).toContain('cargo build --release --locked')
+    expect(pkg.scripts['verify:helper']).toBe('node scripts/verify-bundled-helper.mjs')
   })
 })

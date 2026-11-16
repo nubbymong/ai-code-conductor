@@ -74,6 +74,19 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   files and changes by other users past the folder modes; not root or the same
   user (section 2). `emit`, `mcp` and `askpass` are not hash-checked. macOS
   helpers are signed (Windows at R13); Linux relies on the manifest.
+- **This computer (2.1.3-beta.6, plain and partner terminals).** There is no
+  host and no manifest here: the trust anchor is the helper installed with the
+  signed app (`resources/helper/`, signed with the app on Windows and macOS).
+  The app copies it into a per-user folder outside the install folder (so an
+  update can replace the installed file while holders run from the copy), in a
+  folder named for its version and hash. Before every run of the copy (each
+  `hold`, `list` and `selftest`) the app hashes the copy and compares it with
+  the installed file's SHA-256, taken at start; a mismatch is copied again
+  once, and a second mismatch marks the helper failed and starts nothing
+  through it. A holder's hello must name the nonce from its record, and the
+  app writes nothing to the endpoint before that hello has been read. This
+  catches a corrupted or swapped copy; like the remote case it does not stop
+  the same user, who can already run any program as themselves.
 
 ### 3.2 Downgrade
 
@@ -263,6 +276,13 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   network. A separate signing job takes only the finished artifact, checks it
   against the reproducible-build comparison and signs, so no build script or
   procedural macro runs where signing material is.
+  Not yet in 2.1.3-beta.6: the helper for This computer is built by
+  `cargo build --release --locked` inside each release packaging job, before
+  that job's signing steps, so electron-builder signs it with the app. That job
+  already runs the app's npm install and build, so the helper's pinned crates
+  add to code that runs there rather than open a new place. The separate build
+  and signing jobs, vendored `--offline` sources and the reproducible-build
+  comparison come with the remote helper.
 - **The control against a hostile dependency is source review.** Every
   `Cargo.lock` change is reviewed as a source diff by someone other than its
   author, who records an audit per crate version in the repository's audit

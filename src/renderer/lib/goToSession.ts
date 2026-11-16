@@ -6,21 +6,23 @@ import { useSessionStore } from '../stores/sessionStore'
 
 export const GO_TO_SESSION_EVENT = 'app:goToSession'
 
-export function goToSession(sessionId: string): void {
-  window.dispatchEvent(new CustomEvent(GO_TO_SESSION_EVENT, { detail: { sessionId } }))
+export function goToSession(sessionId: string, opts?: { partner?: boolean }): void {
+  window.dispatchEvent(new CustomEvent(GO_TO_SESSION_EVENT, { detail: { sessionId, partner: opts?.partner === true } }))
 }
 
 /** Listen for Go to: select that session and show the sessions view. A
- *  session that is no longer open is a no-op. Returns the unsubscribe. */
-export function listenGoToSession(showSessions: () => void): () => void {
+ *  session that is no longer open is a no-op. `partner` (the Machines page's
+ *  Re-attach of a partner terminal) asks for that session's partner terminal
+ *  to show. Returns the unsubscribe. */
+export function listenGoToSession(showSessions: (sessionId: string, opts: { partner: boolean }) => void): () => void {
   const onGoTo = (e: Event) => {
-    const detail = (e as CustomEvent).detail as { sessionId?: unknown } | undefined
+    const detail = (e as CustomEvent).detail as { sessionId?: unknown; partner?: unknown } | undefined
     const id = detail?.sessionId
     if (typeof id !== 'string' || !id) return
     const store = useSessionStore.getState()
     if (!store.sessions.some((s) => s.id === id)) return
     store.setActiveSession(id)
-    showSessions()
+    showSessions(id, { partner: detail?.partner === true })
   }
   window.addEventListener(GO_TO_SESSION_EVENT, onGoTo)
   return () => window.removeEventListener(GO_TO_SESSION_EVENT, onGoTo)

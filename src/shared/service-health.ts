@@ -5,7 +5,8 @@ export type ServiceState =
  *  - in-process: inside the app's main process.
  *  - in-process-fallback: a utility-process service whose child could not be
  *    kept up, now running inside the main process instead (the hooks gateway).
- *  - helper: kept for the per-machine helper. No row uses it yet. */
+ *  - helper: the per-machine session helper, a program of its own beside the
+ *    app (the Session helper row). */
 export type ServiceHost = 'utility-process' | 'in-process' | 'in-process-fallback' | 'helper'
 
 /** The ids of the rows the service registry lists, in the order it lists them. */
@@ -15,6 +16,7 @@ export const SERVICE_ID = {
   tokenomics: 'tokenomics',
   watchdog: 'watchdog',
   mcp: 'mcp',
+  helper: 'helper',
 } as const
 export type ServiceId = (typeof SERVICE_ID)[keyof typeof SERVICE_ID]
 
@@ -26,6 +28,7 @@ export const SERVICE_LABEL: Record<ServiceId, string> = {
   tokenomics: 'Tokenomics',
   watchdog: 'Watchdog',
   mcp: 'MCP server',
+  helper: 'Session helper',
 }
 
 /** What a service was measured to cost, when something measures it. Each
@@ -63,6 +66,8 @@ export interface ServiceHealth {
   lastFlushAt?: number
   /** Measured cost, OPTIONAL: absent until something measures this service. */
   measured?: ServiceMeasured
+  /** The session helper's row only: the terminals it holds now. */
+  heldSessions?: number
 }
 
 export interface ServiceLogEntry {

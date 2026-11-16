@@ -20,8 +20,8 @@ import {
 } from '../shared/container-command'
 import { SSH_ENTRY, type SshEntryFailureReason } from '../shared/ssh-entry'
 import type { SshRuntime, DetachedRemoteLiveness, SshEndRemoteOutcome, SshEndRemoteResult, SubmitTextResult, AskConductorNotice } from '../shared/types'
-import type { RealmOwnership, ProviderId } from '../shared/providers'
-import { isProviderId } from '../shared/providers'
+import { isProviderId, type RealmOwnership, type ProviderId } from '../shared/providers'
+import { spawnPlainPty, isHeldReattach } from './session-helper/manager'
 import { IPC } from '../shared/ipc-channels'
 import { codexPromptKeeps } from '../shared/codex-screen'
 import { askConductorProjectDocMaxBytes } from './help-workspace'
@@ -6740,7 +6740,7 @@ function spawnPtyResolved(
     if (shellOnly) {
       logInfo(`[pty-manager] Launching shell-only PTY: ${spawnCmd} ${spawnArgs.join(' ')} cwd=${describePathForLog(resolvedCwd)}${options?.elevated ? ' (elevated)' : ''}`)
 
-      ptyProcess = pty.spawn(spawnCmd, spawnArgs, {
+      ptyProcess = spawnPlainPty({ sessionId, elevated: (options?.elevated ?? options?.terminalOptions?.elevated) === true }, spawnCmd, spawnArgs, {
         name: 'xterm-256color',
         cols,
         rows,
@@ -6777,12 +6777,12 @@ function spawnPtyResolved(
       // shell (localSessionShell, as Alt+V classifies it; an elevated tab runs
       // the same shell under sudo); any other shell gets no line and starts in
       // the folder anyway, the PTY's own working folder.
-      const typeCdLine = isWin || isShFamilyShell(localSessionShell(process.env, os.platform()))
+      const typeCdLine = !isHeldReattach(ptyProcess) && (isWin || isShFamilyShell(localSessionShell(process.env, os.platform())))
 
       // Terminal-only first-run command. `{secret}` becomes a REFERENCE to the
       // CCC_ARG_SECRET env var (set from the keychain in buildClaudeLocalSpawn),
       // never the secret itself — see terminal-launch-line.ts for the contract.
-      const launchLine = buildTerminalLaunchLine(options?.terminalOptions, isWin)
+      const launchLine = isHeldReattach(ptyProcess) ? '' : buildTerminalLaunchLine(options?.terminalOptions, isWin)
 
       launchWriteScheduled = true
       launchPendingSessions.add(sessionId)

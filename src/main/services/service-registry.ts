@@ -61,12 +61,22 @@ export interface McpServerState {
   startError?: { message: string; ts: number } | null
 }
 
+/** What the session helper says of itself (src/main/session-helper/manager.ts). */
+export interface SessionHelperRowState {
+  state: 'off' | 'not-installed' | 'starting' | 'ready' | 'failed'
+  /** The terminals it holds now. */
+  held: number
+  lastError: { message: string; ts: number } | null
+}
+
 export interface ServiceRegistrySources {
   hooks: () => SupervisedService | null
   logging: () => SupervisedService | null
   tokenomics: () => SupervisedService | null
   watchdog: () => WatchdogService | null
   mcp: () => McpServerState
+  /** The session helper; null (or absent) while it was never switched on. */
+  helper?: () => SessionHelperRowState | null
   /** PTY integrity is not a service row: it is a block of its own in the
    *  snapshot, plus lines in the shared log. */
   pty?: () => { snapshot: PtyIntegritySnapshot; logs: ServiceLogEntry[] } | null
@@ -138,6 +148,17 @@ export function mcpServerRow(m: McpServerState): ServiceHealth {
   return row
 }
 
+/** The session helper row. It runs beside the app as a program of its own,
+ *  one holder per terminal, and has no restart: the app starts it. */
+export function sessionHelperRow(h: SessionHelperRowState): ServiceHealth {
+  const row = createInitialHealth(SERVICE_ID.helper, SERVICE_LABEL.helper, 'helper')
+  row.state = h.state === 'ready' ? 'listening' : h.state === 'starting' ? 'starting' : h.state === 'off' ? 'stopped' : 'crashed'
+  row.heldSessions = h.held
+  // A last error shows on a row that is not working; a working one is clean.
+  if (row.state === 'crashed' && h.lastError) row.lastError = { message: h.lastError.message, ts: h.lastError.ts }
+  return row
+}
+
 export function createServiceRegistry(sources: ServiceRegistrySources): ServiceRegistry {
   const now = sources.now ?? (() => Date.now())
 
@@ -183,6 +204,18 @@ export function createServiceRegistry(sources: ServiceRegistrySources): ServiceR
       read: () => ({ row: mcpServerRow(sources.mcp()), log: [] }),
       // No restart: the server lives inside the main process and the open
       // sessions hold connections to it. Relaunching the app restarts it.
+    },
+    {
+      // The session helper (2.1.3-beta.6). Off in Settings: stopped.
+      id: SERVICE_ID.helper,
+      label: SERVICE_LABEL.helper,
+      host: 'helper',
+      read: () => {
+        const h = sources.helper?.() ?? null
+        return h ? { row: sessionHelperRow(h), log: [] } : null
+      },
+      // No restart: each held terminal is a holder of its own, and ending
+      // them would end the terminals. The app starts the helper.
     },
   ]
 

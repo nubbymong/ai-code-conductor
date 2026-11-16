@@ -57,7 +57,15 @@ export interface MachineStatus {
 export interface MachineActionResult {
   ok: boolean
   message?: string
+  /** Re-attach only: the tab that shows the held terminal. `open` true: the
+   *  page opens a new Terminal only tab with this id (the helper bound the
+   *  terminal to it); false: it brings the tab already open forward, its
+   *  partner terminal when `partner` is true. */
+  tab?: { id: string; label: string; open: boolean; partner: boolean }
 }
+
+/** The shape of a tab id a Re-attach may name (the app's own session ids). */
+export const REATTACH_TAB_ID = /^[A-Za-z0-9_-]{1,128}$/
 
 /** What the Machines page reads and does. Main owns the one that is plugged in. */
 export interface MachinesSource {
