@@ -338,10 +338,27 @@ fn is_tmp_name(name: &str) -> bool {
     }
 }
 
-/// Every session in `store`. A record whose holder is gone (its process is
-/// not running, or its endpoint has nothing on it or answers as someone
-/// else) is removed with its socket file, under the store's lock and only if
-/// the record is still the one found stale. Sessions are sorted by start
+/// Whether the holder that wrote `rec` is gone: its process is not running;
+/// or its endpoint has nothing on it or answers as someone else; or, when
+/// the endpoint gives no clear answer, its process id names a process that
+/// started after the record was written (`pids::started_after`): a holder
+/// starts before it writes its record, so the id has been given to another
+/// process. A holder that answers is never gone. `probe` is asked only
+/// while the process id runs.
+pub fn holder_gone(rec: &Record, probe: impl FnOnce(&Record) -> Probe) -> bool {
+    if !crate::pids::alive(rec.pid) {
+        return true;
+    }
+    match probe(rec) {
+        Probe::Live => false,
+        Probe::Gone => true,
+        Probe::Unknown => crate::pids::started_after(rec.pid, rec.started),
+    }
+}
+
+/// Every session in `store`. A record whose holder is gone (`holder_gone`)
+/// is removed with its socket file, under the store's lock and only if the
+/// record is still the one found stale. Sessions are sorted by start
 /// time, then session id. A missing store lists nothing and is not made.
 pub fn list(store: &Path, probe: impl Fn(&Record) -> Probe) -> io::Result<Listing> {
     let mut listing = Listing { sessions: Vec::new(), removed: 0, skipped: 0 };
@@ -378,7 +395,7 @@ pub fn list(store: &Path, probe: impl Fn(&Record) -> Probe) -> io::Result<Listin
             }
             Some(Ok(r)) => r,
         };
-        let stale = !crate::pids::alive(rec.pid) || probe(&rec) == Probe::Gone;
+        let stale = holder_gone(&rec, &probe);
         if !stale {
             listing.sessions.push(rec);
             continue;
@@ -550,6 +567,36 @@ mod tests {
         let listing = list(&store, |_| Probe::Gone).unwrap();
         assert_eq!((listing.sessions.len(), listing.removed), (0, 1));
         drop(child);
+        fs::remove_dir_all(&store).unwrap();
+    }
+
+    /// macOS refuses a connect to a crashed holder's socket as it refuses one
+    /// to a full queue, so that endpoint gives no clear answer; if the
+    /// holder's id has been given to another process, the start time tells.
+    #[cfg(any(target_os = "linux", target_vendor = "apple", windows))]
+    #[test]
+    fn a_record_whose_process_id_now_names_a_later_process_is_stale_when_its_endpoint_gives_no_answer() {
+        let store = scratch("reused");
+        prepare(&store).unwrap();
+        // This test process holds the id, and it started long after 1970.
+        let mut reused = sample("list-reused-1");
+        reused.started = 1;
+        let mut kept = sample("list-kept-01");
+        kept.started = now_ms();
+        let mut answers = sample("list-answers");
+        answers.started = 1;
+        for r in [&reused, &kept, &answers] {
+            write(&store, r).unwrap();
+        }
+        assert!(holder_gone(&reused, |_| Probe::Unknown));
+        assert!(!holder_gone(&kept, |_| Probe::Unknown), "a process that started before its record was taken for another");
+        assert!(!holder_gone(&answers, |_| Probe::Live), "a holder that answers was taken for gone");
+        assert!(holder_gone(&kept, |_| Probe::Gone));
+        let listing = list(&store, |r| if r.session == "list-answers" { Probe::Live } else { Probe::Unknown }).unwrap();
+        let names: Vec<&str> = listing.sessions.iter().map(|r| r.session.as_str()).collect();
+        assert_eq!(names, vec!["list-answers", "list-kept-01"]);
+        assert_eq!(listing.removed, 1);
+        assert!(read(&store, "list-reused-1").is_none(), "the record of a reused id was kept");
         fs::remove_dir_all(&store).unwrap();
     }
 

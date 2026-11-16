@@ -2,11 +2,12 @@
 //! holder, that only the user who started it can reach. No network socket,
 //! loopback included, is ever opened (threat model 3.10).
 //!
-//! - **Windows**: a named pipe `\\.\pipe\aicc-helper-<sid>-<32 hex>`. Its
-//!   security descriptor allows the current user alone (`D:P(A;;GA;;;<SID>)`),
-//!   it refuses remote clients, and the first instance is made with
-//!   `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a name someone else already made is
-//!   never joined.
+//! - **Windows**: a named pipe `\\.\pipe\aicc-helper-<sid>-<32 hex>`. The
+//!   current user owns it and alone may open it
+//!   (`O:<SID>D:P(A;;GA;;;<SID>)`), it refuses remote clients, the first
+//!   instance is made with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a name someone
+//!   else already made is never joined, and a later instance is used only if
+//!   the pipe's owner and its list are the user's.
 //! - **macOS and Linux**: a Unix socket `/tmp/aicc-<uid>/<sid>-<16 hex>.sock`.
 //!   The folder is 0700 and must be a real folder owned by the user, the socket
 //!   0600, and every connection's peer user id must be the user's.

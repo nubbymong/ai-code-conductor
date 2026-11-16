@@ -1,11 +1,22 @@
-//! Is a process still running? List mode uses it to tell a live session record
-//! from one a crashed holder left behind (protocol section 15), and the tests
-//! use it to show that ending a session ends its whole process tree.
+//! Is a process still running, and when did it start? List mode uses both to
+//! tell a live session record from one a crashed holder left behind
+//! (protocol section 15, `store::holder_gone`), and the tests use `alive` to
+//! show that ending a session ends its whole process tree.
 #![allow(unsafe_code)]
 
+/// How much later than a record's `started` the process with its id may have
+/// started and still be taken for its holder. A holder starts before it
+/// writes its record, so its own start is never later; the slack is for a
+/// clock that was set meanwhile (Linux works a start out from the boot time,
+/// which moves with the clock) and for start times kept to the second. Ids
+/// are handed out in turn on macOS and Linux, so one given out again within
+/// a minute is not likely.
+pub const START_SLACK_MS: u64 = 60_000;
+
 /// True while a process with this id exists. A process of another user that
-/// happens to have the id counts as existing; list mode then checks the
-/// endpoint, so a reused id never makes a stale record look live.
+/// happens to have the id counts as existing: the id may have been given to
+/// another process since a record was written, which the endpoint, or else
+/// `started_after`, tells apart (`store::holder_gone`).
 #[cfg(unix)]
 pub fn alive(pid: u32) -> bool {
     if pid == 0 || pid > i32::MAX as u32 {
@@ -32,6 +43,79 @@ fn zombie(pid: u32) -> bool {
         },
         Err(_) => false,
     }
+}
+
+/// True when the process with this id is known to have started more than
+/// `START_SLACK_MS` after `ms` (milliseconds since 1970): it is not the
+/// process that had the id at `ms`. False when its start cannot be read.
+pub fn started_after(pid: u32, ms: u64) -> bool {
+    started_ms(pid).map_or(false, |start| start > ms.saturating_add(START_SLACK_MS))
+}
+
+/// When the process with this id started, in milliseconds since 1970 (UTC).
+/// Linux: field 22 of `/proc/<pid>/stat`, in clock ticks after the boot,
+/// plus the boot time in `/proc/stat`.
+#[cfg(target_os = "linux")]
+pub fn started_ms(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The fields after the name (in brackets, which may hold spaces and
+    // brackets itself) start at field 3, so field 22 is the 20th of them.
+    let ticks: u64 = stat[stat.rfind(')')? + 1..].split_whitespace().nth(19)?.parse().ok()?;
+    let boot_secs: u64 = std::fs::read_to_string("/proc/stat").ok()?.lines().find_map(|l| l.strip_prefix("btime "))?.trim().parse().ok()?;
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if hz <= 0 {
+        return None;
+    }
+    boot_secs.checked_mul(1000)?.checked_add(ticks.checked_mul(1000)? / hz as u64)
+}
+
+/// When the process with this id started, in milliseconds since 1970 (UTC).
+/// macOS keeps it with the process (`proc_pidinfo`, `PROC_PIDTBSDINFO`).
+#[cfg(target_vendor = "apple")]
+pub fn started_ms(pid: u32) -> Option<u64> {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return None;
+    }
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let got = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+    if got != size {
+        return None;
+    }
+    info.pbi_start_tvsec.checked_mul(1000)?.checked_add(info.pbi_start_tvusec / 1000)
+}
+
+/// Not read on any other Unix.
+#[cfg(all(unix, not(any(target_os = "linux", target_vendor = "apple"))))]
+pub fn started_ms(_pid: u32) -> Option<u64> {
+    None
+}
+
+/// When the process with this id started, in milliseconds since 1970 (UTC):
+/// its creation time.
+#[cfg(windows)]
+pub fn started_ms(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    if pid == 0 {
+        return None;
+    }
+    let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let ok = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user);
+        CloseHandle(handle);
+        if ok == 0 {
+            return None;
+        }
+    }
+    // Steps of 100 ns since 1601; 11644473600 s from then to 1970.
+    let steps = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+    (steps / 10_000).checked_sub(11_644_473_600_000)
 }
 
 #[cfg(windows)]
@@ -62,6 +146,27 @@ mod tests {
     fn this_process_is_alive_and_id_zero_is_not() {
         assert!(alive(std::process::id()));
         assert!(!alive(0));
+    }
+
+    /// The start is read in the right unit: this test process started a
+    /// moment ago, not in 1970 and not in the future.
+    #[cfg(any(target_os = "linux", target_vendor = "apple", windows))]
+    #[test]
+    fn this_process_started_a_moment_ago_and_after_any_earlier_record() {
+        let me = std::process::id();
+        let now = crate::store::now_ms();
+        let start = started_ms(me).expect("this process's start can be read");
+        // Linux keeps the boot time to the second.
+        assert!(start <= now + 1_000, "started {start}, after now {now}");
+        assert!(now.saturating_sub(start) < 6 * 3_600_000, "started {start}, hours before now {now}");
+        // A record written before this process started is not its record.
+        assert!(started_after(me, 1));
+        assert!(started_after(me, start - START_SLACK_MS - 1_000));
+        // A record written after it started can be.
+        assert!(!started_after(me, now));
+        assert!(!started_after(me, start));
+        assert!(started_ms(0).is_none());
+        assert!(!started_after(0, 1));
     }
 
     #[test]
