@@ -10,11 +10,14 @@
  * check (see the PR).
  */
 import { describe, it, expect, afterEach } from 'vitest'
-import { trimCanvasFontSetter, installCanvasFontTrim } from '../../../src/renderer/components/terminal/canvasFontTrim'
+import { readFileSync } from 'fs'
+import { join } from 'path'
+import { trimCanvasFontSetter, installCanvasFontTrim, trimCssWhitespace } from '../../../src/renderer/components/terminal/canvasFontTrim'
 import { installWebglWithRecovery } from '../../../src/renderer/components/terminal/terminalWebgl'
 
+const repoRoot = join(__dirname, '../../..')
 const DEFAULT_FONT = '10px sans-serif'
-const FAMILY = "'JetBrains Mono', 'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', Consolas, monospace"
+const FAMILY = "'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', Consolas, monospace"
 
 /** A 2D-context stand-in with the measured behaviour: a value with leading
  *  whitespace is ignored (the context keeps what it had), anything else is
@@ -43,15 +46,14 @@ const atlasFont = (italic: boolean, weight: number | string, size: number, famil
   `${italic ? 'italic' : ''} ${weight} ${size}px ${family}`
 
 describe('canvas font trim (#313)', () => {
-  it('without the trim, the atlas font for upright text is ignored and the canvas stays on 10px sans-serif', () => {
+  it('with the trim, the atlas font for upright text reaches the canvas and is kept, at any weight', () => {
     const { FakeContext2D } = makeContextClass()
-    const ctx = new FakeContext2D() as unknown as { font: string }
-    ctx.font = atlasFont(false, 450, 13, FAMILY)
-    expect(ctx.font).toBe(DEFAULT_FONT)
-  })
+    // Precondition: the stand-in drops the atlas string as the VM canvas did,
+    // so the trim below is what makes it stick.
+    const bare = new FakeContext2D() as unknown as { font: string }
+    bare.font = atlasFont(false, 450, 13, FAMILY)
+    expect(bare.font, 'precondition: the untrimmed string is ignored').toBe(DEFAULT_FONT)
 
-  it('with the trim, the same string reaches the canvas and is kept, at any weight', () => {
-    const { FakeContext2D } = makeContextClass()
     expect(trimCanvasFontSetter(FakeContext2D.prototype)).toBe(true)
     const ctx = new FakeContext2D() as unknown as { font: string }
     for (const w of [450, 400, 700, 'normal', 'bold']) {
@@ -70,6 +72,28 @@ describe('canvas font trim (#313)', () => {
     const obj = { toString: () => '12px serif' }
     ctx.font = obj
     expect(sets).toEqual(['13px "JetBrains Mono"', obj])
+  })
+
+  it('removes only CSS whitespace (space, tab, LF, CR, FF) at the ends', () => {
+    expect(trimCssWhitespace(' \t\n\r\f450 13px x \t\n\r\f')).toBe('450 13px x')
+    expect(trimCssWhitespace('450  13px  x')).toBe('450  13px  x')
+    // Not CSS whitespace: a no-break space can end a valid family ident, and
+    // the others are not whitespace to CSS either. String.prototype.trim would
+    // remove all of them.
+    for (const ch of [' ', '﻿', ' ', ' ', '　', ' ']) {
+      const v = `${ch}13px x${ch}`
+      expect(trimCssWhitespace(v), `U+${ch.codePointAt(0)!.toString(16).toUpperCase()}`).toBe(v)
+    }
+  })
+
+  it('a value with a leading no-break space reaches the native setter unchanged', () => {
+    const { FakeContext2D, sets } = makeContextClass()
+    trimCanvasFontSetter(FakeContext2D.prototype)
+    const ctx = new FakeContext2D() as unknown as { font: string }
+    const v = ' 13px Mono '
+    ctx.font = v
+    ctx.font = ` ${v} `
+    expect(sets).toEqual([v, v])
   })
 
   it('wraps a prototype once: a second install is a no-op and the native setter runs once per set', () => {
@@ -106,30 +130,44 @@ describe('canvas font trim (#313)', () => {
   })
 })
 
-describe('installWebglWithRecovery installs the trim before the WebGL addon builds its atlas (#313)', () => {
-  const g = globalThis as unknown as { CanvasRenderingContext2D?: unknown }
-  const had = Object.prototype.hasOwnProperty.call(g, 'CanvasRenderingContext2D')
-  const prev = g.CanvasRenderingContext2D
-  afterEach(() => {
-    if (had) g.CanvasRenderingContext2D = prev
-    else delete g.CanvasRenderingContext2D
+describe('the trim is in place before any canvas draws (#313)', () => {
+  it('main.tsx installs it once at renderer startup, before React renders', () => {
+    // main.tsx renders the whole App, so it is pinned by its source, as the
+    // other renderer start-up wiring is (excalidraw-fonts-guard).
+    const src = readFileSync(join(repoRoot, 'src/renderer/main.tsx'), 'utf-8')
+    expect(src).toMatch(/import \{ installCanvasFontTrim \} from '\.\/components\/terminal\/canvasFontTrim'/)
+    const call = src.search(/^installCanvasFontTrim\(\)\r?$/m)
+    const render = src.indexOf('createRoot(')
+    expect(call, 'a top-level installCanvasFontTrim() call').toBeGreaterThan(-1)
+    expect(render).toBeGreaterThan(-1)
+    expect(call, 'installed before the root is created').toBeLessThan(render)
   })
 
-  it('a canvas used by the addon from its constructor on accepts the atlas font', () => {
-    const { FakeContext2D } = makeContextClass()
-    g.CanvasRenderingContext2D = FakeContext2D
-    let seenInCtor: string | null = null
-    class FakeWebglAddon {
-      constructor() {
-        const ctx = new FakeContext2D() as unknown as { font: string }
-        ctx.font = atlasFont(false, 450, 13, FAMILY)
-        seenInCtor = ctx.font
+  describe('installWebglWithRecovery installs it too (guard), before the WebGL addon builds its atlas', () => {
+    const g = globalThis as unknown as { CanvasRenderingContext2D?: unknown }
+    const had = Object.prototype.hasOwnProperty.call(g, 'CanvasRenderingContext2D')
+    const prev = g.CanvasRenderingContext2D
+    afterEach(() => {
+      if (had) g.CanvasRenderingContext2D = prev
+      else delete g.CanvasRenderingContext2D
+    })
+
+    it('a canvas used by the addon from its constructor on accepts the atlas font', () => {
+      const { FakeContext2D } = makeContextClass()
+      g.CanvasRenderingContext2D = FakeContext2D
+      let seenInCtor: string | null = null
+      class FakeWebglAddon {
+        constructor() {
+          const ctx = new FakeContext2D() as unknown as { font: string }
+          ctx.font = atlasFont(false, 450, 13, FAMILY)
+          seenInCtor = ctx.font
+        }
+        onContextLoss() {}
+        dispose() {}
       }
-      onContextLoss() {}
-      dispose() {}
-    }
-    const term = { loadAddon() {}, refresh() {}, rows: 24 }
-    installWebglWithRecovery(term as never, { WebglAddonCtor: FakeWebglAddon as never, raf: (cb) => { cb(); return 0 }, isDisposed: () => false })
-    expect(seenInCtor).toBe(`450 13px ${FAMILY}`)
+      const term = { loadAddon() {}, refresh() {}, rows: 24 }
+      installWebglWithRecovery(term as never, { WebglAddonCtor: FakeWebglAddon as never, raf: (cb) => { cb(); return 0 }, isDisposed: () => false })
+      expect(seenInCtor).toBe(`450 13px ${FAMILY}`)
+    })
   })
 })

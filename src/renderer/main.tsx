@@ -9,7 +9,15 @@ import './providers/compose-at-load'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { installCanvasFontTrim } from './components/terminal/canvasFontTrim'
 import './styles.css'
+
+// #313: every 2D canvas in this window gets its `font` value with the CSS
+// whitespace at its ends removed, before anything renders. The bundled
+// Chromium drops a value with a leading space, and the WebGL terminal's glyph
+// atlas sends one (see the module). Installed here, once, so all canvases
+// behave the same from the start, not only after a GPU terminal has opened.
+installCanvasFontTrim()
 
 // Renderer-wide backstop for unhandled promise rejections. IPC read surfaces
 // (tokenomics / logs handlers) reject by design on worker crash / restart-backoff
