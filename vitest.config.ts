@@ -1,6 +1,23 @@
 import { defineConfig, configDefaults } from 'vitest/config'
-import { resolve } from 'path'
+import { BaseSequencer, type TestSpecification } from 'vitest/node'
+import { relative, resolve, sep } from 'path'
 import { canvasBridgePlugin } from './scripts/vite-plugin-canvas-bridge.mjs'
+import { pathsOfPart } from './scripts/ci/shard-by-weight.mjs'
+
+/** `--shard=i/n`, which only the Windows CI parts pass (ci.yml): the few files
+ *  that start many Windows PowerShell processes are spread across the parts by
+ *  weight, and every other file is split as vitest splits it
+ *  (scripts/ci/shard-by-weight.mjs). The order inside a part is vitest's own.
+ *  vitest calls this only under --shard. */
+export class WeightedShardSequencer extends BaseSequencer {
+  async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
+    const { root, shard } = this.ctx.config
+    if (!shard) return files
+    const pathOf = (spec: TestSpecification) => relative(root, spec.moduleId).split(sep).join('/')
+    const chosen = new Set(pathsOfPart([...new Set(files.map(pathOf))], shard.index, shard.count))
+    return files.filter((spec) => chosen.has(pathOf(spec)))
+  }
+}
 
 export default defineConfig({
   // Tests drive the SAME bundled bridge string the app serves — no second,
@@ -23,6 +40,8 @@ export default defineConfig({
     // Forks, not worker threads: a worker thread keeps its own copy of the environment,
     // so the home redirect above would not reach os.homedir() (home-isolation.ts checks).
     pool: 'forks',
+    // How a split run (--shard) divides the files; see WeightedShardSequencer above.
+    sequence: { sequencer: WeightedShardSequencer },
     // Sweeps orphaned per-worker temp roots + a stray drive-root \mock (#559).
     globalSetup: ['tests/global-setup.ts'],
     // Integration tests (e.g. hooks synthetic path) spin up a real loopback

@@ -41,6 +41,18 @@ summed file time.
   summed file time, mostly PowerShell files that run side by side on the
   runner's workers. Three parts left one near 15 minutes; five or six barely
   moved the heaviest part and cost more Windows runners per run.
+- The split is weighted. In the first two runs vitest's hash split gave one
+  part five of the nine slow PowerShell files and another none: 12.0 minutes
+  against 3.1 on the same run, and 7.2 on the run before with the same files.
+  vitest.config.ts now names a sequencer for `--shard` runs:
+  `scripts/ci/shard-by-weight.mjs` places the nine files, heaviest first, each
+  on the part with the least weight so far (measured seconds per file, from the
+  parts' own summaries), and splits every other file exactly as vitest does. A
+  file renamed or added is a light file, still in exactly one part; a test
+  proves the parts cover the suite once each for one to eight parts, and that
+  the light split matches vitest's file for file. Only `--shard` runs use it,
+  and only the Windows CI parts pass `--shard`: release.yml runs the suite
+  whole.
 
 **Not changed.** release.yml (it reads `TEST_JOB_RE` names and the `Tested
 tree` step, both kept), the Helper job, macOS and Linux. The beta release still

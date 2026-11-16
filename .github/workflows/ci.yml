@@ -318,13 +318,17 @@ jobs:
 
   # Windows, in parts (2.1.3-beta.6). In one job the Windows suite took a
   # median of 24 minutes (26 for the job, five runs on 2026-11-15) and set the
-  # CI time of every PR. These three jobs run side by side, and a fourth, named
-  # `Test (windows-2025)`, waits for them and reports the required check:
-  #   - test-windows-part: the unit suite in four parts (vitest --shard). Each
-  #     part runs a quarter of the test files, chosen by a hash of each file's
-  #     path; the four together are the whole suite. The count is the size of
-  #     the matrix (strategy.job-total): add a part there to raise it. Each
-  #     part's summary lists its slowest files.
+  # CI time of every PR. The two jobs below run side by side, and a third,
+  # `test-windows`, named `Test (windows-2025)`, waits for them and reports the
+  # required check:
+  #   - test-windows-part: the unit suite in four parts (vitest --shard); the
+  #     four together are the whole suite, each file in one part. The few files
+  #     that start many Windows PowerShell processes are spread across the
+  #     parts by weight, and every other file goes where vitest's own hash
+  #     split puts it (vitest.config.ts, scripts/ci/shard-by-weight.mjs). The
+  #     count is the size of the matrix (strategy.job-total): add a part there
+  #     to raise it. Each part's summary lists its slowest files, which is
+  #     where a weight that has drifted shows.
   #   - test-windows-build: the typecheck, the native tests, the build and, on
   #     a release/* branch, the installer, once.
   # Each decides the scope itself ("Decide the scope"), as the Test jobs do,
