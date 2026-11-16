@@ -154,7 +154,7 @@ describe('GuidedTour: every card, per assistants in use', () => {
     expect(cards.get('Review what your agent builds')).toBe(CANVAS_BEFORE_NOTE)
     // P4.3: with both on, Ask runs on the one chosen in Settings, so the card names neither.
     expect(cards.get('Help lives here')).toBe('The Feature Guide explains every feature in depth whenever you want it and can hand your question to Ask Conductor, a session that knows the app.')
-    expect(cards.get('Everything has a home')).toContain('Cloud Agents, Insights, Tokenomics, Memory, Logs and the built-in tools (Conductor MCP) all live on this rail')
+    expect(cards.get('Everything has a home')).toContain('Cloud Agents, Insights, Tokenomics, Machines, Memory, Logs and the built-in tools (Conductor MCP) all live on this rail')
     expect(cards.get('Change anything, anytime')).toContain('Everything you just set up lives in Settings: your assistants and their accounts under Accounts, GitHub, the status line and the built-in tools.')
   })
 

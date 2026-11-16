@@ -1,6 +1,31 @@
 import { defineConfig, configDefaults } from 'vitest/config'
-import { resolve } from 'path'
+import { BaseSequencer, type TestSpecification } from 'vitest/node'
+import { relative, resolve, sep } from 'path'
 import { canvasBridgePlugin } from './scripts/vite-plugin-canvas-bridge.mjs'
+import { heavyFirst, pathsOfPart } from './scripts/ci/shard-by-weight.mjs'
+
+/** `--shard=i/n`, which only the Windows CI parts pass (ci.yml): the few files
+ *  that start many Windows PowerShell processes are spread across the parts by
+ *  weight, and every other file is split as vitest splits it; inside a part
+ *  those files start first (scripts/ci/shard-by-weight.mjs). A run that is not
+ *  split keeps vitest's own order, untouched. */
+export class WeightedShardSequencer extends BaseSequencer {
+  private pathOf(spec: TestSpecification): string {
+    return relative(this.ctx.config.root, spec.moduleId).split(sep).join('/')
+  }
+
+  async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
+    const { shard } = this.ctx.config
+    if (!shard) return files
+    const chosen = new Set(pathsOfPart([...new Set(files.map((f) => this.pathOf(f)))], shard.index, shard.count))
+    return files.filter((spec) => chosen.has(this.pathOf(spec)))
+  }
+
+  async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    const sorted = await super.sort(files)
+    return this.ctx.config.shard ? heavyFirst(sorted, (f: TestSpecification) => this.pathOf(f)) : sorted
+  }
+}
 
 export default defineConfig({
   // Tests drive the SAME bundled bridge string the app serves — no second,
@@ -23,6 +48,8 @@ export default defineConfig({
     // Forks, not worker threads: a worker thread keeps its own copy of the environment,
     // so the home redirect above would not reach os.homedir() (home-isolation.ts checks).
     pool: 'forks',
+    // How a split run (--shard) divides the files; see WeightedShardSequencer above.
+    sequence: { sequencer: WeightedShardSequencer },
     // Sweeps orphaned per-worker temp roots + a stray drive-root \mock (#559).
     globalSetup: ['tests/global-setup.ts'],
     // Integration tests (e.g. hooks synthetic path) spin up a real loopback

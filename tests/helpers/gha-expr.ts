@@ -7,7 +7,7 @@
  * Covered, as GitHub documents them: `||`, `&&` (binds tighter), `!`, `==`,
  * `!=`, parentheses, single-quoted strings ('' is a quote), numbers, true,
  * false, null, context paths with the `.*` filter, and the functions
- * contains, startsWith, endsWith, format, fromJSON and the four status
+ * contains, startsWith, endsWith, format, fromJSON, toJSON and the four status
  * functions. Comparison is loose as GitHub's is: strings ignore case, and
  * values of different types are compared as numbers. A missing property is
  * null. Anything else throws, so a test never passes on a guess.
@@ -77,6 +77,8 @@ const FUNCTIONS: Record<string, (args: unknown[]) => unknown> = {
     return asString(rest[Number(n)])
   }),
   fromjson: ([s]) => JSON.parse(asString(s)),
+  // GitHub pretty-prints; the tests read the value back, so the spacing is immaterial.
+  tojson: ([v]) => JSON.stringify(v === undefined ? null : v, null, 2),
   success: () => true,
   always: () => true,
   failure: () => false,
