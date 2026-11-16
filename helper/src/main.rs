@@ -211,7 +211,12 @@ fn cmd_hold(args: &[String]) -> ExitCode {
     if a.flag("--detach") {
         return detached(&store_dir, &sid, &label, away, ring_bytes);
     }
-    let opts = Options { store: store_dir, sid, label, away: Duration::from_secs(away), ring_bytes };
+    // The holder runs for as long as its session, so it keeps nothing open
+    // that was handed down to it. On Windows its starter hands it nothing
+    // but its standard error (`detach.rs`).
+    #[cfg(unix)]
+    detach::close_inherited_descriptors();
+    let opts =Options { store: store_dir, sid, label, away: Duration::from_secs(away), ring_bytes };
     match serve::run(opts) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if serve::already_running(&e) => {

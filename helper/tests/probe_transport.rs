@@ -66,7 +66,8 @@ fn helper(args: &[&str]) -> Ran {
 /// Run `hold --detach` with its output going to files, not pipes. The holder
 /// outlives this call, so a pipe would stay open until it ends and a reader
 /// waiting for end of file would wait with it. Files do not have that problem,
-/// and the helper also clears inheritance on its own standard handles.
+/// and the holder also keeps none of its starter's handles (see
+/// `a_detached_holder_keeps_none_of_its_starters_handles`).
 fn helper_detaching(args: &[&str], tag: &str) -> Ran {
     let base = std::env::temp_dir().join(format!("aicc-helper-detach-{tag}-{}", std::process::id()));
     let out_path = base.with_extension("out");
