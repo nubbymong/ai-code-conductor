@@ -86,6 +86,36 @@ impl DetachedChild {
     }
 }
 
+/// The ways the holder can find the descriptors it closes as it starts. It
+/// tries them in the order of `ALL` (`close_inherited_descriptors`). A test
+/// names one (`aicc-helper __close-check <way>`), so each way is run on every
+/// OS that has it.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseWay {
+    /// Every descriptor in the system's listing: `/proc/self/fd` on Linux,
+    /// `/dev/fd` elsewhere.
+    Listing,
+    /// Every number from 3 up to the soft limit on open descriptors, at most
+    /// 65,536.
+    EveryNumber,
+}
+
+#[cfg(unix)]
+impl CloseWay {
+    /// Every way, in the order the holder tries them.
+    pub const ALL: [CloseWay; 2] = [CloseWay::Listing, CloseWay::EveryNumber];
+
+    /// The way a name on the command line means.
+    pub fn named(name: &str) -> Option<CloseWay> {
+        match name {
+            "listing" => Some(CloseWay::Listing),
+            "every-number" => Some(CloseWay::EveryNumber),
+            _ => None,
+        }
+    }
+}
+
 /// Close every descriptor from 3 up. The holder calls this as it starts,
 /// before it opens anything of its own: whatever its starter was given and
 /// did not mark close-on-exec reaches it, and it runs for as long as its
@@ -93,22 +123,38 @@ impl DetachedChild {
 /// itself would still hold them.
 #[cfg(unix)]
 pub fn close_inherited_descriptors() {
-    match open_descriptors() {
-        Some(fds) => {
-            for fd in fds.into_iter().filter(|fd| *fd > 2) {
-                // The listing's own descriptor is in the list and already
-                // closed; closing it again only fails.
-                unsafe {
-                    libc::close(fd);
-                }
-            }
+    for way in CloseWay::ALL {
+        if close_descriptors(way) {
+            return;
         }
-        None => {
+    }
+}
+
+/// Close every descriptor from 3 up one way. False when this system does
+/// not have that way; nothing was closed then.
+#[cfg(unix)]
+pub fn close_descriptors(way: CloseWay) -> bool {
+    match way {
+        CloseWay::Listing => match open_descriptors() {
+            Some(fds) => {
+                for fd in fds.into_iter().filter(|fd| *fd > 2) {
+                    // The listing's own descriptor is in the list and already
+                    // closed; closing it again only fails.
+                    unsafe {
+                        libc::close(fd);
+                    }
+                }
+                true
+            }
+            None => false,
+        },
+        CloseWay::EveryNumber => {
             for fd in 3..descriptor_limit() {
                 unsafe {
                     libc::close(fd);
                 }
             }
+            true
         }
     }
 }
@@ -327,3 +373,37 @@ mod win {
 
 #[cfg(windows)]
 pub use self::win::spawn_detached;
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_wait_that_fails_is_an_error_not_still_running() {
+        // A null process handle: the wait fails at once.
+        let mut child = DetachedChild { stderr: None, process: 0, pid: 0 };
+        let waited = child.try_wait();
+        assert!(waited.is_err(), "a wait that failed read as {waited:?}");
+    }
+
+    #[test]
+    fn ending_a_copy_that_has_already_exited_is_not_an_error() {
+        let cmd = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot is set")).join("System32").join("cmd.exe");
+        let args = ["/c", "exit", "7"].map(String::from);
+        let mut child = spawn_detached(&cmd, &args, &std::env::temp_dir()).expect("start cmd.exe").child;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("wait for cmd.exe") {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "cmd.exe did not exit");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(status.code(), Some(7));
+        // As with std's `Child`, which this stands in for.
+        let ended = child.kill();
+        assert!(ended.is_ok(), "ending a copy that had already exited failed: {ended:?}");
+    }
+}

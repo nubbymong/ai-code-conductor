@@ -39,6 +39,9 @@ const DETACH_WAIT: Duration = Duration::from_secs(15);
 const EXIT_ALREADY_RUNNING: u8 = 3;
 /// The most of a failed holder's message `hold --detach` passes on.
 const MAX_HOLDER_MESSAGE: u64 = 4096;
+/// `__close-check`'s exit status when this system does not have the way named.
+#[cfg(unix)]
+const EXIT_NO_SUCH_WAY: u8 = 4;
 
 /// Options as given: each known option once, nothing unknown.
 struct Args {
@@ -120,6 +123,10 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail(&e.to_string()),
         },
+        // `hold`'s first step on macOS and Linux, one named way, for the
+        // tests (`detach.rs`); not a public command.
+        #[cfg(unix)]
+        "__close-check" => cmd_close_check(rest),
         _ => usage(&format!("unknown command {command}")),
     }
 }
@@ -298,6 +305,34 @@ fn detached(store_dir: &Path, sid: &str, label: &str, away: u64, ring_bytes: usi
     }
     let _ = child.kill();
     fail(&format!("the holder (process {pid}) did not write its record in 15 seconds"))
+}
+
+/// Close every descriptor from 3 up the way named (`best` is the holder's
+/// own order), say `closed` on stdout, then wait for standard input to end,
+/// so a test can see what this process still holds while it runs. Exits
+/// `EXIT_NO_SUCH_WAY` when this system does not have that way.
+#[cfg(unix)]
+fn cmd_close_check(args: &[String]) -> ExitCode {
+    let name = match args {
+        [name] => name.as_str(),
+        _ => return usage("__close-check needs one way"),
+    };
+    if name == "best" {
+        detach::close_inherited_descriptors();
+    } else {
+        let way = match detach::CloseWay::named(name) {
+            Some(way) => way,
+            None => return usage(&format!("unknown way {name}")),
+        };
+        if !detach::close_descriptors(way) {
+            eprintln!("aicc-helper: this system cannot close descriptors the {name} way");
+            return ExitCode::from(EXIT_NO_SUCH_WAY);
+        }
+    }
+    println!("closed");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let _ = std::io::stdin().read_to_end(&mut Vec::new());
+    ExitCode::SUCCESS
 }
 
 fn cmd_list(args: &[String]) -> ExitCode {
