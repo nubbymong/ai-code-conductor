@@ -15,7 +15,7 @@
 //! `exit_code()` set has had every byte the terminal gave up within `DRAIN`
 //! (2 s) of the exit; output still coming after that is not waited for.
 
-use crate::pty::{Pty, PtySize, SpawnOptions};
+use crate::pty::{Conpty, Pty, PtySize, SpawnOptions};
 use crate::ring::{Replay, Ring, RingError};
 use std::io::{self, Read, Write};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
@@ -95,7 +95,7 @@ impl Holder {
     /// Start `argv` on a new terminal with the holder's own folder and
     /// environment, and hold it. `ring_bytes` is the size of the output ring.
     pub fn start(argv: &[String], size: PtySize, ring_bytes: usize) -> io::Result<Holder> {
-        Holder::start_with(&SpawnOptions { argv, cwd: None, env: None, size }, ring_bytes)
+        Holder::start_with(&SpawnOptions { argv, cwd: None, env: None, size, line: None, conpty: Conpty::System }, ring_bytes)
     }
 
     /// Start what `opts` names on a new terminal and hold it.

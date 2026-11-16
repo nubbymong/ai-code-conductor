@@ -91,6 +91,20 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   app writes nothing to the endpoint before that hello has been read. This
   catches a corrupted or swapped copy; like the remote case it does not stop
   the same user, who can already run any program as themselves.
+- **The bundled ConPTY on This computer (from 2.1.3-beta.7, protocol change
+  2).** A launch may ask a holder on Windows for the bundled ConPTY. The
+  holder then loads `conpty.dll` only from the `conpty` folder beside its own
+  program file, by its full path, never from a path in a message: with
+  `LoadLibraryExW` and `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` plus
+  `LOAD_LIBRARY_SEARCH_SYSTEM32`, so only that folder and System32 are
+  searched for what it needs, and with critical-error dialogs off for the
+  load. Both files (the DLL and the `OpenConsole.exe` it starts) must be
+  plain files, not links. The app puts node-pty's two files from the signed
+  install into that folder of the per-user copy, hashes node-pty's files at
+  start, and checks the copies against those hashes before each use, as for
+  the helper: a mismatch is copied again once, and a second mismatch makes
+  only the bundled ConPTY unavailable. A DLL that is missing or does not load
+  is answered `io`, and nothing starts.
 - **macOS entitlements of the shipped helper.** electron-builder signs every
   Mach-O in the bundle with `entitlementsInherit`, which is the app's own
   `build/entitlements.mac.plist`: allow-jit, allow-unsigned-executable-memory,

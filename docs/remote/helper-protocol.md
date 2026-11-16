@@ -651,7 +651,7 @@ the last column of section 8's table):
 
 | Type | Reply | Fields and rules |
 | --- | --- | --- |
-| `term.launch` | `term.launched` `{re, pid}` | `{id, argv, cwd, env, cols, rows}`; once per holder, then `busy`; a program that does not start gets `io`, and a later launch may try again; while the session is ending, `not-found` |
+| `term.launch` | `term.launched` `{re, pid}` | `{id, argv, cwd, env, cols, rows}`, and on Windows `line` and `conpty` if wanted (below); once per holder, then `busy`; a program that does not start gets `io`, and a later launch may try again; while the session is ending, `not-found` |
 | `term.attach` | `term.attached` `{re, from, ring_start, ring_end, truncated, running, code?}` | `{id, from}`; then the output from `from` on channel 1, then live output; before a launch, or while the session is ending, `not-found` |
 | `term.resize` | `term.resized` `{re}` | `{id, cols, rows}`; only the attached connection, else `not-connected` |
 | `term.detach` | `term.detached` `{re}` | `{id}`; only the attached connection, else `not-connected`; the holder then closes the connection and the session keeps running |
@@ -670,6 +670,30 @@ its fields; `code` is present only once the program has exited.
   `=` or NUL character, a value at most 32767 characters with no NUL
   character, and two names that differ only in case are refused on every OS.
   `cols` and `rows` are whole numbers from 1 to 1000.
+- **Launch on Windows (protocol change 2).** A launch may carry two more
+  fields, on Windows only; on macOS and Linux either is `bad-field`. `line`
+  is the exact command line the program is given (`CreateProcessW`), for a
+  program that reads its line in a way no argument list can say, such as
+  `cmd.exe /d /s /c` running an npm `.cmd` file. The program started is still
+  `argv[0]`, by its absolute path, never a word of `line`, so with `line`,
+  `argv` holds that program alone. `line` is a string of 1 to 32767
+  characters with no NUL character: a longer one is `too-large`; an empty one,
+  one with NUL, one that is not a string, or one with more than the program in
+  `argv` is `bad-field`. `conpty` is `"bundled"`, or left out for Windows' own
+  ConPTY; any other value is `bad-field`. With it, the terminal runs on the
+  `conpty.dll` in a `conpty` folder beside the helper's own program file,
+  which starts the `OpenConsole.exe` beside it; no path in a message is ever
+  used. The holder loads that file by its full path with `LoadLibraryExW`,
+  searching only its folder and System32 for what it needs
+  (`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` and `LOAD_LIBRARY_SEARCH_SYSTEM32`), and
+  makes the calls node-pty makes on it: `ConptyCreatePseudoConsole`,
+  `ConptyResizePseudoConsole` and `ConptyClosePseudoConsole`. When either file
+  is missing or not a plain file, or the library does not load or lacks one of
+  those calls, the launch gets `io` and nothing is started: a later launch may
+  try again, and the app then starts the session the usual way. The app puts
+  node-pty's two files there, beside its copy of the helper, and checks them
+  against node-pty's own before every use, as it checks the helper. A holder
+  from before this change refuses either field with `bad-field`.
 - **Attach.** `from` is an offset in the output, as in section 11: past
   `ring_end` is `bad-field`; older than the ring holds is answered from
   `ring_start` with `truncated` true. Typed input goes to the holder as raw
@@ -722,4 +746,6 @@ its fields; `code` is present only once the program has exited.
 
 **Change.** The `hold` and `list` command lines and their exit codes, the
 record and the listing are frozen within version 1; new fields need a new
-record version or capability.
+record version or capability. A message may gain an optional field, as
+`term.launch` gained `line` and `conpty` in protocol change 2: a holder from
+before it refuses the field with `bad-field`.

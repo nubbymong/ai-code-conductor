@@ -257,6 +257,10 @@ const LOCAL_FIELDS: Record<string, string[]> = {
   'term.detach': ['t', 'id'],
   'term.end': ['t', 'id'],
 }
+/** Fields a type may also carry: the Windows launch fields (protocol change 2). */
+const LOCAL_OPTIONAL: Record<string, string[]> = { 'term.launch': ['line', 'conpty'] }
+const keysFit = (keys: string[], want: string[], may: string[]) =>
+  new Set(keys).size === keys.length && keys.every((k) => want.includes(k) || may.includes(k)) && want.every((k) => keys.includes(k))
 
 type Answer = { error: string } | Record<string, unknown>
 function refLaunch(v: any, os: Os): Answer {
@@ -288,7 +292,18 @@ function refLaunch(v: any, os: Os): Answer {
     folded.add(name.toUpperCase())
   }
   if (!isCells(v.cols) || !isCells(v.rows)) return bad
-  return { type: 'term.launch', id: v.id, argv: v.argv, cwd: v.cwd, env: entries, cols: v.cols, rows: v.rows }
+  // Launch on Windows (protocol change 2): each field Windows only.
+  if ('line' in v) {
+    if (typeof v.line !== 'string' || os !== 'windows') return bad
+    if (chars(v.line) > L.line_chars) return big
+    if (v.line.includes('\0') || v.line.length === 0 || v.argv.length !== 1) return bad
+  }
+  if ('conpty' in v && (v.conpty !== 'bundled' || os !== 'windows')) return bad
+  return {
+    type: 'term.launch', id: v.id, argv: v.argv, cwd: v.cwd, env: entries, cols: v.cols, rows: v.rows,
+    ...('line' in v ? { line: v.line } : {}),
+    ...('conpty' in v ? { conpty: v.conpty } : {}),
+  }
 }
 
 /** A control message as a connection that acked `local` reads it. */
@@ -304,7 +319,7 @@ function refRequest(textIn: string, os: Os): Answer {
   }
   const fields = LOCAL_FIELDS[v.t]
   if (!fields) return { error: 'unknown-type' }
-  if (!isId(v.id) || !sameKeys(keys, fields)) return bad
+  if (!isId(v.id) || !keysFit(keys, fields, LOCAL_OPTIONAL[v.t] ?? [])) return bad
   switch (v.t) {
     case 'term.launch':
       return refLaunch(v, os)
@@ -368,7 +383,7 @@ describe('helper fixtures: the local transport (section 15)', () => {
     }
     // Every limit is met at its edge, and refused one past it.
     const all = local.requests.invalid.map((v: { name: string }) => v.name).join(' | ')
-    for (const needle of ['257 arguments', 'over 8192 characters', 'over 4096 characters', 'over 255 characters', '1001 rows', '0 columns', '2^53', 'differ only in case', 'by name, not path']) expect(all, needle).toContain(needle)
+    for (const needle of ['257 arguments', 'over 8192 characters', 'over 4096 characters', 'over 255 characters', 'over 32767 characters', '1001 rows', '0 columns', '2^53', 'differ only in case', 'by name, not path']) expect(all, needle).toContain(needle)
     expect(local.requests.valid.some((v: { name: string }) => v.name.includes('256 arguments'))).toBe(true)
   })
 
@@ -416,6 +431,12 @@ describe('helper fixtures: the local transport (section 15)', () => {
     expect(section).toContain('`cwd` is an absolute path of at most 4096 characters')
     expect(section).toContain('It has at most 1024 entries; a name is 1 to 255 characters with no `=` or NUL character, a value at most 32767 characters')
     expect(section).toContain('`cols` and `rows` are whole numbers from 1 to 1000')
+    expect(section).toContain('A launch may carry two more fields, on Windows only; on macOS and Linux either is `bad-field`.')
+    expect(section).toContain('`line` is a string of 1 to 32767 characters with no NUL character: a longer one is `too-large`')
+    expect(section).toContain('so with `line`, `argv` holds that program alone')
+    expect(section).toContain('`conpty` is `"bundled"`, or left out for Windows\' own ConPTY; any other value is `bad-field`.')
+    expect(section).toContain('(`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` and `LOAD_LIBRARY_SEARCH_SYSTEM32`)')
+    expect(section).toContain('the launch gets `io` and nothing is started')
     expect(section).toContain('`--away` is 1 to 86400 seconds, default 120')
     expect(section).toContain('a label is at most 128 characters')
     expect(section).toContain('At most 16 connections at once')
@@ -455,6 +476,12 @@ describe('helper fixtures: the local transport (section 15)', () => {
     expect(num('helper/src/request.rs', 'MAX_ENV_ENTRIES')).toBe(L.env_entries)
     expect(num('helper/src/request.rs', 'MAX_ENV_NAME_CHARS')).toBe(L.env_name_chars)
     expect(num('helper/src/request.rs', 'MAX_ENV_VALUE_CHARS')).toBe(L.env_value_chars)
+    expect(num('helper/src/request.rs', 'MAX_LINE_CHARS')).toBe(L.line_chars)
+    // The bundled ConPTY: the folder, the search the load is held to, and node-pty's calls.
+    const win = src('helper/src/pty/windows.rs')
+    expect(win).toContain('pub const BUNDLED_FOLDER: &str = "conpty";')
+    expect(win).toContain('LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32')
+    for (const call of ['ConptyCreatePseudoConsole', 'ConptyResizePseudoConsole', 'ConptyClosePseudoConsole']) expect(win, call).toContain(`b"${call}\\0"`)
     expect(num('helper/src/request.rs', 'MAX_TERM_CELLS')).toBe(L.term_cells)
     expect(num('helper/src/request.rs', 'MAX_SAFE_INTEGER')).toBe(L.max_safe_integer)
     expect(num('helper/src/store.rs', 'MAX_LABEL_CHARS')).toBe(L.label_chars)

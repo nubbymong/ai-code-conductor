@@ -23,7 +23,7 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | JSON | `src/json.rs` | A small reader and writer (depth limit 32), so there is no JSON crate |
 | Hello | `src/hello.rs` | `AICC-HELLO <nonce> <json>`, `hello.ack`, version choice, `error`, `AICC-RESULT` lines |
 | Output ring | `src/ring.rs` | Bytes at fixed offsets, a 2 MiB window, replay from an offset, "too short" reported |
-| Terminal | `src/pty/` | openpty on Unix, ConPTY on Windows; the program's folder and whole environment; a job object on Windows; on Unix an end reaches every process in the child's session |
+| Terminal | `src/pty/` | openpty on Unix, ConPTY on Windows (Windows' own, or the bundled one from a `conpty` folder beside the helper when a launch asks); the program's folder and whole environment, and on Windows an exact command line when a launch gives one; a job object on Windows; on Unix an end reaches every process in the child's session |
 | Holder | `src/holder.rs` | Holds one terminal and child; attach, detach, re-attach with replay; the newest attach replaces the older; ends the whole process tree |
 | Local transport | `src/transport/` | One endpoint per holder that only this user can reach: a named pipe on Windows, a Unix socket in a private folder elsewhere |
 | Holder process | `src/serve.rs`, `src/request.rs`, `src/detach.rs` | `hold`: the hello, the `term.*` messages, the away clock; started detached so it outlives the app |

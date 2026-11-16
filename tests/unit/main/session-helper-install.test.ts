@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'os'
 import { join, sep } from 'path'
 import {
-  BUSY_WAIT_MS, CONPTY_FILES, bundledConptySource, checkedConpty, copyMatches, helperRootDir, installHelperCopy, removeOldVersionFolders, retryWhileBusy,
+  BUSY_WAIT_MS, CONPTY_FILES, CONPTY_FOLDER, bundledConptySource, checkedConpty, copyMatches, helperRootDir, installHelperCopy, removeOldVersionFolders, retryWhileBusy,
 } from '../../../src/main/session-helper/install'
 
 const failure = (code: string) => Object.assign(new Error(`${code}: the file is in use`), { code })
@@ -211,6 +211,14 @@ describe('the bundled ConPTY beside the helper copy', () => {
     const none = await installHelperCopy({ ...opts, conptySource: null })
     expect(none.conpty.available).toBe(false)
     expect(await copyMatches(none.exe, none.sha256)).toBe(true)
+  })
+
+  it('the folder and the files are the ones the holder loads from (helper/src/pty/windows.rs)', () => {
+    const holder = readFileSync(join(__dirname, '../../../helper/src/pty/windows.rs'), 'utf8')
+    expect(holder).toContain(`pub const BUNDLED_FOLDER: &str = "${CONPTY_FOLDER}";`)
+    expect(holder).toContain('let dll = folder.join("conpty.dll");')
+    expect(holder).toContain('plain_file(&folder.join("OpenConsole.exe"))?;')
+    expect([...CONPTY_FILES]).toEqual(['conpty.dll', 'OpenConsole.exe'])
   })
 
   it('without a source nothing is copied, and macOS and Linux have no bundled ConPTY', async () => {

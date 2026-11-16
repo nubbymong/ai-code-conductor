@@ -11,9 +11,23 @@
 //! Handle types differ between `windows-sys` versions (an integer or a
 //! pointer), so handles are held as `usize` and converted with `as` at each
 //! call, which both forms accept.
+//!
+//! The pseudoconsole is Windows' own, or, when a launch asks for it
+//! (protocol change 2), the bundled one: the `conpty.dll` in a `conpty`
+//! folder beside the helper's own program file, which starts the
+//! `OpenConsole.exe` beside it. It is the one node-pty ships, and its calls
+//! are the ones node-pty makes (`ConptyCreatePseudoConsole`,
+//! `ConptyResizePseudoConsole`, `ConptyClosePseudoConsole`). The library is
+//! loaded by its full path, with only its own folder and System32 searched
+//! for what it needs, and no path from a frame is ever used. When it is not
+//! there or does not load, the start fails before anything is made.
+//!
+//! A launch may also give the exact command line (`line`): the program is
+//! still `argv[0]`, named to `CreateProcessW` on its own, so no word of the
+//! line can make it start another program.
 #![allow(unsafe_code)]
 
-use super::{check_argv, check_cwd, check_env, PtySize, SpawnOptions};
+use super::{check_argv, check_cwd, check_env, check_windows_fields, Conpty, PtySize, SpawnOptions};
 use crate::cmdline::build_command_line;
 use crate::winproc::{self, close, os_error, wide, AttrList, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES};
 use std::ffi::c_void;
@@ -21,9 +35,12 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HMODULE};
 use windows_sys::Win32::System::Console::{ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON};
+use windows_sys::Win32::System::Diagnostics::Debug::{SetThreadErrorMode, SEM_FAILCRITICALERRORS};
+use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -42,7 +59,117 @@ const INVALID_HANDLE: usize = usize::MAX;
 /// How long `end_tree` waits for the first process to be gone.
 const END_WAIT_MS: u32 = 5000;
 
+/// The bundled ConPTY's folder name, beside the helper's own program file.
+pub const BUNDLED_FOLDER: &str = "conpty";
+
+/// The bundled conpty.dll's calls, as node-pty declares them (conpty.cc).
+type CreateFn = unsafe extern "system" fn(COORD, HANDLE, HANDLE, u32, *mut HPCON) -> i32;
+type ResizeFn = unsafe extern "system" fn(HPCON, COORD) -> i32;
+type CloseFn = unsafe extern "system" fn(HPCON);
+
+/// The calls of a loaded bundled conpty.dll. The library is never unloaded:
+/// a pseudoconsole it made is closed through it, as late as the holder's end.
+#[derive(Clone, Copy)]
+struct Bundled {
+    create: CreateFn,
+    resize: ResizeFn,
+    close: CloseFn,
+}
+
+/// Whose pseudoconsole calls a terminal makes.
+#[derive(Clone, Copy)]
+enum Console {
+    System,
+    Bundled(Bundled),
+}
+
+impl Console {
+    unsafe fn create(self, size: COORD, input: HANDLE, output: HANDLE, hpc: &mut HPCON) -> i32 {
+        match self {
+            Console::System => CreatePseudoConsole(size, input, output, 0, hpc),
+            Console::Bundled(b) => (b.create)(size, input, output, 0, hpc),
+        }
+    }
+
+    unsafe fn resize(self, hpc: HPCON, size: COORD) -> i32 {
+        match self {
+            Console::System => ResizePseudoConsole(hpc, size),
+            Console::Bundled(b) => (b.resize)(hpc, size),
+        }
+    }
+
+    unsafe fn close(self, hpc: HPCON) {
+        match self {
+            Console::System => ClosePseudoConsole(hpc),
+            Console::Bundled(b) => (b.close)(hpc),
+        }
+    }
+}
+
+/// Why the bundled ConPTY cannot be used, as the launch's `io` answer says it.
+fn unusable(kind: io::ErrorKind, why: String) -> io::Error {
+    io::Error::new(kind, format!("the bundled ConPTY cannot be used: {why}"))
+}
+
+/// A file of the bundled ConPTY must be there, and a plain file, not a link.
+fn plain_file(path: &Path) -> io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_file() => Ok(()),
+        Ok(_) => Err(unusable(io::ErrorKind::InvalidInput, format!("{} is not a plain file", path.display()))),
+        Err(e) => Err(unusable(e.kind(), format!("{} is missing or cannot be read ({e})", path.display()))),
+    }
+}
+
+/// One call of a loaded library, by its NUL-ended name.
+unsafe fn export(module: HMODULE, name: &'static [u8]) -> io::Result<unsafe extern "system" fn() -> isize> {
+    GetProcAddress(module, name.as_ptr()).ok_or_else(|| {
+        let shown = String::from_utf8_lossy(&name[..name.len() - 1]).into_owned();
+        unusable(io::ErrorKind::NotFound, format!("its conpty.dll has no {shown}"))
+    })
+}
+
+/// Load the bundled conpty.dll: from the `conpty` folder beside this
+/// program file, by its full path, searching only that folder and System32
+/// for what it needs.
+fn load_bundled() -> io::Result<Bundled> {
+    let exe = std::env::current_exe()?;
+    let folder: PathBuf = match exe.parent() {
+        Some(dir) => dir.join(BUNDLED_FOLDER),
+        None => return Err(unusable(io::ErrorKind::NotFound, "the helper's own folder is not known".to_string())),
+    };
+    let dll = folder.join("conpty.dll");
+    // conpty.dll starts the OpenConsole.exe beside it. Without that file the
+    // session would not run on the bundled console host at all.
+    plain_file(&dll)?;
+    plain_file(&folder.join("OpenConsole.exe"))?;
+    let name = wide(&dll);
+    unsafe {
+        // A library that does not load is answered, never shown in a dialog
+        // that would hold the holder up until someone closes it.
+        let mut before: u32 = 0;
+        let quiet = SetThreadErrorMode(SEM_FAILCRITICALERRORS, &mut before as *mut u32 as _) != 0;
+        let module = LoadLibraryExW(name.as_ptr(), std::ptr::null_mut(), LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+        let failed = if module as usize == 0 { Some(os_error("LoadLibraryExW")) } else { None };
+        if quiet {
+            SetThreadErrorMode(before as _, std::ptr::null_mut::<u32>() as _);
+        }
+        if let Some(e) = failed {
+            return Err(unusable(e.kind(), format!("{} does not load ({e})", dll.display())));
+        }
+        let create = export(module, b"ConptyCreatePseudoConsole\0")?;
+        let resize = export(module, b"ConptyResizePseudoConsole\0")?;
+        let close = export(module, b"ConptyClosePseudoConsole\0")?;
+        Ok(Bundled {
+            create: std::mem::transmute::<unsafe extern "system" fn() -> isize, CreateFn>(create),
+            resize: std::mem::transmute::<unsafe extern "system" fn() -> isize, ResizeFn>(resize),
+            close: std::mem::transmute::<unsafe extern "system" fn() -> isize, CloseFn>(close),
+        })
+    }
+}
+
 pub struct Pty {
+    /// Whose pseudoconsole this is: Windows' own or the bundled one.
+    console: Console,
     /// The pseudoconsole; 0 once it is closed.
     pseudo_console: usize,
     process: usize,
@@ -100,8 +227,8 @@ unsafe fn new_job() -> io::Result<usize> {
 }
 
 /// Undo a start that failed after the pseudoconsole was made.
-unsafe fn undo(hpc: HPCON, in_write: usize, out_read: usize, job: usize) {
-    ClosePseudoConsole(hpc);
+unsafe fn undo(console: Console, hpc: HPCON, in_write: usize, out_read: usize, job: usize) {
+    console.close(hpc);
     close(in_write);
     close(out_read);
     close(job);
@@ -110,7 +237,7 @@ unsafe fn undo(hpc: HPCON, in_write: usize, out_read: usize, job: usize) {
 impl Pty {
     /// Start `argv` with the holder's own folder and environment.
     pub fn spawn(argv: &[String], size: PtySize) -> io::Result<(Pty, Box<dyn Read + Send>)> {
-        Pty::spawn_with(&SpawnOptions { argv, cwd: None, env: None, size })
+        Pty::spawn_with(&SpawnOptions { argv, cwd: None, env: None, size, line: None, conpty: Conpty::System })
     }
 
     pub fn spawn_with(opts: &SpawnOptions) -> io::Result<(Pty, Box<dyn Read + Send>)> {
@@ -121,7 +248,19 @@ impl Pty {
         if let Some(cwd) = opts.cwd {
             check_cwd(cwd)?;
         }
-        let mut cmdline: Vec<u16> = wide(&build_command_line(opts.argv));
+        check_windows_fields(opts)?;
+        // Loaded first: a bundled ConPTY that cannot be used fails the start
+        // before anything is made or started.
+        let console = match opts.conpty {
+            Conpty::System => Console::System,
+            Conpty::Bundled => Console::Bundled(load_bundled()?),
+        };
+        // With an exact line, the program is argv[0], named on its own.
+        let program: Option<Vec<u16>> = opts.line.map(|_| wide(&opts.argv[0]));
+        let mut cmdline: Vec<u16> = match opts.line {
+            Some(line) => wide(line),
+            None => wide(&build_command_line(opts.argv)),
+        };
         let cwd: Option<Vec<u16>> = opts.cwd.map(wide);
         let block: Option<Vec<u16>> = opts.env.map(env_block);
         unsafe {
@@ -144,7 +283,7 @@ impl Pty {
             }
 
             let mut hpc: HPCON = std::mem::zeroed();
-            let hr = CreatePseudoConsole(coord(opts.size), in_read, out_write, 0, &mut hpc);
+            let hr = console.create(coord(opts.size), in_read, out_write, &mut hpc);
             // The pseudoconsole holds its own ends now; ours are closed so the
             // pipes end when it does.
             close(in_read as usize);
@@ -160,7 +299,7 @@ impl Pty {
             let mut attrs = match AttrList::pseudoconsole(hpc) {
                 Ok(attrs) => attrs,
                 Err(e) => {
-                    undo(hpc, in_write as usize, out_read as usize, job);
+                    undo(console, hpc, in_write as usize, out_read as usize, job);
                     return Err(e);
                 }
             };
@@ -189,8 +328,12 @@ impl Pty {
                 Some(c) => c.as_ptr(),
                 None => std::ptr::null(),
             };
+            let program_ptr: *const u16 = match &program {
+                Some(p) => p.as_ptr(),
+                None => std::ptr::null(),
+            };
             let ok = CreateProcessW(
-                std::ptr::null(),
+                program_ptr,
                 cmdline.as_mut_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
@@ -204,7 +347,7 @@ impl Pty {
             let created = if ok == 0 { Some(os_error("CreateProcessW")) } else { None };
             drop(attrs);
             if let Some(e) = created {
-                undo(hpc, in_write as usize, out_read as usize, job);
+                undo(console, hpc, in_write as usize, out_read as usize, job);
                 return Err(e);
             }
             // Into the job while it is still suspended, so not even its first
@@ -214,7 +357,7 @@ impl Pty {
                 TerminateProcess(info.hProcess, 1);
                 close(info.hThread as usize);
                 close(info.hProcess as usize);
-                undo(hpc, in_write as usize, out_read as usize, job);
+                undo(console, hpc, in_write as usize, out_read as usize, job);
                 return Err(e);
             }
             if ResumeThread(info.hThread) == u32::MAX {
@@ -222,14 +365,14 @@ impl Pty {
                 TerminateJobObject(job as HANDLE, 1);
                 close(info.hThread as usize);
                 close(info.hProcess as usize);
-                undo(hpc, in_write as usize, out_read as usize, job);
+                undo(console, hpc, in_write as usize, out_read as usize, job);
                 return Err(e);
             }
             close(info.hThread as usize);
 
             let reader = File::from_raw_handle(out_read as RawHandle);
             let input = File::from_raw_handle(in_write as RawHandle);
-            let pty = Pty { pseudo_console: hpc as usize, process: info.hProcess as usize, job, pid: info.dwProcessId, input, exit: None };
+            let pty = Pty { console, pseudo_console: hpc as usize, process: info.hProcess as usize, job, pid: info.dwProcessId, input, exit: None };
             Ok((pty, Box::new(reader)))
         }
     }
@@ -244,7 +387,7 @@ impl Pty {
             // The session is over; there is no terminal left to size.
             return Ok(());
         }
-        let hr = unsafe { ResizePseudoConsole(self.pseudo_console as HPCON, coord(size)) };
+        let hr = unsafe { self.console.resize(self.pseudo_console as HPCON, coord(size)) };
         if hr != 0 {
             return Err(io::Error::new(io::ErrorKind::Other, format!("ResizePseudoConsole failed: 0x{:08x}", hr as u32)));
         }
@@ -286,7 +429,7 @@ impl Pty {
     pub fn close_output(&mut self) {
         if self.pseudo_console != 0 {
             unsafe {
-                ClosePseudoConsole(self.pseudo_console as HPCON);
+                self.console.close(self.pseudo_console as HPCON);
             }
             self.pseudo_console = 0;
         }

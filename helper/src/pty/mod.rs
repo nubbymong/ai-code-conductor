@@ -53,11 +53,17 @@ pub enum Conpty {
 /// the self-test and the in-process tests use that. A launch frame always
 /// gives both, and `env` is then the child's WHOLE environment: nothing of the
 /// holder's own is added, except `TERM` on Unix when `env` has none.
+///
+/// `line` and `conpty` are for Windows only. `line` is the exact command
+/// line the program is given; the program is still `argv[0]`, which then
+/// holds it alone.
 pub struct SpawnOptions<'a> {
     pub argv: &'a [String],
     pub cwd: Option<&'a str>,
     pub env: Option<&'a [(String, String)]>,
     pub size: PtySize,
+    pub line: Option<&'a str>,
+    pub conpty: Conpty,
 }
 
 pub(crate) fn check_argv(argv: &[String]) -> io::Result<()> {
@@ -66,6 +72,25 @@ pub(crate) fn check_argv(argv: &[String]) -> io::Result<()> {
     }
     if argv.iter().any(|a| a.contains('\0')) {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "an argument holds a NUL character"));
+    }
+    Ok(())
+}
+
+/// The Windows fields, checked again here as the last line: refused on
+/// macOS and Linux, and on Windows a line is never empty or split by a NUL,
+/// and never comes with arguments that would say something else.
+pub(crate) fn check_windows_fields(opts: &SpawnOptions) -> io::Result<()> {
+    let invalid = |what: &str| Err(io::Error::new(io::ErrorKind::InvalidInput, what.to_string()));
+    if cfg!(not(windows)) && (opts.line.is_some() || opts.conpty != Conpty::System) {
+        return invalid("an exact command line and the bundled ConPTY are for Windows only");
+    }
+    if let Some(line) = opts.line {
+        if line.is_empty() || line.contains('\0') {
+            return invalid("the command line is empty or holds a NUL character");
+        }
+        if opts.argv.len() != 1 {
+            return invalid("with a command line, argv holds the program alone");
+        }
     }
     Ok(())
 }
@@ -101,5 +126,24 @@ mod tests {
         }
         assert!(check_argv(&["/bin/sh".to_string(), "a\0b".to_string()]).is_err());
         assert!(check_cwd("").is_err() && check_cwd("/a\0").is_err() && check_cwd("/tmp").is_ok());
+    }
+
+    #[test]
+    fn the_windows_fields_are_checked_again_before_a_start() {
+        fn passes(argv: &[String], line: Option<&str>, conpty: Conpty) -> bool {
+            check_windows_fields(&SpawnOptions { argv, cwd: None, env: None, size: PtySize::default(), line, conpty }).is_ok()
+        }
+        let one = vec!["C:\\Windows\\System32\\cmd.exe".to_string()];
+        let two = vec![one[0].clone(), "/c".to_string()];
+        assert!(passes(&two, None, Conpty::System), "an argument list as before");
+        if cfg!(windows) {
+            assert!(passes(&one, Some("cmd /c ver"), Conpty::Bundled));
+            assert!(!passes(&two, Some("cmd /c ver"), Conpty::System), "a line with arguments");
+            assert!(!passes(&one, Some(""), Conpty::System), "an empty line");
+            assert!(!passes(&one, Some("a\0b"), Conpty::System), "a NUL in the line");
+        } else {
+            assert!(!passes(&one, Some("/bin/sh -c true"), Conpty::System));
+            assert!(!passes(&one, None, Conpty::Bundled));
+        }
     }
 }

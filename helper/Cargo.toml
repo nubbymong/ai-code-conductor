@@ -43,7 +43,9 @@ libc = "=0.2.172"
 # Features only switch on parts of the same crate: they add no package to
 # Cargo.lock. Authorization builds and reads the pipe's security descriptor,
 # Cryptography gives random endpoint names, FileSystem and IO carry the
-# overlapped named pipe, JobObjects ends a session's whole process tree.
+# overlapped named pipe, JobObjects ends a session's whole process tree,
+# LibraryLoader loads the bundled conpty.dll and Diagnostics_Debug keeps a
+# load that fails from showing a dialog.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.59.0", default-features = false, features = [
   "Win32_Foundation",
@@ -52,8 +54,10 @@ windows-sys = { version = "=0.59.0", default-features = false, features = [
   "Win32_Security_Cryptography",
   "Win32_Storage_FileSystem",
   "Win32_System_Console",
+  "Win32_System_Diagnostics_Debug",
   "Win32_System_IO",
   "Win32_System_JobObjects",
+  "Win32_System_LibraryLoader",
   "Win32_System_Pipes",
   "Win32_System_Threading",
 ] }

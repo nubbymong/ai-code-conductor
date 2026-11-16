@@ -725,7 +725,16 @@ impl Serve {
             }
             st.launching = true;
         }
-        let opts = SpawnOptions { argv: l.argv.as_slice(), cwd: Some(l.cwd.as_str()), env: Some(l.env.as_slice()), size: l.size };
+        // A launch on the bundled ConPTY that cannot load it fails here,
+        // before anything is started, and is answered `io` below.
+        let opts = SpawnOptions {
+            argv: l.argv.as_slice(),
+            cwd: Some(l.cwd.as_str()),
+            env: Some(l.env.as_slice()),
+            size: l.size,
+            line: l.line.as_deref(),
+            conpty: l.conpty,
+        };
         match Holder::start_with(&opts, self.opts.ring_bytes) {
             Ok(h) => {
                 let pid = h.child_pid();

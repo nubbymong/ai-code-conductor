@@ -4,7 +4,7 @@
 
 use aicc_helper::holder::Holder;
 use aicc_helper::pids;
-use aicc_helper::pty::{PtySize, SpawnOptions};
+use aicc_helper::pty::{Conpty, PtySize, SpawnOptions};
 use aicc_helper::ring::RingError;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
@@ -284,7 +284,7 @@ fn a_launch_gets_its_folder_and_exactly_its_own_environment() {
     env.push(("AICC_TEST_VALUE".to_string(), "hello-env".to_string()));
     let argv = vec![FAKE.to_string()];
     let dir_text = dir.to_string_lossy().into_owned();
-    let opts = SpawnOptions { argv: argv.as_slice(), cwd: Some(dir_text.as_str()), env: Some(env.as_slice()), size: PtySize { cols: 250, rows: 24 } };
+    let opts = SpawnOptions { argv: argv.as_slice(), cwd: Some(dir_text.as_str()), env: Some(env.as_slice()), size: PtySize { cols: 250, rows: 24 }, line: None, conpty: Conpty::System };
     let h = Holder::start_with(&opts, 64 * 1024).expect("the fake CLI starts with a folder and an environment");
     assert!(h.wait_for_text("FAKE-CLI READY", WAIT));
     h.write_input(b"pwd\r").expect("type");

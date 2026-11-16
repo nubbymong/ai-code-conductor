@@ -51,6 +51,8 @@ export const LAUNCH_LIMITS = {
   envEntries: 1024,
   envNameChars: 255,
   envValueChars: 32767,
+  /** An exact Windows command line (`line`, protocol change 2). */
+  lineChars: 32767,
   termCells: 1000,
 } as const
 export const LABEL_MAX_CHARS = 128
@@ -380,6 +382,15 @@ export interface LaunchSpec {
   env: Record<string, string>
   cols: number
   rows: number
+  /**
+   * Windows only (protocol change 2): the exact command line the program is
+   * given, for one that reads its line in a way no argument list can say
+   * (cmd.exe running an npm .cmd file). The program is still `argv[0]`,
+   * which then holds it alone.
+   */
+  line?: string
+  /** Windows only (protocol change 2): run on the bundled ConPTY beside the helper. */
+  conpty?: 'bundled'
 }
 
 export function isAbsoluteFor(p: string, os: HelperOs): boolean {
@@ -390,9 +401,10 @@ export function isAbsoluteFor(p: string, os: HelperOs): boolean {
 const isCells = (n: unknown): boolean => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= LAUNCH_LIMITS.termCells
 
 /**
- * Would the holder take this launch (section 15)? Null when it would, else the
- * protocol code it would answer and why. The app checks first, so a launch the
- * holder would refuse starts the usual way instead of failing.
+ * Would the holder take this launch (section 15, with protocol change 2's
+ * `line` and `conpty`)? Null when it would, else the protocol code it would
+ * answer and why. The app checks first, so a launch the holder would refuse
+ * starts the usual way instead of failing.
  */
 export function checkLaunch(spec: LaunchSpec, os: HelperOs): { code: 'bad-field' | 'too-large'; why: string } | null {
   const bad = (why: string) => ({ code: 'bad-field' as const, why })
@@ -425,6 +437,21 @@ export function checkLaunch(spec: LaunchSpec, os: HelperOs): { code: 'bad-field'
     folded.add(upper)
   }
   if (!isCells(spec.cols) || !isCells(spec.rows)) return bad('a terminal size out of range')
+  // The Windows fields (protocol change 2), in the helper's order.
+  if (spec.line !== undefined) {
+    const line: unknown = spec.line
+    if (typeof line !== 'string') return bad('a command line that is not text')
+    if (os !== 'windows') return bad('an exact command line, which is for Windows only')
+    if (chars(line) > LAUNCH_LIMITS.lineChars) return big('a command line over 32767 characters')
+    if (line.includes('\0')) return bad('a command line with a NUL character')
+    if (line.length === 0) return bad('an empty command line')
+    if (argv.length !== 1) return bad('a command line with arguments besides it')
+  }
+  if (spec.conpty !== undefined) {
+    const conpty: unknown = spec.conpty
+    if (conpty !== 'bundled') return bad('a ConPTY other than the bundled one')
+    if (os !== 'windows') return bad('the bundled ConPTY, which is for Windows only')
+  }
   return null
 }
 
