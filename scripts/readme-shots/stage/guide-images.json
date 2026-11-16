@@ -82,6 +82,19 @@
         { "scan": "step-tokenomics" }
       ],
       "settle": 900
+    },
+    {
+      "name": "step-machines",
+      "format": "jpeg",
+      "quality": 85,
+      "steps": [
+        { "click": "[data-testid=\"session-tab\"][aria-label=\"infra\"]", "wait": 3000 },
+        { "click": "[data-tour=\"nav-machines\"]", "wait": 1500 },
+        { "move": [1230, 793] },
+        { "eval": "new Promise((ok, no) => { const t0 = Date.now(); let last = 0; const q = (s) => document.querySelector(s); const s = (e) => (e ? e.textContent.trim() : \"-\"); const tick = () => { const st = q(\"[data-testid=\\\"machines-state\\\"]\"); const te = q(\"[data-testid=\\\"machines-self-test-result\\\"]\"); const n = document.querySelectorAll(\"[data-testid=\\\"machines-session\\\"]\").length; if (s(st) === \"Ready\" && s(te).startsWith(\"Passed\") && n > 0) return ok(n); if (Date.now() - t0 > 60000) return no(new Error(\"Machines page not ready: state \" + s(st) + \", self-test \" + s(te) + \", held terminals \" + n)); if (Date.now() - last > 4000) { last = Date.now(); const r = q(\"button[title=\\\"Read the session helper again\\\"]\"); if (r && !r.disabled) r.click() } setTimeout(tick, 250) }; setTimeout(tick, 250) })", "wait": 800 },
+        { "scan": "step-machines" }
+      ],
+      "settle": 900
     }
   ]
 }

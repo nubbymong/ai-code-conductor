@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.6] - 2026-11-16
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- Plain terminals through the session helper (Settings, General) is a preview and is off by default. When you switch it on, each Terminal only tab on this computer, and the partner terminal of a session on this computer, that you open after that runs inside the session helper, a small program that comes with the app. SSH tabs and their partner terminals, a terminal run as administrator, and the tabs the app opens for a sign-in or to install or update a program start as before. On Windows such a terminal keeps running if the app crashes, and comes back in its tab, with what it printed meanwhile, when you open the app again within two minutes and resume your sessions. Where the Machines page says Windows keeps the helper inside the app's own job, such a terminal ends with the app instead. On macOS and Linux a plain terminal works through it, but surviving a crash is not promised there yet. Quitting the app normally ends these terminals. To switch it off, untick it in Settings, General: terminals already open carry on until their tabs close, and the Machines page lists them, with End.
+- To go back to 2.1.3-beta.5, download its installer from the GitHub releases page and run it over this version.
+
+> A new Machines page shows This computer and its session helper, which now comes with the app. A preview setting, off by default, lets local Terminal only tabs and partner terminals keep running through an app crash on Windows, and a Codex conversation in a linked folder now resumes and lists by the folder the link leads to.
+
+### Added
+- A new Machines page, on the left rail beside Tokenomics, shows This computer: what the session helper is doing (Off, Not installed, Starting, Ready or Failed, with the reason), its version, its last self-test with Run self-test, and the terminals it holds, each with Re-attach and End (End asks first). The page reads when you open it, when you come back to its tab and when you press Refresh.
+- New in Settings, General: Plain terminals through the session helper, a preview, off by default. With it on, a Terminal only tab or a partner terminal starts inside the session helper and works as before. After a crash on Windows, opening the app within two minutes and resuming your sessions brings each one back in its tab with its scrollback, and nothing is typed into it again; one that no tab shows is listed on the Machines page, where Re-attach opens it in a Terminal only tab. Quitting normally ends them. Claude Code, Codex and SSH sessions (an SSH session's partner terminal included), a terminal run as administrator, and the tabs the app opens for a sign-in or to install or update a program start as before.
+
+### Changed
+- The installers for Windows, macOS and Linux now include the session helper, signed with the app on Windows and macOS. The app runs it from its own copy in your user folder and checks that copy against the installed one before each use. While the setting is off, no new terminal starts through it.
+- The Services panel has a sixth card, Session helper, which shows how many terminals the helper holds. It reads stopped while the setting is off and nothing is held. With the setting on, it reads crashed, with the reason, while the helper is not installed or has failed, so the Services pill reads Down. It has no Restart, because each terminal the helper holds runs as a program of its own and a restart would end them.
+
+### Fixed
+- A Codex conversation started in a folder reached through a link (a symbolic link, or a junction on Windows) is now matched by the folder the link leads to, whichever of the two Codex recorded. Reopening or restarting the session resumes it in that folder, not the config's own, and Restart and pick a conversation lists it; before, the list left it out.
+- The expanded left rail fits its sidebar: with two or more accounts (the Account usage button showing), its buttons ran past the sidebar's edge at the narrowest width. Each button and its icon now shrink to fit.
+
 ## [2.1.3-beta.5] - 2026-11-16
 
 ### Warnings
@@ -1954,6 +1975,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.6]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.6
 [2.1.3-beta.5]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.5
 [2.1.3-beta.4]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.4
 [2.1.3-beta.3]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.3

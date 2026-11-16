@@ -576,6 +576,7 @@ export const trainingSteps: TrainingStep[] = [
       'Opens in the working directory locally; on an SSH session it runs on the host, in the config\'s remote folder once it recognises the host\'s shell prompt, if you have not typed in it first',
       'Quick command buttons can target the assistant or the partner explicitly',
       'Resize the split bar to favour whichever pane is active',
+      'With **Plain terminals through the session helper** on (Settings, General; a preview, off by default), a local session\'s partner terminal keeps running if the app crashes on Windows, and shows again in its session when you open the app again within two minutes and resume your sessions',
     ],
     howToTrigger: [
       { label: 'Toggle', value: 'Partner button in the command bar' },
@@ -654,6 +655,41 @@ export const trainingSteps: TrainingStep[] = [
       'Token counts beside the costs, a **Cost or Tokens** chart switch, and **Rescan**; switch the indexer off in Settings, General, Tokenomics',
     ],
     screenshotFilename: 'step-tokenomics.jpg',
+  },
+  {
+    // 2.1.3-beta.6. Pinned at 2.1.3: nothing opens the tour by itself after an
+    // update (see the comment on the provider-accounts card), so the pin only
+    // sets the guide's "since 2.1" chip and raises currentTrainingVersion() to
+    // 2.1.3, the stamp the onboarding settle and the tour's close write. The
+    // card's place in the Feature tour is its place in this list.
+    id: 'machines',
+    title: 'Machines',
+    sinceVersion: '2.1.3',
+    section: 'admin',
+    summary:
+      'One card for **This computer** and its **session helper**, a small program that comes with the app: what it is doing, its version, its self-test, and the terminals it holds. With **Plain terminals through the session helper** on (Settings, General; a preview, off by default), a Terminal only tab on this computer and the partner terminal of a session on this computer run inside the helper, so on Windows they keep running if the app crashes.',
+    highlights: [
+      'The helper reads **Off**, **Not installed**, **Starting**, **Ready** or **Failed**, and a failure comes with its reason',
+      'Its version and its last **self-test**, with the time it ran; **Run self-test** runs it again',
+      'Each held terminal: its name, whether it is a Terminal or a Partner terminal, when it started, and whether the app is attached or it is **waiting for the app**',
+      '**Re-attach** connects a waiting terminal again, and opens a Terminal only tab for one no tab shows; **End** stops one after you confirm',
+      'After a crash on Windows, open the app within two minutes and resume your sessions: each held terminal shows again in its tab, with what it printed meanwhile. Quitting normally ends them',
+      'SSH tabs and their partner terminals, a terminal run as administrator, and the tabs the app opens for a sign-in or to install or update a program start as before',
+      'The page reads when you open it, when you come back to its tab and on **Refresh**',
+    ],
+    howToTrigger: [
+      { label: 'Open', value: 'Left rail -> Machines, beside Tokenomics' },
+      { label: 'Switch on', value: 'Settings -> General -> Plain terminals through the session helper' },
+      { label: 'Services', value: 'Title bar -> Services pill -> Session helper' },
+    ],
+    proTip:
+      'Surviving a crash is for Windows in this beta, and not where the Machines page says Windows keeps the helper inside the app\'s own job: there a held terminal ends with the app. On macOS and Linux a plain terminal works through the helper, but surviving a crash is not promised there yet.',
+    bullets: [
+      '**This computer** and its **session helper**: state, version and self-test',
+      'The terminals the helper holds, each with **Re-attach** and **End**',
+      'Switch it on in **Settings, General, Plain terminals through the session helper** (a preview, off by default)',
+    ],
+    screenshotFilename: 'step-machines.jpg',
   },
   {
     id: 'memory-visualiser',
@@ -753,13 +789,13 @@ export const trainingSteps: TrainingStep[] = [
     summary:
       'Every preference you can set lives here, organised in a left rail. Sandboxed renderer + signed updates + zod-validated IPC keep the app safe; the visible knobs let you tune everything else.',
     highlights: [
-      'General -- default working dir, machine name, update channel, security toggles, and the Tokenomics switch (the usage index can be switched off)',
+      'General -- default working dir, machine name, update channel, security toggles, the Tokenomics switch (the usage index can be switched off), and **Plain terminals through the session helper** (a preview, off by default), which keeps local Terminal only tabs and local partner terminals running if the app crashes on Windows; the **Machines** page shows the helper and what it holds',
       'Accounts -- the Providers card (Claude Code and Codex on or off) and every Claude and Codex account',
       'Status Line -- toggle each element of the in-terminal status bar + font + size',
       'Shortcuts -- rebind every keyboard shortcut',
       'GitHub -- sign in (OAuth / PAT / gh CLI) and configure per-session integration',
       'About -- version, build time, replay training, view What\'s New',
-      'Services -- the **Services** pill in the title bar opens a card for each background service (hooks gateway, session logging, Tokenomics, Watchdog, MCP server) with its real state and a Restart where one makes sense',
+      'Services -- the **Services** pill in the title bar opens a card for each background service (hooks gateway, session logging, Tokenomics, Watchdog, MCP server, session helper) with its real state and a Restart where one makes sense',
     ],
     howToTrigger: [
       { label: 'Open', value: 'Click  ⚙  in the sidebar nav' },

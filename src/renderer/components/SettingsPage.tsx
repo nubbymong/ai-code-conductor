@@ -623,7 +623,7 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
                   />
                   <span>
                     Plain terminals through the session helper
-                    <span className="block text-[10px] text-[var(--text-muted)]">Preview, off by default. A Terminal only tab and the partner terminal start inside the session helper, so they keep running if the app crashes and come back with their tabs when it starts again. Claude Code, Codex and SSH sessions are not affected. Quitting normally ends them. Applies to terminals opened after the change. The Machines page shows the helper and what it holds.</span>
+                    <span className="block text-[10px] text-[var(--text-muted)]">Preview, off by default. A Terminal only tab and the partner terminal of a session on this computer start inside the session helper. On Windows they keep running if the app crashes, and come back with their tabs if you open it again within two minutes and resume your sessions. Claude Code, Codex and SSH sessions are not affected. Quitting normally ends them. Applies to terminals opened after the change. The Machines page shows the helper and what it holds.</span>
                   </span>
                 </label>
                 <p className="text-[11px] text-[var(--text-muted)] mt-2 leading-relaxed">
@@ -1323,7 +1323,7 @@ const TYPOGRAPHY_REGIONS: { key: TypographyRegionKey; label: string; hint: strin
   { key: 'status', label: 'Status bars', hint: 'Per-session strip and the bottom footer' },
   { key: 'sidebar', label: 'Sidebar', hint: 'Session list and the collapsed nav rail' },
   { key: 'header', label: 'Session header + tabs', hint: 'Tab strip and the header above the terminal' },
-  { key: 'panels', label: 'Panels', hint: 'Settings, Tokenomics, Memory, Insights, Vision, Cloud Agents, Logs' },
+  { key: 'panels', label: 'Panels', hint: 'Settings, Tokenomics, Memory, Insights, Vision, Cloud Agents, Logs, Machines' },
 ]
 
 function asPercent(scale: number): string {

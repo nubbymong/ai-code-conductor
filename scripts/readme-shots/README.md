@@ -39,6 +39,12 @@ Everything below runs on the VM: the app is started from the VM user's interacti
 session (a scheduled task with `/it` that runs `launch.js start` and `shoot.js`), never on
 the operator's machine.
 
+With no one signed in on the VM, the run is started from SSH with
+`Invoke-CimMethod Win32_Process Create` and the app runs in session 0. There the terminal's
+GPU (WebGL) renderer draws its text in a sans font instead of JetBrains Mono, so add
+`--dom-terminals` to every `seed.js` line below: it turns the terminal's GPU rendering off,
+and xterm's DOM renderer draws the right font (seen on the 2.1.3-beta.6 VM run).
+
 ```
 # on the VM, in the checkout (<checkout>), with the runner's playwright-core/upng-js installed once
 #   (cd <runner> && npm install --no-audit --no-fund)
@@ -53,10 +59,15 @@ set NODE_PATH=<runner>\node_modules
 node scripts\readme-shots\shoot.js scripts\readme-shots\stage\shots.json
 node scripts\readme-shots\stage\launch.js stop
 # the Feature Guide images and the README hero: a fresh re-seed, then a 1280x800 window
-node scripts\readme-shots\stage\seed.js --app-version <version> --reuse-backup
+# (--helper-terminals: the Terminal only tab runs through the session helper, for step-machines)
+node scripts\readme-shots\stage\seed.js --app-version <version> --reuse-backup --helper-terminals
 node scripts\readme-shots\stage\launch.js start --size 1280x800
 node scripts\readme-shots\shoot.js scripts\readme-shots\stage\guide-images.json
 node scripts\readme-shots\stage\launch.js stop
+# step-machines leaves infra held by the session helper, and a held terminal outlives
+# launch.js stop (a forced end) until its two-minute away clock ends it. Wait that out,
+# or the restore cannot remove C:\dev\platform\infra, the folder that terminal runs in.
+powershell -NoProfile -Command Start-Sleep -Seconds 130
 node scripts\readme-shots\stage\seed.js --restore        # removes the marked C:\dev project folders
 # pull <root>/out/* for the owner's review; delete the root when done
 ```
@@ -67,7 +78,11 @@ The lists:
   `shot-canvas`, `shot-tokenomics`, `shot-logs`, `shot-insights`, and two alternates).
 - `stage/guide-images.json`: the Feature Guide images in `src/renderer/assets/training/`
   (1280x800 JPEG, quality 85) and the README hero (`hero-banner`, the top 1280x400 of the
-  same window, one frame).
+  same window, one frame). `step-machines` opens the Terminal only tab `infra` (a restored
+  tab starts its terminal only when it is first opened), then the Machines page. It needs
+  the app installed with its session helper and the seed's `--helper-terminals`: it waits for
+  the Machines page to read Ready, with a passed self-test and the held `infra` tab, and
+  fails otherwise. Its held `infra` terminal outlives `launch.js stop` for two minutes, so the run waits that out before `seed.js --restore`.
 
 A shot list is JSON: `{ "shots": [ { "name", "steps": [...], "settle", "frames", "interval", "clip"?, "format"?, "quality"? } ] }`.
 Steps target elements by any Playwright selector — prefer `data-testid` and role/text.
