@@ -174,8 +174,11 @@ impl Pty {
     /// go, then kill whatever is left of it. Once the tree is gone this does
     /// nothing (see the module comment).
     pub fn end_tree(&mut self, grace: Duration) {
-        // MUTANT (round three, finding 5): the tree_gone guard is removed for
-        // one CI run, to show the new test fails without it. Reverted next.
+        // The only check that keeps an id another process holds by now from
+        // being signalled: `over` reports what the session looks like now.
+        if self.tree_gone {
+            return;
+        }
         let sid = self.child.id() as libc::pid_t;
         // The session and its first group are the child's own (setsid above);
         // never signal group 0 (our own) or 1.
