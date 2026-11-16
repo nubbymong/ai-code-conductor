@@ -87,8 +87,16 @@ afterEach(async () => {
     Promise.allSettled([...quits, ...starts.splice(0)]),
     new Promise<void>((r) => { timer = setTimeout(r, 3000) }),
   ]).finally(() => clearTimeout(timer))
-  // A self-test started before the quit may still be closing its file.
-  rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 })
+  // Real-time scanning on Windows can hold a just-written .exe for seconds
+  // (Windows CI: still busy after 5 s of retries; tests/wp1/fake-cli.test.ts
+  // saw the same). A folder that still cannot go is left in this run's own
+  // temp folder, which the run's teardown removes: every test makes its own
+  // folder, and cleanup of a disposable folder is not a test result.
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 })
+  } catch (err) {
+    process.stderr.write(`session-helper-manager: left ${dir} behind (${(err as NodeJS.ErrnoException).code ?? String(err)})\n`)
+  }
 })
 
 async function started(m: SessionHelperManager, atStartup = true): Promise<SessionHelperManager> {
