@@ -18,8 +18,9 @@
  */
 import * as fs from 'fs'
 import * as path from 'path'
-import { isHomeOrAncestor } from '../../path-utils'
+import { isHomeOrAncestor, isHomeOrAncestorAsync } from '../../path-utils'
 import { FIRST_LINE_MAX_BYTES, readBoundedFirstLine, type FirstLine } from '../../logging/bounded-first-line'
+import { withPathWalkDeadline } from '../../windows-programs'
 import type { PickFolderIdentity } from '../types'
 
 /** A conversation id as Codex writes it and as a launch may name it: the
@@ -137,6 +138,19 @@ export interface FoundRollout {
   dated: boolean
 }
 
+/** The rollout a launch takes (chooseCodexRollout). */
+export interface ChosenRollout {
+  found: FoundRollout
+  /** False when a directory was asked for and no rollout records it. */
+  cwdMatched: boolean
+}
+
+/** Whether a folder a rollout records (`recorded`) is the directory a lookup
+ *  prefers. Without one, a lookup compares the spelling (sameDirectory); the
+ *  launch's warm-up passes one that also knows the folder's real path
+ *  (warmCodexResume). */
+export type FolderTest = (recorded: string) => boolean
+
 /** The bounds of one lookup (tests narrow them). */
 export interface CodexLookupLimits {
   maxEntries?: number
@@ -173,9 +187,10 @@ const pad2Date = (y: number, m: number, d: number): string => `${y}/${pad2(m)}/$
  * so its content is
  * checked like any other: the file must be named `rollout-...-<id>.jsonl`
  * and its session_meta must say the same id. None when the id is not a
- * conversation id.
+ * conversation id. `isPreferred` replaces the spelling comparison with the
+ * directory `preferCwd` (see FolderTest).
  */
-export function findCodexRollouts(sessionsDir: string, id: string, limits?: CodexLookupLimits, preferCwd?: string): FoundRollout[] {
+export function findCodexRollouts(sessionsDir: string, id: string, limits?: CodexLookupLimits, preferCwd?: string, isPreferred?: FolderTest): FoundRollout[] {
   const out: FoundRollout[] = []
   if (typeof id !== 'string' || !CODEX_CONVERSATION_ID_RE.test(id)) return out
   if (typeof sessionsDir !== 'string' || !sessionsDir || !isRealFolder(sessionsDir)) return out
@@ -218,7 +233,7 @@ export function findCodexRollouts(sessionsDir: string, id: string, limits?: Code
             folderDate === pad2Date(at.getUTCFullYear(), at.getUTCMonth() + 1, at.getUTCDate())
             || folderDate === pad2Date(at.getFullYear(), at.getMonth() + 1, at.getDate()))
           out.push({ path: file, meta, dated })
-          if (dated && preferCwd && sameDirectory(meta.cwd, preferCwd)) return out
+          if (dated && preferCwd && (isPreferred ? isPreferred(meta.cwd) : sameDirectory(meta.cwd, preferCwd))) return out
           if (out.length >= maxMatches) return out
           if (dated) ownFolderReached = true
         }
@@ -236,10 +251,11 @@ export function findCodexRollouts(sessionsDir: string, id: string, limits?: Code
  * or among all when none records it, the one in the date folder its own
  * session_meta names, else the newest folder's. `cwdMatched` is false when a
  * directory was asked for and no rollout records it, so the caller says so.
+ * `isPreferred` replaces the spelling comparison with `preferCwd` (FolderTest).
  */
-export function chooseCodexRollout(matches: readonly FoundRollout[], preferCwd?: string): { found: FoundRollout; cwdMatched: boolean } | null {
+export function chooseCodexRollout(matches: readonly FoundRollout[], preferCwd?: string, isPreferred?: FolderTest): ChosenRollout | null {
   if (matches.length === 0) return null
-  const wanted = preferCwd ? matches.filter((m) => sameDirectory(m.meta.cwd, preferCwd)) : []
+  const wanted = preferCwd ? matches.filter((m) => (isPreferred ? isPreferred(m.meta.cwd) : sameDirectory(m.meta.cwd, preferCwd))) : []
   const pool = wanted.length > 0 ? wanted : matches
   const found = pool.find((m) => m.dated) ?? pool[0]
   return { found, cwdMatched: !preferCwd || wanted.length > 0 }
@@ -255,12 +271,22 @@ export function findCodexRollout(sessionsDir: string, id: string, limits?: Codex
  *  case-folded on Windows. */
 export function sameDirectory(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
   if (!a || !b) return false
-  const api = platform === 'win32' ? path.win32 : path.posix
-  const norm = (p: string): string => {
-    const r = api.resolve(p)
-    return platform === 'win32' ? r.toLowerCase() : r
-  }
-  return norm(a) === norm(b)
+  return normalDirectory(a, platform) === normalDirectory(b, platform)
+}
+
+/** A folder spelling resolved, and case-folded on Windows (what sameDirectory compares). */
+function normalDirectory(p: string, platform: NodeJS.Platform = process.platform): string {
+  const r = (platform === 'win32' ? path.win32 : path.posix).resolve(p)
+  return platform === 'win32' ? r.toLowerCase() : r
+}
+
+/** An absolute path on a local drive or root: a drive letter (`C:\` or `C:/`)
+ *  or a single leading slash. Not a relative spelling (it has no fixed
+ *  folder) and not a network share (`\\server\share`, `//server/share`: a
+ *  call for its real path can be held up for as long as the share takes to
+ *  time out). */
+export function isLocalAbsolutePath(p: string): boolean {
+  return typeof p === 'string' && /^(?:[A-Za-z]:[\\/]|\/(?![\\/]))/.test(p)
 }
 
 /** Whether two folder spellings are one folder by their REAL paths: a session
@@ -276,12 +302,147 @@ export function sameDirectory(a: string, b: string, platform: NodeJS.Platform = 
  *  looked at. `real` is a parameter so the rule tests without a link. */
 export function sameFolderByRealPath(a: string, b: string, real: (p: string) => string = (p) => fs.realpathSync.native(p)): boolean {
   if (!a || !b) return false
-  const absolute = /^(?:[A-Za-z]:[\\/]|\/(?![\\/]))/
-  if (!absolute.test(a) || !absolute.test(b)) return false
+  if (!isLocalAbsolutePath(a) || !isLocalAbsolutePath(b)) return false
   try {
     return sameDirectory(real(a), real(b))
   } catch {
     return false
+  }
+}
+
+/** How long a folder lookup waits for ONE folder's real path before it goes
+ *  on with the spelling alone. A folder on this computer answers in well under
+ *  a millisecond; a mapped drive or share that is down can take far longer,
+ *  and a launch must not wait for it. The wait only ends the waiting: the
+ *  disk call itself runs to its own end, off the main thread. */
+export const CODEX_REAL_PATH_WAIT_MS = 1_500
+
+/** How long, once a folder has not answered in time, no other folder on the
+ *  same drive is asked (askDisk): each unanswered call holds one of the four
+ *  threads libuv has for every file call of the main process until the drive
+ *  gives up, so a drive that is down is not asked again by every launch and
+ *  every restored tab. Short, so a drive that comes back is used again soon,
+ *  and ended at once when the call that did not answer does answer. */
+export const CODEX_DISK_SILENT_MS = 60_000
+
+/** `fs.promises.realpath`, or a stand-in in tests. */
+export type AsyncRealPath = (p: string) => Promise<string>
+
+const defaultRealPath: AsyncRealPath = (p) => fs.promises.realpath(p)
+const defaultIsDirectory = (p: string): Promise<boolean> => fs.promises.stat(p).then((s) => s.isDirectory(), () => false)
+
+/** The mount roots on macOS and Linux, each with how many path segments name
+ *  one mount under it (`/Volumes/Disk`, `/mnt/share`, `/media/user/Disk`,
+ *  `/run/media/user/Disk`). A path under none of them is on the root disk. */
+const MOUNT_ROOTS: ReadonlyArray<{ root: readonly string[]; depth: number }> = [
+  { root: ['volumes'], depth: 2 },
+  { root: ['mnt'], depth: 2 },
+  { root: ['net'], depth: 2 },
+  { root: ['media'], depth: 3 },
+  { root: ['run', 'media'], depth: 4 },
+]
+
+/**
+ * The disk a local absolute spelling is on, for remembering that it did not
+ * answer: its drive letter on Windows, its mount (`/Volumes/Disk`, `/mnt/share`,
+ * ...) on macOS and Linux, else `/` (the root disk). A key that is finer than
+ * the real disk only means one more bounded wait; one that is coarser would
+ * silence a disk that is up because another is down. Mirrors realPathDriveOf
+ * in scripts/lib/codex-resume-picker-lib.js.
+ */
+export function codexDriveKeyOf(p: string): string {
+  if (/^[A-Za-z]:/.test(p)) return p.slice(0, 2).toLowerCase()
+  const segments = p.split(/[\\/]+/).filter(Boolean).map((s) => s.toLowerCase())
+  for (const m of MOUNT_ROOTS) {
+    if (m.root.every((s, i) => segments[i] === s)) return `/${segments.slice(0, Math.min(m.depth, segments.length)).join('/')}`
+  }
+  return '/'
+}
+
+/** What is outstanding with the disk and which drives did not answer, for one
+ *  disk call (the real one, or a stand-in: so a test never sees another's). */
+interface DiskMemory {
+  inFlight: Map<string, Promise<unknown>>
+  silent: Map<string, { until: number; by: Promise<unknown> }>
+}
+let diskMemory = new WeakMap<object, DiskMemory>()
+
+/** Test seam: nothing is outstanding and no drive is silent. */
+export function __resetCodexDiskMemoryForTests(): void { diskMemory = new WeakMap() }
+
+/**
+ * One call to the disk for `p`, from a launch's look at a resumed conversation
+ * (2.1.3-beta.6): off the main thread, with the wait bounded (`waitMs`, the
+ * repo's walk deadline), and remembered across lookups so a folder that does
+ * not answer holds ONE of libuv's threads however many launches ask:
+ *   - a call for the same spelling that has not ended is shared, not made again;
+ *   - once a call did not answer in time, no other folder on that drive is asked
+ *     for CODEX_DISK_SILENT_MS (the fallback is answered at once), unless that
+ *     call ends sooner.
+ * `begin` makes the call; its failure, like a wait that ran out, is `fallback`.
+ * Never rejects. `group` is the disk call's identity (the real one, or a
+ * stand-in) and `kind` says which question, so the answers are not mixed up.
+ */
+function askDisk<T>(group: object, kind: string, p: string, begin: () => Promise<T>, fallback: T, waitMs: number, now: () => number): Promise<T> {
+  let memory = diskMemory.get(group)
+  if (!memory) {
+    memory = { inFlight: new Map(), silent: new Map() }
+    diskMemory.set(group, memory)
+  }
+  const mem = memory
+  const drive = codexDriveKeyOf(p)
+  const quiet = mem.silent.get(drive)
+  if (quiet) {
+    if (now() < quiet.until) return Promise.resolve(fallback)
+    mem.silent.delete(drive)
+  }
+  const key = `${kind}\n${normalDirectory(p)}`
+  let run = mem.inFlight.get(key) as Promise<T> | undefined
+  if (!run) {
+    const mine: Promise<T> = Promise.resolve().then(begin).catch(() => fallback)
+    run = mine
+    mem.inFlight.set(key, mine)
+    const ended = (): void => {
+      if (mem.inFlight.get(key) === mine) mem.inFlight.delete(key)
+      if (mem.silent.get(drive)?.by === mine) mem.silent.delete(drive)
+    }
+    mine.then(ended, ended)
+  }
+  const waited = run
+  return withPathWalkDeadline(waited, waitMs).answered.then((inTime) => {
+    if (inTime) return waited
+    mem.silent.set(drive, { until: now() + CODEX_DISK_SILENT_MS, by: waited })
+    return fallback
+  })
+}
+
+/**
+ * The real path of a folder, for ONE lookup (2.1.3-beta.6): asked of the disk
+ * off the main thread (`fs.promises.realpath`, never the synchronous call),
+ * bounded (a wait of `waitMs` per folder, the repo's walk deadline), and asked
+ * once per spelling however many rollouts name it (the answer, a failure
+ * included, is kept for the life of the lookup). Across lookups a folder that
+ * is still being asked is not asked again, and a drive that did not answer is
+ * left alone for a minute (askDisk). Null for a folder it cannot give: a
+ * relative spelling or a network share written as \\server\share or
+ * //server/share (never asked), one that does not exist or refuses access, or
+ * one that did not answer in time. A folder on a mapped drive letter IS asked,
+ * bounded. The caller then goes on with the exact spelling alone. Never
+ * rejects.
+ */
+export function makeRealPathLookup(deps: { realpath?: AsyncRealPath; waitMs?: number; now?: () => number } = {}): (p: string) => Promise<string | null> {
+  const realpath: AsyncRealPath = deps.realpath ?? defaultRealPath
+  const waitMs = deps.waitMs ?? CODEX_REAL_PATH_WAIT_MS
+  const now = deps.now ?? Date.now
+  const asked = new Map<string, Promise<string | null>>()
+  return (p) => {
+    if (!isLocalAbsolutePath(p)) return Promise.resolve(null)
+    let answer = asked.get(p)
+    if (!answer) {
+      answer = askDisk<string | null>(realpath, 'real', p, () => realpath(p).then((real) => (typeof real === 'string' && real !== '' ? real : null)), null, waitMs, now)
+      asked.set(p, answer)
+    }
+    return answer
   }
 }
 
@@ -313,23 +474,189 @@ export interface ResolvedCodexResume {
  * itself); otherwise in the configured directory, where `codex resume <id>`
  * still finds it (a resume by id is not tied to a directory, unlike
  * `claude --resume`). Null: no exact resume (the launch starts fresh).
+ *
+ * "The directory the rollout itself records" is the same folder by its real
+ * path too (2.1.3-beta.6): a conversation started through a symlink, or a
+ * Windows junction, may record the link or the real folder, and a tab kept
+ * the other. That look is made off the main thread by warmCodexResume, which
+ * the launch's handler awaits first, and it also works out, the same way,
+ * whether the tab's folder is a folder and whether it is the home folder or
+ * above it. This function (a synchronous one, the launch builder's) reads that
+ * answer, once and only while fresh, and then makes no call to the disk (the
+ * walk of the sessions folder aside: the warm-up did it, so it is not made
+ * twice). With no answer (no warm-up was made, it ran out, or it is for
+ * another session), this function walks, compares the exact spelling and asks
+ * the disk in place (the existence check and the home-folder guard), exactly
+ * as it did before the warm-up existed.
  */
 export function resolveCodexResume(
   target: CodexResumeTarget | undefined | null,
-  ctx: { sessionsDir: string; configuredCwd: string; dirExists?: (p: string) => boolean; homeOrAbove?: (p: string) => boolean },
+  ctx: { sessionsDir: string; configuredCwd: string; sessionId?: string; dirExists?: (p: string) => boolean; homeOrAbove?: (p: string) => boolean; now?: () => number },
 ): ResolvedCodexResume | null {
   try {
     if (!target || typeof target.uuid !== 'string' || !CODEX_CONVERSATION_ID_RE.test(target.uuid)) return null
     const own = typeof target.cwd === 'string' ? target.cwd : ''
-    const chosen = chooseCodexRollout(findCodexRollouts(ctx.sessionsDir, target.uuid, undefined, own || undefined), own || undefined)
+    const warmed = own ? takeWarmedResume(warmedKey(ctx.sessionsDir, ctx.sessionId, target.uuid, own), (ctx.now ?? Date.now)()) : undefined
+    const chosen = warmed ? warmed.chosen : chooseCodexRollout(findCodexRollouts(ctx.sessionsDir, target.uuid, undefined, own || undefined), own || undefined)
     if (!chosen) return null
     const found = chosen.found
-    const dirExists = ctx.dirExists ?? ((p: string) => { try { return fs.statSync(p).isDirectory() } catch { return false } })
-    const homeOrAbove = ctx.homeOrAbove ?? isHomeOrAncestor
-    const usable = !!own && path.isAbsolute(own) && sameDirectory(own, found.meta.cwd) && dirExists(own)
-      && (sameDirectory(own, ctx.configuredCwd) || !homeOrAbove(own))
+    let usable: boolean
+    if (warmed) {
+      // The warm-up's own answers: a rollout records the tab's folder (by
+      // spelling, or by real path), the folder is a folder, and it is not the
+      // home folder or above it (no verdict kept: not asked for, so not usable,
+      // never a call here).
+      usable = !!own && path.isAbsolute(own) && chosen.cwdMatched && warmed.ownIsDirectory
+        && (sameDirectory(own, ctx.configuredCwd) || warmed.homeOrAbove === false)
+    } else {
+      const dirExists = ctx.dirExists ?? ((p: string) => { try { return fs.statSync(p).isDirectory() } catch { return false } })
+      const homeOrAbove = ctx.homeOrAbove ?? isHomeOrAncestor
+      usable = !!own && path.isAbsolute(own) && sameDirectory(own, found.meta.cwd) && dirExists(own)
+        && (sameDirectory(own, ctx.configuredCwd) || !homeOrAbove(own))
+    }
     return { resumeId: found.meta.id, cwd: usable ? path.resolve(own) : ctx.configuredCwd, cwdMismatch: !chosen.cwdMatched, path: found.path }
   } catch {
     return null
+  }
+}
+
+// -- The look at a resume's folders, made before the launch ---------------
+// The launch builder is synchronous, and a real path, or whether the tab's
+// folder is a folder, asked in place would hold the whole main process while a
+// mapped drive that is down answers. So the launch's IPC handler awaits
+// warmCodexResume first, which finds the conversation's rollouts, compares
+// their folders by real path and checks the tab's folder, off the main thread
+// (each call bounded), and keeps the answer for resolveCodexResume to read.
+// The same pattern as the node.exe lookup (spawn.ts warmNodeExeOnPosix). A
+// launch that finds no answer kept still asks in place, as it did before this
+// look existed. The walk of the sessions folder itself (findCodexRollouts) is
+// synchronous, as it always was: the warm-up runs it once, in the handler,
+// instead of the builder.
+
+/** How long a warmed answer is read for: a launch reads it within moments of
+ *  the warm-up; one nobody read goes. */
+export const CODEX_WARMED_RESUME_TTL_MS = 30_000
+export const CODEX_WARMED_RESUME_MAX = 32
+
+/** What a warm-up kept for one launch. */
+interface WarmedResume {
+  at: number
+  /** The rollout resolveCodexResume takes (null: no rollout of the id). */
+  chosen: ChosenRollout | null
+  /** The tab's folder is a folder (false too when it did not answer in time). */
+  ownIsDirectory: boolean
+  /** The tab's folder is the home folder or above it; undefined when it was not
+   *  asked (it is the configured folder, or no rollout records it). */
+  homeOrAbove: boolean | undefined
+}
+const warmedResumes = new Map<string, WarmedResume>()
+
+/** One launch's look: the realm, the session, the conversation and the folder.
+ *  The session is part of it: two tabs that resume one conversation in one
+ *  folder each have their own. */
+function warmedKey(sessionsDir: string, sessionId: string | undefined, uuid: string, own: string): string {
+  return `${normalDirectory(sessionsDir)}\n${sessionId ?? ''}\n${uuid.toLowerCase()}\n${normalDirectory(own)}`
+}
+
+/** The kept answer for `key`, taken: undefined when there is none, or it is no longer fresh. */
+function takeWarmedResume(key: string, now: number): WarmedResume | undefined {
+  const kept = warmedResumes.get(key)
+  if (!kept) return undefined
+  warmedResumes.delete(key)
+  return now - kept.at <= CODEX_WARMED_RESUME_TTL_MS && now >= kept.at ? kept : undefined
+}
+
+/** Test-only: drop every kept answer. */
+export function __resetWarmedCodexResumeForTests(): void { warmedResumes.clear() }
+/** Test-only: how many answers are kept. */
+export function __warmedCodexResumeCountForTests(): number { return warmedResumes.size }
+
+/**
+ * Look up `target`'s conversation for the launch that follows, by real path
+ * (2.1.3-beta.6). A conversation started in a symlinked folder (or a Windows
+ * junction) is recorded under the link or the real folder; the tab may hold
+ * the other. This finds the rollouts of the id and compares each one's recorded
+ * folder with the tab's by exact spelling first. Only when none records the
+ * tab's folder does it ask the disk for real paths: the tab's folder and every
+ * distinct recorded folder, together, with one bound, then it chooses again
+ * from the same rollouts (the walk ran to its bounds, so none is walked
+ * again). When a rollout does record the tab's folder, it also works out
+ * whether the folder is a folder and whether it is the home folder or above
+ * it (unless it is `configuredCwd`, which the builder never guards), so the
+ * builder asks the disk for neither. Every call is `fs.promises` (never the
+ * synchronous one), bounded, and remembered across lookups (askDisk). A folder
+ * that cannot be resolved is compared by its spelling alone. Never rejects:
+ * with nothing kept, the launch compares the spelling, as before.
+ */
+export async function warmCodexResume(
+  target: CodexResumeTarget | undefined | null,
+  ctx: {
+    sessionsDir: string
+    /** The tab's session: part of what is kept, so two tabs on one conversation do not share it. */
+    sessionId?: string
+    /** The folder the launch is configured to start in, as the request spells it (no home-folder verdict is asked for the tab's folder when it is this one). */
+    configuredCwd?: string
+    realpath?: AsyncRealPath
+    isDirectory?: (p: string) => Promise<boolean>
+    homeOrAbove?: (p: string) => Promise<boolean>
+    waitMs?: number
+    now?: () => number
+  },
+): Promise<void> {
+  try {
+    if (!target || typeof target.uuid !== 'string' || !CODEX_CONVERSATION_ID_RE.test(target.uuid)) return
+    const own = typeof target.cwd === 'string' ? target.cwd : ''
+    if (!own || typeof ctx.sessionsDir !== 'string' || !ctx.sessionsDir) return
+    const waitMs = ctx.waitMs ?? CODEX_REAL_PATH_WAIT_MS
+    const clock = ctx.now ?? Date.now
+    const group: object = ctx.realpath ?? defaultRealPath
+    const real = makeRealPathLookup({ realpath: ctx.realpath, waitMs, now: ctx.now })
+    // By spelling first: a rollout that records the tab's folder as the tab
+    // spells it needs no disk call at all.
+    const matches = findCodexRollouts(ctx.sessionsDir, target.uuid, undefined, own)
+    let chosen = chooseCodexRollout(matches, own)
+    if (chosen && !chosen.cwdMatched) {
+      // None records the tab's folder as spelled. One may record its real
+      // folder, a link to it, or another link to the same real folder:
+      // resolve the tab's folder and each distinct recorded folder together
+      // (one wait), and look again.
+      const recorded = [...new Set(matches.map((m) => m.meta.cwd))]
+      const [ownReal, ...recordedReal] = await Promise.all([real(own), ...recorded.map((c) => real(c))])
+      const resolved = new Map<string, string | null>(recorded.map((c, i) => [c, recordedReal[i]] as const))
+      const isOwn = (c: string): boolean => {
+        if (ownReal !== null && sameDirectory(c, ownReal)) return true
+        const r = resolved.get(c)
+        return !!r && (sameDirectory(r, own) || (ownReal !== null && sameDirectory(r, ownReal)))
+      }
+      chosen = chooseCodexRollout(matches, own, (c) => sameDirectory(c, own) || isOwn(c))
+    }
+    // What the builder would ask the disk for in place, asked here.
+    let ownIsDirectory = false
+    let homeOrAbove: boolean | undefined
+    if (chosen?.cwdMatched && path.isAbsolute(own)) {
+      const isDirectory = ctx.isDirectory ?? defaultIsDirectory
+      const aboveHome = ctx.homeOrAbove ?? isHomeOrAncestorAsync
+      const guarded = !(ctx.configuredCwd && sameDirectory(own, ctx.configuredCwd))
+      ;[ownIsDirectory, homeOrAbove] = await Promise.all([
+        askDisk<boolean>(group, 'directory', own, () => isDirectory(own), false, waitMs, clock),
+        // A verdict that did not come in time is "yes": the tab's folder is not used.
+        guarded ? askDisk<boolean | undefined>(group, 'home', own, () => aboveHome(own), true, waitMs, clock) : Promise.resolve(undefined),
+      ])
+    }
+    const now = clock()
+    for (const [k, v] of warmedResumes) if (now - v.at > CODEX_WARMED_RESUME_TTL_MS) warmedResumes.delete(k)
+    const key = warmedKey(ctx.sessionsDir, ctx.sessionId, target.uuid, own)
+    // A look made again for the same launch replaces its own, and takes the
+    // newest place (a Map keeps a key's first one), so it is never the oldest
+    // dropped to make room for itself.
+    warmedResumes.delete(key)
+    while (warmedResumes.size >= CODEX_WARMED_RESUME_MAX) {
+      const oldest = warmedResumes.keys().next().value
+      if (oldest === undefined) break
+      warmedResumes.delete(oldest)
+    }
+    warmedResumes.set(key, { at: now, chosen, ownIsDirectory, homeOrAbove })
+  } catch {
+    // The launch compares the spelling, as before.
   }
 }

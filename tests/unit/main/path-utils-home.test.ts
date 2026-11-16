@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs'
-import { isHomeOrAncestor } from '../../../src/main/path-utils'
+import { isHomeOrAncestor, isHomeOrAncestorAsync } from '../../../src/main/path-utils'
 
 /**
  * SECURITY (adversarial review, #188): isHomeOrAncestor is the guard that keeps
@@ -54,5 +54,33 @@ describe('isHomeOrAncestor', () => {
     let reachable = false
     try { reachable = fs.statSync(unc).isDirectory() } catch { reachable = false }
     if (reachable) expect(isHomeOrAncestor(unc)).toBe(true)
+  })
+})
+
+/**
+ * 2.1.3-beta.6: the Codex resume look asks the same question off the main
+ * thread. It must give the answer the synchronous guard gives, for every
+ * spelling the guard is tested with above.
+ */
+describe('isHomeOrAncestorAsync answers as isHomeOrAncestor does', () => {
+  const home = os.homedir()
+  const spellings: Array<[string, string]> = [
+    ['the home folder', home],
+    ['home with a trailing separator', home + path.sep],
+    ['the parent of home', path.dirname(home)],
+    ['a project under home', path.join(home, 'some-project')],
+    ['the temp folder', os.tmpdir()],
+    ['a folder that does not exist', path.join(os.tmpdir(), 'ccc-no-such-folder-' + process.pid, 'x')],
+    ['a case variant of home', home.toLowerCase()],
+  ]
+  for (const [name, spelling] of spellings) {
+    it(`${name}`, async () => {
+      expect(await isHomeOrAncestorAsync(spelling)).toBe(isHomeOrAncestor(spelling))
+    })
+  }
+
+  it('is true for home itself and false for a project under it (so the parity above is not two falses)', async () => {
+    expect(await isHomeOrAncestorAsync(home)).toBe(true)
+    expect(await isHomeOrAncestorAsync(path.join(home, 'some-project'))).toBe(false)
   })
 })
