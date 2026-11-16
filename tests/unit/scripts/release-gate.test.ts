@@ -887,10 +887,14 @@ describe('release-gate carry-forward (check 5)', () => {
     const ciText = readFileSync(resolve(__dirname, `../../../.github/workflows/${CI_WORKFLOW}`), 'utf-8').replace(/\r\n/g, '\n')
     expect(ciText, `${CI_WORKFLOW} runs on a push to main`).toMatch(/^on:\n[\s\S]*?^ {2}push:\n {4}branches: \[main\]$/m)
     const ci = ciText.split('\n')
-    const named = ci.findIndex((l) => l.trim() === 'name: Test (${{ matrix.os }})')
-    expect(named, 'ci.yml has no Test (matrix.os) job').toBeGreaterThan(0)
-    const oses = /^\s*os:\s*\[(.+)\]\s*$/.exec(ci.slice(named).find((l) => /^\s*os:\s*\[/.test(l)) ?? '')?.[1].split(',').map((s) => s.trim()) ?? []
-    expect(oses.length).toBe(3)
+    // Two jobs are named Test (matrix.os): macOS and Linux in `test`, and the
+    // one that stands for the Windows parts (`test-windows`). Each one's os list
+    // is the first `os: [...]` after its name.
+    const named = ci.flatMap((l, i) => (l.trim() === 'name: Test (${{ matrix.os }})' ? [i] : []))
+    expect(named, 'ci.yml has no Test (matrix.os) job').toHaveLength(2)
+    const oses = named.flatMap((at) => /^\s*os:\s*\[(.+)\]\s*$/.exec(ci.slice(at).find((l) => /^\s*os:\s*\[/.test(l)) ?? '')?.[1].split(',').map((s) => s.trim()) ?? [])
+    expect(oses).toEqual(['macos-latest', 'ubuntu-latest', 'windows-2025'])
+    expect(ci.some((l) => /^\s*name: Test \((windows|macos|ubuntu)-/.test(l)), 'a Test job with a plain name').toBe(false)
     expect(oses.map((os) => TEST_JOB_RE.exec(`Test (${os})`)?.[1]).sort()).toEqual([...TEST_OS_FAMILIES].sort())
     const script = readFileSync(resolve(__dirname, '../../../.claude/skills/adversarial-review/adv-marker.sh'), 'utf-8')
     const format = /printf '(ADVERSARIAL-REVIEW v1 [^']+)'/.exec(script)?.[1]

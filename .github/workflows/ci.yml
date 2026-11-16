@@ -155,10 +155,16 @@ jobs:
     # for the same commit.)
     #
     # `Test (windows-2025)` and `Test (macos-latest)` are REQUIRED checks in
-    # the branch rulesets. Never gate this job on the changed paths, here or
-    # with a workflow-level path filter: a job skipped as a whole never reports
-    # those names and the PR waits forever. The paths are read INSIDE the job
-    # ("Decide the scope" below), which then ends green.
+    # the branch rulesets. Never gate this job (or the Windows jobs below) on
+    # the changed paths, here or with a workflow-level path filter: a job
+    # skipped as a whole never reports those names and the PR waits forever.
+    # The paths are read INSIDE the job ("Decide the scope" below), which then
+    # ends green.
+    #
+    # Windows is not in this matrix. Its suite took about 24 minutes in one job
+    # and set every PR's CI time, so it runs in parts, side by side, in the
+    # three jobs after this one, and the job among them named
+    # `Test (windows-2025)` reports the required check for all of them.
     if: |
       github.event_name == 'push' ||
       (contains(github.event.pull_request.labels.*.name, 'ci-run') &&
@@ -175,25 +181,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # windows-2025 pinned (not -latest): the windows-2025-vs2026 image that
-        # windows-latest now redirects to ships ONLY Visual Studio 2026 ("18"),
-        # which @electron/node-gyp cannot use yet -> better-sqlite3 rebuild fails.
-        # Unpin once the electron toolchain supports VS 2026.
         # ubuntu-latest takes the native rebuild path below, as macOS does.
-        os: [windows-2025, macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest]
 
     steps:
       # Depth 2: on a PR this is the merge commit and its parents, so the next
-      # step can read what the PR changes against its base.
+      # step can read what the PR changes against its base. No git operation
+      # in this job needs the token (the scope reads local git, and the WP1
+      # ledger fetch reads the public origin), so it is not left on disk while
+      # the PR's own code runs.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 2
+          persist-credentials: false
 
       # CI runs only what a change touches (ADR-028, rule 6), the safe minimum:
       # a PR that changes ONLY documentation (Markdown, docs/, CONTEXT.d/,
-      # architecture/) skips the suite on Windows and macOS. Linux always runs
-      # it, because some tests read the Markdown they guard. The job itself
-      # still runs and ends green, so the required checks report.
+      # architecture/) skips the suite on macOS here (and on Windows, in the
+      # jobs below). Linux always runs it, because some tests read the Markdown
+      # they guard. The job itself still runs and ends green, so the required
+      # checks report.
       #
       # EVERY step below carries `steps.scope.outputs.suite != 'false'`: only
       # the literal 'false' skips, so an output that was never written runs the
@@ -226,14 +233,10 @@ jobs:
         if: steps.scope.outputs.suite != 'false'
         run: node node_modules/electron/install.js
 
-      # Windows: no VS Build Tools / native rebuild. node-pty and better-sqlite3
-      # ship N-API prebuilt binaries (prebuilds/win32-x64) that load unchanged under
-      # Electron (verified: test:unit:native loads SQLite under electron-as-node from
-      # the prebuild), so we skip the rebuild on Windows and use them as-is. This drops
-      # a dependency on community.chocolatey.org, whose per-IP rate limiting (behind
-      # Cloudflare) intermittently blocks GitHub's SHARED runner IPs and failed the VS
-      # Build Tools install at random with "not valid XML". macOS/Linux still rebuild
-      # from source below.
+      # macOS and Linux rebuild node-pty and better-sqlite3 from source. Windows
+      # never does (why: the comment above test-windows-part). It is not in this
+      # matrix; the `runner.os != 'Windows'` guard is kept on purpose, so the
+      # step stays right if Windows ever rejoins it.
       - name: Rebuild native modules
         if: steps.scope.outputs.suite != 'false' && runner.os != 'Windows'
         shell: bash
@@ -277,33 +280,15 @@ jobs:
       # of a release candidate. Signing/notarisation are skipped here —
       # CI lacks the Apple Developer ID secrets the formal release workflow
       # uses, so the macOS DMG is unsigned and Gatekeeper will warn on
-      # first launch (right-click → Open). The Windows installer is also
-      # unsigned, same SmartScreen warning as the release pipeline.
+      # first launch (right-click → Open). The Windows installer is made the
+      # same way in `test-windows-build` below, unsigned, with the same
+      # SmartScreen warning as the release pipeline.
       # Gate on runner.os, NOT a matrix image name: `matrix.os` carries whatever
       # image is pinned above, so a re-pin silently turns these steps off while
       # the job stays green.
-      - name: Package Windows installer (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
-        # --config.npmRebuild=false: the Windows rebuild step is skipped (prebuilds),
-        # so tell electron-builder not to rebuild either; package the prebuilds as-is.
-        run: npx electron-builder --win --config.npmRebuild=false
-
-      - name: Verify native modules unpacked (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
-        run: npm run verify:package
-
       - name: Package macOS DMG (release/* branches only)
         if: steps.scope.outputs.suite != 'false' && runner.os == 'macOS' && startsWith(github.head_ref, 'release/')
         run: npx electron-builder --mac
-
-      - name: Upload Windows installer
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-installer-${{ github.sha }}
-          path: dist/*.exe
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Upload macOS DMG
         if: steps.scope.outputs.suite != 'false' && runner.os == 'macOS' && startsWith(github.head_ref, 'release/')
@@ -331,6 +316,256 @@ jobs:
         if: steps.scope.outputs.suite != 'false'
         shell: bash
         run: echo "The suite, the native tests and the build passed on this tree."
+
+  # Windows, in parts (2.1.3-beta.6). In one job the Windows suite took a
+  # median of 24 minutes (26 for the job, five runs on 2026-11-15 and 16) and
+  # set the CI time of every PR. The two jobs below run side by side, and a third,
+  # `test-windows`, named `Test (windows-2025)`, waits for them and reports the
+  # required check:
+  #   - test-windows-part: the unit suite in four parts (vitest --shard); the
+  #     four together are the whole suite, each file in one part. The few files
+  #     that start many Windows PowerShell processes are spread across the
+  #     parts by weight, and every other file goes where vitest's own hash
+  #     split puts it (vitest.config.ts, scripts/ci/shard-by-weight.mjs). The
+  #     count is the size of the matrix (strategy.job-total): add a part there
+  #     to raise it. Each part's summary lists its slowest files, which is
+  #     where a weight that has drifted shows.
+  #   - test-windows-build: the typecheck, the native tests, the build and, on
+  #     a release/* branch, the installer, once.
+  # Each decides the scope itself ("Decide the scope"), as the Test jobs do,
+  # and starts on the same events. None of their names begins with `Test (`,
+  # so the release gate and the green-run reuse (TEST_JOB_RE) read only
+  # `Test (windows-2025)`, which stands for them. Both are matrix jobs (the
+  # build a matrix of one, `os` naming it only) so that, skipped as a whole on
+  # a label change or an edit, they report their names unexpanded and the
+  # results already in the PR's list stand.
+  #
+  # Each job has a timeout: a part takes under 10 minutes and the build about
+  # 2, so 30 minutes (10 for the check, which takes seconds) stops a hung job
+  # long before GitHub's default of six hours. A part that times out fails
+  # the check.
+  #
+  # windows-2025 pinned (not -latest): the windows-2025-vs2026 image that
+  # windows-latest now redirects to ships ONLY Visual Studio 2026 ("18"), which
+  # @electron/node-gyp cannot use yet -> better-sqlite3 rebuild fails. Unpin
+  # once the electron toolchain supports VS 2026.
+  #
+  # No native rebuild on Windows, and so no VS Build Tools and no Python.
+  # node-pty and better-sqlite3 ship N-API prebuilt binaries
+  # (prebuilds/win32-x64) that load unchanged under Electron (verified:
+  # test:unit:native loads SQLite under electron-as-node from the prebuild),
+  # so they are used as-is: `npm ci --ignore-scripts` builds nothing, and the
+  # installer is packaged with `--config.npmRebuild=false`. This drops a
+  # dependency on community.chocolatey.org, whose per-IP rate limiting (behind
+  # Cloudflare) intermittently blocks GitHub's SHARED runner IPs and failed the
+  # VS Build Tools install at random with "not valid XML". macOS and Linux
+  # still rebuild from source, in the test job.
+  #
+  # No git operation in these jobs needs the token (the scope reads local git,
+  # and the WP1 ledger fetch reads the public origin), so the checkouts do not
+  # leave it on disk while the PR's own code runs.
+  test-windows-part:
+    if: |
+      github.event_name == 'push' ||
+      (contains(github.event.pull_request.labels.*.name, 'ci-run') &&
+       github.event.action != 'unlabeled' &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+       (github.event.action != 'edited' || github.event.changes.base.ref.from != ''))
+    name: Test part ${{ matrix.part }} of ${{ strategy.job-total }} (windows-2025)
+    runs-on: windows-2025
+    timeout-minutes: 30
+    outputs:
+      suite: ${{ steps.scope.outputs.suite }}
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      # Every step below carries `steps.scope.outputs.suite != 'false'`, as in
+      # the test job (only the literal 'false' skips).
+      - name: Decide the scope
+        id: scope
+        run: node scripts/ci/change-scope.mjs
+
+      - uses: actions/setup-node@v7
+        if: steps.scope.outputs.suite != 'false'
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        if: steps.scope.outputs.suite != 'false'
+        run: npm ci --ignore-scripts
+
+      - name: Install Electron binary
+        if: steps.scope.outputs.suite != 'false'
+        run: node node_modules/electron/install.js
+
+      - name: Fetch the WP1 ledger's bound commit
+        if: steps.scope.outputs.suite != 'false'
+        run: node scripts/wp1/fetch-ledger-commit.mjs
+
+      # The reporters are vitest's two defaults on GitHub Actions (naming them
+      # replaces the defaults) and its own JSON report, for the next step.
+      - name: Unit tests
+        if: steps.scope.outputs.suite != 'false'
+        run: npx vitest run --shard=${{ matrix.part }}/${{ strategy.job-total }} --reporter=default --reporter=github-actions --reporter=json --outputFile.json=${{ runner.temp }}/vitest-part.json
+
+      - name: Slowest test files in this part
+        if: ${{ !cancelled() && steps.scope.outputs.suite != 'false' }}
+        run: node scripts/ci/slow-test-files.mjs "${{ runner.temp }}/vitest-part.json" 15 "part ${{ matrix.part }} of ${{ strategy.job-total }}"
+
+  test-windows-build:
+    if: |
+      github.event_name == 'push' ||
+      (contains(github.event.pull_request.labels.*.name, 'ci-run') &&
+       github.event.action != 'unlabeled' &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+       (github.event.action != 'edited' || github.event.changes.base.ref.from != ''))
+    name: Build and native tests (${{ matrix.os }})
+    runs-on: windows-2025
+    timeout-minutes: 30
+    outputs:
+      suite: ${{ steps.scope.outputs.suite }}
+    strategy:
+      matrix:
+        os: [windows-2025]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      # Every step below carries `steps.scope.outputs.suite != 'false'`, as in
+      # the test job (only the literal 'false' skips). No Python: nothing here
+      # compiles native code (see above test-windows-part).
+      - name: Decide the scope
+        id: scope
+        run: node scripts/ci/change-scope.mjs
+
+      - uses: actions/setup-node@v7
+        if: steps.scope.outputs.suite != 'false'
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        if: steps.scope.outputs.suite != 'false'
+        run: npm ci --ignore-scripts
+
+      - name: Install Electron binary
+        if: steps.scope.outputs.suite != 'false'
+        run: node node_modules/electron/install.js
+
+      - name: Typecheck
+        if: steps.scope.outputs.suite != 'false'
+        run: npm run typecheck
+
+      - name: Unit tests (native / SQLite under Electron-as-Node)
+        if: steps.scope.outputs.suite != 'false'
+        run: npm run test:unit:native
+
+      - name: Build
+        if: steps.scope.outputs.suite != 'false'
+        run: npm run build
+
+      # The Windows half of the beta-testing artifact pipeline (see the macOS
+      # half in the test job): on a release/* branch, the installer, packaged,
+      # checked and uploaded here only. This job does not wait for the unit
+      # parts, which run beside it, so on a red run the installer can still be
+      # uploaded; `Test (windows-2025)` is what says whether the tree passed.
+      - name: Package Windows installer (release/* branches only)
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
+        # --config.npmRebuild=false: Windows uses the prebuilds as-is (see above
+        # test-windows-part), so electron-builder must not rebuild them either.
+        run: npx electron-builder --win --config.npmRebuild=false
+
+      - name: Verify native modules unpacked (release/* branches only)
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
+        run: npm run verify:package
+
+      - name: Upload Windows installer
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer-${{ github.sha }}
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  # The required check `Test (windows-2025)`, for the Windows jobs above. It
+  # needs every one of them and starts whatever they ended with (`always()`:
+  # without it, a part that failed would leave this job skipped, and a skipped
+  # job reports as passed). scripts/ci/all-parts-passed.mjs then passes only
+  # when each of them passed: a part that failed, was cancelled, timed out or
+  # was skipped fails it. That includes a run cancelled as a whole (a newer
+  # push or run replaced it, or someone cancelled it): this job still starts
+  # and fails, so a Windows run that did not finish never reads as passed. It
+  # is not `!cancelled()`, which does not start it in a cancelled run and can
+  # leave the check skipped. The red check left on a commit that a newer push
+  # replaced is harmless, as the old Windows matrix job's cancelled check was.
+  # Its event rule is otherwise the Test jobs', so on a label change or an
+  # edit it is skipped with them and the results already reported for the
+  # commit stand.
+  #
+  # It is a matrix of one, named from `matrix.os` as the `test` job is, for
+  # that skip: a job skipped by its condition reports its name unexpanded, and
+  # GitHub counts a skipped check as passed. With a plain name, a label change
+  # would report a skipped `Test (windows-2025)` over a red one. `os` only
+  # names the check; the job runs on Linux (below).
+  #
+  # It ends, as the Test jobs do, with the step named after the tree under
+  # test, which a beta release reads to reuse this run (ADR-028, rule 4;
+  # scripts/ci/reuse-green-ci.mjs). Every job of a run checks out the same
+  # commit, so that is the tree the parts tested; on a documentation-only
+  # change, when every part skipped the suite, the step is skipped too. Keep
+  # these two steps last, and never give them always() or continue-on-error.
+  # Nothing in this job is Windows, so it runs on a Linux runner, which starts
+  # in seconds. It only reads.
+  test-windows:
+    needs: [test-windows-part, test-windows-build]
+    if: |
+      always() &&
+      (github.event_name == 'push' ||
+       (contains(github.event.pull_request.labels.*.name, 'ci-run') &&
+        github.event.action != 'unlabeled' &&
+        (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+        (github.event.action != 'edited' || github.event.changes.base.ref.from != '')))
+    name: Test (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [windows-2025]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Every Windows part passed
+        id: parts
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EXPECT: test-windows-part test-windows-build
+        run: node scripts/ci/all-parts-passed.mjs
+
+      - name: Read the tree under test
+        id: tree
+        if: steps.parts.outputs.suite != 'false'
+        shell: bash
+        run: echo "sha=$(git rev-parse --verify 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+
+      - name: Tested tree ${{ steps.tree.outputs.sha }}
+        if: steps.parts.outputs.suite != 'false'
+        shell: bash
+        run: echo "Every Windows part of the suite, the native tests and the build passed on this tree."
 
   # Real-CLI conformance (P4.8; rows 59, 60; OD20 D7, WP1.71). Each supported
   # Codex CLI version is installed into a prefix of its own on each OS and run
