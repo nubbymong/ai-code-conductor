@@ -81,6 +81,7 @@ export function normaliseTracking(raw: unknown): UsageTracking {
 export const VIEW_FEATURE_IDS: Readonly<Record<string, string>> = {
   memory: 'memory.memory-page',
   tokenomics: 'tokenomics.dashboard',
+  machines: 'machines.machines-page',
   vision: 'vision.toggle-vision',
   insights: 'advanced.insights',
   logs: 'advanced.log-viewer',

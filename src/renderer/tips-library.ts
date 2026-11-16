@@ -1504,4 +1504,23 @@ export const TIPS_LIBRARY: Tip[] = [
       },
     },
   },
+
+  {
+    id: 'tip.machines-page',
+    category: 'advanced',
+    complexity: 'intermediate',
+    priority: 24,
+    // Gone once the page has been opened (a tab is the way to find it again).
+    excludes: ['machines.machines-page'],
+    variants: {
+      primary: {
+        shortText: 'The Machines page shows what your session helper holds',
+        title: 'The Machines Page',
+        body: 'The **Machines** page shows **This computer** and its **session helper**: whether it is off, not installed, starting, ready or failed, its version, and the result of its **self-test** with a **Run self-test** button.\n\nBelow that it lists the terminals the helper holds. Each row says what it is, when it started, and whether the app is attached to it or it is **waiting for the app**. **Re-attach** connects a waiting terminal again, and **End** stops one after you confirm.\n\nThe session helper is a preview and it is **off by default**. Switch it on in **Settings, General, Plain terminals through the session helper**. The page reads when you open it, when you switch back to its tab, when you press **Refresh** and after each action; it does not update by itself while you stay on it.',
+        actionLabel: 'Open Machines',
+        actionTarget: 'machines',
+        focusHint: 'Left rail -- the Machines icon, beside Tokenomics',
+      },
+    },
+  },
 ]

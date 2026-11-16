@@ -84,6 +84,7 @@ test.describe('Sessions View', () => {
 const RAIL_PAGES: Array<{ view: string; title: string }> = [
   { view: 'insights', title: 'Insights' },
   { view: 'tokenomics', title: 'Tokenomics' },
+  { view: 'machines', title: 'Machines' },
   { view: 'vision', title: 'Conductor MCP' },
   { view: 'memory', title: 'Memory' },
   { view: 'logs', title: 'Logs' },
@@ -99,6 +100,22 @@ for (const { view, title } of RAIL_PAGES) {
     })
   })
 }
+
+// The loop above only proves a tab opens and the main area is not empty (the tab bar
+// alone satisfies that), so the Machines page also has to show its own card.
+test.describe('Machines page content', () => {
+  test('shows the This computer card, with the session helper off by default', async () => {
+    await openPage('machines')
+    const card = page.locator('[data-testid="machines-page"]')
+    await expect(card).toBeVisible({ timeout: 5000 })
+    await expect(card.locator('h2')).toHaveText('This computer')
+    await expect(page.locator('[data-testid="machines-state"]')).toContainText('Off')
+    await expect(page.locator('[data-testid="machines-state-text"]')).toContainText(
+      'Switch it on in Settings, General, Plain terminals through the session helper.',
+    )
+    await expect(page.locator('[data-testid="machines-empty"]')).toBeVisible()
+  })
+})
 
 test.describe('Feature Guide View', () => {
   test('renders the Feature Guide page as an active tab', async () => {

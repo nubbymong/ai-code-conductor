@@ -56,6 +56,17 @@ const navItems: { view: ViewType; icon: React.ReactNode; label: string }[] = [
     )
   },
   {
+    view: 'machines',
+    label: 'Machines',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2" />
+        <line x1="8" y1="21" x2="16" y2="21" />
+        <line x1="12" y1="17" x2="12" y2="21" />
+      </svg>
+    )
+  },
+  {
     view: 'vision',
     label: 'Conductor MCP',
     icon: (
@@ -102,6 +113,12 @@ const navItems: { view: ViewType; icon: React.ReactNode; label: string }[] = [
     )
   },
 ]
+
+// The pages in the rail's first group; every other nav item sits after the divider.
+// (The expanded rail's buttons are flex-1 with min-w-0: they share the row and shrink
+// with it. Without min-w-0 each is at least its 20px icon wide, and the row spills past
+// the sidebar edge once the Account button makes it ten buttons.)
+const PRIMARY_VIEWS: readonly ViewType[] = ['cloud-agents', 'insights', 'tokenomics', 'machines']
 
 function NavButton({ item, currentView, onViewChange, insightsStatus, insightsMessage, cloudAgentRunning, visionRunning, serverRunning, tokenomicsIndexComplete, isCollapsed, loggingEnabled, tooltipAlign = 'start' }: {
   item: typeof navItems[0]
@@ -175,7 +192,7 @@ function NavButton({ item, currentView, onViewChange, insightsStatus, insightsMe
       data-tour={`nav-${item.view}`}
       aria-disabled={isLogsDisabled || undefined}
       tabIndex={isLogsDisabled ? -1 : undefined}
-      className={`group ${isCollapsed ? 'w-10 h-10' : 'flex-1 py-2'} flex items-center justify-center rounded-lg transition-colors relative ${
+      className={`group ${isCollapsed ? 'w-10 h-10' : 'flex-1 min-w-0 py-2'} flex items-center justify-center rounded-lg transition-colors relative ${
         isLogsDisabled
           ? 'text-overlay0/40 cursor-not-allowed'
           : currentView === item.view
@@ -271,7 +288,7 @@ export default function SidebarNav({ currentView, onViewChange, insightsStatus, 
     <button
       onClick={onShowAccountUsage}
       aria-label="Account usage"
-      className={`group ${collapsed ? 'w-10 h-10' : 'flex-1 py-2'} flex items-center justify-center rounded-lg transition-colors focus-ring relative ${
+      className={`group ${collapsed ? 'w-10 h-10' : 'flex-1 min-w-0 py-2'} flex items-center justify-center rounded-lg transition-colors focus-ring relative ${
         accountUsageActive ? 'bg-surface0 rail-active' : 'text-overlay0 hover:text-text hover:bg-surface0/50'
       }`}
       style={accountUsageActive ? { color: 'var(--accent)' } : undefined}
@@ -298,7 +315,7 @@ export default function SidebarNav({ currentView, onViewChange, insightsStatus, 
       aria-label="Feature Guide"
       aria-current={helpActive ? 'page' : undefined}
       data-tour="help-button"
-      className={`group ${collapsed ? 'w-10 h-10' : 'flex-1 py-2'} flex items-center justify-center rounded-lg transition-colors ${helpActive ? 'bg-surface0/60' : 'text-overlay0 hover:text-text hover:bg-surface0/50'} focus-ring relative`}
+      className={`group ${collapsed ? 'w-10 h-10' : 'flex-1 min-w-0 py-2'} flex items-center justify-center rounded-lg transition-colors ${helpActive ? 'bg-surface0/60' : 'text-overlay0 hover:text-text hover:bg-surface0/50'} focus-ring relative`}
       style={helpActive ? { color: 'var(--accent)' } : undefined}
     >
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -317,8 +334,8 @@ export default function SidebarNav({ currentView, onViewChange, insightsStatus, 
     </button>
   )
 
-  const primary = navItems.filter(i => ['cloud-agents', 'insights', 'tokenomics'].includes(i.view))
-  const system = navItems.filter(i => !['cloud-agents', 'insights', 'tokenomics'].includes(i.view))
+  const primary = navItems.filter(i => PRIMARY_VIEWS.includes(i.view))
+  const system = navItems.filter(i => !PRIMARY_VIEWS.includes(i.view))
   const renderItem = (item: typeof navItems[0], tooltipAlign: 'start' | 'end') => (
     <NavButton key={item.view} item={item} currentView={currentView} onViewChange={onViewChange}
       insightsStatus={insightsStatus} insightsMessage={insightsMessage} cloudAgentRunning={cloudAgentRunning}
@@ -333,14 +350,14 @@ export default function SidebarNav({ currentView, onViewChange, insightsStatus, 
         className="flex flex-col items-center gap-1 py-2 border-b border-surface0"
         style={{ background: 'var(--surface-chrome)', color: 'var(--text-on-chrome)' }}
       >
-        {navItems.filter(i => ['cloud-agents', 'insights', 'tokenomics'].includes(i.view)).map(item => (
+        {primary.map(item => (
           <NavButton key={item.view} item={item} currentView={currentView} onViewChange={onViewChange}
             insightsStatus={insightsStatus} insightsMessage={insightsMessage} cloudAgentRunning={cloudAgentRunning}
             visionRunning={visionRunning} serverRunning={serverRunning} tokenomicsIndexComplete={tokenomicsIndexComplete}
             isCollapsed loggingEnabled={loggingEnabled} />
         ))}
         <span className="h-px w-6 my-1 bg-surface1" aria-hidden />
-        {navItems.filter(i => !['cloud-agents', 'insights', 'tokenomics'].includes(i.view)).map(item => (
+        {system.map(item => (
           <NavButton key={item.view} item={item} currentView={currentView} onViewChange={onViewChange}
             insightsStatus={insightsStatus} insightsMessage={insightsMessage} cloudAgentRunning={cloudAgentRunning}
             visionRunning={visionRunning} serverRunning={serverRunning} tokenomicsIndexComplete={tokenomicsIndexComplete}
