@@ -298,10 +298,10 @@ export class CodexProvider implements SessionProvider {
   }
 
   /** 2.1.3-beta.6: the folders of a resumed conversation compared by real
-   *  path, asked of the disk off the event loop before the launch
-   *  (rollout-lookup.ts warmCodexResume). */
-  warmResumeLookup(target: { uuid: string; cwd: string }, sessionsDir: string): Promise<void> {
-    return warmCodexResume(target, { sessionsDir })
+   *  path, and the tab's folder checked, asked of the disk off the event loop
+   *  before the launch (rollout-lookup.ts warmCodexResume). */
+  warmResumeLookup(target: { uuid: string; cwd: string }, sessionsDir: string, sessionId?: string, configuredCwd?: string): Promise<void> {
+    return warmCodexResume(target, { sessionsDir, ...(sessionId !== undefined ? { sessionId } : {}), ...(configuredCwd !== undefined ? { configuredCwd } : {}) })
   }
 
   /** P3.10: the session's hook file, for its launch's hooks; round 1 (A5):

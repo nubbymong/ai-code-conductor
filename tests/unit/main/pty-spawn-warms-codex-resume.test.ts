@@ -23,7 +23,7 @@ vi.mock('electron', () => ({
 interface Target { uuid: string; cwd: string }
 interface KeptSource { uuid: string; cwd: string; accountId: string; uncertain: boolean; unconfirmed: boolean }
 const look = vi.hoisted(() => ({
-  asked: [] as Array<{ target: Target; sessionsDir: string }>,
+  asked: [] as Array<{ target: Target; sessionsDir: string; sessionId?: string; configuredCwd?: string }>,
   prepared: 0,
   ends: Promise.resolve() as Promise<void>,
   fails: false,
@@ -100,8 +100,8 @@ vi.mock('../../../src/main/providers/core', async (importOriginal) => ({
         warmResumeListNode: () => Promise.resolve(),
         ...(look.provided
           ? {
-              warmResumeLookup: (target: Target, sessionsDir: string) => {
-                look.asked.push({ target: { ...target }, sessionsDir })
+              warmResumeLookup: (target: Target, sessionsDir: string, sessionId?: string, configuredCwd?: string) => {
+                look.asked.push({ target: { ...target }, sessionsDir, sessionId, configuredCwd })
                 return look.fails ? Promise.reject(new Error('the look failed')) : look.ends
               },
             }
@@ -153,12 +153,12 @@ afterEach(() => { Object.defineProperty(process, 'platform', PLATFORM) })
 describe('a Codex launch that resumes a conversation waits for the look at its folders', () => {
   // Mutation to prove this can fail: drop the call, or its await: the launch
   // then starts before the look has ended, or never asks.
-  it('the conversation the request names: it starts only once the look has ended, and the look is for that conversation and the launch\'s own sessions folder', async () => {
+  it('the conversation the request names: it starts only once the look has ended, and the look is for that conversation, that session, the configured folder and the launch\'s own sessions folder', async () => {
     const held = heldLook()
     look.ends = held.ends
     const started = outcome(spawn({}, S, { ...CODEX, resume: { uuid: U1, cwd: '/proj/link' } }))
     await settle()
-    expect(look.asked).toEqual([{ target: { uuid: U1, cwd: '/proj/link' }, sessionsDir: '/realm/sessions' }])
+    expect(look.asked).toEqual([{ target: { uuid: U1, cwd: '/proj/link' }, sessionsDir: '/realm/sessions', sessionId: S, configuredCwd: '/w' }])
     expect(spawnPty, 'nothing starts while the look is under way').not.toHaveBeenCalled()
     held.end()
     expect(await started).toBe('started')
@@ -172,7 +172,7 @@ describe('a Codex launch that resumes a conversation waits for the look at its f
     look.ends = held.ends
     const started = outcome(spawn({}, S, CODEX))
     await settle()
-    expect(look.asked).toEqual([{ target: { uuid: U2, cwd: '/proj/real' }, sessionsDir: '/realm/sessions' }])
+    expect(look.asked).toEqual([{ target: { uuid: U2, cwd: '/proj/real' }, sessionsDir: '/realm/sessions', sessionId: S, configuredCwd: '/w' }])
     expect(spawnPty).not.toHaveBeenCalled()
     held.end()
     expect(await started).toBe('started')

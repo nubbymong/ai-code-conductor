@@ -10,18 +10,19 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, rmdirSync, unlinkSync, s
 import { join, dirname, basename, resolve } from 'path'
 import { tmpdir } from 'os'
 
-// Wrap the synchronous real-path calls, so a case can say none was made. They
-// still do what they did.
+// Wrap the synchronous real-path and stat calls, so a case can say none was
+// made. They still do what they did.
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>()
   const realpathSync = Object.assign(vi.fn(actual.realpathSync), { native: vi.fn(actual.realpathSync.native) })
-  return { ...actual, realpathSync, default: { ...actual, realpathSync } }
+  const statSync = vi.fn(actual.statSync)
+  return { ...actual, realpathSync, statSync, default: { ...actual, realpathSync, statSync } }
 })
 
 import * as fs from 'fs'
 import {
   warmCodexResume, resolveCodexResume, makeRealPathLookup, sameDirectory,
-  __resetWarmedCodexResumeForTests,
+  __resetWarmedCodexResumeForTests, __resetCodexDiskMemoryForTests,
 } from '../../../../src/main/providers/codex/rollout-lookup'
 
 type Listed = { id: string; cwd: string; sourceCwd: string }
@@ -48,7 +49,7 @@ afterEach(() => {
     rmSync(t, { recursive: true, force: true })
   }
 })
-beforeEach(() => { __resetWarmedCodexResumeForTests() })
+beforeEach(() => { __resetWarmedCodexResumeForTests(); __resetCodexDiskMemoryForTests() })
 
 /** A project folder, a link to it (a junction on Windows), a sessions folder and a configured folder, in a temp folder. */
 function project(): Project {
@@ -127,9 +128,10 @@ describe('a link whose folder is gone', () => {
   })
 })
 
-describe('the lookup never makes the synchronous real-path call', () => {
+describe('the lookup never makes the synchronous real-path or stat call', () => {
   type SyncReal = Mock<typeof fs.realpathSync> & { native: Mock<typeof fs.realpathSync.native> }
   const syncReal = (): SyncReal => fs.realpathSync as unknown as SyncReal
+  const syncStat = (): Mock<typeof fs.statSync> => fs.statSync as unknown as Mock<typeof fs.statSync>
 
   it('through a real link, both ways round', async () => {
     const p = project()
@@ -139,13 +141,17 @@ describe('the lookup never makes the synchronous real-path call', () => {
     put(p.sessions, ['2026', '09', '01'], backward, p.link)
     syncReal().mockClear()
     syncReal().native.mockClear()
+    syncStat().mockClear()
     await warmCodexResume({ uuid: forward, cwd: p.link }, { sessionsDir: p.sessions })
     await warmCodexResume({ uuid: backward, cwd: p.real }, { sessionsDir: p.sessions })
-    // The folder looks themselves: the launch's own home-folder guard is a separate check (injected off here).
-    expect(resolveCodexResume({ uuid: forward, cwd: p.link }, ctxFor(p))).toMatchObject({ cwdMismatch: false })
-    expect(resolveCodexResume({ uuid: backward, cwd: p.real }, ctxFor(p))).toMatchObject({ cwdMismatch: false })
+    // Nothing is injected away: the launch's existence check and home-folder
+    // guard are answered by the look (the tab's folder is not the configured one).
+    const launch = { sessionsDir: p.sessions, configuredCwd: p.configured }
+    expect(resolveCodexResume({ uuid: forward, cwd: p.link }, launch)).toMatchObject({ cwd: resolve(p.link), cwdMismatch: false })
+    expect(resolveCodexResume({ uuid: backward, cwd: p.real }, launch)).toMatchObject({ cwd: resolve(p.real), cwdMismatch: false })
     expect(syncReal()).not.toHaveBeenCalled()
     expect(syncReal().native).not.toHaveBeenCalled()
+    expect(syncStat()).not.toHaveBeenCalled()
   })
 })
 

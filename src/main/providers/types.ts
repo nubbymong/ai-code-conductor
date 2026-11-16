@@ -267,11 +267,15 @@ export interface SessionProvider {
   /** Optional -- Codex (2.1.3-beta.6): a launch that resumes a conversation
    *  finds its rollout and compares the conversation's recorded folder with
    *  the tab's folder by real path too (a symlinked folder, a Windows
-   *  junction), asked of the disk off the event loop, bounded, and kept for
-   *  the launch to read; the launch builder never asks for a real path in
-   *  place. `sessionsDir` is the launch's own realm's sessions folder. Never
-   *  rejects; with nothing kept the launch compares the exact spelling. */
-  warmResumeLookup?(target: { uuid: string; cwd: string }, sessionsDir: string): Promise<void>
+   *  junction), and checks that the tab's folder is a folder and not the home
+   *  folder or above it. The real paths and the checks are asked of the disk
+   *  off the event loop, each bounded, and kept for the launch to read; the
+   *  walk of the sessions folder itself stays synchronous, as it was in the
+   *  builder. `sessionsDir` is the launch's own realm's sessions folder,
+   *  `sessionId` the tab's session, `configuredCwd` the folder the request
+   *  names. Never rejects; with nothing kept the launch compares the exact
+   *  spelling and asks the disk in place, as before. */
+  warmResumeLookup?(target: { uuid: string; cwd: string }, sessionsDir: string, sessionId?: string, configuredCwd?: string): Promise<void>
   /** Optional -- Codex (P3.10): write the session's hook file (the Hooks
    *  gateway's port, the session id and its token, owner-only, in a folder
    *  made for the launch inside the app's own data folder, P3.10 round 1)

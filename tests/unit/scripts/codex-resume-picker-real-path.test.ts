@@ -20,6 +20,7 @@ const lib = require('../../../scripts/lib/codex-resume-picker-lib.js') as {
   walkRollouts: (home: string, maxDays: number, where: string | Worktree[], platform?: string) => Listed[]
   walkRolloutsAsync: (home: string, maxDays: number, where: string | Worktree[], platform?: string, deps?: { realpath?: (p: string) => Promise<string>; waitMs?: number }) => Promise<Listed[]>
   realPathLookup: (deps?: { realpath?: (p: string) => Promise<string>; waitMs?: number }) => (p: string) => Promise<string | null>
+  realPathDriveOf: (p: string) => string
 }
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const nodeFs = require('fs') as typeof import('fs')
@@ -173,7 +174,72 @@ describe('a folder that did not answer in time', () => {
   })
 })
 
+describe('a mount that did not answer', () => {
+  // The same disks the main process's lookup tells apart (codexDriveKeyOf in
+  // rollout-lookup.ts): on macOS and Linux a mount, not the whole tree.
+  const STALE = '/mnt/share/old-project'
+  const hangingUnder = (prefix: string, known: Record<string, string>) => vi.fn((p: string): Promise<string> => (p.startsWith(prefix) ? new Promise<string>(() => {}) : p in known ? Promise.resolve(known[p]) : Promise.reject(new Error(`ENOENT: ${p}`))))
+
+  // Mutation to prove this can fail: key every POSIX path to one drive ('/').
+  it('does not stop the folders on the root disk from being asked: a link recorded after it is still found', async () => {
+    put(1, STALE, 10)
+    put(2, LINK, 30)
+    const real = hangingUnder('/mnt/', ALL_ONE_FOLDER)
+    const out = await lib.walkRolloutsAsync(home, 30, REAL, undefined, { realpath: real, waitMs: 30 })
+    expect(out.map((c) => c.id)).toEqual([idOf(2)])
+    // The session's own folder, the stale one (not answered), then the link.
+    expect(real.mock.calls.map((c) => c[0])).toEqual([REAL, STALE, LINK])
+  })
+
+  it('does stop a second folder on the same mount', async () => {
+    put(1, STALE, 10)
+    put(2, '/mnt/share/other-project', 30)
+    const real = hangingUnder('/mnt/', ALL_ONE_FOLDER)
+    await lib.walkRolloutsAsync(home, 30, REAL, undefined, { realpath: real, waitMs: 30 })
+    expect(real.mock.calls.map((c) => c[0])).toEqual([REAL, STALE])
+  })
+
+  it('keys a spelling to its drive or mount', () => {
+    expect(lib.realPathDriveOf('/mnt/share/old/project')).toBe('/mnt/share')
+    expect(lib.realPathDriveOf('/mnt/other/project')).toBe('/mnt/other')
+    expect(lib.realPathDriveOf('/Volumes/Backup/x')).toBe('/volumes/backup')
+    expect(lib.realPathDriveOf('/net/host/export/x')).toBe('/net/host')
+    expect(lib.realPathDriveOf('/media/me/USB/x')).toBe('/media/me/usb')
+    expect(lib.realPathDriveOf('/run/media/me/USB/x')).toBe('/run/media/me/usb')
+    expect(lib.realPathDriveOf('/home/me/project')).toBe('/')
+    expect(lib.realPathDriveOf('/proj/link')).toBe('/')
+    expect(lib.realPathDriveOf('C:\\proj\\link')).toBe('c:')
+    expect(lib.realPathDriveOf('z:/proj')).toBe('z:')
+  })
+})
+
+describe('a real path that differs from the recorded one only by case', () => {
+  it('is the same folder on Windows (the platform given)', async () => {
+    put(1, 'c:\\proj\\real')
+    const real = fakeReal({ 'C:\\proj\\link': 'C:\\PROJ\\REAL', 'c:\\proj\\real': 'c:\\proj\\real' })
+    const out = await lib.walkRolloutsAsync(home, 30, 'C:\\proj\\link', 'win32', { realpath: real })
+    expect(out.map((c) => c.id)).toEqual([idOf(1)])
+  })
+
+  it('is another folder where case counts', async () => {
+    put(1, '/proj/real')
+    const out = await lib.walkRolloutsAsync(home, 30, LINK, 'linux', { realpath: fakeReal({ [LINK]: '/PROJ/REAL', '/proj/real': '/proj/real' }) })
+    expect(out).toEqual([])
+  })
+})
+
 describe('what the lookup asks the disk', () => {
+  // Mutation to prove this can fail: resolve the worktrees before the walk, whatever it finds.
+  it('nothing, when every rollout is recorded as the session spells its folder', async () => {
+    put(1, LINK)
+    put(2, LINK)
+    const worktrees: Worktree[] = [{ path: LINK, branch: 'main', isMain: true }, { path: '/proj/wt', branch: 'x', isMain: false }]
+    const real = fakeReal(ALL_ONE_FOLDER)
+    const out = await lib.walkRolloutsAsync(home, 30, worktrees, undefined, { realpath: real })
+    expect(out.map((c) => c.id)).toEqual([idOf(1), idOf(2)])
+    expect(real).not.toHaveBeenCalled()
+  })
+
   it('each folder once, however many rollouts name it', async () => {
     for (let n = 1; n <= 5; n++) put(n, OTHER)
     const real = fakeReal(ALL_ONE_FOLDER)

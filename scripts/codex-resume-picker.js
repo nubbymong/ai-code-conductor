@@ -70,13 +70,11 @@ async function main() {
   const hasWorktrees = worktrees.some((w) => !w.isMain)
   // 2.1.3-beta.6: a conversation recorded under the real folder of a
   // symlinked (or junctioned) folder is listed too; the real paths are asked
-  // of the disk off this loop, bounded. Where that fails, the walk by spelling.
-  let conversations
-  try {
-    conversations = await lib.walkRolloutsAsync(home, 30, worktrees)
-  } catch {
-    conversations = lib.walkRollouts(home, 30, worktrees)
-  }
+  // of the disk off this loop, bounded, and a folder that cannot be resolved
+  // is compared by its spelling. The walk does not reject on that, so there is
+  // no second walk to fall back to: anything else it throws is what main()'s
+  // catch below already turns into a fresh launch.
+  const conversations = await lib.walkRolloutsAsync(home, 30, worktrees)
 
   if (conversations.length === 0) {
     launchCodex(null)

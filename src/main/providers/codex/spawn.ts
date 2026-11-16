@@ -972,7 +972,7 @@ function buildCodexSpawnCommand(opts: SpawnOptions): ProviderSpawnCommand {
   // in when that still holds (resolveCodexResume). It bypasses the picker, as
   // Claude's exact resume does. A miss falls back to the picker or a fresh
   // start, never to another account's conversation.
-  const resumed = opts.resume ? resolveCodexResume(opts.resume, { sessionsDir: launch.sessionsDir, configuredCwd: opts.cwd ?? '' }) : null
+  const resumed = opts.resume ? resolveCodexResume(opts.resume, { sessionsDir: launch.sessionsDir, configuredCwd: opts.cwd ?? '', sessionId: opts.sessionId }) : null
   // Ask's conversation list stays inside its help folder (every route: the
   // CLI, and the picker with the git it runs, inherit this environment):
   // git stops at the parent of the folder the launch starts in (askGitCeiling)
