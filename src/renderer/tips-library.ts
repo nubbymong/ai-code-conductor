@@ -1499,7 +1499,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'The Services pill shows what runs in the background',
         title: 'The Services Panel',
-        body: 'The **Services** pill in the title bar is a dot and a word for the app\'s background services. Click it for the panel: one card each for the **Hooks gateway**, **Session logging**, **Tokenomics**, the **Watchdog** and the **MCP server**, each with its real state and only the counters that service keeps.\n\nThe pill reads **Starting** or **Restarting** while a service comes up, and a service you switched off does not turn it grey. A card has its own **Restart** where a restart makes sense; the MCP server runs inside the app, so it has none. **Uptime** is the age of the current process and starts over after a restart.',
+        body: 'The **Services** pill in the title bar is a dot and a word for the app\'s background services. Click it for the panel: one card each for the **Hooks gateway**, **Session logging**, **Tokenomics**, the **Watchdog**, the **MCP server** and the **Session helper**, each with its real state and only the counters that service keeps.\n\nThe pill reads **Starting** or **Restarting** while a service comes up, and a service you switched off does not turn it grey. A card has its own **Restart** where a restart makes sense; the MCP server runs inside the app, and each terminal the session helper holds runs in a holder of its own, so neither has one. **Uptime** is the age of the current process and starts over after a restart.',
         focusHint: 'Title bar -- the Services pill',
       },
     },
