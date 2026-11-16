@@ -118,17 +118,26 @@ const navItems: { view: ViewType; icon: React.ReactNode; label: string }[] = [
 const PRIMARY_VIEWS: readonly ViewType[] = ['cloud-agents', 'insights', 'tokenomics', 'machines']
 
 // The expanded rail's geometry. Its buttons are flex-1 with min-w-0: they share the row and
-// shrink with it. Without min-w-0 each is at least its 20px icon wide, and the row spills past
-// the sidebar edge once the Account button makes it ten buttons. The icon shrinks with its
-// button, so the pill (the button's own background) always holds its icon:
+// shrink with it. Without min-w-0 each is at least its 20px icon wide: with the Account button
+// showing, the ten buttons, their ten gap-0.5 gaps and the divider need about 221px of the
+// W - 17 the row has (the border and the padding come off), so without min-w-0 the row would
+// spill past the sidebar edge below about 238px. (At the old gap-1 they needed 241px against
+// the 239px a 256px sidebar leaves, so it spilled at the default width too.) The icon shrinks
+// with its button, so the pill (the button's own background) always holds its icon:
 //   - the icon's wrapper has min-w-0, so it can be narrower than the 20px svg inside it;
 //   - the svg gets max-w-full and h-auto: it is never wider than the wrapper, and its height
 //     follows its width (the 24 x 24 viewBox keeps it square), so it scales instead of clipping;
-//   - h-9 holds the row at 36px (8px above and below a 20px icon) however small the icon gets.
+//   - h-9 (2.25rem) holds the row one height however small the icon gets: 36px at the default
+//     UI scale, 8px above and below a 20px icon, as the old py-2 did.
 // A status dot is a child of the button, not of the icon, so it stays on the pill's corner.
-// Width of one button at sidebar width W, ten buttons: (W - 38) / 10 = W less 1 (border), 16
-// (px-2), 1 (divider) and 20 (ten gap-0.5 gaps). 256 gives 21.8, 230 gives 19.2, and the
-// narrowest the sidebar goes (SIDEBAR_WIDTH_MIN, 200) gives 16.2: the icon is 20, 19.2, 16.2.
+// Width of one button at sidebar width W, ten buttons, at the default UI scale (16px root
+// font): (W - 38) / 10 = W less 1 (border), 16 (px-2), 1 (divider) and 20 (ten gap-0.5 gaps).
+// 256 gives 21.8, 230 gives 19.2, and the narrowest the sidebar goes (SIDEBAR_WIDTH_MIN, 200)
+// gives 16.2: the icon is 20, 19.2, 16.2, so at this scale it is never under 16px.
+// The UI scale runs 0.8 to 1.3 (useTypography.ts), and px-2, gap-0.5 and h-9 are rem, so they
+// follow it, as the collapsed rail's w-10 h-10 already does. At 1.3 (a 20.8px root) the row
+// needs 48.8px beside the buttons, so at 200 a button is 15.1px and the icon about 15px, a
+// little under 16; the row is 46.8px tall (28.8px at 0.8). The icon still fits its pill.
 const RAIL_BUTTON_EXPANDED = 'flex-1 min-w-0 h-9'
 const RAIL_ICON_FIT = 'min-w-0 [&>svg]:max-w-full [&>svg]:h-auto'
 

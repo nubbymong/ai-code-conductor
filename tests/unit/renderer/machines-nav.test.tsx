@@ -77,13 +77,18 @@ describe('Machines in the nav rail', () => {
 })
 
 describe('the expanded rail fits the sidebar (Machines made it one button longer)', () => {
-  // jsdom does no layout, so this pins the class that lets the row fit; the width
-  // itself is checked by eye on the VM UI check at the default (256) and narrowest
-  // (200) sidebar width, with two accounts so the Account button shows.
-  // The expanded buttons are flex-1. Without min-w-0 each is at least its 20px
-  // icon wide: ten of them with their gaps and the divider need about 257px
-  // against the 239px a 256px sidebar leaves, and the Feature Guide and Account
-  // buttons spill past the sidebar edge. With min-w-0 they share the row and shrink.
+  // jsdom does no layout, so these tests pin the classes that make the row fit and redo
+  // the arithmetic; the width itself is checked by eye on the VM UI check at 256, 230 and
+  // 200 (the narrowest), with two accounts so the Account button shows, and once at UI
+  // scale 1.3 at 200. The numbers below are at the default UI scale (16px root font) unless
+  // a test says otherwise.
+  // The expanded buttons are flex-1. Without min-w-0 each is at least its 20px icon wide:
+  // ten of them need about 221px (200, ten 2px gaps and the 1px divider) of the W - 17 the
+  // row has (the border and the padding come off), so with the current gap-0.5 the row
+  // would spill past the sidebar only below about 238px. The old gap-1 needed 241px against
+  // the 239px a 256px sidebar leaves, so it spilled at the default width too, and the
+  // Feature Guide and Account buttons went past the sidebar edge. With min-w-0 they share
+  // the row and shrink at every width.
   const profile = (id: string) => ({ id, name: id, accountEmail: `${id}@example.com`, createdAt: 0 })
   const railButtons = () => Array.from(container.querySelector('[data-tour="nav-rail"]')!.children).filter((c) => c.tagName === 'BUTTON')
 
@@ -101,9 +106,10 @@ describe('the expanded rail fits the sidebar (Machines made it one button longer
     }
   })
 
-  // Below about 258px the ten buttons are narrower than their 20px icon (with min-w-0 alone
-  // each is (W - 58) / 10 wide: 19.8 at 256, 17.2 at 230, 14.2 at 200), so the icon stuck out
-  // of its pill and the status dots, which sit on the pill's corner, landed on the icon.
+  // At the old gap-1, below about 258px the ten buttons were narrower than their 20px icon
+  // (with min-w-0 alone each was (W - 58) / 10 wide: 19.8 at 256, 17.2 at 230, 14.2 at 200),
+  // so the icon stuck out of its pill and the status dots, which sit on the pill's corner,
+  // landed on the icon.
   // The fix has three parts, and each is pinned: a 2px gap (more room per button), an icon
   // wrapper that may shrink (min-w-0), and an svg that scales down square with it.
   const tokens = (el: Element | null | undefined) => (el?.getAttribute('class') ?? '').split(/\s+/).filter(Boolean)
@@ -125,13 +131,15 @@ describe('the expanded rail fits the sidebar (Machines made it one button longer
       expect(tokens(wrapper), name).toEqual(expect.arrayContaining(['min-w-0', '[&>svg]:max-w-full', '[&>svg]:h-auto']))
       // h-auto follows the width through the viewBox, so the viewBox must be square.
       expect(svg.getAttribute('viewBox'), name).toBe('0 0 24 24')
-      // A fixed height keeps the row 36px tall as the icon shrinks (it was py-2 round a 20px icon: 36px).
+      // A rem height (h-9, 2.25rem) keeps the row one height as the icon shrinks: 36px at the
+      // default UI scale, as py-2 round a 20px icon was. It now follows the UI scale (28.8px at
+      // 0.8, 46.8px at 1.3), as the collapsed rail's w-10 h-10 already does.
       expect(tokens(b), name).toContain('h-9')
       expect(tokens(b), name).not.toContain('py-2')
     }
   })
 
-  it('the expanded row uses a 2px gap, and with it every width the sidebar allows leaves each icon a whole pill', async () => {
+  it('the expanded row uses a 2px gap, and at the default UI scale (16px root font) every width the sidebar allows leaves each icon as wide as its pill and at least 16px; at 1.3 the 200px minimum gives about 15px', async () => {
     useAccountProfilesStore.setState({ profiles: [profile('one'), profile('two')] as any })
     act(() => root.render(React.createElement(SidebarNav, { ...props, onViewChange: () => {}, onShowAccountUsage: () => {} } as any)))
     const rail = container.querySelector('[data-tour="nav-rail"]')!
@@ -142,22 +150,36 @@ describe('the expanded rail fits the sidebar (Machines made it one button longer
     expect(Array.from(rail.children).filter((c) => c.tagName !== 'BUTTON').length).toBe(1)
 
     // The arithmetic from SidebarNav.tsx, redone from the real button count: sidebar width W,
-    // less the 1px border, the 16px of padding, the 1px divider and the gaps between the 11 items.
+    // less the 1px border, the padding (px-2, 1rem), the 1px divider and the gaps between the 11
+    // items (gap-0.5, 0.125rem each). The padding and the gaps are rem, so they follow the root
+    // font; the border and the divider are 1px. `root` is the root font in px, 16 by default.
     const { SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_DEFAULT } = await import('../../../src/renderer/components/sidebar/sessionsPanelState')
+    const { rootFontPx, clampGlobalScale } = await import('../../../src/renderer/utils/typography')
     const items = railButtons().length + 1
-    const fixed = 1 + 16 + 1 + (items - 1) * 2
-    const pill = (w: number) => (w - fixed) / railButtons().length
-    expect(fixed).toBe(38)
+    const fixed = (root: number) => 1 + root + 1 + (items - 1) * (root / 8)
+    const pill = (w: number, root = 16) => (w - fixed(root)) / railButtons().length
+    expect(fixed(16)).toBe(38)
     expect(SIDEBAR_WIDTH_DEFAULT).toBe(256)
     expect(SIDEBAR_WIDTH_MIN).toBe(200)
     expect(pill(256)).toBeCloseTo(21.8, 5)
     expect(pill(230)).toBeCloseTo(19.2, 5)
     expect(pill(SIDEBAR_WIDTH_MIN)).toBeCloseTo(16.2, 5)
     // The icon is as wide as its pill, up to its own 20px: 20, 19.2 and 16.2px at these three widths.
-    const icon = (w: number) => Math.min(20, pill(w))
+    const icon = (w: number, root = 16) => Math.min(20, pill(w, root))
     expect([icon(256), icon(230), icon(SIDEBAR_WIDTH_MIN)].map((n) => Number(n.toFixed(1)))).toEqual([20, 19.2, 16.2])
-    // No allowed width squeezes the icon below 16px, so it stays a readable glyph.
+    // At the default UI scale no allowed width squeezes the icon below 16px.
     expect(icon(SIDEBAR_WIDTH_MIN)).toBeGreaterThanOrEqual(16)
+
+    // The UI scale runs 0.8 to 1.3 (a 12.8px to a 20.8px root font). At 1.3 the row needs 48.8px
+    // beside the buttons, so at the 200px minimum the icon is about 15.1px, under the 16px above
+    // (it still fits its pill: the icon is the pill's width). At 0.8 it is 16.9px.
+    const smallRoot = rootFontPx(clampGlobalScale(0))
+    const largeRoot = rootFontPx(clampGlobalScale(99))
+    expect([smallRoot, largeRoot]).toEqual([12.8, 20.8])
+    expect(fixed(largeRoot)).toBeCloseTo(48.8, 5)
+    expect(icon(SIDEBAR_WIDTH_MIN, largeRoot)).toBeCloseTo(15.12, 5)
+    expect(icon(SIDEBAR_WIDTH_MIN, largeRoot)).toBeLessThan(16)
+    expect(icon(SIDEBAR_WIDTH_MIN, smallRoot)).toBeCloseTo(16.92, 5)
   })
 
   it('the Insights and Cloud Agents status dots belong to the button, so they stay on the pill corner while the icon shrinks', () => {
