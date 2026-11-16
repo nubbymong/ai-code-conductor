@@ -36,6 +36,17 @@ impl Default for PtySize {
     }
 }
 
+/// Which ConPTY a Windows terminal runs on (protocol change 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Conpty {
+    /// The one built into Windows; on macOS and Linux, the only choice.
+    #[default]
+    System,
+    /// The `conpty.dll` in a `conpty` folder beside the helper's own program
+    /// file, with the `OpenConsole.exe` it starts. Windows only.
+    Bundled,
+}
+
 /// What to start on the terminal.
 ///
 /// `cwd: None` and `env: None` keep the holder's own folder and environment:

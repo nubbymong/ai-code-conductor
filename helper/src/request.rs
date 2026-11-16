@@ -2,9 +2,12 @@
 //! checked strictly: an unknown type closes the connection (`unknown-type`),
 //! an unknown, missing or repeated field is `bad-field`, a size rule broken is
 //! `too-large`. Nothing here runs anything; `serve.rs` acts on what passes.
+//!
+//! A `term.launch` may also carry `line` and `conpty` (protocol change 2),
+//! on Windows only: on macOS and Linux either is `bad-field`.
 
 use crate::json::Value;
-use crate::pty::PtySize;
+use crate::pty::{Conpty, PtySize};
 
 pub const MAX_ARGV_ITEMS: usize = 256;
 pub const MAX_ARG_CHARS: usize = 8192;
@@ -12,6 +15,9 @@ pub const MAX_CWD_CHARS: usize = 4096;
 pub const MAX_ENV_ENTRIES: usize = 1024;
 pub const MAX_ENV_NAME_CHARS: usize = 255;
 pub const MAX_ENV_VALUE_CHARS: usize = 32767;
+/// The longest exact command line (`line`), in characters: what Windows
+/// allows a command line.
+pub const MAX_LINE_CHARS: usize = 32767;
 pub const MAX_TERM_CELLS: u64 = 1000;
 /// The largest integer a JavaScript number holds exactly: request ids and offsets.
 pub const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -45,6 +51,10 @@ pub struct Launch {
     pub cwd: String,
     pub env: Vec<(String, String)>,
     pub size: PtySize,
+    /// Windows only: the exact command line `argv[0]` is given.
+    pub line: Option<String>,
+    /// Windows only: which ConPTY the terminal runs on.
+    pub conpty: Conpty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,17 +69,20 @@ pub enum Request {
     End { id: u64 },
 }
 
-/// The types an app may send once `local` is acked, and their exact fields.
-const LOCAL_TYPES: [(&str, &[&str]); 5] = [
-    ("term.launch", &["t", "id", "argv", "cwd", "env", "cols", "rows"]),
-    ("term.attach", &["t", "id", "from"]),
-    ("term.resize", &["t", "id", "cols", "rows"]),
-    ("term.detach", &["t", "id"]),
-    ("term.end", &["t", "id"]),
+/// The fields of one type: those it must have, and those it may also have.
+type Fields = (&'static [&'static str], &'static [&'static str]);
+
+/// The types an app may send once `local` is acked, and their fields.
+const LOCAL_TYPES: [(&str, Fields); 5] = [
+    ("term.launch", (&["t", "id", "argv", "cwd", "env", "cols", "rows"], &["line", "conpty"])),
+    ("term.attach", (&["t", "id", "from"], &[])),
+    ("term.resize", (&["t", "id", "cols", "rows"], &[])),
+    ("term.detach", (&["t", "id"], &[])),
+    ("term.end", (&["t", "id"], &[])),
 ];
 
 /// The types of the frozen core an app may send after the ack.
-const CORE_TYPES: [(&str, &[&str]); 1] = [("ping", &["t", "id"])];
+const CORE_TYPES: [(&str, Fields); 1] = [("ping", (&["t", "id"], &[]))];
 
 /// A request id: an even integer (app ids are even, section 9) a JavaScript
 /// number holds exactly.
@@ -82,23 +95,26 @@ fn request_id(v: &Value) -> Option<u64> {
     }
 }
 
-/// True when the object's keys are exactly `allowed`, each once.
-fn exact_keys(v: &Value, allowed: &[&str]) -> bool {
+/// True when the object holds every key of `required`, nothing but those
+/// and `optional`, and each key once.
+fn keys_fit(v: &Value, required: &[&str], optional: &[&str]) -> bool {
     let keys = match v.keys() {
         Some(k) => k,
         None => return false,
     };
-    if keys.len() != allowed.len() {
-        return false;
-    }
     let mut seen: Vec<&str> = Vec::new();
     for k in keys {
-        if !allowed.contains(&k) || seen.contains(&k) {
+        if !(required.contains(&k) || optional.contains(&k)) || seen.contains(&k) {
             return false;
         }
         seen.push(k);
     }
-    true
+    required.iter().all(|k| seen.contains(k))
+}
+
+/// True when the object's keys are exactly `allowed`, each once.
+fn exact_keys(v: &Value, allowed: &[&str]) -> bool {
+    keys_fit(v, allowed, &[])
 }
 
 fn is_absolute(path: &str) -> bool {
@@ -208,7 +224,53 @@ pub fn parse_launch(v: &Value, id: u64) -> Result<Launch, Refusal> {
     }
 
     let size = size(v, re)?;
-    Ok(Launch { id, argv, cwd: cwd.to_string(), env, size })
+    let line = match v.get("line") {
+        Some(value) => Some(parse_line(value, argv.len(), re)?),
+        None => None,
+    };
+    let conpty = match v.get("conpty") {
+        Some(value) => parse_conpty(value, re)?,
+        None => Conpty::System,
+    };
+    Ok(Launch { id, argv, cwd: cwd.to_string(), env, size, line, conpty })
+}
+
+/// `line`: the exact command line `CreateProcessW` gives the program, for a
+/// program that reads its line in a way no argument list can say (cmd.exe
+/// running a .cmd file). The program is still `argv[0]`, never a word of
+/// the line, so `argv` then holds it alone.
+fn parse_line(v: &Value, argv_items: usize, re: Option<u64>) -> Result<String, Refusal> {
+    let line = match v.as_str() {
+        Some(s) => s,
+        None => return refuse(CODE_BAD_FIELD, re, "line must be a string"),
+    };
+    if cfg!(not(windows)) {
+        return refuse(CODE_BAD_FIELD, re, "line is for Windows only");
+    }
+    if line.chars().count() > MAX_LINE_CHARS {
+        return refuse(CODE_TOO_LARGE, re, "line is over 32767 characters");
+    }
+    if line.contains('\0') {
+        return refuse(CODE_BAD_FIELD, re, "line holds a NUL character");
+    }
+    if line.is_empty() {
+        return refuse(CODE_BAD_FIELD, re, "line is empty");
+    }
+    if argv_items != 1 {
+        return refuse(CODE_BAD_FIELD, re, "with line, argv holds the program alone");
+    }
+    Ok(line.to_string())
+}
+
+/// `conpty`: "bundled", or absent for the system ConPTY.
+fn parse_conpty(v: &Value, re: Option<u64>) -> Result<Conpty, Refusal> {
+    if v.as_str() != Some("bundled") {
+        return refuse(CODE_BAD_FIELD, re, "conpty must be bundled, or left out");
+    }
+    if cfg!(not(windows)) {
+        return refuse(CODE_BAD_FIELD, re, "the bundled ConPTY is for Windows only");
+    }
+    Ok(Conpty::Bundled)
 }
 
 /// Check one control message. `local` is true when the app acked `local`.
@@ -223,11 +285,11 @@ pub fn parse(v: &Value, local: bool) -> Result<Request, Refusal> {
     if t == "error" {
         return parse_error(v);
     }
-    let mut fields: Option<&[&str]> = CORE_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
+    let mut fields: Option<Fields> = CORE_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
     if fields.is_none() && local {
         fields = LOCAL_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
     }
-    let fields = match fields {
+    let (required, optional) = match fields {
         Some(f) => f,
         None => return refuse(CODE_UNKNOWN_TYPE, None, "a type this connection does not allow"),
     };
@@ -236,7 +298,7 @@ pub fn parse(v: &Value, local: bool) -> Result<Request, Refusal> {
         None => return refuse(CODE_BAD_FIELD, None, "id must be an even whole number up to 2^53 - 1"),
     };
     let re = Some(id);
-    if !exact_keys(v, fields) {
+    if !keys_fit(v, required, optional) {
         return refuse(CODE_BAD_FIELD, re, "a field is unknown, missing or given twice");
     }
     match t {
@@ -303,6 +365,8 @@ mod tests {
                 assert_eq!(l.argv.len(), 2);
                 assert_eq!(l.env, vec![("A".to_string(), "1".to_string()), ("PATH".to_string(), "/bin".to_string())]);
                 assert_eq!(l.size, PtySize { cols: 80, rows: 24 });
+                // Without the Windows fields: its argument list, on the system ConPTY.
+                assert_eq!((l.line, l.conpty), (None, Conpty::System));
             }
             other => panic!("{other:?}"),
         }
@@ -350,6 +414,15 @@ mod tests {
             for text in [&line, &bundled, &both] {
                 assert!(parsed(text).is_ok(), "refused on Windows: {text} ({:?})", parsed(text));
             }
+            let fields = |text: &str| match parsed(text).unwrap() {
+                Request::Launch(l) => (l.line, l.conpty, l.argv.len()),
+                other => panic!("{other:?}"),
+            };
+            // PROGRAM is JSON text here; read, it has single backslashes.
+            let program = PROGRAM.replace("\\\\", "\\");
+            assert_eq!(fields(&line), (Some(format!("{program} /d /s /c echo hi")), Conpty::System, 1));
+            assert_eq!(fields(&bundled), (None, Conpty::Bundled, 1));
+            assert_eq!(fields(&both), (Some(format!("{program} /c ver")), Conpty::Bundled, 1));
         } else {
             for text in [&line, &bundled, &both] {
                 assert_eq!(code(text), CODE_BAD_FIELD, "{text}");

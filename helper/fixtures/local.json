@@ -468,7 +468,7 @@
       {
         "name": "launch on Windows with an exact command line",
         "os": "windows",
-        "json": "{\"t\":\"term.launch\",\"id\":12,\"argv\":[\"C:\\\\Windows\\\\System32\\\\cmd.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"C:\\\\Windows\\\\System32\\\\cmd.exe /d /v:off /s /c \\\"\\\"C:\\\\Users\\\\user\\\\AppData\\\\Roaming\\\\npm\\\\codex.cmd\\\" resume\\\"\"}",
+        "json": "{\"t\":\"term.launch\",\"id\":12,\"argv\":[\"C:\\\\Windows\\\\System32\\\\cmd.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"C:\\\\Windows\\\\System32\\\\cmd.exe /d /v:off /s /c \\\"\\\"C:\\\\Users\\\\user\\\\AppData\\\\Roaming\\\\npm\\\\tool.cmd\\\" resume\\\"\"}",
         "expect": {
           "type": "term.launch",
           "id": 12,
@@ -484,7 +484,7 @@
           ],
           "cols": 80,
           "rows": 24,
-          "line": "C:\\Windows\\System32\\cmd.exe /d /v:off /s /c \"\"C:\\Users\\user\\AppData\\Roaming\\npm\\codex.cmd\" resume\""
+          "line": "C:\\Windows\\System32\\cmd.exe /d /v:off /s /c \"\"C:\\Users\\user\\AppData\\Roaming\\npm\\tool.cmd\" resume\""
         }
       },
       {
@@ -512,7 +512,7 @@
       {
         "name": "launch on Windows on the bundled ConPTY with an exact command line, conpty given first",
         "os": "windows",
-        "json": "{\"t\":\"term.launch\",\"id\":16,\"conpty\":\"bundled\",\"argv\":[\"C:\\\\Windows\\\\System32\\\\cmd.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"C:\\\\Windows\\\\System32\\\\cmd.exe /d /v:off /s /c \\\"\\\"C:\\\\Users\\\\user\\\\AppData\\\\Roaming\\\\npm\\\\codex.cmd\\\" resume\\\"\"}",
+        "json": "{\"t\":\"term.launch\",\"id\":16,\"conpty\":\"bundled\",\"argv\":[\"C:\\\\Windows\\\\System32\\\\cmd.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"C:\\\\Windows\\\\System32\\\\cmd.exe /d /v:off /s /c \\\"\\\"C:\\\\Users\\\\user\\\\AppData\\\\Roaming\\\\npm\\\\tool.cmd\\\" resume\\\"\"}",
         "expect": {
           "type": "term.launch",
           "id": 16,
@@ -528,7 +528,7 @@
           ],
           "cols": 80,
           "rows": 24,
-          "line": "C:\\Windows\\System32\\cmd.exe /d /v:off /s /c \"\"C:\\Users\\user\\AppData\\Roaming\\npm\\codex.cmd\" resume\"",
+          "line": "C:\\Windows\\System32\\cmd.exe /d /v:off /s /c \"\"C:\\Users\\user\\AppData\\Roaming\\npm\\tool.cmd\" resume\"",
           "conpty": "bundled"
         }
       },
@@ -791,7 +791,7 @@
       {
         "name": "launch with an exact command line and arguments as well",
         "os": "windows",
-        "json": "{\"t\":\"term.launch\",\"id\":4,\"argv\":[\"C:\\\\Windows\\\\System32\\\\cmd.exe\",\"/c\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"C:\\\\Windows\\\\System32\\\\cmd.exe /d /v:off /s /c \\\"\\\"C:\\\\Users\\\\user\\\\AppData\\\\Roaming\\\\npm\\\\codex.cmd\\\" resume\\\"\"}",
+        "json": "{\"t\":\"term.launch\",\"id\":4,\"argv\":[\"C:\\\\Windows\\\\System32\\\\cmd.exe\",\"/c\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"C:\\\\Windows\\\\System32\\\\cmd.exe /d /v:off /s /c \\\"\\\"C:\\\\Users\\\\user\\\\AppData\\\\Roaming\\\\npm\\\\tool.cmd\\\" resume\\\"\"}",
         "error": "bad-field"
       },
       {

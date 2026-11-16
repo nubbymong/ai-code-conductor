@@ -979,13 +979,13 @@ fn an_exact_command_line_reaches_cmd_as_given_and_the_same_words_as_an_argument_
     let _serial = one_at_a_time();
     let store = Store::new("store-line");
     // A .cmd file in a folder with a space in its name, as npm can put
-    // codex.cmd under a user folder with a space in it.
+    // its .cmd launchers under a user folder with a space in it.
     let work = Store::new("work line");
     let script = work.0.join("say words.cmd");
     fs::write(&script, "@echo off\r\necho words:[%~1][%~2]\r\n").expect("write the .cmd file");
     let cmd = cmd_exe();
     let inner = format!("\"{}\" alpha \"two words\"", script.display());
-    // The line the app hands node-pty for codex.cmd today (codex/spawn.ts):
+    // The line the app hands node-pty for an npm .cmd launcher today:
     // cmd.exe in its /s form, which strips exactly the outer pair of quotes.
     let line = format!("{cmd} /d /s /c \"{inner}\"");
     let (code, screen) = run_to_the_end(&store.0, "probe-0020", |id| launch_msg_more(id, &[&cmd], &work.0, vec![("line", Value::Str(line))]));

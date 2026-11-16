@@ -172,7 +172,7 @@ describe('session helper protocol: records, listings and endpoints (section 15)'
   it('an exact command line (`line`) is for Windows only, 1 to 32767 characters, with no NUL, and the program alone in argv', () => {
     const cmd = 'C:\\Windows\\System32\\cmd.exe'
     const spec = { argv: [cmd], cwd: 'C:\\Users\\u', env: { SystemRoot: 'C:\\Windows' }, cols: 80, rows: 24 }
-    const line = `${cmd} /d /v:off /s /c ""C:\\Users\\u\\AppData\\Roaming\\npm\\codex.cmd" resume"`
+    const line = `${cmd} /d /v:off /s /c ""C:\\Users\\u\\AppData\\Roaming\\npm\\tool.cmd" resume"`
     expect(checkLaunch({ ...spec, line }, 'windows')).toBeNull()
     expect(checkLaunch({ ...spec, argv: ['/bin/sh'], cwd: '/home/u', line: '/bin/sh -c true' }, 'unix')?.code).toBe('bad-field')
     // The longest allowed and one past it, counted in characters as every other limit is.
