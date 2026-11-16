@@ -604,6 +604,7 @@ export const trainingSteps: TrainingStep[] = [
       'JPEG-encoded at 1920px max long edge to stay under the agent\'s image budget',
       'Saved to the session resources screenshots/ folder so you can drag-drop later too',
       'Esc cancels at any point -- no stuck overlays',
+      'On a Mac, Snap checks the **Screen Recording** permission first: without it, it offers **Open System Settings** and captures nothing; switch the app on there, quit and reopen it, and Snap again',
     ],
     howToTrigger: [
       { label: 'Open', value: 'Session toolbar → Snap' },
@@ -632,7 +633,7 @@ export const trainingSteps: TrainingStep[] = [
       '**Charts** for daily spend, with a line per provider when both have spend in the range, and a per-model breakdown',
       '**Sessions table** with cost, model, account and config attribution per session',
       '**Filters** -- provider, account, config, date range (7d / 30d / all), and a free-text search over model and project',
-      'A model with no price yet reads **no price**, never $0, and a notice names it',
+      'A model with no price yet reads **no price**, never $0, and a notice names it (a model with no tokens in the figures is not named)',
       'Pricing from BerriAI`s LiteLLM (cached 24h); a green nav badge shows when the index is fresh',
       '**Cost or Tokens** -- token counts sit beside the costs, and the chart switches between the two, so usage with no price shows too',
       '**A service you control** -- Settings, General, Tokenomics switches the indexer off (nothing is read, what was recorded stays) and on again (it catches up); **Rescan** reads every transcript again without removing anything; accounts can be left out of the figures',
