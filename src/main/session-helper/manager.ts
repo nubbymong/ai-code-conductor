@@ -133,6 +133,8 @@ export class SessionHelperManager implements MachinesSource {
 
   private enabled = false
   private started = false
+  /** A normal quit has begun: nothing new is held or kept. */
+  private quitting = false
   private state: HelperState = 'off'
   private detail: string | undefined
   private version: string | undefined
@@ -214,7 +216,12 @@ export class SessionHelperManager implements MachinesSource {
     }
     if (crashed) {
       this.loadBindings()
-      for (const r of this.readStoreRecords()) this.adoptable.set(r.session, r)
+      // Kept at once, before the copy and the listing: each record's own hello
+      // proves its holder, and a slow listing cannot use up the two minutes.
+      for (const r of this.readStoreRecords()) {
+        this.adoptable.set(r.session, r)
+        this.keep(r)
+      }
       this.deps.log(`[session-helper] the app did not quit normally; ${this.adoptable.size} held terminal(s) may be shown again`)
     } else {
       this.saveBindings()
@@ -234,23 +241,28 @@ export class SessionHelperManager implements MachinesSource {
     const info = await this.installed()
     if (!info) return
     let records: HolderRecord[] = []
+    let listed = false
     try {
       records = await this.list()
+      listed = true
     } catch (err) {
       this.deps.log(`[session-helper] the held terminals could not be listed: ${message(err)}`)
     }
     if (crashed) {
       // Every held terminal at once: a holder nobody attaches to ends itself
-      // two minutes after the app went.
-      const listed = new Set(records.map((r) => r.session))
-      for (const sid of [...this.adoptable.keys()]) if (!listed.has(sid)) this.adoptable.delete(sid)
+      // two minutes after the app went. The keepers started from the store's
+      // records stand; the listing adds any the store read missed. A record
+      // whose holder is gone drops out when its keeper cannot reach it.
       for (const r of records) {
-        if (this.live.has(r.session)) continue
+        if (this.live.has(r.session) || this.keepers.has(r.session)) continue
         this.adoptable.set(r.session, r)
         this.keep(r)
       }
-      for (const [appId, sid] of [...this.bindings]) if (!listed.has(sid)) this.bindings.delete(appId)
-      this.saveBindings()
+      if (listed) {
+        const held = new Set([...records.map((r) => r.session), ...this.adoptable.keys(), ...this.live.keys()])
+        for (const [appId, sid] of [...this.bindings]) if (!held.has(sid)) this.bindings.delete(appId)
+        this.saveBindings()
+      }
     } else {
       // Left by a normal quit that could not end them: ended now.
       await Promise.allSettled(records.filter((r) => !this.live.has(r.session)).map((r) => this.endRecord(r)))
@@ -434,7 +446,7 @@ export class SessionHelperManager implements MachinesSource {
   /** Keep a held terminal alive (attached, output dropped) until a tab takes it. */
   private keep(record: HolderRecord): void {
     const sid = record.session
-    if (this.keepers.has(sid)) return
+    if (this.quitting || this.keepers.has(sid)) return
     const entry: { conn?: HolderConnection; ready: Promise<void> } = { ready: Promise.resolve() }
     entry.ready = (async () => {
       try {
@@ -448,8 +460,13 @@ export class SessionHelperManager implements MachinesSource {
         await conn.request({ t: 'term.attach', from: 0 })
       } catch (err) {
         this.deps.log(`[session-helper] ${sid}: the held terminal could not be kept: ${message(err)}`)
-        if (this.keepers.get(sid) === entry) this.keepers.delete(sid)
+        if (this.keepers.get(sid) === entry) {
+          this.keepers.delete(sid)
+          // Not reachable now, so not taken over: its tab starts a new terminal.
+          if (this.adoptable.get(sid) === record) this.adoptable.delete(sid)
+        }
         entry.conn?.close()
+        this.changed()
       }
     })()
     this.keepers.set(sid, entry)
@@ -501,29 +518,39 @@ export class SessionHelperManager implements MachinesSource {
     return this.listing
   }
 
-  /** At a normal quit: every terminal through the helper is ended. */
-  shutdown(): void {
+  /**
+   * At a normal quit: every terminal through the helper is ended. The end
+   * messages go now; the answer settles once each holder said it ended (a
+   * terminal still starting, or a keeper still connecting, is ended as soon
+   * as it is up). The caller bounds the wait. The running mark goes at once:
+   * this was a normal quit, so the next start ends anything left instead of
+   * taking it over. Null when there was nothing to end.
+   */
+  shutdown(): Promise<void> | null {
+    this.quitting = true
+    this.enabled = false
+    const waits: Promise<unknown>[] = []
     for (const w of this.live.values()) {
       try { w.kill() } catch { /* already gone */ }
+      waits.push(w.ended)
     }
     for (const [sid, k] of this.keepers) {
-      const conn = k.conn
-      if (conn && !conn.isClosed) conn.request({ t: 'term.end' }).catch(() => { /* gone */ }).finally(() => conn.close())
+      waits.push(k.ready.then(async () => {
+        const conn = k.conn
+        if (!conn || conn.isClosed) return
+        try { await conn.request({ t: 'term.end' }) } finally { conn.close() }
+      }))
       this.keepers.delete(sid)
     }
     this.adoptable.clear()
     try { fs.rmSync(path.join(this.root, MARKER), { force: true }) } catch { /* the next start ends what is left */ }
+    return waits.length === 0 ? null : Promise.allSettled(waits).then(() => undefined)
   }
 
   /** The app saved its tabs: which ones are open, and what they are called. */
   noteSavedTabs(tabs: ReadonlyArray<{ id: string; label?: string; customName?: string }>): void {
     this.savedTabs.clear()
     for (const t of tabs) if (typeof t.id === 'string') this.savedTabs.set(t.id, t.customName || t.label || '')
-  }
-
-  /** True when this terminal took over a held one: the tab's launch lines are not typed into it. */
-  isHeldReattach(p: unknown): boolean {
-    return p instanceof HelperPty && p.adopted
   }
 
   serviceState(): SessionHelperServiceState {
@@ -703,7 +730,15 @@ export function spawnPlainPty(ctx: { sessionId: string; elevated?: boolean }, fi
   return m.spawn(ctx, file, args, opts)
 }
 
-/** True when this PTY took over a held terminal: nothing is typed into it at launch. */
-export function isHeldReattach(p: unknown): boolean {
-  return current?.isHeldReattach(p) ?? false
+/**
+ * Calls `then` with whether this PTY shows a held terminal, once that is known:
+ * true when a take-over attached (nothing is typed into it at launch), false for
+ * any other terminal and for a take-over that failed and started a new shell the
+ * usual way. Synchronously when it is known already (every terminal not through
+ * the helper), so the usual launch keeps its timing.
+ */
+export function whenHeldKnown(p: unknown, then: (held: boolean) => void): void {
+  if (!(p instanceof HelperPty)) { then(false); return }
+  if (p.adoptionKnown !== undefined) { then(p.adoptionKnown); return }
+  void p.adoption.then(then)
 }

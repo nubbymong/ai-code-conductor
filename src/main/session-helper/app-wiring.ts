@@ -67,9 +67,31 @@ export function noteSessionHelperTabs(state: { sessions?: ReadonlyArray<{ id: st
   getSessionHelper()?.noteSavedTabs(Array.isArray(state?.sessions) ? state!.sessions : [])
 }
 
-/** At a normal quit, after every PTY was killed. */
+/** How long a quit waits for the holders to say they ended. */
+export const QUIT_WAIT_MS = 1500
+
+let quitWait: Promise<void> | null = null
+
+/** At a normal quit, after every PTY was killed: the end messages go now. */
 export function shutdownSessionHelper(): void {
-  getSessionHelper()?.shutdown()
+  const ended = getSessionHelper()?.shutdown()
+  if (!ended) return
+  let timer: NodeJS.Timeout | undefined
+  quitWait = Promise.race([ended, new Promise<void>((r) => { timer = setTimeout(r, QUIT_WAIT_MS) })]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * The app's will-quit: held once, for at most QUIT_WAIT_MS, while the holders
+ * answer their ends, then the app exits. Nothing is held when the helper was
+ * never switched on this run. Anything still not ended (a terminal that was
+ * still starting) ends by its away clock, and the next start ends it too.
+ */
+export function holdQuitForSessionHelper(e: { preventDefault(): void }, exit: () => void = () => app.exit(0)): void {
+  const wait = quitWait
+  if (!wait) return
+  quitWait = null
+  e.preventDefault()
+  void wait.then(exit, exit)
 }
 
 /** The Services row's reading; null when the helper was never switched on this run. */

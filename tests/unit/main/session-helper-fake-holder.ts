@@ -179,6 +179,8 @@ export class FakeHelper {
   selfTestOk = true
   /** A holder that has launched already, so it answers a launch with busy. */
   holdBusy = false
+  /** List mode fails (a slow holder ran it past its time). */
+  listFails = false
 
   exec = async (file: string, args: string[]): Promise<ExecResult> => {
     this.calls.push({ file, args })
@@ -196,6 +198,7 @@ export class FakeHelper {
       return { code: 0, stdout: `${JSON.stringify(h.record())}\n`, stderr: '' }
     }
     if (cmd === 'list') {
+      if (this.listFails) return { code: null, stdout: '', stderr: 'timed out' }
       const sessions = [...this.holders.values()].filter((h) => !h.ended).map((h) => h.record())
       return { code: 0, stdout: `${JSON.stringify({ v: 1, sessions, removed: 0, skipped: 0 })}\n`, stderr: '' }
     }

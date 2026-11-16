@@ -81,7 +81,7 @@ import { registerGitHubHandlers } from './ipc/github-handlers'
 import { registerHooksHandlers } from './ipc/hooks-handlers'
 import { registerServiceHealthHandlers } from './ipc/service-health-handlers'
 import { registerMachinesHandlers, getMachinesSource } from './ipc/machines-handlers'
-import { initSessionHelper, applySessionHelperSettings, noteSessionHelperTabs, shutdownSessionHelper, sessionHelperServiceState } from './session-helper/app-wiring'
+import { initSessionHelper, applySessionHelperSettings, noteSessionHelperTabs, shutdownSessionHelper, holdQuitForSessionHelper, sessionHelperServiceState } from './session-helper/app-wiring'
 import { createServiceRegistry } from './services/service-registry'
 import { PtyIntegrityMonitor, setPtyIntegrityMonitor, getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
 import { registerProviderAccountsHandlers } from './ipc/provider-accounts-handlers'
@@ -1253,7 +1253,8 @@ try { getWatchdogManager()?.disposeAll() } catch { /* never init */ }
     // throw, and runs before killAllPty so a throw there cannot skip it.
     killCliSetupPty()
     killAllPty()
-    // Every terminal through the session helper ends with a normal quit.
+    // Every terminal through the session helper ends with a normal quit: the
+    // end messages go here, and will-quit waits (briefly) for their answers.
     try { shutdownSessionHelper() } catch { /* never started */ }
     closeAllWebviews()
     closeAllAccountPanes()
@@ -1267,6 +1268,9 @@ try { getWatchdogManager()?.disposeAll() } catch { /* never init */ }
     closeDebugLogger()
   }
   app.on('before-quit', (e) => closeCoordinator.onBeforeQuit(() => e.preventDefault()))
+  // The session helper's holders answer their ends before the process goes
+  // (at most 1.5 s, only when terminals ran through it this run).
+  app.on('will-quit', (e) => holdQuitForSessionHelper(e))
 
   app.on('window-all-closed', () => {
     // On macOS, apps conventionally stay running when all windows are closed

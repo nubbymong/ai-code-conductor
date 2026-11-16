@@ -94,6 +94,17 @@ export class HelperPty implements IPty {
   private resolveEnded!: () => void
   /** Settles once this terminal is over and its holder ended. */
   readonly ended: Promise<void>
+  private resolveAdoption!: (held: boolean) => void
+  /** What `adoption` settled to, once it has (read synchronously). */
+  adoptionKnown: boolean | undefined
+  /**
+   * Whether this terminal shows a held one: true once the take-over attached
+   * (or the terminal is over, so there is nothing to type into), false when
+   * it was never one or the take-over failed and a new shell started the usual
+   * way. The tab's launch lines wait for it, so a failed take-over still gets
+   * its folder and first-run command.
+   */
+  readonly adoption: Promise<boolean>
 
   constructor(opts: HelperPtyOptions) {
     this.sid = opts.sid
@@ -104,6 +115,14 @@ export class HelperPty implements IPty {
     this.record = opts.adopt
     this.size = { cols: opts.spec.cols, rows: opts.spec.rows }
     this.ended = new Promise<void>((r) => { this.resolveEnded = r })
+    this.adoption = new Promise<boolean>((r) => {
+      this.resolveAdoption = (held) => {
+        if (this.adoptionKnown !== undefined) return
+        this.adoptionKnown = held
+        r(held)
+      }
+    })
+    if (!opts.adopt) this.resolveAdoption(false)
     void (opts.adopt ? this.runAdopt(opts.adopt) : this.runLaunch())
   }
 
@@ -232,6 +251,7 @@ export class HelperPty implements IPty {
     this.offset = start + received
     this.attached = true
     this.everAttached = true
+    this.resolveAdoption(true)
     this.driver.attachedChanged(this.sid, true)
     if (reply.running === false) {
       // Over before this attach: the replay follows the reply, then nothing.
@@ -359,6 +379,8 @@ export class HelperPty implements IPty {
     }
     this.conn = undefined
     this.setDetached()
+    // A new shell from here on: the tab's launch lines are for it.
+    this.resolveAdoption(false)
     if (this.ending) { this.finish(0); this.resolveEnded(); return }
     let inner: IPty
     try {
@@ -389,6 +411,7 @@ export class HelperPty implements IPty {
   private finish(exitCode: number, signal?: number): void {
     if (this.exited) return
     this.exited = true
+    this.resolveAdoption(true)
     this.setDetached()
     const rest = this.decoder.end()
     if (rest) this.dataEmitter.fire(rest)

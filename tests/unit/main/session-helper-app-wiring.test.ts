@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   made: [] as Array<{ deps: Record<string, unknown>; start: ReturnType<typeof vi.fn>; stopRouting: ReturnType<typeof vi.fn>; shutdown: ReturnType<typeof vi.fn>; noteSavedTabs: ReturnType<typeof vi.fn>; enabled: boolean }>,
   machinesSource: vi.fn(),
   current: null as unknown,
+  quitAnswer: null as Promise<void> | null,
 }))
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => 'C:\\app' } }))
@@ -22,7 +23,7 @@ vi.mock('../../../src/main/session-helper/manager', () => {
     enabled = false
     start = vi.fn(async () => { this.enabled = true })
     stopRouting = vi.fn(() => { this.enabled = false })
-    shutdown = vi.fn()
+    shutdown = vi.fn((): Promise<void> | null => h.quitAnswer)
     noteSavedTabs = vi.fn()
     serviceState = () => ({ state: this.enabled ? 'ready' : 'off', held: 0, lastError: null })
     constructor(readonly deps: Record<string, unknown>) { h.made.push(this as never) }
@@ -37,12 +38,13 @@ vi.mock('../../../src/main/session-helper/manager', () => {
 })
 
 import {
-  applySessionHelperSettings, initSessionHelper, noteSessionHelperTabs, plainTerminalsThroughHelperIn,
+  QUIT_WAIT_MS, applySessionHelperSettings, holdQuitForSessionHelper, initSessionHelper, noteSessionHelperTabs, plainTerminalsThroughHelperIn,
   sessionHelperServiceState, shutdownSessionHelper,
 } from '../../../src/main/session-helper/app-wiring'
 
 beforeEach(() => {
   h.settings = {}
+  h.quitAnswer = null
   h.made.length = 0
   h.current = null
   h.machinesSource.mockReset()
@@ -108,6 +110,60 @@ describe('session helper wiring', () => {
   })
 })
 
+describe('a normal quit waits briefly for the holders', () => {
+  const quitEvent = () => ({ preventDefault: vi.fn() })
+
+  it('nothing through the helper (or no helper this run): the quit is not held', () => {
+    const e = quitEvent()
+    holdQuitForSessionHelper(e, () => { throw new Error('no exit expected') })
+    expect(e.preventDefault).not.toHaveBeenCalled()
+    h.settings = { plainTerminalsThroughHelper: true }
+    initSessionHelper(() => {})
+    shutdownSessionHelper()
+    holdQuitForSessionHelper(e, () => { throw new Error('no exit expected') })
+    expect(e.preventDefault).not.toHaveBeenCalled()
+  })
+
+  it('held once until every holder answered, then the app exits; a second will-quit passes', async () => {
+    h.settings = { plainTerminalsThroughHelper: true }
+    initSessionHelper(() => {})
+    let answer!: () => void
+    h.quitAnswer = new Promise<void>((r) => { answer = r })
+    shutdownSessionHelper()
+    const e = quitEvent()
+    const exit = vi.fn()
+    holdQuitForSessionHelper(e, exit)
+    expect(e.preventDefault).toHaveBeenCalledTimes(1)
+    await Promise.resolve()
+    expect(exit).not.toHaveBeenCalled()
+    answer()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(exit).toHaveBeenCalledTimes(1)
+    const again = quitEvent()
+    holdQuitForSessionHelper(again, exit)
+    expect(again.preventDefault).not.toHaveBeenCalled()
+  })
+
+  it('a holder that never answers holds the quit for QUIT_WAIT_MS at most', async () => {
+    vi.useFakeTimers()
+    try {
+      h.settings = { plainTerminalsThroughHelper: true }
+      initSessionHelper(() => {})
+      h.quitAnswer = new Promise<void>(() => { /* never */ })
+      shutdownSessionHelper()
+      const exit = vi.fn()
+      holdQuitForSessionHelper(quitEvent(), exit)
+      await vi.advanceTimersByTimeAsync(QUIT_WAIT_MS - 1)
+      expect(exit).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(exit).toHaveBeenCalledTimes(1)
+      expect(QUIT_WAIT_MS).toBeLessThanOrEqual(1500)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('index.ts calls the wiring at the right moments', () => {
   it('the tab note on every save, the switch on every settings save, the start before any tab, the end after every PTY', async () => {
     const { readFileSync } = await vi.importActual<typeof import('fs')>('fs')
@@ -126,5 +182,11 @@ describe('index.ts calls the wiring at the right moments', () => {
     expect(kill).toBeGreaterThan(0)
     expect(end - kill).toBeLessThan(200)
     expect(src.match(/shutdownSessionHelper\(\)/g)).toHaveLength(1)
+    // The will-quit hold, beside the before-quit that runs the teardown.
+    const beforeQuit = src.indexOf("app.on('before-quit', (e) => closeCoordinator.onBeforeQuit(() => e.preventDefault()))")
+    const willQuit = src.indexOf("app.on('will-quit', (e) => holdQuitForSessionHelper(e))")
+    expect(beforeQuit).toBeGreaterThan(0)
+    expect(willQuit - beforeQuit).toBeLessThan(300)
+    expect(willQuit).toBeGreaterThan(beforeQuit)
   })
 })
