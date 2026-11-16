@@ -106,15 +106,14 @@ describe('training-steps', () => {
     it('is surfaced to beta users who already ran the 2.1 tour, with only the other 2.1.1 cards and the 2.1.3 Machines card', () => {
       // The whole point of the entry. A user who finished the 2.1 tour holds
       // lastTrainingVersion '2.1.0'; getNewSteps keeps sinceVersion > that, so
-      // the card has to sit ABOVE 2.1.0 or shouldShowTraining() stays false and
+      // the card has to sit ABOVE 2.1.0 or getNewSteps('2.1.0') leaves it out and
       // the cohort that already has the feature is never shown it (#372).
       // Equally only the 2.1.1 cards may be re-surfaced -- the new surfaces'
       // cards are a proportionate interruption, replaying the 2.1 set is not.
-      // They stay at 2.1.1, not above it: see the comment on the Providers and
-      // Accounts card for why a higher pin would hold the boot chain instead.
       // Cloud Agents joined them (the owner's 2026-10-04 answer). The 2.1.3
       // Machines card joins them too: it is newer than 2.1.0, and nothing opens
-      // the tour by itself after an update, so its pin interrupts no one.
+      // the tour by itself after an update (see the comment on the Providers and
+      // Accounts card), so a pin above 2.1.1 interrupts no one.
       expect(getNewSteps('2.1.0').map((s) => s.id)).toEqual(['provider-accounts', 'ask-conductor', 'code-review', 'cloud-agents', 'machines'])
       // Users arriving from 2.0.x get it as part of the normal backlog.
       expect(getNewSteps('2.0.0').map((s) => s.id)).toContain('ask-conductor')

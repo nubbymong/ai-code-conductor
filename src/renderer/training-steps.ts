@@ -659,7 +659,9 @@ export const trainingSteps: TrainingStep[] = [
   {
     // 2.1.3-beta.6. Pinned at 2.1.3: nothing opens the tour by itself after an
     // update (see the comment on the provider-accounts card), so the pin only
-    // sets the guide's "since" chip and the Feature tour's order.
+    // sets the guide's "since 2.1" chip and raises currentTrainingVersion() to
+    // 2.1.3, the stamp the onboarding settle and the tour's close write. The
+    // card's place in the Feature tour is its place in this list.
     id: 'machines',
     title: 'Machines',
     sinceVersion: '2.1.3',
@@ -669,7 +671,7 @@ export const trainingSteps: TrainingStep[] = [
     highlights: [
       'The helper reads **Off**, **Not installed**, **Starting**, **Ready** or **Failed**, and a failure comes with its reason',
       'Its version and its last **self-test**, with the time it ran; **Run self-test** runs it again',
-      'Each held terminal: its name, plain or partner, when it started, and whether the app is attached or it is **waiting for the app**',
+      'Each held terminal: its name, whether it is a Terminal or a Partner terminal, when it started, and whether the app is attached or it is **waiting for the app**',
       '**Re-attach** connects a waiting terminal again, and opens a Terminal only tab for one no tab shows; **End** stops one after you confirm',
       'After a crash on Windows, open the app within two minutes and resume your sessions: each held terminal shows again in its tab, with what it printed meanwhile. Quitting normally ends them',
       'SSH tabs and their partner terminals, a terminal run as administrator, and the tabs the app opens for a sign-in or to install or update a program start as before',

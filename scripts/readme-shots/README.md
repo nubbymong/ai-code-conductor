@@ -64,6 +64,10 @@ node scripts\readme-shots\stage\seed.js --app-version <version> --reuse-backup -
 node scripts\readme-shots\stage\launch.js start --size 1280x800
 node scripts\readme-shots\shoot.js scripts\readme-shots\stage\guide-images.json
 node scripts\readme-shots\stage\launch.js stop
+# step-machines leaves infra held by the session helper, and a held terminal outlives
+# launch.js stop (a forced end) until its two-minute away clock ends it. Wait that out,
+# or the restore cannot remove C:\dev\platform\infra, the folder that terminal runs in.
+powershell -NoProfile -Command Start-Sleep -Seconds 130
 node scripts\readme-shots\stage\seed.js --restore        # removes the marked C:\dev project folders
 # pull <root>/out/* for the owner's review; delete the root when done
 ```
@@ -78,7 +82,7 @@ The lists:
   tab starts its terminal only when it is first opened), then the Machines page. It needs
   the app installed with its session helper and the seed's `--helper-terminals`: it waits for
   the Machines page to read Ready, with a passed self-test and the held `infra` tab, and
-  fails otherwise.
+  fails otherwise. Its held `infra` terminal outlives `launch.js stop` for two minutes, so the run waits that out before `seed.js --restore`.
 
 A shot list is JSON: `{ "shots": [ { "name", "steps": [...], "settle", "frames", "interval", "clip"?, "format"?, "quality"? } ] }`.
 Steps target elements by any Playwright selector — prefer `data-testid` and role/text.
