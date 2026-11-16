@@ -56,6 +56,17 @@ const navItems: { view: ViewType; icon: React.ReactNode; label: string }[] = [
     )
   },
   {
+    view: 'machines',
+    label: 'Machines',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2" />
+        <line x1="8" y1="21" x2="16" y2="21" />
+        <line x1="12" y1="17" x2="12" y2="21" />
+      </svg>
+    )
+  },
+  {
     view: 'vision',
     label: 'Conductor MCP',
     icon: (
@@ -102,6 +113,33 @@ const navItems: { view: ViewType; icon: React.ReactNode; label: string }[] = [
     )
   },
 ]
+
+// The pages in the rail's first group; every other nav item sits after the divider.
+const PRIMARY_VIEWS: readonly ViewType[] = ['cloud-agents', 'insights', 'tokenomics', 'machines']
+
+// The expanded rail's geometry. Its buttons are flex-1 with min-w-0: they share the row and
+// shrink with it. Without min-w-0 each is at least its 20px icon wide: with the Account button
+// showing, the ten buttons, their ten gap-0.5 gaps and the divider need about 221px of the
+// W - 17 the row has (the border and the padding come off), so without min-w-0 the row would
+// spill past the sidebar edge below about 238px. (At the old gap-1 they needed 241px against
+// the 239px a 256px sidebar leaves, so it spilled at the default width too.) The icon shrinks
+// with its button, so the pill (the button's own background) always holds its icon:
+//   - the icon's wrapper has min-w-0, so it can be narrower than the 20px svg inside it;
+//   - the svg gets max-w-full and h-auto: it is never wider than the wrapper, and its height
+//     follows its width (the 24 x 24 viewBox keeps it square), so it scales instead of clipping;
+//   - h-9 (2.25rem) holds the row one height however small the icon gets: 36px at the default
+//     UI scale, 8px above and below a 20px icon, as the old py-2 did.
+// A status dot is a child of the button, not of the icon, so it stays on the pill's corner.
+// Width of one button at sidebar width W, ten buttons, at the default UI scale (16px root
+// font): (W - 38) / 10 = W less 1 (border), 16 (px-2), 1 (divider) and 20 (ten gap-0.5 gaps).
+// 256 gives 21.8, 230 gives 19.2, and the narrowest the sidebar goes (SIDEBAR_WIDTH_MIN, 200)
+// gives 16.2: the icon is 20, 19.2, 16.2, so at this scale it is never under 16px.
+// The UI scale runs 0.8 to 1.3 (useTypography.ts), and px-2, gap-0.5 and h-9 are rem, so they
+// follow it, as the collapsed rail's w-10 h-10 already does. At 1.3 (a 20.8px root) the row
+// needs 48.8px beside the buttons, so at 200 a button is 15.1px and the icon about 15px, a
+// little under 16; the row is 46.8px tall (28.8px at 0.8). The icon still fits its pill.
+const RAIL_BUTTON_EXPANDED = 'flex-1 min-w-0 h-9'
+const RAIL_ICON_FIT = 'min-w-0 [&>svg]:max-w-full [&>svg]:h-auto'
 
 function NavButton({ item, currentView, onViewChange, insightsStatus, insightsMessage, cloudAgentRunning, visionRunning, serverRunning, tokenomicsIndexComplete, isCollapsed, loggingEnabled, tooltipAlign = 'start' }: {
   item: typeof navItems[0]
@@ -175,7 +213,7 @@ function NavButton({ item, currentView, onViewChange, insightsStatus, insightsMe
       data-tour={`nav-${item.view}`}
       aria-disabled={isLogsDisabled || undefined}
       tabIndex={isLogsDisabled ? -1 : undefined}
-      className={`group ${isCollapsed ? 'w-10 h-10' : 'flex-1 py-2'} flex items-center justify-center rounded-lg transition-colors relative ${
+      className={`group ${isCollapsed ? 'w-10 h-10' : RAIL_BUTTON_EXPANDED} flex items-center justify-center rounded-lg transition-colors relative ${
         isLogsDisabled
           ? 'text-overlay0/40 cursor-not-allowed'
           : currentView === item.view
@@ -188,7 +226,7 @@ function NavButton({ item, currentView, onViewChange, insightsStatus, insightsMe
       }`}
       style={!isLogsDisabled && currentView === item.view ? { color: 'var(--accent)' } : undefined}
     >
-      <span className={isLogsDisabled ? 'opacity-40' : undefined}>{item.icon}</span>
+      <span className={isLogsDisabled ? `${RAIL_ICON_FIT} opacity-40` : RAIL_ICON_FIT}>{item.icon}</span>
       {/* Instant inline tooltip -- the only tooltip (the OS-native `title` was
           removed so the two no longer conflict). Pointer-events:none so it
           doesn't block clicks. Position adapts: collapsed = right of icon;
@@ -271,15 +309,17 @@ export default function SidebarNav({ currentView, onViewChange, insightsStatus, 
     <button
       onClick={onShowAccountUsage}
       aria-label="Account usage"
-      className={`group ${collapsed ? 'w-10 h-10' : 'flex-1 py-2'} flex items-center justify-center rounded-lg transition-colors focus-ring relative ${
+      className={`group ${collapsed ? 'w-10 h-10' : RAIL_BUTTON_EXPANDED} flex items-center justify-center rounded-lg transition-colors focus-ring relative ${
         accountUsageActive ? 'bg-surface0 rail-active' : 'text-overlay0 hover:text-text hover:bg-surface0/50'
       }`}
       style={accountUsageActive ? { color: 'var(--accent)' } : undefined}
     >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="8" r="3.25" />
-        <path d="M5.5 19.5c0-3.4 3-5.5 6.5-5.5s6.5 2.1 6.5 5.5" />
-      </svg>
+      <span className={RAIL_ICON_FIT}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="8" r="3.25" />
+          <path d="M5.5 19.5c0-3.4 3-5.5 6.5-5.5s6.5 2.1 6.5 5.5" />
+        </svg>
+      </span>
       <span
         className={`pointer-events-none absolute z-40 px-2 py-0.5 text-[11px] rounded bg-surface1 text-text border border-surface2 shadow-md whitespace-nowrap opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity duration-100 ${
           collapsed ? 'left-full ml-2 top-1/2 -translate-y-1/2' : 'top-full mt-1 right-0'
@@ -298,14 +338,16 @@ export default function SidebarNav({ currentView, onViewChange, insightsStatus, 
       aria-label="Feature Guide"
       aria-current={helpActive ? 'page' : undefined}
       data-tour="help-button"
-      className={`group ${collapsed ? 'w-10 h-10' : 'flex-1 py-2'} flex items-center justify-center rounded-lg transition-colors ${helpActive ? 'bg-surface0/60' : 'text-overlay0 hover:text-text hover:bg-surface0/50'} focus-ring relative`}
+      className={`group ${collapsed ? 'w-10 h-10' : RAIL_BUTTON_EXPANDED} flex items-center justify-center rounded-lg transition-colors ${helpActive ? 'bg-surface0/60' : 'text-overlay0 hover:text-text hover:bg-surface0/50'} focus-ring relative`}
       style={helpActive ? { color: 'var(--accent)' } : undefined}
     >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="10" />
-        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
+      <span className={RAIL_ICON_FIT}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+          <line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+      </span>
       <span
         className={`pointer-events-none absolute z-40 px-2 py-0.5 text-[11px] rounded bg-surface1 text-text border border-surface2 shadow-md whitespace-nowrap opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity duration-100 ${
           collapsed ? 'left-full ml-2 top-1/2 -translate-y-1/2' : 'top-full mt-1 right-0'
@@ -317,8 +359,8 @@ export default function SidebarNav({ currentView, onViewChange, insightsStatus, 
     </button>
   )
 
-  const primary = navItems.filter(i => ['cloud-agents', 'insights', 'tokenomics'].includes(i.view))
-  const system = navItems.filter(i => !['cloud-agents', 'insights', 'tokenomics'].includes(i.view))
+  const primary = navItems.filter(i => PRIMARY_VIEWS.includes(i.view))
+  const system = navItems.filter(i => !PRIMARY_VIEWS.includes(i.view))
   const renderItem = (item: typeof navItems[0], tooltipAlign: 'start' | 'end') => (
     <NavButton key={item.view} item={item} currentView={currentView} onViewChange={onViewChange}
       insightsStatus={insightsStatus} insightsMessage={insightsMessage} cloudAgentRunning={cloudAgentRunning}
@@ -333,14 +375,14 @@ export default function SidebarNav({ currentView, onViewChange, insightsStatus, 
         className="flex flex-col items-center gap-1 py-2 border-b border-surface0"
         style={{ background: 'var(--surface-chrome)', color: 'var(--text-on-chrome)' }}
       >
-        {navItems.filter(i => ['cloud-agents', 'insights', 'tokenomics'].includes(i.view)).map(item => (
+        {primary.map(item => (
           <NavButton key={item.view} item={item} currentView={currentView} onViewChange={onViewChange}
             insightsStatus={insightsStatus} insightsMessage={insightsMessage} cloudAgentRunning={cloudAgentRunning}
             visionRunning={visionRunning} serverRunning={serverRunning} tokenomicsIndexComplete={tokenomicsIndexComplete}
             isCollapsed loggingEnabled={loggingEnabled} />
         ))}
         <span className="h-px w-6 my-1 bg-surface1" aria-hidden />
-        {navItems.filter(i => !['cloud-agents', 'insights', 'tokenomics'].includes(i.view)).map(item => (
+        {system.map(item => (
           <NavButton key={item.view} item={item} currentView={currentView} onViewChange={onViewChange}
             insightsStatus={insightsStatus} insightsMessage={insightsMessage} cloudAgentRunning={cloudAgentRunning}
             visionRunning={visionRunning} serverRunning={serverRunning} tokenomicsIndexComplete={tokenomicsIndexComplete}
@@ -355,7 +397,7 @@ export default function SidebarNav({ currentView, onViewChange, insightsStatus, 
   return (
     <div
       data-tour="nav-rail"
-      className="px-2 pt-2 flex gap-1 items-center border-b border-surface0 pb-2"
+      className="px-2 pt-2 flex gap-0.5 items-center border-b border-surface0 pb-2"
       style={{ background: 'var(--surface-chrome)', color: 'var(--text-on-chrome)' }}
     >
       {primary.map((item) => renderItem(item, 'start'))}

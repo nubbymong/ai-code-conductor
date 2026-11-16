@@ -80,6 +80,7 @@ import { registerTokenomics2Handlers } from './ipc/tokenomics2-handlers'
 import { registerGitHubHandlers } from './ipc/github-handlers'
 import { registerHooksHandlers } from './ipc/hooks-handlers'
 import { registerServiceHealthHandlers } from './ipc/service-health-handlers'
+import { registerMachinesHandlers, getMachinesSource } from './ipc/machines-handlers'
 import { createServiceRegistry } from './services/service-registry'
 import { PtyIntegrityMonitor, setPtyIntegrityMonitor, getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
 import { registerProviderAccountsHandlers } from './ipc/provider-accounts-handlers'
@@ -1065,6 +1066,10 @@ if (!gotTheLock) {
     // D1b: diagnostics IPC, answered by the service registry. In the
     // hooks-disabled branch no supervisor was set, so the hooks row reads stopped.
     registerServiceHealthHandlers(serviceRegistry)
+    // Machines page (2.1.3-beta.6, section C). The default source says the session
+    // helper is off and holds nothing; the helper work plugs the real one in with
+    // setMachinesSource (./ipc/machines-handlers). Read per call, so a swap shows at once.
+    registerMachinesHandlers(getMachinesSource, getWindow)
     if (hooksEnabled) {
       cleanupStaleHookEntries(new Set())   // supervisor.start() already fired proxy.start()
     }

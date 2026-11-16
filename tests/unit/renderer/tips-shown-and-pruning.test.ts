@@ -183,7 +183,7 @@ describe('the gates the library depends on', () => {
     // TipCard.handleAction first -- this list pins that pairing.
     const VIEWS = new Set([
       'cloud-agents', 'sessions', 'logs', 'settings', 'insights',
-      'tokenomics', 'vision', 'memory', 'account-usage', 'help',
+      'tokenomics', 'machines', 'vision', 'memory', 'account-usage', 'help',
       'ask-conductor',
     ])
     const bad: string[] = []
