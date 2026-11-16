@@ -198,7 +198,9 @@ describe('everything shown is plain text (row 32)', () => {
     expect(script).toContain('lib.resolveRetargetCwd(resumeUuid, sourceCwd, process.cwd(), lib.isDirectory)')
     expect(script).toMatch(/spawnSync\(target\.file, target\.args, \{[^}]*\benv,[^}]*retarget\.cwd/)
     expect(script).toContain('const env = lib.childEnv(process.env)')
-    expect(script).toContain('lib.walkRollouts(home, 30, worktrees)')
+    // 2.1.3-beta.6: the walk that also matches a symlinked folder by real path (the spelling walk is its base).
+    expect(script).toContain('lib.walkRolloutsAsync(home, 30, worktrees)')
+    expect(script).not.toMatch(/lib\.walkRollouts\(/)
   })
 })
 

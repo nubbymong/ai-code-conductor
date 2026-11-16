@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "fb471dd3f58e60fb8442ec1f80a5f68b0ab26bad6fa2f096a49f529a71a44510",
-  "manifestHead": "6cd51363d4b7a39c3d4e66dafe3e1568331f1bc8",
+  "manifestPathDigest": "aedc96fb91213a0021bcc478b49b7977d6e9e6ae40a9f398ac6d8fd65d1696f8",
+  "manifestHead": "eef1f5e4dcf9eabe0aadbbc7cadff809f124fba2",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -7095,6 +7095,18 @@
       "note": "created by the 2.1.1-beta.3 scripts folders change; the Codex launch case added in its review fix pass"
     },
     {
+      "path": "tests/unit/main/pty-spawn-warms-codex-resume.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.6 test (tests/unit/main/pty-spawn-warms-codex-resume.test.ts): through the real pty:spawn handler, a Codex launch that resumes a conversation (the request's own, else the kept one on a restart) waits for the provider's look at its folders by real path, with the launch's own sessions folder, the session and the configured folder; the picker, a fresh respawn, SSH and Ask launches do not ask it, and a look that fails or is missing never stops the launch (WP1.68)",
+      "note": "created by the 2.1.3-beta.6 section E track; pty-manager and the accounts service are faked, no Codex process"
+    },
+    {
       "path": "tests/unit/main/pty-ssh-color-query-passthrough.test.ts",
       "predicates": [
         "P13"
@@ -7977,6 +7989,41 @@
       "disposition": "added",
       "evidence": "new 2.1.1-beta.3 test (tests/unit/providers/codex/resume-picker-lib-links.test.ts; host quarantine, CI and the VM only): with a real junction or directory link at the resources folder scripts/lib (on Windows also a junction that names its folder by volume), a Codex picker launch starts Codex directly with one warning, and the picker deploy removes that link as a link, never what it names, and makes a real folder before it writes the lib (WP1.33, WP1.68)",
       "note": "the real-link cases; the host-safe ones are in resume-picker-deploy.test.ts, spawn.test.ts and script-deploy-folder.test.ts"
+    },
+    {
+      "path": "tests/unit/providers/codex/resume-real-path-links.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.6 test (tests/unit/providers/codex/resume-real-path-links.test.ts; host quarantine, CI and the VM only): with a real symbolic link (macOS, Linux) or a real junction (Windows), a Codex conversation recorded under the real folder or under the link is resumed in the folder the tab kept, the resume list offers it, a link whose folder is gone falls back to the spelling, and the resume look and the launch's read of it make no synchronous real-path or stat call (WP1.68)",
+      "note": "created by the 2.1.3-beta.6 section E track; the real-link cases, the host-safe ones are in resume-real-path.test.ts and codex-resume-picker-real-path.test.ts; no Codex process"
+    },
+    {
+      "path": "tests/unit/providers/codex/resume-real-path.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.6 test (tests/unit/providers/codex/resume-real-path.test.ts): a Codex conversation recorded under the real folder or the link of a symlinked folder is resumed in the folder the tab kept, by real path asked off the main thread only when the spelling does not match; a folder that cannot be resolved, answers too late, is relative or is a share is compared by its spelling, each folder is asked once and a folder or drive that did not answer is not asked again for a minute, the tab's folder and the home-folder guard are answered by the look, the look is kept per session and capped, and no synchronous real-path or stat call is made (WP1.68)",
+      "note": "created by the 2.1.3-beta.6 section E track; the real-path lookup is a stand-in, no link and no Codex process"
+    },
+    {
+      "path": "tests/unit/providers/codex/resume-warm-wiring.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.6 test (tests/unit/providers/codex/resume-warm-wiring.test.ts): the Codex provider's resume look (warmResumeLookup) and the launch builder (buildSpawnCommand) read one answer, keyed by sessions folder, session, conversation and folder; a look made for another realm, session or folder is not read, and one is read once (WP1.68)",
+      "note": "created by the 2.1.3-beta.6 section E track; a stand-in for the real path, a folder that is not on the disk, no link and no Codex process"
     },
     {
       "path": "tests/unit/providers/codex/rollout-lookup.test.ts",
@@ -10162,6 +10209,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.10 round 1 test (tests/unit/scripts/codex-resume-picker-open-elsewhere.test.ts): the Codex resume picker marks a conversation another open tab is on and says so when Codex refuses its resume, rather than that it is gone; Codex never gets the list (V2) (WP1.68); tests/unit/scripts/codex-resume-picker-open-elsewhere.test.ts",
       "note": "created by WP2 PR 3 P3.10 round 1"
+    },
+    {
+      "path": "tests/unit/scripts/codex-resume-picker-real-path.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.6 test (tests/unit/scripts/codex-resume-picker-real-path.test.ts): the Codex resume list offers a conversation recorded under the real folder or the link of a symlinked folder, tagged with the worktree it is the same folder as; an unresolvable, slow, relative or share folder is compared by its spelling, each folder is asked once and only when the spelling does not match, a mount that did not answer does not silence another, and the list is what the spelling walk lists otherwise (WP1.68)",
+      "note": "created by the 2.1.3-beta.6 section E track; the real-path lookup is a stand-in, no link and no Codex process"
     },
     {
       "path": "tests/unit/scripts/codex-resume-picker-worktrees.test.ts",
