@@ -505,18 +505,19 @@ app whether a holder outlived it: list mode at start-up is the check.
 **Endpoint: only this user can connect.** No network socket is opened.
 
 - **Windows:** the named pipe `\\.\pipe\aicc-helper-<sid>-<32 hex>`. Its
-  security descriptor is `D:P(A;;GA;;;<the user's SID>)`: one entry, the
-  current user, nothing inherited. The first instance is made with
+  security descriptor is `O:<the user's SID>D:P(A;;GA;;;<the user's SID>)`:
+  the current user owns it, and its list has one entry, that user, nothing
+  inherited. The owner counts as much as the list, since an owner may always
+  change the list. The first instance is made with
   `FILE_FLAG_FIRST_PIPE_INSTANCE` (a name someone else made is never joined)
   and every instance refuses remote clients. The holder keeps an instance
-  listening for as long as it runs, one that a client came to and left
-  included, so the name is never free for another process to take. A later
-  instance takes on the pipe's descriptor, not its own, so the holder checks
-  that each one carries the user-only list before it uses it. The descriptor
-  is the control. The holder never impersonates a client. The helper's own
-  client opens the pipe with `SECURITY_IDENTIFICATION`; the app's client opens
-  it at the level its runtime chooses, which would matter only to a holder
-  that impersonates.
+  listening while it can, one that a client came to and left included. A
+  later instance takes on the pipe's descriptor, not its own, so the holder
+  joins a later instance only if the pipe's owner and its list are the
+  user's. The descriptor is the control. The holder never impersonates a
+  client. The helper's own client opens the pipe with
+  `SECURITY_IDENTIFICATION`; the app's client opens it at the level its
+  runtime chooses, which would matter only to a holder that impersonates.
 - **macOS and Linux:** the Unix socket `/tmp/aicc-<uid>/<sid>-<16 hex>.sock`,
   at most 75 bytes (a 10-digit user id, a 32-character session id), under the
   104 a socket path may have on macOS. The folder must be a real folder (not a
@@ -587,11 +588,13 @@ the whole hello line) is kept and listed; so is one whose socket takes no more
 connections (a full backlog is a timeout, never "nothing there"). On Linux a
 refused connection means nothing listens. macOS refuses a connection to a full
 queue exactly as one to a socket with nothing on it, so there a refusal is
-tried again until the 2 s are up and then counts as no answer; a record whose
-holder died is still found stale there, by its process id, unless that id has
-since been given to another process: then the record is kept (and a new holder
-for that session is refused) until that process exits. A missing store lists
-nothing and is not made.
+tried again until the 2 s are up and then counts as no answer. A record whose
+endpoint gives no answer is still stale when its process id now names a
+process that started more than 60 s after the record's `started`: a holder
+starts before it writes its record, so that id has been given to another
+process. The 60 s allow for a clock set meanwhile and for start times the OS
+keeps to the second. A holder started for the session treats such a record
+the same way, and replaces it. A missing store lists nothing and is not made.
 The app uses list mode at start-up, to attach every held terminal again, and
 for the Machines page.
 
@@ -629,7 +632,7 @@ the last column of section 8's table):
 | `timeout` | yes: no `hello.ack` in 10 s, or no frame in 60 s |
 | `bad-field` | yes for the first frame; otherwise no, within the budget of 20 in 60 s |
 | `too-large` | no, within that budget |
-| `busy` | yes when 16 connections are served already, or the connection fell 256 chunks behind; no for typed input not taken or a second launch |
+| `busy` | yes when 16 connections are served already, the connection fell 256 chunks behind, or no thread could be started to carry its live output; no for typed input not taken or a second launch |
 | `not-found`, `not-connected`, `io` | no |
 
 | Type | Reply | Fields and rules |
@@ -664,9 +667,14 @@ its fields; `code` is present only once the program has exited.
   is refused, every later raw frame on that connection is refused too, each
   with a `busy` of its own, in order, until the app's next `ping`. The app
   keeps each raw frame to at most 64 KiB, sends a `ping` after every 16 frames
-  or 1 MiB of typed input, and waits for its `pong` before it sends more. The
-  number of `busy` replies before that `pong` is the number of frames not
-  taken, the last ones before the `ping`: the app sends them again. A newer
+  or 1 MiB of typed input, and waits for its `pong` before it sends more.
+  When the `pong` comes, the number of `busy` replies before it is the number
+  of frames not taken, the last ones before the `ping`: the app sends them
+  again. When the stream ends before the `pong`, the app cannot tell which of
+  those frames were taken (a `busy` just before the end may be the one a
+  connection that fell behind gets, below, not a refusal of input). It sends
+  none of them again, so nothing is ever typed twice, and attaches again from
+  the last offset it saw: the replay shows what reached the program. A newer
   attach, from any connection, takes the terminal: the older
   connection gets `replaced` and is closed. An attach again on the same
   connection drops what was still queued for the earlier one: after its reply

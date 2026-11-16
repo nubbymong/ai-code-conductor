@@ -755,7 +755,9 @@ mod tests {
             endpoint: l.endpoint().to_string(),
             nonce: "0123456789abcdef0123456789abcdef".to_string(),
             helper: "0.1.0".to_string(),
-            started: 0,
+            // A holder writes its record after it starts, as this one would:
+            // a record older than its process is another process's.
+            started: crate::store::now_ms(),
             away: 120,
             attached: false,
             child: "waiting".to_string(),

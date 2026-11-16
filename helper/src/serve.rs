@@ -246,8 +246,10 @@ struct Serve {
     forwarders: AtomicUsize,
 }
 
-/// A forwarder is counted from before its thread starts until it ends (or
-/// fails to start), so an end can wait for the output it is still sending.
+/// A forwarder is counted from the moment its attach is taken, under the
+/// state lock, until its thread ends (or fails to start). An end is claimed
+/// under the same lock, so it always comes after the count and waits for
+/// the output the forwarder still has to send, a slow replay included.
 struct Forwarding(Arc<Serve>);
 
 impl Drop for Forwarding {
@@ -759,13 +761,21 @@ impl Serve {
                             let old = st.attached.replace(Arc::clone(conn)).filter(|o| o.id != conn.id);
                             st.attach_gen += 1;
                             st.away_since = None;
-                            Ok((h, a, old, st.attach_gen))
+                            // Counted before the lock goes, so an end claimed
+                            // after this waits for this forwarder's output.
+                            let forwarding = a.exit_code.is_none().then(|| {
+                                self.forwarders.fetch_add(1, Ordering::SeqCst);
+                                Forwarding(Arc::clone(self))
+                            });
+                            Ok((h, a, old, st.attach_gen, forwarding))
                         }
                     },
                 }
             }
         };
-        let (holder, attachment, old, gen) = match taken {
+        // Every return below that starts no forwarder drops `forwarding`,
+        // and the count with it.
+        let (holder, attachment, old, gen, forwarding) = match taken {
             Ok(t) => t,
             Err((code, text)) => {
                 let _ = conn.send_error(Some(id), code, &text);
@@ -805,12 +815,11 @@ impl Serve {
                 return Flow::Close;
             }
         }
-        if attachment.exit_code.is_some() {
+        let forwarding = match forwarding {
+            Some(f) => f,
             // Over before this attach: the reply said so, and nothing follows.
-            return Flow::Continue;
-        }
-        self.forwarders.fetch_add(1, Ordering::SeqCst);
-        let forwarding = Forwarding(Arc::clone(self));
+            None => return Flow::Continue,
+        };
         let carried = Arc::clone(conn);
         let queue = attachment.live;
         let started = thread::Builder::new().spawn(move || {
@@ -896,8 +905,10 @@ pub fn run(opts: Options) -> io::Result<()> {
     // one's record and its live endpoint, and list mode never removes a
     // record this one has just put in place of a stale one.
     let store_lock = store::lock(&opts.store)?;
+    // A record whose process id was given to another process since is not a
+    // holder: list mode would remove it, and this holder replaces it.
     if let Some(Ok(existing)) = store::read(&opts.store, &opts.sid) {
-        if crate::pids::alive(existing.pid) && crate::client::probe(&existing) != store::Probe::Gone {
+        if !store::holder_gone(&existing, crate::client::probe) {
             return Err(io::Error::new(io::ErrorKind::AlreadyExists, AlreadyRunning));
         }
     }

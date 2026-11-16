@@ -14,7 +14,10 @@
 //! while anything is still in its session (the kernel gives no new process an
 //! id that a live group or session still carries). Once the child has been
 //! reaped and its session is empty, or has been sent a kill, `end_tree` never
-//! signals that id again, however often it is called.
+//! signals that id again, however often it is called. One field remembers
+//! that (`tree_gone`) and one check at the top of `end_tree` reads it: what
+//! the session looks like later proves nothing, since the id may by then
+//! name another process's group.
 //!
 //! Unsafe code sits only in the modules that call the C library or the
 //! Windows API where `std` has no safe form; the library denies it elsewhere.
@@ -41,6 +44,9 @@ pub struct Pty {
     /// How a signal reaches the session: always `signal_session`; a test
     /// records what is sent through it.
     signal: fn(libc::pid_t, libc::c_int),
+    /// Whether anything of the session still runs: always `session_left`; a
+    /// test stands in for an id that another process's group holds by now.
+    session_left: fn(libc::pid_t) -> bool,
 }
 
 fn winsize(size: PtySize) -> libc::winsize {
@@ -129,7 +135,7 @@ impl Pty {
         drop(cmd);
         // The terminal owns the child from here, so a failure below ends it
         // (`Drop`) instead of leaving it running unheld.
-        let pty = Pty { master, child, tree_gone: false, signal: signal_session };
+        let pty = Pty { master, child, tree_gone: false, signal: signal_session, session_left };
         let reader = pty.master.try_clone()?;
         Ok((pty, Box::new(reader)))
     }
@@ -168,6 +174,8 @@ impl Pty {
     /// go, then kill whatever is left of it. Once the tree is gone this does
     /// nothing (see the module comment).
     pub fn end_tree(&mut self, grace: Duration) {
+        // The only check that keeps an id another process holds by now from
+        // being signalled: `over` reports what the session looks like now.
         if self.tree_gone {
             return;
         }
@@ -212,13 +220,15 @@ impl Pty {
     }
 
     /// Reap the child if it has exited, so it does not linger as a zombie
-    /// that keeps its group alive. True, and remembered, once it has been
-    /// reaped and nothing is left in its session.
+    /// that keeps its group alive. True when it has been reaped and nothing
+    /// is left in its session, which `tree_gone` then remembers. This says
+    /// only what is true now; it is asked only while the tree is not gone.
     fn over(&mut self, sid: libc::pid_t) -> bool {
-        if self.reaped() && !session_left(sid) {
+        if self.reaped() && !(self.session_left)(sid) {
             self.tree_gone = true;
+            return true;
         }
-        self.tree_gone
+        false
     }
 
     /// End the tree at once.
@@ -318,8 +328,22 @@ mod tests {
         signal_session(sid, sig);
     }
 
+    /// Records a signal and sends nothing: for a session that must never
+    /// be signalled, so a test that fails cannot reach a real process.
+    fn record_only(sid: libc::pid_t, sig: libc::c_int) {
+        SENT.lock().unwrap_or_else(|p| p.into_inner()).push((sid, sig));
+    }
+
     fn sent_to(sid: libc::pid_t) -> Vec<libc::c_int> {
         SENT.lock().unwrap_or_else(|p| p.into_inner()).iter().filter(|(s, _)| *s == sid).map(|(_, sig)| *sig).collect()
+    }
+
+    fn wait_for_exit(pty: &mut Pty) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while pty.try_wait().expect("wait").is_none() {
+            assert!(Instant::now() < deadline, "the shell never exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn start(script: &str) -> Pty {
@@ -333,11 +357,7 @@ mod tests {
     fn a_session_that_is_over_is_never_signalled() {
         let mut pty = start("exit 0");
         let sid = pty.pid() as libc::pid_t;
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while pty.try_wait().expect("wait").is_none() {
-            assert!(Instant::now() < deadline, "the shell never exited");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_exit(&mut pty);
         // The child is reaped and its session is empty, so its id may name
         // another process by now: every end after this sends nothing.
         pty.end_tree(Duration::from_secs(2));
@@ -357,5 +377,22 @@ mod tests {
         pty.end_tree(Duration::from_secs(2));
         pty.kill();
         assert_eq!(sent_to(sid), first, "an ended session was signalled again");
+    }
+
+    #[test]
+    fn once_the_tree_is_gone_its_id_is_never_signalled_whatever_it_names_now() {
+        let mut pty = start("exit 0");
+        pty.signal = record_only;
+        let sid = pty.pid() as libc::pid_t;
+        wait_for_exit(&mut pty);
+        // Seen over once: the child reaped, its session empty.
+        pty.end_tree(Duration::from_secs(2));
+        assert!(pty.tree_gone, "a reaped child with an empty session was not seen as gone");
+        // Then the id is given to another process, which leads a group of
+        // that id: the session reads as running again.
+        pty.session_left = |_| true;
+        pty.end_tree(Duration::from_millis(100));
+        pty.kill();
+        assert_eq!(sent_to(sid), Vec::<libc::c_int>::new(), "an id another process holds by now was signalled");
     }
 }

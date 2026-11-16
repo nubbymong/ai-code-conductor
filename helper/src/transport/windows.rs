@@ -1,16 +1,18 @@
 //! The Windows transport: a named pipe (protocol section 15).
 //!
-//! Every instance carries one security descriptor, `D:P(A;;GA;;;<user SID>)`:
-//! a protected list with one entry, the current user, so no other account
-//! (and no inherited entry) can open it. Remote clients are refused, the first
-//! instance is made with `FILE_FLAG_FIRST_PIPE_INSTANCE` (a name someone else
-//! already made fails the bind), and a next instance is made before a
-//! connected one is handed out, so a client never finds the name missing. An
-//! instance a failed connect leaves is reset and kept listening for the same
-//! reason. Every later instance shares the first one's security descriptor,
-//! so each is checked to carry the user-only list before it is used: should
-//! the name ever pass to a pipe someone else made, the holder refuses to join
-//! it.
+//! Every instance carries one security descriptor,
+//! `O:<user SID>D:P(A;;GA;;;<user SID>)`: the current user owns it, and a
+//! protected list with one entry, that user, says who may open it, so no
+//! other account (and no inherited entry) can. The owner matters as much as
+//! the list: an owner may always change the list. Remote clients are
+//! refused, the first instance is made with `FILE_FLAG_FIRST_PIPE_INSTANCE`
+//! (a name someone else already made fails the bind), and a next instance is
+//! made before a connected one is handed out, so a client never finds the
+//! name missing. An instance a failed connect leaves is reset and kept
+//! listening for the same reason. Every later instance shares the first
+//! one's security descriptor, so each is checked to be owned by the user and
+//! to carry the user-only list before it is used: should the name ever pass
+//! to a pipe someone else made, the holder refuses to join it.
 //!
 //! The handles are overlapped. A handle opened for plain blocking I/O lets
 //! one call at a time through, so a thread waiting to read would hold up a
@@ -37,7 +39,7 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     AclSizeInformation, EqualSid, GetAce, GetAclInformation, GetTokenInformation, TokenUser, ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION,
-    DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
@@ -154,9 +156,10 @@ impl UserSid {
     }
 }
 
-/// The SDDL of a pipe only the user with SID text `sid` may open.
+/// The SDDL of a pipe the user with SID text `sid` owns and alone may open.
+/// A token may always name its own user as an owner.
 pub(crate) fn user_only_sddl(sid: &str) -> String {
-    format!("D:P(A;;GA;;;{sid})")
+    format!("O:{sid}D:P(A;;GA;;;{sid})")
 }
 
 fn security_descriptor(sddl: &str) -> io::Result<LocalBox> {
@@ -369,7 +372,8 @@ impl Listener {
 
     /// A new instance of the pipe. A later one joins the pipe the name
     /// names and takes on that pipe's security descriptor, not the one it is
-    /// made with, so it is used only if that descriptor is the user-only one.
+    /// made with, so it is used only if the user owns that pipe and its list
+    /// is the user-only one.
     fn instance(&self, first: bool) -> io::Result<Handle> {
         let h = make_instance(&self.name, &self.descriptor, first)?;
         if !first {
@@ -411,7 +415,8 @@ impl Listener {
         Ok(Stream::from_handle(h))
     }
 
-    /// The pipe's access list has exactly one entry: allow, the current user.
+    /// The current user owns the pipe, and its access list has exactly one
+    /// entry: allow, that user.
     pub fn check_private(&self) -> Result<(), String> {
         let guard = crate::holder::lock(&self.pending);
         match guard.as_ref() {
@@ -480,16 +485,19 @@ fn connect_client(h: &Handle) -> io::Result<()> {
     }
 }
 
-/// The access list of the pipe behind `h` has exactly one entry: allow, `user`.
+/// The pipe behind `h` is `user`'s alone: `user` owns it (an owner may
+/// always change the list, so another owner could let itself in later), and
+/// its access list has exactly one entry: allow, `user`.
 fn user_only(h: HANDLE, user: &UserSid) -> Result<(), String> {
     unsafe {
+        let mut owner: PSID = std::ptr::null_mut();
         let mut dacl: *mut ACL = std::ptr::null_mut();
         let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
         let rc = GetSecurityInfo(
             h,
             SE_KERNEL_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
             std::ptr::null_mut(),
             &mut dacl,
             std::ptr::null_mut(),
@@ -499,6 +507,9 @@ fn user_only(h: HANDLE, user: &UserSid) -> Result<(), String> {
             return Err(format!("GetSecurityInfo failed: {rc}"));
         }
         let _owned = LocalBox(sd);
+        if owner.is_null() || EqualSid(owner, user.sid()) == 0 {
+            return Err("the pipe is owned by another account".to_string());
+        }
         if dacl.is_null() {
             return Err("the pipe has no access list (anyone may open it)".to_string());
         }
@@ -571,8 +582,8 @@ mod tests {
     use std::sync::mpsc;
 
     #[test]
-    fn the_descriptor_names_one_allow_entry_for_one_account() {
-        assert_eq!(user_only_sddl("S-1-5-21-1-2-3-1001"), "D:P(A;;GA;;;S-1-5-21-1-2-3-1001)");
+    fn the_descriptor_names_one_owner_and_one_allow_entry_for_one_account() {
+        assert_eq!(user_only_sddl("S-1-5-21-1-2-3-1001"), "O:S-1-5-21-1-2-3-1001D:P(A;;GA;;;S-1-5-21-1-2-3-1001)");
         let me = UserSid::current().unwrap().to_text().unwrap();
         assert!(me.starts_with("S-1-"), "{me}");
     }
@@ -609,25 +620,55 @@ mod tests {
         served.join().unwrap();
     }
 
-    #[test]
-    fn a_later_instance_of_a_pipe_someone_else_made_is_refused() {
-        let endpoint = format!(r"\\.\pipe\aicc-helper-transport-squat-01-{}", crate::random::hex(16).unwrap());
-        let name = wide(&endpoint);
-        // A pipe of that name that anyone may open, made first.
-        let open = security_descriptor("D:P(A;;GA;;;WD)").unwrap();
-        let _theirs = make_instance(&name, &open, true).unwrap();
+    fn squat_name(n: &str) -> String {
+        format!(r"\\.\pipe\aicc-helper-transport-squat-{n}-{}", crate::random::hex(16).unwrap())
+    }
+
+    /// A holder's listener on `endpoint` with no instance of its own: the
+    /// pipe of that name is someone else's.
+    fn joining(endpoint: &str) -> Listener {
         let user = UserSid::current().unwrap();
         let descriptor = security_descriptor(&user_only_sddl(&user.to_text().unwrap())).unwrap();
-        let l = Listener { endpoint, name, user, descriptor, pending: Mutex::new(None) };
-        let e = match l.instance(false) {
-            Ok(_) => panic!("an instance of a pipe anyone may open was used"),
-            Err(e) => e,
-        };
-        assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{e:?}");
-        assert!(l.accept().is_err(), "an accept handed out an instance of that pipe");
+        Listener { endpoint: endpoint.to_string(), name: wide(endpoint), user, descriptor, pending: Mutex::new(None) }
+    }
+
+    fn refuses_to_join(l: &Listener, what: &str) {
+        match l.instance(false) {
+            Ok(_) => panic!("an instance of {what} was used"),
+            Err(e) => assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{what}: {e:?}"),
+        }
+        assert!(l.accept().is_err(), "an accept handed out an instance of {what}");
+    }
+
+    #[test]
+    fn a_later_instance_of_a_pipe_someone_else_made_is_refused() {
+        // A pipe of that name that anyone may open, made first.
+        let endpoint = squat_name("01");
+        let open = security_descriptor("D:P(A;;GA;;;WD)").unwrap();
+        let _theirs = make_instance(&wide(&endpoint), &open, true).unwrap();
+        refuses_to_join(&joining(&endpoint), "a pipe anyone may open");
         // A later instance of the holder's own pipe is used.
         let mine = Listener::bind("transport-squat-02").unwrap();
         assert!(mine.instance(false).is_ok());
+    }
+
+    /// The holder's own list, but another owner, who may change the list at
+    /// any time. Administrators stands in for that owner: a token that holds
+    /// it may name it as an owner, and CI runs as an administrator.
+    #[test]
+    fn a_later_instance_of_a_pipe_with_the_users_list_and_another_owner_is_refused() {
+        let me = UserSid::current().unwrap().to_text().unwrap();
+        let endpoint = squat_name("03");
+        let theirs = security_descriptor(&format!("O:BAD:P(A;;GA;;;{me})")).and_then(|sd| make_instance(&wide(&endpoint), &sd, true));
+        match theirs {
+            Ok(_theirs) => refuses_to_join(&joining(&endpoint), "a pipe another account owns"),
+            // ERROR_INVALID_OWNER: this account may not name Administrators.
+            // CI must run it, so there it fails instead.
+            Err(e) if e.to_string().contains("os error 1307") && std::env::var_os("CI").is_none() => {
+                eprintln!("skipped: this account cannot make a pipe that Administrators owns ({e})");
+            }
+            Err(e) => panic!("could not make a pipe that Administrators owns: {e}"),
+        }
     }
 
     #[test]
