@@ -48,7 +48,8 @@ const STAGE = (() => { try { return JSON.parse(fs.readFileSync(path.join(__dirna
 // maps each to the seeded conversation it was made from, so a copy draws that
 // one's scenario and status, while its status names its own transcript.
 const COPIES = STAGE.copies && typeof STAGE.copies === 'object' ? STAGE.copies : {}
-const templateUuid = resumeUuid && typeof COPIES[resumeUuid] === 'string' ? COPIES[resumeUuid] : resumeUuid
+const isCopy = !!(resumeUuid && typeof COPIES[resumeUuid] === 'string')
+const templateUuid = isCopy ? COPIES[resumeUuid] : resumeUuid
 
 const session = C.SESSIONS.find((s) => s.resumeUuid && s.resumeUuid === templateUuid) || C.SESSIONS.find((s) => s.scenario === 'promo')
 const scenario = C.SCENARIOS[session.scenario]
@@ -59,14 +60,15 @@ const CCC_SESSION = process.env.CLAUDE_MULTI_SESSION_ID || null
 
 // The performance harness (scripts/perf/gen-sessions.cjs) sets `mode` in the
 // same file. idle: the conversation is drawn, then the CLI sits at its prompt
-// (no working line) and writes its status file every 30 s. busy, and no mode at all
-// (the README pipeline): the spinner is redrawn every 120 ms and the status
-// file written every 2 s. Read again every 2 s, so a run can switch it while
-// the app runs.
-const readMode = () => {
-  try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'fake-stage.json'), 'utf8')).mode === 'idle' ? 'idle' : 'busy' } catch { return 'busy' }
-}
-let mode = readMode()
+// (no working line) and writes its status file every 30 s. busy: the spinner
+// is redrawn every 120 ms and the status file written every 2 s. A harness
+// CLI looks at the file every 2 s (fake-mode.js reads it again only when it
+// changed), so a run can switch the mode while the app runs. With no mode in
+// the file (the README pipeline) none of this runs: the CLI is busy for good,
+// exactly as it always was.
+const HARNESS = STAGE.mode === 'idle' || STAGE.mode === 'busy'
+const readMode = HARNESS ? require(path.join(__dirname, 'fake-mode.js')).modeReader(path.join(__dirname, 'fake-stage.json'), STAGE.mode) : () => 'busy'
+let mode = HARNESS ? STAGE.mode : 'busy'
 
 // ── terminal geometry + palette ────────────────────────────────────────────
 const cols = Math.max(60, Math.min(process.stdout.columns || 120, 160))
@@ -209,7 +211,7 @@ function writeStatus() {
     const data = C.statusFor(session, Date.now(), HOME, { seconds, ctxPlus: Math.floor(seconds / 45) })
     data.sessionId = CCC_SESSION
     // A copy's own conversation, not the one it was made from.
-    if (resumeUuid && resumeUuid !== session.resumeUuid && typeof data.transcriptPath === 'string') data.transcriptPath = data.transcriptPath.split(session.resumeUuid).join(resumeUuid)
+    if (isCopy && typeof data.transcriptPath === 'string') data.transcriptPath = data.transcriptPath.split(session.resumeUuid).join(resumeUuid)
     fs.mkdirSync(STATUS_DIR, { recursive: true })
     const file = path.join(STATUS_DIR, `${CCC_SESSION}.json`)
     fs.writeFileSync(file + '.tmp', JSON.stringify(data))
@@ -224,11 +226,14 @@ function writeStatus() {
   process.stdin.on('data', (d) => { const s = String(d); if (s.includes('\x03') || s === 'q') process.exit(0) })
 
   writeStatus()
-  let statusAt = Date.now()
-  setInterval(() => {
-    mode = readMode()
-    if (Date.now() - statusAt >= (mode === 'idle' ? 30000 : 2000) - 100) { statusAt = Date.now(); writeStatus() }
-  }, 2000)
+  if (!HARNESS) setInterval(writeStatus, 2000)
+  else {
+    let statusAt = Date.now()
+    setInterval(() => {
+      mode = readMode()
+      if (Date.now() - statusAt >= (mode === 'idle' ? 30000 : 2000) - 100) { statusAt = Date.now(); writeStatus() }
+    }, 2000)
+  }
 
   header()
   let spinnerWord = 'Thinking'
@@ -242,7 +247,10 @@ function writeStatus() {
   let tick = 0
   let tokens = 640
   let working = mode !== 'idle'
-  spinnerBlock(spinnerWord, tick, 4, tokens, working)
+  // A harness CLI draws its bottom block at once, so an idle one shows its
+  // prompt without waiting for a tick; the README pipeline's first frame comes
+  // with the first tick, as it always did.
+  if (HARNESS) spinnerBlock(spinnerWord, tick, 4, tokens, working)
   setInterval(() => {
     if (mode === 'idle') {
       // Resting at the prompt: the working line goes once, then nothing is drawn.
