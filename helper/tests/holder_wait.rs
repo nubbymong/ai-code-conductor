@@ -412,10 +412,12 @@ fn what_a_program_writes_as_it_exits_reaches_the_app_before_the_exit_report() {
     check("wait-0004", Ending::SaysByeAndExits, Starter::Plain, 0);
 }
 
-/// A starter that ignores SIGCHLD hands that down through exec. A holder
-/// started so had its program reaped by the system as it exited: it could
-/// then not read the program's code (it reported -1), nor see it reaped. The
-/// holder sets SIGCHLD back to its default before it starts a program.
+/// A starter that ignores SIGCHLD hands that down through exec. On Linux a
+/// holder started so had its program reaped by the system as it exited: it
+/// could then not read the program's code (it reported -1, about 7 s late,
+/// after its tree end gave up) nor see it reaped. The holder sets SIGCHLD
+/// back to its default before it starts a program. macOS showed no such gap
+/// in CI; the test runs there too.
 #[cfg(unix)]
 #[test]
 fn a_holder_started_with_sigchld_ignored_still_reports_its_programs_own_code() {
