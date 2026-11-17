@@ -2,16 +2,19 @@
 // aicc_planning#304: a statusline tick whose values equal the stored ones
 // leaves the sessions array (and the session object) as they were, even
 // though usageBuckets and rateLimitExtra arrive as fresh objects every tick.
-// And a usage bar whose figures did not change does not render again.
+// And a usage bar whose figures did not change does not render again, except
+// when the local date changes under it.
 import React, { act } from 'react'
-import { createRoot } from 'react-dom/client'
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { createRoot, type Root } from 'react-dom/client'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-const formatResetTime = vi.hoisted(() => vi.fn((_iso: string) => '3:00 pm'))
-vi.mock('../../../src/renderer/utils/terminalFormatting', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  formatResetTime,
-}))
+// The real formatResetTime, counted.
+const formatResetTime = vi.hoisted(() => vi.fn<(iso: string) => string>())
+vi.mock('../../../src/renderer/utils/terminalFormatting', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../src/renderer/utils/terminalFormatting')>()
+  formatResetTime.mockImplementation(real.formatResetTime)
+  return { ...real, formatResetTime }
+})
 
 import { useSessionStore, sameStatusValue } from '../../../src/renderer/stores/sessionStore'
 import type { Session } from '../../../src/renderer/stores/sessionStore'
@@ -81,24 +84,50 @@ describe('sameStatusValue', () => {
 })
 
 describe('RateLimitBar (#304)', () => {
-  it('a bar whose figures did not change does not render again', () => {
-    const container = document.createElement('div')
+  let container: HTMLDivElement
+  let root: Root | null
+  const unmount = () => { if (root) { const r = root; root = null; act(() => { r.unmount() }) } }
+  beforeEach(() => {
+    container = document.createElement('div')
     document.body.appendChild(container)
-    const root = createRoot(container)
+    root = createRoot(container)
+  })
+  // Each case leaves nothing mounted, and so no midnight timer, for the next.
+  afterEach(() => {
+    unmount()
+    container.remove()
+    vi.useRealTimers()
+  })
+
+  it('a bar whose figures did not change does not render again', () => {
     const props = { label: '5h', pct: 41, resets: '2026-11-17T05:00:00Z' }
     const tree = (tick: number, p: typeof props) =>
       React.createElement('div', { 'data-tick': tick }, React.createElement(RateLimitBar, p))
-    act(() => { root.render(tree(1, props)) })
+    act(() => { root!.render(tree(1, props)) })
     const first = formatResetTime.mock.calls.length
     expect(first).toBeGreaterThan(0)
     // The parent re-renders (another session ticked): same figures, new props object.
-    act(() => { root.render(tree(2, { ...props })) })
+    act(() => { root!.render(tree(2, { ...props })) })
     expect(formatResetTime.mock.calls.length).toBe(first)
     // A real change still paints.
-    act(() => { root.render(tree(3, { ...props, pct: 42 })) })
+    act(() => { root!.render(tree(3, { ...props, pct: 42 })) })
     expect(formatResetTime.mock.calls.length).toBeGreaterThan(first)
     expect(container.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('42')
-    act(() => { root.unmount() })
-    container.remove()
+  })
+
+  it('at local midnight, a bar whose reset was tomorrow drops the date, with no new props', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    vi.setSystemTime(new Date(2026, 10, 17, 23, 59, 0)) // local time
+    const resets = new Date(2026, 10, 18, 3, 0, 0).toISOString()
+    const dated = formatResetTime(resets)
+    act(() => { root!.render(React.createElement(RateLimitBar, { label: '5h', pct: 41, resets, showReset: true })) })
+    expect(container.textContent).toContain(`resets ${dated}`)
+    act(() => { vi.advanceTimersByTime(2 * 60_000) }) // 00:01 on the 18th
+    const timeOnly = formatResetTime(resets)
+    expect(timeOnly).not.toBe(dated)
+    expect(container.textContent).toContain(`resets ${timeOnly}`)
+    // The last bar gone, its midnight timer goes too.
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

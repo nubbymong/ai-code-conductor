@@ -79,7 +79,45 @@ export function RateLimitBarNoReading({ label, resetsAt, compact }: { label: str
   )
 }
 
+// aicc_planning#304: the bar below is memoized, so it renders only when its
+// props change. Its reset text also depends on today's date (formatResetTime
+// drops the date for a reset later today), so every bar also renders when the
+// local date changes: one timer for all of them, set for the next local
+// midnight while any bar is on screen.
+const midnightListeners = new Set<() => void>()
+let midnightTimer: ReturnType<typeof setTimeout> | null = null
+
+function armMidnight(): void {
+  if (midnightTimer !== null || midnightListeners.size === 0) return
+  const next = new Date()
+  next.setHours(24, 0, 0, 0)
+  midnightTimer = setTimeout(() => {
+    midnightTimer = null
+    for (const wake of [...midnightListeners]) wake()
+    armMidnight()
+  }, next.getTime() - Date.now() + 1000)
+}
+
+function subscribeMidnight(wake: () => void): () => void {
+  midnightListeners.add(wake)
+  armMidnight()
+  return () => {
+    midnightListeners.delete(wake)
+    if (midnightListeners.size === 0 && midnightTimer !== null) {
+      clearTimeout(midnightTimer)
+      midnightTimer = null
+    }
+  }
+}
+
+/** The local date, as a number that changes only when the date does. */
+function localDay(): number {
+  const d = new Date()
+  return d.getFullYear() * 10000 + d.getMonth() * 100 + d.getDate()
+}
+
 function RateLimitBar({ label, pct, resets, showReset, compact }: { label: string; pct: number; resets?: string; showReset?: boolean; compact?: boolean }) {
+  React.useSyncExternalStore(subscribeMidnight, localDay)
   const clamped = Math.min(100, Math.max(0, pct))
   // Drive from theme tokens so the bar adapts to light/dark — hard-
   // coded Catppuccin Mocha hex didn't repaint when the user flipped
@@ -132,5 +170,5 @@ function RateLimitBar({ label, pct, resets, showReset, compact }: { label: strin
 
 // aicc_planning#304: every footer and strip bar re-rendered on any session's
 // statusline tick. Its props are primitives, so a bar whose figures did not
-// change skips the render.
+// change skips the render (it still renders at local midnight, above).
 export default React.memo(RateLimitBar)
