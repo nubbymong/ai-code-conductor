@@ -360,4 +360,20 @@ mod tests {
         let checks = h.shared.status_checks.load(Ordering::SeqCst);
         assert!(checks <= 2, "the child's status was asked for {checks} times while it ran for {ran:?}");
     }
+
+    /// The holder waits for its child without the terminal's lock, so what
+    /// needs the terminal while the child runs (a resize here) is answered at
+    /// once, not when the child exits.
+    #[test]
+    fn the_terminal_is_not_locked_while_the_holder_waits_for_its_child() {
+        let h = Holder::start(&two_seconds(), PtySize::default(), 64 * 1024).expect("a program starts on a terminal");
+        // The exit thread is waiting by now.
+        thread::sleep(Duration::from_millis(300));
+        let began = Instant::now();
+        h.resize(PtySize { cols: 100, rows: 30 }).expect("resize");
+        let took = began.elapsed();
+        assert!(took < Duration::from_millis(500), "a resize while the child ran waited {took:?}");
+        assert_eq!(h.exit_code(), None, "the program ended before the resize could show anything");
+        assert_eq!(h.wait_exit(Duration::from_secs(30)), Some(0));
+    }
 }
