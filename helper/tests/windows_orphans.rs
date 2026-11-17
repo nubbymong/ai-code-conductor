@@ -6,13 +6,18 @@
 //! purpose. A self-test ended by force never calls it, and one that ends
 //! normally can exit before the thread that closes its terminal has run. On
 //! the Windows 11 test VM (build 22621) the host then kept running after 1 of
-//! 12 forced ends and 3 of 4 normal ends of the 2.1.3-beta.6 helper.
+//! 12 forced ends and 3 of 4 normal ends of the 2.1.3-beta.6 helper. On the
+//! CI runner (Windows Server 2025, build 26100) the host ended with the
+//! self-test even before the fix, and this test passed there against the
+//! unfixed self-test: in CI it holds the guarantee, and checks that the
+//! self-test still passes inside its job, rather than showing the leak.
 //!
 //! The test runs the real helper. The self-test is started with no console of
-//! its own, so every `conhost.exe` child it has is its terminal's host. Each
-//! one is held open by a process handle from the moment it is seen, so a
-//! reused process id is never taken for it, and one left running is ended
-//! before the test fails.
+//! its own, so every `conhost.exe` child it has is its terminal's host. That
+//! host and the terminal's child are each held open by a process handle from
+//! the moment they are seen, so a reused process id is never taken for one,
+//! and one left running is ended before the test fails. Every try is
+//! checked, also a forced end that missed the moment.
 //!
 //! Probabilistic by nature: the self-test is short, so a forced end lands
 //! while its terminal is open only when the poll catches that moment. Such a
@@ -122,22 +127,30 @@ fn start_selftest() -> Child {
         .expect("start aicc-helper selftest")
 }
 
-/// Every console host of `pid` not yet in `held`, held from now on.
-fn hold_new_hosts(pid: u32, held: &mut Vec<Held>) {
-    for id in children(pid, "conhost.exe") {
-        if !held.iter().any(|h| h.pid == id) {
-            if let Some(h) = Held::open(id) {
-                held.push(h);
+/// What the self-test starts: its terminal's child and the console host.
+const STARTED: [&str; 2] = ["aicc-helper.exe", "conhost.exe"];
+
+/// Every child of `pid` that the self-test starts and `held` does not have
+/// yet, held from now on. After `pid` has exited this still finds them: its
+/// id stays this process's while the test holds it.
+fn hold_new(pid: u32, held: &mut Vec<Held>) {
+    for exe in STARTED {
+        for id in children(pid, exe) {
+            if !held.iter().any(|h| h.pid == id) {
+                if let Some(h) = Held::open(id) {
+                    held.push(h);
+                }
             }
         }
     }
 }
 
-/// One forced end. Waits for the terminal's child, then ends the self-test
-/// while that child, and every console host, still runs. Returns what the
-/// self-test had started then (the child and the hosts), held open; `None`
-/// when the moment was missed and the self-test was not ended mid-run.
-fn forced_end() -> Option<Vec<Held>> {
+/// One forced end. Waits for the terminal's child, then ends the self-test,
+/// counting the end as mid-run when that child and every console host still
+/// ran right before it. Returns everything the self-test was seen to start,
+/// looked at again after the end and held open, whether or not the moment
+/// was caught, and whether the end landed mid-run.
+fn forced_end() -> (Vec<Held>, bool) {
     let mut selftest = start_selftest();
     let pid = selftest.id();
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -145,39 +158,43 @@ fn forced_end() -> Option<Vec<Held>> {
     while echo.is_none() && Instant::now() < deadline && matches!(selftest.try_wait(), Ok(None)) {
         echo = children(pid, "aicc-helper.exe").into_iter().find_map(Held::open);
     }
-    let mut landed = None;
+    let mut started = Vec::new();
+    let mut mid_run = false;
     if let Some(echo) = echo {
-        let mut started = Vec::new();
-        hold_new_hosts(pid, &mut started);
-        let open = !started.is_empty() && started.iter().all(Held::running) && echo.running();
-        if open && matches!(selftest.try_wait(), Ok(None)) && selftest.kill().is_ok() {
-            started.push(echo);
-            landed = Some(started);
+        for id in children(pid, "conhost.exe") {
+            if let Some(h) = Held::open(id) {
+                started.push(h);
+            }
         }
+        let open = !started.is_empty() && started.iter().all(Held::running) && echo.running();
+        mid_run = open && matches!(selftest.try_wait(), Ok(None)) && selftest.kill().is_ok();
+        started.push(echo);
     }
     let _ = selftest.kill();
     let _ = selftest.wait();
-    landed
+    hold_new(pid, &mut started);
+    (started, mid_run)
 }
 
-/// One self-test run to its end: whether it passed, and the console hosts it
-/// had, held open.
+/// One self-test run to its end: whether it passed, its answer, and
+/// everything it was seen to start, held open.
 fn normal_end() -> (bool, String, Vec<Held>) {
     let mut selftest = start_selftest();
     let pid = selftest.id();
     let deadline = Instant::now() + Duration::from_secs(60);
-    let mut hosts = Vec::new();
+    let mut started = Vec::new();
     while matches!(selftest.try_wait(), Ok(None)) && Instant::now() < deadline {
-        hold_new_hosts(pid, &mut hosts);
+        hold_new(pid, &mut started);
     }
-    // Once more after the exit: the id stays this process's while `selftest` holds it.
-    hold_new_hosts(pid, &mut hosts);
     if matches!(selftest.try_wait(), Ok(None)) {
         let _ = selftest.kill();
+        let _ = selftest.wait();
     }
+    // Before `wait_with_output` lets the id go.
+    hold_new(pid, &mut started);
     let out = selftest.wait_with_output().expect("read the self-test's answer");
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    (out.status.success() && text.contains("{\"ok\":true,"), text, hosts)
+    (out.status.success() && text.contains("{\"ok\":true,"), text, started)
 }
 
 /// The ones still running `GONE_WITHIN` after the self-test ended, each named
@@ -200,15 +217,18 @@ fn nothing_the_self_test_starts_outlives_it_however_it_ends() {
     let mut tried = 0;
     while landed < MID_RUN && tried < MAX_FORCED {
         tried += 1;
-        if let Some(started) = forced_end() {
+        // Every try is checked, also one whose moment was missed: it still
+        // ended the self-test, or let it end.
+        let (started, mid_run) = forced_end();
+        if mid_run {
             landed += 1;
-            left.extend(left_running(&started, "a forced end"));
         }
+        left.extend(left_running(&started, if mid_run { "a forced end mid-run" } else { "a forced end" }));
     }
     let mut failed = Vec::new();
     for _ in 0..NORMAL_RUNS {
-        let (ok, text, hosts) = normal_end();
-        left.extend(left_running(&hosts, "a normal end"));
+        let (ok, text, started) = normal_end();
+        left.extend(left_running(&started, "a normal end"));
         if !ok {
             failed.push(text);
         }
