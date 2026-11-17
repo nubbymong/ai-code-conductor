@@ -101,7 +101,7 @@ impl ExitWatch {
             let e = io::Error::last_os_error();
             match e.raw_os_error() {
                 Some(libc::EINTR) => continue,
-                Some(libc::ECHILD) => return Ok(()),
+                Some(libc::ECHILD) => std::thread::sleep(Duration::from_secs(3600)), // MUTANT M10: a child already reaped blocks the wait
                 _ => return Err(e),
             }
         }

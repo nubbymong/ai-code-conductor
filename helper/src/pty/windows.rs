@@ -676,7 +676,9 @@ impl Pty {
     /// `end_tree` are untouched.
     pub fn exit_watch(&self) -> io::Result<ExitWatch> {
         let mut own: HANDLE = unsafe { std::mem::zeroed() };
-        let duplicated = unsafe { DuplicateHandle(GetCurrentProcess(), self.process as HANDLE, GetCurrentProcess(), &mut own, PROCESS_SYNCHRONIZE, 0, 0) };
+        // MUTANT M11: the handle holds the query right again, as before the review fix
+        let rights = PROCESS_SYNCHRONIZE | windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
+        let duplicated = unsafe { DuplicateHandle(GetCurrentProcess(), self.process as HANDLE, GetCurrentProcess(), &mut own, rights, 0, 0) };
         if duplicated == 0 {
             return Err(os_error("DuplicateHandle"));
         }
