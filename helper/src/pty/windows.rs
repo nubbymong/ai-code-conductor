@@ -58,7 +58,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, GetFileInformationByHandle, GetFullPathNameW, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
-use windows_sys::Win32::System::Console::{ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON};
+use windows_sys::Win32::System::Console::{ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, SetConsoleCtrlHandler, COORD, HPCON};
 use windows_sys::Win32::System::Diagnostics::Debug::{SetThreadErrorMode, SEM_FAILCRITICALERRORS};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32};
 use windows_sys::Win32::System::JobObjects::{
@@ -506,6 +506,15 @@ impl Pty {
                 Some(p) => p.as_ptr(),
                 None => std::ptr::null(),
             };
+            // Ctrl+C on again before the program starts. `hold --detach`
+            // starts the holder in a process group of its own
+            // (CREATE_NEW_PROCESS_GROUP, detach.rs), which turns Ctrl+C off
+            // for it, and a process hands that on to every process it starts:
+            // the program would then ignore the Ctrl+C its terminal sends (the
+            // console's CTRL_C_EVENT for a Ctrl+C typed in processed input),
+            // where a program node-pty starts gets it. The holder itself has
+            // no console (DETACHED_PROCESS), so no Ctrl+C reaches it.
+            SetConsoleCtrlHandler(None, 0);
             let ok = CreateProcessW(
                 program_ptr,
                 cmdline.as_mut_ptr(),

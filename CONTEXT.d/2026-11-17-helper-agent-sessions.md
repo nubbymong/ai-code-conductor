@@ -58,6 +58,23 @@ wait happens in `hold()`. Otherwise it happens through a HelperPty whose hold
 waits and then hands over to the usual start (or to the "nothing started"
 terminal).
 
+**Ctrl+C in a held terminal (found on the VM).** A normal quit types Escape,
+Ctrl-C and /exit into each agent session. With the setting off, the Codex
+resume picker ended at the Ctrl-C (exit 0xC000013A, STATUS_CONTROL_C_EXIT).
+Through the helper it ignored it, and the quit waited the full 5 s before it
+was ended. The cause is in the holder, and it has been there since beta.6 for
+every held terminal. `hold --detach` starts the holder with
+CREATE_NEW_PROCESS_GROUP (detach.rs), which turns Ctrl+C off for that
+process, and a process hands that on to every process it starts. So a program
+in a held terminal ignored the Ctrl+C its terminal sends, for example a native
+command running in a held PowerShell. The holder now turns Ctrl+C back on
+(`SetConsoleCtrlHandler(NULL, FALSE)`) just before it starts the program. It
+has no console itself (DETACHED_PROCESS), so no Ctrl+C reaches it. A Windows
+test (`a_held_program_gets_the_ctrl_c_its_terminal_sends`) runs
+`timeout /t 60 /nobreak` and expects a typed Ctrl+C to end it at once. macOS
+and Linux are not affected: the child has its own session and terminal, and
+nothing ignores SIGINT.
+
 **Machines.** The kinds are Claude Code and Codex, under the tab's name, with
 End only. Main refuses a Re-attach of one too. The Services count includes
 them. The page's "off" sentence now names the place ("Settings, General,
