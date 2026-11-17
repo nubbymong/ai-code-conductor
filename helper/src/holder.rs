@@ -114,11 +114,17 @@ impl Holder {
             status_checks: AtomicUsize::new(0),
         });
         let pty = Arc::new(Mutex::new(pty));
+        // The watch on the child's exit, made before any thread: one that
+        // cannot be made fails the start. Declared after `pty`, so on a
+        // failed start it is dropped first, which hands the reaping back to
+        // the terminal before the terminal's drop ends the child.
+        let watch = lock(&pty).exit_watch()?;
 
         // The threads start in this order, the one that watches the child
         // last, and none of the earlier ones holds the terminal: so if a
         // thread cannot be made, the start fails (rather than a panic) and the
-        // terminal and its child go with it (`Pty`'s drop).
+        // terminal and its child go with it (`Pty`'s drop; a watch that never
+        // waited hands the reaping back to the terminal first).
 
         // Input: in order, one frame at a time. A failed write (the terminal
         // is gone) ends the thread, and later input is refused as closed.
@@ -157,22 +163,18 @@ impl Holder {
             lock(&out_shared.state).output_ended = true;
         })?;
 
-        // Exit: the child is watched by polling. On Windows the output pipe does
-        // not end when the child does, so the reader cannot be the signal.
+        // Exit: one wait that blocks until the child exits (`ExitWatch`),
+        // without the terminal's lock, so nothing wakes this thread while the
+        // child runs and nothing else waits behind it. On Windows the output
+        // pipe does not end when the child does, so the reader cannot be the
+        // signal; on macOS and Linux this wait is the only one that reaps the
+        // child. A wait that fails is reported as an exit, never waited on.
         let watch_shared = Arc::clone(&shared);
         let watch_pty = Arc::clone(&pty);
         thread::Builder::new().spawn(move || {
-            let code = loop {
-                #[cfg(test)]
-                watch_shared.status_checks.fetch_add(1, Ordering::SeqCst);
-                let status = lock(&watch_pty).try_wait();
-                match status {
-                    Ok(Some(code)) => break code,
-                    Ok(None) => {}
-                    Err(_) => break -1,
-                }
-                thread::sleep(Duration::from_millis(25));
-            };
+            #[cfg(test)]
+            watch_shared.status_checks.fetch_add(1, Ordering::SeqCst);
+            let code = watch.wait().unwrap_or(-1);
             // The first process is gone: end what it left behind on the
             // terminal, then close the terminal so the output can end.
             {

@@ -5,8 +5,14 @@
 //! `spawn_with` returns the terminal and a reader for what the child writes.
 //! On Unix the reader ends when the child and everything it started have
 //! closed the terminal. On Windows it ends only when the pseudoconsole is
-//! closed (`close_output`), so callers watch the child with `try_wait` and do
-//! not rely on the reader's end.
+//! closed (`close_output`), so callers do not rely on the reader's end.
+//!
+//! A caller learns of the child's exit through an exit watch (`exit_watch`):
+//! `ExitWatch::wait` blocks a thread of the caller's until the child exits
+//! and answers its exit code, without the terminal's lock and with no clock
+//! waking it meanwhile. On Windows the watch waits on a handle of its own; on
+//! Unix it is the only reaper of the child, and `try_wait` and `end_tree`
+//! read the status it recorded.
 //!
 //! The child is started in a unit that can be ended whole: a job object owned
 //! by the holder on Windows (the holder itself is in none, probe P7), its own
@@ -17,12 +23,12 @@ use std::io;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
-pub use unix::Pty;
+pub use unix::{ExitWatch, Pty};
 
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{end_children_with_this_process, Pty};
+pub use windows::{end_children_with_this_process, ExitWatch, Pty};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PtySize {
