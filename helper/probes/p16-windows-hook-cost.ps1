@@ -129,6 +129,7 @@ public class P16Run
     public bool ZeroByPoll;
     public int Missed;
     public string Chain = "";
+    public string Paths = "";
     public string Output = "";
 }
 
@@ -274,11 +275,11 @@ public static class P16Runner
         return up == null ? name : Path.GetFileName(up) + "/" + name;
     }
 
-    static string ImageName(IntPtr h)
+    static string ImagePath(IntPtr h)
     {
         StringBuilder sb = new StringBuilder(1024);
         int size = sb.Capacity;
-        return QueryFullProcessImageNameW(h, 0, sb, ref size) ? ShortName(sb.ToString()) : "?";
+        return QueryFullProcessImageNameW(h, 0, sb, ref size) ? sb.ToString() : "?";
     }
 
     static JOBOBJECT_BASIC_ACCOUNTING_INFORMATION Accounting(IntPtr job)
@@ -373,7 +374,7 @@ public static class P16Runner
             throw new Win32Exception(e, "AssignProcessToJobObject");
         }
         handles[pi.dwProcessId] = pi.hProcess;
-        names[pi.dwProcessId] = ImageName(pi.hProcess);
+        names[pi.dwProcessId] = ImagePath(pi.hProcess);
         order.Add(pi.dwProcessId);
         ResumeThread(pi.hThread);
         CloseHandle(pi.hThread);
@@ -401,7 +402,7 @@ public static class P16Runner
                         // The image name can only be read while the process
                         // runs; its cycle count can be read after it ends.
                         IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, false, pid);
-                        if (h != IntPtr.Zero) { handles[pid] = h; names[pid] = ImageName(h); order.Add(pid); }
+                        if (h != IntPtr.Zero) { handles[pid] = h; names[pid] = ImagePath(h); order.Add(pid); }
                     }
                 }
                 else if (msg == MSG_EXIT_PROCESS || msg == MSG_ABNORMAL_EXIT_PROCESS)
@@ -449,6 +450,7 @@ public static class P16Runner
         if (GetExitCodeProcess(pi.hProcess, out code)) r.ExitCode = code;
 
         List<string> parts = new List<string>();
+        List<string> paths = new List<string>();
         double total = 0;
         int counted = 0;
         foreach (int pid in order)
@@ -462,9 +464,12 @@ public static class P16Runner
                 total += cpu;
                 counted++;
             }
-            parts.Add(names[pid] + ":" + cpu.ToString("0.00", CultureInfo.InvariantCulture));
+            string full = names[pid];
+            parts.Add((full == "?" ? "?" : ShortName(full)) + ":" + cpu.ToString("0.00", CultureInfo.InvariantCulture));
+            paths.Add(full);
             CloseHandle(h);
         }
+        r.Paths = string.Join("|", paths.ToArray());
         // Every process the job ever held, less those whose cycles were read:
         // a process that could not be opened, a lost start notice, or a
         // failed cycle read all leave CpuMs short, and the run then fails.
@@ -576,26 +581,44 @@ function Get-Defender {
     }
 }
 
-# Whether a Defender exclusion covers a path, or a program of the chain by
-# name or path. Reading exclusions can need an elevated session; then this
-# says so instead of guessing.
+# Whether a Defender exclusion covers the probe: a path exclusion (a folder or
+# a file) over the helper, the store or a program of the chain; a process
+# exclusion naming a program of the chain by full path or file name; or an
+# extension exclusion matching one. Rules may hold environment variables and
+# wildcards. Reading exclusions can need an elevated session; then this says
+# so instead of guessing.
 function Test-Excluded([string[]] $paths, [string[]] $programs) {
     try {
         $pref = Get-MpPreference
         $list = @($pref.ExclusionPath | Where-Object { $_ })
         $procs = @($pref.ExclusionProcess | Where-Object { $_ })
+        $exts = @($pref.ExclusionExtension | Where-Object { $_ })
     } catch {
         return 'unknown'
     }
-    if (($list.Count -gt 0 -and $list[0] -like 'N/A*') -or ($procs.Count -gt 0 -and $procs[0] -like 'N/A*')) { return 'unknown' }
-    foreach ($p in $paths) {
+    foreach ($l in @(, $list) + @(, $procs) + @(, $exts)) {
+        if ($l.Count -gt 0 -and $l[0] -like 'N/A*') { return 'unknown' }
+    }
+    $wild = [char[]]@('*', '?')
+    foreach ($p in @($paths) + @($programs)) {
         foreach ($x in $list) {
-            if ($p.StartsWith($x.TrimEnd([char]92), [StringComparison]::OrdinalIgnoreCase)) { return 'yes' }
+            $rule = [Environment]::ExpandEnvironmentVariables($x).TrimEnd([char]92)
+            if ($rule.IndexOfAny($wild) -ge 0) {
+                if (($p -like $rule) -or ($p -like ($rule + [char]92 + '*'))) { return 'yes' }
+            } elseif (($p -ieq $rule) -or $p.StartsWith($rule + [char]92, [StringComparison]::OrdinalIgnoreCase)) {
+                return 'yes'
+            }
         }
     }
-    foreach ($x in $procs) {
-        foreach ($p in $programs) {
-            if ($x -ieq $p -or $x -ieq (Split-Path -Leaf $p)) { return 'yes' }
+    foreach ($p in $programs) {
+        $leaf = Split-Path -Leaf $p
+        foreach ($x in $procs) {
+            $rule = [Environment]::ExpandEnvironmentVariables($x)
+            if (($rule -ieq $p) -or ($rule -ieq $leaf)) { return 'yes' }
+            if ($rule.IndexOfAny($wild) -ge 0 -and (($p -like $rule) -or ($leaf -like $rule))) { return 'yes' }
+        }
+        foreach ($x in $exts) {
+            if ([IO.Path]::GetExtension($p).TrimStart('.') -ieq $x.TrimStart('.', '*')) { return 'yes' }
         }
     }
     return 'no'
@@ -785,10 +808,9 @@ try {
     if ([P16Runner]::CycleRate -le 0) { throw 'could not run: no CPU cycle count on this machine' }
     $result.machine.cpuCyclesPerMs = [math]::Round([P16Runner]::CycleRate, 0)
     $result.defenderBefore = Get-Defender
-    $result.defenderExcludesProbe = Test-Excluded @($helperFull, $storeFull) @($helperFull, 'bash.exe', 'conhost.exe', 'cmd.exe')
     $result.passLine = [ordered]@{ p95WallMs = $PassP95Ms; maxWallMs = $PassMaxMs; meanCpuMs = $PassMeanCpuMs; failedRuns = $PassFailedRuns; defenderRealTime = 'on' }
     Write-Host "P16: helper $($result.helper.version) ($($result.helper.folder)), signature $($result.helper.signature)"
-    Write-Host "P16: Defender real-time protection $($result.defenderBefore.realTimeProtection); exclusion covering the probe: $($result.defenderExcludesProbe)"
+    Write-Host "P16: Defender real-time protection $($result.defenderBefore.realTimeProtection)"
 
     # --- Step 0: how Claude Code starts a command hook -----------------------
     $step0 = [ordered]@{ how = 'documented, not observed' }
@@ -913,6 +935,8 @@ try {
     $mpClock = [Diagnostics.Stopwatch]::StartNew()
 
     $rows = New-Object Collections.Generic.List[object]
+    # Every program the chains ran, by full path, for the exclusion check.
+    $chainPaths = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $interval = 1000.0 / $PerSecond
     $plan = @()
     for ($i = 1; $i -le $Paced; $i++) { $plan += 'paced' }
@@ -929,6 +953,7 @@ try {
         }
         $at = $clock.Elapsed.TotalMilliseconds
         $r = [P16Runner]::Run($standIn, $freshBlock, $work, $newConsole, $hookStdin, $RunTimeoutMs, $null)
+        foreach ($cp in $r.Paths.Split('|')) { if ($cp -and $cp -ne '?') { [void]$chainPaths.Add($cp) } }
         $listed = $false
         try {
             $listing = $r.Output.Trim() | ConvertFrom-Json
@@ -969,6 +994,13 @@ try {
 
     # The holder is no longer needed; end it now so step 3 runs alone.
     Stop-ProbeHolder
+
+    # Is Defender as shipped for everything measured? Checked against the
+    # programs the chains really ran, so a folder exclusion over Git, or a
+    # process exclusion by full path, is caught.
+    $result.chainPrograms = @($chainPaths | Sort-Object | ForEach-Object { $_.Replace($helperFull, '<helper>') })
+    $result.defenderExcludesProbe = Test-Excluded @($helperFull, $storeFull) (@($helperFull) + @($chainPaths))
+    Write-Host "P16: programs in the chains: $($result.chainPrograms -join '; '); exclusion covering the probe: $($result.defenderExcludesProbe)"
 
     # --- Step 3: reference, today's HTTP hook ---------------------------------
     if ($HttpPosts -gt 0) {
