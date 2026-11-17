@@ -102,3 +102,5 @@ tests/live/results/
 # the P7 probe is a PowerShell script, which the repo-wide *.ps1 rule above would hide.
 helper/target/
 !helper/probes/*.ps1
+# The performance harness's process sampler (scripts/perf/README.md) is one too.
+!scripts/perf/*.ps1

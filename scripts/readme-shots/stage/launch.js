@@ -129,12 +129,38 @@ function stop() {
   // its command on macOS and Linux, started no earlier than the record), on
   // every platform: PIDs are reused.
   if (!S.isRecordedProcess(rec, S.processIdentity(rec.pid))) { console.log(`pid ${rec.pid} is not the app launch.js started (ended, or another process now): not touched`); return }
-  if (process.platform === 'win32') execFileSync('taskkill', ['/T', '/F', '/PID', String(rec.pid)], { stdio: 'ignore', windowsHide: true })
+  if (process.platform === 'win32') endTreeWin(rec)
   else process.kill(-rec.pid, 'SIGTERM') // its own process group (started detached)
   console.log(`ended the app's tree (pid ${rec.pid})`)
 }
 
-module.exports = { planLaunch, installedExe, DEAD_PROXY }
+/**
+ * End the recorded app's process tree on Windows (taskkill /T /F). taskkill
+ * exits non-zero when a process of the tree is gone by the time it reaches it
+ * (a terminal's console host ending with its shell, say: most stops on the
+ * test VM hit this), so a non-zero exit is a failure only when the app itself
+ * is still running afterwards (checked for up to 5 s). A process that is no
+ * longer in the app's tree when taskkill walks it is not touched here.
+ * deps (for the unit suite): exec, stillRunning(), wait(ms), log(line).
+ * Returns taskkill's exit code.
+ */
+function endTreeWin(rec, deps = {}) {
+  const exec = deps.exec || execFileSync
+  const stillRunning = deps.stillRunning || (() => S.isRecordedProcess(rec, S.processIdentity(rec.pid)))
+  const wait = deps.wait || ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms))
+  const log = deps.log || ((line) => console.log(line))
+  try {
+    exec('taskkill', ['/T', '/F', '/PID', String(rec.pid)], { stdio: 'ignore', windowsHide: true, timeout: 60000 })
+    return 0
+  } catch (e) {
+    for (let i = 0; i < 10 && stillRunning(); i++) wait(500)
+    if (stillRunning()) throw new Error(`taskkill exited ${e.status} and the app (pid ${rec.pid}) is still running`)
+    log(`taskkill exited ${e.status}: part of the tree had already ended; the app itself has ended`)
+    return e.status
+  }
+}
+
+module.exports = { planLaunch, installedExe, DEAD_PROXY, endTreeWin }
 
 if (require.main === module) {
   const [cmd, ...rest] = process.argv.slice(2)

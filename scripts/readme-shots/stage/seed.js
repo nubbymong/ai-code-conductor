@@ -190,6 +190,8 @@ function installFakeClis() {
   fs.copyFileSync(`${here}/fake-claude.js`, `${NPM_BIN}/fake-claude.js`)
   fs.copyFileSync(`${here}/fake-codex.js`, `${NPM_BIN}/fake-codex.js`)
   fs.copyFileSync(`${here}/content.js`, `${NPM_BIN}/content.js`)
+  // The performance harness's mode switch for the fake Claude (scripts/perf).
+  fs.copyFileSync(`${here}/fake-mode.js`, `${NPM_BIN}/fake-mode.js`)
   writeText(`${NPM_BIN}/claude.cmd`, `@echo off\r\nnode "%~dp0fake-claude.js" %*\r\n`)
   writeText(`${NPM_BIN}/codex.cmd`, `@echo off\r\nnode "%~dp0fake-codex.js" %*\r\n`)
   // Where the fake Claude keeps each session's status file (this staging's
@@ -207,6 +209,7 @@ function uninstallFakeClis() {
     rmrf(`${NPM_BIN}/fake-${n}.js`)
   }
   rmrf(`${NPM_BIN}/content.js`)
+  rmrf(`${NPM_BIN}/fake-mode.js`)
   rmrf(`${NPM_BIN}/fake-stage.json`)
   log('fake CLIs removed')
 }
