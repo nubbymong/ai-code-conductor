@@ -44,8 +44,6 @@ libc = "=0.2.172"
 # Cargo.lock. Authorization builds and reads the pipe's security descriptor,
 # Cryptography gives random endpoint names, FileSystem and IO carry the
 # overlapped named pipe, JobObjects ends a session's whole process tree.
-# Diagnostics_ToolHelp lists a process's children, for the tests only
-# (tests/windows_orphans.rs).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.59.0", default-features = false, features = [
   "Win32_Foundation",
@@ -54,12 +52,17 @@ windows-sys = { version = "=0.59.0", default-features = false, features = [
   "Win32_Security_Cryptography",
   "Win32_Storage_FileSystem",
   "Win32_System_Console",
-  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_IO",
   "Win32_System_JobObjects",
   "Win32_System_Pipes",
   "Win32_System_Threading",
 ] }
+
+# The tests only: the same pinned crate, one more feature. Diagnostics_ToolHelp
+# lists processes and threads (tests/windows_orphans.rs). Cargo adds it to the
+# build that runs the tests; the release build of the helper never has it.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "=0.59.0", default-features = false, features = ["Win32_System_Diagnostics_ToolHelp"] }
 
 [profile.release]
 strip = true

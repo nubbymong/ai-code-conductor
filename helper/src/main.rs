@@ -169,9 +169,6 @@ fn cmd_selftest(args: &[String]) -> ExitCode {
         Err(e) => return usage(&e),
     };
     let nonce = a.get("--nonce").map(str::to_string).unwrap_or_else(|| "0".repeat(32));
-    // Before the self-test starts anything: see `end_children_with_this_process`.
-    #[cfg(windows)]
-    end_children_with_selftest();
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => return fail(&format!("cannot find this program: {e}")),
