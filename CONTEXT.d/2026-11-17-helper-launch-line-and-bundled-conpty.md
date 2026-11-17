@@ -94,7 +94,13 @@ launch frame, the install copy, the recopy keeping the source, a failed
 copy, a copy in use, missing files and the folder names the holder uses. The
 bundled ConPTY itself loading and running cannot be tested in CI: the Helper
 jobs have no node-pty, so no conpty.dll. It was checked on the Windows test
-VM instead (see the PR).
+VM instead, with the CI-built helper and node-pty's two files from the
+installed 2.1.3-beta.6: sessions on the bundled ConPTY launch, take input,
+resize and end with the folder and files held during the start; and a
+program that exits by itself on it (`echo done & exit 3`) is reported as
+`term.exit` code 3 about 20 ms after its exit, with `done` replayed and its
+OpenConsole.exe gone at once, as on Windows' own ConPTY. Not calling
+`ConptyReleasePseudoConsole` costs nothing there.
 
 **Owed before stable.** The ADR-009 adversarial pass on this change (the DLL
 load and the new launch fields), under the owner rule of 2026-11-15 that
