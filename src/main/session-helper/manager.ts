@@ -109,6 +109,8 @@ export interface SessionHelperDeps {
   newTabId?: () => string
   log?: (message: string) => void
   now?: () => number
+  /** The wait between tries to end an agent session's earlier holder (tests shorten it). */
+  sleep?: (ms: number) => Promise<void>
 }
 
 /** What the Services row shows. */
@@ -133,6 +135,7 @@ export const HELPER_SENTENCES = {
   offNothingToEnd: 'The session helper is off, so it holds no terminal to end.',
   offNothingToReattach: 'The session helper is off, so it holds no terminal to re-attach.',
   agentNotReattached: 'An agent session cannot be re-attached. Its own tab resumes the conversation.',
+  agentNotCleared: '[The session helper still runs the session this tab had before, and could not end it, so a second one was not started. Restart this tab in a few minutes.]',
 } as const
 
 /** The Machines page's line while the switch is off and terminals are still held. */
@@ -147,6 +150,14 @@ const SELF_TEST_TIMEOUT_MS = 25_000
 /** How much of the self-test's standard-error note goes in the log line. */
 const SELF_TEST_NOTE_CHARS = 200
 const ENDING_WAIT_MS = 5_000
+/** An agent session's earlier holder that did not end when asked is asked
+ *  again this often, while the helper still lists it. */
+const AGENT_CLEAR_RETRY_MS = 2_000
+/** The longest an agent session's start waits for an earlier holder that does
+ *  not answer: its away clock (it ends itself that long after the app let go
+ *  of it), at most this much, and AGENT_CLEAR_GRACE_MS more. */
+const AGENT_CLEAR_AWAY_CAP_MS = 5 * 60_000
+const AGENT_CLEAR_GRACE_MS = 10_000
 /** A copy that could not be put in place is tried again by a terminal started this long after. */
 const INSTALL_RETRY_AFTER_MS = 60_000
 /** `hold`'s exit status when a holder for the session runs already (protocol 15). */
@@ -190,7 +201,7 @@ export class SessionHelperManager implements MachinesSource {
   private readonly os: HelperOs
   private readonly root: string
   private readonly store: string
-  private readonly deps: Required<Pick<SessionHelperDeps, 'exec' | 'spawnDirect' | 'newTabId' | 'log' | 'now' | 'conptySource'>> & SessionHelperDeps
+  private readonly deps: Required<Pick<SessionHelperDeps, 'exec' | 'spawnDirect' | 'newTabId' | 'log' | 'now' | 'conptySource' | 'sleep'>> & SessionHelperDeps
 
   /** Plain terminals go through the helper (the first setting). */
   private plainOn = false
@@ -221,6 +232,10 @@ export class SessionHelperManager implements MachinesSource {
   /** The app's terminals through the helper, by session id. */
   private readonly live = new Map<string, HelperPty>()
   private readonly endings = new Map<string, Promise<void>>()
+  /** Agent session ids whose earlier holder is being ended (clearAgent): true once it is gone. */
+  private readonly agentClears = new Map<string, Promise<boolean>>()
+  /** Agent session ids whose earlier holder could not be ended: the next start asks again. */
+  private readonly agentsNotCleared = new Set<string>()
   /** A tab Re-attach opened, by its app id, and the held terminal it shows. */
   private readonly bindings = new Map<string, string>()
   /** The tabs the app last saved, by id, with their names. */
@@ -239,6 +254,7 @@ export class SessionHelperManager implements MachinesSource {
       log: () => { /* silent */ },
       now: () => Date.now(),
       conptySource: () => bundledConptySource({ platform: deps.platform }),
+      sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
       ...deps,
     }
   }
@@ -276,10 +292,13 @@ export class SessionHelperManager implements MachinesSource {
     return this.adoptable.has(this.sidFor(appPtyId))
   }
 
-  /** True while the holder this agent session had is being ended (one a
-   *  crash left, or this run's own): its next start waits for that end. */
+  /** True while a holder this agent session had may still run (one a crash
+   *  left, or this run's own, being ended or not ended): its next start waits
+   *  for that end, and starts nothing while it is not confirmed. */
   endingFor(ctx: AgentSpawnContext): boolean {
-    return APP_PTY_ID_RE.test(ctx.sessionId) && this.endings.has(heldAgentSessionId(ctx.sessionId, ctx.kind))
+    if (!APP_PTY_ID_RE.test(ctx.sessionId)) return false
+    const sid = heldAgentSessionId(ctx.sessionId, ctx.kind)
+    return this.endings.has(sid) || this.agentClears.has(sid) || this.agentsNotCleared.has(sid)
   }
 
   /**
@@ -334,7 +353,7 @@ export class SessionHelperManager implements MachinesSource {
       // and tools were this run's alone, so its tab resumes the conversation.
       let agents = 0
       for (const r of this.readStoreRecords()) {
-        if (heldIdKind(r.session) === 'agent') { agents++; this.endLeftAgent(r); continue }
+        if (heldIdKind(r.session) === 'agent') { agents++; void this.clearAgent(r.session, r); continue }
         this.adoptable.set(r.session, r)
         this.keep(r)
       }
@@ -381,8 +400,8 @@ export class SessionHelperManager implements MachinesSource {
       // agent session the store read missed is ended, as at the start; one a
       // tab of this run holds by now is that tab's.
       for (const r of records) {
-        if (this.live.has(r.session) || this.keepers.has(r.session) || this.endings.has(r.session)) continue
-        if (heldIdKind(r.session) === 'agent') { this.endLeftAgent(r); continue }
+        if (this.live.has(r.session) || this.keepers.has(r.session) || this.endings.has(r.session) || this.agentClears.has(r.session)) continue
+        if (heldIdKind(r.session) === 'agent') { void this.clearAgent(r.session, r); continue }
         this.adoptable.set(r.session, r)
         this.keep(r)
       }
@@ -394,8 +413,11 @@ export class SessionHelperManager implements MachinesSource {
     } else {
       // Left by a normal quit that could not end them: ended now. A terminal
       // this run holds or keeps for a tab is not one of those.
+      // An agent session's goes through clearAgent, not waited for here, so
+      // its tab's next start waits for it.
       const left = records.filter((r) => !this.live.has(r.session) && !this.keepers.has(r.session) && !this.adoptable.has(r.session))
-      await Promise.allSettled(left.map((r) => this.endRecord(r)))
+      for (const r of left) if (heldIdKind(r.session) === 'agent' && !this.agentClears.has(r.session)) void this.clearAgent(r.session, r)
+      await Promise.allSettled(left.filter((r) => heldIdKind(r.session) !== 'agent').map((r) => this.endRecord(r)))
     }
     if (!this.info) return
     this.state = 'ready'
@@ -543,28 +565,37 @@ export class SessionHelperManager implements MachinesSource {
    * An agent session (a provider's CLI in a local tab): through a holder when
    * its setting is on and the helper can carry this launch, else node-pty's
    * spawn with these same arguments. Never a take-over: a held agent session
-   * a crash left is ended, not shown again (plan s11, Q1). Either way it
-   * starts once the end of this tab's earlier holder is over, when one is
-   * still under way (a crash's, or a Restart's), so two CLIs never run on
-   * one conversation; it waits ENDING_WAIT_MS at most.
+   * a crash left is ended, not shown again (plan s11, Q1). Either way, while
+   * a holder this tab had may still run its CLI (a crash's, a Restart's, one
+   * that did not end when asked), it starts only once that holder is gone
+   * (clearAgent), so two CLIs never run on one conversation. When that cannot
+   * be confirmed, it starts nothing, and the tab says why.
    */
   spawnAgent(ctx: AgentSpawnContext, file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
     if (!APP_PTY_ID_RE.test(ctx.sessionId)) return this.deps.spawnDirect(file, args, opts)
     const sid = heldAgentSessionId(ctx.sessionId, ctx.kind)
     const spec = this.agentSpec(file, args, opts)
     const usual = this.usualStart(file, args, opts, ctx.sessionId)
+    // Set when the earlier holder could not be ended: then the usual way
+    // starts nothing either, and the tab reads why.
+    let notCleared = false
+    const direct = (): IPty => (notCleared ? notStartedPty(HELPER_SENTENCES.agentNotCleared, opts) : usual())
+    const cleared = async (): Promise<void> => {
+      if (await this.clearAgent(sid)) return
+      notCleared = true
+      throw new Error("the holder this tab had before is still running and could not be ended, so nothing was started")
+    }
     const usualWay = (why: string, said: boolean): IPty => {
-      const earlier = this.endings.get(sid)
-      if (!earlier) {
+      if (!this.endingFor(ctx)) {
         if (said) this.deps.log(`[session-helper] ${ctx.sessionId}: started the usual way, because ${why}`)
         return this.deps.spawnDirect(file, args, opts)
       }
-      // Not through the helper, but after that end: a terminal whose hold
-      // waits for it and then hands over to the usual start.
+      // Not through the helper, but only once that holder is gone: a terminal
+      // whose hold waits for it and then hands over to the usual start.
       const driver: HelperPtyDriver = {
-        ...this.driver(usual, false, false),
+        ...this.driver(direct, false, false),
         hold: async () => {
-          await waitAtMost(earlier, ENDING_WAIT_MS)
+          await cleared()
           throw new Error(`${why}; it waited for the end of this tab's earlier holder first`)
         },
       }
@@ -575,7 +606,8 @@ export class SessionHelperManager implements MachinesSource {
     if (this.state !== 'starting' && this.state !== 'ready') return usualWay(`the session helper is ${this.state}`, false)
     const refused = checkLaunch(spec, this.os)
     if (refused) return usualWay(`the helper would refuse ${refused.why}`, true)
-    return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver: this.driver(usual, true, spec.conpty === 'bundled') }), ctx.sessionId)
+    const driver = this.driver(direct, true, spec.conpty === 'bundled', cleared)
+    return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver }), ctx.sessionId)
   }
 
   /**
@@ -643,10 +675,12 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   /** `bundled`: the launch asks for the bundled ConPTY, whose copy beside the
-   *  helper is checked before the holder starts. */
-  private driver(direct: () => IPty, checkHash: boolean, bundled = false): HelperPtyDriver {
+   *  helper is checked before the holder starts. `cleared` (an agent
+   *  session): what must settle before a holder starts, in place of the plain
+   *  terminal's wait for an earlier holder's end; it throws to start none. */
+  private driver(direct: () => IPty, checkHash: boolean, bundled = false, cleared?: () => Promise<void>): HelperPtyDriver {
     return {
-      hold: (sid, label) => this.hold(sid, label, bundled),
+      hold: (sid, label) => this.hold(sid, label, bundled, cleared),
       connect: (record) => this.connectFor(record, checkHash),
       direct,
       ending: (sid, done) => {
@@ -670,9 +704,14 @@ export class SessionHelperManager implements MachinesSource {
     })
   }
 
-  private async hold(sid: string, label: string, bundled = false): Promise<HolderRecord> {
-    const previous = this.endings.get(sid)
-    if (previous) await waitAtMost(previous, ENDING_WAIT_MS)
+  private async hold(sid: string, label: string, bundled = false, cleared?: () => Promise<void>): Promise<HolderRecord> {
+    if (cleared) {
+      // An agent session: no earlier holder of its id may still run (clearAgent).
+      await cleared()
+    } else {
+      const previous = this.endings.get(sid)
+      if (previous) await waitAtMost(previous, ENDING_WAIT_MS)
+    }
     const exe = await this.checkedExe()
     if (bundled) {
       // Checked against node-pty's files before every launch on it, as the
@@ -751,23 +790,77 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   /**
-   * An agent session a crash left held: ended now, never kept or shown again
-   * (plan s11, Q1). Its tab, restored, resumes the conversation the usual way;
-   * one that starts again meanwhile waits for this end (hold, or
-   * spawnAgent's usual way).
+   * Make sure no earlier holder of this agent session id still runs: one a
+   * crash left (ended now, never kept or shown again, plan s11 Q1), one this
+   * run is ending (a Restart), or one that did not end when asked. Answers
+   * true once none runs, so the tab may start its CLI; false when that could
+   * not be confirmed, and then nothing may start for it. One at a time for an
+   * id: every start that asks shares the answer. `record` is the crash's or
+   * the listing's; without one the store is read for it.
    */
-  private endLeftAgent(record: HolderRecord): void {
-    const sid = record.session
-    if (this.endings.has(sid) || this.live.has(sid)) return
-    const done = this.endRecord(record).then(
-      () => this.deps.log(`[session-helper] ${sid}: ended the agent session the crash left held`),
-      (err) => this.deps.log(`[session-helper] ${sid}: the agent session the crash left held did not answer its end (${message(err)}); it ends by its away clock`),
-    )
-    this.endings.set(sid, done)
-    void done.finally(() => {
-      if (this.endings.get(sid) === done) this.endings.delete(sid)
+  private clearAgent(sid: string, record?: HolderRecord): Promise<boolean> {
+    const pending = this.agentClears.get(sid)
+    if (pending) return pending
+    const earlier = this.endings.get(sid)
+    const p = (async () => {
+      // This run's own end first: it settles once its holder answered, or
+      // after END_WAIT_MS when it did not (then the store still has its record).
+      if (earlier) await earlier.catch(() => { /* settled */ })
+      const left = record ?? this.readStoreRecords().find((r) => r.session === sid)
+      if (!left) return true
+      return this.endUntilGone(left)
+    })()
+    this.agentClears.set(sid, p)
+    void p.then((ok) => {
+      if (this.agentClears.get(sid) === p) this.agentClears.delete(sid)
+      if (ok) this.agentsNotCleared.delete(sid)
+      else this.agentsNotCleared.add(sid)
       this.changed()
     })
+    return p
+  }
+
+  /**
+   * End an agent session's earlier holder, and keep asking while the helper
+   * still lists it: a holder that cannot be reached ends itself by its away
+   * clock once the app let go of it, so this waits that long at most
+   * (AGENT_CLEAR_AWAY_CAP_MS at the most, and AGENT_CLEAR_GRACE_MS more).
+   * True once it ended or is gone.
+   */
+  private async endUntilGone(record: HolderRecord): Promise<boolean> {
+    const sid = record.session
+    const until = this.deps.now() + Math.min(record.away * 1000, AGENT_CLEAR_AWAY_CAP_MS) + AGENT_CLEAR_GRACE_MS
+    let said = false
+    for (;;) {
+      try {
+        await this.endRecord(record)
+        this.deps.log(`[session-helper] ${sid}: ended the agent session's earlier holder`)
+        return true
+      } catch (err) {
+        if (!said) this.deps.log(`[session-helper] ${sid}: the agent session's earlier holder did not answer its end (${message(err)}); waiting until it is gone`)
+        said = true
+      }
+      if (await this.holderGone(record)) {
+        this.deps.log(`[session-helper] ${sid}: the agent session's earlier holder is gone`)
+        return true
+      }
+      if (this.quitting || this.deps.now() >= until) {
+        this.deps.log(`[session-helper] ${sid}: the agent session's earlier holder is still running and could not be ended; nothing is started for its tab`)
+        return false
+      }
+      await this.deps.sleep(AGENT_CLEAR_RETRY_MS)
+    }
+  }
+
+  /** True when this holder no longer runs: the helper's own listing (which
+   *  checks its process and its endpoint) no longer has it, or, when the
+   *  helper cannot list now, no process has its id. */
+  private async holderGone(record: HolderRecord): Promise<boolean> {
+    try {
+      return !(await this.list()).some((r) => r.session === record.session && r.pid === record.pid)
+    } catch {
+      return processGone(record.pid)
+    }
   }
 
   /** End a held terminal no tab of this run started. */
@@ -1149,6 +1242,56 @@ function quoteLikeNodePty(arg: string): string {
     }
   }
   return quote ? `${out}${'\\'.repeat(backslashes * 2)}"` : `${out}${'\\'.repeat(backslashes)}`
+}
+
+/**
+ * A terminal in which nothing started: it shows `text` once and ends at once
+ * (exit code 1), as a session whose program failed does. For an agent
+ * session that may not start while its tab's earlier holder still runs.
+ */
+function notStartedPty(text: string, opts: SpawnOptions): IPty {
+  const onData = new Set<(d: string) => void>()
+  const onExit = new Set<(e: { exitCode: number; signal?: number }) => void>()
+  let over = false
+  const end = () => {
+    if (over) return
+    over = true
+    for (const l of [...onExit]) { try { l({ exitCode: 1 }) } catch { /* the listener's own */ } }
+  }
+  const p = {
+    pid: 0,
+    cols: opts.cols ?? 80,
+    rows: opts.rows ?? 24,
+    process: '',
+    handleFlowControl: false,
+    onData: (l: (d: string) => void) => { onData.add(l); return { dispose: () => { onData.delete(l) } } },
+    onExit: (l: (e: { exitCode: number; signal?: number }) => void) => { onExit.add(l); return { dispose: () => { onExit.delete(l) } } },
+    write: () => { /* nothing runs */ },
+    resize: () => { /* nothing runs */ },
+    clear: () => { /* nothing runs */ },
+    pause: () => { /* nothing runs */ },
+    resume: () => { /* nothing runs */ },
+    kill: () => end(),
+  }
+  // After the caller's listeners are on, as node-pty's own events come.
+  setTimeout(() => {
+    if (over) return
+    for (const l of [...onData]) { try { l(`\r\n${text}\r\n`) } catch { /* the listener's own */ } }
+    end()
+  }, 0)
+  return p as unknown as IPty
+}
+
+/** True when no process has this id (signal 0 only asks). One that exists,
+ *  or that cannot be asked about, is not gone. */
+function processGone(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return false
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === 'ESRCH'
+  }
 }
 
 /** Waits for `p`, or `ms`, whichever is first; never throws. */

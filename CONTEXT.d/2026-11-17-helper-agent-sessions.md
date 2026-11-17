@@ -38,13 +38,25 @@ wiring code name no provider.
 **After a crash (plan s11, Q1 default).** A held agent session is ended at
 the next start and never offered to its tab again. Its hooks secret and MCP
 token were the crashed run's alone, so its tab resumes the conversation the
-usual way. The end is registered among the manager's endings, so a tab that
-starts again meanwhile waits for it, at most 5 s. With the setting on, the
-wait happens through `hold()`. Otherwise it happens through a HelperPty whose
-hold waits and then hands over to the usual start. A plain terminal is still
-kept for its tab. With both settings off, the manager is still made at
-start-up when the running mark (`app-running.json`) is there, carrying
-nothing new, to end those sessions.
+usual way. A plain terminal is still kept for its tab. With both settings off,
+the manager is still made at start-up when the running mark
+(`app-running.json`) is there, carrying nothing new, to end those sessions.
+
+**No second CLI on one conversation (PR review).** The first cut waited at
+most 5 s for that end and let a failed end clear the way, so a tab could start
+its CLI while the old one still ran. Now an agent session starts only once no
+earlier holder of its id runs (`clearAgent`): a crash's, a Restart's, or one
+that did not end when asked. It waits as long as that takes, with no cap. A
+holder that does not answer is asked again every 2 s until the helper's own
+listing no longer has it (the listing checks the process and its endpoint, and
+a reused process id by its start time), or, when the helper cannot list, until
+no process has its id. That lasts at most its away clock (it ends itself that
+long after the app let go of it), capped at 5 minutes, plus 10 s. When it is
+still running after that, nothing starts: the tab shows one line saying why
+and ends, and the next start for that tab asks again. With the setting on the
+wait happens in `hold()`. Otherwise it happens through a HelperPty whose hold
+waits and then hands over to the usual start (or to the "nothing started"
+terminal).
 
 **Machines.** The kinds are Claude Code and Codex, under the tab's name, with
 End only. Main refuses a Re-attach of one too. The Services count includes

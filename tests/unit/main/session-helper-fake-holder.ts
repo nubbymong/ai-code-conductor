@@ -77,6 +77,8 @@ export class FakeHolder {
   ended = false
   /** The holder process is gone: nothing answers at its endpoint. */
   gone = false
+  /** The holder runs (list mode still lists it), but its endpoint cannot be reached. */
+  unreachable = false
   readonly conns = new Set<FakeConn>()
   readonly requests: Json[] = []
   /** What the program read, in order. */
@@ -309,7 +311,7 @@ export class FakeHelper {
   }
 
   openStream = async (endpoint: string): Promise<Duplex> => {
-    const h = [...this.holders.values()].find((x) => x.endpoint === endpoint && !x.ended && !x.gone)
+    const h = [...this.holders.values()].find((x) => x.endpoint === endpoint && !x.ended && !x.gone && !x.unreachable)
     if (!h) throw new Error('no holder at that endpoint')
     return h.connect()
   }

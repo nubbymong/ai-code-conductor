@@ -1010,6 +1010,60 @@ describe('agent sessions after a crash (plan s11, Q1): ended, never shown again'
     expect(ptySpawn).not.toHaveBeenCalled()
   })
 
+  it('a tab that starts again waits for that end however long it takes, past five seconds too (PR review: no start before the old CLI is gone)', async () => {
+    const { claudeSid } = await crashedWith()
+    const oldClaude = helper.holders.get(claudeSid)!
+    let release!: () => void
+    oldClaude.endGate = new Promise<void>((r) => { release = r })
+    // The end's answer times out quickly, so a start that went ahead after a
+    // five-second wait and one unanswered end would have gone ahead by now.
+    const second = makeManager({ replyTimeoutMs: 500 })
+    setSessionHelper(second)
+    void second.start(ON_AGENTS)
+    await until(() => oldClaude.endsAsked >= 1, 'the end to be asked')
+    const holdsBefore = helper.holds()
+    const p = spawnAgentPty(claudeTab('abcdef0123456789abcdef71'), SHELL, [], agentOpts())
+    await tick(6500)
+    expect(helper.holds()).toBe(holdsBefore)
+    expect(ptySpawn).not.toHaveBeenCalled()
+    expect(oldClaude.ended).toBe(false)
+    release()
+    // The next try (every 2 s) finds it gone.
+    await until(() => helper.holders.get(claudeSid) !== oldClaude && !!helper.holders.get(claudeSid)?.attached, 'the new holder', 8000)
+    expect((p as HelperPty).throughHelper).toBe(true)
+    expect(ptySpawn).not.toHaveBeenCalled()
+  }, 20_000)
+
+  it('an earlier holder that still runs and cannot be reached: the tab starts nothing and says why; once the helper no longer lists it, the next start goes ahead', async () => {
+    const { claudeSid } = await crashedWith()
+    const oldClaude = helper.holders.get(claudeSid)!
+    oldClaude.unreachable = true
+    // The away clock passes in a few fake steps: each wait between tries moves the clock on 30 s.
+    let clock = Date.now()
+    const second = makeManager({ now: () => clock, sleep: async () => { clock += 30_000 } })
+    setSessionHelper(second)
+    void second.start(ON_AGENTS)
+    const holdsBefore = helper.holds()
+    const p = spawnAgentPty(claudeTab('abcdef0123456789abcdef71'), SHELL, [], agentOpts())
+    const seen: string[] = []
+    const exits: number[] = []
+    p.onData((d) => seen.push(d))
+    p.onExit((e) => exits.push(e.exitCode))
+    await until(() => exits.length === 1, 'the tab to end with nothing started')
+    expect(exits).toEqual([1])
+    expect(seen.join('')).toContain(HELPER_SENTENCES.agentNotCleared)
+    expect(ptySpawn).not.toHaveBeenCalled()
+    expect(helper.holds()).toBe(holdsBefore)
+    // The gate stays: any later start for this tab, with the setting off too, asks again first.
+    expect(second.endingFor(claudeTab('abcdef0123456789abcdef71'))).toBe(true)
+    // It is gone at last (its away clock ended it): the next start goes ahead.
+    oldClaude.vanish()
+    const q = spawnAgentPty(claudeTab('abcdef0123456789abcdef71'), SHELL, [], agentOpts())
+    await until(() => helper.holders.get(claudeSid) !== oldClaude && !!helper.holders.get(claudeSid)?.attached, 'the new holder')
+    expect((q as HelperPty).throughHelper).toBe(true)
+    expect(ptySpawn).not.toHaveBeenCalled()
+  })
+
   it('with both settings off and the crash mark there, the agent session is still ended, and a tab that starts meanwhile waits for it, then starts node-pty\'s own way', async () => {
     const { plainSid, claudeSid } = await crashedWith()
     const oldClaude = helper.holders.get(claudeSid)!
