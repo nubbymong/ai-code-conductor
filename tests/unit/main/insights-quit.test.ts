@@ -4,7 +4,10 @@
 // Claude Code and its console host running after the app had gone (seen on
 // the beta.6 VM smoke: a 120x30 headless conhost). The quit teardown now calls
 // killInsightsPty beside killCliSetupPty, and the terminal's start reads the
-// quit hold (quit-hold.ts) in the same step as its spawn.
+// quit hold (quit-hold.ts) in the same step as its spawn. A run whose terminal
+// is ended at quit is never answered: it is not recorded as a failure the
+// user did not have, nor carried on, and the next start records it as
+// interrupted.
 //
 // index.ts cannot be imported in a unit test (it boots the app), so the quit
 // teardown is cut out of its source and run against fakes, as
@@ -13,7 +16,7 @@
 // PTY, the Claude Code resolution, the KPI extraction and the first-start
 // warm-up are faked, as in insights-first-start.test.ts. Nothing is started.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { MAIN_INDEX, runCut, quitTeardownSource } from '../../helpers/main-index-cut'
@@ -33,6 +36,7 @@ const h = vi.hoisted(() => ({
   profiles: [] as Array<{ id: string; name?: string; accountEmail: string; isPrimary?: boolean }>,
   ptys: [] as FakePty[],
   killThrows: false,
+  killExitCode: 1,
   warm: 0,
   gate: null as null | Promise<void>,
 }))
@@ -55,8 +59,8 @@ vi.mock('../../../src/main/pty-manager', async () => ({
   resolveClaudeForPty: () => ({ cmd: RESOLVED, args: [] }),
   withProfileHome: (await vi.importActual<typeof import('../../../src/main/account-profiles')>('../../../src/main/account-profiles')).withProfileHome,
 }))
-// A terminal that runs until it is killed; a kill reports its exit a moment
-// later, as node-pty does.
+// A terminal that runs until it is killed; a kill reports its exit (with
+// `killExitCode`) a moment later, as node-pty does.
 vi.mock('node-pty', () => ({
   spawn: () => {
     const p: FakePty = {
@@ -66,7 +70,8 @@ vi.mock('node-pty', () => ({
       write: vi.fn(),
       kill: vi.fn(() => {
         if (h.killThrows) throw new Error('the terminal has already gone')
-        setTimeout(() => p.exit?.({ exitCode: 1 }), 0)
+        const exitCode = h.killExitCode
+        setTimeout(() => p.exit?.({ exitCode }), 0)
       }),
     }
     h.ptys.push(p)
@@ -89,6 +94,7 @@ vi.mock('../../../src/main/first-start-warmup', () => ({
 }))
 
 import * as insights from '../../../src/main/insights-runner'
+import { logInfo } from '../../../src/main/debug-logger'
 import { beginQuitHold, _resetQuitHoldForTest } from '../../../src/main/quit-hold'
 import { composeProviders } from '../../../src/main/providers/compose'
 import { _resetProfileConsumersForTest } from '../../../src/main/profile-consumers'
@@ -132,11 +138,17 @@ function account(primary = false): string {
 }
 
 /** Starts a report and waits for its terminal. */
-async function reportRunning(): Promise<{ run: Promise<unknown>; pty: FakePty }> {
+async function reportRunning(): Promise<{ run: Promise<unknown>; pty: FakePty; profileId: string }> {
   const before = h.ptys.length
-  const run = insights.runInsights(() => null, { profileId: account() })
+  const profileId = account()
+  const run = insights.runInsights(() => null, { profileId })
   await vi.waitFor(() => expect(h.ptys.length).toBe(before + 1))
-  return { run, pty: h.ptys[before] }
+  return { run, pty: h.ptys[before], profileId }
+}
+
+/** The catalogue's run for `profileId`, as it is on disk now. */
+function runOf(profileId: string) {
+  return insights.getCatalogue().runs.find((r) => r.profileId === profileId)
 }
 
 beforeAll(() => { composeProviders() })
@@ -150,8 +162,10 @@ beforeEach(() => {
   h.profiles = []
   h.ptys.length = 0
   h.killThrows = false
+  h.killExitCode = 1
   h.warm = 0
   h.gate = null
+  vi.mocked(logInfo).mockClear()
   _resetQuitHoldForTest()
   _resetProfileConsumersForTest()
   _resetProjectScanStateForTest()
@@ -160,7 +174,7 @@ beforeEach(() => {
 afterEach(async () => {
   // Nothing an earlier case started is left for the next one.
   h.killThrows = false
-  insights.killInsightsPty?.()
+  insights.killInsightsPty()
   await new Promise((r) => setTimeout(r, 5))
   _resetQuitHoldForTest()
   _resetProjectScanStateForTest()
@@ -169,17 +183,45 @@ afterEach(async () => {
 
 describe('a normal quit ends the Insights report terminal that is running', () => {
   it('the quit teardown kills it exactly once, before killAllPty and before the debug logger closes', async () => {
-    const { run, pty } = await reportRunning()
+    const { pty } = await reportRunning()
     const order = quitTeardown()
     expect(pty.kill).toHaveBeenCalledTimes(1) // beta.6: 0, Claude Code and its conhost left running
     expect(order.filter((o) => o === 'killInsightsPty')).toHaveLength(1)
     // Before killAllPty, so a throw there cannot skip it; its line is logged
-    // while the log is still open.
+    // while the log is still open, and says a kill was sent (node-pty on
+    // Windows holds the kill of a terminal that has shown no output yet).
     expect(order.indexOf('killInsightsPty')).toBeLessThan(order.indexOf('killAllPty'))
     expect(order.indexOf('killInsightsPty')).toBeLessThan(order.indexOf('closeDebugLogger'))
-    // The killed terminal's exit settles the run: nothing is left waiting on it.
-    const id = await run as string
-    expect(insights.getCatalogue().runs.find((r) => r.id === id)?.status).toBe('failed')
+    expect(logInfo).toHaveBeenCalledWith('[insights] kill sent to 1 /insights terminal(s) at quit')
+  })
+
+  it('the run of a terminal ended at quit is never answered, and the next start records it as interrupted', async () => {
+    const { run, pty, profileId } = await reportRunning()
+    quitTeardown()
+    await vi.waitFor(() => expect(pty.kill).toHaveBeenCalledTimes(1))
+    // The killed terminal has reported its exit by now; the run still waits,
+    // as a start the quit hold stops does. Before: recorded as failed, with
+    // the terminal's last output as the error, for a report the user ended.
+    expect(await stateOf(run)).toBe('pending')
+    expect(runOf(profileId)).toMatchObject({ status: 'running', statusMessage: 'Step 1/3: Generating report...' })
+    expect(runOf(profileId)?.error).toBeUndefined()
+    // What the next start writes for it (index.ts runs this at start-up).
+    insights.cleanupStuckRuns()
+    expect(runOf(profileId)).toMatchObject({ status: 'failed', error: 'Interrupted by app restart' })
+  })
+
+  it('a terminal ended at quit that reports exit code 0 is not taken for a finished report', async () => {
+    h.killExitCode = 0
+    const { run, pty, profileId } = await reportRunning()
+    quitTeardown()
+    await vi.waitFor(() => expect(pty.kill).toHaveBeenCalledTimes(1))
+    // Before: the run went on to step 2, archived the PREVIOUS report.html
+    // under this run's id, and went on to the KPI step.
+    expect(await stateOf(run)).toBe('pending')
+    const id = runOf(profileId)?.id
+    expect(id).toBeTruthy()
+    expect(runOf(profileId)).toMatchObject({ status: 'running', statusMessage: 'Step 1/3: Generating report...' })
+    expect(existsSync(join(h.resourcesDir, 'insights', id!, 'report.html'))).toBe(false)
   })
 
   it('reports running for two accounts at once: both terminals are killed', async () => {

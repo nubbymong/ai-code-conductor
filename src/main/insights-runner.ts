@@ -483,24 +483,28 @@ export function insightsTerminalEnv(env: Record<string, string>, platform: NodeJ
   return platform === 'win32' ? withFullyQualifiedProgramLookup(env) : env
 }
 
-/** The /insights terminals running now: one per account whose report is at
- *  step 1. They are main's own, outside pty-manager, so killAllPty never
- *  reaches them (#317). */
-const insightsPtys = new Set<pty.IPty>()
+/** The /insights terminals running now (one per account whose report is at
+ *  step 1), each with what ends it at quit. They are main's own, outside
+ *  pty-manager, so killAllPty never reaches them (#317). */
+const insightsPtys = new Map<pty.IPty, () => void>()
 
-/** #317: ends every /insights terminal still running. The app's quit
- *  teardown calls it (index.ts, beside killCliSetupPty): a report in progress
- *  at a normal quit used to leave Claude Code and its console host running
- *  after the app had gone. A killed terminal's exit settles its run as
- *  failed. Safe with none running, and safe twice. */
+/** #317: sends a kill to every /insights terminal still running. The app's
+ *  quit teardown calls it (index.ts, beside killCliSetupPty): a report in
+ *  progress at a normal quit used to leave Claude Code and its console host
+ *  running after the app had gone. On Windows, node-pty holds the kill of a
+ *  terminal that has shown no output yet until its first output.
+ *
+ *  The run of a terminal ended here is never answered, as a start the quit
+ *  hold stops is not (quit-hold.ts): nothing of it is archived or carried on
+ *  to the KPI step, whatever exit code the killed terminal reports, and it
+ *  stays running in the catalogue, which the next start records as
+ *  interrupted (cleanupStuckRuns). Safe with none running, and safe twice. */
 export function killInsightsPty(): void {
   if (insightsPtys.size === 0) return
-  const running = [...insightsPtys]
+  const ending = [...insightsPtys.values()]
   insightsPtys.clear()
-  for (const proc of running) {
-    try { proc.kill() } catch { /* already gone */ }
-  }
-  logInfo(`[insights] ${running.length} /insights terminal(s) ended at quit`)
+  for (const end of ending) end()
+  logInfo(`[insights] kill sent to ${ending.length} /insights terminal(s) at quit`)
 }
 
 /**
@@ -554,8 +558,6 @@ async function spawnClaudeInsights(home: string | null, timeoutMs = 600000): Pro
       cwd,
       env: insightsTerminalEnv(withProfileHome(process.env as Record<string, string>, home, { launchId: 'insights', cwd, probe: false, projectGate }))
     }))
-    // Until it exits or is killed, the quit teardown can reach it (#317).
-    insightsPtys.add(proc)
     // P3.15 round 4 (P2): an error on this PTY's input (the app types
     // /insights into it) or output never quits the app; the run settles on its
     // exit or its time limit.
@@ -586,6 +588,14 @@ async function spawnClaudeInsights(home: string | null, timeoutMs = 600000): Pro
       clearTimeout(startupFallback)
       clearInterval(pollInterval)
     }
+    // Until the run settles, the quit teardown can reach its terminal (#317).
+    // Ended there, the run is never answered (killInsightsPty): `resolved`
+    // stops every path from settling it, its exit included.
+    insightsPtys.set(proc, () => {
+      resolved = true
+      cleanup()
+      try { proc.kill() } catch { /* already gone */ }
+    })
 
     const sendInsights = () => {
       if (commandSent || resolved) return
