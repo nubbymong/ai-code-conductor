@@ -881,10 +881,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       })
       // P3.8 round 1: the live screen, for the gate a Codex command (/compact,
       // /model, /plan) is typed behind (lib/codexComposer.ts).
-      // aicc_planning#303: a hidden terminal's output may be queued. A read
-      // writes it, and answers no screen when there was any: xterm parses a
-      // write on a later task, so this read could not show it (the gates
-      // that read fail closed on no screen and read again).
+      // aicc_planning#303: a hidden terminal's output may be queued, or
+      // written as a batch xterm has not parsed yet (it parses on a later
+      // task). A read writes the queue, and answers no screen while a batch is
+      // unparsed: the screen would be up to a second old (the gates that read
+      // fail closed on no screen and read again).
       unregisterScreen = registerScreenReader(sessionId, () => {
         if (hiddenOutputRef.current?.beforeScreenRead()) return null
         return term ? readXtermScreen(term) : null
@@ -1522,9 +1523,10 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // aicc_planning#303: writeOutput is the write path for one piece of
       // output: the follow decision, the write and the repaint scheduling. The
       // visible terminal calls it for every chunk; a hidden one once per batch
-      // (hiddenOutputQueue). Byte counts, the resume nudge's timing and the
-      // output parse below still see every chunk as it arrives.
-      const writeOutput = (filtered: string): void => {
+      // (hiddenOutputQueue), passing `parsed` for xterm's write callback.
+      // Byte counts, the resume nudge's timing and the output parse below
+      // still see every chunk as it arrives.
+      const writeOutput = (filtered: string, parsed?: () => void): void => {
         // Sticky-bottom follow (issue #73): sample the LIVE viewport position
         // BEFORE this chunk lays out and decide from THAT — not from the
         // wheel-set latch, which scrollbar-thumb drags and keyboard scrolling
@@ -1538,7 +1540,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           baseY: preWriteBuf?.baseY ?? 0,
         })
 
-        term?.write(filtered)
+        if (term) term.write(filtered, parsed)
+        else parsed?.()
 
         if (follow.scrollToBottom) term?.scrollToBottom()
         if (follow.scrolledUp !== isScrolledUpRef.current) updateScrollState(follow.scrolledUp)

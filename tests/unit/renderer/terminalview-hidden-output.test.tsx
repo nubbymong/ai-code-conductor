@@ -22,6 +22,8 @@ const H = vi.hoisted(() => {
   /** Every write to a terminal, every scroll to the bottom and every PTY
    *  resize, in the order they happened. */
   const log: LogEntry[] = []
+  /** The parsed callbacks of writes xterm has not parsed yet. */
+  const unparsed: Array<() => void> = []
   class MockTerminal {
     static last: any = null
     options: any
@@ -44,7 +46,12 @@ const H = vi.hoisted(() => {
     clearSelection() {}
     getSelection() { return '' }
     scrollToBottom() { log.push([this.disposed ? 'scroll-after-dispose' : 'scroll']) }
-    write(s: unknown) { log.push([this.disposed ? 'write-after-dispose' : 'write', s]) }
+    // xterm calls a write's callback once its parser has taken the data, on a
+    // later task; here the test says when (parseWrites).
+    write(s: unknown, parsed?: () => void) {
+      log.push([this.disposed ? 'write-after-dispose' : 'write', s])
+      if (parsed) unparsed.push(parsed)
+    }
     writeln(s: string) { log.push([this.disposed ? 'writeln-after-dispose' : 'writeln', s]) }
     dispose() { this.disposed = true }
   }
@@ -56,8 +63,10 @@ const H = vi.hoisted(() => {
   const spawned = new Set<string>()
   const tokens = new Map<string, number>()
   const counter = { last: 0 }
-  return { MockTerminal, sessionState, spawned, tokens, counter, log }
+  return { MockTerminal, sessionState, spawned, tokens, counter, log, unparsed }
 })
+/** xterm finishes parsing everything written so far. */
+const parseWrites = () => { const p = H.unparsed.splice(0); p.forEach((cb) => cb()) }
 
 vi.mock('@xterm/xterm/css/xterm.css', () => ({ default: {} }))
 vi.mock('@xterm/xterm', () => ({ Terminal: H.MockTerminal }))
@@ -226,6 +235,7 @@ beforeEach(() => {
   fireExit = null
   sendData = null
   H.log.length = 0
+  H.unparsed.length = 0
   H.spawned.clear()
   H.tokens.clear()
   forgetSpawnEnd('s-1')
@@ -350,14 +360,27 @@ describe('the lines the app writes itself come after the queued output (aicc_pla
 })
 
 describe('a screen read and the unmount (aicc_planning#303)', () => {
-  it('a read of a hidden terminal with output queued writes it and answers no screen; the next read answers', async () => {
+  it('a read of a hidden terminal with output queued writes it and answers no screen until xterm has parsed it', async () => {
     await mount({ isActive: false })
     send('busy')
     expect(readSessionScreen('s-1')).toBeNull()
     expect(writes()).toEqual(['busy'])
+    // Read again before the parse: still no screen.
+    expect(readSessionScreen('s-1')).toBeNull()
+    parseWrites()
     const next = readSessionScreen('s-1')
     expect(next).not.toBeNull()
     expect(next).toHaveLength(24)
+  })
+
+  it('a batch the timer wrote: no screen until xterm has parsed it', async () => {
+    await mount({ isActive: false })
+    send('turn started')
+    advance(HIDDEN_OUTPUT_FLUSH_MS)
+    expect(writes()).toEqual(['turn started'])
+    expect(readSessionScreen('s-1')).toBeNull()
+    parseWrites()
+    expect(readSessionScreen('s-1')).not.toBeNull()
   })
 
   it('after a read the hidden terminal writes each chunk at once, so the reads that follow are current', async () => {

@@ -17,12 +17,14 @@
  *
  * A screen read (the gate a command or a canvas marker is typed behind) is
  * the one reader of a hidden terminal's buffer. xterm parses a write on a
- * later task, so output queued at the moment of a read cannot be on the
- * screen it reads: `beforeScreenRead` writes the queue and says so, and the
- * reader answers "no screen" for that read rather than a screen up to
- * `flushMs` old. The terminal then writes each chunk at once for
- * `liveAfterReadMs`, so the reads that follow (the gates poll) see it as
- * current as a visible terminal.
+ * later task, so a batch is on the screen only once xterm reports it parsed
+ * (the write's callback). Until then the screen can be up to `flushMs` old:
+ * `beforeScreenRead` writes anything queued and says whether a batch is still
+ * waiting to be parsed, and the reader answers "no screen" for that read. The
+ * terminal then writes each chunk at once for `liveAfterReadMs`, so the reads
+ * that follow (the gates poll) see it as current as a visible terminal. A
+ * chunk written at once (visible, or live after a read) is not waited for:
+ * that is how every terminal was read before batching.
  */
 export const HIDDEN_OUTPUT_FLUSH_MS = 1000
 
@@ -31,8 +33,9 @@ export const SCREEN_READ_LIVE_MS = 3000
 
 export interface HiddenOutputQueueOptions {
   /** Writes output to the terminal (the caller's full per-chunk write path:
-   *  the follow decision, the write and the repaint scheduling). */
-  write: (chunk: string) => void
+   *  the follow decision, the write and the repaint scheduling). For a batch
+   *  it passes `parsed`, which the caller hands to xterm's write callback. */
+  write: (chunk: string, parsed?: () => void) => void
   /** Whether the terminal is on screen now. */
   isVisible: () => boolean
   flushMs?: number
@@ -46,8 +49,8 @@ export interface HiddenOutputQueue {
   /** Write everything queued, now. */
   flush(): void
   /** A screen read is about to happen: write everything queued, and write
-   *  each chunk at once for the next `liveAfterReadMs`. True when something
-   *  was queued, so the screen read now does not show it yet. */
+   *  each chunk at once for the next `liveAfterReadMs`. True while a batch is
+   *  not yet parsed, so the screen read now does not show it. */
   beforeScreenRead(): boolean
   /** The terminal is gone: drop the timer and what is queued. */
   dispose(): void
@@ -59,6 +62,8 @@ export function createHiddenOutputQueue(opts: HiddenOutputQueueOptions): HiddenO
   let queued = ''
   let timer: ReturnType<typeof setTimeout> | null = null
   let liveUntil = Number.NEGATIVE_INFINITY
+  /** Batches handed to the terminal that xterm has not reported parsed. */
+  let unparsed = 0
   let disposed = false
 
   const flush = (): void => {
@@ -66,7 +71,20 @@ export function createHiddenOutputQueue(opts: HiddenOutputQueueOptions): HiddenO
     if (disposed || queued === '') return
     const chunk = queued
     queued = ''
-    opts.write(chunk)
+    let settled = false
+    const parsed = (): void => {
+      if (settled) return
+      settled = true
+      unparsed -= 1
+    }
+    unparsed += 1
+    try {
+      opts.write(chunk, parsed)
+    } catch (err) {
+      // Not written (xterm refused it): nothing to wait for.
+      parsed()
+      throw err
+    }
   }
 
   return {
@@ -84,9 +102,8 @@ export function createHiddenOutputQueue(opts: HiddenOutputQueueOptions): HiddenO
     beforeScreenRead() {
       if (disposed) return false
       liveUntil = Date.now() + liveAfterReadMs
-      const behind = queued !== ''
       flush()
-      return behind
+      return unparsed > 0
     },
     dispose() {
       if (timer !== null) { clearTimeout(timer); timer = null }
