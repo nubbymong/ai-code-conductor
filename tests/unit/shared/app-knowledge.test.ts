@@ -2031,3 +2031,108 @@ describe('the 2.1.3-beta.6 sweep', () => {
     expect(services).not.toContain('holder')
   })
 })
+
+// 2.1.3-beta.7 user-facing sweep: Claude Code and Codex sessions through the
+// session helper (#705) named everywhere the plain-terminal switch is, its two
+// known issues, the uninstall clean-up and installer look (#707), and the
+// release's own lines, so a later edit cannot drop them silently.
+describe('the 2.1.3-beta.7 sweep', () => {
+  const AGENT_SWITCH = 'Claude Code and Codex sessions through the session helper'
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const tipOf = (id: string) => TIPS_LIBRARY.find((t) => t.id === id)!
+  const step = (id: string) => trainingSteps.find((s) => s.id === id)!
+  const entry = changelog.find((e) => e.version === '2.1.3-beta.7')!
+
+  it('the known issues cover a held session after a crash, the Windows whole-tree end, and what an uninstall now removes', () => {
+    const k = body('known-issues')
+    expect(k).toContain('a Claude Code or Codex session does not survive an app crash yet')
+    expect(k).toContain('the session the helper held is ended and its tab resumes the conversation')
+    expect(k).toContain('The tab then says why in one line and starts nothing')
+    expect(k).toContain('end that session on the Machines page first and then restart the tab')
+    expect(k).toContain('ending such a session ends every program it started, even one it opened in a window of its own')
+    expect(k).toContain('Workaround: start a program that must keep running in a terminal outside that session')
+    expect(k).toContain('Removing the app on a Mac or Linux leaves the session helper\'s own folder')
+    expect(k).toContain('On Windows, uninstalling now removes that folder')
+    expect(k).toContain('an update keeps it')
+    expect(k).not.toContain('Uninstalling or removing the app leaves')
+  })
+
+  it('the Services section counts the held sessions and names both switches', () => {
+    const s = body('services')
+    expect(s).toContain('Claude Code and Codex sessions included, and reads stopped while both session helper switches are off and it holds nothing')
+    expect(s).toContain(AGENT_SWITCH)
+    expect(s).not.toContain('holder')
+  })
+
+  it('the Machines section names both switches, the agent rows and their End, and no longer says agents never start through it', () => {
+    const m = body('machines')
+    expect(m).toContain(AGENT_SWITCH)
+    expect(m).toContain('either one switches the session helper on')
+    expect(m).toContain('Claude Code and Codex sessions have their own setting, below.')
+    expect(m).toContain('A Claude Code or Codex session has End and no Re-attach')
+    expect(m).toContain('reads Being ended')
+    expect(m).toContain('also ends every program it started, even one it opened in a window of its own')
+    expect(m).not.toContain('Claude Code sessions, Codex sessions, SSH sessions')
+    expect(body('pages')).toContain('and the Claude Code and Codex sessions it holds, each with End')
+  })
+
+  it('the installer paragraph says the uninstaller removes the helper folder and the pages share one look', () => {
+    const p = APP_KNOWLEDGE_SECTIONS.map((s) => s.body).find((b) => b.includes('On Windows the installer opens with a Welcome page'))!
+    expect(p).toContain("removes the session helper's own folder, with its copies and records; an update keeps them")
+    expect(p).toContain('Every page of the installer and the uninstaller has the same light look')
+  })
+
+  it('a tip for the new switch, and the Machines tip names both switches', () => {
+    const t = tipOf('tip.agent-sessions-helper')
+    expect(t.variants.primary.shortText.length).toBeLessThan(60)
+    expect(t.variants.primary.actionTarget).toBe('settings')
+    expect(t.variants.primary.body).toContain(`**Settings, General, Terminal, ${AGENT_SWITCH}**`)
+    expect(t.variants.primary.body).toContain('**off by default**')
+    expect(t.variants.primary.body).toContain('it is ended and its tab resumes the conversation')
+    expect(t.provider).toBeUndefined()
+    expect(`${t.variants.primary.title} ${t.variants.primary.body}`).not.toMatch(/—/)
+    expect(tipOf('tip.machines-page').variants.primary.body).toContain(`**${AGENT_SWITCH}**`)
+  })
+
+  it('the Settings and Machines cards name the new switch; Combined Mode points to it without naming a provider', () => {
+    expect(step('settings').highlights.join('\n')).toContain(`**${AGENT_SWITCH}**`)
+    // Combined Mode reads the same for either assistant (feature-guide-provider-filter), so it says where the switch is, not its name.
+    expect(step('combined-mode').highlights.join('\n')).toContain("The assistant's own session has a switch of its own, just below it in Settings, General")
+    const machines = step('machines')
+    expect(machines.summary).toContain(`**${AGENT_SWITCH}**`)
+    expect(machines.howToTrigger!.map((h) => h.value)).toContain(`Settings -> General -> ${AGENT_SWITCH}`)
+    expect(machines.bullets.join('\n')).toContain(`**${AGENT_SWITCH}**`)
+  })
+
+  it('the README names the new switch next to the plain-terminal one', () => {
+    const readme = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'README.md'), 'utf8')
+    const line = readme.split('\n').find((l) => l.startsWith('- **Machines and the session helper**'))!
+    expect(line).toContain('Plain terminals through the session helper')
+    expect(line).toContain(AGENT_SWITCH)
+  })
+
+  it('the release warning names the preview, the crash end, the Windows whole-tree end and the way back', () => {
+    const w = entry.warnings!.join('\n')
+    expect(w).toContain("This beta series begins moving the app's background services")
+    expect(w).toContain(`${AGENT_SWITCH} (Settings, General, under Terminal) is a preview and is off by default`)
+    expect(w).toContain('when you open the app again, it is ended and its tab resumes the conversation')
+    expect(w).toContain('ending such a session also ends every program it started')
+    expect(w).toContain('To go back to 2.1.3-beta.6')
+    const all = entry.changes.map((c) => c.description).join('\n')
+    for (const said of [
+      `New in Settings, General, under Terminal: ${AGENT_SWITCH}`,
+      'now gets the Ctrl+C its terminal sends',
+      'no longer keeps any of the app\'s open files or network ports',
+      'terminal text is drawn in JetBrains Mono again',
+      'the Saved and Running tabs now fit',
+      'no longer shows a Desktop notifications (coming soon) box',
+      'while an Insights report runs no longer leaves Claude Code running',
+      'no longer leaves a console host (conhost.exe) running',
+      'no longer redraws the usage bars',
+      'update their terminal once a second',
+      'now keep one light look on every page',
+      'Uninstalling on Windows now ends the terminals and sessions the session helper still holds',
+    ]) expect(all).toContain(said)
+    for (const text of [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)]) expect(text, text.slice(0, 40)).not.toMatch(/—/)
+  })
+})

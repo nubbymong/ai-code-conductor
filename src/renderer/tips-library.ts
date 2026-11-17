@@ -1516,10 +1516,27 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'The Machines page shows what your session helper holds',
         title: 'The Machines Page',
-        body: 'The **Machines** page shows **This computer** and its **session helper**: whether it is off, not installed, starting, ready or failed, its version, and the result of its **self-test** with a **Run self-test** button.\n\nBelow that it lists the terminals the helper holds. Each row says what it is, when it started, and whether the app is attached to it or it is **waiting for the app**. **Re-attach** connects a waiting terminal again, and **End** stops one after you confirm.\n\nThe session helper is a preview and it is **off by default**. Switch it on in **Settings, General, Plain terminals through the session helper**: Terminal only tabs and partner terminals on this computer then keep running if the app crashes on Windows, and come back in their tabs when you open it again within two minutes and resume your sessions. The page reads when you open it, when you switch back to its tab, when you press **Refresh** and after each action; it does not update by itself while you stay on it.',
+        body: 'The **Machines** page shows **This computer** and its **session helper**: whether it is off, not installed, starting, ready or failed, its version, and the result of its **self-test** with a **Run self-test** button.\n\nBelow that it lists the terminals the helper holds. Each row says what it is, when it started, and whether the app is attached to it or it is **waiting for the app**. **Re-attach** connects a waiting terminal again, and **End** stops one after you confirm.\n\nThe session helper is a preview and it is **off by default**. Switch it on in **Settings, General, Plain terminals through the session helper**: Terminal only tabs and partner terminals on this computer then keep running if the app crashes on Windows, and come back in their tabs when you open it again within two minutes and resume your sessions. Its second switch, **Claude Code and Codex sessions through the session helper**, runs those sessions inside it too, and the page lists them as **Claude Code** and **Codex**, with **End**. The page reads when you open it, when you switch back to its tab, when you press **Refresh** and after each action; it does not update by itself while you stay on it.',
         actionLabel: 'Open Machines',
         actionTarget: 'machines',
         focusHint: 'Left rail -- the Machines icon, beside Tokenomics',
+      },
+    },
+  },
+
+  {
+    id: 'tip.agent-sessions-helper',
+    category: 'advanced',
+    complexity: 'intermediate',
+    priority: 23,
+    variants: {
+      primary: {
+        shortText: 'Claude Code and Codex can run inside the session helper',
+        title: 'Sessions Through the Session Helper',
+        body: 'A preview, **off by default**: **Settings, General, Terminal, Claude Code and Codex sessions through the session helper** starts each Claude Code or Codex session on this computer inside the **session helper**, launched exactly as before. The **Machines** page then lists them as **Claude Code** and **Codex** under their tab names, with **End**.\n\nSuch a session does not survive a crash yet: when you open the app again, it is ended and its tab resumes the conversation. On Windows, ending one also ends every program it started, even one in a window of its own. SSH sessions are not affected, and Terminal only tabs and partner terminals have their own switch just above it.',
+        actionLabel: 'Open Settings',
+        actionTarget: 'settings',
+        focusHint: 'Settings -- General, under Terminal',
       },
     },
   },

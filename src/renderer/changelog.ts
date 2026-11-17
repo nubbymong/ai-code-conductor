@@ -41,6 +41,30 @@ export interface ChangelogEntry {
 // a backtick in a comment opens a phantom string and the parse fails.
 export const changelog: ChangelogEntry[] = [
   {
+    version: '2.1.3-beta.7',
+    date: '2026-11-17',
+    highlights: 'A second preview setting, off by default, starts Claude Code and Codex sessions inside the session helper. Terminal text with GPU rendering is in JetBrains Mono again, a window with many sessions does less work, quitting during an Insights report no longer leaves Claude Code running, and on Windows the installer keeps one look and the uninstaller removes the session helper\'s folder.',
+    warnings: [
+      'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',
+      'Claude Code and Codex sessions through the session helper (Settings, General, under Terminal) is a preview and is off by default. When you switch it on, each Claude Code or Codex session on this computer that you start after that runs inside the session helper, launched exactly as before. SSH sessions start as before. Such a session does not survive a crash yet: when you open the app again, it is ended and its tab resumes the conversation. Quitting the app normally ends these sessions. On Windows, ending such a session also ends every program it started, even one it opened in a window of its own, so start a program that must keep running outside the session, or leave the setting off. To switch it off, untick it in Settings, General: sessions already open carry on until you restart or close them, and the Machines page lists them, with End.',
+      'To go back to 2.1.3-beta.6, download its installer from the GitHub releases page and run it over this version.',
+    ],
+    changes: [
+      { type: 'feature', description: 'New in Settings, General, under Terminal: Claude Code and Codex sessions through the session helper, a preview, off by default. With it on, a Claude Code or Codex session on this computer starts inside the session helper, launched exactly as before, so its status line, hooks, tools and resume list work as they did. After a crash, opening the app again ends such a session and its tab resumes the conversation. The Machines page lists these sessions as Claude Code and Codex under their tab names, with End (End asks first). SSH sessions are not affected.' },
+      { type: 'fix', description: 'On Windows, a program running in a terminal the session helper holds now gets the Ctrl+C its terminal sends. Before, it ignored it, so Ctrl+C could not stop a command such as ping -t in a held Terminal only tab.' },
+      { type: 'fix', description: 'A terminal the session helper holds no longer keeps any of the app\'s open files or network ports. Once the app has ended they are free, so the app can start again with the same ones while the terminal runs on.' },
+      { type: 'fix', description: 'With GPU rendering on, terminal text is drawn in JetBrains Mono again. Since 2.1.3-beta.1 it could show in a small sans font, spaced out in its cells, because the browser inside the app ignored the font the GPU renderer asked for. A new terminal also waits briefly for its font before it first draws.' },
+      { type: 'fix', description: 'At UI scale 1.3 with the sidebar at its narrowest, the Saved and Running tabs now fit. Their icons drop out when space is short, a label too long to fit is shortened and shows in full when you point at it, and the Running count always shows.' },
+      { type: 'fix', description: 'The HTTP Hooks Gateway card in Settings, Hooks no longer shows a Desktop notifications (coming soon) box that did nothing.' },
+      { type: 'fix', description: 'Quitting the app while an Insights report runs no longer leaves Claude Code running. The report is ended, and the next start marks it as interrupted, as before.' },
+      { type: 'fix', description: 'On Windows, the session helper\'s self-test no longer leaves a console host (conhost.exe) running after it ends, even when it is ended by force.' },
+      { type: 'improvement', description: 'Less work in a window with many sessions. A status update that changes nothing no longer redraws the usage bars, and the app listens once for all sessions\' status, effort, Watchdog and account updates instead of once per session.' },
+      { type: 'improvement', description: 'Sessions you are not looking at now update their terminal once a second instead of on every piece of output, so a window with many busy sessions does less work. Switching to a tab still shows its latest output at once.' },
+      { type: 'improvement', description: 'The Windows installer and uninstaller now keep one light look on every page, with the brand in the header and the side art. Before, some pages were dark and others light.' },
+      { type: 'fix', description: 'Uninstalling on Windows now ends the terminals and sessions the session helper still holds for you, and removes its copies and records from your local app data folder. An update keeps them, and anything in that folder the app did not make is left in place.' },
+    ],
+  },
+  {
     version: '2.1.3-beta.6',
     date: '2026-11-16',
     highlights: 'A new Machines page shows This computer and its session helper, which now comes with the app. A preview setting, off by default, lets local Terminal only tabs and partner terminals keep running through an app crash on Windows, and a Codex conversation in a linked folder now resumes and lists by the folder the link leads to.',
