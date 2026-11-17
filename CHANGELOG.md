@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.7] - 2026-11-17
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- Claude Code and Codex sessions through the session helper (Settings, General, under Terminal) is a preview and is off by default. When you switch it on, each Claude Code or Codex session on this computer that you start after that runs inside the session helper, launched exactly as before. SSH sessions start as before. Such a session does not survive a crash yet: when you open the app again, it is ended and its tab resumes the conversation. Quitting the app normally ends these sessions. On Windows, ending such a session also ends every program it started, even one it opened in a window of its own, so start a program that must keep running outside the session, or leave the setting off. To switch it off, untick it in Settings, General: sessions already open carry on until you restart or close them, and the Machines page lists them, with End.
+- To go back to 2.1.3-beta.6, download its installer from the GitHub releases page and run it over this version.
+
+> A second preview setting, off by default, starts Claude Code and Codex sessions inside the session helper. Terminal text with GPU rendering is in JetBrains Mono again. Usage bars redraw less often, and so do terminals you are not looking at. Quitting during an Insights report no longer leaves Claude Code running, and on Windows the installer keeps one look and the uninstaller removes the session helper's folder.
+
+### Added
+- New in Settings, General, under Terminal: Claude Code and Codex sessions through the session helper, a preview, off by default. With it on, a Claude Code or Codex session on this computer starts inside the session helper, launched exactly as before, so its status line, hooks, tools and resume list work as they did. After a crash, opening the app again ends such a session and its tab resumes the conversation. The Machines page lists these sessions as Claude Code and Codex under their tab names, with End (End asks first). SSH sessions are not affected.
+
+### Changed
+- Usage bars no longer redraw on every status update from every session, and the app listens once for all sessions' status, effort, Watchdog and account updates instead of once per session.
+- Sessions you are not looking at now update their terminal once a second instead of on every piece of output. Switching to a tab still shows its latest output at once.
+- The Windows installer and uninstaller now keep one light look on every page, with the brand in the header and the side art. Before, some pages were dark and others light.
+
+### Fixed
+- On Windows, a program running in a terminal the session helper holds now gets the Ctrl+C its terminal sends. Before, it ignored it, so Ctrl+C could not stop a command such as ping -t in a held Terminal only tab.
+- A terminal the session helper holds no longer keeps any of the app's open files or network ports. Once the app has ended they are free, so the app can start again with the same ones while the terminal runs on.
+- With GPU rendering on, terminal text is drawn in JetBrains Mono again. Since 2.1.3-beta.1 it could show in a small sans font, spaced out in its cells, because the browser inside the app ignored the font the GPU renderer asked for. A new terminal also waits briefly for its font before it first draws.
+- At UI scale 1.3 with the sidebar at its narrowest, the Saved and Running tabs now fit. Their icons drop out when space is short, a label too long to fit is shortened and shows in full when you point at it, and the Running count always shows.
+- The HTTP Hooks Gateway card in Settings, Hooks no longer shows a Desktop notifications (coming soon) box that did nothing.
+- Quitting the app while an Insights report runs no longer leaves Claude Code running. The report is ended, and the next start marks it as interrupted, as before.
+- On Windows, the session helper's self-test no longer leaves a console host (conhost.exe) running after it ends, even when it is ended by force.
+- Uninstalling on Windows now ends the terminals and sessions the session helper still holds for you, and removes its copies and records from your local app data folder. An update keeps them, and anything in that folder the app did not make is left in place.
+
 ## [2.1.3-beta.6] - 2026-11-16
 
 ### Warnings
@@ -1975,6 +2002,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.7]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.7
 [2.1.3-beta.6]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.6
 [2.1.3-beta.5]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.5
 [2.1.3-beta.4]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.4
