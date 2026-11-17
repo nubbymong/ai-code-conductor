@@ -101,7 +101,7 @@ impl Drop for ExitWatch {
         // A watch that never reaped (its thread was never made) hands the
         // reaping back to the terminal. After a wait the code is recorded,
         // and the terminal reads that instead.
-        // MUTANT M2: the reaping is never handed back.
+        self.reaping.watched.store(false, Ordering::SeqCst);
     }
 }
 
@@ -256,9 +256,7 @@ impl Pty {
         if let Some(code) = self.reaping.code.get() {
             return Ok(Some(*code));
         }
-        if self.reaping.watched.load(Ordering::SeqCst) {
-            return Ok(None);
-        }
+        // MUTANT M1: the terminal reaps even when a watch is waiting.
         let mut status: libc::c_int = 0;
         let got = unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) };
         if got == 0 {
