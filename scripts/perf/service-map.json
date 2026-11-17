@@ -25,7 +25,7 @@
     {
       "id": "logging",
       "label": "Session logging (main side: supervisor, transcript binding)",
-      "within": ["^(?:LogSupervisor|routeHookTranscriptPath|noteClaudeTranscript|noteClaudeFolder|initLogging|getTranscriptBinder)(?:\\$\\d+)?$"]
+      "within": ["^(?:LogSupervisor|routeHookTranscriptPath|noteClaudeTranscript|noteClaudeFolder|initLogging|getTranscriptBinder|makeTranscriptBinder|makeHeuristicBinder|canonicalizeTranscriptPath)(?:\\$\\d+)?$"]
     },
     {
       "id": "hooks",

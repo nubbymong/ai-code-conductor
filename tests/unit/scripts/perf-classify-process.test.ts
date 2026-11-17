@@ -215,16 +215,22 @@ describe('main-process attribution with the committed service map', () => {
     '  const t = `x`;',                                // 63: ...with a template of its own
     '  startWork();',                                      // 64
     '});',                                                 // 65
+    'function makeTranscriptBinder(deps) {',               // 66: session logging's transcript binder
+    '  const uuidFromPath = (p) => {',                     // 67
+    '    return p.slice(-36);',                            // 68
+    '  };',                                                // 69
+    '}',                                                   // 70
   ].join('\n')
-  // A chunk the bundler split out (out/main/chunks), as the real build has.
-  const CHUNK = ['"use strict";', 'class LoopStallMonitor {', '  tick() {', '    this.prune(Date.now());', '  }', '}'].join('\n')
+  // A chunk the bundler split out (out/main/chunks), as the real build has; the real one also holds
+  // session logging's canonicalizeTranscriptPath.
+  const CHUNK = ['"use strict";', 'class LoopStallMonitor {', '  tick() {', '    this.prune(Date.now());', '  }', '}', 'function canonicalizeTranscriptPath(p) {', '  return p;', '}'].join('\n')
   const SOURCES = { 'index.js': BUNDLE, 'chunks/loop-stall-monitor-DTsNW8F7.js': CHUNK }
   const URL = 'file:///C:/Users/User/AppData/Local/Programs/AI%20Code%20Conductor/resources/app.asar/out/main/index.js'
   const CHUNK_URL = URL.replace('index.js', 'chunks/loop-stall-monitor-DTsNW8F7.js')
   const f = (functionName: string, lineNumber: number, url = URL) => ({ functionName, url, lineNumber, columnNumber: 0, scriptId: '1' })
   const profile = {
     nodes: [
-      { id: 1, callFrame: f('(root)', -1, ''), children: [2, 9, 12, 13, 20, 30, 40, 42, 43, 44, 46] },
+      { id: 1, callFrame: f('(root)', -1, ''), children: [2, 9, 12, 13, 20, 30, 40, 42, 43, 44, 46, 47, 48] },
       { id: 30, callFrame: f('tick', 2, CHUNK_URL), children: [] }, // a method in a chunk
       { id: 2, callFrame: f('processTimers', 500, 'node:internal/timers'), children: [3] },
       { id: 3, callFrame: f('listOnTimeout', 520, 'node:internal/timers'), children: [4] },
@@ -243,10 +249,12 @@ describe('main-process attribution with the committed service map', () => {
       { id: 43, callFrame: f('forward', 40), children: [] },       // the hooks gateway
       { id: 44, callFrame: f('', 45), children: [] },              // the MCP server's request handler
       { id: 46, callFrame: f('handlePostMessage', 80, 'file:///C:/x/resources/app.asar/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/sse.js'), children: [] },
+      { id: 47, callFrame: f('uuidFromPath', 67), children: [] },  // session logging's binder, by the function it sits in
+      { id: 48, callFrame: f('canonicalizeTranscriptPath', 6, CHUNK_URL), children: [] }, // ...and its path check, in a chunk
     ],
     // Each sample lasts until the next one (timeDeltas[i + 1], microseconds).
-    samples: [5, 5, 9, 9, 9, 22, 23, 13, 12, 20, 30, 40, 41, 42, 43, 44, 46, 5],
-    timeDeltas: [0, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
+    samples: [5, 5, 9, 9, 9, 22, 23, 13, 12, 20, 30, 40, 41, 42, 43, 44, 46, 47, 48, 5],
+    timeDeltas: [0, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
   }
 
   it('names each frame by the top-level function or class it sits in', () => {
@@ -290,12 +298,13 @@ describe('main-process attribution with the committed service map', () => {
     expect(r.topUnattributed[0].frame).toMatch(/^unrelatedThing .*index\.js:22$/)
     // The three service workers' main-side code, and the MCP server (a Services row) by name and by its package.
     expect(r.byService.tokenomics).toBeCloseTo(1, 6)
-    expect(r.byService.logging).toBeCloseTo(1, 6)
+    // The log supervisor's flush, and the transcript binder's two frames (in index.js and in a chunk).
+    expect(r.byService.logging).toBeCloseTo(3, 6)
     expect(r.byService.hooks).toBeCloseTo(1, 6)
     expect(r.byService.mcp).toBeCloseTo(2, 6)
     // The shared Supervisor's own frame is the nearest: its own row, not services-panel and not a guess at which worker.
     expect(r.byService.supervision).toBeCloseTo(1, 6)
-    expect(r.totalMs).toBeCloseTo(17, 6)
+    expect(r.totalMs).toBeCloseTo(19, 6)
   })
 
   it('has a row for every Services registry row that runs in main', () => {
