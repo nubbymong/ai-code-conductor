@@ -33,6 +33,7 @@ const A = req('./lib/aggregate.cjs') as {
   attributeProfile: (profile: unknown, map: unknown, o?: Record<string, unknown>) => { totalMs: number; idleMs: number; gcMs: number; unattributedMs: number; byService: Record<string, number>; topUnattributed: Array<{ frame: string; ms: number }> }
   topLevelName: (lines: string[], line: number) => string
   topLevelNamer: (files: Record<string, string>) => (cf: { url?: string; lineNumber?: number }) => string
+  unescapedBackticks: (s: string) => number
 }
 const SERVICE_MAP = JSON.parse(readFileSync(join(PERF, 'service-map.json'), 'utf8'))
 
@@ -61,6 +62,9 @@ const LINES: Array<[string, Proc]> = [
   ['shell', { pid: 141, name: 'powershell.exe', cmd: VM.powershell }],
   ['shell', { pid: 142, name: 'cmd.exe', cmd: VM.claudeCmd }],
   ['fake-claude', { pid: 143, name: 'node.exe', cmd: VM.fakeClaude }],
+  // The app's short probes of the same CLI are not sessions (they would count as live ones).
+  ['node', { pid: 144, name: 'node.exe', cmd: VM.fakeClaude.replace(/--resume .*$/, '--version') }],
+  ['node', { pid: 145, name: 'node.exe', cmd: VM.fakeClaude.replace(/--resume .*$/, 'auth status') }],
   ['vision-chrome', { pid: 150, name: 'chrome.exe', cmd: VM.visionChrome }],
   ['chrome', { pid: 151, name: 'chrome.exe', cmd: '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --type=renderer' }],
   ['defender', { pid: 160, name: 'MsMpEng.exe', cmd: '' }],
@@ -174,6 +178,43 @@ describe('main-process attribution with the committed service map', () => {
     '    return manager.feedData(id, d);',                 // 26
     '  });',                                               // 27
     '}',                                                   // 28
+    'class TokenomicsSupervisor {',                        // 29
+    '  onMessage(m) {',                                    // 30
+    '    this.sup.noteBeat(m);',                           // 31
+    '  }',                                                 // 32
+    '}',                                                   // 33
+    'class LogSupervisor {',                               // 34
+    '  flush() {',                                         // 35
+    '    return 1;',                                       // 36
+    '  }',                                                 // 37
+    '}',                                                   // 38
+    'class HooksGatewayProxy {',                           // 39
+    '  forward(e) {',                                      // 40
+    '    return e;',                                       // 41
+    '  }',                                                 // 42
+    '}',                                                   // 43
+    'async function startMcpServer(port) {',               // 44
+    '  const server = http.createServer((req, res) => {',  // 45
+    '    res.end();',                                      // 46
+    '  });',                                               // 47
+    '}',                                                   // 48
+    'class Supervisor {',                                  // 49
+    '  noteBeat(m) {',                                     // 50
+    '    this.lastBeat = Date.now();',                     // 51
+    '  }',                                                 // 52
+    '}',                                                   // 53
+    'function buildScript(x) {',                           // 54
+    '  const s = `',                                     // 55: a template literal main embeds...
+    'if ($x) {',                                           // 56: ...whose lines start in column 0
+    '  Write-Host \\`n',                               // 57: an escaped backtick inside it
+    '}',                                                   // 58
+    '`;',                                                // 59
+    '  return s.trim();',                                  // 60
+    '}',                                                   // 61
+    'app.on("ready", () => {',                             // 62: a top-level statement...
+    '  const t = `x`;',                                // 63: ...with a template of its own
+    '  startWork();',                                      // 64
+    '});',                                                 // 65
   ].join('\n')
   // A chunk the bundler split out (out/main/chunks), as the real build has.
   const CHUNK = ['"use strict";', 'class LoopStallMonitor {', '  tick() {', '    this.prune(Date.now());', '  }', '}'].join('\n')
@@ -183,7 +224,7 @@ describe('main-process attribution with the committed service map', () => {
   const f = (functionName: string, lineNumber: number, url = URL) => ({ functionName, url, lineNumber, columnNumber: 0, scriptId: '1' })
   const profile = {
     nodes: [
-      { id: 1, callFrame: f('(root)', -1, ''), children: [2, 9, 12, 13, 20, 30] },
+      { id: 1, callFrame: f('(root)', -1, ''), children: [2, 9, 12, 13, 20, 30, 40, 42, 43, 44, 46] },
       { id: 30, callFrame: f('tick', 2, CHUNK_URL), children: [] }, // a method in a chunk
       { id: 2, callFrame: f('processTimers', 500, 'node:internal/timers'), children: [3] },
       { id: 3, callFrame: f('listOnTimeout', 520, 'node:internal/timers'), children: [4] },
@@ -196,10 +237,16 @@ describe('main-process attribution with the committed service map', () => {
       { id: 21, callFrame: f('feedData', 9), children: [22, 23] }, // ...calling the Watchdog
       { id: 22, callFrame: f('stripAnsi', 2), children: [] },
       { id: 23, callFrame: f('', 11), children: [] },              // forEach arrow inside the method
+      { id: 40, callFrame: f('onMessage', 30), children: [41] },   // Tokenomics' supervisor...
+      { id: 41, callFrame: f('noteBeat', 50), children: [] },      // ...calling the shared Supervisor
+      { id: 42, callFrame: f('flush', 35), children: [] },         // session logging
+      { id: 43, callFrame: f('forward', 40), children: [] },       // the hooks gateway
+      { id: 44, callFrame: f('', 45), children: [] },              // the MCP server's request handler
+      { id: 46, callFrame: f('handlePostMessage', 80, 'file:///C:/x/resources/app.asar/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/sse.js'), children: [] },
     ],
     // Each sample lasts until the next one (timeDeltas[i + 1], microseconds).
-    samples: [5, 5, 9, 9, 9, 22, 23, 13, 12, 20, 30, 5],
-    timeDeltas: [0, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
+    samples: [5, 5, 9, 9, 9, 22, 23, 13, 12, 20, 30, 40, 41, 42, 43, 44, 46, 5],
+    timeDeltas: [0, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
   }
 
   it('names each frame by the top-level function or class it sits in', () => {
@@ -213,6 +260,18 @@ describe('main-process attribution with the committed service map', () => {
     expect(topOf(f('', 17))).toBe('startStatuslineWatcher') // the url's %20 read as a space
     expect(topOf(f('tick', 2, CHUNK_URL))).toBe('LoopStallMonitor')
     expect(topOf(f('readFileSync', 400, 'node:fs'))).toBe('')
+    // A url that is not valid percent-encoding is matched as it is, not thrown on.
+    expect(topOf(f('', 17, 'file:///C:/odd%zz/resources/app.asar/out/main/index.js'))).toBe('startStatuslineWatcher')
+  })
+
+  it('passes over column-0 lines inside a template literal, and still names a top-level statement', () => {
+    const lines = BUNDLE.split('\n')
+    // Inside the template: '`;' and 'if ($x) {' start in column 0 but are text.
+    expect(A.topLevelName(lines, 60)).toBe('buildScript')
+    // A top-level statement with a template of its own (an even number of backticks above the frame).
+    expect(A.topLevelName(lines, 64)).toBe('app.on("ready", () => {')
+    expect(A.topLevelNamer(SOURCES)(f('trim', 60))).toBe('buildScript')
+    expect(A.unescapedBackticks('a \\` b ` c')).toBe(1)
   })
 
   it('attributes the self time to services, the nearest matching frame first', () => {
@@ -229,7 +288,20 @@ describe('main-process attribution with the committed service map', () => {
     expect(r.gcMs).toBeCloseTo(1, 6)
     expect(r.unattributedMs).toBeCloseTo(1, 6)
     expect(r.topUnattributed[0].frame).toMatch(/^unrelatedThing .*index\.js:22$/)
-    expect(r.totalMs).toBeCloseTo(11, 6)
+    // The three service workers' main-side code, and the MCP server (a Services row) by name and by its package.
+    expect(r.byService.tokenomics).toBeCloseTo(1, 6)
+    expect(r.byService.logging).toBeCloseTo(1, 6)
+    expect(r.byService.hooks).toBeCloseTo(1, 6)
+    expect(r.byService.mcp).toBeCloseTo(2, 6)
+    // The shared Supervisor's own frame is the nearest: its own row, not services-panel and not a guess at which worker.
+    expect(r.byService.supervision).toBeCloseTo(1, 6)
+    expect(r.totalMs).toBeCloseTo(17, 6)
+  })
+
+  it('has a row for every Services registry row that runs in main', () => {
+    const ids = (SERVICE_MAP.services as Array<{ id: string }>).map((s) => s.id)
+    // src/shared/service-health.ts SERVICE_ID: the helper is its own program and has its connection row.
+    for (const id of ['hooks', 'logging', 'tokenomics', 'watchdog', 'mcp', 'session-helper']) expect(ids).toContain(id)
   })
 
   it('attributes nothing to a service when the bundle source is missing (names alone)', () => {

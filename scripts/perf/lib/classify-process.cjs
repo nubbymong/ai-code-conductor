@@ -38,7 +38,7 @@ const ROLE_LABEL = Object.freeze({
   'pty-host': 'Console host (per terminal)',
   shell: 'Shell (per terminal)',
   'fake-claude': 'Fake Claude CLI (per session)',
-  node: 'Node (other)',
+  node: 'Node (other, the CLI probes included)',
   'vision-chrome': 'Vision browser',
   chrome: 'Chrome (other)',
   defender: 'Microsoft Defender (confounder)',
@@ -95,7 +95,9 @@ function classifyProcess(proc, ctx = {}) {
   if (name === 'conhost.exe' || name === 'openconsole.exe') return 'pty-host'
   if (name === 'powershell.exe' || name === 'pwsh.exe' || name === 'cmd.exe') return 'shell'
   if (name === 'node.exe' || name === 'node') {
-    if (/fake-claude\.js/i.test(cmd)) return 'fake-claude'
+    // A session's CLI is started with --resume; the app's short probes of the
+    // same file (--version, auth status) are not sessions.
+    if (/fake-claude\.js/i.test(cmd) && /\s--resume(?:\s|=|$)/.test(cmd)) return 'fake-claude'
     return 'node'
   }
   if (name === 'chrome.exe') {

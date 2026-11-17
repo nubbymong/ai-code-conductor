@@ -1,5 +1,5 @@
 {
-  "about": "Performance harness (scripts/perf): which main-process code belongs to which service, for report.cjs to attribute a main CPU profile. Main is bundled but neither minified nor source-mapped, so names are the only key. A frame matches a service when its own function name matches one of `functions`, the top-level function or class of the bundle it sits in matches one of `within`, or its script url matches one of `urls`. Walking from the sampled frame up through its callers, the nearest matching frame names the service; services are tried in this order. Names may carry a $N suffix where the bundler renamed a clash. Node and Electron internals are deliberately not services: a frame there takes the service of the app code that called it.",
+  "about": "Performance harness (scripts/perf): which main-process code belongs to which service, for report.cjs to attribute a main CPU profile. Main is bundled but neither minified nor source-mapped, so names are the only key. A frame matches a service when its own function name matches one of `functions`, the top-level function or class of the bundle it sits in matches one of `within`, or its script url matches one of `urls`. Walking from the sampled frame up through its callers, the nearest matching frame names the service; services are tried in this order. Names may carry a $N suffix where the bundler renamed a clash. Node and Electron internals are deliberately not services: a frame there takes the service of the app code that called it. The rows follow the Services registry (src/shared/service-health.ts: hooks, logging, tokenomics, watchdog, mcp, helper) and add the other main-process work by name; the three workers' shared Supervisor class has a row of its own, because its frames cannot tell which worker they serve.",
   "services": [
     {
       "id": "pty-output",
@@ -33,9 +33,20 @@
       "within": ["^(?:HooksGatewayProxy|HooksGateway|ServiceSupervisor|forkHooksChild)(?:\\$\\d+)?$"]
     },
     {
+      "id": "mcp",
+      "label": "MCP server (the sessions' Conductor tools and status posts)",
+      "within": ["^(?:startMcpServer|stopMcpServer|serveStatelessMcp|loadMcpDeps|authenticateMcpRequest|isAuthorizedMcpRequest|authorizeMessagePost|parseBearerToken|tokensMatch|parseCccSessionIdFromUrl|ingestStatusPayload|armSseKeepAlive|buildSessionNotFoundResponse|issueMcpSessionToken|mcpSessionToken|resultToMcpContent|imageFileToMcpContent|decideAgentBrowserPush|McpServer|SSEServerTransport|StreamableHTTPServerTransport)(?:\\$\\d+)?$"],
+      "urls": ["@modelcontextprotocol"]
+    },
+    {
+      "id": "supervision",
+      "label": "Service supervision (the shared Supervisor of the three workers: fork, restart, health)",
+      "within": ["^Supervisor(?:\\$\\d+)?$"]
+    },
+    {
       "id": "services-panel",
       "label": "Services registry and monitors",
-      "within": ["^(?:createServiceRegistry|fromSnapshot|Supervisor|LoopStallMonitor|startJankDetector|reportIfStalled|registerServiceHealthHandlers)(?:\\$\\d+)?$"]
+      "within": ["^(?:createServiceRegistry|fromSnapshot|LoopStallMonitor|startJankDetector|reportIfStalled|registerServiceHealthHandlers)(?:\\$\\d+)?$"]
     },
     {
       "id": "session-helper",
