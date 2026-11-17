@@ -101,7 +101,9 @@ describe('a port check that failed is not a free port', () => {
     expect(script).not.toMatch(/SilentlyContinue|-EA\b|ErrorActionPreference/i)
     expect(script).toMatch(/try \{ \(Get-NetTCPConnection -State Listen -LocalPort 9333 -ErrorAction Stop \| Select-Object -First 1\)\.OwningProcess \} catch \{/)
     expect(script).toMatch(/\$_\.CategoryInfo\.Category -ne 'ObjectNotFound'/)
-    expect(script).toMatch(/\{ exit 1 \}/)
+    // A missing cmdlet is ObjectNotFound too: without this clause it would print nothing, exit 0
+    // and read as free, where it must read as unknown.
+    expect(script).toMatch(/if \(\$_\.CategoryInfo\.Category -ne 'ObjectNotFound' -or \$_\.Exception -is \[System\.Management\.Automation\.CommandNotFoundException\]\) \{ exit 1 \}/)
     // `powershell -Command` exits 1 after a caught "no match" unless told otherwise (seen on Windows
     // 11 with port 1): without this every free port would read as unknown.
     expect(script).toMatch(/\}; exit 0$/)

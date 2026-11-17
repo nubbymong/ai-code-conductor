@@ -217,7 +217,9 @@ describe('the ablations, read against their all-on windows', () => {
 
   // The VM's two runs (installed 2.1.3-beta.6, harness 1588c81b): the all-on windows' app totals,
   // 35.29 and 35.25 in run 1, 34.57 and 33.26 in run 2. Run 1's Tokenomics-off window, 34.71, saves
-  // 0.56 against run 1's own two, which agree within 0.04 by chance.
+  // 0.56 against run 1's own two, which agree within 0.04 by chance. Run 2's Tokenomics-off total
+  // is a constructed value: it is set to 33.355, not the VM's 33.77, so that the two runs' mean
+  // also saves 0.56. The VM's own pooled Tokenomics saving is in CONTEXT.d/2026-11-17-perf-harness.md.
   const run1 = [cell('n25-busy-off-none', 'none', 35.29), cell('n25-busy-off-tokenomics', 'tokenomics', 34.71), cell('n25-busy-off-none-again', 'none', 35.25)]
   const run2 = [cell('n25-busy-off-none', 'none', 34.57), cell('n25-busy-off-tokenomics', 'tokenomics', 33.355), cell('n25-busy-off-none-again', 'none', 33.26)]
 
@@ -231,7 +233,7 @@ describe('the ablations, read against their all-on windows', () => {
     expect(R.verdictWord(tok)).toBe('too few all-on windows for a noise figure')
   })
 
-  it("reads several runs' savings against every run's all-on windows together: 0.56 against a spread of 2.03 is no", () => {
+  it("reads several runs' savings against every run's all-on windows together: a constructed saving of 0.56 against the VM's spread of 2.03 is no", () => {
     const p = R.pooledAblation([run1, run2])!
     expect(p.totals).toEqual([35.29, 35.25, 34.57, 33.26])
     expect(p.refMean).toBeCloseTo(34.5925, 6)
