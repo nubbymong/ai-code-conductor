@@ -30,6 +30,13 @@
 //! on another thread at that moment could still signal it. std's `Child` is
 //! not kept: its own waits would be a second reaper.
 //!
+//! That needs SIGCHLD at its default. A process that ignores it has its
+//! children reaped by the system as they exit, outside the terminal, and an
+//! ignored SIGCHLD is handed down through exec, so a starter that ignores it
+//! would leave `try_wait` unable to read the code and `end_tree` never
+//! seeing the child reaped. Each start sets SIGCHLD back to its default
+//! first.
+//!
 //! Unsafe code sits only in the modules that call the C library or the
 //! Windows API where `std` has no safe form; the library denies it elsewhere.
 #![allow(unsafe_code)]
@@ -40,6 +47,11 @@ use std::io::{self, Read};
 use std::os::fd::FromRawFd;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, ExitStatus, Stdio};
+#[cfg(test)]
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 /// What a launch adds when its environment has no `TERM`.
@@ -58,6 +70,12 @@ fn code_of(status: ExitStatus) -> i32 {
 /// (`Pty::exit_watch`). It never reaps the child (see the module comment).
 pub struct ExitWatch {
     pid: libc::pid_t,
+    /// The terminal's count of status checks (`Pty::status_checks`).
+    #[cfg(test)]
+    checks: Arc<AtomicUsize>,
+    /// Set by a test that needs the wait to fail (`failing`).
+    #[cfg(test)]
+    fail: bool,
 }
 
 impl ExitWatch {
@@ -68,7 +86,13 @@ impl ExitWatch {
     /// other failure is an error, so the caller reports an exit instead of
     /// waiting on.
     pub fn wait(self) -> io::Result<()> {
+        #[cfg(test)]
+        if self.fail {
+            return Err(io::Error::other("a wait made to fail by a test"));
+        }
         loop {
+            #[cfg(test)]
+            self.checks.fetch_add(1, Ordering::SeqCst);
             let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
             let rc = unsafe { libc::waitid(libc::P_PID, self.pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) };
             if rc == 0 {
@@ -81,6 +105,14 @@ impl ExitWatch {
                 _ => return Err(e),
             }
         }
+    }
+
+    /// This watch with a wait that fails at once, for a test of what the
+    /// caller does then.
+    #[cfg(test)]
+    pub(crate) fn failing(mut self) -> ExitWatch {
+        self.fail = true;
+        self
     }
 }
 
@@ -100,6 +132,11 @@ pub struct Pty {
     /// Whether anything of the session still runs: always `session_left`; a
     /// test stands in for an id that another process's group holds by now.
     session_left: fn(libc::pid_t) -> bool,
+    /// How many times the child's status was asked of the system: each
+    /// `waitpid` in `try_wait` and each `waitid` in this terminal's exit
+    /// watches (test builds only).
+    #[cfg(test)]
+    checks: Arc<AtomicUsize>,
 }
 
 fn winsize(size: PtySize) -> libc::winsize {
@@ -183,6 +220,11 @@ impl Pty {
                 Ok(())
             });
         }
+        // The terminal alone reaps the child (module comment), so SIGCHLD
+        // must not be ignored when it starts.
+        unsafe {
+            libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+        }
         let child = cmd.spawn()?;
         // `cmd` still holds the parent's copies of the slave; drop them so the
         // reader sees the end when the child is gone.
@@ -192,7 +234,16 @@ impl Pty {
         drop(child);
         // The terminal owns the child from here, so a failure below ends it
         // (`Drop`) instead of leaving it running unheld.
-        let pty = Pty { master, pid, exit: None, tree_gone: false, signal: signal_session, session_left };
+        let pty = Pty {
+            master,
+            pid,
+            exit: None,
+            tree_gone: false,
+            signal: signal_session,
+            session_left,
+            #[cfg(test)]
+            checks: Arc::default(),
+        };
         let reader = pty.master.try_clone()?;
         Ok((pty, Box::new(reader)))
     }
@@ -219,8 +270,21 @@ impl Pty {
     /// A wait for the child's exit, for a thread that blocks on it without
     /// the terminal (`ExitWatch::wait`). It never reaps: the caller then
     /// reaps through `try_wait`.
-    pub fn exit_watch(&mut self) -> io::Result<ExitWatch> {
-        Ok(ExitWatch { pid: self.pid })
+    pub fn exit_watch(&self) -> io::Result<ExitWatch> {
+        Ok(ExitWatch {
+            pid: self.pid,
+            #[cfg(test)]
+            checks: Arc::clone(&self.checks),
+            #[cfg(test)]
+            fail: false,
+        })
+    }
+
+    /// How many times the child's status has been asked of the system so
+    /// far, by `try_wait` and by this terminal's exit watches.
+    #[cfg(test)]
+    pub(crate) fn status_checks(&self) -> usize {
+        self.checks.load(Ordering::SeqCst)
     }
 
     /// The exit code once the child has exited (128 + n when signal n ended
@@ -231,6 +295,8 @@ impl Pty {
             return Ok(Some(code));
         }
         let mut status: libc::c_int = 0;
+        #[cfg(test)]
+        self.checks.fetch_add(1, Ordering::SeqCst);
         let got = unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) };
         if got == 0 {
             return Ok(None);
@@ -493,11 +559,21 @@ mod tests {
     }
 
     /// A watch made after the terminal has reaped the child answers at once.
+    /// The wait runs on a thread of its own, so one that blocked fails this
+    /// test within 2 s instead of hanging it.
     #[test]
     fn an_exit_watch_of_a_child_already_reaped_answers_at_once() {
         let mut pty = start("exit 3");
         wait_for_exit(&mut pty);
         assert_eq!(pty.try_wait().expect("try_wait"), Some(3));
-        pty.exit_watch().expect("an exit watch").wait().expect("the wait of a child already reaped");
+        let watch = pty.exit_watch().expect("an exit watch");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(watch.wait().map_err(|e| e.to_string()));
+        });
+        match rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(waited) => waited.expect("the wait of a child already reaped"),
+            Err(_) => panic!("the wait of a child already reaped did not answer within 2 s"),
+        }
     }
 }

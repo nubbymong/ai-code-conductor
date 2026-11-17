@@ -109,7 +109,15 @@ fn a_newer_attachment_replaces_the_older_one() {
 #[test]
 fn a_ring_that_is_too_short_reports_it() {
     let h = start(64);
-    assert!(h.wait_for_text("FAKE-CLI READY", WAIT) || h.ring_range().1 > 0);
+    // Any output shows the program has started. The banner itself is not
+    // looked for: in a 64-byte ring it can be gone before it is looked at
+    // (on Windows that look always ran out its 20 s, then passed on this
+    // same check).
+    let deadline = std::time::Instant::now() + WAIT;
+    while h.ring_range().1 == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(h.ring_range().1 > 0, "the program wrote nothing");
     for i in 0..12 {
         h.write_input(format!("padding-line-number-{i}\r").as_bytes()).expect("type");
     }

@@ -4,11 +4,14 @@
 //! whether the program exits 0, exits 7 or is ended from outside the holder,
 //! the attached app gets `term.exit` with that code within 250 ms of the end,
 //! and the record says `exited` with the same code within one more tick of
-//! the holder's 250 ms clock.
+//! the holder's 250 ms clock. What the program writes as it exits reaches the
+//! app before `term.exit` does. And a holder whose starter ignored SIGCHLD
+//! (which is handed down through exec) still reads its program's own code.
 //!
 //! Each time is measured from just before the test made the program end (it
-//! typed `exit <n>`, or ended the process itself), so it is never shorter than
-//! the time from the program's own exit.
+//! typed `exit <n>` or `quit`, or ended the process itself), so it is never
+//! shorter than the time from the program's own exit. Each run prints its
+//! times (shown with `--show-output`, and in any failure).
 
 use aicc_helper::client::Client;
 use aicc_helper::frame::{Body, Frame};
@@ -49,19 +52,45 @@ fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
+/// How the test starts the helper.
+#[derive(Clone, Copy, Debug)]
+enum Starter {
+    /// As the app does.
+    Plain,
+    /// With SIGCHLD ignored, as a launcher may leave it: an ignored signal
+    /// stays ignored through exec, so the detached holder starts with it
+    /// ignored too.
+    #[cfg(unix)]
+    IgnoringSigchld,
+}
+
 /// Start a detached holder; the record it printed. Its output goes to files,
 /// not pipes: the holder outlives this call, and a pipe would stay open with it.
-fn hold(store_dir: &Path, sid: &str) -> Record {
+fn hold(store_dir: &Path, sid: &str, starter: Starter) -> Record {
     let out_path = store_dir.with_extension("out");
     let err_path = store_dir.with_extension("err");
     let store_arg = store_dir.to_string_lossy().into_owned();
-    let status = Command::new(HELPER)
+    let mut helper = Command::new(HELPER);
+    helper
         .args(["hold", "--detach", "--store", store_arg.as_str(), "--session", sid, "--label", "Exit test", "--away", "30"])
         .stdin(Stdio::null())
         .stdout(fs::File::create(&out_path).expect("a file for stdout"))
-        .stderr(fs::File::create(&err_path).expect("a file for stderr"))
-        .status()
-        .expect("run the helper");
+        .stderr(fs::File::create(&err_path).expect("a file for stderr"));
+    match starter {
+        Starter::Plain => {}
+        #[cfg(unix)]
+        Starter::IgnoringSigchld => {
+            use std::os::unix::process::CommandExt;
+            // Between fork and exec, one call that is safe there.
+            unsafe {
+                helper.pre_exec(|| {
+                    libc::signal(libc::SIGCHLD, libc::SIG_IGN);
+                    Ok(())
+                });
+            }
+        }
+    }
+    let status = helper.status().expect("run the helper");
     let stdout = fs::read_to_string(&out_path).unwrap_or_default();
     let stderr = fs::read_to_string(&err_path).unwrap_or_default();
     let _ = fs::remove_file(&out_path);
@@ -189,25 +218,66 @@ impl App {
     }
 }
 
-/// End process `pid` from outside the holder, as another program could.
+/// End process `pid` at once (on macOS and Linux a SIGKILL, so `code` is
+/// not used there).
 #[cfg(unix)]
-fn end_from_outside(pid: u32) {
-    let sent = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-    assert_eq!(sent, 0, "could not end the program: {}", std::io::Error::last_os_error());
+fn end_process(pid: u32, _code: u32) -> std::io::Result<()> {
+    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
-/// End process `pid` from outside the holder, as another program could.
+/// End process `pid` at once, with exit code `code`.
 #[cfg(windows)]
-fn end_from_outside(pid: u32) {
+fn end_process(pid: u32, code: u32) -> std::io::Result<()> {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
     unsafe {
         let process = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        assert!(!process.is_null(), "could not open the program: {}", std::io::Error::last_os_error());
-        let ended = TerminateProcess(process, KILLED_CODE as u32);
+        if process.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let ended = TerminateProcess(process, code);
         let why = std::io::Error::last_os_error();
         CloseHandle(process);
-        assert_ne!(ended, 0, "could not end the program: {why}");
+        if ended == 0 {
+            Err(why)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// End process `pid` from outside the holder, as another program could.
+fn end_from_outside(pid: u32) {
+    if let Err(e) = end_process(pid, KILLED_CODE as u32) {
+        panic!("could not end the program: {e}");
+    }
+}
+
+/// However a run ends, passed or failed: ends its holder if that still runs,
+/// and removes the run's folders. Ending the holder ends its program too (on
+/// Windows the program's job closes with the holder; on macOS and Linux the
+/// program's terminal closes, which hangs it up).
+struct Cleanup {
+    /// The holder's process id, until the run has seen it gone: an id seen
+    /// gone may be given to another process, which must never be ended.
+    holder: Option<u32>,
+    dirs: Vec<PathBuf>,
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        if let Some(pid) = self.holder.take() {
+            if pids::alive(pid) {
+                let _ = end_process(pid, 1);
+            }
+        }
+        for dir in &self.dirs {
+            let _ = fs::remove_dir_all(dir);
+        }
     }
 }
 
@@ -216,6 +286,8 @@ fn end_from_outside(pid: u32) {
 enum Ending {
     /// It exits by itself with this code.
     Exits(i64),
+    /// It writes "FAKE-CLI BYE" and exits 0 (the fake CLI's `quit`).
+    SaysByeAndExits,
     /// It is ended from outside the holder.
     FromOutside,
 }
@@ -224,17 +296,22 @@ enum Ending {
 struct Seen {
     told: Duration,
     told_code: Option<i64>,
+    /// Whether "FAKE-CLI BYE" had reached the app when `term.exit` did.
+    bye_first: bool,
     recorded: Duration,
     recorded_code: Option<i64>,
 }
 
 /// Launch the fake CLI in a detached holder, attach, end the program as
-/// `ending` says, and time `term.exit` and the record. The holder is ended
-/// before anything is checked, so a failed check leaves nothing running.
-fn run(sid: &str, ending: Ending) -> Seen {
+/// `ending` says, and time `term.exit` and the record. `Cleanup` ends the
+/// holder and removes the folders however the run ends, including when a
+/// step here fails.
+fn run(sid: &str, ending: Ending, starter: Starter) -> Seen {
     let store_dir = temp_dir(&format!("store-{sid}"));
     let work = temp_dir(&format!("work-{sid}"));
-    let rec = hold(&store_dir, sid);
+    let mut cleanup = Cleanup { holder: None, dirs: vec![store_dir.clone(), work.clone()] };
+    let rec = hold(&store_dir, sid, starter);
+    cleanup.holder = Some(rec.pid);
     let mut app = App::connect(&rec);
     let id = app.id();
     let launched = app.call(launch_msg(id, &work));
@@ -249,10 +326,14 @@ fn run(sid: &str, ending: Ending) -> Seen {
     let began = Instant::now();
     match ending {
         Ending::Exits(code) => app.client.send_raw(1, format!("exit {code}\r").as_bytes()).expect("type into the terminal"),
+        Ending::SaysByeAndExits => app.client.send_raw(1, b"quit\r").expect("type into the terminal"),
         Ending::FromOutside => end_from_outside(child),
     }
     let exit = app.wait_message("term.exit", |e| t_of(e) == "term.exit");
     let told = began.elapsed();
+    // Frames are read in the order they came, so the screen holds all that
+    // came before term.exit.
+    let bye_first = app.text().contains("FAKE-CLI BYE");
     let told_code = exit.get("code").and_then(Value::as_i64);
     let (recorded, recorded_code) = loop {
         match store::read(&store_dir, sid) {
@@ -270,33 +351,71 @@ fn run(sid: &str, ending: Ending) -> Seen {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(!pids::alive(rec.pid), "the holder outlived term.end");
-    let _ = fs::remove_dir_all(&store_dir);
-    let _ = fs::remove_dir_all(&work);
-    Seen { told, told_code, recorded, recorded_code }
+    // Seen gone: from here its id may name another process.
+    cleanup.holder = None;
+    Seen { told, told_code, bye_first, recorded, recorded_code }
 }
 
-fn check(sid: &str, ending: Ending, code: i64) {
-    let seen = run(sid, ending);
-    assert_eq!(seen.told_code, Some(code), "{ending:?}: term.exit carried the wrong code");
-    assert_eq!(seen.recorded_code, Some(code), "{ending:?}: the record carried the wrong code");
-    assert!(seen.told <= TOLD_WITHIN, "{ending:?}: the app was told {:?} after the program's end (limit {TOLD_WITHIN:?})", seen.told);
-    assert!(seen.recorded <= RECORDED_WITHIN, "{ending:?}: the record said exited {:?} after the program's end (limit {RECORDED_WITHIN:?})", seen.recorded);
+fn check(sid: &str, ending: Ending, starter: Starter, code: i64) {
+    let seen = run(sid, ending, starter);
+    eprintln!(
+        "{sid} {ending:?} {starter:?}: told after {:?} (limit {TOLD_WITHIN:?}), recorded after {:?} (limit {RECORDED_WITHIN:?})",
+        seen.told, seen.recorded
+    );
+    // Every check is made, then all that failed are reported together, so
+    // one failed check never hides another.
+    let mut wrong: Vec<String> = Vec::new();
+    if seen.told_code != Some(code) {
+        wrong.push(format!("term.exit carried code {:?}, not {code}", seen.told_code));
+    }
+    if seen.recorded_code != Some(code) {
+        wrong.push(format!("the record carried code {:?}, not {code}", seen.recorded_code));
+    }
+    if seen.told > TOLD_WITHIN {
+        wrong.push(format!("the app was told {:?} after the program's end (limit {TOLD_WITHIN:?})", seen.told));
+    }
+    if seen.recorded > RECORDED_WITHIN {
+        wrong.push(format!("the record said exited {:?} after the program's end (limit {RECORDED_WITHIN:?})", seen.recorded));
+    }
+    if matches!(ending, Ending::SaysByeAndExits) && !seen.bye_first {
+        wrong.push("\"FAKE-CLI BYE\", written as the program exited, had not reached the app when term.exit did".to_string());
+    }
+    assert!(wrong.is_empty(), "{sid} {ending:?} {starter:?}: {}", wrong.join("; "));
 }
 
 #[test]
 fn a_program_that_exits_0_is_reported_at_once() {
     let _serial = one_at_a_time();
-    check("wait-0001", Ending::Exits(0), 0);
+    check("wait-0001", Ending::Exits(0), Starter::Plain, 0);
 }
 
 #[test]
 fn a_program_that_exits_7_is_reported_at_once_with_its_code() {
     let _serial = one_at_a_time();
-    check("wait-0002", Ending::Exits(7), 7);
+    check("wait-0002", Ending::Exits(7), Starter::Plain, 7);
 }
 
 #[test]
 fn a_program_ended_from_outside_the_holder_is_reported_at_once() {
     let _serial = one_at_a_time();
-    check("wait-0003", Ending::FromOutside, KILLED_CODE);
+    check("wait-0003", Ending::FromOutside, Starter::Plain, KILLED_CODE);
+}
+
+/// The holder lets the last output drain before it reports the exit, so
+/// what the program wrote as it exited is not lost behind `term.exit`.
+#[test]
+fn what_a_program_writes_as_it_exits_reaches_the_app_before_the_exit_report() {
+    let _serial = one_at_a_time();
+    check("wait-0004", Ending::SaysByeAndExits, Starter::Plain, 0);
+}
+
+/// A starter that ignores SIGCHLD hands that down through exec. A holder
+/// started so had its program reaped by the system as it exited: it could
+/// then not read the program's code (it reported -1), nor see it reaped. The
+/// holder sets SIGCHLD back to its default before it starts a program.
+#[cfg(unix)]
+#[test]
+fn a_holder_started_with_sigchld_ignored_still_reports_its_programs_own_code() {
+    let _serial = one_at_a_time();
+    check("wait-0005", Ending::Exits(7), Starter::IgnoringSigchld, 7);
 }

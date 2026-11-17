@@ -18,8 +18,6 @@
 use crate::pty::{Conpty, Pty, PtySize, SpawnOptions};
 use crate::ring::{Replay, Ring, RingError};
 use std::io::{self, Read, Write};
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -62,9 +60,13 @@ struct State {
 
 struct Shared {
     state: Mutex<State>,
-    /// How many times the exit watch asked for the child's status.
-    #[cfg(test)]
-    status_checks: AtomicUsize,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Set by a test, on its own thread, around a start: the holder started
+    /// then gets an exit watch whose wait fails at once.
+    static FAILING_WATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -110,13 +112,13 @@ impl Holder {
         let mut writer = pty.input_writer()?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State { ring: Ring::new(ring_bytes), terminal: None, exit_code: None, output_ended: false }),
-            #[cfg(test)]
-            status_checks: AtomicUsize::new(0),
         });
         let pty = Arc::new(Mutex::new(pty));
         // The watch on the child's exit, made before any thread: one that
         // cannot be made fails the start.
         let watch = lock(&pty).exit_watch()?;
+        #[cfg(test)]
+        let watch = if FAILING_WATCH.with(std::cell::Cell::get) { watch.failing() } else { watch };
 
         // The threads start in this order, the one that watches the child
         // last, and none of the earlier ones holds the terminal: so if a
@@ -172,16 +174,12 @@ impl Holder {
         let watch_shared = Arc::clone(&shared);
         let watch_pty = Arc::clone(&pty);
         thread::Builder::new().spawn(move || {
-            #[cfg(test)]
-            watch_shared.status_checks.fetch_add(1, Ordering::SeqCst);
             let waited = watch.wait();
             // The first process is gone. In one critical section: reap it and
             // read its code, end what it left behind on the terminal, then
             // close the terminal so the output can end.
             let code = {
                 let mut p = lock(&watch_pty);
-                #[cfg(test)]
-                watch_shared.status_checks.fetch_add(1, Ordering::SeqCst);
                 let code = match waited {
                     Ok(()) => match p.try_wait() {
                         Ok(Some(code)) => code,
@@ -357,20 +355,55 @@ mod tests {
         }
     }
 
+    /// A program that runs for a minute unless it is ended.
+    fn a_minute() -> Vec<String> {
+        if cfg!(windows) {
+            let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+            vec![format!("{root}\\System32\\PING.EXE"), "-n".to_string(), "60".to_string(), "127.0.0.1".to_string()]
+        } else {
+            vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 60".to_string()]
+        }
+    }
+
     /// A held terminal waits for its child's exit: it does not ask for the
-    /// child's status on a clock. It asks twice, once with a wait that blocks
-    /// until the exit and once to read the code. A watch that asked every
-    /// 25 ms asked about 80 times while this child ran.
+    /// child's status on a clock. It asks twice: one wait that blocks until
+    /// the exit, then one read of the code. The count is kept by the
+    /// terminal where the system is asked (each wait call in
+    /// `ExitWatch::wait`, each check in `Pty::try_wait`), so a clock anywhere
+    /// in those would count every time it fired. The 25 ms loop asked about
+    /// 80 times while this child ran.
     #[test]
     fn the_holder_waits_for_its_childs_exit_instead_of_asking_on_a_clock() {
         let h = Holder::start(&two_seconds(), PtySize::default(), 64 * 1024).expect("a program starts on a terminal");
         let began = Instant::now();
         let code = h.wait_exit(Duration::from_secs(30));
         let ran = began.elapsed();
+        let checks = lock(&h.pty).status_checks();
+        assert!((1..=2).contains(&checks), "the child's status was asked for {checks} times while it ran for {ran:?}");
         assert_eq!(code, Some(0), "the program did not exit 0: {:?}", String::from_utf8_lossy(&h.snapshot()));
         assert!(ran >= Duration::from_millis(1500), "the program ran only {ran:?}, too short to show anything");
-        let checks = h.shared.status_checks.load(Ordering::SeqCst);
-        assert!(checks <= 2, "the child's status was asked for {checks} times while it ran for {ran:?}");
+    }
+
+    /// A wait for the child's exit that fails is reported as an exit with
+    /// code -1 at once: the live channel closes as after any exit, and the
+    /// child, which would run for a minute, is ended rather than waited on.
+    #[test]
+    fn a_wait_for_the_child_that_fails_is_reported_as_an_exit_with_code_minus_1() {
+        FAILING_WATCH.with(|f| f.set(true));
+        let started = Holder::start(&a_minute(), PtySize::default(), 64 * 1024);
+        FAILING_WATCH.with(|f| f.set(false));
+        let h = started.expect("a program starts on a terminal");
+        let began = Instant::now();
+        let attached = h.attach(0).expect("attach");
+        let deadline = began + Duration::from_secs(15);
+        loop {
+            match attached.live.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => panic!("the live channel was still open {:?} after a failed wait", began.elapsed()),
+            }
+        }
+        assert_eq!(h.exit_code(), Some(-1), "a failed wait was not reported as an exit with code -1");
     }
 
     /// The holder waits for its child without the terminal's lock, so what

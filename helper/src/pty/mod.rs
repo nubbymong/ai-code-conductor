@@ -11,10 +11,11 @@
 //! `ExitWatch::wait` blocks a thread of the caller's until the child has
 //! exited, without the terminal and with no clock waking it meanwhile. The
 //! caller then reads the exit code with `try_wait`. On Windows the watch
-//! waits on a handle of its own. On Unix it leaves the child unreaped
-//! (`WNOWAIT`): `try_wait` is the one place the child is reaped, so its id
-//! is freed only through the terminal, as every decision to signal its
-//! session is made.
+//! waits on a handle of its own that may only wait. On Unix it leaves the
+//! child unreaped (`WNOWAIT`): `try_wait` is the one place the child is
+//! reaped, so its id is freed only through the terminal, as every decision
+//! to signal its session is made; each start sets SIGCHLD back to its
+//! default, so the system never reaps the child itself.
 //!
 //! The child is started in a unit that can be ended whole: a job object owned
 //! by the holder on Windows (the holder itself is in none, probe P7), its own

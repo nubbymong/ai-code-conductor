@@ -12,7 +12,7 @@ use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Console::HPCON;
 use windows_sys::Win32::System::Threading::{
-    DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList, UpdateProcThreadAttribute, WaitForSingleObject,
+    DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList, UpdateProcThreadAttribute, WaitForSingleObject, INFINITE,
 };
 
 /// `EXTENDED_STARTUPINFO_PRESENT`: the start-up block carries an attribute list.
@@ -56,6 +56,15 @@ pub(crate) fn exit_code(process: usize) -> io::Result<Option<u32>> {
         return Err(os_error("GetExitCodeProcess"));
     }
     Ok(Some(code))
+}
+
+/// Block until `process` has exited, with no time limit. A wait that fails
+/// is an error. The handle needs only the right to wait (`SYNCHRONIZE`).
+pub(crate) fn wait_for_exit(process: usize) -> io::Result<()> {
+    match unsafe { WaitForSingleObject(process as HANDLE, INFINITE) } {
+        WAIT_OBJECT_0 => Ok(()),
+        _ => Err(os_error("WaitForSingleObject")),
+    }
 }
 
 /// A process and thread attribute list with one attribute, deleted when it
