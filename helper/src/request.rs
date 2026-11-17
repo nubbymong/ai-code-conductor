@@ -3,11 +3,11 @@
 //! an unknown, missing or repeated field is `bad-field`, a size rule broken is
 //! `too-large`. Nothing here runs anything; `serve.rs` acts on what passes.
 //!
-//! A `term.launch` may also carry `line` and `conpty` (protocol change 2),
-//! on Windows only: on macOS and Linux either is `bad-field`.
+//! A `term.launch` may also carry `line` and `conpty` (the launch fields for
+//! Windows), on Windows only: on macOS and Linux either is `bad-field`.
 
 use crate::json::Value;
-use crate::pty::{Conpty, PtySize};
+use crate::pty::{is_batch_file, Conpty, PtySize};
 
 pub const MAX_ARGV_ITEMS: usize = 256;
 pub const MAX_ARG_CHARS: usize = 8192;
@@ -15,9 +15,11 @@ pub const MAX_CWD_CHARS: usize = 4096;
 pub const MAX_ENV_ENTRIES: usize = 1024;
 pub const MAX_ENV_NAME_CHARS: usize = 255;
 pub const MAX_ENV_VALUE_CHARS: usize = 32767;
-/// The longest exact command line (`line`), in characters: what Windows
-/// allows a command line.
-pub const MAX_LINE_CHARS: usize = 32767;
+/// The longest exact command line (`line`), in UTF-16 units, as Windows
+/// counts it: `CreateProcessW` takes at most 32767 with the NUL that ends
+/// the line, so 32766 without it. A character outside the Basic Multilingual
+/// Plane is two units.
+pub const MAX_LINE_UNITS: usize = 32766;
 pub const MAX_TERM_CELLS: u64 = 1000;
 /// The largest integer a JavaScript number holds exactly: request ids and offsets.
 pub const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -225,7 +227,7 @@ pub fn parse_launch(v: &Value, id: u64) -> Result<Launch, Refusal> {
 
     let size = size(v, re)?;
     let line = match v.get("line") {
-        Some(value) => Some(parse_line(value, argv.len(), re)?),
+        Some(value) => Some(parse_line(value, &argv, re)?),
         None => None,
     };
     let conpty = match v.get("conpty") {
@@ -235,11 +237,14 @@ pub fn parse_launch(v: &Value, id: u64) -> Result<Launch, Refusal> {
     Ok(Launch { id, argv, cwd: cwd.to_string(), env, size, line, conpty })
 }
 
-/// `line`: the exact command line `CreateProcessW` gives the program, for a
-/// program that reads its line in a way no argument list can say (cmd.exe
-/// running a .cmd file). The program is still `argv[0]`, never a word of
-/// the line, so `argv` then holds it alone.
-fn parse_line(v: &Value, argv_items: usize, re: Option<u64>) -> Result<String, Refusal> {
+/// `line`: the exact command line the program reads (`CreateProcessW`'s
+/// `lpCommandLine`), for a program that reads its line in a way no argument
+/// list can say (cmd.exe running a .cmd file). `CreateProcessW` starts the
+/// program at `argv[0]` by that exact path, so `argv` then holds it alone.
+/// A command interpreter runs what its line says, so the line gives nothing
+/// `argv` could not; a batch file is refused, since Windows would start
+/// cmd.exe for it and cmd.exe would read the line as commands.
+fn parse_line(v: &Value, argv: &[String], re: Option<u64>) -> Result<String, Refusal> {
     let line = match v.as_str() {
         Some(s) => s,
         None => return refuse(CODE_BAD_FIELD, re, "line must be a string"),
@@ -247,8 +252,8 @@ fn parse_line(v: &Value, argv_items: usize, re: Option<u64>) -> Result<String, R
     if cfg!(not(windows)) {
         return refuse(CODE_BAD_FIELD, re, "line is for Windows only");
     }
-    if line.chars().count() > MAX_LINE_CHARS {
-        return refuse(CODE_TOO_LARGE, re, "line is over 32767 characters");
+    if line.encode_utf16().count() > MAX_LINE_UNITS {
+        return refuse(CODE_TOO_LARGE, re, "line is over 32766 UTF-16 units");
     }
     if line.contains('\0') {
         return refuse(CODE_BAD_FIELD, re, "line holds a NUL character");
@@ -256,8 +261,11 @@ fn parse_line(v: &Value, argv_items: usize, re: Option<u64>) -> Result<String, R
     if line.is_empty() {
         return refuse(CODE_BAD_FIELD, re, "line is empty");
     }
-    if argv_items != 1 {
+    if argv.len() != 1 {
         return refuse(CODE_BAD_FIELD, re, "with line, argv holds the program alone");
+    }
+    if is_batch_file(&argv[0]) {
+        return refuse(CODE_BAD_FIELD, re, "line is never given to a batch file, which Windows runs through cmd.exe");
     }
     Ok(line.to_string())
 }

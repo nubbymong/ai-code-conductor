@@ -229,6 +229,10 @@ export class HelperPty implements IPty {
         env: this.spec.env,
         cols: sent.cols,
         rows: sent.rows,
+        // The Windows fields, only when the spec gives them: a launch without
+        // them is the same frame as before they existed.
+        ...(this.spec.line !== undefined ? { line: this.spec.line } : {}),
+        ...(this.spec.conpty !== undefined ? { conpty: this.spec.conpty } : {}),
       })
       if (typeof launched.pid === 'number') this.childPid = launched.pid
     } catch (err) {

@@ -105,20 +105,32 @@ export function asarUnpackedPath(p: string): string {
   return p.replace(/([\\/])app\.asar(?=[\\/]|$)/g, '$1app.asar.unpacked')
 }
 
+/** node-pty's `conpty` folder (conpty.dll and OpenConsole.exe): beside the
+ *  native module node-pty's loader finds first (`conpty.node`), in a packaged
+ *  app under app.asar.unpacked. Null when there is no such module. The one
+ *  lookup for the app's own bundled spawn (chooseConpty) and the session
+ *  helper's copy (session-helper/install.ts bundledConptySource), so both
+ *  use the same files. */
+export function nodePtyConptyDir(libDir: string, platform: string, arch: string, exists: (p: string) => boolean): string | null {
+  const dir = nativeModuleDirs(libDir, platform, arch)
+    .map(asarUnpackedPath)
+    .find((d) => exists(path.join(d, 'conpty.node')))
+  return dir ? path.join(dir, 'conpty') : null
+}
+
 /** The ConPTY for a PTY that asks for the bundled one. */
 export function chooseConpty(deps: ConptyChoiceDeps): ConptyChoice {
   if (deps.platform !== 'win32') return { kind: 'not-windows', options: SYSTEM_CONPTY_OPTIONS }
   const system = (reason: string): ConptyChoice => ({ kind: 'system', options: SYSTEM_CONPTY_OPTIONS, reason })
   if (!deps.nodePtyLibDir) return system('node-pty was not found')
-  const dir = nativeModuleDirs(deps.nodePtyLibDir, deps.platform, deps.arch)
-    .map(asarUnpackedPath)
-    .find((d) => deps.exists(path.join(d, 'conpty.node')))
-  if (!dir) return system(`node-pty's conpty.node was not found for win32-${deps.arch}`)
+  const conptyDir = nodePtyConptyDir(deps.nodePtyLibDir, deps.platform, deps.arch, deps.exists)
+  if (!conptyDir) return system(`node-pty's conpty.node was not found for win32-${deps.arch}`)
+  const dir = path.dirname(conptyDir)
   for (const file of ['conpty.dll', 'OpenConsole.exe']) {
-    const p = path.join(dir, 'conpty', file)
+    const p = path.join(conptyDir, file)
     if (!deps.exists(p)) return system(`${p} is missing`)
   }
-  const dll = path.join(dir, 'conpty', 'conpty.dll')
+  const dll = path.join(conptyDir, 'conpty.dll')
   const named = dll.length + namespacedPrefixLength(dll)
   if (named >= NODE_PTY_MAX_PATH) {
     return system(`the path to ${dll} is ${dll.length} characters, ${named} as Windows names the loaded module, more than the ${NODE_PTY_MAX_PATH - 1} node-pty can use`)

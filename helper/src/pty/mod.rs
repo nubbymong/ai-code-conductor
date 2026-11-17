@@ -36,11 +36,10 @@ impl Default for PtySize {
     }
 }
 
-/// Which ConPTY a Windows terminal runs on (protocol change 2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Which ConPTY a Windows terminal runs on (the launch field `conpty`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Conpty {
     /// The one built into Windows; on macOS and Linux, the only choice.
-    #[default]
     System,
     /// The `conpty.dll` in a `conpty` folder beside the helper's own program
     /// file, with the `OpenConsole.exe` it starts. Windows only.
@@ -55,8 +54,8 @@ pub enum Conpty {
 /// holder's own is added, except `TERM` on Unix when `env` has none.
 ///
 /// `line` and `conpty` are for Windows only. `line` is the exact command
-/// line the program is given; the program is still `argv[0]`, which then
-/// holds it alone.
+/// line the program reads; the program started is `argv[0]`, which then
+/// holds it alone and is never a batch file.
 pub struct SpawnOptions<'a> {
     pub argv: &'a [String],
     pub cwd: Option<&'a str>,
@@ -76,9 +75,19 @@ pub(crate) fn check_argv(argv: &[String]) -> io::Result<()> {
     Ok(())
 }
 
+/// True when `program` names a batch file: a name ending in `.bat` or
+/// `.cmd`, in any case, once the trailing dots and spaces Windows drops from
+/// a name are dropped. Windows starts a batch file through cmd.exe, which
+/// would then read every word of an exact command line as commands.
+pub fn is_batch_file(program: &str) -> bool {
+    let name = program.trim_end_matches(|c: char| c == '.' || c == ' ').to_ascii_lowercase();
+    name.ends_with(".bat") || name.ends_with(".cmd")
+}
+
 /// The Windows fields, checked again here as the last line: refused on
 /// macOS and Linux, and on Windows a line is never empty or split by a NUL,
-/// and never comes with arguments that would say something else.
+/// never comes with arguments that would say something else, and is never
+/// given to a batch file.
 pub(crate) fn check_windows_fields(opts: &SpawnOptions) -> io::Result<()> {
     let invalid = |what: &str| Err(io::Error::new(io::ErrorKind::InvalidInput, what.to_string()));
     if cfg!(not(windows)) && (opts.line.is_some() || opts.conpty != Conpty::System) {
@@ -90,6 +99,9 @@ pub(crate) fn check_windows_fields(opts: &SpawnOptions) -> io::Result<()> {
         }
         if opts.argv.len() != 1 {
             return invalid("with a command line, argv holds the program alone");
+        }
+        if is_batch_file(&opts.argv[0]) {
+            return invalid("a command line is never given to a batch file, which Windows runs through cmd.exe");
         }
     }
     Ok(())

@@ -51,8 +51,9 @@ export const LAUNCH_LIMITS = {
   envEntries: 1024,
   envNameChars: 255,
   envValueChars: 32767,
-  /** An exact Windows command line (`line`, protocol change 2). */
-  lineChars: 32767,
+  /** An exact Windows command line (`line`), in UTF-16 units: CreateProcessW
+   *  takes 32767 with the NUL that ends it. */
+  lineUnits: 32766,
   termCells: 1000,
 } as const
 export const LABEL_MAX_CHARS = 128
@@ -383,13 +384,13 @@ export interface LaunchSpec {
   cols: number
   rows: number
   /**
-   * Windows only (protocol change 2): the exact command line the program is
-   * given, for one that reads its line in a way no argument list can say
-   * (cmd.exe running an npm .cmd file). The program is still `argv[0]`,
-   * which then holds it alone.
+   * Windows only: the exact command line the program reads, for one that
+   * reads its line in a way no argument list can say (cmd.exe running an npm
+   * .cmd file). The program started is `argv[0]`, by that exact path, which
+   * then holds it alone and is never a batch file.
    */
   line?: string
-  /** Windows only (protocol change 2): run on the bundled ConPTY beside the helper. */
+  /** Windows only: run on the bundled ConPTY beside the helper. */
   conpty?: 'bundled'
 }
 
@@ -401,7 +402,14 @@ export function isAbsoluteFor(p: string, os: HelperOs): boolean {
 const isCells = (n: unknown): boolean => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= LAUNCH_LIMITS.termCells
 
 /**
- * Would the holder take this launch (section 15, with protocol change 2's
+ * A batch file, as the helper reads a name (helper/src/pty/mod.rs
+ * is_batch_file): ending in `.bat` or `.cmd`, in any case, once the trailing
+ * dots and spaces Windows drops from a name are dropped.
+ */
+const isBatchFile = (program: string): boolean => /\.(bat|cmd)$/i.test(program.replace(/[. ]+$/, ''))
+
+/**
+ * Would the holder take this launch (section 15, with the Windows fields
  * `line` and `conpty`)? Null when it would, else the protocol code it would
  * answer and why. The app checks first, so a launch the holder would refuse
  * starts the usual way instead of failing.
@@ -437,15 +445,17 @@ export function checkLaunch(spec: LaunchSpec, os: HelperOs): { code: 'bad-field'
     folded.add(upper)
   }
   if (!isCells(spec.cols) || !isCells(spec.rows)) return bad('a terminal size out of range')
-  // The Windows fields (protocol change 2), in the helper's order.
+  // The Windows fields `line` and `conpty`, in the helper's order. A line is
+  // counted in UTF-16 units, a JavaScript string's length, as Windows counts it.
   if (spec.line !== undefined) {
     const line: unknown = spec.line
     if (typeof line !== 'string') return bad('a command line that is not text')
     if (os !== 'windows') return bad('an exact command line, which is for Windows only')
-    if (chars(line) > LAUNCH_LIMITS.lineChars) return big('a command line over 32767 characters')
+    if (line.length > LAUNCH_LIMITS.lineUnits) return big('a command line over 32766 UTF-16 units')
     if (line.includes('\0')) return bad('a command line with a NUL character')
     if (line.length === 0) return bad('an empty command line')
     if (argv.length !== 1) return bad('a command line with arguments besides it')
+    if (isBatchFile(argv[0])) return bad('a command line for a batch file, which Windows runs through cmd.exe')
   }
   if (spec.conpty !== undefined) {
     const conpty: unknown = spec.conpty
