@@ -94,14 +94,19 @@ impl ExitWatch {
             #[cfg(test)]
             self.checks.fetch_add(1, Ordering::SeqCst);
             let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            let rc = unsafe { libc::waitid(libc::P_PID, self.pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) };
+            // MUTANT M12: the wait asks every 25 ms instead of blocking
+            let rc = unsafe { libc::waitid(libc::P_PID, self.pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT | libc::WNOHANG) };
             if rc == 0 {
-                return Ok(());
+                if info.si_signo != 0 {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(25));
+                continue;
             }
             let e = io::Error::last_os_error();
             match e.raw_os_error() {
                 Some(libc::EINTR) => continue,
-                Some(libc::ECHILD) => std::thread::sleep(Duration::from_secs(3600)), // MUTANT M10: a child already reaped blocks the wait
+                Some(libc::ECHILD) => return Err(e), // MUTANT M15: a child already reaped is an error
                 _ => return Err(e),
             }
         }
@@ -220,11 +225,7 @@ impl Pty {
                 Ok(())
             });
         }
-        // The terminal alone reaps the child (module comment), so SIGCHLD
-        // must not be ignored when it starts.
-        unsafe {
-            libc::signal(libc::SIGCHLD, libc::SIG_DFL);
-        }
+        // MUTANT M13: SIGCHLD is left as the starter set it (the reset is removed)
         let child = cmd.spawn()?;
         // `cmd` still holds the parent's copies of the slave; drop them so the
         // reader sees the end when the child is gone.

@@ -175,20 +175,28 @@ impl Holder {
         let watch_pty = Arc::clone(&pty);
         thread::Builder::new().spawn(move || {
             let waited = watch.wait();
-            thread::sleep(Duration::from_millis(300)); // MUTANT M7: the exit is reported late
             // The first process is gone. In one critical section: reap it and
             // read its code, end what it left behind on the terminal, then
             // close the terminal so the output can end.
             let code = {
                 let mut p = lock(&watch_pty);
                 let code = match waited {
-                    Ok(()) => -1, // MUTANT M8: the code of a successful wait is lost
-                    Err(_) => 0, // MUTANT M9: a failed wait reads as exit 0
+                    Ok(()) => match p.try_wait() {
+                        Ok(Some(code)) => code,
+                        Ok(None) | Err(_) => -1,
+                    },
+                    Err(_) => -1,
                 };
                 p.end_tree(END_GRACE);
                 p.close_output();
                 code
             };
+            // MUTANT M14: the exit is reported before the output has drained
+            {
+                let mut st = lock(&watch_shared.state);
+                st.exit_code = Some(code);
+                st.terminal = None;
+            }
             let deadline = Instant::now() + DRAIN;
             while !lock(&watch_shared.state).output_ended && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));
