@@ -8,14 +8,17 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { createHash } from 'crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, sep } from 'path'
+import { chooseConpty } from '../../../src/main/bundled-conpty'
 import {
   BUSY_WAIT_MS, CONPTY_FILES, CONPTY_FOLDER, bundledConptySource, checkedConpty, copyMatches, helperRootDir, installHelperCopy, removeOldVersionFolders, retryWhileBusy,
 } from '../../../src/main/session-helper/install'
 
 const failure = (code: string) => Object.assign(new Error(`${code}: the file is in use`), { code })
+/** libuv's UV_FS_O_EXLOCK on Windows: open a file with no sharing at all. */
+const EXCLUSIVE_OPEN = (constants as unknown as Record<string, number>).UV_FS_O_EXLOCK ?? 0x10000000
 
 describe('retryWhileBusy', () => {
   it('a file another program has open is waited for, a little longer each time, then the step runs', async () => {
@@ -111,7 +114,7 @@ describe('removeOldVersionFolders', () => {
   })
 })
 
-// Protocol change 2 (plan 2.1.3-beta.7 section A2): a holder that runs a
+// The launch field `conpty` (plan 2.1.3-beta.7 section A2): a holder that runs a
 // terminal on the bundled ConPTY loads conpty.dll only from a `conpty` folder
 // beside its own program file. So node-pty's conpty.dll and OpenConsole.exe
 // are copied there, beside the helper's copy, and checked against node-pty's
@@ -157,11 +160,80 @@ describe('the bundled ConPTY beside the helper copy', () => {
     expect(readdirSync(join(info.folder, 'conpty')).sort()).toEqual(['OpenConsole.exe', 'conpty.dll'])
     for (const f of CONPTY_FILES) expect(readFileSync(join(info.folder, 'conpty', f), 'utf8')).toBe(readFileSync(join(source, f), 'utf8'))
     expect(leftovers(root)).toEqual([])
+    expect(leftovers(info.folder)).toEqual([])
     expect(await checkedConpty(info)).toEqual(info.conpty)
     // A second start finds the copy in place and keeps it.
     const again = await installHelperCopy({ ...opts, conptySource: source })
     expect(again.conpty).toEqual(info.conpty)
   })
+
+  it('a helper copy made again keeps the bundled ConPTY: the result carries the source it was asked for', async () => {
+    const { source, opts } = setUp()
+    const info = await installHelperCopy({ ...opts, conptySource: source })
+    expect(info.conptySource).toBe(source)
+    // The helper's copy no longer matches, so it is made again (the
+    // manager's checkedExe), which replaces the whole version folder. Given
+    // the source the first copy was asked for, the ConPTY's files are back.
+    writeFileSync(info.exe, 'MZ changed after the copy')
+    const again = await installHelperCopy({ ...opts, conptySource: info.conptySource })
+    expect(again.conpty).toEqual(info.conpty)
+    expect(again.conptySource).toBe(source)
+    for (const f of CONPTY_FILES) expect(readFileSync(join(again.folder, 'conpty', f), 'utf8')).toBe(readFileSync(join(source, f), 'utf8'))
+    // What a copy was not asked for, or could not find, it says so too.
+    expect((await installHelperCopy(opts)).conptySource).toBeUndefined()
+    expect((await installHelperCopy({ ...opts, conptySource: null })).conptySource).toBeNull()
+  })
+
+  it('the manager makes a helper copy again with the ConPTY source it has', () => {
+    const manager = readFileSync(join(__dirname, '../../../src/main/session-helper/manager.ts'), 'utf8')
+    const recopy = manager.slice(manager.indexOf('private async checkedExe'), manager.indexOf('// ── terminals'))
+    expect(recopy).toContain('installHelperCopy({')
+    expect(recopy).toContain('conptySource: now.conptySource')
+  })
+
+  it('a copy that fails part way leaves no staging folder behind, in the version folder or the root', async () => {
+    const { source, root, opts } = setUp()
+    const info = await installHelperCopy({ ...opts, conptySource: source })
+    // node-pty's OpenConsole.exe is gone since start: the copy made again
+    // stops part way, after conpty.dll.
+    rmSync(join(source, 'OpenConsole.exe'))
+    rmSync(join(info.folder, 'conpty'), { recursive: true, force: true })
+    const checked = await checkedConpty(info)
+    expect(checked.available).toBe(false)
+    expect(leftovers(root)).toEqual([])
+    expect(leftovers(info.folder)).toEqual([])
+    expect(readdirSync(info.folder)).toEqual(['aicc-helper.exe'])
+  })
+
+  // A running session holds the conpty.dll it loaded and the OpenConsole.exe
+  // it runs: Windows removes neither. That does not change while the app
+  // waits, so the copy is not waited for: the bundled ConPTY is unavailable
+  // at once, and a later check makes the copy again.
+  it.skipIf(process.platform !== 'win32')('a copy a running session holds cannot be replaced: the bundled ConPTY is unavailable at once, not after a long wait', async () => {
+    const { source, opts } = setUp()
+    const info = await installHelperCopy({ ...opts, conptySource: source })
+    const copied = join(info.folder, 'conpty', 'conpty.dll')
+    // libuv's exclusive open (UV_FS_O_EXLOCK): no sharing, so the file can be
+    // neither read nor removed while it is open.
+    const fd = openSync(copied, constants.O_RDONLY | EXCLUSIVE_OPEN)
+    try {
+      writeFileSync(join(info.folder, 'conpty', 'OpenConsole.exe'), 'MZ changed after the copy')
+      const began = Date.now()
+      const checked = await checkedConpty(info)
+      expect(checked.available ? '' : checked.reason).toContain('in use by a running session')
+      // At a start too.
+      const start = await installHelperCopy({ ...opts, conptySource: source })
+      expect(start.conpty.available ? '' : start.conpty.reason).toContain('in use by a running session')
+      expect(Date.now() - began).toBeLessThan(BUSY_WAIT_MS / 2)
+      expect(await copyMatches(start.exe, start.sha256)).toBe(true)
+    } finally {
+      closeSync(fd)
+    }
+    // Once the session that held it is gone, the next check makes it again.
+    expect(await checkedConpty(info)).toEqual(info.conpty)
+    expect(readFileSync(join(info.folder, 'conpty', 'OpenConsole.exe'), 'utf8')).toBe('MZ node-pty OpenConsole.exe')
+    expect(leftovers(info.folder)).toEqual([])
+  }, 30_000)
 
   it('a copy that no longer matches, or is gone, is copied again before it is used', async () => {
     const { source, root, opts } = setUp()
@@ -203,7 +275,7 @@ describe('the bundled ConPTY beside the helper copy', () => {
     rmSync(join(source, 'OpenConsole.exe'))
     const info = await installHelperCopy({ ...opts, conptySource: source })
     expect(info.conpty.available).toBe(false)
-    expect(info.conpty.available ? '' : info.conpty.reason).toContain('OpenConsole.exe')
+    expect(info.conpty.available ? '' : info.conpty.reason).toContain('OpenConsole.exe is missing or not a plain file')
     expect(await copyMatches(info.exe, info.sha256)).toBe(true)
     expect(readdirSync(info.folder)).toEqual(['aicc-helper.exe'])
     expect(await checkedConpty(info)).toEqual(info.conpty)
@@ -216,8 +288,8 @@ describe('the bundled ConPTY beside the helper copy', () => {
   it('the folder and the files are the ones the holder loads from (helper/src/pty/windows.rs)', () => {
     const holder = readFileSync(join(__dirname, '../../../helper/src/pty/windows.rs'), 'utf8')
     expect(holder).toContain(`pub const BUNDLED_FOLDER: &str = "${CONPTY_FOLDER}";`)
-    expect(holder).toContain('let dll = folder.join("conpty.dll");')
-    expect(holder).toContain('plain_file(&folder.join("OpenConsole.exe"))?;')
+    expect(holder).toContain(`const BUNDLED_DLL: &str = "${CONPTY_FILES[0]}";`)
+    expect(holder).toContain(`const BUNDLED_HOST: &str = "${CONPTY_FILES[1]}";`)
     expect([...CONPTY_FILES]).toEqual(['conpty.dll', 'OpenConsole.exe'])
   })
 
@@ -247,6 +319,22 @@ describe('bundledConptySource', () => {
     const packed = join(sep, 'res', 'app.asar', 'node_modules', 'node-pty', 'lib')
     const unpacked = join(sep, 'res', 'app.asar.unpacked', 'node_modules', 'node-pty', 'prebuilds', 'win32-arm64')
     expect(bundledConptySource({ platform: 'win32', arch: 'arm64', nodePtyLibDir: packed, exists: has(join(unpacked, 'conpty.node')) })).toBe(join(unpacked, 'conpty'))
+  })
+
+  it('is the folder the app\'s own bundled node-pty spawn uses (chooseConpty): one lookup for both', () => {
+    const packed = join(sep, 'res', 'app.asar', 'node_modules', 'node-pty', 'lib')
+    const unpacked = join(sep, 'res', 'app.asar.unpacked', 'node_modules', 'node-pty', 'prebuilds', 'win32-arm64')
+    const withFiles = (dir: string) => [join(dir, 'conpty.node'), join(dir, 'conpty', 'conpty.dll'), join(dir, 'conpty', 'OpenConsole.exe')]
+    const cases = [
+      { platform: 'win32' as const, arch: 'x64', nodePtyLibDir: lib, exists: has(...withFiles(prebuild)) },
+      { platform: 'win32' as const, arch: 'x64', nodePtyLibDir: lib, exists: has(...withFiles(prebuild), ...withFiles(release)) },
+      { platform: 'win32' as const, arch: 'arm64', nodePtyLibDir: packed, exists: has(...withFiles(unpacked)) },
+    ]
+    for (const deps of cases) {
+      const choice = chooseConpty(deps)
+      expect(choice.kind).toBe('bundled')
+      expect(bundledConptySource(deps)).toBe(choice.kind === 'bundled' ? join(choice.dir, 'conpty') : null)
+    }
   })
 
   it('is null off Windows, without node-pty, or without its native module', () => {

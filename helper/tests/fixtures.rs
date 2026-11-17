@@ -190,7 +190,7 @@ fn described(req: &Request) -> Value {
             m.push(("env", Value::Arr(l.env.iter().map(|(k, v)| Value::Arr(vec![Value::Str(k.clone()), Value::Str(v.clone())])).collect())));
             m.push(("cols", Value::uint(u64::from(l.size.cols))));
             m.push(("rows", Value::uint(u64::from(l.size.rows))));
-            // The Windows fields (protocol change 2), only when given.
+            // The Windows launch fields `line` and `conpty`, only when given.
             if let Some(line) = &l.line {
                 m.push(("line", Value::Str(line.clone())));
             }
@@ -321,7 +321,7 @@ fn the_local_limits_match_the_constants() {
     assert_eq!(n("env_entries"), request::MAX_ENV_ENTRIES as u64);
     assert_eq!(n("env_name_chars"), request::MAX_ENV_NAME_CHARS as u64);
     assert_eq!(n("env_value_chars"), request::MAX_ENV_VALUE_CHARS as u64);
-    assert_eq!(n("line_chars"), request::MAX_LINE_CHARS as u64);
+    assert_eq!(n("line_units"), request::MAX_LINE_CHARS as u64);
     assert_eq!(n("term_cells"), request::MAX_TERM_CELLS);
     assert_eq!(n("max_safe_integer"), request::MAX_SAFE_INTEGER);
     assert_eq!(n("label_chars"), store::MAX_LABEL_CHARS as u64);

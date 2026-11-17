@@ -141,9 +141,30 @@ mod tests {
             assert!(!passes(&two, Some("cmd /c ver"), Conpty::System), "a line with arguments");
             assert!(!passes(&one, Some(""), Conpty::System), "an empty line");
             assert!(!passes(&one, Some("a\0b"), Conpty::System), "a NUL in the line");
+            // Windows starts a batch file through cmd.exe, which would read
+            // the line as commands: a line is never given to one.
+            let batch = vec!["C:\\Users\\u\\AppData\\Roaming\\npm\\tool.cmd".to_string()];
+            assert!(!passes(&batch, Some("tool.cmd resume"), Conpty::System), "a line for a batch file");
+            assert!(passes(&batch, None, Conpty::System), "a batch file with an argument list, as before");
         } else {
             assert!(!passes(&one, Some("/bin/sh -c true"), Conpty::System));
             assert!(!passes(&one, None, Conpty::Bundled));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_batch_file_is_known_by_its_name_as_windows_reads_it() {
+        let with_line = |program: &str| {
+            let argv = vec![program.to_string()];
+            check_windows_fields(&SpawnOptions { argv: &argv, cwd: None, env: None, size: PtySize::default(), line: Some("x"), conpty: Conpty::System }).is_ok()
+        };
+        // Any case, and the trailing dots and spaces Windows drops from a name.
+        for name in ["C:\\x\\a.bat", "C:\\x\\a.CMD", "C:\\x\\a.Bat", "C:\\x\\a.cmd.", "C:\\x\\a.bat . .", "\\\\?\\C:\\x\\a.cmd"] {
+            assert!(!with_line(name), "{name} was not taken for a batch file");
+        }
+        for name in ["C:\\Windows\\System32\\cmd.exe", "C:\\x\\a.bat.exe", "C:\\x\\bat", "C:\\x\\a.cmdx", "C:\\x.bat\\a.exe"] {
+            assert!(with_line(name), "{name} was taken for a batch file");
         }
     }
 }

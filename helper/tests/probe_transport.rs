@@ -931,7 +931,7 @@ fn a_detached_holder_keeps_none_of_its_starters_handles() {
     assert_eq!(listed.sessions.iter().map(|s| s.pid).collect::<Vec<_>>(), vec![pid], "list mode did not show the holder");
 }
 
-// ── Windows launch fields (protocol change 2): `line` and `conpty` ───────────
+// ── The Windows launch fields `line` and `conpty` ────────────────────────────
 
 /// cmd.exe by its full path, as the app names it.
 #[cfg(windows)]
@@ -1000,6 +1000,33 @@ fn an_exact_command_line_reaches_cmd_as_given_and_the_same_words_as_an_argument_
 
 #[cfg(windows)]
 #[test]
+fn with_an_exact_command_line_the_program_started_is_argv0_never_the_first_word_of_the_line() {
+    let _serial = one_at_a_time();
+    let store = Store::new("store-argv0");
+    let cmd = cmd_exe();
+    // The line's first word names a program that does not exist. The holder
+    // gives CreateProcessW argv[0] as the program (lpApplicationName), so
+    // cmd.exe starts, skips that first word as its own name and runs the
+    // rest. Were the program taken from the line, the start would fail (io).
+    let line = "C:\\nope\\not-here.exe /d /c echo argv0-ran";
+    let (code, screen) = run_to_the_end(&store.0, "probe-0023", |id| launch_msg_more(id, &[&cmd], &store.0, vec![("line", Value::str(line))]));
+    assert!(screen.contains("argv0-ran"), "argv[0] did not run the line: {screen:?}");
+    assert_eq!(code, Some(0), "{screen:?}");
+}
+
+/// Remove `path`, a folder or a junction: a junction as a link, never
+/// through to the folder it points at. Gone already is fine.
+#[cfg(windows)]
+fn remove_folder_or_link(path: &Path) {
+    match fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => fs::remove_dir(path).expect("remove the junction"),
+        Ok(_) => fs::remove_dir_all(path).expect("remove the folder"),
+        Err(_) => {}
+    }
+}
+
+#[cfg(windows)]
+#[test]
 fn on_the_bundled_conpty_with_no_usable_conpty_dll_beside_the_holder_a_launch_answers_io_and_starts_nothing() {
     let _serial = one_at_a_time();
     let store = Store::new("store-bundled");
@@ -1017,21 +1044,83 @@ fn on_the_bundled_conpty_with_no_usable_conpty_dll_beside_the_holder_a_launch_an
     let cmd = cmd_exe();
     let writes_marker = "echo started>started.txt";
     let conpty = bin.0.join("conpty");
-    // Each way it is unusable: no conpty folder, a conpty.dll with no
-    // OpenConsole.exe beside it, and files that are not programs.
-    let ways: [(&str, &[&str]); 3] = [("no conpty folder", &[]), ("conpty.dll alone", &["conpty.dll"]), ("files that do not load", &["conpty.dll", "OpenConsole.exe"])];
-    for (way, files) in ways {
-        for f in files {
-            fs::create_dir_all(&conpty).expect("the conpty folder");
-            fs::write(conpty.join(f), b"not a program").expect("a stand-in file");
+    let elsewhere = bin.0.join("elsewhere");
+    // A real library that loads but is not a ConPTY: none of its calls.
+    let loads = format!("{}\\System32\\version.dll", std::env::var("SystemRoot").expect("SystemRoot is set"));
+    let put = |dir: &Path, name: &str, real: bool| {
+        fs::create_dir_all(dir).expect("a folder");
+        if real {
+            fs::copy(&loads, dir.join(name)).expect("copy a library that loads");
+        } else {
+            fs::write(dir.join(name), b"not a program").expect("a stand-in file");
         }
+    };
+    let folder_named = |name: &str| fs::create_dir_all(conpty.join(name)).expect("a folder with a file's name");
+    // Each way it is unusable, with the reason the answer must give. The
+    // library that loads is last: the holder must unload it again.
+    let ways: Vec<(&str, &str, Box<dyn Fn() + '_>)> = vec![
+        ("no conpty folder", "conpty is missing", Box::new(|| {})),
+        (
+            "a conpty folder that is a junction to one with both files",
+            "conpty is not a plain folder",
+            Box::new(|| {
+                put(&elsewhere, "conpty.dll", true);
+                put(&elsewhere, "OpenConsole.exe", false);
+                let made = Command::new(&cmd).args(["/d", "/c", "mklink", "/J"]).arg(&conpty).arg(&elsewhere).output().expect("run mklink");
+                assert!(made.status.success(), "mklink /J: {}", String::from_utf8_lossy(&made.stdout));
+            }),
+        ),
+        ("a conpty.dll that is a folder", "conpty.dll is not a plain file", Box::new(|| folder_named("conpty.dll"))),
+        ("a conpty.dll that loads, with no OpenConsole.exe", "OpenConsole.exe is missing", Box::new(|| put(&conpty, "conpty.dll", true))),
+        (
+            "an OpenConsole.exe that is a folder",
+            "OpenConsole.exe is not a plain file",
+            Box::new(|| {
+                put(&conpty, "conpty.dll", true);
+                folder_named("OpenConsole.exe");
+            }),
+        ),
+        (
+            "files that do not load",
+            "conpty.dll does not load",
+            Box::new(|| {
+                put(&conpty, "conpty.dll", false);
+                put(&conpty, "OpenConsole.exe", false);
+            }),
+        ),
+        (
+            "a library that loads without the ConPTY's calls",
+            "has no ConptyCreatePseudoConsole",
+            Box::new(|| {
+                put(&conpty, "conpty.dll", true);
+                put(&conpty, "OpenConsole.exe", false);
+            }),
+        ),
+    ];
+    for (way, why, set_up) in &ways {
+        remove_folder_or_link(&conpty);
+        let _ = fs::remove_dir_all(&elsewhere);
+        set_up();
         let id = app.id();
         let answer = app.call(launch_msg_more(id, &[&cmd, "/d", "/c", writes_marker], &store.0, vec![("conpty", Value::str("bundled"))]));
         expect_error(&answer, "io");
         let text = answer.get("text").and_then(Value::as_str).unwrap_or("");
-        assert!(text.contains("bundled ConPTY"), "{way}: the answer does not say why: {text:?}");
+        assert!(text.contains("bundled ConPTY") && text.contains(*why), "{way}: the answer does not say {why:?}: {text:?}");
         assert_eq!(read_record(&store.0, sid).child, "waiting", "{way}: a launch that failed changed the record");
     }
+    // A library without the calls was unloaded again: its file can be
+    // written, which Windows refuses while a program has it loaded. A virus
+    // scanner may hold the new file a moment, so this tries for a while.
+    let dll = conpty.join("conpty.dll");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let rewritten = loop {
+        match fs::write(&dll, b"not a program") {
+            Ok(()) => break Ok(()),
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => break Err(e),
+        }
+    };
+    assert!(rewritten.is_ok(), "the library without the ConPTY's calls is still loaded in the holder: {rewritten:?}");
     std::thread::sleep(Duration::from_millis(500));
     assert!(!marker.exists(), "a launch answered io and still ran its program");
     // Nothing was started, so the holder still takes a launch: the same one

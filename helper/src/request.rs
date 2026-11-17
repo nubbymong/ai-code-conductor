@@ -442,16 +442,28 @@ mod tests {
     fn an_exact_command_line_is_held_to_its_limits() {
         let p = format!("[\"{PROGRAM}\"]");
         let with_line = |line: &str| launch_with(&p, &format!("\"line\":\"{line}\""));
-        // The longest allowed, and one past it, counted in characters as
-        // every other limit is.
-        assert!(parsed(&with_line(&"a".repeat(32767))).is_ok(), "32767 characters refused");
-        assert!(parsed(&with_line(&"\u{e9}".repeat(32767))).is_ok(), "32767 two-byte characters refused");
-        assert_eq!(code(&with_line(&"a".repeat(32768))), CODE_TOO_LARGE);
+        // The longest CreateProcessW takes, and one past it: 32767 UTF-16
+        // units with the NUL that ends the line, so 32766 without. Counted in
+        // UTF-16 units, as Windows counts them, not in characters: a
+        // character outside the Basic Multilingual Plane is two.
+        assert!(parsed(&with_line(&"a".repeat(32766))).is_ok(), "32766 units refused");
+        assert!(parsed(&with_line(&"\u{e9}".repeat(32766))).is_ok(), "32766 two-byte characters, one unit each, refused");
+        assert!(parsed(&with_line(&"\u{1f600}".repeat(16383))).is_ok(), "16383 characters of two units each refused");
+        assert_eq!(code(&with_line(&"a".repeat(32767))), CODE_TOO_LARGE, "32767 units, which CreateProcessW refuses");
+        assert_eq!(code(&with_line(&format!("{}a", "\u{1f600}".repeat(16383)))), CODE_TOO_LARGE, "32767 units in 16384 characters");
+        assert_eq!(code(&with_line(&"\u{1f600}".repeat(16384))), CODE_TOO_LARGE, "32768 units in 16384 characters");
         assert_eq!(code(&with_line("a\\u0000b")), CODE_BAD_FIELD);
         assert_eq!(code(&with_line("")), CODE_BAD_FIELD);
         // With a line, argv holds the program alone: nothing says which wins.
         let two = format!("[\"{PROGRAM}\",\"/c\"]");
         assert_eq!(code(&launch_with(&two, "\"line\":\"cmd /c ver\"")), CODE_BAD_FIELD);
+        // Never a batch file: Windows starts one through cmd.exe, which would
+        // read the line as commands. Any case, trailing dots and spaces dropped.
+        for batch in ["C:\\\\x\\\\tool.cmd", "C:\\\\x\\\\tool.BAT", "C:\\\\x\\\\tool.cmd. ", "C:\\\\x\\\\tool.Cmd.."] {
+            assert_eq!(code(&launch_with(&format!("[\"{batch}\"]"), "\"line\":\"tool resume\"")), CODE_BAD_FIELD, "{batch}");
+            // With an argument list, as before.
+            assert!(parsed(&launch(&format!("[\"{batch}\",\"resume\"]"), "{}")).is_ok(), "{batch} with an argument list");
+        }
         // Each field once.
         assert_eq!(code(&launch_with(&p, "\"conpty\":\"bundled\",\"conpty\":\"bundled\"")), CODE_BAD_FIELD);
         assert_eq!(code(&launch_with(&p, "\"line\":\"a\",\"line\":\"a\"")), CODE_BAD_FIELD);

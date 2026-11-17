@@ -297,3 +297,40 @@ fn a_launch_gets_its_folder_and_exactly_its_own_environment() {
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The terminal's own check of the Windows launch fields (`check_windows_fields`)
+/// runs before anything starts, whoever calls it: a start it refuses is
+/// `InvalidInput`, and its program never ran (it would have written a file).
+#[test]
+fn the_windows_launch_fields_are_checked_again_before_anything_starts() {
+    let dir = std::env::temp_dir().join(format!("aicc-hold-fields-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a folder");
+    let dir_text = dir.to_string_lossy().into_owned();
+    let marker = dir.join("started.txt");
+    let refused = |argv: &[String], line: Option<&str>, conpty: Conpty, what: &str| {
+        let opts = SpawnOptions { argv, cwd: Some(dir_text.as_str()), env: None, size: PtySize::default(), line, conpty };
+        match Holder::start_with(&opts, 64 * 1024) {
+            Ok(h) => {
+                h.kill();
+                panic!("{what}: started");
+            }
+            Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{what}: {e}"),
+        }
+    };
+    if cfg!(windows) {
+        let cmd = format!("{}\\System32\\cmd.exe", std::env::var("SystemRoot").expect("SystemRoot is set"));
+        let writes = format!("{cmd} /d /c echo started>started.txt");
+        refused(&[cmd.clone(), "/c".to_string()], Some(writes.as_str()), Conpty::System, "a line with arguments as well");
+        // A batch file is started through cmd.exe, which would run its line.
+        let batch = dir.join("run.cmd");
+        std::fs::write(&batch, "@echo started>started.txt\r\n").expect("write the .cmd file");
+        refused(&[batch.to_string_lossy().into_owned()], Some("run.cmd"), Conpty::System, "a line for a batch file");
+    } else {
+        let writes = "/bin/sh -c 'echo started>started.txt'";
+        refused(&["/bin/sh".to_string()], Some(writes), Conpty::System, "a line on macOS or Linux");
+        refused(&[FAKE.to_string()], None, Conpty::Bundled, "the bundled ConPTY on macOS or Linux");
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!marker.exists(), "a refused start still ran its program");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -53,7 +53,7 @@ describe('session helper protocol: the numbers are the helper\'s', () => {
     const L = local.limits
     expect(LAUNCH_LIMITS).toEqual({
       argvItems: L.argv_items, argChars: L.arg_chars, cwdChars: L.cwd_chars, envEntries: L.env_entries,
-      envNameChars: L.env_name_chars, envValueChars: L.env_value_chars, lineChars: L.line_chars, termCells: L.term_cells,
+      envNameChars: L.env_name_chars, envValueChars: L.env_value_chars, lineUnits: L.line_units, termCells: L.term_cells,
     })
   })
 })
@@ -152,8 +152,8 @@ describe('session helper protocol: records, listings and endpoints (section 15)'
         let m: Record<string, unknown>
         try { m = JSON.parse(v.json) } catch { continue }
         if (!m || m.t !== 'term.launch' || typeof m.id !== 'number') continue
-        // The launch's own fields, and the two Windows ones (protocol change
-        // 2); a vector with any other key is about the frame, not the launch.
+        // The launch's own fields, and the two Windows ones (`line` and
+        // `conpty`); a vector with any other key is about the frame, not the launch.
         const base = ['argv', 'cols', 'cwd', 'env', 'id', 'rows', 't']
         const keys = Object.keys(m)
         if (!base.every((k) => keys.includes(k)) || !keys.every((k) => base.includes(k) || k === 'line' || k === 'conpty')) continue
@@ -165,25 +165,44 @@ describe('session helper protocol: records, listings and endpoints (section 15)'
       }
     }
     expect(checked).toBeGreaterThan(4)
-    // Both OSes see every vector of the Windows fields: refused on one, read on the other.
-    expect(windowsFields).toBeGreaterThanOrEqual(12)
+    // Each vector with a Windows field is checked on the OS it is tagged for
+    // (on both when it names none): none is skipped by the key filter above.
+    const tagged = [...local.requests.valid, ...local.requests.invalid].filter((v: { json: string }) => /"(line|conpty)":/.test(v.json))
+    const expected = tagged.reduce((n: number, v: { os?: HelperOs }) => n + OSES.filter((os) => appliesOn(v, os)).length, 0)
+    expect(tagged.length).toBeGreaterThan(0)
+    expect(windowsFields).toBe(expected)
   })
 
-  it('an exact command line (`line`) is for Windows only, 1 to 32767 characters, with no NUL, and the program alone in argv', () => {
+  it('an exact command line (`line`) is for Windows only, 1 to 32766 UTF-16 units, with no NUL, the program alone in argv and never a batch file', () => {
     const cmd = 'C:\\Windows\\System32\\cmd.exe'
     const spec = { argv: [cmd], cwd: 'C:\\Users\\u', env: { SystemRoot: 'C:\\Windows' }, cols: 80, rows: 24 }
     const line = `${cmd} /d /v:off /s /c ""C:\\Users\\u\\AppData\\Roaming\\npm\\tool.cmd" resume"`
     expect(checkLaunch({ ...spec, line }, 'windows')).toBeNull()
     expect(checkLaunch({ ...spec, argv: ['/bin/sh'], cwd: '/home/u', line: '/bin/sh -c true' }, 'unix')?.code).toBe('bad-field')
-    // The longest allowed and one past it, counted in characters as every other limit is.
-    expect(checkLaunch({ ...spec, line: 'a'.repeat(LAUNCH_LIMITS.lineChars) }, 'windows')).toBeNull()
-    expect(checkLaunch({ ...spec, line: '\u00e9'.repeat(LAUNCH_LIMITS.lineChars) }, 'windows')).toBeNull()
-    expect(checkLaunch({ ...spec, line: 'a'.repeat(LAUNCH_LIMITS.lineChars + 1) }, 'windows')?.code).toBe('too-large')
+    // The longest CreateProcessW takes (32767 units with the NUL that ends
+    // it) and one past it, counted in UTF-16 units as Windows counts them:
+    // a character outside the Basic Multilingual Plane is two.
+    expect(LAUNCH_LIMITS.lineUnits).toBe(32766)
+    expect(checkLaunch({ ...spec, line: 'a'.repeat(32766) }, 'windows')).toBeNull()
+    expect(checkLaunch({ ...spec, line: '\u00e9'.repeat(32766) }, 'windows')).toBeNull()
+    expect(checkLaunch({ ...spec, line: String.fromCodePoint(0x1f600).repeat(16383) }, 'windows')).toBeNull()
+    expect(checkLaunch({ ...spec, line: 'a'.repeat(32767) }, 'windows')?.code).toBe('too-large')
+    expect(checkLaunch({ ...spec, line: `${String.fromCodePoint(0x1f600).repeat(16383)}a` }, 'windows')?.code).toBe('too-large')
+    expect(checkLaunch({ ...spec, line: String.fromCodePoint(0x1f600).repeat(16384) }, 'windows')?.code).toBe('too-large')
     expect(checkLaunch({ ...spec, line: `${cmd} /c a\0b` }, 'windows')?.code).toBe('bad-field')
     expect(checkLaunch({ ...spec, line: '' }, 'windows')?.code).toBe('bad-field')
     expect(checkLaunch({ ...spec, line: 7 } as never, 'windows')?.code).toBe('bad-field')
     expect(checkLaunch({ ...spec, line: null } as never, 'windows')?.code).toBe('bad-field')
     expect(checkLaunch({ ...spec, argv: [cmd, '/c'], line }, 'windows')?.code).toBe('bad-field')
+    // Never a batch file: Windows starts one through cmd.exe, which would read
+    // the line as commands. Any case, trailing dots and spaces dropped.
+    for (const batch of ['C:\\x\\tool.cmd', 'C:\\x\\tool.BAT', 'C:\\x\\tool.cmd. ', 'C:\\x\\tool.Cmd..']) {
+      expect(checkLaunch({ ...spec, argv: [batch], line: 'tool resume' }, 'windows')?.code, batch).toBe('bad-field')
+      expect(checkLaunch({ ...spec, argv: [batch, 'resume'] }, 'windows'), `${batch} with an argument list`).toBeNull()
+    }
+    for (const program of ['C:\\x\\tool.bat.exe', 'C:\\x.cmd\\tool.exe', 'C:\\x\\cmd']) {
+      expect(checkLaunch({ ...spec, argv: [program], line: 'tool resume' }, 'windows'), program).toBeNull()
+    }
   })
 
   it('the bundled ConPTY (`conpty: "bundled"`) is for Windows only, and no other value is', () => {
