@@ -102,7 +102,9 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   starts) must be plain, not a link, a junction or another reparse point,
   and the holder keeps all three open from that check until the
   pseudoconsole is made, so within the holder nothing can swap them between
-  its check and its use. A DLL that is missing, does not load or lacks one of
+  its check and its use. Files can still be added to the folder, which is
+  searched for what the DLL needs; only the same user can do that, as below.
+  A DLL that is missing, does not load or lacks one of
   its three calls is answered `io`, and nothing starts; one that lacks a call
   is unloaded again. The app's install code can put node-pty's two files from
   the signed install into that folder of the per-user copy, hash node-pty's
@@ -117,9 +119,13 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   field `line`).** `line` changes what a program reads, never which program
   starts: `CreateProcessW` starts `argv[0]` by that exact path with no
   search, and `line` is refused with a batch file there, which Windows would
-  start through cmd.exe. A command interpreter runs what its line says, so
-  `line` gives nothing `argv` could not already say; like `argv`, it comes
-  only from the same user's app.
+  start through cmd.exe. That check reads the name Windows opens: with
+  `line`, a name with a part made only of dots and spaces (such as `.` or
+  `..`, which Windows resolves first) or a trailing separator is refused,
+  and the holder checks once more on the full name `GetFullPathNameW` makes,
+  as Rust's own `Command` does. A command interpreter runs what its line
+  says, so `line` gives nothing `argv` could not already say; like `argv`,
+  it comes only from the same user's app.
 - **macOS entitlements of the shipped helper.** electron-builder signs every
   Mach-O in the bundle with `entitlementsInherit`, which is the app's own
   `build/entitlements.mac.plist`: allow-jit, allow-unsigned-executable-memory,

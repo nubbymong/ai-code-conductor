@@ -294,11 +294,15 @@ function refLaunch(v: any, os: Os): Answer {
   if (!isCells(v.cols) || !isCells(v.rows)) return bad
   // Launch on Windows: `line` and `conpty`, each Windows only. `line` is
   // counted in UTF-16 units (a JavaScript string's length), as Windows
-  // counts a command line, and is never given to a batch file.
+  // counts a command line, and is never given to a batch file. The name
+  // checked is the one Windows opens: a name ending in a separator, or with
+  // a part of dots and spaces alone (`.`, `..`), which Windows resolves
+  // first, is refused before the batch-file rule reads it.
   if ('line' in v) {
     if (typeof v.line !== 'string' || os !== 'windows') return bad
     if (v.line.length > L.line_units) return big
     if (v.line.includes('\0') || v.line.length === 0 || v.argv.length !== 1) return bad
+    if (/[\\/]$/.test(v.argv[0]) || /(^|[\\/])[. ]+([\\/]|$)/.test(v.argv[0])) return bad
     if (/\.(bat|cmd)$/i.test(v.argv[0].replace(/[. ]+$/, ''))) return bad
   }
   if ('conpty' in v && (v.conpty !== 'bundled' || os !== 'windows')) return bad

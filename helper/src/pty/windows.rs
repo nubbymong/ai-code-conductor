@@ -22,8 +22,10 @@
 //! not, so a session ends as it does on Windows' own ConPTY: when the
 //! program exits, the holder closes the pseudoconsole. The folder and both
 //! files must be plain (no link or other reparse point) and are held open
-//! from that check until the pseudoconsole is made, so none can be written,
-//! renamed or removed in between. The library is loaded by its full path,
+//! from that check until the pseudoconsole is made: neither file can be
+//! written, renamed or removed, and the folder cannot be renamed or
+//! removed, in between; files can still be added to the folder. The library
+//! is loaded by its full path,
 //! with only its own folder and System32 searched for what it needs, and no
 //! path from a frame is ever used. When it is not there, does not load or
 //! lacks one of the calls, the start fails before anything is made; a
@@ -34,10 +36,13 @@
 //! with no search, and `line` is only the text that program reads. A command
 //! interpreter runs what its line says, so `line` gives nothing `argv` could
 //! not already say. A batch file is refused with it (`check_windows_fields`):
-//! Windows would start cmd.exe for it, reading the line as commands.
+//! Windows would start cmd.exe for it, reading the line as commands. That
+//! check reads the name as given; as the last line, `check_full_name` reads
+//! it again as Windows makes it full before it opens the file, as Rust's own
+//! `Command` does.
 #![allow(unsafe_code)]
 
-use super::{check_argv, check_cwd, check_env, check_windows_fields, Conpty, PtySize, SpawnOptions};
+use super::{check_argv, check_cwd, check_env, check_windows_fields, is_batch_file, is_renamed_by_windows, Conpty, PtySize, SpawnOptions};
 use crate::cmdline::build_command_line;
 use crate::winproc::{self, close, os_error, wide, AttrList, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES};
 use std::ffi::c_void;
@@ -49,7 +54,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{CloseHandle, FreeLibrary, GENERIC_READ, HANDLE, HMODULE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    CreateFileW, GetFileInformationByHandle, GetFullPathNameW, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Console::{ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON};
@@ -142,8 +147,9 @@ fn unusable(kind: io::ErrorKind, why: String) -> io::Error {
 
 /// A folder or file of the bundled ConPTY, held open from its check until the
 /// pseudoconsole is made. Others may read it, as the loader and the start of
-/// OpenConsole.exe do, but none may write, rename or remove it meanwhile, so
-/// what was checked is what is used.
+/// OpenConsole.exe do. Meanwhile a held file cannot be written, renamed or
+/// removed, and a held folder cannot be renamed or removed, though files can
+/// still be added to it.
 struct Held(usize);
 
 impl Drop for Held {
@@ -187,6 +193,42 @@ fn hold_plain(path: &Path, folder: bool) -> io::Result<Held> {
         return Err(unusable(io::ErrorKind::InvalidInput, format!("{} is not a plain {what}", path.display())));
     }
     Ok(held)
+}
+
+/// `program` as Windows makes it full before it opens the file
+/// (`GetFullPathNameW`): `.` and `..` parts resolved, `/` read as `\`,
+/// trailing dots and spaces dropped from the last part.
+fn full_name(program: &str) -> io::Result<String> {
+    let name = wide(program);
+    let mut buffer: Vec<u16> = vec![0; 512];
+    // A buffer too small is told the size it needs, with the NUL. A name
+    // that still does not fit the second time is not trusted.
+    for _ in 0..2 {
+        let n = unsafe { GetFullPathNameW(name.as_ptr(), buffer.len() as u32, buffer.as_mut_ptr(), std::ptr::null_mut()) } as usize;
+        if n == 0 {
+            return Err(os_error("GetFullPathNameW"));
+        }
+        if n < buffer.len() {
+            buffer.truncate(n);
+            return Ok(String::from_utf16_lossy(&buffer));
+        }
+        buffer = vec![0; n];
+    }
+    Err(io::Error::new(io::ErrorKind::InvalidInput, "GetFullPathNameW: the program's full name kept changing"))
+}
+
+/// With an exact command line, the holder's last line: the name rules once
+/// more, on the full name Windows opens (`full_name`), as Rust's own
+/// `Command` does before it starts a program.
+fn check_full_name(program: &str) -> io::Result<()> {
+    let full = full_name(program)?;
+    if is_renamed_by_windows(&full) || is_batch_file(&full) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("a command line is never given to a batch file, which Windows runs through cmd.exe, or to a name Windows changes (Windows opens {full})"),
+        ));
+    }
+    Ok(())
 }
 
 /// One call of a loaded library, by its NUL-ended name.
@@ -333,6 +375,9 @@ impl Pty {
             check_cwd(cwd)?;
         }
         check_windows_fields(opts)?;
+        if opts.line.is_some() {
+            check_full_name(&opts.argv[0])?;
+        }
         // Loaded first: a bundled ConPTY that cannot be used fails the start
         // before anything is made or started. Its folder and files stay held
         // until this start is over, past the pseudoconsole's making.
@@ -553,6 +598,21 @@ mod tests {
         let block = env_block(&env);
         assert_eq!(text(&block), "A=1=one\0b=2\0Path=C:\\x\0\0");
         assert_eq!(env_block(&[]), vec![0, 0], "an empty block is two NULs");
+    }
+
+    #[test]
+    fn a_line_is_checked_once_more_on_the_full_name_windows_opens() {
+        // Windows resolves `..`, drops a last `.` part and reads `/` as `\`.
+        assert_eq!(full_name("C:\\x\\tool.cmd\\sub\\..").unwrap(), "C:\\x\\tool.cmd");
+        assert_eq!(full_name("C:/x/tool.cmd/.").unwrap(), "C:\\x\\tool.cmd");
+        for name in ["C:\\x\\tool.cmd\\.", "C:\\x\\tool.cmd\\sub\\..", "C:/x/./tool.CMD", "C:\\x\\tool.bat. ", "C:\\x\\tool.cmd\\. ", "C:\\x\\tool.cmd\\"] {
+            assert!(check_full_name(name).is_err(), "{name} was not refused");
+        }
+        // Read as the full name only. The name as given is checked first
+        // (`check_windows_fields`), which refuses C:\x\sub\..\tool.exe.
+        for name in ["C:\\Windows\\System32\\cmd.exe", "C:\\x\\sub\\..\\tool.exe", "C:\\x.cmd\\tool.exe"] {
+            assert!(check_full_name(name).is_ok(), "{name} was refused: {:?}", check_full_name(name));
+        }
     }
 
     unsafe extern "system" fn no_create(_: COORD, _: HANDLE, _: HANDLE, _: u32, _: *mut HPCON) -> i32 {

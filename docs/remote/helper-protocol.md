@@ -682,11 +682,17 @@ its fields; `code` is present only once the program has exited.
   runs what its line says, so `line` gives nothing `argv` could not already
   say. `argv[0]` may not be a batch file (a name ending in `.bat` or `.cmd`,
   in any case, once trailing dots and spaces are dropped): Windows starts a
-  batch file through cmd.exe, which would read the line as commands. `line`
-  is 1 to 32766 UTF-16 units long with no NUL character (Windows takes a
-  command line of at most 32767 units, counting the NUL that ends it): a
-  longer one is `too-large`; an empty one, one with NUL, one that is not a
-  string, one with more than the program in `argv`, or one for a batch file
+  batch file through cmd.exe, which would read the line as commands. The
+  name checked must be the name Windows opens, so with `line`, `argv[0]` may
+  not end in `\` or `/` or have a part made only of dots and spaces, such as
+  `.` or `..`, which Windows resolves before it opens the file
+  (`C:\x\tool.cmd\.` opens `C:\x\tool.cmd`; a `\\.\` path is refused too).
+  The holder checks these rules once more on the full name Windows makes of
+  `argv[0]` (`GetFullPathNameW`). `line` is 1 to 32766 UTF-16 units long
+  with no NUL character (Windows takes a command line of at most 32767
+  units, counting the NUL that ends it): a longer one is `too-large`; an
+  empty one, one with NUL, one that is not a string, one with more than the
+  program in `argv`, or one for a batch file or a name Windows would change
   is `bad-field`.
   `conpty` is `"bundled"`, or left out for Windows' own ConPTY; any other
   value is `bad-field`. With it, the terminal runs on the `conpty.dll` in a
@@ -694,7 +700,9 @@ its fields; `code` is present only once the program has exited.
   `OpenConsole.exe` beside it; no path in a message is ever used. The folder
   and both files must be plain (not a link or another reparse point), and
   the holder keeps all three open from that check until the pseudoconsole is
-  made, so none of them can be written, renamed or removed in between. It
+  made: neither file can be written, renamed or removed, and the folder
+  cannot be renamed or removed, between the check and the pseudoconsole's
+  making; files can still be added to the folder. It
   loads the library by its full path with `LoadLibraryExW`, searching only
   its folder and System32 for what it needs
   (`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` and `LOAD_LIBRARY_SEARCH_SYSTEM32`), and

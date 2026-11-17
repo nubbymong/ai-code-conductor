@@ -23,7 +23,12 @@ system `CreatePseudoConsole` (`helper/src/pty/windows.rs`).
   reads: a command interpreter runs what its line says, so `line` gives
   nothing `argv` could not already say. It is never given to a batch file
   (.bat or .cmd, any case, trailing dots and spaces dropped), which Windows
-  would start through cmd.exe. It is 1 to 32766 UTF-16 units with no NUL
+  would start through cmd.exe. That rule reads the name Windows opens: with
+  `line`, a name ending in `\` or `/`, or with a part made only of dots and
+  spaces (`.`, `..`), is refused first, since Windows resolves those parts
+  before it opens the file (`C:\x\tool.cmd\.` and `C:\x\tool.cmd\sub\..`
+  open `tool.cmd`). The holder also checks the full name `GetFullPathNameW`
+  makes, as Rust's own `Command` does. It is 1 to 32766 UTF-16 units with no NUL
   (`CreateProcessW` takes 32767 with the NUL that ends it): longer is
   `too-large`, the rest `bad-field`. `conpty: "bundled"` (any other value is
   `bad-field`) runs the terminal on the `conpty.dll` in a `conpty` folder
@@ -31,8 +36,10 @@ system `CreatePseudoConsole` (`helper/src/pty/windows.rs`).
   beside it.
 - The holder opens that folder and both files first, refuses any that is not
   plain (a link, a junction or another reparse point), and keeps all three
-  open until the pseudoconsole is made, so none can be written, renamed or
-  removed in between. It loads the DLL by its full path, never a path from a
+  open until the pseudoconsole is made: neither file can be written, renamed
+  or removed, and the folder cannot be renamed or removed, between the check
+  and the pseudoconsole's making; files can still be added to the folder.
+  It loads the DLL by its full path, never a path from a
   frame, with `LoadLibraryExW` and `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` plus
   `LOAD_LIBRARY_SEARCH_SYSTEM32`, critical-error dialogs off for the load. It
   makes three of node-pty's calls: `ConptyCreatePseudoConsole`,
@@ -73,15 +80,18 @@ system `CreatePseudoConsole` (`helper/src/pty/windows.rs`).
   the gap between the app's check and the holder's load (two processes: it
   does not stop the same user), and what `line` can and cannot do.
 
-**Test.** Shared vectors in `helper/fixtures/local.json` (4 valid and 15
+**Test.** Shared vectors in `helper/fixtures/local.json` (4 valid and 17
 invalid with `line` or `conpty`, the 32766-unit edge and one past it in
-characters outside the Basic Multilingual Plane, batch files, and macOS and
+characters outside the Basic Multilingual Plane, batch files, batch files
+named with a `.` or `..` part, and macOS and
 Linux twins of the vectors refused on every OS; `line_units`), read by
 `helper/tests/fixtures.rs`, the reference reader in
 `tests/unit/scripts/helper-fixtures.test.ts` and
 `tests/unit/main/session-helper-protocol.test.ts`. Rust request and pty
-tests for both OS families, and a `hold.rs` test that the holder's second
-check runs before anything starts. Windows transport tests: `line` running
+tests for both OS families, a test of the holder's full-name check, and a
+`hold.rs` test that the holder's second check runs before anything starts
+(including run.cmd named as `run.cmd\.` and `run.cmd\sub\..`, which Windows
+would otherwise start through cmd.exe). Windows transport tests: `line` running
 cmd.exe `/s /c` on a .cmd file in a folder with a space prints exactly its
 words and the same words as an argument list are mangled; the program
 started is argv[0], not the line's first word (a line whose first word

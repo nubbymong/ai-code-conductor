@@ -7,7 +7,7 @@
 //! Windows), on Windows only: on macOS and Linux either is `bad-field`.
 
 use crate::json::Value;
-use crate::pty::{is_batch_file, Conpty, PtySize};
+use crate::pty::{is_batch_file, is_renamed_by_windows, Conpty, PtySize};
 
 pub const MAX_ARGV_ITEMS: usize = 256;
 pub const MAX_ARG_CHARS: usize = 8192;
@@ -243,7 +243,10 @@ pub fn parse_launch(v: &Value, id: u64) -> Result<Launch, Refusal> {
 /// program at `argv[0]` by that exact path, so `argv` then holds it alone.
 /// A command interpreter runs what its line says, so the line gives nothing
 /// `argv` could not; a batch file is refused, since Windows would start
-/// cmd.exe for it and cmd.exe would read the line as commands.
+/// cmd.exe for it and cmd.exe would read the line as commands. So that the
+/// name checked is the name Windows opens, a name with a part of dots and
+/// spaces alone (such as `.` or `..`) or a trailing separator is refused
+/// first: Windows resolves those before it opens the file.
 fn parse_line(v: &Value, argv: &[String], re: Option<u64>) -> Result<String, Refusal> {
     let line = match v.as_str() {
         Some(s) => s,
@@ -263,6 +266,9 @@ fn parse_line(v: &Value, argv: &[String], re: Option<u64>) -> Result<String, Ref
     }
     if argv.len() != 1 {
         return refuse(CODE_BAD_FIELD, re, "with line, argv holds the program alone");
+    }
+    if is_renamed_by_windows(&argv[0]) {
+        return refuse(CODE_BAD_FIELD, re, "line is never given to a program named with a part of dots alone or a trailing separator, which Windows opens by another name");
     }
     if is_batch_file(&argv[0]) {
         return refuse(CODE_BAD_FIELD, re, "line is never given to a batch file, which Windows runs through cmd.exe");

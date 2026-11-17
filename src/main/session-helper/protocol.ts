@@ -409,6 +409,17 @@ const isCells = (n: unknown): boolean => Number.isInteger(n) && (n as number) >=
 const isBatchFile = (program: string): boolean => /\.(bat|cmd)$/i.test(program.replace(/[. ]+$/, ''))
 
 /**
+ * A name Windows opens as another, as the helper reads it
+ * (helper/src/pty/mod.rs is_renamed_by_windows): ending in `\` or `/`, or
+ * with a part made only of dots and spaces, such as `.` or `..`. Windows
+ * resolves those parts before it opens the file, so `C:\x\tool.cmd\.` opens
+ * `C:\x\tool.cmd`; with a line, such a name is refused before the batch-file
+ * rule reads it.
+ */
+const isRenamedByWindows = (program: string): boolean =>
+  /[\\/]$/.test(program) || program.split(/[\\/]/).some((part) => part.length > 0 && /^[. ]+$/.test(part))
+
+/**
  * Would the holder take this launch (section 15, with the Windows fields
  * `line` and `conpty`)? Null when it would, else the protocol code it would
  * answer and why. The app checks first, so a launch the holder would refuse
@@ -455,6 +466,7 @@ export function checkLaunch(spec: LaunchSpec, os: HelperOs): { code: 'bad-field'
     if (line.includes('\0')) return bad('a command line with a NUL character')
     if (line.length === 0) return bad('an empty command line')
     if (argv.length !== 1) return bad('a command line with arguments besides it')
+    if (isRenamedByWindows(argv[0])) return bad('a command line for a program named with a part of dots alone or a trailing separator, which Windows opens by another name')
     if (isBatchFile(argv[0])) return bad('a command line for a batch file, which Windows runs through cmd.exe')
   }
   if (spec.conpty !== undefined) {

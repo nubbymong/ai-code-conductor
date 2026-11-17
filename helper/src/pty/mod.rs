@@ -84,10 +84,22 @@ pub fn is_batch_file(program: &str) -> bool {
     name.ends_with(".bat") || name.ends_with(".cmd")
 }
 
+/// True when Windows would open `program` by another name than it says: a
+/// name that ends in `\` or `/`, or has a part made only of dots and spaces,
+/// such as `.` or `..`. Windows resolves those parts, and reads `/` as `\`,
+/// before it opens the file, so `C:\x\tool.cmd\.` and `C:\x\tool.cmd\sub\..`
+/// open `C:\x\tool.cmd`. With an exact command line such a name is refused,
+/// so `is_batch_file` reads the name Windows opens. A `\\.\` device path
+/// has a `.` part, so it is refused with a line too.
+pub fn is_renamed_by_windows(program: &str) -> bool {
+    let separator = |c: char| c == '\\' || c == '/';
+    program.ends_with(separator) || program.split(separator).any(|part| !part.is_empty() && part.chars().all(|c| c == '.' || c == ' '))
+}
+
 /// The Windows fields, checked again here as the last line: refused on
 /// macOS and Linux, and on Windows a line is never empty or split by a NUL,
 /// never comes with arguments that would say something else, and is never
-/// given to a batch file.
+/// given to a program whose name Windows changes or to a batch file.
 pub(crate) fn check_windows_fields(opts: &SpawnOptions) -> io::Result<()> {
     let invalid = |what: &str| Err(io::Error::new(io::ErrorKind::InvalidInput, what.to_string()));
     if cfg!(not(windows)) && (opts.line.is_some() || opts.conpty != Conpty::System) {
@@ -99,6 +111,9 @@ pub(crate) fn check_windows_fields(opts: &SpawnOptions) -> io::Result<()> {
         }
         if opts.argv.len() != 1 {
             return invalid("with a command line, argv holds the program alone");
+        }
+        if is_renamed_by_windows(&opts.argv[0]) {
+            return invalid("a command line is never given to a program named with a part of dots alone or a trailing separator, which Windows opens by another name");
         }
         if is_batch_file(&opts.argv[0]) {
             return invalid("a command line is never given to a batch file, which Windows runs through cmd.exe");
