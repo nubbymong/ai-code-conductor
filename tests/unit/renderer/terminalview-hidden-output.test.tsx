@@ -24,6 +24,10 @@ const H = vi.hoisted(() => {
   const log: LogEntry[] = []
   /** The parsed callbacks of writes xterm has not parsed yet. */
   const unparsed: Array<() => void> = []
+  /** xterm refusing writes: more than its limit (about 50 MB) is waiting to
+   *  be parsed, and write and writeln throw. */
+  const refuse = { on: false }
+  const REFUSED = 'write data discarded, use flow control to avoid losing data'
   class MockTerminal {
     static last: any = null
     options: any
@@ -49,10 +53,14 @@ const H = vi.hoisted(() => {
     // xterm calls a write's callback once its parser has taken the data, on a
     // later task; here the test says when (parseWrites).
     write(s: unknown, parsed?: () => void) {
+      if (refuse.on) { log.push(['refused', s]); throw new Error(REFUSED) }
       log.push([this.disposed ? 'write-after-dispose' : 'write', s])
       if (parsed) unparsed.push(parsed)
     }
-    writeln(s: string) { log.push([this.disposed ? 'writeln-after-dispose' : 'writeln', s]) }
+    writeln(s: string) {
+      if (refuse.on) { log.push(['refused', s]); throw new Error(REFUSED) }
+      log.push([this.disposed ? 'writeln-after-dispose' : 'writeln', s])
+    }
     dispose() { this.disposed = true }
   }
   const sessionState: any = {
@@ -63,7 +71,7 @@ const H = vi.hoisted(() => {
   const spawned = new Set<string>()
   const tokens = new Map<string, number>()
   const counter = { last: 0 }
-  return { MockTerminal, sessionState, spawned, tokens, counter, log, unparsed }
+  return { MockTerminal, sessionState, spawned, tokens, counter, log, unparsed, refuse }
 })
 /** xterm finishes parsing everything written so far. */
 const parseWrites = () => { const p = H.unparsed.splice(0); p.forEach((cb) => cb()) }
@@ -200,9 +208,13 @@ const claudeSession = (over: Record<string, unknown> = {}) => (
   { id: 's-1', label: 'api-server', workingDirectory: 'C:/proj', color: '#89b4fa', sessionType: 'local', provider: 'claude', model: '', ...over }
 )
 
+/** The view's key (App keys it by the session's createdAt, which a Restart
+ *  bumps) and any extra props (an ssh one), kept across re-renders. */
+let viewKey = 'a'
+let viewProps: Record<string, unknown> = {}
 const render = (isActive: boolean) => {
   act(() => {
-    root.render(React.createElement(TerminalView as any, { key: 'a', sessionId: 's-1', cwd: 'C:/proj', isActive, provider: 'claude' }))
+    root.render(React.createElement(TerminalView as any, { key: viewKey, sessionId: 's-1', cwd: 'C:/proj', isActive, provider: 'claude', ...viewProps }))
   })
 }
 /** Drain frames and microtasks until the view has done what it will. */
@@ -212,8 +224,9 @@ const settle = async () => {
 /** Mount the view of s-1. `running`: onto a PTY that is already running (no
  *  spawn); otherwise this view spawns it (the spawn is left pending). Fake
  *  timers from here on, so each test drives the flush interval. */
-const mount = async (opts: { isActive: boolean; running?: boolean; session?: Record<string, unknown> }) => {
+const mount = async (opts: { isActive: boolean; running?: boolean; session?: Record<string, unknown>; props?: Record<string, unknown> }) => {
   H.sessionState.sessions = [opts.session ?? claudeSession()]
+  viewProps = opts.props ?? {}
   if (opts.running ?? true) H.spawned.add('s-1')
   render(opts.isActive)
   await settle()
@@ -236,6 +249,13 @@ beforeEach(() => {
   sendData = null
   H.log.length = 0
   H.unparsed.length = 0
+  H.refuse.on = false
+  // Another session is the active one: s-1 is hidden unless isActive says
+  // otherwise (the active session's own terminal is never batched).
+  H.sessionState.activeSessionId = 's-other'
+  H.sessionState.updateSession = vi.fn()
+  viewKey = 'a'
+  viewProps = {}
   H.spawned.clear()
   H.tokens.clear()
   forgetSpawnEnd('s-1')
@@ -399,5 +419,121 @@ describe('a screen read and the unmount (aicc_planning#303)', () => {
     advance(HIDDEN_OUTPUT_FLUSH_MS * 2)
     expect(H.log.filter((e) => String(e[0]).endsWith('after-dispose'))).toEqual([])
     expect(writes()).toEqual([])
+  })
+})
+
+describe('a restart under the same id, and an SSH session (aicc_planning#303)', () => {
+  it('a restart (a new view for s-1, new key): the old view\'s queue never reaches a terminal, and the new view batches again', async () => {
+    await mount({ isActive: false })
+    send('old')
+    const oldTerm = H.MockTerminal.last
+    viewKey = 'b'
+    render(false)
+    await settle()
+    expect(H.MockTerminal.last).not.toBe(oldTerm)
+    expect(sendData, 'the new view listens for the PTY output').not.toBeNull()
+    send('new')
+    expect(writes()).toEqual([])
+    advance(HIDDEN_OUTPUT_FLUSH_MS - 1)
+    expect(writes()).toEqual([])
+    advance(1)
+    expect(writes()).toEqual(['new'])
+    advance(HIDDEN_OUTPUT_FLUSH_MS * 2)
+    expect(H.log.filter((e) => String(e[0]).endsWith('after-dispose'))).toEqual([])
+    expect(writes()).toEqual(['new'])
+    // A screen read goes through the new view's queue.
+    parseWrites()
+    send('more')
+    expect(readSessionScreen('s-1')).toBeNull()
+    expect(writes()).toEqual(['new', 'more'])
+    parseWrites()
+    expect(readSessionScreen('s-1')).not.toBeNull()
+  })
+
+  it('an SSH session (the same output handler) is batched while hidden, and the output parse still reads each chunk as it arrives', async () => {
+    const sshConfig = { host: 'build-box', port: 22, username: 'dev', remotePath: '/srv/app' }
+    await mount({ isActive: false, props: { ssh: sshConfig }, session: claudeSession({ sessionType: 'ssh', sshConfig }) })
+    send('12% context left')
+    // The output parse runs 250 ms after a chunk, before the batch is due.
+    advance(250)
+    expect(writes()).toEqual([])
+    expect(H.sessionState.updateSession).toHaveBeenCalledWith('s-1', expect.objectContaining({ contextPercent: 88 }))
+    advance(HIDDEN_OUTPUT_FLUSH_MS - 250)
+    expect(writes()).toEqual(['12% context left'])
+  })
+})
+
+describe('the active session\'s own terminal is never batched (aicc_planning#303)', () => {
+  it('under another pane (isActive false), it writes each chunk at once: the status strip and command bar read its screen', async () => {
+    H.sessionState.activeSessionId = 's-1'
+    await mount({ isActive: false })
+    send('a'); send('b')
+    expect(writes()).toEqual(['a', 'b'])
+    expect(readSessionScreen('s-1')).not.toBeNull()
+  })
+
+  it('a session that becomes the active one while its terminal is covered writes what it queued at once', async () => {
+    await mount({ isActive: false })
+    send('queued')
+    expect(writes()).toEqual([])
+    H.sessionState.activeSessionId = 's-1'
+    render(false)
+    expect(writes()).toEqual(['queued'])
+    parseWrites()
+    expect(readSessionScreen('s-1')).not.toBeNull()
+  })
+})
+
+describe('xterm refusing a write (over its parse limit) never breaks the view (aicc_planning#303)', () => {
+  let warn: ReturnType<typeof vi.spyOn>
+  beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+  afterEach(() => { warn.mockRestore() })
+
+  it('the batch written when the tab is shown: nothing escapes, and the view keeps working', async () => {
+    await mount({ isActive: false })
+    send('flood')
+    H.refuse.on = true
+    expect(() => render(true)).not.toThrow()
+    expect(H.log).toContainEqual(['refused', 'flood'])
+    H.refuse.on = false
+    send('after')
+    expect(writes()).toEqual(['after'])
+  })
+
+  it('the batch the timer writes: nothing escapes, and a screen read is not held up by it', async () => {
+    await mount({ isActive: false })
+    send('flood')
+    H.refuse.on = true
+    expect(() => advance(HIDDEN_OUTPUT_FLUSH_MS)).not.toThrow()
+    expect(H.log).toContainEqual(['refused', 'flood'])
+    H.refuse.on = false
+    expect(readSessionScreen('s-1')).not.toBeNull()
+  })
+
+  it('the queued output and the exit line at session end: the session is still marked ended', async () => {
+    await mount({ isActive: false })
+    send('last words')
+    H.refuse.on = true
+    expect(() => act(() => { fireExit!(0) })).not.toThrow()
+    expect(H.log).toContainEqual(['refused', 'last words'])
+    expect(H.sessionState.updateSession).toHaveBeenCalledWith('s-1', { ptyExited: true })
+    expect(H.spawned.has('s-1')).toBe(false)
+  })
+
+  it('a start that ended elsewhere (spawn end notice): the session is still marked ended', async () => {
+    await mount({ isActive: false })
+    send('queued')
+    H.refuse.on = true
+    expect(() => act(() => { reportSpawnEnd('s-1', 'ended with nothing started') })).not.toThrow()
+    expect(H.sessionState.updateSession).toHaveBeenCalledWith('s-1', { ptyExited: true })
+  })
+
+  it('a launch that fails: the session is still marked as never started', async () => {
+    await mount({ isActive: false, running: false })
+    send('stray')
+    H.refuse.on = true
+    await act(async () => { settles[0].reject(new Error('Claude Code CLI not found on PATH')) })
+    expect(H.log).toContainEqual(['refused', 'stray'])
+    expect(H.sessionState.updateSession).toHaveBeenCalledWith('s-1', { neverStarted: true })
   })
 })

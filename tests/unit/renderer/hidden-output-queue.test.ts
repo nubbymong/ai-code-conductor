@@ -28,7 +28,9 @@ function harness(visible = false) {
   return { q, writes, tracked, state, parse }
 }
 
-beforeEach(() => { vi.useFakeTimers() })
+// Date and performance too: the live window after a read runs on
+// performance.now(), and the clock-step cases move Date alone.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] }) })
 afterEach(() => { vi.useRealTimers() })
 
 describe('hiddenOutputQueue (aicc_planning#303)', () => {
@@ -97,15 +99,6 @@ describe('hiddenOutputQueue (aicc_planning#303)', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('a line the app writes itself comes after the queued output when the caller flushes first (exit line, resume nudge)', () => {
-    const writes: string[] = []
-    const q = createHiddenOutputQueue({ write: (c) => writes.push(`out:${c}`), isVisible: () => false })
-    q.push('last output')
-    q.flush()
-    writes.push('line:[Process exited with code 0]')
-    expect(writes).toEqual(['out:last output', 'line:[Process exited with code 0]'])
-  })
-
   it('a flush with nothing queued writes nothing', () => {
     const h = harness(false)
     h.q.flush()
@@ -142,7 +135,7 @@ describe('hiddenOutputQueue (aicc_planning#303)', () => {
     h.state.visible = true
     h.q.push('c')
     expect(h.writes).toEqual([])
-    expect(h.q.beforeScreenRead()).toBe(false)
+    expect(h.q.prepareScreenRead().behind).toBe(false)
   })
 })
 
@@ -150,13 +143,13 @@ describe('a read of a hidden terminal screen (aicc_planning#303)', () => {
   it('writes what is queued and says so: the screen read now does not show it yet', () => {
     const h = harness(false)
     h.q.push('a'); h.q.push('b')
-    expect(h.q.beforeScreenRead()).toBe(true)
+    expect(h.q.prepareScreenRead().behind).toBe(true)
     expect(h.writes).toEqual(['ab'])
     // Read again before xterm has parsed the batch: still behind.
-    expect(h.q.beforeScreenRead()).toBe(true)
+    expect(h.q.prepareScreenRead().behind).toBe(true)
     expect(h.writes).toEqual(['ab'])
     h.parse()
-    expect(h.q.beforeScreenRead()).toBe(false)
+    expect(h.q.prepareScreenRead().behind).toBe(false)
   })
 
   it('a batch the timer wrote is behind until xterm has parsed it, though nothing is queued', () => {
@@ -164,10 +157,10 @@ describe('a read of a hidden terminal screen (aicc_planning#303)', () => {
     h.q.push('a')
     vi.advanceTimersByTime(HIDDEN_OUTPUT_FLUSH_MS)
     expect(h.writes).toEqual(['a'])
-    expect(h.q.beforeScreenRead()).toBe(true)
-    expect(h.q.beforeScreenRead()).toBe(true)
+    expect(h.q.prepareScreenRead().behind).toBe(true)
+    expect(h.q.prepareScreenRead().behind).toBe(true)
     h.parse()
-    expect(h.q.beforeScreenRead()).toBe(false)
+    expect(h.q.prepareScreenRead().behind).toBe(false)
   })
 
   it('two batches in flight: behind until both are parsed', () => {
@@ -179,9 +172,9 @@ describe('a read of a hidden terminal screen (aicc_planning#303)', () => {
     vi.advanceTimersByTime(HIDDEN_OUTPUT_FLUSH_MS)
     expect(h.tracked).toEqual(['a', 'b'])
     expect(first).toBe(1)
-    expect(h.q.beforeScreenRead()).toBe(true)
+    expect(h.q.prepareScreenRead().behind).toBe(true)
     h.parse()
-    expect(h.q.beforeScreenRead()).toBe(false)
+    expect(h.q.prepareScreenRead().behind).toBe(false)
   })
 
   it('a parsed report that arrives twice counts once', () => {
@@ -192,16 +185,34 @@ describe('a read of a hidden terminal screen (aicc_planning#303)', () => {
     parsed!(); parsed!()
     q.push('b')
     q.flush()
-    expect(q.beforeScreenRead()).toBe(true)
+    expect(q.prepareScreenRead().behind).toBe(true)
   })
 
-  it('a batch whose write throws is not waited for (it never reaches the screen)', () => {
-    let fail = true
-    const q = createHiddenOutputQueue({ write: () => { if (fail) throw new Error('write data discarded') }, isVisible: () => false })
-    q.push('a')
-    expect(() => q.flush()).toThrow('write data discarded')
-    fail = false
-    expect(q.beforeScreenRead()).toBe(false)
+  it('a batch xterm refuses (its write throws, over the parse limit) is dropped and logged once, never thrown, and not waited for', () => {
+    // Every caller of flush is a cleanup or bookkeeping path (shown, exit,
+    // spawn end, launch failure, the timer): a throw there would skip the
+    // rest of it, and the batch is lost either way.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      let fail = true
+      const writes: string[] = []
+      const q = createHiddenOutputQueue({
+        write: (c) => { if (fail) throw new Error('write data discarded, use flow control to avoid losing data'); writes.push(c) },
+        isVisible: () => false,
+      })
+      q.push('a')
+      expect(() => q.flush()).not.toThrow()
+      q.push('b')
+      expect(() => vi.advanceTimersByTime(HIDDEN_OUTPUT_FLUSH_MS)).not.toThrow()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0][0]).toBe('[hiddenOutputQueue] xterm refused a batch')
+      fail = false
+      expect(q.prepareScreenRead().behind).toBe(false)
+      q.push('c')
+      expect(writes).toEqual(['c'])
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('only batches are waited for: a chunk written at once (visible, or live after a read) is not, as before this change', () => {
@@ -212,29 +223,29 @@ describe('a read of a hidden terminal screen (aicc_planning#303)', () => {
     h.q.push('visible')
     h.state.visible = false
     h.parse()
-    h.q.beforeScreenRead()
+    h.q.prepareScreenRead()
     h.q.push('live')
     expect(h.writes).toEqual(['queued', 'visible', 'live'])
     expect(h.tracked).toEqual(['queued'])
-    expect(h.q.beforeScreenRead()).toBe(false)
+    expect(h.q.prepareScreenRead().behind).toBe(false)
   })
 
   it('with nothing queued the screen is current', () => {
     const h = harness(false)
-    expect(h.q.beforeScreenRead()).toBe(false)
+    expect(h.q.prepareScreenRead().behind).toBe(false)
     expect(h.writes).toEqual([])
   })
 
   it('after a read the terminal writes each chunk at once for a while, so the reads that follow are current', () => {
     const h = harness(false)
-    h.q.beforeScreenRead()
+    h.q.prepareScreenRead()
     h.q.push('a')
     expect(h.writes).toEqual(['a'])
     vi.advanceTimersByTime(SCREEN_READ_LIVE_MS - 1)
     h.q.push('b')
     expect(h.writes).toEqual(['a', 'b'])
     // Each read keeps it live from that read.
-    expect(h.q.beforeScreenRead()).toBe(false)
+    expect(h.q.prepareScreenRead().behind).toBe(false)
     vi.advanceTimersByTime(SCREEN_READ_LIVE_MS - 1)
     h.q.push('c')
     expect(h.writes).toEqual(['a', 'b', 'c'])
@@ -247,10 +258,30 @@ describe('a read of a hidden terminal screen (aicc_planning#303)', () => {
     expect(h.tracked).toEqual(['d'])
   })
 
+  it('the live window after a read runs on a steady clock: a wall clock set back does not keep it open', () => {
+    const h = harness(false)
+    h.q.prepareScreenRead()
+    // Time sync or a manual change moves the wall clock back a minute.
+    vi.setSystemTime(Date.now() - 60_000)
+    vi.advanceTimersByTime(SCREEN_READ_LIVE_MS)
+    h.q.push('a')
+    expect(h.writes).toEqual([])
+    vi.advanceTimersByTime(HIDDEN_OUTPUT_FLUSH_MS)
+    expect(h.writes).toEqual(['a'])
+  })
+
+  it('the live window after a read runs on a steady clock: a wall clock set forward does not end it early', () => {
+    const h = harness(false)
+    h.q.prepareScreenRead()
+    vi.setSystemTime(Date.now() + 60_000)
+    h.q.push('a')
+    expect(h.writes).toEqual(['a'])
+  })
+
   it('a read of the visible terminal finds nothing queued', () => {
     const h = harness(true)
     h.q.push('a')
-    expect(h.q.beforeScreenRead()).toBe(false)
+    expect(h.q.prepareScreenRead().behind).toBe(false)
     expect(h.writes).toEqual(['a'])
   })
 })
