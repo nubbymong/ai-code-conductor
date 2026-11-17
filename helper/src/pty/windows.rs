@@ -12,9 +12,38 @@
 //! Handle types differ between `windows-sys` versions (an integer or a
 //! pointer), so handles are held as `usize` and converted with `as` at each
 //! call, which both forms accept.
+//!
+//! The pseudoconsole is Windows' own, or, when a launch asks for it (the
+//! launch field `conpty`), the bundled one: the `conpty.dll` in a `conpty`
+//! folder beside the helper's own program file, which starts the
+//! `OpenConsole.exe` beside it. It is the one node-pty ships. Three of
+//! node-pty's calls are made on it (`ConptyCreatePseudoConsole`,
+//! `ConptyResizePseudoConsole`, `ConptyClosePseudoConsole`);
+//! `ConptyReleasePseudoConsole`, which node-pty calls after the start, is
+//! not, so a session ends as it does on Windows' own ConPTY: when the
+//! program exits, the holder closes the pseudoconsole. The folder and both
+//! files must be plain (no link or other reparse point) and are held open
+//! from that check until the pseudoconsole is made: neither file can be
+//! written, renamed or removed, and the folder cannot be renamed or
+//! removed, in between; files can still be added to the folder. The library
+//! is loaded by its full path,
+//! with only its own folder and System32 searched for what it needs, and no
+//! path from a frame is ever used. When it is not there, does not load or
+//! lacks one of the calls, the start fails before anything is made; a
+//! library that lacks a call is unloaded again.
+//!
+//! A launch may also give the exact command line (`line`). `CreateProcessW`
+//! starts the program at `argv[0]` (`lpApplicationName`), by that exact path
+//! with no search, and `line` is only the text that program reads. A command
+//! interpreter runs what its line says, so `line` gives nothing `argv` could
+//! not already say. A batch file is refused with it: Windows would start
+//! cmd.exe for it, reading the line as commands. The holder reads the name
+//! first as Windows makes it full before it opens the file
+//! (`check_full_name`), as Rust's own `Command` does, then as given
+//! (`check_windows_fields`).
 #![allow(unsafe_code)]
 
-use super::{check_argv, check_cwd, check_env, PtySize, SpawnOptions};
+use super::{check_argv, check_cwd, check_env, check_windows_fields, is_batch_file, is_renamed_by_windows, Conpty, PtySize, SpawnOptions};
 use crate::cmdline::build_command_line;
 use crate::winproc::{self, close, os_error, wide, AttrList, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES};
 use std::ffi::c_void;
@@ -22,9 +51,16 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Foundation::{CloseHandle, FreeLibrary, GENERIC_READ, HANDLE, HMODULE};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, GetFileInformationByHandle, GetFullPathNameW, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+};
 use windows_sys::Win32::System::Console::{ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON};
+use windows_sys::Win32::System::Diagnostics::Debug::{SetThreadErrorMode, SEM_FAILCRITICALERRORS};
+use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -43,7 +79,232 @@ const INVALID_HANDLE: usize = usize::MAX;
 /// How long `end_tree` waits for the first process to be gone.
 const END_WAIT_MS: u32 = 5000;
 
+/// The bundled ConPTY's folder name, beside the helper's own program file.
+pub const BUNDLED_FOLDER: &str = "conpty";
+/// The bundled ConPTY's library, in that folder.
+const BUNDLED_DLL: &str = "conpty.dll";
+/// The console host the library starts, beside it.
+const BUNDLED_HOST: &str = "OpenConsole.exe";
+
+/// The bundled conpty.dll's calls, as node-pty declares them (conpty.cc).
+type CreateFn = unsafe extern "system" fn(COORD, HANDLE, HANDLE, u32, *mut HPCON) -> i32;
+type ResizeFn = unsafe extern "system" fn(HPCON, COORD) -> i32;
+type CloseFn = unsafe extern "system" fn(HPCON);
+
+/// The calls of a loaded bundled conpty.dll. A library with all three is
+/// never unloaded: a pseudoconsole it made is closed through it, as late as
+/// the holder's end.
+#[derive(Clone, Copy)]
+struct Bundled {
+    create: CreateFn,
+    resize: ResizeFn,
+    close: CloseFn,
+}
+
+/// Whose pseudoconsole calls a terminal makes.
+#[derive(Clone, Copy)]
+enum Console {
+    System,
+    Bundled(Bundled),
+}
+
+impl Console {
+    unsafe fn create(self, size: COORD, input: HANDLE, output: HANDLE, hpc: &mut HPCON) -> i32 {
+        match self {
+            Console::System => CreatePseudoConsole(size, input, output, 0, hpc),
+            Console::Bundled(b) => (b.create)(size, input, output, 0, hpc),
+        }
+    }
+
+    unsafe fn resize(self, hpc: HPCON, size: COORD) -> i32 {
+        match self {
+            Console::System => ResizePseudoConsole(hpc, size),
+            Console::Bundled(b) => (b.resize)(hpc, size),
+        }
+    }
+
+    unsafe fn close(self, hpc: HPCON) {
+        match self {
+            Console::System => ClosePseudoConsole(hpc),
+            Console::Bundled(b) => (b.close)(hpc),
+        }
+    }
+
+    /// A failed pseudoconsole call (`Create`, `Resize`), named as it was
+    /// made: Windows' own, or the bundled library's.
+    fn failed(self, call: &str, hr: i32) -> io::Error {
+        let named = match self {
+            Console::System => format!("{call}PseudoConsole"),
+            Console::Bundled(_) => format!("the bundled ConPTY's Conpty{call}PseudoConsole"),
+        };
+        io::Error::new(io::ErrorKind::Other, format!("{named} failed: 0x{:08x}", hr as u32))
+    }
+}
+
+/// Why the bundled ConPTY cannot be used, as the launch's `io` answer says it.
+fn unusable(kind: io::ErrorKind, why: String) -> io::Error {
+    io::Error::new(kind, format!("the bundled ConPTY cannot be used: {why}"))
+}
+
+/// A folder or file of the bundled ConPTY, held open from its check until the
+/// pseudoconsole is made. Others may read it, as the loader and the start of
+/// OpenConsole.exe do. Meanwhile a held file cannot be written, renamed or
+/// removed, and a held folder cannot be renamed or removed, though files can
+/// still be added to it.
+struct Held(usize);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        unsafe { close(self.0) }
+    }
+}
+
+/// Open `path` and check it is a plain file, or with `folder` a plain
+/// folder: never a link, a junction or any other reparse point, which is
+/// opened itself and never followed.
+fn hold_plain(path: &Path, folder: bool) -> io::Result<Held> {
+    let name = wide(path);
+    // A folder's entries may still change; the folder itself cannot be
+    // renamed or removed while it is held. A file cannot be written either.
+    let share = if folder { FILE_SHARE_READ | FILE_SHARE_WRITE } else { FILE_SHARE_READ };
+    let h = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            GENERIC_READ,
+            share,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if h as usize == INVALID_HANDLE {
+        let e = io::Error::last_os_error();
+        return Err(unusable(e.kind(), format!("{} is missing or cannot be read ({e})", path.display())));
+    }
+    let held = Held(h as usize);
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(h, &mut info) } == 0 {
+        let e = io::Error::last_os_error();
+        return Err(unusable(e.kind(), format!("{} cannot be read ({e})", path.display())));
+    }
+    let is_folder = info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+    if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || is_folder != folder {
+        let what = if folder { "folder" } else { "file" };
+        return Err(unusable(io::ErrorKind::InvalidInput, format!("{} is not a plain {what}", path.display())));
+    }
+    Ok(held)
+}
+
+/// `program` as Windows makes it full before it opens the file
+/// (`GetFullPathNameW`): `.` and `..` parts resolved, `/` read as `\`,
+/// trailing dots and spaces dropped from the last part.
+fn full_name(program: &str) -> io::Result<String> {
+    let name = wide(program);
+    written_name(|buffer| unsafe { GetFullPathNameW(name.as_ptr(), buffer.len() as u32, buffer.as_mut_ptr(), std::ptr::null_mut()) as usize })
+}
+
+/// The name a call such as `GetFullPathNameW` writes into a buffer. The
+/// call answers the units written without the NUL, or, for a buffer too
+/// small, the size it needs with the NUL, or 0 when it fails. The buffer
+/// is made that size once; a name that still does not fit the second time
+/// is not trusted.
+fn written_name(mut call: impl FnMut(&mut [u16]) -> usize) -> io::Result<String> {
+    let mut buffer: Vec<u16> = vec![0; 512];
+    for _ in 0..2 {
+        let n = call(&mut buffer);
+        if n == 0 {
+            return Err(os_error("GetFullPathNameW"));
+        }
+        if n < buffer.len() {
+            buffer.truncate(n);
+            return Ok(String::from_utf16_lossy(&buffer));
+        }
+        buffer = vec![0; n];
+    }
+    Err(io::Error::new(io::ErrorKind::InvalidInput, "GetFullPathNameW: the program's full name kept changing"))
+}
+
+/// With an exact command line, the holder's first name check: the name
+/// rules on the full name Windows opens (`full_name`), as Rust's own
+/// `Command` does before it starts a program. The name as given is read
+/// next (`check_windows_fields`).
+fn check_full_name(program: &str) -> io::Result<()> {
+    let full = full_name(program)?;
+    if is_renamed_by_windows(&full) || is_batch_file(&full) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("a command line is never given to a batch file, which Windows runs through cmd.exe, or to a name Windows changes (Windows opens {full})"),
+        ));
+    }
+    Ok(())
+}
+
+/// One call of a loaded library, by its NUL-ended name.
+unsafe fn export(module: HMODULE, name: &'static [u8]) -> io::Result<unsafe extern "system" fn() -> isize> {
+    GetProcAddress(module, name.as_ptr()).ok_or_else(|| {
+        let shown = String::from_utf8_lossy(&name[..name.len() - 1]).into_owned();
+        unusable(io::ErrorKind::NotFound, format!("its conpty.dll has no {shown}"))
+    })
+}
+
+/// The three calls node-pty makes, from a loaded conpty.dll.
+unsafe fn calls(module: HMODULE) -> io::Result<Bundled> {
+    let create = export(module, b"ConptyCreatePseudoConsole\0")?;
+    let resize = export(module, b"ConptyResizePseudoConsole\0")?;
+    let close = export(module, b"ConptyClosePseudoConsole\0")?;
+    Ok(Bundled {
+        create: std::mem::transmute::<unsafe extern "system" fn() -> isize, CreateFn>(create),
+        resize: std::mem::transmute::<unsafe extern "system" fn() -> isize, ResizeFn>(resize),
+        close: std::mem::transmute::<unsafe extern "system" fn() -> isize, CloseFn>(close),
+    })
+}
+
+/// Load the bundled conpty.dll: from the `conpty` folder beside this
+/// program file, by its full path, searching only that folder and System32
+/// for what it needs. Answers its calls and the folder and both files, held
+/// open: the caller keeps them until the pseudoconsole is made.
+fn load_bundled() -> io::Result<(Bundled, [Held; 3])> {
+    let exe = std::env::current_exe()?;
+    let folder: PathBuf = match exe.parent() {
+        Some(dir) => dir.join(BUNDLED_FOLDER),
+        None => return Err(unusable(io::ErrorKind::NotFound, "the helper's own folder is not known".to_string())),
+    };
+    let held_folder = hold_plain(&folder, true)?;
+    let dll = folder.join(BUNDLED_DLL);
+    let held_dll = hold_plain(&dll, false)?;
+    // conpty.dll starts the OpenConsole.exe beside it. Without that file the
+    // session would not run on the bundled console host at all.
+    let held_host = hold_plain(&folder.join(BUNDLED_HOST), false)?;
+    let name = wide(&dll);
+    unsafe {
+        // A library that does not load is answered, never shown in a dialog
+        // that would hold the holder up until someone closes it.
+        let mut before: u32 = 0;
+        let quiet = SetThreadErrorMode(SEM_FAILCRITICALERRORS, &mut before as *mut u32 as _) != 0;
+        let module = LoadLibraryExW(name.as_ptr(), std::ptr::null_mut(), LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+        let failed = if module as usize == 0 { Some(os_error("LoadLibraryExW")) } else { None };
+        if quiet {
+            SetThreadErrorMode(before as _, std::ptr::null_mut::<u32>() as _);
+        }
+        if let Some(e) = failed {
+            return Err(unusable(e.kind(), format!("{} does not load ({e})", dll.display())));
+        }
+        match calls(module) {
+            Ok(b) => Ok((b, [held_folder, held_dll, held_host])),
+            Err(e) => {
+                // Not a ConPTY: unloaded again, so its file is not kept in
+                // use and a later launch loads it afresh.
+                FreeLibrary(module);
+                Err(e)
+            }
+        }
+    }
+}
+
 pub struct Pty {
+    /// Whose pseudoconsole this is: Windows' own or the bundled one.
+    console: Console,
     /// The pseudoconsole; 0 once it is closed.
     pseudo_console: usize,
     process: usize,
@@ -129,8 +390,8 @@ pub fn end_children_with_this_process() -> io::Result<()> {
 }
 
 /// Undo a start that failed after the pseudoconsole was made.
-unsafe fn undo(hpc: HPCON, in_write: usize, out_read: usize, job: usize) {
-    ClosePseudoConsole(hpc);
+unsafe fn undo(console: Console, hpc: HPCON, in_write: usize, out_read: usize, job: usize) {
+    console.close(hpc);
     close(in_write);
     close(out_read);
     close(job);
@@ -139,7 +400,7 @@ unsafe fn undo(hpc: HPCON, in_write: usize, out_read: usize, job: usize) {
 impl Pty {
     /// Start `argv` with the holder's own folder and environment.
     pub fn spawn(argv: &[String], size: PtySize) -> io::Result<(Pty, Box<dyn Read + Send>)> {
-        Pty::spawn_with(&SpawnOptions { argv, cwd: None, env: None, size })
+        Pty::spawn_with(&SpawnOptions { argv, cwd: None, env: None, size, line: None, conpty: Conpty::System })
     }
 
     pub fn spawn_with(opts: &SpawnOptions) -> io::Result<(Pty, Box<dyn Read + Send>)> {
@@ -150,7 +411,30 @@ impl Pty {
         if let Some(cwd) = opts.cwd {
             check_cwd(cwd)?;
         }
-        let mut cmdline: Vec<u16> = wide(&build_command_line(opts.argv));
+        // With a line, the name Windows opens is read first, then the name
+        // as given: so a start reaches both, and a refusal of the file
+        // Windows would open (a batch file) names that file.
+        if opts.line.is_some() {
+            check_full_name(&opts.argv[0])?;
+        }
+        check_windows_fields(opts)?;
+        // Loaded first: a bundled ConPTY that cannot be used fails the start
+        // before anything is made or started. Its folder and files stay held
+        // until this start is over, past the pseudoconsole's making.
+        let (console, _held) = match opts.conpty {
+            Conpty::System => (Console::System, None),
+            Conpty::Bundled => {
+                let (calls, held) = load_bundled()?;
+                (Console::Bundled(calls), Some(held))
+            }
+        };
+        // With an exact line, CreateProcessW is given argv[0] as the program
+        // (lpApplicationName) and the line as the text it reads.
+        let program: Option<Vec<u16>> = opts.line.map(|_| wide(&opts.argv[0]));
+        let mut cmdline: Vec<u16> = match opts.line {
+            Some(line) => wide(line),
+            None => wide(&build_command_line(opts.argv)),
+        };
         let cwd: Option<Vec<u16>> = opts.cwd.map(wide);
         let block: Option<Vec<u16>> = opts.env.map(env_block);
         unsafe {
@@ -173,7 +457,7 @@ impl Pty {
             }
 
             let mut hpc: HPCON = std::mem::zeroed();
-            let hr = CreatePseudoConsole(coord(opts.size), in_read, out_write, 0, &mut hpc);
+            let hr = console.create(coord(opts.size), in_read, out_write, &mut hpc);
             // The pseudoconsole holds its own ends now; ours are closed so the
             // pipes end when it does.
             close(in_read as usize);
@@ -182,14 +466,14 @@ impl Pty {
                 close(in_write as usize);
                 close(out_read as usize);
                 close(job);
-                return Err(io::Error::new(io::ErrorKind::Other, format!("CreatePseudoConsole failed: 0x{:08x}", hr as u32)));
+                return Err(console.failed("Create", hr));
             }
 
             // The attribute list that attaches the child to the pseudoconsole.
             let mut attrs = match AttrList::pseudoconsole(hpc) {
                 Ok(attrs) => attrs,
                 Err(e) => {
-                    undo(hpc, in_write as usize, out_read as usize, job);
+                    undo(console, hpc, in_write as usize, out_read as usize, job);
                     return Err(e);
                 }
             };
@@ -218,8 +502,12 @@ impl Pty {
                 Some(c) => c.as_ptr(),
                 None => std::ptr::null(),
             };
+            let program_ptr: *const u16 = match &program {
+                Some(p) => p.as_ptr(),
+                None => std::ptr::null(),
+            };
             let ok = CreateProcessW(
-                std::ptr::null(),
+                program_ptr,
                 cmdline.as_mut_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
@@ -233,7 +521,7 @@ impl Pty {
             let created = if ok == 0 { Some(os_error("CreateProcessW")) } else { None };
             drop(attrs);
             if let Some(e) = created {
-                undo(hpc, in_write as usize, out_read as usize, job);
+                undo(console, hpc, in_write as usize, out_read as usize, job);
                 return Err(e);
             }
             // Into the job while it is still suspended, so not even its first
@@ -243,7 +531,7 @@ impl Pty {
                 TerminateProcess(info.hProcess, 1);
                 close(info.hThread as usize);
                 close(info.hProcess as usize);
-                undo(hpc, in_write as usize, out_read as usize, job);
+                undo(console, hpc, in_write as usize, out_read as usize, job);
                 return Err(e);
             }
             if ResumeThread(info.hThread) == u32::MAX {
@@ -251,14 +539,14 @@ impl Pty {
                 TerminateJobObject(job as HANDLE, 1);
                 close(info.hThread as usize);
                 close(info.hProcess as usize);
-                undo(hpc, in_write as usize, out_read as usize, job);
+                undo(console, hpc, in_write as usize, out_read as usize, job);
                 return Err(e);
             }
             close(info.hThread as usize);
 
             let reader = File::from_raw_handle(out_read as RawHandle);
             let input = File::from_raw_handle(in_write as RawHandle);
-            let pty = Pty { pseudo_console: hpc as usize, process: info.hProcess as usize, job, pid: info.dwProcessId, input, exit: None };
+            let pty = Pty { console, pseudo_console: hpc as usize, process: info.hProcess as usize, job, pid: info.dwProcessId, input, exit: None };
             Ok((pty, Box::new(reader)))
         }
     }
@@ -273,9 +561,9 @@ impl Pty {
             // The session is over; there is no terminal left to size.
             return Ok(());
         }
-        let hr = unsafe { ResizePseudoConsole(self.pseudo_console as HPCON, coord(size)) };
+        let hr = unsafe { self.console.resize(self.pseudo_console as HPCON, coord(size)) };
         if hr != 0 {
-            return Err(io::Error::new(io::ErrorKind::Other, format!("ResizePseudoConsole failed: 0x{:08x}", hr as u32)));
+            return Err(self.console.failed("Resize", hr));
         }
         Ok(())
     }
@@ -315,7 +603,7 @@ impl Pty {
     pub fn close_output(&mut self) {
         if self.pseudo_console != 0 {
             unsafe {
-                ClosePseudoConsole(self.pseudo_console as HPCON);
+                self.console.close(self.pseudo_console as HPCON);
             }
             self.pseudo_console = 0;
         }
@@ -350,5 +638,59 @@ mod tests {
         let block = env_block(&env);
         assert_eq!(text(&block), "A=1=one\0b=2\0Path=C:\\x\0\0");
         assert_eq!(env_block(&[]), vec![0, 0], "an empty block is two NULs");
+    }
+
+    #[test]
+    fn a_line_is_checked_once_more_on_the_full_name_windows_opens() {
+        // Windows resolves `..`, drops a last `.` part and reads `/` as `\`.
+        assert_eq!(full_name("C:\\x\\tool.cmd\\sub\\..").unwrap(), "C:\\x\\tool.cmd");
+        assert_eq!(full_name("C:/x/tool.cmd/.").unwrap(), "C:\\x\\tool.cmd");
+        for name in ["C:\\x\\tool.cmd\\.", "C:\\x\\tool.cmd\\sub\\..", "C:/x/./tool.CMD", "C:\\x\\tool.bat. ", "C:\\x\\tool.cmd\\. ", "C:\\x\\tool.cmd\\"] {
+            assert!(check_full_name(name).is_err(), "{name} was not refused");
+        }
+        // Read as the full name only. The name as given is checked next
+        // (`check_windows_fields`), which refuses C:\x\sub\..\tool.exe.
+        for name in ["C:\\Windows\\System32\\cmd.exe", "C:\\x\\sub\\..\\tool.exe", "C:\\x.cmd\\tool.exe"] {
+            assert!(check_full_name(name).is_ok(), "{name} was refused: {:?}", check_full_name(name));
+        }
+        // A name of 512 UTF-16 units or more does not fit the first buffer: it
+        // is read again into one of the size Windows asks for (argv[0] may be
+        // up to 8192 characters).
+        let long = format!("C:\\{}tool.cmd\\.", "a\\".repeat(300));
+        assert!(long.encode_utf16().count() > 511);
+        assert_eq!(full_name(&long).unwrap(), format!("C:\\{}tool.cmd", "a\\".repeat(300)));
+        assert!(check_full_name(&long).is_err(), "a long name was not refused");
+        // A name that asks for a larger buffer again the second time is not
+        // trusted; one that fits the second time is read from it.
+        let kept_changing = written_name(|buffer| buffer.len() + 1).unwrap_err();
+        assert_eq!(kept_changing.kind(), io::ErrorKind::InvalidInput);
+        assert!(kept_changing.to_string().contains("kept changing"), "{kept_changing}");
+        let mut calls = 0;
+        let grown = written_name(|buffer| {
+            calls += 1;
+            if buffer.len() < 600 {
+                return 600;
+            }
+            buffer[..3].copy_from_slice(&[u16::from(b'C'), u16::from(b':'), u16::from(b'\\')]);
+            3
+        });
+        assert_eq!((grown.unwrap(), calls), ("C:\\".to_string(), 2));
+    }
+
+    unsafe extern "system" fn no_create(_: COORD, _: HANDLE, _: HANDLE, _: u32, _: *mut HPCON) -> i32 {
+        1
+    }
+    unsafe extern "system" fn no_resize(_: HPCON, _: COORD) -> i32 {
+        1
+    }
+    unsafe extern "system" fn no_close(_: HPCON) {}
+
+    #[test]
+    fn a_failed_pseudoconsole_call_is_named_as_it_was_made() {
+        let bundled = Console::Bundled(Bundled { create: no_create, resize: no_resize, close: no_close });
+        assert_eq!(Console::System.failed("Create", 5).to_string(), "CreatePseudoConsole failed: 0x00000005");
+        assert_eq!(Console::System.failed("Resize", 5).to_string(), "ResizePseudoConsole failed: 0x00000005");
+        assert_eq!(bundled.failed("Create", -2147024809).to_string(), "the bundled ConPTY's ConptyCreatePseudoConsole failed: 0x80070057");
+        assert_eq!(bundled.failed("Resize", -2147024809).to_string(), "the bundled ConPTY's ConptyResizePseudoConsole failed: 0x80070057");
     }
 }

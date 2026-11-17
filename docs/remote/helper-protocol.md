@@ -651,7 +651,7 @@ the last column of section 8's table):
 
 | Type | Reply | Fields and rules |
 | --- | --- | --- |
-| `term.launch` | `term.launched` `{re, pid}` | `{id, argv, cwd, env, cols, rows}`; once per holder, then `busy`; a program that does not start gets `io`, and a later launch may try again; while the session is ending, `not-found` |
+| `term.launch` | `term.launched` `{re, pid}` | `{id, argv, cwd, env, cols, rows}`, and on Windows `line` and `conpty` if wanted (below); once per holder, then `busy`; a program that does not start gets `io`, and a later launch may try again; while the session is ending, `not-found` |
 | `term.attach` | `term.attached` `{re, from, ring_start, ring_end, truncated, running, code?}` | `{id, from}`; then the output from `from` on channel 1, then live output; before a launch, or while the session is ending, `not-found` |
 | `term.resize` | `term.resized` `{re}` | `{id, cols, rows}`; only the attached connection, else `not-connected` |
 | `term.detach` | `term.detached` `{re}` | `{id}`; only the attached connection, else `not-connected`; the holder then closes the connection and the session keeps running |
@@ -670,6 +670,53 @@ its fields; `code` is present only once the program has exited.
   `=` or NUL character, a value at most 32767 characters with no NUL
   character, and two names that differ only in case are refused on every OS.
   `cols` and `rows` are whole numbers from 1 to 1000.
+- **Launch on Windows: `line` and `conpty`.** A launch may carry two more
+  fields, on Windows only; on macOS and Linux either is `bad-field`, and a
+  holder from before them refuses either with `bad-field` too.
+  `line` is the exact command line the program reads (`CreateProcessW`'s
+  `lpCommandLine`), for a program that reads its line in a way no argument
+  list can say, such as `cmd.exe /d /s /c` running an npm `.cmd` file.
+  `CreateProcessW` starts the program at `argv[0]`, by that exact path with
+  no search (`lpApplicationName`), so with `line`, `argv` holds that program
+  alone. `line` is only the text that program reads: a command interpreter
+  runs what its line says, so `line` gives nothing `argv` could not already
+  say. `argv[0]` may not be a batch file (a name ending in `.bat` or `.cmd`,
+  in any case, once trailing dots and spaces are dropped): Windows starts a
+  batch file through cmd.exe, which would read the line as commands. The
+  name checked must be the name Windows opens, so with `line`, `argv[0]` may
+  not end in `\` or `/` or have a part made only of dots and spaces, such as
+  `.` or `..`, which Windows resolves before it opens the file
+  (`C:\x\tool.cmd\.` opens `C:\x\tool.cmd`; a `\\.\` path is refused too).
+  The holder checks these rules once more on the full name Windows makes of
+  `argv[0]` (`GetFullPathNameW`). `line` is 1 to 32766 UTF-16 units long
+  with no NUL character (Windows takes a command line of at most 32767
+  units, counting the NUL that ends it): a longer one is `too-large`; an
+  empty one, one with NUL, one that is not a string, one with more than the
+  program in `argv`, or one for a batch file or a name Windows would change
+  is `bad-field`.
+  `conpty` is `"bundled"`, or left out for Windows' own ConPTY; any other
+  value is `bad-field`. With it, the terminal runs on the `conpty.dll` in a
+  `conpty` folder beside the helper's own program file, which starts the
+  `OpenConsole.exe` beside it; no path in a message is ever used. The folder
+  and both files must be plain (not a link or another reparse point), and
+  the holder keeps all three open from that check until the pseudoconsole is
+  made: neither file can be written, renamed or removed, and the folder
+  cannot be renamed or removed, between the check and the pseudoconsole's
+  making; files can still be added to the folder. It
+  loads the library by its full path with `LoadLibraryExW`, searching only
+  its folder and System32 for what it needs
+  (`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` and `LOAD_LIBRARY_SEARCH_SYSTEM32`), and
+  makes three of node-pty's calls on it: `ConptyCreatePseudoConsole`,
+  `ConptyResizePseudoConsole` and `ConptyClosePseudoConsole`.
+  `ConptyReleasePseudoConsole`, which node-pty calls after the start, is not
+  made, so a session ends as it does on Windows' own ConPTY: when the program
+  exits, the holder closes the pseudoconsole. When the folder or a file is
+  missing or not plain, or the library does not load or lacks one of those
+  calls, the launch gets `io` and nothing is started; a library that lacks a
+  call is unloaded again, and a later launch may try again. The app's install
+  code can put node-pty's two files in that folder of its copy of the helper
+  and check them against node-pty's own before each use, as it checks the
+  helper. The app does not yet send either field or copy those files.
 - **Attach.** `from` is an offset in the output, as in section 11: past
   `ring_end` is `bad-field`; older than the ring holds is answered from
   `ring_start` with `truncated` true. Typed input goes to the holder as raw
@@ -722,4 +769,6 @@ its fields; `code` is present only once the program has exited.
 
 **Change.** The `hold` and `list` command lines and their exit codes, the
 record and the listing are frozen within version 1; new fields need a new
-record version or capability.
+record version or capability. A message may gain an optional field, as
+`term.launch` gained `line` and `conpty` (2.1.3-beta.7): a holder from before
+it refuses the field with `bad-field`.

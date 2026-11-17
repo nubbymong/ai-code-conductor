@@ -257,6 +257,10 @@ const LOCAL_FIELDS: Record<string, string[]> = {
   'term.detach': ['t', 'id'],
   'term.end': ['t', 'id'],
 }
+/** Fields a type may also carry: the Windows launch fields `line` and `conpty`. */
+const LOCAL_OPTIONAL: Record<string, string[]> = { 'term.launch': ['line', 'conpty'] }
+const keysFit = (keys: string[], want: string[], may: string[]) =>
+  new Set(keys).size === keys.length && keys.every((k) => want.includes(k) || may.includes(k)) && want.every((k) => keys.includes(k))
 
 type Answer = { error: string } | Record<string, unknown>
 function refLaunch(v: any, os: Os): Answer {
@@ -288,7 +292,25 @@ function refLaunch(v: any, os: Os): Answer {
     folded.add(name.toUpperCase())
   }
   if (!isCells(v.cols) || !isCells(v.rows)) return bad
-  return { type: 'term.launch', id: v.id, argv: v.argv, cwd: v.cwd, env: entries, cols: v.cols, rows: v.rows }
+  // Launch on Windows: `line` and `conpty`, each Windows only. `line` is
+  // counted in UTF-16 units (a JavaScript string's length), as Windows
+  // counts a command line, and is never given to a batch file. The name
+  // checked is the one Windows opens: a name ending in a separator, or with
+  // a part of dots and spaces alone (`.`, `..`), which Windows resolves
+  // first, is refused before the batch-file rule reads it.
+  if ('line' in v) {
+    if (typeof v.line !== 'string' || os !== 'windows') return bad
+    if (v.line.length > L.line_units) return big
+    if (v.line.includes('\0') || v.line.length === 0 || v.argv.length !== 1) return bad
+    if (/[\\/]$/.test(v.argv[0]) || /(^|[\\/])[. ]+([\\/]|$)/.test(v.argv[0])) return bad
+    if (/\.(bat|cmd)$/i.test(v.argv[0].replace(/[. ]+$/, ''))) return bad
+  }
+  if ('conpty' in v && (v.conpty !== 'bundled' || os !== 'windows')) return bad
+  return {
+    type: 'term.launch', id: v.id, argv: v.argv, cwd: v.cwd, env: entries, cols: v.cols, rows: v.rows,
+    ...('line' in v ? { line: v.line } : {}),
+    ...('conpty' in v ? { conpty: v.conpty } : {}),
+  }
 }
 
 /** A control message as a connection that acked `local` reads it. */
@@ -304,7 +326,7 @@ function refRequest(textIn: string, os: Os): Answer {
   }
   const fields = LOCAL_FIELDS[v.t]
   if (!fields) return { error: 'unknown-type' }
-  if (!isId(v.id) || !sameKeys(keys, fields)) return bad
+  if (!isId(v.id) || !keysFit(keys, fields, LOCAL_OPTIONAL[v.t] ?? [])) return bad
   switch (v.t) {
     case 'term.launch':
       return refLaunch(v, os)
@@ -368,8 +390,8 @@ describe('helper fixtures: the local transport (section 15)', () => {
     }
     // Every limit is met at its edge, and refused one past it.
     const all = local.requests.invalid.map((v: { name: string }) => v.name).join(' | ')
-    for (const needle of ['257 arguments', 'over 8192 characters', 'over 4096 characters', 'over 255 characters', '1001 rows', '0 columns', '2^53', 'differ only in case', 'by name, not path']) expect(all, needle).toContain(needle)
-    expect(local.requests.valid.some((v: { name: string }) => v.name.includes('256 arguments'))).toBe(true)
+    for (const needle of ['257 arguments', 'over 8192 characters', 'over 4096 characters', 'over 255 characters', 'over 32766 UTF-16 units', '1001 rows', '0 columns', '2^53', 'differ only in case', 'by name, not path']) expect(all, needle).toContain(needle)
+    for (const edge of ['256 arguments', '32766 UTF-16 units']) expect(local.requests.valid.some((v: { name: string }) => v.name.includes(edge)), edge).toBe(true)
   })
 
   it('the launch frame is the bytes an independent encoder writes', () => {
@@ -416,6 +438,23 @@ describe('helper fixtures: the local transport (section 15)', () => {
     expect(section).toContain('`cwd` is an absolute path of at most 4096 characters')
     expect(section).toContain('It has at most 1024 entries; a name is 1 to 255 characters with no `=` or NUL character, a value at most 32767 characters')
     expect(section).toContain('`cols` and `rows` are whole numbers from 1 to 1000')
+    expect(section).toContain('A launch may carry two more fields, on Windows only; on macOS and Linux either is `bad-field`')
+    expect(section).toContain('`CreateProcessW` starts the program at `argv[0]`, by that exact path with no search')
+    expect(section).toContain('so with `line`, `argv` holds that program alone')
+    expect(section).toContain('`argv[0]` may not be a batch file (a name ending in `.bat` or `.cmd`, in any case, once trailing dots and spaces are dropped)')
+    expect(section).toContain('The name checked must be the name Windows opens, so with `line`, `argv[0]` may not end in `\\` or `/` or have a part made only of dots and spaces, such as `.` or `..`, which Windows resolves before it opens the file')
+    expect(section).toContain('The holder checks these rules once more on the full name Windows makes of `argv[0]` (`GetFullPathNameW`)')
+    expect(section).toContain('`line` is 1 to 32766 UTF-16 units long with no NUL character')
+    expect(section).toContain('counting the NUL that ends it): a longer one is `too-large`')
+    expect(section).toContain('`conpty` is `"bundled"`, or left out for Windows\' own ConPTY; any other value is `bad-field`.')
+    expect(section).toContain('The folder and both files must be plain (not a link or another reparse point)')
+    // The folder is held so it cannot be renamed or removed, but files may
+    // still be added to it (windows.rs hold_plain shares it for writing).
+    expect(section).toContain('neither file can be written, renamed or removed, and the folder cannot be renamed or removed, between the check and the pseudoconsole\'s making; files can still be added to the folder')
+    expect(section).not.toContain('so none of them can be written, renamed or removed')
+    expect(section).toContain('(`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` and `LOAD_LIBRARY_SEARCH_SYSTEM32`)')
+    expect(section).toContain('`ConptyReleasePseudoConsole`, which node-pty calls after the start, is not made')
+    expect(section).toContain('the launch gets `io` and nothing is started')
     expect(section).toContain('`--away` is 1 to 86400 seconds, default 120')
     expect(section).toContain('a label is at most 128 characters')
     expect(section).toContain('At most 16 connections at once')
@@ -455,6 +494,15 @@ describe('helper fixtures: the local transport (section 15)', () => {
     expect(num('helper/src/request.rs', 'MAX_ENV_ENTRIES')).toBe(L.env_entries)
     expect(num('helper/src/request.rs', 'MAX_ENV_NAME_CHARS')).toBe(L.env_name_chars)
     expect(num('helper/src/request.rs', 'MAX_ENV_VALUE_CHARS')).toBe(L.env_value_chars)
+    expect(num('helper/src/request.rs', 'MAX_LINE_UNITS')).toBe(L.line_units)
+    // The bundled ConPTY: the folder, the files held open and refused as
+    // links, the search the load is held to, and node-pty's calls.
+    const win = src('helper/src/pty/windows.rs')
+    expect(win).toContain('pub const BUNDLED_FOLDER: &str = "conpty";')
+    expect(win).toContain('FILE_FLAG_OPEN_REPARSE_POINT')
+    expect(win).toContain('LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32')
+    expect(win).toContain('FreeLibrary(module)')
+    for (const call of ['ConptyCreatePseudoConsole', 'ConptyResizePseudoConsole', 'ConptyClosePseudoConsole']) expect(win, call).toContain(`b"${call}\\0"`)
     expect(num('helper/src/request.rs', 'MAX_TERM_CELLS')).toBe(L.term_cells)
     expect(num('helper/src/request.rs', 'MAX_SAFE_INTEGER')).toBe(L.max_safe_integer)
     expect(num('helper/src/store.rs', 'MAX_LABEL_CHARS')).toBe(L.label_chars)

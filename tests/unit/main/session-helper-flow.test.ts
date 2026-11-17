@@ -16,7 +16,7 @@ import { join } from 'path'
 import type { IPty } from 'node-pty'
 import { HolderConnection, HolderError, INPUT_FRAMES_PER_PING, unixEndpointFolderProblem } from '../../../src/main/session-helper/connection'
 import { HelperPty, LOST_EXIT_CODE, type HelperPtyDriver } from '../../../src/main/session-helper/helper-pty'
-import { RAW_MAX, heldSessionId, type HolderRecord } from '../../../src/main/session-helper/protocol'
+import { RAW_MAX, heldSessionId, type HolderRecord, type LaunchSpec } from '../../../src/main/session-helper/protocol'
 import { FakeHolder, duplexPair, type ConnEvent } from './session-helper-fake-holder'
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
@@ -68,6 +68,8 @@ function rig(o: {
   cols?: number
   rows?: number
   replyTimeoutMs?: number
+  /** Launch fields besides argv, cwd, env and the size (the Windows `line` and `conpty`). */
+  spec?: Partial<LaunchSpec>
   before?: (h: FakeHolder) => void
   connect?: (record: HolderRecord, open: (record: HolderRecord) => Promise<HolderConnection>) => Promise<HolderConnection>
 } = {}): Rig {
@@ -108,7 +110,7 @@ function rig(o: {
   const p = new HelperPty({
     sid: h.sid,
     label: app,
-    spec: { argv: ['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'], cwd: 'C:\\Users\\someone', env: { Path: 'C:\\Windows' }, cols: o.cols ?? 80, rows: o.rows ?? 24 },
+    spec: { argv: ['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'], cwd: 'C:\\Users\\someone', env: { Path: 'C:\\Windows' }, cols: o.cols ?? 80, rows: o.rows ?? 24, ...o.spec },
     ...(o.adopt ? { adopt: h.record() } : {}),
     driver,
   })
@@ -300,6 +302,17 @@ describe('starting and ending', () => {
     await tick(30)
     expect(r.exits).toEqual([5])
     expect(r.text()).not.toContain('late')
+  })
+
+  it('the launch frame carries exactly the spec: the Windows `line` and `conpty` when given, nothing more when not', async () => {
+    const cmd = 'C:\\Windows\\System32\\cmd.exe'
+    const line = `${cmd} /d /v:off /s /c ""C:\\Users\\someone\\AppData\\Roaming\\npm\\tool.cmd" resume"`
+    const both = rig({ spec: { argv: [cmd], line, conpty: 'bundled' } })
+    await attached(both)
+    expect(both.h.launch).toEqual({ t: 'term.launch', id: expect.any(Number), argv: [cmd], cwd: 'C:\\Users\\someone', env: { Path: 'C:\\Windows' }, cols: 80, rows: 24, line, conpty: 'bundled' })
+    const plain = rig()
+    await attached(plain)
+    expect(Object.keys(plain.h.launch ?? {}).sort()).toEqual(['argv', 'cols', 'cwd', 'env', 'id', 'rows', 't'])
   })
 
   it('a resize while the launch is on its way is sent once the terminal is attached', async () => {

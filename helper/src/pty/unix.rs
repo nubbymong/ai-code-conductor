@@ -23,7 +23,7 @@
 //! Windows API where `std` has no safe form; the library denies it elsewhere.
 #![allow(unsafe_code)]
 
-use super::{check_argv, check_cwd, check_env, PtySize, SpawnOptions};
+use super::{check_argv, check_cwd, check_env, check_windows_fields, Conpty, PtySize, SpawnOptions};
 use std::fs::File;
 use std::io::{self, Read};
 use std::os::fd::FromRawFd;
@@ -56,7 +56,7 @@ fn winsize(size: PtySize) -> libc::winsize {
 impl Pty {
     /// Start `argv` with the holder's own folder and environment.
     pub fn spawn(argv: &[String], size: PtySize) -> io::Result<(Pty, Box<dyn Read + Send>)> {
-        Pty::spawn_with(&SpawnOptions { argv, cwd: None, env: None, size })
+        Pty::spawn_with(&SpawnOptions { argv, cwd: None, env: None, size, line: None, conpty: Conpty::System })
     }
 
     pub fn spawn_with(opts: &SpawnOptions) -> io::Result<(Pty, Box<dyn Read + Send>)> {
@@ -67,6 +67,7 @@ impl Pty {
         if let Some(cwd) = opts.cwd {
             check_cwd(cwd)?;
         }
+        check_windows_fields(opts)?;
         let mut master_fd: libc::c_int = -1;
         let mut slave_fd: libc::c_int = -1;
         let ws = winsize(opts.size);

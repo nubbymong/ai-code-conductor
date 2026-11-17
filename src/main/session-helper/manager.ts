@@ -400,7 +400,9 @@ export class SessionHelperManager implements MachinesSource {
     if (this.quitting) throw new Error('The app is quitting.')
     if (!this.recopying) {
       this.deps.log('[session-helper] the helper copy does not match the installed helper; copying it again')
-      const again = installHelperCopy({ bundled: this.deps.bundled, root: this.root, version: now.version, sha256: now.sha256, platform: this.deps.platform })
+      // The whole version folder is made again, the bundled ConPTY's copy in
+      // it too: from the same node-pty folder the first copy was asked for.
+      const again = installHelperCopy({ bundled: this.deps.bundled, root: this.root, version: now.version, sha256: now.sha256, platform: this.deps.platform, conptySource: now.conptySource })
       this.recopying = again
       void again.catch(() => { /* answered below */ }).finally(() => { if (this.recopying === again) this.recopying = null })
     }

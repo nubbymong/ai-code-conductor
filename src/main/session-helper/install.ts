@@ -9,11 +9,20 @@
  * (`<version>-<first 12 hex of its SHA-256>`), and checks the copy against
  * the installed file before every holder start (docs/remote/helper-threat-model.md,
  * 3.1 and 3.10).
+ *
+ * On Windows, node-pty's bundled ConPTY (conpty.dll and the OpenConsole.exe
+ * it starts) can go beside that copy, in a `conpty` folder: a holder asked
+ * for the bundled ConPTY (the launch field `conpty`) loads it only from
+ * there. It is checked against node-pty's installed files before every use,
+ * the same way. Missing or unusable files make only the bundled ConPTY
+ * unavailable; the helper itself works without them. The manager does not
+ * ask for it yet.
  */
 import { createHash, randomBytes } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { findNodePtyLibDir, nodePtyConptyDir } from '../bundled-conpty'
 import { HELPER_FOLDER_RE } from './protocol'
 
 export const HELPER_EXE_NAME = (platform: NodeJS.Platform = process.platform): string => (platform === 'win32' ? 'aicc-helper.exe' : 'aicc-helper')
@@ -102,6 +111,19 @@ export class InstallError extends Error {
   }
 }
 
+/** The bundled ConPTY's files, copied beside the helper (Windows). */
+export const CONPTY_FILES = ['conpty.dll', 'OpenConsole.exe'] as const
+/** The folder beside the helper's copy they go in: the holder looks there. */
+export const CONPTY_FOLDER = 'conpty'
+
+/**
+ * The bundled ConPTY beside the helper's copy: usable, with each file's
+ * SHA-256 taken from node-pty's installed file at start, or not, with why.
+ */
+export type ConptyCopy =
+  | { available: true; dir: string; source: string; sha256: Readonly<Record<string, string>> }
+  | { available: false; reason: string }
+
 export interface InstalledHelper {
   /** The copy holders run from. */
   exe: string
@@ -110,22 +132,165 @@ export interface InstalledHelper {
   /** The installed file's SHA-256, which the copy must match. */
   sha256: string
   version: string
+  /** node-pty's bundled ConPTY beside the copy (Windows only). */
+  conpty: ConptyCopy
+  /**
+   * The node-pty `conpty` folder this copy was asked to carry: undefined when
+   * it was not asked, null when none was found. A copy made again (the whole
+   * version folder) is given it again, so the bundled ConPTY is not lost.
+   */
+  conptySource: string | null | undefined
 }
 
 /**
  * Put the bundled helper's copy in place (or keep the one there that still
  * matches) and check it. A copy that does not match is made again once; when
  * that one does not match either, this fails.
+ *
+ * `conptySource` is node-pty's `conpty` folder (bundledConptySource): on
+ * Windows its two files are copied beside the helper too. Left out, nothing
+ * of it is copied. That part never fails the helper: it only makes the
+ * bundled ConPTY unavailable, with the reason.
  */
-export async function installHelperCopy(opts: { bundled: string; root: string; version: string; sha256: string; platform?: NodeJS.Platform }): Promise<InstalledHelper> {
+export async function installHelperCopy(opts: { bundled: string; root: string; version: string; sha256: string; platform?: NodeJS.Platform; conptySource?: string | null }): Promise<InstalledHelper> {
   const platform = opts.platform ?? process.platform
   const folder = path.join(opts.root, versionFolderName(opts.version, opts.sha256))
   const exe = path.join(folder, HELPER_EXE_NAME(platform))
-  const info: InstalledHelper = { exe, folder, sha256: opts.sha256, version: opts.version }
-  if (await copyMatches(exe, opts.sha256)) return info
+  const placed = async (): Promise<InstalledHelper> => ({
+    exe, folder, sha256: opts.sha256, version: opts.version,
+    conpty: await installConptyCopy({ source: opts.conptySource, folder, platform }),
+    conptySource: opts.conptySource,
+  })
+  if (await copyMatches(exe, opts.sha256)) return placed()
   await makeCopy(opts.bundled, opts.root, folder, exe, platform)
-  if (await copyMatches(exe, opts.sha256)) return info
+  if (await copyMatches(exe, opts.sha256)) return placed()
   throw new InstallError('The session helper copy on this computer does not match the one installed with the app, so nothing is started through it.', 'mismatch')
+}
+
+const conptyUnavailable = (reason: string): ConptyCopy => ({ available: false, reason })
+
+/**
+ * Put node-pty's conpty.dll and OpenConsole.exe in the `conpty` folder of the
+ * helper's version folder (or keep the copies there that match) and check
+ * them. Never throws: anything that goes wrong makes only the bundled ConPTY
+ * unavailable. `expected` holds the hashes taken at start, when there are any.
+ */
+async function installConptyCopy(opts: { source: string | null | undefined; folder: string; platform: NodeJS.Platform; expected?: Readonly<Record<string, string>> }): Promise<ConptyCopy> {
+  if (opts.platform !== 'win32') return conptyUnavailable('the bundled ConPTY is for Windows only')
+  if (opts.source === undefined) return conptyUnavailable('the bundled ConPTY was not asked for')
+  if (opts.source === null) return conptyUnavailable("node-pty's bundled ConPTY was not found")
+  const source = opts.source
+  const dir = path.join(opts.folder, CONPTY_FOLDER)
+  try {
+    let sha256 = opts.expected
+    if (!sha256) {
+      const taken: Record<string, string> = {}
+      for (const name of CONPTY_FILES) {
+        const file = path.join(source, name)
+        if (!(await isPlainFile(file))) return conptyUnavailable(`${file} is missing or not a plain file`)
+        taken[name] = await sha256File(file)
+      }
+      sha256 = taken
+    }
+    const copy: ConptyCopy = { available: true, dir, source, sha256 }
+    if (await conptyCopyMatches(dir, sha256)) return copy
+    const inUse = await makeConptyCopy(source, opts.folder, dir)
+    if (inUse) return inUse
+    if (await conptyCopyMatches(dir, sha256)) return copy
+    return conptyUnavailable("the bundled ConPTY's copy on this computer does not match the one installed with the app")
+  } catch (err) {
+    return conptyUnavailable(`the bundled ConPTY could not be copied into place: ${(err as Error).message}`)
+  }
+}
+
+async function isPlainFile(file: string): Promise<boolean> {
+  try {
+    return (await fs.promises.lstat(file)).isFile()
+  } catch {
+    return false
+  }
+}
+
+/** True when every file of the bundled ConPTY's copy is a plain file with the hash taken at start. */
+async function conptyCopyMatches(dir: string, sha256: Readonly<Record<string, string>>): Promise<boolean> {
+  for (const name of CONPTY_FILES) {
+    if (!(await copyMatches(path.join(dir, name), sha256[name]))) return false
+  }
+  return true
+}
+
+/**
+ * Copy node-pty's two files into `dir`: whole into a folder of their own
+ * first, then moved into place, as the helper is, so a holder never loads a
+ * half-written file. The staging folder is in the helper's version folder,
+ * which no clean-up of old folders touches while it is the current one, and
+ * it is removed again when the copy fails. Answers the bundled ConPTY as
+ * unavailable when the old copy is in use; null once the copy is in place.
+ */
+async function makeConptyCopy(source: string, folder: string, dir: string): Promise<ConptyCopy | null> {
+  const staging = path.join(folder, `.new-${randomBytes(6).toString('hex')}`)
+  try {
+    await fs.promises.mkdir(staging, { mode: 0o700 })
+    for (const name of CONPTY_FILES) await fs.promises.copyFile(path.join(source, name), path.join(staging, name))
+    // A running session holds the conpty.dll it loaded and the
+    // OpenConsole.exe it runs, and Windows removes neither until that session
+    // ends: waiting would only hold up the start. Tried once.
+    try {
+      await removeFolder(dir)
+    } catch (err) {
+      if (BUSY_CODES.has((err as NodeJS.ErrnoException)?.code ?? '')) {
+        return conptyUnavailable(`the bundled ConPTY's copy is in use by a running session (or cannot be removed), so it is not replaced now: ${(err as Error).message}`)
+      }
+      throw err
+    }
+    // Only the just-written files can be busy here (real-time scanning).
+    await retryWhileBusy(() => fs.promises.rename(staging, dir))
+    return null
+  } finally {
+    // Gone already once the rename is done; otherwise what a failed copy left.
+    await removeFolder(staging).catch(() => { /* tried again at the next start */ })
+  }
+}
+
+/** One copy made again at a time for each folder: checks that find the same mismatch share it. */
+const conptyRecopies = new Map<string, Promise<ConptyCopy>>()
+
+/**
+ * The check before every launch on the bundled ConPTY: the copy as it is when
+ * it still matches what was taken at start; otherwise it is made again once
+ * from node-pty's files, and is unavailable when that one does not match
+ * either. Only the bundled ConPTY is then unavailable: the session starts
+ * the usual way.
+ */
+export async function checkedConpty(info: InstalledHelper): Promise<ConptyCopy> {
+  const copy = info.conpty
+  if (!copy.available) return copy
+  if (await conptyCopyMatches(copy.dir, copy.sha256)) return copy
+  let again = conptyRecopies.get(copy.dir)
+  if (!again) {
+    const made = installConptyCopy({ source: copy.source, folder: info.folder, platform: 'win32', expected: copy.sha256 })
+    again = made
+    conptyRecopies.set(copy.dir, made)
+    void made.finally(() => { if (conptyRecopies.get(copy.dir) === made) conptyRecopies.delete(copy.dir) })
+  }
+  return again
+}
+
+/**
+ * node-pty's `conpty` folder (conpty.dll and OpenConsole.exe), by the one
+ * lookup the app's own bundled node-pty spawn uses (bundled-conpty.ts
+ * nodePtyConptyDir): beside the native module node-pty's loader finds first,
+ * in a packaged app under app.asar.unpacked. Null off Windows, or when there
+ * is none. Whether the two files are there is the copy's to say, with which
+ * one is missing.
+ */
+export function bundledConptySource(deps: { platform?: NodeJS.Platform; arch?: string; nodePtyLibDir?: string | null; exists?: (p: string) => boolean } = {}): string | null {
+  const platform = deps.platform ?? process.platform
+  if (platform !== 'win32') return null
+  const lib = 'nodePtyLibDir' in deps ? deps.nodePtyLibDir ?? null : findNodePtyLibDir()
+  if (!lib) return null
+  const exists = deps.exists ?? ((p: string) => { try { return fs.statSync(p).isFile() } catch { return false } })
+  return nodePtyConptyDir(lib, platform, deps.arch ?? process.arch, exists)
 }
 
 /** The check before every holder start: true when the copy is still the installed helper. */
