@@ -97,6 +97,10 @@ export class FakeHolder {
   pongDelayMs = 0
   /** Runs when a launch arrives, before its answer. */
   onLaunch: (() => void) | null = null
+  /** Set: a term.end is carried out (and answered) only once this settles. */
+  endGate: Promise<void> | null = null
+  /** term.end requests that arrived, carried out or not yet. */
+  endsAsked = 0
 
   constructor(readonly sid: string, readonly label: string, readonly store: string) {
     this.endpoint = `\\\\.\\pipe\\aicc-helper-${sid}-${hex(16)}`
@@ -203,13 +207,19 @@ export class FakeHolder {
         this.size = { cols: Number(m.cols), rows: Number(m.rows) }
         conn.sendJson({ t: 'term.resized', re })
         return
-      case 'term.end':
-        this.ended = true
-        this.child = 'exited'
-        conn.sendJson({ t: 'term.ended', re })
-        try { fs.rmSync(path.join(this.store, `${this.sid}.json`), { force: true }) } catch { /* gone */ }
-        setTimeout(() => { for (const c of [...this.conns]) c.close() }, 5)
+      case 'term.end': {
+        this.endsAsked++
+        const end = () => {
+          this.ended = true
+          this.child = 'exited'
+          conn.sendJson({ t: 'term.ended', re })
+          try { fs.rmSync(path.join(this.store, `${this.sid}.json`), { force: true }) } catch { /* gone */ }
+          setTimeout(() => { for (const c of [...this.conns]) c.close() }, 5)
+        }
+        if (this.endGate) void this.endGate.then(end)
+        else end()
         return
+      }
       default:
         err('unknown-type', String(m.t))
     }

@@ -9,11 +9,13 @@ import type { IPty } from 'node-pty'
 const ptySpawn = vi.hoisted(() => vi.fn())
 vi.mock('node-pty', () => ({ spawn: ptySpawn }))
 
-import { HELPER_SENTENCES, SessionHelperManager, offStillHoldingSentence, setSessionHelper, spawnPlainPty, whenHeldKnown } from '../../../src/main/session-helper/manager'
+import { createRequire } from 'module'
+import { HELPER_SENTENCES, SessionHelperManager, nodePtyCommandLine, offStillHoldingSentence, setSessionHelper, spawnAgentPty, spawnPlainPty, whenHeldKnown } from '../../../src/main/session-helper/manager'
 import { HolderConnection } from '../../../src/main/session-helper/connection'
 import { HelperPty } from '../../../src/main/session-helper/helper-pty'
-import { heldSessionId } from '../../../src/main/session-helper/protocol'
+import { heldAgentSessionId, heldIdKind, heldSessionId } from '../../../src/main/session-helper/protocol'
 import { versionFolderName } from '../../../src/main/session-helper/install'
+import { _resetBundledConptyForTest, bundledConptyChoice } from '../../../src/main/bundled-conpty'
 import { sessionHelperRow } from '../../../src/main/services/service-registry'
 import { FakeHelper, FakeHolder } from './session-helper-fake-holder'
 
@@ -60,7 +62,8 @@ function makeManager(over: Partial<ConstructorParameters<typeof SessionHelperMan
     platform: 'win32', root, bundled,
     exec: async (file, args) => { alive(); return helper.exec(file, args) },
     openStream: async (endpoint) => { alive(); return helper.openStream(endpoint) },
-    spawnDirect: (file, args, o) => ptySpawn(file, args, o), newTabId: () => 'newtab0123456789abcdef01', ...over,
+    // node-pty's bundled ConPTY is not copied unless a test names a folder for it.
+    spawnDirect: (file, args, o) => ptySpawn(file, args, o), newTabId: () => 'newtab0123456789abcdef01', conptySource: () => null, ...over,
   })
   self = m
   managers.push(m)
@@ -756,5 +759,311 @@ describe('the Machines page and the Services row', () => {
     const failed = sessionHelperRow({ state: 'failed', held: 0, lastError: { message: 'does not match', ts: 5 } })
     expect(failed).toMatchObject({ state: 'crashed', lastError: { message: 'does not match', ts: 5 } })
     expect(sessionHelperRow({ state: 'not-installed', held: 0, lastError: null }).state).toBe('crashed')
+  })
+})
+
+// ── 2.1.3-beta.7 (plan section A3): local agent sessions through the helper ──
+
+const CMD = 'C:\\Windows\\System32\\cmd.exe'
+/** What the PTY manager hands an agent spawn: the account by USERPROFILE, the
+ *  session's own id and worktree, and the colour hint (pty-manager.ts). */
+const AGENT_ENV = {
+  Path: 'C:\\Windows',
+  USERPROFILE: 'C:\\Users\\someone\\.claude-profiles\\work',
+  CLAUDE_MULTI_SESSION_ID: 'abcdef0123456789abcdef60',
+  CCC_SESSION_WORKTREE: 'C:\\Users\\someone\\project\\.wt\\one',
+  COLORFGBG: '15;0',
+}
+const agentOpts = (over: Record<string, unknown> = {}) => ({ name: 'xterm-256color', cols: 120, rows: 30, cwd: CWD, env: { ...AGENT_ENV }, useConpty: true, ...over })
+/** The line an npm codex.cmd runs by (providers/codex/spawn.ts codexCmdExeTarget). */
+const NPM_LINE = '/d /v:off /s /c ""C:\\Users\\someone\\AppData\\Roaming\\npm\\codex.cmd" --no-alt-screen"'
+const claudeTab = (sessionId: string) => ({ sessionId, kind: 'claude' as const })
+const codexTab = (sessionId: string) => ({ sessionId, kind: 'codex' as const })
+const ON_AGENTS = { atStartup: true, plain: false, agents: true }
+const ON_BOTH = { atStartup: true, plain: true, agents: true }
+
+async function startedWith(m: SessionHelperManager, o: { atStartup: boolean; plain?: boolean; agents?: boolean }): Promise<SessionHelperManager> {
+  await m.start(o)
+  await until(() => m.serviceState().state === 'ready', 'the helper to be ready')
+  return m
+}
+
+/** A node-pty `conpty` folder with the two files, as installHelperCopy reads it. */
+function conptyFolder(): string {
+  const d = join(dir, 'node-pty', 'conpty')
+  mkdirSync(d, { recursive: true })
+  writeFileSync(join(d, 'conpty.dll'), 'MZ conpty')
+  writeFileSync(join(d, 'OpenConsole.exe'), 'MZ console')
+  return d
+}
+
+describe('agent sessions: the setting off is exactly today\'s launch', () => {
+  it('with no helper this run, or with the helper on for plain terminals only, spawnAgentPty is node-pty\'s spawn with the very same arguments', async () => {
+    setSessionHelper(null)
+    const o = agentOpts()
+    const args = ['-NoLogo']
+    spawnAgentPty(claudeTab('abcdef0123456789abcdef60'), SHELL, args, o)
+    expect(ptySpawn).toHaveBeenCalledTimes(1)
+    expect(ptySpawn.mock.calls[0]).toEqual([SHELL, args, o])
+    expect(ptySpawn.mock.calls[0][1]).toBe(args)
+    expect(ptySpawn.mock.calls[0][2]).toBe(o)
+    // The helper on for plain terminals: an agent start is still node-pty's own,
+    // a string line and the bundled ConPTY included.
+    const m = await started(makeManager())
+    setSessionHelper(m)
+    const c = agentOpts({ useConptyDll: true })
+    const p = spawnAgentPty(codexTab('abcdef0123456789abcdef61'), CMD, NPM_LINE, c)
+    expect(p).not.toBeInstanceOf(HelperPty)
+    expect(ptySpawn.mock.calls[1]).toEqual([CMD, NPM_LINE, c])
+    expect(ptySpawn.mock.calls[1][2]).toBe(c)
+    expect(helper.holds()).toBe(0)
+  })
+
+  it('the agent setting alone carries no plain terminal', async () => {
+    const m = await startedWith(makeManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const o = opts()
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef62' }, SHELL, [], o)).not.toBeInstanceOf(HelperPty)
+    expect(ptySpawn.mock.calls[0][2]).toBe(o)
+    expect(helper.holds()).toBe(0)
+  })
+})
+
+describe('agent sessions: the setting on', () => {
+  it('a Claude Code session: the launch carries the spawn\'s own program, arguments, folder and environment, and the typed launch line reaches the program', async () => {
+    const m = await startedWith(makeManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdef63'
+    const p = spawnAgentPty(claudeTab(id), SHELL, ['-NoLogo'], agentOpts())
+    expect(p).toBeInstanceOf(HelperPty)
+    expect(ptySpawn).not.toHaveBeenCalled()
+    // An id of its own kind, never a plain terminal's.
+    const sid = heldAgentSessionId(id, 'claude')
+    expect(heldIdKind(sid)).toBe('agent')
+    expect(heldIdKind(heldSessionId(id))).toBe('plain')
+    expect(sid).not.toBe(heldAgentSessionId(id, 'codex'))
+    await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
+    const h = helper.holders.get(sid)!
+    expect(h.label).toBe(id)
+    expect(h.launch).toEqual({ t: 'term.launch', id: expect.anything(), argv: [SHELL, '-NoLogo'], cwd: CWD, env: AGENT_ENV, cols: 120, rows: 30 })
+    // What the PTY manager types 300 ms after the spawn, then the program's own output.
+    const line = "Set-Location -LiteralPath 'C:\\Users\\someone\\project'; & 'C:\\Users\\someone\\.local\\bin\\claude.exe' --settings x; exit"
+    p.write(line + '\r')
+    await until(() => Buffer.concat(h.input).toString() === line + '\r', 'the launch line')
+    const seen: string[] = []
+    p.onData((d) => seen.push(d))
+    h.output('Claude Code\r\n')
+    await until(() => seen.join('').includes('Claude Code'), 'output')
+    // A new session, never a take-over.
+    expect(heldNow(p)).toBe(false)
+    expect(m.serviceState().held).toBe(1)
+  })
+
+  it('a Codex session by its npm launcher: the string line goes as `line`, as node-pty would make it, with the program alone, and the bundled ConPTY as the helper\'s', async () => {
+    const source = conptyFolder()
+    const m = await startedWith(makeManager({ conptySource: () => source }), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdef64'
+    const p = spawnAgentPty(codexTab(id), CMD, NPM_LINE, agentOpts({ useConptyDll: true }))
+    expect(p).toBeInstanceOf(HelperPty)
+    const sid = heldAgentSessionId(id, 'codex')
+    await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
+    expect(helper.holders.get(sid)!.launch).toEqual({
+      t: 'term.launch', id: expect.anything(), argv: [CMD], cwd: CWD, env: AGENT_ENV, cols: 120, rows: 30, line: `${CMD} ${NPM_LINE}`, conpty: 'bundled',
+    })
+    expect(ptySpawn).not.toHaveBeenCalled()
+    // The two files went beside the helper's copy, checked before the launch.
+    const folder = readdirSync(root).find((n) => /^0\.1\.0-/.test(n))!
+    expect(readFileSync(join(root, folder, 'conpty', 'conpty.dll'), 'utf8')).toBe('MZ conpty')
+    // A native codex.exe (an argument list) on the system ConPTY: neither field.
+    const q = spawnAgentPty(codexTab('abcdef0123456789abcdef65'), 'C:\\Users\\someone\\bin\\codex.exe', ['--no-alt-screen'], agentOpts())
+    const qsid = heldAgentSessionId('abcdef0123456789abcdef65', 'codex')
+    await until(() => !!helper.holders.get(qsid)?.attached, 'the second session to attach')
+    expect(q).toBeInstanceOf(HelperPty)
+    expect(helper.holders.get(qsid)!.launch).toEqual({ t: 'term.launch', id: expect.anything(), argv: ['C:\\Users\\someone\\bin\\codex.exe', '--no-alt-screen'], cwd: CWD, env: AGENT_ENV, cols: 120, rows: 30 })
+  })
+
+  it('the command line is node-pty\'s own for the same program and line', () => {
+    const { argsToCommandLine } = createRequire(__filename)('node-pty/lib/windowsPtyAgent.js') as { argsToCommandLine: (f: string, a: string) => string }
+    const programs = [CMD, 'C:\\Program Files\\Tools\\cmd.exe', 'C:\\odd "name"\\x.exe', 'C:\\trailing\\', 'C:\\with tab\t\\x.exe', '"C:\\Already Quoted\\cmd.exe"', '"C:\\lopsided\\cmd.exe']
+    for (const file of programs) {
+      for (const line of [NPM_LINE, '', '/c echo hi']) expect(nodePtyCommandLine(file, line), `${file} | ${line}`).toBe(argsToCommandLine(file, line))
+    }
+  })
+
+  it('no bundled ConPTY copy beside the helper: the Codex session starts the usual way, on node-pty\'s own, and no holder starts', async () => {
+    const m = await startedWith(makeManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const o = agentOpts({ useConptyDll: true })
+    const p = spawnAgentPty(codexTab('abcdef0123456789abcdef66'), CMD, NPM_LINE, o)
+    expect(p).toBeInstanceOf(HelperPty)
+    await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
+    expect(ptySpawn.mock.calls[0]).toEqual([CMD, NPM_LINE, o])
+    expect(ptySpawn.mock.calls[0][2]).toBe(o)
+    expect((p as HelperPty).throughHelper).toBe(false)
+    expect(helper.holds()).toBe(0)
+  })
+
+  it('node-pty failing on its bundled ConPTY in that usual start: started on the system ConPTY, and the rest of the run uses it', async () => {
+    _resetBundledConptyForTest({ platform: 'win32', arch: 'x64', nodePtyLibDir: join(dir, 'node-pty', 'lib'), exists: () => true })
+    try {
+      expect(bundledConptyChoice().kind).toBe('bundled')
+      ptySpawn.mockImplementation((_f: string, _a: unknown, o: { useConptyDll?: boolean }) => {
+        if (o.useConptyDll) throw new Error('conpty.dll would not load')
+        return fakeDirect()
+      })
+      const m = await startedWith(makeManager(), ON_AGENTS)
+      setSessionHelper(m)
+      const p = spawnAgentPty(codexTab('abcdef0123456789abcdef67'), CMD, NPM_LINE, agentOpts({ useConptyDll: true }))
+      await until(() => ptySpawn.mock.calls.length === 2, 'the system ConPTY start')
+      expect(ptySpawn.mock.calls[1]).toEqual([CMD, NPM_LINE, agentOpts()])
+      expect((p as HelperPty).throughHelper).toBe(false)
+      expect(bundledConptyChoice().kind).toBe('system')
+    } finally {
+      _resetBundledConptyForTest(null)
+    }
+  })
+
+  it('off Windows a string line or the bundled ConPTY is never sent: the session starts the usual way', async () => {
+    const m = await startedWith(makeManager({ platform: 'linux', checkEndpointFolder: () => null }), ON_AGENTS)
+    const o = { name: 'xterm-256color', cols: 80, rows: 24, cwd: '/home/u', env: { PATH: '/bin' } }
+    expect(m.spawnAgent(codexTab('abcdef0123456789abcdef68'), '/bin/sh', '-c codex', o)).not.toBeInstanceOf(HelperPty)
+    const b = { ...o, useConptyDll: true }
+    expect(m.spawnAgent(codexTab('abcdef0123456789abcdef69'), '/usr/bin/codex', [], b)).not.toBeInstanceOf(HelperPty)
+    expect(ptySpawn.mock.calls).toEqual([['/bin/sh', '-c codex', o], ['/usr/bin/codex', [], b]])
+    expect(helper.holds()).toBe(0)
+  })
+
+  it('a normal quit: Escape, Ctrl-C and /exit reach a held Claude Code session in order, then its holder is ended', async () => {
+    const m = await startedWith(makeManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const p = spawnAgentPty(claudeTab('abcdef0123456789abcdef6a'), SHELL, [], agentOpts())
+    const sid = heldAgentSessionId('abcdef0123456789abcdef6a', 'claude')
+    await until(() => !!helper.holders.get(sid)?.attached, 'attached')
+    const h = helper.holders.get(sid)!
+    // gracefulExitPty's keys (pty-manager.ts), through the helper's terminal.
+    p.write('\x1b')
+    p.write('\x03')
+    p.write('/exit\r')
+    await until(() => Buffer.concat(h.input).toString() === '\x1b\x03/exit\r', 'the exit keys')
+    expect(h.ended).toBe(false)
+    const done = m.shutdown()
+    expect(done).not.toBeNull()
+    await done
+    expect(h.ended).toBe(true)
+    expect(h.requests.map((r) => r.t).filter((t) => t !== 'ping')).toEqual(['term.launch', 'term.attach', 'term.end'])
+  })
+})
+
+describe('agent sessions after a crash (plan s11, Q1): ended, never shown again', () => {
+  async function crashedWith(): Promise<{ plainSid: string; claudeSid: string }> {
+    const first = await startedWith(makeManager(), ON_BOTH)
+    setSessionHelper(first)
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef70' }, SHELL, [], opts())
+    spawnAgentPty(claudeTab('abcdef0123456789abcdef71'), SHELL, [], agentOpts())
+    const plainSid = heldSessionId('abcdef0123456789abcdef70')
+    const claudeSid = heldAgentSessionId('abcdef0123456789abcdef71', 'claude')
+    await until(() => !!helper.holders.get(plainSid)?.attached && !!helper.holders.get(claudeSid)?.attached, 'both attached')
+    crash(first)
+    return { plainSid, claudeSid }
+  }
+
+  it('a store with one plain and one Claude Code record keeps the plain one for its tab and ends the Claude one, which its tab never takes over', async () => {
+    const { plainSid, claudeSid } = await crashedWith()
+    const oldClaude = helper.holders.get(claudeSid)!
+    const second = makeManager()
+    setSessionHelper(second)
+    void second.start(ON_BOTH)
+    await until(() => helper.holders.get(plainSid)!.attaches === 2 && oldClaude.ended, 'the keeper and the end')
+    expect(oldClaude.attaches).toBe(1)
+    expect(second.holdsFor('abcdef0123456789abcdef70')).toBe(true)
+    // The plain tab shows its terminal again.
+    const plain = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef70' }, SHELL, [], opts())
+    expect(await (plain as HelperPty).adoption).toBe(true)
+    // The Claude tab, restored, starts a new session (and resumes its conversation by its launch line).
+    const p = spawnAgentPty(claudeTab('abcdef0123456789abcdef71'), SHELL, [], agentOpts())
+    expect(heldNow(p)).toBe(false)
+    await until(() => helper.holders.get(claudeSid) !== oldClaude && !!helper.holders.get(claudeSid)?.attached, 'a new holder')
+    expect(helper.holders.get(claudeSid)!.requests.filter((r) => r.t === 'term.launch')).toHaveLength(1)
+    expect(ptySpawn).not.toHaveBeenCalled()
+  })
+
+  it('a Claude Code tab that starts again while that end is under way waits for it, then launches anew', async () => {
+    const { claudeSid } = await crashedWith()
+    const oldClaude = helper.holders.get(claudeSid)!
+    let release!: () => void
+    oldClaude.endGate = new Promise<void>((r) => { release = r })
+    const second = makeManager()
+    setSessionHelper(second)
+    void second.start(ON_AGENTS)
+    await until(() => oldClaude.endsAsked === 1, 'the end to be asked')
+    const holdsBefore = helper.holds()
+    const p = spawnAgentPty(claudeTab('abcdef0123456789abcdef71'), SHELL, [], agentOpts())
+    await tick(150)
+    // Nothing started for the tab while the old session still runs.
+    expect(helper.holds()).toBe(holdsBefore)
+    expect(ptySpawn).not.toHaveBeenCalled()
+    release()
+    await until(() => helper.holders.get(claudeSid) !== oldClaude && !!helper.holders.get(claudeSid)?.attached, 'the new holder')
+    expect(oldClaude.ended).toBe(true)
+    expect((p as HelperPty).throughHelper).toBe(true)
+    expect(ptySpawn).not.toHaveBeenCalled()
+  })
+
+  it('with both settings off and the crash mark there, the agent session is still ended, and a tab that starts meanwhile waits for it, then starts node-pty\'s own way', async () => {
+    const { plainSid, claudeSid } = await crashedWith()
+    const oldClaude = helper.holders.get(claudeSid)!
+    let release!: () => void
+    oldClaude.endGate = new Promise<void>((r) => { release = r })
+    const second = makeManager()
+    setSessionHelper(second)
+    void second.start({ atStartup: true, plain: false, agents: false })
+    await until(() => oldClaude.endsAsked === 1, 'the end to be asked')
+    expect(second.isEnabled()).toBe(false)
+    const o = agentOpts()
+    const p = spawnAgentPty(claudeTab('abcdef0123456789abcdef71'), SHELL, [], o)
+    await tick(150)
+    expect(ptySpawn).not.toHaveBeenCalled()
+    release()
+    await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
+    expect(oldClaude.ended).toBe(true)
+    expect(ptySpawn.mock.calls[0]).toEqual([SHELL, [], o])
+    expect(ptySpawn.mock.calls[0][2]).toBe(o)
+    expect((p as HelperPty).throughHelper).toBe(false)
+    // Its plain terminal is still kept for its tab, as with the setting on.
+    await until(() => helper.holders.get(plainSid)!.attaches === 2, 'the keeper')
+    // Once the end is over, a start is node-pty's own straight away.
+    expect(spawnAgentPty(claudeTab('abcdef0123456789abcdef72'), SHELL, [], o)).not.toBeInstanceOf(HelperPty)
+    // And the page lists no agent session left.
+    expect((await second.status()).sessions.map((s) => s.id)).toEqual([plainSid])
+  })
+})
+
+describe('agent sessions on the Machines page', () => {
+  it('listed by provider under their tab names and counted on the Services row; End ends one, Re-attach is refused', async () => {
+    const m = await startedWith(makeManager(), ON_AGENTS)
+    setSessionHelper(m)
+    m.noteSavedTabs([{ id: 'abcdef0123456789abcdef80', label: 'API', customName: 'Payments' }, { id: 'abcdef0123456789abcdef81', label: 'Docs' }])
+    spawnAgentPty(claudeTab('abcdef0123456789abcdef80'), SHELL, [], agentOpts())
+    const q = spawnAgentPty(codexTab('abcdef0123456789abcdef81'), 'C:\\Users\\someone\\bin\\codex.exe', [], agentOpts())
+    const c = heldAgentSessionId('abcdef0123456789abcdef80', 'claude')
+    const x = heldAgentSessionId('abcdef0123456789abcdef81', 'codex')
+    await until(() => !!helper.holders.get(c)?.attached && !!helper.holders.get(x)?.attached, 'both attached')
+    // A record with an agent id no provider of this app makes for its label is not listed.
+    const stray = new FakeHolder(`ag${'0'.repeat(30)}`, 'abcdef0123456789abcdef82', join(root, 'store'))
+    helper.holders.set(stray.sid, stray)
+    const s = await m.status()
+    const byId = new Map(s.sessions.map((x) => [x.id, x]))
+    expect(s.sessions).toHaveLength(2)
+    expect(byId.get(c)).toEqual({ id: c, kind: 'claude', label: 'Payments', startedAt: helper.holders.get(c)!.started, attached: true, tabOpen: true })
+    expect(byId.get(x)).toEqual({ id: x, kind: 'codex', label: 'Docs', startedAt: helper.holders.get(x)!.started, attached: true, tabOpen: true })
+    expect(m.serviceState().held).toBe(2)
+    expect(await m.reattach(c)).toEqual({ ok: false, message: HELPER_SENTENCES.agentNotReattached })
+    const exits: number[] = []
+    q.onExit((e) => exits.push(e.exitCode))
+    expect(await m.endSession(x)).toEqual({ ok: true })
+    expect(helper.holders.get(x)!.ended).toBe(true)
+    expect(exits).toHaveLength(1)
+    await until(() => m.serviceState().held === 1, 'one left')
   })
 })

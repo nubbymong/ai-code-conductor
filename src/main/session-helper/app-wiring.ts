@@ -9,30 +9,43 @@ import { readConfig } from '../config-manager'
 import { logInfo } from '../debug-logger'
 import { setMachinesSource } from '../ipc/machines-handlers'
 import { bundledHelperPath, helperRootDir } from './install'
-import { SessionHelperManager, getSessionHelper, setSessionHelper, type SessionHelperServiceState } from './manager'
+import { SessionHelperManager, crashMarkIn, getSessionHelper, setSessionHelper, type HelperRouting, type SessionHelperServiceState } from './manager'
 
-/** The setting (Settings, General): off unless saved as true. */
+/** The settings (Settings, General, Terminal): each off unless saved as true. */
 export const PLAIN_TERMINALS_SETTING = 'plainTerminalsThroughHelper'
+/** 2.1.3-beta.7: local agent sessions (each provider's CLI in a tab) too. */
+export const AGENT_SESSIONS_SETTING = 'agentSessionsThroughHelper'
+
+const savedTrue = (settings: unknown, name: string): boolean =>
+  !!settings && typeof settings === 'object' && (settings as Record<string, unknown>)[name] === true
 
 export function plainTerminalsThroughHelperIn(settings: unknown): boolean {
-  return !!settings && typeof settings === 'object' && (settings as Record<string, unknown>)[PLAIN_TERMINALS_SETTING] === true
+  return savedTrue(settings, PLAIN_TERMINALS_SETTING)
 }
 
-function settingOn(): boolean {
+export function agentSessionsThroughHelperIn(settings: unknown): boolean {
+  return savedTrue(settings, AGENT_SESSIONS_SETTING)
+}
+
+/** Both settings as saved; an unreadable settings file reads as both off. */
+function routing(): HelperRouting {
   try {
-    return plainTerminalsThroughHelperIn(readConfig<Record<string, unknown>>('settings'))
+    const settings = readConfig<Record<string, unknown>>('settings')
+    return { plain: plainTerminalsThroughHelperIn(settings), agents: agentSessionsThroughHelperIn(settings) }
   } catch {
-    return false
+    return { plain: false, agents: false }
   }
 }
 
 let notify: (() => void) | null = null
 
+const rootDir = (): string => helperRootDir({ isPackaged: app.isPackaged })
+
 function ensureManager(): SessionHelperManager {
   const existing = getSessionHelper()
   if (existing) return existing
   const m = new SessionHelperManager({
-    root: helperRootDir({ isPackaged: app.isPackaged }),
+    root: rootDir(),
     bundled: bundledHelperPath({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),
     log: (message) => logInfo(message),
   })
@@ -42,19 +55,28 @@ function ensureManager(): SessionHelperManager {
   return m
 }
 
-/** At start-up: with the setting on, the helper comes up and any terminal a
- *  crash left held is kept for its tab. Off: nothing is made. */
+/**
+ * At start-up: with either setting on, the helper comes up; a plain terminal
+ * a crash left held is kept for its tab, and an agent session is ended (its
+ * tab resumes the conversation). Both off: nothing is made, unless the last
+ * run with the helper on did not quit normally. Then the helper comes up all
+ * the same, carrying nothing new, to end the agent sessions that run left
+ * held (and keep its plain terminals for their tabs).
+ */
 export function initSessionHelper(onChange: () => void): void {
   notify = onChange
-  if (!settingOn()) return
-  void ensureManager().start({ atStartup: true })
+  const { plain, agents } = routing()
+  if (!plain && !agents && !crashMarkIn(rootDir())) return
+  void ensureManager().start({ atStartup: true, plain, agents })
 }
 
-/** After a settings save: the switch applies to the next terminal at once. */
+/** After a settings save: each switch applies to the next terminal at once. */
 export function applySessionHelperSettings(): void {
-  if (settingOn()) {
+  const { plain, agents } = routing()
+  if (plain || agents) {
     const m = ensureManager()
-    if (!m.isEnabled()) void m.start({ atStartup: false })
+    if (!m.isEnabled()) void m.start({ atStartup: false, plain, agents })
+    else m.setRouting({ plain, agents })
   } else {
     // Off: the page reads the helper as off; terminals already through it
     // keep running until their tabs close.

@@ -111,7 +111,7 @@ test.describe('Machines page content', () => {
     await expect(card.locator('h2')).toHaveText('This computer')
     await expect(page.locator('[data-testid="machines-state"]')).toContainText('Off')
     await expect(page.locator('[data-testid="machines-state-text"]')).toContainText(
-      'Switch it on in Settings, General, Plain terminals through the session helper.',
+      'Switch it on in Settings, General, under Terminal.',
     )
     await expect(page.locator('[data-testid="machines-empty"]')).toBeVisible()
   })

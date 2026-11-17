@@ -72,4 +72,20 @@ describe('the setting', () => {
     expect(page).toContain('Plain terminals through the session helper')
     expect(page).toContain('data-testid="setting-plain-terminals-helper"')
   })
+
+  it('the agent sessions\' setting (2.1.3-beta.7) is off by default too, beside it, and its note says what a crash and Windows do', () => {
+    expect(DEFAULT_SETTINGS.agentSessionsThroughHelper).toBe(false)
+    const page = readFileSync(resolve(__dirname, '../../../src/renderer/components/SettingsPage.tsx'), 'utf8')
+    const plain = page.indexOf('data-testid="setting-plain-terminals-helper"')
+    const agents = page.indexOf('data-testid="setting-agent-sessions-helper"')
+    expect(plain).toBeGreaterThan(0)
+    expect(agents).toBeGreaterThan(plain)
+    const block = page.slice(agents, page.indexOf('</label>', agents))
+    expect(block).toContain('checked={settings.agentSessionsThroughHelper === true}')
+    expect(block).toContain('onChange={(e) => save({ agentSessionsThroughHelper: e.target.checked })}')
+    expect(block).toContain('Claude Code and Codex sessions through the session helper')
+    // Q1: ended after a crash, the tab resumes; Q2: the whole tree ends on Windows.
+    expect(block).toContain('when you open the app again, the session is ended and its tab resumes the conversation as before.')
+    expect(block).toContain('On Windows, ending a session also ends every program it started, even one it opened in a window of its own.')
+  })
 })

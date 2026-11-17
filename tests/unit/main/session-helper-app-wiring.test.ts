@@ -7,10 +7,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const h = vi.hoisted(() => ({
   settings: {} as Record<string, unknown> | null,
-  made: [] as Array<{ deps: Record<string, unknown>; start: ReturnType<typeof vi.fn>; stopRouting: ReturnType<typeof vi.fn>; shutdown: ReturnType<typeof vi.fn>; noteSavedTabs: ReturnType<typeof vi.fn>; enabled: boolean }>,
+  made: [] as Array<{ deps: Record<string, unknown>; start: ReturnType<typeof vi.fn>; setRouting: ReturnType<typeof vi.fn>; stopRouting: ReturnType<typeof vi.fn>; shutdown: ReturnType<typeof vi.fn>; noteSavedTabs: ReturnType<typeof vi.fn>; enabled: boolean }>,
   machinesSource: vi.fn(),
   current: null as unknown,
   quitAnswer: null as Promise<void> | null,
+  /** The last run with the helper on did not quit normally (its running mark is there). */
+  crashMark: false,
+  crashMarkAsked: [] as string[],
 }))
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => 'C:\\app' } }))
@@ -21,7 +24,8 @@ vi.mock('../../../src/main/session-helper/install', () => ({ helperRootDir: () =
 vi.mock('../../../src/main/session-helper/manager', () => {
   class SessionHelperManager {
     enabled = false
-    start = vi.fn(async () => { this.enabled = true })
+    start = vi.fn(async (o: { plain?: boolean; agents?: boolean }) => { this.enabled = (o.plain ?? true) || (o.agents ?? false) })
+    setRouting = vi.fn((r: { plain: boolean; agents: boolean }) => { this.enabled = r.plain || r.agents })
     stopRouting = vi.fn(() => { this.enabled = false })
     shutdown = vi.fn((): Promise<void> | null => h.quitAnswer)
     noteSavedTabs = vi.fn()
@@ -33,18 +37,21 @@ vi.mock('../../../src/main/session-helper/manager', () => {
   return {
     SessionHelperManager,
     getSessionHelper: () => h.current,
+    crashMarkIn: (root: string) => { h.crashMarkAsked.push(root); return h.crashMark },
     setSessionHelper: (m: unknown) => { h.current = m },
   }
 })
 
 import {
-  QUIT_WAIT_MS, applySessionHelperSettings, holdQuitForSessionHelper, initSessionHelper, noteSessionHelperTabs, plainTerminalsThroughHelperIn,
+  QUIT_WAIT_MS, agentSessionsThroughHelperIn, applySessionHelperSettings, holdQuitForSessionHelper, initSessionHelper, noteSessionHelperTabs, plainTerminalsThroughHelperIn,
   sessionHelperServiceState, shutdownSessionHelper,
 } from '../../../src/main/session-helper/app-wiring'
 
 beforeEach(() => {
   h.settings = {}
   h.quitAnswer = null
+  h.crashMark = false
+  h.crashMarkAsked.length = 0
   h.made.length = 0
   h.current = null
   h.machinesSource.mockReset()
@@ -54,13 +61,19 @@ describe('session helper wiring', () => {
   it('the setting is on only when saved as true', () => {
     expect(plainTerminalsThroughHelperIn({ plainTerminalsThroughHelper: true })).toBe(true)
     for (const v of [undefined, null, {}, { plainTerminalsThroughHelper: 'true' }, { plainTerminalsThroughHelper: 1 }]) expect(plainTerminalsThroughHelperIn(v)).toBe(false)
+    // 2.1.3-beta.7: the agent sessions' setting, the same way, and each on its own.
+    expect(agentSessionsThroughHelperIn({ agentSessionsThroughHelper: true })).toBe(true)
+    for (const v of [undefined, null, {}, { agentSessionsThroughHelper: 'true' }, { agentSessionsThroughHelper: 1 }, { plainTerminalsThroughHelper: true }]) expect(agentSessionsThroughHelperIn(v)).toBe(false)
+    expect(plainTerminalsThroughHelperIn({ agentSessionsThroughHelper: true })).toBe(false)
   })
 
-  it('off at start-up (or an unreadable settings file): nothing is made, the Machines page keeps its off source', () => {
+  it('off at start-up (or an unreadable settings file), with no crash mark: nothing is made, the Machines page keeps its off source', () => {
     initSessionHelper(() => {})
     h.settings = null
     initSessionHelper(() => {})
     expect(h.made).toHaveLength(0)
+    // The mark was looked for, in the helper's own folder.
+    expect(h.crashMarkAsked).toEqual(['C:\\user\\helper', 'C:\\user\\helper'])
     expect(h.machinesSource).not.toHaveBeenCalled()
     expect(sessionHelperServiceState()).toBeNull()
     // And the quit and the tab note have nothing to do.
@@ -73,8 +86,28 @@ describe('session helper wiring', () => {
     initSessionHelper(() => {})
     expect(h.made).toHaveLength(1)
     expect(h.made[0].deps).toMatchObject({ root: 'C:\\user\\helper', bundled: 'C:\\app\\helper\\aicc-helper.exe' })
-    expect(h.made[0].start).toHaveBeenCalledWith({ atStartup: true })
+    expect(h.made[0].start).toHaveBeenCalledWith({ atStartup: true, plain: true, agents: false })
     expect(h.machinesSource).toHaveBeenCalledWith(h.made[0])
+  })
+
+  it('the agent sessions\' setting alone at start-up: the helper comes up carrying agent sessions only', () => {
+    h.settings = { agentSessionsThroughHelper: true }
+    initSessionHelper(() => {})
+    expect(h.made).toHaveLength(1)
+    expect(h.made[0].start).toHaveBeenCalledWith({ atStartup: true, plain: false, agents: true })
+  })
+
+  it('both settings off with the crash mark there: the helper still comes up, carrying nothing new, to end what the crash left held', () => {
+    h.crashMark = true
+    initSessionHelper(() => {})
+    expect(h.made).toHaveLength(1)
+    expect(h.made[0].start).toHaveBeenCalledWith({ atStartup: true, plain: false, agents: false })
+    expect(h.machinesSource).toHaveBeenCalledWith(h.made[0])
+    // Not on: a settings save that turns one on starts it as a switch-on.
+    h.settings = { agentSessionsThroughHelper: true }
+    applySessionHelperSettings()
+    expect(h.made).toHaveLength(1)
+    expect(h.made[0].start).toHaveBeenLastCalledWith({ atStartup: false, plain: false, agents: true })
   })
 
   it('a settings save switches it: on starts it (not as a start-up), off stops routing; terminals already through it keep running', () => {
@@ -83,10 +116,20 @@ describe('session helper wiring', () => {
     h.settings = { plainTerminalsThroughHelper: true }
     applySessionHelperSettings()
     expect(h.made).toHaveLength(1)
-    expect(h.made[0].start).toHaveBeenCalledWith({ atStartup: false })
+    expect(h.made[0].start).toHaveBeenCalledWith({ atStartup: false, plain: true, agents: false })
     // Saved again while on: not started twice.
     applySessionHelperSettings()
     expect(h.made[0].start).toHaveBeenCalledTimes(1)
+    // The agent sessions' setting turned on as well: the routing changes, no second start.
+    h.settings = { plainTerminalsThroughHelper: true, agentSessionsThroughHelper: true }
+    applySessionHelperSettings()
+    expect(h.made[0].start).toHaveBeenCalledTimes(1)
+    expect(h.made[0].setRouting).toHaveBeenLastCalledWith({ plain: true, agents: true })
+    // The plain one off, the agent one still on: still on, carrying agent sessions only.
+    h.settings = { agentSessionsThroughHelper: true }
+    applySessionHelperSettings()
+    expect(h.made[0].setRouting).toHaveBeenLastCalledWith({ plain: false, agents: true })
+    expect(h.made[0].stopRouting).not.toHaveBeenCalled()
     h.settings = {}
     applySessionHelperSettings()
     expect(h.made[0].stopRouting).toHaveBeenCalledTimes(1)
@@ -96,6 +139,7 @@ describe('session helper wiring', () => {
     applySessionHelperSettings()
     expect(h.made).toHaveLength(1)
     expect(h.made[0].start).toHaveBeenCalledTimes(2)
+    expect(h.made[0].start).toHaveBeenLastCalledWith({ atStartup: false, plain: true, agents: false })
   })
 
   it('the saved tabs reach the manager, and a normal quit shuts it down', () => {

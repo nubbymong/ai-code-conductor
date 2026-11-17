@@ -21,7 +21,7 @@ import {
 import { SSH_ENTRY, type SshEntryFailureReason } from '../shared/ssh-entry'
 import type { SshRuntime, DetachedRemoteLiveness, SshEndRemoteOutcome, SshEndRemoteResult, SubmitTextResult, AskConductorNotice } from '../shared/types'
 import { isProviderId, type RealmOwnership, type ProviderId } from '../shared/providers'
-import { spawnPlainPty, whenHeldKnown } from './session-helper/manager'
+import { spawnAgentPty, spawnPlainPty, whenHeldKnown } from './session-helper/manager'
 import { IPC } from '../shared/ipc-channels'
 import { codexPromptKeeps } from '../shared/codex-screen'
 import { askConductorProjectDocMaxBytes } from './help-workspace'
@@ -6277,7 +6277,7 @@ function spawnPtyResolved(
       // A cmd.exe line goes verbatim (see buildSpawnCommand's `commandLine`).
       // The ConPTY options are the choice's own; nothing else differs between
       // the bundled and the system ConPTY.
-      const spawnCodexPty = (conptyOptions: ConptySpawnOptions): pty.IPty => pty.spawn(spawnCmd, commandLine ?? spawnArgs, {
+      const spawnCodexPty = (conptyOptions: ConptySpawnOptions): pty.IPty => spawnAgentPty({ sessionId, kind: 'codex' }, spawnCmd, commandLine ?? spawnArgs, {
         name: 'xterm-256color',
         cols,
         rows,
@@ -6955,7 +6955,7 @@ function spawnPtyResolved(
       }
 
       claudeLaunchedAt = Date.now()
-      ptyProcess = pty.spawn(spawnCmd, spawnArgs, {
+      ptyProcess = spawnAgentPty({ sessionId, kind: 'claude' }, spawnCmd, spawnArgs, {
         name: 'xterm-256color',
         cols,
         rows,

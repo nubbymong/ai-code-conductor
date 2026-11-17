@@ -35,7 +35,7 @@ const STATE_COLOR: Record<HelperState, string> = {
 }
 
 const STATE_SENTENCE: Record<HelperState, string> = {
-  off: 'The session helper is off. Switch it on in Settings, General, Plain terminals through the session helper.',
+  off: 'The session helper is off. Switch it on in Settings, General, under Terminal.',
   'not-installed': 'The session helper is not installed on this computer.',
   starting: 'The session helper is starting.',
   ready: 'The session helper is ready.',
@@ -72,8 +72,29 @@ function sessionStateText(s: Pick<HeldSession, 'attached' | 'tabOpen'>): string 
   return s.tabOpen ? 'Waiting for the app' : 'Waiting for the app. No tab shows it.'
 }
 
+/** What each kind is called on its row (2.1.3-beta.7: agent sessions by their CLI). */
+const KIND_TEXT: Readonly<Record<HeldSession['kind'], string>> = {
+  plain: 'Terminal',
+  partner: 'Partner terminal',
+  claude: 'Claude Code',
+  codex: 'Codex',
+}
+
+/** Which kinds Re-attach can show in a tab: an agent session is ended, never re-attached. */
+const REATTACHABLE: Readonly<Record<HeldSession['kind'], boolean>> = {
+  plain: true,
+  partner: true,
+  claude: false,
+  codex: false,
+}
+
 function kindText(kind: HeldSession['kind']): string {
-  return kind === 'partner' ? 'Partner terminal' : 'Terminal'
+  return KIND_TEXT[kind] ?? 'Terminal'
+}
+
+/** A kind this version does not know is not offered Re-attach either. */
+function canReattach(kind: HeldSession['kind']): boolean {
+  return REATTACHABLE[kind] === true
 }
 
 function newer(a: SelfTestResult | undefined, b: SelfTestResult | undefined): SelfTestResult | undefined {
@@ -152,15 +173,17 @@ function SessionRow({
         </div>
         {!confirming && (
           <div className="flex items-center gap-1.5 shrink-0">
-            <DialogButton
-              variant="secondary"
-              onClick={onReattach}
-              disabled={busy || session.attached}
-              title={session.attached ? 'Already attached to the app' : 'Attach this terminal to the app again'}
-              aria-label={`Re-attach ${session.label}`}
-            >
-              Re-attach
-            </DialogButton>
+            {canReattach(session.kind) && (
+              <DialogButton
+                variant="secondary"
+                onClick={onReattach}
+                disabled={busy || session.attached}
+                title={session.attached ? 'Already attached to the app' : 'Attach this terminal to the app again'}
+                aria-label={`Re-attach ${session.label}`}
+              >
+                Re-attach
+              </DialogButton>
+            )}
             <DialogButton
               variant="danger"
               onClick={onAskEnd}
