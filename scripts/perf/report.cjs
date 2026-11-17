@@ -248,7 +248,7 @@ function analyseFolder(dir, serviceMap, { functions = [] } = {}) {
     aborted: record.aborted || null, header: null, windows: [], profiles: [], ab: [], failed: failedRuns(record), cleanup: [],
   }
   for (const runRec of record.runs) {
-    if (runRec.stopWarning || (runRec.leftovers && runRec.leftovers.length)) json.cleanup.push({ id: runRec.id, stopWarning: runRec.stopWarning || null, leftovers: runRec.leftovers || [] })
+    json.cleanup.push({ id: runRec.id, stopWarning: runRec.stopWarning || null, stopNote: runRec.stopNote || null, treeAtStop: runRec.treeAtStop, leftovers: runRec.leftovers || [] })
     for (const wref of runRec.windows) {
       const w = JSON.parse(fs.readFileSync(path.join(dir, wref.file), 'utf8'))
       const ctx = contextOf(w, record)
@@ -424,15 +424,16 @@ function renderFolder(record, json, serviceMap, { functions = [] } = {}) {
     md.push('')
     md.push('## Main process by service (CPU profile)')
     md.push('')
-    md.push('The profile covers main\'s JavaScript thread only. The rest of the main process\'s CPU (Chromium\'s browser-process threads for I/O, IPC and the thread pool, and any Node worker threads) is not attributed by this harness: the heading of each profile gives the whole process\'s figure next to the thread\'s.')
+    md.push('The profile covers main\'s JavaScript thread only. The rest of the main process\'s CPU (Chromium\'s browser-process threads for I/O, IPC and the thread pool, and any Node worker threads) is not attributed by this harness. Each heading gives the whole process\'s CPU in the window before the profile next to the thread\'s busy share in the profile, and the whole process\'s CPU while it was profiled, which includes the profiler\'s own sampling.')
     const label = (id) => ((serviceMap.services || []).find((s) => s.id === id) || {}).label || id
     for (const p of json.profiles) {
       if (!p.main) continue
       const busy = p.main.totalMs - p.main.idleMs
       const secs = p.main.totalMs / 1000
       const split = mainProfileSplit(p.main)
+      const before = cells.find((c) => c.tag === p.tag)
       md.push('')
-      md.push(`### ${p.tag}: main process ${f2(p.mainProcessCpu)} % of a core (app figure over the profile); its JS thread ${f1(p.mainBusyPct)} % busy (${f1(busy / secs)} ms per second)`)
+      md.push(`### ${p.tag}: main process ${before ? markCpu(cpuOf(before, 'main')) : '-'} % of a core in the window; its JS thread ${f1(p.mainBusyPct)} % busy in the profile (${f1(busy / secs)} ms per second; the whole process read ${f2(p.mainProcessCpu)} % while profiled, the profiler included)`)
       md.push('')
       md.push(`Of the JS thread's busy time: services ${f1(split.servicesPct)} %, garbage collection ${f1(split.gcPct)} %, native outside JS ${f1(split.programPct)} %, not attributed ${f1(split.unattributedPct)} %.`)
       md.push('')
@@ -509,7 +510,7 @@ function renderFolder(record, json, serviceMap, { functions = [] } = {}) {
       { label: 'Run', align: 'left', get: (x) => (x.cell.off === 'none' ? `all services on (${x.cell.tag})` : `${x.cell.off} off`) },
       { label: 'App total CPU %', get: (x) => markGroup(x.total) },
       { label: 'Saved vs all on', get: (x) => (x.saved === null ? '-' : f2(x.saved)) },
-      { label: 'Larger than the all-on spread', align: 'left', get: (x) => (x.aboveNoise === null ? '-' : x.aboveNoise ? 'yes' : 'no') },
+      { label: 'Outside the all-on spread', align: 'left', get: (x) => (x.aboveNoise === null ? '-' : x.aboveNoise ? (x.saved < 0 ? 'yes (it cost more off)' : 'yes') : 'no') },
       { label: 'Main %', get: (x) => markCpu(cpuOf(x.cell, 'main')) },
       { label: 'Renderer %', get: (x) => markCpu(cpuOf(x.cell, 'renderer')) },
       { label: 'GPU %', get: (x) => markCpu(cpuOf(x.cell, 'gpu')) },
@@ -526,7 +527,8 @@ function renderFolder(record, json, serviceMap, { functions = [] } = {}) {
     md.push('')
     md.push(A.markdownTable([
       { label: 'Run', align: 'left', get: (c) => c.id },
-      { label: 'launch.js stop', align: 'left', get: (c) => c.stopWarning || 'ended the app' },
+      { label: 'launch.js stop', align: 'left', get: (c) => c.stopWarning || c.stopNote || 'ended the app' },
+      { label: 'App processes recorded before the stop', get: (c) => (Number.isFinite(c.treeAtStop) ? c.treeAtStop : '-') },
       { label: 'Left after the stop and ended by the harness', align: 'left', get: (c) => c.leftovers.map((l) => `${l.name} ${l.pid} (${l.outcome})`).join(', ') || 'none' },
     ], json.cleanup))
   }

@@ -413,7 +413,10 @@ async function doRun(run, stage) {
     // The tree before the stop: what of it is still alive afterwards is ended by pid and start time.
     tree = rec ? appTree(rec) : []
     runRec.treeAtStop = tree.length
-    try { launch(['stop']) } catch (e) { runRec.stopWarning = e.message }
+    try {
+      const said = String(launch(['stop'])).split(/\r?\n/).find((l) => /taskkill exited/.test(l))
+      if (said) runRec.stopNote = said.trim()
+    } catch (e) { runRec.stopWarning = e.message }
     runRec.ended = Date.now()
     save()
   }
