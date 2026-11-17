@@ -94,6 +94,20 @@ describe('a port check that failed is not a free port', () => {
     expect(S.portOwnerPid(9333, 'win32', () => '')).toBeNull()
     expect(S.portOwnerPid(9333, 'win32', () => { throw new Error('timed out') })).toBeUndefined()
   })
+  it('lets only "no listener" read as free on Windows: any other error of the query exits non-zero, which reads as unknown', () => {
+    let script = ''
+    expect(S.portOwnerPid(9333, 'win32', (_cmd, args) => { script = args.join(' '); return '' })).toBeNull()
+    // A silenced error (a CIM or WMI failure) would print nothing and exit 0, which reads as free.
+    expect(script).not.toMatch(/SilentlyContinue|-EA\b|ErrorActionPreference/i)
+    expect(script).toMatch(/try \{ \(Get-NetTCPConnection -State Listen -LocalPort 9333 -ErrorAction Stop \| Select-Object -First 1\)\.OwningProcess \} catch \{/)
+    expect(script).toMatch(/\$_\.CategoryInfo\.Category -ne 'ObjectNotFound'/)
+    expect(script).toMatch(/\{ exit 1 \}/)
+    // `powershell -Command` exits 1 after a caught "no match" unless told otherwise (seen on Windows
+    // 11 with port 1): without this every free port would read as unknown.
+    expect(script).toMatch(/\}; exit 0$/)
+    // The non-zero exit, whatever it printed.
+    expect(S.portOwnerPid(9333, 'win32', () => { throw Object.assign(new Error('Command failed'), { status: 1, stdout: '4242\r\n' }) })).toBeUndefined()
+  })
   it("reads lsof's no-match exit as free, and any other failure as unknown, on macOS and Linux", () => {
     expect(S.portOwnerPid(9333, 'darwin', () => { throw Object.assign(new Error('exit 1'), { status: 1, stdout: '' }) })).toBeNull()
     expect(S.portOwnerPid(9333, 'linux', () => { throw Object.assign(new Error('no lsof'), { status: 127, stdout: '' }) })).toBeUndefined()

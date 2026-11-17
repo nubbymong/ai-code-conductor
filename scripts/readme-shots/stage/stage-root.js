@@ -346,13 +346,17 @@ function isRecordedProcess(rec, ident, platform = process.platform) {
 
 /** The pid listening on `port` on the loopback; null when nothing listens;
  *  undefined when it could not be told (the check failed or timed out),
- *  which a caller must treat as busy, never as free. */
+ *  which a caller must treat as busy, never as free. On Windows only the
+ *  query's own "no match" (ObjectNotFound) prints nothing and exits 0; any
+ *  other error of it (a CIM or WMI failure, the cmdlet missing) exits 1.
+ *  The closing `exit 0` is needed: `powershell -Command` exits 1 after a
+ *  caught error unless the script says otherwise. */
 function portOwnerPid(port, platform = process.platform, exec = runCmd) {
   const n = Number(port)
   let out
   try {
     out = isWin(platform)
-      ? String(exec('powershell.exe', ['-NoProfile', '-Command', `(Get-NetTCPConnection -State Listen -LocalPort ${n} -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess`]))
+      ? String(exec('powershell.exe', ['-NoProfile', '-Command', `try { (Get-NetTCPConnection -State Listen -LocalPort ${n} -ErrorAction Stop | Select-Object -First 1).OwningProcess } catch { if ($_.CategoryInfo.Category -ne 'ObjectNotFound' -or $_.Exception -is [System.Management.Automation.CommandNotFoundException]) { exit 1 } }; exit 0`]))
       : String(exec('lsof', ['-nP', `-iTCP:${n}`, '-sTCP:LISTEN', '-t']))
   } catch (e) {
     // lsof exits 1, printing nothing, when nothing listens.
