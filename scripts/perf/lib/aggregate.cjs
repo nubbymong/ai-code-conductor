@@ -52,7 +52,7 @@ function normalizeRow(raw) {
  *  process query took) and its process rows. A byte order mark is dropped. */
 function parseSampleText(text) {
   const out = { header: null, ticks: [], rows: [] }
-  for (const line of String(text).replace(/^﻿/, '').split(/\r?\n/)) {
+  for (const line of String(text).replace(/^\uFEFF/, '').split(/\r?\n/)) {
     if (!line.trim()) continue
     let o
     try { o = JSON.parse(line) } catch { continue }
