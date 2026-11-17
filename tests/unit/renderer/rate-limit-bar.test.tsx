@@ -13,7 +13,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
-const { default: RateLimitBar } = await import('../../../src/renderer/components/terminal/RateLimitBar')
+const { RateLimitBar } = await import('../../../src/renderer/components/terminal/RateLimitBar')
 
 describe('RateLimitBar per-window reset', () => {
   let container: HTMLDivElement

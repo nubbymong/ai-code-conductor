@@ -2,6 +2,7 @@
 import { useEffect } from 'react'
 import { useSessionStore } from '../stores/sessionStore'
 import type { IdentityColorKey } from '../../shared/identity-colors'
+import { accountIdentityRouter } from '../lib/sessionBroadcastRouter'
 
 /**
  * Surface the RELIABLE per-session account identity captured at spawn in main
@@ -22,8 +23,7 @@ export function useAccountIdentitySubscription(sessionId: string) {
       updateSession(sessionId, { accountEmail: id.email, accountColour: id.colourKey as IdentityColorKey })
     })
     // (b) SUBSCRIBE -- capture may complete after this hook mounted.
-    const unsub = window.electronAPI.accountIdentity.onUpdate(({ sessionId: sid, email, colourKey }) => {
-      if (sid !== sessionId) return
+    const unsub = accountIdentityRouter.subscribe(sessionId, ({ email, colourKey }) => {
       updateSession(sessionId, { accountEmail: email, accountColour: colourKey as IdentityColorKey })
     })
     return () => { cancelled = true; unsub() }

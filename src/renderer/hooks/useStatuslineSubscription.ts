@@ -1,16 +1,18 @@
 import { useEffect } from 'react'
 import { useSessionStore } from '../stores/sessionStore'
+import { statuslineRouter } from '../lib/sessionBroadcastRouter'
 
 /**
  * Subscribe to statusline API updates for a session.
  * Updates session store with context, cost, model, rate limit, etc.
+ * One listener serves every session (aicc_planning#304): the router hands
+ * this handler only its own session's ticks.
  */
 export function useStatuslineSubscription(sessionId: string) {
   const updateSession = useSessionStore((s) => s.updateSession)
 
   useEffect(() => {
-    const unsub = window.electronAPI.statusline.onUpdate((data) => {
-      if (data.sessionId !== sessionId) return
+    const unsub = statuslineRouter.subscribe(sessionId, (data) => {
       const updates: Record<string, unknown> = {}
       if (data.contextUsedPercent != null) updates.contextPercent = data.contextUsedPercent
       if (data.costUsd != null) updates.costUsd = data.costUsd

@@ -1,20 +1,21 @@
 // src/renderer/hooks/useWatchdogSubscription.ts
 import { useEffect } from 'react'
 import { useSessionStore } from '../stores/sessionStore'
+import { watchdogRouter } from '../lib/sessionBroadcastRouter'
 
 /**
  * Subscribe to Session Watchdog (#235) state pushes for a session. Mirrors
- * useStatuslineSubscription/useEffortSubscription: filters the main->renderer
- * push by sessionId and copies the fields the sidebar/status-area indicator
- * needs into the session store. A no-op stream when the watchdog is off or
- * was never started for this session (main never pushes for it).
+ * useStatuslineSubscription/useEffortSubscription: takes this session's
+ * main->renderer pushes from the shared router (aicc_planning#304) and copies
+ * the fields the sidebar/status-area indicator needs into the session store.
+ * A no-op stream when the watchdog is off or was never started for this
+ * session (main never pushes for it).
  */
 export function useWatchdogSubscription(sessionId: string) {
   const updateSession = useSessionStore((s) => s.updateSession)
 
   useEffect(() => {
-    const unsub = window.electronAPI.watchdog.onUpdate((state) => {
-      if (state.sessionId !== sessionId) return
+    const unsub = watchdogRouter.subscribe(sessionId, (state) => {
       updateSession(sessionId, {
         // #605: a teardown push carries armed:false -- clear rather than paint
         // an "off" pill and a menu block whose toggles could never tick.

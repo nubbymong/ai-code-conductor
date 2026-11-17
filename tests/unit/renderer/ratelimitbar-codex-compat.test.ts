@@ -13,7 +13,7 @@ import { act } from 'react'
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
 // RateLimitBar has no store dependency -- import directly
-const { default: RateLimitBar } = await import('../../../src/renderer/components/terminal/RateLimitBar')
+const { RateLimitBar } = await import('../../../src/renderer/components/terminal/RateLimitBar')
 
 // One root per test, unmounted in afterEach. Avoids the React 18 multi-root
 // leak pattern flagged by Copilot review on PR #30 (2026-05-07).

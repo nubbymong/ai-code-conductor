@@ -6,13 +6,20 @@
 // We provide a tiny local `renderHook` shim with the same call shape the plan
 // specified, so the test semantics match the spec exactly.
 import React from 'react'
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { useEffortSubscription } from '../../../src/renderer/hooks/useEffortSubscription'
 import { useSessionStore } from '../../../src/renderer/stores/sessionStore'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+
+// Every hook a test mounts is unmounted after it (aicc_planning#304): the
+// hooks share one router per channel, which reads the bridge when it binds
+// and releases it on the last unsubscribe. A hook left mounted would keep
+// the previous test's mock bound.
+const mounted = new Set<() => void>()
+afterEach(() => { for (const unmount of [...mounted]) unmount() })
 
 function renderHook<T>(hook: () => T) {
   const container = document.createElement('div')
@@ -25,14 +32,15 @@ function renderHook<T>(hook: () => T) {
   act(() => {
     root.render(<HookHost />)
   })
-  return {
-    unmount: () => {
-      act(() => {
-        root.unmount()
-      })
-      container.remove()
-    },
+  const unmount = () => {
+    if (!mounted.delete(unmount)) return
+    act(() => {
+      root.unmount()
+    })
+    container.remove()
   }
+  mounted.add(unmount)
+  return { unmount }
 }
 
 let cb: ((d: { sessionId: string; effortLevel: string }) => void) | null = null
