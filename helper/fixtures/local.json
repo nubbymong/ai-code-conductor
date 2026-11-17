@@ -643,6 +643,50 @@
         }
       },
       {
+        "name": "launch on Windows with an exact command line for a program in a folder whose name ends with a dot",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":28,\"argv\":[\"C:\\\\x\\\\sub.\\\\tool.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "expect": {
+          "type": "term.launch",
+          "id": 28,
+          "argv": [
+            "C:\\x\\sub.\\tool.exe"
+          ],
+          "cwd": "C:\\Users\\user\\project",
+          "env": [
+            [
+              "SystemRoot",
+              "C:\\Windows"
+            ]
+          ],
+          "cols": 80,
+          "rows": 24,
+          "line": "tool resume"
+        }
+      },
+      {
+        "name": "launch on Windows with an exact command line for a program whose name ends with a dot",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":30,\"argv\":[\"C:\\\\x\\\\tool.exe.\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "expect": {
+          "type": "term.launch",
+          "id": 30,
+          "argv": [
+            "C:\\x\\tool.exe."
+          ],
+          "cwd": "C:\\Users\\user\\project",
+          "env": [
+            [
+              "SystemRoot",
+              "C:\\Windows"
+            ]
+          ],
+          "cols": 80,
+          "rows": 24,
+          "line": "tool resume"
+        }
+      },
+      {
         "name": "attach from 0",
         "json": "{\"t\":\"term.attach\",\"id\":12,\"from\":0}",
         "expect": {

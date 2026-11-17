@@ -383,8 +383,8 @@ impl Pty {
             check_cwd(cwd)?;
         }
         // With a line, the name Windows opens is read first, then the name
-        // as given: so a start reaches both, and a refusal for a name Windows
-        // would change names the file it would open.
+        // as given: so a start reaches both, and a refusal of the file
+        // Windows would open (a batch file) names that file.
         if opts.line.is_some() {
             check_full_name(&opts.argv[0])?;
         }
