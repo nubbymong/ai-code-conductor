@@ -3,8 +3,8 @@
 //! every 25 ms, so this checks that nothing is lost or late on the way:
 //! whether the program exits 0, exits 7 or is ended from outside the holder,
 //! the attached app gets `term.exit` with that code within 250 ms of the end,
-//! and the record says `exited` with the same code within one more tick of
-//! the holder's 250 ms clock. What the program writes as it exits reaches the
+//! and the record says `exited` with the same code within 1 s (it is written
+//! on the holder's 250 ms clock, with a sync to disk). What the program writes as it exits reaches the
 //! app before `term.exit` does. And a holder whose starter ignored SIGCHLD
 //! (which is handed down through exec) still reads its program's own code.
 //!
@@ -30,8 +30,11 @@ const WAIT: Duration = Duration::from_secs(20);
 /// How soon after the program's end the attached app is told (`term.exit`).
 const TOLD_WITHIN: Duration = Duration::from_millis(250);
 /// The record is written on the holder's 250 ms clock (serve.rs `TICK`),
-/// which this change leaves as it is: it may come one tick after `term.exit`.
-const RECORDED_WITHIN: Duration = Duration::from_millis(500);
+/// which this change leaves as it is, and each write ends with a full sync
+/// of the file to disk (`store::write`). So it may come a tick and a slow
+/// sync after `term.exit`: a macOS run recorded 400 ms (PR #710, run
+/// 44201547684), with `term.exit` under 2 ms.
+const RECORDED_WITHIN: Duration = Duration::from_millis(1000);
 /// The exit code a program ended from outside reports: 128 + SIGKILL on
 /// macOS and Linux, and the code this test ends it with on Windows.
 const KILLED_CODE: i64 = 137;

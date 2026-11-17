@@ -54,8 +54,9 @@ check in `try_wait`): `the_holder_waits_for_its_childs_exit_instead_of_asking_on
 expects 1 or 2 while a child runs about 2 s (now: the wait, then one read
 of the code). Against the 25 ms loop it failed in CI (PR #710, first commit)
 with 82 checks on Windows, 35 on macOS and 81 on Linux.
-`helper/tests/holder_wait.rs` times `term.exit` (250 ms) and the record (one
-more tick, 500 ms) for exit 0, exit 7, an outside kill and a program that
+`helper/tests/holder_wait.rs` times `term.exit` (250 ms) and the record (1 s:
+it is written on serve's 250 ms clock and synced to disk, and one macOS run
+took 400 ms) for exit 0, exit 7, an outside kill and a program that
 writes as it exits (that output must reach the app before `term.exit`), and
 on macOS and Linux for a holder started with SIGCHLD ignored. It prints the
 times it measured. Unit tests: a failed wait is reported as exit code -1 and
