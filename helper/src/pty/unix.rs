@@ -101,7 +101,7 @@ impl Drop for ExitWatch {
         // A watch that never reaped (its thread was never made) hands the
         // reaping back to the terminal. After a wait the code is recorded,
         // and the terminal reads that instead.
-        self.reaping.watched.store(false, Ordering::SeqCst);
+        // MUTANT M2: the reaping is never handed back.
     }
 }
 

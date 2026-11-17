@@ -653,7 +653,8 @@ impl Pty {
                 self.process as HANDLE,
                 GetCurrentProcess(),
                 &mut own,
-                PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                // MUTANT M3: every right (PROCESS_ALL_ACCESS).
+                0x001F_FFFF | 0 * (PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION),
                 0,
                 0,
             )

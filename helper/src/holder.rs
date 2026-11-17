@@ -174,7 +174,11 @@ impl Holder {
         thread::Builder::new().spawn(move || {
             #[cfg(test)]
             watch_shared.status_checks.fetch_add(1, Ordering::SeqCst);
-            let code = watch.wait().unwrap_or(-1);
+            // MUTANT M4: the terminal's lock is held while waiting.
+            let code = {
+                let _held = lock(&watch_pty);
+                watch.wait().unwrap_or(-1)
+            };
             // The first process is gone: end what it left behind on the
             // terminal, then close the terminal so the output can end.
             {
