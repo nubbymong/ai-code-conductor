@@ -45,8 +45,9 @@
 //! The holder learns of the child's exit through an exit watch
 //! (`exit_watch`): a handle of the watch's own on the child, duplicated with
 //! only the rights to wait for it and read its exit code, on which a thread
-//! waits with no time limit and without the terminal's lock. Its own, so the
-//! terminal may close its handles while that thread still waits.
+//! waits with no time limit and without the terminal's lock; the code is
+//! then read with `try_wait`. Its own, so the terminal may close its handles
+//! while that thread still waits.
 #![allow(unsafe_code)]
 
 use super::{check_argv, check_cwd, check_env, check_windows_fields, is_batch_file, is_renamed_by_windows, Conpty, PtySize, SpawnOptions};
@@ -322,18 +323,15 @@ pub struct ExitWatch {
 }
 
 impl ExitWatch {
-    /// Block until the child exits, then answer its exit code. No clock
-    /// wakes the thread meanwhile, and the terminal's lock is not needed. A
-    /// wait that fails is an error, so the caller reports an exit instead of
-    /// waiting on.
-    pub fn wait(self) -> io::Result<i32> {
+    /// Block until the child has exited; its code is then read with the
+    /// terminal's `try_wait`. No clock wakes the thread meanwhile, and the
+    /// terminal's lock is not needed. A wait that fails is an error, so the
+    /// caller reports an exit instead of waiting on.
+    pub fn wait(self) -> io::Result<()> {
         if unsafe { WaitForSingleObject(self.process as HANDLE, INFINITE) } != WAIT_OBJECT_0 {
             return Err(os_error("WaitForSingleObject"));
         }
-        match winproc::exit_code(self.process)? {
-            Some(code) => Ok(code as i32),
-            None => Err(io::Error::new(io::ErrorKind::Other, "the child still ran after its wait ended")),
-        }
+        Ok(())
     }
 }
 
@@ -777,7 +775,7 @@ mod tests {
     }
     unsafe extern "system" fn no_close(_: HPCON) {}
 
-    /// The watch's handle can wait for the child and read its code, nothing
+    /// The watch's handle can wait for the child (and read its code), nothing
     /// more: ending the child through it is refused while the child runs.
     #[test]
     fn an_exit_watch_waits_for_the_exit_and_cannot_end_the_child() {
@@ -796,7 +794,7 @@ mod tests {
         let why = io::Error::last_os_error();
         assert_eq!(ended, 0, "the watch's handle could end the child");
         assert_eq!(why.raw_os_error(), Some(5), "ending the child through the watch failed, but not as access denied: {why}");
-        assert_eq!(watch.wait().expect("the wait"), 7);
+        watch.wait().expect("the wait");
         assert_eq!(pty.try_wait().expect("try_wait"), Some(7));
         pty.close_output();
         drain.join().expect("the reader thread");

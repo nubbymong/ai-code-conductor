@@ -19,13 +19,16 @@
 //! the session looks like later proves nothing, since the id may by then
 //! name another process's group.
 //!
-//! The child is reaped in one place. A holder hands the reaping to an exit
-//! watch (`exit_watch`), whose thread blocks in `waitpid` without the
-//! terminal's lock and records the status; from then on `try_wait` and
-//! `end_tree` only read what it recorded and never wait for the child
-//! themselves. A terminal with no watch (the tests here) reaps the child
-//! itself, without waiting, when it asks. std's `Child` is not kept: its own
-//! waits would be a second reaper.
+//! The child is reaped in one place: `try_wait`, which `end_tree` also uses,
+//! so reaping it (which frees its id) and every decision to signal its
+//! session happen through `&mut self`, and in the holder under the
+//! terminal's one lock. The holder learns of the exit from an exit watch
+//! (`exit_watch`) whose thread blocks in `waitid` with `WNOWAIT` without the
+//! lock: it sees the exit but leaves the child unreaped, still holding its
+//! id, and the holder then reaps it through `try_wait` under the lock. A
+//! watch that reaped would free the id outside the lock, and an end running
+//! on another thread at that moment could still signal it. std's `Child` is
+//! not kept: its own waits would be a second reaper.
 //!
 //! Unsafe code sits only in the modules that call the C library or the
 //! Windows API where `std` has no safe form; the library denies it elsewhere.
@@ -37,19 +40,10 @@ use std::io::{self, Read};
 use std::os::fd::FromRawFd;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 /// What a launch adds when its environment has no `TERM`.
 const DEFAULT_TERM: &str = "xterm-256color";
-
-/// The child's exit code once it has been reaped, and whether an exit watch
-/// is the one to reap it. Shared by the terminal and its watch.
-struct Reaping {
-    code: OnceLock<i32>,
-    watched: AtomicBool,
-}
 
 /// The exit code of a reaped child: its own code, or 128 + n when signal n
 /// ended it.
@@ -60,48 +54,33 @@ fn code_of(status: ExitStatus) -> i32 {
     }
 }
 
-/// The one reaper of a terminal's child, for a thread of its own
-/// (`Pty::exit_watch`).
+/// A wait for a terminal's child to exit, for a thread of its own
+/// (`Pty::exit_watch`). It never reaps the child (see the module comment).
 pub struct ExitWatch {
     pid: libc::pid_t,
-    reaping: Arc<Reaping>,
 }
 
 impl ExitWatch {
-    /// Block until the child exits, reap it and record its exit code where
-    /// the terminal reads it, then answer that code. No clock wakes the
-    /// thread meanwhile, and the terminal's lock is not needed. A wait cut
-    /// short by a signal is made again. A wait that fails (nothing left to
-    /// wait for) is an error, and the child is then taken as reaped, so its
-    /// id is never signalled on its own account again.
-    pub fn wait(self) -> io::Result<i32> {
-        if let Some(code) = self.reaping.code.get() {
-            return Ok(*code);
-        }
-        let mut status: libc::c_int = 0;
+    /// Block until the child has exited, leaving it unreaped for the
+    /// terminal's `try_wait`. No clock wakes the thread meanwhile, and the
+    /// terminal's lock is not needed. A wait cut short by a signal is made
+    /// again. A child the terminal has already reaped counts as exited. Any
+    /// other failure is an error, so the caller reports an exit instead of
+    /// waiting on.
+    pub fn wait(self) -> io::Result<()> {
         loop {
-            let got = unsafe { libc::waitpid(self.pid, &mut status, 0) };
-            if got == self.pid {
-                let code = code_of(ExitStatus::from_raw(status));
-                let _ = self.reaping.code.set(code);
-                return Ok(code);
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let rc = unsafe { libc::waitid(libc::P_PID, self.pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) };
+            if rc == 0 {
+                return Ok(());
             }
             let e = io::Error::last_os_error();
-            if got < 0 && e.kind() == io::ErrorKind::Interrupted {
-                continue;
+            match e.raw_os_error() {
+                Some(libc::EINTR) => continue,
+                Some(libc::ECHILD) => return Ok(()),
+                _ => return Err(e),
             }
-            let _ = self.reaping.code.set(-1);
-            return Err(if got < 0 { e } else { io::Error::new(io::ErrorKind::Other, format!("waitpid answered process {got}")) });
         }
-    }
-}
-
-impl Drop for ExitWatch {
-    fn drop(&mut self) {
-        // A watch that never reaped (its thread was never made) hands the
-        // reaping back to the terminal. After a wait the code is recorded,
-        // and the terminal reads that instead.
-        self.reaping.watched.store(false, Ordering::SeqCst);
     }
 }
 
@@ -109,8 +88,8 @@ pub struct Pty {
     master: File,
     /// The child's process id: also its session's and first group's id.
     pid: libc::pid_t,
-    /// Its exit code once reaped, and who reaps it (see the module comment).
-    reaping: Arc<Reaping>,
+    /// Its exit code once `try_wait` has reaped it.
+    exit: Option<i32>,
     /// Set once the child has been reaped and nothing of its session can be
     /// left (seen empty, or every member sent a kill): from then on its id
     /// may name an unrelated process, and nothing is sent to it.
@@ -213,8 +192,7 @@ impl Pty {
         drop(child);
         // The terminal owns the child from here, so a failure below ends it
         // (`Drop`) instead of leaving it running unheld.
-        let reaping = Arc::new(Reaping { code: OnceLock::new(), watched: AtomicBool::new(false) });
-        let pty = Pty { master, pid, reaping, tree_gone: false, signal: signal_session, session_left };
+        let pty = Pty { master, pid, exit: None, tree_gone: false, signal: signal_session, session_left };
         let reader = pty.master.try_clone()?;
         Ok((pty, Box::new(reader)))
     }
@@ -238,26 +216,19 @@ impl Pty {
         self.pid as u32
     }
 
-    /// Hand the reaping to a watch, for a thread that blocks until the child
-    /// exits (`ExitWatch::wait`). From here on the watch is the only reaper:
-    /// `try_wait` and `end_tree` read what it records. One watch at a time.
+    /// A wait for the child's exit, for a thread that blocks on it without
+    /// the terminal (`ExitWatch::wait`). It never reaps: the caller then
+    /// reaps through `try_wait`.
     pub fn exit_watch(&mut self) -> io::Result<ExitWatch> {
-        if self.reaping.watched.swap(true, Ordering::SeqCst) {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "the child already has an exit watch"));
-        }
-        Ok(ExitWatch { pid: self.pid, reaping: Arc::clone(&self.reaping) })
+        Ok(ExitWatch { pid: self.pid })
     }
 
-    /// The exit code once the child has been reaped (128 + n when signal n
-    /// ended it). With an exit watch this only reads what the watch
-    /// recorded; with none, it reaps the child itself if it has exited,
-    /// without waiting.
+    /// The exit code once the child has exited (128 + n when signal n ended
+    /// it). This is the one place the child is reaped, without waiting; the
+    /// code is kept, so it is reaped at most once.
     pub fn try_wait(&mut self) -> io::Result<Option<i32>> {
-        if let Some(code) = self.reaping.code.get() {
-            return Ok(Some(*code));
-        }
-        if self.reaping.watched.load(Ordering::SeqCst) {
-            return Ok(None);
+        if let Some(code) = self.exit {
+            return Ok(Some(code));
         }
         let mut status: libc::c_int = 0;
         let got = unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) };
@@ -268,7 +239,7 @@ impl Pty {
             return Err(io::Error::last_os_error());
         }
         let code = code_of(ExitStatus::from_raw(status));
-        let _ = self.reaping.code.set(code);
+        self.exit = Some(code);
         Ok(Some(code))
     }
 
@@ -315,8 +286,7 @@ impl Pty {
         }
     }
 
-    /// True once the child has been reaped: by its exit watch when it has
-    /// one, else here (`try_wait`), at most once.
+    /// True once the child has been reaped (`try_wait`, at most once).
     fn reaped(&mut self) -> bool {
         matches!(self.try_wait(), Ok(Some(_)))
     }
@@ -498,41 +468,36 @@ mod tests {
         assert_eq!(sent_to(sid), Vec::<libc::c_int>::new(), "an id another process holds by now was signalled");
     }
 
-    /// The child is ended from outside the terminal. With an exit watch, the
-    /// terminal does not reap it: the watch does, and records the code. An
-    /// end after that sends the session nothing, since its id may name
-    /// another process by then.
+    /// The child is ended from outside the terminal. The exit watch sees the
+    /// exit but does not reap the child, so its id stays held (a child not
+    /// yet reaped still answers signal 0) until the terminal reaps it through
+    /// `try_wait`, where every decision to signal the session is made too. An
+    /// end after that sends the session nothing: its id may name another
+    /// process by then.
     #[test]
-    fn with_an_exit_watch_only_the_watch_reaps_and_an_end_after_it_sends_nothing() {
+    fn the_exit_watch_never_reaps_so_only_the_terminal_frees_the_childs_id() {
         // `exec`: the shell becomes the sleep, so the session holds one process.
         let mut pty = start("exec sleep 60");
         let sid = pty.pid() as libc::pid_t;
         let watch = pty.exit_watch().expect("an exit watch");
-        assert!(pty.exit_watch().is_err(), "a second exit watch was handed out");
         assert_eq!(unsafe { libc::kill(sid, libc::SIGKILL) }, 0, "the child could not be ended from outside");
-        // Long enough for the kill to land: the child has exited, and only
-        // its watch may reap it.
-        std::thread::sleep(Duration::from_millis(300));
-        assert_eq!(pty.try_wait().expect("try_wait"), None, "the terminal reaped a child its exit watch is waiting for");
-        // From here a signal is recorded and never sent: the id is free.
+        watch.wait().expect("the wait");
+        assert_eq!(unsafe { libc::kill(sid, 0) }, 0, "the exit watch reaped the child: its id was freed outside the terminal");
+        // From here a signal is recorded and never sent: the id is freed next.
         pty.signal = record_only;
-        assert_eq!(watch.wait().expect("the wait"), 128 + libc::SIGKILL);
-        assert_eq!(pty.try_wait().expect("try_wait"), Some(128 + libc::SIGKILL), "the terminal does not read what its watch recorded");
+        assert_eq!(pty.try_wait().expect("try_wait"), Some(128 + libc::SIGKILL));
         pty.end_tree(Duration::from_secs(2));
         pty.kill();
         assert!(pty.tree_gone, "a reaped child with an empty session was not seen as gone");
         assert_eq!(sent_to(sid), Vec::<libc::c_int>::new(), "a session whose child was reaped was signalled");
     }
 
-    /// A watch dropped before it waited (the holder could not make its
-    /// thread) hands the reaping back, so the terminal still reaps the child.
+    /// A watch made after the terminal has reaped the child answers at once.
     #[test]
-    fn an_exit_watch_dropped_before_it_waited_hands_the_reaping_back() {
+    fn an_exit_watch_of_a_child_already_reaped_answers_at_once() {
         let mut pty = start("exit 3");
-        drop(pty.exit_watch().expect("an exit watch"));
         wait_for_exit(&mut pty);
         assert_eq!(pty.try_wait().expect("try_wait"), Some(3));
-        let watch = pty.exit_watch().expect("an exit watch after the reap");
-        assert_eq!(watch.wait().expect("the wait"), 3, "a watch of a child already reaped answers its code");
+        pty.exit_watch().expect("an exit watch").wait().expect("the wait of a child already reaped");
     }
 }

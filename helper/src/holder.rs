@@ -115,16 +115,13 @@ impl Holder {
         });
         let pty = Arc::new(Mutex::new(pty));
         // The watch on the child's exit, made before any thread: one that
-        // cannot be made fails the start. Declared after `pty`, so on a
-        // failed start it is dropped first, which hands the reaping back to
-        // the terminal before the terminal's drop ends the child.
+        // cannot be made fails the start.
         let watch = lock(&pty).exit_watch()?;
 
         // The threads start in this order, the one that watches the child
         // last, and none of the earlier ones holds the terminal: so if a
         // thread cannot be made, the start fails (rather than a panic) and the
-        // terminal and its child go with it (`Pty`'s drop; a watch that never
-        // waited hands the reaping back to the terminal first).
+        // terminal and its child go with it (`Pty`'s drop).
 
         // Input: in order, one frame at a time. A failed write (the terminal
         // is gone) ends the thread, and later input is refused as closed.
@@ -163,25 +160,39 @@ impl Holder {
             lock(&out_shared.state).output_ended = true;
         })?;
 
-        // Exit: one wait that blocks until the child exits (`ExitWatch`),
-        // without the terminal's lock, so nothing wakes this thread while the
-        // child runs and nothing else waits behind it. On Windows the output
-        // pipe does not end when the child does, so the reader cannot be the
-        // signal; on macOS and Linux this wait is the only one that reaps the
-        // child. A wait that fails is reported as an exit, never waited on.
+        // Exit: one wait that blocks until the child has exited
+        // (`ExitWatch`), without the terminal's lock, so nothing wakes this
+        // thread while the child runs and nothing else waits behind it. On
+        // Windows the output pipe does not end when the child does, so the
+        // reader cannot be the signal. On macOS and Linux the wait leaves the
+        // child unreaped: it is reaped below, under the lock every decision
+        // to signal its session is made under, so an end on another thread
+        // never signals an id the reap has just freed. A wait that fails is
+        // reported as an exit (code -1), never waited on.
         let watch_shared = Arc::clone(&shared);
         let watch_pty = Arc::clone(&pty);
         thread::Builder::new().spawn(move || {
             #[cfg(test)]
             watch_shared.status_checks.fetch_add(1, Ordering::SeqCst);
-            let code = watch.wait().unwrap_or(-1);
-            // The first process is gone: end what it left behind on the
-            // terminal, then close the terminal so the output can end.
-            {
+            let waited = watch.wait();
+            // The first process is gone. In one critical section: reap it and
+            // read its code, end what it left behind on the terminal, then
+            // close the terminal so the output can end.
+            let code = {
                 let mut p = lock(&watch_pty);
+                #[cfg(test)]
+                watch_shared.status_checks.fetch_add(1, Ordering::SeqCst);
+                let code = match waited {
+                    Ok(()) => match p.try_wait() {
+                        Ok(Some(code)) => code,
+                        Ok(None) | Err(_) => -1,
+                    },
+                    Err(_) => -1,
+                };
                 p.end_tree(END_GRACE);
                 p.close_output();
-            }
+                code
+            };
             let deadline = Instant::now() + DRAIN;
             while !lock(&watch_shared.state).output_ended && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));
@@ -347,8 +358,9 @@ mod tests {
     }
 
     /// A held terminal waits for its child's exit: it does not ask for the
-    /// child's status on a clock. A watch that asked every 25 ms asked about
-    /// 80 times while this child ran.
+    /// child's status on a clock. It asks twice, once with a wait that blocks
+    /// until the exit and once to read the code. A watch that asked every
+    /// 25 ms asked about 80 times while this child ran.
     #[test]
     fn the_holder_waits_for_its_childs_exit_instead_of_asking_on_a_clock() {
         let h = Holder::start(&two_seconds(), PtySize::default(), 64 * 1024).expect("a program starts on a terminal");

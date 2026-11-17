@@ -8,11 +8,13 @@
 //! closed (`close_output`), so callers do not rely on the reader's end.
 //!
 //! A caller learns of the child's exit through an exit watch (`exit_watch`):
-//! `ExitWatch::wait` blocks a thread of the caller's until the child exits
-//! and answers its exit code, without the terminal's lock and with no clock
-//! waking it meanwhile. On Windows the watch waits on a handle of its own; on
-//! Unix it is the only reaper of the child, and `try_wait` and `end_tree`
-//! read the status it recorded.
+//! `ExitWatch::wait` blocks a thread of the caller's until the child has
+//! exited, without the terminal and with no clock waking it meanwhile. The
+//! caller then reads the exit code with `try_wait`. On Windows the watch
+//! waits on a handle of its own. On Unix it leaves the child unreaped
+//! (`WNOWAIT`): `try_wait` is the one place the child is reaped, so its id
+//! is freed only through the terminal, as every decision to signal its
+//! session is made.
 //!
 //! The child is started in a unit that can be ended whole: a job object owned
 //! by the holder on Windows (the holder itself is in none, probe P7), its own
