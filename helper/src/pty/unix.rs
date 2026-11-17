@@ -256,7 +256,9 @@ impl Pty {
         if let Some(code) = self.reaping.code.get() {
             return Ok(Some(*code));
         }
-        // MUTANT M1: the terminal reaps even when a watch is waiting.
+        if self.reaping.watched.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
         let mut status: libc::c_int = 0;
         let got = unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) };
         if got == 0 {
