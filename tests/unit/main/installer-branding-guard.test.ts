@@ -15,7 +15,9 @@ import { ANIM_STEPS, artManifest, bmpMaxDelta, renderAll } from '../../../script
  *   - a missing or malformed bitmap (electron-builder falls back to NSIS's
  *     stock art for a default name, and MUI shows a blank panel for a bad BMP);
  *   - an interface define placed after the first page macro (MUI then bakes in
- *     its white defaults without a word);
+ *     its defaults without a word);
+ *   - a colour of our own: every page keeps Windows' stock light dialog, and
+ *     the brand is in the header bitmap and the sidebar art (aicc_planning #295);
  *   - a Function or Var that one compile pass declares but never references,
  *     which -WX turns into a failed release build;
  *   - motion or a splash leaking onto the Installing page or an in-app update;
@@ -364,6 +366,29 @@ describe('installer branding: assets', () => {
     }
   })
 
+  it('the header bitmap and the folder-page emblem are drawn on the light grounds they sit on (aicc_planning #295)', () => {
+    // Every page keeps the stock light dialog. The header band is white, and
+    // the emblem's SS_CENTERIMAGE strip takes the bitmap's top-left pixel, so
+    // a dark corner shows as a dark tile on the header, or a dark band across
+    // the folder page. The sidebar keeps the dark brand ground, as a panel.
+    const corners = (file: string) => {
+      const b = readFileSync(join(ROOT, file))
+      const w = b.readInt32LE(18)
+      const h = b.readInt32LE(22)
+      const stride = Math.ceil((w * 3) / 4) * 4
+      const px = (x: number, y: number) => {
+        const o = 54 + (h - 1 - y) * stride + x * 3 // bottom-up rows, BGR
+        return [b[o + 2], b[o + 1], b[o]].map((v) => v.toString(16).padStart(2, '0')).join('').toUpperCase()
+      }
+      return [px(0, 0), px(w - 1, 0), px(0, h - 1), px(w - 1, h - 1)]
+    }
+    expect(corners('build/installerHeader.bmp'), 'the header band is white').toEqual(Array(4).fill('FFFFFF'))
+    const emblems = (artManifest() as { file: string }[]).map((a) => a.file).filter((f) => /installer-art\/emblem(-\d+)?\.bmp$/.test(f))
+    expect(emblems).toHaveLength(ANIM_STEPS)
+    for (const f of emblems) expect(corners(f), `${f}: the dialog face colour`).toEqual(Array(4).fill('F0F0F0'))
+    expect(corners('build/installerSidebar.bmp')[0], 'the sidebar keeps its dark ground').not.toBe('FFFFFF')
+  })
+
   it('every File the installer embeds exists under build/ as a valid BMP, and the frame set is complete', () => {
     const src = readNsh()
     const sources = [...src.matchAll(/^\s*File\s+"\/oname=\$PLUGINSDIR\\([^"]+)"\s+"([^"]+)"/gm)].map((m) => ({ oname: m[1], src: m[2] }))
@@ -412,7 +437,7 @@ describe('installer branding: page order and interface settings', () => {
     expect(readNsh()).not.toMatch(/^!macro customWelcomePage\b/m)
   })
 
-  it('the theme, classic-controls, GUIINIT and Welcome hook defines all precede MUI_PAGE_WELCOME', () => {
+  it('the GUIINIT and Welcome hook defines all precede MUI_PAGE_WELCOME', () => {
     // Modern UI reads interface settings when the first page macro inserts
     // MUI_INTERFACE; a define after that point is silently ignored.
     const lines = analyse(readNsh())
@@ -420,9 +445,6 @@ describe('installer branding: page order and interface settings', () => {
     const welcome = at(/^!insertmacro MUI_PAGE_WELCOME$/)!
     expect(welcome).toBeDefined()
     for (const re of [
-      /^!define MUI_BGCOLOR\b/,
-      /^!define MUI_TEXTCOLOR\b/,
-      /^!define MUI_FORCECLASSICCONTROLS\b/,
       /^!define MUI_CUSTOMFUNCTION_GUIINIT\b/,
       /^!define MUI_WELCOMEPAGE_TITLE\b/,
       /^!define MUI_WELCOMEPAGE_TEXT\b/,
@@ -434,15 +456,51 @@ describe('installer branding: page order and interface settings', () => {
       expect(d, `${re} is not defined at file scope`).toBeDefined()
       expect(d!.n, `${re} must come before MUI_PAGE_WELCOME (line ${welcome.n})`).toBeLessThan(welcome.n)
     }
-    // The colours are in BOTH passes, so the uninstaller's pages match.
-    expect(at(/^!define MUI_BGCOLOR\b/)!.passes).toEqual(BOTH)
-    expect(at(/^!define MUI_TEXTCOLOR\b/)!.passes).toEqual(BOTH)
-    expect(at(/^!define MUI_FORCECLASSICCONTROLS\b/)!.passes).toEqual(BOTH)
-    expect(at(/^!define MUI_BGCOLOR\b/)!.code).toBe('!define MUI_BGCOLOR "${CCC_BRAND_BG}"')
-    expect(readNsh()).toMatch(/^!define CCC_BRAND_BG "0B0E15"$/m)
     // The GUIINIT hook and its Function are installer-pass only.
     expect(at(/^!define MUI_CUSTOMFUNCTION_GUIINIT\b/)!.passes).toEqual(['inst'])
     expect(at(/^!define MUI_CUSTOMFUNCTION_GUIINIT\b/)!.code).toBe('!define MUI_CUSTOMFUNCTION_GUIINIT CccBrandGuiInit')
+  })
+
+  it('every page keeps Windows\' stock light dialog: no colour define, no classic controls, no SetCtlColors (aicc_planning #295)', () => {
+    // Modern UI colours only the header and the Welcome and Finish pages, and
+    // NSIS cannot recolour the button strip or a Browse button without a skin
+    // plugin, so a dark theme left stock light parts beside dark ones. The
+    // brand is in the header bitmap and the sidebar art only, in both passes.
+    // Any Modern UI colour define (MUI_BGCOLOR, MUI_TEXTCOLOR, MUI_*_COLOR,
+    // MUI_*_COLORS, MUI_*_BGCOLOR), with or without a /ifndef or /redef
+    // switch, classic controls, a CCC_BRAND_* colour, or SetCtlColors.
+    const ownColour = (code: string) =>
+      /^!define\s+(?:\/\w+\s+)*(?:MUI_\w*COLORS?\b|MUI_FORCECLASSICCONTROLS\b|CCC_BRAND_\w+)/.test(code) ||
+      /^SetCtlColors\b/i.test(code)
+    // The detector catches every line this file used to set: the 11 distinct
+    // lines below are all 13 that the stock-dialog change removed (each folder
+    // page had the same two SetCtlColors $0 lines). And it catches the other
+    // ways to set a colour, which this file never used.
+    for (const old of [
+      '!define CCC_BRAND_BG "0B0E15"',
+      '!define CCC_BRAND_TEXT "F4F7FA"',
+      '!define CCC_BRAND_FIELD "161B26"',
+      '!define MUI_BGCOLOR "${CCC_BRAND_BG}"',
+      '!define MUI_TEXTCOLOR "${CCC_BRAND_TEXT}"',
+      '!define MUI_FORCECLASSICCONTROLS',
+      'SetCtlColors $cccAnimCtl "" "${CCC_BRAND_BG}"',
+      'SetCtlColors $0 "" "${CCC_BRAND_BG}"',
+      'SetCtlColors $0 "${CCC_BRAND_TEXT}" "${CCC_BRAND_BG}"',
+      'SetCtlColors $DataDir "${CCC_BRAND_TEXT}" "${CCC_BRAND_FIELD}"',
+      'SetCtlColors $ResourcesDir "${CCC_BRAND_TEXT}" "${CCC_BRAND_FIELD}"',
+      '!define MUI_INSTFILESPAGE_COLORS "F4F7FA 0B0E15"',
+      '!define MUI_LICENSEPAGE_BGCOLOR /grey',
+      '!define MUI_FINISHPAGE_LINK_COLOR 000080',
+      '!define /ifndef MUI_BGCOLOR 0B0E15',
+      '!define /redef MUI_TEXTCOLOR F4F7FA',
+    ]) {
+      expect(ownColour(old), old).toBe(true)
+    }
+    for (const fine of ['!define MUI_WELCOMEPAGE_TITLE "x"', '!define MUI_CUSTOMFUNCTION_GUIINIT CccBrandGuiInit', '; SetCtlColors in a comment', '']) {
+      expect(ownColour(fine), fine).toBe(false)
+    }
+    const found = analyse(readNsh()).filter((l) => ownColour(l.code)).map((l) => `line ${l.n}: ${l.code}`)
+    expect(found).toEqual([])
   })
 
   it('in the elevated inner instance, the first page shown has no live Back button', () => {
@@ -484,19 +542,15 @@ describe('installer branding: page order and interface settings', () => {
     const res = functionBody(lines, 'ResourcesDirPage').map((l) => l.code).join('\n')
     expect(data).toMatch(/^!insertmacro MUI_HEADER_TEXT "Data folder" "[^"]+"$/m)
     expect(res).toMatch(/^!insertmacro MUI_HEADER_TEXT "Resources folder" "[^"]+"$/m)
-    // Dark bodies: the dialog, its label and the path field take the brand colours.
-    for (const body of [data, res]) {
-      expect(body).toMatch(/SetCtlColors \$0 "" "\$\{CCC_BRAND_BG\}"/)
-      expect(body).toMatch(/SetCtlColors \$0 "\$\{CCC_BRAND_TEXT\}" "\$\{CCC_BRAND_BG\}"/)
-      expect(body).toMatch(/SetCtlColors \$(DataDir|ResourcesDir) "\$\{CCC_BRAND_TEXT\}" "\$\{CCC_BRAND_FIELD\}"/)
-    }
+    // Stock bodies: the dialog, its label and the path field keep the system
+    // colours (see the stock light dialog test above).
+    for (const body of [data, res]) expect(body).not.toMatch(/SetCtlColors/i)
   })
 
-  it('the folder-page emblem is a centred bitmap on the dark ground, in a strip it fits', () => {
-    // Two ways the emblem breaks that only a screen capture would show: a
-    // STATIC control with no colours of its own paints the system face colour,
-    // so without SetCtlColors the emblem sits in a light box on the dark page;
-    // and without SS_CENTERIMAGE the bitmap is drawn at the strip's top-left.
+  it('the folder-page emblem is a centred bitmap in a strip it fits', () => {
+    // A way the emblem breaks that only a screen capture would show: without
+    // SS_CENTERIMAGE the bitmap is drawn at the strip's top-left. Its STATIC
+    // control keeps the page's own system colour around it.
     const lines = analyse(readNsh())
     const body = functionBody(lines, 'CccFolderArt').map((l) => l.code)
     const at = body.findIndex((c) => /^nsDialogs::CreateControl\s+STATIC\s/.test(c))
@@ -507,9 +561,8 @@ describe('installer branding: page order and interface settings', () => {
     const [, style, , x, y, w, h] = m!
     expect(style.split('|').sort()).toEqual(['${DEFAULT_STYLES}', '${SS_BITMAP}', '${SS_CENTERIMAGE}'])
     expect(body[at + 1]).toBe('Pop $cccAnimCtl')
-    const colours = body.indexOf('SetCtlColors $cccAnimCtl "" "${CCC_BRAND_BG}"')
-    expect(colours, 'SetCtlColors $cccAnimCtl "" "${CCC_BRAND_BG}"').toBeGreaterThan(at + 1)
-    expect(colours).toBeLessThan(body.indexOf('Call CccAnimStart'))
+    expect(body.indexOf('Call CccAnimStart')).toBeGreaterThan(at + 1)
+    expect(body.some((c) => /^SetCtlColors\b/i.test(c)), 'no colours of its own').toBe(false)
 
     // The strip: full width, from y to the bottom of the page.
     const pct = (s: string) => {

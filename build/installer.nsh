@@ -1014,7 +1014,7 @@
 !macroend
 
 ; ============================================================
-; BRANDING: dark theme, artwork, light motion, fresh-install splash
+; BRANDING: stock light dialog, artwork, light motion, fresh-install splash
 ; ============================================================
 ; The art is drawn from the boot splash by scripts/gen-installer-art.mjs and
 ; committed under build/ (installerSidebar.bmp, installerHeader.bmp,
@@ -1024,10 +1024,12 @@
 ;
 ; ORDER. This file is compiled ahead of electron-builder's installer.nsi, so
 ; the Welcome page below is page 1 and the two folder pages stay pages 2 and 3.
-; Modern UI reads its interface settings (MUI_BGCOLOR, MUI_TEXTCOLOR) when the
-; FIRST page macro is inserted, which is now MUI_PAGE_WELCOME, so they are
-; defined above it. MUI_CUSTOMFUNCTION_GUIINIT is read when addLangs inserts
-; the language, after all of this. None of it may move into customHeader,
+; Modern UI reads its interface settings (MUI_BGCOLOR and the like) when the
+; FIRST page macro is inserted, which is now MUI_PAGE_WELCOME. This file sets
+; none of them now (NO COLOURS OF OUR OWN, below); one added later has to come
+; before MUI_PAGE_WELCOME, or Modern UI ignores it without a word.
+; MUI_CUSTOMFUNCTION_GUIINIT is read when addLangs inserts the language,
+; after all of this. None of it may move into customHeader,
 ; customInit or customInstall: those macros are lifted verbatim into the
 ; makensis probe (tests/unit/main/installer-nsis-behaviour.test.ts).
 ;
@@ -1038,19 +1040,15 @@
 ; reference them sit inside !ifndef BUILD_UNINSTALLER, and the folder pages
 ; (compiled in both passes) only call them from inside the same guard.
 ;
-; The colours are shared by both passes, so the uninstaller matches.
-!define CCC_BRAND_BG "0B0E15"
-!define CCC_BRAND_TEXT "F4F7FA"
-!define CCC_BRAND_FIELD "161B26"
-!define MUI_BGCOLOR "${CCC_BRAND_BG}"
-!define MUI_TEXTCOLOR "${CCC_BRAND_TEXT}"
-; A themed checkbox ignores SetCtlColors, which would leave the Finish page's
-; "Run" label dark on dark. Stock MUI: this drops the high-contrast-only guard
-; in Finish.nsh (the IsHighContrastModeActive branch), so every check and radio
-; control the Finish pages can show (Run, Show readme and the two reboot
-; choices) is unthemed and takes the light text colour. A control a page does
-; not create gets SetWindowTheme on a null handle, which does nothing.
-!define MUI_FORCECLASSICCONTROLS
+; NO COLOURS OF OUR OWN (aicc_planning #295). Modern UI colours only the
+; header and the Welcome and Finish pages, and NSIS cannot recolour the
+; dialog's own button strip or a Browse button without a skin plugin, so the
+; dark theme this file used to set always left stock light parts beside dark
+; ones, and dark text on dark where a control ignored the colours. So every
+; page, in both passes, keeps Windows' own light dialog and its own themed
+; controls, and the brand is in the header bitmap and the sidebar art.
+; installer-branding-guard.test.ts fails on a colour define, classic
+; controls or a SetCtlColors anywhere in this file.
 
 !ifndef BUILD_UNINSTALLER
   !define CCC_ART_DIR "${BUILD_RESOURCES_DIR}\installer-art"
@@ -1159,7 +1157,6 @@
   Function CccFolderArt
     nsDialogs::CreateControl STATIC ${DEFAULT_STYLES}|${SS_BITMAP}|${SS_CENTERIMAGE} 0 0 64% 100% 36% ""
     Pop $cccAnimCtl
-    SetCtlColors $cccAnimCtl "" "${CCC_BRAND_BG}"
     StrCpy $cccAnimPrefix "ccc-emblem-"
     StrCpy $cccAnimFinal "$PLUGINSDIR\ccc-emblem.bmp"
     StrCpy $cccAnimStretch 0
@@ -1224,11 +1221,9 @@ Function DataDirPage
   !insertmacro MUI_HEADER_TEXT "Data folder" "Where AI Code Conductor keeps sessions, logs and configuration data."
   nsDialogs::Create 1018
   Pop $0
-  SetCtlColors $0 "" "${CCC_BRAND_BG}"
 
   ${NSD_CreateLabel} 0 0 100% 24u "Choose where to store sessions, logs, and configuration data:"
   Pop $0
-  SetCtlColors $0 "${CCC_BRAND_TEXT}" "${CCC_BRAND_BG}"
 
   ; Current brand key first, then each legacy key, then the fresh-install default.
   ReadRegStr $1 HKCU "Software\AI Code Conductor" "DataDirectory"
@@ -1247,7 +1242,6 @@ Function DataDirPage
 
   ${NSD_CreateDirRequest} 0 30u 75% 12u "$1"
   Pop $DataDir
-  SetCtlColors $DataDir "${CCC_BRAND_TEXT}" "${CCC_BRAND_FIELD}"
 
   ${NSD_CreateBrowseButton} 77% 29u 23% 14u "Browse..."
   Pop $0
@@ -1296,11 +1290,9 @@ Function ResourcesDirPage
   !insertmacro MUI_HEADER_TEXT "Resources folder" "Shared insights, screenshots, skills and scripts."
   nsDialogs::Create 1018
   Pop $0
-  SetCtlColors $0 "" "${CCC_BRAND_BG}"
 
   ${NSD_CreateLabel} 0 0 100% 36u "Choose where to store shared resources (insights, screenshots, skills, scripts).$\nUse a network-mountable path to share across SSH sessions."
   Pop $0
-  SetCtlColors $0 "${CCC_BRAND_TEXT}" "${CCC_BRAND_BG}"
 
   ; Current brand key first, then each legacy key, then the fresh-install default.
   ReadRegStr $1 HKCU "Software\AI Code Conductor" "ResourcesDirectory"
@@ -1317,7 +1309,6 @@ Function ResourcesDirPage
 
   ${NSD_CreateDirRequest} 0 42u 75% 12u "$1"
   Pop $ResourcesDir
-  SetCtlColors $ResourcesDir "${CCC_BRAND_TEXT}" "${CCC_BRAND_FIELD}"
 
   ${NSD_CreateBrowseButton} 77% 41u 23% 14u "Browse..."
   Pop $0

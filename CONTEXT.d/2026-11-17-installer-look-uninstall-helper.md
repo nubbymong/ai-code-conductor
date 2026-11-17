@@ -70,3 +70,26 @@ running. Until now CI had no makensis and skipped the probe; the Windows
 test parts now fetch electron-builder's own (`scripts/ci/fetch-makensis.mjs`),
 and a Windows CI run without one fails. `installer-branding-guard.test.ts`
 pins the same macros statically, everywhere. Runs and mutants are in the PR.
+
+**One installer look (aicc_planning#295).** The installer mixed a dark
+theme with the light system dialog: Modern UI's `MUI_BGCOLOR` and
+`MUI_TEXTCOLOR` colour only the header and the Welcome and Finish pages, the
+Data and Resources pages painted themselves dark with `SetCtlColors`, and
+the button strip and the Browse buttons stayed stock, since NSIS cannot
+recolour those without a skin plugin. Decision (orchestrator default, the
+owner said work unaided): keep Windows' stock light dialog on every page and
+put the brand in the header bitmap and the sidebar art only. So the colour
+defines, `MUI_FORCECLASSICCONTROLS` and every `SetCtlColors` (both folder
+pages and the emblem) are gone. The header bitmap and the folder-page
+emblem are drawn again on the light grounds they now sit on: white for the
+header band, and the dialog face colour for the emblem, whose
+`SS_CENTERIMAGE` strip takes the bitmap's corner colour
+(`scripts/gen-installer-art.mjs`). The sidebar and the splash keep the dark
+brand ground, as a panel. It is its own commit, so it can be dropped.
+`installer-branding-guard.test.ts` fails on any colour define (with or
+without a `/ifndef` or `/redef` switch), classic controls or `SetCtlColors`,
+and on a header or emblem with dark corners; its detector is checked
+against every line this removed (13 lines, 11 distinct). Not seen yet: the
+look on a real screen. Installers are built only on release branches, so
+the screenshots of every page (fresh install, upgrade over beta.6,
+uninstall) come from the beta.7 release build, for the owner's sign-off.
