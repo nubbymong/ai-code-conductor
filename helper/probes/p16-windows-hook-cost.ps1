@@ -56,16 +56,21 @@ with Defender real-time protection on, over all step 2 runs, p95 wall time at
 most 150 ms, longest at most 750 ms, mean CPU time at most 50 ms per event, and
 no failed run. Anything else is FAIL. p95 is the nearest-rank value: the
 ceil(0.95 * n)-th smallest. The mean CPU judged is the larger of the mean of
-cpu_ms and the mean of cpu_tick_ms.
+cpu_ms and the mean of cpu_tick_ms. A Defender exclusion that covers the
+helper, the store or a program of the chain also makes it a FAIL, since
+Defender is then not as shipped.
 
-The script refuses to run when the store folder already exists or the output
-folder is inside it, and refuses a helper whose Authenticode signature is not
-valid (P16 measures the signed per-user copy, not a dev build). It makes the
-store folder itself, in one step that fails if the folder exists, before
-anything else; only a store it made is removed. In a finally block it ends the holder (only
-the process its record names, and only if that process runs this helper),
-removes the store and its own temporary folder, and reports any process of the
-probe still running.
+The script refuses to run when the store folder already exists, its parent
+folder does not, or the output folder is inside it; when step 2 could outlast
+the holder's 600-second away clock; and when the helper's Authenticode
+signature is not valid (P16 measures the signed per-user copy, not a dev
+build). It makes the store folder itself, in one step that fails if the folder
+exists, before anything else; only a store it made is removed, and results are
+written only to an output folder that passed its checks. Each chain's output
+is read while it runs. In a finally block it ends the holder (only the process
+its record names, and only while that process runs this helper as the holder
+of this store and session), removes the store and its own temporary folder,
+and reports any process of the probe still running.
 
 Writes p16-runs.csv, p16-http.csv, p16-step0.json and p16-result.json to
 -OutDir. The last line is "P16 RESULT: PASS" or "P16 RESULT: FAIL - <reasons>".
@@ -206,8 +211,6 @@ public static class P16Runner
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool ReadFile(IntPtr h, byte[] buf, int count, out int read, IntPtr overlapped);
     [DllImport("kernel32.dll", SetLastError = true)]
-    static extern bool PeekNamedPipe(IntPtr h, IntPtr buf, int size, IntPtr read, out int available, IntPtr left);
-    [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool QueryProcessCycleTime(IntPtr process, out ulong cycles);
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool QueryThreadCycleTime(IntPtr thread, out ulong cycles);
@@ -318,6 +321,22 @@ public static class P16Runner
         SetHandleInformation(outRead, HANDLE_FLAG_INHERIT, 0);
         SetHandleInformation(inWrite, HANDLE_FLAG_INHERIT, 0);
 
+        // Drain the output while the job runs, so a chain that writes more
+        // than the pipe holds never stalls. The reader starts before the clock.
+        MemoryStream outBytes = new MemoryStream();
+        IntPtr readEnd = outRead;
+        System.Threading.Thread reader = new System.Threading.Thread(delegate ()
+        {
+            byte[] chunk = new byte[8192];
+            int got;
+            while (ReadFile(readEnd, chunk, chunk.Length, out got, IntPtr.Zero) && got > 0)
+            {
+                lock (outBytes) { outBytes.Write(chunk, 0, got); }
+            }
+        });
+        reader.IsBackground = true;
+        reader.Start();
+
         STARTUPINFO si = new STARTUPINFO();
         si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
         si.dwFlags = STARTF_USESTDHANDLES;
@@ -340,6 +359,8 @@ public static class P16Runner
         if (env != IntPtr.Zero) Marshal.FreeHGlobal(env);
         if (!ok)
         {
+            // No writer is left, so the reader ends; let it before closing.
+            reader.Join(2000);
             CloseHandle(outRead); CloseHandle(inWrite); CloseHandle(port); CloseHandle(job);
             throw new Win32Exception(err, "CreateProcess: " + commandLine);
         }
@@ -347,6 +368,7 @@ public static class P16Runner
         {
             int e = Marshal.GetLastWin32Error();
             TerminateProcess(pi.hProcess, 1);
+            reader.Join(2000);
             CloseHandle(pi.hThread); CloseHandle(pi.hProcess); CloseHandle(outRead); CloseHandle(inWrite); CloseHandle(port); CloseHandle(job);
             throw new Win32Exception(e, "AssignProcessToJobObject");
         }
@@ -450,19 +472,12 @@ public static class P16Runner
         r.CpuMs = total;
         r.Chain = string.Join("|", parts.ToArray());
 
-        // Every writer has ended, so all the output is in the pipe; read only
-        // what is there and never wait on it.
-        MemoryStream ms = new MemoryStream();
-        byte[] buf = new byte[8192];
-        int avail;
-        while (PeekNamedPipe(outRead, IntPtr.Zero, 0, IntPtr.Zero, out avail, IntPtr.Zero) && avail > 0)
-        {
-            int n;
-            if (!ReadFile(outRead, buf, Math.Min(buf.Length, avail), out n, IntPtr.Zero) || n == 0) break;
-            ms.Write(buf, 0, n);
-        }
-        CloseHandle(outRead);
-        r.Output = Encoding.UTF8.GetString(ms.ToArray());
+        // Every process of the job has ended, so the reader reaches the end of
+        // the pipe. If something outside the job still holds its write end,
+        // the reader is left (it is a background thread) with its handle open,
+        // and the output read so far is used.
+        if (reader.Join(5000)) CloseHandle(outRead);
+        lock (outBytes) { r.Output = Encoding.UTF8.GetString(outBytes.ToArray()); }
         CloseHandle(port);
         CloseHandle(job);
         return r;
@@ -684,11 +699,28 @@ if (process.argv[2] === 'server') {
 
 $exitCode = 2
 $holderPid = 0
+$holderSid = ''
 $storeMade = $false
 $tempRoot = ''
 $storeFull = ''
 $helperFull = ''
+$outFull = ''
 $started = Get-Date
+
+# The holder's away clock (step 1) runs from its start and a listing does not
+# reset it, so step 2 must end well inside it.
+$HolderAwaySeconds = 600
+
+# End the probe's holder: only the process its record names, and only while
+# that process runs this helper as the holder of this store and session.
+function Stop-ProbeHolder {
+    if ($holderPid -le 0) { return }
+    $w = Get-CimInstance Win32_Process -Filter "ProcessId=$holderPid" -ErrorAction SilentlyContinue
+    if ($w -and $w.ExecutablePath -and ($w.ExecutablePath -ieq $helperFull) -and $w.CommandLine -and
+        $w.CommandLine.Contains($storeFull) -and $w.CommandLine.Contains($holderSid)) {
+        Stop-Process -Id $holderPid -Force -ErrorAction SilentlyContinue
+    }
+}
 $result = [ordered]@{ probe = 'P16'; started = $started.ToUniversalTime().ToString('o') }
 
 try {
@@ -700,16 +732,25 @@ try {
     if ($outWanted -ieq $storeFull -or $outWanted.StartsWith($storeFull + [char]92, [StringComparison]::OrdinalIgnoreCase)) {
         throw "could not run: the output folder $outWanted is inside the store folder, which the probe removes at the end"
     }
+    # Step 2 at the slowest: the 20 idle seconds before it, every paced slot,
+    # up to a second for each back-to-back run, and a minute to spare.
+    $needSeconds = 20 + $Paced / $PerSecond + $BackToBack + 60
+    if ($needSeconds -gt $HolderAwaySeconds) {
+        throw "could not run: step 2 could take $([math]::Ceiling($needSeconds)) seconds, longer than the holder's $HolderAwaySeconds-second away clock; use fewer runs or a higher -PerSecond"
+    }
     if (Test-Path -LiteralPath $storeFull) { throw "could not run: the store folder $storeFull already exists; give a folder that does not" }
+    $storeParent = Split-Path -Parent $storeFull
+    if (-not $storeParent -or -not (Test-Path -LiteralPath $storeParent -PathType Container)) {
+        throw "could not run: the store folder's parent $storeParent does not exist; the probe makes only the store itself"
+    }
     # Reserve the store before anything else: only a folder this run made is
     # ever removed at the end.
-    $storeParent = Split-Path -Parent $storeFull
-    if ($storeParent -and -not (Test-Path -LiteralPath $storeParent)) { [void][IO.Directory]::CreateDirectory($storeParent) }
     if (-not [P16Runner]::Reserve($storeFull)) { throw "could not run: the store folder $storeFull already exists; give a folder that does not" }
     $storeMade = $true
     $sig = Get-AuthenticodeSignature -LiteralPath $helperFull
     if ($sig.Status -ne 'Valid') { throw "could not run: the helper's signature is $($sig.Status), not Valid; P16 measures the signed per-user copy" }
     if (-not (Test-Path -LiteralPath $outWanted)) { New-Item -ItemType Directory -Path $outWanted | Out-Null }
+    # Results are written only once the output folder has passed its checks.
     $outFull = (Resolve-Path -LiteralPath $outWanted).ProviderPath
 
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('p16-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -834,7 +875,8 @@ try {
 
     # --- Step 1: one holder in a throwaway store -----------------------------
     $sid = 'p16-probe-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-    $hold =Invoke-Fresh $helperFull @('hold', '--store', $storeFull, '--session', $sid, '--away', '600', '--detach') $freshEnv $work 30000
+    $holderSid = $sid
+    $hold = Invoke-Fresh $helperFull @('hold', '--store', $storeFull, '--session', $sid, '--away', [string]$HolderAwaySeconds, '--detach') $freshEnv $work 30000
     if ($hold.Code -ne 0) { throw "could not run: hold --detach exited $($hold.Code): $($hold.Err.Trim())" }
     $rec = $hold.Out.Trim() | ConvertFrom-Json
     $holderPid = [int]$rec.pid
@@ -926,8 +968,7 @@ try {
     [IO.File]::WriteAllLines((Join-Path $outFull 'p16-runs.csv'), $csv)
 
     # The holder is no longer needed; end it now so step 3 runs alone.
-    $hp = Get-Process -Id $holderPid -ErrorAction SilentlyContinue
-    if ($hp -and $hp.Path -and ($hp.Path -ieq $helperFull)) { Stop-Process -Id $holderPid -Force }
+    Stop-ProbeHolder
 
     # --- Step 3: reference, today's HTTP hook ---------------------------------
     if ($HttpPosts -gt 0) {
@@ -993,6 +1034,7 @@ try {
     $result.stepTwo = $summary
     $why = @()
     if (-not $result.defenderBefore.realTimeProtection -or -not $result.defenderAfter.realTimeProtection) { $why += 'Defender real-time protection was not on throughout' }
+    if ($result.defenderExcludesProbe -eq 'yes') { $why += 'a Defender exclusion covers the helper, the store or a program of the chain, so Defender was not as shipped' }
     if ($summary.p95WallMs -gt $PassP95Ms) { $why += "p95 wall $($summary.p95WallMs) ms is over $PassP95Ms ms" }
     if ($summary.maxWallMs -gt $PassMaxMs) { $why += "longest wall $($summary.maxWallMs) ms is over $PassMaxMs ms" }
     if ($summary.meanCpuMs -gt $PassMeanCpuMs) { $why += "mean CPU $($summary.meanCpuMs) ms is over $PassMeanCpuMs ms" }
@@ -1004,12 +1046,10 @@ try {
     $result.verdict = 'could not run'
     $exitCode = 2
 } finally {
-    # End the holder: only the process its record names, and only while that
-    # process runs this helper. Nothing was launched in it, so nothing is left
-    # behind it.
+    # End the holder (Stop-ProbeHolder checks it is this run's). Nothing was
+    # launched in it, so nothing is left behind it.
     if ($holderPid -gt 0) {
-        $hp = Get-Process -Id $holderPid -ErrorAction SilentlyContinue
-        if ($hp -and $hp.Path -and ($hp.Path -ieq $helperFull)) { Stop-Process -Id $holderPid -Force -ErrorAction SilentlyContinue }
+        Stop-ProbeHolder
         Start-Sleep -Milliseconds 300
     }
     if ($storeMade) {
@@ -1020,21 +1060,25 @@ try {
         if ([string]::IsNullOrWhiteSpace($tempRoot) -or -not ((Split-Path -Leaf $tempRoot) -like 'p16-*')) { throw 'the temporary folder path is not the probe''s; nothing removed' }
         if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }
+    # Only what this run made is looked for: a store it did not make may be
+    # another run's, with that run's holder in it.
     $left = @()
-    if ($storeFull) {
+    if ($storeMade) {
         $left += @(Get-CimInstance Win32_Process -Filter "Name='aicc-helper.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($storeFull) } | ForEach-Object { "aicc-helper.exe $($_.ProcessId)" })
     }
     if ($tempRoot) {
         $left += @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains((Split-Path -Leaf $tempRoot)) } | ForEach-Object { "$($_.Name) $($_.ProcessId)" })
     }
     $result.cleanUp = [ordered]@{
-        storeRemoved = -not ($storeFull -and (Test-Path -LiteralPath $storeFull))
+        storeMadeByThisRun = $storeMade
+        storeRemoved = $storeMade -and -not (Test-Path -LiteralPath $storeFull)
         tempRemoved = -not ($tempRoot -and (Test-Path -LiteralPath $tempRoot))
         processesLeft = $left
     }
     $result.finished = (Get-Date).ToUniversalTime().ToString('o')
-    if ($OutDir -and (Test-Path -LiteralPath $OutDir)) {
-        $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path (Resolve-Path -LiteralPath $OutDir).ProviderPath 'p16-result.json') -Encoding UTF8
+    # Written only to an output folder that passed its checks.
+    if ($outFull -and (Test-Path -LiteralPath $outFull)) {
+        $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outFull 'p16-result.json') -Encoding UTF8
     }
     if ($left.Count -gt 0) { Write-Host "P16: still running after clean-up: $($left -join ', ')" }
 }

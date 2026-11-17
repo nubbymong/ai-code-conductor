@@ -31,32 +31,38 @@ machine over SSH):
   ran (its macOS notarisation was being retried); its Windows build was the
   one installed.
 
-**Result: PASS**, in all three full runs (350 runs each, 0 failed):
+**Result: PASS**, in all four full runs (350 runs each, 0 failed):
 
 | Run (script sha256) | p95 wall | longest | mean CPU | Defender CPU per event |
 |---|---|---|---|---|
 | 1 (13ba3577) | 33.98 ms | 39.57 ms | 27.57 ms | 18.8 ms |
 | 2 (4a2d8714) | 35.45 ms | 39.80 ms | 28.15 ms | 18.9 ms |
-| 3 (15e0e229, committed) | 36.98 ms | 48.07 ms | 28.80 ms | 19.5 ms |
+| 3 (15e0e229) | 36.98 ms | 48.07 ms | 28.80 ms | 19.5 ms |
+| 4 (26e6f38d, committed) | 37.19 ms | 42.25 ms | 29.61 ms | 20.0 ms |
 
-In run 3 the mean CPU splits as: the helper 3.2 ms, Git's launcher 6.5 ms,
-the console host 8.0 ms, Git's bash 11.1 ms. Defender's own process is
+In run 4 the mean CPU splits as: the helper 3.4 ms, Git's launcher 6.6 ms,
+the console host 8.1 ms, Git's bash 11.6 ms. Defender's own process is
 outside the chain (reported beside the verdict, not in the pass line; chain
-and Defender together are about 48 ms). Reference: today's HTTP hook POST
-took 0.66 ms mean, 0.94 ms p95, and about 1.1 ms of CPU (client and server).
+and Defender together are about 50 ms). Reference: today's HTTP hook POST
+took 0.68 ms mean, 0.94 ms p95, and about 1.1 ms of CPU (client and server).
+The figures crept up by about 2 ms of CPU from run 1 to run 4, over an hour
+on a host that was also running other work; every run is far inside the line.
 
-Runs 2 and 3 exist because review found two gaps in the script's own checks
-(a store folder made by someone else, or an output folder inside the store,
-could be removed at the end; and a run whose CPU sum missed a process could
-still pass), and the WP1 legacy-Codex gate refused one environment variable
-name in the new file. Run 2 is the first fix, run 3 the committed script. The
-measurement code and the pass line did not change between them.
+Runs 2 to 4 exist because review found gaps in the script's own checks, not
+in what it measures: a store folder made by someone else, or an output folder
+inside the store, could be removed at the end, or a refused output folder
+written to; a run whose CPU sum missed a process could still pass; a slow
+schedule could outlast the holder; a Defender exclusion did not fail the
+verdict; and a chain writing more than one pipe holds would stall. The WP1
+legacy-Codex gate also refused one environment variable name in the new file.
+Run 4 is the committed script. The way the chain is started, timed and
+counted, and the pass line, did not change between runs.
 
 **Decisions made while building the probe, before the measured run:**
 - CPU is taken two ways: CPU cycles per process, converted at the machine's
   measured cycle rate, and the job's own user and kernel time. Windows charges
   the second in clock ticks of about 15.6 ms and under-counts short bursts on
-  idle processors (4 to 6 ms mean against 28 ms from cycles). The pass line is
+  idle processors (4 to 6 ms mean against 28 to 30 ms from cycles). The pass line is
   judged on the larger of the two means. This rule was fixed after three
   10-run harness checks, which found the tick figure reading near zero, and
   before the first 350-run measurement; the pass line itself never moved.

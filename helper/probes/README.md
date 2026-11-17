@@ -84,8 +84,10 @@ session in a throwaway store, then starts `aicc-helper list` behind that same
 launcher 300 times at 2 a second and 50 times back to back, counting the wall
 time and the CPU time of every process in each chain; a loopback HTTP POST is
 timed beside it for reference. The pass line is in the script's header and was
-fixed before measuring. It refuses a store folder that already exists, an
-output folder inside the store, and a helper that is not validly signed, and
-cleans up its holder and the store it made in a `finally` block. The last line is `P16 RESULT: PASS` or `P16 RESULT: FAIL -
+fixed before measuring. It refuses a store folder that already exists (or
+whose parent does not), an output folder inside the store, a schedule that
+would outlast the holder's 600-second away clock, and a helper that is not
+validly signed, and cleans up its holder and the store it made in a `finally`
+block. The last line is `P16 RESULT: PASS` or `P16 RESULT: FAIL -
 <reasons>`; the raw runs are `p16-runs.csv`. The answer is in ADR-030 after
 the P7 result.
