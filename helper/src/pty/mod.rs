@@ -178,5 +178,25 @@ mod tests {
         for name in ["C:\\Windows\\System32\\cmd.exe", "C:\\x\\a.bat.exe", "C:\\x\\bat", "C:\\x\\a.cmdx", "C:\\x.bat\\a.exe"] {
             assert!(with_line(name), "{name} was taken for a batch file");
         }
+        // The name checked is the one Windows opens: it resolves a part of
+        // dots alone (with any trailing spaces) and reads `/` as `\` first,
+        // so a.cmd\. and a.cmd\sub\.. are a.cmd. With a line, such a name is
+        // refused, as is one ending in a separator, and a `\\.\` device path.
+        for name in [
+            "C:\\x\\a.cmd\\.",
+            "C:\\x\\a.cmd\\sub\\..",
+            "C:/x/a.cmd/sub/..",
+            "C:\\x\\a.cmd\\. ",
+            "C:\\x\\a.cmd\\.. \\.",
+            "C:\\x\\a.cmd\\",
+            "C:\\x\\a.cmd/",
+            "C:\\x\\sub\\..\\a.exe",
+            "\\\\.\\C:\\x\\a.exe",
+        ] {
+            assert!(!with_line(name), "{name} was not refused");
+        }
+        for name in ["C:\\x\\.tools\\a.exe", "C:\\x\\...a.exe", "\\\\?\\C:\\x\\a.exe", "\\\\server\\share\\a.exe"] {
+            assert!(with_line(name), "{name} was refused");
+        }
     }
 }

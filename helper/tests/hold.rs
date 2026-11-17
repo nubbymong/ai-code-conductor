@@ -325,6 +325,11 @@ fn the_windows_launch_fields_are_checked_again_before_anything_starts() {
         let batch = dir.join("run.cmd");
         std::fs::write(&batch, "@echo started>started.txt\r\n").expect("write the .cmd file");
         refused(&[batch.to_string_lossy().into_owned()], Some("run.cmd"), Conpty::System, "a line for a batch file");
+        // Windows resolves `.` and `..` parts before it opens the file, so
+        // these name run.cmd too, and it would start cmd.exe for them.
+        let named = batch.to_string_lossy().into_owned();
+        refused(&[format!("{named}\\.")], Some("run.cmd"), Conpty::System, "a line for a batch file named with a last . part");
+        refused(&[format!("{named}\\sub\\..")], Some("run.cmd"), Conpty::System, "a line for a batch file named with a .. part");
     } else {
         let writes = "/bin/sh -c 'echo started>started.txt'";
         refused(&["/bin/sh".to_string()], Some(writes), Conpty::System, "a line on macOS or Linux");

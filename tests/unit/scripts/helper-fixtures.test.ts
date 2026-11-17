@@ -438,10 +438,16 @@ describe('helper fixtures: the local transport (section 15)', () => {
     expect(section).toContain('`CreateProcessW` starts the program at `argv[0]`, by that exact path with no search')
     expect(section).toContain('so with `line`, `argv` holds that program alone')
     expect(section).toContain('`argv[0]` may not be a batch file (a name ending in `.bat` or `.cmd`, in any case, once trailing dots and spaces are dropped)')
+    expect(section).toContain('The name checked must be the name Windows opens, so with `line`, `argv[0]` may not end in `\\` or `/` or have a part made only of dots and spaces, such as `.` or `..`, which Windows resolves before it opens the file')
+    expect(section).toContain('The holder checks these rules once more on the full name Windows makes of `argv[0]` (`GetFullPathNameW`)')
     expect(section).toContain('`line` is 1 to 32766 UTF-16 units long with no NUL character')
     expect(section).toContain('counting the NUL that ends it): a longer one is `too-large`')
     expect(section).toContain('`conpty` is `"bundled"`, or left out for Windows\' own ConPTY; any other value is `bad-field`.')
     expect(section).toContain('The folder and both files must be plain (not a link or another reparse point)')
+    // The folder is held so it cannot be renamed or removed, but files may
+    // still be added to it (windows.rs hold_plain shares it for writing).
+    expect(section).toContain('neither file can be written, renamed or removed, and the folder cannot be renamed or removed, between the check and the pseudoconsole\'s making; files can still be added to the folder')
+    expect(section).not.toContain('so none of them can be written, renamed or removed')
     expect(section).toContain('(`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` and `LOAD_LIBRARY_SEARCH_SYSTEM32`)')
     expect(section).toContain('`ConptyReleasePseudoConsole`, which node-pty calls after the start, is not made')
     expect(section).toContain('the launch gets `io` and nothing is started')

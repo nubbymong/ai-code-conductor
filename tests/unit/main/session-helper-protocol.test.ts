@@ -203,6 +203,29 @@ describe('session helper protocol: records, listings and endpoints (section 15)'
     for (const program of ['C:\\x\\tool.bat.exe', 'C:\\x.cmd\\tool.exe', 'C:\\x\\cmd']) {
       expect(checkLaunch({ ...spec, argv: [program], line: 'tool resume' }, 'windows'), program).toBeNull()
     }
+    // The name checked is the name Windows opens. Windows resolves a part of
+    // dots alone (`.`, `..`, and with trailing spaces) and reads `/` as `\`
+    // before it opens the file, so tool.cmd\. and tool.cmd\sub\.. are
+    // tool.cmd: with a line, such a name is refused, and so is one that ends
+    // in a separator. A `\\.\` device path has a `.` part too.
+    for (const renamed of [
+      'C:\\x\\tool.cmd\\.',
+      'C:\\x\\tool.cmd\\sub\\..',
+      'C:/x/tool.cmd/sub/..',
+      'C:\\x\\tool.cmd\\. ',
+      'C:\\x\\tool.cmd\\.. \\.',
+      'C:\\x\\tool.cmd\\',
+      'C:\\x\\tool.cmd/',
+      'C:\\x\\sub\\..\\tool.exe',
+      '\\\\.\\C:\\x\\tool.exe',
+    ]) {
+      expect(checkLaunch({ ...spec, argv: [renamed], line: 'tool resume' }, 'windows')?.code, renamed).toBe('bad-field')
+      expect(checkLaunch({ ...spec, argv: [renamed, 'resume'] }, 'windows'), `${renamed} with an argument list`).toBeNull()
+    }
+    // A part that only starts or ends with a dot is a plain name.
+    for (const plain of ['C:\\x\\.tools\\tool.exe', 'C:\\x\\...tool.exe', '\\\\?\\C:\\x\\tool.exe', '\\\\server\\share\\tool.exe']) {
+      expect(checkLaunch({ ...spec, argv: [plain], line: 'tool resume' }, 'windows'), plain).toBeNull()
+    }
   })
 
   it('the bundled ConPTY (`conpty: "bundled"`) is for Windows only, and no other value is', () => {
