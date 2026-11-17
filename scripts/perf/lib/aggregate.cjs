@@ -10,15 +10,16 @@
 // sample header records for a share of the machine.
 //
 // Two CPU counters per sampled process. Windows charges a process's user and
-// kernel time (Win32_Process) at the clock tick (15.6 ms), so a process that
-// runs in short bursts woken by timers is undercounted, by several times on
-// the VM (the app window's renderer read 1.2 % while its main thread alone was
-// measured 3.7 % busy). The sampler also reads each process's CPU cycle count
+// kernel time (Win32_Process) by sampling at the clock tick (15.6 ms), so a
+// process that runs in short bursts woken by timers can read low or high: on
+// the VM at N=25 busy the console hosts read 0.03 % of a core from the ticks
+// against 3.44 % from their cycles, and the GPU process 6.14 % against 3.66 %.
+// The sampler also reads each process's CPU cycle count
 // (QueryProcessCycleTime), which is charged exactly, and the cycles per second
 // of that counter: CPU is taken from the cycles wherever both samples of an
 // interval have them (source 'cycles'), and from the ticks only where they do
-// not (source 'windows', a lower bound). Chromium's own per-process figure
-// (app.getAppMetrics, appCpuByRole) counts the same cycles.
+// not (source 'windows', neither a lower nor an upper bound). Chromium's own
+// per-process figure (app.getAppMetrics, appCpuByRole) counts the same cycles.
 'use strict'
 
 const MB = 1024 * 1024

@@ -5,7 +5,9 @@
 //   node scripts/perf/report.cjs <results folder> [<results folder> ...] [--service-map <file>] [--functions a,b]
 //
 // With two or more folders (the same grid run again), the first folder's report.md also gets each
-// cell's spread across the runs, which is the noise any difference between cells is read against.
+// cell's spread across the runs, which is the noise any difference between cells is read against,
+// and the ablations read once against every folder's all-on windows together (each folder's own
+// table then leaves the verdict out; one folder's two all-on windows are too few for a noise figure).
 // --functions names functions whose self and inclusive time each CPU profile reports (B2 judges
 // `RateLimitBar` self time and B3 `handleSelectionChanged` inclusive time, in a 90 s renderer
 // profile: run the grid with --profile 90 for those).
@@ -13,9 +15,10 @@
 // CPU comes from the sampler's cycle counts for every process (QueryProcessCycleTime, charged
 // exactly), mean and p95 alike. A cell without them is marked: `a` when it is the app's own figure
 // (app.getAppMetrics between the window's two snapshots, its own processes only), `w` when it is
-// Windows' tick-charged time, which undercounts processes that run in short timer-driven bursts and
-// is a lower bound (lib/aggregate.cjs has the measured case). A results folder from before the
-// sampler read cycles shows every cell marked.
+// Windows' tick-sampled time, which can read low or high for processes that run in short
+// timer-driven bursts (lib/aggregate.cjs has the measured cases: console hosts 0.03 against 3.44
+// from their cycles, the GPU process 6.14 against 3.66). A results folder from before the sampler
+// read cycles shows every cell marked.
 'use strict'
 
 const fs = require('fs')
@@ -93,8 +96,8 @@ function appCpu(a, b, ctx) {
 }
 
 /** The CPU a cell shows for a role, and where it came from: the sampler's cycle counts ('cycles'),
- *  the app's own figure for its own processes ('app'), or Windows' tick-charged time ('windows', a
- *  lower bound). { value: null, source: null } when there is none. */
+ *  the app's own figure for its own processes ('app'), or Windows' tick-sampled time ('windows',
+ *  which can read low or high). { value: null, source: null } when there is none. */
 function cpuOf(cell, role) {
   const r = (cell.roles || []).find((x) => x.role === role)
   if (r && r.cpuSource === 'cycles' && Number.isFinite(r.cpuMean)) return { value: r.cpuMean, source: 'cycles' }
@@ -123,7 +126,7 @@ const MARK = Object.freeze({ cycles: '', app: ' a', windows: ' w' })
 /** A CPU cell for a table: the value, then its source's mark when it is not the cycle counts. */
 const markCpu = (c, d = 2) => (c.value === null ? '-' : A.fixed(c.value, d) + (MARK[c.source] || ''))
 const markGroup = (g, d = 2) => A.fixed(g.value, d) + g.sources.map((s) => MARK[s] || '').join('')
-const CPU_NOTE = 'Unmarked CPU is from the sampler\'s cycle counts (QueryProcessCycleTime), mean and p95 alike. `a`: the app\'s own figure (app.getAppMetrics), where the samples had no cycle count. `w`: Windows\' tick-charged time, a lower bound for processes that run in short timer-driven bursts.'
+const CPU_NOTE = 'Unmarked CPU is from the sampler\'s cycle counts (QueryProcessCycleTime), mean and p95 alike. `a`: the app\'s own figure (app.getAppMetrics), where the samples had no cycle count. `w`: Windows\' tick-sampled time, which can read low or high for processes that run in short timer-driven bursts (on the VM at N=25 busy, console hosts 0.03 against 3.44 from their cycles, the GPU process 6.14 against 3.66).'
 
 /** The runs that failed, and the planned runs that never started (the grid was cut short). */
 function failedRuns(record) {
@@ -184,23 +187,60 @@ function abParts(ab, parsed, ctx, record, runRec) {
   return parts
 }
 
-/** The ablation windows (kind 'ablation', or an older record's '-off-' tags): the all-on windows,
- *  their mean and spread (max - min; null with one), and each switched-off window's saving against
- *  that mean, with whether the saving is larger than the spread. Null without an all-on window. */
+/** All-on windows a noise figure needs. Two can agree by chance: on the VM one run's two read 0.04
+ *  apart and the next run's 1.31. */
+const MIN_NOISE_WINDOWS = 3
+/** An ablation window: kind 'ablation', or an older record's '-off-' tags. */
+const isAblation = (c) => c.kind === 'ablation' || (!c.kind && /-off-/.test(c.tag))
+
+/** The all-on windows' app totals, their mean and spread (max - min; null with one), and whether
+ *  there are enough of them for the spread to be read as the noise. */
+function allOnNoise(refs) {
+  const totals = refs.map((c) => groupCpu(c, 'app').value)
+  const spread = totals.length > 1 ? Math.max(...totals) - Math.min(...totals) : null
+  return { totals, refMean: A.mean(totals), spread, enough: totals.length >= MIN_NOISE_WINDOWS }
+}
+/** Whether a saving is larger than the spread: null for an all-on row, and with too few windows. */
+const pastNoise = (saved, noise) => (saved === null || !noise.enough ? null : Math.abs(saved) > noise.spread)
+
+/** One results folder's ablation windows: the all-on windows, their mean and spread, and each
+ *  switched-off window's saving against that mean, with whether the saving is larger than the
+ *  spread (null with fewer than MIN_NOISE_WINDOWS all-on windows). Null without an all-on window. */
 function ablationSummary(cells) {
-  const abl = cells.filter((c) => c.kind === 'ablation' || (!c.kind && /-off-/.test(c.tag)))
+  const abl = cells.filter(isAblation)
   const refs = abl.filter((c) => c.off === 'none')
   if (!refs.length) return null
-  const totals = refs.map((c) => groupCpu(c, 'app').value)
-  const refMean = A.mean(totals)
-  const spread = totals.length > 1 ? Math.max(...totals) - Math.min(...totals) : null
+  const noise = allOnNoise(refs)
   const rows = abl.map((c) => {
     const total = groupCpu(c, 'app')
-    const saved = c.off === 'none' ? null : refMean - total.value
-    return { cell: c, total, saved, aboveNoise: saved === null || spread === null ? null : Math.abs(saved) > spread }
+    const saved = c.off === 'none' ? null : noise.refMean - total.value
+    return { cell: c, total, saved, aboveNoise: pastNoise(saved, noise) }
   })
-  return { refs, refMean, spread, rows }
+  return { refs, ...noise, rows }
 }
+
+/** Several runs of the same grid (each a list of cells): every run's all-on windows pooled into one
+ *  mean and spread, and per switched-off service its app total in each run (null where a run has no
+ *  such window), their mean, its saving against the pooled mean, and whether that saving is larger
+ *  than the pooled spread (null with fewer than MIN_NOISE_WINDOWS all-on windows in all). Null
+ *  without an all-on window. */
+function pooledAblation(runs) {
+  const refs = runs.flatMap((cells, run) => cells.filter((c) => isAblation(c) && c.off === 'none').map((cell) => ({ run, cell })))
+  if (!refs.length) return null
+  const noise = allOnNoise(refs.map((r) => r.cell))
+  const offs = []
+  for (const cells of runs) for (const c of cells) if (isAblation(c) && c.off !== 'none' && !offs.includes(c.off)) offs.push(c.off)
+  const rows = offs.map((off) => {
+    const perRun = runs.map((cells) => { const c = cells.find((x) => isAblation(x) && x.off === off); return c ? groupCpu(c, 'app') : null })
+    const mean = A.mean(perRun.filter(Boolean).map((g) => g.value))
+    const saved = noise.refMean - mean
+    return { off, runs: perRun, mean, saved, aboveNoise: pastNoise(saved, noise) }
+  })
+  return { refs, ...noise, rows }
+}
+
+/** The verdict a table shows for a saving. */
+const verdictWord = (row) => (row.saved === null ? '-' : row.aboveNoise === null ? 'too few all-on windows for a noise figure' : row.aboveNoise ? (row.saved < 0 ? 'yes (it cost more off)' : 'yes') : 'no')
 
 /** Main's CPU profile split: services, garbage collection, native ('(program)'), not attributed, as
  *  percents of the JS thread's busy time. */
@@ -324,8 +364,9 @@ function serviceRows(w) {
   })
 }
 
-/** report.md for one folder. */
-function renderFolder(record, json, serviceMap, { functions = [] } = {}) {
+/** report.md for one folder. pooledWith: { runs, first } when it is one of several folders, whose
+ *  ablation verdict the first folder's report gives once for all of them. */
+function renderFolder(record, json, serviceMap, { functions = [], pooledWith = null } = {}) {
   const md = []
   const f0 = (v) => A.fixed(v, 0)
   const f1 = (v) => A.fixed(v, 1)
@@ -503,22 +544,28 @@ function renderFolder(record, json, serviceMap, { functions = [] } = {}) {
 
   const abl = ablationSummary(cells)
   if (abl) {
+    // With several folders the verdict is read once, against every folder's all-on windows together.
+    const pooled = pooledWith && pooledWith.runs > 1
     md.push('')
     md.push(`## Ablations (N=${abl.refs[0].n} busy, one service switched off per run)`)
     md.push('')
     md.push(A.markdownTable([
       { label: 'Run', align: 'left', get: (x) => (x.cell.off === 'none' ? `all services on (${x.cell.tag})` : `${x.cell.off} off`) },
       { label: 'App total CPU %', get: (x) => markGroup(x.total) },
-      { label: 'Saved vs all on', get: (x) => (x.saved === null ? '-' : f2(x.saved)) },
-      { label: 'Outside the all-on spread', align: 'left', get: (x) => (x.aboveNoise === null ? '-' : x.aboveNoise ? (x.saved < 0 ? 'yes (it cost more off)' : 'yes') : 'no') },
+      { label: pooled ? 'Saved vs this folder\'s all on' : 'Saved vs all on', get: (x) => (x.saved === null ? '-' : f2(x.saved)) },
+      ...(pooled ? [] : [{ label: 'Outside the all-on spread', align: 'left', get: (x) => verdictWord(x) }]),
       { label: 'Main %', get: (x) => markCpu(cpuOf(x.cell, 'main')) },
       { label: 'Renderer %', get: (x) => markCpu(cpuOf(x.cell, 'renderer')) },
       { label: 'GPU %', get: (x) => markCpu(cpuOf(x.cell, 'gpu')) },
     ], abl.rows))
     md.push('')
-    md.push(abl.spread === null
-      ? 'One all-on window only: there is no noise figure to read the savings against.'
-      : `The all-on windows average ${f2(abl.refMean)} and differ by ${f2(abl.spread)}: a saving no larger than that is within the noise.`)
+    const n = abl.totals.length
+    const here = n === 1 ? 'One all-on window' : `The ${n} all-on windows average ${f2(abl.refMean)} and differ by ${f2(abl.spread)}`
+    md.push(pooled
+      ? `${here} in this folder. Whether a saving clears the noise is read once, against the all-on windows of all ${pooledWith.runs} folders together: see "Ablations across the ${pooledWith.runs} runs" in the report of ${pooledWith.first}.`
+      : abl.enough
+        ? `${here}: a saving no larger than that is within the noise.`
+        : `${here}: too few all-on windows for a noise figure (at least ${MIN_NOISE_WINDOWS}; two can agree by chance). Run the grid again and give report.cjs both results folders.`)
   }
 
   if (json.cleanup.length) {
@@ -545,6 +592,21 @@ function renderSpread(folders) {
     { label: 'Process', align: 'left', get: (r) => r.label },
     ...sp.tags.map((t) => ({ label: t, get: (r) => (r.byTag[t] ? `${A.fixed(r.byTag[t].mean, 2)} (${A.fixed(r.byTag[t].spread, 2)})` : '-') })),
   ], sp.rows))
+  const p = pooledAblation(folders.map((f) => f.json.windows))
+  if (p) {
+    const f2 = (v) => A.fixed(v, 2)
+    const names = folders.map((f) => path.basename(f.json.dir))
+    md.push('', `## Ablations across the ${folders.length} runs (N=${p.refs[0].cell.n} busy)`, '')
+    md.push(`Every folder's all-on windows together: ${p.refs.map((r) => `${markGroup(groupCpu(r.cell, 'app'))} (${names[r.run]} ${r.cell.tag})`).join(', ')}. They average ${f2(p.refMean)}${p.spread === null ? '' : ` and differ by ${f2(p.spread)}`}: ${p.enough ? 'a saving no larger than that is within the noise' : `too few all-on windows for a noise figure (at least ${MIN_NOISE_WINDOWS})`}. Each service's app total is the mean of its runs, and its saving is read against that average.`)
+    md.push('')
+    md.push(A.markdownTable([
+      { label: 'Switched off', align: 'left', get: (x) => x.off },
+      ...names.map((name, i) => ({ label: `App total % (${name})`, get: (x) => (x.runs[i] ? markGroup(x.runs[i]) : '-') })),
+      { label: 'Mean', get: (x) => f2(x.mean) },
+      { label: 'Saved vs all on', get: (x) => f2(x.saved) },
+      { label: 'Outside the all-on spread', align: 'left', get: (x) => verdictWord(x) },
+    ], p.rows))
+  }
   return md
 }
 
@@ -556,8 +618,9 @@ function main() {
   const serviceMap = JSON.parse(fs.readFileSync(valueOf('--service-map') || path.join(__dirname, 'service-map.json'), 'utf8'))
   const functions = String(valueOf('--functions') || '').split(',').map((s) => s.trim()).filter(Boolean)
   const folders = dirs.map((d) => analyseFolder(path.resolve(d), serviceMap, { functions }))
+  const pooledWith = folders.length > 1 ? { runs: folders.length, first: path.basename(folders[0].json.dir) } : null
   folders.forEach((f, i) => {
-    const md = renderFolder(f.record, f.json, serviceMap, { functions })
+    const md = renderFolder(f.record, f.json, serviceMap, { functions, pooledWith })
     if (i === 0 && folders.length > 1) md.push(...renderSpread(folders))
     fs.writeFileSync(path.join(f.json.dir, 'report.json'), JSON.stringify(f.json, null, 1))
     fs.writeFileSync(path.join(f.json.dir, 'report.md'), md.join('\n') + '\n')
@@ -565,7 +628,7 @@ function main() {
   })
 }
 
-module.exports = { groupOf, isElectronRole, roleFunction, analyseSamples, appCpu, cpuOf, groupCpu, markCpu, markGroup, failedRuns, expectedSweeps, abParts, ablationSummary, mainProfileSplit, repeatSpread }
+module.exports = { groupOf, isElectronRole, roleFunction, analyseSamples, appCpu, cpuOf, groupCpu, markCpu, markGroup, failedRuns, expectedSweeps, abParts, ablationSummary, pooledAblation, verdictWord, mainProfileSplit, repeatSpread }
 
 if (require.main === module) {
   try { main() } catch (e) { console.error(e && e.stack ? e.stack : e); process.exit(1) }

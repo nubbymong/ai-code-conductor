@@ -5,7 +5,8 @@
  * group totals without counting a role twice, which sampled processes are the
  * app's, the reduced-motion A/B/A parts cut at their switches (the app's
  * figures from the marks, a failed mark falling back with its source said),
- * the ablation table read against the spread of its all-on windows, the runs
+ * the ablations read against the spread of their all-on windows (every run's
+ * together, and no verdict from fewer than three windows), the runs
  * that failed, the estimated Tokenomics sweeps, main's profile split and the
  * spread of a grid run twice.
  *
@@ -28,7 +29,9 @@ const R = req('./report.cjs') as {
   markGroup: (g: { value: number; sources: string[] }) => string
   roleFunction: (parsed: unknown, ctx: Record<string, unknown>, record: Record<string, unknown>, runRec: Record<string, unknown>) => (row: Record<string, unknown>) => string | null
   abParts: (ab: Record<string, unknown>, parsed: unknown, ctx: Record<string, unknown>, record: Record<string, unknown>, runRec: Record<string, unknown>) => Array<{ name: string; rendererCpu: Cpu; gpuCpu: Cpu; mainCpu: Cpu; valid: boolean }>
-  ablationSummary: (cells: Cell[]) => { refMean: number; spread: number | null; rows: Array<{ cell: Cell; saved: number | null; aboveNoise: boolean | null }> } | null
+  ablationSummary: (cells: Cell[]) => { refMean: number; spread: number | null; enough: boolean; rows: Array<{ cell: Cell; saved: number | null; aboveNoise: boolean | null }> } | null
+  pooledAblation: (runs: Cell[][]) => { totals: number[]; refMean: number; spread: number | null; enough: boolean; rows: Array<{ off: string; runs: Array<{ value: number } | null>; mean: number; saved: number; aboveNoise: boolean | null }> } | null
+  verdictWord: (row: { saved: number | null; aboveNoise: boolean | null }) => string
   failedRuns: (record: Record<string, unknown>) => Array<{ id: string; windows: number; errors: string[] }>
   expectedSweeps: (appStartedAt: number, from: number, to: number) => Array<{ k: number; earliest: number; latest: number; where: string }>
   mainProfileSplit: (p: Record<string, unknown>) => { busyMs: number; servicesPct: number; gcPct: number; programPct: number; unattributedPct: number }
@@ -192,19 +195,69 @@ describe('the ablations, read against their all-on windows', () => {
     cell('n25-busy-off-logging', 'logging', 37.5),
     cell('n25-busy-off-hooks', 'hooks', 40.5),
     cell('n25-busy-off-none-again', 'none', 42),
+    cell('n25-busy-off-none-third', 'none', 41),
   ]
 
   it('takes the mean of the all-on windows as the reference and their spread as the noise', () => {
     const s = R.ablationSummary(cells)!
     expect(s.refMean).toBeCloseTo(41, 6)
     expect(s.spread).toBeCloseTo(2, 6)
+    expect(s.enough).toBe(true)
     const by = Object.fromEntries(s.rows.filter((r) => r.cell.off !== 'none').map((r) => [r.cell.off, r]))
     expect(by.tokenomics.saved).toBeCloseTo(2, 6)
     expect(by.tokenomics.aboveNoise).toBe(false) // not larger than the spread
     expect(by.logging.saved).toBeCloseTo(3.5, 6)
     expect(by.logging.aboveNoise).toBe(true)
     expect(by.hooks.aboveNoise).toBe(false)
-    expect(s.rows).toHaveLength(5)
+    expect(s.rows).toHaveLength(6)
+    expect([R.verdictWord(by.tokenomics), R.verdictWord(by.logging), R.verdictWord(by.hooks)]).toEqual(['no', 'yes', 'no'])
+    expect(R.verdictWord({ saved: -3.5, aboveNoise: true })).toBe('yes (it cost more off)')
+    expect(R.verdictWord(s.rows.find((r) => r.cell.off === 'none')!)).toBe('-')
+  })
+
+  // The VM's two runs (installed 2.1.3-beta.6, harness 1588c81b): the all-on windows' app totals,
+  // 35.29 and 35.25 in run 1, 34.57 and 33.26 in run 2. Run 1's Tokenomics-off window, 34.71, saves
+  // 0.56 against run 1's own two, which agree within 0.04 by chance.
+  const run1 = [cell('n25-busy-off-none', 'none', 35.29), cell('n25-busy-off-tokenomics', 'tokenomics', 34.71), cell('n25-busy-off-none-again', 'none', 35.25)]
+  const run2 = [cell('n25-busy-off-none', 'none', 34.57), cell('n25-busy-off-tokenomics', 'tokenomics', 33.355), cell('n25-busy-off-none-again', 'none', 33.26)]
+
+  it("gives no verdict from one run's two all-on windows: too few for a noise figure", () => {
+    const s = R.ablationSummary(run1)!
+    expect(s.spread).toBeCloseTo(0.04, 6)
+    expect(s.enough).toBe(false)
+    const tok = s.rows.find((r) => r.cell.off === 'tokenomics')!
+    expect(tok.saved).toBeCloseTo(0.56, 6)
+    expect(tok.aboveNoise).toBeNull()
+    expect(R.verdictWord(tok)).toBe('too few all-on windows for a noise figure')
+  })
+
+  it("reads several runs' savings against every run's all-on windows together: 0.56 against a spread of 2.03 is no", () => {
+    const p = R.pooledAblation([run1, run2])!
+    expect(p.totals).toEqual([35.29, 35.25, 34.57, 33.26])
+    expect(p.refMean).toBeCloseTo(34.5925, 6)
+    expect(p.spread).toBeCloseTo(2.03, 6)
+    expect(p.enough).toBe(true)
+    expect(p.rows).toHaveLength(1)
+    const tok = p.rows[0]
+    expect(tok.off).toBe('tokenomics')
+    expect(tok.runs.map((r) => r && r.value)).toEqual([34.71, 33.355])
+    expect(tok.saved).toBeCloseTo(0.56, 6)
+    expect(tok.aboveNoise).toBe(false)
+    expect(R.verdictWord(tok)).toBe('no')
+  })
+
+  it('pools a service a run lacks from the runs that have it, and needs three all-on windows in all', () => {
+    const p = R.pooledAblation([run1, [cell('n25-busy-off-none', 'none', 34.57), cell('n25-busy-off-none-again', 'none', 33.26), cell('n25-busy-off-logging', 'logging', 31)]])!
+    const by = Object.fromEntries(p.rows.map((r) => [r.off, r]))
+    expect(by.tokenomics.runs.map((r) => r && r.value)).toEqual([34.71, null])
+    expect(by.tokenomics.mean).toBeCloseTo(34.71, 6)
+    expect(by.logging.saved).toBeCloseTo(3.5925, 6)
+    expect(R.verdictWord(by.logging)).toBe('yes')
+    // Two runs of an older record, one all-on window each: two in all, no verdict.
+    const two = R.pooledAblation([run1.slice(0, 2), run2.slice(0, 2)])!
+    expect(two.enough).toBe(false)
+    expect(two.rows[0].aboveNoise).toBeNull()
+    expect(R.pooledAblation([[cell('n1-idle', 'none', 1, 'grid')]])).toBeNull()
   })
 
   it('has no noise figure with one all-on window, and reads an older record by its tags', () => {

@@ -18,15 +18,16 @@ desktop with WebGL terminals. The fake Claude CLI is not Claude Code: it writes 
 2 s and sends no hook events. Defender is on, but the VM does not reproduce a desktop's file churn;
 I/O operations per second is the proxy (read and write operations, pipes and sockets included).
 
-CPU comes from each process's cycle count. Windows charges a process's user and kernel time at the
-clock tick (15.6 ms), so a process that runs in short bursts woken by timers is undercounted: on the
-VM the app window's renderer read 1.2 % from those times while its main thread alone was measured
-3.7 % busy (CDP task time). The sampler also reads every process's cycle count (QueryProcessCycleTime,
-through PowerShell's Add-Type: nothing is installed), and the counter's rate, measured on a spinning
-thread when the sampler starts. Every mean and p95 comes from the cycles. The report marks a cell
-that does not: `a` for the app's own figure (`app.getAppMetrics()` between the window's two
-snapshots), `w` for Windows' tick-charged time, a lower bound. Both are also shown beside the cycle
-figure in each window's own table.
+CPU comes from each process's cycle count. Windows charges a process's user and kernel time by
+sampling at the clock tick (15.6 ms), so a process that runs in short bursts woken by timers can read
+low or high: on the VM at N=25 busy the console hosts read 0.03 % of a core from those times against
+3.44 % from their cycles, and the GPU process 6.14 % against 3.66 %. The sampler also reads every
+process's cycle count (QueryProcessCycleTime, through PowerShell's Add-Type: nothing is installed),
+and the counter's rate, measured on a spinning thread when the sampler starts. Every mean and p95
+comes from the cycles. The report marks a cell that does not: `a` for the app's own figure
+(`app.getAppMetrics()` between the window's two snapshots), `w` for Windows' tick-sampled time,
+which is neither a lower nor an upper bound. Both are also shown beside the cycle figure in each
+window's own table.
 
 ## The parts
 
@@ -57,8 +58,9 @@ writer, settle 5 min, measure a busy window of 3 min; stop the app. At N=25 each
 by a 60 s renderer and main CPU profile, then (after a 15 s gap) a reduced-motion A/B/A of 3 x 60 s:
 as is, with `prefers-reduced-motion: reduce`, and as is again, so drift shows as a difference between
 the two as-is parts. Then five ablation runs at N=25 busy: all services on, Tokenomics, session
-logging and the hooks gateway each switched off, and all on again. The two all-on windows give the
-noise each saving is read against. About 115 minutes. `--dry-run` prints the plan and its length;
+logging and the hooks gateway each switched off, and all on again. The two all-on windows bracket
+the others; they are too few for a noise figure on their own (two can agree by chance), so read the
+savings from two runs of the grid together (below). About 115 minutes. `--dry-run` prints the plan and its length;
 every number is an option (see the top of `run-matrix.cjs`).
 
 Each window settles 5 minutes, as the plan sets: the busy window follows the idle one on the same
@@ -69,7 +71,7 @@ report when a walk ran).
 
 Every number is relative to the run's own windows. To read a difference between two cells, run the
 grid twice and give `report.cjs` both folders: the first folder's report then has each cell's mean and
-spread across the two runs.
+spread across the two runs, and the ablations read once against all four all-on windows together.
 
 Between runs the app's process tree is recorded, the app is stopped with `launch.js stop`, and
 whatever of the tree outlives the stop is ended by pid and start time (console hosts and shells
@@ -142,6 +144,9 @@ root.
 - The reduced-motion A/B/A: renderer, GPU and main CPU and the renderer's own figures, each part cut at
   its switches (a part whose page did not take the emulation is marked not valid).
 - The ablations: app CPU with each service off against the mean of the all-on windows, and whether
-  each saving is larger than the spread between those windows.
+  each saving is larger than the spread between those windows. That verdict needs at least three
+  all-on windows; one folder has two, so it reads "too few all-on windows for a noise figure". With
+  several folders it is given once, in the first folder's report, against every folder's all-on
+  windows together, and each folder's own table leaves it out.
 - The clean-up between runs: what `launch.js stop` said, and what the runner had to end afterwards.
 - With two or more folders: each cell's mean and spread across them.
