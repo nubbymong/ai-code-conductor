@@ -1,6 +1,7 @@
 // src/renderer/hooks/useEffortSubscription.ts
 import { useEffect } from 'react'
 import { useSessionStore, type Session } from '../stores/sessionStore'
+import { effortRouter } from '../lib/sessionBroadcastRouter'
 
 const VALID: ReadonlyArray<NonNullable<Session['effortLevel']>> = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
 
@@ -12,8 +13,7 @@ const VALID: ReadonlyArray<NonNullable<Session['effortLevel']>> = ['low', 'mediu
 export function useEffortSubscription(sessionId: string) {
   const updateSession = useSessionStore((s) => s.updateSession)
   useEffect(() => {
-    const unsub = window.electronAPI.effort.onUpdate(({ sessionId: sid, effortLevel }) => {
-      if (sid !== sessionId) return
+    const unsub = effortRouter.subscribe(sessionId, ({ effortLevel }) => {
       if (!VALID.includes(effortLevel as NonNullable<Session['effortLevel']>)) return
       // effortLive: this is a live hooks tick, so the card may now show the pill.
       updateSession(sessionId, { effortLevel: effortLevel as Session['effortLevel'], effortLive: true })
