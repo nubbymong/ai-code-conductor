@@ -26,6 +26,7 @@ const M = req('./run-matrix.cjs') as {
   planMatrix: (o: Opts) => Run[]
   planSeconds: (runs: Run[], o: Opts) => number
   writerSeconds: (run: Run, from: number, o: Opts) => number
+  stopScript: (rows: Array<{ pid: number; created: number }>) => string
 }
 type Session = { id: string; label?: string; customName?: string; resumeUuid: string; resumeCwd?: string; workingDirectory?: string; claudeOptions?: Record<string, unknown>; shellOnly?: boolean }
 const Gs = req('./gen-sessions.cjs') as {
@@ -103,6 +104,18 @@ describe('the planned grid', () => {
     expect(M.writerSeconds(n1, 1, o)).toBe(300 + 180)
     const n25 = M.planMatrix(o).find((r) => r.id === 'n25')!
     expect(M.writerSeconds(n25, 1, o)).toBe(300 + 180 + 60 + 10 + 15 + 3 * 60 + 10)
+  })
+})
+
+describe('ending what a run left behind', () => {
+  it('hands PowerShell one pid:start string per process, so a single leftover is not flattened into two numbers', () => {
+    // @(@(7840,1763330000000)) is two numbers to PowerShell, not one pair: the loop then ended nothing.
+    expect(M.stopScript([{ pid: 7840, created: 1_763_330_000_000 }])).toMatch(/^foreach \(\$w in @\('7840:1763330000000'\)\) \{ \$id, \$at = \$w -split ':';/)
+    const two = M.stopScript([{ pid: 1, created: 2 }, { pid: 3, created: 4 }])
+    expect(two).toContain("@('1:2','3:4')")
+    // Only the same process: its start time is compared before it is stopped.
+    expect(two).toMatch(/ToUnixTimeMilliseconds\(\) -eq \[long\]\$at\) \{ Stop-Process -Id \$id -Force/)
+    expect(two).not.toMatch(/\$pid\b/i) // $PID is PowerShell's own, read-only
   })
 })
 

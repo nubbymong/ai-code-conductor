@@ -130,6 +130,14 @@ function planSeconds(runs, o) {
   return s
 }
 
+/** The PowerShell that stops each of `rows` ({ pid, created }) while it is still the same process
+ *  (pid and start time), printing "<pid> stopped" or "<pid> gone or reused" for each. Each process is
+ *  one 'pid:start' string: PowerShell flattens a list holding one nested pair into two numbers. */
+function stopScript(rows) {
+  const list = rows.map((r) => `'${Number(r.pid)}:${Number(r.created)}'`).join(',')
+  return `foreach ($w in @(${list})) { $id, $at = $w -split ':'; $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id"; if ($p -and $p.CreationDate -and [DateTimeOffset]::new($p.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds() -eq [long]$at) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue; "$id stopped" } else { "$id gone or reused" } }`
+}
+
 /** How long a run's transcript writer may need to run from the phase it starts in. */
 function writerSeconds(run, from, o) {
   let s = 0
@@ -137,7 +145,7 @@ function writerSeconds(run, from, o) {
   return s
 }
 
-module.exports = { parseOptions, planMatrix, planSeconds, writerSeconds }
+module.exports = { parseOptions, planMatrix, planSeconds, writerSeconds, stopScript }
 
 const S = require(path.join(STAGE_DIR, 'stage-root.js'))
 const C = require('./lib/classify-process.cjs')
@@ -227,8 +235,7 @@ const liveSessions = (stage, sinceMs) => stagedProcesses(stage, sinceMs, process
 /** Stop each process in `rows`, only while it is still the same process (pid and start time). */
 function stopLeftovers(rows) {
   if (!rows.length) return []
-  const pairs = rows.map((r) => `@(${Number(r.pid)},${Number(r.created)})`).join(',')
-  const ps = `foreach ($w in @(${pairs})) { $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($w[0])"; if ($p -and $p.CreationDate -and [DateTimeOffset]::new($p.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds() -eq $w[1]) { Stop-Process -Id $w[0] -Force -ErrorAction SilentlyContinue; "$($w[0]) stopped" } else { "$($w[0]) gone or reused" } }`
+  const ps = stopScript(rows)
   let out = ''
   try { out = execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], { encoding: 'utf8', windowsHide: true, timeout: 120000 }) } catch (e) { out = rows.map((r) => `${r.pid} failed: ${e.message}`).join('\n') }
   const said = new Map(out.split(/\r?\n/).filter(Boolean).map((l) => { const i = l.indexOf(' '); return [Number(l.slice(0, i)), l.slice(i + 1)] }))
