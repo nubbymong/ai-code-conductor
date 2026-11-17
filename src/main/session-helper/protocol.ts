@@ -490,6 +490,23 @@ export function heldSessionId(appPtyId: string): string {
   return `pt${createHash('sha256').update(`aicc-plain-terminal\0${appPtyId}`, 'utf8').digest('hex').slice(0, 30)}`
 }
 
+/**
+ * The helper's session id for an agent session (a provider's CLI in a local
+ * tab, 2.1.3-beta.7): always the same for the same app id and provider, never
+ * one a plain terminal gets (`ag` and 30 hex characters, where a plain one is
+ * `pt`), so a start after a crash tells the two apart by the id alone.
+ */
+export function heldAgentSessionId(appPtyId: string, provider: string): string {
+  return `ag${createHash('sha256').update(`aicc-agent-session\0${provider}\0${appPtyId}`, 'utf8').digest('hex').slice(0, 30)}`
+}
+
+/** What a held session id says it is, by its prefix: a plain terminal, an
+ *  agent session, or neither (an id the app did not make). */
+export function heldIdKind(sid: string): 'plain' | 'agent' | null {
+  if (!SID_RE.test(sid)) return null
+  return /^pt[0-9a-f]{30}$/.test(sid) ? 'plain' : /^ag[0-9a-f]{30}$/.test(sid) ? 'agent' : null
+}
+
 /** An app PTY id the helper can carry as a holder's label. */
 export const APP_PTY_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
 

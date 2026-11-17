@@ -400,9 +400,15 @@ export interface AppSettings {
   clickableQuestions?: boolean
   /** 2.1.3-beta.6 (preview): a Terminal only tab and a partner terminal start
    *  inside the session helper, so they survive an app crash. OFF by default
-   *  (absent/false). Claude Code, Codex and SSH sessions are not affected.
+   *  (absent/false). Claude Code and Codex sessions have their own switch
+   *  (agentSessionsThroughHelper), and SSH sessions are not affected.
    *  Applies to terminals opened after the change. */
   plainTerminalsThroughHelper?: boolean
+  /** 2.1.3-beta.7 (preview): a local Claude Code or Codex session starts
+   *  inside the session helper, launched as before. OFF by default
+   *  (absent/false). After a crash it is ended and its tab resumes the
+   *  conversation. Applies to sessions started after the change. */
+  agentSessionsThroughHelper?: boolean
   /** v2.0.0-beta.3: disable Claude Code's background tasks/agents so a stray
    *  Ctrl+B (or /bg) can't detach and strand a session. Default-on (absent/true
    *  = disabled); set false to allow background agents. New sessions only. */
@@ -497,6 +503,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   classicTerminalCopyPaste: true,
   clickableQuestions: false,
   plainTerminalsThroughHelper: false,
+  agentSessionsThroughHelper: false,
   sentinelEnabled: false,
   sentinelAutoOpen: true,
   githubAiUsageEnabled: false,

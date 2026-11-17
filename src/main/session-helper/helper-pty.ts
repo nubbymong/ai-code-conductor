@@ -24,11 +24,15 @@ import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
 import type { HolderConnection } from './connection'
 import { LAUNCH_LIMITS, type HolderRecord, type LaunchSpec } from './protocol'
+import { stripSpoofableText } from '../../shared/safe-text'
+import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT, guardPtyIo } from '../pty-input-guard'
 
 export interface HelperPtyDriver {
   /** Start a holder for `sid` and answer its record. Throws when the helper
-   *  cannot be used for it now (nothing was started through it then). */
-  hold(sid: string, label: string): Promise<HolderRecord>
+   *  cannot be used for it now (nothing was started through it then).
+   *  `abandoned` is true once this terminal no longer wants starting (it was
+   *  ended meanwhile): then no holder may be started for it. */
+  hold(sid: string, label: string, abandoned: () => boolean): Promise<HolderRecord>
   /** Open a checked connection to a holder. */
   connect(record: HolderRecord): Promise<HolderConnection>
   /** The terminal the usual way: node-pty with the spawn's own arguments. */
@@ -40,6 +44,20 @@ export interface HelperPtyDriver {
   log(message: string): void
   /** The clock for the attach-again budget. */
   now?: () => number
+}
+
+/**
+ * What a driver's hold throws when nothing may start for this terminal, not
+ * through a holder and not the usual way either: it was ended while it
+ * waited, or a holder its session had before still runs and could not be
+ * ended. The terminal then logs that nothing was started, never that it
+ * starts the usual way.
+ */
+export class NothingStartedError extends Error {
+  constructor(why: string) {
+    super(why)
+    this.name = 'NothingStartedError'
+  }
 }
 
 export interface HelperPtyOptions {
@@ -205,9 +223,10 @@ export class HelperPty implements IPty {
   private async runLaunch(): Promise<void> {
     let record: HolderRecord
     try {
-      record = await this.driver.hold(this.sid, this.label)
+      record = await this.driver.hold(this.sid, this.label, () => this.ending || this.exited)
     } catch (err) {
-      this.fallBack(`the helper could not hold it: ${(err as Error).message}`)
+      if (err instanceof NothingStartedError) this.fallBack(err.message, undefined, undefined, true)
+      else this.fallBack(`the helper could not hold it: ${(err as Error).message}`)
       return
     }
     this.record = record
@@ -487,10 +506,17 @@ export class HelperPty implements IPty {
     })
   }
 
-  /** The usual way after all: node-pty, with what was queued for the holder. */
-  private fallBack(why: string, record?: HolderRecord, conn?: HolderConnection): void {
+  /**
+   * The usual way after all: node-pty, with what was queued for the holder.
+   * `nothing` (a NothingStartedError): no program starts for this terminal;
+   * `direct` then answers one that only says why (the driver's own), or, for
+   * a terminal ended meanwhile, nothing is asked of it at all.
+   */
+  private fallBack(why: string, record?: HolderRecord, conn?: HolderConnection, nothing = false): void {
     if (this.exited) return
-    this.driver.log(`[session-helper] ${this.sid}: starting it the usual way, because ${why}`)
+    this.driver.log(nothing || this.ending
+      ? `[session-helper] ${this.sid}: nothing is started for this tab, because ${why}`
+      : `[session-helper] ${this.sid}: starting it the usual way, because ${why}`)
     if (conn) {
       conn.request({ t: 'term.end' }).catch(() => { /* gone */ }).finally(() => conn.close())
     } else if (record) {
@@ -511,6 +537,7 @@ export class HelperPty implements IPty {
       return
     }
     this.inner = inner
+    this.guardInner(inner)
     inner.onData((d) => this.dataEmitter.fire(d))
     inner.onExit((e) => { this.finish(e.exitCode, e.signal); this.resolveEnded() })
     if (this.sizeChanged) inner.resize(this.size.cols, this.size.rows)
@@ -518,6 +545,35 @@ export class HelperPty implements IPty {
     this.queued = []
     this.queuedBytes = 0
     for (const b of queued) inner.write(b.toString('utf8'))
+  }
+
+  /**
+   * P3.15 for the usual-way terminal: a failed write to its input, or an
+   * error on its output, never takes the app down (pty-input-guard.ts says
+   * why each can happen, under node-pty's bundled ConPTY above all). The PTY
+   * manager guards the terminal its spawn answered, which is this object, so
+   * node-pty's own sockets, under the one made here, are guarded here. The
+   * first failure of each side goes in the log; a terminal that has not
+   * ended by itself PTY_IO_FAILED_GRACE_MS later is ended, with a line saying
+   * why, as the PTY manager ends its own.
+   */
+  private guardInner(inner: IPty): void {
+    let ending = false
+    guardPtyIo(inner, (side, err) => {
+      const what = stripSpoofableText(String(err?.code ?? err?.message ?? err), 120)
+      this.driver.log(side === 'input'
+        ? `[session-helper] ${this.sid}: input to the usual-way terminal failed (${what}); it takes no more input`
+        : `[session-helper] ${this.sid}: output of the usual-way terminal failed (${what})`)
+      if (ending) return
+      ending = true
+      const timer = setTimeout(() => {
+        if (this.exited || this.inner !== inner) return
+        this.driver.log(`[session-helper] ${this.sid}: it did not end within ${PTY_IO_FAILED_GRACE_MS} ms of its ${side} failing: ending it`)
+        this.dataEmitter.fire(PTY_IO_FAILED_TEXT)
+        try { inner.kill() } catch { /* already gone */ }
+      }, PTY_IO_FAILED_GRACE_MS)
+      ;(timer as unknown as { unref?: () => void }).unref?.()
+    })
   }
 
   private flushDecoder(): void {

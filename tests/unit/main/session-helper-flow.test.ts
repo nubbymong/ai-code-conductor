@@ -15,7 +15,9 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import type { IPty } from 'node-pty'
 import { HolderConnection, HolderError, INPUT_FRAMES_PER_PING, unixEndpointFolderProblem } from '../../../src/main/session-helper/connection'
-import { HelperPty, LOST_EXIT_CODE, type HelperPtyDriver } from '../../../src/main/session-helper/helper-pty'
+import { EventEmitter } from 'events'
+import { HelperPty, LOST_EXIT_CODE, NothingStartedError, type HelperPtyDriver } from '../../../src/main/session-helper/helper-pty'
+import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT } from '../../../src/main/pty-input-guard'
 import { RAW_MAX, heldSessionId, type HolderRecord, type LaunchSpec } from '../../../src/main/session-helper/protocol'
 import { FakeHolder, duplexPair, type ConnEvent } from './session-helper-fake-holder'
 
@@ -338,6 +340,80 @@ describe('starting and ending', () => {
     expect(r.text()).toBe('bye\r\n')
     expect(r.exits).toEqual([7])
     await until(() => r.h.ended, 'the end of the holder')
+  })
+})
+
+/** A terminal whose hold is `hold` and whose usual way is `direct`, with no holder at all. */
+function bare(hold: HelperPtyDriver['hold'], direct: () => IPty) {
+  const logs: string[] = []
+  const seen: string[] = []
+  const exits: number[] = []
+  const app = 'abcdef0123456789abcdefb0'
+  const p = new HelperPty({
+    sid: heldSessionId(app),
+    label: app,
+    spec: { argv: ['C:\\Windows\\System32\\cmd.exe'], cwd: 'C:\\Users\\someone', env: { Path: 'C:\\Windows' }, cols: 80, rows: 24 },
+    driver: {
+      hold,
+      connect: async () => { throw new Error('no holder') },
+      direct,
+      ending: () => {},
+      attachedChanged: () => {},
+      log: (m) => logs.push(m),
+    },
+  })
+  p.onData((d) => seen.push(d))
+  p.onExit((e) => exits.push(e.exitCode))
+  return { p, logs, seen, exits }
+}
+
+describe('nothing started, and the usual way after all (PR review)', () => {
+  it('a hold that may start nothing (NothingStartedError) is logged as that, never as a start the usual way', async () => {
+    const said = fakeDirect()
+    const { p, logs } = bare(async () => { throw new NothingStartedError('the holder this tab had before is still running and could not be ended') }, () => said)
+    await until(() => !p.throughHelper, 'the hand-over')
+    expect(logs).toEqual([`[session-helper] ${p.sid}: nothing is started for this tab, because the holder this tab had before is still running and could not be ended`])
+  })
+
+  it('a terminal ended while its hold waited: nothing is asked of the usual way, and the log says nothing was started', async () => {
+    let fail!: (err: Error) => void
+    const direct = vi.fn(() => fakeDirect())
+    const { p, logs, exits } = bare((_sid, _label, abandoned) => new Promise((_resolve, reject) => {
+      fail = (err) => { expect(abandoned()).toBe(true); reject(err) }
+    }), direct)
+    await tick(5)
+    p.kill()
+    fail(new NothingStartedError('it was ended before its holder started'))
+    await until(() => exits.length === 1, 'the exit')
+    expect(direct).not.toHaveBeenCalled()
+    expect(logs).toEqual([`[session-helper] ${p.sid}: nothing is started for this tab, because it was ended before its holder started`])
+  })
+
+  it('the usual-way terminal\'s input and output never throw (P3.15): each side is logged once, and one that does not end is ended after the grace, saying why', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      // node-pty's Windows terminal: its input socket, and its own `on` for the output's.
+      const inSocket = new EventEmitter()
+      const output = new EventEmitter()
+      const kill = vi.fn()
+      const inner = { ...fakeDirect(), _agent: { inSocket }, on: (event: string, l: (...a: unknown[]) => void) => { output.on(event, l) }, kill } as unknown as IPty
+      const { p, logs, seen } = bare(async () => { throw new Error('the helper is not installed') }, () => inner)
+      for (let i = 0; i < 10 && p.throughHelper; i++) await Promise.resolve()
+      expect(p.throughHelper).toBe(false)
+      const eagain = Object.assign(new Error('write EAGAIN'), { code: 'EAGAIN' })
+      expect(() => inSocket.emit('error', eagain)).not.toThrow()
+      expect(() => inSocket.emit('error', eagain)).not.toThrow()
+      expect(() => output.emit('error', Object.assign(new Error('read EPIPE'), { code: 'EPIPE' }))).not.toThrow()
+      expect(logs.filter((l) => l.includes('input to the usual-way terminal failed (EAGAIN)'))).toHaveLength(1)
+      expect(logs.filter((l) => l.includes('output of the usual-way terminal failed (EPIPE)'))).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(PTY_IO_FAILED_GRACE_MS - 1)
+      expect(kill).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(kill).toHaveBeenCalledTimes(1)
+      expect(seen.join('')).toBe(PTY_IO_FAILED_TEXT)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

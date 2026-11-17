@@ -1014,6 +1014,35 @@ fn with_an_exact_command_line_the_program_started_is_argv0_never_the_first_word_
     assert_eq!(code, Some(0), "{screen:?}");
 }
 
+/// A held program gets the Ctrl+C its terminal sends, as one node-pty starts
+/// does. `timeout /nobreak` ignores every key: only a Ctrl+C ends it before
+/// its 60 seconds, so with Ctrl+C turned off for the holder (its own process
+/// group, `hold --detach`) and handed on to the program, no exit comes within
+/// the wait.
+#[cfg(windows)]
+#[test]
+fn a_held_program_gets_the_ctrl_c_its_terminal_sends() {
+    let _serial = one_at_a_time();
+    let store = Store::new("store-ctrlc");
+    let work = Store::new("work-ctrlc");
+    let root = std::env::var("SystemRoot").expect("SystemRoot is set");
+    let timeout = format!("{root}\\System32\\timeout.exe");
+    let held = Held(hold(&store.0, "probe-0030", 60));
+    let mut app = App::connect(&held.0, true);
+    let id = app.id();
+    expect_t(&app.call(launch_msg_more(id, &[&timeout, "/t", "60", "/nobreak"], &work.0, vec![])), "term.launched");
+    let id = app.id();
+    expect_t(&app.call(msg("term.attach", id, vec![("from", Value::uint(0))])), "term.attached");
+    // It waits now ("press CTRL+C to quit"): a Ctrl+C before it reads its
+    // console would reach no one.
+    app.wait_text("CTRL+C");
+    let typed = Instant::now();
+    app.client.send_raw(1, b"\x03").expect("type Ctrl+C");
+    let exit = app.event("term.exit");
+    assert!(typed.elapsed() < Duration::from_secs(15), "the program ended {:?} after the Ctrl+C, not at once", typed.elapsed());
+    assert_ne!(field(&exit, "code").as_i64(), Some(0), "the program ran its 60 seconds to the end: {}", exit.to_json());
+}
+
 /// Remove `path`, a folder or a junction: a junction as a link, never
 /// through to the folder it points at. Gone already is fine.
 #[cfg(windows)]

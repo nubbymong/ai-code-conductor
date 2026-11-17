@@ -8,13 +8,16 @@
  * real one with setMachinesSource. The renderer only ever sees these types over
  * the typed bridge, so nothing here may name a path, a pipe or a process id.
  */
+import type { ProviderId } from './types'
 
 /** A terminal a session helper holds for a machine. */
 export interface HeldSession {
   /** Stable id of the held terminal; the same string End and Re-attach take. */
   id: string
-  /** A plain Terminal only tab, or a partner terminal beside an assistant. */
-  kind: 'plain' | 'partner'
+  /** A plain Terminal only tab, a partner terminal beside an assistant, or
+   *  (2.1.3-beta.7) an agent session, by its provider's id. An agent session
+   *  can be ended, never re-attached. */
+  kind: 'plain' | 'partner' | ProviderId
   /** What the tab is called, for the row. */
   label: string
   /** When the helper started it (ms since the epoch). */

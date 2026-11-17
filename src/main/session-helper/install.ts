@@ -15,8 +15,9 @@
  * for the bundled ConPTY (the launch field `conpty`) loads it only from
  * there. It is checked against node-pty's installed files before every use,
  * the same way. Missing or unusable files make only the bundled ConPTY
- * unavailable; the helper itself works without them. The manager does not
- * ask for it yet.
+ * unavailable; the helper itself works without them. The manager asks for
+ * it with every copy (2.1.3-beta.7), for an agent session on the bundled
+ * ConPTY, and checks it before each such launch (checkedConpty).
  */
 import { createHash, randomBytes } from 'crypto'
 import * as fs from 'fs'

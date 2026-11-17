@@ -91,6 +91,14 @@ export function guardPtyOutput(proc: unknown, onFirstError: (err: NodeJS.ErrnoEx
 
 export type PtyIoSide = 'input' | 'output'
 
+/** P3.15 rounds 3 and 4 (K1, P4): how long a session whose PTY input or output
+ *  failed may take to end by itself (as after a Ctrl+C that quits Codex)
+ *  before it is ended. */
+export const PTY_IO_FAILED_GRACE_MS = 3000
+
+/** The line a session's terminal shows when it was ended that way. */
+export const PTY_IO_FAILED_TEXT = '\r\n[This session stopped taking input, so it was ended.]\r\n'
+
 /** Both sides: `onFirstError` hears the first failure of each. */
 export function guardPtyIo(proc: unknown, onFirstError: (side: PtyIoSide, err: NodeJS.ErrnoException) => void): { input: boolean; output: boolean } {
   return {

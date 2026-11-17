@@ -623,7 +623,20 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
                   />
                   <span>
                     Plain terminals through the session helper
-                    <span className="block text-[10px] text-[var(--text-muted)]">Preview, off by default. A Terminal only tab and the partner terminal of a session on this computer start inside the session helper. On Windows they keep running if the app crashes, and come back with their tabs if you open it again within two minutes and resume your sessions. Claude Code, Codex and SSH sessions are not affected. Quitting normally ends them. Applies to terminals opened after the change. The Machines page shows the helper and what it holds.</span>
+                    <span className="block text-[10px] text-[var(--text-muted)]">Preview, off by default. A Terminal only tab and the partner terminal of a session on this computer start inside the session helper. On Windows they keep running if the app crashes, and come back with their tabs if you open it again within two minutes and resume your sessions. Claude Code and Codex sessions have their own switch below, and SSH sessions are not affected. Quitting normally ends them. Applies to terminals opened after the change. The Machines page shows the helper and what it holds.</span>
+                  </span>
+                </label>
+                {/* 2.1.3-beta.7 (plan section A3): agent sessions through the session helper, a preview. */}
+                <label className="flex items-start gap-2 text-sm text-subtext0 cursor-pointer mt-2" data-testid="setting-agent-sessions-helper">
+                  <input
+                    type="checkbox"
+                    checked={settings.agentSessionsThroughHelper === true}
+                    onChange={(e) => save({ agentSessionsThroughHelper: e.target.checked })}
+                    className="mt-0.5 rounded border-surface1"
+                  />
+                  <span>
+                    Claude Code and Codex sessions through the session helper
+                    <span className="block text-[10px] text-[var(--text-muted)]">Preview, off by default. A Claude Code or Codex session on this computer starts inside the session helper, launched exactly as before. It does not survive a crash yet: when you open the app again, the session is ended and its tab resumes the conversation as before. Quitting normally ends it. On Windows, ending a session also ends every program it started, even one it opened in a window of its own. SSH sessions are not affected. Applies to sessions started after the change. The Machines page lists them.</span>
                   </span>
                 </label>
                 <p className="text-[11px] text-[var(--text-muted)] mt-2 leading-relaxed">

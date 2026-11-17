@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import PageFrame from './PageFrame'
 import { DialogButton } from './ui/Dialog'
 import { MACHINES_NO_ANSWER, type HeldSession, type HelperState, type MachineActionResult, type MachineStatus, type SelfTestResult } from '../../shared/machines'
+import type { ProviderId } from '../../shared/providers'
 import { showHeldTerminalTab } from '../utils/heldTerminalTab'
+import { PROVIDER_NAMES } from '../provider-names'
 
 // The Machines page (2.1.3-beta.6, plan section C): one card, This computer.
 // It shows what the session helper is doing and the terminals it holds, and
@@ -35,7 +37,7 @@ const STATE_COLOR: Record<HelperState, string> = {
 }
 
 const STATE_SENTENCE: Record<HelperState, string> = {
-  off: 'The session helper is off. Switch it on in Settings, General, Plain terminals through the session helper.',
+  off: 'The session helper is off. Switch it on in Settings, General, under Terminal.',
   'not-installed': 'The session helper is not installed on this computer.',
   starting: 'The session helper is starting.',
   ready: 'The session helper is ready.',
@@ -66,14 +68,34 @@ function formatWhen(ms: number, now: number = Date.now()): string {
   return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
 }
 
-/** What a held terminal is doing, in plain words. */
-function sessionStateText(s: Pick<HeldSession, 'attached' | 'tabOpen'>): string {
+/** The CLI an agent session's row names (2.1.3-beta.7); null for a plain or
+ *  partner terminal, and for a kind this version does not know. */
+function agentName(kind: HeldSession['kind']): string | null {
+  return Object.prototype.hasOwnProperty.call(PROVIDER_NAMES, kind) ? PROVIDER_NAMES[kind as ProviderId] : null
+}
+
+/** What a held terminal is doing, in plain words. An agent session no tab
+ *  shows is one a crash or a quit left: it is being ended, never shown again. */
+function sessionStateText(s: Pick<HeldSession, 'attached' | 'tabOpen' | 'kind'>): string {
+  if (agentName(s.kind) !== null && !s.attached && !s.tabOpen) return 'Being ended'
   if (s.attached) return s.tabOpen ? 'Attached to the app' : 'Attached to the app. No tab shows it.'
   return s.tabOpen ? 'Waiting for the app' : 'Waiting for the app. No tab shows it.'
 }
 
+/** What each kind is called on its row: a terminal by its kind, an agent
+ *  session by its CLI (2.1.3-beta.7). */
+const KIND_TEXT: Readonly<Record<HeldSession['kind'], string>> = { plain: 'Terminal', partner: 'Partner terminal', ...PROVIDER_NAMES }
+
+/** Which kinds Re-attach can show in a tab: an agent session is ended, never re-attached. */
+const REATTACHABLE: Readonly<Partial<Record<HeldSession['kind'], boolean>>> = { plain: true, partner: true }
+
 function kindText(kind: HeldSession['kind']): string {
-  return kind === 'partner' ? 'Partner terminal' : 'Terminal'
+  return KIND_TEXT[kind] ?? 'Terminal'
+}
+
+/** A kind this version does not know is not offered Re-attach either. */
+function canReattach(kind: HeldSession['kind']): boolean {
+  return REATTACHABLE[kind] === true
 }
 
 function newer(a: SelfTestResult | undefined, b: SelfTestResult | undefined): SelfTestResult | undefined {
@@ -110,6 +132,10 @@ function SessionRow({
   const warnId = useId()
   const rowRef = useRef<HTMLLIElement>(null)
   const backedOut = useRef(false)
+  // An agent session ends its CLI, not a terminal's scrollback: its tab keeps
+  // that, and can resume the conversation.
+  const agent = agentName(session.kind)
+  const endWord = agent ? 'End session' : 'End terminal'
   // Keyboard and screen-reader users keep their place. The question opens on its
   // safe answer (Keep it). Backing out (and only that) puts focus back on this
   // row's End. The question closing for any other reason, such as another row's
@@ -152,15 +178,17 @@ function SessionRow({
         </div>
         {!confirming && (
           <div className="flex items-center gap-1.5 shrink-0">
-            <DialogButton
-              variant="secondary"
-              onClick={onReattach}
-              disabled={busy || session.attached}
-              title={session.attached ? 'Already attached to the app' : 'Attach this terminal to the app again'}
-              aria-label={`Re-attach ${session.label}`}
-            >
-              Re-attach
-            </DialogButton>
+            {canReattach(session.kind) && (
+              <DialogButton
+                variant="secondary"
+                onClick={onReattach}
+                disabled={busy || session.attached}
+                title={session.attached ? 'Already attached to the app' : 'Attach this terminal to the app again'}
+                aria-label={`Re-attach ${session.label}`}
+              >
+                Re-attach
+              </DialogButton>
+            )}
             <DialogButton
               variant="danger"
               onClick={onAskEnd}
@@ -183,11 +211,13 @@ function SessionRow({
           data-testid="machines-end-confirm"
         >
           <span id={warnId} className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>
-            End this terminal? Whatever is running in it stops, and its scrollback is lost.
+            {agent
+              ? `End this ${agent} session? Its CLI stops. Its tab can resume the conversation.`
+              : 'End this terminal? Whatever is running in it stops, and its scrollback is lost.'}
           </span>
           {/* The name starts with the visible words, so "click End terminal" finds it (WCAG 2.5.3). */}
-          <DialogButton variant="danger-solid" onClick={onConfirmEnd} disabled={busy} aria-label={`End terminal ${session.label}`} aria-describedby={warnId}>
-            End terminal
+          <DialogButton variant="danger-solid" onClick={onConfirmEnd} disabled={busy} aria-label={`${endWord} ${session.label}`} aria-describedby={warnId}>
+            {endWord}
           </DialogButton>
           <DialogButton variant="ghost" onClick={keepIt} disabled={busy} data-machines-keep="" aria-describedby={warnId}>
             Keep it

@@ -23,7 +23,8 @@ vi.mock('../../../src/renderer/utils/heldTerminalTab', () => ({ showHeldTerminal
 
 const { default: MachinesPage } = await import('../../../src/renderer/components/MachinesPage')
 
-const OFF_SENTENCE = 'The session helper is off. Switch it on in Settings, General, Plain terminals through the session helper.'
+// 2.1.3-beta.7: two settings switch it on, so the sentence names their place, not one of them.
+const OFF_SENTENCE = 'The session helper is off. Switch it on in Settings, General, under Terminal.'
 const EMPTY_SENTENCE = 'The session helper holds no terminals right now.'
 const UNAVAILABLE_SENTENCE = 'The list of held terminals is not available until the session helper is ready.'
 const NO_ANSWER_SENTENCE = 'The session helper did not answer.'
@@ -228,6 +229,57 @@ describe('Machines page: what it shows for each helper state', () => {
     expect(rows[0].textContent).toContain('Partner terminal')
     expect(rows[1].textContent).toContain('Waiting for the app')
     expect(rows[1].textContent).not.toContain('No tab shows it')
+  })
+
+  it('an agent session is named by its CLI under its tab name, with End and no Re-attach (2.1.3-beta.7)', async () => {
+    install(status({}, [
+      held({ id: 'c', label: 'Payments', kind: 'claude', attached: false, tabOpen: false }),
+      held({ id: 'x', label: 'Docs', kind: 'codex' }),
+      held({ id: 'p', label: 'build watcher', kind: 'plain', attached: false, tabOpen: false }),
+      // A kind this version does not know: named as a terminal, and not offered Re-attach either.
+      held({ id: 'n', label: 'Later', kind: 'later-cli' as never, attached: false, tabOpen: false }),
+    ]))
+    await open()
+    const rows = Array.from(container.querySelectorAll('[data-testid="machines-session"]')) as HTMLElement[]
+    expect(rows.map((r) => r.getAttribute('data-session-id'))).toEqual(['c', 'x', 'p', 'n'])
+    expect(rows[0].textContent).toContain('Payments')
+    expect(rows[0].textContent).toContain('Claude Code · Started at')
+    expect(rows[1].textContent).toContain('Codex · Started at')
+    expect(rows[3].textContent).toContain('Terminal · Started at')
+    for (const label of ['Payments', 'Docs', 'Later']) {
+      expect(byLabel(`Re-attach ${label}`), `no Re-attach for ${label}`).toBeNull()
+      expect(byLabel(`End ${label}`)?.disabled).toBe(false)
+    }
+    // A plain terminal left the same way still offers Re-attach.
+    expect(byLabel('Re-attach build watcher')?.disabled).toBe(false)
+    // What each is doing (PR review): an agent session no tab shows is one a
+    // crash or a quit left, being ended, never waiting to be shown again. One
+    // its tab shows reads as attached; a plain one left reads as before.
+    const state = (r: HTMLElement) => r.querySelector('[data-testid="machines-session-state"]')?.textContent
+    expect(state(rows[0])).toBe('Being ended')
+    expect(state(rows[1])).toBe('Attached to the app')
+    expect(state(rows[2])).toBe('Waiting for the app. No tab shows it.')
+    expect(state(rows[3])).toBe('Waiting for the app. No tab shows it.')
+    // End on an agent session asks first, in its own words (its tab keeps its
+    // scrollback and can resume the conversation), and ends it through the bridge.
+    await click(byLabel('End Payments'))
+    expect(byTestId('machines-end-confirm')?.textContent).toContain('End this Claude Code session? Its CLI stops. Its tab can resume the conversation.')
+    expect(byTestId('machines-end-confirm')?.textContent).not.toContain('scrollback')
+    expect(byLabel('End terminal Payments')).toBeNull()
+    await click(byLabel('End session Payments'))
+    expect(bridge.endSession).toHaveBeenCalledWith('c')
+  })
+
+  it('ending a Codex session asks in its own words too, and a terminal still asks as a terminal (PR review)', async () => {
+    install(status({}, [held({ id: 'x', label: 'Docs', kind: 'codex' }), held({ id: 'p', label: 'build watcher', kind: 'plain' })]))
+    await open()
+    await click(byLabel('End Docs'))
+    expect(byTestId('machines-end-confirm')?.textContent).toContain('End this Codex session? Its CLI stops. Its tab can resume the conversation.')
+    expect(byText('End session')).toBeTruthy()
+    await click(byText('Keep it'))
+    await click(byLabel('End build watcher'))
+    expect(byTestId('machines-end-confirm')?.textContent).toContain('End this terminal? Whatever is running in it stops, and its scrollback is lost.')
+    expect(byLabel('End terminal build watcher')).toBeTruthy()
   })
 
   it('failed: says it failed, gives the reason, and still lets you run the self-test', async () => {

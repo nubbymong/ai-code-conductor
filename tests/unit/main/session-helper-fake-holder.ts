@@ -68,6 +68,8 @@ export class FakeHolder {
   readonly started = Date.now()
   /** The helper version its record reports. */
   helperVersion = '0.1.0'
+  /** Its away clock in seconds, as its record reports it. */
+  away = 120
   launch: Json | null = null
   child: 'waiting' | 'running' | 'exited' = 'waiting'
   code: number | null = null
@@ -77,6 +79,8 @@ export class FakeHolder {
   ended = false
   /** The holder process is gone: nothing answers at its endpoint. */
   gone = false
+  /** The holder runs (list mode still lists it), but its endpoint cannot be reached. */
+  unreachable = false
   readonly conns = new Set<FakeConn>()
   readonly requests: Json[] = []
   /** What the program read, in order. */
@@ -97,6 +101,10 @@ export class FakeHolder {
   pongDelayMs = 0
   /** Runs when a launch arrives, before its answer. */
   onLaunch: (() => void) | null = null
+  /** Set: a term.end is carried out (and answered) only once this settles. */
+  endGate: Promise<void> | null = null
+  /** term.end requests that arrived, carried out or not yet. */
+  endsAsked = 0
 
   constructor(readonly sid: string, readonly label: string, readonly store: string) {
     this.endpoint = `\\\\.\\pipe\\aicc-helper-${sid}-${hex(16)}`
@@ -105,7 +113,7 @@ export class FakeHolder {
   record(): HolderRecord {
     return {
       v: 1, session: this.sid, label: this.label, pid: this.pid, endpoint: this.endpoint, nonce: this.nonce,
-      helper: this.helperVersion, started: this.started, away: 120, attached: !!this.attached, child: this.child, code: this.code,
+      helper: this.helperVersion, started: this.started, away: this.away, attached: !!this.attached, child: this.child, code: this.code,
     }
   }
 
@@ -203,13 +211,19 @@ export class FakeHolder {
         this.size = { cols: Number(m.cols), rows: Number(m.rows) }
         conn.sendJson({ t: 'term.resized', re })
         return
-      case 'term.end':
-        this.ended = true
-        this.child = 'exited'
-        conn.sendJson({ t: 'term.ended', re })
-        try { fs.rmSync(path.join(this.store, `${this.sid}.json`), { force: true }) } catch { /* gone */ }
-        setTimeout(() => { for (const c of [...this.conns]) c.close() }, 5)
+      case 'term.end': {
+        this.endsAsked++
+        const end = () => {
+          this.ended = true
+          this.child = 'exited'
+          conn.sendJson({ t: 'term.ended', re })
+          try { fs.rmSync(path.join(this.store, `${this.sid}.json`), { force: true }) } catch { /* gone */ }
+          setTimeout(() => { for (const c of [...this.conns]) c.close() }, 5)
+        }
+        if (this.endGate) void this.endGate.then(end)
+        else end()
         return
+      }
       default:
         err('unknown-type', String(m.t))
     }
@@ -265,6 +279,10 @@ export class FakeHelper {
   listFails = false
   /** `hold --detach` notes that the holder stays inside the app's job. */
   insideJob = false
+  /** Set: a `hold` that arrives waits for it before its holder starts (a slow start). */
+  holdGate: Promise<void> | null = null
+  /** Every holder `hold` started, in order (the map keeps only the last of a session). */
+  readonly made: FakeHolder[] = []
 
   exec = async (file: string, args: string[]): Promise<ExecResult> => {
     this.calls.push({ file, args })
@@ -273,12 +291,14 @@ export class FakeHelper {
     if (cmd === 'version') return { code: 0, stdout: `${this.version}\n`, stderr: '' }
     if (cmd === 'hold') {
       const sid = opt('--session')
+      if (this.holdGate) await this.holdGate
       const existing = this.holders.get(sid)
       if (existing && !existing.ended && !existing.gone) return { code: 3, stdout: '', stderr: 'aicc-helper: a holder for this session is already running\n' }
       const h = new FakeHolder(sid, opt('--label'), opt('--store'))
       if (this.holdBusy) h.launch = { t: 'term.launch' }
       h.writeRecord()
       this.holders.set(sid, h)
+      this.made.push(h)
       const note = this.insideJob ? "aicc-helper: note: this process's job does not let a process leave it, so the holder runs inside the job and ends when the job does\n" : ''
       return { code: 0, stdout: `${JSON.stringify(h.record())}\n`, stderr: note }
     }
@@ -299,7 +319,7 @@ export class FakeHelper {
   }
 
   openStream = async (endpoint: string): Promise<Duplex> => {
-    const h = [...this.holders.values()].find((x) => x.endpoint === endpoint && !x.ended && !x.gone)
+    const h = [...this.holders.values()].find((x) => x.endpoint === endpoint && !x.ended && !x.gone && !x.unreachable)
     if (!h) throw new Error('no holder at that endpoint')
     return h.connect()
   }

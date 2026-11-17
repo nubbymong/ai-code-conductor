@@ -21,7 +21,7 @@ import {
 import { SSH_ENTRY, type SshEntryFailureReason } from '../shared/ssh-entry'
 import type { SshRuntime, DetachedRemoteLiveness, SshEndRemoteOutcome, SshEndRemoteResult, SubmitTextResult, AskConductorNotice } from '../shared/types'
 import { isProviderId, type RealmOwnership, type ProviderId } from '../shared/providers'
-import { spawnPlainPty, whenHeldKnown } from './session-helper/manager'
+import { spawnAgentPty, spawnPlainPty, whenHeldKnown } from './session-helper/manager'
 import { IPC } from '../shared/ipc-channels'
 import { codexPromptKeeps } from '../shared/codex-screen'
 import { askConductorProjectDocMaxBytes } from './help-workspace'
@@ -44,7 +44,8 @@ import { forgetSessionName } from './logging/session-name-sidecar'
 import { logInfo, logDebug, logError, logWarn } from './debug-logger'
 import { checkDeployedScript } from './script-folders'
 import { bundledConptyChoice, bundledConptyFailed, SYSTEM_CONPTY_OPTIONS, BUNDLED_EARLY_EXIT_MS, type ConptySpawnOptions } from './bundled-conpty'
-import { guardPtyIo, type PtyIoSide } from './pty-input-guard'
+import { guardPtyIo, PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT, type PtyIoSide } from './pty-input-guard'
+import { processGone } from './process-alive'
 import { writeCliSetupPty, getResourcesDirectory } from './ipc/setup-handlers'
 import { TMUX_WHEEL_EXIT_KEY } from '../shared/tmux-wheel'
 import { isGlobalVisionRunning, getGlobalVisionConfig, teardownVisionSession } from './vision-manager'
@@ -442,10 +443,7 @@ const logHelperPtyIo = (what: string) => (side: PtyIoSide, err: NodeJS.ErrnoExce
   logWarn(`${what} ${side} failed (${describePtyIoError(err)})`)
 }
 
-/** P3.15 rounds 3 and 4 (K1, P4): how long a session whose PTY input or output
- *  failed may take to end by itself (as after a Ctrl+C that quits Codex)
- *  before it is ended. */
-export const PTY_IO_FAILED_GRACE_MS = 3000
+export { PTY_IO_FAILED_GRACE_MS }
 
 /** P3.15 rounds 3 and 4 (K1, P4): a failed write to a session's PTY input, or
  *  an error on its output, never quits the app (pty-input-guard.ts says why
@@ -464,7 +462,7 @@ function guardSessionPty(win: BrowserWindow, sessionId: string, proc: pty.IPty):
     const timer = setTimeout(() => {
       if (ptySessions.get(sessionId)?.ptyProcess !== proc) return // it ended, or was replaced, by itself
       logWarn(`[pty] session ${sessionId} did not end within ${PTY_IO_FAILED_GRACE_MS} ms of its ${side} failing: ending it`)
-      if (!win.isDestroyed()) win.webContents.send(`pty:data:${sessionId}`, '\r\n[This session stopped taking input, so it was ended.]\r\n')
+      if (!win.isDestroyed()) win.webContents.send(`pty:data:${sessionId}`, PTY_IO_FAILED_TEXT)
       try { proc.kill() } catch { /* already gone */ }
     }, PTY_IO_FAILED_GRACE_MS)
     ;(timer as unknown as { unref?: () => void }).unref?.()
@@ -1050,19 +1048,6 @@ function noteAgentRunFolder(proc: pty.IPty, sessionId: string, folder: string): 
   } catch {
     agentRunFolders.delete(proc)
     ended()
-  }
-}
-
-/** Whether no process has this id any more (its exit may simply not have
- *  been reported). Signal 0 only asks; an id that exists, or one that cannot
- *  be asked about, is not gone. */
-function processGone(pid: unknown): boolean {
-  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return false
-  } catch (err) {
-    return (err as NodeJS.ErrnoException)?.code === 'ESRCH'
   }
 }
 
@@ -6277,7 +6262,7 @@ function spawnPtyResolved(
       // A cmd.exe line goes verbatim (see buildSpawnCommand's `commandLine`).
       // The ConPTY options are the choice's own; nothing else differs between
       // the bundled and the system ConPTY.
-      const spawnCodexPty = (conptyOptions: ConptySpawnOptions): pty.IPty => pty.spawn(spawnCmd, commandLine ?? spawnArgs, {
+      const spawnCodexPty = (conptyOptions: ConptySpawnOptions): pty.IPty => spawnAgentPty({ sessionId, kind: 'codex' }, spawnCmd, commandLine ?? spawnArgs, {
         name: 'xterm-256color',
         cols,
         rows,
@@ -6955,7 +6940,7 @@ function spawnPtyResolved(
       }
 
       claudeLaunchedAt = Date.now()
-      ptyProcess = pty.spawn(spawnCmd, spawnArgs, {
+      ptyProcess = spawnAgentPty({ sessionId, kind: 'claude' }, spawnCmd, spawnArgs, {
         name: 'xterm-256color',
         cols,
         rows,

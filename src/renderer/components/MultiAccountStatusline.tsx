@@ -19,6 +19,7 @@ import {
   useProviderAccountsStore, accountForLegacyId, accountDisplayName, providerView, signInMethodLabel, ACCOUNT_NAME_FALLBACK,
 } from '../stores/providerAccountsStore'
 import { usesCodex } from '../onboarding/provider-choice'
+import { PROVIDER_NAMES } from '../provider-names'
 import { useRenderAtNextReset } from '../hooks/useRenderAtNextReset'
 import { ProviderMark } from './sidebar/Badges'
 
@@ -83,7 +84,6 @@ const ACCOUNT_ATTRIBUTED: FooterProviderRules = { byEmail: false, plainAlone: fa
 const FOOTER_PROVIDER: Readonly<Record<ProviderId, FooterProviderRules>> = { claude: EMAIL_ATTRIBUTED, codex: ACCOUNT_ATTRIBUTED }
 const PROVIDER_ORDER = Object.keys(FOOTER_PROVIDER) as ProviderId[]
 const DEFAULT_PROVIDER: ProviderId = PROVIDER_ORDER[0]
-const PROVIDER_NAME: Readonly<Record<ProviderId, string>> = { claude: 'Claude Code', codex: 'Codex' }
 
 /** D3: why a provider's group will never show a meter. */
 export type UsageGroupWord = 'per token' | 'no reading'
@@ -304,7 +304,7 @@ export function liveIdentityUsage(
     const accountKey = !how.byEmail && account ? account.id : ''
     let ga = g.accounts.get(accountKey)
     if (!ga) {
-      const provider = providerView(snapshot, providerId) ?? { providerId, displayName: PROVIDER_NAME[providerId] }
+      const provider = providerView(snapshot, providerId) ?? { providerId, displayName: PROVIDER_NAMES[providerId] }
       const method = !how.byEmail && account && !account.external ? signInMethodLabel(account, provider) : null
       ga = { id: accountKey, ...(method ? { method } : {}), perToken: account?.authMethod === 'apiKey', sessions: 0, unavailable: 0 }
       g.accounts.set(accountKey, ga)
@@ -592,7 +592,7 @@ function useMeasuredFooterRows(
 }
 
 function providerNameOf(providerId: ProviderId, snapshot: AccountsSnapshot | null): string {
-  return providerView(snapshot, providerId)?.displayName ?? PROVIDER_NAME[providerId]
+  return providerView(snapshot, providerId)?.displayName ?? PROVIDER_NAMES[providerId]
 }
 
 /** A reset time as the pill tooltips say it ("5h -- reset 3:10 pm, no reading since"). */

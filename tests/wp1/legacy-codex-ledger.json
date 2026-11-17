@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "aedc96fb91213a0021bcc478b49b7977d6e9e6ae40a9f398ac6d8fd65d1696f8",
-  "manifestHead": "eef1f5e4dcf9eabe0aadbbc7cadff809f124fba2",
+  "manifestPathDigest": "bbd36c7620388dba99b637c3d1af293b6c8d286bd7e22c2079b2cc869d884236",
+  "manifestHead": "982ae4afbaa2e70be6bf6e6a70130f05c1ab6bb6",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -3674,6 +3674,16 @@
       ]
     },
     {
+      "path": "src/renderer/provider-names.ts",
+      "predicates": [
+        "P11"
+      ],
+      "category": "UI-ONLY",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.7 renderer module (src/renderer/provider-names.ts): the one map of what each provider is called on screen, which the Machines page, the usage page, the footer, the Memory page and the new agent dialog fall back on before the provider view is read; it names Codex as a value keyed by provider id, never compared (WP1.68); tests/wp1/provider-conformance.test.ts holds it to each provider package's displayName",
+      "note": "created by the PR #705 review fix (2.1.3-beta.7 section A3); replaces four hand-written copies of the same map"
+    },
+    {
       "path": "src/renderer/providers/codex/index.ts",
       "predicates": [
         "P01",
@@ -7234,6 +7244,26 @@
       "note": "created by the PR 4 owner answers review fix pass (FC, 9d606305); the P13 hits are the pty-manager stand-ins for main's Codex conversation records"
     },
     {
+      "path": "tests/unit/main/session-helper-manager.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.7 cases in a 2.1.3-beta.6 test (tests/unit/main/session-helper-manager.test.ts): a local Claude Code or Codex session through the session helper (spawnAgentPty), off by default and then exactly node-pty's spawn; on, the same program, folder and environment, a Codex npm line as the launch's exact command line and node-pty's bundled ConPTY as the helper's; after a crash the agent session is ended, never shown again, and a tab that starts meanwhile waits for that end (WP1.68)",
+      "note": "created by 2.1.3-beta.6 (plan section B); a fake helper over in-memory streams and a mocked node-pty; no process starts"
+    },
+    {
+      "path": "tests/unit/main/session-helper-pty-site.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.7 case in a 2.1.3-beta.6 test (tests/unit/main/session-helper-pty-site.test.ts): the two local agent spawns in pty-manager.ts, the Codex one included, go through spawnAgentPty with the arguments they had, and the SSH start stays node-pty's own (WP1.68)",
+      "note": "created by 2.1.3-beta.6 (plan section B); reads source files only"
+    },
+    {
       "path": "tests/unit/main/session-resume-enrich.test.ts",
       "predicates": [
         "P13"
@@ -8992,6 +9022,16 @@
       "note": ""
     },
     {
+      "path": "tests/unit/renderer/held-terminal-tab.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.7 case in a 2.1.3-beta.6 test (tests/unit/renderer/held-terminal-tab.test.ts): the Claude Code and Codex sessions setting is off by default and its Settings note says what a crash and Windows do (WP1.68)",
+      "note": "created by 2.1.3-beta.6 (plan section B); reads the settings defaults and the Settings page source"
+    },
+    {
       "path": "tests/unit/renderer/hello-codex-usage-copy.test.ts",
       "predicates": [
         "P01",
@@ -9134,6 +9174,16 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): the Codex reason gone; no-transcript names the assistant; tests/unit/renderer/logs/log-empty-state.test.tsx",
       "note": "re-dispositioned in WP2 PR 3 P3.12 (was retain)"
+    },
+    {
+      "path": "tests/unit/renderer/machines-page.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.7 case in a 2.1.3-beta.6 test (tests/unit/renderer/machines-page.test.tsx): a held Codex or Claude Code session is named by its CLI, with End and no Re-attach (WP1.68)",
+      "note": "created by 2.1.3-beta.6 (plan section C); the real page over a fake bridge, no IPC"
     },
     {
       "path": "tests/unit/renderer/memory-account-memories.test.tsx",

@@ -29,9 +29,7 @@ import {
   type ScopeFilter,
 } from './memory/memory-stats'
 import { liveSessionsForProject } from './memory/live-sessions'
-
-/** A provider's name when the accounts snapshot has not named it yet. */
-const PROVIDER_NAME_FALLBACK: Readonly<Record<ProviderId, string>> = { claude: 'Claude Code', codex: 'Codex' }
+import { PROVIDER_NAMES } from '../provider-names'
 
 /** The name an account's memories are shown under: the account's own name
  *  as Settings, Accounts shows it. */
@@ -110,7 +108,7 @@ export default function MemoryPage({ onClose, onOpenSessionLogs, onJumpToSession
     }
     return [...groups.entries()].map(([providerId, accounts]) => ({
       providerId,
-      providerName: providerView(providerSnapshot, providerId)?.displayName ?? PROVIDER_NAME_FALLBACK[providerId],
+      providerName: providerView(providerSnapshot, providerId)?.displayName ?? PROVIDER_NAMES[providerId],
       accounts,
     }))
   }, [accountMemories, providerSnapshot, codexOn])

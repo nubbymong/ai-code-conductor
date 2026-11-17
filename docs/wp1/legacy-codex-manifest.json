@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-16T04:53:23.019Z",
-  "head": "eef1f5e4dcf9eabe0aadbbc7cadff809f124fba2",
-  "tree": "ed8414a62952228984750817f217b612e5ad7d9e",
+  "generatedAt": "2026-11-17T07:28:49.065Z",
+  "head": "982ae4afbaa2e70be6bf6e6a70130f05c1ab6bb6",
+  "tree": "423c0ff093e8bc22c5661bfab74b647d8e7bbad5",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,10 +116,10 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3295,
-  "excludedFileCount": 488,
-  "scannedFileCount": 2807,
-  "unscopedFileCount": 42,
+  "trackedFileCount": 3364,
+  "excludedFileCount": 499,
+  "scannedFileCount": 2865,
+  "unscopedFileCount": 53,
   "unscoped": [
     ".claude/settings.json",
     ".claude/skills/LoopReady/SKILL.md",
@@ -139,35 +139,46 @@
     "helper/fixtures/frames.json",
     "helper/fixtures/hello.json",
     "helper/fixtures/limits.json",
+    "helper/fixtures/local.json",
     "helper/probes/README.md",
     "helper/probes/p7-windows-survival.ps1",
     "helper/rust-toolchain.toml",
     "helper/src/bin/aicc-fake-cli.rs",
+    "helper/src/client.rs",
     "helper/src/cmdline.rs",
     "helper/src/detach.rs",
-    "helper/src/dirhold.rs",
     "helper/src/frame.rs",
     "helper/src/hello.rs",
     "helper/src/holder.rs",
     "helper/src/json.rs",
     "helper/src/lib.rs",
     "helper/src/main.rs",
+    "helper/src/pids.rs",
     "helper/src/pty/mod.rs",
     "helper/src/pty/unix.rs",
     "helper/src/pty/windows.rs",
+    "helper/src/random.rs",
+    "helper/src/request.rs",
     "helper/src/ring.rs",
     "helper/src/selftest.rs",
+    "helper/src/serve.rs",
+    "helper/src/store.rs",
+    "helper/src/transport/mod.rs",
+    "helper/src/transport/unix.rs",
+    "helper/src/transport/windows.rs",
+    "helper/src/winproc.rs",
     "helper/tests/fixtures.rs",
     "helper/tests/hold.rs",
     "helper/tests/probe_transport.rs",
+    "helper/tests/windows_orphans.rs",
     "test/minimal/index.html",
     "test/minimal/main.js",
     "test/minimal/preload.js"
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 915,
-  "pathDigest": "aedc96fb91213a0021bcc478b49b7977d6e9e6ae40a9f398ac6d8fd65d1696f8",
+  "matchedPathCount": 920,
+  "pathDigest": "bbd36c7620388dba99b637c3d1af293b6c8d286bd7e22c2079b2cc869d884236",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1403,7 +1414,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 3
+      "lineCount": 4
     },
     {
       "path": "src/main/pty-manager.ts",
@@ -1413,7 +1424,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 447,
+      "lineCount": 446,
       "truncated": true
     },
     {
@@ -1648,7 +1659,7 @@
       "predicates": [
         "P11"
       ],
-      "lineCount": 78
+      "lineCount": 77
     },
     {
       "path": "src/renderer/components/AccountsPanel.tsx",
@@ -1769,14 +1780,14 @@
       "predicates": [
         "P11"
       ],
-      "lineCount": 10
+      "lineCount": 9
     },
     {
       "path": "src/renderer/components/MultiAccountStatusline.tsx",
       "predicates": [
         "P11"
       ],
-      "lineCount": 11
+      "lineCount": 10
     },
     {
       "path": "src/renderer/components/MultiSpawnStartupPage.tsx",
@@ -1793,7 +1804,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 71
+      "lineCount": 70
     },
     {
       "path": "src/renderer/components/ResumeSessionsPrompt.tsx",
@@ -1851,7 +1862,7 @@
         "P05",
         "P11"
       ],
-      "lineCount": 59
+      "lineCount": 62
     },
     {
       "path": "src/renderer/components/SetupDialog.tsx",
@@ -2489,6 +2500,13 @@
       "lineCount": 11
     },
     {
+      "path": "src/renderer/provider-names.ts",
+      "predicates": [
+        "P11"
+      ],
+      "lineCount": 1
+    },
+    {
       "path": "src/renderer/providers/codex/index.ts",
       "predicates": [
         "P01",
@@ -2590,7 +2608,7 @@
         "P05",
         "P11"
       ],
-      "lineCount": 37
+      "lineCount": 39
     },
     {
       "path": "src/renderer/stores/tipsStore.ts",
@@ -2707,7 +2725,7 @@
         "P12",
         "P14"
       ],
-      "lineCount": 142
+      "lineCount": 144
     },
     {
       "path": "src/shared/ask-conductor-provider.ts",
@@ -5040,6 +5058,20 @@
       "lineCount": 3
     },
     {
+      "path": "tests/unit/main/session-helper-manager.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 21
+    },
+    {
+      "path": "tests/unit/main/session-helper-pty-site.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 4
+    },
+    {
       "path": "tests/unit/main/session-resume-enrich.test.ts",
       "predicates": [
         "P13"
@@ -6304,6 +6336,13 @@
       "lineCount": 46
     },
     {
+      "path": "tests/unit/renderer/held-terminal-tab.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 4
+    },
+    {
       "path": "tests/unit/renderer/hello-codex-usage-copy.test.ts",
       "predicates": [
         "P01",
@@ -6407,6 +6446,13 @@
         "P13"
       ],
       "lineCount": 2
+    },
+    {
+      "path": "tests/unit/renderer/machines-page.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 5
     },
     {
       "path": "tests/unit/renderer/memory-account-memories.test.tsx",
@@ -7285,7 +7331,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 340
+      "lineCount": 343
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",

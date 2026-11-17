@@ -31,6 +31,7 @@ import { listProviderPackages, packageRegistrationProblem, tryGetProviderPackage
 import type { ProviderPackage } from '../../src/main/providers/core'
 import { composeRendererProviders, composedRendererProviderIds } from '../../src/renderer/providers'
 import { listRendererProviders, getRendererProvider, _resetRendererProviderRegistryForTest } from '../../src/renderer/providers/core'
+import { PROVIDER_NAMES } from '../../src/renderer/provider-names'
 import { resolvePhase } from './phase'
 
 const SEMVER = /^\d+\.\d+\.\d+$/
@@ -219,6 +220,11 @@ describe('composition roots (WP1.66)', () => {
     _resetRendererProviderRegistryForTest()
     composeRendererProviders()
     expect(composedRendererProviderIds()).toEqual([...PROVIDER_IDS])
+  })
+
+  it('renderer: the one provider-name map pages fall back on names every provider as its package does, the name the provider view gives once read (2.1.3-beta.7)', () => {
+    expect(Object.keys(PROVIDER_NAMES).sort()).toEqual([...PROVIDER_IDS].sort())
+    for (const c of cases) expect(PROVIDER_NAMES[c.id], c.id).toBe(c.create().displayName)
   })
 })
 
