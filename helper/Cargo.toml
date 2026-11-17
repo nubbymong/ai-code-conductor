@@ -58,6 +58,12 @@ windows-sys = { version = "=0.59.0", default-features = false, features = [
   "Win32_System_Threading",
 ] }
 
+# The tests only: the same pinned crate, one more feature. Diagnostics_ToolHelp
+# lists processes and threads (tests/windows_orphans.rs). Cargo adds it to the
+# build that runs the tests; the release build of the helper never has it.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "=0.59.0", default-features = false, features = ["Win32_System_Diagnostics_ToolHelp"] }
+
 [profile.release]
 strip = true
 opt-level = "s"

@@ -115,8 +115,18 @@ fn terminal_round_trip(exe: &Path) -> Result<(), String> {
         }
         Ok(())
     })();
-    holder.kill();
+    end_terminal(&holder);
     result
+}
+
+/// How the terminal round trip ends its terminal before the self-test moves
+/// on: the child and its tree are stopped, and the terminal is closed (on
+/// Windows, `ClosePseudoConsole`, which ends the terminal's host). It returns
+/// once that is done, or after a few seconds at most (aicc_planning#317).
+/// A kill alone left the closing to the holder's watch thread, which the
+/// self-test often exited before; on Windows the host could then outlive it.
+pub fn end_terminal(holder: &Holder) {
+    let _ = holder.end();
 }
 
 /// The listening side of the transport round trip: one connection, a hello,

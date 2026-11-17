@@ -310,6 +310,34 @@ describe('the helper copy: checked before every holder start', () => {
     expect(m2.serviceState().state).toBe('ready')
   })
 
+  it('a note on the self-test\'s standard error goes in the log line, never in its result (#317)', async () => {
+    // What the Windows self-test writes when its job could not be made: it
+    // still runs and passes, but what it starts may outlive it.
+    // Longer than the 200 characters the log takes of it.
+    const NOTE = `aicc-helper: note: what the self-test starts may outlive it: AssignProcessToJobObject (this process): Access is denied. (os error 5)${' and more'.repeat(12)}`
+    expect(NOTE.length).toBeGreaterThan(200)
+    let note = `${NOTE}\r\nsecond line\r\n`
+    const logs: string[] = []
+    const m = await started(makeManager({
+      exec: async (file, args) => {
+        const r = await helper.exec(file, args)
+        return args[0] === 'selftest' ? { ...r, stderr: note } : r
+      },
+      log: (s) => logs.push(s),
+    }))
+    await until(() => logs.some((l) => l.startsWith('[session-helper] self-test:')), 'the self-test line')
+    const line = logs.find((l) => l.startsWith('[session-helper] self-test:'))!
+    // Before: the line had no trace of it, so a self-test without its job
+    // went unseen. Its first line only, cut to 200 characters.
+    expect(line).toBe(`[session-helper] self-test: passed: All 2 checks passed. Its note: ${NOTE.slice(0, 200)}`)
+    expect((await m.status()).helper.selfTest).toMatchObject({ ok: true, detail: 'All 2 checks passed.' })
+    // With nothing on standard error, the line is as before.
+    note = ''
+    logs.length = 0
+    await m.runSelfTest()
+    expect(logs).toContain('[session-helper] self-test: passed: All 2 checks passed.')
+  })
+
   it('old version folders no holder runs from are removed', async () => {
     mkdirSync(join(root, '0.0.9-aaaaaaaaaaaa'), { recursive: true })
     writeFileSync(join(root, '0.0.9-aaaaaaaaaaaa', 'aicc-helper.exe'), 'old')

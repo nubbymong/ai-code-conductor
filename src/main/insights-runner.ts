@@ -44,6 +44,7 @@ import { getAccountsService } from './provider-accounts'
 import { ownerOnlyThroughHandle, sweepStaleFolders } from './stale-folder-sweep'
 import { withFullyQualifiedProgramLookup } from './windows-programs'
 import { warmFirstStart } from './first-start-warmup'
+import { quitHold } from './quit-hold'
 import { awaitClaudeLaunchWalk } from './claude-launch-walk'
 import { timedStart } from './main-thread-ops'
 import { claudeVersionRunEnv, redactFailure, redactHead, redactTail } from './providers/review-support'
@@ -482,6 +483,30 @@ export function insightsTerminalEnv(env: Record<string, string>, platform: NodeJ
   return platform === 'win32' ? withFullyQualifiedProgramLookup(env) : env
 }
 
+/** The /insights terminals running now (one per account whose report is at
+ *  step 1), each with what ends it at quit. They are main's own, outside
+ *  pty-manager, so killAllPty never reaches them (#317). */
+const insightsPtys = new Map<pty.IPty, () => void>()
+
+/** #317: sends a kill to every /insights terminal still running. The app's
+ *  quit teardown calls it (index.ts, beside killCliSetupPty): a report in
+ *  progress at a normal quit used to leave Claude Code and its console host
+ *  running after the app had gone. On Windows, node-pty holds the kill of a
+ *  terminal that has shown no output yet until its first output.
+ *
+ *  The run of a terminal ended here is never answered, as a start the quit
+ *  hold stops is not (quit-hold.ts): nothing of it is archived or carried on
+ *  to the KPI step, whatever exit code the killed terminal reports, and it
+ *  stays running in the catalogue, which the next start records as
+ *  interrupted (cleanupStuckRuns). Safe with none running, and safe twice. */
+export function killInsightsPty(): void {
+  if (insightsPtys.size === 0) return
+  const ending = [...insightsPtys.values()]
+  insightsPtys.clear()
+  for (const end of ending) end()
+  logInfo(`[insights] kill sent to ${ending.length} /insights terminal(s) at quit`)
+}
+
 /**
  * Spawn Claude interactively via node-pty, type /insights, wait for report.html to update, then /exit.
  * This is needed because /insights is a TUI slash command, not a CLI argument.
@@ -515,6 +540,12 @@ async function spawnClaudeInsights(home: string | null, timeoutMs = 600000): Pro
   // as one switched off before this step does.
   const offNow = providerLaunchRefusal('claude')
   if (offNow) throw new Error(offNow.message)
+  // #317: once the before-quit teardown has run, no /insights terminal
+  // starts (quit-hold.ts): the run is never answered. The warm-up above holds
+  // it too; this is read in the same step as the start, as the four other
+  // starts that read it do.
+  const held = quitHold<{ code: number; output: string }>('an Insights report terminal')
+  if (held) return held
   return new Promise((resolve) => {
     const reportPath = claudeReportPath(home)
     logInfo(`[insights] Spawning Claude PTY for /insights: ${cmd} in ${cwd} (home=${home ?? 'default'})`)
@@ -549,11 +580,22 @@ async function spawnClaudeInsights(home: string | null, timeoutMs = 600000): Pro
     } catch { /* ignore */ }
     logInfo(`[insights] Initial report.html mtime: ${initialMtime}`)
 
+    // Every way the run settles (its exit, its time limit, the kill after
+    // /exit) passes here, so the quit teardown never kills it after that.
     const cleanup = () => {
+      insightsPtys.delete(proc)
       clearTimeout(timeout)
       clearTimeout(startupFallback)
       clearInterval(pollInterval)
     }
+    // Until the run settles, the quit teardown can reach its terminal (#317).
+    // Ended there, the run is never answered (killInsightsPty): `resolved`
+    // stops every path from settling it, its exit included.
+    insightsPtys.set(proc, () => {
+      resolved = true
+      cleanup()
+      try { proc.kill() } catch { /* already gone */ }
+    })
 
     const sendInsights = () => {
       if (commandSent || resolved) return

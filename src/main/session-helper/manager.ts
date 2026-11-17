@@ -110,6 +110,8 @@ const VERSION_TIMEOUT_MS = 10_000
 const HOLD_TIMEOUT_MS = 20_000
 const LIST_TIMEOUT_MS = 15_000
 const SELF_TEST_TIMEOUT_MS = 25_000
+/** How much of the self-test's standard-error note goes in the log line. */
+const SELF_TEST_NOTE_CHARS = 200
 const ENDING_WAIT_MS = 5_000
 /** A copy that could not be put in place is tried again by a terminal started this long after. */
 const INSTALL_RETRY_AFTER_MS = 60_000
@@ -773,7 +775,11 @@ export class SessionHelperManager implements MachinesSource {
       this.state = result.ok ? 'ready' : 'failed'
       this.detail = result.ok ? undefined : result.detail
     }
-    this.deps.log(`[session-helper] self-test: ${result.ok ? 'passed' : 'failed'}: ${result.detail}`)
+    // Standard error is never the result, but a note there is kept in the log:
+    // on Windows the self-test writes one there when it ran without its job,
+    // so its terminal's host could outlive it (aicc_planning#317).
+    const note = firstLine(r.stderr).slice(0, SELF_TEST_NOTE_CHARS)
+    this.deps.log(`[session-helper] self-test: ${result.ok ? 'passed' : 'failed'}: ${result.detail}${note ? ` Its note: ${note}` : ''}`)
     if (!result.ok) this.lastError = { message: result.detail ?? 'The self-test failed.', ts: result.at }
     this.changed()
     return result
