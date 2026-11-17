@@ -18,6 +18,8 @@
 use crate::pty::{Conpty, Pty, PtySize, SpawnOptions};
 use crate::ring::{Replay, Ring, RingError};
 use std::io::{self, Read, Write};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -60,6 +62,9 @@ struct State {
 
 struct Shared {
     state: Mutex<State>,
+    /// How many times the exit watch asked for the child's status.
+    #[cfg(test)]
+    status_checks: AtomicUsize,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -105,6 +110,8 @@ impl Holder {
         let mut writer = pty.input_writer()?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State { ring: Ring::new(ring_bytes), terminal: None, exit_code: None, output_ended: false }),
+            #[cfg(test)]
+            status_checks: AtomicUsize::new(0),
         });
         let pty = Arc::new(Mutex::new(pty));
 
@@ -156,6 +163,8 @@ impl Holder {
         let watch_pty = Arc::clone(&pty);
         thread::Builder::new().spawn(move || {
             let code = loop {
+                #[cfg(test)]
+                watch_shared.status_checks.fetch_add(1, Ordering::SeqCst);
                 let status = lock(&watch_pty).try_wait();
                 match status {
                     Ok(Some(code)) => break code,
@@ -322,5 +331,31 @@ mod tests {
     fn the_queue_and_the_waits_are_bounded() {
         assert!(LIVE_QUEUE_CHUNKS > 0 && LIVE_QUEUE_CHUNKS <= 1024);
         assert!(END_GRACE <= Duration::from_secs(5) && DRAIN <= Duration::from_secs(5));
+    }
+
+    /// A program that runs for about 2 s, reads nothing and exits 0.
+    fn two_seconds() -> Vec<String> {
+        if cfg!(windows) {
+            // Three echo requests to this machine, one second apart.
+            let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+            vec![format!("{root}\\System32\\PING.EXE"), "-n".to_string(), "3".to_string(), "127.0.0.1".to_string()]
+        } else {
+            vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 2".to_string()]
+        }
+    }
+
+    /// A held terminal waits for its child's exit: it does not ask for the
+    /// child's status on a clock. A watch that asked every 25 ms asked about
+    /// 80 times while this child ran.
+    #[test]
+    fn the_holder_waits_for_its_childs_exit_instead_of_asking_on_a_clock() {
+        let h = Holder::start(&two_seconds(), PtySize::default(), 64 * 1024).expect("a program starts on a terminal");
+        let began = Instant::now();
+        let code = h.wait_exit(Duration::from_secs(30));
+        let ran = began.elapsed();
+        assert_eq!(code, Some(0), "the program did not exit 0: {:?}", String::from_utf8_lossy(&h.snapshot()));
+        assert!(ran >= Duration::from_millis(1500), "the program ran only {ran:?}, too short to show anything");
+        let checks = h.shared.status_checks.load(Ordering::SeqCst);
+        assert!(checks <= 2, "the child's status was asked for {checks} times while it ran for {ran:?}");
     }
 }
