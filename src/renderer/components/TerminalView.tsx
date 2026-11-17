@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { decorateTerminalLinks, createLinkHoverControl, type LinkHoverControl } from './terminal/terminalLinks'
 import { installWebglWithRecovery, createAtlasResync, type WebglHandle } from './terminal/terminalWebgl'
+import { onFontsReady, terminalFontOptions, terminalFontReady, terminalFontSpecs, waitForTerminalFont, type CancelFontWait } from './terminal/terminalFont'
 import { atlasCoordinator } from './terminal/atlasCoordinator'
 import {
   createStaleGlyphRepainter,
@@ -544,6 +545,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     let unregisterScreen: (() => void) | null = null
     /** P3.8 round 1 (L2): a Plan mode launch's wait for the ready composer. */
     let planModeWait: { cancel: () => void } | null = null
+    /** #313: the pending font wait (before the terminal is built, then before
+     *  its first fit). Cancelled on teardown: its cap timer goes with the view. */
+    let cancelFontWait: CancelFontWait | null = null
     let lastWheelAt = Number.NEGATIVE_INFINITY
 
     // PTY-integrity instrumentation (scoped to this session's mount; resets on
@@ -659,8 +663,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       }
 
       const ts = useSettingsStore.getState().settings.terminal || DEFAULT_TERMINAL_SETTINGS
-      const fontFallbacks = "'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', Consolas, monospace"
-      const fontFamily = ts.fontFamily ? `'${ts.fontFamily}', ${fontFallbacks}` : fontFallbacks
+      // The same options the font wait loaded its faces from (terminalFont.ts).
+      const font = terminalFontOptions(ts)
 
       // Claude's TUI draws its own input cursor as a coloured cell at
       // the prompt position, and leaves xterm's real cursor wherever
@@ -680,12 +684,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
 
       term = new Terminal({
         theme: termTheme,
-        fontFamily,
-        fontSize: ts.fontSize || 13,
-        // 450 is a variable-font instance; if it renders unreliably in packaged
-        // Electron, fall back to 400 after visual testing (spec section 2).
-        fontWeight: (ts.fontWeight || 450) as import('@xterm/xterm').FontWeight,
-        fontWeightBold: 700,
+        fontFamily: font.fontFamily,
+        fontSize: font.fontSize,
+        // Default 450, a variable-font instance (see TERMINAL_FONT_WEIGHT_DEFAULT).
+        fontWeight: font.fontWeight as import('@xterm/xterm').FontWeight,
+        fontWeightBold: font.fontWeightBold as import('@xterm/xterm').FontWeight,
         lineHeight: ts.lineHeight || 1.2,
         cursorBlink: ts.cursorBlink ?? true,
         cursorStyle: ts.cursorStyle || 'bar',
@@ -775,7 +778,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // then we try ONE recreate in the next frame (GPU-blip recovery).
       // If recreate fails, we force term.refresh so the DOM renderer
       // repaints the viewport the dead WebGL canvas left garbled.
-      // The GPU renderer is OPT-IN: only a literal `true` enables it (see
+      // GPU rendering is on by default; only an explicit false turns it off (see
       // settingsStore.gpuRenderingEnabled). `@xterm/addon-webgl` keeps ONE glyph
       // atlas per PROCESS, so a clearTextureAtlas() from ANY terminal empties the
       // texture every OTHER terminal drawing from it. Only ONE terminal holds a
@@ -1325,7 +1328,10 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
 
       // Wait for custom fonts, then fit + spawn. document.fonts.ready resolves
       // immediately if all fonts are already loaded, so no delay for subsequent sessions.
-      document.fonts.ready.then(() => {
+      // #313: capped like the font wait before initTerminal, so a font load
+      // that never ends cannot leave the session without its fit and PTY. The
+      // cleanup cancels it, so a torn-down view leaves no cap timer behind.
+      cancelFontWait = onFontsReady(document.fonts, () => {
         // One more frame to let the browser apply the font to the terminal element
         requestAnimationFrame(fitAndSpawn)
       })
@@ -1768,10 +1774,23 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       container.addEventListener('paste', handlePaste, true)
     }
 
-    requestAnimationFrame(initTerminal)
+    // #313: build the terminal only once its font has loaded (capped, never
+    // rejects), so xterm's cell measure and the WebGL glyph atlas never see a
+    // stand-in face (terminal/terminalFont.ts). A face that is already loaded
+    // (every terminal after the first) starts on the first frame as before.
+    // Only this first call can wait; initTerminal and everything after it run
+    // in the same order as before. A view torn down while it waits cancels the
+    // wait (cleanup below), so its callback never runs after teardown.
+    const fontSpecs = terminalFontSpecs(useSettingsStore.getState().settings.terminal || DEFAULT_TERMINAL_SETTINGS)
+    if (terminalFontReady(document.fonts, fontSpecs)) {
+      requestAnimationFrame(initTerminal)
+    } else {
+      cancelFontWait = waitForTerminalFont(document.fonts, fontSpecs, () => requestAnimationFrame(initTerminal))
+    }
 
     return () => {
       disposed = true
+      cancelFontWait?.()
       // A launch confirm this view asked (an unverified sign-in) goes with it:
       // nothing spawns from a torn-down view, and a remount asks afresh.
       useLaunchAckStore.getState().withdraw(sessionId)

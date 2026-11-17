@@ -200,6 +200,42 @@ describe('Sidebar panel tabs (two-mode left panel)', () => {
     expect(anchor).toBeTruthy()
     expect(anchor).toBe(tabs().saved)
   })
+
+  // aicc_planning #315: at UI scale 1.3 and the 200px sidebar floor the two
+  // tabs' content was wider than the row, so "Running" ran past the sidebar
+  // edge and its count badge was hidden. jsdom has no layout, so this pins the
+  // classes that make the row shrink instead (the VM measured the result, see
+  // the PR): a tab may shrink below its content, the label truncates, the
+  // count never shrinks, and the icon drops out below a REM-sized width of
+  // the row (rem, so the threshold moves with the UI scale).
+  it('the tabs shrink and truncate their label instead of overflowing; the count stays (#315)', () => {
+    render()
+    const row = container.querySelector('[role="tablist"][aria-label="Sessions panel"]') as HTMLElement
+    expect(row.className.split(/\s+/)).toContain('@container/panel-tabs')
+    for (const id of ['saved', 'running'] as const) {
+      const tab = tabs()[id]!
+      const cls = tab.className.split(/\s+/)
+      expect(cls, `${id} tab`).toContain('min-w-0')
+      const label = tab.querySelector(`[data-testid="panel-tab-${id}-label"]`) as HTMLElement
+      expect(label, `${id} label span`).toBeTruthy()
+      expect(label.className.split(/\s+/)).toEqual(expect.arrayContaining(['min-w-0', 'truncate']))
+      expect(label.textContent).toBe(id === 'saved' ? 'Saved' : 'Running')
+      // A truncated label still shows its whole name on hover.
+      expect(label.getAttribute('title'), `${id} label title`).toBe(label.textContent)
+      const count = tab.querySelector(`[data-testid="panel-tab-${id}-count"]`) as HTMLElement
+      expect(count, `${id} count badge`).toBeTruthy()
+      expect(count.className.split(/\s+/)).toContain('shrink-0')
+      const icon = tab.querySelector('svg') as SVGElement
+      const iconCls = (icon.getAttribute('class') ?? '').split(/\s+/)
+      expect(iconCls).toContain('shrink-0')
+      const hide = iconCls.find((c) => /^@max-\[\d+(\.\d+)?rem\]\/panel-tabs:hidden$/.test(c))
+      expect(hide, `${id} icon hides below a rem width`).toBeTruthy()
+      // Below the same width the tab's padding and gap tighten, so the label
+      // keeps the room the icon gave up.
+      const at = hide!.slice(0, hide!.indexOf(':') + 1)
+      expect(cls, `${id} tab tightens below ${at}`).toEqual(expect.arrayContaining([`${at}px-0.5`, `${at}gap-1`]))
+    }
+  })
 })
 
 describe('Sidebar width (#461)', () => {

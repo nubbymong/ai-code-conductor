@@ -78,6 +78,24 @@ interface Props {
   tourActive?: boolean
 }
 
+/** #315: the Saved/Running tab row has to fit the 200px sidebar floor at any
+ *  UI scale. The scale grows the root font, so the row's text, gaps and padding
+ *  grow with it while the floor stays in CSS px. Each tab may shrink below its
+ *  content (min-w-0), the label truncates, the count badge never shrinks, and
+ *  the icon drops out when the row (a named query container) is narrower than
+ *  the threshold below. The threshold is in rem, so it moves with the scale.
+ *  Measured on the test VM: "Running" is 2.99rem, the count badge 0.75rem plus
+ *  about 6px a digit, the icon 13px. Icon, label and a two-digit count fit a
+ *  tab when the row is at least about 13.75rem wide (the default 256px sidebar
+ *  at scale 1.0 gives 14.9rem). Below the same width the tab's padding and gap
+ *  tighten too, which gives each label about 8px more. Measured at scale 1.3
+ *  and 200px: "Saved" whole, and "Running" shows 51 of its 62px, so it reads
+ *  "Run..." (the full name is the label's title). Every other scale and width
+ *  the VM measured shows both labels whole. Literal class names, so Tailwind's
+ *  scanner sees them. */
+const PANEL_TAB_ICON_CLASS = 'shrink-0 @max-[13.75rem]/panel-tabs:hidden'
+const PANEL_TAB_CLASS = 'flex-1 min-w-0 h-8 px-1 @max-[13.75rem]/panel-tabs:px-0.5 rounded-lg flex items-center justify-center gap-1.5 @max-[13.75rem]/panel-tabs:gap-1 text-xs font-semibold transition-colors focus-ring'
+
 export default function Sidebar({ currentView, onViewChange, collapsed, onShowAccountUsage, onShowFirstRun, onShowTip, tourActive }: Props) {
   const launchConfig = useLaunchConfig()
   const sideType = useRegionTypography('sidebar')
@@ -1022,7 +1040,7 @@ export default function Sidebar({ currentView, onViewChange, collapsed, onShowAc
           whole left panel switches modes; the old hover fly-out, its notch and
           the pin-open machinery are gone — a mode needs no overlay. */}
       <div
-        className="px-2 pt-2 pb-1.5 flex gap-1.5 shrink-0"
+        className="@container/panel-tabs px-2 pt-2 pb-1.5 flex gap-1.5 shrink-0"
         role="tablist"
         aria-label="Sessions panel"
         onKeyDown={(e) => {
@@ -1039,7 +1057,7 @@ export default function Sidebar({ currentView, onViewChange, collapsed, onShowAc
           aria-controls="saved-tabpanel"
           tabIndex={panelTab === 'saved' ? 0 : -1}
           onClick={() => selectPanelTab('saved')}
-          className={`flex-1 h-8 rounded-lg flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors focus-ring ${
+          className={`${PANEL_TAB_CLASS} ${
             panelTab === 'saved' ? 'bg-surface0 border border-surface1 text-text' : 'border border-transparent text-overlay1 hover:text-text'
           }`}
           data-testid="panel-tab-saved"
@@ -1049,12 +1067,12 @@ export default function Sidebar({ currentView, onViewChange, collapsed, onShowAc
              GuidedTour.available() silently skip the step. */
           data-tour="new-config"
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={panelTab === 'saved' ? 'text-blue' : ''}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={`${PANEL_TAB_ICON_CLASS}${panelTab === 'saved' ? ' text-blue' : ''}`}>
             <line x1="4" y1="7" x2="20" y2="7" /><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="17" x2="20" y2="17" />
             <circle cx="9" cy="7" r="1.6" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="8" cy="17" r="1.6" fill="currentColor" stroke="none" />
           </svg>
-          Saved
-          <span className={`text-[10px] rounded-full px-1.5 py-0.5 ${panelTab === 'saved' ? 'bg-blue/20 text-blue' : 'bg-surface0 text-overlay1'}`}>{configs.length}</span>
+          <span className="min-w-0 truncate" title="Saved" data-testid="panel-tab-saved-label">Saved</span>
+          <span data-testid="panel-tab-saved-count" className={`shrink-0 text-[10px] rounded-full px-1.5 py-0.5 ${panelTab === 'saved' ? 'bg-blue/20 text-blue' : 'bg-surface0 text-overlay1'}`}>{configs.length}</span>
         </button>
         <button
           ref={runningTabRef}
@@ -1064,16 +1082,16 @@ export default function Sidebar({ currentView, onViewChange, collapsed, onShowAc
           aria-controls="running-tabpanel"
           tabIndex={panelTab === 'running' ? 0 : -1}
           onClick={() => selectPanelTab('running')}
-          className={`flex-1 h-8 rounded-lg flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors focus-ring ${
+          className={`${PANEL_TAB_CLASS} ${
             panelTab === 'running' ? 'bg-surface0 border border-surface1 text-text' : 'border border-transparent text-overlay1 hover:text-text'
           }`}
           data-testid="panel-tab-running"
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={panelTab === 'running' ? 'text-blue' : ''}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`${PANEL_TAB_ICON_CLASS}${panelTab === 'running' ? ' text-blue' : ''}`}>
             <path d="M3 12h4l2 6 4-14 2 8h6" />
           </svg>
-          Running
-          <span className={`text-[10px] rounded-full px-1.5 py-0.5 ${panelTab === 'running' ? 'bg-blue/20 text-blue' : 'bg-surface0 text-overlay1'}`}>{sessions.length}</span>
+          <span className="min-w-0 truncate" title="Running" data-testid="panel-tab-running-label">Running</span>
+          <span data-testid="panel-tab-running-count" className={`shrink-0 text-[10px] rounded-full px-1.5 py-0.5 ${panelTab === 'running' ? 'bg-blue/20 text-blue' : 'bg-surface0 text-overlay1'}`}>{sessions.length}</span>
         </button>
       </div>
       <div className="mx-2 border-t border-surface1 shrink-0" aria-hidden />

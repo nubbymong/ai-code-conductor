@@ -1,5 +1,6 @@
 import type { Terminal } from '@xterm/xterm'
 import type { WebglAddon } from '@xterm/addon-webgl'
+import { installCanvasFontTrim } from './canvasFontTrim'
 
 /**
  * Options that let callers (or tests) inject dependencies.
@@ -160,6 +161,10 @@ export function createAtlasResync(
  * loss) is otherwise identical to the original single-line version.
  */
 export function installWebglWithRecovery(term: Terminal, opts: WebglRecoveryOptions): WebglHandle {
+  // #313: main.tsx installs the canvas font trim at renderer startup (see
+  // canvasFontTrim.ts). This repeat is a guard, idempotent: whatever the entry
+  // point, the trim is in place before any addon builds its glyph atlas.
+  installCanvasFontTrim()
   const { WebglAddonCtor, raf, isDisposed } = opts
   const maxRecreates = opts.maxRecreates ?? DEFAULT_MAX_RECREATES
   const stablePeriodMs = opts.stablePeriodMs ?? DEFAULT_STABLE_PERIOD_MS
