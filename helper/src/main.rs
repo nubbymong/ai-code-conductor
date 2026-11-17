@@ -169,6 +169,9 @@ fn cmd_selftest(args: &[String]) -> ExitCode {
         Err(e) => return usage(&e),
     };
     let nonce = a.get("--nonce").map(str::to_string).unwrap_or_else(|| "0".repeat(32));
+    // Before the self-test starts anything: see `end_children_with_this_process`.
+    #[cfg(windows)]
+    end_children_with_selftest();
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => return fail(&format!("cannot find this program: {e}")),
@@ -190,7 +193,8 @@ fn cmd_selftest(args: &[String]) -> ExitCode {
 /// it when it ended, or was ended, before it closed its terminal
 /// (aicc_planning#317). In a job that ends with the self-test, everything it
 /// starts ends with it. The self-test still runs when the job cannot be made;
-/// the note goes to standard error, which the app does not read as the result.
+/// the note goes to standard error, which the app keeps in its log and never
+/// reads as the result.
 #[cfg(windows)]
 fn end_children_with_selftest() {
     if let Err(e) = aicc_helper::pty::end_children_with_this_process() {

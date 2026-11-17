@@ -163,6 +163,20 @@ fn a_terminal_can_be_resized_and_a_missing_program_is_an_error() {
     assert!(Holder::start(&[], PtySize::default(), 1024).is_err());
 }
 
+/// aicc_planning#317: the self-test's terminal is closed before the self-test
+/// moves on. When `end_terminal` returns, the child's exit is known, which
+/// the holder records only after it has closed the terminal and let its
+/// output drain. A self-test that only stopped the child left the closing to the
+/// holder's watch thread, and often exited before that thread ran; on
+/// Windows the terminal's host could then outlive it.
+#[test]
+fn the_self_test_closes_its_terminal_before_it_moves_on() {
+    let h = start(64 * 1024);
+    assert!(h.wait_for_text("FAKE-CLI READY", WAIT));
+    aicc_helper::selftest::end_terminal(&h);
+    assert!(h.exit_code().is_some(), "the terminal was still open when end_terminal returned");
+}
+
 /// True once `pid` is no longer running, within `within`.
 fn gone(pid: u32, within: Duration) -> bool {
     let deadline = std::time::Instant::now() + within;
