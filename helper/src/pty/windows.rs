@@ -5,8 +5,9 @@
 //! The child starts suspended, is put in a job object the holder owns, and
 //! only then runs, so nothing it starts can leave the job: `end_tree` ends the
 //! job and with it the whole tree. The job ends its processes when its last
-//! handle closes, so a holder that dies takes its session with it. The holder
-//! itself is never put in a job (probe P7).
+//! handle closes, so a holder that dies takes its session with it. The `hold`
+//! process itself is never put in a job (probe P7); only the self-test's
+//! process is, see `end_children_with_this_process`.
 //!
 //! Handle types differ between `windows-sys` versions (an integer or a
 //! pointer), so handles are held as `usize` and converted with `as` at each
