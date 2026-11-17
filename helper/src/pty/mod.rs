@@ -22,7 +22,7 @@ pub use unix::Pty;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::Pty;
+pub use windows::{end_children_with_this_process, Pty};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PtySize {

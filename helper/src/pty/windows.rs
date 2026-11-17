@@ -30,7 +30,7 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, ResumeThread, TerminateProcess, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOEXW,
+    CreateProcessW, GetCurrentProcess, ResumeThread, TerminateProcess, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOEXW,
 };
 
 /// `CREATE_SUSPENDED`: the child runs only once it is in the job.
@@ -97,6 +97,34 @@ unsafe fn new_job() -> io::Result<usize> {
         return Err(e);
     }
     Ok(job as usize)
+}
+
+/// Put this process in a new job that ends every process in it when its last
+/// handle closes, and keep that handle until this process exits.
+///
+/// A pseudoconsole's host (`conhost.exe`) is a child of the process that
+/// makes the pseudoconsole, and only `ClosePseudoConsole` ends it on purpose.
+/// A process that exits, or is ended, without that call can leave the host
+/// running (aicc_planning#317). From this call on, every child this process
+/// starts is in the job (the job allows no child to leave it), the host
+/// included, so none outlives this process however it ends. A terminal's
+/// child is moved on into the terminal's own job, which is then nested in
+/// this one. The handle is not inheritable, so no child keeps the job open.
+///
+/// Only the self-test calls it. A holder never does: a holder must outlive
+/// the app, and is in no job of its own (probe P7).
+pub fn end_children_with_this_process() -> io::Result<()> {
+    unsafe {
+        let job = new_job()?;
+        if AssignProcessToJobObject(job as HANDLE, GetCurrentProcess()) == 0 {
+            let e = os_error("AssignProcessToJobObject (this process)");
+            close(job);
+            return Err(e);
+        }
+        // Never closed: closing the last handle would end this process too.
+        // It closes when this process exits, and the job then ends the rest.
+    }
+    Ok(())
 }
 
 /// Undo a start that failed after the pseudoconsole was made.
