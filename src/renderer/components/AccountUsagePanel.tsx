@@ -16,6 +16,7 @@ import { useRenderAtNextReset } from '../hooks/useRenderAtNextReset'
 import { useRenderEvery } from '../hooks/useRenderEvery'
 import { useSettingsStore } from '../stores/settingsStore'
 import { usesCodex } from '../onboarding/provider-choice'
+import { PROVIDER_NAMES } from '../provider-names'
 import {
   useProviderAccountsStore, selectProviderAccounts, accountForLegacyId, accountDisplayName, providerView, signInMethodLabel,
 } from '../stores/providerAccountsStore'
@@ -36,7 +37,6 @@ const COUNTDOWN_LINE = 'The countdown is the point at which an interactive sign-
 // asks for a provider's accounts and usage by its id; it never branches on it.
 const CLAUDE: ProviderId = 'claude'
 const CODEX: ProviderId = 'codex'
-const PROVIDER_NAME: Readonly<Record<ProviderId, string>> = { claude: 'Claude Code', codex: 'Codex' }
 
 /** A window focus reloads the page's Codex views at most this often. */
 export const FOCUS_REFRESH_MS = 60_000
@@ -314,7 +314,7 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
           <p className="text-[0.8125rem] text-overlay0" data-testid="account-usage-claude-off">{CLAUDE_OFF_USAGE_LINE}</p>
         )}
         {claudeSection && (<>
-        {bothSections && <SectionHeading providerId={CLAUDE} name={providerView(snapshot, CLAUDE)?.displayName ?? PROVIDER_NAME[CLAUDE]} count={loadError ? null : profiles?.length ?? null} />}
+        {bothSections && <SectionHeading providerId={CLAUDE} name={providerView(snapshot, CLAUDE)?.displayName ?? PROVIDER_NAMES[CLAUDE]} count={loadError ? null : profiles?.length ?? null} />}
         {profiles === null
           // The list is a local read; the placeholders below cover only the frame
           // or two before it resolves, so the page never flashes empty.
@@ -336,7 +336,7 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
               })}
         </>)}
         {codexSection && (<>
-        <SectionHeading providerId={CODEX} name={providerView(snapshot, CODEX)?.displayName ?? PROVIDER_NAME[CODEX]} count={codexAccounts.length} />
+        <SectionHeading providerId={CODEX} name={providerView(snapshot, CODEX)?.displayName ?? PROVIDER_NAMES[CODEX]} count={codexAccounts.length} />
         {codexAccounts.map((a) => {
           const view = codexViews[a.id]
           const parked = a.lifecycle === 'inactive'
@@ -349,7 +349,7 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
             return <UsageUnavailableRow key={a.id} name={accountDisplayName(snapshot, a)} onRetry={() => void refreshCodexOne(a.id, true)} />
           }
           const identity = identityOf(snapshot, a)
-          const provider = providerView(snapshot, a.providerId) ?? { providerId: a.providerId, displayName: PROVIDER_NAME[a.providerId] }
+          const provider = providerView(snapshot, a.providerId) ?? { providerId: a.providerId, displayName: PROVIDER_NAMES[a.providerId] }
           return (
             <CodexAccountCard
               key={a.id}

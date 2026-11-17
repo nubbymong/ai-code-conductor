@@ -5,9 +5,11 @@ ADR-030). Since 2.1.3-beta.6 the installer ships one file of it: the release
 build (`target/release/aicc-helper`, `.exe` on Windows), which the release
 workflow builds before packaging and electron-builder copies to
 `resources/helper/`. On This computer the app runs it for plain and partner
-terminals when Settings has "Plain terminals through the session helper" on
-(off by default); the app side is `src/main/session-helper/`. Nothing else here
-ships. It is a top-level folder on purpose, not under `src/` or `resources/`,
+terminals when Settings has "Plain terminals through the session helper" on,
+and, since 2.1.3-beta.7, for local Claude Code sessions and the other agent
+sessions (each assistant's CLI in its tab) when the agent sessions' switch
+below it is on (`agentSessionsThroughHelper`). Both are off by default; the
+app side is `src/main/session-helper/`. Nothing else here ships. It is a top-level folder on purpose, not under `src/` or `resources/`,
 so no packaging glob picks it up (`tests/unit/scripts/helper-packaging.test.ts`
 fails if anything but the release program would, and
 `scripts/verify-bundled-helper.mjs` checks the packaged copy).

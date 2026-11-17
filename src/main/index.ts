@@ -779,8 +779,8 @@ if (!gotTheLock) {
         // 2.1.3-beta.4: the Tokenomics switch stops or starts its worker at
         // once, and the accounts left out apply to the next query.
         try { applyTokenomicsSettings() } catch (err) { logError('[main] tokenomics settings apply failed:', err) }
-        // 2.1.3-beta.6: plain terminals through the session helper, switched
-        // for the next terminal at once.
+        // 2.1.3-beta.6 and beta.7: both session helper switches (plain
+        // terminals, and agent sessions) apply to the next terminal at once.
         try { applySessionHelperSettings() } catch (err) { logError('[main] session helper settings apply failed:', err) }
       },
       // P3.12 round 1 (V1): a config's own logging switch turned off stops

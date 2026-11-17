@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-17T03:34:08.844Z",
-  "head": "dde2a95512b948e38369364f6efc215f9aad6797",
-  "tree": "4af287981e940626fc4ed36f0be55a8d5b3ad77e",
+  "generatedAt": "2026-11-17T07:28:49.065Z",
+  "head": "982ae4afbaa2e70be6bf6e6a70130f05c1ab6bb6",
+  "tree": "423c0ff093e8bc22c5661bfab74b647d8e7bbad5",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3360,
-  "excludedFileCount": 498,
-  "scannedFileCount": 2862,
+  "trackedFileCount": 3364,
+  "excludedFileCount": 499,
+  "scannedFileCount": 2865,
   "unscopedFileCount": 53,
   "unscoped": [
     ".claude/settings.json",
@@ -178,7 +178,7 @@
   "unscopedMentions": [],
   "unreadable": [],
   "matchedPathCount": 920,
-  "pathDigest": "93eb69a4ebaf9bb63288abc633d446a9f248f2dfa45d11b8ac0f96a6c0b61013",
+  "pathDigest": "bbd36c7620388dba99b637c3d1af293b6c8d286bd7e22c2079b2cc869d884236",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1414,7 +1414,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 3
+      "lineCount": 4
     },
     {
       "path": "src/main/pty-manager.ts",
@@ -1424,7 +1424,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 447,
+      "lineCount": 446,
       "truncated": true
     },
     {
@@ -1659,7 +1659,7 @@
       "predicates": [
         "P11"
       ],
-      "lineCount": 78
+      "lineCount": 77
     },
     {
       "path": "src/renderer/components/AccountsPanel.tsx",
@@ -1776,25 +1776,18 @@
       "lineCount": 9
     },
     {
-      "path": "src/renderer/components/MachinesPage.tsx",
-      "predicates": [
-        "P11"
-      ],
-      "lineCount": 2
-    },
-    {
       "path": "src/renderer/components/MemoryPage.tsx",
       "predicates": [
         "P11"
       ],
-      "lineCount": 10
+      "lineCount": 9
     },
     {
       "path": "src/renderer/components/MultiAccountStatusline.tsx",
       "predicates": [
         "P11"
       ],
-      "lineCount": 11
+      "lineCount": 10
     },
     {
       "path": "src/renderer/components/MultiSpawnStartupPage.tsx",
@@ -1811,7 +1804,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 71
+      "lineCount": 70
     },
     {
       "path": "src/renderer/components/ResumeSessionsPrompt.tsx",
@@ -2505,6 +2498,13 @@
         "P11"
       ],
       "lineCount": 11
+    },
+    {
+      "path": "src/renderer/provider-names.ts",
+      "predicates": [
+        "P11"
+      ],
+      "lineCount": 1
     },
     {
       "path": "src/renderer/providers/codex/index.ts",
@@ -6340,7 +6340,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 1
+      "lineCount": 4
     },
     {
       "path": "tests/unit/renderer/hello-codex-usage-copy.test.ts",
@@ -6452,7 +6452,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 2
+      "lineCount": 5
     },
     {
       "path": "tests/unit/renderer/memory-account-memories.test.tsx",

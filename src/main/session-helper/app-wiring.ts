@@ -9,7 +9,7 @@ import { readConfig } from '../config-manager'
 import { logInfo } from '../debug-logger'
 import { setMachinesSource } from '../ipc/machines-handlers'
 import { bundledHelperPath, helperRootDir } from './install'
-import { SessionHelperManager, crashMarkIn, getSessionHelper, setSessionHelper, type HelperRouting, type SessionHelperServiceState } from './manager'
+import { SessionHelperManager, agentRecordsIn, crashMarkIn, getSessionHelper, setSessionHelper, type HelperRouting, type SessionHelperServiceState } from './manager'
 
 /** The settings (Settings, General, Terminal): each off unless saved as true. */
 export const PLAIN_TERMINALS_SETTING = 'plainTerminalsThroughHelper'
@@ -59,14 +59,16 @@ function ensureManager(): SessionHelperManager {
  * At start-up: with either setting on, the helper comes up; a plain terminal
  * a crash left held is kept for its tab, and an agent session is ended (its
  * tab resumes the conversation). Both off: nothing is made, unless the last
- * run with the helper on did not quit normally. Then the helper comes up all
- * the same, carrying nothing new, to end the agent sessions that run left
- * held (and keep its plain terminals for their tabs).
+ * run with the helper on did not quit normally, or left an agent session
+ * held (a quit that could not wait for its end). Then the helper comes up
+ * all the same, carrying nothing new, to end those agent sessions before
+ * their tabs start their CLIs again (and keep a crash's plain terminals for
+ * their tabs).
  */
 export function initSessionHelper(onChange: () => void): void {
   notify = onChange
   const { plain, agents } = routing()
-  if (!plain && !agents && !crashMarkIn(rootDir())) return
+  if (!plain && !agents && !crashMarkIn(rootDir()) && !agentRecordsIn(rootDir())) return
   void ensureManager().start({ atStartup: true, plain, agents })
 }
 

@@ -52,6 +52,7 @@ use std::io::{self, Read};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{CloseHandle, FreeLibrary, GENERIC_READ, HANDLE, HMODULE};
 use windows_sys::Win32::Storage::FileSystem::{
@@ -397,6 +398,32 @@ unsafe fn undo(console: Console, hpc: HPCON, in_write: usize, out_read: usize, j
     close(job);
 }
 
+/// Ctrl+C on again for the programs this process starts. `hold --detach`
+/// starts the holder in a process group of its own (CREATE_NEW_PROCESS_GROUP,
+/// detach.rs), which turns Ctrl+C off for it, and a process hands that on to
+/// every process it starts: the program would then ignore the Ctrl+C its
+/// terminal sends (the console's CTRL_C_EVENT for a Ctrl+C typed in processed
+/// input), where a program node-pty starts gets it. The holder itself has no
+/// console (DETACHED_PROCESS), so no Ctrl+C reaches it.
+///
+/// The setting is the whole process's, and nothing here turns Ctrl+C off
+/// again, so once a call has worked it is not made again. A call that fails
+/// fails the start: a held program that ignored every Ctrl+C is the very bug
+/// this fixes, so the app starts that terminal the usual way instead.
+fn ctrl_c_on_for_children() -> io::Result<()> {
+    static ON: AtomicBool = AtomicBool::new(false);
+    if ON.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    // No handler routine and FALSE: only this process's own Ctrl+C setting
+    // changes.
+    if unsafe { SetConsoleCtrlHandler(None, 0) } == 0 {
+        return Err(os_error("SetConsoleCtrlHandler"));
+    }
+    ON.store(true, Ordering::Release);
+    Ok(())
+}
+
 impl Pty {
     /// Start `argv` with the holder's own folder and environment.
     pub fn spawn(argv: &[String], size: PtySize) -> io::Result<(Pty, Box<dyn Read + Send>)> {
@@ -418,6 +445,8 @@ impl Pty {
             check_full_name(&opts.argv[0])?;
         }
         check_windows_fields(opts)?;
+        // Before anything is made, so a failure leaves nothing to undo.
+        ctrl_c_on_for_children()?;
         // Loaded first: a bundled ConPTY that cannot be used fails the start
         // before anything is made or started. Its folder and files stay held
         // until this start is over, past the pseudoconsole's making.
@@ -506,15 +535,6 @@ impl Pty {
                 Some(p) => p.as_ptr(),
                 None => std::ptr::null(),
             };
-            // Ctrl+C on again before the program starts. `hold --detach`
-            // starts the holder in a process group of its own
-            // (CREATE_NEW_PROCESS_GROUP, detach.rs), which turns Ctrl+C off
-            // for it, and a process hands that on to every process it starts:
-            // the program would then ignore the Ctrl+C its terminal sends (the
-            // console's CTRL_C_EVENT for a Ctrl+C typed in processed input),
-            // where a program node-pty starts gets it. The holder itself has
-            // no console (DETACHED_PROCESS), so no Ctrl+C reaches it.
-            SetConsoleCtrlHandler(None, 0);
             let ok = CreateProcessW(
                 program_ptr,
                 cmdline.as_mut_ptr(),

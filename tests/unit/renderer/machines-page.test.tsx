@@ -252,10 +252,34 @@ describe('Machines page: what it shows for each helper state', () => {
     }
     // A plain terminal left the same way still offers Re-attach.
     expect(byLabel('Re-attach build watcher')?.disabled).toBe(false)
-    // End on an agent session asks first, and ends it through the bridge.
+    // What each is doing (PR review): an agent session no tab shows is one a
+    // crash or a quit left, being ended, never waiting to be shown again. One
+    // its tab shows reads as attached; a plain one left reads as before.
+    const state = (r: HTMLElement) => r.querySelector('[data-testid="machines-session-state"]')?.textContent
+    expect(state(rows[0])).toBe('Being ended')
+    expect(state(rows[1])).toBe('Attached to the app')
+    expect(state(rows[2])).toBe('Waiting for the app. No tab shows it.')
+    expect(state(rows[3])).toBe('Waiting for the app. No tab shows it.')
+    // End on an agent session asks first, in its own words (its tab keeps its
+    // scrollback and can resume the conversation), and ends it through the bridge.
     await click(byLabel('End Payments'))
-    await click(byLabel('End terminal Payments'))
+    expect(byTestId('machines-end-confirm')?.textContent).toContain('End this Claude Code session? Its CLI stops. Its tab can resume the conversation.')
+    expect(byTestId('machines-end-confirm')?.textContent).not.toContain('scrollback')
+    expect(byLabel('End terminal Payments')).toBeNull()
+    await click(byLabel('End session Payments'))
     expect(bridge.endSession).toHaveBeenCalledWith('c')
+  })
+
+  it('ending a Codex session asks in its own words too, and a terminal still asks as a terminal (PR review)', async () => {
+    install(status({}, [held({ id: 'x', label: 'Docs', kind: 'codex' }), held({ id: 'p', label: 'build watcher', kind: 'plain' })]))
+    await open()
+    await click(byLabel('End Docs'))
+    expect(byTestId('machines-end-confirm')?.textContent).toContain('End this Codex session? Its CLI stops. Its tab can resume the conversation.')
+    expect(byText('End session')).toBeTruthy()
+    await click(byText('Keep it'))
+    await click(byLabel('End build watcher'))
+    expect(byTestId('machines-end-confirm')?.textContent).toContain('End this terminal? Whatever is running in it stops, and its scrollback is lost.')
+    expect(byLabel('End terminal build watcher')).toBeTruthy()
   })
 
   it('failed: says it failed, gives the reason, and still lets you run the self-test', async () => {

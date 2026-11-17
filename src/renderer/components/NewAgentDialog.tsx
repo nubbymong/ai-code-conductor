@@ -7,6 +7,7 @@ import { useProviderAccountsStore, externalSignInRetiring } from '../stores/prov
 import { resolveAccountName } from '../../shared/account-chip-color'
 import { useLaunchGateSettings } from '../hooks/useLaunchConfig'
 import { codexPreference, usesClaude } from '../onboarding/provider-choice'
+import { PROVIDER_NAMES } from '../provider-names'
 import { accountEmail, accountFieldState, defaultAccountId, noticeText, providerTooOldText, NO_ACCOUNT } from '../utils/launchAccount'
 import type { CloudAgentCodexOptions, ProviderId } from '../../shared/types'
 import {
@@ -31,8 +32,6 @@ interface Props {
   initialName?: string
   initialDescription?: string
 }
-
-const PROVIDER_NAMES: Readonly<Record<ProviderId, string>> = { claude: 'Claude Code', codex: 'Codex' }
 
 export default function NewAgentDialog({ onClose, initialName, initialDescription }: Props) {
   const [name, setName] = useState(initialName ?? '')

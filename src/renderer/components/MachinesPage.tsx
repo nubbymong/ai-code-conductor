@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import PageFrame from './PageFrame'
 import { DialogButton } from './ui/Dialog'
 import { MACHINES_NO_ANSWER, type HeldSession, type HelperState, type MachineActionResult, type MachineStatus, type SelfTestResult } from '../../shared/machines'
+import type { ProviderId } from '../../shared/providers'
 import { showHeldTerminalTab } from '../utils/heldTerminalTab'
+import { PROVIDER_NAMES } from '../provider-names'
 
 // The Machines page (2.1.3-beta.6, plan section C): one card, This computer.
 // It shows what the session helper is doing and the terminals it holds, and
@@ -66,27 +68,26 @@ function formatWhen(ms: number, now: number = Date.now()): string {
   return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
 }
 
-/** What a held terminal is doing, in plain words. */
-function sessionStateText(s: Pick<HeldSession, 'attached' | 'tabOpen'>): string {
+/** The CLI an agent session's row names (2.1.3-beta.7); null for a plain or
+ *  partner terminal, and for a kind this version does not know. */
+function agentName(kind: HeldSession['kind']): string | null {
+  return Object.prototype.hasOwnProperty.call(PROVIDER_NAMES, kind) ? PROVIDER_NAMES[kind as ProviderId] : null
+}
+
+/** What a held terminal is doing, in plain words. An agent session no tab
+ *  shows is one a crash or a quit left: it is being ended, never shown again. */
+function sessionStateText(s: Pick<HeldSession, 'attached' | 'tabOpen' | 'kind'>): string {
+  if (agentName(s.kind) !== null && !s.attached && !s.tabOpen) return 'Being ended'
   if (s.attached) return s.tabOpen ? 'Attached to the app' : 'Attached to the app. No tab shows it.'
   return s.tabOpen ? 'Waiting for the app' : 'Waiting for the app. No tab shows it.'
 }
 
-/** What each kind is called on its row (2.1.3-beta.7: agent sessions by their CLI). */
-const KIND_TEXT: Readonly<Record<HeldSession['kind'], string>> = {
-  plain: 'Terminal',
-  partner: 'Partner terminal',
-  claude: 'Claude Code',
-  codex: 'Codex',
-}
+/** What each kind is called on its row: a terminal by its kind, an agent
+ *  session by its CLI (2.1.3-beta.7). */
+const KIND_TEXT: Readonly<Record<HeldSession['kind'], string>> = { plain: 'Terminal', partner: 'Partner terminal', ...PROVIDER_NAMES }
 
 /** Which kinds Re-attach can show in a tab: an agent session is ended, never re-attached. */
-const REATTACHABLE: Readonly<Record<HeldSession['kind'], boolean>> = {
-  plain: true,
-  partner: true,
-  claude: false,
-  codex: false,
-}
+const REATTACHABLE: Readonly<Partial<Record<HeldSession['kind'], boolean>>> = { plain: true, partner: true }
 
 function kindText(kind: HeldSession['kind']): string {
   return KIND_TEXT[kind] ?? 'Terminal'
@@ -131,6 +132,10 @@ function SessionRow({
   const warnId = useId()
   const rowRef = useRef<HTMLLIElement>(null)
   const backedOut = useRef(false)
+  // An agent session ends its CLI, not a terminal's scrollback: its tab keeps
+  // that, and can resume the conversation.
+  const agent = agentName(session.kind)
+  const endWord = agent ? 'End session' : 'End terminal'
   // Keyboard and screen-reader users keep their place. The question opens on its
   // safe answer (Keep it). Backing out (and only that) puts focus back on this
   // row's End. The question closing for any other reason, such as another row's
@@ -206,11 +211,13 @@ function SessionRow({
           data-testid="machines-end-confirm"
         >
           <span id={warnId} className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>
-            End this terminal? Whatever is running in it stops, and its scrollback is lost.
+            {agent
+              ? `End this ${agent} session? Its CLI stops. Its tab can resume the conversation.`
+              : 'End this terminal? Whatever is running in it stops, and its scrollback is lost.'}
           </span>
           {/* The name starts with the visible words, so "click End terminal" finds it (WCAG 2.5.3). */}
-          <DialogButton variant="danger-solid" onClick={onConfirmEnd} disabled={busy} aria-label={`End terminal ${session.label}`} aria-describedby={warnId}>
-            End terminal
+          <DialogButton variant="danger-solid" onClick={onConfirmEnd} disabled={busy} aria-label={`${endWord} ${session.label}`} aria-describedby={warnId}>
+            {endWord}
           </DialogButton>
           <DialogButton variant="ghost" onClick={keepIt} disabled={busy} data-machines-keep="" aria-describedby={warnId}>
             Keep it

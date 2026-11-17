@@ -71,6 +71,11 @@ describe('the setting', () => {
     const page = readFileSync(resolve(__dirname, '../../../src/renderer/components/SettingsPage.tsx'), 'utf8')
     expect(page).toContain('Plain terminals through the session helper')
     expect(page).toContain('data-testid="setting-plain-terminals-helper"')
+    // Its note sends Claude Code and Codex to the switch below it (2.1.3-beta.7, PR review).
+    const plain = page.indexOf('data-testid="setting-plain-terminals-helper"')
+    const block = page.slice(plain, page.indexOf('</label>', plain))
+    expect(block).toContain('Claude Code and Codex sessions have their own switch below, and SSH sessions are not affected.')
+    expect(block).not.toContain('Claude Code, Codex and SSH sessions are not affected.')
   })
 
   it('the agent sessions\' setting (2.1.3-beta.7) is off by default too, beside it, and its note says what a crash and Windows do', () => {

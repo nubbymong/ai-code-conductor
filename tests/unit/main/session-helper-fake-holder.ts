@@ -68,6 +68,8 @@ export class FakeHolder {
   readonly started = Date.now()
   /** The helper version its record reports. */
   helperVersion = '0.1.0'
+  /** Its away clock in seconds, as its record reports it. */
+  away = 120
   launch: Json | null = null
   child: 'waiting' | 'running' | 'exited' = 'waiting'
   code: number | null = null
@@ -111,7 +113,7 @@ export class FakeHolder {
   record(): HolderRecord {
     return {
       v: 1, session: this.sid, label: this.label, pid: this.pid, endpoint: this.endpoint, nonce: this.nonce,
-      helper: this.helperVersion, started: this.started, away: 120, attached: !!this.attached, child: this.child, code: this.code,
+      helper: this.helperVersion, started: this.started, away: this.away, attached: !!this.attached, child: this.child, code: this.code,
     }
   }
 
@@ -277,6 +279,10 @@ export class FakeHelper {
   listFails = false
   /** `hold --detach` notes that the holder stays inside the app's job. */
   insideJob = false
+  /** Set: a `hold` that arrives waits for it before its holder starts (a slow start). */
+  holdGate: Promise<void> | null = null
+  /** Every holder `hold` started, in order (the map keeps only the last of a session). */
+  readonly made: FakeHolder[] = []
 
   exec = async (file: string, args: string[]): Promise<ExecResult> => {
     this.calls.push({ file, args })
@@ -285,12 +291,14 @@ export class FakeHelper {
     if (cmd === 'version') return { code: 0, stdout: `${this.version}\n`, stderr: '' }
     if (cmd === 'hold') {
       const sid = opt('--session')
+      if (this.holdGate) await this.holdGate
       const existing = this.holders.get(sid)
       if (existing && !existing.ended && !existing.gone) return { code: 3, stdout: '', stderr: 'aicc-helper: a holder for this session is already running\n' }
       const h = new FakeHolder(sid, opt('--label'), opt('--store'))
       if (this.holdBusy) h.launch = { t: 'term.launch' }
       h.writeRecord()
       this.holders.set(sid, h)
+      this.made.push(h)
       const note = this.insideJob ? "aicc-helper: note: this process's job does not let a process leave it, so the holder runs inside the job and ends when the job does\n" : ''
       return { code: 0, stdout: `${JSON.stringify(h.record())}\n`, stderr: note }
     }

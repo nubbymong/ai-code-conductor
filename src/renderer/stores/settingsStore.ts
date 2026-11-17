@@ -400,7 +400,8 @@ export interface AppSettings {
   clickableQuestions?: boolean
   /** 2.1.3-beta.6 (preview): a Terminal only tab and a partner terminal start
    *  inside the session helper, so they survive an app crash. OFF by default
-   *  (absent/false). Claude Code, Codex and SSH sessions are not affected.
+   *  (absent/false). Claude Code and Codex sessions have their own switch
+   *  (agentSessionsThroughHelper), and SSH sessions are not affected.
    *  Applies to terminals opened after the change. */
   plainTerminalsThroughHelper?: boolean
   /** 2.1.3-beta.7 (preview): a local Claude Code or Codex session starts

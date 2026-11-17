@@ -14,6 +14,9 @@ const h = vi.hoisted(() => ({
   /** The last run with the helper on did not quit normally (its running mark is there). */
   crashMark: false,
   crashMarkAsked: [] as string[],
+  /** The store holds an agent session's record a quit left (a held CLI it could not wait to end). */
+  agentRecords: false,
+  agentRecordsAsked: [] as string[],
 }))
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => 'C:\\app' } }))
@@ -38,6 +41,7 @@ vi.mock('../../../src/main/session-helper/manager', () => {
     SessionHelperManager,
     getSessionHelper: () => h.current,
     crashMarkIn: (root: string) => { h.crashMarkAsked.push(root); return h.crashMark },
+    agentRecordsIn: (root: string) => { h.agentRecordsAsked.push(root); return h.agentRecords },
     setSessionHelper: (m: unknown) => { h.current = m },
   }
 })
@@ -52,6 +56,8 @@ beforeEach(() => {
   h.quitAnswer = null
   h.crashMark = false
   h.crashMarkAsked.length = 0
+  h.agentRecords = false
+  h.agentRecordsAsked.length = 0
   h.made.length = 0
   h.current = null
   h.machinesSource.mockReset()
@@ -72,8 +78,10 @@ describe('session helper wiring', () => {
     h.settings = null
     initSessionHelper(() => {})
     expect(h.made).toHaveLength(0)
-    // The mark was looked for, in the helper's own folder.
+    // The mark was looked for, in the helper's own folder, and so was an
+    // agent session a quit left held.
     expect(h.crashMarkAsked).toEqual(['C:\\user\\helper', 'C:\\user\\helper'])
+    expect(h.agentRecordsAsked).toEqual(['C:\\user\\helper', 'C:\\user\\helper'])
     expect(h.machinesSource).not.toHaveBeenCalled()
     expect(sessionHelperServiceState()).toBeNull()
     // And the quit and the tab note have nothing to do.
@@ -108,6 +116,14 @@ describe('session helper wiring', () => {
     applySessionHelperSettings()
     expect(h.made).toHaveLength(1)
     expect(h.made[0].start).toHaveBeenLastCalledWith({ atStartup: false, plain: false, agents: true })
+  })
+
+  it('both settings off with no crash mark, but an agent session a quit left held: the helper still comes up, carrying nothing new, to end it before its tab starts again (PR review)', () => {
+    h.agentRecords = true
+    initSessionHelper(() => {})
+    expect(h.made).toHaveLength(1)
+    expect(h.made[0].start).toHaveBeenCalledWith({ atStartup: true, plain: false, agents: false })
+    expect(h.machinesSource).toHaveBeenCalledWith(h.made[0])
   })
 
   it('a settings save switches it: on starts it (not as a start-up), off stops routing; terminals already through it keep running', () => {

@@ -10,7 +10,7 @@ const ptySpawn = vi.hoisted(() => vi.fn())
 vi.mock('node-pty', () => ({ spawn: ptySpawn }))
 
 import { createRequire } from 'module'
-import { HELPER_SENTENCES, SessionHelperManager, nodePtyCommandLine, offStillHoldingSentence, setSessionHelper, spawnAgentPty, spawnPlainPty, whenHeldKnown } from '../../../src/main/session-helper/manager'
+import { HELPER_SENTENCES, SessionHelperManager, agentRecordsIn, crashMarkIn, nodePtyCommandLine, offStillHoldingSentence, setSessionHelper, spawnAgentPty, spawnPlainPty, whenHeldKnown } from '../../../src/main/session-helper/manager'
 import { HolderConnection } from '../../../src/main/session-helper/connection'
 import { HelperPty } from '../../../src/main/session-helper/helper-pty'
 import { heldAgentSessionId, heldIdKind, heldSessionId } from '../../../src/main/session-helper/protocol'
@@ -36,6 +36,28 @@ async function until(cond: () => boolean, what: string, ms = 3000): Promise<void
   while (!cond()) {
     if (Date.now() > end) throw new Error(`timed out waiting for ${what}`)
     await tick(5)
+  }
+}
+
+// Under fake timers (vi.useFakeTimers with setTimeout, clearTimeout and Date):
+// the test's clock moves on in steps, and real time passes briefly between
+// them, so file reads (the helper copy's hash) and the in-memory streams move
+// on too. Real time is the real setTimeout, kept from before any faking, and
+// performance.now, which is never faked here.
+const realSetTimeout = globalThis.setTimeout
+const realWait = (ms: number) => new Promise<void>((r) => { realSetTimeout(r, ms) })
+async function step(ms = 50): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ms)
+  await realWait(2)
+}
+async function stepFor(ms: number): Promise<void> {
+  for (let t = 0; t < ms; t += 50) await step(50)
+}
+async function stepUntil(cond: () => boolean, what: string, realMs = 10_000): Promise<void> {
+  const end = performance.now() + realMs
+  while (!cond()) {
+    if (performance.now() > end) throw new Error(`timed out waiting for ${what}`)
+    await step(50)
   }
 }
 
@@ -536,13 +558,36 @@ describe('a normal quit ends every terminal through the helper', () => {
     expect(helper.holders.get(sid)!.ended).toBe(true)
   })
 
-  it('a terminal still starting at the quit is ended once its holder is up', async () => {
+  it('a terminal still starting at the quit starts no holder at all (PR review: a start no longer wanted starts nothing)', async () => {
     const m = await started(makeManager())
     setSessionHelper(m)
-    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef24' }, SHELL, [], opts())
+    const before = helper.holds()
+    const p = spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef24' }, SHELL, [], opts())
     const sid = heldSessionId('abcdef0123456789abcdef24')
+    const exits: number[] = []
+    p.onExit((e) => exits.push(e.exitCode))
     const done = m.shutdown()
     expect(done).not.toBeNull()
+    await done
+    await tick(50)
+    expect(helper.holds()).toBe(before)
+    expect(helper.holders.get(sid)).toBeUndefined()
+    expect(exits).toHaveLength(1)
+    expect(ptySpawn).not.toHaveBeenCalled()
+  })
+
+  it('a terminal whose holder was already being started at the quit is ended once its holder is up', async () => {
+    const m = await started(makeManager())
+    setSessionHelper(m)
+    let open!: () => void
+    helper.holdGate = new Promise<void>((r) => { open = r })
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef25' }, SHELL, [], opts())
+    const sid = heldSessionId('abcdef0123456789abcdef25')
+    await until(() => helper.holds() === 1, 'the hold under way')
+    const done = m.shutdown()
+    expect(done).not.toBeNull()
+    helper.holdGate = null
+    open()
     await done
     await until(() => helper.holders.get(sid)?.ended === true, 'the end of the late holder')
   })
@@ -1003,6 +1048,9 @@ describe('agent sessions after a crash (plan s11, Q1): ended, never shown again'
     // Nothing started for the tab while the old session still runs.
     expect(helper.holds()).toBe(holdsBefore)
     expect(ptySpawn).not.toHaveBeenCalled()
+    // The page lists the old one as no tab's, being ended, though its tab
+    // waits under the same id to start a new one (PR review).
+    expect((await second.status()).sessions.find((s) => s.id === claudeSid)).toMatchObject({ kind: 'claude', attached: false, tabOpen: false })
     release()
     await until(() => helper.holders.get(claudeSid) !== oldClaude && !!helper.holders.get(claudeSid)?.attached, 'the new holder')
     expect(oldClaude.ended).toBe(true)
@@ -1010,29 +1058,38 @@ describe('agent sessions after a crash (plan s11, Q1): ended, never shown again'
     expect(ptySpawn).not.toHaveBeenCalled()
   })
 
-  it('a tab that starts again waits for that end however long it takes, past five seconds too (PR review: no start before the old CLI is gone)', async () => {
+  it('a tab that starts again waits past five seconds for that end (PR review: no start before the old CLI is gone)', async () => {
     const { claudeSid } = await crashedWith()
     const oldClaude = helper.holders.get(claudeSid)!
     let release!: () => void
     oldClaude.endGate = new Promise<void>((r) => { release = r })
     // The end's answer times out quickly, so a start that went ahead after a
-    // five-second wait and one unanswered end would have gone ahead by now.
+    // five-second wait and one unanswered end would have gone ahead by then.
     const second = makeManager({ replyTimeoutMs: 500 })
     setSessionHelper(second)
     void second.start(ON_AGENTS)
-    await until(() => oldClaude.endsAsked >= 1, 'the end to be asked')
-    const holdsBefore = helper.holds()
-    const p = spawnAgentPty(claudeTab('abcdef0123456789abcdef71'), SHELL, [], agentOpts())
-    await tick(6500)
-    expect(helper.holds()).toBe(holdsBefore)
-    expect(ptySpawn).not.toHaveBeenCalled()
-    expect(oldClaude.ended).toBe(false)
-    release()
-    // The next try (every 2 s) finds it gone.
-    await until(() => helper.holders.get(claudeSid) !== oldClaude && !!helper.holders.get(claudeSid)?.attached, 'the new holder', 8000)
-    expect((p as HelperPty).throughHelper).toBe(true)
-    expect(ptySpawn).not.toHaveBeenCalled()
-  }, 20_000)
+    await until(() => oldClaude.endsAsked >= 1 && second.serviceState().state === 'ready', 'the end to be asked, and the helper ready')
+    // From here the timers are the test's: more than five seconds
+    // (ENDING_WAIT_MS) pass in steps, with no real waiting beyond what the
+    // file reads need.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const holdsBefore = helper.holds()
+      const p = spawnAgentPty(claudeTab('abcdef0123456789abcdef71'), SHELL, [], agentOpts())
+      await stepFor(6500)
+      await realWait(300)
+      expect(helper.holds()).toBe(holdsBefore)
+      expect(ptySpawn).not.toHaveBeenCalled()
+      expect(oldClaude.ended).toBe(false)
+      release()
+      // The next try (every 2 s) finds it gone.
+      await stepUntil(() => helper.holders.get(claudeSid) !== oldClaude && !!helper.holders.get(claudeSid)?.attached, 'the new holder')
+      expect((p as HelperPty).throughHelper).toBe(true)
+      expect(ptySpawn).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 
   it('an earlier holder that still runs and cannot be reached: the tab starts nothing and says why; once the helper no longer lists it, the next start goes ahead', async () => {
     const { claudeSid } = await crashedWith()
@@ -1119,5 +1176,205 @@ describe('agent sessions on the Machines page', () => {
     expect(helper.holders.get(x)!.ended).toBe(true)
     expect(exits).toHaveLength(1)
     await until(() => m.serviceState().held === 1, 'one left')
+  })
+})
+
+// ── PR #705 review: the branches each fix or check below rests on ────────────
+
+describe('agent sessions: the switches, the marks and the waits (PR review)', () => {
+  const TAB = 'abcdef0123456789abcdefa1'
+  const SID = heldAgentSessionId(TAB, 'claude')
+
+  /** A held Claude Code session the last run left: by a crash (its running
+   *  mark stays), or by a normal quit whose end never arrived (it went). */
+  async function leftHeld(how: 'crash' | 'quit'): Promise<FakeHolder> {
+    const first = await startedWith(makeManager(), ON_AGENTS)
+    setSessionHelper(first)
+    spawnAgentPty(claudeTab(TAB), SHELL, [], agentOpts())
+    await until(() => !!helper.holders.get(SID)?.attached, 'the session to attach')
+    crash(first)
+    if (how === 'quit') rmSync(join(root, 'app-running.json'))
+    return helper.holders.get(SID)!
+  }
+
+  it('the crash mark is the file start() writes and a normal quit removes; an agent session\'s record in the store is found, a plain one\'s is not', async () => {
+    expect(crashMarkIn(root)).toBe(false)
+    expect(agentRecordsIn(root, 'win32')).toBe(false)
+    const m = await started(makeManager(), false)
+    expect(crashMarkIn(root)).toBe(true)
+    setSessionHelper(m)
+    m.setRouting({ plain: true, agents: true })
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdefa2' }, SHELL, [], opts())
+    await until(() => !!helper.holders.get(heldSessionId('abcdef0123456789abcdefa2'))?.attached, 'the plain terminal')
+    expect(agentRecordsIn(root, 'win32')).toBe(false)
+    spawnAgentPty(claudeTab(TAB), SHELL, [], agentOpts())
+    await until(() => !!helper.holders.get(SID)?.attached, 'the agent session')
+    expect(agentRecordsIn(root, 'win32')).toBe(true)
+    await m.shutdown()
+    expect(crashMarkIn(root)).toBe(false)
+    expect(agentRecordsIn(root, 'win32')).toBe(false)
+  })
+
+  it('setRouting decides each kind on its own, and once a quit began nothing new is carried, whatever a late save says', async () => {
+    const m = await started(makeManager())
+    setSessionHelper(m)
+    m.setRouting({ plain: false, agents: true })
+    expect(spawnAgentPty(claudeTab('abcdef0123456789abcdefa3'), SHELL, [], agentOpts())).toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdefa4' }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+    m.setRouting({ plain: true, agents: false })
+    expect(spawnAgentPty(claudeTab('abcdef0123456789abcdefa5'), SHELL, [], agentOpts())).not.toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdefa6' }, SHELL, [], opts())).toBeInstanceOf(HelperPty)
+    await m.shutdown()
+    m.setRouting({ plain: true, agents: true })
+    expect(m.routesAgents()).toBe(false)
+    expect(m.routesPlain()).toBe(false)
+    expect(spawnAgentPty(claudeTab('abcdef0123456789abcdefa7'), SHELL, [], agentOpts())).not.toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdefa8' }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+  })
+
+  it('a start the tab ends while it waits for the earlier holder starts nothing, and the next start gets a holder of its own whose launch is never ended', async () => {
+    const old = await leftHeld('crash')
+    let release!: () => void
+    old.endGate = new Promise<void>((r) => { release = r })
+    const second = makeManager()
+    setSessionHelper(second)
+    void second.start(ON_AGENTS)
+    await until(() => old.endsAsked === 1 && second.serviceState().state === 'ready', 'the end to be asked, and the helper ready')
+    const madeBefore = helper.made.length
+    const holdsBefore = helper.holds()
+    const first = spawnAgentPty(claudeTab(TAB), SHELL, [], agentOpts())
+    const firstExits: number[] = []
+    first.onExit((e) => firstExits.push(e.exitCode))
+    await tick(50)
+    // A Restart: the waiting start is ended, and the tab starts again at once.
+    first.kill()
+    const next = spawnAgentPty(claudeTab(TAB), SHELL, [], agentOpts())
+    release()
+    await until(() => helper.holders.get(SID) !== old && !!helper.holders.get(SID)?.attached, 'the new holder')
+    await tick(100)
+    // One hold, for the next start: the ended one asked for none.
+    expect(helper.holds() - holdsBefore).toBe(1)
+    expect(helper.made.length - madeBefore).toBe(1)
+    const fresh = helper.holders.get(SID)!
+    expect(fresh.ended).toBe(false)
+    expect(fresh.requests.filter((r) => r.t === 'term.launch')).toHaveLength(1)
+    expect(fresh.requests.filter((r) => r.t === 'term.end')).toHaveLength(0)
+    expect((next as HelperPty).throughHelper).toBe(true)
+    expect(firstExits).toHaveLength(1)
+    expect(ptySpawn).not.toHaveBeenCalled()
+  })
+
+  it('Restart of a held Claude Code session still starting: the new start waits until the old holder is up and ended, then starts its own', async () => {
+    const m = await startedWith(makeManager(), ON_AGENTS)
+    setSessionHelper(m)
+    let open!: () => void
+    helper.holdGate = new Promise<void>((r) => { open = r })
+    const first = spawnAgentPty(claudeTab(TAB), SHELL, [], agentOpts())
+    await until(() => helper.holds() === 1, 'the first hold under way')
+    first.kill()
+    const next = spawnAgentPty(claudeTab(TAB), SHELL, [], agentOpts())
+    await tick(100)
+    expect(helper.holds()).toBe(1)
+    // The ended flag of every holder started so far, at each later hold.
+    const seenAtHold: boolean[][] = []
+    const exec = helper.exec
+    helper.exec = async (file, args) => {
+      if (args[0] === 'hold') seenAtHold.push(helper.made.map((h) => h.ended))
+      return exec(file, args)
+    }
+    helper.holdGate = null
+    open()
+    await until(() => helper.made.length === 2 && !!helper.made[1].attached, 'the second holder')
+    await tick(100)
+    expect(seenAtHold).toEqual([[true]])
+    expect(helper.made[0].ended).toBe(true)
+    expect(helper.made[0].requests.filter((r) => r.t === 'term.launch')).toHaveLength(0)
+    expect(helper.made[1].ended).toBe(false)
+    expect(helper.made[1].requests.filter((r) => r.t === 'term.launch')).toHaveLength(1)
+    expect(helper.made[1].requests.filter((r) => r.t === 'term.end')).toHaveLength(0)
+    expect((next as HelperPty).throughHelper).toBe(true)
+    expect(ptySpawn).not.toHaveBeenCalled()
+  })
+
+  it('an agent session a normal quit could not end is ended at the next start, with its setting off too, and its tab, restored at once, waits for that end', async () => {
+    const old = await leftHeld('quit')
+    let release!: () => void
+    old.endGate = new Promise<void>((r) => { release = r })
+    // The start-up makes a manager for it (app-wiring), whatever the settings say.
+    expect(crashMarkIn(root)).toBe(false)
+    expect(agentRecordsIn(root, 'win32')).toBe(true)
+    const second = makeManager()
+    setSessionHelper(second)
+    void second.start({ atStartup: true, plain: true, agents: false })
+    const o = agentOpts()
+    const p = spawnAgentPty(claudeTab(TAB), SHELL, [], o)
+    await tick(150)
+    expect(ptySpawn).not.toHaveBeenCalled()
+    release()
+    await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
+    expect(old.ended).toBe(true)
+    expect(ptySpawn.mock.calls[0][2]).toBe(o)
+    expect((p as HelperPty).throughHelper).toBe(false)
+  })
+
+  it('a quit\'s leftover whose store record does not read is still ended, from the listing', async () => {
+    const old = await leftHeld('quit')
+    writeFileSync(join(root, 'store', `${SID}.json`), 'not a record')
+    const second = makeManager()
+    setSessionHelper(second)
+    void second.start({ atStartup: true, plain: false, agents: false })
+    await until(() => old.ended, 'the end from the listing')
+  })
+
+  it('after a crash, an agent session the store read missed but the listing has is ended too, never kept', async () => {
+    const old = await leftHeld('crash')
+    writeFileSync(join(root, 'store', `${SID}.json`), 'not a record')
+    const second = makeManager()
+    setSessionHelper(second)
+    void second.start(ON_AGENTS)
+    await until(() => old.ended, 'the end from the listing')
+    expect(old.attaches).toBe(1)
+  })
+
+  it('an unreachable earlier holder while the helper cannot list: the start waits until no process has its id, then goes ahead', async () => {
+    const old = await leftHeld('crash')
+    old.unreachable = true
+    helper.listFails = true
+    let clock = Date.now()
+    let tries = 0
+    const asked: number[] = []
+    const second = makeManager({
+      now: () => clock,
+      // Its process goes after the third wait between tries.
+      sleep: async () => { clock += 2_000; if (++tries === 3) old.vanish() },
+      processGone: (pid) => { asked.push(pid); return old.gone },
+    })
+    setSessionHelper(second)
+    void second.start(ON_AGENTS)
+    const p = spawnAgentPty(claudeTab(TAB), SHELL, [], agentOpts())
+    await until(() => helper.holders.get(SID) !== old && !!helper.holders.get(SID)?.attached, 'the new holder')
+    expect(asked.length).toBeGreaterThanOrEqual(4)
+    expect(new Set(asked)).toEqual(new Set([old.pid]))
+    expect((p as HelperPty).throughHelper).toBe(true)
+    expect(ptySpawn).not.toHaveBeenCalled()
+  })
+
+  it('an earlier holder with a long away clock is waited for 5 minutes and 10 s at most, then the tab starts nothing', async () => {
+    const old = await leftHeld('crash')
+    old.unreachable = true
+    old.away = 3600
+    old.writeRecord()
+    const t0 = Date.now()
+    let clock = t0
+    const second = makeManager({ now: () => clock, sleep: async () => { clock += 30_000 } })
+    setSessionHelper(second)
+    void second.start(ON_AGENTS)
+    const p = spawnAgentPty(claudeTab(TAB), SHELL, [], agentOpts())
+    let gaveUpAt = 0
+    p.onExit(() => { gaveUpAt = clock })
+    await until(() => gaveUpAt > 0, 'the tab to end with nothing started')
+    expect(gaveUpAt - t0).toBeGreaterThanOrEqual(5 * 60_000 + 10_000)
+    expect(gaveUpAt - t0).toBeLessThan(5 * 60_000 + 10_000 + 30_000)
+    expect(ptySpawn).not.toHaveBeenCalled()
   })
 })
