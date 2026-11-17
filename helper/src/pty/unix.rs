@@ -70,7 +70,8 @@ impl ExitWatch {
     pub fn wait(self) -> io::Result<()> {
         loop {
             let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            let rc = unsafe { libc::waitid(libc::P_PID, self.pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) };
+            // MUTANT M6: the watch reaps the child (no WNOWAIT).
+            let rc = unsafe { libc::waitid(libc::P_PID, self.pid as libc::id_t, &mut info, libc::WEXITED) };
             if rc == 0 {
                 return Ok(());
             }
