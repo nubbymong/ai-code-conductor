@@ -12,19 +12,29 @@
 //! pointer), so handles are held as `usize` and converted with `as` at each
 //! call, which both forms accept.
 //!
-//! The pseudoconsole is Windows' own, or, when a launch asks for it
-//! (protocol change 2), the bundled one: the `conpty.dll` in a `conpty`
+//! The pseudoconsole is Windows' own, or, when a launch asks for it (the
+//! launch field `conpty`), the bundled one: the `conpty.dll` in a `conpty`
 //! folder beside the helper's own program file, which starts the
-//! `OpenConsole.exe` beside it. It is the one node-pty ships, and its calls
-//! are the ones node-pty makes (`ConptyCreatePseudoConsole`,
-//! `ConptyResizePseudoConsole`, `ConptyClosePseudoConsole`). The library is
-//! loaded by its full path, with only its own folder and System32 searched
-//! for what it needs, and no path from a frame is ever used. When it is not
-//! there or does not load, the start fails before anything is made.
+//! `OpenConsole.exe` beside it. It is the one node-pty ships. Three of
+//! node-pty's calls are made on it (`ConptyCreatePseudoConsole`,
+//! `ConptyResizePseudoConsole`, `ConptyClosePseudoConsole`);
+//! `ConptyReleasePseudoConsole`, which node-pty calls after the start, is
+//! not, so a session ends as it does on Windows' own ConPTY: when the
+//! program exits, the holder closes the pseudoconsole. The folder and both
+//! files must be plain (no link or other reparse point) and are held open
+//! from that check until the pseudoconsole is made, so none can be written,
+//! renamed or removed in between. The library is loaded by its full path,
+//! with only its own folder and System32 searched for what it needs, and no
+//! path from a frame is ever used. When it is not there, does not load or
+//! lacks one of the calls, the start fails before anything is made; a
+//! library that lacks a call is unloaded again.
 //!
-//! A launch may also give the exact command line (`line`): the program is
-//! still `argv[0]`, named to `CreateProcessW` on its own, so no word of the
-//! line can make it start another program.
+//! A launch may also give the exact command line (`line`). `CreateProcessW`
+//! starts the program at `argv[0]` (`lpApplicationName`), by that exact path
+//! with no search, and `line` is only the text that program reads. A command
+//! interpreter runs what its line says, so `line` gives nothing `argv` could
+//! not already say. A batch file is refused with it (`check_windows_fields`):
+//! Windows would start cmd.exe for it, reading the line as commands.
 #![allow(unsafe_code)]
 
 use super::{check_argv, check_cwd, check_env, check_windows_fields, Conpty, PtySize, SpawnOptions};
@@ -37,7 +47,11 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HMODULE};
+use windows_sys::Win32::Foundation::{CloseHandle, FreeLibrary, GENERIC_READ, HANDLE, HMODULE};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+};
 use windows_sys::Win32::System::Console::{ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON};
 use windows_sys::Win32::System::Diagnostics::Debug::{SetThreadErrorMode, SEM_FAILCRITICALERRORS};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32};
@@ -61,14 +75,19 @@ const END_WAIT_MS: u32 = 5000;
 
 /// The bundled ConPTY's folder name, beside the helper's own program file.
 pub const BUNDLED_FOLDER: &str = "conpty";
+/// The bundled ConPTY's library, in that folder.
+const BUNDLED_DLL: &str = "conpty.dll";
+/// The console host the library starts, beside it.
+const BUNDLED_HOST: &str = "OpenConsole.exe";
 
 /// The bundled conpty.dll's calls, as node-pty declares them (conpty.cc).
 type CreateFn = unsafe extern "system" fn(COORD, HANDLE, HANDLE, u32, *mut HPCON) -> i32;
 type ResizeFn = unsafe extern "system" fn(HPCON, COORD) -> i32;
 type CloseFn = unsafe extern "system" fn(HPCON);
 
-/// The calls of a loaded bundled conpty.dll. The library is never unloaded:
-/// a pseudoconsole it made is closed through it, as late as the holder's end.
+/// The calls of a loaded bundled conpty.dll. A library with all three is
+/// never unloaded: a pseudoconsole it made is closed through it, as late as
+/// the holder's end.
 #[derive(Clone, Copy)]
 struct Bundled {
     create: CreateFn,
@@ -104,6 +123,16 @@ impl Console {
             Console::Bundled(b) => (b.close)(hpc),
         }
     }
+
+    /// A failed pseudoconsole call (`Create`, `Resize`), named as it was
+    /// made: Windows' own, or the bundled library's.
+    fn failed(self, call: &str, hr: i32) -> io::Error {
+        let named = match self {
+            Console::System => format!("{call}PseudoConsole"),
+            Console::Bundled(_) => format!("the bundled ConPTY's Conpty{call}PseudoConsole"),
+        };
+        io::Error::new(io::ErrorKind::Other, format!("{named} failed: 0x{:08x}", hr as u32))
+    }
 }
 
 /// Why the bundled ConPTY cannot be used, as the launch's `io` answer says it.
@@ -111,13 +140,53 @@ fn unusable(kind: io::ErrorKind, why: String) -> io::Error {
     io::Error::new(kind, format!("the bundled ConPTY cannot be used: {why}"))
 }
 
-/// A file of the bundled ConPTY must be there, and a plain file, not a link.
-fn plain_file(path: &Path) -> io::Result<()> {
-    match std::fs::symlink_metadata(path) {
-        Ok(m) if m.file_type().is_file() => Ok(()),
-        Ok(_) => Err(unusable(io::ErrorKind::InvalidInput, format!("{} is not a plain file", path.display()))),
-        Err(e) => Err(unusable(e.kind(), format!("{} is missing or cannot be read ({e})", path.display()))),
+/// A folder or file of the bundled ConPTY, held open from its check until the
+/// pseudoconsole is made. Others may read it, as the loader and the start of
+/// OpenConsole.exe do, but none may write, rename or remove it meanwhile, so
+/// what was checked is what is used.
+struct Held(usize);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        unsafe { close(self.0) }
     }
+}
+
+/// Open `path` and check it is a plain file, or with `folder` a plain
+/// folder: never a link, a junction or any other reparse point, which is
+/// opened itself and never followed.
+fn hold_plain(path: &Path, folder: bool) -> io::Result<Held> {
+    let name = wide(path);
+    // A folder's entries may still change; the folder itself cannot be
+    // renamed or removed while it is held. A file cannot be written either.
+    let share = if folder { FILE_SHARE_READ | FILE_SHARE_WRITE } else { FILE_SHARE_READ };
+    let h = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            GENERIC_READ,
+            share,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if h as usize == INVALID_HANDLE {
+        let e = io::Error::last_os_error();
+        return Err(unusable(e.kind(), format!("{} is missing or cannot be read ({e})", path.display())));
+    }
+    let held = Held(h as usize);
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(h, &mut info) } == 0 {
+        let e = io::Error::last_os_error();
+        return Err(unusable(e.kind(), format!("{} cannot be read ({e})", path.display())));
+    }
+    let is_folder = info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+    if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || is_folder != folder {
+        let what = if folder { "folder" } else { "file" };
+        return Err(unusable(io::ErrorKind::InvalidInput, format!("{} is not a plain {what}", path.display())));
+    }
+    Ok(held)
 }
 
 /// One call of a loaded library, by its NUL-ended name.
@@ -128,20 +197,34 @@ unsafe fn export(module: HMODULE, name: &'static [u8]) -> io::Result<unsafe exte
     })
 }
 
+/// The three calls node-pty makes, from a loaded conpty.dll.
+unsafe fn calls(module: HMODULE) -> io::Result<Bundled> {
+    let create = export(module, b"ConptyCreatePseudoConsole\0")?;
+    let resize = export(module, b"ConptyResizePseudoConsole\0")?;
+    let close = export(module, b"ConptyClosePseudoConsole\0")?;
+    Ok(Bundled {
+        create: std::mem::transmute::<unsafe extern "system" fn() -> isize, CreateFn>(create),
+        resize: std::mem::transmute::<unsafe extern "system" fn() -> isize, ResizeFn>(resize),
+        close: std::mem::transmute::<unsafe extern "system" fn() -> isize, CloseFn>(close),
+    })
+}
+
 /// Load the bundled conpty.dll: from the `conpty` folder beside this
 /// program file, by its full path, searching only that folder and System32
-/// for what it needs.
-fn load_bundled() -> io::Result<Bundled> {
+/// for what it needs. Answers its calls and the folder and both files, held
+/// open: the caller keeps them until the pseudoconsole is made.
+fn load_bundled() -> io::Result<(Bundled, [Held; 3])> {
     let exe = std::env::current_exe()?;
     let folder: PathBuf = match exe.parent() {
         Some(dir) => dir.join(BUNDLED_FOLDER),
         None => return Err(unusable(io::ErrorKind::NotFound, "the helper's own folder is not known".to_string())),
     };
-    let dll = folder.join("conpty.dll");
+    let held_folder = hold_plain(&folder, true)?;
+    let dll = folder.join(BUNDLED_DLL);
+    let held_dll = hold_plain(&dll, false)?;
     // conpty.dll starts the OpenConsole.exe beside it. Without that file the
     // session would not run on the bundled console host at all.
-    plain_file(&dll)?;
-    plain_file(&folder.join("OpenConsole.exe"))?;
+    let held_host = hold_plain(&folder.join(BUNDLED_HOST), false)?;
     let name = wide(&dll);
     unsafe {
         // A library that does not load is answered, never shown in a dialog
@@ -156,14 +239,15 @@ fn load_bundled() -> io::Result<Bundled> {
         if let Some(e) = failed {
             return Err(unusable(e.kind(), format!("{} does not load ({e})", dll.display())));
         }
-        let create = export(module, b"ConptyCreatePseudoConsole\0")?;
-        let resize = export(module, b"ConptyResizePseudoConsole\0")?;
-        let close = export(module, b"ConptyClosePseudoConsole\0")?;
-        Ok(Bundled {
-            create: std::mem::transmute::<unsafe extern "system" fn() -> isize, CreateFn>(create),
-            resize: std::mem::transmute::<unsafe extern "system" fn() -> isize, ResizeFn>(resize),
-            close: std::mem::transmute::<unsafe extern "system" fn() -> isize, CloseFn>(close),
-        })
+        match calls(module) {
+            Ok(b) => Ok((b, [held_folder, held_dll, held_host])),
+            Err(e) => {
+                // Not a ConPTY: unloaded again, so its file is not kept in
+                // use and a later launch loads it afresh.
+                FreeLibrary(module);
+                Err(e)
+            }
+        }
     }
 }
 
@@ -250,12 +334,17 @@ impl Pty {
         }
         check_windows_fields(opts)?;
         // Loaded first: a bundled ConPTY that cannot be used fails the start
-        // before anything is made or started.
-        let console = match opts.conpty {
-            Conpty::System => Console::System,
-            Conpty::Bundled => Console::Bundled(load_bundled()?),
+        // before anything is made or started. Its folder and files stay held
+        // until this start is over, past the pseudoconsole's making.
+        let (console, _held) = match opts.conpty {
+            Conpty::System => (Console::System, None),
+            Conpty::Bundled => {
+                let (calls, held) = load_bundled()?;
+                (Console::Bundled(calls), Some(held))
+            }
         };
-        // With an exact line, the program is argv[0], named on its own.
+        // With an exact line, CreateProcessW is given argv[0] as the program
+        // (lpApplicationName) and the line as the text it reads.
         let program: Option<Vec<u16>> = opts.line.map(|_| wide(&opts.argv[0]));
         let mut cmdline: Vec<u16> = match opts.line {
             Some(line) => wide(line),
@@ -292,7 +381,7 @@ impl Pty {
                 close(in_write as usize);
                 close(out_read as usize);
                 close(job);
-                return Err(io::Error::new(io::ErrorKind::Other, format!("CreatePseudoConsole failed: 0x{:08x}", hr as u32)));
+                return Err(console.failed("Create", hr));
             }
 
             // The attribute list that attaches the child to the pseudoconsole.
@@ -389,7 +478,7 @@ impl Pty {
         }
         let hr = unsafe { self.console.resize(self.pseudo_console as HPCON, coord(size)) };
         if hr != 0 {
-            return Err(io::Error::new(io::ErrorKind::Other, format!("ResizePseudoConsole failed: 0x{:08x}", hr as u32)));
+            return Err(self.console.failed("Resize", hr));
         }
         Ok(())
     }
@@ -464,5 +553,22 @@ mod tests {
         let block = env_block(&env);
         assert_eq!(text(&block), "A=1=one\0b=2\0Path=C:\\x\0\0");
         assert_eq!(env_block(&[]), vec![0, 0], "an empty block is two NULs");
+    }
+
+    unsafe extern "system" fn no_create(_: COORD, _: HANDLE, _: HANDLE, _: u32, _: *mut HPCON) -> i32 {
+        1
+    }
+    unsafe extern "system" fn no_resize(_: HPCON, _: COORD) -> i32 {
+        1
+    }
+    unsafe extern "system" fn no_close(_: HPCON) {}
+
+    #[test]
+    fn a_failed_pseudoconsole_call_is_named_as_it_was_made() {
+        let bundled = Console::Bundled(Bundled { create: no_create, resize: no_resize, close: no_close });
+        assert_eq!(Console::System.failed("Create", 5).to_string(), "CreatePseudoConsole failed: 0x00000005");
+        assert_eq!(Console::System.failed("Resize", 5).to_string(), "ResizePseudoConsole failed: 0x00000005");
+        assert_eq!(bundled.failed("Create", -2147024809).to_string(), "the bundled ConPTY's ConptyCreatePseudoConsole failed: 0x80070057");
+        assert_eq!(bundled.failed("Resize", -2147024809).to_string(), "the bundled ConPTY's ConptyResizePseudoConsole failed: 0x80070057");
     }
 }

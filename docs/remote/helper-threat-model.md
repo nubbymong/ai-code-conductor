@@ -91,20 +91,35 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   app writes nothing to the endpoint before that hello has been read. This
   catches a corrupted or swapped copy; like the remote case it does not stop
   the same user, who can already run any program as themselves.
-- **The bundled ConPTY on This computer (from 2.1.3-beta.7, protocol change
-  2).** A launch may ask a holder on Windows for the bundled ConPTY. The
-  holder then loads `conpty.dll` only from the `conpty` folder beside its own
-  program file, by its full path, never from a path in a message: with
+- **The bundled ConPTY on This computer (from 2.1.3-beta.7, the launch field
+  `conpty`).** A launch may ask a holder on Windows for the bundled ConPTY.
+  The holder then loads `conpty.dll` only from the `conpty` folder beside its
+  own program file, by its full path, never from a path in a message: with
   `LoadLibraryExW` and `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` plus
   `LOAD_LIBRARY_SEARCH_SYSTEM32`, so only that folder and System32 are
   searched for what it needs, and with critical-error dialogs off for the
-  load. Both files (the DLL and the `OpenConsole.exe` it starts) must be
-  plain files, not links. The app puts node-pty's two files from the signed
-  install into that folder of the per-user copy, hashes node-pty's files at
-  start, and checks the copies against those hashes before each use, as for
-  the helper: a mismatch is copied again once, and a second mismatch makes
-  only the bundled ConPTY unavailable. A DLL that is missing or does not load
-  is answered `io`, and nothing starts.
+  load. The folder and both files (the DLL and the `OpenConsole.exe` it
+  starts) must be plain, not a link, a junction or another reparse point,
+  and the holder keeps all three open from that check until the
+  pseudoconsole is made, so within the holder nothing can swap them between
+  its check and its use. A DLL that is missing, does not load or lacks one of
+  its three calls is answered `io`, and nothing starts; one that lacks a call
+  is unloaded again. The app's install code can put node-pty's two files from
+  the signed install into that folder of the per-user copy, hash node-pty's
+  files when it does, and check the copies against those hashes before each
+  use, as for the helper: a mismatch is copied again once, and a second
+  mismatch makes only the bundled ConPTY unavailable. The app does not use
+  this yet. The app's check and the holder's load happen in two processes,
+  so the same user can swap the files between them. Like the helper's own
+  check, this catches a corrupted or swapped copy but does not stop the same
+  user, who can already run any program as themselves.
+- **An exact command line on This computer (from 2.1.3-beta.7, the launch
+  field `line`).** `line` changes what a program reads, never which program
+  starts: `CreateProcessW` starts `argv[0]` by that exact path with no
+  search, and `line` is refused with a batch file there, which Windows would
+  start through cmd.exe. A command interpreter runs what its line says, so
+  `line` gives nothing `argv` could not already say; like `argv`, it comes
+  only from the same user's app.
 - **macOS entitlements of the shipped helper.** electron-builder signs every
   Mach-O in the bundle with `entitlementsInherit`, which is the app's own
   `build/entitlements.mac.plist`: allow-jit, allow-unsigned-executable-memory,
