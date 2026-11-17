@@ -191,12 +191,6 @@ impl Holder {
                 p.close_output();
                 code
             };
-            // MUTANT M14: the exit is reported before the output has drained
-            {
-                let mut st = lock(&watch_shared.state);
-                st.exit_code = Some(code);
-                st.terminal = None;
-            }
             let deadline = Instant::now() + DRAIN;
             while !lock(&watch_shared.state).output_ended && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));

@@ -968,10 +968,7 @@ jobs:
         shell: bash
         working-directory: helper
         timeout-minutes: 15
-        # TEMPORARY (PR #710 evidence rounds; reverted before merge): every
-        # test binary runs even after one fails, and passing tests' output
-        # (holder_wait.rs's measured times) is shown.
-        run: cargo test --locked --no-fail-fast -- --show-output
+        run: cargo test --locked
 
       # The P7 script goes in as the record of how the probe ran (see the job's
       # header); it needs a 2.1.3-beta.5 artifact to run again.

@@ -337,16 +337,9 @@ impl ExitWatch {
         if self.fail {
             return Err(io::Error::other("a wait made to fail by a test"));
         }
-        // MUTANT M12: the wait asks every 25 ms instead of blocking
-        loop {
-            #[cfg(test)]
-            self.checks.fetch_add(1, Ordering::SeqCst);
-            match unsafe { WaitForSingleObject(self.process as HANDLE, 25) } {
-                0 => return Ok(()),
-                0x102 => continue,
-                _ => return Err(os_error("WaitForSingleObject")),
-            }
-        }
+        #[cfg(test)]
+        self.checks.fetch_add(1, Ordering::SeqCst);
+        winproc::wait_for_exit(self.process)
     }
 
     /// This watch with a wait that fails at once, for a test of what the
