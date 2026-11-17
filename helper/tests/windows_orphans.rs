@@ -6,7 +6,7 @@
 //! purpose, and a self-test ended by force never calls it. Whether the host
 //! then ends by itself depends on the Windows build. On the Windows 11 test VM
 //! (build 22621) the 2.1.3-beta.6 helper left it running after 1 of 12 forced
-//! ends and 3 of 4 normal ends; that was measured by hand, not by this test.
+//! ends and 4 of 5 normal ends; that was measured by hand, not by this test.
 //! On the CI runner (Windows Server 2025, build 26100) the host ended with the
 //! self-test, so a test that waits for a host to stay by chance cannot fail
 //! there.
