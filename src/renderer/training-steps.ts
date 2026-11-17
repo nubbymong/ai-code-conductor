@@ -791,7 +791,8 @@ export const trainingSteps: TrainingStep[] = [
     summary:
       'Every preference you can set lives here, organised in a left rail. Sandboxed renderer + signed updates + zod-validated IPC keep the app safe; the visible knobs let you tune everything else.',
     highlights: [
-      'General -- default working dir, machine name, update channel, security toggles, the Tokenomics switch (the usage index can be switched off), and **Plain terminals through the session helper** (a preview, off by default), which keeps local Terminal only tabs and local partner terminals running if the app crashes on Windows, and **Claude Code and Codex sessions through the session helper** (also a preview, off by default), which runs local Claude Code and Codex sessions inside the helper; the **Machines** page shows the helper and what it holds',
+      'General -- default working dir, machine name, update channel, security toggles, and the Tokenomics switch (the usage index can be switched off)',
+      'General, under Terminal -- two previews, both off by default. **Plain terminals through the session helper** keeps local Terminal only tabs and local partner terminals running if the app crashes on Windows. **Claude Code and Codex sessions through the session helper** runs local Claude Code and Codex sessions inside the helper. The **Machines** page shows the helper and what it holds',
       'Accounts -- the Providers card (Claude Code and Codex on or off) and every Claude and Codex account',
       'Status Line -- toggle each element of the in-terminal status bar + font + size',
       'Shortcuts -- rebind every keyboard shortcut',

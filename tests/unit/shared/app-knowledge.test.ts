@@ -2052,7 +2052,8 @@ describe('the 2.1.3-beta.7 sweep', () => {
     expect(k).toContain('ending such a session ends every program it started, even one it opened in a window of its own')
     expect(k).toContain('Workaround: start a program that must keep running in a terminal outside that session')
     expect(k).toContain('Removing the app on a Mac or Linux leaves the session helper\'s own folder')
-    expect(k).toContain('On Windows, uninstalling now removes that folder')
+    expect(k).toContain('Uninstalling on Windows now ends the terminals and sessions the helper still holds for you and removes that folder')
+    expect(k).toContain('unlike a plain terminal the helper holds on Windows')
     expect(k).toContain('an update keeps it')
     expect(k).not.toContain('Uninstalling or removing the app leaves')
   })
@@ -2128,11 +2129,13 @@ describe('the 2.1.3-beta.7 sweep', () => {
       'no longer shows a Desktop notifications (coming soon) box',
       'while an Insights report runs no longer leaves Claude Code running',
       'no longer leaves a console host (conhost.exe) running',
-      'no longer redraws the usage bars',
+      'Usage bars no longer redraw on every status update from every session',
       'update their terminal once a second',
       'now keep one light look on every page',
       'Uninstalling on Windows now ends the terminals and sessions the session helper still holds',
     ]) expect(all).toContain(said)
     for (const text of [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)]) expect(text, text.slice(0, 40)).not.toMatch(/—/)
+    // #706 and #708 measured no CPU gain, so no line claims the app does less work.
+    expect(`${entry.highlights}\n${all}`).not.toMatch(/less work/i)
   })
 })

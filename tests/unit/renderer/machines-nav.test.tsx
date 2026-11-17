@@ -231,7 +231,9 @@ describe('the surface sweep for the Machines page', () => {
     expect(section.title).toBe('The Machines page')
     expect(section.body).toContain('one machine, This computer')
     expect(section.body).toContain('off by default')
-    expect(section.body).toContain('Plain terminals through the session helper, in Settings, General')
+    // Where the settings are is said once, for both; then each setting by name.
+    expect(section.body).toContain('Two settings in Settings, General, under Terminal')
+    expect(section.body).toContain('The setting Plain terminals through the session helper carries Terminal only tabs and partner terminals')
     for (const word of ['Re-attach', 'End', 'Run self-test', 'Refresh']) expect(section.body).toContain(word)
     // When it reads, and what an empty list means.
     expect(section.body).toContain('when you open it, when you switch back to its tab, when you press Refresh and after each action')
