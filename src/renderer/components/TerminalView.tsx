@@ -8,6 +8,7 @@ import { decorateTerminalLinks, createLinkHoverControl, type LinkHoverControl } 
 import { installWebglWithRecovery, createAtlasResync, type WebglHandle } from './terminal/terminalWebgl'
 import { onFontsReady, terminalFontOptions, terminalFontReady, terminalFontSpecs, waitForTerminalFont, type CancelFontWait } from './terminal/terminalFont'
 import { atlasCoordinator } from './terminal/atlasCoordinator'
+import { createHiddenOutputQueue, type HiddenOutputQueue } from './terminal/hiddenOutputQueue'
 import {
   createStaleGlyphRepainter,
   shouldRepaintOnOutput,
@@ -176,6 +177,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
   // captured prop there would go stale on tab switches. See the paste handler.
   const isActiveRef = useRef(isActive)
   isActiveRef.current = isActive
+  // aicc_planning#303: the mounted terminal's output queue (hiddenOutputQueue):
+  // batched while hidden, each chunk at once while on screen.
+  const hiddenOutputRef = useRef<HiddenOutputQueue | null>(null)
   // Whether #145 input diagnostics are on, readable from the init effect's
   // long-lived onData closure.
   const inputDiagRef = useRef(false)
@@ -203,6 +207,13 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
   // backdrop's mousedown-close, so it must be closed here.
   useEffect(() => {
     if (!isActive) setCtxMenu(null)
+  }, [isActive])
+
+  // aicc_planning#303: a terminal shown again writes what it queued while
+  // hidden, before anything else this activation does (the atlas catch-up and
+  // repaint below, WebGL, fit, focus) reads its buffer.
+  useEffect(() => {
+    if (isActive) hiddenOutputRef.current?.flush()
   }, [isActive])
 
   // Rebuild the glyph atlas when this terminal becomes the active tab.
@@ -607,6 +618,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     // spawn CLEARS that buffer before it fills it. So the write is not delayed,
     // it is lost. clearSpawned too, so a remount is allowed to respawn this id.
     const markExited = (line: string | null) => {
+      // aicc_planning#303: queued output comes before the line that ends it.
+      hiddenOutputRef.current?.flush()
       if (line) term?.writeln(`\r\n\x1b[90m${line}\x1b[0m`)
       useSessionStore.getState().updateSession(sessionId, { ptyExited: true })
       clearSpawned(sessionId)
@@ -868,7 +881,14 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       })
       // P3.8 round 1: the live screen, for the gate a Codex command (/compact,
       // /model, /plan) is typed behind (lib/codexComposer.ts).
-      unregisterScreen = registerScreenReader(sessionId, () => (term ? readXtermScreen(term) : null))
+      // aicc_planning#303: a hidden terminal's output may be queued. A read
+      // writes it, and answers no screen when there was any: xterm parses a
+      // write on a later task, so this read could not show it (the gates
+      // that read fail closed on no screen and read again).
+      unregisterScreen = registerScreenReader(sessionId, () => {
+        if (hiddenOutputRef.current?.beforeScreenRead()) return null
+        return term ? readXtermScreen(term) : null
+      })
 
       // #119: cursor options passed to the Terminal constructor do NOT reliably
       // initialize the WebGL renderer's cursor layer — the caret stays absent
@@ -1237,6 +1257,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
                 // Same rule as above for a torn-down view.
                 if (disposed) { endSpawnElsewhere(spawnToken, line); return }
                 console.error('[TerminalView] pty.spawn failed', err)
+                hiddenOutputRef.current?.flush()
                 term?.writeln(line)
                 markNeverStarted()
                 // No PTY came of this spawn: an exit held meanwhile ends the
@@ -1497,19 +1518,20 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // call still fights cursor blink and DECSCUSR styles that would
       // override our settings, but no longer touches reverse video,
       // backgrounds, or spinner glyphs.
-      unsubData = window.electronAPI.pty.onData(sessionId, (data) => {
-        const filtered = shellOnly ? data : stripCursorSequences(data)
-        bytesReceived += data.length
-        strippedBytes += data.length - filtered.length
-        bytesWritten += filtered.length
-
+      //
+      // aicc_planning#303: writeOutput is the write path for one piece of
+      // output: the follow decision, the write and the repaint scheduling. The
+      // visible terminal calls it for every chunk; a hidden one once per batch
+      // (hiddenOutputQueue). Byte counts, the resume nudge's timing and the
+      // output parse below still see every chunk as it arrives.
+      const writeOutput = (filtered: string): void => {
         // Sticky-bottom follow (issue #73): sample the LIVE viewport position
         // BEFORE this chunk lays out and decide from THAT — not from the
         // wheel-set latch, which scrollbar-thumb drags and keyboard scrolling
         // never touched, so live output kept yanking the viewport back down.
-        // onData chunks run atomically, so viewportY is the user's current
+        // Each write runs atomically, so viewportY is the user's current
         // position. Keeps the scrolled-up latch (the scroll-to-bottom button)
-        // in sync with where the user actually is, every chunk.
+        // in sync with where the user actually is, every write.
         const preWriteBuf = term?.buffer.active
         const follow = decideFollow({
           viewportY: preWriteBuf?.viewportY ?? 0,
@@ -1564,6 +1586,17 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             repainter.strongIfStale()
           }
         }
+      }
+      const hiddenOutput = createHiddenOutputQueue({ write: writeOutput, isVisible: () => isActiveRef.current })
+      hiddenOutputRef.current = hiddenOutput
+
+      unsubData = window.electronAPI.pty.onData(sessionId, (data) => {
+        const filtered = shellOnly ? data : stripCursorSequences(data)
+        bytesReceived += data.length
+        strippedBytes += data.length - filtered.length
+        bytesWritten += filtered.length
+
+        hiddenOutput.push(filtered)
 
         // Post-resume settle nudge: every chunk re-arms the timer; it fires only
         // once a burst has gone quiet for 600ms, and only while shots remain.
@@ -1583,6 +1616,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             // a tiny transcript may slip under it, but tiny replays are also the
             // least corruption-prone.
             if (resumeNudgeGated && burst < 32_768) return
+            // aicc_planning#303: the replay a hidden terminal has queued goes
+            // in before the nudge makes the CLI redraw at the new geometry.
+            hiddenOutput.flush()
             resumeNudgesLeft -= 1
             resumeNudgeSuppressUntil = Date.now() + 1500
             const c = term.cols, r = term.rows
@@ -1622,6 +1658,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // down view saw end with nothing started: say it here, and end the session.
       unsubSpawnEnd = listenForSpawnEnd(sessionId, (line) => {
         adoptedStartEnded = true
+        hiddenOutputRef.current?.flush()
         if (line) term?.writeln(line)
         markExited(null)
       })
@@ -1824,6 +1861,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       if (repainterRef.current === repainter) repainterRef.current = null
       resizeObserver?.disconnect()
       unsubData?.()
+      // aicc_planning#303: its queued output goes with the terminal.
+      hiddenOutputRef.current?.dispose()
+      hiddenOutputRef.current = null
       unsubExit?.()
       unsubSpawnEnd?.()
       // DON'T kill PTY here - it survives HMR remounts.
