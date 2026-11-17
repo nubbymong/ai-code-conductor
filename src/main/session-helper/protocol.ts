@@ -387,7 +387,8 @@ export interface LaunchSpec {
    * Windows only: the exact command line the program reads, for one that
    * reads its line in a way no argument list can say (cmd.exe running an npm
    * .cmd file). The program started is `argv[0]`, by that exact path, which
-   * then holds it alone and is never a batch file.
+   * then holds it alone and is never a batch file, nor a name Windows opens
+   * as another (a `.` or `..` part, or a trailing `\` or `/`).
    */
   line?: string
   /** Windows only: run on the bundled ConPTY beside the helper. */
