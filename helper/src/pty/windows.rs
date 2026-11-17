@@ -35,11 +35,11 @@
 //! starts the program at `argv[0]` (`lpApplicationName`), by that exact path
 //! with no search, and `line` is only the text that program reads. A command
 //! interpreter runs what its line says, so `line` gives nothing `argv` could
-//! not already say. A batch file is refused with it (`check_windows_fields`):
-//! Windows would start cmd.exe for it, reading the line as commands. That
-//! check reads the name as given; as the last line, `check_full_name` reads
-//! it again as Windows makes it full before it opens the file, as Rust's own
-//! `Command` does.
+//! not already say. A batch file is refused with it: Windows would start
+//! cmd.exe for it, reading the line as commands. The holder reads the name
+//! first as Windows makes it full before it opens the file
+//! (`check_full_name`), as Rust's own `Command` does, then as given
+//! (`check_windows_fields`).
 #![allow(unsafe_code)]
 
 use super::{check_argv, check_cwd, check_env, check_windows_fields, is_batch_file, is_renamed_by_windows, Conpty, PtySize, SpawnOptions};
@@ -200,11 +200,18 @@ fn hold_plain(path: &Path, folder: bool) -> io::Result<Held> {
 /// trailing dots and spaces dropped from the last part.
 fn full_name(program: &str) -> io::Result<String> {
     let name = wide(program);
+    written_name(|buffer| unsafe { GetFullPathNameW(name.as_ptr(), buffer.len() as u32, buffer.as_mut_ptr(), std::ptr::null_mut()) as usize })
+}
+
+/// The name a call such as `GetFullPathNameW` writes into a buffer. The
+/// call answers the units written without the NUL, or, for a buffer too
+/// small, the size it needs with the NUL, or 0 when it fails. The buffer
+/// is made that size once; a name that still does not fit the second time
+/// is not trusted.
+fn written_name(mut call: impl FnMut(&mut [u16]) -> usize) -> io::Result<String> {
     let mut buffer: Vec<u16> = vec![0; 512];
-    // A buffer too small is told the size it needs, with the NUL. A name
-    // that still does not fit the second time is not trusted.
     for _ in 0..2 {
-        let n = unsafe { GetFullPathNameW(name.as_ptr(), buffer.len() as u32, buffer.as_mut_ptr(), std::ptr::null_mut()) } as usize;
+        let n = call(&mut buffer);
         if n == 0 {
             return Err(os_error("GetFullPathNameW"));
         }
@@ -217,9 +224,10 @@ fn full_name(program: &str) -> io::Result<String> {
     Err(io::Error::new(io::ErrorKind::InvalidInput, "GetFullPathNameW: the program's full name kept changing"))
 }
 
-/// With an exact command line, the holder's last line: the name rules once
-/// more, on the full name Windows opens (`full_name`), as Rust's own
-/// `Command` does before it starts a program.
+/// With an exact command line, the holder's first name check: the name
+/// rules on the full name Windows opens (`full_name`), as Rust's own
+/// `Command` does before it starts a program. The name as given is read
+/// next (`check_windows_fields`).
 fn check_full_name(program: &str) -> io::Result<()> {
     let full = full_name(program)?;
     if is_renamed_by_windows(&full) || is_batch_file(&full) {
@@ -374,10 +382,13 @@ impl Pty {
         if let Some(cwd) = opts.cwd {
             check_cwd(cwd)?;
         }
-        check_windows_fields(opts)?;
+        // With a line, the name Windows opens is read first, then the name
+        // as given: so a start reaches both, and a refusal for a name Windows
+        // would change names the file it would open.
         if opts.line.is_some() {
             check_full_name(&opts.argv[0])?;
         }
+        check_windows_fields(opts)?;
         // Loaded first: a bundled ConPTY that cannot be used fails the start
         // before anything is made or started. Its folder and files stay held
         // until this start is over, past the pseudoconsole's making.
@@ -608,7 +619,7 @@ mod tests {
         for name in ["C:\\x\\tool.cmd\\.", "C:\\x\\tool.cmd\\sub\\..", "C:/x/./tool.CMD", "C:\\x\\tool.bat. ", "C:\\x\\tool.cmd\\. ", "C:\\x\\tool.cmd\\"] {
             assert!(check_full_name(name).is_err(), "{name} was not refused");
         }
-        // Read as the full name only. The name as given is checked first
+        // Read as the full name only. The name as given is checked next
         // (`check_windows_fields`), which refuses C:\x\sub\..\tool.exe.
         for name in ["C:\\Windows\\System32\\cmd.exe", "C:\\x\\sub\\..\\tool.exe", "C:\\x.cmd\\tool.exe"] {
             assert!(check_full_name(name).is_ok(), "{name} was refused: {:?}", check_full_name(name));
@@ -620,6 +631,21 @@ mod tests {
         assert!(long.encode_utf16().count() > 511);
         assert_eq!(full_name(&long).unwrap(), format!("C:\\{}tool.cmd", "a\\".repeat(300)));
         assert!(check_full_name(&long).is_err(), "a long name was not refused");
+        // A name that asks for a larger buffer again the second time is not
+        // trusted; one that fits the second time is read from it.
+        let kept_changing = written_name(|buffer| buffer.len() + 1).unwrap_err();
+        assert_eq!(kept_changing.kind(), io::ErrorKind::InvalidInput);
+        assert!(kept_changing.to_string().contains("kept changing"), "{kept_changing}");
+        let mut calls = 0;
+        let grown = written_name(|buffer| {
+            calls += 1;
+            if buffer.len() < 600 {
+                return 600;
+            }
+            buffer[..3].copy_from_slice(&[u16::from(b'C'), u16::from(b':'), u16::from(b'\\')]);
+            3
+        });
+        assert_eq!((grown.unwrap(), calls), ("C:\\".to_string(), 2));
     }
 
     unsafe extern "system" fn no_create(_: COORD, _: HANDLE, _: HANDLE, _: u32, _: *mut HPCON) -> i32 {

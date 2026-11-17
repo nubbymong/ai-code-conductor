@@ -55,7 +55,9 @@ pub enum Conpty {
 ///
 /// `line` and `conpty` are for Windows only. `line` is the exact command
 /// line the program reads; the program started is `argv[0]`, which then
-/// holds it alone and is never a batch file.
+/// holds it alone and is never a batch file, nor a name Windows opens as
+/// another (one ending in `\` or `/`, or with a part made only of dots and
+/// spaces, such as `.` or `..`).
 pub struct SpawnOptions<'a> {
     pub argv: &'a [String],
     pub cwd: Option<&'a str>,

@@ -90,10 +90,14 @@ Linux twins of the vectors refused on every OS; `line_units`), read by
 `helper/tests/fixtures.rs`, the reference reader in
 `tests/unit/scripts/helper-fixtures.test.ts` and
 `tests/unit/main/session-helper-protocol.test.ts`. Rust request and pty
-tests for both OS families, a test of the holder's full-name check, and a
-`hold.rs` test that the holder's second check runs before anything starts
-(including run.cmd named as `run.cmd\.` and `run.cmd\sub\..`, which Windows
-would otherwise start through cmd.exe). Windows transport tests: `line` running
+tests for both OS families, a test of the holder's full-name check
+(including a name over 511 UTF-16 units, read through a second, larger
+buffer), and a `hold.rs` test that the holder's own checks run before
+anything starts and that a start reaches both: run.cmd named as
+`run.cmd\.` or `run.cmd\sub\..`, which Windows would otherwise start through
+cmd.exe, is refused by the full-name check, which runs first and names the
+file Windows opens; cmd.exe named with a `..` part is refused by the check
+of the name as given. Windows transport tests: `line` running
 cmd.exe `/s /c` on a .cmd file in a folder with a space prints exactly its
 words and the same words as an argument list are mangled; the program
 started is argv[0], not the line's first word (a line whose first word
