@@ -80,10 +80,12 @@ system `CreatePseudoConsole` (`helper/src/pty/windows.rs`).
   the gap between the app's check and the holder's load (two processes: it
   does not stop the same user), and what `line` can and cannot do.
 
-**Test.** Shared vectors in `helper/fixtures/local.json` (4 valid and 17
+**Test.** Shared vectors in `helper/fixtures/local.json` (8 valid and 24
 invalid with `line` or `conpty`, the 32766-unit edge and one past it in
-characters outside the Basic Multilingual Plane, batch files, batch files
-named with a `.` or `..` part, and macOS and
+characters outside the Basic Multilingual Plane, batch files, names Windows
+opens as another (a trailing `\` or `/`, a `.` or `..` part, parts of dots
+and spaces, a `\\.\` device path), plain names whose parts only start with
+dots, a `\\?\` path and a share, and macOS and
 Linux twins of the vectors refused on every OS; `line_units`), read by
 `helper/tests/fixtures.rs`, the reference reader in
 `tests/unit/scripts/helper-fixtures.test.ts` and

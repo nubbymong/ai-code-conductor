@@ -555,6 +555,94 @@
         }
       },
       {
+        "name": "launch on Windows with an exact command line for a program in a folder whose name starts with a dot",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":20,\"argv\":[\"C:\\\\x\\\\.tools\\\\tool.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "expect": {
+          "type": "term.launch",
+          "id": 20,
+          "argv": [
+            "C:\\x\\.tools\\tool.exe"
+          ],
+          "cwd": "C:\\Users\\user\\project",
+          "env": [
+            [
+              "SystemRoot",
+              "C:\\Windows"
+            ]
+          ],
+          "cols": 80,
+          "rows": 24,
+          "line": "tool resume"
+        }
+      },
+      {
+        "name": "launch on Windows with an exact command line for a program whose name starts with dots",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":22,\"argv\":[\"C:\\\\x\\\\...tool.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "expect": {
+          "type": "term.launch",
+          "id": 22,
+          "argv": [
+            "C:\\x\\...tool.exe"
+          ],
+          "cwd": "C:\\Users\\user\\project",
+          "env": [
+            [
+              "SystemRoot",
+              "C:\\Windows"
+            ]
+          ],
+          "cols": 80,
+          "rows": 24,
+          "line": "tool resume"
+        }
+      },
+      {
+        "name": "launch on Windows with an exact command line for a program named by a path with the long-path prefix",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":24,\"argv\":[\"\\\\\\\\?\\\\C:\\\\x\\\\tool.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "expect": {
+          "type": "term.launch",
+          "id": 24,
+          "argv": [
+            "\\\\?\\C:\\x\\tool.exe"
+          ],
+          "cwd": "C:\\Users\\user\\project",
+          "env": [
+            [
+              "SystemRoot",
+              "C:\\Windows"
+            ]
+          ],
+          "cols": 80,
+          "rows": 24,
+          "line": "tool resume"
+        }
+      },
+      {
+        "name": "launch on Windows with an exact command line for a program on a network share",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":26,\"argv\":[\"\\\\\\\\server\\\\share\\\\tool.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "expect": {
+          "type": "term.launch",
+          "id": 26,
+          "argv": [
+            "\\\\server\\share\\tool.exe"
+          ],
+          "cwd": "C:\\Users\\user\\project",
+          "env": [
+            [
+              "SystemRoot",
+              "C:\\Windows"
+            ]
+          ],
+          "cols": 80,
+          "rows": 24,
+          "line": "tool resume"
+        }
+      },
+      {
         "name": "attach from 0",
         "json": "{\"t\":\"term.attach\",\"id\":12,\"from\":0}",
         "expect": {
@@ -856,6 +944,48 @@
         "name": "launch with an exact command line for a batch file named with a .. part, which Windows resolves",
         "os": "windows",
         "json": "{\"t\":\"term.launch\",\"id\":4,\"argv\":[\"C:\\\\x\\\\tool.cmd\\\\sub\\\\..\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with an exact command line for a batch file named with a trailing backslash",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":4,\"argv\":[\"C:\\\\x\\\\tool.cmd\\\\\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with an exact command line for a batch file named with a trailing slash",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":4,\"argv\":[\"C:\\\\x\\\\tool.cmd/\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with an exact command line for a batch file named with slashes and a .. part",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":4,\"argv\":[\"C:/x/tool.cmd/sub/..\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with an exact command line for a batch file named with a last part of a dot and a space",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":4,\"argv\":[\"C:\\\\x\\\\tool.cmd\\\\. \"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with an exact command line for a batch file named with parts of dots and spaces",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":4,\"argv\":[\"C:\\\\x\\\\tool.cmd\\\\.. \\\\.\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with an exact command line for a program named with a .. part, which Windows resolves",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":4,\"argv\":[\"C:\\\\x\\\\sub\\\\..\\\\tool.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
+        "error": "bad-field"
+      },
+      {
+        "name": "launch with an exact command line for a program named by a device path, which has a . part",
+        "os": "windows",
+        "json": "{\"t\":\"term.launch\",\"id\":4,\"argv\":[\"\\\\\\\\.\\\\C:\\\\x\\\\tool.exe\"],\"cwd\":\"C:\\\\Users\\\\user\\\\project\",\"env\":{\"SystemRoot\":\"C:\\\\Windows\"},\"cols\":80,\"rows\":24,\"line\":\"tool resume\"}",
         "error": "bad-field"
       },
       {

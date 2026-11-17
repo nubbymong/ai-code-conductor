@@ -482,7 +482,10 @@ mod tests {
         // of dots alone (`.`, `..`, and with trailing spaces) and reads `/` as
         // `\` before it opens the file, so tool.cmd\. and tool.cmd\sub\.. are
         // tool.cmd: with a line, such a name is refused, and so is one that
-        // ends in a separator. A `\\.\` device path has a `.` part too.
+        // ends in a separator; a part that only starts or ends with a dot is
+        // a plain name. Both lists are shared vectors (helper/fixtures/
+        // local.json), so every reader is held to them. With an argument
+        // list, as before, the name is not read.
         for renamed in [
             "C:\\\\x\\\\tool.cmd\\\\.",
             "C:\\\\x\\\\tool.cmd\\\\sub\\\\..",
@@ -494,12 +497,7 @@ mod tests {
             "C:\\\\x\\\\sub\\\\..\\\\tool.exe",
             "\\\\\\\\.\\\\C:\\\\x\\\\tool.exe",
         ] {
-            assert_eq!(code(&launch_with(&format!("[\"{renamed}\"]"), "\"line\":\"tool resume\"")), CODE_BAD_FIELD, "{renamed}");
             assert!(parsed(&launch(&format!("[\"{renamed}\",\"resume\"]"), "{}")).is_ok(), "{renamed} with an argument list");
-        }
-        // A part that only starts or ends with a dot is a plain name.
-        for plain in ["C:\\\\x\\\\.tools\\\\tool.exe", "C:\\\\x\\\\...tool.exe", "\\\\\\\\?\\\\C:\\\\x\\\\tool.exe", "\\\\\\\\server\\\\share\\\\tool.exe"] {
-            assert!(parsed(&launch_with(&format!("[\"{plain}\"]"), "\"line\":\"tool resume\"")).is_ok(), "{plain} refused");
         }
         // Each field once.
         assert_eq!(code(&launch_with(&p, "\"conpty\":\"bundled\",\"conpty\":\"bundled\"")), CODE_BAD_FIELD);

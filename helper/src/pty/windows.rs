@@ -613,6 +613,13 @@ mod tests {
         for name in ["C:\\Windows\\System32\\cmd.exe", "C:\\x\\sub\\..\\tool.exe", "C:\\x.cmd\\tool.exe"] {
             assert!(check_full_name(name).is_ok(), "{name} was refused: {:?}", check_full_name(name));
         }
+        // A name of 512 UTF-16 units or more does not fit the first buffer: it
+        // is read again into one of the size Windows asks for (argv[0] may be
+        // up to 8192 characters).
+        let long = format!("C:\\{}tool.cmd\\.", "a\\".repeat(300));
+        assert!(long.encode_utf16().count() > 511);
+        assert_eq!(full_name(&long).unwrap(), format!("C:\\{}tool.cmd", "a\\".repeat(300)));
+        assert!(check_full_name(&long).is_err(), "a long name was not refused");
     }
 
     unsafe extern "system" fn no_create(_: COORD, _: HANDLE, _: HANDLE, _: u32, _: *mut HPCON) -> i32 {

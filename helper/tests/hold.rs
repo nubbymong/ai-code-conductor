@@ -298,27 +298,34 @@ fn a_launch_gets_its_folder_and_exactly_its_own_environment() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The terminal's own check of the Windows launch fields (`check_windows_fields`)
-/// runs before anything starts, whoever calls it: a start it refuses is
-/// `InvalidInput`, and its program never ran (it would have written a file).
+/// The terminal's own checks of the Windows launch fields run before anything
+/// starts, whoever calls it: a start they refuse is `InvalidInput`, and its
+/// program never ran (it would have written a file). With a line, the name is
+/// read first as Windows makes it full (`check_full_name`), then as given
+/// (`check_windows_fields`); a start reaches both.
 #[test]
 fn the_windows_launch_fields_are_checked_again_before_anything_starts() {
     let dir = std::env::temp_dir().join(format!("aicc-hold-fields-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a folder");
     let dir_text = dir.to_string_lossy().into_owned();
     let marker = dir.join("started.txt");
-    let refused = |argv: &[String], line: Option<&str>, conpty: Conpty, what: &str| {
+    // The refusal's text, once it is known to be a refusal.
+    let refused = |argv: &[String], line: Option<&str>, conpty: Conpty, what: &str| -> String {
         let opts = SpawnOptions { argv, cwd: Some(dir_text.as_str()), env: None, size: PtySize::default(), line, conpty };
         match Holder::start_with(&opts, 64 * 1024) {
             Ok(h) => {
                 h.kill();
                 panic!("{what}: started");
             }
-            Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{what}: {e}"),
+            Err(e) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{what}: {e}");
+                e.to_string()
+            }
         }
     };
     if cfg!(windows) {
-        let cmd = format!("{}\\System32\\cmd.exe", std::env::var("SystemRoot").expect("SystemRoot is set"));
+        let root = std::env::var("SystemRoot").expect("SystemRoot is set");
+        let cmd = format!("{root}\\System32\\cmd.exe");
         let writes = format!("{cmd} /d /c echo started>started.txt");
         refused(&[cmd.clone(), "/c".to_string()], Some(writes.as_str()), Conpty::System, "a line with arguments as well");
         // A batch file is started through cmd.exe, which would run its line.
@@ -326,10 +333,17 @@ fn the_windows_launch_fields_are_checked_again_before_anything_starts() {
         std::fs::write(&batch, "@echo started>started.txt\r\n").expect("write the .cmd file");
         refused(&[batch.to_string_lossy().into_owned()], Some("run.cmd"), Conpty::System, "a line for a batch file");
         // Windows resolves `.` and `..` parts before it opens the file, so
-        // these name run.cmd too, and it would start cmd.exe for them.
+        // these name run.cmd too, and it would start cmd.exe for them. The
+        // full name is read first, so the refusal names the file Windows opens.
         let named = batch.to_string_lossy().into_owned();
-        refused(&[format!("{named}\\.")], Some("run.cmd"), Conpty::System, "a line for a batch file named with a last . part");
-        refused(&[format!("{named}\\sub\\..")], Some("run.cmd"), Conpty::System, "a line for a batch file named with a .. part");
+        let opens = format!("(Windows opens {named})");
+        for (program, what) in [(format!("{named}\\."), "a line for a batch file named with a last . part"), (format!("{named}\\sub\\.."), "a line for a batch file named with a .. part")] {
+            let why = refused(&[program], Some("run.cmd"), Conpty::System, what);
+            assert!(why.contains(&opens), "{what}: the refusal does not name the full name {opens}: {why}");
+        }
+        // The name as given is read too: cmd.exe named with a `..` part is
+        // cmd.exe in full, but it is not the name Windows opens.
+        refused(&[format!("{root}\\System32\\sub\\..\\cmd.exe")], Some(writes.as_str()), Conpty::System, "a line for cmd.exe named with a .. part");
     } else {
         let writes = "/bin/sh -c 'echo started>started.txt'";
         refused(&["/bin/sh".to_string()], Some(writes), Conpty::System, "a line on macOS or Linux");
