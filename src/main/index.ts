@@ -59,6 +59,7 @@ import { removeWebSession } from './account-web/session-store'
 import { wireCodexWebArchive, wireCodexWebSession } from './account-web/codex-web-wiring'
 import { wireClaudeWebSession } from './account-web/claude-web-wiring'
 import { registerInsightsHandlers } from './ipc/insights-handlers'
+import { killInsightsPty } from './insights-runner'
 import { registerNotesHandlers } from './ipc/notes-handlers'
 import { registerVisionHandlers } from './ipc/vision-handlers'
 import { registerConfigHandlers } from './ipc/config-handlers'
@@ -1252,6 +1253,9 @@ try { getWatchdogManager()?.disposeAll() } catch { /* never init */ }
     // Safe when none runs, and after the screen already stopped it. It cannot
     // throw, and runs before killAllPty so a throw there cannot skip it.
     killCliSetupPty()
+    // So is an Insights report's /insights terminal (#317), for the same
+    // reason; it cannot throw either.
+    killInsightsPty()
     killAllPty()
     // Every terminal through the session helper ends with a normal quit: the
     // end messages go here, and will-quit waits (briefly) for their answers.

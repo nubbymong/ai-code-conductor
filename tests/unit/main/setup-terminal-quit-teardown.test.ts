@@ -18,10 +18,7 @@
 // first-start warm-up are faked. Nothing is started.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as os from 'node:os'
-import fs from 'node:fs'
-import path from 'node:path'
-import vm from 'node:vm'
-import { transformSync } from 'esbuild'
+import { MAIN_INDEX as INDEX, block, runCut as run, quitTeardownSource } from '../../helpers/main-index-cut'
 
 const RESOLVED = 'C:\\Users\\A\\.local\\bin\\claude.exe'
 type FakePty = { onData: ReturnType<typeof vi.fn>; onExit: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn> }
@@ -76,55 +73,7 @@ const killCliSetupIpc = h.handlers.get('setup:killCliSetup')!
 
 // --- index.ts, cut out and run ---------------------------------------------
 
-const INDEX = fs.readFileSync(path.resolve(process.cwd(), 'src/main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
-
-/** The text from `from` to the brace that closes the block opened by the
- *  first `{` at or after `from`. Strings, template literals and comments are
- *  skipped. */
-function block(src: string, from: number): string {
-  let i = src.indexOf('{', from)
-  expect(i, 'an opening brace').toBeGreaterThan(-1)
-  let depth = 0
-  for (; i < src.length; i++) {
-    const c = src[i]
-    if (c === '/' && src[i + 1] === '/') { i = src.indexOf('\n', i); continue }
-    if (c === '/' && src[i + 1] === '*') { i = src.indexOf('*/', i) + 1; continue }
-    if (c === "'" || c === '"' || c === '`') {
-      const q = c
-      for (i++; i < src.length && src[i] !== q; i++) if (src[i] === '\\') i++
-      continue
-    }
-    if (c === '{') depth++
-    else if (c === '}') { depth--; if (depth === 0) return src.slice(from, i + 1) }
-  }
-  throw new Error('unbalanced braces')
-}
-
-/** A stand-in for every other service the code calls: any property, any call,
- *  answers itself (so `getGateway()?.stop().catch(...)` runs), never a promise. */
-function inert(): unknown {
-  const f: unknown = new Proxy(() => {}, { get: (_t, k) => (k === 'then' ? undefined : f), apply: () => f })
-  return f
-}
-
-/** Compile an arrow cut from the source and evaluate it with `fakes`; every
- *  other name it uses gets an inert stand-in, so a teardown step another change
- *  adds does not break this suite. */
-function run<T>(code: string, fakes: Record<string, unknown>): T {
-  const globals: Record<string, unknown> = {}
-  for (const name of new Set(code.match(/[A-Za-z_$][\w$]*/g) ?? [])) {
-    if (!(name in globalThis)) globals[name] = inert()
-  }
-  const js = transformSync(`(${code})`, { loader: 'ts', target: 'es2022', format: 'esm' }).code
-  return vm.runInContext(js, vm.createContext({ ...globals, console, ...fakes })) as T
-}
-
-const TEARDOWN = (() => {
-  const marker = 'quitTeardown = '
-  const at = INDEX.indexOf(`${marker}() => {`)
-  expect(at, 'the quit teardown').toBeGreaterThan(-1)
-  return block(INDEX, at + marker.length)
-})()
+const TEARDOWN = quitTeardownSource()
 
 /** Runs the quit teardown once; returns, in order, the PTY kills and the
  *  debug logger's close it made. killCliSetupPty is the real one. With

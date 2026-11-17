@@ -12,12 +12,14 @@
 // on Windows, they never passed through the warm-up, so its latch did not hold
 // them. Each of the four now reads this hold in the same step as its own
 // start, whatever the platform or the program, and starts nothing once it is
-// set.
+// set. An Insights report's /insights terminal (insights-runner.ts) awaits the
+// warm-up on every path, so the latch already held it; it reads this hold as
+// well, in the same step as its start (#317).
 //
 // It is set at the same moment as the warm-up's latch, by
 // flushFirstStartWarmups, which only the before-quit teardown calls (through
 // flushPendingProviderCliKills, index.ts). The exit that installs an update
-// and SIGTERM end the app without it. No start other than those four reads it,
+// and SIGTERM end the app without it. No start other than those five reads it,
 // so a start that neither awaits the warm-up nor is one of them (an SSH
 // launch, a Claude Code session terminal, the Claude sign-out through the CLI
 // runner, with the status read inside it) is not held by either.
