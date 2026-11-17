@@ -614,6 +614,14 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       }, 1000)
     }
 
+    // A line the app writes itself (an exit, a spawn end, a launch failure).
+    // xterm throws once about 50 MB is waiting to be parsed; the bookkeeping
+    // after the line (the session marked ended or never started) must still
+    // run, so the line is lost instead.
+    const writeAppLine = (line: string) => {
+      try { term?.writeln(line) } catch (err) { console.warn('[TerminalView] xterm refused a line', err) }
+    }
+
     // The session's PTY is gone (or never started). `line` is what the
     // terminal says about it; null says nothing (a failed spawn has already
     // written why).
@@ -624,13 +632,6 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     // bytes buffered into a pendingWrites map that only a spawn drains, and a
     // spawn CLEARS that buffer before it fills it. So the write is not delayed,
     // it is lost. clearSpawned too, so a remount is allowed to respawn this id.
-    // A line the app writes itself (an exit, a spawn end, a launch failure).
-    // xterm throws once about 50 MB is waiting to be parsed; the bookkeeping
-    // after the line (the session marked ended or never started) must still
-    // run, so the line is lost instead.
-    const writeAppLine = (line: string) => {
-      try { term?.writeln(line) } catch (err) { console.warn('[TerminalView] xterm refused a line', err) }
-    }
     const markExited = (line: string | null) => {
       // aicc_planning#303: queued output comes before the line that ends it.
       hiddenOutput?.flush()
