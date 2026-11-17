@@ -344,18 +344,23 @@ function isRecordedProcess(rec, ident, platform = process.platform) {
   return isWin(platform) ? same(ident.command, rec.exe, platform) : ident.command === rec.exe || ident.command.startsWith(rec.exe + ' ')
 }
 
-/** The pid listening on `port` on the loopback, or null. */
+/** The pid listening on `port` on the loopback; null when nothing listens;
+ *  undefined when it could not be told (the check failed or timed out),
+ *  which a caller must treat as busy, never as free. */
 function portOwnerPid(port, platform = process.platform, exec = runCmd) {
   const n = Number(port)
+  let out
   try {
-    const out = isWin(platform)
+    out = isWin(platform)
       ? String(exec('powershell.exe', ['-NoProfile', '-Command', `(Get-NetTCPConnection -State Listen -LocalPort ${n} -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess`]))
       : String(exec('lsof', ['-nP', `-iTCP:${n}`, '-sTCP:LISTEN', '-t']))
-    const pid = Number(out.trim().split(/\s+/)[0])
-    return Number.isInteger(pid) && pid > 0 ? pid : null
-  } catch {
-    return null
+  } catch (e) {
+    // lsof exits 1, printing nothing, when nothing listens.
+    if (!isWin(platform) && e && e.status === 1 && !String(e.stdout || '').trim()) return null
+    return undefined
   }
+  const pid = Number(out.trim().split(/\s+/)[0])
+  return Number.isInteger(pid) && pid > 0 ? pid : null
 }
 
 /** Before shoot.js attaches: the recorded app is still the process launch.js
@@ -365,7 +370,7 @@ function checkLaunchedApp(rec, deps = {}) {
   const exec = deps.exec || runCmd
   if (!isRecordedProcess(rec, processIdentity(rec.pid, platform, exec), platform)) refuse(`the recorded app (pid ${rec.pid}) is not running any more: start it with launch.js`)
   const owner = portOwnerPid(rec.port, platform, exec)
-  if (owner !== rec.pid) refuse(`port ${rec.port} is not held by the recorded app (pid ${rec.pid}; held by ${owner === null ? 'nothing' : 'pid ' + owner})`)
+  if (owner !== rec.pid) refuse(`port ${rec.port} is not held by the recorded app (pid ${rec.pid}; held by ${owner === null ? 'nothing' : owner === undefined ? 'an unknown process: the port check failed' : 'pid ' + owner})`)
 }
 
 module.exports = {

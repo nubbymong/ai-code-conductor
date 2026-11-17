@@ -3,8 +3,11 @@
 // assistant line (with token usage, as Claude Code writes them) to each harness session's transcript
 // every --every-ms, spread evenly across the sessions. Tokenomics and session logging read those files.
 //
-//   CCC_STAGE_ROOT=<root> node load-sidecar.cjs [--every-ms 5000] [--seconds 0]    0 = until stopped
+//   CCC_STAGE_ROOT=<root> node load-sidecar.cjs [--every-ms 5000] [--seconds 0] [--exit-on-stdin-close]
 //
+// --seconds 0 runs until stopped. --exit-on-stdin-close ends it when its standard input closes:
+// run-matrix.cjs starts it with a pipe there, so it ends with the runner even when the runner is
+// killed, and gives it a --seconds limit too.
 // The sessions and their transcripts are the ones gen-sessions.cjs recorded (runner/perf-sessions.json).
 // It writes only into those transcripts, each inside the staging root's home (checked).
 'use strict'
@@ -14,10 +17,18 @@ const path = require('path')
 const crypto = require('crypto')
 const S = require(path.join(__dirname, '..', 'readme-shots', 'stage', 'stage-root.js'))
 
-const argv = process.argv.slice(2)
-const opt = (name, d) => { const i = argv.indexOf(name); return i >= 0 ? Number(argv[i + 1]) : d }
-const EVERY_MS = Math.max(200, opt('--every-ms', 5000))
-const SECONDS = Math.max(0, opt('--seconds', 0))
+/** The options; throws on a value that is not a number or is below its floor
+ *  (every 200 ms at the fastest; seconds from 0). */
+function parseSidecarOptions(argv) {
+  const num = (name, d, min) => {
+    const i = argv.indexOf(name)
+    if (i < 0) return d
+    const v = Number(argv[i + 1])
+    if (argv[i + 1] === undefined || !Number.isFinite(v) || v < min) throw new Error(`${name} must be a number of at least ${min}, not ${argv[i + 1]}`)
+    return v
+  }
+  return { everyMs: num('--every-ms', 5000, 200), seconds: num('--seconds', 0, 0), exitOnStdinClose: argv.includes('--exit-on-stdin-close') }
+}
 
 const hex = (n) => crypto.randomBytes(Math.ceil(n / 2)).toString('hex').slice(0, n)
 const rint = (lo, hi) => lo + crypto.randomInt(hi - lo + 1)
@@ -36,7 +47,7 @@ function assistantLine(s, parentUuid, n) {
   }
 }
 
-function main() {
+function main(o) {
   const stage = S.resolveStage(process.env)
   S.ensureMarker(stage.ROOT, { create: false })
   const rec = JSON.parse(fs.readFileSync(path.join(stage.RUNNER, 'perf-sessions.json'), 'utf8'))
@@ -45,7 +56,7 @@ function main() {
   if (!targets.length) { console.error('refusing: no harness transcript to write to (run gen-sessions.cjs first)'); process.exit(2) }
   let lines = 0
   const parents = new Map()
-  const stagger = EVERY_MS / targets.length
+  const stagger = o.everyMs / targets.length
   targets.forEach((s, i) => {
     let n = 0
     setTimeout(() => {
@@ -56,18 +67,25 @@ function main() {
         lines++
       }
       write()
-      setInterval(write, EVERY_MS)
+      setInterval(write, o.everyMs)
     }, Math.round(i * stagger))
   })
-  console.log(`appending to ${targets.length} transcripts every ${EVERY_MS} ms`)
+  console.log(`appending to ${targets.length} transcripts every ${o.everyMs} ms${o.seconds ? ` for ${o.seconds} s` : ''}`)
   setInterval(() => console.log(`${new Date().toISOString()} lines written: ${lines}`), 60000)
-  if (SECONDS > 0) setTimeout(() => { console.log(`done: ${lines} lines`); process.exit(0) }, SECONDS * 1000)
+  if (o.seconds > 0) setTimeout(() => { console.log(`done: ${lines} lines`); process.exit(0) }, o.seconds * 1000)
+  if (o.exitOnStdinClose) {
+    process.stdin.on('end', () => { console.log(`input closed: ${lines} lines`); process.exit(0) })
+    process.stdin.on('error', () => process.exit(0))
+    process.stdin.resume()
+  }
 }
 
-module.exports = { assistantLine }
+module.exports = { assistantLine, parseSidecarOptions }
 
 if (require.main === module) {
-  try { main() } catch (e) {
+  let o
+  try { o = parseSidecarOptions(process.argv.slice(2)) } catch (e) { console.error('refusing: ' + e.message); process.exit(2) }
+  try { main(o) } catch (e) {
     if (e instanceof S.StageRefusal) { console.error('refusing: ' + e.message); process.exit(2) }
     console.error(e && e.stack ? e.stack : e)
     process.exit(1)

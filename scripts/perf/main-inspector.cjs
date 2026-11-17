@@ -13,10 +13,14 @@
 //   node main-inspector.cjs snapshot <out.json>
 //   node main-inspector.cjs profile <seconds> <out.cpuprofile>
 //   node main-inspector.cjs sources <out.json>   the main bundle's files, for naming frames
-//   env CCC_PERF_INSPECT_PORT (default 9229)
+//   env CCC_STAGE_ROOT (the staging root the app was started on), CCC_PERF_INSPECT_PORT (default 9229)
+//
+// Run on its own, it first checks that the inspector port is held by the app launch.js started on the
+// staging root (pid, executable and start time from launch.js's record), and refuses otherwise.
 'use strict'
 
 const fs = require('fs')
+const path = require('path')
 const { Cdp, getJson, sleep } = require('./cdp-sample.cjs')
 
 const port = () => Number(process.env.CCC_PERF_INSPECT_PORT) || 9229
@@ -88,6 +92,15 @@ module.exports = { snapshot, profile, sources }
 
 if (require.main === module) {
   const [cmd, a1, a2] = process.argv.slice(2)
+  // Only the app launch.js started on the staging root (CCC_STAGE_ROOT), never whatever listens on the port.
+  const S = require(path.join(__dirname, '..', 'readme-shots', 'stage', 'stage-root.js'))
+  try {
+    const stage = S.resolveStage(process.env)
+    require('./lib/guard.cjs').checkStagedApp(S, S.readLaunchRecord(stage), [port()])
+  } catch (e) {
+    console.error('refusing: ' + (e && e.message))
+    process.exit(2)
+  }
   const run = {
     snapshot: async () => { fs.writeFileSync(a1, JSON.stringify(await snapshot())); console.log('wrote ' + a1) },
     profile: async () => { fs.writeFileSync(a2, JSON.stringify(await profile(Number(a1) || 60))); console.log('wrote ' + a2) },

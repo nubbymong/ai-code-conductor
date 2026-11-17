@@ -4,20 +4,24 @@
 // Raw CDP over Node's own WebSocket (Node 22 and later), not Playwright: nothing to install on the VM,
 // and no domain is switched on beyond the ones a reading needs (Playwright enables several on attach).
 // Reads only, except what a run needs: the reduced-motion A/B sets an emulated media feature for its
-// second half (CDP drops it when the session detaches), `resume` presses the start-up prompt's Resume
+// middle part and clears it after (CDP drops it anyway when the session detaches), `resume` presses the start-up prompt's Resume
 // button and `open` clicks each session card once, as a person would (a resumed tab starts its
 // terminal only when it is first opened).
 //
 //   node cdp-sample.cjs window <seconds> <out.json>     Performance.getMetrics over one held session, plus the Services rows
 //   node cdp-sample.cjs profile <seconds> <out.cpuprofile>
-//   node cdp-sample.cjs ab <seconds> <out.json>         the same window twice: as is, then prefers-reduced-motion: reduce
+//   node cdp-sample.cjs ab <seconds> <out.json>         the same window three times: as is, prefers-reduced-motion: reduce, as is
 //   node cdp-sample.cjs resume [timeoutSec]             press Resume on the "Resume previous sessions?" prompt
 //   node cdp-sample.cjs open <n>                        open every resumed session once; wait for n terminals
-//   env CCC_PERF_PORT (default 9333)
+//   env CCC_STAGE_ROOT (the staging root the app was started on), CCC_PERF_PORT (default 9333)
+//
+// Run on its own, it first checks that the port is held by the app launch.js started on the staging
+// root (pid, executable and start time from launch.js's record), and refuses otherwise.
 'use strict'
 
 const fs = require('fs')
 const http = require('http')
+const path = require('path')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -150,12 +154,16 @@ async function profile(seconds, p = port()) {
 }
 
 /**
- * The reduced-motion A/B: the same held session measures `seconds` as the
- * page is, then `seconds` with prefers-reduced-motion: reduce emulated (the
- * app's always-on sidebar animations stop under it). marks.start, .switch and
- * .end (async, optional) are called at the start, the moment the second half
- * starts and the end, and what they return is kept (run-matrix takes main's
- * process figures there, so each half has its own CPU).
+ * The reduced-motion A/B, as A, B, A: the same held session measures
+ * `seconds` as the page is, then `seconds` with prefers-reduced-motion:
+ * reduce emulated (the app's always-on sidebar animations stop under it),
+ * then `seconds` as the page is again, so drift over the six minutes shows as
+ * a difference between the two as-is parts instead of favouring one side.
+ * marks.start, .switch, .back and .end (async, optional) are called at the
+ * start, when the reduced part starts, when the second as-is part starts and
+ * at the end, and what they return is kept (run-matrix takes main's process
+ * figures there, so each part has its own CPU). reduceMatched says whether
+ * the page took the emulation.
  */
 async function reducedMotionAB(seconds, marks = {}, p = port()) {
   return withPage(async (cdp) => {
@@ -172,10 +180,14 @@ async function reducedMotionAB(seconds, marks = {}, p = port()) {
     const b0 = await read()
     await sleep(seconds * 1000)
     const b1 = await read()
+    await cdp.send('Emulation.setEmulatedMedia', { features: [] })
+    at.back = await mark('back')
+    const c0 = await read()
+    await sleep(seconds * 1000)
+    const c1 = await read()
     at.end = await mark('end')
-    await cdp.send('Emulation.setEmulatedMedia', { features: [] }).catch(() => {})
     await cdp.send('Performance.disable').catch(() => {})
-    return { kind: 'reduced-motion-ab', seconds, reduceMatched: matches, asIs: { start: a0, end: a1 }, reduced: { start: b0, end: b1 }, marks: at }
+    return { kind: 'reduced-motion-ab', seconds, reduceMatched: matches, asIs: { start: a0, end: a1 }, reduced: { start: b0, end: b1 }, asIs2: { start: c0, end: c1 }, marks: at }
   }, p)
 }
 
@@ -234,6 +246,15 @@ module.exports = { Cdp, getJson, appPage, evaluate, measureWindow, profile, redu
 
 if (require.main === module) {
   const [cmd, a1, a2] = process.argv.slice(2)
+  // Only the app launch.js started on the staging root (CCC_STAGE_ROOT), never whatever listens on the port.
+  const S = require(path.join(__dirname, '..', 'readme-shots', 'stage', 'stage-root.js'))
+  try {
+    const stage = S.resolveStage(process.env)
+    require('./lib/guard.cjs').checkStagedApp(S, S.readLaunchRecord(stage), [port()])
+  } catch (e) {
+    console.error('refusing: ' + (e && e.message))
+    process.exit(2)
+  }
   const write = (file, v) => { fs.writeFileSync(file, JSON.stringify(v)); console.log('wrote ' + file) }
   const run = {
     window: async () => write(a2, await measureWindow(Number(a1) || 60)),
