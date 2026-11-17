@@ -74,9 +74,11 @@ spread across the two runs.
 Between runs the app's process tree is recorded, the app is stopped with `launch.js stop`, and
 whatever of the tree outlives the stop is ended by pid and start time (console hosts and shells
 included). `taskkill /T` exits non-zero when a member of the tree has already ended by the time it is
-reached, which every stop on the VM hit; `launch.js stop` treats that as success once the app itself
-has ended. The vision browser the app starts is not in its tree: the runner ends it, and anything else
-of the run whose command line names the staging root. Each run's report lists what it had to end.
+reached, which most stops on the VM hit; `launch.js stop` treats that as success once the app itself
+has ended. The vision browser is a child of the app's main process, so the tree takes it with the
+rest; a process of the run that has left the tree by then (an earlier run had to end a vision browser
+process that way) is ended by the runner when its command line names the staging root. Each run's
+report lists what it had to end.
 The next run waits until no app process is left and ports 9333 and 9229 are free; if they do not free
 up, or cannot be checked, it stops the whole grid rather than measure on top of a leftover. It refuses
 to start while any app instance (installed or a development Electron) runs.
