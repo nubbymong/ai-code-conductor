@@ -10,10 +10,12 @@ shipped, and gives a PASS or FAIL against a pass line fixed before measuring.
 
 Step 0  How Claude Code starts a command hook. With -Claude, it runs that
         claude.exe once with --settings whose SessionStart hook records its own
-        parent chain, in a fresh environment (HOME, USERPROFILE, APPDATA,
-        LOCALAPPDATA, CLAUDE_CONFIG_DIR, CODEX_HOME and TEMP in a folder of its
-        own; a placeholder API key and an API address on a closed local port,
-        so nothing is signed in and nothing leaves the machine). The process
+        parent chain, in a fresh environment (built from an allow-list, with
+        HOME, USERPROFILE, APPDATA, LOCALAPPDATA, CLAUDE_CONFIG_DIR and TEMP
+        in a folder of its own, so any other CLI home falls back to its
+        default under that HOME; a placeholder API key and an API address on a
+        closed local port, so nothing is signed in and nothing leaves the
+        machine). The process
         between claude.exe and the hook command is the launcher, and a console
         host under it means the launcher gets a console of its own. Without
         -Claude, or with -Launcher, the launcher is the one named and the result
@@ -34,8 +36,13 @@ Step 2  The stand-in for one hook event, behind the launcher from step 0:
         to milliseconds at the rate measured on this machine (precise); and
         cpu_tick_ms is the job's own user and kernel time, which Windows charges
         in clock ticks of about 15.6 ms (coarse for one run, fair on average).
-        A run fails when it times out, exits non-zero, or its listing does not
-        show the holder as live. Defender's own process (MsMpEng.exe) is
+        A run fails when it times out, exits non-zero, its listing does not
+        show the holder as live, or any process the job counted has no cycle
+        count (one that could not be opened, a lost start notice, or a failed
+        read would leave cpu_ms short). One limit of the stand-in: `list` keeps
+        the record of a running holder when the hello gives no clear answer (a
+        read error), so a run cannot prove its nonce check completed; the hook
+        mode reports its handshake itself. Defender's own process (MsMpEng.exe) is
         outside the chain: its CPU over step 2, net of its rate over 20 idle
         seconds before, is reported per event beside the verdict, not in it.
 Step 3  Reference only: today's HTTP hook is a loopback POST from inside the
@@ -51,9 +58,11 @@ no failed run. Anything else is FAIL. p95 is the nearest-rank value: the
 ceil(0.95 * n)-th smallest. The mean CPU judged is the larger of the mean of
 cpu_ms and the mean of cpu_tick_ms.
 
-The script refuses to run when the store folder already exists, and refuses a
-helper whose Authenticode signature is not valid (P16 measures the signed
-per-user copy, not a dev build). In a finally block it ends the holder (only
+The script refuses to run when the store folder already exists or the output
+folder is inside it, and refuses a helper whose Authenticode signature is not
+valid (P16 measures the signed per-user copy, not a dev build). It makes the
+store folder itself, in one step that fails if the folder exists, before
+anything else; only a store it made is removed. In a finally block it ends the holder (only
 the process its record names, and only if that process runs this helper),
 removes the store and its own temporary folder, and reports any process of the
 probe still running.
@@ -204,6 +213,18 @@ public static class P16Runner
     static extern bool QueryThreadCycleTime(IntPtr thread, out ulong cycles);
     [DllImport("kernel32.dll")]
     static extern IntPtr GetCurrentThread();
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool CreateDirectoryW(string path, IntPtr attrs);
+
+    // Make a folder that must not exist yet, in one step: false when it
+    // already exists, so a folder someone else made is never taken as ours.
+    public static bool Reserve(string path)
+    {
+        if (CreateDirectoryW(path, IntPtr.Zero)) return true;
+        int e = Marshal.GetLastWin32Error();
+        if (e == 183) return false; // ERROR_ALREADY_EXISTS
+        throw new Win32Exception(e, "CreateDirectory " + path);
+    }
 
     // CPU cycles per millisecond of this machine's cycle counter: the fastest
     // of five 100 ms busy loops (a loop that was descheduled counts fewer
@@ -359,7 +380,6 @@ public static class P16Runner
                         // runs; its cycle count can be read after it ends.
                         IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, false, pid);
                         if (h != IntPtr.Zero) { handles[pid] = h; names[pid] = ImageName(h); order.Add(pid); }
-                        else { r.Missed++; }
                     }
                 }
                 else if (msg == MSG_EXIT_PROCESS || msg == MSG_ABNORMAL_EXIT_PROCESS)
@@ -408,6 +428,7 @@ public static class P16Runner
 
         List<string> parts = new List<string>();
         double total = 0;
+        int counted = 0;
         foreach (int pid in order)
         {
             IntPtr h = handles[pid];
@@ -417,14 +438,15 @@ public static class P16Runner
             {
                 cpu = cycles / CycleRate;
                 total += cpu;
-            }
-            else
-            {
-                r.Missed++;
+                counted++;
             }
             parts.Add(names[pid] + ":" + cpu.ToString("0.00", CultureInfo.InvariantCulture));
             CloseHandle(h);
         }
+        // Every process the job ever held, less those whose cycles were read:
+        // a process that could not be opened, a lost start notice, or a
+        // failed cycle read all leave CpuMs short, and the run then fails.
+        r.Missed = Math.Max(0, (int)a.TotalProcesses - counted);
         r.CpuMs = total;
         r.Chain = string.Join("|", parts.ToArray());
 
@@ -486,7 +508,6 @@ function New-FreshEnv([string] $root, [hashtable] $extra) {
     $envs['APPDATA'] = Join-Path $root 'appdata'
     $envs['LOCALAPPDATA'] = Join-Path $root 'localappdata'
     $envs['CLAUDE_CONFIG_DIR'] = Join-Path $root 'claude'
-    $envs['CODEX_HOME'] = Join-Path $root 'codex'
     $envs['TEMP'] = Join-Path $root 'tmp'
     $envs['TMP'] = Join-Path $root 'tmp'
     if ($extra) { foreach ($k in $extra.Keys) { $envs[$k] = $extra[$k] } }
@@ -674,16 +695,26 @@ try {
     # --- Checks before anything runs ---------------------------------------
     if (-not (Test-Path -LiteralPath $Helper -PathType Leaf)) { throw "could not run: no helper at $Helper" }
     $helperFull = (Resolve-Path -LiteralPath $Helper).ProviderPath
-    $storeFull = [IO.Path]::GetFullPath($Store)
+    $storeFull = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Store).TrimEnd([char]92)
+    $outWanted = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutDir).TrimEnd([char]92)
+    if ($outWanted -ieq $storeFull -or $outWanted.StartsWith($storeFull + [char]92, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "could not run: the output folder $outWanted is inside the store folder, which the probe removes at the end"
+    }
     if (Test-Path -LiteralPath $storeFull) { throw "could not run: the store folder $storeFull already exists; give a folder that does not" }
+    # Reserve the store before anything else: only a folder this run made is
+    # ever removed at the end.
+    $storeParent = Split-Path -Parent $storeFull
+    if ($storeParent -and -not (Test-Path -LiteralPath $storeParent)) { [void][IO.Directory]::CreateDirectory($storeParent) }
+    if (-not [P16Runner]::Reserve($storeFull)) { throw "could not run: the store folder $storeFull already exists; give a folder that does not" }
+    $storeMade = $true
     $sig = Get-AuthenticodeSignature -LiteralPath $helperFull
     if ($sig.Status -ne 'Valid') { throw "could not run: the helper's signature is $($sig.Status), not Valid; P16 measures the signed per-user copy" }
-    if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
-    $outFull = (Resolve-Path -LiteralPath $OutDir).ProviderPath
+    if (-not (Test-Path -LiteralPath $outWanted)) { New-Item -ItemType Directory -Path $outWanted | Out-Null }
+    $outFull = (Resolve-Path -LiteralPath $outWanted).ProviderPath
 
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('p16-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Path $tempRoot | Out-Null
-    foreach ($d in 'home', 'appdata', 'localappdata', 'claude', 'codex', 'tmp', 'work') { New-Item -ItemType Directory -Path (Join-Path $tempRoot $d) | Out-Null }
+    foreach ($d in 'home', 'appdata', 'localappdata', 'claude', 'tmp', 'work') { New-Item -ItemType Directory -Path (Join-Path $tempRoot $d) | Out-Null }
     $work = Join-Path $tempRoot 'work'
     $freshEnv = New-FreshEnv $tempRoot $null
     $freshBlock = ConvertTo-EnvBlock $freshEnv
@@ -803,8 +834,7 @@ try {
 
     # --- Step 1: one holder in a throwaway store -----------------------------
     $sid = 'p16-probe-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-    $storeMade = $true
-    $hold = Invoke-Fresh $helperFull @('hold', '--store', $storeFull, '--session', $sid, '--away', '600', '--detach') $freshEnv $work 30000
+    $hold =Invoke-Fresh $helperFull @('hold', '--store', $storeFull, '--session', $sid, '--away', '600', '--detach') $freshEnv $work 30000
     if ($hold.Code -ne 0) { throw "could not run: hold --detach exited $($hold.Code): $($hold.Err.Trim())" }
     $rec = $hold.Out.Trim() | ConvertFrom-Json
     $holderPid = [int]$rec.pid
@@ -862,13 +892,18 @@ try {
             $listing = $r.Output.Trim() | ConvertFrom-Json
             $listed = (@($listing.sessions | Where-Object { $_.session -eq $sid -and $_.pid -eq $holderPid }).Count -eq 1) -and ($listing.removed -eq 0)
         } catch { $listed = $false }
-        $ok = (-not $r.TimedOut) -and ($r.ExitCode -eq 0) -and $listed
+        $why = @()
+        if ($r.TimedOut) { $why += 'timed out' }
+        if ($r.ExitCode -ne 0) { $why += "exit $($r.ExitCode)" }
+        if (-not $listed) { $why += 'holder not listed as live' }
+        if ($r.Missed -gt 0) { $why += "$($r.Missed) process(es) without a CPU count" }
+        $ok = $why.Count -eq 0
         $rows.Add([pscustomobject]@{
             run = $n; phase = $phase; at = $at; wall = $r.WallMs; topExit = $r.TopExitMs; cpu = $r.CpuMs; tick = $r.CpuTickMs; procs = $r.Processes
             exit = $r.ExitCode; ok = $ok; poll = $r.ZeroByPoll; missed = $r.Missed; chain = $r.Chain
-            note = $(if ($ok) { '' } else { ($r.Output.Trim() -replace '[\r\n,]+', ' ') })
+            note = $(if ($ok) { '' } else { (($why -join '; ') + ': ' + $r.Output.Trim()) -replace '[\r\n,]+', ' ' })
         })
-        if (-not $ok) { Write-Host "P16 step 2: run $n failed: exit $($r.ExitCode), timed out $($r.TimedOut), output: $($r.Output.Trim())" }
+        if (-not $ok) { Write-Host "P16 step 2: run $n failed: $($why -join '; '); output: $($r.Output.Trim())" }
     }
     $mpEnd = $(if ($mpPid) { [P16Runner]::ProcessCpuMs($mpPid) } else { -1 })
     $mpSpan = $mpClock.Elapsed.TotalMilliseconds

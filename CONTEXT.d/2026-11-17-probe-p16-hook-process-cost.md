@@ -31,29 +31,50 @@ machine over SSH):
   ran (its macOS notarisation was being retried); its Windows build was the
   one installed.
 
-**Result: PASS.** 350 runs, 0 failed. p95 wall 33.98 ms, longest 39.57 ms,
-mean wall 32.58 ms. Mean CPU 27.57 ms per event: the helper about 3.1 ms,
-Git's launcher 6.2 ms, the console host 7.7 ms, Git's bash 10.6 ms. Defender's
-own process added 18.8 ms of CPU per event outside the chain (reported beside
-the verdict, not in the pass line; chain and Defender together are about
-46 ms). Reference: today's HTTP hook POST took 0.69 ms mean, 0.91 ms p95, and
-about 1.1 ms of CPU (client and server).
+**Result: PASS**, in all three full runs (350 runs each, 0 failed):
+
+| Run (script sha256) | p95 wall | longest | mean CPU | Defender CPU per event |
+|---|---|---|---|---|
+| 1 (13ba3577) | 33.98 ms | 39.57 ms | 27.57 ms | 18.8 ms |
+| 2 (4a2d8714) | 35.45 ms | 39.80 ms | 28.15 ms | 18.9 ms |
+| 3 (15e0e229, committed) | 36.98 ms | 48.07 ms | 28.80 ms | 19.5 ms |
+
+In run 3 the mean CPU splits as: the helper 3.2 ms, Git's launcher 6.5 ms,
+the console host 8.0 ms, Git's bash 11.1 ms. Defender's own process is
+outside the chain (reported beside the verdict, not in the pass line; chain
+and Defender together are about 48 ms). Reference: today's HTTP hook POST
+took 0.66 ms mean, 0.94 ms p95, and about 1.1 ms of CPU (client and server).
+
+Runs 2 and 3 exist because review found two gaps in the script's own checks
+(a store folder made by someone else, or an output folder inside the store,
+could be removed at the end; and a run whose CPU sum missed a process could
+still pass), and the WP1 legacy-Codex gate refused one environment variable
+name in the new file. Run 2 is the first fix, run 3 the committed script. The
+measurement code and the pass line did not change between them.
 
 **Decisions made while building the probe, before the measured run:**
 - CPU is taken two ways: CPU cycles per process, converted at the machine's
   measured cycle rate, and the job's own user and kernel time. Windows charges
   the second in clock ticks of about 15.6 ms and under-counts short bursts on
-  idle processors (4.5 ms mean against 27.6 ms from cycles). The pass line is
+  idle processors (4 to 6 ms mean against 28 ms from cycles). The pass line is
   judged on the larger of the two means. This rule was fixed after three
   10-run harness checks, which found the tick figure reading near zero, and
-  before the one 350-run measurement; the pass line itself never moved.
-- The 350-run measurement is the first and only full run of the final script
-  (sha256 13ba3577...). The harness checks used the same helper, so Defender
-  had already scanned it: a first start after an update (a new, unscanned
+  before the first 350-run measurement; the pass line itself never moved.
+- Harness checks and earlier runs used the same helper, so Defender had
+  already scanned it: a first start after an update (a new, unscanned
   per-user copy) is not in these numbers. The max line exists for that case.
 - `list` takes the store lock only for a stale record, so the stand-in does
   not take it for the live holder; the hook mode in A3 may. One lock is a
   file open and a lock call, small next to the process starts measured here.
+- `list` also cannot prove the hello's nonce check completed: on a read error
+  it keeps a running holder's record. No run came near the 2 to 3 second
+  connect and hello deadlines, and the helper's CPU per run has no low
+  outliers; the hook mode in A3 reports its handshake itself.
+- The probe's fresh environment is built from an allow-list and sets HOME,
+  USERPROFILE, APPDATA, LOCALAPPDATA, CLAUDE_CONFIG_DIR and TEMP; any other
+  CLI home falls back to its default under that HOME. The file names no other
+  CLI's home variable, because `helper/` is outside every WP1 legacy-Codex
+  scope and an unscoped file may not mention that CLI at all.
 
 **For A3 and A4:** the hook command runs under Git Bash, so it is written with
 forward slashes and quoted paths, for example
