@@ -158,6 +158,18 @@
   ${EndIf}
 !macroend
 
+; IsSameOrInside over BOTH canonical spellings, in one direction only: ${OUT}
+; = 1 when ${PATH} is ${DIR} or something inside it. An empty ${PATH} is 0.
+; Scratch: $cccCanon* (via CanonPathPair) and $R5 $R6 $R7 (via IsSameOrInside).
+!macro IsSameOrInsideCanon DIR PATH OUT
+  !insertmacro CanonPathPair "${DIR}" $cccCanonA $cccCanonAS
+  !insertmacro CanonPathPair "${PATH}" $cccCanonB $cccCanonBS
+  !insertmacro IsSameOrInside "$cccCanonA" "$cccCanonB" ${OUT}
+  ${If} ${OUT} != 1
+    !insertmacro IsSameOrInside "$cccCanonAS" "$cccCanonBS" ${OUT}
+  ${EndIf}
+!macroend
+
 ; Walk ${PATH} from its last component upwards and return, in ${OUT}, the
 ; OUTERMOST legacy-brand folder in the nesting chain ("" = none).
 ;
@@ -541,6 +553,19 @@
 ; customHeader is inserted by installer.nsi at file scope AFTER multiUser.nsh, so
 ; ${INSTALL_REGISTRY_KEY} resolves here — it does not at the top of this file.
 !macro customHeader
+  ; CanonPathPair's scratch, in BOTH passes: the installer pass compares paths
+  ; in customInit and customInstall, the uninstaller pass in
+  ; RemoveUserHelperFolder (customUnInstall). Each pass uses every one of them,
+  ; so -WX has nothing to warn about in either.
+  Var cccCanonA
+  Var cccCanonAS
+  Var cccCanonB
+  Var cccCanonBS
+  Var cccCanonWork
+  Var cccCanonChar
+  Var cccCanonIdx
+  Var cccCanonTmp
+
   !ifndef BUILD_UNINSTALLER
     Var cccSavedPerUserInstallLocation
     Var cccSavedPerMachineInstallLocation
@@ -550,15 +575,6 @@
     Var cccLegacyUninstaller
     Var cccRecordVerdict
     Var cccRecordUninstaller
-
-    Var cccCanonA
-    Var cccCanonAS
-    Var cccCanonB
-    Var cccCanonBS
-    Var cccCanonWork
-    Var cccCanonChar
-    Var cccCanonIdx
-    Var cccCanonTmp
 
     Var cccQuoteWork
     Var cccQuoteChar
@@ -998,7 +1014,7 @@
 !macroend
 
 ; ============================================================
-; BRANDING: dark theme, artwork, light motion, fresh-install splash
+; BRANDING: stock light dialog, artwork, light motion, fresh-install splash
 ; ============================================================
 ; The art is drawn from the boot splash by scripts/gen-installer-art.mjs and
 ; committed under build/ (installerSidebar.bmp, installerHeader.bmp,
@@ -1008,10 +1024,12 @@
 ;
 ; ORDER. This file is compiled ahead of electron-builder's installer.nsi, so
 ; the Welcome page below is page 1 and the two folder pages stay pages 2 and 3.
-; Modern UI reads its interface settings (MUI_BGCOLOR, MUI_TEXTCOLOR) when the
-; FIRST page macro is inserted, which is now MUI_PAGE_WELCOME, so they are
-; defined above it. MUI_CUSTOMFUNCTION_GUIINIT is read when addLangs inserts
-; the language, after all of this. None of it may move into customHeader,
+; Modern UI reads its interface settings (MUI_BGCOLOR and the like) when the
+; FIRST page macro is inserted, which is now MUI_PAGE_WELCOME. This file sets
+; none of them now (NO COLOURS OF OUR OWN, below); one added later has to come
+; before MUI_PAGE_WELCOME, or Modern UI ignores it without a word.
+; MUI_CUSTOMFUNCTION_GUIINIT is read when addLangs inserts the language,
+; after all of this. None of it may move into customHeader,
 ; customInit or customInstall: those macros are lifted verbatim into the
 ; makensis probe (tests/unit/main/installer-nsis-behaviour.test.ts).
 ;
@@ -1022,19 +1040,15 @@
 ; reference them sit inside !ifndef BUILD_UNINSTALLER, and the folder pages
 ; (compiled in both passes) only call them from inside the same guard.
 ;
-; The colours are shared by both passes, so the uninstaller matches.
-!define CCC_BRAND_BG "0B0E15"
-!define CCC_BRAND_TEXT "F4F7FA"
-!define CCC_BRAND_FIELD "161B26"
-!define MUI_BGCOLOR "${CCC_BRAND_BG}"
-!define MUI_TEXTCOLOR "${CCC_BRAND_TEXT}"
-; A themed checkbox ignores SetCtlColors, which would leave the Finish page's
-; "Run" label dark on dark. Stock MUI: this drops the high-contrast-only guard
-; in Finish.nsh (the IsHighContrastModeActive branch), so every check and radio
-; control the Finish pages can show (Run, Show readme and the two reboot
-; choices) is unthemed and takes the light text colour. A control a page does
-; not create gets SetWindowTheme on a null handle, which does nothing.
-!define MUI_FORCECLASSICCONTROLS
+; NO COLOURS OF OUR OWN (aicc_planning #295). Modern UI colours only the
+; header and the Welcome and Finish pages, and NSIS cannot recolour the
+; dialog's own button strip or a Browse button without a skin plugin, so the
+; dark theme this file used to set always left stock light parts beside dark
+; ones, and dark text on dark where a control ignored the colours. So every
+; page, in both passes, keeps Windows' own light dialog and its own themed
+; controls, and the brand is in the header bitmap and the sidebar art.
+; installer-branding-guard.test.ts fails on a colour define, classic
+; controls or a SetCtlColors anywhere in this file.
 
 !ifndef BUILD_UNINSTALLER
   !define CCC_ART_DIR "${BUILD_RESOURCES_DIR}\installer-art"
@@ -1143,7 +1157,6 @@
   Function CccFolderArt
     nsDialogs::CreateControl STATIC ${DEFAULT_STYLES}|${SS_BITMAP}|${SS_CENTERIMAGE} 0 0 64% 100% 36% ""
     Pop $cccAnimCtl
-    SetCtlColors $cccAnimCtl "" "${CCC_BRAND_BG}"
     StrCpy $cccAnimPrefix "ccc-emblem-"
     StrCpy $cccAnimFinal "$PLUGINSDIR\ccc-emblem.bmp"
     StrCpy $cccAnimStretch 0
@@ -1208,11 +1221,9 @@ Function DataDirPage
   !insertmacro MUI_HEADER_TEXT "Data folder" "Where AI Code Conductor keeps sessions, logs and configuration data."
   nsDialogs::Create 1018
   Pop $0
-  SetCtlColors $0 "" "${CCC_BRAND_BG}"
 
   ${NSD_CreateLabel} 0 0 100% 24u "Choose where to store sessions, logs, and configuration data:"
   Pop $0
-  SetCtlColors $0 "${CCC_BRAND_TEXT}" "${CCC_BRAND_BG}"
 
   ; Current brand key first, then each legacy key, then the fresh-install default.
   ReadRegStr $1 HKCU "Software\AI Code Conductor" "DataDirectory"
@@ -1231,7 +1242,6 @@ Function DataDirPage
 
   ${NSD_CreateDirRequest} 0 30u 75% 12u "$1"
   Pop $DataDir
-  SetCtlColors $DataDir "${CCC_BRAND_TEXT}" "${CCC_BRAND_FIELD}"
 
   ${NSD_CreateBrowseButton} 77% 29u 23% 14u "Browse..."
   Pop $0
@@ -1280,11 +1290,9 @@ Function ResourcesDirPage
   !insertmacro MUI_HEADER_TEXT "Resources folder" "Shared insights, screenshots, skills and scripts."
   nsDialogs::Create 1018
   Pop $0
-  SetCtlColors $0 "" "${CCC_BRAND_BG}"
 
   ${NSD_CreateLabel} 0 0 100% 36u "Choose where to store shared resources (insights, screenshots, skills, scripts).$\nUse a network-mountable path to share across SSH sessions."
   Pop $0
-  SetCtlColors $0 "${CCC_BRAND_TEXT}" "${CCC_BRAND_BG}"
 
   ; Current brand key first, then each legacy key, then the fresh-install default.
   ReadRegStr $1 HKCU "Software\AI Code Conductor" "ResourcesDirectory"
@@ -1301,7 +1309,6 @@ Function ResourcesDirPage
 
   ${NSD_CreateDirRequest} 0 42u 75% 12u "$1"
   Pop $ResourcesDir
-  SetCtlColors $ResourcesDir "${CCC_BRAND_TEXT}" "${CCC_BRAND_FIELD}"
 
   ${NSD_CreateBrowseButton} 77% 41u 23% 14u "Browse..."
   Pop $0
@@ -1347,11 +1354,801 @@ FunctionEnd
 ; a per-machine uninstall elevated as a different administrator account reads
 ; that account's record. When it has none, the question is not asked and
 ; CONFIG is kept. That is the safe side, and it was the same before this page.
+; The session helper sentence holds on every route, elevated or not
+; (RemoveUserHelperFolder). Known edge: an uninstall that runs as another
+; account from the start (a standard user who typed an administrator's
+; password) ends that account's held terminals and removes its copies, not
+; the standard user's.
 !macro customUnWelcomePage
   !define MUI_WELCOMEPAGE_TITLE "Uninstall AI Code Conductor"
-  !define MUI_WELCOMEPAGE_TEXT "Setup will remove AI Code Conductor from this computer.$\r$\n$\r$\nYour data and resources folders stay where they are. If your resources folder holds a CONFIG folder of settings, Setup asks whether to remove that too.$\r$\n$\r$\nClick Next to continue."
+  !define MUI_WELCOMEPAGE_TEXT "Setup will remove AI Code Conductor from this computer.$\r$\n$\r$\nYour data and resources folders stay where they are. If your resources folder holds a CONFIG folder of settings, Setup asks whether to remove that too.$\r$\n$\r$\nTerminals the session helper is still holding are ended, and its copies are removed.$\r$\n$\r$\nClick Next to continue."
   !insertmacro MUI_UNPAGE_WELCOME
 !macroend
+
+; ============================================================
+; UNINSTALLER: the per-user session helper folder
+; ============================================================
+; Held terminals run from the app's own copy of the session helper, kept per
+; user and outside the install folder, in %LOCALAPPDATA%\AI Code Conductor\helper
+; (src/main/session-helper/install.ts helperRootDir, manager.ts). This is all
+; the app and the helper put there, and so all the clean-up removes:
+;   <version>-<12 hex>\     one copy per version (installHelperCopy)
+;     aicc-helper.exe
+;     conpty\               node-pty's ConPTY, for a holder that asks for it
+;       conpty.dll          (CONPTY_FILES)
+;       OpenConsole.exe
+;     .new-<12 hex>\        a ConPTY copy that stopped half way
+;                           (makeConptyCopy), with the same two files
+;   .new-<12 hex>\          a copy that stopped half way (makeCopy), with
+;                           aicc-helper.exe
+;   store\                  the held sessions' records (helper/src/store.rs):
+;                           .lock, <session>.json, <session>.json.<pid>.tmp
+;   bindings.json           which tab holds which terminal (manager.ts)
+;   app-running.json        the app's crash mark (manager.ts)
+; The Data folder page proposes that SAME parent folder for the user's data
+; (DataDirPage), and either folder page takes any path at all.
+;
+; The clean-up may run as administrator: an uninstall started elevated has no
+; user copy behind it (Windows Settings, Apps on an all-users install; an
+; administrator prompt). So it is written to be safe there:
+;   - It never deletes recursively, and walks only the layout above.
+;   - It checks that a folder is not a link (a junction or a symbolic link)
+;     before it touches anything in it. A link stays as it is.
+;   - Files go by name, or by a wildcard inside the checked store folder.
+;     Delete never removes a folder, and on a link it removes the link only.
+;     Windows matches a wildcard against a file's short 8.3 name too, so
+;     each one is written so that no short name can match it: *.json has a
+;     four-letter extension, longer than a short name's three, and
+;     *.json.*.tmp has two dots, which a short name never has. *.tmp would
+;     also take notes.tmpl, whose short name ends in .TMP.
+;   - Folders go with plain RMDir, deepest first. RMDir removes a folder only
+;     when it is empty, so anything the app did not make stays, with the
+;     folders above it, and the details list says so.
+;   - It never removes a folder that is, or holds, the user's data or
+;     resources folder.
+; Not covered: a program already running as the user that swaps a checked
+; folder for a link between the check and the delete. That needs a hostile
+; program racing the uninstall, and such cases wait for a real report. Even
+; then, only files with the names above could go.
+; Not /REBOOTOK either: a delete scheduled for the next start runs before
+; anything can check the path again, so a link put there meanwhile would be
+; followed. A file still in use stays, and the details list says so.
+;
+; These are macros, not Functions, and declare no Var: customUnInstall is
+; compiled in the uninstaller pass alone, and a Function or Var the installer
+; pass never uses fails that pass under -WX (TWO PASSES, in BRANDING above).
+; They use registers, and CanonPathPair's $cccCanon* scratch, which
+; customHeader declares in both passes.
+
+; ${OUT} = 1 when ${CH} is one of the characters of ${SET}. Case counts (S==).
+; Scratch: $0 $1.
+!macro CccCharIn CH SET OUT
+  StrCpy ${OUT} 0
+  StrCpy $1 0
+  ${Do}
+    StrCpy $0 "${SET}" 1 $1
+    ${If} $0 == ""
+      ${ExitDo}
+    ${EndIf}
+    ${If} $0 S== "${CH}"
+      StrCpy ${OUT} 1
+      ${ExitDo}
+    ${EndIf}
+    IntOp $1 $1 + 1
+  ${Loop}
+!macroend
+
+; ${OUT} = 1 when ${STR} is exactly 12 hex digits in lower case, as the app
+; writes them. Scratch: $R5 $R6 $R7 $2, and $0 $1 (CccCharIn).
+!macro CccIsHex12 STR OUT
+  StrCpy ${OUT} 0
+  StrLen $R5 "${STR}"
+  ${If} $R5 == 12
+    StrCpy ${OUT} 1
+    StrCpy $R6 0
+    ${Do}
+      ${If} $R6 >= 12
+        ${ExitDo}
+      ${EndIf}
+      StrCpy $R7 "${STR}" 1 $R6
+      !insertmacro CccCharIn "$R7" "0123456789abcdef" $2
+      ${If} $2 != 1
+        StrCpy ${OUT} 0
+        ${ExitDo}
+      ${EndIf}
+      IntOp $R6 $R6 + 1
+    ${Loop}
+  ${EndIf}
+!macroend
+
+; ${OUT} = 1 when ${NAME} is a version folder's name, <version>-<12 hex>. The
+; version is three numbers with a dot between each, then optionally a hyphen
+; and a tag of letters, digits and dots (HELPER_FOLDER_RE in
+; src/main/session-helper/protocol.ts). Scratch: $R5 to $R9, $0 $1 $2.
+!macro IsHelperVersionFolder NAME OUT
+  StrCpy ${OUT} 0
+  StrLen $R5 "${NAME}"
+  ${If} $R5 >= 18
+    IntOp $R6 $R5 - 13
+    StrCpy $R7 "${NAME}" 1 $R6
+    ${If} $R7 == "-"
+      StrCpy $R9 "${NAME}" "" -12
+      !insertmacro CccIsHex12 "$R9" ${OUT}
+    ${EndIf}
+  ${EndIf}
+  ${If} ${OUT} == 1
+    ; The version: $R5 is its length, $R6 the position, $R8 the part (0 to 2
+    ; the numbers, 3 the tag) and $R9 how many characters that part has.
+    StrLen $R5 "${NAME}"
+    IntOp $R5 $R5 - 13
+    StrCpy $R6 0
+    StrCpy $R8 0
+    StrCpy $R9 0
+    ${Do}
+      ${If} $R6 >= $R5
+        ${ExitDo}
+      ${EndIf}
+      StrCpy $R7 "${NAME}" 1 $R6
+      StrCpy $2 0
+      ${If} $R8 == 3
+        !insertmacro CccCharIn "$R7" "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz." $2
+        ${If} $2 == 1
+          IntOp $R9 $R9 + 1
+        ${EndIf}
+      ${Else}
+        !insertmacro CccCharIn "$R7" "0123456789" $2
+        ${If} $2 == 1
+          IntOp $R9 $R9 + 1
+        ${ElseIf} $R9 > 0
+          ; A dot ends the first and the second number, a hyphen the third.
+          ${If} $R7 == "."
+            ${If} $R8 < 2
+              IntOp $R8 $R8 + 1
+              StrCpy $R9 0
+              StrCpy $2 1
+            ${EndIf}
+          ${ElseIf} $R7 == "-"
+            ${If} $R8 == 2
+              StrCpy $R8 3
+              StrCpy $R9 0
+              StrCpy $2 1
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+      ${If} $2 != 1
+        StrCpy ${OUT} 0
+        ${ExitDo}
+      ${EndIf}
+      IntOp $R6 $R6 + 1
+    ${Loop}
+    ; It has to end in the third number, or in a tag of one character or more.
+    ${If} $R8 < 2
+    ${OrIf} $R9 < 1
+      StrCpy ${OUT} 0
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; ${OUT} = 1 when ${NAME} is one of the helper folder's own folders: "store",
+; ".new-<12 hex>" or a version folder. Scratch: $R5 to $R9, $0 $1 $2.
+!macro IsHelperOwnFolder NAME OUT
+  StrCpy ${OUT} 0
+  StrCpy $R8 "${NAME}" 5
+  ${If} "${NAME}" S== "store"
+    StrCpy ${OUT} 1
+  ${ElseIf} $R8 S== ".new-"
+    StrCpy $R9 "${NAME}" "" 5
+    !insertmacro CccIsHex12 "$R9" ${OUT}
+  ${Else}
+    !insertmacro IsHelperVersionFolder "${NAME}" ${OUT}
+  ${EndIf}
+!macroend
+
+; ${OUT} = 1 when the user's data folder ($7) or resources folder ($8) is
+; ${DIR} or inside it, compared canonically (IsSameOrInsideCanon). Scratch:
+; $cccCanon* and $R5 $R6 $R7.
+!macro HoldsUserFolder DIR OUT
+  !insertmacro IsSameOrInsideCanon "${DIR}" "$7" ${OUT}
+  ${If} ${OUT} != 1
+    !insertmacro IsSameOrInsideCanon "${DIR}" "$8" ${OUT}
+  ${EndIf}
+!macroend
+
+; Adds one line to $9, the clean-up's notes, which RemoveUserHelperFolder
+; shows in the details list. Lines are kept apart by "|", which no Windows
+; path can hold. A line that would not fit in one NSIS string is left out, and
+; the list then ends by saying so. Saves its scratch, $0 and $1.
+!macro CccHelperNote TEXT
+  Push $0
+  StrCpy $0 "${TEXT}"
+  Push $1
+  StrLen $1 "$9|$0"
+  ; Room is kept for the closing line below.
+  IntOp $1 $1 + 64
+  ${If} $1 < ${NSIS_MAX_STRLEN}
+    ${If} $9 == ""
+      StrCpy $9 "$0"
+    ${Else}
+      StrCpy $9 "$9|$0"
+    ${EndIf}
+  ${Else}
+    StrCpy $1 "$9" 6 -6
+    ${If} $1 != "shows."
+      StrCpy $9 "$9|The clean-up did more than this list shows."
+    ${EndIf}
+  ${EndIf}
+  Pop $1
+  Pop $0
+!macroend
+
+; Shows $9's notes in the details list, one line each. Saves $0 $1 $2.
+!macro CccPrintHelperNotes
+  Push $0
+  Push $1
+  Push $2
+  StrCpy $0 0
+  StrCpy $1 ""
+  ${Do}
+    StrCpy $2 "$9" 1 $0
+    ${If} $2 == ""
+      ${If} $1 != ""
+        DetailPrint "$1"
+      ${EndIf}
+      ${ExitDo}
+    ${ElseIf} $2 == "|"
+      DetailPrint "$1"
+      StrCpy $1 ""
+    ${Else}
+      StrCpy $1 "$1$2"
+    ${EndIf}
+    IntOp $0 $0 + 1
+  ${Loop}
+  Pop $2
+  Pop $1
+  Pop $0
+!macroend
+
+; ${OUT} = 1 when process ${PID} runs as this copy's own user: the SID in its
+; token equals $R6, this copy's (CccEndUserHelpers). $R5 is a 256-byte
+; buffer. ${PID} and ${OUT} must not be $0 $1 $2. Scratch: $0 $1 $2.
+!macro CccProcessIsMine PID OUT
+  StrCpy ${OUT} 0
+  ; PROCESS_QUERY_LIMITED_INFORMATION, then TOKEN_QUERY and TokenUser.
+  System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i ${PID}) p .r0'
+  ${If} $0 != 0
+    System::Call 'advapi32::OpenProcessToken(p r0, i 8, *p .r1) i .r2'
+    ${If} $2 != 0
+      System::Call 'advapi32::GetTokenInformation(p r1, i 1, p R5, i 256, *i .r2) i .r2'
+      ${If} $2 != 0
+        System::Call '*$R5(p .r2)'
+        System::Call 'advapi32::EqualSid(p r2, p R6) i .r2'
+        ${If} $2 != 0
+          StrCpy ${OUT} 1
+        ${EndIf}
+      ${EndIf}
+      System::Call 'kernel32::CloseHandle(p r1)'
+    ${EndIf}
+    System::Call 'kernel32::CloseHandle(p r0)'
+  ${EndIf}
+!macroend
+
+; ${OUT} = when process ${PID} started (a 64-bit FILETIME), or "" when that
+; cannot be read. ${PID} and ${OUT} must not be $0 $1 $2. Scratch: $0 $1 $2.
+!macro CccProcessStart PID OUT
+  StrCpy ${OUT} ""
+  System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i ${PID}) p .r0'
+  ${If} $0 != 0
+    System::Call 'kernel32::GetProcessTimes(p r0, *l .r1, *l, *l, *l) i .r2'
+    ${If} $2 != 0
+      StrCpy ${OUT} $1
+    ${EndIf}
+    System::Call 'kernel32::CloseHandle(p r0)'
+  ${EndIf}
+!macroend
+
+; ${OUT} = 1 when the number ${ITEM} is in $R1, a list like ",12,345,".
+; ${ITEM} and ${OUT} must not be scratch. Scratch: $0 $1 $2 $R7 $R8.
+!macro CccInList ITEM OUT
+  StrCpy ${OUT} 0
+  StrCpy $2 ",${ITEM},"
+  StrLen $1 "$2"
+  StrLen $R8 "$R1"
+  StrCpy $0 0
+  ${Do}
+    ${If} $0 >= $R8
+      ${ExitDo}
+    ${EndIf}
+    StrCpy $R7 "$R1" $1 $0
+    ${If} $R7 == $2
+      StrCpy ${OUT} 1
+      ${ExitDo}
+    ${EndIf}
+    IntOp $0 $0 + 1
+  ${Loop}
+!macroend
+
+; One pass over every running process (a Toolhelp snapshot, so no WMI: over
+; a non-interactive sign-in tasklist and taskkill answer "Access denied",
+; measured on the VM). MODE 0 adds to $R1 each aicc-helper.exe of this
+; copy's user. MODE 1 adds each process of this user whose parent is in $R1
+; and that started after its parent, so a parent id Windows has since given
+; to a new process is not taken for its parent. $R2 is the snapshot, $R3 a
+; PROCESSENTRY32W (556 bytes, 32-bit). Scratch: $3 $4 $5 $6 $7, and
+; CccInList's, CccProcessIsMine's and CccProcessStart's.
+!macro CccScanProcesses MODE
+  System::Call 'kernel32::CreateToolhelp32Snapshot(i 2, i 0) p .R2'
+  ${If} $R2 != 0
+  ${AndIf} $R2 != -1
+  ${AndIf} $R2 != 4294967295
+    System::Call '*$R3(i 556)'
+    System::Call 'kernel32::Process32FirstW(p R2, p R3) i .r7'
+    ${DoWhile} $7 != 0
+      System::Call '*$R3(i, i, i .r3, p, i, i, i .r4, i, i, &w260 .r5)'
+      !if "${MODE}" == "0"
+        ${If} $5 == "aicc-helper.exe"
+          !insertmacro CccProcessIsMine "$3" $6
+          ${If} $6 == 1
+            StrCpy $R1 "$R1$3,"
+          ${EndIf}
+        ${EndIf}
+      !else
+        ${If} $4 != 0
+          !insertmacro CccInList "$4" $6
+          ${If} $6 == 1
+            !insertmacro CccInList "$3" $6
+            ${If} $6 == 0
+              !insertmacro CccProcessIsMine "$3" $6
+              ${If} $6 == 1
+                !insertmacro CccProcessStart "$3" $R7
+                !insertmacro CccProcessStart "$4" $R8
+                ${If} $R7 != ""
+                ${AndIf} $R8 != ""
+                  System::Int64Op $R7 < $R8
+                  Pop $6
+                  ${If} $6 == 0
+                    StrCpy $R1 "$R1$3,"
+                  ${EndIf}
+                ${EndIf}
+              ${EndIf}
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+      !endif
+      System::Call 'kernel32::Process32NextW(p R2, p R3) i .r7'
+    ${Loop}
+    System::Call 'kernel32::CloseHandle(p R2)'
+  ${EndIf}
+!macroend
+
+; Ends every process in $R1 that is still this user's when its turn comes.
+; Scratch: $3 $4 $6 $R7, and CccProcessIsMine's.
+!macro CccEndListed
+  StrCpy $4 1
+  ${Do}
+    StrCpy $3 ""
+    ${Do}
+      StrCpy $R7 "$R1" 1 $4
+      IntOp $4 $4 + 1
+      ${If} $R7 == ","
+      ${OrIf} $R7 == ""
+        ${ExitDo}
+      ${EndIf}
+      StrCpy $3 "$3$R7"
+    ${Loop}
+    ${If} $3 == ""
+      ${ExitDo}
+    ${EndIf}
+    !insertmacro CccProcessIsMine "$3" $6
+    ${If} $6 == 1
+      ; PROCESS_TERMINATE
+      System::Call 'kernel32::OpenProcess(i 1, i 0, i $3) p .r0'
+      ${If} $0 != 0
+        System::Call 'kernel32::TerminateProcess(p r0, i 1)'
+        System::Call 'kernel32::CloseHandle(p r0)'
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+!macroend
+
+; Force-ends every aicc-helper.exe that this copy's own user runs, and what
+; each one started: at least 8 levels below each holder, and in practice all
+; of them (each pass also takes the children of what it found earlier in the
+; same pass). A held terminal
+; keeps its copy's files open, the conpty folder's OpenConsole.exe among
+; them, and once the app is gone nothing can reach it; a holder has no window
+; or console to close. Only this user's, never another user's, even when this
+; copy is elevated: the user is the one in this copy's own token, and every
+; process is checked against it, again just before it is ended. A
+; development run's holders end too. Saves and restores every register but
+; $9, where it adds its note.
+!macro CccEndUserHelpers
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $R0
+  Push $R1
+  Push $R2
+  Push $R3
+  Push $R4
+  Push $R5
+  Push $R6
+  Push $R7
+  Push $R8
+  Push $R9
+
+  ; The name, for the notes only.
+  StrCpy $8 ""
+  System::Call 'secur32::GetUserNameExW(i 2, w .r8, *i ${NSIS_MAX_STRLEN})'
+  ${If} $8 == ""
+    StrCpy $8 "this user"
+  ${EndIf}
+  ; This copy's own user: TOKEN_USER in $R0, its SID at $R6.
+  System::Alloc 256
+  Pop $R0
+  System::Alloc 256
+  Pop $R5
+  System::Alloc 556
+  Pop $R3
+  StrCpy $R6 0
+  System::Call 'kernel32::GetCurrentProcess() p .r0'
+  System::Call 'advapi32::OpenProcessToken(p r0, i 8, *p .r1) i .r2'
+  ${If} $2 != 0
+    System::Call 'advapi32::GetTokenInformation(p r1, i 1, p R0, i 256, *i .r2) i .r2'
+    ${If} $2 != 0
+      System::Call '*$R0(p .R6)'
+    ${EndIf}
+    System::Call 'kernel32::CloseHandle(p r1)'
+  ${EndIf}
+
+  ${If} $R6 == 0
+    !insertmacro CccHelperNote "Could not tell which user this is, so no running session helper was ended."
+  ${Else}
+    StrCpy $R1 ","
+    !insertmacro CccScanProcesses 0
+    ${If} $R1 == ","
+      !insertmacro CccHelperNote "No session helper of $8 was running."
+    ${Else}
+      ; What they started: a pass also takes the children of what it found
+      ; earlier in the same pass; stop when a pass finds nothing new, or
+      ; after 8 passes.
+      StrCpy $R4 0
+      ${Do}
+        StrLen $R9 "$R1"
+        !insertmacro CccScanProcesses 1
+        StrLen $7 "$R1"
+        IntOp $R4 $R4 + 1
+        ${If} $7 == $R9
+        ${OrIf} $R4 >= 8
+          ${ExitDo}
+        ${EndIf}
+      ${Loop}
+      !insertmacro CccEndListed
+      ; Windows finishes ending a process a moment later: look again, for
+      ; up to about 3 seconds.
+      StrCpy $R4 0
+      ${Do}
+        Sleep 300
+        StrCpy $R1 ","
+        !insertmacro CccScanProcesses 0
+        IntOp $R4 $R4 + 1
+        ${If} $R1 == ","
+        ${OrIf} $R4 >= 10
+          ${ExitDo}
+        ${EndIf}
+      ${Loop}
+      ${If} $R1 == ","
+        !insertmacro CccHelperNote "Ended the running session helpers of $8."
+      ${Else}
+        !insertmacro CccHelperNote "Some session helpers of $8 are still running, so their files may stay."
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  System::Free $R3
+  System::Free $R5
+  System::Free $R0
+  Pop $R9
+  Pop $R8
+  Pop $R7
+  Pop $R6
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Pop $R1
+  Pop $R0
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+!macroend
+
+; Removes one of the helper folder's own folders, $R0\$R3, by the layout
+; above. The caller has checked that it is not a link and that it neither is
+; nor holds the user's data or resources folder. Each folder inside it is
+; checked not to be a link first. Saves and restores the caller's search
+; ($R2 $R3) around its own. Scratch: $R8 $R9 $5 $6, and CccIsHex12's.
+!macro CccRemoveHelperOwnFolder
+  StrCpy $R8 "$R0\$R3"
+  StrCpy $R9 "$R3" 5
+  ${If} "$R3" S== "store"
+    Delete "$R8\.lock"
+    Delete "$R8\*.json"
+    Delete "$R8\*.json.*.tmp"
+  ${ElseIf} $R9 S== ".new-"
+    Delete "$R8\aicc-helper.exe"
+  ${Else}
+    ; A version folder: its conpty folder, then any ConPTY copy that stopped
+    ; half way, then the helper itself.
+    ${If} ${FileExists} "$R8\conpty\*.*"
+      ${GetFileAttributes} "$R8\conpty" "REPARSE_POINT" $6
+      ${If} $6 == 0
+        Delete "$R8\conpty\conpty.dll"
+        Delete "$R8\conpty\OpenConsole.exe"
+        RMDir "$R8\conpty"
+      ${EndIf}
+    ${EndIf}
+    Push $R2
+    Push $R3
+    ClearErrors
+    FindFirst $R2 $R3 "$R8\.new-*"
+    ${Do}
+      ${If} $R3 == ""
+        ${ExitDo}
+      ${EndIf}
+      StrCpy $R9 "$R3" "" 5
+      !insertmacro CccIsHex12 "$R9" $5
+      ${If} $5 == 1
+      ${AndIf} ${FileExists} "$R8\$R3\*.*"
+        ${GetFileAttributes} "$R8\$R3" "REPARSE_POINT" $6
+        ${If} $6 == 0
+          Delete "$R8\$R3\conpty.dll"
+          Delete "$R8\$R3\OpenConsole.exe"
+          RMDir "$R8\$R3"
+        ${EndIf}
+      ${EndIf}
+      FindNext $R2 $R3
+    ${Loop}
+    FindClose $R2
+    ClearErrors
+    Pop $R3
+    Pop $R2
+    Delete "$R8\aicc-helper.exe"
+  ${EndIf}
+  RMDir "$R8"
+!macroend
+
+; Removes this user's copies of the session helper and their records, and
+; shows in the details list what it did. customUnInstall inserts it, never on
+; an update (see there). It runs as the user who started the uninstall:
+;   - The elevated copy of an all-users uninstall started by the user. The
+;     uninstaller starts as that user, starts itself again as administrator
+;     (UAC_RunElevated, multiUser.nsh), and the first copy waits for the
+;     second. The clean-up runs in that first copy (UAC_AsUser_Call), with
+;     the user's own rights, local app data folder and registry. That copy
+;     has no window, so it hands its notes back in $9, which the UAC plugin
+;     copies back with the other registers (UAC_SYNCREGISTERS).
+;   - Any other uninstall runs it in this copy: a per-user one, and one
+;     started already elevated, which has no first copy behind it (Windows
+;     Settings, Apps on an all-users install; an administrator prompt). The
+;     user is then the account this copy runs as.
+; If the first copy did not run it (no notes came back), this copy runs it.
+; An uninstall that runs as another account (a standard user who typed an
+; administrator's password before it started) reaches that account's folder
+; and holders, not the standard user's. The label is called like a Function
+; and ends at its Return; a Function would have to sit at file scope, where a
+; UAC call compiles before electron-builder adds the plugin.
+!macro RemoveUserHelperFolder
+  Push $9
+  StrCpy $9 ""
+  ${If} ${UAC_IsInnerInstance}
+    !insertmacro UAC_AsUser_Call Label cccHelperFolderHere ${UAC_SYNCREGISTERS}
+  ${EndIf}
+  ${If} $9 == ""
+    Call :cccHelperFolderHere
+  ${EndIf}
+  !insertmacro CccPrintHelperNotes
+  Pop $9
+  Goto cccHelperFolderDone
+  cccHelperFolderHere:
+    !insertmacro RemoveUserHelperFolderHere
+    Return
+  cccHelperFolderDone:
+!macroend
+
+; The clean-up itself, in whichever copy RemoveUserHelperFolder chose. It
+; adds a note for everything it does or leaves ($9) and shows none itself.
+; In order:
+;   1. Nothing when the parent or the helper folder is a link. A parent made a
+;      junction by hand points at the user's data elsewhere.
+;   2. This user's running aicc-helper.exe, with what they started, are
+;      force-ended (CccEndUserHelpers).
+;   3. Each of the helper folder's own folders (IsHelperOwnFolder) that is not
+;      a link, and is not and does not hold the user's data or resources
+;      folder, is removed by the layout (CccRemoveHelperOwnFolder). Those two
+;      are the ones the user recorded (any brand's key, as ReadUserPath reads
+;      them), or the ones the app then uses (src/main/data-paths.ts): with no
+;      data folder recorded, the parent, and with no resources folder
+;      recorded, the data folder's resources folder. A file still in use (a
+;      holder taking a moment to end, a virus scan) is tried again for about
+;      3 seconds; what stays after that is noted.
+;   4. The two files, by name.
+;   5. The helper folder, then the parent, with plain RMDir: each goes only
+;      when it is empty, and never when it is the data or resources folder.
+; Registers are saved and restored, all but $9. $R0 is the helper folder, $R1
+; its parent, $R2 the search handle, $R3 the name found, $R4 the round, $3
+; the folders this round tried, $4 the ones still there after it, $5 and $6
+; answers, $7 the data folder and $8 the resources folder.
+!macro RemoveUserHelperFolderHere
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $R0
+  Push $R1
+  Push $R2
+  Push $R3
+  Push $R4
+  Push $R5
+  Push $R6
+  Push $R7
+  Push $R8
+  Push $R9
+
+  ; The app finds the folder the same way (install.ts helperRootDir).
+  ReadEnvStr $R1 LOCALAPPDATA
+  ${If} $R1 == ""
+    !insertmacro CccHelperNote "No local app data folder is set, so there is no session helper folder to remove."
+  ${Else}
+    StrCpy $R1 "$R1\AI Code Conductor"
+    StrCpy $R0 "$R1\helper"
+    ${IfNot} ${FileExists} "$R0\*.*"
+      !insertmacro CccHelperNote "No session helper folder to remove: $R0"
+    ${Else}
+      ; Fail closed: only a hard "0" (no reparse attribute) goes on.
+      ${GetFileAttributes} "$R1" "REPARSE_POINT" $5
+      ${GetFileAttributes} "$R0" "REPARSE_POINT" $6
+      ${If} $5 != 0
+      ${OrIf} $6 != 0
+        !insertmacro CccHelperNote "Left the session helper folder as it is, because it or its parent is a link: $R0"
+      ${Else}
+        !insertmacro CccHelperNote "Session helper folder: $R0"
+        !insertmacro ReadUserPath "DataDirectory" $7
+        ${If} $7 == ""
+          StrCpy $7 "$R1"
+        ${EndIf}
+        !insertmacro ReadUserPath "ResourcesDirectory" $8
+        ${If} $8 == ""
+          ; The data folder's own, as data-paths.ts joins it: from the plain
+          ; spelling, so a trailing or forward slash makes no odd path.
+          !insertmacro CanonPathPair "$7" $cccCanonA $cccCanonAS
+          StrCpy $8 "$cccCanonA\resources"
+        ${EndIf}
+
+        !insertmacro CccEndUserHelpers
+
+        StrCpy $R4 0
+        ${Do}
+          StrCpy $3 0
+          StrCpy $4 0
+          ClearErrors
+          FindFirst $R2 $R3 "$R0\*.*"
+          ${Do}
+            ${If} $R3 == ""
+              ${ExitDo}
+            ${EndIf}
+            ; Never "." or "..": "helper\.." is the parent, the Data folder's
+            ; default. The name test below rejects both as well.
+            ${If} $R3 != "."
+            ${AndIf} $R3 != ".."
+            ${AndIf} ${FileExists} "$R0\$R3\*.*"
+              !insertmacro IsHelperOwnFolder "$R3" $5
+              ${If} $5 == 1
+                ${GetFileAttributes} "$R0\$R3" "REPARSE_POINT" $6
+                ${If} $6 != 0
+                  ${If} $R4 == 0
+                    !insertmacro CccHelperNote "Left $R3 as it is, because it is a link."
+                  ${EndIf}
+                ${Else}
+                  !insertmacro HoldsUserFolder "$R0\$R3" $6
+                  ${If} $6 == 1
+                    ${If} $R4 == 0
+                      !insertmacro CccHelperNote "Left $R3 as it is, because it holds your data or resources folder."
+                    ${EndIf}
+                  ${Else}
+                    IntOp $3 $3 + 1
+                    !insertmacro CccRemoveHelperOwnFolder
+                    ${If} ${FileExists} "$R0\$R3\*.*"
+                      IntOp $4 $4 + 1
+                      ${If} $R4 >= 6
+                        !insertmacro CccHelperNote "Kept $R3, because a file in it is still in use or was not made by the app."
+                      ${EndIf}
+                    ${Else}
+                      !insertmacro CccHelperNote "Removed $R3"
+                    ${EndIf}
+                  ${EndIf}
+                ${EndIf}
+              ${EndIf}
+            ${EndIf}
+            FindNext $R2 $R3
+          ${Loop}
+          FindClose $R2
+          ClearErrors
+          ; Another round after any try: one that tries nothing is done.
+          IntOp $R4 $R4 + 1
+          ${If} $3 == 0
+          ${OrIf} $R4 >= 7
+            ${ExitDo}
+          ${EndIf}
+          ${If} $4 > 0
+            Sleep 500
+          ${EndIf}
+        ${Loop}
+
+        Delete "$R0\bindings.json"
+        Delete "$R0\app-running.json"
+
+        !insertmacro HoldsUserFolder "$R0" $6
+        ${If} $6 == 1
+          !insertmacro CccHelperNote "Kept the session helper folder, because it is, or holds, your data or resources folder."
+        ${Else}
+          RMDir "$R0"
+          ${If} ${FileExists} "$R0\*.*"
+            !insertmacro CccHelperNote "Kept the session helper folder, because something in it is still in use or was not made by the app."
+          ${Else}
+            !insertmacro CccHelperNote "Removed the session helper folder."
+          ${EndIf}
+        ${EndIf}
+        !insertmacro HoldsUserFolder "$R1" $6
+        ${If} $6 != 1
+          RMDir "$R1"
+          ${IfNot} ${FileExists} "$R1\*.*"
+            !insertmacro CccHelperNote "Removed the empty folder $R1"
+          ${EndIf}
+        ${EndIf}
+        ClearErrors
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  Pop $R9
+  Pop $R8
+  Pop $R7
+  Pop $R6
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Pop $R1
+  Pop $R0
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+!macroend
+
 !macro customUnInstall
   ; Read ResourcesDirectory from new key, fall back to old key
   ReadRegStr $0 HKCU "Software\AI Code Conductor" "ResourcesDirectory"
@@ -1384,4 +2181,15 @@ FunctionEnd
 
   ; Clean up old registry key if it still exists
   DeleteRegKey /ifempty HKCU "Software\Claude Conductor"
+
+  ; The session helper's per-user folder (RemoveUserHelperFolder above).
+  ; Never on an update: the new installer runs this uninstaller with
+  ; --updated (electron-builder installUtil.nsh, uninstallOldVersion), and
+  ; held terminals are meant to live through an update, so their helper
+  ; copies and records stay. The one exception is Setup started with
+  ; --delete-app-data: it then passes that flag instead of --updated, which
+  ; asks for the app's data to go, and the helper folder goes with it.
+  ${IfNot} ${isUpdated}
+    !insertmacro RemoveUserHelperFolder
+  ${EndIf}
 !macroend

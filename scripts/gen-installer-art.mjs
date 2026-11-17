@@ -69,6 +69,40 @@ const BLUE = [0x2f, 0x9b, 0xff]
 const I_GREY = [0xe0, 0xe0, 0xe0]
 const WORD = [0xd9, 0xdb, 0xe0]
 const LINE = [140, 170, 230]
+
+// Every page keeps Windows' stock light dialog (aicc_planning #295), so the
+// header bitmap and the folder-page emblem sit on light grounds. Modern UI's
+// header band is white (MUI_BGCOLOR's default, FFFFFF). A page is the dialog
+// face colour (COLOR_BTNFACE, F0F0F0 in Windows' default theme), and the
+// emblem's STATIC control (SS_CENTERIMAGE) fills the rest of its strip with
+// the bitmap's top-left pixel, so the emblem's corners are that colour too.
+// The Welcome and Finish sidebar and the splash keep the splash's dark ground:
+// they are the brand panel.
+export const HEADER_GROUND = [0xff, 0xff, 0xff]
+export const FACE_GROUND = [0xf0, 0xf0, 0xf0]
+
+/** The monogram's and the glow line's inks: on the splash's dark ground, and on a light one. */
+const ON_DARK = {
+  a: BLUE,
+  i: I_GREY,
+  ring: RING_STOPS,
+  line: [[90, 150, 255], [150, 200, 255]],
+  halo: [120, 180, 255],
+  core: [0xbc, 0xd8, 0xff],
+}
+const SLATE = [0x26, 0x2e, 0x3d]
+const ON_LIGHT = {
+  a: BLUE,
+  i: SLATE,
+  ring: [
+    [0, BLUE],
+    [0.55, [0x3d, 0x6f, 0xb3]],
+    [1, SLATE],
+  ],
+  line: [[70, 140, 240], [30, 110, 225]],
+  halo: [47, 155, 255],
+  core: BLUE,
+}
 const TICK = [160, 190, 240]
 
 // ---------------------------------------------------------------------------
@@ -376,7 +410,7 @@ function stops(list, t) {
 }
 
 /** The ring's gradient, in the ring's own bounding box (objectBoundingBox units). */
-function ringPaint(brand) {
+function ringPaint(brand, ringStops = RING_STOPS) {
   const b = brand.ringBox
   const p1 = [0, 0.92]
   const p2 = [0.85, 0.08]
@@ -386,7 +420,7 @@ function ringPaint(brand) {
   return (lx, ly) => {
     const u = (lx - b.x0) / b.w
     const v = (ly - b.y0) / b.h
-    return stops(RING_STOPS, ((u - p1[0]) * dx + (v - p1[1]) * dy) / len2)
+    return stops(ringStops, ((u - p1[0]) * dx + (v - p1[1]) * dy) / len2)
   }
 }
 
@@ -421,11 +455,11 @@ function placeMonogram(brand, cx, cy, height) {
 }
 
 /** Draw a placed monogram. `t` is the animation time 0..1 (1 = settled). */
-function drawMonogram(cv, brand, at, t = 1) {
+function drawMonogram(cv, brand, at, t = 1, ink = ON_DARK) {
   const aiAlpha = smooth(t * 2.2)
-  fillShape(cv, brand.a, at.map, at.inv, () => BLUE, aiAlpha)
-  fillShape(cv, brand.i, at.map, at.inv, () => I_GREY, aiAlpha)
-  fillShape(cv, brand.ring, at.map, at.inv, ringPaint(brand), 1, sweepMask(brand, smooth(t) * 372))
+  fillShape(cv, brand.a, at.map, at.inv, () => ink.a, aiAlpha)
+  fillShape(cv, brand.i, at.map, at.inv, () => ink.i, aiAlpha)
+  fillShape(cv, brand.ring, at.map, at.inv, ringPaint(brand, ink.ring), 1, sweepMask(brand, smooth(t) * 372))
 }
 
 /** "CONDUCTOR": the C ring and the traced word, as the SVG lays them out. */
@@ -520,7 +554,7 @@ function drawWash(cv, cx, cy, r, rgb, a) {
  * The splash's glow line (#glowline): a 1px gradient line with a bright dot in
  * the middle. `reach` 0..1 grows it out from the centre (animation).
  */
-function drawGlowLine(cv, x0, x1, y, reach = 1) {
+function drawGlowLine(cv, x0, x1, y, reach = 1, ink = ON_DARK) {
   const mid = (x0 + x1) / 2
   const half = ((x1 - x0) / 2) * smooth(reach)
   for (let x = Math.floor(x0); x <= Math.ceil(x1); x++) {
@@ -528,7 +562,7 @@ function drawGlowLine(cv, x0, x1, y, reach = 1) {
     if (f < 0 || f > 1) continue
     if (Math.abs(x + 0.5 - mid) > half) continue
     const a = stops([[0, [0]], [0.3, [0.34]], [0.5, [0.6]], [0.7, [0.34]], [1, [0]]], f)[0]
-    const col = mix([90, 150, 255], [150, 200, 255], 1 - Math.min(1, Math.abs(f - 0.5) / 0.2))
+    const col = mix(ink.line[0], ink.line[1], 1 - Math.min(1, Math.abs(f - 0.5) / 0.2))
     cv.blend(x, y, col, a)
     cv.blend(x, y - 1, col, a * 0.18)
     cv.blend(x, y + 1, col, a * 0.18)
@@ -539,9 +573,9 @@ function drawGlowLine(cv, x0, x1, y, reach = 1) {
     for (let xx = Math.floor(mid - R); xx <= Math.ceil(mid + R); xx++) {
       const d = Math.hypot(xx + 0.5 - mid, yy + 0.5 - (y + 0.5))
       const glow = 0.75 * Math.exp(-(Math.max(0, d - 2.5) ** 2) / (2 * 4 * 4))
-      cv.blend(xx, yy, [120, 180, 255], glow * 0.55 * dotA)
+      cv.blend(xx, yy, ink.halo, glow * 0.55 * dotA)
       const core = Math.min(1, Math.max(0, 3 - d))
-      cv.blend(xx, yy, [0xbc, 0xd8, 0xff], core * dotA)
+      cv.blend(xx, yy, ink.core, core * dotA)
     }
   }
 }
@@ -578,16 +612,16 @@ export function renderSidebar(brand, t = 1) {
   return cv
 }
 
-/** Header band image, 150x57, on the band's own dark ground. */
+/** Header band image, 150x57, on the band's own white ground (HEADER_GROUND). */
 export function renderHeader(brand) {
-  const cv = new Canvas(150, 57)
+  const cv = new Canvas(150, 57, HEADER_GROUND)
   const at = placeMonogram(brand, 150 - 34, 28, 36)
   drawWash(cv, at.ringX, at.ringY, 40, BLUE, 0.06)
   drawRing(cv, at.ringX, at.ringY, at.ringR + 5, 0.07)
-  drawMonogram(cv, brand, at)
+  drawMonogram(cv, brand, at, 1, ON_LIGHT)
   // A short glow line leading in from the header text, fading out to the left.
   const end = Math.floor(at.ringX - at.ringR - 8)
-  for (let x = 14; x <= end; x++) cv.blend(x, 28, [90, 150, 255], 0.34 * smooth((x - 14) / (end - 14)))
+  for (let x = 14; x <= end; x++) cv.blend(x, 28, ON_LIGHT.line[0], 0.34 * smooth((x - 14) / (end - 14)))
   return cv
 }
 
@@ -605,14 +639,14 @@ export function renderSplash(brand) {
   return cv
 }
 
-/** Folder-page emblem, EMBLEM_W x EMBLEM_H, on the page's dark ground. */
+/** Folder-page emblem, EMBLEM_W x EMBLEM_H, on the page's own light ground (FACE_GROUND). */
 export function renderEmblem(brand, t = 1) {
-  const cv = new Canvas(EMBLEM_W, EMBLEM_H)
+  const cv = new Canvas(EMBLEM_W, EMBLEM_H, FACE_GROUND)
   const cx = EMBLEM_W / 2
   const at = placeMonogram(brand, cx, 27, 44)
   drawWash(cv, at.ringX, at.ringY, 60, BLUE, 0.06)
-  drawMonogram(cv, brand, at, t)
-  drawGlowLine(cv, cx - 120, cx + 120, 62, t)
+  drawMonogram(cv, brand, at, t, ON_LIGHT)
+  drawGlowLine(cv, cx - 120, cx + 120, 62, t, ON_LIGHT)
   return cv
 }
 

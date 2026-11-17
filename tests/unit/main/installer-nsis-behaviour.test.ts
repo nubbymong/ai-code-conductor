@@ -1,7 +1,7 @@
 // HOST QUARANTINE: plants junctions; writes a probe registry key; starts real processes. [CI] [VM] only -- never run on the owner's machine.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { originalHomeEnv } from '../../helpers/home-guard-core.mjs'
@@ -103,6 +103,18 @@ describe('installer.nsh behavioural probe — availability', () => {
     const cachePresent = process.platform === 'win32' && cache !== null && nsisCachePresent(cache)
     if (cachePresent) expect(MAKENSIS, `electron-builder caches NSIS under ${cache}, but no makensis.exe was found there`).not.toBeNull()
     else expect(true).toBe(true) // nothing to find; the suite below skips
+  })
+
+  it('on a Windows CI runner the compiler is always there, so the probes below never skip in CI', () => {
+    // [CI] The Windows test parts fetch electron-builder's own NSIS compiler
+    // and set MAKENSIS (scripts/ci/fetch-makensis.mjs, ci.yml). Before that,
+    // CI had no compiler and skipped every probe below while staying green.
+    if (process.platform === 'win32' && process.env.CI) {
+      expect(process.env.MAKENSIS, 'the CI job sets MAKENSIS (scripts/ci/fetch-makensis.mjs)').toBeTruthy()
+      expect(MAKENSIS, `MAKENSIS=${process.env.MAKENSIS} is not a file`).toBe(process.env.MAKENSIS)
+    } else {
+      expect(true).toBe(true) // not a Windows CI runner
+    }
   })
 
   it('looks in the LOCALAPPDATA the test home guard found, not the isolated one it points the variable at', () => {
@@ -710,4 +722,721 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe', () => {
     expect(log.afterInit).toBe(custom)
     expect(existsSync(join(f.programs, 'Claude Conductor Beta'))).toBe(true)
   }, 60_000)
+})
+
+// ------------------------------------------ uninstall: the helper folder ---
+
+/**
+ * The uninstaller's clean-up of the per-user session helper folder
+ * (RemoveUserHelperFolder, inserted by customUnInstall). It deletes near the
+ * user's data: the Data folder page proposes the same parent folder. So the
+ * real macros run over a real tree, with real junctions and real running
+ * stand-ins for a holder and what it starts.
+ *
+ * A probe of its own, so the cases above still compile against an
+ * installer.nsh without these macros. It compiles as the uninstaller pass
+ * does: BUILD_UNINSTALLER defined, the real customHeader lifted for the
+ * variables both passes declare, and /WX, so a variable or label the
+ * uninstaller pass would warn about fails here too. Sandboxed like the cases
+ * above: the local app data folder, the profile folder and the registry keys
+ * are rewritten to fixture paths and the probe key, and the helper's name
+ * is the stand-in's everywhere (the force-end by name, the delete by
+ * name), so a real holder on the machine is never touched. Every DetailPrint
+ * is logged as well, so a case can read the details list. One shown by the
+ * user's first copy of an all-users uninstall is logged apart: that copy has
+ * no window, so nobody sees it.
+ */
+const UNINSTALL_PROBE_MACROS = [
+  'customHeader',
+  'IsSameOrInside',
+  'CanonPathPair',
+  'IsSameOrInsideCanon',
+  'ReadUserPath',
+  'CccCharIn',
+  'CccIsHex12',
+  'IsHelperVersionFolder',
+  'IsHelperOwnFolder',
+  'HoldsUserFolder',
+  'CccHelperNote',
+  'CccPrintHelperNotes',
+  'CccProcessIsMine',
+  'CccProcessStart',
+  'CccInList',
+  'CccScanProcesses',
+  'CccEndListed',
+  'CccEndUserHelpers',
+  'CccRemoveHelperOwnFolder',
+  'RemoveUserHelperFolderHere',
+  'RemoveUserHelperFolder',
+  'customUnInstall',
+]
+
+/** What the probe's taskkill ends in place of aicc-helper.exe. */
+const PROBE_HELPER_EXE = 'ccc-probe-helper.exe'
+/** A child a stand-in starts from its conpty folder, under the name a holder's child has there. */
+const PROBE_CHILD_EXE = 'OpenConsole.exe'
+
+function extractUninstallMacros(): string {
+  const src = readFileSync(NSH, 'utf-8')
+  const text = UNINSTALL_PROBE_MACROS.map((name) => {
+    const m = src.match(new RegExp(`^!macro ${name}\\b[\\s\\S]*?^!macroend`, 'm'))
+    if (!m) throw new Error(`macro ${name} not found in build/installer.nsh`)
+    return m[0]
+  }).join('\n\n')
+    .replace(/Software\\(AI Code Conductor|Claude Command Center|Claude Conductor)/g, 'Software\\CccProbe\\$1')
+    .replace(/\$PROFILE/g, '$cccProbeProfile')
+    .replace(/ReadEnvStr (\$\w+) LOCALAPPDATA/g, 'StrCpy $1 $cccProbeLocalAppData')
+    .replace(/aicc-helper\.exe/gi, PROBE_HELPER_EXE)
+    .replace(/^(\s*)DetailPrint\b/gm, '$1!insertmacro CccProbeDetail')
+  // Fail closed: anything that could still reach the real folders, the real
+  // helper or the real keys stops the probe before it is compiled.
+  for (const [what, re] of [
+    ['the real local app data folder', /LOCALAPPDATA|ReadEnvStr/],
+    ['the real profile folder', /\$PROFILE/],
+    ['the real helper', /aicc-helper/i],
+    ['a real registry key', /Software\\(?!CccProbe\\)/],
+    ['a detail line the probe cannot read', /\bDetailPrint\b/],
+  ] as const) {
+    if (re.test(text)) throw new Error(`the uninstall probe would reach ${what}: ${text.match(re)?.[0]}`)
+  }
+  if (!text.includes(PROBE_HELPER_EXE)) throw new Error('the uninstall probe has no force-end of the stand-in helper')
+  return text
+}
+
+function uninstallProbeScript(out: string, cfg: string, log: string): string {
+  const readCfg = (v: string, key: string) => `  ReadINIStr ${v} "${cfg}" "probe" "${key}"`
+  return `Unicode true
+SetCompress off
+RequestExecutionLevel user
+SilentInstall silent
+Name "CccUninstallProbe"
+OutFile "${out}"
+InstallDir "$TEMP\\ccc-nsis-probe-unused"
+
+!include "LogicLib.nsh"
+!include "FileFunc.nsh"
+
+; The uninstaller pass: customHeader declares only what both passes use.
+!define BUILD_UNINSTALLER
+
+Var cccProbeLog
+Var cccProbeUpdated
+Var cccProbeAdmin
+Var cccProbeInner
+Var cccProbeOuterGone
+Var cccProbeOuter
+Var cccProbeLocalAppData
+Var cccProbeProfile
+
+; electron-builder's update flag (StdUtils) and UAC.nsh's two tests, driven by
+; the ini instead of a real update or a real elevation.
+!define isUpdated \`$cccProbeUpdated == "1"\`
+!define UAC_IsAdmin \`$cccProbeAdmin == "1"\`
+!define UAC_IsInnerInstance \`$cccProbeInner == "1"\`
+!define UAC_SYNCREGISTERS 0x1
+
+; UAC.nsh runs the label in the uninstaller's first copy, the one the user
+; started, and copies the registers there and back (UAC_SYNCREGISTERS), but
+; not the stack. Here: the same code, in this process, logged. While it runs,
+; a detail line is logged as hidden: that copy has no window. A stack the
+; label leaves changed is logged too. With outerGone the first copy is gone
+; and the call does nothing.
+!macro UAC_AsUser_Call TYPE NAME FLAGS
+  !if "\${TYPE}" != "Label"
+    !error "the probe's UAC_AsUser_Call takes a Label"
+  !endif
+  FileWrite $cccProbeLog "asuser=1$\\r$\\n"
+  \${If} $cccProbeOuterGone != "1"
+    Push "ccc-probe-stack"
+    StrCpy $cccProbeOuter 1
+    Call :\${NAME}
+    StrCpy $cccProbeOuter 0
+    Exch $0
+    \${If} $0 != "ccc-probe-stack"
+      FileWrite $cccProbeLog "stack=bad$\\r$\\n"
+    \${EndIf}
+    Pop $0
+  \${EndIf}
+!macroend
+
+; Each DetailPrint of the macros under test: logged, then shown.
+!macro CccProbeDetail TEXT
+  \${If} $cccProbeOuter == "1"
+    FileWrite $cccProbeLog "hidden-detail=\${TEXT}$\\r$\\n"
+  \${Else}
+    FileWrite $cccProbeLog "detail=\${TEXT}$\\r$\\n"
+  \${EndIf}
+  DetailPrint "\${TEXT}"
+!macroend
+
+${extractUninstallMacros()}
+
+!insertmacro customHeader
+
+Page instfiles
+
+Section "probe"
+  SetShellVarContext current
+${readCfg('$cccProbeLocalAppData', 'localAppData')}
+${readCfg('$cccProbeProfile', 'profile')}
+${readCfg('$cccProbeUpdated', 'updated')}
+${readCfg('$cccProbeAdmin', 'admin')}
+${readCfg('$cccProbeInner', 'inner')}
+${readCfg('$cccProbeOuterGone', 'outerGone')}
+  StrCpy $cccProbeOuter 0
+  ClearErrors
+  FileOpen $cccProbeLog "${log}" w
+  !insertmacro customUnInstall
+  FileWrite $cccProbeLog "done=1$\\r$\\n"
+  FileClose $cccProbeLog
+SectionEnd
+`
+}
+
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+async function waitGone(pid: number, ms = 5000): Promise<boolean> {
+  const end = Date.now() + ms
+  while (Date.now() < end) {
+    if (!isAlive(pid)) return true
+    await pause(100)
+  }
+  return !isAlive(pid)
+}
+async function waitFor(check: () => boolean, ms = 5000): Promise<boolean> {
+  const end = Date.now() + ms
+  while (Date.now() < end) {
+    if (check()) return true
+    await pause(100)
+  }
+  return check()
+}
+
+/**
+ * The idle script a stand-in runs; with a child exe and a pid file, it first
+ * starts that child. Detached: Node otherwise puts a child in a job that ends
+ * it with its parent (measured on the VM: the no-/T mutant stayed green).
+ * Nothing promises that for a holder's OpenConsole.exe, and #317 records a
+ * console process outliving a forced end, so the child here has to be able
+ * to outlive a stand-in ended alone.
+ */
+const IDLE = 'setInterval(() => {}, 1000)'
+const STARTS_CHILD = [
+  "const { spawn } = require('child_process')",
+  "const c = spawn(process.argv[1], ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore', windowsHide: true, env: { SystemRoot: process.env.SystemRoot } })",
+  'c.unref()',
+  "require('fs').writeFileSync(process.argv[2], String(c.pid))",
+  IDLE,
+].join('\n')
+
+describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes the per-user helper folder', () => {
+  let uwork = ''
+  const uexe = () => join(uwork, 'probe-uninstall.exe')
+  const ucfg = () => join(uwork, 'probe-uninstall.ini')
+  const ulog = () => join(uwork, 'probe-uninstall.log')
+  const started: number[] = []
+
+  beforeAll(() => {
+    uwork = mkdtempSync(join(tmpdir(), 'ccc-nsis-unprobe-'))
+    regClear()
+    const nsi = join(uwork, 'probe-uninstall.nsi')
+    writeFileSync(nsi, uninstallProbeScript(uexe(), ucfg(), ulog()))
+    try {
+      // /WX as electron-builder compiles both passes.
+      execFileSync(MAKENSIS as string, ['/V2', '/WX', nsi], { encoding: 'utf-8', stdio: 'pipe' })
+    } catch (e) {
+      const err = e as { stdout?: string; stderr?: string }
+      throw new Error(`makensis failed for the uninstall probe:\n${err.stdout ?? ''}${err.stderr ?? ''}`)
+    }
+  }, 120_000)
+
+  afterAll(async () => {
+    for (const pid of started) {
+      if (isAlive(pid)) {
+        try {
+          process.kill(pid)
+        } catch {
+          // already gone
+        }
+        await waitGone(pid)
+      }
+    }
+    regClear()
+    if (uwork) rmSync(uwork, { recursive: true, force: true, maxRetries: 5 })
+  }, 60_000)
+
+  /** One uninstall over the tree. `data` and `res` are the folders recorded
+   *  under the (sandboxed) brand key; left out, nothing is recorded. `inner`
+   *  is the elevated copy of an all-users uninstall, with a user copy behind
+   *  it; `outerGone`, that copy did not run the call. `admin` alone is an
+   *  uninstall started elevated, with no user copy behind it. Returns the
+   *  probe's log, the details list (`details`) and how long the uninstall
+   *  took. A loop that never ends fails at 30 seconds instead of hanging the
+   *  suite. */
+  function runUninstall(cfg: { localAppData: string; profile: string; updated?: boolean; admin?: boolean; inner?: boolean; outerGone?: boolean; data?: string; res?: string }) {
+    regClear()
+    if (cfg.data !== undefined) regSet('AI Code Conductor', 'DataDirectory', cfg.data)
+    if (cfg.res !== undefined) regSet('AI Code Conductor', 'ResourcesDirectory', cfg.res)
+    writeFileSync(ucfg(), [
+      '[probe]',
+      `localAppData=${cfg.localAppData}`,
+      `profile=${cfg.profile}`,
+      `updated=${cfg.updated ? 1 : 0}`,
+      `admin=${cfg.admin ? 1 : 0}`,
+      `inner=${cfg.inner ? 1 : 0}`,
+      `outerGone=${cfg.outerGone ? 1 : 0}`,
+      '',
+    ].join('\r\n'))
+    rmSync(ulog(), { force: true })
+    const t0 = Date.now()
+    try {
+      execFileSync(uexe(), [], { encoding: 'utf-8', stdio: 'pipe', timeout: 30_000 })
+    } finally {
+      regClear()
+    }
+    const ms = Date.now() - t0
+    const log = readFileSync(ulog(), 'utf-8')
+    expect(log).toContain('done=1')
+    // What the user can read: the details list of the copy with a window.
+    // Nothing is shown in the windowless first copy, and the stack is as it was.
+    expect(log, 'a detail line was shown where nobody sees it').not.toContain('hidden-detail=')
+    expect(log, 'the user copy\'s call left the stack changed').not.toContain('stack=bad')
+    const details = log.split(/\r?\n/).filter((l) => l.startsWith('detail=')).map((l) => l.slice('detail='.length))
+    return { log, ms, details }
+  }
+
+  /**
+   * A running stand-in: a copy of this Node under `name`, idling in `folder`.
+   * While it runs, its program file cannot be deleted, so that folder goes
+   * only once it is ended. With `child`, it first starts a second copy from
+   * that path, as a holder starts OpenConsole.exe from its conpty folder, and
+   * the child's pid is returned too. Each gets an environment of its own,
+   * never this one.
+   */
+  async function startStandIn(folder: string, name = PROBE_HELPER_EXE, child?: string): Promise<{ pid: number; childPid?: number }> {
+    dir(folder)
+    const exe = join(folder, name)
+    copyFileSync(process.execPath, exe)
+    let pidFile: string | undefined
+    if (child) {
+      dir(dirname(child))
+      copyFileSync(process.execPath, child)
+      pidFile = join(uwork, `child-${started.length}.pid`)
+      rmSync(pidFile, { force: true })
+    }
+    const proc = spawn(exe, child ? ['-e', STARTS_CHILD, child, pidFile!] : ['-e', IDLE], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: { SystemRoot: process.env.SystemRoot ?? 'C:\\Windows' },
+    })
+    proc.unref()
+    expect(proc.pid, 'the stand-in started').toBeDefined()
+    started.push(proc.pid!)
+    let childPid: number | undefined
+    if (pidFile) {
+      expect(await waitFor(() => existsSync(pidFile!) && readFileSync(pidFile!, 'utf-8') !== ''), 'the stand-in started its child').toBe(true)
+      childPid = Number(readFileSync(pidFile, 'utf-8'))
+      started.push(childPid)
+      expect(isAlive(childPid), 'the child is running before the uninstall').toBe(true)
+    } else {
+      await pause(500)
+    }
+    expect(isAlive(proc.pid!), 'the stand-in is running before the uninstall').toBe(true)
+    return { pid: proc.pid!, childPid }
+  }
+
+  /**
+   * The helper folder as the app and the helper leave it (install.ts,
+   * manager.ts, helper/src/store.rs), with what is not the app's beside it.
+   * The helper's program file has the stand-in's name, as everywhere in the probe.
+   */
+  function helperTree(name: string) {
+    const root = join(uwork, name)
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+    const lad = join(root, 'Local')
+    const parent = join(lad, 'AI Code Conductor')
+    const helper = join(parent, 'helper')
+    const own = {
+      version: join(helper, '0.1.0-abcdef123456'),
+      tagged: join(helper, '2.1.3-beta.7-0123456789ab'),
+      staging: join(helper, '.new-0123456789ab'),
+      store: join(helper, 'store'),
+      bindings: join(helper, 'bindings.json'),
+      crashMark: join(helper, 'app-running.json'),
+    }
+    file(join(own.version, PROBE_HELPER_EXE))
+    file(join(own.version, 'conpty', 'conpty.dll'))
+    file(join(own.version, 'conpty', 'OpenConsole.exe'))
+    // A ConPTY copy that stopped half way, inside the version folder.
+    file(join(own.version, '.new-89abcdef0123', 'conpty.dll'))
+    file(join(own.version, '.new-89abcdef0123', 'OpenConsole.exe'))
+    file(join(own.tagged, PROBE_HELPER_EXE))
+    file(join(own.staging, PROBE_HELPER_EXE))
+    file(join(own.store, 'sess-0001.json'), '{}')
+    file(join(own.store, 'sess-0002.json.4242.tmp'), '{}')
+    file(join(own.store, '.lock'), '')
+    file(own.bindings, '{"v":1,"bindings":{}}')
+    file(own.crashMark, '{}')
+    const keep = {
+      // a folder the user made, and a development run's copies
+      notes: join(helper, 'notes', 'keep.txt'),
+      dev: join(helper, 'dev', '0.1.0-abcdef123456', 'aicc-helper.exe'),
+      // the default Data folder is this same parent
+      sessions: join(parent, 'sessions', 'keep.json'),
+    }
+    for (const p of Object.values(keep)) file(p)
+    return { root, lad, parent, helper, own, keep }
+  }
+
+  /** The details list of a clean-up that ended one helper and removed `t`'s own folders. */
+  function expectCleanupDetails(details: string[], t: ReturnType<typeof helperTree>) {
+    expect(details[0]).toBe(`Session helper folder: ${t.helper}`)
+    expect(details.filter((d) => /^Ended the running session helpers of .+\\.+\.$/.test(d)), details.join('\n')).toHaveLength(1)
+    for (const n of ['0.1.0-abcdef123456', '2.1.3-beta.7-0123456789ab', '.new-0123456789ab', 'store']) expect(details).toContain(`Removed ${n}`)
+    // A folder the user made is still in it.
+    expect(details).toContain('Kept the session helper folder, because something in it is still in use or was not made by the app.')
+  }
+
+  it('ends the running helpers, then removes the copies, a half-made copy and the records, and nothing else', async () => {
+    const t = helperTree('un-main')
+    const { pid } = await startStandIn(t.own.version)
+    const { log, details } = runUninstall({ localAppData: t.lad, profile: t.root })
+
+    expect(await waitGone(pid), 'the running helper was ended').toBe(true)
+    for (const [k, p] of Object.entries(t.own)) expect(existsSync(p), `${k} is removed`).toBe(false)
+    for (const [k, p] of Object.entries(t.keep)) expect(existsSync(p), `${k} stays`).toBe(true)
+    // Not empty, so neither goes.
+    expect(existsSync(t.helper)).toBe(true)
+    expect(existsSync(t.parent)).toBe(true)
+    // A per-user uninstall runs the clean-up itself, and the details list says what it did.
+    expect(log).not.toContain('asuser=1')
+    expectCleanupDetails(details, t)
+  }, 60_000)
+
+  it('started already elevated, with no user copy behind it (Settings, Apps on an all-users install), ends this user\'s helpers and removes the copies in this copy', async () => {
+    // electron-builder skips UAC_RunElevated when the uninstaller starts as
+    // administrator, so no first copy waits to take UAC_AsUser_Call.
+    const t = helperTree('un-admin')
+    const { pid } = await startStandIn(t.own.version)
+    const { log, details } = runUninstall({ localAppData: t.lad, profile: t.root, admin: true })
+
+    expect(log).not.toContain('asuser=1')
+    expect(await waitGone(pid), 'the running helper was ended').toBe(true)
+    for (const [k, p] of Object.entries(t.own)) expect(existsSync(p), `${k} is removed`).toBe(false)
+    for (const [k, p] of Object.entries(t.keep)) expect(existsSync(p), `${k} stays`).toBe(true)
+    expectCleanupDetails(details, t)
+  }, 60_000)
+
+  it('ends what a running helper started too, so its conpty folder is not left locked', async () => {
+    // A holder on the bundled ConPTY starts OpenConsole.exe from the copy's
+    // conpty folder. Ending only the holder leaves that child running, its
+    // program file locked, and the copy's folder behind for good.
+    const t = helperTree('un-child')
+    const child = join(t.own.version, 'conpty', PROBE_CHILD_EXE)
+    const { pid, childPid } = await startStandIn(t.own.version, PROBE_HELPER_EXE, child)
+    runUninstall({ localAppData: t.lad, profile: t.root })
+
+    expect(await waitGone(pid), 'the running helper was ended').toBe(true)
+    expect(await waitGone(childPid!), 'what it started was ended').toBe(true)
+    expect(existsSync(t.own.version), 'its copy is removed').toBe(false)
+    for (const [k, p] of Object.entries(t.own)) expect(existsSync(p), `${k} is removed`).toBe(false)
+  }, 60_000)
+
+  it('leaves a folder another program holds open, and still finishes, after about 3 seconds of tries', async () => {
+    // A program that is not a holder's, running from a file the clean-up
+    // deletes by name: that file cannot go, so its copy stays, the others
+    // go, and the tries are bounded.
+    const t = helperTree('un-locked')
+    const { pid } = await startStandIn(join(t.own.tagged, 'conpty'), 'OpenConsole.exe')
+    const { ms, details } = runUninstall({ localAppData: t.lad, profile: t.root })
+
+    expect(isAlive(pid), 'the other program was not ended').toBe(true)
+    expect(existsSync(join(t.own.tagged, 'conpty', 'OpenConsole.exe')), 'the file in use stays').toBe(true)
+    for (const [k, p] of Object.entries(t.own).filter(([name]) => name !== 'tagged')) expect(existsSync(p), `${k} is removed`).toBe(false)
+    for (const [k, p] of Object.entries(t.keep)) expect(existsSync(p), `${k} stays`).toBe(true)
+    expect(ms, 'it tried again for a while').toBeGreaterThanOrEqual(2500)
+    expect(ms, 'and then stopped').toBeLessThan(20_000)
+    expect(details).toContain('Kept 2.1.3-beta.7-0123456789ab, because a file in it is still in use or was not made by the app.')
+    // No holder ran, and the other program is not one.
+    expect(details.some((d) => /^No session helper of .+ was running\.$/.test(d)), details.join('\n')).toBe(true)
+    process.kill(pid)
+    await waitGone(pid)
+  }, 60_000)
+
+  it('leaves every name that only looks like one of the helper folder\'s own', () => {
+    const t = helperTree('un-lookalike')
+    // Names are case-blind on Windows, so the upper-case ones must not match
+    // one of the app's own folders above in any case: they would be that folder.
+    const lookalikes = [
+      '0.4.0-ABCDEF123456', // hex in upper case
+      '0.1.0-abcdef12345', // 11 hex digits
+      '0.1.0-abcdef1234567', // 13
+      '0.1-abcdef123456', // two numbers
+      '0.1.0.1-abcdef123456', // four
+      '0..1.0-abcdef123456', // an empty number
+      'v0.1.0-abcdef123456', // a letter in front
+      '0.1.0--abcdef123456', // an empty tag
+      '0.1.0-be_ta-abcdef123456', // a character a tag cannot have
+      '.new-ABCDEF012345',
+      '.new-0123456789a',
+      'store.old',
+      'stores',
+    ]
+    for (const n of lookalikes) file(join(t.helper, n, 'keep.txt'))
+    // A FILE with a version folder's name is not a version folder, and only
+    // the app's two files go by name.
+    const files = ['0.3.0-abcdef123456', 'bindings.json.bak', 'notes.json']
+    for (const n of files) file(join(t.helper, n))
+
+    runUninstall({ localAppData: t.lad, profile: t.root })
+
+    for (const n of lookalikes) expect(existsSync(join(t.helper, n, 'keep.txt')), n).toBe(true)
+    for (const n of files) expect(existsSync(join(t.helper, n)), n).toBe(true)
+    for (const [k, p] of Object.entries(t.own)) expect(existsSync(p), `${k} is removed`).toBe(false)
+  }, 60_000)
+
+  /** Only the app's own things in the helper folder, and nothing else in its parent. */
+  function bareTree(name: string) {
+    const root = join(uwork, name)
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+    const lad = join(root, 'Local')
+    const parent = join(lad, 'AI Code Conductor')
+    const helper = join(parent, 'helper')
+    file(join(helper, '0.1.0-abcdef123456', PROBE_HELPER_EXE))
+    file(join(helper, 'store', 'x.json'), '{}')
+    file(join(helper, 'bindings.json'), '{}')
+    file(join(helper, 'app-running.json'), '{}')
+    file(join(lad, 'Other App', 'keep.txt'))
+    return { root, lad, parent, helper }
+  }
+
+  it('removes the helper folder and its parent once nothing else is in them', () => {
+    const t = bareTree('un-empty')
+    // The user's folders are elsewhere.
+    const { details } = runUninstall({ localAppData: t.lad, profile: t.root, data: join(t.root, 'My Data'), res: join(t.root, 'My Resources') })
+
+    expect(existsSync(t.parent)).toBe(false)
+    // The local app data folder itself, and every other app's folder, stay.
+    expect(existsSync(join(t.lad, 'Other App', 'keep.txt'))).toBe(true)
+    expect(details.slice(-2)).toEqual(['Removed the session helper folder.', `Removed the empty folder ${t.parent}`])
+  }, 60_000)
+
+  it('with only the data folder recorded, elsewhere, takes the resources folder inside it, as the app does, and removes the empty parent', () => {
+    // src/main/data-paths.ts: no resources folder recorded is <data>\resources.
+    // Recorded with a trailing slash, so the join has to use the plain spelling.
+    const t = bareTree('un-data-only')
+    const data = join(t.root, 'My Data')
+    file(join(data, 'resources', 'CONFIG', 'settings.json'), '{}')
+    runUninstall({ localAppData: t.lad, profile: t.root, data: `${data}\\` })
+
+    expect(existsSync(t.parent), 'nothing of the user\'s is in it, so it goes').toBe(false)
+    expect(existsSync(join(data, 'resources', 'CONFIG', 'settings.json'))).toBe(true)
+  }, 60_000)
+
+  it('keeps the parent, even empty, when nothing is recorded: the app then uses it as the data folder', () => {
+    const t = bareTree('un-default-data')
+    runUninstall({ localAppData: t.lad, profile: t.root })
+
+    expect(existsSync(t.helper)).toBe(false)
+    expect(existsSync(t.parent)).toBe(true)
+  }, 60_000)
+
+  it('never removes the user\'s data or resources folder, or a folder of the helper\'s that holds one', () => {
+    // Either folder page takes any path. Recorded in another spelling (forward
+    // slashes, a trailing separator), so only the canonical compare matches.
+    const a = helperTree('un-user-folder-inside')
+    const data = join(a.own.store, 'My Data')
+    const res = join(a.own.version, 'My Resources')
+    file(join(data, 'sessions', 'keep.json'))
+    file(join(res, 'CONFIG', 'settings.json'), '{}')
+    runUninstall({ localAppData: a.lad, profile: a.root, data: `${data.replace(/\\/g, '/')}/`, res })
+
+    expect(existsSync(join(data, 'sessions', 'keep.json')), 'the data folder').toBe(true)
+    expect(existsSync(join(res, 'CONFIG', 'settings.json')), 'the resources folder').toBe(true)
+    expect(existsSync(a.own.tagged)).toBe(false)
+    expect(existsSync(a.own.staging)).toBe(false)
+
+    // The helper folder itself recorded as the data folder: what is the
+    // app's in it goes, and the folder stays, even once it is empty.
+    const b = bareTree('un-user-folder-is-helper')
+    runUninstall({ localAppData: b.lad, profile: b.root, data: `${b.helper}\\`, res: join(b.root, 'My Resources') })
+
+    expect(existsSync(join(b.helper, 'store'))).toBe(false)
+    expect(existsSync(join(b.helper, 'bindings.json'))).toBe(false)
+    expect(existsSync(b.helper), 'the data folder stays').toBe(true)
+  }, 60_000)
+
+  for (const [label, flags] of [
+    ['on an update', { updated: true }],
+    ['on an update started as administrator', { updated: true, admin: true }],
+    ['on an update, even in the elevated copy', { updated: true, admin: true, inner: true }],
+  ] as const) {
+    it(`keeps the whole tree, and running helpers, ${label}`, async () => {
+      const t = helperTree(`un-keep-${Object.keys(flags).join('-')}`)
+      const { pid } = await startStandIn(t.own.version)
+      const { log, details } = runUninstall({ localAppData: t.lad, profile: t.root, ...flags })
+
+      expect(isAlive(pid), 'the running helper was not ended').toBe(true)
+      for (const [k, p] of Object.entries({ ...t.own, ...t.keep })) expect(existsSync(p), `${k} stays`).toBe(true)
+      expect(log).not.toContain('asuser=1')
+      expect(details).toEqual([])
+      process.kill(pid)
+      await waitGone(pid)
+    }, 60_000)
+  }
+
+  it('in the elevated copy of an all-users uninstall, runs the clean-up as the user who started it, and shows what it did', async () => {
+    // electron-builder's uninstaller starts itself again as administrator and
+    // the user's first copy waits; the clean-up runs there. That copy has no
+    // window, so its notes come back in a register and show here.
+    const t = helperTree('un-elevated')
+    const { pid } = await startStandIn(t.own.version)
+    const { log, details } = runUninstall({ localAppData: t.lad, profile: t.root, admin: true, inner: true })
+
+    expect(log).toContain('asuser=1')
+    expect(await waitGone(pid), 'the running helper was ended').toBe(true)
+    for (const [k, p] of Object.entries(t.own)) expect(existsSync(p), `${k} is removed`).toBe(false)
+    for (const [k, p] of Object.entries(t.keep)) expect(existsSync(p), `${k} stays`).toBe(true)
+    expectCleanupDetails(details, t)
+  }, 60_000)
+
+  it('runs the clean-up in the elevated copy when the user copy did not', async () => {
+    const t = helperTree('un-elevated-outer-gone')
+    const { pid } = await startStandIn(t.own.version)
+    const { log, details } = runUninstall({ localAppData: t.lad, profile: t.root, admin: true, inner: true, outerGone: true })
+
+    expect(log).toContain('asuser=1')
+    expect(await waitGone(pid), 'the running helper was ended').toBe(true)
+    for (const [k, p] of Object.entries(t.own)) expect(existsSync(p), `${k} is removed`).toBe(false)
+    expectCleanupDetails(details, t)
+  }, 60_000)
+
+  it('never enters a link inside a helper copy or the store, and leaves what it points at', () => {
+    // An elevated clean-up must not follow a link anywhere in the folder: in
+    // a copy's conpty folder, a half-made ConPTY copy, or the store. Each
+    // link points at files with the very names the clean-up deletes.
+    const t = helperTree('un-link-inside')
+    const outside = join(t.root, 'outside')
+    const targets = ['conpty', 'newcopy', 'store']
+    for (const n of targets) {
+      for (const f of ['conpty.dll', 'OpenConsole.exe', PROBE_HELPER_EXE, 'sess-0009.json', '.lock']) file(join(outside, n, f))
+    }
+    rmSync(join(t.own.version, 'conpty'), { recursive: true, force: true })
+    junction(join(t.own.version, 'conpty'), join(outside, 'conpty'))
+    junction(join(t.own.tagged, '.new-89abcdef0123'), join(outside, 'newcopy'))
+    junction(join(t.own.store, 'sub'), join(outside, 'store'))
+
+    const { details } = runUninstall({ localAppData: t.lad, profile: t.root })
+
+    for (const n of targets) {
+      for (const f of ['conpty.dll', 'OpenConsole.exe', PROBE_HELPER_EXE, 'sess-0009.json', '.lock']) expect(existsSync(join(outside, n, f)), `${n}\\${f}`).toBe(true)
+    }
+    // Each folder with a link in it stays, with the link; what the app made around it goes.
+    for (const k of ['version', 'tagged', 'store'] as const) expect(existsSync(t.own[k]), k).toBe(true)
+    expect(existsSync(join(t.own.version, PROBE_HELPER_EXE))).toBe(false)
+    expect(existsSync(join(t.own.version, '.new-89abcdef0123'))).toBe(false)
+    expect(existsSync(join(t.own.store, 'sess-0001.json'))).toBe(false)
+    expect(existsSync(t.own.staging)).toBe(false)
+    for (const n of ['0.1.0-abcdef123456', '2.1.3-beta.7-0123456789ab', 'store']) expect(details).toContain(`Kept ${n}, because a file in it is still in use or was not made by the app.`)
+  }, 60_000)
+
+  it('keeps a file the app did not make, and the folders above it, and says so', () => {
+    const t = helperTree('un-unknown')
+    const unknown = [
+      join(t.own.version, 'notes.txt'),
+      join(t.own.version, 'conpty', 'notes.txt'),
+      join(t.own.store, 'notes.txt'),
+      join(t.own.store, 'sub', 'sess-0003.json'),
+      // The helper's only temporary name is <session>.json.<digits>.tmp
+      // (helper/src/store.rs, is_tmp_name), so these are not the app's.
+      // Windows matches a wildcard against the short 8.3 name too, so a
+      // "*.tmp" in the store also takes the last three (short names such as
+      // NOTES~1.TMP), but only on a volume that makes short names: only
+      // there do they fail against it. notes.tmp fails against it everywhere.
+      join(t.own.store, 'notes.tmp'),
+      join(t.own.store, 'notes.tmpx'),
+      join(t.own.store, 'x.tmp1'),
+      join(t.own.store, 'a.tmp_old'),
+    ]
+    for (const p of unknown) file(p)
+
+    const { details } = runUninstall({ localAppData: t.lad, profile: t.root })
+
+    for (const p of unknown) expect(existsSync(p), p).toBe(true)
+    // What the app made goes, around them.
+    for (const p of [join(t.own.version, PROBE_HELPER_EXE), join(t.own.version, 'conpty', 'OpenConsole.exe'), join(t.own.version, '.new-89abcdef0123'), join(t.own.store, 'sess-0001.json'), join(t.own.store, 'sess-0002.json.4242.tmp'), join(t.own.store, '.lock')]) {
+      expect(existsSync(p), p).toBe(false)
+    }
+    expect(existsSync(t.own.tagged)).toBe(false)
+    expect(existsSync(t.own.staging)).toBe(false)
+    for (const n of ['0.1.0-abcdef123456', 'store']) expect(details).toContain(`Kept ${n}, because a file in it is still in use or was not made by the app.`)
+    expect(details).toContain('Kept the session helper folder, because something in it is still in use or was not made by the app.')
+  }, 60_000)
+
+  it('says why it kept the helper folder when the only thing left is a copy still in use', async () => {
+    // Nothing of the user's in it: only a copy another program holds open
+    // keeps the folder, so the note must not say the user put something there.
+    const t = bareTree('un-locked-only')
+    const version = join(t.helper, '0.1.0-abcdef123456')
+    const { pid } = await startStandIn(join(version, 'conpty'), 'OpenConsole.exe')
+    const { details } = runUninstall({ localAppData: t.lad, profile: t.root, data: join(t.root, 'My Data'), res: join(t.root, 'My Resources') })
+
+    expect(isAlive(pid), 'the other program was not ended').toBe(true)
+    expect(existsSync(join(version, 'conpty', 'OpenConsole.exe')), 'the file in use stays').toBe(true)
+    // Everything else the app made is gone, so the copy in use is the only reason.
+    expect(existsSync(join(version, PROBE_HELPER_EXE))).toBe(false)
+    expect(readdirSync(t.helper)).toEqual(['0.1.0-abcdef123456'])
+    expect(readdirSync(version)).toEqual(['conpty'])
+    expect(readdirSync(join(version, 'conpty'))).toEqual(['OpenConsole.exe'])
+    expect(details).toContain('Kept 0.1.0-abcdef123456, because a file in it is still in use or was not made by the app.')
+    expect(details).toContain('Kept the session helper folder, because something in it is still in use or was not made by the app.')
+    expect(details.some((d) => /did not make is still in it/.test(d)), details.join('\n')).toBe(false)
+    expect(existsSync(t.parent), 'the helper folder is still in it').toBe(true)
+    process.kill(pid)
+    await waitGone(pid)
+  }, 60_000)
+
+  it('never follows a version folder that is a link', () => {
+    const t = helperTree('un-link-version')
+    const outside = join(t.root, 'outside')
+    file(join(outside, 'keep.txt'))
+    junction(join(t.helper, '0.2.0-abcdef123456'), outside)
+
+    runUninstall({ localAppData: t.lad, profile: t.root })
+
+    expect(existsSync(join(outside, 'keep.txt'))).toBe(true)
+    // The real copies still go.
+    for (const [k, p] of Object.entries(t.own)) expect(existsSync(p), `${k} is removed`).toBe(false)
+  }, 60_000)
+
+  for (const which of ['parent', 'helper'] as const) {
+    it(`leaves everything alone when the ${which} folder is a link`, () => {
+      const root = join(uwork, `un-link-${which}`)
+      rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+      const lad = join(root, 'Local')
+      const target = join(root, 'moved')
+      // The folders behind the link, and the link itself.
+      const behind = which === 'parent' ? join(target, 'helper') : target
+      file(join(behind, '0.1.0-abcdef123456', 'aicc-helper.exe'))
+      file(join(behind, 'store', 'x.json'), '{}')
+      const link = which === 'parent' ? join(lad, 'AI Code Conductor') : join(lad, 'AI Code Conductor', 'helper')
+      dir(dirname(link))
+      junction(link, target)
+
+      const { details } = runUninstall({ localAppData: lad, profile: root })
+
+      expect(existsSync(link), 'the link stays').toBe(true)
+      expect(existsSync(join(behind, '0.1.0-abcdef123456', 'aicc-helper.exe'))).toBe(true)
+      expect(existsSync(join(behind, 'store', 'x.json'))).toBe(true)
+      expect(details).toEqual([`Left the session helper folder as it is, because it or its parent is a link: ${join(lad, 'AI Code Conductor', 'helper')}`])
+    }, 60_000)
+  }
 })

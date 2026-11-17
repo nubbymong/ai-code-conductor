@@ -6,14 +6,18 @@ import { ANIM_STEPS, artManifest, bmpMaxDelta, renderAll } from '../../../script
 /**
  * Guards for the branded Windows installer (finding O4, aicc_planning #180).
  *
- * makensis cannot run on the owner's machine, so the real compile (-WX, both
- * the installer and the BUILD_UNINSTALLER pass) happens on CI and the VM. This
- * file holds what can be proved from the files alone, and it is aimed at the
- * ways this change could ship broken while every other test stayed green:
+ * makensis cannot run on the owner's machine. The real compile (-WX, both the
+ * installer and the BUILD_UNINSTALLER pass) happens in a release build and on
+ * the VM, and the makensis probes (installer-nsis-behaviour.test.ts) on CI's
+ * Windows parts and the VM. This file holds what can be proved from the files
+ * alone, everywhere, and it is aimed at the ways this change could ship
+ * broken while every other test stayed green:
  *   - a missing or malformed bitmap (electron-builder falls back to NSIS's
  *     stock art for a default name, and MUI shows a blank panel for a bad BMP);
  *   - an interface define placed after the first page macro (MUI then bakes in
- *     its white defaults without a word);
+ *     its defaults without a word);
+ *   - a colour of our own: every page keeps Windows' stock light dialog, and
+ *     the brand is in the header bitmap and the sidebar art (aicc_planning #295);
  *   - a Function or Var that one compile pass declares but never references,
  *     which -WX turns into a failed release build;
  *   - motion or a splash leaking onto the Installing page or an in-app update;
@@ -23,7 +27,9 @@ import { ANIM_STEPS, artManifest, bmpMaxDelta, renderAll } from '../../../script
  *   - a call into electron-builder's own plugins (UAC, StdUtils) compiled at
  *     file scope, directly or through a helper macro a file-scope Function
  *     inserts, which fails the installer pass whenever electron-builder
- *     happens to include this file before it adds their folder.
+ *     happens to include this file before it adds their folder;
+ *   - the uninstaller's clean-up of the session helper folder running on an
+ *     update or as administrator, or deleting more than its own folders.
  * Reads files only: no makensis, no registry, no installer run.
  */
 
@@ -360,6 +366,29 @@ describe('installer branding: assets', () => {
     }
   })
 
+  it('the header bitmap and the folder-page emblem are drawn on the light grounds they sit on (aicc_planning #295)', () => {
+    // Every page keeps the stock light dialog. The header band is white, and
+    // the emblem's SS_CENTERIMAGE strip takes the bitmap's top-left pixel, so
+    // a dark corner shows as a dark tile on the header, or a dark band across
+    // the folder page. The sidebar keeps the dark brand ground, as a panel.
+    const corners = (file: string) => {
+      const b = readFileSync(join(ROOT, file))
+      const w = b.readInt32LE(18)
+      const h = b.readInt32LE(22)
+      const stride = Math.ceil((w * 3) / 4) * 4
+      const px = (x: number, y: number) => {
+        const o = 54 + (h - 1 - y) * stride + x * 3 // bottom-up rows, BGR
+        return [b[o + 2], b[o + 1], b[o]].map((v) => v.toString(16).padStart(2, '0')).join('').toUpperCase()
+      }
+      return [px(0, 0), px(w - 1, 0), px(0, h - 1), px(w - 1, h - 1)]
+    }
+    expect(corners('build/installerHeader.bmp'), 'the header band is white').toEqual(Array(4).fill('FFFFFF'))
+    const emblems = (artManifest() as { file: string }[]).map((a) => a.file).filter((f) => /installer-art\/emblem(-\d+)?\.bmp$/.test(f))
+    expect(emblems).toHaveLength(ANIM_STEPS)
+    for (const f of emblems) expect(corners(f), `${f}: the dialog face colour`).toEqual(Array(4).fill('F0F0F0'))
+    expect(corners('build/installerSidebar.bmp')[0], 'the sidebar keeps its dark ground').not.toBe('FFFFFF')
+  })
+
   it('every File the installer embeds exists under build/ as a valid BMP, and the frame set is complete', () => {
     const src = readNsh()
     const sources = [...src.matchAll(/^\s*File\s+"\/oname=\$PLUGINSDIR\\([^"]+)"\s+"([^"]+)"/gm)].map((m) => ({ oname: m[1], src: m[2] }))
@@ -408,7 +437,7 @@ describe('installer branding: page order and interface settings', () => {
     expect(readNsh()).not.toMatch(/^!macro customWelcomePage\b/m)
   })
 
-  it('the theme, classic-controls, GUIINIT and Welcome hook defines all precede MUI_PAGE_WELCOME', () => {
+  it('the GUIINIT and Welcome hook defines all precede MUI_PAGE_WELCOME', () => {
     // Modern UI reads interface settings when the first page macro inserts
     // MUI_INTERFACE; a define after that point is silently ignored.
     const lines = analyse(readNsh())
@@ -416,9 +445,6 @@ describe('installer branding: page order and interface settings', () => {
     const welcome = at(/^!insertmacro MUI_PAGE_WELCOME$/)!
     expect(welcome).toBeDefined()
     for (const re of [
-      /^!define MUI_BGCOLOR\b/,
-      /^!define MUI_TEXTCOLOR\b/,
-      /^!define MUI_FORCECLASSICCONTROLS\b/,
       /^!define MUI_CUSTOMFUNCTION_GUIINIT\b/,
       /^!define MUI_WELCOMEPAGE_TITLE\b/,
       /^!define MUI_WELCOMEPAGE_TEXT\b/,
@@ -430,15 +456,51 @@ describe('installer branding: page order and interface settings', () => {
       expect(d, `${re} is not defined at file scope`).toBeDefined()
       expect(d!.n, `${re} must come before MUI_PAGE_WELCOME (line ${welcome.n})`).toBeLessThan(welcome.n)
     }
-    // The colours are in BOTH passes, so the uninstaller's pages match.
-    expect(at(/^!define MUI_BGCOLOR\b/)!.passes).toEqual(BOTH)
-    expect(at(/^!define MUI_TEXTCOLOR\b/)!.passes).toEqual(BOTH)
-    expect(at(/^!define MUI_FORCECLASSICCONTROLS\b/)!.passes).toEqual(BOTH)
-    expect(at(/^!define MUI_BGCOLOR\b/)!.code).toBe('!define MUI_BGCOLOR "${CCC_BRAND_BG}"')
-    expect(readNsh()).toMatch(/^!define CCC_BRAND_BG "0B0E15"$/m)
     // The GUIINIT hook and its Function are installer-pass only.
     expect(at(/^!define MUI_CUSTOMFUNCTION_GUIINIT\b/)!.passes).toEqual(['inst'])
     expect(at(/^!define MUI_CUSTOMFUNCTION_GUIINIT\b/)!.code).toBe('!define MUI_CUSTOMFUNCTION_GUIINIT CccBrandGuiInit')
+  })
+
+  it('every page keeps Windows\' stock light dialog: no colour define, no classic controls, no SetCtlColors (aicc_planning #295)', () => {
+    // Modern UI colours only the header and the Welcome and Finish pages, and
+    // NSIS cannot recolour the button strip or a Browse button without a skin
+    // plugin, so a dark theme left stock light parts beside dark ones. The
+    // brand is in the header bitmap and the sidebar art only, in both passes.
+    // Any Modern UI colour define (MUI_BGCOLOR, MUI_TEXTCOLOR, MUI_*_COLOR,
+    // MUI_*_COLORS, MUI_*_BGCOLOR), with or without a /ifndef or /redef
+    // switch, classic controls, a CCC_BRAND_* colour, or SetCtlColors.
+    const ownColour = (code: string) =>
+      /^!define\s+(?:\/\w+\s+)*(?:MUI_\w*COLORS?\b|MUI_FORCECLASSICCONTROLS\b|CCC_BRAND_\w+)/.test(code) ||
+      /^SetCtlColors\b/i.test(code)
+    // The detector catches every line this file used to set: the 11 distinct
+    // lines below are all 13 that the stock-dialog change removed (each folder
+    // page had the same two SetCtlColors $0 lines). And it catches the other
+    // ways to set a colour, which this file never used.
+    for (const old of [
+      '!define CCC_BRAND_BG "0B0E15"',
+      '!define CCC_BRAND_TEXT "F4F7FA"',
+      '!define CCC_BRAND_FIELD "161B26"',
+      '!define MUI_BGCOLOR "${CCC_BRAND_BG}"',
+      '!define MUI_TEXTCOLOR "${CCC_BRAND_TEXT}"',
+      '!define MUI_FORCECLASSICCONTROLS',
+      'SetCtlColors $cccAnimCtl "" "${CCC_BRAND_BG}"',
+      'SetCtlColors $0 "" "${CCC_BRAND_BG}"',
+      'SetCtlColors $0 "${CCC_BRAND_TEXT}" "${CCC_BRAND_BG}"',
+      'SetCtlColors $DataDir "${CCC_BRAND_TEXT}" "${CCC_BRAND_FIELD}"',
+      'SetCtlColors $ResourcesDir "${CCC_BRAND_TEXT}" "${CCC_BRAND_FIELD}"',
+      '!define MUI_INSTFILESPAGE_COLORS "F4F7FA 0B0E15"',
+      '!define MUI_LICENSEPAGE_BGCOLOR /grey',
+      '!define MUI_FINISHPAGE_LINK_COLOR 000080',
+      '!define /ifndef MUI_BGCOLOR 0B0E15',
+      '!define /redef MUI_TEXTCOLOR F4F7FA',
+    ]) {
+      expect(ownColour(old), old).toBe(true)
+    }
+    for (const fine of ['!define MUI_WELCOMEPAGE_TITLE "x"', '!define MUI_CUSTOMFUNCTION_GUIINIT CccBrandGuiInit', '; SetCtlColors in a comment', '']) {
+      expect(ownColour(fine), fine).toBe(false)
+    }
+    const found = analyse(readNsh()).filter((l) => ownColour(l.code)).map((l) => `line ${l.n}: ${l.code}`)
+    expect(found).toEqual([])
   })
 
   it('in the elevated inner instance, the first page shown has no live Back button', () => {
@@ -480,19 +542,15 @@ describe('installer branding: page order and interface settings', () => {
     const res = functionBody(lines, 'ResourcesDirPage').map((l) => l.code).join('\n')
     expect(data).toMatch(/^!insertmacro MUI_HEADER_TEXT "Data folder" "[^"]+"$/m)
     expect(res).toMatch(/^!insertmacro MUI_HEADER_TEXT "Resources folder" "[^"]+"$/m)
-    // Dark bodies: the dialog, its label and the path field take the brand colours.
-    for (const body of [data, res]) {
-      expect(body).toMatch(/SetCtlColors \$0 "" "\$\{CCC_BRAND_BG\}"/)
-      expect(body).toMatch(/SetCtlColors \$0 "\$\{CCC_BRAND_TEXT\}" "\$\{CCC_BRAND_BG\}"/)
-      expect(body).toMatch(/SetCtlColors \$(DataDir|ResourcesDir) "\$\{CCC_BRAND_TEXT\}" "\$\{CCC_BRAND_FIELD\}"/)
-    }
+    // Stock bodies: the dialog, its label and the path field keep the system
+    // colours (see the stock light dialog test above).
+    for (const body of [data, res]) expect(body).not.toMatch(/SetCtlColors/i)
   })
 
-  it('the folder-page emblem is a centred bitmap on the dark ground, in a strip it fits', () => {
-    // Two ways the emblem breaks that only a screen capture would show: a
-    // STATIC control with no colours of its own paints the system face colour,
-    // so without SetCtlColors the emblem sits in a light box on the dark page;
-    // and without SS_CENTERIMAGE the bitmap is drawn at the strip's top-left.
+  it('the folder-page emblem is a centred bitmap in a strip it fits', () => {
+    // A way the emblem breaks that only a screen capture would show: without
+    // SS_CENTERIMAGE the bitmap is drawn at the strip's top-left. Its STATIC
+    // control keeps the page's own system colour around it.
     const lines = analyse(readNsh())
     const body = functionBody(lines, 'CccFolderArt').map((l) => l.code)
     const at = body.findIndex((c) => /^nsDialogs::CreateControl\s+STATIC\s/.test(c))
@@ -503,9 +561,8 @@ describe('installer branding: page order and interface settings', () => {
     const [, style, , x, y, w, h] = m!
     expect(style.split('|').sort()).toEqual(['${DEFAULT_STYLES}', '${SS_BITMAP}', '${SS_CENTERIMAGE}'])
     expect(body[at + 1]).toBe('Pop $cccAnimCtl')
-    const colours = body.indexOf('SetCtlColors $cccAnimCtl "" "${CCC_BRAND_BG}"')
-    expect(colours, 'SetCtlColors $cccAnimCtl "" "${CCC_BRAND_BG}"').toBeGreaterThan(at + 1)
-    expect(colours).toBeLessThan(body.indexOf('Call CccAnimStart'))
+    expect(body.indexOf('Call CccAnimStart')).toBeGreaterThan(at + 1)
+    expect(body.some((c) => /^SetCtlColors\b/i.test(c)), 'no colours of its own').toBe(false)
 
     // The strip: full width, from y to the bottom of the page.
     const pct = (s: string) => {
@@ -968,5 +1025,350 @@ describe('installer branding: copy', () => {
     }
     const gen = readFileSync(join(ROOT, 'scripts', 'gen-installer-art.mjs'), 'utf-8')
     expect(gen.split('\n').filter((l) => /[^\x09\x0d\x20-\x7e]/.test(l))).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The uninstaller's clean-up of the session helper folder
+// ---------------------------------------------------------------------------
+
+/** The code lines of one macro's body, without comments, blanks or the !macro lines. */
+const bodyCode = (lines: NshLine[], name: string) =>
+  lines.filter((l) => l.macro === name && l.code !== '' && !/^!macro(end)?\b/.test(l.code)).map((l) => l.code)
+
+/** A DetailPrint line with its text left out, so the wording can change. */
+const quiet = (c: string) => c.replace(/^DetailPrint ".*"$/, 'DetailPrint "..."')
+
+/** `name` and every local macro it inserts, to any depth. */
+function reachableMacros(name: string, lines: NshLine[]): Set<string> {
+  const macros = localMacros(lines)
+  const wrappers = macroWrappers(lines)
+  const seen = new Set<string>()
+  const walk = (m: string) => {
+    if (seen.has(m) || !macros.has(m)) return
+    seen.add(m)
+    for (const l of macros.get(m)!) for (const x of insertedMacros(l.code, wrappers)) walk(x)
+  }
+  walk(name)
+  return seen
+}
+
+/** A note line with its text left out, so the wording can change. */
+const quietNote = (c: string) => quiet(c).replace(/^!insertmacro CccHelperNote ".*"$/, '!insertmacro CccHelperNote "..."')
+
+/** The code lines of `name` and of every local macro it inserts, to any depth, with the macro each is in. */
+function reachableCode(lines: NshLine[], name: string): { macro: string; code: string }[] {
+  const names = reachableMacros(name, lines)
+  return lines
+    .filter((l) => l.macro !== null && names.has(l.macro) && l.code !== '' && !/^!macro(end)?\b/.test(l.code))
+    .map((l) => ({ macro: l.macro as string, code: l.code }))
+}
+
+describe('installer: the uninstaller removes the session helper folder, and nothing more (static)', () => {
+  // installer-nsis-behaviour.test.ts runs these macros for real with makensis,
+  // on CI's Windows parts and the VM. These hold, everywhere, what the file
+  // alone can prove: a gate dropped, a recursive delete brought back or a
+  // variable moved out of the uninstaller pass fails here even where nothing
+  // compiles.
+
+  it('customUnInstall inserts the clean-up once, inside ${IfNot} ${isUpdated} and nowhere else', () => {
+    const lines = analyse(readNsh())
+    const body = bodyCode(lines, 'customUnInstall')
+    const at = body.indexOf('!insertmacro RemoveUserHelperFolder')
+    expect(at, 'customUnInstall inserts RemoveUserHelperFolder').toBeGreaterThan(0)
+    expect(body.slice(at - 1, at + 2)).toEqual(['${IfNot} ${isUpdated}', '!insertmacro RemoveUserHelperFolder', '${EndIf}'])
+    const inserts = lines
+      .filter((l) => /^!insertmacro\s+"?RemoveUserHelperFolder(Here)?\b/.test(l.code))
+      .map((l) => `${l.macro}: ${l.code}`)
+    expect(inserts).toEqual([
+      'RemoveUserHelperFolder: !insertmacro RemoveUserHelperFolderHere',
+      'customUnInstall: !insertmacro RemoveUserHelperFolder',
+    ])
+  })
+
+  it('it runs in the user\'s own copy when there is one, in this copy otherwise, and on every route shows what it did', () => {
+    const lines = analyse(readNsh())
+    // electron-builder's elevated copy of an all-users uninstall hands the
+    // clean-up to the copy the user started. Any other copy runs it itself,
+    // elevated or not, and so does the elevated copy when no notes came back.
+    // The notes come back in $9, a register the UAC plugin copies back.
+    expect(bodyCode(lines, 'RemoveUserHelperFolder')).toEqual([
+      'Push $9',
+      'StrCpy $9 ""',
+      '${If} ${UAC_IsInnerInstance}',
+      '!insertmacro UAC_AsUser_Call Label cccHelperFolderHere ${UAC_SYNCREGISTERS}',
+      '${EndIf}',
+      '${If} $9 == ""',
+      'Call :cccHelperFolderHere',
+      '${EndIf}',
+      '!insertmacro CccPrintHelperNotes',
+      'Pop $9',
+      'Goto cccHelperFolderDone',
+      'cccHelperFolderHere:',
+      '!insertmacro RemoveUserHelperFolderHere',
+      'Return',
+      'cccHelperFolderDone:',
+    ])
+    const all = reachableCode(lines, 'RemoveUserHelperFolder')
+    // No route skips the clean-up for running as administrator.
+    expect(all.filter((l) => /UAC_IsAdmin/.test(l.code))).toEqual([])
+    // The clean-up itself shows nothing: the first copy has no window. Only
+    // the printer does, in the copy that has one.
+    expect(all.filter((l) => /^DetailPrint\b/.test(l.code)).map((l) => `${l.macro}: ${l.code}`)).toEqual([
+      'CccPrintHelperNotes: DetailPrint "$1"',
+      'CccPrintHelperNotes: DetailPrint "$1"',
+    ])
+    // $9 holds the notes across the call: nothing in the clean-up saves and
+    // restores it over them.
+    const here = reachableCode(lines, 'RemoveUserHelperFolderHere')
+    expect(here.filter((l) => /^(Push|Pop|Exch)\s+\$9\b/.test(l.code))).toEqual([])
+    expect(here.filter((l) => /^StrCpy \$9\b/.test(l.code)).map((l) => l.macro)).toEqual(['CccHelperNote', 'CccHelperNote', 'CccHelperNote'])
+  })
+
+  it('it ends only this user\'s helpers, by image name, with what they started, through no WMI tool, and never loops for long', () => {
+    const lines = analyse(readNsh())
+    const all = reachableCode(lines, 'RemoveUserHelperFolder')
+    // No taskkill or tasklist: over a non-interactive sign-in both answer
+    // "Access denied" (WMI), measured on the VM. No other program is run at all.
+    expect(all.filter((l) => /taskkill|tasklist|tskill|wmic|Stop-Process|KillProc|nsExec::|ExecWait|ExecShell|\bExec\b/i.test(l.code))).toEqual([])
+    // TerminateProcess appears once in the file, in CccEndListed, and only for a
+    // process checked to be this copy's own user's just before.
+    const kills = lines.filter((l) => /TerminateProcess/.test(l.code))
+    expect(kills.map((l) => l.macro)).toEqual(['CccEndListed'])
+    const listed = bodyCode(lines, 'CccEndListed')
+    const mine = listed.indexOf('!insertmacro CccProcessIsMine "$3" $6')
+    expect(listed.slice(mine, mine + 5)).toEqual([
+      '!insertmacro CccProcessIsMine "$3" $6',
+      '${If} $6 == 1',
+      'System::Call \'kernel32::OpenProcess(i 1, i 0, i $3) p .r0\'',
+      '${If} $0 != 0',
+      'System::Call \'kernel32::TerminateProcess(p r0, i 1)\'',
+    ])
+    // "Mine" is the SID in the process's token against this copy's own.
+    expect(bodyCode(lines, 'CccProcessIsMine').filter((c) => /System::Call/.test(c))).toEqual([
+      'System::Call \'kernel32::OpenProcess(i 0x1000, i 0, i ${PID}) p .r0\'',
+      'System::Call \'advapi32::OpenProcessToken(p r0, i 8, *p .r1) i .r2\'',
+      'System::Call \'advapi32::GetTokenInformation(p r1, i 1, p R5, i 256, *i .r2) i .r2\'',
+      'System::Call \'*$R5(p .r2)\'',
+      'System::Call \'advapi32::EqualSid(p r2, p R6) i .r2\'',
+      'System::Call \'kernel32::CloseHandle(p r1)\'',
+      'System::Call \'kernel32::CloseHandle(p r0)\'',
+    ])
+    const end = bodyCode(lines, 'CccEndUserHelpers')
+    const own = end.indexOf('System::Call \'kernel32::GetCurrentProcess() p .r0\'')
+    expect(end.slice(own, own + 6)).toEqual([
+      'System::Call \'kernel32::GetCurrentProcess() p .r0\'',
+      'System::Call \'advapi32::OpenProcessToken(p r0, i 8, *p .r1) i .r2\'',
+      '${If} $2 != 0',
+      'System::Call \'advapi32::GetTokenInformation(p r1, i 1, p R0, i 256, *i .r2) i .r2\'',
+      '${If} $2 != 0',
+      'System::Call \'*$R0(p .R6)\'',
+    ])
+    // With no SID of its own, nothing is scanned or ended.
+    const none = end.indexOf('${If} $R6 == 0')
+    expect(none).toBeGreaterThan(own)
+    expect(end.slice(none, none + 3).map(quietNote)).toEqual(['${If} $R6 == 0', '!insertmacro CccHelperNote "..."', '${Else}'])
+    expect(end.findIndex((c) => /^!insertmacro CccScanProcesses\b/.test(c))).toBeGreaterThan(none)
+    // Helpers by name and owner; what they started by parent, owner and start time.
+    const scan = bodyCode(lines, 'CccScanProcesses')
+    const byName = scan.indexOf('${If} $5 == "aicc-helper.exe"')
+    expect(scan.slice(byName, byName + 4)).toEqual(['${If} $5 == "aicc-helper.exe"', '!insertmacro CccProcessIsMine "$3" $6', '${If} $6 == 1', 'StrCpy $R1 "$R1$3,"'])
+    const byParent = scan.indexOf('!insertmacro CccInList "$4" $6')
+    expect(scan.slice(byParent, byParent + 14)).toEqual([
+      '!insertmacro CccInList "$4" $6',
+      '${If} $6 == 1',
+      '!insertmacro CccInList "$3" $6',
+      '${If} $6 == 0',
+      '!insertmacro CccProcessIsMine "$3" $6',
+      '${If} $6 == 1',
+      '!insertmacro CccProcessStart "$3" $R7',
+      '!insertmacro CccProcessStart "$4" $R8',
+      '${If} $R7 != ""',
+      '${AndIf} $R8 != ""',
+      'System::Int64Op $R7 < $R8',
+      'Pop $6',
+      '${If} $6 == 0',
+      'StrCpy $R1 "$R1$3,"',
+    ])
+    // Every loop is bounded: 8 passes, 10 looks after the end.
+    expect(end.filter((c) => /^\$\{OrIf\} \$R4 >= /.test(c))).toEqual(['${OrIf} $R4 >= 8', '${OrIf} $R4 >= 10'])
+    // The buffers it takes are given back.
+    expect(end.filter((c) => /^System::(Alloc|Free)\b/.test(c))).toEqual([
+      'System::Alloc 256', 'System::Alloc 256', 'System::Alloc 556', 'System::Free $R3', 'System::Free $R5', 'System::Free $R0',
+    ])
+  })
+
+  it('it never deletes recursively: files go by name, folders only when empty, and no delete waits for the next start', () => {
+    const lines = analyse(readNsh())
+    const all = reachableCode(lines, 'RemoveUserHelperFolder')
+    expect(all.filter((l) => /^RMDir\b/i.test(l.code) && /\/r\b/i.test(l.code)), 'no RMDir /r').toEqual([])
+    expect(all.some((l) => /REBOOTOK/i.test(l.code)), 'no delete is scheduled for the next start').toBe(false)
+    expect(all.filter((l) => /^RMDir\b/i.test(l.code)).map((l) => `${l.macro}: ${l.code}`)).toEqual([
+      'CccRemoveHelperOwnFolder: RMDir "$R8\\conpty"',
+      'CccRemoveHelperOwnFolder: RMDir "$R8\\$R3"',
+      'CccRemoveHelperOwnFolder: RMDir "$R8"',
+      'RemoveUserHelperFolderHere: RMDir "$R0"',
+      'RemoveUserHelperFolderHere: RMDir "$R1"',
+    ])
+    expect(all.filter((l) => /^Delete\b/i.test(l.code)).map((l) => `${l.macro}: ${l.code}`)).toEqual([
+      'CccRemoveHelperOwnFolder: Delete "$R8\\.lock"',
+      'CccRemoveHelperOwnFolder: Delete "$R8\\*.json"',
+      'CccRemoveHelperOwnFolder: Delete "$R8\\*.json.*.tmp"',
+      'CccRemoveHelperOwnFolder: Delete "$R8\\aicc-helper.exe"',
+      'CccRemoveHelperOwnFolder: Delete "$R8\\conpty\\conpty.dll"',
+      'CccRemoveHelperOwnFolder: Delete "$R8\\conpty\\OpenConsole.exe"',
+      'CccRemoveHelperOwnFolder: Delete "$R8\\$R3\\conpty.dll"',
+      'CccRemoveHelperOwnFolder: Delete "$R8\\$R3\\OpenConsole.exe"',
+      'CccRemoveHelperOwnFolder: Delete "$R8\\aicc-helper.exe"',
+      'RemoveUserHelperFolderHere: Delete "$R0\\bindings.json"',
+      'RemoveUserHelperFolderHere: Delete "$R0\\app-running.json"',
+    ])
+  })
+
+  it('it checks every folder is not a link before it touches anything in it, and walks only the helper\'s own layout', () => {
+    const lines = analyse(readNsh())
+    const own = bodyCode(lines, 'CccRemoveHelperOwnFolder')
+    // The wildcards only in the store, by the store's own name.
+    const store = own.indexOf('${If} "$R3" S== "store"')
+    expect(own.slice(store, store + 5)).toEqual([
+      '${If} "$R3" S== "store"',
+      'Delete "$R8\\.lock"',
+      'Delete "$R8\\*.json"',
+      'Delete "$R8\\*.json.*.tmp"',
+      '${ElseIf} $R9 S== ".new-"',
+    ])
+    // Windows matches a wildcard against a file's short 8.3 name too, so
+    // "*.tmp" would also take notes.tmpl (short name NOTES~1.TMP). A short
+    // name has at most one dot and an extension of at most three letters, so
+    // a wildcard is safe only with two dots, or a longer last extension.
+    const wild = reachableCode(lines, 'RemoveUserHelperFolder')
+      .map((l) => /^Delete\s+"([^"]*)"/i.exec(l.code)?.[1])
+      .filter((p): p is string => p !== undefined && /[*?]/.test(p.split('\\').pop() ?? ''))
+      .map((p) => p.split('\\').pop() as string)
+    expect(wild).toEqual(['*.json', '*.json.*.tmp'])
+    for (const name of wild) {
+      const dots = name.split('.').length - 1
+      const ext = name.slice(name.lastIndexOf('.') + 1)
+      expect(dots >= 2 || (ext.length > 3 && !/[*?]/.test(ext)), `${name} can match a short 8.3 name`).toBe(true)
+    }
+    // The conpty folder: checked, then its two files, then the folder.
+    const conpty = own.indexOf('${If} ${FileExists} "$R8\\conpty\\*.*"')
+    expect(own.slice(conpty, conpty + 6)).toEqual([
+      '${If} ${FileExists} "$R8\\conpty\\*.*"',
+      '${GetFileAttributes} "$R8\\conpty" "REPARSE_POINT" $6',
+      '${If} $6 == 0',
+      'Delete "$R8\\conpty\\conpty.dll"',
+      'Delete "$R8\\conpty\\OpenConsole.exe"',
+      'RMDir "$R8\\conpty"',
+    ])
+    // A ConPTY copy that stopped half way: its own name, a folder, not a link.
+    const half = own.indexOf('FindFirst $R2 $R3 "$R8\\.new-*"')
+    expect(own.slice(half - 3, half)).toEqual(['Push $R2', 'Push $R3', 'ClearErrors'])
+    const check = own.indexOf('!insertmacro CccIsHex12 "$R9" $5')
+    expect(own.slice(check, check + 7)).toEqual([
+      '!insertmacro CccIsHex12 "$R9" $5',
+      '${If} $5 == 1',
+      '${AndIf} ${FileExists} "$R8\\$R3\\*.*"',
+      '${GetFileAttributes} "$R8\\$R3" "REPARSE_POINT" $6',
+      '${If} $6 == 0',
+      'Delete "$R8\\$R3\\conpty.dll"',
+      'Delete "$R8\\$R3\\OpenConsole.exe"',
+    ])
+    expect(own.slice(own.indexOf('FindClose $R2'), own.indexOf('FindClose $R2') + 4)).toEqual(['FindClose $R2', 'ClearErrors', 'Pop $R3', 'Pop $R2'])
+
+    const body = bodyCode(lines, 'RemoveUserHelperFolderHere')
+    // Neither the parent nor the helper folder may be a link.
+    const linkCheck = body.indexOf('${GetFileAttributes} "$R1" "REPARSE_POINT" $5')
+    expect(linkCheck).toBeGreaterThan(-1)
+    expect(body.slice(linkCheck, linkCheck + 5).map(quietNote)).toEqual([
+      '${GetFileAttributes} "$R1" "REPARSE_POINT" $5',
+      '${GetFileAttributes} "$R0" "REPARSE_POINT" $6',
+      '${If} $5 != 0',
+      '${OrIf} $6 != 0',
+      '!insertmacro CccHelperNote "..."',
+    ])
+    // The force-end comes after that check.
+    expect(body.indexOf('!insertmacro CccEndUserHelpers')).toBeGreaterThan(linkCheck)
+
+    // Each entry: not "." or "..", a folder, of the helper's own name, not a
+    // link, and neither the user's data or resources folder nor holding one.
+    const entry = body.indexOf('${If} $R3 != "."')
+    expect(entry).toBeGreaterThan(linkCheck)
+    expect(body.slice(entry, entry + 20).map(quietNote)).toEqual([
+      '${If} $R3 != "."',
+      '${AndIf} $R3 != ".."',
+      '${AndIf} ${FileExists} "$R0\\$R3\\*.*"',
+      '!insertmacro IsHelperOwnFolder "$R3" $5',
+      '${If} $5 == 1',
+      '${GetFileAttributes} "$R0\\$R3" "REPARSE_POINT" $6',
+      '${If} $6 != 0',
+      '${If} $R4 == 0',
+      '!insertmacro CccHelperNote "..."',
+      '${EndIf}',
+      '${Else}',
+      '!insertmacro HoldsUserFolder "$R0\\$R3" $6',
+      '${If} $6 == 1',
+      '${If} $R4 == 0',
+      '!insertmacro CccHelperNote "..."',
+      '${EndIf}',
+      '${Else}',
+      'IntOp $3 $3 + 1',
+      '!insertmacro CccRemoveHelperOwnFolder',
+      '${If} ${FileExists} "$R0\\$R3\\*.*"',
+    ])
+
+    // The tries are bounded.
+    const bound = body.indexOf('${OrIf} $R4 >= 7')
+    expect(body.slice(bound - 2, bound + 2)).toEqual(['IntOp $R4 $R4 + 1', '${If} $3 == 0', '${OrIf} $R4 >= 7', '${ExitDo}'])
+
+    // The helper folder, then the parent: plain RMDir, never when it is or holds a user folder.
+    const helperAt = body.indexOf('RMDir "$R0"')
+    expect(body.slice(helperAt - 4, helperAt + 1).map(quietNote)).toEqual([
+      '!insertmacro HoldsUserFolder "$R0" $6',
+      '${If} $6 == 1',
+      '!insertmacro CccHelperNote "..."',
+      '${Else}',
+      'RMDir "$R0"',
+    ])
+    const parentAt = body.indexOf('RMDir "$R1"')
+    expect(body.slice(parentAt - 2, parentAt + 1)).toEqual(['!insertmacro HoldsUserFolder "$R1" $6', '${If} $6 != 1', 'RMDir "$R1"'])
+    expect(parentAt).toBeGreaterThan(helperAt)
+  })
+
+  it('the user\'s folders are the recorded ones, or the ones the app then uses (src/main/data-paths.ts)', () => {
+    const body = bodyCode(analyse(readNsh()), 'RemoveUserHelperFolderHere')
+    const at = body.indexOf('!insertmacro ReadUserPath "DataDirectory" $7')
+    expect(body.slice(at, at + 9)).toEqual([
+      '!insertmacro ReadUserPath "DataDirectory" $7',
+      '${If} $7 == ""',
+      'StrCpy $7 "$R1"',
+      '${EndIf}',
+      '!insertmacro ReadUserPath "ResourcesDirectory" $8',
+      '${If} $8 == ""',
+      '!insertmacro CanonPathPair "$7" $cccCanonA $cccCanonAS',
+      'StrCpy $8 "$cccCanonA\\resources"',
+      '${EndIf}',
+    ])
+  })
+
+  it('CanonPathPair\'s eight scratch variables are declared in both passes, and each pass uses every one (-WX)', () => {
+    const lines = analyse(readNsh())
+    const NAMES = ['cccCanonA', 'cccCanonAS', 'cccCanonB', 'cccCanonBS', 'cccCanonWork', 'cccCanonChar', 'cccCanonIdx', 'cccCanonTmp']
+    const decl = lines.filter((l) => /^Var\s+(?:\/GLOBAL\s+)?cccCanon\w*$/.test(l.code))
+    expect(decl.map((l) => l.code.split(/\s+/).pop()).sort()).toEqual([...NAMES].sort())
+    for (const l of decl) {
+      expect(l.macro, `${l.code} is declared in customHeader`).toBe('customHeader')
+      expect(l.passes, `${l.code} compiles in both passes`).toEqual(BOTH)
+    }
+    // "Variable X not referenced" fails a pass under -WX: the uninstaller pass
+    // uses them through customUnInstall, the installer pass through customInit
+    // and customInstall.
+    const unused = (roots: string[], pass: Pass) => {
+      const names = new Set(roots.flatMap((r) => [...reachableMacros(r, lines)]))
+      const code = lines.filter((l) => l.macro !== null && names.has(l.macro) && l.passes.includes(pass)).map((l) => l.code).join('\n')
+      return NAMES.filter((n) => !new RegExp(`\\$${n}(?![\\w.])`).test(code))
+    }
+    expect(unused(['customUnInstall'], 'un'), 'unused in the uninstaller pass').toEqual([])
+    expect(unused(['customInit', 'customInstall'], 'inst'), 'unused in the installer pass').toEqual([])
   })
 })
