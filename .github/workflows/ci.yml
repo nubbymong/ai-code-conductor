@@ -429,6 +429,15 @@ jobs:
         if: steps.scope.outputs.suite != 'false'
         run: node scripts/wp1/fetch-ledger-commit.mjs
 
+      # The makensis probes (tests/unit/main/installer-nsis-behaviour.test.ts)
+      # compile the real installer macros and run them, and skip without a
+      # compiler. electron-builder's own, fetched as a release build fetches
+      # it, into MAKENSIS for the suite; the file's tripwire fails a Windows
+      # CI run that has none.
+      - name: Fetch the NSIS compiler for the installer probes
+        if: steps.scope.outputs.suite != 'false'
+        run: node scripts/ci/fetch-makensis.mjs
+
       # The reporters are vitest's two defaults on GitHub Actions (naming them
       # replaces the defaults) and its own JSON report, for the next step.
       - name: Unit tests
