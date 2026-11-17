@@ -179,20 +179,66 @@ describe('createSessionRouter', () => {
     expect(src.live.size).toBe(0)
   })
 
-  it('a replaced bridge (a hot reload, or a test\'s fresh mock) is bound instead of the old one, never beside it', async () => {
+  it('after the last unsubscribe, the next subscribe binds the bridge as it is then', async () => {
     const { createSessionRouter } = await routerModule()
     const first = source()
     const second = source()
     let current = first
     const router = createSessionRouter<{ sessionId: string }>(() => current.ns)
     const got: string[] = []
-    router.subscribe('a', () => got.push('a'))
+    router.subscribe('a', () => got.push('a'))()
+    expect(first.live.size).toBe(0)
+    // A test's fresh mock, installed once the earlier hooks have unmounted.
     current = second
-    const offB = router.subscribe('b', () => got.push('b'))
+    const off = router.subscribe('a', () => got.push('a'))
     expect(first.live.size).toBe(0)
     expect(second.live.size).toBe(1)
     for (const cb of second.live) cb({ sessionId: 'a' })
     expect(got).toEqual(['a'])
+    off()
+  })
+
+  it('the same handler subscribed twice is two subscriptions: one unsubscribe leaves the other', async () => {
+    const { createSessionRouter } = await routerModule()
+    const src = source()
+    const router = createSessionRouter<{ sessionId: string; n: number }>(() => src.ns)
+    const got: number[] = []
+    const handler = (d: { n: number }) => { got.push(d.n) }
+    const off1 = router.subscribe('a', handler)
+    const off2 = router.subscribe('a', handler)
+    for (const cb of src.live) cb({ sessionId: 'a', n: 1 })
+    expect(got).toEqual([1, 1])
+    off1()
+    expect(src.live.size).toBe(1)
+    for (const cb of src.live) cb({ sessionId: 'a', n: 2 })
+    expect(got).toEqual([1, 1, 2])
+    off2()
+    expect(src.live.size).toBe(0)
+  })
+
+  it('a stale unsubscribe, after the session subscribed again, does not cut off the new subscription', async () => {
+    const { createSessionRouter } = await routerModule()
+    const src = source()
+    const router = createSessionRouter<{ sessionId: string; n: number }>(() => src.ns)
+    const got: number[] = []
+    const handler = (d: { n: number }) => { got.push(d.n) }
+    const stale = router.subscribe('a', handler)
+    stale()
+    const off = router.subscribe('a', handler) // a remount, with the same function
+    stale()
+    expect(src.live.size).toBe(1)
+    for (const cb of src.live) cb({ sessionId: 'a', n: 3 })
+    expect(got).toEqual([3])
+    off()
+  })
+
+  it('unsubscribing twice is harmless once the session has no subscriptions left', async () => {
+    const { createSessionRouter } = await routerModule()
+    const src = source()
+    const router = createSessionRouter<{ sessionId: string }>(() => src.ns)
+    const offB = router.subscribe('b', () => {})
     offB()
+    expect(() => offB()).not.toThrow()
+    expect(src.live.size).toBe(0)
   })
 })

@@ -11,18 +11,21 @@
  * dropped. The last unsubscribe releases the channel, so a StrictMode mount,
  * unmount and mount, or any remount, ends with exactly one listener.
  *
- * A session id holds a set of handlers, not one: during a remount handover
- * the old and the new view of the same session can both be subscribed for a
- * moment, and each must get its own unsubscribe.
+ * Every subscription is its own entry, even for the same handler function:
+ * during a remount handover the old and the new view of a session can both be
+ * subscribed for a moment, and each unsubscribe removes only its own entry.
  */
 import type { ElectronAPI } from '../types/electron'
 
 type Handler<T> = (data: T) => void
 type Unsubscribe = () => void
 
+/** The release of a channel that is not bound: there is nothing to release. */
+const NOT_BOUND: Unsubscribe = () => {}
+
 /** The bridge namespace of one channel, e.g. window.electronAPI.statusline. */
 interface BridgeChannel<T> {
-  onUpdate: (callback: (data: T) => void) => Unsubscribe | void
+  onUpdate: (callback: (data: T) => void) => Unsubscribe
 }
 
 export interface SessionRouter<T> {
@@ -32,7 +35,8 @@ export interface SessionRouter<T> {
 
 export function createSessionRouter<T extends { sessionId: string }>(bridge: () => BridgeChannel<T>): SessionRouter<T> {
   const handlers = new Map<string, Set<Handler<T>>>()
-  let bound: { onUpdate: BridgeChannel<T>['onUpdate']; release: Unsubscribe | void } | null = null
+  /** Releases the bridge listener; NOT_BOUND while the channel is not bound. */
+  let release: Unsubscribe = NOT_BOUND
 
   const dispatch = (data: T): void => {
     const id = data !== null && typeof data === 'object' ? (data as { sessionId?: unknown }).sessionId : undefined
@@ -40,43 +44,35 @@ export function createSessionRouter<T extends { sessionId: string }>(bridge: () 
     const mine = handlers.get(id)
     if (!mine) return
     // A copy: a handler may unsubscribe (or a remount subscribe) mid-delivery.
-    for (const handler of [...mine]) handler(data)
-  }
-
-  const unbind = (): void => {
-    const was = bound
-    bound = null
-    if (was && typeof was.release === 'function') was.release()
-  }
-
-  const ensureBound = (): void => {
-    const channel = bridge()
-    if (bound && bound.onUpdate === channel.onUpdate) return
-    // In the app the bridge never changes, so this binds once. A test that
-    // installs a fresh mock, or a dev hot reload, does change it: release the
-    // old listener first, so there is never more than one.
-    unbind()
-    bound = { onUpdate: channel.onUpdate, release: channel.onUpdate(dispatch) }
+    for (const entry of [...mine]) entry(data)
   }
 
   return {
     subscribe(sessionId, handler) {
-      ensureBound()
+      // The bridge is read when the channel is bound: on the first subscribe,
+      // and on the first one after the channel was released. In the app
+      // window.electronAPI never changes; a test that installs a fresh mock
+      // gets it bound once its earlier hooks have unmounted.
+      if (release === NOT_BOUND) release = bridge().onUpdate(dispatch)
       let mine = handlers.get(sessionId)
       if (!mine) {
         mine = new Set()
         handlers.set(sessionId, mine)
       }
-      mine.add(handler)
-      let done = false
+      const entry: Handler<T> = (data) => handler(data)
+      mine.add(entry)
       return () => {
-        if (done) return
-        done = true
         const set = handlers.get(sessionId)
+        // Already unsubscribed, and the session has no entries left.
         if (!set) return
-        set.delete(handler)
-        if (set.size === 0) handlers.delete(sessionId)
-        if (handlers.size === 0) unbind()
+        // A no-op when already unsubscribed: the entry is this call's own.
+        set.delete(entry)
+        if (set.size > 0) return
+        handlers.delete(sessionId)
+        if (handlers.size > 0) return
+        const was = release
+        release = NOT_BOUND
+        was()
       }
     },
   }

@@ -253,6 +253,12 @@ interface SessionState {
   renameSession: (id: string, name: string) => void
 }
 
+/** An object made by a literal or Object.create(null): no class, no Date. */
+function isPlainObject(o: object): boolean {
+  const proto = Object.getPrototypeOf(o)
+  return proto === Object.prototype || proto === null
+}
+
 /**
  * aicc_planning#304: equality for updateSession's no-op guard. A statusline
  * tick carries `usageBuckets` and `rateLimitExtra` as objects deserialised
@@ -260,7 +266,8 @@ interface SessionState {
  * sessions array, re-rendering every usage bar in the window from every
  * session's ticks. Plain arrays and objects are compared by value; anything
  * else (functions, class instances, Dates) only by identity, as before. Past
- * depth 6 a value counts as changed, so a deep payload is never skipped.
+ * depth 6 a value counts as changed, so a deep payload is never skipped and a
+ * cyclic one cannot recurse forever.
  */
 export function sameStatusValue(a: unknown, b: unknown, depth = 0): boolean {
   if (a === b) return true
@@ -270,8 +277,7 @@ export function sameStatusValue(a: unknown, b: unknown, depth = 0): boolean {
     for (let i = 0; i < a.length; i++) if (!sameStatusValue(a[i], b[i], depth + 1)) return false
     return true
   }
-  const plain = (o: object) => Object.getPrototypeOf(o) === Object.prototype || Object.getPrototypeOf(o) === null
-  if (!plain(a) || !plain(b)) return false
+  if (!isPlainObject(a) || !isPlainObject(b)) return false
   const ak = Object.keys(a)
   const bk = Object.keys(b)
   if (ak.length !== bk.length) return false
@@ -325,7 +331,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const current = state.sessions[idx]
       let changed = false
       for (const k in updates) {
-        // By value for plain objects and arrays (#304): see sameStatusValue.
+        // By value for plain objects and arrays (aicc_planning#304): see sameStatusValue.
         if (!sameStatusValue((current as unknown as Record<string, unknown>)[k], (updates as unknown as Record<string, unknown>)[k])) {
           changed = true
           break

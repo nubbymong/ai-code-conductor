@@ -6,6 +6,7 @@
 // when the local date changes under it.
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // The real formatResetTime, counted.
@@ -18,7 +19,7 @@ vi.mock('../../../src/renderer/utils/terminalFormatting', async (importOriginal)
 
 import { useSessionStore, sameStatusValue } from '../../../src/renderer/stores/sessionStore'
 import type { Session } from '../../../src/renderer/stores/sessionStore'
-import RateLimitBar from '../../../src/renderer/components/terminal/RateLimitBar'
+import { RateLimitBar } from '../../../src/renderer/components/terminal/RateLimitBar'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -35,7 +36,7 @@ beforeEach(() => {
   })
 })
 
-describe('updateSession no-op guard (#304)', () => {
+describe('updateSession no-op guard (aicc_planning#304)', () => {
   it('a tick with equal bucket and extra values keeps the sessions array identity', () => {
     const { updateSession } = useSessionStore.getState()
     updateSession('s1', { usageBuckets: buckets(), rateLimitExtra: extra(), rateLimitCurrent: 41 } as never)
@@ -81,9 +82,27 @@ describe('sameStatusValue', () => {
     expect(sameStatusValue(f, () => 1)).toBe(false)
     expect(sameStatusValue(f, f)).toBe(true)
   })
+
+  it('a key that only one side has is a change, even when both read undefined', () => {
+    // Same key count, so only the own-key check tells them apart.
+    expect(sameStatusValue({ a: 1, b: undefined }, { a: 1, c: undefined })).toBe(false)
+  })
+
+  it('past depth 6 a value counts as changed, so a cyclic value ends', () => {
+    const nest = (n: number): unknown => (n === 0 ? 1 : { x: nest(n - 1) })
+    // Seven objects, at depths 0 to 6, are still compared by value.
+    expect(sameStatusValue(nest(7), nest(7))).toBe(true)
+    // An eighth, at depth 7, counts as changed.
+    expect(sameStatusValue(nest(8), nest(8))).toBe(false)
+    const a: Record<string, unknown> = { n: 1 }
+    a.self = a
+    const b: Record<string, unknown> = { n: 1 }
+    b.self = b
+    expect(sameStatusValue(a, b)).toBe(false)
+  })
 })
 
-describe('RateLimitBar (#304)', () => {
+describe('RateLimitBar (aicc_planning#304)', () => {
   let container: HTMLDivElement
   let root: Root | null
   const unmount = () => { if (root) { const r = root; root = null; act(() => { r.unmount() }) } }
@@ -92,12 +111,21 @@ describe('RateLimitBar (#304)', () => {
     document.body.appendChild(container)
     root = createRoot(container)
   })
-  // Each case leaves nothing mounted, and so no midnight timer, for the next.
+  // Each case leaves nothing mounted, and so no date-check timer, for the next.
   afterEach(() => {
     unmount()
     container.remove()
     vi.useRealTimers()
+    vi.restoreAllMocks()
   })
+
+  /** A fake clock at a local time; the date check's timer runs on it. */
+  const clockAt = (d: Date) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    vi.setSystemTime(d)
+  }
+  const bar = (resets: string, label = '5h') =>
+    React.createElement(RateLimitBar, { key: label, label, pct: 41, resets, showReset: true })
 
   it('a bar whose figures did not change does not render again', () => {
     const props = { label: '5h', pct: 41, resets: '2026-11-17T05:00:00Z' }
@@ -116,18 +144,77 @@ describe('RateLimitBar (#304)', () => {
   })
 
   it('at local midnight, a bar whose reset was tomorrow drops the date, with no new props', () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
-    vi.setSystemTime(new Date(2026, 10, 17, 23, 59, 0)) // local time
+    clockAt(new Date(2026, 10, 17, 23, 59, 0))
     const resets = new Date(2026, 10, 18, 3, 0, 0).toISOString()
     const dated = formatResetTime(resets)
-    act(() => { root!.render(React.createElement(RateLimitBar, { label: '5h', pct: 41, resets, showReset: true })) })
+    act(() => { root!.render(bar(resets)) })
     expect(container.textContent).toContain(`resets ${dated}`)
     act(() => { vi.advanceTimersByTime(2 * 60_000) }) // 00:01 on the 18th
     const timeOnly = formatResetTime(resets)
     expect(timeOnly).not.toBe(dated)
     expect(container.textContent).toContain(`resets ${timeOnly}`)
-    // The last bar gone, its midnight timer goes too.
+    // The last bar gone, its timer goes too.
     unmount()
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('bars share one timer, and unmounting one keeps it for the others', () => {
+    clockAt(new Date(2026, 10, 17, 23, 59, 0))
+    const resets = new Date(2026, 10, 18, 3, 0, 0).toISOString()
+    const dated = formatResetTime(resets)
+    act(() => { root!.render(React.createElement('div', null, bar(resets, '5h'), bar(resets, 'Weekly'))) })
+    expect(vi.getTimerCount()).toBe(1)
+    act(() => { root!.render(React.createElement('div', null, bar(resets, '5h'))) })
+    expect(vi.getTimerCount()).toBe(1)
+    expect(container.textContent).toContain(`resets ${dated}`)
+    act(() => { vi.advanceTimersByTime(2 * 60_000) }) // 00:01 on the 18th
+    expect(container.textContent).toContain(`resets ${formatResetTime(resets)}`)
+  })
+
+  it('the check is armed again after it fires, so a second midnight is caught too', () => {
+    clockAt(new Date(2026, 10, 17, 23, 59, 0))
+    const resets = new Date(2026, 10, 19, 3, 0, 0).toISOString() // two days out
+    const dated = formatResetTime(resets)
+    act(() => { root!.render(bar(resets)) })
+    act(() => { vi.advanceTimersByTime(2 * 60_000) }) // 00:01 on the 18th: still tomorrow
+    expect(container.textContent).toContain(`resets ${dated}`)
+    expect(vi.getTimerCount()).toBe(1)
+    act(() => { vi.advanceTimersByTime(24 * 60 * 60_000) }) // 00:01 on the 19th
+    const timeOnly = formatResetTime(resets)
+    expect(timeOnly).not.toBe(dated)
+    expect(container.textContent).toContain(`resets ${timeOnly}`)
+  })
+
+  it('a late timer, or a clock or time-zone change, still shows the new date within 15 minutes', () => {
+    clockAt(new Date(2026, 10, 17, 12, 0, 0))
+    const resets = new Date(2026, 10, 18, 3, 0, 0).toISOString()
+    const dated = formatResetTime(resets)
+    act(() => { root!.render(bar(resets)) })
+    expect(container.textContent).toContain(`resets ${dated}`)
+    // The wall clock jumps to 00:05 on the 18th while the pending timer keeps
+    // its remaining wait, as after a sleep or a time-zone change.
+    vi.setSystemTime(new Date(2026, 10, 18, 0, 5, 0))
+    act(() => { vi.advanceTimersByTime(15 * 60_000) })
+    expect(container.textContent).toContain(`resets ${formatResetTime(resets)}`)
+  })
+
+  it('showing the window again checks the date at once, and the last bar removes that listener', () => {
+    const add = vi.spyOn(document, 'addEventListener')
+    const remove = vi.spyOn(document, 'removeEventListener')
+    clockAt(new Date(2026, 10, 17, 12, 0, 0))
+    const resets = new Date(2026, 10, 18, 3, 0, 0).toISOString()
+    act(() => { root!.render(bar(resets)) })
+    vi.setSystemTime(new Date(2026, 10, 18, 0, 5, 0))
+    act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+    expect(container.textContent).toContain(`resets ${formatResetTime(resets)}`)
+    const added = add.mock.calls.filter(([type]) => type === 'visibilitychange')
+    expect(added).toHaveLength(1)
+    unmount()
+    expect(remove).toHaveBeenCalledWith('visibilitychange', added[0][1])
+  })
+
+  it('renders on a server render too (React needs a server snapshot for the date)', () => {
+    const html = renderToStaticMarkup(React.createElement(RateLimitBar, { label: '5h', pct: 41 }))
+    expect(html).toContain('aria-valuenow="41"')
   })
 })

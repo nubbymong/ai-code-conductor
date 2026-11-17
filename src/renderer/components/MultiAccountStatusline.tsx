@@ -9,7 +9,7 @@ import {
   canonicaliseEmail,
 } from '../../shared/account-chip-color'
 import { resolveIdentityColor, type IdentityColorKey } from '../../shared/identity-colors'
-import RateLimitBar, { RateLimitBarPending, RateLimitBarNoReading } from './terminal/RateLimitBar'
+import { RateLimitBar, RateLimitBarPending, RateLimitBarNoReading } from './terminal/RateLimitBar'
 import type { AccountProfile } from '../../shared/account-types'
 import type { UsageBucket } from '../../shared/usage-types'
 import type { AccountsSnapshot, AccountView, IdentityView, ProviderId } from '../../shared/providers'

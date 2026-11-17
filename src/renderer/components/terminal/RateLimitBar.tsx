@@ -81,31 +81,43 @@ export function RateLimitBarNoReading({ label, resetsAt, compact }: { label: str
 
 // aicc_planning#304: the bar below is memoized, so it renders only when its
 // props change. Its reset text also depends on today's date (formatResetTime
-// drops the date for a reset later today), so every bar also renders when the
-// local date changes: one timer for all of them, set for the next local
-// midnight while any bar is on screen.
-const midnightListeners = new Set<() => void>()
-let midnightTimer: ReturnType<typeof setTimeout> | null = null
+// drops the date for a reset later today), so every bar also checks the local
+// date: one timer for all mounted bars, and again whenever the window is shown.
+// The timer aims just past the next local midnight but never waits longer than
+// DAY_CHECK_MAX_MS: a timer runs late after a system sleep, and does not move
+// when the clock or the time zone changes, so the cap bounds how long a stale
+// date can stay. A check that finds the same date renders nothing
+// (useSyncExternalStore compares the two numbers).
+const DAY_CHECK_MAX_MS = 15 * 60_000
+const dayListeners = new Set<() => void>()
+let dayTimer: ReturnType<typeof setTimeout> | null = null
 
-function armMidnight(): void {
-  if (midnightTimer !== null || midnightListeners.size === 0) return
-  const next = new Date()
-  next.setHours(24, 0, 0, 0)
-  midnightTimer = setTimeout(() => {
-    midnightTimer = null
-    for (const wake of [...midnightListeners]) wake()
-    armMidnight()
-  }, next.getTime() - Date.now() + 1000)
+function checkDay(): void {
+  for (const wake of [...dayListeners]) wake()
 }
 
-function subscribeMidnight(wake: () => void): () => void {
-  midnightListeners.add(wake)
-  armMidnight()
+function armDayCheck(): void {
+  if (dayTimer !== null || dayListeners.size === 0) return
+  const next = new Date()
+  next.setHours(24, 0, 0, 0)
+  dayTimer = setTimeout(() => {
+    dayTimer = null
+    checkDay()
+    armDayCheck()
+  }, Math.min(next.getTime() - Date.now() + 1000, DAY_CHECK_MAX_MS))
+}
+
+function subscribeDay(wake: () => void): () => void {
+  if (dayListeners.size === 0) document.addEventListener('visibilitychange', checkDay)
+  dayListeners.add(wake)
+  armDayCheck()
   return () => {
-    midnightListeners.delete(wake)
-    if (midnightListeners.size === 0 && midnightTimer !== null) {
-      clearTimeout(midnightTimer)
-      midnightTimer = null
+    dayListeners.delete(wake)
+    if (dayListeners.size > 0) return
+    document.removeEventListener('visibilitychange', checkDay)
+    if (dayTimer !== null) {
+      clearTimeout(dayTimer)
+      dayTimer = null
     }
   }
 }
@@ -117,7 +129,9 @@ function localDay(): number {
 }
 
 function RateLimitBar({ label, pct, resets, showReset, compact }: { label: string; pct: number; resets?: string; showReset?: boolean; compact?: boolean }) {
-  React.useSyncExternalStore(subscribeMidnight, localDay)
+  // localDay is also the server snapshot: React's server renderer throws
+  // without one.
+  React.useSyncExternalStore(subscribeDay, localDay, localDay)
   const clamped = Math.min(100, Math.max(0, pct))
   // Drive from theme tokens so the bar adapts to light/dark — hard-
   // coded Catppuccin Mocha hex didn't repaint when the user flipped
@@ -170,5 +184,8 @@ function RateLimitBar({ label, pct, resets, showReset, compact }: { label: strin
 
 // aicc_planning#304: every footer and strip bar re-rendered on any session's
 // statusline tick. Its props are primitives, so a bar whose figures did not
-// change skips the render (it still renders at local midnight, above).
-export default React.memo(RateLimitBar)
+// change skips the render (it still renders when the local date changes,
+// above). Exported under the inner function's name, which stays RateLimitBar
+// so CPU profiles (scripts/perf) still find it by that name.
+const MemoRateLimitBar = React.memo(RateLimitBar)
+export { MemoRateLimitBar as RateLimitBar }
