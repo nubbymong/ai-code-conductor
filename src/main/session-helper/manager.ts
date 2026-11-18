@@ -34,7 +34,9 @@
  * (releaseForUpdate). Its holder's away clock starts, the running mark stays
  * (saying "update"), and the new version's start takes the crash path: the
  * restored tab shows the terminal again. Agent sessions still end at an
- * update, and macOS and Linux keep ending every one.
+ * update, and macOS and Linux keep ending every one. A terminal kept for a
+ * tab that no tab took over runs on through the update and is kept again,
+ * unless the user discarded the saved sessions (section B3).
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -1020,23 +1022,27 @@ export class SessionHelperManager implements MachinesSource {
    * a holder is let go of instead of ended, when its tab (a partner's is its
    * session's) is saved twice over: in the app's last save (noteSavedTabs)
    * and in `restorable`, the tabs in the saved file the next start restores
-   * from. "Close without saving" clears that file, so then none is. Its
-   * holder's away clock starts (two minutes) and the next start, finding the
-   * running mark, shows it again in its tab. An agent session, a terminal
-   * still starting and one whose tab was not saved are left to the kill that
-   * follows, which ends them as before. A held terminal kept for a tab that
-   * no tab took over (one a crash left, one Re-attach opened a tab for, one
-   * an earlier reclaim() kept) is ended now unless its tab is saved the same
-   * way: the kill does not reach it, so "Close sessions" would otherwise
-   * leave it running past the exit.
+   * from. `restorable` is null when the user chose "Close sessions" on the
+   * update dialog (the renderer says so with the install call; app-wiring
+   * passes it on), so then none is. Its holder's away clock starts (two
+   * minutes) and the next start, finding the running mark, shows it again in
+   * its tab. An agent session, a terminal still starting and one whose tab was
+   * not saved are left to the kill that follows, which ends them as before.
+   * A held terminal kept for a tab that no tab took over (one a crash left,
+   * one Re-attach opened a tab for, one an earlier reclaim() kept) is not
+   * reached by that kill. When `restorable` is a set (Save, even with no tab
+   * saved; an update with no tab open, which shows no dialog; a saved file
+   * that did not read), it is neither let go of nor ended: it runs on past
+   * the exit, and the next start, taking the crash path, keeps it again
+   * (section B3). When it is null, it is ended now, so none is left held.
    * The mark is written again saying "update" and stays. Nothing new goes
    * through the helper until reclaim(). Off Windows nothing is let go of.
    * Answers how many were.
    */
-  releaseForUpdate(restorable: ReadonlySet<string>): number {
+  releaseForUpdate(restorable: ReadonlySet<string> | null): number {
     if (this.os !== 'windows' || this.quitting) return 0
     this.updating = true
-    const saved = (tab: string) => this.savedTabs.has(tab) && restorable.has(tab)
+    const saved = (tab: string) => restorable !== null && this.savedTabs.has(tab) && restorable.has(tab)
     let n = 0
     for (const [sid, w] of this.live) {
       if (heldIdKind(sid) !== 'plain' || !w.throughHelper) continue
@@ -1048,12 +1054,17 @@ export class SessionHelperManager implements MachinesSource {
       n++
     }
     // Kept and no tab took it over (a crash's, Re-attach's or reclaim()'s):
-    // its holder runs on past the app's exit unless it is ended here.
+    // the kill does not reach it, so its holder runs on past the app's exit.
+    // That is what the user chose with Save; only "Close sessions" ends it here.
     const ends: Promise<unknown>[] = []
+    let leftRunning = 0
     for (const [sid, r] of new Map([...this.reclaimed, ...this.adoptable])) {
       if (this.live.has(sid) || heldIdKind(sid) !== 'plain') continue
-      const appId = this.appIdOf(r)
-      if (saved(parentOfPartnerPtyId(appId) ?? appId)) continue
+      if (restorable !== null) {
+        leftRunning++
+        this.deps.log(`[session-helper] ${sid}: kept with no tab showing it; left running through the update, for the next start to keep again`)
+        continue
+      }
       this.reclaimed.delete(sid)
       ends.push(this.endRecord(r).catch((err) => this.deps.log(`[session-helper] ${sid}: could not be ended at the update: ${message(err)}`)))
     }
@@ -1063,14 +1074,17 @@ export class SessionHelperManager implements MachinesSource {
     } catch (err) {
       this.deps.log(`[session-helper] the running mark could not be written for the update: ${message(err)}`)
     }
-    this.deps.log(`[session-helper] an app update: ${n} held terminal(s) are let go of, for the new version to show again`)
+    const tail = restorable === null
+      ? `the sessions were discarded, so ${ends.length} kept terminal(s) are ended`
+      : `${leftRunning} kept terminal(s) are left running`
+    this.deps.log(`[session-helper] an app update: ${n} held terminal(s) are let go of, for the new version to show again; ${tail}`)
     this.changed()
     return n
   }
 
   /** Settles once every end the last releaseForUpdate sent was answered (or
-   *  failed): the held terminals kept for a tab no longer saved. The caller
-   *  bounds the wait; the app exits next. */
+   *  failed): the kept terminals ended because the user discarded the saved
+   *  sessions. The caller bounds the wait; the app exits next. */
   endsForUpdate(): Promise<void> {
     return this.updateEnds
   }

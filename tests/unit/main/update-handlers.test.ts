@@ -17,7 +17,7 @@ const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const shownErrorBoxes: Array<[string, string]> = []
 const exitCalls: number[] = []
 /** The install path's steps, in the order they ran (plan section B2). */
-const steps = vi.hoisted(() => ({ order: [] as string[], releaseThrows: false, releaseDelayMs: 0 }))
+const steps = vi.hoisted(() => ({ order: [] as string[], releaseThrows: false, releaseDelayMs: 0, choices: [] as unknown[] }))
 
 vi.mock('electron', () => ({
   ipcMain: { handle: (ch: string, fn: (...a: unknown[]) => unknown) => { handlers.set(ch, fn) } },
@@ -126,8 +126,9 @@ vi.mock('../../../src/main/pty-manager', () => ({ killAllPty: vi.fn(() => { step
 vi.mock('../../../src/main/session-helper/app-wiring', () => ({
   // Async, as the real one is (it waits briefly for the ends it sent): the
   // kill must come only once it has settled.
-  releaseHeldTerminalsForUpdate: vi.fn(async () => {
+  releaseHeldTerminalsForUpdate: vi.fn(async (choice?: unknown) => {
     steps.order.push('release held terminals')
+    steps.choices.push(choice)
     if (steps.releaseThrows) throw new Error('the release failed')
     if (steps.releaseDelayMs > 0) await new Promise((r) => setTimeout(r, steps.releaseDelayMs))
     steps.order.push('released')
@@ -167,6 +168,7 @@ beforeEach(() => {
   steps.order.length = 0
   steps.releaseThrows = false
   steps.releaseDelayMs = 0
+  steps.choices.length = 0
   registerUpdateHandlers()
 })
 
@@ -451,6 +453,26 @@ describe('update:installAndRestart — held terminals keep running through an up
       await expect(invoke()).resolves.toBe(true)
       expect(steps.order).toEqual(['release held terminals', 'kill every PTY', 'launch', 'exit'])
       expect(shownErrorBoxes).toHaveLength(0)
+    })
+  })
+
+  it('the choice made at the update dialog reaches the release: only "Close sessions" (discarded: true) is a discard; no choice, or anything else sent, is Save (section B3, PR review)', async () => {
+    const invokeWith = (...args: unknown[]) => Promise.resolve(handlers.get('update:installAndRestart')!({ sender: {} }, ...args))
+    await on('win32', async () => {
+      const cases: Array<[unknown[], boolean]> = [
+        [[{ discarded: true }], true],
+        [[], false],
+        [[{ discarded: false }], false],
+        [[{ discarded: 'true' }], false],
+        [[{ discarded: 1 }], false],
+        [['discarded'], false],
+        [[null], false],
+      ]
+      for (const [args, discarded] of cases) {
+        steps.choices.length = 0
+        await expect(invokeWith(...args)).resolves.toBe(true)
+        expect(steps.choices, JSON.stringify(args)).toEqual([{ discarded }])
+      }
     })
   })
 

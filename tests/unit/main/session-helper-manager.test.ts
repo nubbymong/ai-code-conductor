@@ -1666,7 +1666,7 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     expect(m.holdsFor(PLAIN)).toBe(true)
   })
 
-  it('a retry with "Close sessions" after an update that did not start ends what reclaim kept, unless its tab is saved (PR review)', async () => {
+  it('after an update that did not start, a retry with Save leaves what reclaim kept running, its tab saved or not; a retry with "Close sessions" ends it (PR review, section B3)', async () => {
     const m = await startedWith(makeManager(), ON_BOTH)
     const ptys = await fourHeld(m)
     const s = sids()
@@ -1674,18 +1674,27 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     killAll(ptys)
     m.reclaim()
     await until(() => helper.holders.get(s.plain)!.attaches === 2 && helper.holders.get(s.partner)!.attaches === 2, 'the keepers')
-    // The retry: only the plain terminal's tab is still saved.
+    // The retry with Save: only the plain terminal's tab is still saved.
+    // Neither kept terminal is ended: both run on past the exit.
     m.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
     expect(m.releaseForUpdate(new Set([PLAIN]))).toBe(0)
-    // The end is answered by the time endsForUpdate settles (app-wiring
+    await m.endsForUpdate()
+    await tick(30)
+    for (const sid of [s.plain, s.partner]) {
+      expect(helper.holders.get(sid)!.endsAsked).toBe(0)
+      expect(helper.holders.get(sid)!.ended).toBe(false)
+    }
+    expect(m.holdsFor(PARTNER)).toBe(true)
+    expect(m.holdsFor(PLAIN)).toBe(true)
+    // The retry with "Close sessions": the saved file is cleared, so both go.
+    // The ends are answered by the time endsForUpdate settles (app-wiring
     // waits for it, bounded, before the update goes on).
+    expect(m.releaseForUpdate(null)).toBe(0)
     await m.endsForUpdate()
     expect(helper.holders.get(s.partner)!.ended).toBe(true)
-    await tick(30)
-    expect(helper.holders.get(s.plain)!.endsAsked).toBe(0)
-    expect(helper.holders.get(s.plain)!.ended).toBe(false)
+    expect(helper.holders.get(s.plain)!.ended).toBe(true)
     expect(m.holdsFor(PARTNER)).toBe(false)
-    expect(m.holdsFor(PLAIN)).toBe(true)
+    expect(m.holdsFor(PLAIN)).toBe(false)
   })
 
   it('a normal quit that overtakes the update ends what was let go of too (PR review)', async () => {
@@ -1734,7 +1743,7 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     const sid = heldSessionId(PLAIN)
     await until(() => !!helper.holders.get(sid)?.attached, 'attached')
     m.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
-    expect(m.releaseForUpdate(new Set())).toBe(0)
+    expect(m.releaseForUpdate(null)).toBe(0)
     p.kill()
     await until(() => helper.holders.get(sid)!.ended, 'the end')
     expect(m.reclaim()).toBe(0)
@@ -1804,34 +1813,119 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     expect(helper.holders.get(sid)!.endsAsked).toBe(0)
   })
 
-  it('kept for a tab that no tab took over (after a crash): an update ends it unless its tab is saved, so "Close sessions" leaves none (PR review)', async () => {
+  /** Run 1 holds a terminal for each tab, then the app is gone; run 2 takes
+   *  the crash path and keeps each one, with no tab of its own showing it. */
+  async function keptAfterCrash(tabs: string[], over: Parameters<typeof makeManager>[0] = {}): Promise<SessionHelperManager> {
     const first = await started(makeManager())
     setSessionHelper(first)
-    spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
-    spawnPlainPty({ plain: true, sessionId: UNSAVED }, SHELL, [], opts())
-    const s = sids()
-    await until(() => !!helper.holders.get(s.plain)?.attached && !!helper.holders.get(s.unsaved)?.attached, 'both attached')
+    for (const tab of tabs) spawnPlainPty({ plain: true, sessionId: tab }, SHELL, [], opts())
+    await until(() => tabs.every((tab) => !!helper.holders.get(heldSessionId(tab))?.attached), 'all attached')
     crash(first)
-    const second = await started(makeManager())
+    const second = await started(makeManager(over))
     setSessionHelper(second)
-    await until(() => helper.holders.get(s.plain)!.attaches === 2 && helper.holders.get(s.unsaved)!.attaches === 2, 'the keepers')
-    expect(second.holdsFor(PLAIN)).toBe(true)
-    expect(second.holdsFor(UNSAVED)).toBe(true)
+    await until(() => tabs.every((tab) => helper.holders.get(heldSessionId(tab))!.attaches === 2), 'the keepers')
+    for (const tab of tabs) expect(second.holdsFor(tab)).toBe(true)
+    return second
+  }
+
+  it('kept for a tab that no tab took over (after a crash): with Save it runs on through the update, its tab saved or not, and the log says so; with "Close sessions" every one is ended, so none is left held (PR review, section B3)', async () => {
+    const logs: string[] = []
+    const second = await keptAfterCrash([PLAIN, UNSAVED], { log: (l) => logs.push(l) })
+    const s = sids()
     // "Save sessions" with only the plain terminal's tab saved.
     second.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
     expect(second.releaseForUpdate(new Set([PLAIN]))).toBe(0)
     await second.endsForUpdate()
-    expect(helper.holders.get(s.unsaved)!.endsAsked).toBe(1)
-    expect(helper.holders.get(s.unsaved)!.ended).toBe(true)
-    expect(second.holdsFor(UNSAVED)).toBe(false)
-    expect(helper.holders.get(s.plain)!.endsAsked).toBe(0)
+    await tick(30)
+    for (const sid of [s.plain, s.unsaved]) {
+      expect(helper.holders.get(sid)!.endsAsked).toBe(0)
+      expect(helper.holders.get(sid)!.ended).toBe(false)
+    }
+    expect(second.holdsFor(UNSAVED)).toBe(true)
     expect(second.holdsFor(PLAIN)).toBe(true)
-    // A retry with "Close sessions": the saved file is cleared, so the other one goes too.
+    expect(logs).toContain(`[session-helper] ${s.unsaved}: kept with no tab showing it; left running through the update, for the next start to keep again`)
+    expect(logs).toContain('[session-helper] an app update: 0 held terminal(s) are let go of, for the new version to show again; 2 kept terminal(s) are left running')
+    // A retry with "Close sessions": the saved file is cleared, so both go,
+    // the one whose tab the last save still names too.
+    expect(second.releaseForUpdate(null)).toBe(0)
+    await second.endsForUpdate()
+    for (const sid of [s.plain, s.unsaved]) {
+      expect(helper.holders.get(sid)!.endsAsked).toBe(1)
+      expect(helper.holders.get(sid)!.ended).toBe(true)
+    }
+    expect(second.holdsFor(PLAIN)).toBe(false)
+    expect(second.holdsFor(UNSAVED)).toBe(false)
+    expect(logs).toContain('[session-helper] an app update: 0 held terminal(s) are let go of, for the new version to show again; the sessions were discarded, so 2 kept terminal(s) are ended')
+  })
+
+  it('Save with no tab saved at all: a kept terminal no tab shows still runs on through the update (the choice is the user\'s, never read from an empty set) (section B3)', async () => {
+    const second = await keptAfterCrash([UNSAVED])
+    const sid = heldSessionId(UNSAVED)
+    second.noteSavedTabs([])
     expect(second.releaseForUpdate(new Set())).toBe(0)
     await second.endsForUpdate()
-    expect(helper.holders.get(s.plain)!.endsAsked).toBe(1)
-    expect(helper.holders.get(s.plain)!.ended).toBe(true)
-    expect(second.holdsFor(PLAIN)).toBe(false)
+    await tick(30)
+    expect(helper.holders.get(sid)!.endsAsked).toBe(0)
+    expect(helper.holders.get(sid)!.ended).toBe(false)
+    expect(second.holdsFor(UNSAVED)).toBe(true)
+  })
+
+  it('a saved file that did not read (app-wiring passes an empty set): nothing is let go of, and a kept terminal no tab shows is not ended (section B3)', async () => {
+    const second = await keptAfterCrash([UNSAVED])
+    const kept = heldSessionId(UNSAVED)
+    // A tab of this run, in its last save, through a holder.
+    const p = spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    const live = heldSessionId(PLAIN)
+    await until(() => !!helper.holders.get(live)?.attached, 'attached')
+    second.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
+    expect(second.releaseForUpdate(new Set())).toBe(0)
+    p.kill()
+    await until(() => helper.holders.get(live)!.ended, 'the tab\'s terminal to end with the kill, as before')
+    await second.endsForUpdate()
+    await tick(30)
+    expect(helper.holders.get(kept)!.endsAsked).toBe(0)
+    expect(helper.holders.get(kept)!.ended).toBe(false)
+    expect(second.holdsFor(UNSAVED)).toBe(true)
+  })
+
+  /** After a crash: the terminal kept for UNSAVED, which no tab shows, and a
+   *  live terminal of this run for PLAIN, through a holder and in its last save. */
+  async function keptAndLive(logs: string[]): Promise<{ m: SessionHelperManager; p: IPty; kept: string; live: string }> {
+    const m = await keptAfterCrash([UNSAVED], { log: (l) => logs.push(l) })
+    const p = spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    const live = heldSessionId(PLAIN)
+    await until(() => !!helper.holders.get(live)?.attached, 'attached')
+    m.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
+    return { m, p, kept: heldSessionId(UNSAVED), live }
+  }
+
+  it('Save with a live saved tab and a kept terminal no tab shows, in the same update: the live one is let go of, the kept one is left running, and the log says both (section B3, PR review)', async () => {
+    const logs: string[] = []
+    const { m, p, kept, live } = await keptAndLive(logs)
+    expect(m.releaseForUpdate(new Set([PLAIN]))).toBe(1)
+    p.kill()
+    await until(() => helper.holders.get(live)!.conns.size === 0, 'the released connection to close')
+    await m.endsForUpdate()
+    await tick(30)
+    for (const sid of [live, kept]) {
+      expect(helper.holders.get(sid)!.endsAsked).toBe(0)
+      expect(helper.holders.get(sid)!.ended).toBe(false)
+    }
+    expect(logs).toContain('[session-helper] an app update: 1 held terminal(s) are let go of, for the new version to show again; 1 kept terminal(s) are left running')
+    crash(m)
+  })
+
+  it('"Close sessions" with a live saved tab and a kept terminal no tab shows: nothing is let go of, the kill ends the live one and the discard ends the kept one (section B3, PR review)', async () => {
+    const logs: string[] = []
+    const { m, p, kept, live } = await keptAndLive(logs)
+    expect(m.releaseForUpdate(null)).toBe(0)
+    p.kill()
+    await until(() => helper.holders.get(live)!.ended, 'the live terminal to end with the kill')
+    await m.endsForUpdate()
+    expect(helper.holders.get(kept)!.endsAsked).toBe(1)
+    expect(helper.holders.get(kept)!.ended).toBe(true)
+    expect(m.holdsFor(UNSAVED)).toBe(false)
+    expect(logs).toContain('[session-helper] an app update: 0 held terminal(s) are let go of, for the new version to show again; the sessions were discarded, so 1 kept terminal(s) are ended')
   })
 
   it('after a crash, a start-up listing that answers after the release neither keeps what was let go of nor ends it (PR review)', async () => {

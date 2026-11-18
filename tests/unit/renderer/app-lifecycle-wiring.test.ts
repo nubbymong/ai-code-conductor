@@ -88,6 +88,9 @@ describe('App.tsx wires the R6/R7 helpers', () => {
     expect(api.session.gracefulExit).toHaveBeenCalledTimes(1)
     await deps.installAndRestart()
     expect(api.update.installAndRestart).toHaveBeenCalledTimes(1)
+    // Section B3: the update is told the sessions were discarded, so main
+    // ends the kept terminals no tab shows instead of guessing from the file.
+    expect(api.update.installAndRestart).toHaveBeenCalledWith({ discarded: true })
     deps.allowClose()
     expect(api.window.allowClose).toHaveBeenCalledTimes(1)
     expect(setIsClosing).toHaveBeenLastCalledWith(false) // the helper returned false: closing state released
@@ -104,6 +107,33 @@ describe('App.tsx wires the R6/R7 helpers', () => {
     await handler()
     expect(setIsUpdating).toHaveBeenCalledWith(true)
     expect((discardAndClose.mock.calls[0][0] as { isUpdate: boolean }).isUpdate).toBe(true)
+  })
+
+  it('Save on the update dialog, and an update with no tab open (no dialog, so no choice), pass no discard: main keeps what the user kept (section B3, PR review)', async () => {
+    const noDiscard = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.every((c) => (c[0] as { discarded?: unknown } | undefined)?.discarded !== true)
+    const saveApi = { session: { save: vi.fn(async () => true) }, update: { installAndRestart: vi.fn(async () => true) }, window: { allowClose: vi.fn() } }
+    const save = run<() => Promise<void>>(namedArrow(APP, 'handleSaveAndClose'), {
+      closeDialog: 'update', setCloseDialog: vi.fn(), setIsClosing: vi.fn(), setIsUpdating: vi.fn(),
+      flushPendingConfigSaves: vi.fn(async () => {}),
+      buildSessionStateWithResumeTargets: vi.fn(async () => ({ sessions: [] })), buildSessionState: vi.fn(() => ({ sessions: [] })),
+      window: { electronAPI: saveApi },
+    })
+    await save()
+    expect(saveApi.session.save).toHaveBeenCalledTimes(1)
+    expect(saveApi.update.installAndRestart).toHaveBeenCalledTimes(1)
+    expect(noDiscard(saveApi.update.installAndRestart)).toBe(true)
+    const noTabApi = { update: { installAndRestart: vi.fn(async () => true) } }
+    const setCloseDialog = vi.fn()
+    const update = run<() => void>(namedArrow(APP, 'handleUpdateRequested'), {
+      useSessionStore: { getState: () => ({ sessions: [] }) },
+      setCloseDialog, setIsClosing: vi.fn(), setIsUpdating: vi.fn(),
+      window: { electronAPI: noTabApi },
+    })
+    update()
+    await flush()
+    expect(setCloseDialog).not.toHaveBeenCalled()
+    expect(noTabApi.update.installAndRestart).toHaveBeenCalledTimes(1)
+    expect(noDiscard(noTabApi.update.installAndRestart)).toBe(true)
   })
 
   it('startup loads through loadSavedStateAtStartup (load wired to session.load) and offers the prompt only when it returns cards', async () => {

@@ -589,7 +589,8 @@ export interface ElectronAPI {
   update: {
     check: () => Promise<boolean>
     getVersion: () => Promise<string>
-    installAndRestart: () => Promise<boolean>
+    /** `discarded`: the user chose "Close sessions" on the update dialog. */
+    installAndRestart: (choice?: { discarded?: boolean }) => Promise<boolean>
     hasSourcePath: () => Promise<boolean>
     getSourcePath: () => Promise<string>
     setSourcePath: (path: string) => Promise<boolean>
@@ -1270,7 +1271,7 @@ const electronAPI: ElectronAPI = {
   update: {
     check: () => ipcRenderer.invoke(IPC.UPDATE_CHECK),
     getVersion: () => ipcRenderer.invoke(IPC.UPDATE_GET_VERSION),
-    installAndRestart: () => ipcRenderer.invoke(IPC.UPDATE_INSTALL_RESTART),
+    installAndRestart: (choice) => ipcRenderer.invoke(IPC.UPDATE_INSTALL_RESTART, { discarded: choice?.discarded === true }),
     hasSourcePath: () => ipcRenderer.invoke(IPC.UPDATE_HAS_SOURCE_PATH),
     getSourcePath: () => ipcRenderer.invoke(IPC.UPDATE_GET_SOURCE_PATH),
     setSourcePath: (path: string) => ipcRenderer.invoke(IPC.UPDATE_SET_SOURCE_PATH, path),

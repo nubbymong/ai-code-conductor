@@ -44,7 +44,7 @@ vi.mock('../../../src/main/session-helper/manager', () => {
     stopRouting = vi.fn(() => { this.enabled = false })
     shutdown = vi.fn((): Promise<void> | null => h.quitAnswer)
     noteSavedTabs = vi.fn()
-    releaseForUpdate = vi.fn((tabs: ReadonlySet<string>) => tabs.size)
+    releaseForUpdate = vi.fn((tabs: ReadonlySet<string> | null) => tabs?.size ?? 0)
     endsForUpdate = vi.fn(() => h.updateEnds)
     reclaim = vi.fn(() => 0)
     serviceState = () => ({ state: this.enabled ? 'ready' : 'off', held: 0, lastError: null })
@@ -212,15 +212,39 @@ describe('an app update on Windows (plan section B2)', () => {
     expect(m.reclaim).toHaveBeenCalledTimes(1)
   })
 
-  it('a saved file "Close without saving" cleared, or one that does not read: the manager is told no tab, so it lets go of none', async () => {
+  /** What the manager was told on each call: null (discarded) or the tab ids. */
+  const toldOf = (m: (typeof h.made)[number]) => m.releaseForUpdate.mock.calls.map((c) => (c[0] === null ? null : [...(c[0] as ReadonlySet<string>)]))
+
+  it('with no discard passed (Save, or an update with no tab open and so no dialog), the state of the saved file never reads as a discard: a cleared file, one that does not read and one with no tab in it are each an empty set (section B3, PR review)', async () => {
     h.settings = { plainTerminalsThroughHelper: true }
     initSessionHelper(() => {})
     const m = h.made[0]
+    // "Don't open" on the resume prompt cleared the file, and no tab was opened since.
     h.savedState = null
     expect(await releaseHeldTerminalsForUpdate()).toBe(0)
     h.savedState = new Error('session-state.json did not parse')
-    expect(await releaseHeldTerminalsForUpdate()).toBe(0)
-    expect(m.releaseForUpdate.mock.calls.map((c) => [...c[0]])).toEqual([[], []])
+    expect(await releaseHeldTerminalsForUpdate({ discarded: false })).toBe(0)
+    h.savedState = { sessions: [] }
+    expect(await releaseHeldTerminalsForUpdate({})).toBe(0)
+    expect(toldOf(m)).toEqual([[], [], []])
+  })
+
+  it('"Close sessions" on the update dialog passes the discard: the manager is told no set at all, whatever the saved file holds, a remote left running in it too (section B3, PR review)', async () => {
+    h.settings = { plainTerminalsThroughHelper: true }
+    initSessionHelper(() => {})
+    const m = h.made[0]
+    // With a remote left running, "Close sessions" writes a file with no tab
+    // and that remote in it, instead of clearing it.
+    h.savedState = { sessions: [], detachedRemotes: [{ configId: 'a-remote' }] } as { sessions: unknown[] }
+    expect(await releaseHeldTerminalsForUpdate({ discarded: true })).toBe(0)
+    h.savedState = null
+    expect(await releaseHeldTerminalsForUpdate({ discarded: true })).toBe(0)
+    h.savedState = { sessions: [{ id: 'abcdef0123456789abcdef01' }] }
+    expect(await releaseHeldTerminalsForUpdate({ discarded: true })).toBe(0)
+    // An unreadable file: the user's explicit choice still wins.
+    h.savedState = new Error('session-state.json did not parse')
+    expect(await releaseHeldTerminalsForUpdate({ discarded: true })).toBe(0)
+    expect(toldOf(m)).toEqual([null, null, null, null])
   })
 
   it('the ends the manager sent are waited for before the update goes on, UPDATE_END_WAIT_MS at most (PR review)', async () => {

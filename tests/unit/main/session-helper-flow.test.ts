@@ -625,6 +625,54 @@ describe('an app update on Windows, the whole round (plan section B2)', () => {
     await until(() => seen2.join('') === 'a new shell\r\n', 'the fresh terminal\'s output')
     expect(seen2.join('')).not.toContain('before the update')
   })
+
+  // The resume prompt was declined, so no tab shows the kept terminal. Then
+  // the update: Save of another tab only; or no tab open at all, so no close
+  // dialog and no choice ("Don't open" cleared the saved file, and app-wiring
+  // passes an empty set, since no discard came with the install call).
+  const updates: Array<[string, (m: SessionHelperManager) => number]> = [
+    ['an update with Save', (m) => {
+      m.noteSavedTabs([{ id: 'abcdef0123456789abcdefd2', label: 'Other' }])
+      return m.releaseForUpdate(new Set(['abcdef0123456789abcdefd2']))
+    }],
+    ['an update with no tab open after "Don\'t open" (no dialog, no choice)', (m) => m.releaseForUpdate(new Set())],
+  ]
+  for (const [what, update] of updates) it(`kept after a crash and shown in no tab, then ${what}: it runs on, the same holder, and the next start keeps it again and lists it on the Machines page (section B3)`, async () => {
+    const c = computer()
+    // Run 1: a Terminal only tab through a holder, then the app crashes.
+    const m1 = c.run()
+    await until(() => m1.serviceState().state === 'ready', 'the helper to be ready')
+    m1.spawn({ plain: true, sessionId: TAB }, SHELL, [], spawnOpts())
+    await until(() => !!c.helper.holders.get(SID)?.attached, 'the terminal to attach')
+    const h = c.helper.holders.get(SID)!
+    h.output('before the crash\r\n')
+    c.exit(m1)
+    // Run 2: the crash path keeps it; no tab shows it. Then the update.
+    const m2 = c.run()
+    expect(m2.holdsFor(TAB)).toBe(true)
+    await until(() => m2.serviceState().state === 'ready' && h.attaches === 2, 'run 2 ready, with the keeper')
+    expect(update(m2)).toBe(0)
+    await m2.endsForUpdate()
+    c.exit(m2)
+    await until(() => h.conns.size === 0 && h.awaySince !== null, 'the app to let go')
+    expect(h.endsAsked).toBe(0)
+    // The installer runs for a minute.
+    c.clock.now += 60_000
+    c.helper.tick()
+    expect(h.ended).toBe(false)
+    // Run 3, the new version: the update's mark takes the crash path's listing.
+    const m3 = c.run()
+    expect(m3.holdsFor(TAB)).toBe(true)
+    expect(c.logs).toContain('[session-helper] the app was updated; 1 held terminal(s) may be shown again, and 0 agent session(s) it held are ended')
+    await until(() => h.attaches === 3, 'run 3\'s keeper')
+    const status = await m3.status()
+    expect(status.sessions.find((x) => x.id === SID)).toMatchObject({ kind: 'plain', attached: false })
+    // The same holder throughout: one hold, one launch, never an end.
+    expect(c.helper.made).toEqual([h])
+    expect(h.requests.filter((r) => r.t === 'term.launch')).toHaveLength(1)
+    expect(h.endsAsked).toBe(0)
+    expect(h.ended).toBe(false)
+  })
 })
 
 describe('let go of for an update while it attaches again (plan section B2, PR review)', () => {
