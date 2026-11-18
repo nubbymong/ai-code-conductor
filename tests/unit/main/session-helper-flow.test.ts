@@ -626,3 +626,110 @@ describe('an app update on Windows, the whole round (plan section B2)', () => {
     expect(seen2.join('')).not.toContain('before the update')
   })
 })
+
+describe('let go of for an update while it attaches again (plan section B2, PR review)', () => {
+  /** A terminal whose connection dropped: its attach again waits at a gate
+   *  until the test opens it. `next` decides that connection (by default it
+   *  is made as usual). */
+  async function droppedRig(next?: (record: HolderRecord, open: (record: HolderRecord) => Promise<HolderConnection>) => Promise<HolderConnection>) {
+    let gate: Promise<void> | null = null
+    let go: () => void = () => {}
+    let wrap: typeof next | null = null
+    const r = rig({
+      connect: async (record, open) => {
+        if (!gate) return open(record)
+        const g = gate
+        const w = wrap
+        gate = null
+        wrap = null
+        await g
+        return w ? w(record, open) : open(record)
+      },
+    })
+    await attached(r)
+    gate = new Promise<void>((res) => { go = res })
+    wrap = next ?? null
+    r.h.dropAll()
+    await until(() => !r.p.isAttached, 'the drop')
+    await tick(10)
+    return { r, go: () => go() }
+  }
+
+  /** The update's kill that follows: the exit is the terminal's alone, and its holder runs on. */
+  async function killedLocally(r: Rig): Promise<void> {
+    r.p.kill()
+    await until(() => r.exits.length === 1, 'the exit')
+    await tick(30)
+    expect(r.exits).toEqual([0])
+    expect(r.h.endsAsked).toBe(0)
+    expect(r.h.ended).toBe(false)
+  }
+
+  it('the connection made after the release closes without attaching, and nothing ends the holder', async () => {
+    const { r, go } = await droppedRig()
+    expect(r.p.release()).toBe(true)
+    go()
+    await until(() => r.conns.length === 2 && r.conns[1].isClosed, 'the new connection to close')
+    await until(() => r.h.conns.size === 0, 'the holder to have no connection')
+    await tick(30)
+    expect(r.h.attaches).toBe(1)
+    expect(r.h.attached).toBeNull()
+    expect(r.exits).toEqual([])
+    await killedLocally(r)
+  })
+
+  it('a connection that cannot be made after the release does not end the holder: it runs on for the next version', async () => {
+    const { r, go } = await droppedRig(async () => { throw new HolderError('io', 'the holder could not be reached') })
+    expect(r.p.release()).toBe(true)
+    go()
+    await tick(60)
+    expect(r.h.endsAsked).toBe(0)
+    expect(r.exits).toEqual([])
+    expect(r.conns).toHaveLength(1)
+    await killedLocally(r)
+  })
+
+  it('let go of just as its attach again goes out: the attach fails on the closed connection, and nothing more is tried', async () => {
+    let released: boolean | null = null
+    const { r, go } = await droppedRig(async (record, open) => {
+      const c = await open(record)
+      const request = c.request.bind(c)
+      c.request = (msg, onReply) => {
+        if (msg.t === 'term.attach') released = r.p.release()
+        return request(msg, onReply)
+      }
+      return c
+    })
+    go()
+    await until(() => released !== null, 'the release')
+    await tick(60)
+    expect(released).toBe(true)
+    expect(r.conns).toHaveLength(2)
+    expect(r.h.attaches).toBe(1)
+    expect(r.h.conns.size).toBe(0)
+    await killedLocally(r)
+  })
+
+  it('let go of once its attach again was answered: that connection closes, and nothing attaches again or ends', async () => {
+    let released: boolean | null = null
+    const { r, go } = await droppedRig(async (record, open) => {
+      const c = await open(record)
+      const request = c.request.bind(c)
+      c.request = (msg, onReply) => {
+        const answer = request(msg, onReply)
+        // The update lets go after the answer came in, before the terminal acts on it.
+        return msg.t === 'term.attach' ? answer.then((v) => { released = r.p.release(); return v }) : answer
+      }
+      return c
+    })
+    go()
+    await until(() => released !== null, 'the release')
+    await tick(60)
+    expect(released).toBe(true)
+    expect(r.conns).toHaveLength(2)
+    expect(r.h.attaches).toBe(2)
+    expect(r.p.isAttached).toBe(false)
+    await until(() => r.h.conns.size === 0, 'the holder to have no connection')
+    await killedLocally(r)
+  })
+})

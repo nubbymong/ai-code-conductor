@@ -47,7 +47,7 @@ vi.mock('../../../src/main/session-helper/manager', () => {
     releaseForUpdate = vi.fn((tabs: ReadonlySet<string>) => tabs.size)
     endsForUpdate = vi.fn(() => h.updateEnds)
     reclaim = vi.fn(() => 0)
-    serviceState = () =>({ state: this.enabled ? 'ready' : 'off', held: 0, lastError: null })
+    serviceState = () => ({ state: this.enabled ? 'ready' : 'off', held: 0, lastError: null })
     constructor(readonly deps: Record<string, unknown>) { h.made.push(this as never) }
     onChange() {}
     isEnabled() { return this.enabled }

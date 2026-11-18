@@ -175,8 +175,6 @@ const INSTALL_RETRY_AFTER_MS = 60_000
 /** `hold`'s exit status when a holder for the session runs already (protocol 15). */
 const EXIT_ALREADY_RUNNING = 3
 const MARKER = 'app-running.json'
-/** How many moves deep sidFor derives a tab's own id (each one a Re-attach). */
-const SID_DERIVE_MAX = 16
 const BINDINGS = 'bindings.json'
 
 /** The variables a helper command gets: what the system itself needs to run
@@ -568,20 +566,26 @@ export class SessionHelperManager implements MachinesSource {
    *  new tab stays with that tab: its first tab then gets a session of its own,
    *  derived from where that one went, and derived again while the one it
    *  derives is bound to another tab too (a terminal moved, then its
-   *  replacement moved as well). */
+   *  replacement moved as well). Never an id another tab is bound to: a
+   *  terminal started under one would end that tab's held terminal. */
   sidFor(appPtyId: string): string {
     const bound = this.bindings.get(appPtyId)
     if (bound) return bound
     let seed = appPtyId
     let sid = heldSessionId(seed)
-    for (let i = 0; i < SID_DERIVE_MAX; i++) {
+    // Each seed is new, so each id tried is new, and each one found taken is
+    // the id of a different binding: one try more than there are bindings
+    // always finds a free one.
+    for (let i = 0; i <= this.bindings.size; i++) {
       let other: string | undefined
       for (const [o, s] of this.bindings) if (s === sid && o !== appPtyId) { other = o; break }
       if (other === undefined) return sid
       seed = `${seed}/after/${other}`
       sid = heldSessionId(seed)
     }
-    return sid
+    // Only when two seeds hash alike: an id no binding has.
+    this.deps.log(`[session-helper] ${appPtyId}: every id derived for this tab is bound to another tab; it gets a new one`)
+    return heldSessionId(`${seed}/after/${randomId()}`)
   }
 
   /**
@@ -626,7 +630,9 @@ export class SessionHelperManager implements MachinesSource {
    * id of its own, derived from that other tab (sidFor). It is kept as this
    * tab's binding once a terminal runs under it, so moving that first
    * terminal again later does not change it, and the tab still finds its
-   * own held terminal. The binding goes when the terminal ends (track).
+   * own held terminal. The binding goes when the terminal ends (track),
+   * unless an update let it go or a newer terminal of this tab runs under
+   * the id.
    */
   private pinOwnId(appPtyId: string, sid: string): void {
     if (sid === heldSessionId(appPtyId) || this.bindings.get(appPtyId) === sid) return
@@ -1018,9 +1024,11 @@ export class SessionHelperManager implements MachinesSource {
    * holder's away clock starts (two minutes) and the next start, finding the
    * running mark, shows it again in its tab. An agent session, a terminal
    * still starting and one whose tab was not saved are left to the kill that
-   * follows, which ends them as before. What an earlier reclaim() kept, and
-   * no tab took over since, is ended now unless its tab is saved the same
-   * way (a retry with "Close sessions" after an update that did not start).
+   * follows, which ends them as before. A held terminal kept for a tab that
+   * no tab took over (one a crash left, one Re-attach opened a tab for, one
+   * an earlier reclaim() kept) is ended now unless its tab is saved the same
+   * way: the kill does not reach it, so "Close sessions" would otherwise
+   * leave it running past the exit.
    * The mark is written again saying "update" and stays. Nothing new goes
    * through the helper until reclaim(). Off Windows nothing is let go of.
    * Answers how many were.
@@ -1039,9 +1047,11 @@ export class SessionHelperManager implements MachinesSource {
       this.released.set(sid, { record, pty: w })
       n++
     }
+    // Kept and no tab took it over (a crash's, Re-attach's or reclaim()'s):
+    // its holder runs on past the app's exit unless it is ended here.
     const ends: Promise<unknown>[] = []
-    for (const [sid, r] of [...this.reclaimed]) {
-      if (this.live.has(sid)) continue
+    for (const [sid, r] of new Map([...this.reclaimed, ...this.adoptable])) {
+      if (this.live.has(sid) || heldIdKind(sid) !== 'plain') continue
       const appId = this.appIdOf(r)
       if (saved(parentOfPartnerPtyId(appId) ?? appId)) continue
       this.reclaimed.delete(sid)
@@ -1059,8 +1069,8 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   /** Settles once every end the last releaseForUpdate sent was answered (or
-   *  failed): what an earlier reclaim() kept for a tab no longer saved. The
-   *  caller bounds the wait; the app exits next. */
+   *  failed): the held terminals kept for a tab no longer saved. The caller
+   *  bounds the wait; the app exits next. */
   endsForUpdate(): Promise<void> {
     return this.updateEnds
   }

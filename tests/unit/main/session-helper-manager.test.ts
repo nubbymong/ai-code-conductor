@@ -1803,4 +1803,78 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     await until(() => seen.join('').includes('kept output'), 'the replay in that tab')
     expect(helper.holders.get(sid)!.endsAsked).toBe(0)
   })
+
+  it('kept for a tab that no tab took over (after a crash): an update ends it unless its tab is saved, so "Close sessions" leaves none (PR review)', async () => {
+    const first = await started(makeManager())
+    setSessionHelper(first)
+    spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    spawnPlainPty({ plain: true, sessionId: UNSAVED }, SHELL, [], opts())
+    const s = sids()
+    await until(() => !!helper.holders.get(s.plain)?.attached && !!helper.holders.get(s.unsaved)?.attached, 'both attached')
+    crash(first)
+    const second = await started(makeManager())
+    setSessionHelper(second)
+    await until(() => helper.holders.get(s.plain)!.attaches === 2 && helper.holders.get(s.unsaved)!.attaches === 2, 'the keepers')
+    expect(second.holdsFor(PLAIN)).toBe(true)
+    expect(second.holdsFor(UNSAVED)).toBe(true)
+    // "Save sessions" with only the plain terminal's tab saved.
+    second.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
+    expect(second.releaseForUpdate(new Set([PLAIN]))).toBe(0)
+    await second.endsForUpdate()
+    expect(helper.holders.get(s.unsaved)!.endsAsked).toBe(1)
+    expect(helper.holders.get(s.unsaved)!.ended).toBe(true)
+    expect(second.holdsFor(UNSAVED)).toBe(false)
+    expect(helper.holders.get(s.plain)!.endsAsked).toBe(0)
+    expect(second.holdsFor(PLAIN)).toBe(true)
+    // A retry with "Close sessions": the saved file is cleared, so the other one goes too.
+    expect(second.releaseForUpdate(new Set())).toBe(0)
+    await second.endsForUpdate()
+    expect(helper.holders.get(s.plain)!.endsAsked).toBe(1)
+    expect(helper.holders.get(s.plain)!.ended).toBe(true)
+    expect(second.holdsFor(PLAIN)).toBe(false)
+  })
+
+  it('after a crash, a start-up listing that answers after the release neither keeps what was let go of nor ends it (PR review)', async () => {
+    // The last run did not quit normally, so this start takes the crash path.
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, 'app-running.json'), JSON.stringify({ v: 1, pid: 1, at: 1 }))
+    let open!: () => void
+    helper.listGate = new Promise<void>((r) => { open = r })
+    const m = makeManager()
+    setSessionHelper(m)
+    void m.start({ atStartup: true })
+    await until(() => helper.calls.some((c) => c.args[0] === 'list'), 'the start-up listing under way')
+    const p = spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    const sid = heldSessionId(PLAIN)
+    await until(() => !!helper.holders.get(sid)?.attached, 'attached')
+    m.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
+    expect(m.releaseForUpdate(new Set([PLAIN]))).toBe(1)
+    p.kill()
+    await until(() => !liveOf(m).has(sid), 'the tab\'s terminal to drop')
+    helper.listGate = null
+    open()
+    await until(() => m.serviceState().state === 'ready', 'the listing to answer')
+    await tick(50)
+    const h = helper.holders.get(sid)!
+    expect(h.endsAsked).toBe(0)
+    expect(h.ended).toBe(false)
+    expect(h.attaches).toBe(1)
+    expect(m.holdsFor(PLAIN)).toBe(false)
+    expect((m as unknown as { keepers: Map<string, unknown> }).keepers.has(sid)).toBe(false)
+  })
+
+  it('a chain of moves deeper than any fixed limit: the first tab still gets an id no other tab is bound to (PR review)', async () => {
+    const m = await started(makeManager())
+    const bindings = (m as unknown as { bindings: Map<string, string> }).bindings
+    // Twenty Re-attach moves, each tab's replacement moved again.
+    let seed = PLAIN
+    for (let i = 0; i < 20; i++) {
+      const tab = `newtab0123456789abcd${String(i).padStart(4, '0')}`
+      bindings.set(tab, heldSessionId(seed))
+      seed = `${seed}/after/${tab}`
+    }
+    const sid = m.sidFor(PLAIN)
+    expect([...bindings.values()]).not.toContain(sid)
+    expect(sid).toBe(heldSessionId(seed))
+  })
 })
