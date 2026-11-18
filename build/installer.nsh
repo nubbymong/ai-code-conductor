@@ -706,42 +706,95 @@
 ; APP-RUNNING CHECK — also the install's commit point
 ; ============================================================
 
-; Override the default "app is running" check with debug-enabled version.
-; Close a running instance before installing. An UPGRADE from a pre-rename build
-; still has "Claude Command Center.exe" running, so both the current and the
-; legacy executable names have to be checked — matching only
-; ${APP_EXECUTABLE_FILENAME} would let the old process keep a file lock and fail
-; the install.
-!macro KillIfRunning EXE
-  nsExec::Exec /TIMEOUT=5000 `"$SYSDIR\cmd.exe" /c tasklist /FI "IMAGENAME eq ${EXE}" /FO csv | "$SYSDIR\find.exe" "${EXE}"`
-  Pop $R0
-  ${if} $R0 == 0
-    DetailPrint "Found running ${EXE}, attempting to close..."
-    nsExec::Exec `taskkill /im "${EXE}"`
-    Sleep 2000
-  ${endIf}
-!macroend
-
+; electron-builder's CHECK_APP_RUNNING inserts this in both passes: at the top
+; of the install section, and in the uninstaller's un.checkAppRunning. It
+; closes a running copy of the app before files are replaced or removed, and
+; only this user's copies from this install's folder (CccCloseAppCopies, with
+; the process macros beside CccScanProcesses below): another user's copy, or
+; one started from another folder, keeps running, and the details log says so.
+; In the installer pass the folder of the install this run replaces counts
+; too: an UPGRADE from a pre-rename build still has the old executable name
+; running there, and that copy's file locks would fail the install.
+;
+; No tasklist, taskkill, WMI or PowerShell. Over a non-interactive sign-in
+; (SSH, a scheduled task) tasklist and taskkill answer "Access denied"
+; (measured on the VM, see CccScanProcesses), so the old check found nothing
+; and closed nothing there; and an elevated run's `taskkill /im` asked every
+; signed-in user's copy to close.
+;
+; The folder of the install this run replaces is the one its uninstall record
+; names in SHELL_CONTEXT, the hive this run installs to: the record
+; uninstallOldVersion runs next, or, for a legacy tree beside $INSTDIR, the
+; one the commit point drops before customInstall's sweep removes that tree.
+; Not $cccLegacyUninstaller: customInit falls back to the other hives for it,
+; as the sweep's proof of ownership, so on a per-user run it can name an
+; all-users install that this run neither uninstalls nor sweeps. An all-users
+; run also runs the HKCU record's uninstaller (installSection.nsh); a copy
+; running from that per-user folder is left to that uninstaller's own check.
+;
+; Not covered either: a legacy-named copy running from one of the sibling
+; folders customInstall's sweep removes (RemoveLegacyInstall, proved by
+; ProveLegacyInstallRoot) when no uninstall record in this hive names that
+; folder. It keeps running, and the sweep cannot remove the files it holds.
+;
+; If a copy is still running after that, the box lets the user deal with it
+; and Retry, which runs the whole check again, or Cancel. That is a copy
+; asking whether to save its sessions (in a run someone can see, a copy that
+; was asked to close is not ended: CccCloseAppCopies), or one this installer
+; could not end, or a copy from this folder whose user it could not read
+; (this user's copy started as administrator, say, seen from an installer
+; that is not; whether Windows lets such an installer see that copy at all is
+; a release-smoke check). A silent run answers Cancel, as electron-builder's
+; own check does: nobody is there to answer the box, and an unanswered box
+; would keep a remote or scheduled install waiting forever. When the check
+; itself could not run (this copy's own user, or the running programs, could
+; not be read), a second box asks whether to carry on, and a silent run
+; stops. Either way a run that stops says so in the details log, puts back
+; what customInit changed (installer pass) and exits with code 2.
 !macro customCheckAppRunning
-  DetailPrint "=== customCheckAppRunning: current + legacy executables ==="
+  DetailPrint "=== customCheckAppRunning: this user's copies from this install's folder ==="
 
-  !insertmacro KillIfRunning "${APP_EXECUTABLE_FILENAME}"
-  !insertmacro KillIfRunning "Claude Command Center.exe"
-  !insertmacro KillIfRunning "Claude Conductor.exe"
-
-  ; Re-check the current executable; if it survived a taskkill, let the user act.
-  nsExec::Exec /TIMEOUT=5000 `"$SYSDIR\cmd.exe" /c tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO csv | "$SYSDIR\find.exe" "${APP_EXECUTABLE_FILENAME}"`
-  Pop $R0
-  ${if} $R0 == 0
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "AI Code Conductor is still running.$\n$\nProcess: ${APP_EXECUTABLE_FILENAME}$\n$\nPlease close it manually and click Retry." IDRETRY retry_check
+  Push $R0
+  !ifndef BUILD_UNINSTALLER
+    ReadRegStr $R0 SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+    !insertmacro CccGetInQuotes "$R0" $cccRecordUninstaller
+    ClearErrors
+  !endif
+  cccAppStillRunning:
+  !ifndef BUILD_UNINSTALLER
+    !insertmacro CccCloseAppCopies "$cccRecordUninstaller"
+  !else
+    !insertmacro CccCloseAppCopies ""
+  !endif
+  ${If} $R0 == 1
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "AI Code Conductor is still running.$\n$\nIf it is asking whether to save your sessions, answer it first. Otherwise close it yourself.$\n$\nThen click Retry." /SD IDCANCEL IDRETRY cccAppStillRunning
+    !ifndef BUILD_UNINSTALLER
+      DetailPrint "AI Code Conductor is still running, so nothing was installed."
+    !else
+      DetailPrint "AI Code Conductor is still running, so nothing was removed."
+    !endif
+  ${ElseIf} $R0 == 2
+    MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "Could not check whether AI Code Conductor is running.$\n$\nClose it if it is open, then click OK to carry on." /SD IDCANCEL IDOK cccAppCheckCarryOn
+    !ifndef BUILD_UNINSTALLER
+      DetailPrint "Could not check whether AI Code Conductor is running, so nothing was installed."
+    !else
+      DetailPrint "Could not check whether AI Code Conductor is running, so nothing was removed."
+    !endif
+  ${EndIf}
+  ${If} $R0 != 0
     !ifndef BUILD_UNINSTALLER
       Call CccRestoreInstallLocation
     !endif
+    SetErrorLevel 2
     Quit
-    retry_check:
-  ${else}
-    DetailPrint "No running instance found. Proceeding."
-  ${endIf}
+  ${EndIf}
+  cccAppCheckCarryOn:
+  ${If} $R0 == 0
+    DetailPrint "No copy of AI Code Conductor is running from this install's folder. Proceeding."
+  ${Else}
+    DetailPrint "Carrying on without the check, as chosen in the box."
+  ${EndIf}
+  Pop $R0
 
   !ifndef BUILD_UNINSTALLER
     ; ---- COMMIT POINT -----------------------------------------------------
@@ -1610,10 +1663,14 @@ FunctionEnd
 !macroend
 
 ; ${OUT} = 1 when process ${PID} runs as this copy's own user: the SID in its
-; token equals $R6, this copy's (CccEndUserHelpers). $R5 is a 256-byte
-; buffer. ${PID} and ${OUT} must not be $0 $1 $2. Scratch: $0 $1 $2.
+; token equals $R6, this copy's (CccEndUserHelpers). ${OUT} = 0 when it runs
+; as another user, and 2 when that cannot be told: the process or its token
+; could not be opened or read (this user's copy started as administrator,
+; say, seen from an installer that is not). Callers that test for 1 treat 0
+; and 2 alike. $R5 is a 256-byte buffer. ${PID} and ${OUT} must not be
+; $0 $1 $2. Scratch: $0 $1 $2.
 !macro CccProcessIsMine PID OUT
-  StrCpy ${OUT} 0
+  StrCpy ${OUT} 2
   ; PROCESS_QUERY_LIMITED_INFORMATION, then TOKEN_QUERY and TokenUser.
   System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i ${PID}) p .r0'
   ${If} $0 != 0
@@ -1625,6 +1682,8 @@ FunctionEnd
         System::Call 'advapi32::EqualSid(p r2, p R6) i .r2'
         ${If} $2 != 0
           StrCpy ${OUT} 1
+        ${Else}
+          StrCpy ${OUT} 0
         ${EndIf}
       ${EndIf}
       System::Call 'kernel32::CloseHandle(p r1)'
@@ -1749,6 +1808,452 @@ FunctionEnd
       ${EndIf}
     ${EndIf}
   ${Loop}
+!macroend
+
+; ------------------------------------------------------------
+; The app-running check's own macros (customCheckAppRunning, both passes).
+; They use the process macros above, and declare no Var and no Function, so
+; neither pass has anything new for -WX to warn about.
+; ------------------------------------------------------------
+
+; Reads the next "a:b," entry of ${LIST}, a list like ",12:34,56:78,", from
+; position ${POS}, which it moves past the entry, into ${A} and ${B}. ${A} is
+; "" at the end of the list. An entry with no colon, as in ",12,34,", comes
+; back whole in ${A}. ${LIST}, ${POS}, ${A} and ${B} must not be $R7 or $R8.
+; Scratch: $R7 $R8.
+!macro CccNextPair LIST POS A B
+  StrCpy ${A} ""
+  StrCpy ${B} ""
+  StrCpy $R8 0
+  ${Do}
+    StrCpy $R7 "${LIST}" 1 ${POS}
+    IntOp ${POS} ${POS} + 1
+    ${If} $R7 == ","
+    ${OrIf} $R7 == ""
+      ${ExitDo}
+    ${EndIf}
+    ${If} $R7 == ":"
+      StrCpy $R8 1
+    ${ElseIf} $R8 == 0
+      StrCpy ${A} "${A}$R7"
+    ${Else}
+      StrCpy ${B} "${B}$R7"
+    ${EndIf}
+  ${Loop}
+!macroend
+
+; One Toolhelp pass for this install's running copies of the app. A copy is
+; a process with one of the app's own image names (${APP_EXECUTABLE_FILENAME},
+; or one of the two names it had before its rename), that runs as this
+; copy's own user (CccProcessIsMine), and whose program file, as Windows
+; reports it (QueryFullProcessImageNameW), is $INSTDIR\<name>, or, when
+; ${OLD_UNINSTALLER} names the uninstaller of the install this run replaces,
+; <that folder>\<name>. Paths are compared through CanonPathPair, so case, a
+; forward slash or an 8.3 short name makes no difference. Each candidate is
+; held open (PROCESS_QUERY_LIMITED_INFORMATION) from before its user is
+; checked until its start time is read, so its pid cannot pass to another
+; process in between: the user, the program file and the start time are all
+; the same process's. Each copy goes into $R1 as "pid,", and, when ${STARTS}
+; names a register, into it as "pid:start," (CccProcessStart). $R1 is ""
+; when Windows could not list the running programs at all.
+;
+; ${REPORT} 0 only counts. ${REPORT} 1, the first look, writes each copy found
+; and each same-named process left alone to the details log, with the reason.
+; ${REPORT} 2, the last look, writes each copy still running.
+;
+; When ${UNSURE} names a register that holds 1, a process from this install's
+; folder whose user could not be read counts too: nothing here asks it to
+; close or ends it, but the install cannot go on over it. It goes into $R1
+; only, never into ${STARTS}.
+;
+; No other image name is looked at: the session helper and the terminals it
+; holds keep running through an install. $R2 is the snapshot, $R3 a
+; PROCESSENTRY32W (556 bytes, 32-bit), $R5 and $R6 as CccProcessIsMine needs
+; them. ${STARTS} and ${UNSURE} must not be $0 to $8 or $R8. Scratch: $3 $4
+; $5 $6 $7 $8 $R8, $cccCanon*, and CccProcessIsMine's and CccProcessStart's
+; ($0 $1 $2).
+!macro CccScanAppCopies REPORT STARTS OLD_UNINSTALLER UNSURE
+  System::Call 'kernel32::CreateToolhelp32Snapshot(i 2, i 0) p .R2'
+  ${If} $R2 != 0
+  ${AndIf} $R2 != -1
+  ${AndIf} $R2 != 4294967295
+    System::Call '*$R3(i 556)'
+    System::Call 'kernel32::Process32FirstW(p R2, p R3) i .r7'
+    ${DoWhile} $7 != 0
+      System::Call '*$R3(i, i, i .r3, p, i, i, i .r4, i, i, &w260 .r5)'
+      ${If} $5 == "${APP_EXECUTABLE_FILENAME}"
+      ${OrIf} $5 == "Claude Command Center.exe"
+      ${OrIf} $5 == "Claude Conductor.exe"
+        ; $6: 1 this user's, 0 another user's, 2 its user could not be read,
+        ; 3 it could not be opened at all.
+        System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i $3) p .R8'
+        StrCpy $6 3
+        ${If} $R8 != 0
+          !insertmacro CccProcessIsMine "$3" $6
+        ${EndIf}
+        ; Its program file, read through that same handle ($8), and whether
+        ; it is this install's ($7; Process32NextW sets $7 again below).
+        StrCpy $8 ""
+        StrCpy $7 0
+        ${If} $6 == 1
+        ${OrIf} $6 == 2
+          System::Call 'kernel32::QueryFullProcessImageNameW(p R8, i 0, w .r1, *i ${NSIS_MAX_STRLEN}) i .r2'
+          ${If} $2 != 0
+            StrCpy $8 "$1"
+          ${EndIf}
+          ${If} $8 != ""
+            !insertmacro CanonPathPair "$8" $cccCanonA $cccCanonAS
+            !insertmacro CanonPathPair "$INSTDIR\$5" $cccCanonB $cccCanonBS
+            ${If} $cccCanonA == $cccCanonB
+            ${OrIf} $cccCanonAS == $cccCanonBS
+              StrCpy $7 1
+            ${EndIf}
+            !if "${OLD_UNINSTALLER}" != ""
+              ${If} $7 != 1
+              ${AndIf} "${OLD_UNINSTALLER}" != ""
+                ${GetParent} "${OLD_UNINSTALLER}" $4
+                !insertmacro CanonPathPair "$4\$5" $cccCanonB $cccCanonBS
+                ${If} $cccCanonA == $cccCanonB
+                ${OrIf} $cccCanonAS == $cccCanonBS
+                  StrCpy $7 1
+                ${EndIf}
+              ${EndIf}
+            !endif
+          ${EndIf}
+        ${EndIf}
+        ${If} $7 == 1
+        ${AndIf} $6 == 1
+          StrCpy $R1 "$R1$3,"
+          !if "${STARTS}" != ""
+            !insertmacro CccProcessStart "$3" $4
+            StrCpy ${STARTS} "${STARTS}$3:$4,"
+          !endif
+        ${EndIf}
+        !if ${REPORT} == 1
+          ${If} $6 == 3
+            DetailPrint "Left $5 (process $3) running: it could not be opened, so its user and folder are not known."
+          ${ElseIf} $6 == 0
+            DetailPrint "Left $5 (process $3) running: it is another user's."
+          ${ElseIf} $8 == ""
+            DetailPrint "Left $5 (process $3) running: its program file could not be read."
+          ${ElseIf} $7 != 1
+            DetailPrint "Left $5 (process $3) running from $8, which is not this install's folder."
+          ${ElseIf} $6 == 2
+            DetailPrint "Found $5 (process $3) running from this install's folder, but could not read its user, so it is not closed or ended here."
+          ${Else}
+            DetailPrint "Found $5 (process $3) running from this install's folder."
+          ${EndIf}
+        !endif
+        !if ${REPORT} == 2
+          ${If} $7 == 1
+          ${AndIf} $6 == 1
+            DetailPrint "Still running from this install's folder: $5 (process $3)."
+          ${EndIf}
+        !endif
+        !if "${UNSURE}" != ""
+          ${If} $7 == 1
+          ${AndIf} $6 == 2
+          ${AndIf} ${UNSURE} == 1
+            StrCpy $R1 "$R1$3,"
+            !if ${REPORT} != 0
+              DetailPrint "Still running from this install's folder, its user unknown: $5 (process $3)."
+            !endif
+          ${EndIf}
+        !endif
+        ${If} $R8 != 0
+          System::Call 'kernel32::CloseHandle(p R8)'
+        ${EndIf}
+      ${EndIf}
+      System::Call 'kernel32::Process32NextW(p R2, p R3) i .r7'
+    ${Loop}
+    System::Call 'kernel32::CloseHandle(p R2)'
+  ${Else}
+    StrCpy $R1 ""
+    !if ${REPORT} != 0
+      DetailPrint "Could not list the running programs, so no copy of AI Code Conductor was looked for."
+    !endif
+  ${EndIf}
+!macroend
+
+; Asks this install's running copies of the app (CccScanAppCopies) to close,
+; and ends the ones that do not:
+;   1. WM_CLOSE to each top-level window those processes own, as closing the
+;      window by hand would. The windows are listed first, as "window:pid",
+;      and closed after: a window gone while the list is walked would end the
+;      walk early. Before each WM_CLOSE the pid, held open, must still have
+;      the start time the first look recorded, and then, last of all, the
+;      window must still be that pid's, so a pid or a window handle that
+;      passed to another program in between gets nothing. Over a remote or
+;      scheduled sign-in the app's windows are on another desktop, which this
+;      installer cannot see, so no window is reached and step 3 ends the copy.
+;   2. Up to 5 seconds for them to go, looking every 250 ms.
+;   3. In a run someone can see (not silent), a copy that was asked to close
+;      and is still open may be asking whether to save its sessions: nothing
+;      is ended, and the caller's box lets the user answer it and Retry. The
+;      app closes at once on a second WM_CLOSE (window-close-coordinator.ts).
+;      Otherwise, TerminateProcess for each copy the first look found that is
+;      still running, still this user's and has the same start time. A handle
+;      to it is held open across those checks, so its pid cannot pass to
+;      another process in between, and the handle is what ends it.
+;   4. Up to about 2 more seconds for Windows to finish ending them.
+;   5. A last look, which writes to the details log what is still running.
+; ${OLD_UNINSTALLER} is as for CccScanAppCopies. Leaves in $R0: 0 when no copy
+; is running at the end, 1 when one is, and 2 when that could not be checked
+; (this copy's own user, or the running programs, could not be read). Until
+; then $R0 holds the pids asked to close, and at the last look whether this
+; installer is not elevated. Saves and restores every other
+; register. $9 holds the first look's "pid:start," list, $R4 the round or the
+; place in a list, $R9 this copy's TOKEN_USER (its SID at $R6), $R5 and $R3
+; CccScanAppCopies's buffers, $7 the windows to close, $8 a window or a
+; process handle, $5 a process handle or a flag, $R2 between looks the number
+; of windows asked to close.
+!macro CccCloseAppCopies OLD_UNINSTALLER
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $9
+  Push $R1
+  Push $R2
+  Push $R3
+  Push $R4
+  Push $R5
+  Push $R6
+  Push $R7
+  Push $R8
+  Push $R9
+
+  ; This copy's own user, as CccEndUserHelpers reads it.
+  System::Alloc 256
+  Pop $R9
+  System::Alloc 256
+  Pop $R5
+  System::Alloc 556
+  Pop $R3
+  StrCpy $R6 0
+  System::Call 'kernel32::GetCurrentProcess() p .r0'
+  System::Call 'advapi32::OpenProcessToken(p r0, i 8, *p .r1) i .r2'
+  ${If} $2 != 0
+    System::Call 'advapi32::GetTokenInformation(p r1, i 1, p R9, i 256, *i .r2) i .r2'
+    ${If} $2 != 0
+      System::Call '*$R9(p .R6)'
+    ${EndIf}
+    System::Call 'kernel32::CloseHandle(p r1)'
+  ${EndIf}
+
+  StrCpy $R1 ","
+  ${If} $R6 == 0
+    DetailPrint "Could not tell which user this is, so no copy of AI Code Conductor was looked for."
+    StrCpy $R1 ""
+  ${Else}
+    StrCpy $9 ","
+    !insertmacro CccScanAppCopies 1 $9 "${OLD_UNINSTALLER}" ""
+    ${If} $R1 != ""
+      ${If} $R1 != ","
+        ; 1. Their top-level windows, as "window:pid,"; then WM_CLOSE to each.
+        StrCpy $7 ","
+        StrCpy $8 0
+        StrCpy $R4 0
+        ${Do}
+          System::Call 'user32::FindWindowExW(p 0, p r8, p 0, p 0) p .r8'
+          ${If} $8 == 0
+            ${ExitDo}
+          ${EndIf}
+          StrCpy $3 0
+          System::Call 'user32::GetWindowThreadProcessId(p r8, *i .r3)'
+          ${If} $3 != 0
+            !insertmacro CccInList "$3" $6
+            ${If} $6 == 1
+              StrCpy $7 "$7$8:$3,"
+            ${EndIf}
+          ${EndIf}
+          IntOp $R4 $R4 + 1
+          ${If} $R4 >= 20000
+            ${ExitDo}
+          ${EndIf}
+        ${Loop}
+        StrCpy $R0 ","
+        StrCpy $R2 0
+        StrCpy $R4 1
+        ${Do}
+          !insertmacro CccNextPair "$7" $R4 $8 $3
+          ${If} $8 == ""
+            ${ExitDo}
+          ${EndIf}
+          ; That pid, held open, still the process the first look found
+          ; ("pid:start" in $9); then, last of all, still that pid's window.
+          System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i $3) p .r5'
+          ${If} $5 != 0
+            !insertmacro CccProcessStart "$3" $4
+            ${If} $4 != ""
+              Push $R1
+              StrCpy $R1 "$9"
+              !insertmacro CccInList "$3:$4" $6
+              Pop $R1
+              ${If} $6 == 1
+                StrCpy $4 0
+                System::Call 'user32::GetWindowThreadProcessId(p r8, *i .r4)'
+                ${If} $4 == $3
+                  ; WM_CLOSE
+                  System::Call 'user32::PostMessageW(p r8, i 0x10, p 0, p 0) i .r6'
+                  ${If} $6 != 0
+                    IntOp $R2 $R2 + 1
+                    StrCpy $R0 "$R0$3,"
+                  ${EndIf}
+                ${EndIf}
+              ${EndIf}
+            ${EndIf}
+            System::Call 'kernel32::CloseHandle(p r5)'
+          ${EndIf}
+        ${Loop}
+        ${If} $R2 > 0
+          DetailPrint "Windows of AI Code Conductor asked to close: $R2."
+        ${Else}
+          DetailPrint "No window of AI Code Conductor could be reached from here (over a remote or scheduled sign-in its windows are on another desktop), so none was asked to close."
+        ${EndIf}
+
+        ; 2. Up to 5 seconds, looking every 250 ms.
+        StrCpy $R4 0
+        ${Do}
+          Sleep 250
+          StrCpy $R1 ","
+          !insertmacro CccScanAppCopies 0 "" "${OLD_UNINSTALLER}" ""
+          IntOp $R4 $R4 + 1
+          ${If} $R1 == ","
+          ${OrIf} $R4 >= 20
+            ${ExitDo}
+          ${EndIf}
+        ${Loop}
+
+        ${If} $R1 != ","
+          ; 3. In a run someone can see, is a copy that was asked to close
+          ; still open? ($5 = 1.) Then it may be asking whether to save its
+          ; sessions, and nothing is ended.
+          StrCpy $5 0
+          ${IfNot} ${Silent}
+            StrCpy $R4 1
+            ${Do}
+              !insertmacro CccNextPair "$R0" $R4 $3 $4
+              ${If} $3 == ""
+                ${ExitDo}
+              ${EndIf}
+              !insertmacro CccInList "$3" $6
+              ${If} $6 == 1
+                StrCpy $5 1
+              ${EndIf}
+            ${Loop}
+          ${EndIf}
+          ${If} $5 == 1
+            DetailPrint "AI Code Conductor was asked to close and is still open. It may be asking whether to save your sessions, so it was not ended."
+          ${Else}
+            ; Each copy the first look found that the last one still saw: $3
+            ; its pid, $4 its start.
+            StrCpy $R4 1
+            ${Do}
+              !insertmacro CccNextPair "$9" $R4 $3 $4
+              ${If} $3 == ""
+                ${ExitDo}
+              ${EndIf}
+              !insertmacro CccInList "$3" $6
+              ${If} $6 == 1
+                ; PROCESS_TERMINATE and PROCESS_QUERY_LIMITED_INFORMATION.
+                System::Call 'kernel32::OpenProcess(i 0x1001, i 0, i $3) p .r8'
+                ${If} $8 != 0
+                  !insertmacro CccProcessIsMine "$3" $6
+                  !insertmacro CccProcessStart "$3" $R8
+                  ${If} $6 == 1
+                  ${AndIf} $4 != ""
+                  ${AndIf} $R8 == $4
+                    System::Call 'kernel32::TerminateProcess(p r8, i 1) i .r6'
+                    ${If} $6 != 0
+                      DetailPrint "Ended process $3, which did not close within 5 seconds."
+                    ${Else}
+                      DetailPrint "Could not end process $3."
+                    ${EndIf}
+                  ${Else}
+                    DetailPrint "Did not end process $3: it could not be confirmed as the copy found first."
+                  ${EndIf}
+                  System::Call 'kernel32::CloseHandle(p r8)'
+                ${Else}
+                  DetailPrint "Could not end process $3: it could not be opened to end it."
+                ${EndIf}
+              ${EndIf}
+            ${Loop}
+
+            ; 4. Windows finishes ending a process a moment later.
+            StrCpy $R4 0
+            ${Do}
+              Sleep 250
+              StrCpy $R1 ","
+              !insertmacro CccScanAppCopies 0 "" "${OLD_UNINSTALLER}" ""
+              IntOp $R4 $R4 + 1
+              ${If} $R1 == ","
+              ${OrIf} $R4 >= 8
+                ${ExitDo}
+              ${EndIf}
+            ${Loop}
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+
+      ; 5. The last look: what is still running from this install's folder.
+      ; A process from there whose user could not be read counts too when
+      ; this installer is not elevated ($R0 = 1): it is then most likely this
+      ; user's copy started as administrator. Run elevated, this installer
+      ; can read the user of every copy this user started, elevated or not,
+      ; so such a process is another user's and keeps running, as another
+      ; user's copy does.
+      StrCpy $R0 1
+      System::Call 'kernel32::GetCurrentProcess() p .r0'
+      System::Call 'advapi32::OpenProcessToken(p r0, i 8, *p .r1) i .r2'
+      ${If} $2 != 0
+        ; TokenElevation
+        System::Call 'advapi32::GetTokenInformation(p r1, i 20, *i .r3, i 4, *i .r2) i .r2'
+        ${If} $2 != 0
+        ${AndIf} $3 != 0
+          StrCpy $R0 0
+        ${EndIf}
+        System::Call 'kernel32::CloseHandle(p r1)'
+      ${EndIf}
+      StrCpy $R1 ","
+      !insertmacro CccScanAppCopies 2 "" "${OLD_UNINSTALLER}" $R0
+    ${EndIf}
+  ${EndIf}
+
+  ${If} $R1 == ","
+    StrCpy $R0 0
+  ${ElseIf} $R1 == ""
+    StrCpy $R0 2
+  ${Else}
+    StrCpy $R0 1
+  ${EndIf}
+  System::Free $R3
+  System::Free $R5
+  System::Free $R9
+  Pop $R9
+  Pop $R8
+  Pop $R7
+  Pop $R6
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Pop $R1
+  Pop $9
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
 !macroend
 
 ; Force-ends every aicc-helper.exe that this copy's own user runs, and what
