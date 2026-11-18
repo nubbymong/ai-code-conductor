@@ -62,6 +62,13 @@ struct Shared {
     state: Mutex<State>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Set by a test, on its own thread, around a start: the holder started
+    /// then gets an exit watch whose wait fails at once.
+    static FAILING_WATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // A panicked thread must not take the holder down with it.
     match m.lock() {
@@ -107,6 +114,11 @@ impl Holder {
             state: Mutex::new(State { ring: Ring::new(ring_bytes), terminal: None, exit_code: None, output_ended: false }),
         });
         let pty = Arc::new(Mutex::new(pty));
+        // The watch on the child's exit, made before any thread: one that
+        // cannot be made fails the start.
+        let watch = lock(&pty).exit_watch()?;
+        #[cfg(test)]
+        let watch = if FAILING_WATCH.with(std::cell::Cell::get) { watch.failing() } else { watch };
 
         // The threads start in this order, the one that watches the child
         // last, and none of the earlier ones holds the terminal: so if a
@@ -150,27 +162,35 @@ impl Holder {
             lock(&out_shared.state).output_ended = true;
         })?;
 
-        // Exit: the child is watched by polling. On Windows the output pipe does
-        // not end when the child does, so the reader cannot be the signal.
+        // Exit: one wait that blocks until the child has exited
+        // (`ExitWatch`), without the terminal's lock, so nothing wakes this
+        // thread while the child runs and nothing else waits behind it. On
+        // Windows the output pipe does not end when the child does, so the
+        // reader cannot be the signal. On macOS and Linux the wait leaves the
+        // child unreaped: it is reaped below, under the lock every decision
+        // to signal its session is made under, so an end on another thread
+        // never signals an id the reap has just freed. A wait that fails is
+        // reported as an exit (code -1), never waited on.
         let watch_shared = Arc::clone(&shared);
         let watch_pty = Arc::clone(&pty);
         thread::Builder::new().spawn(move || {
-            let code = loop {
-                let status = lock(&watch_pty).try_wait();
-                match status {
-                    Ok(Some(code)) => break code,
-                    Ok(None) => {}
-                    Err(_) => break -1,
-                }
-                thread::sleep(Duration::from_millis(25));
-            };
-            // The first process is gone: end what it left behind on the
-            // terminal, then close the terminal so the output can end.
-            {
+            let waited = watch.wait();
+            // The first process is gone. In one critical section: reap it and
+            // read its code, end what it left behind on the terminal, then
+            // close the terminal so the output can end.
+            let code = {
                 let mut p = lock(&watch_pty);
+                let code = match waited {
+                    Ok(()) => match p.try_wait() {
+                        Ok(Some(code)) => code,
+                        Ok(None) | Err(_) => -1,
+                    },
+                    Err(_) => -1,
+                };
                 p.end_tree(END_GRACE);
                 p.close_output();
-            }
+                code
+            };
             let deadline = Instant::now() + DRAIN;
             while !lock(&watch_shared.state).output_ended && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));
@@ -322,5 +342,88 @@ mod tests {
     fn the_queue_and_the_waits_are_bounded() {
         assert!(LIVE_QUEUE_CHUNKS > 0 && LIVE_QUEUE_CHUNKS <= 1024);
         assert!(END_GRACE <= Duration::from_secs(5) && DRAIN <= Duration::from_secs(5));
+    }
+
+    /// A program that runs for about 2 s, reads nothing and exits 0.
+    fn two_seconds() -> Vec<String> {
+        if cfg!(windows) {
+            // Three echo requests to this machine, one second apart.
+            let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+            vec![format!("{root}\\System32\\PING.EXE"), "-n".to_string(), "3".to_string(), "127.0.0.1".to_string()]
+        } else {
+            vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 2".to_string()]
+        }
+    }
+
+    /// A program that runs for a minute unless it is ended.
+    fn a_minute() -> Vec<String> {
+        if cfg!(windows) {
+            let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+            vec![format!("{root}\\System32\\PING.EXE"), "-n".to_string(), "60".to_string(), "127.0.0.1".to_string()]
+        } else {
+            vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 60".to_string()]
+        }
+    }
+
+    /// A held terminal waits for its child's exit: it does not ask for the
+    /// child's status on a clock. It asks twice: one wait that blocks until
+    /// the exit, then one read of the code. The terminal counts each ask the
+    /// exit watch makes right beside the system call that makes it: the
+    /// `waitid` in each turn of `ExitWatch::wait`'s loop (macOS, Linux) and
+    /// each call of `ExitWatch::wait_once` (Windows). It also counts each
+    /// check in `Pty::try_wait`: beside its `waitpid` on macOS and Linux, and
+    /// on Windows once in `try_wait`, one call above the single zero-time
+    /// wait in `winproc::exit_code` (which `detach.rs` shares).
+    /// An exit watch that waits at most 25 ms and asks again, through that
+    /// loop or that call, counts every ask. The 25 ms loop asked about 80
+    /// times while this child ran.
+    #[test]
+    fn the_holder_waits_for_its_childs_exit_instead_of_asking_on_a_clock() {
+        let h = Holder::start(&two_seconds(), PtySize::default(), 64 * 1024).expect("a program starts on a terminal");
+        let began = Instant::now();
+        let code = h.wait_exit(Duration::from_secs(30));
+        let ran = began.elapsed();
+        let checks = lock(&h.pty).status_checks();
+        assert!((1..=2).contains(&checks), "the child's status was asked for {checks} times while it ran for {ran:?}");
+        assert_eq!(code, Some(0), "the program did not exit 0: {:?}", String::from_utf8_lossy(&h.snapshot()));
+        assert!(ran >= Duration::from_millis(1500), "the program ran only {ran:?}, too short to show anything");
+    }
+
+    /// A wait for the child's exit that fails is reported as an exit with
+    /// code -1 at once: the live channel closes as after any exit, and the
+    /// child, which would run for a minute, is ended rather than waited on.
+    #[test]
+    fn a_wait_for_the_child_that_fails_is_reported_as_an_exit_with_code_minus_1() {
+        FAILING_WATCH.with(|f| f.set(true));
+        let started = Holder::start(&a_minute(), PtySize::default(), 64 * 1024);
+        FAILING_WATCH.with(|f| f.set(false));
+        let h = started.expect("a program starts on a terminal");
+        let began = Instant::now();
+        let attached = h.attach(0).expect("attach");
+        let deadline = began + Duration::from_secs(15);
+        loop {
+            match attached.live.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => panic!("the live channel was still open {:?} after a failed wait", began.elapsed()),
+            }
+        }
+        assert_eq!(h.exit_code(), Some(-1), "a failed wait was not reported as an exit with code -1");
+    }
+
+    /// The holder waits for its child without the terminal's lock, so what
+    /// needs the terminal while the child runs (a resize here) is answered at
+    /// once, not when the child exits.
+    #[test]
+    fn the_terminal_is_not_locked_while_the_holder_waits_for_its_child() {
+        let h = Holder::start(&two_seconds(), PtySize::default(), 64 * 1024).expect("a program starts on a terminal");
+        // The exit thread is waiting by now.
+        thread::sleep(Duration::from_millis(300));
+        let began = Instant::now();
+        h.resize(PtySize { cols: 100, rows: 30 }).expect("resize");
+        let took = began.elapsed();
+        assert!(took < Duration::from_millis(500), "a resize while the child ran waited {took:?}");
+        assert_eq!(h.exit_code(), None, "the program ended before the resize could show anything");
+        assert_eq!(h.wait_exit(Duration::from_secs(30)), Some(0));
     }
 }

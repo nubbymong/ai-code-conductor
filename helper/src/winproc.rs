@@ -24,7 +24,7 @@ const ATTR_HANDLE_LIST: usize = 0x0002_0002;
 /// `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`: attribute 22, input only.
 const ATTR_PSEUDOCONSOLE: usize = 0x0002_0016;
 /// `WAIT_OBJECT_0`: the process has exited.
-const WAIT_OBJECT_0: u32 = 0;
+pub(crate) const WAIT_OBJECT_0: u32 = 0;
 /// `WAIT_TIMEOUT`: it is still running.
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 

@@ -41,11 +41,19 @@
 //! first as Windows makes it full before it opens the file
 //! (`check_full_name`), as Rust's own `Command` does, then as given
 //! (`check_windows_fields`).
+//!
+//! The holder learns of the child's exit through an exit watch
+//! (`exit_watch`): a handle of the watch's own on the child, duplicated with
+//! only the right to wait for it (`SYNCHRONIZE`), on which a thread waits
+//! with no time limit and without the terminal's lock. The code is then read
+//! with `try_wait`, through the terminal's own handle: the watch never reads
+//! it. Its own, so the terminal may close its handles while that thread
+//! still waits.
 #![allow(unsafe_code)]
 
 use super::{check_argv, check_cwd, check_env, check_windows_fields, is_batch_file, is_renamed_by_windows, Conpty, PtySize, SpawnOptions};
 use crate::cmdline::build_command_line;
-use crate::winproc::{self, close, os_error, wide, AttrList, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES};
+use crate::winproc::{self, close, os_error, wide, AttrList, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES, WAIT_OBJECT_0};
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::{self, Read};
@@ -53,8 +61,10 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(test)]
+use std::sync::{atomic::AtomicUsize, Arc};
 use std::time::Duration;
-use windows_sys::Win32::Foundation::{CloseHandle, FreeLibrary, GENERIC_READ, HANDLE, HMODULE};
+use windows_sys::Win32::Foundation::{CloseHandle, DuplicateHandle, FreeLibrary, GENERIC_READ, HANDLE, HMODULE};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, GetFileInformationByHandle, GetFullPathNameW, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -68,7 +78,7 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, GetCurrentProcess, ResumeThread, TerminateProcess, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOEXW,
+    CreateProcessW, GetCurrentProcess, ResumeThread, TerminateProcess, WaitForSingleObject, INFINITE, PROCESS_INFORMATION, PROCESS_SYNCHRONIZE, STARTUPINFOEXW,
 };
 
 /// `CREATE_SUSPENDED`: the child runs only once it is in the job.
@@ -303,6 +313,61 @@ fn load_bundled() -> io::Result<(Bundled, [Held; 3])> {
     }
 }
 
+/// A handle of its own on a terminal's child, for a thread that waits for
+/// the exit (`Pty::exit_watch`). It may only wait for the child: it can
+/// neither read its exit code (the terminal's `try_wait` does that) nor end
+/// it, and no child inherits it. Closed when dropped.
+pub struct ExitWatch {
+    process: usize,
+    /// The terminal's count of status checks (`Pty::status_checks`).
+    #[cfg(test)]
+    checks: Arc<AtomicUsize>,
+    /// Set by a test that needs the wait to fail (`failing`).
+    #[cfg(test)]
+    fail: bool,
+}
+
+impl ExitWatch {
+    /// Block until the child has exited; its code is then read with the
+    /// terminal's `try_wait`. No clock wakes the thread meanwhile, and the
+    /// terminal's lock is not needed. A wait that fails is an error, so the
+    /// caller reports an exit instead of waiting on.
+    pub fn wait(self) -> io::Result<()> {
+        #[cfg(test)]
+        if self.fail {
+            return Err(io::Error::other("a wait made to fail by a test"));
+        }
+        match self.wait_once(INFINITE) {
+            WAIT_OBJECT_0 => Ok(()),
+            _ => Err(os_error("WaitForSingleObject")),
+        }
+    }
+
+    /// One wait of the system's for the child's exit, for at most `ms`
+    /// milliseconds, and what it returned. The watch asks the system only
+    /// through here, and test builds count each ask right beside the call
+    /// (`Pty::status_checks`).
+    fn wait_once(&self, ms: u32) -> u32 {
+        #[cfg(test)]
+        self.checks.fetch_add(1, Ordering::SeqCst);
+        unsafe { WaitForSingleObject(self.process as HANDLE, ms) }
+    }
+
+    /// This watch with a wait that fails at once, for a test of what the
+    /// caller does then.
+    #[cfg(test)]
+    pub(crate) fn failing(mut self) -> ExitWatch {
+        self.fail = true;
+        self
+    }
+}
+
+impl Drop for ExitWatch {
+    fn drop(&mut self) {
+        unsafe { close(self.process) }
+    }
+}
+
 pub struct Pty {
     /// Whose pseudoconsole this is: Windows' own or the bundled one.
     console: Console,
@@ -313,6 +378,11 @@ pub struct Pty {
     pid: u32,
     input: File,
     exit: Option<i32>,
+    /// How many times the child's status was asked of the system: each
+    /// check in `try_wait` and each wait call in this terminal's exit
+    /// watches (`ExitWatch::wait_once`) (test builds only).
+    #[cfg(test)]
+    checks: Arc<AtomicUsize>,
 }
 
 fn coord(size: PtySize) -> COORD {
@@ -575,7 +645,17 @@ impl Pty {
 
             let reader = File::from_raw_handle(out_read as RawHandle);
             let input = File::from_raw_handle(in_write as RawHandle);
-            let pty = Pty { console, pseudo_console: hpc as usize, process: info.hProcess as usize, job, pid: info.dwProcessId, input, exit: None };
+            let pty = Pty {
+                console,
+                pseudo_console: hpc as usize,
+                process: info.hProcess as usize,
+                job,
+                pid: info.dwProcessId,
+                input,
+                exit: None,
+                #[cfg(test)]
+                checks: Arc::default(),
+            };
             Ok((pty, Box::new(reader)))
         }
     }
@@ -601,11 +681,39 @@ impl Pty {
         self.pid
     }
 
+    /// A watch on the child's exit, for a thread that waits on it
+    /// (`ExitWatch::wait`): a duplicate of the child's handle with only
+    /// `SYNCHRONIZE`, not inheritable. The job, the pseudoconsole and
+    /// `end_tree` are untouched.
+    pub fn exit_watch(&self) -> io::Result<ExitWatch> {
+        let mut own: HANDLE = unsafe { std::mem::zeroed() };
+        let duplicated = unsafe { DuplicateHandle(GetCurrentProcess(), self.process as HANDLE, GetCurrentProcess(), &mut own, PROCESS_SYNCHRONIZE, 0, 0) };
+        if duplicated == 0 {
+            return Err(os_error("DuplicateHandle"));
+        }
+        Ok(ExitWatch {
+            process: own as usize,
+            #[cfg(test)]
+            checks: Arc::clone(&self.checks),
+            #[cfg(test)]
+            fail: false,
+        })
+    }
+
+    /// How many times the child's status has been asked of the system so
+    /// far, by `try_wait` and by this terminal's exit watches.
+    #[cfg(test)]
+    pub(crate) fn status_checks(&self) -> usize {
+        self.checks.load(Ordering::SeqCst)
+    }
+
     /// The exit code once the child has exited.
     pub fn try_wait(&mut self) -> io::Result<Option<i32>> {
         if let Some(code) = self.exit {
             return Ok(Some(code));
         }
+        #[cfg(test)]
+        self.checks.fetch_add(1, Ordering::SeqCst);
         // A wait that fails is an error, never "still running".
         if let Some(code) = winproc::exit_code(self.process)? {
             self.exit = Some(code as i32);
@@ -656,6 +764,7 @@ impl Drop for Pty {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows_sys::Win32::System::Threading::GetExitCodeProcess;
 
     fn text(block: &[u16]) -> String {
         String::from_utf16_lossy(block)
@@ -713,6 +822,65 @@ mod tests {
         1
     }
     unsafe extern "system" fn no_close(_: HPCON) {}
+
+    /// The basic facts Windows keeps on a handle (`NtQueryObject`, class 0).
+    /// Only the granted rights are read; the rest gives the layout.
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct HandleBasics {
+        attributes: u32,
+        granted_access: u32,
+        handle_count: u32,
+        pointer_count: u32,
+        reserved: [u32; 10],
+    }
+
+    #[link(name = "ntdll", kind = "raw-dylib")]
+    unsafe extern "system" {
+        fn NtQueryObject(handle: HANDLE, class: u32, info: *mut c_void, length: u32, returned: *mut u32) -> i32;
+    }
+
+    /// The rights `handle` was granted.
+    fn granted_access(handle: usize) -> u32 {
+        let mut basics: HandleBasics = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<HandleBasics>() as u32;
+        let status = unsafe { NtQueryObject(handle as HANDLE, 0, (&mut basics as *mut HandleBasics).cast(), size, std::ptr::null_mut()) };
+        assert_eq!(status, 0, "NtQueryObject failed: {status:#x}");
+        basics.granted_access
+    }
+
+    /// The watch's handle can wait for the child, nothing more: it holds
+    /// exactly `SYNCHRONIZE`, and reading the child's code or ending it
+    /// through it is refused while the child runs. The code is read through
+    /// the terminal's own handle.
+    #[test]
+    fn an_exit_watch_waits_for_the_exit_and_cannot_end_the_child() {
+        let root = std::env::var("SystemRoot").expect("SystemRoot is set");
+        // About a second of running, then exit code 7.
+        let argv = vec![format!("{root}\\System32\\cmd.exe"), "/d".to_string(), "/c".to_string(), "ping -n 2 127.0.0.1 >nul & exit 7".to_string()];
+        let (mut pty, mut reader) = Pty::spawn(&argv, PtySize::default()).expect("cmd.exe starts on a terminal");
+        // The terminal's output is read, so the pseudoconsole never waits on it.
+        let drain = std::thread::spawn(move || {
+            let mut sink = Vec::new();
+            let _ = reader.read_to_end(&mut sink);
+        });
+        let watch = pty.exit_watch().expect("an exit watch");
+        assert_eq!(pty.try_wait().expect("try_wait"), None, "cmd.exe ended before the check could mean anything");
+        assert_eq!(granted_access(watch.process), PROCESS_SYNCHRONIZE, "the watch's handle holds more than the right to wait");
+        let mut code: u32 = 0;
+        let read = unsafe { GetExitCodeProcess(watch.process as HANDLE, &mut code) };
+        let why = io::Error::last_os_error();
+        assert_eq!(read, 0, "the watch's handle could read the child's code");
+        assert_eq!(why.raw_os_error(), Some(5), "reading the code through the watch failed, but not as access denied: {why}");
+        let ended = unsafe { TerminateProcess(watch.process as HANDLE, 1) };
+        let why = io::Error::last_os_error();
+        assert_eq!(ended, 0, "the watch's handle could end the child");
+        assert_eq!(why.raw_os_error(), Some(5), "ending the child through the watch failed, but not as access denied: {why}");
+        watch.wait().expect("the wait");
+        assert_eq!(pty.try_wait().expect("try_wait"), Some(7));
+        pty.close_output();
+        drain.join().expect("the reader thread");
+    }
 
     #[test]
     fn a_failed_pseudoconsole_call_is_named_as_it_was_made() {
