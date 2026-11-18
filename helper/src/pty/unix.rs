@@ -30,12 +30,9 @@
 //! on another thread at that moment could still signal it. std's `Child` is
 //! not kept: its own waits would be a second reaper.
 //!
-//! That needs SIGCHLD at its default. On Linux an ignored SIGCHLD is handed
-//! down through exec, and a process that ignores it has its children reaped
-//! by the system as they exit, outside the terminal: a starter that ignored
-//! it left `try_wait` unable to read the code and `end_tree` never seeing
-//! the child reaped. (macOS did not show this in CI.) Each start sets
-//! SIGCHLD back to its default first, on both.
+//! That needs SIGCHLD at its default, so that `try_wait` alone reaps the
+//! child. A starter may leave SIGCHLD ignored, which is handed down through
+//! exec, so each start sets it back to its default first.
 //!
 //! Unsafe code sits only in the modules that call the C library or the
 //! Windows API where `std` has no safe form; the library denies it elsewhere.

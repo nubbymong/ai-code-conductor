@@ -25,13 +25,10 @@ about 40 wake-ups a second per held terminal while nothing happened.
   kept, since its own waits would be a second reaper. The rule that a session
   whose program was reaped and whose session is empty is never signalled
   again (helper-protocol.md section 15, "The whole tree") holds as before.
-- A gap that was there before this change, seen on Linux: that rule needs
-  SIGCHLD at its default. A starter that ignores SIGCHLD hands that down
-  through exec, and on Linux the system then reaps the child as it exits:
-  the holder could not read its code (it reported -1) and never saw it
-  reaped, so its tree end still signalled the freed id. macOS did not show
-  this in CI. Each start of a terminal now sets SIGCHLD back to its
-  default first, on both (`Pty::spawn_with`).
+- macOS and Linux: that rule needs SIGCHLD at its default, so that
+  `try_wait` alone reaps the child. A starter may leave SIGCHLD ignored,
+  which is handed down through exec, so each start of a terminal sets it
+  back to its default first (`Pty::spawn_with`).
 - Changed from the plan's text, after review:
   - The plan had the macOS and Linux watch reap with `waitpid(pid, 0)` and
     record the status. Copilot's review of PR #710 found the race in that:
