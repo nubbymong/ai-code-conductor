@@ -37,6 +37,13 @@
  * update, and macOS and Linux keep ending every one. A terminal kept for a
  * tab that no tab took over runs on through the update and is kept again,
  * unless the user discarded the saved sessions (section B3).
+ *
+ * 2.1.3-beta.8 (plan section A4): a Claude Code session the helper holds sends
+ * its hook events through its holder when the holder offers `hooks` (hookRoute):
+ * its per-session settings file is switched to the helper's hook mode for all
+ * but PreToolUse once the holder launched it and before its launch line is
+ * typed, and each event the holder passes on reaches the session signals
+ * module under the tab's id.
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -66,8 +73,10 @@ import {
   readRecord,
   type HelperOs,
   type HolderRecord,
+  type HookEventFrame,
   type LaunchSpec,
 } from './protocol'
+import type { HelperHookTarget, HelperHooksResult } from '../hooks/session-hooks-writer'
 import { InstallError, bundledConptySource, checkedConpty, copyMatches, installHelperCopy, removeOldVersionFolders, sha256File, type InstalledHelper } from './install'
 
 export interface ExecResult {
@@ -124,6 +133,36 @@ export interface SessionHelperDeps {
   sleep?: (ms: number) => Promise<void>
   /** Whether no process has this id (process-alive.ts; tests answer for a fake holder). */
   processGone?: (pid: number) => boolean
+  /** Agent sessions' hooks through their holders, by provider (app-wiring.ts
+   *  gives Claude Code's only). A provider with none keeps its hooks on the
+   *  hooks gateway. */
+  hooks?: Partial<Record<ProviderId, HelperHookDeps>>
+}
+
+/** What a Claude Code session's hooks through its holder need of the app
+ *  (2.1.3-beta.8, plan section A4). */
+export interface HelperHookDeps {
+  /** Point the tab's per-session settings file at the helper's hook mode, all
+   *  but PreToolUse (session-hooks-writer.ts switchHooksToHelper). */
+  useHelperHooks(appPtyId: string, target: HelperHookTarget): HelperHooksResult
+  /** One hook event the tab's holder passed on (the session signals module). */
+  event(appPtyId: string, e: HookEventFrame): void
+  /** The tab's session through the helper is over: its hook events with it. */
+  ended(appPtyId: string): void
+}
+
+/** One Claude Code session's hooks through its holder (hookRoute). */
+interface HookRoute {
+  launched(conn: HolderConnection): void
+  event(e: HookEventFrame): void
+  ended(): void
+}
+
+/** Why a session's hooks stay on the gateway, for its one log line. */
+const HOOKS_STAY_BECAUSE: Record<Exclude<HelperHooksResult, 'switched'>, string> = {
+  'no-gateway-hooks': 'its settings file holds no hooks of the hooks gateway (the gateway was off or not listening when it started)',
+  'unsafe-path': 'the helper\'s path cannot be given to Claude Code\'s hook launcher safely',
+  'not-written': 'its settings file could not be written',
 }
 
 /** What the Services row shows. */
@@ -689,8 +728,58 @@ export class SessionHelperManager implements MachinesSource {
     if (this.state !== 'starting' && this.state !== 'ready') return usualWay(`the session helper is ${this.state}`, false)
     const refused = checkLaunch(spec, this.os)
     if (refused) return usualWay(`the helper would refuse ${refused.why}`, true)
-    const driver = this.driver(direct, true, spec.conpty === 'bundled', cleared)
-    return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver }), ctx.sessionId)
+    const hooks = this.hookRoute(ctx, sid)
+    const driver = this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks)
+    const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver }), ctx.sessionId)
+    if (hooks) void wrapper.ended.then(() => hooks.ended())
+    return wrapper
+  }
+
+  /**
+   * A Claude Code session's hooks through its holder (2.1.3-beta.8, plan
+   * section A4), when the app wires them for its provider (deps.hooks: Claude
+   * Code's only, so none for another provider's session). Its connections
+   * ack `hooks` when the holder offers it. Once the holder launched it, and
+   * before the attach sends its launch line, its per-session settings file
+   * (written for the hooks gateway before the spawn) is switched to the
+   * helper's hook mode for all but PreToolUse; a holder without `hooks`, or
+   * a file that cannot be switched, leaves the session on the gateway, with
+   * one log line. Then each event the holder passes on reaches the signals
+   * module under the tab's id, once (a `seq` seen already is dropped,
+   * section 15), and never a PreToolUse: that one is the gateway's. Nothing
+   * a holder sends is taken before the switch.
+   */
+  private hookRoute(ctx: AgentSpawnContext, sid: string): HookRoute | undefined {
+    const deps = this.deps.hooks?.[ctx.kind]
+    if (!deps) return undefined
+    const appId = ctx.sessionId
+    let on = false
+    let lastSeq = 0
+    return {
+      launched: (conn) => {
+        const exe = this.info?.exe
+        if (!conn.hooks || !exe) {
+          this.deps.log(`[session-helper] ${appId}: its hooks stay on the hooks gateway, because ${conn.hooks ? 'the helper copy is not known' : 'its holder does not offer hook events'}`)
+          return
+        }
+        const r = deps.useHelperHooks(appId, { helperPath: exe, store: this.store, sid, launcher: this.os === 'windows' ? 'git-bash' : 'sh' })
+        if (r !== 'switched') {
+          this.deps.log(`[session-helper] ${appId}: its hooks stay on the hooks gateway, because ${HOOKS_STAY_BECAUSE[r]}`)
+          return
+        }
+        on = true
+        this.deps.log(`[session-helper] ${appId}: its hook events go through its holder; PreToolUse stays on the hooks gateway`)
+      },
+      event: (e) => {
+        if (!on || e.seq <= lastSeq) return
+        lastSeq = e.seq
+        if (e.kind === 'PreToolUse') return
+        deps.event(appId, e)
+      },
+      ended: () => {
+        if (on) deps.ended(appId)
+      },
+    }
   }
 
   /**
@@ -766,11 +855,13 @@ export class SessionHelperManager implements MachinesSource {
   /** `bundled`: the launch asks for the bundled ConPTY, whose copy beside the
    *  helper is checked before the holder starts. `cleared` (an agent
    *  session): what must settle before a holder starts, in place of the plain
-   *  terminal's wait for an earlier holder's end; it throws to start none. */
-  private driver(direct: () => IPty, checkHash: boolean, bundled = false, cleared?: () => Promise<void>): HelperPtyDriver {
+   *  terminal's wait for an earlier holder's end; it throws to start none.
+   *  `hooks`: a Claude Code session's hooks through its holder (hookRoute). */
+  private driver(direct: () => IPty, checkHash: boolean, bundled = false, cleared?: () => Promise<void>, hooks?: HookRoute): HelperPtyDriver {
     return {
       hold: (sid, label, abandoned) => this.hold(sid, label, abandoned, bundled, cleared),
-      connect: (record) => this.connectFor(record, checkHash),
+      connect: (record) => this.connectFor(record, checkHash, hooks),
+      ...(hooks ? { launched: (conn: HolderConnection) => hooks.launched(conn) } : {}),
       direct,
       ending: (sid, done) => {
         this.endings.set(sid, done)
@@ -782,15 +873,18 @@ export class SessionHelperManager implements MachinesSource {
     }
   }
 
-  private open(record: HolderRecord, sha256?: string): Promise<HolderConnection> {
-    return HolderConnection.open({
+  private async open(record: HolderRecord, sha256?: string, hooks?: HookRoute): Promise<HolderConnection> {
+    const conn = await HolderConnection.open({
       record,
       os: this.os,
       sha256,
       openStream: this.deps.openStream,
       checkEndpointFolder: this.deps.checkEndpointFolder,
       replyTimeoutMs: this.deps.replyTimeoutMs,
+      ...(hooks ? { hooks: true } : {}),
     })
+    if (hooks && conn.hooks) conn.on('event', (e) => hooks.event(e))
+    return conn
   }
 
   private async hold(sid: string, label: string, abandoned: () => boolean, bundled = false, cleared?: () => Promise<void>): Promise<HolderRecord> {
@@ -848,11 +942,11 @@ export class SessionHelperManager implements MachinesSource {
     return record
   }
 
-  private async connectFor(record: HolderRecord, checkHash: boolean): Promise<HolderConnection> {
+  private async connectFor(record: HolderRecord, checkHash: boolean, hooks?: HookRoute): Promise<HolderConnection> {
     // A keeper attaches first; the tab's attach then replaces it, never the other way.
     const keeper = this.keepers.get(record.session)
     if (keeper) await keeper.ready
-    return this.open(record, checkHash ? this.info?.sha256 : undefined)
+    return this.open(record, checkHash ? this.info?.sha256 : undefined, hooks)
   }
 
   /** Keep a held terminal alive (attached, output dropped) until a tab takes it. */

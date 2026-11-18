@@ -78,6 +78,157 @@ export function buildHooksBlock(
   return hooks
 }
 
+/**
+ * How Claude Code starts a command hook (2.1.3-beta.8, plan section A4): on
+ * Windows through Git for Windows' bash, `bin\bash.exe -c "<command>"` (ADR-030
+ * probe P16, step 0, seen with Claude Code 2.1.296), and elsewhere through
+ * `/bin/sh -c "<command>"`. Both read the command as a POSIX shell does.
+ */
+export type HookLauncher = 'git-bash' | 'sh'
+
+/** The session helper's hook mode for one held session. */
+export interface HelperHookTarget {
+  /** The per-user helper copy's absolute path. */
+  helperPath: string
+  /** The helper's store folder. */
+  store: string
+  /** The holder's session id. */
+  sid: string
+  launcher: HookLauncher
+}
+
+/** The helper's session id pattern (protocol section 15). */
+const HELPER_SID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$/
+/** A control character anywhere. */
+const HOOK_CONTROL_RE = /[\x00-\x1f\x7f-\x9f]/
+/** A Windows path from a drive's root (no network path, no relative path). */
+const DRIVE_PATH_RE = /^[A-Za-z]:[\\/]/
+
+/** One word for a POSIX shell: single-quoted, so nothing in it has a meaning
+ *  ($, `, %, &, ^, spaces and letters outside ASCII included), and a single
+ *  quote in it closed, given escaped, and opened again. */
+function shellWord(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * A path as the launcher takes it, or null when it cannot take it safely.
+ * Git Bash: a drive path, its backslashes made forward slashes (bash reads a
+ * backslash as an escape, and MSYS leaves a `C:/` argument as it is), and no
+ * double quote, which would end Claude Code's own quoting of the command on
+ * the Windows command line it builds for bash.exe. /bin/sh: an absolute path.
+ * Neither takes a control character.
+ */
+function launcherPath(p: string, launcher: HookLauncher): string | null {
+  if (typeof p !== 'string' || p.length === 0 || HOOK_CONTROL_RE.test(p)) return null
+  if (launcher === 'git-bash') {
+    if (!DRIVE_PATH_RE.test(p) || p.includes('"')) return null
+    return p.replace(/\\/g, '/')
+  }
+  return p.startsWith('/') ? p : null
+}
+
+/**
+ * The command a Claude Code session held by the session helper runs for a
+ * hook event: the helper's hook mode, quoted for the launcher. Null when a
+ * path cannot be given to that launcher safely, or the session id breaks its
+ * pattern: then the session keeps its hooks on the hooks gateway.
+ */
+export function helperHookCommand(target: HelperHookTarget): string | null {
+  const exe = launcherPath(target.helperPath, target.launcher)
+  const store = launcherPath(target.store, target.launcher)
+  if (exe === null || store === null || !HELPER_SID_RE.test(target.sid)) return null
+  return `${shellWord(exe)} hook --store ${shellWord(store)} --session ${target.sid}`
+}
+
+/** How long Claude Code may give the hook mode, in seconds. The hook mode
+ *  itself ends within 2 s; this bounds a launcher that hangs. */
+export const HELPER_HOOK_TIMEOUT_SECS = 10
+
+/**
+ * The `hooks` block of a Claude Code session whose hooks go through the
+ * session helper (2.1.3-beta.8, plan section A4): PreToolUse stays on the
+ * hooks gateway, exactly as buildHooksBlock writes it (the gateway can hold it
+ * open while the permission gate decides), and the other eight injected
+ * events run the helper's hook mode, which passes each one to the session's
+ * holder. Null when the command cannot be given safely (helperHookCommand).
+ */
+export function buildHelperHooksBlock(
+  sessionId: string,
+  port: number,
+  secret: string,
+  target: HelperHookTarget,
+): Record<string, unknown[]> | null {
+  const command = helperHookCommand(target)
+  if (command === null) return null
+  const gateway = buildHooksBlock(sessionId, port, secret)
+  const hooks: Record<string, unknown[]> = {}
+  for (const kind of MVP_EVENTS) {
+    hooks[kind] = kind === 'PreToolUse'
+      ? gateway[kind]
+      : [{ matcher: '', hooks: [{ type: 'command', command, timeout: HELPER_HOOK_TIMEOUT_SECS }] }]
+  }
+  return hooks
+}
+
+/** What switchHooksToHelper did. */
+export type HelperHooksResult =
+  /** The settings file now sends all but PreToolUse through the helper. */
+  | 'switched'
+  /** The file holds no gateway hooks of this session (the gateway was down
+   *  or switched off at the spawn): nothing to switch. */
+  | 'no-gateway-hooks'
+  /** A path the launcher cannot take safely (helperHookCommand). */
+  | 'unsafe-path'
+  /** The file could not be written; it was left as it was. */
+  | 'not-written'
+
+/** The port and token of this session's gateway hooks in a `hooks` map: read
+ *  from its PreToolUse entry, exactly as buildHooksBlock writes it. */
+function gatewayHooksIn(hooks: Record<string, unknown[]>, sessionId: string): { port: number; secret: string } | null {
+  const tail = `/hook/${sessionId}`
+  for (const entry of hooks.PreToolUse ?? []) {
+    const inner = (entry as { hooks?: unknown } | null)?.hooks
+    const first = Array.isArray(inner) ? (inner[0] as Record<string, unknown> | undefined) : undefined
+    if (!first || first.type !== 'http' || typeof first.url !== 'string' || !first.url.endsWith(tail)) continue
+    const m = /^http:\/\/localhost:(\d{1,5})\/hook\//.exec(first.url)
+    const secret = (first.headers as Record<string, unknown> | undefined)?.['X-CCC-Hook-Token']
+    if (!m || typeof secret !== 'string') continue
+    const port = Number(m[1])
+    // Only the entry buildHooksBlock writes, byte for byte.
+    if (JSON.stringify(entry) === JSON.stringify(buildHooksBlock(sessionId, port, secret).PreToolUse[0])) return { port, secret }
+  }
+  return null
+}
+
+/**
+ * Point a session's per-session settings file at the helper's hook mode, in
+ * place (2.1.3-beta.8, plan section A4). The file was written as usual before
+ * the spawn (injectHooks, the gateway's hooks); once the session's holder has
+ * launched it and before the launch line reaches it, this swaps the app's own
+ * entries of the eight events for the hook mode and keeps PreToolUse, and
+ * every hook the session inherited, as they were. The gateway token stays
+ * (PreToolUse uses it). FAIL-SAFE: on anything but 'switched' the file is as
+ * it was, and the session keeps its gateway hooks.
+ */
+export function switchHooksToHelper(a: { settingsPath: string; sessionId: string; target: HelperHookTarget }): HelperHooksResult {
+  const settings = readJsonSafe(a.settingsPath)
+  const hooks = hooksOf(settings)
+  const gw = gatewayHooksIn(hooks, a.sessionId)
+  if (!gw) return 'no-gateway-hooks'
+  const helper = buildHelperHooksBlock(a.sessionId, gw.port, gw.secret, a.target)
+  if (!helper) return 'unsafe-path'
+  const own = buildHooksBlock(a.sessionId, gw.port, gw.secret)
+  const kept: Record<string, unknown[]> = {}
+  for (const [event, arr] of Object.entries(hooks)) {
+    const mine = own[event]?.[0] !== undefined ? JSON.stringify(own[event][0]) : null
+    kept[event] = mine === null ? arr : arr.filter((entry) => JSON.stringify(entry) !== mine)
+  }
+  // The app's hooks last, as injectHooks puts them.
+  settings.hooks = concatHookMaps(kept, helper)
+  return writeJson(a.settingsPath, settings) ? 'switched' : 'not-written'
+}
+
 /** The array-valued events of a parsed settings object's `hooks`; {} for
  *  anything else. */
 function hooksOf(parsed: unknown): Record<string, unknown[]> {
@@ -378,7 +529,7 @@ function readJsonSafe(file: string): Record<string, unknown> {
 // handle, and uses /reload to refresh, so rename-over a just-released
 // handle is safe. Using a `.tmp.<pid>` suffix keeps concurrent callers
 // (different Electron processes in dev) from colliding on the tmp path.
-function writeJson(file: string, data: unknown): void {
+function writeJson(file: string, data: unknown): boolean {
   const dir = path.dirname(file)
   try {
     // settings-<sid>.json carries the per-session X-CCC-Hook-Token in its hooks
@@ -390,9 +541,11 @@ function writeJson(file: string, data: unknown): void {
     mkdirSecure(dir)
     hardenCredentialDir(dir)
     atomicWriteSecure(file, JSON.stringify(data, null, 2), 0o600)
+    return true
   } catch (err) {
     // Fail closed: leave the existing file (base settings from
     // writeLocalSessionSettings) rather than fall back to an insecure write.
     logWarn(`[hooks] secure write of ${path.basename(file)} failed (${String(err)}); left the previous file`)
+    return false
   }
 }

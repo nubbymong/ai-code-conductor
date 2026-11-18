@@ -3,6 +3,10 @@ import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import {
   FRAME_MIN_REST,
+  HELPER_HOOK_KINDS,
+  HOOKS_CAP,
+  HOOK_EVENT_JSON_MAX,
+  HOOK_PAYLOAD_MAX,
   JSON_DEPTH_MAX,
   JSON_FROM_HELPER_MAX,
   JSON_TO_HELPER_MAX,
@@ -21,11 +25,13 @@ import {
   parseHelloLine,
   parseSelfTestResult,
   parseVersionLine,
+  readEventFrame,
   readListing,
   readRecord,
   validEndpoint,
   type HelperOs,
 } from '../../../src/main/session-helper/protocol'
+import { MVP_EVENTS } from '../../../src/main/hooks/session-hooks-writer'
 
 // The app's own client against the helper's shared vectors (helper/fixtures):
 // the same files the Rust helper and the reference readers in
@@ -263,5 +269,106 @@ describe('session helper protocol: ids and one-shot output', () => {
     const r = parseSelfTestResult(`noise\nAICC-RESULT ${nonce} ${JSON.stringify(body)}\n`, nonce)
     expect(r).toEqual({ ok: false, helper: '0.1.0', checks: [{ name: 'hello', ok: true }, { name: 'local-transport', ok: false, detail: 'no pipe' }] })
     expect(parseSelfTestResult(`AICC-RESULT ${'f'.repeat(32)} ${JSON.stringify(body)}`, nonce)).toBeNull()
+  })
+})
+
+// 2.1.3-beta.8, plan section A4: the `hooks` part of helper/fixtures/local.json
+// (section A3's vectors), read from the app's side. The app sends no
+// `hook.event` (the hook mode does); it acks `hooks` and reads `event`.
+describe('session helper protocol: hook events (capability hooks, section 15)', () => {
+  const H = local.hooks
+  /** An `event` frame from a holder, as the app's reader gets it. */
+  const asRead = (msg: unknown): ReturnType<typeof readEventFrame> => {
+    const f = decodeOneFrame(encodeJsonFrame(msg), 'helper_to_app')
+    if ('error' in f || f.kind !== 0) throw new Error('not one JSON frame')
+    return readEventFrame(f.json, f.size)
+  }
+
+  it("the caps, the nine kinds and the payload limit are the helper's", () => {
+    expect(HOOKS_CAP).toBe('hooks')
+    expect(H.caps).toEqual(['core', 'local', HOOKS_CAP])
+    expect([...HELPER_HOOK_KINDS]).toEqual(H.kinds)
+    // The kinds the app injects into a session's settings are the same nine.
+    expect(MVP_EVENTS).toEqual(H.kinds)
+    expect(HOOK_PAYLOAD_MAX).toBe(H.limits.payload_bytes)
+    expect(HOOK_EVENT_JSON_MAX).toBe(64 * 1024)
+  })
+
+  it('the ack names hooks only when asked to', () => {
+    expect(helloAck(true)).toEqual({ t: 'hello.ack', proto: 1, caps: H.caps })
+    expect(helloAck(false)).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local'] })
+    expect(helloAck()).toEqual(helloAck(false))
+  })
+
+  it('every event message vector reads as its fields say, exactly as the holder sends it', () => {
+    for (const v of H.messages) {
+      const f = decodeOneFrame(encodeJsonFrame(JSON.parse(v.json)), 'helper_to_app')
+      if ('error' in f || f.kind !== 0) throw new Error(v.name)
+      expect(f.size, v.name).toBe(Buffer.byteLength(v.json, 'utf8'))
+      // No `lost` when nothing was dropped before it.
+      expect(readEventFrame(f.json, f.size), v.name).toEqual({ seq: v.seq, kind: v.kind, payload: v.payload, ...(v.lost > 0 ? { lost: v.lost } : {}) })
+    }
+  })
+
+  it('the largest event there can be is read; a payload one byte larger is not', () => {
+    const L = H.largest
+    const build = (payloadBytes: number) => {
+      const head = JSON.stringify({ hook_event_name: L.kind, prompt: '' })
+      const payload = { hook_event_name: L.kind, prompt: 'x'.repeat(payloadBytes - Buffer.byteLength(head, 'utf8')) }
+      return { t: 'event', seq: L.seq, kind: L.kind, payload, lost: L.lost }
+    }
+    const largest = build(H.limits.payload_bytes)
+    expect(Buffer.byteLength(JSON.stringify(largest.payload), 'utf8')).toBe(H.limits.payload_bytes)
+    expect(Buffer.byteLength(JSON.stringify(largest), 'utf8')).toBe(L.event_bytes)
+    expect(asRead(largest)).toEqual({ seq: L.seq, kind: L.kind, payload: largest.payload, lost: L.lost })
+    expect(asRead(build(H.limits.payload_bytes + 1))).toBeNull()
+    // A message over 64 KiB as it came is refused whatever it holds.
+    expect(readEventFrame(largest, HOOK_EVENT_JSON_MAX + 1)).toBeNull()
+  })
+
+  it('what a holder takes in a hook.event, it may pass on: each valid request vector, as an event, reads', () => {
+    for (const v of H.requests.valid) {
+      const req = JSON.parse(v.json)
+      expect(asRead({ t: 'event', seq: 1, kind: req.kind, payload: req.payload }), v.name).toEqual({ seq: 1, kind: req.kind, payload: req.payload })
+    }
+  })
+
+  it('what a holder refuses for its kind or payload, the app refuses in an event too', () => {
+    // The vectors about the request's own envelope (its id, an extra or doubled
+    // field, the ack) have no counterpart in an event. A payload naming a
+    // member twice is the holder's to refuse: JSON.parse keeps the last.
+    const ABOUT_KIND_OR_PAYLOAD = [
+      'an unknown kind', 'a kind in another case', 'a kind that is not a string', 'a payload over 64 KiB as JSON',
+      'a payload that is not an object', 'a payload without hook_event_name', 'a payload whose hook_event_name is another kind',
+      'a missing payload', 'a missing kind',
+    ]
+    const named = H.requests.invalid.filter((v: { name: string }) => ABOUT_KIND_OR_PAYLOAD.includes(v.name))
+    expect(named.map((v: { name: string }) => v.name).sort()).toEqual([...ABOUT_KIND_OR_PAYLOAD].sort())
+    for (const v of named) {
+      const req = JSON.parse(v.json)
+      const msg: Record<string, unknown> = { t: 'event', seq: 1 }
+      if ('kind' in req) msg.kind = req.kind
+      if ('payload' in req) msg.payload = req.payload
+      expect(asRead(msg), v.name).toBeNull()
+    }
+  })
+
+  it('an event message is read strictly: its fields only, seq from 1, lost a whole number', () => {
+    const ok = { t: 'event', seq: 3, kind: 'Stop', payload: { hook_event_name: 'Stop' } }
+    expect(asRead(ok)).toEqual({ seq: 3, kind: 'Stop', payload: { hook_event_name: 'Stop' } })
+    const bad: Array<[string, unknown]> = [
+      ['seq 0', { ...ok, seq: 0 }],
+      ['a negative seq', { ...ok, seq: -1 }],
+      ['a seq that is not whole', { ...ok, seq: 1.5 }],
+      ['a seq past 2^53 - 1', { ...ok, seq: Number.MAX_SAFE_INTEGER + 1 }],
+      ['a seq as text', { ...ok, seq: '3' }],
+      ['no seq', { t: 'event', kind: 'Stop', payload: { hook_event_name: 'Stop' } }],
+      ['a negative lost', { ...ok, lost: -1 }],
+      ['a lost that is not whole', { ...ok, lost: 0.5 }],
+      ['an extra field', { ...ok, re: 2 }],
+      ['another type', { ...ok, t: 'status' }],
+      ['not an object', ['event', 3]],
+    ]
+    for (const [what, msg] of bad) expect(asRead(msg), what).toBeNull()
   })
 })

@@ -85,14 +85,16 @@ export function tokensMatch(presented: string, expected: string): boolean {
 const MAX_SCALAR_LENGTH = 128
 const MAX_SUMMARY_LENGTH = 256
 
-/** Truncate a scalar lifted from a hook body. Undefined passes through. */
-function boundScalar(v: string | undefined): string | undefined {
+/** Truncate a scalar lifted from a hook body. Undefined passes through.
+ *  Exported for the session helper's hook events, which the session signals
+ *  module bounds the same way (src/main/session-signals/hooks.ts). */
+export function boundScalar(v: string | undefined): string | undefined {
   if (v === undefined) return undefined
   return v.length > MAX_SCALAR_LENGTH ? v.slice(0, MAX_SCALAR_LENGTH) : v
 }
 
-/** Truncate the derived feed summary. */
-function boundSummary(v: string): string {
+/** Truncate the derived feed summary. Exported with boundScalar. */
+export function boundSummary(v: string): string {
   return v.length > MAX_SUMMARY_LENGTH ? `${v.slice(0, MAX_SUMMARY_LENGTH - 1)}…` : v
 }
 
@@ -768,7 +770,8 @@ function headerValue(
   return raw
 }
 
-function buildSummary(
+/** The feed summary of an event. Exported with boundScalar. */
+export function buildSummary(
   event: string,
   toolName: string | undefined,
   payload: Record<string, unknown>,

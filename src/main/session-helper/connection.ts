@@ -5,7 +5,8 @@
  * The app writes nothing until the holder's hello line has been read and
  * checked: its nonce must be the one in the holder's record and its session
  * the one asked for, so a process that took the endpoint's name first learns
- * nothing from the app. Then the app acks `core` and `local` and the
+ * nothing from the app. Then the app acks `core` and `local` (and `hooks`, for
+ * a connection that takes hook events, when the holder offers it) and the
  * connection carries requests (even ids, one reply each), terminal output and
  * the holder's events.
  *
@@ -23,6 +24,7 @@ import type { Duplex } from 'stream'
 import {
   FrameReader,
   HELLO_LINE_MAX,
+  HOOKS_CAP,
   LOCAL_CAPS,
   PROTO_VERSION,
   TERMINAL_CHANNEL,
@@ -33,7 +35,9 @@ import {
   endpointUid,
   helloAck,
   parseHelloLine,
+  readEventFrame,
   type Hello,
+  type HookEventFrame,
   type HelperOs,
   type HolderRecord,
 } from './protocol'
@@ -54,6 +58,9 @@ export interface ConnectionOptions {
   openStream?: (endpoint: string) => Promise<Duplex>
   /** Section 15's folder check on Unix. Tests skip it. */
   checkEndpointFolder?: (endpoint: string) => string | null
+  /** This connection takes hook events (a Claude Code session whose hooks may
+   *  go through its holder): `hooks` is acked when the holder offers it. */
+  hooks?: boolean
   helloTimeoutMs?: number
   replyTimeoutMs?: number
   pingEveryMs?: number
@@ -124,11 +131,16 @@ export type HolderConnectionEvents = {
   exit: [code: number | null]
   /** An error frame with no `re`: `replaced`, `busy` and the like. */
   notice: [code: string, text: string]
+  /** A hook event the holder passed on; only on a connection that acked `hooks`. */
+  event: [e: HookEventFrame]
   close: []
 }
 
 export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   readonly hello: Hello
+  /** True when this connection acked `hooks`: the holder offered it and the
+   *  connection wanted it. Only then are hook events reported. */
+  readonly hooks: boolean
   private readonly stream: Duplex
   private readonly reader = new FrameReader('helper_to_app')
   private nextId = 2
@@ -152,12 +164,13 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     super()
     this.stream = stream
     this.hello = hello
+    this.hooks = opts.hooks === true && hello.caps.includes(HOOKS_CAP)
     this.replyTimeoutMs = opts.replyTimeoutMs ?? REPLY_TIMEOUT_MS
     stream.on('data', (chunk: Buffer) => this.onBytes(chunk))
     stream.on('close', () => this.shut())
     stream.on('end', () => this.shut())
     stream.on('error', () => this.shut())
-    stream.write(encodeJsonFrame(helloAck()))
+    stream.write(encodeJsonFrame(helloAck(this.hooks)))
     if (rest.length > 0) this.onBytes(rest)
     stream.resume()
     const every = opts.pingEveryMs ?? PING_EVERY_MS
@@ -370,6 +383,11 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
       }
       if (m.t === 'term.exit') {
         this.emit('exit', typeof m.code === 'number' ? m.code : null)
+      } else if (m.t === 'event') {
+        // A hook event: read strictly, and only on a connection that acked
+        // hooks. One that does not read is dropped (a holder sends none).
+        const e = this.hooks ? readEventFrame(m, f.size) : null
+        if (e) this.emit('event', e)
       } else if (m.t === 'error') {
         const code = String(m.code ?? 'internal')
         if (code === 'busy' && re === undefined) {

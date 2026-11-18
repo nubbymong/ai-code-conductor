@@ -974,8 +974,9 @@ if (!gotTheLock) {
     // subscriber to the Hooks gateway (whichever is set below, and any set after
     // it); every consumer (the rules engine started above, the rest below) takes
     // events from it, in the order they start. A transcript path the gateway
-    // reports reaches the route through it.
-    startSessionSignals({ onTranscriptPath: routeTranscriptPath })
+    // reports reaches the route through it. A4: the hook events a session's
+    // holder passes on reach the window's feed through the same emit.
+    startSessionSignals({ onTranscriptPath: routeTranscriptPath, emit: emitWithMerge })
     if (hooksEnabled) {
       // Supervised out-of-process gateway: a utilityProcess child runs the HooksGateway,
       // crash-isolated from the main thread, with restart/backoff + fail-open-to-in-process.

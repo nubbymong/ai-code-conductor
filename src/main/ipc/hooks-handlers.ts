@@ -5,6 +5,7 @@ import type { HooksToggleRequest, HooksGetBufferRequest, HooksGatewayStatus } fr
 import { getActivePtySessionIds } from '../pty-manager'
 import { removeHooks } from '../hooks/session-hooks-writer'
 import { getLocalSessionSettingsPath } from '../hooks/per-session-settings'
+import { hookFeedBuffer, setHelperHooksTaken } from '../session-signals'
 
 function broadcastStatus(status: HooksGatewayStatus): void {
   for (const w of BrowserWindow.getAllWindows()) {
@@ -17,6 +18,9 @@ function broadcastStatus(status: HooksGatewayStatus): void {
 export function registerHooksHandlers(gateway: HooksGatewayLike): void {
   ipcMain.handle(IPC.HOOKS_TOGGLE, async (_e, req: HooksToggleRequest) => {
     let status: HooksGatewayStatus
+    // The hook events a session's holder passes on (2.1.3-beta.8, A4) follow
+    // the switch too: none is taken while it is off, as the gateway takes none.
+    setHelperHooksTaken(req.enabled === true)
     if (req.enabled) {
       status = await gateway.start()
     } else {
@@ -42,7 +46,9 @@ export function registerHooksHandlers(gateway: HooksGatewayLike): void {
   })
 
   ipcMain.handle(IPC.HOOKS_GET_BUFFER, async (_e, req: HooksGetBufferRequest) => {
-    return gateway.getBuffer(req.sessionId)
+    // A session whose hook events come through the session helper (2.1.3-beta.8,
+    // A4) has a ring in the signals module too: both, in the order they came.
+    return hookFeedBuffer(req.sessionId, gateway.getBuffer(req.sessionId))
   })
 
   ipcMain.handle(IPC.HOOKS_GET_STATUS, async () => gateway.status())

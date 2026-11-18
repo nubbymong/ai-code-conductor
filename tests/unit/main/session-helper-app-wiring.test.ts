@@ -22,12 +22,19 @@ const h = vi.hoisted(() => ({
   /** The store holds an agent session's record a quit left (a held CLI it could not wait to end). */
   agentRecords: false,
   agentRecordsAsked: [] as string[],
+  /** 2.1.3-beta.8 (A4): what the hooks wiring calls. */
+  switchHooks: vi.fn((_a: unknown) => 'switched'),
+  helperEvent: vi.fn(),
+  helperEnded: vi.fn(),
 }))
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => 'C:\\app' } }))
 vi.mock('../../../src/main/config-manager', () => ({ readConfig: () => { if (h.settings === null) throw new Error('unreadable'); return h.settings } }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {} }))
 vi.mock('../../../src/main/ipc/machines-handlers', () => ({ setMachinesSource: h.machinesSource }))
+vi.mock('../../../src/main/hooks/per-session-settings', () => ({ getLocalSessionSettingsPath: (id: string) => `C:/Users/u/.claude/settings-${id}.json` }))
+vi.mock('../../../src/main/hooks/session-hooks-writer', () => ({ switchHooksToHelper: h.switchHooks }))
+vi.mock('../../../src/main/session-signals/hooks', () => ({ helperHookEvent: h.helperEvent, endHelperHooks: h.helperEnded }))
 vi.mock('../../../src/main/session-helper/install', () => ({ helperRootDir: () => 'C:\\user\\helper', bundledHelperPath: () => 'C:\\app\\helper\\aicc-helper.exe' }))
 vi.mock('../../../src/main/session-state', () => ({
   peekSessionState: () => {
@@ -355,5 +362,22 @@ describe('index.ts calls the wiring at the right moments', () => {
     expect(beforeQuit).toBeGreaterThan(0)
     expect(willQuit - beforeQuit).toBeLessThan(300)
     expect(willQuit).toBeGreaterThan(beforeQuit)
+  })
+})
+
+describe("Claude Code sessions' hooks through the holder (2.1.3-beta.8, plan section A4)", () => {
+  it('the manager gets hooks for Claude Code sessions only, wired to the settings writer and the session signals module', () => {
+    h.settings = { agentSessionsThroughHelper: true }
+    initSessionHelper(() => {})
+    const hooks = h.made[0].deps.hooks as Record<string, { useHelperHooks: (id: string, t: unknown) => unknown; event: (id: string, e: unknown) => void; ended: (id: string) => void }>
+    expect(Object.keys(hooks)).toEqual(['claude'])
+    const target = { helperPath: 'C:/h/aicc-helper.exe', store: 'C:/h/store', sid: 'ag0123456789abcdef0123456789abcd', launcher: 'git-bash' }
+    expect(hooks.claude.useHelperHooks('abcdef0123456789abcdef01', target)).toBe('switched')
+    expect(h.switchHooks).toHaveBeenCalledWith({ settingsPath: 'C:/Users/u/.claude/settings-abcdef0123456789abcdef01.json', sessionId: 'abcdef0123456789abcdef01', target })
+    const e = { seq: 1, kind: 'Stop', payload: { hook_event_name: 'Stop' } }
+    hooks.claude.event('abcdef0123456789abcdef01', e)
+    expect(h.helperEvent).toHaveBeenCalledWith('abcdef0123456789abcdef01', e)
+    hooks.claude.ended('abcdef0123456789abcdef01')
+    expect(h.helperEnded).toHaveBeenCalledWith('abcdef0123456789abcdef01')
   })
 })
