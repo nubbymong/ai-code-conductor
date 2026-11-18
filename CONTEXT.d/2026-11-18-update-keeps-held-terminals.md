@@ -47,7 +47,10 @@ the app's exit and a silent install.
   own bound) before every PTY is killed, so the app does not exit first.
   Re-attach into a new tab moves the binding: a tab an earlier Re-attach
   bound to the same terminal gets one of its own if it starts again, and can
-  no longer take it over or end it.
+  no longer take it over or end it. A tab whose shell runs under an id
+  derived from where its first terminal went keeps that id as a binding, so
+  a later move does not cost it its shell. While an update goes on, nothing
+  is taken over either: the kill would end it.
 - At the next start a mark with reason "update" takes the crash path
   unchanged; only the log line says the app was updated.
 - Settings: one sentence in the plain-terminal switch's note.

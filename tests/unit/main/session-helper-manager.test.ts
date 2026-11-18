@@ -1511,15 +1511,30 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     const p1 = spawnPlainPty({ plain: true, sessionId: N1 }, SHELL, [], opts())
     expect(await (p1 as HelperPty).adoption).toBe(true)
     await until(() => liveOf(second).get(sid)?.isAttached === true, 'attached in N1')
+    // The first tab, started again, runs a shell of its own under an id
+    // derived from N1 (PR review, round 3: that id must not change later).
+    const a = spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    const aSid = (a as HelperPty).sid
+    expect(aSid).toBe(heldSessionId(`${PLAIN}/after/${N1}`))
+    await until(() => !!helper.holders.get(aSid)?.attached, 'the first tab\'s own shell')
+    helper.holders.get(aSid)!.output('its own shell\r\n')
     // An update that does not start: released, killed, reclaimed; then Re-attach to N2.
-    second.noteSavedTabs([{ id: N1, label: 'Terminal' }])
-    expect(second.releaseForUpdate(new Set([N1]))).toBe(1)
+    second.noteSavedTabs([{ id: N1, label: 'Terminal' }, { id: PLAIN, label: 'Build' }])
+    expect(second.releaseForUpdate(new Set([N1, PLAIN]))).toBe(2)
     p1.kill()
+    a.kill()
     second.reclaim()
     // Attaches: run 1, run 2's keeper, N1, then reclaim's keeper.
     await until(() => !liveOf(second).has(sid) && helper.holders.get(sid)!.attaches === 4, 'the keeper')
     expect(await second.reattach(sid)).toMatchObject({ ok: true, tab: { id: N2, open: true } })
-    expect(JSON.parse(readFileSync(join(root, 'bindings.json'), 'utf8')).bindings).toEqual({ [N2]: sid })
+    expect(JSON.parse(readFileSync(join(root, 'bindings.json'), 'utf8')).bindings).toEqual({ [N2]: sid, [PLAIN]: aSid })
+    // The first tab still finds its own shell, not a fresh one.
+    expect(second.sidFor(PLAIN)).toBe(aSid)
+    const a2 = spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    const aSeen: string[] = []
+    a2.onData((d) => aSeen.push(d))
+    expect(await (a2 as HelperPty).adoption).toBe(true)
+    await until(() => aSeen.join('').includes('its own shell'), 'the first tab\'s replay')
     // N1 started again: a terminal of its own, not this one.
     const again = spawnPlainPty({ plain: true, sessionId: N1 }, SHELL, [], opts())
     expect(second.sidFor(N1)).not.toBe(sid)
@@ -1531,6 +1546,26 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     expect(await (again as HelperPty).adoption).toBe(false)
     await tick(50)
     expect(helper.holders.get(sid)!.endsAsked).toBe(0)
+    expect(helper.holders.get(aSid)!.endsAsked).toBe(0)
+  })
+
+  it('while an update goes on, a tab started again does not take over a terminal kept for it, so the kill that follows cannot end it (PR review)', async () => {
+    const m = await startedWith(makeManager(), ON_BOTH)
+    const ptys = await fourHeld(m)
+    const s = sids()
+    m.releaseForUpdate(SAVED)
+    killAll(ptys)
+    m.reclaim()
+    await until(() => helper.holders.get(s.plain)!.attaches === 2, 'the keeper')
+    // A retry, its tab still saved: the kept terminal stays kept.
+    expect(m.releaseForUpdate(SAVED)).toBe(0)
+    const p = spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    expect(p).not.toBeInstanceOf(HelperPty)
+    p.kill()
+    await tick(50)
+    expect(helper.holders.get(s.plain)!.endsAsked).toBe(0)
+    expect(helper.holders.get(s.plain)!.ended).toBe(false)
+    expect(m.holdsFor(PLAIN)).toBe(true)
   })
 
   it('a retry with "Close sessions" after an update that did not start ends what reclaim kept, unless its tab is saved (PR review)', async () => {

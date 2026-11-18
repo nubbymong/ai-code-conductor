@@ -582,10 +582,13 @@ export class SessionHelperManager implements MachinesSource {
     const direct = () => this.deps.spawnDirect(file, args, opts)
     if (ctx.plain !== true || typeof args === 'string' || !APP_PTY_ID_RE.test(ctx.sessionId)) return direct()
     const sid = this.sidFor(ctx.sessionId)
-    const adopt = this.quitting || this.live.has(sid) ? undefined : this.adoptable.get(sid)
+    // While an update goes on nothing is taken over either: the kill that
+    // follows would end it, and the next version shows it again.
+    const adopt = this.quitting || this.updating || this.live.has(sid) ? undefined : this.adoptable.get(sid)
     if (adopt) {
       this.adoptable.delete(sid)
       this.reclaimed.delete(sid)
+      this.pinOwnId(ctx.sessionId, sid)
       return this.track(new HelperPty({ sid, label: ctx.sessionId, spec: this.launchSpec(file, args, opts), adopt, driver: this.driver(direct, false) }), ctx.sessionId)
     }
     if (!this.routesPlain()) return direct()
@@ -601,7 +604,21 @@ export class SessionHelperManager implements MachinesSource {
       this.deps.log(`[session-helper] ${ctx.sessionId}: started the usual way, because the helper would refuse ${refused.why}`)
       return direct()
     }
+    this.pinOwnId(ctx.sessionId, sid)
     return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver: this.driver(direct, true) }), ctx.sessionId)
+  }
+
+  /**
+   * A tab whose first terminal Re-attach moved to another tab runs under an
+   * id of its own, derived from that other tab (sidFor). It is kept as this
+   * tab's binding once a terminal runs under it, so moving that first
+   * terminal again later does not change it, and the tab still finds its
+   * own held terminal. The binding goes when the terminal ends (track).
+   */
+  private pinOwnId(appPtyId: string, sid: string): void {
+    if (sid === heldSessionId(appPtyId) || this.bindings.get(appPtyId) === sid) return
+    this.bindings.set(appPtyId, sid)
+    this.saveBindings()
   }
 
   /**
