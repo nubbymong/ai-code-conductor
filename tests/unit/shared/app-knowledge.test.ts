@@ -2236,7 +2236,7 @@ describe('the 2.1.3-beta.8 sweep', () => {
   it('the release notes carry the update warning, the way back and every change line', () => {
     const w = entry.warnings!.join('\n')
     expect(w).toContain("This beta series begins moving the app's background services")
-    expect(w).toContain('the update to this version still ends the terminals the session helper holds')
+    expect(w).toContain('the update to this version still ends the held terminals open in tabs')
     expect(w).toContain('the version you update from decides what an update does')
     expect(w).toContain('To go back to 2.1.3-beta.7')
     const all = entry.changes.map((c) => c.description).join('\n')
