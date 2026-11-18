@@ -61,13 +61,19 @@ export function deliverStatus(data: StatuslineData, getWindow: (() => BrowserWin
     delete forDisplay.modelId
     delete forDisplay.effortLevel
   }
+  // The window send and the provider's step are guarded as the three sinks
+  // below are, each on its own (planning #324): a window torn down between
+  // the check and the send, or a provider that throws, must not stop the
+  // transcript binder, the usage figure or Sentinel.
   if (getWindow) {
-    const win = getWindow()
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('statusline:update', forDisplay)
-    }
+    try {
+      const win = getWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('statusline:update', forDisplay)
+      }
+    } catch { /* the window must not break fan-out */ }
   }
-  tryGetProvider('claude')?.deliverStatusline?.(forDisplay)
+  try { tryGetProvider('claude')?.deliverStatusline?.(forDisplay) } catch { /* the provider must not break fan-out */ }
   // Logs v2 (Task 8): forward the live transcript path to the binder (continuous,
   // exact discovery source). Guarded — the sink may not be registered yet (and
   // isn't in unit tests). A throw here must not break the statusline pipeline.
