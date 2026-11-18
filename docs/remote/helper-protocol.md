@@ -771,14 +771,14 @@ its fields; `code` is present only once the program has exited.
   then the end. A holder that ends this way removes its record and its
   endpoint, as `term.end` does.
 
-**Hook events (capability `hooks`, from 2.1.3-beta.8).** This local `hooks`
-is only `hook.event` and `event` on a holder's own endpoint; the remote
-`hooks` of section 8 (R7) is a separate capability that also carries
-`session.prepare`. A Claude Code session's hooks can reach the app through
-its holder instead of the hooks gateway. A holder from 2.1.3-beta.8 offers `hooks` in its hello. Nothing in
-the app uses it yet: the app's own ack stays `["core","local"]`, so it is
-never sent a hook event. Fixtures: the `hooks` part of
-`helper/fixtures/local.json`.
+**Hook events (capability `hooks`, from 2.1.3-beta.8).** This local `hooks` is
+only `hook.event` and `event` on a holder's own endpoint; the remote `hooks`
+of section 8 (R7) is a separate capability that also carries
+`session.prepare`. A Claude Code session's hooks can reach the app through its
+holder instead of the hooks gateway. A holder from 2.1.3-beta.8 offers `hooks`
+in its hello. Nothing in the app uses it yet: the app's own ack stays
+`["core","local"]`, so it is never sent a hook event. Fixtures: the `hooks`
+part of `helper/fixtures/local.json`.
 
 - **The hook mode.** Claude Code runs, as a command hook,
 
@@ -841,22 +841,23 @@ never sent a hook event. Fixtures: the `hooks` part of
   ack `hooks` it is `unknown-type` and a close. The reply is `hook.taken`
   `{re, seq}`. The holder only numbers the event and passes it on: it runs,
   opens and writes nothing for it.
-- **`event`** `{seq, kind, payload, lost?}`, from the holder, on channel 0,
-  at most 64 KiB of JSON: its payload is at most 65,280 bytes and the rest
-  at most 105. Each `hook.event` takes the session's next `seq`, from 1. It
-  goes at once to the attached connection if that connection acked `hooks`;
-  a connection that did not is never sent one. With no such connection attached, events
-  wait in a queue of at most 256 events and 2 MiB of payload, the oldest
-  dropped first; the next event sent carries `lost`, the number dropped
+- **`event`** `{seq, kind, payload, lost?}`, from the holder, on channel 0, at
+  most 64 KiB of JSON: its payload is at most 65,280 bytes and the rest at
+  most 105. Each `hook.event` takes the session's next `seq`, from 1. It goes
+  at once to the attached connection if that connection acked `hooks`; a
+  connection that did not is never sent one. With no such connection attached,
+  events wait in a queue of at most 256 events and 2 MiB of payload, the
+  oldest dropped first; the next event sent carries `lost`, the number dropped
   before it, and an event with nothing dropped before it has no `lost`. A
   connection that acked `hooks` gets every waiting event right after its
   `term.attached` reply and replay, before any live output, then each new one
-  at once; the waiting events go within 5 s in all, and a connection that
-  does not take them in that time is closed while they wait on. No event
-  follows `term.detached`, `replaced`, `term.exit` or `term.ended`: one that
-  comes later waits for the next attach. An event whose send failed waits
-  for the next attach, and the app drops a `seq` it has already seen
-  (section 9). A holder that ends drops its queue.
+  at once; the waiting events go within 5 s in all, and a connection that does
+  not take them in that time is closed while they wait on. No event follows
+  `term.detached`, `replaced`, `term.exit`, `term.ended`, or either `busy` an
+  attach can end with (the connection fell too far behind, or no thread could
+  carry its output): one that comes later waits for the next attach. An event
+  whose send failed waits for the next attach, and the app drops a `seq` it
+  has already seen (section 9). A holder that ends drops its queue.
 
 **Change.** The `hold` and `list` command lines and their exit codes, the
 record and the listing are frozen within version 1; new fields need a new

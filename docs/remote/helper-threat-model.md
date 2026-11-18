@@ -411,13 +411,12 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   session's gateway token from its settings file and post to the hooks
   gateway. The holder only numbers an event and passes it on: it runs, opens
   and writes nothing for it, and keeps at most 256 events and 2 MiB while no
-  connection takes them. The app treats every hook payload as untrusted
-  text, and a transcript path from one passes `sanitiseTranscriptPath` before
-  it is used, in the app-side change that sends hooks through the helper
-  (ADR-030 slice S12). The hook mode reads untrusted
-  input on its standard input, keeps at most 4 MiB of it, and never prints
-  or exits other than 0, so nothing it reads reaches the CLI's conversation
-  through it.
+  connection takes them. The app treats every hook payload as untrusted text,
+  and a transcript path from one passes `sanitiseTranscriptPath` before it is
+  used, in the app-side change that sends hooks through the helper (ADR-030
+  slice S12). The hook mode reads untrusted input on its standard input, keeps
+  at most 4 MiB of it, and never prints or exits other than 0, so nothing it
+  reads reaches the CLI's conversation through it.
 
 ## 4 Review
 
