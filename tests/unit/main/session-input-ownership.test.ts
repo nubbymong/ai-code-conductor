@@ -6,7 +6,9 @@
 // hands to canvas/claude-marker-typing.ts, which has the renderer type it.)
 // Every other caller asks the module (submitLine, typeKeys, submitMarker,
 // handOffAskQuestion); askQuestion, which skips the Ask check, is the PTY
-// manager's Ask launch's only.
+// manager's Ask launch's only, and codexRunScreen, the Codex run screen
+// itself, is the PTY manager's only (it resizes and closes each pane through
+// it).
 //
 // This reads every src/main/**/*.ts file and finds, in each file outside the
 // module, every place that types into a session's terminal:
@@ -24,10 +26,14 @@
 //    on whole (spread, passed, stored, read by a computed key, re-exported)
 //    counts too. The module's own exports are the door: a name imported or
 //    destructured from src/main/session-input, or read from a namespace of
-//    it, is not counted, whatever it is;
+//    it, is not counted, whatever it is (but what its codexRunScreen returns
+//    is a run screen, below);
 //  - `.submit` read from a provider's run screen, or destructured from one:
 //    anything traced to a `.runScreen` read (destructured included), typed
-//    SessionRunScreen or `X['runScreen']`;
+//    SessionRunScreen or `X['runScreen']`, or a call of the module's
+//    codexRunScreen under any name (imported, renamed or not, read from a
+//    namespace, a require or an import() of the module, destructured from
+//    one, or set to a name from one of those);
 //  - `.write` read from a PTY handle, or destructured from one: anything typed
 //    IPty or HelperPty or `X['ptyProcess']`, the result of node-pty's spawn
 //    (imported, required or imported at run time), spawnPlainPty,
@@ -55,14 +61,16 @@
 // through any file it loads, is the PTY manager (so the ports cannot be
 // registered before the module is ready, and imports run one way); the PTY
 // manager registers the ports in one statement of its own, when it loads; and
-// askQuestion is reached from the PTY manager only.
+// askQuestion and codexRunScreen are reached from the PTY manager only.
 //
 // Not checked here: the renderer (its typing moves with S13); a PTY handle
 // held in an object property other than `ptyProcess` (or a backstop name) of
 // an object that is not `this`; a handle handed to an untyped parameter other
 // than a collection callback's; a writer reached through a field of an
 // injected dependency object (`deps.write`: the composer rule's and the
-// Watchdog's own writers, handed in by the PTY manager and by this module); a
+// Watchdog's own writers, handed in by the PTY manager and by this module);
+// the module's codexRunScreen handed on as a value and called elsewhere (only
+// the PTY manager may import it, above); a
 // computed key that is not a literal, except on a namespace of a module that
 // exports a typing function, which then counts whole; a reach through
 // `Reflect`, `eval` or a require whose name is built at run time; and a local
@@ -84,6 +92,8 @@ const TYPING_MODULES = new Set(['src/main/pty-manager', 'src/main/providers/code
 const PTY_TYPES = new Set(['IPty', 'HelperPty'])
 const PTY_STARTS = new Set(['spawnPlainPty', 'spawnAgentPty', 'spawnRunPty'])
 const SCREEN_TYPES = new Set(['SessionRunScreen'])
+/** The module's export that returns the Codex run screen: a call of it is a run screen. */
+const DOOR_SCREEN = 'codexRunScreen'
 /** The property an indexed type names a PTY handle or a run screen by (`PtySession['ptyProcess']`). */
 const INDEXED = { pty: 'ptyProcess', screen: 'runScreen' } as const
 const BY_NAME = new Set(['ptyProcess', 'cliSetupPty', 'codexRun', 'pane'])
@@ -219,6 +229,7 @@ type NsKind = 'door' | 'typing' | 'node-pty'
 export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] {
   const ast = parseTs(code, file)
   const door = new Set<string>()          // names imported or destructured from the module
+  const doorScreens = new Set<string>()   // names (or `this` fields) holding the module's codexRunScreen
   const namespaces = new Map<string, NsKind>()
   const typingImports = new Map<string, string>()
   const startNames = new Set<string>()
@@ -239,7 +250,11 @@ export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] 
     for (const s of n.specifiers as N[]) {
       if (s.type === 'ImportSpecifier') {
         const imported = s.imported.name ?? s.imported.value
-        if (kind === 'door') { door.add(s.local.name); continue }
+        if (kind === 'door') {
+          door.add(s.local.name)
+          if (imported === DOOR_SCREEN) doorScreens.add(s.local.name)
+          continue
+        }
         if (TYPING_FUNCTIONS.has(imported)) typingImports.set(s.local.name, imported)
         if (PTY_STARTS.has(imported)) startNames.add(s.local.name)
         if (PTY_TYPES.has(imported) || SCREEN_TYPES.has(imported)) typeAlias.set(s.local.name, imported)
@@ -330,7 +345,17 @@ export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] 
     }
     return false
   }
+  /** Whether `raw` is the module's codexRunScreen: a name or field bound to
+   *  it, or read from a namespace, a require or an import() of the module. */
+  const isDoorScreen = (raw: N | undefined): boolean => {
+    const e = unwrap(raw)
+    if (!e) return false
+    const k = keyOf(e)
+    if (k !== null && doorScreens.has(k)) return true
+    return isMember(e) && propName(e) === DOOR_SCREEN && nsKind(e.object) === 'door'
+  }
   const ownScreen = (e: N): boolean => (isMember(e) && propName(e) === 'runScreen') || (e.type === 'NewExpression' && namesType(e.typeParameters, 'screen'))
+    || (isCall(e) && isDoorScreen(e.callee))     // codexRunScreen(), under any name
   const isScreen = (e: N | undefined): boolean => traced(e, screens, ownScreen)
   const byName = (raw: N | undefined): boolean => {
     const e = unwrap(raw)
@@ -344,6 +369,7 @@ export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] 
     if (!value) return
     if (isHandle(value)) handles.add(k)
     if (isScreen(value)) screens.add(k)
+    if (isDoorScreen(value)) doorScreens.add(k)
     const ns = nsKind(value)
     if (ns && !k.startsWith('this.')) namespaces.set(k, ns)
   }
@@ -374,7 +400,11 @@ export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] 
       const target = prop.value?.type === 'AssignmentPattern' ? prop.value.left : prop.value
       if (target?.type !== 'Identifier') { bindPattern(prop.value, read, onRead); continue }
       const v = target.name
-      if (kind === 'door') { door.add(v); continue }
+      if (kind === 'door') {
+        door.add(v)
+        if (key === DOOR_SCREEN) doorScreens.add(v)
+        continue
+      }
       if (TYPING_FUNCTIONS.has(key)) typingImports.set(v, key)
       if (PTY_STARTS.has(key)) startNames.add(v)
       if (kind === 'node-pty' && key === 'spawn') nodePtySpawn.add(v)
@@ -405,7 +435,7 @@ export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] 
   }
 
   // Grow the sets of holders until nothing new is found (aliases of aliases).
-  const total = (): number => handles.size + screens.size + namespaces.size + door.size + typingImports.size + startNames.size + nodePtySpawn.size
+  const total = (): number => handles.size + screens.size + doorScreens.size + namespaces.size + door.size + typingImports.size + startNames.size + nodePtySpawn.size
   for (let size = -1; size !== total();) {
     size = total()
     walk(ast, (n) => {

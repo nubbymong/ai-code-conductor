@@ -69,7 +69,10 @@ function port(): SessionInputPorts {
  *  primitive (providers/codex/session-screen.ts), from the registered
  *  provider: main reaches a provider package only through the registry,
  *  never by importing it. Undefined when none is registered. The PTY manager
- *  opens, feeds, resizes and closes each run's pane through this one copy. */
+ *  resizes and closes each run's pane through this one copy (it opens and
+ *  feeds the pane through its provider's runScreen at the launch). Only the
+ *  PTY manager imports it, and session-input-ownership.test.ts counts a
+ *  submit on what it returns as typing, outside this module. */
 export function codexRunScreen(): SessionRunScreen | undefined {
   try { return getProvider('codex').runScreen } catch { return undefined }
 }
