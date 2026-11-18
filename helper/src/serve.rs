@@ -1186,6 +1186,28 @@ mod tests {
     }
 
     #[test]
+    fn the_largest_event_fits_a_frame_once_launched_and_one_byte_more_is_too_large() {
+        let kind = *request::HOOK_KINDS.iter().max_by_key(|k| k.len()).expect("a kind");
+        let head = format!("{{\"hook_event_name\":\"{kind}\",\"prompt\":\"");
+        let payload_of = |bytes: usize| format!("{head}{}\"}}", "x".repeat(bytes - head.len() - 2));
+        // The most a hook.event may carry, sent on with the longest seq and
+        // lost there are.
+        let most = payload_of(request::MAX_HOOK_PAYLOAD);
+        assert_eq!(most.len(), request::MAX_HOOK_PAYLOAD);
+        let ev = HookEvent { seq: u64::MAX, kind: kind.to_string(), payload: json::parse(most.as_bytes()).unwrap(), bytes: most.len() };
+        let event = event_message(&ev, u64::MAX).to_json();
+        assert!(event.len() <= MAX_JSON_AFTER_LAUNCH, "the largest event is {} bytes", event.len());
+        // One byte more of payload is `too-large`, not a frame over the
+        // limit: the hook.event carrying it, with the longest id, still fits.
+        let over = payload_of(request::MAX_HOOK_PAYLOAD + 1);
+        let id = request::MAX_SAFE_INTEGER - 1;
+        let message = format!("{{\"t\":\"hook.event\",\"id\":{id},\"kind\":\"{kind}\",\"payload\":{over}}}");
+        assert!(message.len() <= MAX_JSON_AFTER_LAUNCH, "a hook.event one byte over is {} bytes", message.len());
+        let refused = request::parse_allowed(&json::parse(message.as_bytes()).unwrap(), Allowed { local: true, hooks: true }).unwrap_err();
+        assert_eq!(refused.code, request::CODE_TOO_LARGE);
+    }
+
+    #[test]
     fn the_first_frame_must_be_an_ack_of_what_was_offered() {
         assert_eq!(ack("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\"]}"), Ok(true));
         assert_eq!(ack("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\"]}"), Ok(false));

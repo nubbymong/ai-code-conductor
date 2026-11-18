@@ -1597,7 +1597,7 @@
     ]
   },
   "hooks": {
-    "_doc": "Hook event vectors for docs/remote/helper-protocol.md section 15 (capability hooks, from 2.1.3-beta.8). Read by helper/tests/fixtures.rs. A request is read as a connection that acked core, local and hooks reads it, unless the vector says what was acked (acked). messages and taken are the exact bytes the holder sends.",
+    "_doc": "Hook event vectors for docs/remote/helper-protocol.md section 15 (capability hooks, from 2.1.3-beta.8). Read by helper/tests/fixtures.rs. A request is read as a connection that acked core, local and hooks reads it, unless the vector says what was acked (acked). messages and taken are the exact bytes the holder sends; largest is the largest event there can be.",
     "caps": [
       "core",
       "local",
@@ -1615,7 +1615,7 @@
       "StopFailure"
     ],
     "limits": {
-      "payload_bytes": 65536,
+      "payload_bytes": 65280,
       "queue_events": 256,
       "queue_bytes": 2097152,
       "stdin_bytes": 4194304,
@@ -1643,7 +1643,7 @@
         },
         {
           "name": "a PostToolUse event whose tool input and output were cut",
-          "json": "{\"t\":\"hook.event\",\"id\":4,\"kind\":\"PostToolUse\",\"payload\":{\"session_id\":\"abc\",\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"cut\":26},\"tool_response\":{\"cut\":102402}}}",
+          "json": "{\"t\":\"hook.event\",\"id\":4,\"kind\":\"PostToolUse\",\"payload\":{\"session_id\":\"abc\",\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"cut\":26},\"tool_response\":{\"cut\":102402},\"cut\":true}}",
           "expect": {
             "type": "hook.event",
             "id": 4,
@@ -1657,7 +1657,8 @@
               },
               "tool_response": {
                 "cut": 102402
-              }
+              },
+              "cut": true
             }
           }
         },
@@ -1690,16 +1691,6 @@
           }
         },
         {
-          "name": "an empty payload",
-          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"SessionStart\",\"payload\":{}}",
-          "expect": {
-            "type": "hook.event",
-            "id": 2,
-            "kind": "SessionStart",
-            "payload": {}
-          }
-        },
-        {
           "name": "on a connection that acked hooks without local",
           "acked": [
             "core",
@@ -1719,17 +1710,17 @@
       "invalid": [
         {
           "name": "an unknown kind",
-          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"PermissionRequest\",\"payload\":{}}",
+          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"PermissionRequest\",\"payload\":{\"hook_event_name\":\"PermissionRequest\"}}",
           "error": "bad-field"
         },
         {
           "name": "a kind in another case",
-          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"stop\",\"payload\":{}}",
+          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"stop\",\"payload\":{\"hook_event_name\":\"stop\"}}",
           "error": "bad-field"
         },
         {
           "name": "a kind that is not a string",
-          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":1,\"payload\":{}}",
+          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":1,\"payload\":{\"hook_event_name\":\"Stop\"}}",
           "error": "bad-field"
         },
         {
@@ -1743,33 +1734,48 @@
           "error": "bad-field"
         },
         {
+          "name": "a payload without hook_event_name",
+          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"SessionStart\",\"payload\":{}}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a payload whose hook_event_name is another kind",
+          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"PreToolUse\"}}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a payload that names a member twice",
+          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\",\"session_id\":\"a\",\"session_id\":\"b\"}}",
+          "error": "bad-field"
+        },
+        {
           "name": "a missing payload",
           "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\"}",
           "error": "bad-field"
         },
         {
           "name": "a missing kind",
-          "json": "{\"t\":\"hook.event\",\"id\":2,\"payload\":{}}",
+          "json": "{\"t\":\"hook.event\",\"id\":2,\"payload\":{\"hook_event_name\":\"Stop\"}}",
           "error": "bad-field"
         },
         {
           "name": "a missing id",
-          "json": "{\"t\":\"hook.event\",\"kind\":\"Stop\",\"payload\":{}}",
+          "json": "{\"t\":\"hook.event\",\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\"}}",
           "error": "bad-field"
         },
         {
           "name": "an odd id",
-          "json": "{\"t\":\"hook.event\",\"id\":3,\"kind\":\"Stop\",\"payload\":{}}",
+          "json": "{\"t\":\"hook.event\",\"id\":3,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\"}}",
           "error": "bad-field"
         },
         {
           "name": "an extra field",
-          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{},\"seq\":1}",
+          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\"},\"seq\":1}",
           "error": "bad-field"
         },
         {
           "name": "a field given twice",
-          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"kind\":\"Stop\",\"payload\":{}}",
+          "json": "{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\"}}",
           "error": "bad-field"
         },
         {
@@ -1818,6 +1824,13 @@
       "re": 2,
       "seq": 7,
       "json": "{\"t\":\"hook.taken\",\"re\":2,\"seq\":7}"
+    },
+    "largest": {
+      "_doc": "The largest hook event: a payload of limits.payload_bytes, built as {\"hook_event_name\":<kind>,\"prompt\":\"x...\"} (the longest kind), sent as an event with seq and lost of 2^53 - 1. The event is event_bytes of JSON, within the 64 KiB a frame holds once the session is launched; a payload one byte larger is too-large.",
+      "kind": "UserPromptSubmit",
+      "seq": 9007199254740991,
+      "lost": 9007199254740991,
+      "event_bytes": 65377
     }
   }
 }

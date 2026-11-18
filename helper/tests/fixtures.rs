@@ -312,6 +312,30 @@ fn the_hook_limits_match_the_constants() {
 }
 
 #[test]
+fn the_largest_hook_event_fits_a_frame_once_launched() {
+    let doc = load("local.json");
+    let hooks = doc.get("hooks").expect("hooks");
+    let largest = hooks.get("largest").expect("largest");
+    let n = |v: &Value, k: &str| v.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    let most = n(hooks.get("limits").expect("limits"), "payload_bytes") as usize;
+    let kind = text(largest, "kind");
+    assert_eq!(Some(kind), request::HOOK_KINDS.iter().copied().max_by_key(|k| k.len()), "not the longest kind");
+    let head = format!("{{\"hook_event_name\":\"{kind}\",\"prompt\":\"");
+    let payload_of = |bytes: usize| format!("{head}{}\"}}", "x".repeat(bytes - head.len() - 2));
+    let payload = payload_of(most);
+    let ev = HookEvent { seq: n(largest, "seq"), kind: kind.to_string(), payload: json::parse(payload.as_bytes()).expect("JSON"), bytes: most };
+    let event = serve::event_message(&ev, n(largest, "lost")).to_json();
+    assert_eq!(event.len() as u64, n(largest, "event_bytes"));
+    assert!(event.len() <= serve::MAX_JSON_AFTER_LAUNCH, "the largest event is {} bytes", event.len());
+    // As a hook.event: the most is taken, one byte more is too large.
+    let both = Allowed { local: true, hooks: true };
+    let message = |p: &str| json::parse(format!("{{\"t\":\"hook.event\",\"id\":2,\"kind\":\"{kind}\",\"payload\":{p}}}").as_bytes()).expect("JSON");
+    assert!(request::parse_allowed(&message(&payload), both).is_ok(), "the largest payload is refused");
+    let refused = request::parse_allowed(&message(&payload_of(most + 1)), both).expect_err("a payload one byte larger");
+    assert_eq!(refused.code, request::CODE_TOO_LARGE);
+}
+
+#[test]
 fn local_requests_read_as_the_fixtures_say() {
     let doc = load("local.json");
     let requests = doc.get("requests").expect("requests");

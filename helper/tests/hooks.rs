@@ -59,6 +59,19 @@ impl Drop for Folder {
     }
 }
 
+/// Every entry of `dir` by name, with the bytes of each file, in name order.
+fn files(dir: &Folder) -> Vec<(String, Vec<u8>)> {
+    let mut out: Vec<(String, Vec<u8>)> = fs::read_dir(&dir.0)
+        .expect("read the folder")
+        .map(|entry| {
+            let entry = entry.expect("an entry");
+            (entry.file_name().to_string_lossy().into_owned(), fs::read(entry.path()).unwrap_or_default())
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 fn t_of(v: &Value) -> &str {
     v.get("t").and_then(Value::as_str).unwrap_or("")
 }
@@ -423,14 +436,24 @@ fn hook_runs_reach_the_attached_app_in_order_and_whole() {
     }
 
     // A 100 KiB tool output: the tool's input and output become their
-    // sizes, the rest is whole.
+    // sizes, the rest is whole, and the payload says it was cut.
     let big = event_input("PostToolUse", &format!(",\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":\"cat big.txt\"}},\"tool_response\":\"{}\"", "x".repeat(100 * 1024)));
     let ran = hook_to(&store_dir, sid, big.as_bytes());
     assert!(ran.quiet(), "{}", ran.say());
     let event = app.events(1).remove(0);
     assert_eq!(num(&event, "seq"), Some(4), "{}", event.to_json());
-    let want = json::parse(event_input("PostToolUse", ",\"tool_name\":\"Bash\",\"tool_input\":{\"cut\":25},\"tool_response\":{\"cut\":102402}").as_bytes()).expect("JSON");
+    let want = json::parse(event_input("PostToolUse", ",\"tool_name\":\"Bash\",\"tool_input\":{\"cut\":25},\"tool_response\":{\"cut\":102402},\"cut\":true").as_bytes()).expect("JSON");
     assert_eq!(event.get("payload"), Some(&want), "{}", event.to_json());
+
+    // A tool output cut inside a surrogate pair, as Node writes it: the
+    // lone half reads as the replacement character, and the event comes.
+    let lone = event_input("PostToolUse", ",\"tool_name\":\"Bash\",\"tool_response\":\"cut mid-emoji \\ud83d\"");
+    let ran = hook_to(&store_dir, sid, lone.as_bytes());
+    assert!(ran.quiet(), "{}", ran.say());
+    let event = app.events(1).remove(0);
+    assert_eq!(num(&event, "seq"), Some(5), "{}", event.to_json());
+    let response = event.get("payload").and_then(|p| p.get("tool_response")).and_then(Value::as_str);
+    assert_eq!(response, Some("cut mid-emoji \u{fffd}"), "{}", event.to_json());
     end(&held.0);
 }
 
@@ -464,39 +487,53 @@ fn a_hook_run_that_cannot_pass_its_event_on_exits_0_and_says_nothing() {
     }
     assert!(!missing.exists(), "the hook mode made the store");
 
-    // A record whose holder is gone: nothing listens on its endpoint.
+    // A record whose holder is gone: nothing listens on its endpoint. The
+    // hook mode writes no file: unlike list mode, it leaves the record be.
     let stale_sid = "hooks-stale-01";
     let gone = transport::endpoint_name(stale_sid, &"0".repeat(transport::ENDPOINT_RANDOM_HEX));
     store::prepare(&stale_dir.0).expect("a store");
     store::write(&stale_dir.0, &record(stale_sid, &gone)).expect("a record");
+    let stale_path = store::record_path(&stale_dir.0, stale_sid);
+    let stale_bytes = fs::read(&stale_path).expect("the record");
     let ran = hook_to(&stale_dir, stale_sid, good.as_bytes());
     assert!(ran.quiet(), "a stale record: {}", ran.say());
+    assert_eq!(fs::read(&stale_path).ok(), Some(stale_bytes), "the hook mode removed or changed a stale record");
 
     // What came on standard input is not an event of the nine: nothing, not
-    // JSON, not an object, another kind, or over 4 MiB.
+    // JSON, not an object, another kind, a name given twice, or over 4 MiB.
     let over = format!("{{\"hook_event_name\":\"Stop\",\"x\":\"{}\"}}", "x".repeat(4 * 1024 * 1024));
     for (what, input) in [
         ("nothing", Vec::new()),
         ("not JSON", b"not json".to_vec()),
         ("not an object", b"[\"Stop\"]".to_vec()),
         ("another kind", event_input("PermissionRequest", "").into_bytes()),
+        ("a name given twice", event_input("Stop", ",\"hook_event_name\":\"PreToolUse\"").into_bytes()),
         ("over 4 MiB", over.into_bytes()),
     ] {
         let ran = hook_to(&store_dir, sid, &input);
         assert!(ran.quiet(), "{what}: {}", ran.say());
     }
 
+    // None of those reached the holder. The attached app would have got it
+    // within the run, so a second more is ample.
+    if let Some(m) = app.next(Duration::from_secs(1)) {
+        panic!("a run that should have sent nothing reached the app: {}", m.to_json());
+    }
+
     // A holder that serves 16 connections already (the app and 15 more)
-    // answers busy.
+    // answers busy, and nothing reaches the app.
     let idle: Vec<Client> = (0..15).map(|_| Client::to_record(&held.0, WAIT).expect("an idle connection")).collect();
     let ran = hook_to(&store_dir, sid, good.as_bytes());
     assert!(ran.quiet(), "busy: {}", ran.say());
     assert!(ran.took < HOOK_BOUND, "busy: {}", ran.say());
+    if let Some(m) = app.next(Duration::from_secs(1)) {
+        panic!("a run the holder answered busy reached the app: {}", m.to_json());
+    }
     drop(idle);
 
-    // None of those reached the holder: the next event is the session's
-    // first. (A run made while the holder still counts the idle connections
-    // is busy too, and is made again.)
+    // The next good run's event is the session's first, whole. (A run made
+    // while the holder still counts the idle connections is busy too, and
+    // is made again.)
     let mut first = None;
     for _ in 0..10 {
         let ran = hook_to(&store_dir, sid, good.as_bytes());
@@ -509,6 +546,7 @@ fn a_hook_run_that_cannot_pass_its_event_on_exits_0_and_says_nothing() {
     let first = first.expect("no hook event came once the idle connections had gone");
     assert_eq!(t_of(&first), "event", "{}", first.to_json());
     assert_eq!(num(&first, "seq"), Some(1), "a run that should have sent nothing took a seq: {}", first.to_json());
+    assert_eq!(first.get("payload"), Some(&json::parse(good.as_bytes()).expect("JSON")), "{}", first.to_json());
     end(&held.0);
 }
 
@@ -520,12 +558,16 @@ fn events_wait_while_no_connection_takes_them_and_the_last_256_come_with_the_cou
     let sid = "hooks-queue-01";
     let held = Held(hold(&store_dir, sid));
 
-    // A connection that posts hook events and holds no terminal.
+    // A connection that posts hook events and holds no terminal. The
+    // holder writes nothing for them: the store is as it was.
     let mut poster = App::connect(&held.0, &HOLDER_CAPS);
     launch(&mut poster, &work);
+    let before = files(&store_dir);
+    assert!(!before.is_empty(), "no record in the store");
     for n in 1..=300 {
         assert_eq!(post(&mut poster, n), n);
     }
+    assert_eq!(files(&store_dir), before, "posting hook events changed the store");
 
     // The app's own ack (core and local) takes the terminal and is never
     // sent a hook event; it may not post one either.
@@ -571,6 +613,38 @@ fn events_wait_while_no_connection_takes_them_and_the_last_256_come_with_the_cou
     assert_eq!(events.iter().map(|e| num(e, "seq")).collect::<Vec<_>>(), vec![Some(301), Some(302)]);
     assert!(events.iter().all(|e| e.get("lost").is_none()), "{:?}", texts(&events));
     end(&held.0);
+}
+
+#[test]
+fn a_holder_that_ends_drops_its_hook_events_and_the_next_one_counts_from_1() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-ends");
+    let work = Folder::new("work-ends");
+    let sid = "hooks-ends-01";
+
+    // Two events wait in a holder no connection takes them from; it ends.
+    let first = Held(hold(&store_dir, sid));
+    let mut poster = App::connect(&first.0, &HOLDER_CAPS);
+    launch(&mut poster, &work);
+    assert_eq!(post(&mut poster, 1), 1);
+    assert_eq!(post(&mut poster, 2), 2);
+    end(&first.0);
+    assert!(!pids::alive(first.0.pid), "the first holder still runs");
+
+    // A new holder of the session has none of them, and counts from 1.
+    let second = Held(hold(&store_dir, sid));
+    let mut app = App::connect(&second.0, &HOLDER_CAPS);
+    launch(&mut app, &work);
+    attach(&mut app);
+    if let Some(m) = app.next(Duration::from_secs(1)) {
+        panic!("a new holder sent {}", m.to_json());
+    }
+    let mut poster = App::connect(&second.0, &HOLDER_CAPS);
+    assert_eq!(post(&mut poster, 3), 1);
+    let event = app.events(1).remove(0);
+    assert_eq!(event.get("payload").and_then(|p| num(p, "n")), Some(3), "{}", event.to_json());
+    assert!(event.get("lost").is_none(), "{}", event.to_json());
+    end(&second.0);
 }
 
 #[test]

@@ -604,7 +604,7 @@ mod tests {
             }
         }
         // Not without hooks acked, whatever else was: the connection is closed.
-        let v = json::parse(b"{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{}}").unwrap();
+        let v = json::parse(b"{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\"}}").unwrap();
         assert_eq!(parse(&v, true).unwrap_err().code, CODE_UNKNOWN_TYPE);
         assert_eq!(parse_allowed(&v, Allowed { local: true, hooks: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
         // Hooks alone allow it, and the terminal messages still need local.
@@ -628,9 +628,30 @@ mod tests {
         assert_eq!(code("{\"t\":\"hook.event\",\"id\":3,\"kind\":\"Stop\",\"payload\":{}}"), CODE_BAD_FIELD, "an odd id");
         assert_eq!(code("{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{},\"seq\":1}"), CODE_BAD_FIELD, "an extra field");
         assert_eq!(code("{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"kind\":\"Stop\",\"payload\":{}}"), CODE_BAD_FIELD, "a field twice");
-        // 64 KiB of payload as JSON is the most: one byte more is too large.
+        // 64 KiB less 256 of payload as JSON is the most: one byte more is
+        // too large. The 256 leave room for the `event` that carries it.
         assert!(hook(&hook_of_size("PostToolUse", MAX_HOOK_PAYLOAD)).is_ok());
         assert_eq!(code(&hook_of_size("PostToolUse", MAX_HOOK_PAYLOAD + 1)), CODE_TOO_LARGE);
-        assert_eq!(MAX_HOOK_PAYLOAD, 64 * 1024);
+        assert_eq!(MAX_HOOK_PAYLOAD, 64 * 1024 - 256);
+    }
+
+    #[test]
+    fn a_hook_event_whose_payload_repeats_a_name_or_names_another_kind_is_refused() {
+        let code = |payload: &str| hook(&format!("{{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{payload}}}")).unwrap_err().code;
+        for payload in [
+            "{}",
+            "{\"session_id\":\"abc\"}",
+            "{\"hook_event_name\":\"PreToolUse\"}",
+            "{\"hook_event_name\":\"stop\"}",
+            "{\"hook_event_name\":1}",
+            "{\"hook_event_name\":[\"Stop\"]}",
+            "{\"hook_event_name\":\"Stop\",\"hook_event_name\":\"PreToolUse\"}",
+            "{\"hook_event_name\":\"Stop\",\"hook_event_name\":\"Stop\"}",
+            "{\"hook_event_name\":\"Stop\",\"session_id\":\"a\",\"session_id\":\"b\"}",
+        ] {
+            assert_eq!(code(payload), CODE_BAD_FIELD, "payload {payload}");
+        }
+        // A name repeated further in is not the holder's to judge.
+        assert!(hook("{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\",\"tool_input\":{\"a\":1,\"a\":2}}}").is_ok());
     }
 }

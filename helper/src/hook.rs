@@ -314,6 +314,63 @@ mod tests {
         assert_eq!(payload.to_json(), "{\"hook_event_name\":\"Stop\",\"n\":1}");
     }
 
+    #[test]
+    fn an_escaped_lone_surrogate_reads_as_the_replacement_character() {
+        // Node writes a lone surrogate when a string was cut inside a pair,
+        // a tool's output cut in the middle of an emoji: still an event.
+        let input = br#"{"hook_event_name":"PostToolUse","tool_response":"cut mid-emoji \ud83d"}"#;
+        let (kind, payload) = event_from(input).expect("an event");
+        assert_eq!(kind, "PostToolUse");
+        assert_eq!(payload.get("tool_response").and_then(Value::as_str), Some("cut mid-emoji \u{fffd}"));
+        // In this table `%` stands for a backslash.
+        let bs = |s: &str| s.replace('%', "\\");
+        for (escaped, read) in [
+            ("%ud83d", "\u{fffd}"),
+            ("%ude00", "\u{fffd}"),
+            ("%uD83D", "\u{fffd}"),
+            ("%ud83d%u0041", "\u{fffd}A"),
+            ("%ud83d%ud83d%ude00", "\u{fffd}\u{1f600}"),
+            ("%ude00%ud83d", "\u{fffd}\u{fffd}"),
+            ("%ud83d%ude00", "\u{1f600}"),
+            ("%%ud83d", "%ud83d"),
+            ("%%%ud83d", "%\u{fffd}"),
+            ("a%\"%ud83d", "a\"\u{fffd}"),
+        ] {
+            let input = format!(r#"{{"hook_event_name":"Stop","s":"{}"}}"#, bs(escaped));
+            let (_, payload) = event_from(input.as_bytes()).unwrap_or_else(|| panic!("{escaped}"));
+            assert_eq!(payload.get("s").and_then(Value::as_str), Some(bs(read).as_str()), "{escaped}");
+        }
+        // In a member's name too.
+        let (_, payload) = event_from(br#"{"hook_event_name":"Stop","\udc00":1}"#).expect("an event");
+        assert_eq!(payload.keys(), Some(vec!["hook_event_name", "\u{fffd}"]));
+        // What is not JSON stays not JSON.
+        for bad in [r#"{"hook_event_name":"Stop","s":"\ud83"}"#, r#"{"hook_event_name":"Stop",\ud83d:1}"#] {
+            assert!(event_from(bad.as_bytes()).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_payload_that_names_a_member_twice_is_not_an_event() {
+        // json.rs keeps both and finds the first; the app's JSON.parse keeps
+        // the last: the kind, the session or the transcript would be read
+        // one way here and another way there.
+        for input in [
+            r#"{"hook_event_name":"Stop","hook_event_name":"PreToolUse"}"#,
+            r#"{"hook_event_name":"Stop","session_id":"a","session_id":"b"}"#,
+            r#"{"transcript_path":"/a","hook_event_name":"Stop","transcript_path":"/b"}"#,
+            r#"{"hook_event_name":"Stop","cut":1,"cut":2}"#,
+        ] {
+            assert!(event_from(input.as_bytes()).is_none(), "{input}");
+        }
+        // The names compared are the names read: an escaped `c` is a `c`.
+        let escaped = r#"{"hook_event_name":"Stop","%u0063ut":1,"cut":2}"#.replace('%', "\\");
+        assert!(event_from(escaped.as_bytes()).is_none(), "{escaped}");
+        // A name repeated further in is the tool's own: kept as it came.
+        let nested = r#"{"hook_event_name":"Stop","tool_input":{"a":1,"a":2}}"#;
+        let (_, payload) = event_from(nested.as_bytes()).expect("an event");
+        assert_eq!(payload.to_json(), nested);
+    }
+
     fn json_string_len(s: &str) -> usize {
         Value::str(s).to_json().len()
     }
@@ -363,18 +420,25 @@ mod tests {
             ("tool_name", Value::str("Bash")),
             ("tool_input", obj(vec![("cut", Value::uint(input.to_json().len() as u64))])),
             ("tool_response", obj(vec![("cut", Value::uint(100 * 1024 + 2))])),
+            ("cut", Value::Bool(true)),
         ]);
         assert_eq!(got, want);
     }
 
     #[test]
     fn long_strings_elsewhere_are_cut_and_what_still_does_not_fit_keeps_five_fields() {
-        // A long prompt: cut to 4 KiB as JSON, the rest kept.
+        // A long prompt: cut to 4 KiB as JSON, the rest kept, and the
+        // payload says it was cut.
         let payload = obj(vec![("hook_event_name", Value::str("UserPromptSubmit")), ("cwd", Value::str("/w")), ("prompt", Value::str(&"p".repeat(60 * 1024)))]);
         let cut1 = cut(payload);
         assert_eq!(cut1.get("cwd"), Some(&Value::str("/w")));
         assert_eq!(cut1.get("prompt"), Some(&Value::str(&"p".repeat(MAX_STRING - 2))));
-        assert!(cut1.get("cut").is_none());
+        assert_eq!(cut1.get("cut"), Some(&Value::Bool(true)));
+        // A `cut` member of the payload's own is replaced, not repeated.
+        let payload = obj(vec![("hook_event_name", Value::str("UserPromptSubmit")), ("cut", Value::str("mine")), ("prompt", Value::str(&"p".repeat(60 * 1024)))]);
+        let cut1 = cut(payload);
+        assert_eq!(cut1.keys(), Some(vec!["hook_event_name", "prompt", "cut"]));
+        assert_eq!(cut1.get("cut"), Some(&Value::Bool(true)));
 
         // Many fields, none long: only the five stay, those that are strings.
         let mut members = vec![
@@ -416,12 +480,15 @@ mod tests {
             obj(vec![("hook_event_name", Value::str("Stop")), ("x", nest(31))]),
             obj(vec![("hook_event_name", Value::str("Stop")), ("x", Value::Arr((0..20_000).map(|_| Value::str("ab")).collect()))]),
         ];
+        let names: Vec<String> = (0..200).map(|n| format!("prompt{n}")).collect();
         let mut many = vec![("hook_event_name", Value::str("SessionStart"))];
         let long = "\"".repeat(3000);
-        for _ in 0..200 {
-            many.push(("prompt", Value::str(&long)));
+        for name in &names {
+            many.push((name.as_str(), Value::str(&long)));
         }
         out.push(obj(many));
+        // Its own `cut` member, and a long prompt: the second step's result.
+        out.push(obj(vec![("hook_event_name", Value::str("UserPromptSubmit")), ("cut", Value::Num("1".to_string())), ("prompt", Value::str(&control))]));
         out
     }
 
