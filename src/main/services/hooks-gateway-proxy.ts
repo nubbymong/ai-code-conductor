@@ -197,12 +197,17 @@ export class HooksGatewayProxy implements HooksGatewayLike {
   isInProcessFallback(): boolean { return this.inProcess !== null }
 
   /** Tear down the child path and run the gateway in-process (today's exact code).
-   *  Replays known secrets + current subscribers so live sessions keep working.
+   *  Replays known secrets + current subscribers so live sessions keep working,
+   *  and hands over the mirror of the child's per-session rings, so getBuffer
+   *  still answers what came before the fail-open (the history read of a session
+   *  held by the session helper merges these with its own ring: both or neither,
+   *  session-signals/hooks.ts dropHelperRings).
    *  PRECONDITION: the supervisor has already killed the child (no double bind). */
   failOpen(): void {
     if (this.inProcess) return
     const gw = new HooksGateway({ defaultPort: this.port, emit: this.emit, onTranscriptPath: this.onTranscriptPath })
     for (const [sid, secret] of this.secrets) gw.registerSessionWithSecret(sid, secret)
+    gw.seedBuffers(this.buffers)
     for (const cb of this.subscribers) gw.subscribe(cb)
     this.inProcess = gw
     // Tracked so stop() can await it (no socket leak / race). Draining the bound

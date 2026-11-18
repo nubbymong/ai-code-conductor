@@ -8,6 +8,19 @@ import type { IPty } from 'node-pty'
 // through the helper, with the exact arguments it was given.
 const ptySpawn = vi.hoisted(() => vi.fn())
 vi.mock('node-pty', () => ({ spawn: ptySpawn }))
+// The settings writer's secure write (an owner-only folder and file) as a
+// plain write: the hook tests switch a per-session settings file in a temp
+// folder and must not change any folder's permissions. Only the three writers
+// are replaced; every other export stays the real one.
+vi.mock('../../../src/main/account-profiles', async (importOriginal) => {
+  const fs = await import('node:fs')
+  return {
+    ...(await importOriginal<typeof import('../../../src/main/account-profiles')>()),
+    mkdirSecure: (d: string) => { fs.mkdirSync(d, { recursive: true }) },
+    hardenCredentialDir: () => {},
+    atomicWriteSecure: (f: string, data: string) => { fs.writeFileSync(f, data) },
+  }
+})
 
 import { createRequire } from 'module'
 import { HELPER_SENTENCES, SessionHelperManager, agentRecordsIn, crashMarkIn, nodePtyCommandLine, offStillHoldingSentence, setSessionHelper, spawnAgentPty, spawnPlainPty, whenHeldKnown } from '../../../src/main/session-helper/manager'
@@ -18,6 +31,7 @@ import { versionFolderName } from '../../../src/main/session-helper/install'
 import { _resetBundledConptyForTest, bundledConptyChoice } from '../../../src/main/bundled-conpty'
 import { sessionHelperRow } from '../../../src/main/services/service-registry'
 import { FakeHelper, FakeHolder } from './session-helper-fake-holder'
+import { buildHelperHooksBlock, buildHooksBlock, switchHooksToHelper, type HelperHookTarget } from '../../../src/main/hooks/session-hooks-writer'
 
 /** What whenHeldKnown answers now, or undefined while it waits. */
 function heldNow(p: unknown): boolean | undefined {
@@ -1970,5 +1984,300 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     const sid = m.sidFor(PLAIN)
     expect([...bindings.values()]).not.toContain(sid)
     expect(sid).toBe(heldSessionId(seed))
+  })
+})
+
+describe('Claude Code sessions: hooks through the holder (2.1.3-beta.8, plan section A4)', () => {
+  const PORT = 19334
+  const SECRET = '6f1c3d2a-1b2c-4d3e-8f90-a1b2c3d4e5f6'
+  let settingsDir: string
+  const settingsOf = (id: string) => join(settingsDir, `settings-${id}.json`)
+  const targets: Array<[string, HelperHookTarget]> = []
+  const events: Array<[string, Record<string, unknown>]> = []
+  const ended: string[] = []
+  const logs: string[] = []
+  /** Whether the app takes hook events now (the hooks gateway on and listening). */
+  let taking = true
+  /** The launcher the host this test runs on can take its temp paths with: the
+   *  manager names Git Bash (the fakes are a Windows helper), which takes only
+   *  a drive path; on macOS and Linux the same paths go to /bin/sh. */
+  const onThisHost = (t: HelperHookTarget): HelperHookTarget => (process.platform === 'win32' ? t : { ...t, launcher: 'sh' })
+
+  /** As the PTY manager writes it (writeLocalSessionSettings, then injectHooks):
+   *  the gateway's hooks. It does so in the same synchronous run as the spawn
+   *  call, just after it; a test may write it before the call or after it, in
+   *  the same tick, and the holder answers term.launched later either way. */
+  function spawnedSettings(id: string, hooks: unknown = buildHooksBlock(id, PORT, SECRET)): string {
+    const text = JSON.stringify({ statusLine: { type: 'command', command: 'statusline.js' }, ...(hooks ? { hooks } : {}) }, null, 2)
+    writeFileSync(settingsOf(id), text)
+    return text
+  }
+
+  function hooksManager(over: Partial<ConstructorParameters<typeof SessionHelperManager>[0]> = {}): SessionHelperManager {
+    return makeManager({
+      log: (m) => logs.push(m),
+      hooks: {
+        claude: {
+          taking: () => taking,
+          useHelperHooks: (id, target) => {
+            targets.push([id, target])
+            return switchHooksToHelper({ settingsPath: settingsOf(id), sessionId: id, target: onThisHost(target) })
+          },
+          event: (id, e) => { events.push([id, e as unknown as Record<string, unknown>]) },
+          ended: (id) => { ended.push(id) },
+        },
+      },
+      ...over,
+    })
+  }
+
+  /** The per-user copy the holders run from. */
+  const helperCopy = () => join(root, readdirSync(root).find((n) => /^0\.1\.0-/.test(n))!, 'aicc-helper.exe')
+
+  /** The helper form the session's file should hold. */
+  function helperForm(id: string): Record<string, unknown[]> {
+    const target: HelperHookTarget = { helperPath: helperCopy(), store: join(root, 'store'), sid: heldAgentSessionId(id, 'claude'), launcher: 'git-bash' }
+    return buildHelperHooksBlock(id, PORT, SECRET, onThisHost(target))!
+  }
+
+  beforeEach(() => {
+    settingsDir = join(dir, 'claude')
+    mkdirSync(settingsDir, { recursive: true })
+    targets.length = 0
+    events.length = 0
+    ended.length = 0
+    logs.length = 0
+    taking = true
+  })
+
+  it('the PTY manager writes the file just after the spawn call, in the same run: the switch still finds it, before the launch line', async () => {
+    const m = await startedWith(hooksManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdef78'
+    let atFirstByte: string | null = null
+    helper.onTyped = () => { if (atFirstByte === null) atFirstByte = readFileSync(settingsOf(id), 'utf8') }
+    // pty-manager.ts: spawnAgentPty, then writeLocalSessionSettings and
+    // injectHooks with no await between them.
+    const p = spawnAgentPty(claudeTab(id), SHELL, [], agentOpts())
+    spawnedSettings(id)
+    p.write('claude --settings x\r')
+    const sid = heldAgentSessionId(id, 'claude')
+    await until(() => Buffer.concat(helper.holders.get(sid)?.input ?? []).toString() === 'claude --settings x\r', 'the launch line')
+    expect(atFirstByte).not.toBeNull()
+    expect(JSON.parse(atFirstByte!).hooks).toEqual(helperForm(id))
+    expect(targets.map(([who]) => who)).toEqual([id])
+  })
+
+  it('a connection that drops is replaced by one that acks hooks again: events keep coming, those that waited arrive, and a seq seen on the first is dropped on the next', async () => {
+    const m = await startedWith(hooksManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdef79'
+    spawnedSettings(id)
+    spawnAgentPty(claudeTab(id), SHELL, [], agentOpts())
+    const sid = heldAgentSessionId(id, 'claude')
+    await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
+    const h = helper.holders.get(sid)!
+    const first = h.attached!
+    expect(first.ackedCaps).toEqual(['core', 'local', 'hooks'])
+    const one = h.hookEvent('Stop', { hook_event_name: 'Stop' })
+    await until(() => events.length === 1, 'the first event')
+    // The holder drops the connection. Its send of seq 1 counts as failed, so
+    // seq 1 waits for the next attach and goes first there (section 15: the
+    // app drops a seq it has seen); an event while none is attached waits too.
+    first.close()
+    h.waitingEvents.push(one)
+    h.hookEvent('Notification', { hook_event_name: 'Notification', message: 'Claude needs your permission to use Bash' })
+    await until(() => h.attaches === 2 && !!h.attached && h.attached !== first, 'the attach again')
+    expect(h.attached!.ackedCaps).toEqual(['core', 'local', 'hooks'])
+    await until(() => events.length >= 2, 'the event that waited')
+    // The first connection's seq again, live on the new one: dropped too.
+    h.sendEvent(one)
+    h.hookEvent('SubagentStop', { hook_event_name: 'SubagentStop' })
+    await until(() => events.some(([, e]) => e.seq === 3), 'the next event')
+    await tick(20)
+    expect(events.map(([who, e]) => [who, e.seq, e.kind])).toEqual([[id, 1, 'Stop'], [id, 2, 'Notification'], [id, 3, 'SubagentStop']])
+    // Switched once, at the launch; the attach again changes no file.
+    expect(targets.map(([who]) => who)).toEqual([id])
+  })
+
+  it('the gateway not taking hook events at the launch (off, or not listening) keeps the session on it: no switch, and nothing is taken', async () => {
+    const m = await startedWith(hooksManager(), ON_AGENTS)
+    setSessionHelper(m)
+    taking = false
+    const id = 'abcdef0123456789abcdef7a'
+    const text = spawnedSettings(id)
+    spawnAgentPty(claudeTab(id), SHELL, [], agentOpts()).write('claude\r')
+    const sid = heldAgentSessionId(id, 'claude')
+    await until(() => helper.holders.get(sid)?.input.length === 1, 'the launch line')
+    expect(readFileSync(settingsOf(id), 'utf8')).toBe(text)
+    expect(targets).toEqual([])
+    expect(logs).toContain(`[session-helper] ${id}: its hooks stay on the hooks gateway, because the hooks gateway is off or not listening, so no hook event would be taken`)
+    taking = true
+    helper.holders.get(sid)!.hookEvent('Stop', { hook_event_name: 'Stop' })
+    await tick(30)
+    expect(events).toEqual([])
+  })
+
+  it('an event a holder sends to a connection that did not ack hooks reaches nothing (a holder that breaks section 15)', async () => {
+    const m = await startedWith(hooksManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdef7b'
+    spawnedSettings(id)
+    spawnAgentPty(claudeTab(id), SHELL, [], agentOpts())
+    const sid = heldAgentSessionId(id, 'claude')
+    await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
+    const h = helper.holders.get(sid)!
+    h.hookEvent('Stop', { hook_event_name: 'Stop' })
+    await until(() => events.length === 1, 'the event while switched')
+    // The next connection's hello offers no hooks, so it acks none; the
+    // holder sends it events anyway.
+    h.caps = ['core', 'local']
+    h.forceEvents = true
+    const first = h.attached!
+    first.close()
+    await until(() => h.attaches === 2 && !!h.attached && h.attached !== first, 'the attach again')
+    expect(h.attached!.ackedCaps).toEqual(['core', 'local'])
+    h.hookEvent('Notification', { hook_event_name: 'Notification' })
+    h.hookEvent('SubagentStop', { hook_event_name: 'SubagentStop' })
+    await tick(40)
+    expect(events.map(([, e]) => e.seq)).toEqual([1])
+  })
+
+  it('the settings file holds the helper form before the first typed byte (the launch line) reaches the holder, and the connection acks hooks', async () => {
+    const m = await startedWith(hooksManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdef70'
+    spawnedSettings(id)
+    // The file as it is when the app sends the first typed byte to the holder
+    // (from then on the program may read it), and when the holder gets it.
+    let atFirstSend: string | null = null
+    let atFirstByte: string | null = null
+    const sendInput = HolderConnection.prototype.sendInput
+    const sending = vi.spyOn(HolderConnection.prototype, 'sendInput').mockImplementation(function (this: HolderConnection, bytes: Buffer) {
+      if (atFirstSend === null) atFirstSend = readFileSync(settingsOf(id), 'utf8')
+      return sendInput.call(this, bytes)
+    })
+    helper.onTyped = () => { if (atFirstByte === null) atFirstByte = readFileSync(settingsOf(id), 'utf8') }
+    const sid = heldAgentSessionId(id, 'claude')
+    try {
+      const p = spawnAgentPty(claudeTab(id), SHELL, [], agentOpts())
+      // The PTY manager types its launch line 300 ms after the spawn; typed at
+      // once here, it waits for the attach, as the line does.
+      p.write('claude --settings x\r')
+      await until(() => Buffer.concat(helper.holders.get(sid)?.input ?? []).toString() === 'claude --settings x\r', 'the launch line')
+    } finally {
+      sending.mockRestore()
+    }
+    expect(atFirstSend).not.toBeNull()
+    expect(JSON.parse(atFirstSend!).hooks).toEqual(helperForm(id))
+    expect(atFirstByte).not.toBeNull()
+    const seen = JSON.parse(atFirstByte!)
+    expect(seen.hooks).toEqual(helperForm(id))
+    expect(seen.hooks.PreToolUse).toEqual(buildHooksBlock(id, PORT, SECRET).PreToolUse)
+    expect(seen.statusLine).toEqual({ type: 'command', command: 'statusline.js' })
+    // The manager named the per-user copy, its store and the holder's session, for Git Bash.
+    expect(targets).toEqual([[id, { helperPath: helperCopy(), store: join(root, 'store'), sid, launcher: 'git-bash' }]])
+    expect(helper.holders.get(sid)!.attached!.ackedCaps).toEqual(['core', 'local', 'hooks'])
+    expect(logs.filter((l) => l.includes(id) && l.includes('hook'))).toEqual([`[session-helper] ${id}: its hook events go through its holder; PreToolUse stays on the hooks gateway`])
+  })
+
+  it("an event frame reaches the signals module under the app's session id, once each, never a PreToolUse; the end is told", async () => {
+    const m = await startedWith(hooksManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdef71'
+    spawnedSettings(id)
+    const p = spawnAgentPty(claudeTab(id), SHELL, [], agentOpts())
+    const sid = heldAgentSessionId(id, 'claude')
+    await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
+    const h = helper.holders.get(sid)!
+    const stop = h.hookEvent('Stop', { hook_event_name: 'Stop', session_id: 'c1', transcript_path: 'C:\\Users\\someone\\.claude\\projects\\p\\c1.jsonl' })
+    await until(() => events.length === 1, 'the event')
+    expect(events[0]).toEqual([id, { seq: 1, kind: 'Stop', payload: stop.payload }])
+    h.sendEvent(stop) // the same seq again (section 15: dropped)
+    h.hookEvent('PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'Bash' }) // never the helper's
+    h.sendEvent({ t: 'event', seq: 3, kind: 'Notification', payload: { hook_event_name: 'Notification', message: 'Claude needs your permission to use Bash' }, lost: 2 })
+    h.sendEvent({ t: 'event', seq: 4, kind: 'Stop', payload: { hook_event_name: 'Notification' } }) // does not read: dropped
+    h.seq = 4
+    h.hookEvent('SubagentStop', { hook_event_name: 'SubagentStop' })
+    await until(() => events.length === 3, 'the next two events')
+    expect(events.map(([who, e]) => [who, e.seq, e.kind, e.lost])).toEqual([[id, 1, 'Stop', undefined], [id, 3, 'Notification', 2], [id, 5, 'SubagentStop', undefined]])
+    expect(ended).toEqual([])
+    p.kill()
+    await until(() => ended.length === 1, 'the end')
+    expect(ended).toEqual([id])
+  })
+
+  it('a holder without the hooks cap, a session that fell back to the usual way, a Codex session and the switch off all keep the gateway block, untouched', async () => {
+    // No cap: the ack stays core and local, the file stays, one log line.
+    helper.holderCaps = ['core', 'local']
+    const m = await startedWith(hooksManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const noCap = 'abcdef0123456789abcdef72'
+    const noCapText = spawnedSettings(noCap)
+    spawnAgentPty(claudeTab(noCap), SHELL, [], agentOpts()).write('claude\r')
+    const sid = heldAgentSessionId(noCap, 'claude')
+    await until(() => helper.holders.get(sid)?.input.length === 1, 'the launch line')
+    expect(readFileSync(settingsOf(noCap), 'utf8')).toBe(noCapText)
+    expect(helper.holders.get(sid)!.attached!.ackedCaps).toEqual(['core', 'local'])
+    expect(logs).toContain(`[session-helper] ${noCap}: its hooks stay on the hooks gateway, because its holder does not offer hook events`)
+    helper.holders.get(sid)!.hookEvent('Stop', { hook_event_name: 'Stop' })
+
+    // A Codex session: never asked, and its connections do not ack hooks.
+    helper.holderCaps = ['core', 'local', 'hooks']
+    const codex = 'abcdef0123456789abcdef73'
+    const codexText = spawnedSettings(codex)
+    spawnAgentPty(codexTab(codex), SHELL, [], agentOpts()).write('codex\r')
+    const csid = heldAgentSessionId(codex, 'codex')
+    await until(() => helper.holders.get(csid)?.input.length === 1, 'the Codex launch line')
+    expect(readFileSync(settingsOf(codex), 'utf8')).toBe(codexText)
+    expect(helper.holders.get(csid)!.attached!.ackedCaps).toEqual(['core', 'local'])
+
+    // The usual way after all (the holder refuses the launch): never switched.
+    helper.holdBusy = true
+    const usual = 'abcdef0123456789abcdef74'
+    const usualText = spawnedSettings(usual)
+    const q = spawnAgentPty(claudeTab(usual), SHELL, [], agentOpts())
+    await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
+    expect((q as HelperPty).throughHelper).toBe(false)
+    expect(readFileSync(settingsOf(usual), 'utf8')).toBe(usualText)
+    helper.holdBusy = false
+
+    // The switch off: the usual way at once.
+    m.setRouting({ plain: true, agents: false })
+    const off = 'abcdef0123456789abcdef75'
+    const offText = spawnedSettings(off)
+    expect(spawnAgentPty(claudeTab(off), SHELL, [], agentOpts())).not.toBeInstanceOf(HelperPty)
+    await tick(20)
+    expect(readFileSync(settingsOf(off), 'utf8')).toBe(offText)
+
+    expect(targets).toEqual([])
+    expect(events).toEqual([])
+  })
+
+  it('a file with no gateway hooks (the gateway was down at the spawn) stays as it is, and nothing the holder sends is taken', async () => {
+    const m = await startedWith(hooksManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdef76'
+    const text = spawnedSettings(id, null)
+    spawnAgentPty(claudeTab(id), SHELL, [], agentOpts()).write('claude\r')
+    const sid = heldAgentSessionId(id, 'claude')
+    await until(() => helper.holders.get(sid)?.input.length === 1, 'the launch line')
+    expect(readFileSync(settingsOf(id), 'utf8')).toBe(text)
+    expect(logs).toContain(`[session-helper] ${id}: its hooks stay on the hooks gateway, because its settings file holds no hooks of the hooks gateway (the gateway was off or not listening when it started, or the file was not written)`)
+    // Acked (the holder offers it), but nothing is taken before a switch.
+    expect(helper.holders.get(sid)!.attached!.ackedCaps).toEqual(['core', 'local', 'hooks'])
+    helper.holders.get(sid)!.hookEvent('Stop', { hook_event_name: 'Stop' })
+    await tick(30)
+    expect(events).toEqual([])
+  })
+
+  it("without the app's hooks wiring (deps.hooks), a Claude Code session acks core and local only, as before", async () => {
+    const m = await startedWith(makeManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdef77'
+    spawnAgentPty(claudeTab(id), SHELL, [], agentOpts())
+    const sid = heldAgentSessionId(id, 'claude')
+    await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
+    expect(helper.holders.get(sid)!.attached!.ackedCaps).toEqual(['core', 'local'])
   })
 })

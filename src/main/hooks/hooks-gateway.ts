@@ -285,6 +285,27 @@ export class HooksGateway {
     return [...(this.buffers.get(sessionId) ?? [])]
   }
 
+  /**
+   * Take over per-session feed history another gateway kept: the proxy's fail-open
+   * (services/hooks-gateway-proxy.ts failOpen) hands its mirror of the child's
+   * rings to the in-process gateway it starts, so getBuffer still answers what
+   * came before the fail-open. Each session's entries go in front of any it
+   * holds already (they are the older ones), in the order given, and the ring
+   * keeps the newest RING_BUFFER_CAP. The entries are kept as the very objects
+   * given, not copies: the history read orders a session's events by the order
+   * they reached main, keyed by the object itself (session-signals/hooks.ts
+   * hookFeedBuffer). Nothing is emitted, fanned out or counted: these events
+   * were taken already.
+   */
+  seedBuffers(rings: ReadonlyMap<string, readonly RingBufferEntry[]>): void {
+    for (const [sessionId, entries] of rings) {
+      if (entries.length === 0) continue
+      const ring = [...entries, ...(this.buffers.get(sessionId) ?? [])]
+      if (ring.length > RING_BUFFER_CAP) ring.splice(0, ring.length - RING_BUFFER_CAP)
+      this.buffers.set(sessionId, ring)
+    }
+  }
+
   private async bindWithRetry(startPort: number): Promise<number | null> {
     for (let i = 0; i < PORT_RETRY_COUNT; i++) {
       const candidate =
@@ -666,44 +687,7 @@ export class HooksGateway {
       ? (parsed.hook_event_name as string)
       : typeof parsed.event === 'string' ? (parsed.event as string) : undefined
     if (eventName === undefined) return
-    const event = boundScalar(eventName) as HookEventKind
-    const toolName = boundScalar(
-      typeof parsed.tool_name === 'string'
-        ? (parsed.tool_name as string)
-        : typeof parsed.toolName === 'string'
-          ? (parsed.toolName as string)
-          : undefined,
-    )
-    const rawPayload =
-      parsed.payload && typeof parsed.payload === 'object'
-        ? (parsed.payload as Record<string, unknown>)
-        : (parsed as Record<string, unknown>)
-
-    let redacted: Record<string, unknown>
-    try {
-      redacted = redactHookPayload(rawPayload)
-    } catch {
-      redacted = { error: 'redaction-failed' }
-    }
-
-    const entry: RingBufferEntry = {
-      sessionId: sid,
-      event,
-      toolName,
-      // Summary is built from the FULL redacted payload (so it stays accurate),
-      // THEN the stored/emitted payload is bounded to ~8 KiB so feed history can't
-      // grow unbounded (RING_BUFFER_CAP entries * ~8 KiB = hard memory ceiling).
-      //
-      // The summary itself is bounded too (#180). It is derived from the UNbounded
-      // payload -- `${toolName} ${file_path}` -- so it sat OUTSIDE that ceiling: a
-      // 1 MiB body produced a 1 MiB summary and a 2 MB ring entry, times
-      // RING_BUFFER_CAP. Every entry is also structured-cloned across the
-      // utilityProcess transport, so this was main-process serialisation cost per
-      // event, not only memory.
-      summary: boundSummary(buildSummary(event, toolName, redacted)),
-      payload: boundPayloadForFeed(redacted),
-      ts: Date.now(),
-    }
+    const entry = feedEntryOf(sid, eventName, parsed)
     this._eventsTotal++
 
     const buf = this.buffers.get(sid) ?? []
@@ -783,4 +767,54 @@ function buildSummary(
     return file ? `${toolName} ${file}` : toolName
   }
   return event
+}
+
+/**
+ * The feed entry of one hook event: the event name and the tool name bounded,
+ * the payload envelope chosen, the redaction (with its failure fallback), the
+ * summary and the payload bounded. The gateway's ingest builds every entry
+ * here, and so do the hook events a Claude Code session sends through the
+ * session helper (2.1.3-beta.8, plan section A4; src/main/session-signals/
+ * hooks.ts helperHookEvent): one builder, so the two transports cannot drift.
+ * `eventName` is the event's own name (`hook_event_name`, or `event`).
+ */
+export function feedEntryOf(sessionId: string, eventName: string, parsed: Record<string, unknown>): RingBufferEntry {
+  const event = boundScalar(eventName) as HookEventKind
+  const toolName = boundScalar(
+    typeof parsed.tool_name === 'string'
+      ? (parsed.tool_name as string)
+      : typeof parsed.toolName === 'string'
+        ? (parsed.toolName as string)
+        : undefined,
+  )
+  const rawPayload =
+    parsed.payload && typeof parsed.payload === 'object'
+      ? (parsed.payload as Record<string, unknown>)
+      : (parsed as Record<string, unknown>)
+
+  let redacted: Record<string, unknown>
+  try {
+    redacted = redactHookPayload(rawPayload)
+  } catch {
+    redacted = { error: 'redaction-failed' }
+  }
+
+  return {
+    sessionId,
+    event,
+    toolName,
+    // Summary is built from the FULL redacted payload (so it stays accurate),
+    // THEN the stored/emitted payload is bounded to ~8 KiB so feed history can't
+    // grow unbounded (RING_BUFFER_CAP entries * ~8 KiB = hard memory ceiling).
+    //
+    // The summary itself is bounded too (#180). It is derived from the UNbounded
+    // payload -- `${toolName} ${file_path}` -- so it sat OUTSIDE that ceiling: a
+    // 1 MiB body produced a 1 MiB summary and a 2 MB ring entry, times
+    // RING_BUFFER_CAP. Every entry is also structured-cloned across the
+    // utilityProcess transport, so this was main-process serialisation cost per
+    // event, not only memory.
+    summary: boundSummary(buildSummary(event, toolName, redacted)),
+    payload: boundPayloadForFeed(redacted),
+    ts: Date.now(),
+  }
 }

@@ -222,8 +222,7 @@ fn descriptor_limit() -> i32 {
 mod win {
     use super::{Detached, DetachedChild};
     use crate::cmdline::build_command_line;
-    use crate::winproc::{self, close, os_error, wide, AttrList, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES};
-    use std::ffi::OsStr;
+    use crate::winproc::{self, close, create_process, os_error, wide, AttrList, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES};
     use std::fs::File;
     use std::io;
     use std::os::windows::io::{FromRawHandle, RawHandle};
@@ -233,7 +232,7 @@ mod win {
     use windows_sys::Win32::Foundation::{SetHandleInformation, BOOL, HANDLE, HANDLE_FLAG_INHERIT};
     use windows_sys::Win32::System::JobObjects::IsProcessInJob;
     use windows_sys::Win32::System::Pipes::CreatePipe;
-    use windows_sys::Win32::System::Threading::{CreateProcessW, TerminateProcess, PROCESS_INFORMATION, STARTUPINFOEXW};
+    use windows_sys::Win32::System::Threading::{TerminateProcess, STARTUPINFOEXW};
 
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
@@ -304,41 +303,19 @@ mod win {
         // holder then starts without it, inside the job. Both starts use the
         // same handle list.
         let flags = EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
-        let created = match create(app, cmdline, cwd, &startup, flags | CREATE_BREAKAWAY_FROM_JOB) {
+        // Inheritance is asked for, and limited to the list.
+        let created = match create_process(app, cmdline, cwd, &startup, flags | CREATE_BREAKAWAY_FROM_JOB, true) {
             Ok(info) => Ok((info, false)),
             // After the second start, whether the copy is in a job is asked,
             // not taken from which start worked: the first can fail for a
             // reason that is not the job. If the answer cannot be had, the
             // refusal is the best guess.
-            Err(_) => create(app, cmdline, cwd, &startup, flags).map(|info| (info, in_a_job(info.hProcess as usize).unwrap_or(true))),
+            Err(_) => create_process(app, cmdline, cwd, &startup, flags, true).map(|info| (info, in_a_job(info.hProcess as usize).unwrap_or(true))),
         };
         drop(attrs);
         let (info, in_starters_job) = created?;
         close(info.hThread as usize);
         Ok((info.hProcess as usize, info.dwProcessId, in_starters_job))
-    }
-
-    /// One `CreateProcessW` with handle inheritance limited to the list.
-    unsafe fn create(app: &[u16], cmdline: &str, cwd: &[u16], startup: &STARTUPINFOEXW, flags: u32) -> io::Result<PROCESS_INFORMATION> {
-        // CreateProcessW may write to the command line, so each try gets a fresh copy.
-        let mut line = wide(OsStr::new(cmdline));
-        let mut info: PROCESS_INFORMATION = std::mem::zeroed();
-        let ok = CreateProcessW(
-            app.as_ptr(),
-            line.as_mut_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            1,
-            flags,
-            std::ptr::null(),
-            cwd.as_ptr(),
-            &startup.StartupInfo,
-            &mut info,
-        );
-        if ok == 0 {
-            return Err(os_error("CreateProcessW"));
-        }
-        Ok(info)
     }
 
     /// Whether `process` runs inside any job.

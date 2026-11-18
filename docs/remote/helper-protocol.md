@@ -505,6 +505,80 @@ a job that does not keeps the holder inside it, and the holder then ends when
 the job does (`--detach` says so in a note on stderr). Nothing else tells the
 app whether a holder outlived it: list mode at start-up is the check.
 
+**Starting a program (Windows only).** The app starts the vision browser with
+
+```
+aicc-helper start [--hide] --cwd <folder> -- <program> [args...]
+```
+
+The program is started by the exact path given, which `CreateProcessW` is
+handed as the program, so nothing is searched for; the arguments after it are
+quoted as the holder quotes a launch's `argv`. It runs as a detached process
+in a process group of its own, in `<folder>`, with its window hidden under
+`--hide`, and it inherits no handle: inheritance is off and its standard
+input, output and error are nothing. The helper is given every handle the app
+lets a child inherit, as any child of the app is, but it exits at once. The
+program and the folder must each be a drive-absolute path (`C:\...` or
+`C:/...`; a share, a rooted path such as `\x` and a name with only a drive are
+refused). The program must not be a batch file, and must not be a name Windows
+opens as another (a part of dots alone, a trailing separator, a trailing dot
+or space). It takes at most 256 arguments of at most 8192 characters, the
+folder is at most 4096 characters, and none of them may hold a NUL character.
+The program is created suspended; its creation time is read from the process
+handle the start returned, and only then does it run. On success the helper
+prints one line, `{"pid":<n>,"created":"<t>"}`, and exits 0 without waiting for
+the program. `created` is the program's creation time as
+`Win32_Process.CreationDate.ToFileTimeUtc()` gives it (steps of 100 ns since
+1601, UTC, to the microsecond), so the app ends that process later only while
+its pid still has that creation time. A program it refuses, or one that cannot
+be started, exits 1 with a message on stderr, and nothing has run: a creation
+time that cannot be read ends a program that has not run yet. A command line
+it cannot read exits 2. On macOS and Linux the mode exits 1. The app runs it
+from the install folder (`resources/helper`): it does not outlive the app, so
+it needs no per-user copy.
+
+**Ending a program it started (Windows only).** The app ends that program with
+
+```
+aicc-helper end --pid <n> --created <t>
+```
+
+`<n>` is a pid of up to 10 digits, above 0, and `<t>` a creation time of 1 to
+20 digits in the form `start` prints; each is given once and nothing else is
+taken. The helper opens that process and holds it open from its check to its
+end, so the pid cannot pass to another process in between. When the pid still
+has that creation time and the process still runs, the helper ends it and every
+process under it, prints `ended` and exits 0. The processes under it come from
+one read of the process list, and the helper reads the system time just before
+that read. A process counts as under its parent only when it was made no
+earlier than the parent and no later than that time: one made earlier names a
+parent id that has since passed to another process, and one made later may have
+taken a listed pid after the list was read. A pid is freed and passed on only
+after the list is read, so a process that takes one is always made after that
+time; one made while the list is read is left out too, and keeps running. A
+list it cannot read in full (the snapshot fails, or reading an entry fails with
+any error but the end of the list) ends nothing: a list read in part would
+leave processes under it running once it is gone. The processes under it are
+ended once it is gone, also when it exits by itself after the check, and it
+prints `ended` only when none of the processes it checked still runs. An end
+that fails waits for the process to exit before it counts: Windows refuses to
+end a process whose own exit is under way, but marks it exited only once that
+exit is done. One that exits within the wait exited by itself; one that runs
+past it still runs. The wait is one bound for the whole end, one second in all
+however many ends fail, so such an end answers up to a second later; an end
+that succeeds waits for nothing. When no process has that pid, the one that has
+it was made at another time, or it had already exited when it was checked, it
+ends nothing, prints `left` and exits 0. It exits 1 with a message on stderr in
+three cases, and the app then keeps the program tracked. When it cannot tell
+(the process cannot be opened or read, or the process list cannot be read), it
+ends nothing. When the process still runs and cannot be ended, it ends nothing.
+When a process under it cannot be ended and may still run, it ends the rest. A
+command line it cannot read exits 2. It reads the process list and each
+process's times itself, with no PowerShell and no WMI, so it answers in
+milliseconds: the app uses it on the exits that cannot wait (quit, an update
+install, SIGTERM) as well as at a stop and a relaunch. On macOS and Linux the
+mode exits 1.
+
 **Endpoint: only this user can connect.** No network socket is opened.
 
 - **Windows:** the named pipe `\\.\pipe\aicc-helper-<sid>-<32 hex>`. Its
@@ -776,9 +850,21 @@ only `hook.event` and `event` on a holder's own endpoint; the remote `hooks`
 of section 8 (R7) is a separate capability that also carries
 `session.prepare`. A Claude Code session's hooks can reach the app through its
 holder instead of the hooks gateway. A holder from 2.1.3-beta.8 offers `hooks`
-in its hello. Nothing in the app uses it yet: the app's own ack stays
-`["core","local"]`, so it is never sent a hook event. Fixtures: the `hooks`
-part of `helper/fixtures/local.json`.
+in its hello. The app acks `["core","local","hooks"]` only on the connections
+of a Claude Code session it started through the holder (the agent sessions'
+setting, off by default), and only when the hello offers `hooks`; every other
+connection acks `["core","local"]` and is never sent a hook event. For such a
+session, while the hooks gateway is on and listening, the app switches the
+session's settings file to the hook mode for every injected event but
+`PreToolUse`, which stays on the hooks gateway, once the holder answers
+`term.launched` and before the attach sends the launch line; a holder without
+`hooks` leaves the session on the gateway. The app reads each `event`
+strictly (on channel 0 only, its fields only, `seq` from 1, `kind` one of the
+nine and the payload's `hook_event_name`, the payload at most 65,280 bytes
+and the message at most 64 KiB), drops a `seq` it has seen and a
+`PreToolUse`, takes none while the hooks gateway is off or not listening, and
+treats the payload as untrusted text. Fixtures: the `hooks` part of
+`helper/fixtures/local.json`.
 
 - **The hook mode.** Claude Code runs, as a command hook,
 

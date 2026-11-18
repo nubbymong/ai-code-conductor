@@ -120,6 +120,7 @@ import { peekSessionState, hasSavedSessionState, SessionState } from './session-
 import { createAppSessionDurability } from './app-session-durability'
 import { getConfigDir, snapshotConfig, readConfig, readConfigChecked } from './config-manager'
 import { stopGlobalVision, killSpawnedBrowser, cleanupLegacyVisionMarkers } from './vision-manager'
+import { exitOnSigterm } from './hard-exit'
 import { startConductorMcpServer, stopConductorMcpServer, startBrowserAtBoot, isMcpServerRunning, getMcpPort } from './conductor-mcp-server'
 import { loadWindowState, clampToVisibleDisplay, saveWindowStateFor } from './window-state'
 import { registerCredentialHandlers } from './ipc/credentials-handlers'
@@ -472,11 +473,14 @@ if (!gotTheLock) {
     // Ctrl+C on a dev run still terminates in one press — a SIGINT handler here
     // re-entered the vetoable graceful-close dialog and left the app alive
     // (adversarial-review round-2). Flush, then exit HARD: app.quit() would be
-    // vetoed by that same dialog, so a signal must not route through it.
+    // vetoed by that same dialog, so a signal must not route through it. The
+    // hard-exit teardown (hard-exit.ts) runs before the exit, as on an update.
     process.on('SIGTERM', () => {
-      sessionDurability.flushOnExit('SIGTERM')
-      try { flushIndexingGaps() } catch { /* best-effort */ }
-      app.exit(0)
+      exitOnSigterm({
+        flushSessions: () => sessionDurability.flushOnExit('SIGTERM'),
+        flushIndexingGaps: () => flushIndexingGaps(),
+        exit: (code) => app.exit(code),
+      })
     })
 
     // Expose dev/prod build mode to the renderer for DEV labeling (title + badge
@@ -974,8 +978,9 @@ if (!gotTheLock) {
     // subscriber to the Hooks gateway (whichever is set below, and any set after
     // it); every consumer (the rules engine started above, the rest below) takes
     // events from it, in the order they start. A transcript path the gateway
-    // reports reaches the route through it.
-    startSessionSignals({ onTranscriptPath: routeTranscriptPath })
+    // reports reaches the route through it. A4: the hook events a session's
+    // holder passes on reach the window's feed through the same emit.
+    startSessionSignals({ onTranscriptPath: routeTranscriptPath, emit: emitWithMerge })
     if (hooksEnabled) {
       // Supervised out-of-process gateway: a utilityProcess child runs the HooksGateway,
       // crash-isolated from the main thread, with restart/backoff + fail-open-to-in-process.

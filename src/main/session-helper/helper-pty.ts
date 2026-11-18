@@ -41,6 +41,10 @@ export interface HelperPtyDriver {
   ending(sid: string, done: Promise<void>): void
   /** This terminal is attached to its tab, or no longer is. */
   attachedChanged(sid: string, attached: boolean): void
+  /** The holder launched the program, on `conn`, and nothing typed has
+   *  reached it yet (the tab's input waits for the attach that follows): the
+   *  last moment what the launch line starts reads may change. */
+  launched?(conn: HolderConnection): void
   log(message: string): void
   /** The clock for the attach-again budget. */
   now?: () => number
@@ -295,6 +299,12 @@ export class HelperPty implements IPty {
     }
     // A kill meanwhile sent the end already.
     if (this.ending || this.exited) return
+    // Before the attach, which sends what the tab typed (its launch line).
+    try {
+      this.driver.launched?.(conn)
+    } catch (err) {
+      this.driver.log(`[session-helper] ${this.sid}: after the launch: ${(err as Error).message}`)
+    }
     // A resize while the launch was on its way is sent once attached.
     this.sizeChanged = this.size.cols !== sent.cols || this.size.rows !== sent.rows
     await this.attach(conn, 0, 'launch')

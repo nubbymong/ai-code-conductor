@@ -311,12 +311,17 @@
   "src/main/vision-browser-owner.ts :: execFileSync(file": {
    "count": 1,
    "how": "system-folder",
-   "reason": "The browser-ownership checks' synchronous run: taskkill.exe and Windows PowerShell by full paths under an absolute SystemRoot; elsewhere ps by its full path (posixTool)."
+   "reason": "The browser-ownership checks' synchronous run: taskkill.exe and Windows PowerShell by full paths under an absolute SystemRoot; elsewhere ps by its full path (posixTool). On Windows it also runs the session helper's end mode (endStartedBrowserSync): the helper the installer put beside the app (resources/helper, bundledHelperPath), by a drive-absolute path and only when that file exists, arguments as a list (a pid and a creation time of digits), no shell, a 5 s bound."
   },
   "src/main/vision-browser-owner.ts :: spawn(file": {
    "count": 1,
    "how": "system-folder",
-   "reason": "The browser-ownership checks: Windows PowerShell by its full path under an absolute SystemRoot (powershellPath); elsewhere ps by its full path (posixTool)."
+   "reason": "The browser-ownership checks: Windows PowerShell by its full path under an absolute SystemRoot (powershellPath); elsewhere ps by its full path (posixTool). On Windows it also runs the session helper's end mode (endStartedBrowser): the helper the installer put beside the app (resources/helper, bundledHelperPath), by a drive-absolute path and only when that file exists, arguments as a list (a pid and a creation time of digits), no shell, a 5 s bound."
+  },
+  "src/main/vision-manager.ts :: execFile(helper": {
+   "count": 1,
+   "how": "app-path",
+   "reason": "Windows only: the session helper the installer put beside the app (resources/helper, bundledHelperPath), by its full path and only when that file exists, arguments as a list, no shell, a 10 s bound. Its start mode starts the vision browser, named by the full path of an install that exists (a bare browser name is never handed to it), with no handle passed on; the helper exits at once and searches nothing."
   },
   "src/main/vision-manager.ts :: spawn(executable": {
    "count": 1,

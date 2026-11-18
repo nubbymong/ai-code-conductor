@@ -268,7 +268,9 @@ describe('today\'s registration order, as src/main/index.ts starts the consumers
 
   it('the rules engine, the module, the gateway, then effort, canvas turn, attention, the claim and the Watchdog', () => {
     const rules = at('startRulesEngine()')
-    const module = at('startSessionSignals({ onTranscriptPath: routeTranscriptPath })')
+    // A4: the module's own feed (hook events through the session helper) goes
+    // to the window through the gateway's emit.
+    const module = at('startSessionSignals({ onTranscriptPath: routeTranscriptPath, emit: emitWithMerge })')
     const gateway = at('setGateway(')
     const effort = at('startEffortTracker()')
     const canvas = at('startCanvasMarkerQueue({')
