@@ -1028,19 +1028,29 @@ async function startThroughHelper(executable: string, args: string[], headless: 
 }
 
 /**
+ * The exit statuses Windows ends a program with when it cannot load it, before
+ * any of the program's own code runs, as Node reports them (unsigned): a DLL
+ * it needs is missing (0xC0000135, the helper needs the Visual C++ runtime),
+ * a DLL lacks a function it needs (0xC0000139), a file is not a program this
+ * Windows can run (0xC000007B), or a DLL failed to start (0xC0000142).
+ */
+const HELPER_NOT_LOADED = new Set([3221225781, 3221225785, 3221225595, 3221225794])
+
+/**
  * Whether a helper start that failed started nothing, so the plain spawn may
  * follow: the helper exited 1 (it refused the program, or the start failed:
  * by its contract nothing is left running) or 2 (a command line it could not
- * read), or the helper itself never ran (its own start failed, a `spawn`
- * error). Anything else (killed at the timeout, ended by a signal, an answer
- * over the size bound, another exit status) can come after the browser has
- * started.
+ * read), Windows could not load it (HELPER_NOT_LOADED: none of its code ran),
+ * or the helper itself never ran (its own start failed, a `spawn` error).
+ * Anything else (killed at the timeout, ended by a signal, an answer over the
+ * size bound, another exit status) can come after the browser has started.
  */
 function helperStartedNothing(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false
   const e = err as { code?: unknown; killed?: unknown; signal?: unknown; syscall?: unknown }
   if (e.killed === true || (e.signal !== null && e.signal !== undefined)) return false
   if (e.code === 1 || e.code === 2) return true
+  if (typeof e.code === 'number' && HELPER_NOT_LOADED.has(e.code)) return true
   return typeof e.code === 'string' && typeof e.syscall === 'string' && e.syscall.startsWith('spawn')
 }
 

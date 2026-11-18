@@ -17,8 +17,11 @@ Plan 2.1.3-beta.8, section C2.
 - **An end mode beside it (Windows).** `aicc-helper end --pid <n> --created <t>` (protocol 15,
   "Ending a program it started") ends that process and the processes under it only while the
   pid has that creation time, holding the process open from the check to the end, and prints
-  `ended` or `left`. It reads the process list itself (no PowerShell, no WMI), so it answers in
-  milliseconds. The review found the first design's quit-time end (a PowerShell CIM query on the
+  `ended` or `left`. A process counts as under its parent only when it was made between the
+  parent and the read of the process list (the system time is read right after that read), so
+  a listed pid that passes to a new process before it is opened is not ended. It reads the
+  process list itself (no PowerShell, no WMI), so it answers in milliseconds. The review found
+  the first design's quit-time end (a PowerShell CIM query on the
   main thread, bounded at 5 s) too slow for an exit, and able to time out and leave the browser
   running on a busy machine; this replaces it.
 - **The vision browser through them.** On Windows, when the installed helper is there
@@ -31,8 +34,9 @@ Plan 2.1.3-beta.8, section C2.
   (after a stop, until the quit; at a relaunch the next start replaces it, and the scan by
   profile before that start ends it). Two seconds after a start, one look logs a browser that
   has already exited and stops tracking it. Without the helper, after a start that started
-  nothing (the helper exited 1 or 2, or could not be run), or with a browser found only by its
-  bare name, the launch is the spawn it was, with one log line. A start that may have started
+  nothing (the helper exited 1 or 2, Windows could not load it, such as without the Visual C++
+  runtime, or it could not be run), or with a browser found only by its bare name, the launch
+  is the spawn it was, with one log line. A start that may have started
   the browser without saying so (a timeout, a crash, an answer that cannot be read) is not
   followed by a second start: the launch fails with one log line. macOS and Linux are unchanged.
 - **Every way the app exits.** src/main/hard-exit.ts holds what the two `app.exit` paths that

@@ -427,6 +427,15 @@ describe('Windows: a start that started nothing is the plain spawn, as before', 
     expect(logged(/could not start the vision browser \(spawn .*ENOENT\)/)).toHaveLength(1)
   })
 
+  it('Windows could not load the helper (a DLL it needs is missing: 0xC0000135, which Node reports as 3221225781): spawned, with one line in the log', async () => {
+    sys.answer = { kind: 'exit', code: 3221225781, stderr: '' }
+    await launchBrowser('chrome', 9222, undefined, true)
+    expect(sys.execFiles).toHaveLength(1)
+    expectPlainSpawn(CHROME)
+    expect(logged(/could not start the vision browser \(Command failed\)/)).toHaveLength(1)
+    expect(logged(/did not say whether/)).toEqual([])
+  })
+
   it('a browser named by a bare name (found on PATH): spawned, and the helper is never asked', async () => {
     sys.present = new Set([HELPER])
     await launchBrowser('chrome', 9222, undefined, true)
@@ -441,6 +450,7 @@ describe('Windows: a start that may have started the browser without saying so i
     ['the helper timed out', { kind: 'timeout' }, /no answer within 10 s/],
     ['it exited 0 with an answer that is not one', { kind: 'print', stdout: 'started\n' }, /its answer could not be read/],
     ['it exited 3', { kind: 'exit', code: 3, stderr: 'aicc-helper: something else' }, /aicc-helper: something else/],
+    ['it crashed once it ran (0xC0000005, which Node reports as 3221225477)', { kind: 'exit', code: 3221225477, stderr: '' }, /Command failed/],
   ] as Array<[string, HelperAnswer, RegExp]>) {
     it(`${what}: no spawn, one line in the log, and the launch fails`, async () => {
       sys.answer = helperAnswer
