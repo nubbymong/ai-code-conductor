@@ -4,7 +4,9 @@ const pasted: Array<{ id: string; env: string }> = []
 const ledger: any[] = []
 vi.mock('../../src/main/pty-manager', () => ({
   isSessionWritable: (id: string) => id !== 'dead',
-  pastePty: (id: string, env: string) => { pasted.push({ id, env }); return id === 'full' ? 1 : 0 },
+}))
+vi.mock('../../src/main/session-input', () => ({
+  pasteEnvelope: (id: string, env: string) => { pasted.push({ id, env }); return id === 'full' ? 1 : 0 },
 }))
 vi.mock('../../src/main/channel-ledger', () => ({
   appendLedger: (r: any) => { ledger.push(r); return 'lid' },

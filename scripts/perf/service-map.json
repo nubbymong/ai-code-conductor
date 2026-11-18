@@ -4,7 +4,7 @@
     {
       "id": "pty-output",
       "label": "Terminal I/O (PTY data, writes, resizes)",
-      "within": ["^(?:spawnPtyResolved|spawnPty|writePty|writeChunked|writeEnvelopeChunked|pastePty|resizePty|guardSessionPty|extractSshOscSentinels|submitLine|typeKeys|PasteQueue|PtyIntegrityMonitor)(?:\\$\\d+)?$"],
+      "within": ["^(?:spawnPtyResolved|spawnPty|writePty|writeChunked|writeEnvelopeChunked|pasteEnvelope|resizePty|guardSessionPty|extractSshOscSentinels|submitLine|typeKeys|sendExitKeys|PasteQueue|PtyIntegrityMonitor)(?:\\$\\d+)?$"],
       "urls": ["node-pty"]
     },
     {

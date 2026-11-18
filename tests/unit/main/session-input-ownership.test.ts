@@ -5,7 +5,9 @@
 // Agent Canvas marker, Ask Conductor's question. (A Claude Code marker it
 // hands to canvas/claude-marker-typing.ts, which has the renderer type it.)
 // Every other caller asks the module (submitLine, typeKeys, submitMarker,
-// handOffAskQuestion); askQuestion, which skips the Ask check, is the PTY
+// handOffAskQuestion, pasteEnvelope); sendExitKeys, which skips the quit's
+// own checks (a CLI the app started, no tmux-persistent remote), is the PTY
+// manager's quit's only (A2); askQuestion, which skips the Ask check, is the PTY
 // manager's Ask launch's only, and codexRunScreen, the Codex run screen
 // itself, is the PTY manager's only (it resizes and closes each pane through
 // it).
@@ -137,14 +139,9 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
       why: "in the SSH branch the tmux patch (2), the password and sudo answers (2) and the partner folder line (1); in the local branch the folder line, the launch line and a plain terminal's start command (3); the Codex pane writer, the raw writer the run screen types through, reached only through this module, and the Codex colour answer, a terminal reply (2)",
       until: 'S25 and S11 (the launch writes); the pane writer and the colour answer stay',
     },
-    writeEnvelopeChunked: { count: 1, why: "the channel envelope writer (a Tier 1 paste)", until: 'A2' },
-    gracefulExitPty: { count: 3, why: 'the quit keys: Escape, Ctrl-C and /exit', until: 'A2' },
   },
   'src/main/ipc/pty-handlers.ts': {
     registerPtyHandlers: { count: 1, why: "pty:write, the renderer's own typing into the tab", until: "S13 (the renderer's typing moves once main holds a Claude Code screen)" },
-  },
-  'src/main/channel-bus.ts': {
-    send: { count: 1, why: 'pastePty: a channel message, as a Tier 1 paste', until: 'A2' },
   },
   'src/main/ipc/setup-handlers.ts': {
     writeCliSetupPty: { count: 1, why: 'the first-run terminal (declared exception 10)', until: 'stays (exception 10)' },
@@ -753,6 +750,15 @@ describe('the session input module is the one door for the app\'s own typing int
     for (const p of sources) {
       if (p.startsWith(MODULE_DIR)) continue
       for (const r of doorReads(read(p), p)) if (r.name === 'askQuestion' || r.name === '*') where.push(`${p}:${r.line} (${r.name})`)
+    }
+    expect(where.map((w) => w.split(':')[0]), where.join('\n')).toEqual(['src/main/pty-manager.ts'])
+  })
+
+  it('sendExitKeys, which skips the quit\'s own checks, is reached from the PTY manager only (its gracefulExitPty)', () => {
+    const where: string[] = []
+    for (const p of sources) {
+      if (p.startsWith(MODULE_DIR)) continue
+      for (const r of doorReads(read(p), p)) if (r.name === 'sendExitKeys' || r.name === '*') where.push(`${p}:${r.line} (${r.name})`)
     }
     expect(where.map((w) => w.split(':')[0]), where.join('\n')).toEqual(['src/main/pty-manager.ts'])
   })

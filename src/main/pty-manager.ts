@@ -1,6 +1,5 @@
 import { BrowserWindow, nativeTheme } from 'electron'
 import * as pty from 'node-pty'
-import { PasteQueue } from './paste-queue'
 import { runChunkedWrite, WRITE_CHUNK_SIZE } from './pty-chunked-write'
 import { buildTmuxLaunchCommand, buildSshClaudeFlags } from './ssh-tmux'
 import { buildTmuxListCommand, parseTmuxLivenessOutput, computeLiveSessionIds, TMUX_LIVENESS_END } from './ssh-liveness'
@@ -22,7 +21,7 @@ import { SSH_ENTRY, type SshEntryFailureReason } from '../shared/ssh-entry'
 import type { SshRuntime, DetachedRemoteLiveness, SshEndRemoteOutcome, SshEndRemoteResult } from '../shared/types'
 import { isProviderId, type RealmOwnership, type ProviderId } from '../shared/providers'
 import { spawnAgentPty, spawnPlainPty, whenHeldKnown } from './session-helper/manager'
-import { setSessionInputPorts, askQuestion as typeAskQuestion, codexRunScreen } from './session-input'
+import { setSessionInputPorts, askQuestion as typeAskQuestion, codexRunScreen, cancelPastes, sendExitKeys } from './session-input'
 import { IPC } from '../shared/ipc-channels'
 import { askConductorProjectDocMaxBytes } from './help-workspace'
 import { resolveRunningClaudeInfo } from '../shared/ssh-tmux-persistence'
@@ -7620,35 +7619,6 @@ function writeChunked(sessionId: string, ptyProcess: pty.IPty, data: string): vo
   })
 }
 
-// Per-session FIFO paste queues for channel envelopes (P3.1).
-const pasteQueues = new Map<string, PasteQueue>()
-
-// Guard-free chunked write (channel envelopes carry a unique ts: and must not
-// be deduped). Mirrors writeChunked's 256-byte/12ms cadence.
-function writeEnvelopeChunked(sessionId: string, data: string): Promise<void> {
-  return new Promise<void>((resolve) => {
-    // Capture THIS pty up front and route through the R-010-tested
-    // runChunkedWrite with an identity-guarded isAlive, so a respawn (new PTY
-    // under the same sessionId) can't receive the tail of a half-written
-    // envelope (P1.5 — mirrors writeChunked). onDone resolves the queue's writer.
-    const proc = ptySessions.get(sessionId)?.ptyProcess
-    if (!proc) return resolve()
-    runChunkedWrite(data, {
-      write: (slice) => proc.write(slice),
-      isAlive: () => ptySessions.get(sessionId)?.ptyProcess === proc,
-      onDone: resolve,
-    })
-  })
-}
-
-// Public API for the bus. Enqueues a fully-wrapped envelope for delivery.
-// Returns dropped-count (>0 means overflow occurred).
-export function pastePty(sessionId: string, envelope: string): number {
-  let q = pasteQueues.get(sessionId)
-  if (!q) { q = new PasteQueue((d) => writeEnvelopeChunked(sessionId, d), 16); pasteQueues.set(sessionId, q) }
-  return q.enqueue(envelope)
-}
-
 // Track recent SUBMITTED writes per session to detect + suppress accidental double-sends.
 // A prompt being submitted twice causes two Claude API calls and can trigger rate limits.
 //
@@ -7671,9 +7641,9 @@ function isSubmittedPayload(data: string): boolean {
   return last === 13 /* \r */ || last === 10 /* \n */
 }
 
-// 2.1.3-beta.9 A1: the session input module (./session-input) types into a
-// session for the app (the Watchdog's retry, a canvas marker, Ask Conductor's
-// question) through these ports, so it imports nothing from this module.
+// 2.1.3-beta.9 A1, A2: the session input module (./session-input) types for
+// the app (the Watchdog's retry, a canvas marker, Ask Conductor's question, a
+// channel message, the quit keys) through these ports; it imports nothing here.
 setSessionInputPorts({
   write: (sessionId, data) => writePty(sessionId, data),
   run: (sessionId) => ptySessions.get(sessionId)?.ptyProcess,
@@ -7827,8 +7797,7 @@ function cleanupSessionResources(sessionId: string): void {
   // the host. They are cleared only on deliberate close, in killPty (a respawn
   // overwrites them, so a stale entry from an exited-but-open session is bounded
   // and self-healing). See the maps' doc comment (adversarial review 2026-08-18).
-  pasteQueues.get(sessionId)?.cancel() // stop draining + drop pending before dropping the ref (P1.5)
-  pasteQueues.delete(sessionId)
+  cancelPastes(sessionId) // the channel paste queue: stop draining + drop pending (P1.5)
   // Delete the per-session statusline status file so the watcher's poll
   // fan-out stays bounded between boot sweeps (the reaper only unlinks
   // files older than 3 days).
@@ -8171,18 +8140,8 @@ export function gracefulExitPty(sessionId: string, timeoutMs = 5000): Promise<vo
       return
     }
 
-    // Send Escape (cancel any pending input), then /exit
-    entry.ptyProcess.write('\x1b')  // Escape
-    setTimeout(() => {
-      if (ptySessions.has(sessionId)) {
-        entry.ptyProcess.write('\x03')  // Ctrl+C to interrupt anything
-      }
-    }, 100)
-    setTimeout(() => {
-      if (ptySessions.has(sessionId)) {
-        entry.ptyProcess.write('/exit\r')
-      }
-    }, 300)
+    // Escape, Ctrl-C, then /exit (the session input module, A2)
+    sendExitKeys(sessionId, entry.ptyProcess)
   })
 }
 

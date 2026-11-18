@@ -61,7 +61,7 @@ export const PTY_MANAGER = 'src/main/pty-manager.ts'
  * was added (ADR-030 states the starting value). Lower it, never raise it,
  * whenever a PR shortens the file.
  */
-export const PTY_MANAGER_LINE_CAP = 8228
+export const PTY_MANAGER_LINE_CAP = 8187
 /** The PR label that lets pty-manager.ts grow past the cap. */
 export const OVERRIDE_LABEL = 'cap-override'
 
