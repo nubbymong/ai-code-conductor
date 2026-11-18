@@ -203,7 +203,7 @@ pub fn cut(payload: Value) -> Value {
         })
         .collect();
     let smaller = Value::Obj(members);
-    if true || fits(&smaller) {
+    if fits(&smaller) {
         return smaller;
     }
     let mut kept: Vec<(String, Value)> = Vec::new();

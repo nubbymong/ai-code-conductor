@@ -90,7 +90,7 @@ impl HookQueue {
         let seq = self.last_seq;
         self.bytes += bytes;
         self.waiting.push_back(HookEvent { seq, kind, payload, bytes });
-        while self.waiting.len() > 1 && (self.waiting.len() > HOOK_QUEUE_EVENTS + 1 || self.bytes > HOOK_QUEUE_BYTES) {
+        while self.waiting.len() > 1 && (self.waiting.len() > HOOK_QUEUE_EVENTS || self.bytes > HOOK_QUEUE_BYTES) {
             if let Some(old) = self.waiting.pop_front() {
                 self.bytes -= old.bytes;
                 self.lost += 1;
