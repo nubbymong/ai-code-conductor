@@ -516,8 +516,8 @@ describe.runIf(onWindows)('with the agent sessions\' switch on: the report\'s te
     const holder = helper.holders.get(sid)!
     await holderShows(holder, w, '\x1b[1mClaude Code\x1b[0m v2.1.0\r\n')
     const F = Date.now()
-    // 7.5 minutes after Claude Code started (10 minutes after the start call
-    // minus the wait): where the limit counted from the call, the run was ended.
+    // 8 minutes after Claude Code started (the 10 minutes after the start call
+    // less the 120 s wait): where the limit counted from the call, the run was ended.
     await stepCoarse(480_000)
     expect(timedOut()).toBe(false)
     expect(holder.ended).toBe(false)
