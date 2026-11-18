@@ -27,6 +27,10 @@ export interface HeldSession {
   /** True while a tab in the app shows it. A held terminal with no app
    *  attached and no tab is one a crash left behind. */
   tabOpen: boolean
+  /** 2.1.3-beta.9: true for the terminal of a report the app runs on its own
+   *  (an Insights report), not a tab's session. Its label names the report;
+   *  ending it stops its CLI and the report fails, and no tab resumes it. */
+  run?: boolean
 }
 
 /** What the session helper is doing on a machine. */

@@ -20,7 +20,7 @@ import {
   constants as fsConstants,
   type BigIntStats,
 } from 'fs'
-import * as pty from 'node-pty'
+import type { IPty } from 'node-pty'
 import { guardPtyIo } from './pty-input-guard'
 import { stripSpoofableText } from '../shared/safe-text'
 import { BrowserWindow } from 'electron'
@@ -44,7 +44,8 @@ import { getAccountsService } from './provider-accounts'
 import { ownerOnlyThroughHandle, sweepStaleFolders } from './stale-folder-sweep'
 import { withFullyQualifiedProgramLookup } from './windows-programs'
 import { warmFirstStart } from './first-start-warmup'
-import { spawnRunPty } from './session-helper/manager'
+import { HELPER_SENTENCES, spawnRunPty } from './session-helper/manager'
+import { HelperPty, LOST_EXIT_CODE } from './session-helper/helper-pty'
 import { quitHold } from './quit-hold'
 import { awaitClaudeLaunchWalk } from './claude-launch-walk'
 import { timedStart } from './main-thread-ops'
@@ -489,12 +490,15 @@ export function insightsTerminalEnv(env: Record<string, string>, platform: NodeJ
  *  pty-manager, so killAllPty never reaches them (#317). With the agent
  *  sessions' setting on, each runs through the session helper (spawnRunPty),
  *  and its kill ends its holder. */
-const insightsPtys = new Map<pty.IPty, () => void>()
+const insightsPtys = new Map<IPty, () => void>()
 
 /** The id an account's report terminal runs under (spawnRunPty): the same
- *  for every report of the account, so a start after a crash finds and ends
- *  what an earlier report left held, and never another account's, since two
- *  accounts' reports may run at once (accountKey). The global sign-in's is
+ *  for every report of the account, so a report started while an earlier
+ *  one's holder is still being ended (the app's start ends every holder a
+ *  crash or a quit left) waits for that end, and a holder of the same id
+ *  still running is ended before the new one starts. Never another
+ *  account's, since two accounts' reports may run at once (accountKey), and
+ *  neither waits for or ends the other's. The global sign-in's is
  *  `insights--default`: a profile id starts with a letter or digit
  *  (isValidProfileId), so no profile's id makes it, a profile named
  *  `default` included. */
@@ -651,13 +655,24 @@ async function spawnClaudeInsights(home: string | null, runId: string, timeoutMs
       }
     }, timeoutMs)
 
-    // Fallback: if prompt not detected within 20 seconds, send /insights anyway
-    const startupFallback = setTimeout(() => {
-      if (!commandSent && !resolved) {
-        logInfo(`[insights] Startup fallback (20s), sending /insights regardless (got ${dataChunks} data chunks, trustHandled=${trustHandled})`)
-        sendInsights()
-      }
-    }, 20000)
+    // Fallback: if prompt not detected within 20 seconds, send /insights anyway.
+    // node-pty's terminal starts Claude Code at once: the 20 s count from now,
+    // as before. Through the session helper (a HelperPty) Claude Code can
+    // start much later (the start first waits for an earlier holder of the
+    // run to end, then for the hold), and what is typed meanwhile waits and
+    // reaches it the moment it starts: there the 20 s count from the
+    // terminal's first output, so nothing is typed before Claude Code is up.
+    const fallbackFromOutput = proc instanceof HelperPty
+    let startupFallback: ReturnType<typeof setTimeout> | undefined
+    const armStartupFallback = () => {
+      startupFallback = setTimeout(() => {
+        if (!commandSent && !resolved) {
+          logInfo(`[insights] Startup fallback (20s), sending /insights regardless (got ${dataChunks} data chunks, trustHandled=${trustHandled})`)
+          sendInsights()
+        }
+      }, 20000)
+    }
+    if (!fallbackFromOutput) armStartupFallback()
 
     // Poll for report.html changes (every 3 seconds, starting 5s after command sent)
     let pollStartTime = 0
@@ -704,6 +719,7 @@ async function spawnClaudeInsights(home: string | null, runId: string, timeoutMs
     const chunkLines = createLineRedactor((text) => shownClaudeFailure(text.replace(/\s+/g, ' ').trim()))
 
     proc.onData((data) => {
+      if (fallbackFromOutput && startupFallback === undefined && !commandSent && !resolved) armStartupFallback()
       output += data
       dataChunks++
       const clean = stripAnsiCodes(data)
@@ -755,7 +771,11 @@ async function spawnClaudeInsights(home: string | null, runId: string, timeoutMs
         resolved = true
         cleanup()
         logInfo(`[insights] PTY exited with code ${exitCode}`)
-        resolve({ code: exitCode, output })
+        // Through the session helper, a holder that could no longer be
+        // reached ends the terminal with no exit code of Claude Code's: the
+        // run's failure says so, not only the log.
+        const lost = proc instanceof HelperPty && proc.throughHelper && exitCode === LOST_EXIT_CODE
+        resolve({ code: exitCode, output: lost ? output + '\n' + HELPER_SENTENCES.runLost : output })
       }
     })
   })

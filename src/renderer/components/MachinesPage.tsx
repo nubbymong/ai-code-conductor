@@ -133,9 +133,11 @@ function SessionRow({
   const rowRef = useRef<HTMLLIElement>(null)
   const backedOut = useRef(false)
   // An agent session ends its CLI, not a terminal's scrollback: its tab keeps
-  // that, and can resume the conversation.
+  // that, and can resume the conversation. A report the app runs on its own
+  // (2.1.3-beta.9, an Insights report) has no tab: ending it fails the report.
   const agent = agentName(session.kind)
-  const endWord = agent ? 'End session' : 'End terminal'
+  const report = agent !== null && session.run === true
+  const endWord = report ? 'End report' : agent ? 'End session' : 'End terminal'
   // Keyboard and screen-reader users keep their place. The question opens on its
   // safe answer (Keep it). Backing out (and only that) puts focus back on this
   // row's End. The question closing for any other reason, such as another row's
@@ -211,9 +213,11 @@ function SessionRow({
           data-testid="machines-end-confirm"
         >
           <span id={warnId} className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>
-            {agent
-              ? `End this ${agent} session? Its CLI stops. Its tab can resume the conversation.`
-              : 'End this terminal? Whatever is running in it stops, and its scrollback is lost.'}
+            {report
+              ? `End this ${session.label}? ${agent} stops and the report fails.`
+              : agent
+                ? `End this ${agent} session? Its CLI stops. Its tab can resume the conversation.`
+                : 'End this terminal? Whatever is running in it stops, and its scrollback is lost.'}
           </span>
           {/* The name starts with the visible words, so "click End terminal" finds it (WCAG 2.5.3). */}
           <DialogButton variant="danger-solid" onClick={onConfirmEnd} disabled={busy} aria-label={`${endWord} ${session.label}`} aria-describedby={warnId}>

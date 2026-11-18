@@ -212,6 +212,8 @@ export const HELPER_SENTENCES = {
   updating: 'The app is being updated. Re-attach the terminal once the new version has opened.',
   agentNotCleared: '[The session helper still runs the session this tab had before, and could not end it, so a second one was not started. Restart this tab in a few minutes.]',
   runNotCleared: '[The session helper still runs the terminal this report started before, and could not end it, so a second one was not started. Try again in a few minutes.]',
+  /** A report's terminal whose holder could no longer be reached (helper-pty.ts LOST_EXIT_CODE). */
+  runLost: 'The session helper lost this report\'s terminal. Run the report again.',
 } as const
 
 /** What the Machines page calls the terminal of a run of the app's own, by
@@ -224,9 +226,17 @@ function runName(label: string): string | null {
   return first !== undefined && Object.prototype.hasOwnProperty.call(RUN_NAMES, first) ? RUN_NAMES[first] : null
 }
 
-/** The Machines page's line while the switch is off and terminals are still held. */
-export function offStillHoldingSentence(n: number): string {
-  return `Switched off. It still holds ${n === 1 ? '1 terminal' : `${n} terminals`} until ${n === 1 ? 'its tab closes' : 'their tabs close'} or you end ${n === 1 ? 'it' : 'them'} here.`
+/** The Machines page's line while the switch is off and terminals are still
+ *  held. `runs` of the `n` are reports of the app's own (2.1.3-beta.9), which
+ *  have no tab: they go when the report finishes. */
+export function offStillHoldingSentence(n: number, runs = 0): string {
+  const one = n === 1
+  const until = runs <= 0
+    ? (one ? 'its tab closes' : 'their tabs close')
+    : runs >= n
+      ? (one ? 'its report finishes' : 'their reports finish')
+      : 'their tabs close or their reports finish,'
+  return `Switched off. It still holds ${one ? '1 terminal' : `${n} terminals`} until ${until} or you end ${one ? 'it' : 'them'} here.`
 }
 
 const VERSION_TIMEOUT_MS = 10_000
@@ -733,10 +743,12 @@ export class SessionHelperManager implements MachinesSource {
     // starts nothing either, and the tab (or the run) reads why.
     let notCleared = false
     const direct = (): IPty => (notCleared ? notStartedPty(ctx.run ? HELPER_SENTENCES.runNotCleared : HELPER_SENTENCES.agentNotCleared, opts) : usual())
+    // What the log calls the one that starts: a tab, or a run of the app's own.
+    const whose = ctx.run ? 'this report' : 'this tab'
     const cleared = async (): Promise<void> => {
       if (await this.clearAgent(sid)) return
       notCleared = true
-      throw new NothingStartedError('the holder this tab had before is still running and could not be ended')
+      throw new NothingStartedError(`the holder ${whose} had before is still running and could not be ended`)
     }
     const usualWay = (why: string, said: boolean): IPty => {
       if (!this.endingFor(ctx)) {
@@ -751,7 +763,7 @@ export class SessionHelperManager implements MachinesSource {
         hold: async (_sid, _label, abandoned) => {
           await cleared()
           if (abandoned()) throw new NothingStartedError('it was ended before it started')
-          throw new Error(`${why}; it waited for the end of this tab's earlier holder first`)
+          throw new Error(`${why}; it waited for the end of ${whose}'s earlier holder first`)
         },
       }
       return new HelperPty({ sid, label: ctx.sessionId, spec, driver })
@@ -1109,7 +1121,7 @@ export class SessionHelperManager implements MachinesSource {
         return true
       }
       if (this.quitting || this.deps.now() >= until) {
-        this.deps.log(`[session-helper] ${sid}: the agent session's earlier holder is still running and could not be ended; nothing is started for its tab`)
+        this.deps.log(`[session-helper] ${sid}: the agent session's earlier holder is still running and could not be ended; nothing is started for its terminal`)
         return false
       }
       await this.deps.sleep(AGENT_CLEAR_RETRY_MS)
@@ -1364,14 +1376,17 @@ export class SessionHelperManager implements MachinesSource {
       const w = this.live.get(r.session)
       const own = w && w.heldRecord?.pid === r.pid ? w : undefined
       // Its kind names the provider; End only, never Re-attach (the page). A
-      // run of the app's own goes by what it is (an Insights report).
+      // run of the app's own goes by what it is (an Insights report), and is
+      // marked as one, so the page asks about the report, not a tab.
+      const run = runName(r.label)
       return {
         id: r.session,
         kind: provider,
-        label: runName(r.label) ?? (this.savedTabs.get(r.label) || 'Session'),
+        label: run ?? (this.savedTabs.get(r.label) || 'Session'),
         startedAt: r.started,
         attached: !!own && own.isAttached,
         tabOpen: !!own,
+        ...(run !== null ? { run: true } : {}),
       }
     }
     const appId = this.appIdOf(r)
@@ -1414,7 +1429,7 @@ export class SessionHelperManager implements MachinesSource {
     const detail = [
       this.detail,
       this.insideJob ? HELPER_SENTENCES.insideJob : undefined,
-      !this.enabled ? offStillHoldingSentence(Math.max(heldNow, sessions.length)) : undefined,
+      !this.enabled ? offStillHoldingSentence(Math.max(heldNow, sessions.length), sessions.filter((s) => s.run === true).length) : undefined,
     ].filter(Boolean).join(' ')
     return {
       ...base,

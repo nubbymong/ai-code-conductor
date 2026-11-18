@@ -563,7 +563,7 @@ export class HelperPty implements IPty {
   private fallBack(why: string, record?: HolderRecord, conn?: HolderConnection, nothing = false): void {
     if (this.exited) return
     this.driver.log(nothing || this.ending
-      ? `[session-helper] ${this.sid}: nothing is started for this tab, because ${why}`
+      ? `[session-helper] ${this.sid}: nothing is started for this terminal, because ${why}`
       : `[session-helper] ${this.sid}: starting it the usual way, because ${why}`)
     if (conn) {
       conn.request({ t: 'term.end' }).catch(() => { /* gone */ }).finally(() => conn.close())

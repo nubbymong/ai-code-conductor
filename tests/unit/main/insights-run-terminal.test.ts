@@ -2,12 +2,23 @@
 // spawnRunPty (session-helper/manager.ts) instead of node-pty's spawn, under
 // the run's own id ('insights-' and the account's profile id, or
 // 'insights--default' for the global sign-in). With the agent sessions' switch off, and with no
-// session helper this run (these cases), spawnRunPty is node-pty's spawn with
-// the very same arguments, so everything the report does with its terminal is
-// as before: the same command, arguments and options, the Enter on the
-// folder-trust prompt, /insights once a prompt shows, /exit once report.html
-// changes, each at the same delay, and the kill at quit. The run's terminal
-// through a holder is session-helper-manager.test.ts's.
+// session helper this run, spawnRunPty is node-pty's spawn with the very same
+// arguments, so everything the report does with its terminal is as before:
+// the same command, arguments and options, the Enter on the folder-trust
+// prompt, /insights once a prompt shows, /exit once report.html changes, each
+// at the same delay, and the kill at quit. The same holds with a session
+// helper running for plain terminals only (the agent sessions' switch off).
+//
+// With the switch on (review), the report runs through a holder of the fake
+// session helper (session-helper-fake-holder.ts): the same writes at the same
+// delays reach Claude Code through it, a normal quit's kill ends the holder,
+// a start held past 20 s types nothing before Claude Code's first output (the
+// 20 s fallback counts from that output there), and a holder that vanishes
+// fails the run with a sentence saying so. Those cases run on Windows only:
+// the fake helper's records are Windows ones, so its manager is a Windows
+// one, and its launch check takes the report's folder (a temp folder here)
+// as a Windows path. Windows CI runs them (the unit suite's Windows parts).
+// The rest of the holder's path is session-helper-manager.test.ts's.
 //
 // The PTY, the Claude Code resolution, the KPI step and the first-start
 // warm-up are faked, as in insights-quit.test.ts. Nothing is started.
@@ -87,9 +98,12 @@ vi.mock('../../../src/main/first-start-warmup', () => ({
   warmFirstStart: async () => ({ outcome: 'ran', exitCode: 0, timedOut: false }),
 }))
 
+import type { IPty } from 'node-pty'
 import * as insights from '../../../src/main/insights-runner'
-import { spawnRunPty, setSessionHelper } from '../../../src/main/session-helper/manager'
+import { HELPER_SENTENCES, SessionHelperManager, spawnRunPty, setSessionHelper } from '../../../src/main/session-helper/manager'
+import { HelperPty } from '../../../src/main/session-helper/helper-pty'
 import { APP_PTY_ID_RE, heldAgentSessionId } from '../../../src/main/session-helper/protocol'
+import { FakeHelper, type FakeHolder } from './session-helper-fake-holder'
 import { isValidProfileId } from '../../../src/shared/profile-id'
 import { _resetQuitHoldForTest } from '../../../src/main/quit-hold'
 import { composeProviders } from '../../../src/main/providers/compose'
@@ -124,6 +138,104 @@ function shows(p: FakePty, ...chunks: string[]): void {
   for (const c of chunks) p.data?.(c)
 }
 
+// ── through the session helper (review) ──────────────────────────────────────
+
+const onWindows = process.platform === 'win32'
+/** The real spawnRunPty the watched one calls. */
+const realSpawnRunPty = vi.mocked(spawnRunPty).getMockImplementation()!
+// Real time, kept from before any faking: the in-memory streams to a fake
+// holder move on in it while the test's fake clock stands still.
+const realSetTimeout = globalThis.setTimeout
+const realWait = (ms: number) => new Promise<void>((r) => { realSetTimeout(r, ms) })
+async function realUntil(cond: () => boolean, what: string, ms = 5000): Promise<void> {
+  const end = performance.now() + ms
+  while (!cond()) {
+    if (performance.now() > end) throw new Error(`timed out waiting for ${what}`)
+    await realWait(5)
+  }
+}
+/** The fake clock moves on `ms`, in steps, with real time between them. */
+async function stepFor(ms: number): Promise<void> {
+  for (let t = 0; t < ms; t += 50) {
+    await vi.advanceTimersByTimeAsync(50)
+    await realWait(2)
+  }
+}
+
+const helpers: Array<{ m: SessionHelperManager; helper: FakeHelper }> = []
+const helperLogs: string[] = []
+
+/** A session helper (the fake one) set up and ready for this run: agent
+ *  sessions through it when `agents` is true, else plain terminals only. */
+async function helperOn(agents: boolean): Promise<FakeHelper> {
+  const dir = join(tmpRoot, 'helper')
+  mkdirSync(join(dir, 'install'), { recursive: true })
+  const bundled = join(dir, 'install', 'aicc-helper.exe')
+  writeFileSync(bundled, 'MZ the installed helper')
+  const helper = new FakeHelper()
+  const m = new SessionHelperManager({
+    platform: 'win32', root: join(dir, 'user'), bundled,
+    exec: helper.exec, openStream: helper.openStream, conptySource: () => null,
+    log: (l) => { helperLogs.push(l) },
+  })
+  helpers.push({ m, helper })
+  await m.start({ atStartup: true, plain: !agents, agents })
+  await realUntil(() => m.serviceState().state === 'ready', 'the helper to be ready')
+  setSessionHelper(m)
+  return helper
+}
+
+/** The report's terminal as the runner got it, with each write it made (and
+ *  the fake clock then) and what it showed. */
+interface Watched { term: IPty; at: number; writes: Array<{ at: number; data: string }>; seen: string[] }
+
+/** Watches the next start: the real spawnRunPty, its terminal's writes recorded. */
+function watchTheStart(): () => Watched | undefined {
+  let w: Watched | undefined
+  vi.mocked(spawnRunPty).mockImplementationOnce((ctx, file, args, o) => {
+    const term = realSpawnRunPty(ctx, file, args, o)
+    const writes: Watched['writes'] = []
+    const seen: string[] = []
+    const write = term.write.bind(term)
+    term.write = (d: string | Buffer) => { writes.push({ at: Date.now(), data: String(d) }); write(d) }
+    // Before the runner's own listener, in the same output event.
+    term.onData((d) => seen.push(d))
+    w = { term, at: Date.now(), writes, seen }
+    return term
+  })
+  return () => w
+}
+
+/** Starts a report through the watched start and waits for its terminal. */
+async function reportThroughHelper(): Promise<{ run: Promise<unknown>; w: Watched; profileId: string; sid: string }> {
+  const watched = watchTheStart()
+  const profileId = account()
+  const run = insights.runInsights(() => null, { profileId })
+  await vi.waitFor(() => expect(watched()).toBeDefined())
+  const w = watched()!
+  expect(w.term).toBeInstanceOf(HelperPty)
+  return { run, w, profileId, sid: heldAgentSessionId(insights.insightsRunId(profileId), 'claude') }
+}
+
+/** The holder shows `chunks` (one output frame each); answers once the runner has seen them all. */
+async function holderShows(holder: FakeHolder, w: Watched, ...chunks: string[]): Promise<void> {
+  const before = w.seen.join('')
+  for (const c of chunks) holder.output(c)
+  await realUntil(() => w.seen.join('') === before + chunks.join(''), 'the runner to see the output')
+}
+
+async function endHelpers(): Promise<void> {
+  setSessionHelper(null)
+  const quits = helpers.map(({ m }) => { try { return m.shutdown() } catch { return null } })
+  for (const { helper } of helpers) for (const holder of helper.holders.values()) holder.dropAll()
+  helpers.length = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([
+    Promise.allSettled(quits),
+    new Promise<void>((r) => { timer = realSetTimeout(r, 3000) }),
+  ]).finally(() => clearTimeout(timer))
+}
+
 beforeAll(() => { composeProviders() })
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'insights-run-terminal-'))
@@ -135,6 +247,7 @@ beforeEach(() => {
   h.profiles = []
   h.ptys.length = 0
   vi.mocked(spawnRunPty).mockClear()
+  helperLogs.length = 0
   setSessionHelper(null)
   _resetQuitHoldForTest()
   _resetProfileConsumersForTest()
@@ -145,6 +258,7 @@ afterEach(async () => {
   vi.useRealTimers()
   insights.killInsightsPty()
   await new Promise((r) => setTimeout(r, 5))
+  await endHelpers()
   _resetQuitHoldForTest()
   _resetProjectScanStateForTest()
   try { rmSync(tmpRoot, { recursive: true, force: true }) } catch { /* ignore */ }
@@ -234,5 +348,135 @@ describe('what the report types into its terminal, and when (fake clock)', () =>
     expect(pty.kills).toHaveLength(1)
     insights.killInsightsPty()
     expect(pty.kills).toHaveLength(1)
+  })
+})
+
+describe('with a session helper running for plain terminals only (the agent sessions\' switch off)', () => {
+  it('node-pty\'s spawn with that very command, arguments and options, and the report completes as before (review)', async () => {
+    const helper = await helperOn(false)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const { run, pty, profileId } = await reportRunning()
+    expect(spawnRunPty).toHaveBeenCalledTimes(1)
+    const [ctx, file, args, opts] = vi.mocked(spawnRunPty).mock.calls[0]
+    expect(ctx).toEqual({ runId: `insights-${profileId}`, kind: 'claude' })
+    expect(pty.file).toBe(file)
+    expect(pty.args).toBe(args)
+    expect(pty.opts).toBe(opts)
+    expect(helper.holds()).toBe(0)
+    // The prompt: /insights 1 s later; the report written: /exit; then Claude Code exits.
+    shows(pty, '\x1b[1mWelcome to Claude Code\x1b[0m\r\n\r\n> ')
+    const P = Date.now()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(pty.writes).toEqual([{ at: P + 1000, data: '/insights\r' }])
+    const later = new Date(statSync(reportOf(profileId)).mtimeMs + 60_000)
+    utimesSync(reportOf(profileId), later, later)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(pty.writes.map((x) => x.data)).toEqual(['/insights\r', '/exit\r'])
+    pty.exit?.({ exitCode: 0 })
+    vi.useRealTimers()
+    await run
+    expect(insights.getCatalogue().runs.find((r) => r.profileId === profileId)?.status).toBe('complete')
+    expect(helper.holds()).toBe(0)
+  })
+})
+
+describe.runIf(onWindows)('with the agent sessions\' switch on: the report\'s terminal runs through a holder (review)', () => {
+  /** The trust prompt, then Claude Code's prompt, each split across chunks of
+   *  different sizes, as in the node-pty case above: Enter 1 s after the trust
+   *  prompt and every 1.5 s after (three at most), /insights 3 s after the prompt. */
+  async function trustThenPrompt(holder: FakeHolder, w: Watched): Promise<{ T: number; P: number }> {
+    await holderShows(holder, w, '\x1b[2JDo you tr', 'ust the files in this fol', 'der?\r\n 1. Yes, proceed\r\n')
+    const T = Date.now()
+    await stepFor(1200)
+    await holderShows(holder, w, '\x1b[1mWelcome to Claude Code\x1b[0m\r\n\r\n', '>', ' \x1b[2mTry "help"\x1b[0m')
+    const P = Date.now()
+    expect(P).toBe(T + 1200)
+    await stepFor(3000)
+    return { T, P }
+  }
+  const usualWrites = (T: number, P: number) => [
+    { at: T + 1000, data: '\r' },
+    { at: T + 2500, data: '\r' },
+    { at: T + 4000, data: '\r' },
+    { at: P + 3000, data: '/insights\r' },
+  ]
+
+  /** A hold that waits until `open` is called: the start held as long as the test likes. */
+  function heldHold(helper: FakeHelper): () => void {
+    let open!: () => void
+    helper.holdGate = new Promise<void>((r) => { open = r })
+    return () => open()
+  }
+
+  it('the same start under the run\'s id, the same writes at the same delays reaching Claude Code through the holder, and a normal quit\'s kill ending the holder', async () => {
+    const helper = await helperOn(true)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const { w, sid, profileId } = await reportThroughHelper()
+    await realUntil(() => !!helper.holders.get(sid)?.attached, 'the report to attach')
+    const holder = helper.holders.get(sid)!
+    const [ctx, , , opts] = vi.mocked(spawnRunPty).mock.calls[0]
+    expect(ctx).toEqual({ runId: insights.insightsRunId(profileId), kind: 'claude' })
+    expect(holder.label).toBe(ctx.runId)
+    expect(holder.launch).toEqual({ t: 'term.launch', id: expect.anything(), argv: [RESOLVED], cwd: h.installPath, env: opts.env, cols: 120, rows: 30 })
+    expect(h.ptys).toEqual([])
+    const { T, P } = await trustThenPrompt(holder, w)
+    expect(w.writes).toEqual(usualWrites(T, P))
+    await realUntil(() => Buffer.concat(holder.input).toString() === '\r\r\r/insights\r', 'the writes to reach Claude Code')
+    insights.killInsightsPty()
+    await realUntil(() => holder.ended, 'the holder\'s end')
+    expect(holder.requests.map((r) => r.t)).toContain('term.end')
+  })
+
+  it('a start held past 20 s: nothing is typed before Claude Code\'s first output, then Enter and /insights come at their usual delays', async () => {
+    const helper = await helperOn(true)
+    const open = heldHold(helper)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const { w, sid } = await reportThroughHelper()
+    await vi.waitFor(() => expect(helper.holds()).toBe(1))
+    // Past node-pty's 20 s fallback, with Claude Code not started yet.
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(w.writes).toEqual([])
+    open()
+    await realUntil(() => !!helper.holders.get(sid)?.attached, 'the report to attach')
+    const holder = helper.holders.get(sid)!
+    await realWait(20)
+    expect(holder.input).toEqual([])
+    const { T, P } = await trustThenPrompt(holder, w)
+    expect(w.writes).toEqual(usualWrites(T, P))
+    await realUntil(() => Buffer.concat(holder.input).toString() === '\r\r\r/insights\r', 'the writes to reach Claude Code')
+  })
+
+  it('a start held past 20 s with no prompt seen: /insights 20 s after Claude Code\'s first output, not 20 s after the start call', async () => {
+    const helper = await helperOn(true)
+    const open = heldHold(helper)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const { w, sid } = await reportThroughHelper()
+    await vi.waitFor(() => expect(helper.holds()).toBe(1))
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(w.writes).toEqual([])
+    open()
+    await realUntil(() => !!helper.holders.get(sid)?.attached, 'the report to attach')
+    const holder = helper.holders.get(sid)!
+    // A banner, with no trust prompt and no ">" prompt in it.
+    await holderShows(holder, w, '\x1b[1mClaude Code\x1b[0m v2.1.0\r\n')
+    const F = Date.now()
+    await stepFor(19_950)
+    expect(w.writes).toEqual([])
+    await stepFor(50)
+    expect(w.writes).toEqual([{ at: F + 20_000, data: '/insights\r' }])
+    await realUntil(() => Buffer.concat(holder.input).toString() === '/insights\r', 'the write to reach Claude Code')
+  })
+
+  it('its holder vanishes during the report: the run fails, and its error says the session helper lost the report\'s terminal', async () => {
+    const helper = await helperOn(true)
+    const { run, sid, profileId } = await reportThroughHelper()
+    await realUntil(() => !!helper.holders.get(sid)?.attached, 'the report to attach')
+    helper.holders.get(sid)!.vanish()
+    await run
+    const r = insights.getCatalogue().runs.find((x) => x.profileId === profileId)
+    expect(r?.status).toBe('failed')
+    expect(r?.error).toContain('The session helper lost this report\'s terminal. Run the report again.')
+    expect(r?.error).toContain(HELPER_SENTENCES.runLost)
+    expect(helperLogs.some((l) => l.includes(sid) && l.includes('could not be attached again'))).toBe(true)
   })
 })

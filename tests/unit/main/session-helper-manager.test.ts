@@ -2355,6 +2355,40 @@ describe('a run of the app\'s own: Insights\' Claude Code report through the hel
     await until(() => h.ended && exits.length === 1, 'the end')
     expect(h.requests.map((r) => r.t).filter((t) => t !== 'ping')).toEqual(['term.launch', 'term.attach', 'term.end'])
     expect(hookEvents).toEqual([])
+    // Nothing of it is left (review): no holder runs, the store has no record
+    // of it, and the manager no longer counts it.
+    await until(() => m.serviceState().held === 0, 'the run to be let go of')
+    expect([...helper.holders.values()].filter((x) => !x.ended && !x.gone)).toEqual([])
+    expect(existsSync(join(root, 'store', `${RUN_SID}.json`))).toBe(false)
+  })
+
+  it('a run\'s Claude Code that exits by itself: the run reads its own exit code, and nothing of it is left; a normal quit ends a live run (review)', async () => {
+    const m = await startedWith(runManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const p = spawnRunPty(run(), CLAUDE, [], runOpts())
+    await until(() => !!helper.holders.get(RUN_SID)?.attached, 'the run to attach')
+    const h = helper.holders.get(RUN_SID)!
+    const exits: number[] = []
+    p.onExit((e) => exits.push(e.exitCode))
+    h.exitChild(3)
+    await until(() => exits.length === 1, 'the exit')
+    expect(exits).toEqual([3])
+    // Its holder is ended after the exit, and nothing of it is left.
+    await until(() => h.ended && m.serviceState().held === 0, 'the holder\'s end')
+    expect(existsSync(join(root, 'store', `${RUN_SID}.json`))).toBe(false)
+    // The next report runs in a holder of its own; the app quits while it runs.
+    const q = spawnRunPty(run(), CLAUDE, [], runOpts())
+    await until(() => helper.holders.get(RUN_SID) !== h && !!helper.holders.get(RUN_SID)?.attached, 'the next run to attach')
+    const live = helper.holders.get(RUN_SID)!
+    const quitExits: number[] = []
+    q.onExit((e) => quitExits.push(e.exitCode))
+    const quit = m.shutdown()
+    expect(quit).not.toBeNull()
+    await quit
+    expect(live.requests.map((r) => r.t)).toContain('term.end')
+    expect(live.ended).toBe(true)
+    expect(quitExits).toHaveLength(1)
+    expect(existsSync(join(root, 'store', `${RUN_SID}.json`))).toBe(false)
   })
 
   it('with the switch off, with no manager, or for a launch the helper would refuse: node-pty\'s spawn with the same arguments, each refusal with one log line', async () => {
@@ -2433,11 +2467,30 @@ describe('a run of the app\'s own: Insights\' Claude Code report through the hel
     spawnRunPty(run(), CLAUDE, [], runOpts())
     await until(() => !!helper.holders.get(RUN_SID)?.attached, 'the run to attach')
     const s = await m.status()
-    expect(s.sessions).toEqual([{ id: RUN_SID, kind: 'claude', label: 'Insights report', startedAt: helper.holders.get(RUN_SID)!.started, attached: true, tabOpen: true }])
+    // Marked as a run (review), so the page asks about the report, not a tab.
+    expect(s.sessions).toEqual([{ id: RUN_SID, kind: 'claude', label: 'Insights report', startedAt: helper.holders.get(RUN_SID)!.started, attached: true, tabOpen: true, run: true }])
     expect(await m.reattach(RUN_SID)).toEqual({ ok: false, message: HELPER_SENTENCES.agentNotReattached })
     expect(helper.holders.get(RUN_SID)!.ended).toBe(false)
     expect(await m.endSession(RUN_SID)).toEqual({ ok: true })
     expect(helper.holders.get(RUN_SID)!.ended).toBe(true)
+  })
+
+  it('switched off while a report runs: the page\'s line says it goes when the report finishes, not when a tab closes (review)', async () => {
+    const m = await startedWith(runManager(), ON_AGENTS)
+    setSessionHelper(m)
+    spawnRunPty(run(), CLAUDE, [], runOpts())
+    await until(() => !!helper.holders.get(RUN_SID)?.attached, 'the run to attach')
+    m.stopRouting()
+    const s = await m.status()
+    expect(s.helper.state).toBe('off')
+    expect(s.helper.detail).toBe('Switched off. It still holds 1 terminal until its report finishes or you end it here.')
+    expect(s.helper.detail).toBe(offStillHoldingSentence(1, 1))
+    // A tab's terminal beside a report: both ways they go are named.
+    expect(offStillHoldingSentence(2, 1)).toBe('Switched off. It still holds 2 terminals until their tabs close or their reports finish, or you end them here.')
+    expect(offStillHoldingSentence(2, 2)).toBe('Switched off. It still holds 2 terminals until their reports finish or you end them here.')
+    // With no report among them, as before.
+    expect(offStillHoldingSentence(1)).toBe('Switched off. It still holds 1 terminal until its tab closes or you end it here.')
+    expect(offStillHoldingSentence(2, 0)).toBe('Switched off. It still holds 2 terminals until their tabs close or you end them here.')
   })
 
   /** A report running through the helper when the app went without a quit. */
@@ -2452,15 +2505,22 @@ describe('a run of the app\'s own: Insights\' Claude Code report through the hel
 
   it('after a crash: the next start ends the run\'s holder and never keeps or adopts it, and the next report starts a holder of its own', async () => {
     const old = await crashedDuringRun()
+    let release!: () => void
+    old.endGate = new Promise<void>((r) => { release = r })
     const second = runManager()
     setSessionHelper(second)
     void second.start(ON_AGENTS)
+    await until(() => old.endsAsked === 1, 'the end to be asked')
+    await until(() => second.serviceState().state === 'ready', 'the helper to be ready')
+    // While its end is on its way, the page lists it as no tab's and not
+    // attached (it reads "Being ended"), and Re-attach refuses it.
+    expect((await second.status()).sessions).toEqual([{ id: RUN_SID, kind: 'claude', label: 'Insights report', startedAt: old.started, attached: false, tabOpen: false, run: true }])
+    expect(await second.reattach(RUN_SID)).toEqual({ ok: false, message: HELPER_SENTENCES.agentNotReattached })
+    release()
     await until(() => old.ended, 'the end of the run\'s holder')
     // Never kept (one attach: the first run's), never waiting for a tab.
     expect(old.attaches).toBe(1)
-    expect(second.holdsFor(RUN)).toBe(false)
     expect(logs).toContain(`[session-helper] ${RUN_SID}: ended the agent session's earlier holder`)
-    await until(() => second.serviceState().state === 'ready', 'the helper to be ready')
     expect((await second.status()).sessions).toEqual([])
     const p = spawnRunPty(run(), CLAUDE, [], runOpts())
     expect(heldNow(p)).toBe(false)
@@ -2487,6 +2547,8 @@ describe('a run of the app\'s own: Insights\' Claude Code report through the hel
     expect(ptySpawn.mock.calls[0]).toEqual([CLAUDE, [], o])
     expect(ptySpawn.mock.calls[0][2]).toBe(o)
     expect((p as HelperPty).throughHelper).toBe(false)
+    // The log line speaks of the report, not of a tab (review).
+    expect(logs).toContain(`[session-helper] ${RUN_SID}: starting it the usual way, because the helper could not hold it: agent sessions do not go through the session helper now; it waited for the end of this report's earlier holder first`)
     // Once that end is over, the next report is node-pty's own at once.
     expect(spawnRunPty(run(), CLAUDE, [], runOpts())).not.toBeInstanceOf(HelperPty)
   })
@@ -2508,5 +2570,9 @@ describe('a run of the app\'s own: Insights\' Claude Code report through the hel
     expect(seen.join('')).toContain(HELPER_SENTENCES.runNotCleared)
     expect(seen.join('')).not.toContain(HELPER_SENTENCES.agentNotCleared)
     expect(ptySpawn).not.toHaveBeenCalled()
+    // The log lines speak of the report's terminal, not of a tab (review).
+    expect(logs).toContain(`[session-helper] ${RUN_SID}: the agent session's earlier holder is still running and could not be ended; nothing is started for its terminal`)
+    expect(logs).toContain(`[session-helper] ${RUN_SID}: nothing is started for this terminal, because the holder this report had before is still running and could not be ended`)
+    expect(logs.filter((l) => l.includes(RUN_SID) && /\btab\b/.test(l))).toEqual([])
   })
 })
