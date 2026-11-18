@@ -73,13 +73,17 @@ const ARGS: Readonly<Record<CodexCliOperation, readonly string[]>> = {
   // made, a review runs in the project under review: that project's own
   // instructions (AGENTS.md) are context for reviewing it, from the same
   // source as the change, so project_doc_max_bytes and project_root_markers
-  // are left at Codex's defaults.
+  // are left at Codex's defaults. No -m (2.1.3-beta.8): a review runs on the
+  // reviewer account's default Codex model, as the analysis run does, at
+  // medium reasoning effort (model_reasoning_effort=medium), so its depth
+  // stays what it was. The config's agents setting is off too
+  // (agents.enabled=false), as in the analysis and Insights runs below.
   'review': [
     'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--disable', 'hooks', '--sandbox', 'read-only',
     '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'apps', '--disable', 'plugins', '--disable', 'browser_use',
     '--disable', 'computer_use', '--disable', 'image_generation', '--disable', 'view_image', '--disable', 'multi_agent',
-    '--disable', 'code_mode', '--disable', 'code_mode_host',
-    '-c', 'web_search=disabled', '-m', 'gpt-5.5', '-',
+    '--disable', 'multi_agent_v2', '--disable', 'sleep_tool', '--disable', 'code_mode', '--disable', 'code_mode_host',
+    '-c', 'web_search=disabled', '-c', 'model_reasoning_effort=medium', '-c', 'agents.enabled=false', '-',
   ],
   // Usage track MP7 (ADR-022; the owner's scoped WP1.41 exception): the
   // protocol helper for one usage read, on its default stdio transport only:
@@ -103,32 +107,40 @@ const ARGS: Readonly<Record<CodexCliOperation, readonly string[]>> = {
   // request_user_input, which does nothing in exec; round 2); web search
   // off; no project instructions (AGENTS.md) loaded at all; and the working
   // folder is the project root (no search of the folders above it for a
-  // project's files). Every key is in both supported CLIs (their feature
-  // lists and config keys); an unknown one makes the run fail, which fails
-  // closed. No -m (round 2): Codex runs its own default model for the
+  // project's files). Every feature name is one both supported CLIs list,
+  // and an unknown one makes the run fail, which fails closed. The -c keys
+  // were checked against both CLIs' config source, and CI's real-CLI
+  // conformance job loads them, where a value of the wrong type is refused.
+  // An unknown top-level key is ignored, not refused, so their spelling is
+  // pinned by tests/unit/providers/codex/analysis-features.test.ts.
+  // No -m (round 2): Codex runs its own default model for the
   // account, as the list that CLI offers names it. Round 3: code_mode and
   // code_mode_host too (both CLIs' feature lists name them; code_mode_host is
   // on by default); js_repl and apply_patch_freeform are listed as removed
-  // (off) in both, so they are not named.
+  // (off) in both, so they are not named. 2.1.3-beta.8: more agent features
+  // off, here and in the review and Insights runs: multi_agent_v2 and
+  // sleep_tool (both CLIs' feature lists name them), and the config's agents
+  // setting (agents.enabled=false, a key of both CLIs' config).
   'analysis': [
     'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--sandbox', 'read-only',
     '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'apps', '--disable', 'plugins', '--disable', 'browser_use',
     '--disable', 'computer_use', '--disable', 'image_generation', '--disable', 'view_image', '--disable', 'multi_agent', '--disable', 'hooks',
-    '--disable', 'code_mode', '--disable', 'code_mode_host',
-    '-c', 'web_search=disabled', '-c', 'project_doc_max_bytes=0', '-c', 'project_root_markers=[]', '-',
+    '--disable', 'multi_agent_v2', '--disable', 'sleep_tool', '--disable', 'code_mode', '--disable', 'code_mode_host',
+    '-c', 'web_search=disabled', '-c', 'project_doc_max_bytes=0', '-c', 'project_root_markers=[]', '-c', 'agents.enabled=false', '-',
   ],
   // WP2 PR 4, P4.7 (row 68): a Codex Insights report's one model run, in the
   // analysis form above with one change: no --ephemeral (mockup D13, approved
   // 2026-10-05). The run is kept, as Claude's report runs keep their
   // transcripts and Codex cloud agents keep theirs, so its cost reaches
   // Tokenomics on the account; the next report knows it by its working
-  // folder and leaves it out (insights-codex.ts).
+  // folder and leaves it out (insights-codex.ts). Its agent features are
+  // the analysis run's, the 2.1.3-beta.8 ones included.
   'insights': [
     'exec', '--json', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--sandbox', 'read-only',
     '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'apps', '--disable', 'plugins', '--disable', 'browser_use',
     '--disable', 'computer_use', '--disable', 'image_generation', '--disable', 'view_image', '--disable', 'multi_agent', '--disable', 'hooks',
-    '--disable', 'code_mode', '--disable', 'code_mode_host',
-    '-c', 'web_search=disabled', '-c', 'project_doc_max_bytes=0', '-c', 'project_root_markers=[]', '-',
+    '--disable', 'multi_agent_v2', '--disable', 'sleep_tool', '--disable', 'code_mode', '--disable', 'code_mode_host',
+    '-c', 'web_search=disabled', '-c', 'project_doc_max_bytes=0', '-c', 'project_root_markers=[]', '-c', 'agents.enabled=false', '-',
   ],
 }
 

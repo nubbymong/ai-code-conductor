@@ -1276,13 +1276,15 @@ describe('the login-shell PATH (macOS/Linux)', () => {
 // request (the reviewer could run no command on Windows: Codex's exec policy
 // refuses every command of a read-only run with no Windows sandbox set), it
 // runs no tool: the analysis run's --disable features and web search off,
-// with --disable hooks (D3), the two ignore flags and the model kept.
+// with --disable hooks (D3) and the two ignore flags. 2.1.3-beta.8: no -m (the
+// reviewer account's default Codex model) at medium reasoning effort, and
+// more agent features off (multi_agent_v2, sleep_tool, agents.enabled=false).
 const REVIEW_ARGV = [
   'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--disable', 'hooks', '--sandbox', 'read-only',
   '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'apps', '--disable', 'plugins', '--disable', 'browser_use',
   '--disable', 'computer_use', '--disable', 'image_generation', '--disable', 'view_image', '--disable', 'multi_agent',
-  '--disable', 'code_mode', '--disable', 'code_mode_host',
-  '-c', 'web_search=disabled', '-m', 'gpt-5.5', '-',
+  '--disable', 'multi_agent_v2', '--disable', 'sleep_tool', '--disable', 'code_mode', '--disable', 'code_mode_host',
+  '-c', 'web_search=disabled', '-c', 'model_reasoning_effort=medium', '-c', 'agents.enabled=false', '-',
 ]
 describe('the Codex reviewer (WP2 5a)', () => {
   const jsonl = (...events: unknown[]) => events.map((e) => JSON.stringify(e)).join('\n') + '\n'
@@ -2131,8 +2133,8 @@ describe('the text-only analysis run (P3.9 round 1)', () => {
     'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--sandbox', 'read-only',
     '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'apps', '--disable', 'plugins', '--disable', 'browser_use',
     '--disable', 'computer_use', '--disable', 'image_generation', '--disable', 'view_image', '--disable', 'multi_agent', '--disable', 'hooks',
-    '--disable', 'code_mode', '--disable', 'code_mode_host',
-    '-c', 'web_search=disabled', '-c', 'project_doc_max_bytes=0', '-c', 'project_root_markers=[]', '-',
+    '--disable', 'multi_agent_v2', '--disable', 'sleep_tool', '--disable', 'code_mode', '--disable', 'code_mode_host',
+    '-c', 'web_search=disabled', '-c', 'project_doc_max_bytes=0', '-c', 'project_root_markers=[]', '-c', 'agents.enabled=false', '-',
   ]
   const REVIEW = REVIEW_ARGV
   const input = (over: Record<string, unknown> = {}) => ({
@@ -2152,17 +2154,18 @@ describe('the text-only analysis run (P3.9 round 1)', () => {
     expect(spawned[0].child.stdin!.end).toHaveBeenCalledWith('Analyse these notes.')
   })
 
-  it('a review runs no tool: every feature the analysis turns off is off, and web search; --disable hooks (D3), the ignore flags, the read-only sandbox and the model stay', () => {
+  it('a review runs no tool: every feature the analysis turns off is off, and web search; --disable hooks (D3), the ignore flags and the read-only sandbox stay; no model is named (2.1.3-beta.8)', () => {
     const review = codexCommandLine('/usr/bin/codex', 'review', 'linux', {})
     const args = 'refused' in review ? [] : review.args
     const disabled = (a: readonly string[]) => a.flatMap((x, i) => (a[i - 1] === '--disable' ? [x] : []))
     const overrides = (a: readonly string[]) => a.flatMap((x, i) => (a[i - 1] === '-c' ? [x] : []))
     expect([...disabled(args)].sort()).toEqual([...disabled(ANALYSIS)].sort())
     expect(disabled(args)).toEqual(expect.arrayContaining(['shell_tool', 'unified_exec', 'hooks']))
-    expect(overrides(args)).toEqual(['web_search=disabled'])
+    expect(overrides(args)).toEqual(['web_search=disabled', 'model_reasoning_effort=medium', 'agents.enabled=false'])
     for (const kept of ['--ignore-user-config', '--ignore-rules', '--ephemeral', '--json']) expect(args, kept).toContain(kept)
     expect(args.slice(args.indexOf('--sandbox'), args.indexOf('--sandbox') + 2)).toEqual(['--sandbox', 'read-only'])
-    expect(args.slice(-3)).toEqual(['-m', 'gpt-5.5', '-'])
+    expect(args).not.toContain('-m')
+    expect(args[args.length - 1]).toBe('-')
     // The project's own instructions are review context: left at Codex's defaults.
     expect(args.join(' ')).not.toMatch(/project_doc_max_bytes|project_root_markers/)
   })

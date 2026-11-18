@@ -23,6 +23,7 @@ import { runCodexReview, runClaudeReview, registerCodexReviewTool, registerClaud
 import type { ReviewToolDeps } from '../../../src/main/codex-review-mcp-tool'
 import { REVIEW_DIFF_MAX_BYTES, REVIEW_FILE_LINE_BYTES, produceReviewFiles } from '../../../src/main/review-diff'
 import type { ReviewFile, ReviewFilesDeps } from '../../../src/main/review-diff'
+import registryJson from '../../../resources/model-registry.json'
 
 const optedIn = new Set<string>(['sess-allowed'])
 
@@ -637,6 +638,46 @@ describe('registerCodexReviewTool: the session id comes only from the transport'
     expect(out.isError).toBe(true)
     expect(out.content[0].text).toContain('not enabled')
     expect(h.prepareLaunch).not.toHaveBeenCalled()
+  })
+})
+
+// 2.1.3-beta.8: a Codex review runs on the reviewer account's default Codex
+// model, so the tool's description names no model.
+describe('codex_review: the tool description names no model (2.1.3-beta.8)', () => {
+  const describeTool = () => {
+    const seen: { name: string; description: string }[] = []
+    const server = { tool: (name: string, description: string) => { seen.push({ name, description }) } }
+    const chain: any = new Proxy(function () { return chain }, { get: () => chain, apply: () => chain })
+    registerCodexReviewTool(server, chain, () => optedIn, () => null, () => null)
+    expect(seen.map((s) => s.name)).toEqual(['codex_review'])
+    return seen[0].description
+  }
+
+  // A name counts only as a whole word, so a registry name that occurs inside
+  // an ordinary word of the description (say "fable" in "affable") is not one.
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const namesWord = (text: string, name: string) => new RegExp(`(^|[^a-z0-9])${esc(name)}([^a-z0-9]|$)`, 'i').test(text)
+
+  it('the whole-word match finds a model name and ignores one inside a longer word', () => {
+    expect(namesWord('Runs on Opus 4.8 today.', 'Opus 4.8')).toBe(true)
+    expect(namesWord('Runs on gpt-5.5.', 'gpt-5.5')).toBe(true)
+    expect(namesWord('(sonnet)', 'sonnet')).toBe(true)
+    expect(namesWord('An affable, fabled reviewer.', 'fable')).toBe(false)
+    expect(namesWord('gpt-5.56', 'gpt-5.5')).toBe(false)
+  })
+
+  it('starts "Get a Codex code review on a change." and holds no model id, label, pattern or alias the app knows', () => {
+    const d = describeTool()
+    expect(d.startsWith('Get a Codex code review on a change. ')).toBe(true)
+    expect(d).not.toMatch(/gpt/i)
+    // A family's catch-all entry (codex-family: label "Codex") names the
+    // provider, not a model; its gpt- pattern is the check above.
+    const names = (registryJson as { models: { id: string; label?: string; patterns?: string[]; aliases?: string[] }[] }).models
+      .filter((m) => !m.id.endsWith('-family'))
+      .flatMap((m) => [m.id, m.label ?? '', ...(m.patterns ?? []), ...(m.aliases ?? [])])
+      .filter((n) => n.length >= 4)
+    expect(names.length).toBeGreaterThan(10)
+    for (const n of names) expect(namesWord(d, n), n).toBe(false)
   })
 })
 

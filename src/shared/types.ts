@@ -852,7 +852,7 @@ export interface CodexReviewUsageRecord {
   totalInputTokens: number
   /** Sum of output tokens across all reviews in this session. */
   totalOutputTokens: number
-  /** State of the user's 5h gpt-5.5 window after the most recent review.
+  /** State of the reviewer account's 5-hour window after the most recent review.
    *  Null if no review has produced a token_count event yet. */
   lastRateLimitWindow: CodexReviewRateLimitWindow | null
   /** Unix ms of the last review's completion time. */

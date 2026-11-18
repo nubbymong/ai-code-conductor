@@ -1658,8 +1658,15 @@ describe('surfaces for the Codex review fix and the last 2.1.1-beta.3 text', () 
   it('the Feature Guide says what each reviewer is sent and that the Codex reviewer runs no commands', () => {
     const cr = body('code-review')
     expect(cr).toContain('The app sends the reviewer the change itself: the git diff of the uncommitted changes to tracked files, or of a range you name. For files you name, the Codex reviewer is sent their content, and the Claude reviewer reads them in the project. A change larger than 512 KB is refused, never cut.')
-    expect(cr).toContain("The Codex reviewer runs no commands and cannot read or change files: it reviews what it is sent, plus the project's AGENTS.md if there is one, which Codex loads by itself. The Claude reviewer can also read other files in the project.")
+    expect(cr).toContain("The Codex reviewer runs no commands and cannot read or change files: it reviews what it is sent, plus the project's AGENTS.md if there is one, which Codex loads by itself. It runs on the reviewer account's default Codex model. The Claude reviewer can also read other files in the project.")
     expect(cr).not.toMatch(/Codex reviewer (reads|runs git)/)
+  })
+
+  // 2.1.3-beta.8: a Codex review passes no model, so the card names none.
+  it("the Feature Guide says a Codex review runs on the reviewer account's default Codex model, and names no model", () => {
+    const cr = body('code-review')
+    expect(cr).toContain("It runs on the reviewer account's default Codex model.")
+    expect(cr).not.toMatch(/gpt/i)
   })
 
   it("the Combined Mode card says the partner opens in the remote folder only if you have not typed in it first", () => {
