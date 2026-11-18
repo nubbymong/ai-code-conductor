@@ -2161,6 +2161,12 @@ describe('the 2.1.3-beta.8 sweep', () => {
   const entry = changelog.find((e) => e.version === '2.1.3-beta.8')!
   const readme = () => fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'README.md'), 'utf8')
 
+  it('the installer paragraph says the app check closes only your own copy and waits at its save dialog (#720)', () => {
+    const p = body('providers')
+    expect(p).toContain('If your own copy of AI Code Conductor is still running from the folder being installed, the installer asks it to close')
+    expect(p).toContain('while the app shows its save dialog, the installer waits, so answer the dialog and then choose Retry')
+  })
+
   it('the Machines section says an update with Save sessions keeps held terminals on Windows, and what still ends them', () => {
     const m = body('machines')
     expect(m).toContain('On Windows an app update keeps them when you choose Save sessions on the update dialog')
@@ -2253,6 +2259,8 @@ describe('the 2.1.3-beta.8 sweep', () => {
       'multi_agent_v2, sleep_tool and the agents setting',
       "the vision browser no longer keeps the app's files open after the app ends",
       'closed on every way the app exits, including an update install',
+      'the installer now closes only your own copy of AI Code Conductor that runs from the folder being installed',
+      'while the app shows its save dialog the installer waits for you instead of ending it',
     ]) expect(all).toContain(said)
     for (const text of [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)]) expect(text, text.slice(0, 40)).not.toMatch(/—/)
     // #710 measured no CPU figure, so no line claims one.

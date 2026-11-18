@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A Codex review now runs on your reviewer account's default Codex model, at the same medium reasoning effort. Before, it always asked for GPT-5.5, which OpenAI retired from Codex with ChatGPT sign-in on October 14, 2026.
 - On Windows, the vision browser no longer keeps the app's files open after the app ends.
 - The vision browser is now closed on every way the app exits, including an update install.
+- On Windows, the installer now closes only your own copy of AI Code Conductor that runs from the folder being installed. Other users' copies and the session helper are left alone. It asks the app to close first, and while the app shows its save dialog the installer waits for you instead of ending it. A silent install over a remote or scheduled sign-in no longer waits forever on a box nobody can see.
 
 ## [2.1.3-beta.7] - 2026-11-17
 
