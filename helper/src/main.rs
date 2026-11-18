@@ -26,6 +26,7 @@ use aicc_helper::ring::DEFAULT_RING_BYTES;
 use aicc_helper::serve::{self, Options};
 use aicc_helper::store::{self, DEFAULT_AWAY_SECS, MAX_AWAY_SECS};
 use aicc_helper::{client, detach, hook, selftest, VERSION};
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -106,6 +107,12 @@ fn usage(msg: &str) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // The hook mode first, from the raw arguments: `args()` panics on one
+    // that is not Unicode, and the hook mode must never print or fail.
+    let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if raw.first().map_or(false, |c| c.as_os_str() == "hook") {
+        return cmd_hook(&raw[1..]);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = match args.first() {
         Some(c) => c.as_str(),
@@ -121,7 +128,6 @@ fn main() -> ExitCode {
         "selftest" => cmd_selftest(rest),
         "hold" => cmd_hold(rest),
         "list" => cmd_list(rest),
-        "hook" => cmd_hook(rest),
         // The child the self-test holds on a terminal; not a public command.
         "__echo" => match selftest::echo_child() {
             Ok(()) => ExitCode::SUCCESS,
@@ -358,10 +364,14 @@ fn cmd_close_check(args: &[String]) -> ExitCode {
 }
 
 /// Claude Code's command hook: whatever happens, exit 0 and print nothing,
-/// a panic included (Claude Code reads a hook's output and exit code).
-fn cmd_hook(args: &[String]) -> ExitCode {
+/// a panic included (Claude Code reads a hook's output and exit code). An
+/// argument that is not Unicode loses the event, as any other bad argument.
+fn cmd_hook(raw: &[OsString]) -> ExitCode {
     std::panic::set_hook(Box::new(|_| {}));
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook::run(args)));
+    let args: Option<Vec<String>> = raw.iter().map(|a| a.to_str().map(str::to_string)).collect();
+    if let Some(args) = args {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook::run(&args)));
+    }
     ExitCode::SUCCESS
 }
 

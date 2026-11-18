@@ -13,6 +13,7 @@ use aicc_helper::pids;
 use aicc_helper::serve::HOLDER_CAPS;
 use aicc_helper::store::{self, Record};
 use aicc_helper::transport::{self, Listener};
+use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -201,10 +202,11 @@ fn hook_to(store_dir: &Folder, sid: &str, input: &[u8]) -> Ran {
 }
 
 /// A connection standing in for the app: the JSON messages it read and has
-/// not yet looked at, in the order they came. Terminal output is not kept.
+/// not yet looked at, in the order they came, and what the terminal showed.
 struct App {
     client: Client,
     got: Vec<Value>,
+    screen: Vec<u8>,
     next_id: u64,
 }
 
@@ -213,7 +215,21 @@ impl App {
     fn connect(rec: &Record, caps: &[&str]) -> App {
         let mut client = Client::to_record(rec, WAIT).expect("connect to the holder and read its hello");
         client.send(hello::ack_message(1, caps)).expect("ack the hello");
-        App { client, got: Vec::new(), next_id: 2 }
+        App { client, got: Vec::new(), screen: Vec::new(), next_id: 2 }
+    }
+
+    /// Wait until the terminal has shown `needle`; messages that come
+    /// meanwhile are kept.
+    fn wait_text(&mut self, needle: &str) {
+        let until = Instant::now() + WAIT;
+        while !String::from_utf8_lossy(&self.screen).contains(needle) {
+            match self.client.recv(until.saturating_duration_since(Instant::now())) {
+                Ok(Some(Frame { channel: 1, body: Body::Raw(bytes) })) => self.screen.extend_from_slice(&bytes),
+                Ok(Some(Frame { body: Body::Json(v), .. })) => self.got.push(v),
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => panic!("{needle:?} never appeared on the terminal: {:?}", String::from_utf8_lossy(&self.screen)),
+            }
+        }
     }
 
     fn id(&mut self) -> u64 {
@@ -232,6 +248,7 @@ impl App {
             }
             match self.client.recv(left) {
                 Ok(Some(Frame { channel: 0, body: Body::Json(v) })) => return Some(v),
+                Ok(Some(Frame { channel: 1, body: Body::Raw(bytes) })) => self.screen.extend_from_slice(&bytes),
                 Ok(Some(_)) => {}
                 Ok(None) | Err(_) => return None,
             }
@@ -624,4 +641,65 @@ fn a_hook_run_whose_standard_input_never_ends_ends_by_its_deadline() {
     let ran = Ran { code: out.status.code(), stdout: out.stdout, stderr: out.stderr, took };
     assert!(ran.quiet(), "{}", ran.say());
     assert!(ran.took < HOOK_BOUND, "{}", ran.say());
+}
+
+/// An argument that is not Unicode: bytes that are not UTF-8 on macOS and
+/// Linux, a lone surrogate on Windows.
+fn not_unicode() -> OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(b"/tmp/aicc-\xff-store".to_vec())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        let mut wide: Vec<u16> = "C:\\aicc-".encode_utf16().collect();
+        wide.push(0xD800);
+        OsString::from_wide(&wide)
+    }
+}
+
+#[test]
+fn a_hook_run_with_an_argument_that_is_not_unicode_exits_0_and_says_nothing() {
+    let _serial = one_at_a_time();
+    for args in [
+        vec![OsString::from("hook"), OsString::from("--store"), not_unicode(), OsString::from("--session"), OsString::from("hooks-wide-0001")],
+        vec![OsString::from("hook"), not_unicode()],
+    ] {
+        let started = Instant::now();
+        let out = Command::new(HELPER).args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).output().expect("run the hook mode");
+        let ran = Ran { code: out.status.code(), stdout: out.stdout, stderr: out.stderr, took: started.elapsed() };
+        assert!(ran.quiet(), "{args:?}: {}", ran.say());
+    }
+}
+
+#[test]
+fn no_hook_event_follows_term_exit_and_the_next_attach_gets_what_came_after() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-exit");
+    let work = Folder::new("work-exit");
+    let sid = "hooks-exit-01";
+    let held = Held(hold(&store_dir, sid));
+    let mut app = App::connect(&held.0, &HOLDER_CAPS);
+    launch(&mut app, &work);
+    attach(&mut app);
+    app.wait_text("FAKE-CLI READY");
+    app.client.send_raw(1, b"exit 3\r").expect("type into the terminal");
+    let exit = app.next(WAIT).expect("a message once the program exits");
+    assert_eq!((t_of(&exit), num(&exit, "code")), ("term.exit", Some(3)), "{}", exit.to_json());
+
+    // An event after the program's end is not sent to the app that was told
+    // of the end: it waits, and the next attach gets it after its reply.
+    let mut poster = App::connect(&held.0, &HOLDER_CAPS);
+    assert_eq!(post(&mut poster, 1), 1);
+    if let Some(m) = app.next(Duration::from_secs(1)) {
+        panic!("after term.exit the app got {}", m.to_json());
+    }
+    let mut again = App::connect(&held.0, &HOLDER_CAPS);
+    attach(&mut again);
+    let events = again.events(1);
+    assert_eq!(num(&events[0], "seq"), Some(1), "{}", events[0].to_json());
+    assert!(events[0].get("lost").is_none(), "{}", events[0].to_json());
+    end(&held.0);
 }

@@ -800,8 +800,9 @@ never sent a hook event. Fixtures: the `hooks` part of
   writes to standard output or standard error: Claude Code adds what a
   SessionStart or UserPromptSubmit hook prints to the conversation, and an
   exit other than 0 (2 above all) changes what the CLI does. Whatever fails
-  (no store, a session id that breaks its pattern, a record whose holder is
-  gone, `busy`, input that is not an event of the nine, no reply in time)
+  (no store, a session id that breaks its pattern, an argument that is not
+  Unicode, a record whose holder is gone, `busy`, input that is not an event
+  of the nine, no reply in time)
   loses that one event, silently. The hook mode writes no file and starts no
   process.
 - **The payload** is the event as Claude Code wrote it, sent as compact JSON.
@@ -833,10 +834,12 @@ never sent a hook event. Fixtures: the `hooks` part of
   before it, and an event with nothing dropped before it has no `lost`. A
   connection that acked `hooks` gets every waiting event right after its
   `term.attached` reply and replay, before any live output, then each new one
-  at once. No event follows `term.detached`, `replaced`, `term.exit` or
-  `term.ended`. An event whose send failed waits for the next attach, and
-  the app drops a `seq` it has already seen (section 9). A holder that ends
-  drops its queue.
+  at once; the waiting events go within 5 s in all, and a connection that
+  does not take them in that time is closed while they wait on. No event
+  follows `term.detached`, `replaced`, `term.exit` or `term.ended`: one that
+  comes later waits for the next attach. An event whose send failed waits
+  for the next attach, and the app drops a `seq` it has already seen
+  (section 9). A holder that ends drops its queue.
 
 **Change.** The `hold` and `list` command lines and their exit codes, the
 record and the listing are frozen within version 1; new fields need a new

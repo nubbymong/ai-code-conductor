@@ -29,7 +29,9 @@
 //! events (`Serve::hooks`), then the record, then the serve state, then the
 //! holder's own (never the other way), and nothing is written to a connection
 //! while the record or the serve state is held. Hook events are written to a
-//! connection under the hook lock, so they go out in `seq` order.
+//! connection under its gate and the hook lock, so they go out in `seq` order
+//! and never inside an attach's reply and replay or after its last word; the
+//! hook lock is held for at most `WRITE_TIMEOUT` of writing at a time.
 
 use crate::frame::{self, Body, Direction, Frame, FrameError};
 use crate::hello::{self, Hello, PROTO_VERSIONS};
@@ -123,14 +125,30 @@ struct Conn {
 
 impl Conn {
     fn send_bytes(&self, bytes: &[u8]) -> io::Result<()> {
-        let mut w = lock(&self.writer);
         // The limit is for the whole message, however slowly the app reads.
-        let result = w.write_all_within(bytes, transport::WRITE_TIMEOUT);
+        self.send_bytes_within(bytes, transport::WRITE_TIMEOUT)
+    }
+
+    fn send_bytes_within(&self, bytes: &[u8], limit: Duration) -> io::Result<()> {
+        let mut w = lock(&self.writer);
+        let result = w.write_all_within(bytes, limit);
         if result.is_err() {
             // A write that failed or timed out ends the connection.
             self.closer.shutdown();
         }
         result
+    }
+
+    /// A control message whose write must be done by `deadline`; one that
+    /// is not ends the connection.
+    fn send_json_by(&self, v: Value, deadline: Instant) -> io::Result<()> {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            self.closer.shutdown();
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the app did not take the hook events in time"));
+        }
+        let bytes = frame::encode(&Frame::json(0, v), Direction::HelperToApp).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        self.send_bytes_within(&bytes, left)
     }
 
     fn send_frame(&self, frame: &Frame) -> io::Result<()> {
@@ -315,11 +333,16 @@ pub fn hook_taken(re: u64, seq: u64) -> Value {
 }
 
 /// Send `conn` every hook event waiting, oldest first; each leaves the queue
-/// once it is sent. False when a send failed: that event and those after it
-/// wait on (the app drops a `seq` it has already seen).
+/// once it is sent. The whole queue goes within `WRITE_TIMEOUT`, however
+/// many events it holds, so the hook lock is never held longer: a connection
+/// that does not take them in time is closed. False when a send failed or
+/// the time ran out: that event and those after it wait on (the app drops a
+/// `seq` it has already seen). An event always encodes: its payload came in
+/// a frame of at most 32 levels and is at most 64 KiB.
 fn send_waiting(queue: &mut HookQueue, conn: &Conn) -> bool {
+    let deadline = Instant::now() + transport::WRITE_TIMEOUT;
     while let Some(message) = queue.front().map(|(ev, lost)| event_message(ev, lost)) {
-        if conn.send_json(message).is_err() {
+        if conn.send_json_by(message, deadline).is_err() {
             return false;
         }
         queue.sent();
@@ -395,15 +418,25 @@ impl Serve {
     /// queue. Its `seq`; None while the session is ending.
     fn post_hook(&self, kind: String, payload: Value) -> Option<u64> {
         let bytes = payload.to_json().len();
-        let mut hooks = lock(&self.hooks);
-        if self.ending.load(Ordering::SeqCst) {
-            return None;
-        }
-        let seq = hooks.queue.push(kind, payload, bytes);
-        if let Some((conn, gen)) = hooks.to.clone() {
-            // Sent only while that attach still holds the terminal: after a
-            // detach or a newer attach the event waits for the next one.
-            if !self.is_current(&conn, gen) || !send_waiting(&mut hooks.queue, &conn) {
+        let (seq, to) = {
+            let mut hooks = lock(&self.hooks);
+            if self.ending.load(Ordering::SeqCst) {
+                return None;
+            }
+            let seq = hooks.queue.push(kind, payload, bytes);
+            (seq, hooks.to.clone())
+        };
+        if let Some((conn, gen)) = to {
+            // That connection's gate first, as an attach takes it, so no
+            // event comes between an attach's reply and its replay, or after
+            // `term.exit` or `term.detached`. Then the hook lock again: the
+            // queue goes out in `seq` order, whichever poster sends it, and
+            // only while that attach still holds the terminal. Otherwise the
+            // event waits for the next attach, which takes the queue itself.
+            let _live = lock(&conn.live);
+            let mut hooks = lock(&self.hooks);
+            let still = hooks.to.as_ref().map_or(false, |(c, g)| c.id == conn.id && *g == gen);
+            if still && (!self.is_current(&conn, gen) || !send_waiting(&mut hooks.queue, &conn)) {
                 hooks.to = None;
             }
         }
@@ -429,8 +462,10 @@ impl Serve {
     }
 
     /// `conn` takes no more hook events; they wait for the next attach.
-    /// Called before the message that tells it so (`term.detached`,
-    /// `replaced`), so no event follows that message.
+    /// Called under `conn.live` before the last message it gets as the
+    /// attached connection (`term.detached`, `replaced`, `term.exit`, or
+    /// `busy` when it fell behind), so no event follows that message; and
+    /// when the connection goes.
     fn stop_hooks(&self, conn: &Conn) {
         let mut hooks = lock(&self.hooks);
         if hooks.to.as_ref().map(|(c, _)| c.id) == Some(conn.id) {
@@ -977,6 +1012,9 @@ impl Serve {
             if *live != gen || serve.ending.load(Ordering::SeqCst) || !serve.is_current(&conn, gen) {
                 return;
             }
+            // No hook event after either last word: later ones wait for the
+            // next attach.
+            serve.stop_hooks(&conn);
             match holder.exit_code() {
                 Some(code) => conn.send_exit(code),
                 None => {

@@ -35,6 +35,14 @@ Claude sessions to it, behind the agent-sessions switch.
   event is lost.
 - An event posted while a connection that did not ack `hooks` holds the
   terminal waits in the queue: it is never sent to that connection.
+- A post sends through the attached connection's gate (`Conn::live`), the
+  same gate an attach holds for its reply and replay, so an event never
+  lands inside them; the queue then goes out in `seq` order whichever poster
+  sends it. Sending the queue takes 5 s at most in all, so a slow reader
+  cannot hold the hook lock for minutes. After `term.exit` the connection
+  takes no more events; later ones wait for the next attach. (The first
+  Copilot review found these three, and the panic `args()` gives on an
+  argument that is not Unicode, which now goes to the hook mode first.)
 - The holder's offered caps are a new constant (`serve::HOLDER_CAPS`);
   `hello::LOCAL_CAPS` stays `["core","local"]`, the app's ack, which
   tests/unit/scripts/helper-fixtures.test.ts pins.
