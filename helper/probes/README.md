@@ -86,7 +86,9 @@ launcher 300 times at 2 a second and 50 times back to back, counting the wall
 time and the CPU time of every process in each chain. Beside the verdict it
 reads the CPU of Defender's own process, the holder and the whole machine,
 times one first start of a fresh copy of the helper, and times a loopback
-HTTP POST for reference. The pass line is in the script's header and was
+HTTP POST for reference, taken the way the hooks gateway takes it (a new
+connection each time, the token checked, the body parsed). The pass line is
+in the script's header and was
 fixed before measuring; only the plan's schedule gives a verdict, and any
 other is a check run. It refuses a helper that is not the installed app's
 signed per-user copy, a store folder that already exists (or whose parent

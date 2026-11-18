@@ -31,13 +31,13 @@ machine over SSH):
 - The helper was the signed per-user copy of 2.1.3-beta.7 installed on the
   test machine (sha256 7a099cd8..., Authenticode valid). The beta.7 release
   was published at 23:13Z on 2026-11-17, during the session: runs 1 to 3 came
-  before it, runs 4 to 7 after. The helper inside the published Windows
+  before it, runs 4 to 8 after. The helper inside the published Windows
   installer (whose sha256 matches the release's own digest) has the same
   sha256, and so does the installed app's bundled copy; from run 7 the probe
   checks the second itself.
 
-**Result: PASS**, in all seven full runs (350 runs each, 0 failed; runs 6 and
-7 on 2026-11-18):
+**Result: PASS**, in all eight full runs (350 runs each, 0 failed; runs 6 to
+8 on 2026-11-18):
 
 | Run (script sha256) | p95 wall | longest | mean CPU | Defender CPU per event |
 |---|---|---|---|---|
@@ -47,27 +47,31 @@ machine over SSH):
 | 4 (26e6f38d) | 37.19 ms | 42.25 ms | 29.61 ms | 20.0 ms |
 | 5 (bc511bfa) | 38.21 ms | 50.78 ms | 29.60 ms | 19.9 ms |
 | 6 (86320988) | 38.61 ms | 41.28 ms | 29.91 ms | 20.0 ms |
-| 7 (a1ded564, committed) | 37.66 ms | 45.44 ms | 29.62 ms | 20.1 ms |
+| 7 (a1ded564) | 37.66 ms | 45.44 ms | 29.62 ms | 20.1 ms |
+| 8 (bcb96a3e, committed) | 34.86 ms | 37.42 ms | 28.10 ms | 19.4 ms |
 
-In run 7 the chain's mean CPU (29.6 ms, what the pass line counts) splits
-as: the helper 3.3 ms, Git's launcher 6.7 ms, the console host 8.1 ms, Git's
-bash 11.5 ms. Outside the chain, per event and net of idle: Defender's own
-process 20.1 ms, the probe's thread starting the launcher 0.7 ms, the holder
-0.1 ms, and the whole machine 55.9 ms (every process and the kernel, the
-probe's own 3.1 ms of bookkeeping included). So the chain passes the CPU
-line, and an event costs this machine about 53 to 56 ms of CPU in all, over
-50 ms if all of it were counted; whether it should be is a question for the
-owner, raised by the orchestrator. Run 6's "chain plus Defender, about 50
-ms" left out the starting program, the holder, csrss and the kernel.
-Reference: today's HTTP hook POST took 0.70 ms mean, 0.92 ms p95, and 1.0 ms
+In run 8 the chain's mean CPU (28.1 ms, what the pass line counts) splits
+as: the helper 3.1 ms, Git's launcher 6.3 ms, the console host 7.8 ms, Git's
+bash 11.0 ms. Outside the chain, per event and net of idle: Defender's own
+process 19.4 ms, the probe's thread starting the launcher 0.7 ms, the holder
+0.1 ms, and the whole machine 55.6 ms (every process and the kernel, the
+probe's own process included: 3.0 ms, the starter's 0.7 ms among it). Run 7
+gave 20.1, 0.7, 0.1 and 55.9 ms. So the chain passes the CPU line, and an
+event costs this machine about 53 to 56 ms of CPU in all, over 50 ms if all
+of it were counted; whether it should be is a question for the owner, raised
+by the orchestrator. Run 6's "chain plus Defender, about 50 ms" left out the
+starting program, the holder, csrss and the kernel. Reference: today's HTTP
+hook POST, taken as the gateway takes it (a new connection each time, the
+token checked, the body parsed), took 1.02 ms mean, 1.28 ms p95, and 1.5 ms
 of CPU, client and server, against a baseline on the same 150-second
-schedule (run 6's 1.1 ms was an upper estimate: its baseline lasted under a
-second). A fresh copy of the helper in a new folder took 105 ms on its first
-start, against about 35 ms warm. The figures crept up by about 2 ms of CPU
-from run 1 to run 6, over an hour and a half on a host that was also running
-other work; every run is far inside the line.
+schedule. Run 7's 0.70 ms and 1.0 ms reused one connection and skipped the
+token check and the parse, and run 6's 1.1 ms CPU was an upper estimate (its
+baseline lasted under a second). A fresh copy of the helper in a new folder
+took 105 ms on its first start, against about 33 ms warm. The figures crept
+up by about 2 ms of CPU from run 1 to run 6, over an hour and a half on a
+host that was also running other work; every run is far inside the line.
 
-Runs 2 to 7 exist because review found gaps in the script's own checks, not
+Runs 2 to 8 exist because review found gaps in the script's own checks, not
 in what it measures: a store folder made by someone else, or an output folder
 inside the store, could be removed at the end, or a refused output folder
 written to; a run whose CPU sum missed a process could still pass; a slow
@@ -77,13 +81,15 @@ extension rules over the chain's programs and the probe's own program, and
 an unreadable exclusion list could still give a PASS; a chain writing more
 than one pipe holds would stall; and the verdict compared rounded values,
 accepted any schedule and any validly signed helper, lost the step 2 result
-when step 3 failed, and kept a clean-up failure off its last line. The WP1
-legacy-Codex gate also refused one environment variable name in the new
-file. Run 7 is the committed script. Only the output reading (read during
-the run from run 4), the failure rules (a process without a cycle count
-fails a run, from run 2), and from run 7 the readings outside the chain and
-step 3's baseline changed; no run of any full run had a process without a
-cycle count, and the pass line never changed.
+when step 3 failed, and kept a clean-up failure off its last line; and the
+HTTP reference reused one connection and skipped the gateway's token check
+and parse. The WP1 legacy-Codex gate also refused one environment variable
+name in the new file. Run 8 is the committed script. Only the output
+reading (read during the run from run 4), the failure rules (a process
+without a cycle count fails a run, from run 2), from run 7 the readings
+outside the chain and step 3's baseline, and from run 8 step 3's reference
+changed; no run of any full run had a process without a cycle count, and the
+pass line never changed.
 
 **Decisions made while building the probe, before the measured run:**
 - CPU is taken two ways: CPU cycles per process, converted at the machine's
@@ -94,12 +100,12 @@ cycle count, and the pass line never changed.
   three 10-run harness checks, which found the tick figure reading near zero,
   and before the first 350-run measurement; the pass line itself never moved.
   The cycle rate is the fastest of five 100 ms loops (being descheduled can
-  only lower a loop's rate); run 7's five rates were within 0.03 percent of
-  each other.
+  only lower a loop's rate); in runs 7 and 8 the five rates were within 0.05
+  percent of each other.
 - Harness checks and earlier runs used the same helper, so Defender had
   already scanned it: a first start of a new version's bytes after an update
-  is not in these numbers. Run 7's fresh copy (the same bytes in a new
-  folder) is the nearest reference. The max line exists for that case.
+  is not in these numbers. The fresh copy of runs 7 and 8 (the same bytes in
+  a new folder) is the nearest reference. The max line exists for that case.
 - `list` takes the store lock only for a stale record, so the stand-in does
   not take it for the live holder; the hook mode in A3 may. One lock is a
   file open and a lock call, small next to the process starts measured here.
