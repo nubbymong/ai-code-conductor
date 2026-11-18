@@ -39,6 +39,7 @@
 import { readRegistryPaths, registryPathFolders, windowsFolderKey, PATH_VALUE_KINDS, type RegistryPaths } from './windows-registry-path'
 import { windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
 import { noteWindowsPathRefresh } from './windows-programs'
+import { lookForSshProgramAfterPathRefresh } from './ssh-program'
 import { logInfo } from './debug-logger'
 
 export { expandWindowsVariables } from './windows-registry-path'
@@ -144,7 +145,12 @@ export function refreshWindowsPath(): Promise<string[]> {
       }
       return added
     }, () => [] as string[])
-    .finally(() => { inFlight = null })
+    .finally(() => {
+      inFlight = null
+      // The kept ssh.exe went with the count: looked for again, off the
+      // event loop, on the PATH there is now (ssh-program.ts).
+      try { lookForSshProgramAfterPathRefresh() } catch { /* the next SSH start walks in place */ }
+    })
   inFlight = run
   return run
 }

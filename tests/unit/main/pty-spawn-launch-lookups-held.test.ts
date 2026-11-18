@@ -12,6 +12,9 @@
  *    (the Codex provider's warmResumeListNode), asked off the event loop. A
  *    launch that opens no resume list does not ask it.
  *
+ * 3. (2.1.3-beta.9) The look for ssh.exe made off the event loop is started
+ *    once where the handlers are registered; no SSH start waits for it.
+ *
  * The look itself and the warm-up are covered where they live
  * (launch-lookups-off-main-thread.test.ts); here they are stand-ins the test
  * answers, so what is checked is the handler's wiring: if either hold is
@@ -100,6 +103,14 @@ vi.mock('../../../src/main/gsudo-lookup', async (importOriginal) => ({
 vi.mock('../../../src/main/providers/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/providers/core')>()),
   tryGetProvider: (id: string) => (id === 'codex' ? { warmResumeListNode: () => { looks.nodeAsked++; return looks.nodeEnds } } : null),
+}))
+// 2.1.3-beta.9 (planning #310, item 5): the look for ssh.exe made off the
+// event loop is started where the handlers are registered; a stand-in that
+// counts it (the look itself: ssh-program-lookup.test.ts).
+const sshLook = vi.hoisted(() => ({ starts: 0 }))
+vi.mock('../../../src/main/ssh-program', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/ssh-program')>()),
+  startSshProgramLookup: () => { sshLook.starts++ },
 }))
 
 const { registerPtyHandlers } = await import('../../../src/main/ipc/pty-handlers')
@@ -221,5 +232,16 @@ describe('a Codex launch that opens the resume list, on macOS and Linux, waits f
     asPlatform('win32')
     expect(await outcome(spawn({}, S, { ...CODEX, cwd: 'C:/w', useResumePicker: true }))).toBe('started')
     expect(looks.nodeAsked).toBe(0)
+  })
+})
+
+describe('the look for ssh.exe (planning #310, item 5)', () => {
+  // Mutation to prove this can fail: drop the startSshProgramLookup call
+  // from registerPtyHandlers.
+  it('registering the handlers starts it once, at start; a launch starts no other', async () => {
+    expect(sshLook.starts).toBe(1)
+    asPlatform('win32')
+    expect(await outcome(spawn({}, S, { cwd: 'C:/w', shellOnly: true }))).toBe('started')
+    expect(sshLook.starts).toBe(1)
   })
 })

@@ -11,8 +11,17 @@
 // a folder PATH names only relatively, or with an unexpanded %VAR%, is never
 // read, whatever is in it. Off Windows the start stays `ssh` by name.
 //
-// node-pty, child_process and Electron are mocked: nothing is started and no
-// host is dialled. Reads no file of the host's.
+// 2.1.3-beta.9 (planning #310, item 5): the walk is also made once off the
+// main thread (ssh-program.ts lookForSshProgram, through the shared
+// findOnWindowsPathAsync), at start and after a PATH refresh, and its answer
+// is kept for the PATH and the PATH refresh count it was made under. A start
+// reads the kept answer and walks nothing in place; with none kept it walks
+// in place exactly as before, and never waits for the look. The look is the
+// real findOnWindowsPathAsync, watched, over the same fake file system, and
+// can be held (a folder on a share that does not answer).
+//
+// node-pty, child_process, Electron and the registry read are mocked:
+// nothing is started and no host is dialled. Reads no file of the host's.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const h = vi.hoisted(() => ({
@@ -23,6 +32,11 @@ const h = vi.hoisted(() => ({
   ptySpawns: [] as Array<{ file: string; args: string[] }>,
   execFiles: [] as Array<{ file: string; args: string[] }>,
   logs: [] as string[],
+  /** Each file test of the look off the main thread waits for this, when set. */
+  lookGate: null as Promise<void> | null,
+  openLook: (): void => {},
+  /** The user PATH the registry holds for a PATH refresh, or null for none. */
+  registryUser: null as string | null,
 }))
 
 vi.mock('os', async (importOriginal) => ({
@@ -69,15 +83,33 @@ vi.mock('../../../src/main/debug-logger', async (importOriginal) => {
 })
 
 const findOnWindowsPath = vi.hoisted(() => vi.fn())
+const findOnWindowsPathAsync = vi.hoisted(() => vi.fn())
 vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../../src/main/windows-programs')>()
   findOnWindowsPath.mockImplementation((names: readonly string[], env: NodeJS.ProcessEnv, _stat?: unknown, order?: 'folder' | 'name') =>
     real.findOnWindowsPath(names, env, (p) => h.every || h.files.has(p), order))
-  return { ...real, findOnWindowsPath }
+  // The look off the main thread: the real walk over the same fake file
+  // system, each file test held while `lookGate` is.
+  findOnWindowsPathAsync.mockImplementation((names: readonly string[], env: NodeJS.ProcessEnv, _stat?: unknown, order?: 'folder' | 'name') =>
+    real.findOnWindowsPathAsync(names, env, async (p) => {
+      if (h.lookGate) await h.lookGate
+      return h.every || h.files.has(p)
+    }, order))
+  return { ...real, findOnWindowsPath, findOnWindowsPathAsync }
+})
+vi.mock('../../../src/main/windows-registry-path', async (importOriginal) => {
+  type Values = import('../../../src/main/windows-registry-path').RegistryPaths
+  return {
+    ...(await importOriginal<typeof import('../../../src/main/windows-registry-path')>()),
+    readRegistryPaths: async (): Promise<Values> => ({ machine: null, user: h.registryUser ? { kind: 'String', data: h.registryUser } : null }),
+  }
 })
 
 const { spawnPty, endSshRemote, probeTmuxLive } = await import('../../../src/main/pty-manager')
-const { sshProgram, SSH_NOT_ON_PATH } = await import('../../../src/main/ssh-program')
+const { sshProgram, SSH_NOT_ON_PATH, SSH_PROGRAM_RECHECK_MS, lookForSshProgram, keptSshProgram, startSshProgramLookup, lookForSshProgramAfterPathRefresh, _resetSshProgramForTest } =
+  await import('../../../src/main/ssh-program')
+const { noteWindowsPathRefresh } = await import('../../../src/main/windows-programs')
+const { refreshWindowsPath } = await import('../../../src/main/windows-path-refresh')
 const { registerProvider } = await import('../../../src/main/providers')
 const { ClaudeProvider } = await import('../../../src/main/providers/claude')
 registerProvider(new ClaudeProvider())
@@ -95,7 +127,14 @@ const TRUSTED_SSH = 'C:\\Tools\\OpenSSH\\ssh.exe'
 const UNTRUSTED = ['.', '.\\tools', 'tools\\bin', 'C:tools', '\\tools', '%LOCALAPPDATA%\\OpenSSH']
 
 const savedPath = process.env.PATH
+const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform')!
 function setPath(...dirs: string[]): void { process.env.PATH = dirs.join(';') }
+/** Hold every file test of the look off the main thread until openLook(). */
+function holdTheLook(): void {
+  let open = (): void => {}
+  h.lookGate = new Promise<void>((resolve) => { open = resolve })
+  h.openLook = open
+}
 
 /** Every SSH start, each as a function that runs it and returns how it ended. */
 const sites: Array<[string, () => Promise<unknown>]> = [
@@ -115,9 +154,16 @@ beforeEach(() => {
   h.ptySpawns.length = 0
   h.execFiles.length = 0
   h.logs.length = 0
+  h.lookGate = null
+  h.registryUser = null
+  _resetSshProgramForTest()
   findOnWindowsPath.mockClear()
+  findOnWindowsPathAsync.mockClear()
 })
 afterEach(() => {
+  // A look a case left held ends, so the next case starts its own.
+  h.openLook()
+  Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM)
   if (savedPath === undefined) delete process.env.PATH
   else process.env.PATH = savedPath
 })
@@ -196,5 +242,187 @@ describe('sshProgram', () => {
     expect(sshProgram('darwin', {})).toBe('ssh')
     expect(() => sshProgram('win32', { PATH: '.;tools' })).toThrow(SSH_NOT_ON_PATH)
     expect(() => sshProgram('win32', {})).toThrow(SSH_NOT_ON_PATH)
+  })
+})
+
+describe('the answer kept from the look made off the main thread (planning #310, item 5)', () => {
+  // Mutation to prove this can fail: sshProgram walks in place whatever is
+  // kept (the code before beta.9), or the look passes a file test of its own.
+  it.each(sites)('%s: with an answer kept, starts that ssh.exe and walks nothing in place', async (_name, run) => {
+    setPath(...UNTRUSTED, TRUSTED)
+    h.every = true
+    await lookForSshProgram()
+    // One look, for ssh.exe in the app's own PATH, through the shared folder
+    // test (no file test of its own).
+    expect(findOnWindowsPathAsync).toHaveBeenCalledTimes(1)
+    expect(findOnWindowsPathAsync.mock.calls[0][0]).toEqual(['ssh.exe'])
+    expect(findOnWindowsPathAsync.mock.calls[0][1]).toBe(process.env)
+    expect(findOnWindowsPathAsync.mock.calls[0][2]).toBeUndefined()
+    await run()
+    expect(started()).toEqual([TRUSTED_SSH])
+    expect(findOnWindowsPath).not.toHaveBeenCalled()
+  })
+
+  it('the same ssh.exe in every case for one PATH: walked in place, kept, dropped by a refresh, kept again', async () => {
+    const GIT = 'D:\\Git\\usr\\bin'
+    setPath(...UNTRUSTED, GIT, TRUSTED)
+    h.files = new Set([`${GIT}\\ssh.exe`, TRUSTED_SSH])
+    const inPlace = sshProgram()
+    expect(findOnWindowsPath).toHaveBeenCalledTimes(1)
+    await lookForSshProgram()
+    const kept = sshProgram()
+    expect(findOnWindowsPath, 'the kept answer walks nothing in place').toHaveBeenCalledTimes(1)
+    noteWindowsPathRefresh()
+    const afterRefresh = sshProgram()
+    expect(findOnWindowsPath, 'a refresh dropped it: in place again').toHaveBeenCalledTimes(2)
+    await lookForSshProgram()
+    const keptAgain = sshProgram()
+    expect(findOnWindowsPath).toHaveBeenCalledTimes(2)
+    expect([inPlace, kept, afterRefresh, keptAgain]).toEqual([`${GIT}\\ssh.exe`, `${GIT}\\ssh.exe`, `${GIT}\\ssh.exe`, `${GIT}\\ssh.exe`])
+  })
+
+  // Mutation to prove this can fail: keep the answer for the PATH alone,
+  // without the PATH refresh count.
+  it('a PATH refresh drops the kept answer: the next start walks in place, as before', async () => {
+    setPath(TRUSTED)
+    h.files = new Set([TRUSTED_SSH])
+    await lookForSshProgram()
+    expect(keptSshProgram()).toBe(TRUSTED_SSH)
+    noteWindowsPathRefresh()
+    expect(keptSshProgram()).toBeUndefined()
+    await probeTmuxLive(KEY, ['a'])
+    expect(started()).toEqual([TRUSTED_SSH])
+    expect(findOnWindowsPath).toHaveBeenCalledTimes(1)
+  })
+
+  it('a changed PATH drops it too: the start walks the PATH there is now', async () => {
+    setPath(TRUSTED)
+    h.files = new Set([TRUSTED_SSH, 'D:\\Other\\ssh.exe'])
+    await lookForSshProgram()
+    setPath('D:\\Other', TRUSTED)
+    expect(keptSshProgram()).toBeUndefined()
+    await probeTmuxLive(KEY, ['a'])
+    expect(started()).toEqual(['D:\\Other\\ssh.exe'])
+    expect(findOnWindowsPath).toHaveBeenCalledTimes(1)
+  })
+
+  it('with the look still under way, every start walks in place as before and none waits for it', async () => {
+    setPath(TRUSTED)
+    h.files = new Set([TRUSTED_SSH])
+    holdTheLook()
+    const look = lookForSshProgram()
+    for (const [, run] of sites) await run()
+    expect(started()).toEqual([TRUSTED_SSH, TRUSTED_SSH, TRUSTED_SSH, TRUSTED_SSH, TRUSTED_SSH])
+    expect(findOnWindowsPath).toHaveBeenCalledTimes(5)
+    // The walk in place keeps nothing: only the look does, once it ends.
+    expect(keptSshProgram()).toBeUndefined()
+    h.openLook()
+    await look
+    expect(keptSshProgram()).toBe(TRUSTED_SSH)
+  })
+
+  it('a look that finds none keeps nothing, and a start still refuses with SSH_NOT_ON_PATH', async () => {
+    setPath(...UNTRUSTED)
+    h.every = true
+    await lookForSshProgram()
+    expect(keptSshProgram()).toBeUndefined()
+    expect(() => spawnPty(fakeWin, 'ssh-kept-none', { ssh: SSH } as never)).toThrow(SSH_NOT_ON_PATH)
+    expect(findOnWindowsPath).toHaveBeenCalledTimes(1)
+    expect(started()).toEqual([])
+  })
+
+  it('a look that finds none drops the answer kept for the same PATH', async () => {
+    setPath(TRUSTED)
+    h.files = new Set([TRUSTED_SSH])
+    await lookForSshProgram()
+    expect(keptSshProgram()).toBe(TRUSTED_SSH)
+    h.files = new Set()
+    await lookForSshProgram()
+    expect(keptSshProgram()).toBeUndefined()
+    expect(() => sshProgram()).toThrow(SSH_NOT_ON_PATH)
+  })
+
+  it('one look at a time for one PATH: a second ask while it is under way joins it', async () => {
+    setPath(TRUSTED)
+    h.files = new Set([TRUSTED_SSH])
+    holdTheLook()
+    const first = lookForSshProgram()
+    const second = lookForSshProgram()
+    expect(second).toBe(first)
+    expect(findOnWindowsPathAsync).toHaveBeenCalledTimes(1)
+    h.openLook()
+    await first
+    expect(keptSshProgram()).toBe(TRUSTED_SSH)
+  })
+
+  // Mutation to prove this can fail: let any look that ends keep its answer,
+  // so the one begun before the refresh, which ends last, replaces the newer.
+  it('a look begun before a PATH refresh keeps nothing once a newer look has begun, even when it ends last', async () => {
+    setPath('D:\\A', 'D:\\B', TRUSTED)
+    h.files = new Set([TRUSTED_SSH, 'D:\\Other\\ssh.exe'])
+    holdTheLook()
+    const before = lookForSshProgram()
+    setPath('D:\\Other')
+    noteWindowsPathRefresh()
+    const after = lookForSshProgram()
+    expect(after).not.toBe(before)
+    expect(findOnWindowsPathAsync).toHaveBeenCalledTimes(2)
+    h.openLook()
+    await Promise.all([before, after])
+    expect(keptSshProgram()).toBe('D:\\Other\\ssh.exe')
+  })
+
+  // Mutation to prove this can fail: drop the new look a start makes when
+  // the kept answer is old.
+  it('a kept answer older than SSH_PROGRAM_RECHECK_MS is still used, and starts a new look for the starts after it', async () => {
+    const FIRST = 'D:\\First'
+    setPath(FIRST, TRUSTED)
+    h.files = new Set([TRUSTED_SSH])
+    await lookForSshProgram()
+    findOnWindowsPathAsync.mockClear()
+    const now = performance.now()
+    expect(sshProgram('win32', process.env, now)).toBe(TRUSTED_SSH)
+    expect(findOnWindowsPathAsync, 'a fresh answer starts no look').not.toHaveBeenCalled()
+    // An ssh.exe put in an earlier PATH folder since the look.
+    h.files.add(`${FIRST}\\ssh.exe`)
+    expect(sshProgram('win32', process.env, now + SSH_PROGRAM_RECHECK_MS)).toBe(TRUSTED_SSH)
+    expect(findOnWindowsPathAsync).toHaveBeenCalledTimes(1)
+    await lookForSshProgram()
+    expect(sshProgram()).toBe(`${FIRST}\\ssh.exe`)
+    expect(findOnWindowsPath, 'never a walk in place').not.toHaveBeenCalled()
+  })
+
+  // Mutation to prove this can fail: drop the start-up call, or the call
+  // after a refresh (windows-path-refresh.ts refreshWindowsPath).
+  it('the look starts at start, and again after each PATH refresh, on the PATH there is then; never after a refresh before start', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    const NEW = 'D:\\New'
+    setPath(TRUSTED)
+    h.files = new Set([`${NEW}\\ssh.exe`])
+    lookForSshProgramAfterPathRefresh()
+    expect(findOnWindowsPathAsync, 'no look before start').not.toHaveBeenCalled()
+    startSshProgramLookup()
+    expect(findOnWindowsPathAsync).toHaveBeenCalledTimes(1)
+    await lookForSshProgram() // joins the look under way
+    expect(findOnWindowsPathAsync).toHaveBeenCalledTimes(1)
+    expect(keptSshProgram(), 'none on that PATH').toBeUndefined()
+    // The refresh adds the folder that holds ssh.exe.
+    h.registryUser = NEW
+    await refreshWindowsPath()
+    expect(findOnWindowsPathAsync).toHaveBeenCalledTimes(2)
+    await lookForSshProgram() // joins the look the refresh started
+    expect(findOnWindowsPathAsync).toHaveBeenCalledTimes(2)
+    expect(keptSshProgram()).toBe(`${NEW}\\ssh.exe`)
+    await probeTmuxLive(KEY, ['a'])
+    expect(started()).toEqual([`${NEW}\\ssh.exe`])
+    expect(findOnWindowsPath).not.toHaveBeenCalled()
+  })
+
+  it('off Windows nothing is looked for and nothing is kept', async () => {
+    h.platform = 'linux'
+    startSshProgramLookup()
+    await lookForSshProgram()
+    expect(findOnWindowsPathAsync).not.toHaveBeenCalled()
+    expect(sshProgram()).toBe('ssh')
   })
 })

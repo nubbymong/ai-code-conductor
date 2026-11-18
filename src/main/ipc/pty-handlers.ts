@@ -55,6 +55,7 @@ import { claudeStartLookupPending, awaitClaudeStartLookup } from '../claude-star
 import { claudeLaunchWalkPending, awaitClaudeLaunchWalk } from '../claude-launch-walk'
 import { gsudoAnswerKept, gsudoLookAnswered } from '../gsudo-lookup'
 import { launchLookupsArmed } from '../launch-lookups-armed'
+import { startSshProgramLookup } from '../ssh-program'
 
 /** SSH options as received from the renderer (no passwords — only configId) */
 interface RendererSSHOptions {
@@ -725,6 +726,12 @@ const askHandOffSchema = z.object({
 }).strict()
 
 export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void {
+  // 2.1.3-beta.9 (planning #310, item 5): on Windows, ssh.exe is looked for
+  // once off the event loop now, and again after each PATH refresh; an SSH
+  // start reads that answer instead of walking PATH on this thread, and
+  // walks in place as before only while there is none (ssh-program.ts).
+  startSshProgramLookup()
+
   // WP2 PR 4, P4.1 (row 51): whether a Codex session's launch carried the
   // canvas and vision skills' guidance with the tools, for the canvas page's
   // one line. A pure read of main's own launch record; the app's window only.

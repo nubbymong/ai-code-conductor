@@ -256,17 +256,17 @@
   "src/main/pty-manager.ts :: execFile(sshProgram()": {
    "count": 2,
    "how": "full-path",
-   "reason": "ssh for an SSH session's separate End and liveness execs, argv only: on Windows ssh.exe by the full path found in PATH's fully qualified folders (sshProgram, findOnWindowsPath; none found: nothing starts, and the exec settles as failed or unverified); elsewhere ssh by name, as before."
+   "reason": "ssh for an SSH session's separate End and liveness execs, argv only: on Windows ssh.exe by the full path found in PATH's fully qualified folders (ssh-program.ts sshProgram: the answer kept from the look made off the event loop with findOnWindowsPathAsync for this PATH and PATH refresh count, else findOnWindowsPath in place; none found: nothing starts, and the exec settles as failed or unverified); elsewhere ssh by name, as before."
   },
   "src/main/pty-manager.ts :: pty.spawn(sshBin": {
    "count": 1,
    "how": "full-path",
-   "reason": "ssh for an SSH session: the same program found the same way as the sshProgram() sites, asked once at the top of the SSH branch (const sshBin = sshProgram()) before the launch's MCP record is made, and started here. On Windows ssh.exe by the full path found in PATH's fully qualified folders (sshProgram, findOnWindowsPath; none found: nothing starts, the session fails with SSH_NOT_ON_PATH and no record is left); elsewhere ssh by name, as before."
+   "reason": "ssh for an SSH session: the same program found the same way as the sshProgram() sites, asked once at the top of the SSH branch (const sshBin = sshProgram()) before the launch's MCP record is made, and started here. On Windows ssh.exe by the full path found in PATH's fully qualified folders (ssh-program.ts sshProgram: the answer kept from the look made off the event loop with findOnWindowsPathAsync for this PATH and PATH refresh count, else findOnWindowsPath in place; none found: nothing starts, the session fails with SSH_NOT_ON_PATH and no record is left); elsewhere ssh by name, as before."
   },
   "src/main/pty-manager.ts :: pty.spawn(sshProgram()": {
    "count": 2,
    "how": "full-path",
-   "reason": "ssh for the password route of an SSH session's End and liveness execs: on Windows ssh.exe by the full path found in PATH's fully qualified folders (sshProgram, findOnWindowsPath; none found: nothing starts, and the exec settles as failed or unverified); elsewhere ssh by name, as before."
+   "reason": "ssh for the password route of an SSH session's End and liveness execs: on Windows ssh.exe by the full path found in PATH's fully qualified folders (ssh-program.ts sshProgram: the answer kept from the look made off the event loop with findOnWindowsPathAsync for this PATH and PATH refresh count, else findOnWindowsPath in place; none found: nothing starts, and the exec settles as failed or unverified); elsewhere ssh by name, as before."
   },
   "src/main/registry.ts :: execFileSync(systemTool('reg.exe')": {
    "count": 1,
