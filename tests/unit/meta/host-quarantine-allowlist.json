@@ -34,6 +34,10 @@
       "reason": "Names icacls only in its in-memory Windows (the programs, the file system and PowerShell are all fakes) and in prose; every child_process call refuses. No process starts and no real folder is touched."
     },
     {
+      "path": "tests/unit/main/session-input-ownership.test.ts",
+      "reason": "Reads and parses source files only: the node-pty require and import the rules see are text inside its self-test strings, which it parses and never runs, and it reads the folder itself with no git process. No process starts."
+    },
+    {
       "path": "tests/unit/main/sentinel-start-steps-wait.test.ts",
       "reason": "Names icacls only in its fake child_process, which answers or refuses every program start the code it drives makes; the headless runner is a recording fake, the owner-only rule is a test rule and the account resolver links nothing. No process starts, no ACL is changed and no link is made."
     },
