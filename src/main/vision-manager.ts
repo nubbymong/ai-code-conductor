@@ -839,14 +839,16 @@ async function killSpawnedBrowserForRelaunch(): Promise<void> {
 /** End a browser the session helper started through the awaited verified
  *  path (endVerified: its pid, only while it still has its creation time).
  *  It stays tracked until that has answered, so an exit that comes first
- *  (killSpawnedBrowser, synchronous) still ends it. Resolves whether it was
- *  ended. */
+ *  (killSpawnedBrowser, synchronous) still ends it, and it stops being
+ *  tracked only once the end is confirmed. An answer that does not confirm
+ *  it (a check that timed out or failed, or a pid that now has another
+ *  creation time) keeps it tracked, so the next end, at quit at the latest,
+ *  checks again with the same pid and creation time. Resolves whether it
+ *  was ended. endVerified never throws. */
 async function endStartedBrowser(t: StartedBrowser): Promise<boolean> {
-  try {
-    return await endVerified({ pid: t.pid, created: t.created }, ownerPorts())
-  } finally {
-    if (spawnedBrowser === t) spawnedBrowser = null
-  }
+  const ended = await endVerified({ pid: t.pid, created: t.created }, ownerPorts())
+  if (ended && spawnedBrowser === t) spawnedBrowser = null
+  return ended
 }
 
 /** Stop (stopGlobalVision): the app's own child is ended as at quit

@@ -30,6 +30,8 @@ const sys = vi.hoisted(() => ({
   nextPid: 5000,
   nextCreated: 134078000000000000,
   answer: { kind: 'ok' } as HelperAnswer,
+  /** Every awaited OS call fails, as a PowerShell that timed out does. */
+  failAsync: false,
   execFiles: [] as Array<{ file: string; args: string[]; opts: Record<string, unknown> }>,
   spawns: [] as Array<{ executable: string; args: string[]; opts: Record<string, unknown> }>,
   runs: [] as Array<{ file: string; args: string[]; sync: boolean; timeoutMs: number; answer?: string }>,
@@ -129,6 +131,7 @@ const fakePorts: OwnerPorts = {
     const r: { file: string; args: string[]; sync: boolean; timeoutMs: number; answer?: string } = { file, args, sync: false, timeoutMs }
     sys.runs.push(r)
     await new Promise((res) => setTimeout(res, 5))
+    if (sys.failAsync) throw new Error('timed out')
     r.answer = answer(file, args)
     return r.answer
   },
@@ -168,6 +171,7 @@ beforeEach(() => {
   sys.present = new Set([HELPER, CHROME])
   sys.procs.clear()
   sys.answer = { kind: 'ok' }
+  sys.failAsync = false
   sys.execFiles.length = 0
   sys.spawns.length = 0
   sys.runs.length = 0
@@ -252,6 +256,21 @@ describe('Windows: the vision browser starts through the session helper', () => 
     expect(pidOnlyKills()).toEqual([])
     killSpawnedBrowser()
     expect(sys.runs).toHaveLength(1)
+  })
+
+  it('a stop whose check does not answer keeps it tracked, so the quit still ends it by pid and start time', async () => {
+    const { pid } = await launchBrowser('chrome', 9222, undefined, true)
+    const created = sys.procs.get(pid) as string
+    sys.failAsync = true
+    await stopGlobalVision()
+    expect(sys.procs.has(pid), 'the failed check ended it').toBe(true)
+    killSpawnedBrowser()
+    const sync = sys.runs.filter((r) => r.sync)
+    expect(sync).toHaveLength(1)
+    expect(sync[0].args[sync[0].args.length - 1]).toBe(windowsEndScript(pid, created))
+    expect(sync[0].answer).toBe('ended\r\n')
+    expect(sys.procs.has(pid)).toBe(false)
+    expect(pidOnlyKills()).toEqual([])
   })
 
   it('a quit that comes while a stop is still checking still ends it, synchronously', async () => {
