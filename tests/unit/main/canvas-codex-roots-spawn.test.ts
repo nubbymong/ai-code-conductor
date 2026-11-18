@@ -98,7 +98,9 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
 
 const store = await import('../../../src/main/canvas/canvas-store')
 const link = await import('../../../src/main/canvas/canvas-session-link')
-const { spawnPty, killPty, writeCanvasMarkerLine } = await import('../../../src/main/pty-manager')
+const { spawnPty, killPty } = await import('../../../src/main/pty-manager')
+// The session input module's submitMarker, which writeCanvasMarkerLine became (2.1.3-beta.9 A1).
+const { submitMarker: writeCanvasMarkerLine } = await import('../../../src/main/session-input')
 type SpawnOpts = NonNullable<Parameters<typeof spawnPty>[2]>
 
 let seq = 0

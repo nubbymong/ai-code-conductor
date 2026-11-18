@@ -82,7 +82,8 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
   setupProfileLinks: () => {}, syncPrimaryCredentialsWithGlobal: () => {}, backupProfileHomeToCanonical: () => {},
 }))
 
-const { spawnPty, killPty, handOffAskQuestion, ASK_READY_WAIT_MS } = await import('../../../src/main/pty-manager')
+const { spawnPty, killPty } = await import('../../../src/main/pty-manager')
+const { handOffAskQuestion, ASK_READY_WAIT_MS } = await import('../../../src/main/session-input')
 const { askConductorProjectDocMaxBytes } = await import('../../../src/main/help-workspace')
 const { IPC } = await import('../../../src/shared/ipc-channels')
 const { codexPromptKeeps } = await import('../../../src/shared/codex-screen')

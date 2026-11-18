@@ -9,7 +9,8 @@ import { registerAccountWebHandlers } from './ipc/account-web-handlers'
 import { sweepAbandonedProfiles } from './account-web/sign-in'
 import { setSignInWindowsQuitting } from './account-web/in-app-sign-in'
 import { warnAboutOrphanedSharedPartitions } from './account-web/orphan-partitions'
-import { killAllPty, gracefulExitAllPty, isSessionWritable, writePty, writeSubmittedLine, writeCanvasMarkerLine, routeHookTranscriptPath, noteCodexHookEvent, isCodexPtySession, codexRolloutForSessionContext, applyLoggingSwitches } from './pty-manager'
+import { killAllPty, gracefulExitAllPty, isSessionWritable, routeHookTranscriptPath, noteCodexHookEvent, isCodexPtySession, codexRolloutForSessionContext, applyLoggingSwitches } from './pty-manager'
+import { submitLine, typeKeys, submitMarker } from './session-input'
 import { registerResumeHandlers } from './ipc/resume-handlers'
 import { registerCliHandlers } from './ipc/cli-handlers'
 import { registerClipboardHandlers } from './ipc/clipboard-handlers'
@@ -1035,10 +1036,10 @@ if (!gotTheLock) {
     startCanvasMarkerQueue({
       // A Claude session's marker is held and typed only at Claude Code's
       // ready, empty prompt, read from the session's own screen
-      // (writeCanvasMarkerLine). WP2 PR 4, P4.1: a Codex session's
+      // (session-input submitMarker). WP2 PR 4, P4.1: a Codex session's
       // goes through the submit primitive, which answers later whether it was
       // delivered.
-      write: (sessionId, line, canvasId) => writeCanvasMarkerLine(sessionId, line, canvasId),
+      write: (sessionId, line, canvasId) => submitMarker(sessionId, line, canvasId),
       // P4.1: a Codex marker the primitive did not deliver, a Claude marker
       // dropped untyped (held past its bound, its run ended, or refused), or
       // a marker the queue held when its session ended or restarted, is
@@ -1076,11 +1077,11 @@ if (!gotTheLock) {
       getWindow,
       isSessionAlive: isSessionWritable,
       send: (sessionId, text) => {
-        writeSubmittedLine(sessionId, text)
+        submitLine(sessionId, text)
       },
       // P3.10: a Codex session's retry is typed, then submitted once the
       // screen shows it (watchdog-manager submitCodex).
-      write: (sessionId, data) => writePty(sessionId, data),
+      write: (sessionId, data) => typeKeys(sessionId, data),
       // Refresh the services view live when a watchdog state changes; routed
       // through the same merge so the push carries every source (#235).
       onHealthChange: () => pushDiagnostics(),

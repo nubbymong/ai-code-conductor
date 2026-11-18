@@ -19,11 +19,11 @@ import {
   isProvableContainerEntry, parseEntrySentinels, buildEntryGuardCommand, readContainerName,
 } from '../shared/container-command'
 import { SSH_ENTRY, type SshEntryFailureReason } from '../shared/ssh-entry'
-import type { SshRuntime, DetachedRemoteLiveness, SshEndRemoteOutcome, SshEndRemoteResult, SubmitTextResult, AskConductorNotice } from '../shared/types'
+import type { SshRuntime, DetachedRemoteLiveness, SshEndRemoteOutcome, SshEndRemoteResult } from '../shared/types'
 import { isProviderId, type RealmOwnership, type ProviderId } from '../shared/providers'
 import { spawnAgentPty, spawnPlainPty, whenHeldKnown } from './session-helper/manager'
+import { setSessionInputPorts, askQuestion as typeAskQuestion, codexRunScreen } from './session-input'
 import { IPC } from '../shared/ipc-channels'
-import { codexPromptKeeps } from '../shared/codex-screen'
 import { askConductorProjectDocMaxBytes } from './help-workspace'
 import { resolveRunningClaudeInfo } from '../shared/ssh-tmux-persistence'
 import { buildTmuxStageCommand, type TmuxStageTarget } from './ssh-tmux-stage'
@@ -47,7 +47,6 @@ import { bundledConptyChoice, bundledConptyFailed, SYSTEM_CONPTY_OPTIONS, BUNDLE
 import { guardPtyIo, PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT, type PtyIoSide } from './pty-input-guard'
 import { processGone } from './process-alive'
 import { writeCliSetupPty, getResourcesDirectory } from './ipc/setup-handlers'
-import { TMUX_WHEEL_EXIT_KEY } from '../shared/tmux-wheel'
 import { isGlobalVisionRunning, getGlobalVisionConfig, teardownVisionSession } from './vision-manager'
 import { getConductorMcpPort, issueMcpSessionToken } from './conductor-mcp-server'
 import { conductorToolsMasterOn } from './conductor-tools-switch'
@@ -57,7 +56,7 @@ import { partnerFolderLine, partnerPromptTail, isPartnerShellPrompt, partnerRece
 import { resolveHostColorScheme, colorFgBgEnvToken } from './providers/host-color-scheme'
 import { getProvider, providerCapability } from './providers'
 import { isSshCapable } from './providers/types'
-import type { TelemetrySource, SessionRunScreen, SpawnOptions, SshCapableProvider, SessionProvider } from './providers/types'
+import type { TelemetrySource, SpawnOptions, SshCapableProvider, SessionProvider } from './providers/types'
 import { resolveCwd, isHomeOrAncestor } from './path-utils'
 import { AGENTS_ENV, agentsEnvValue, agentsRef, buildTerminalLaunchLine } from './terminal-launch-line'
 import { findOnWindowsPath, findOnWindowsPathAsync } from './windows-programs'
@@ -81,8 +80,6 @@ import { registerCanvasUatRoot, revokeCanvasUatRoots, designateCanvasWorktreeRoo
 import { designatedWorktreeDir } from './canvas/canvas-worktree'
 import { forgetSessionForCanvas, setCanvasCodexConversationLookup } from './canvas/canvas-session-link'
 import { forgetCanvasMarkers } from './canvas/canvas-marker-delivery'
-import { MARKER_FALLBACK_FLUSH_MS } from './canvas/canvas-marker-queue'
-import { queueClaudeMarkerLine } from './canvas/claude-marker-typing'
 import { prepareCodexCanvasLaunch } from './canvas/codex-canvas-launch'
 import { registerCodexCanvasRoots } from './canvas/codex-canvas-roots'
 import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from './canvas/codex-guidance'
@@ -980,14 +977,6 @@ export function routeHookTranscriptPath(sessionId: string, transcriptPath: strin
  *  session). The attention source maps Codex's own hook events with it. */
 export function isCodexPtySession(sessionId: string): boolean {
   return ptySessions.get(sessionId)?.agent === 'codex'
-}
-
-/** WP2 PR 4, P4.1: the Codex package's pane of each run and its submit
- *  primitive (providers/codex/session-screen.ts), from the registered
- *  provider: this module reaches a provider package only through the
- *  registry, never by importing it. Undefined when none is registered. */
-function codexRunScreen(): SessionRunScreen | undefined {
-  try { return getProvider('codex').runScreen } catch { return undefined }
 }
 
 /** WP2 PR 4, P4.3: the Codex sessions running as Ask Conductor (launched with
@@ -6332,7 +6321,7 @@ function spawnPtyResolved(
       // spawnPty has registered this run (below the provider branches).
       if (options?.isAsk === true) codexAskSessions.add(sessionId)
       else codexAskSessions.delete(sessionId)
-      if (askQuestion && !built.askPromptOnArgv) setImmediate(() => { void deliverAskQuestion(win, sessionId, askQuestion) })
+      if (askQuestion && !built.askPromptOnArgv) setImmediate(() => { void typeAskQuestion(win, sessionId, askQuestion) })
       // P3.12 (row 31): whatever an earlier launch of this session claimed is
       // not this run's; this launch's claims are held until its run is
       // recorded (a resume claims at once, inside ingestSessionTelemetry).
@@ -7699,112 +7688,16 @@ function isSubmittedPayload(data: string): boolean {
   return last === 13 /* \r */ || last === 10 /* \n */
 }
 
-/**
- * WP2 PR 4, P4.1: an Agent Canvas marker line into a session. A Codex
- * session's goes through the submit primitive (providers/codex/
- * composer-submit.ts), which types it only at Codex's ready, empty composer
- * (waiting, within the marker queue's own fallback bound, while a turn runs
- * or a prompt is up), submits it once it is confirmed on screen, and answers
- * whether it was delivered: Codex never submits one write of a line and its
- * Enter (PB3).
- *
- * Every other session's (Claude Code's) is held, in the order handed in, and
- * typed only when the session's own screen reads Claude Code's ready, empty
- * prompt, by the same reading the status strip's controls type through
- * (canvas/claude-marker-typing.ts). Only into the run it was handed for, the
- * session's terminal process (a restart is a new run; a Claude Code started
- * again by hand in the same terminal is not); a session with no run takes
- * nothing and answers not delivered (the session gone), as the branch above
- * does for a session with no pane, so its canvas is told. Otherwise it answers
- * nothing: a marker the chain drops untyped (held past its bound, its run
- * ended) is told to its canvas by the chain itself. `canvasId`, the canvas
- * the marker was filed on when the caller named one, goes with the line, so
- * the same words filed on two canvases stay two markers.
- */
-export function writeCanvasMarkerLine(sessionId: string, line: string, canvasId?: string): void | Promise<SubmitTextResult> {
-  if (isCodexPtySession(sessionId)) {
-    // The primitive answers a session with no pane itself (review A-8).
-    const screen = codexRunScreen()
-    if (!screen) return Promise.resolve({ delivered: false, reason: 'session-gone' })
-    return screen.submit(sessionId, line, { readyWaitMs: MARKER_FALLBACK_FLUSH_MS })
-  }
-  const run = ptySessions.get(sessionId)?.ptyProcess
-  if (!run) {
-    logInfo(`[canvas-marker] ${sessionId}: no running session, so a marker was not typed`)
-    return Promise.resolve({ delivered: false, reason: 'session-gone' })
-  }
-  queueClaudeMarkerLine(sessionId, line, () => ptySessions.get(sessionId)?.ptyProcess === run, canvasId)
-}
-
-/** WP2 PR 4, P4.3: how long an Ask question waits for Codex's ready, empty
- *  composer. A first Ask in a fresh account folder shows folder trust and the
- *  sandbox setup first, which the user answers (PB4), and a live tab may be
- *  mid-answer. Past it the question is not sent, and the dock says so and
- *  keeps it. */
-export const ASK_READY_WAIT_MS = 300_000
-
-/** One of Ask Conductor's notice lines, to the dock (askConductor:notice). */
-function sendAskNotice(win: BrowserWindow, notice: AskConductorNotice): void {
-  try { if (!win.isDestroyed()) win.webContents.send(IPC.ASK_CONDUCTOR_NOTICE, notice) } catch { /* the window is going */ }
-}
-
-/**
- * WP2 PR 4, P4.3 (row 53): type an Ask question into a Codex session through
- * the run's pane and its submit primitive, never as the raw question and
- * Enter (Codex submits no such write, PB3). The characters Codex's prompt
- * would drop are removed first and the dock told how many (section 10
- * question 6, default A); a question that is not sent is said, with why, and
- * the dock keeps it. The log names the question by its length only. Never
- * rejects.
- */
-async function deliverAskQuestion(win: BrowserWindow, sessionId: string, question: string): Promise<SubmitTextResult> {
-  let result: SubmitTextResult
-  try {
-    const screen = codexRunScreen()
-    if (!screen?.has(sessionId)) {
-      result = { delivered: false, reason: 'session-gone' }
-    } else {
-      const { text, removed } = codexPromptKeeps(question)
-      if (removed > 0) sendAskNotice(win, { sessionId, kind: 'removed', count: removed })
-      result = text.trim() ? await screen.submit(sessionId, text, { readyWaitMs: ASK_READY_WAIT_MS }) : { delivered: false, reason: 'refused-text' }
-    }
-  } catch {
-    result = { delivered: false, reason: 'session-gone' }
-  }
-  logInfo(`[codex-ask] ${sessionId}: a question of ${[...question].length} characters ${result.delivered ? 'typed into Codex\'s prompt' : `not delivered (${result.reason})`}`)
-  if (!result.delivered) sendAskNotice(win, { sessionId, kind: 'not-delivered', reason: result.reason })
-  return result
-}
-
-/**
- * WP2 PR 4, P4.3: a question for a LIVE Ask session on Codex
- * (askConductor:handOff), through the same door as the launch's. Only a
- * running Codex session that launched as Ask takes one; anything else is the
- * session gone, and nothing is typed.
- */
-export function handOffAskQuestion(win: BrowserWindow, sessionId: string, question: string): Promise<SubmitTextResult> {
-  if (!isCodexPtySession(sessionId) || !codexAskSessions.has(sessionId)) return Promise.resolve({ delivered: false, reason: 'session-gone' })
-  return deliverAskQuestion(win, sessionId, question)
-}
-
-/**
- * #85 — submit a programmatic LINE into a session (the watchdog's retry, the
- * canvas marker queue), leaving tmux copy-mode first when the session is
- * tmux-wrapped.
- *
- * The wheel now opens tmux's scrollback view on an SSH Persistent session, and
- * copy-mode SWALLOWS input: a user who scrolled up to read something and then
- * walked away leaves the pane in a state where the watchdog's rate-limit retry
- * would go to the scrollback viewer instead of claude, and the session would
- * simply never resume. The leave key is prepended unconditionally for a wrapped
- * session because main cannot observe copy-mode: outside it, tmux's root table
- * binds that key to a silent no-op, so the cost of being wrong is nothing
- * (verified against tmux 3.4, 2026-09-20). Untouched for every other session.
- */
-export function writeSubmittedLine(sessionId: string, line: string): void {
-  const prefix = sshTmuxWrappedBySession.has(sessionId) ? TMUX_WHEEL_EXIT_KEY : ''
-  writePty(sessionId, `${prefix}${line}\r`)
-}
+// 2.1.3-beta.9 A1: the session input module (./session-input) types into a
+// session for the app (the Watchdog's retry, a canvas marker, Ask Conductor's
+// question) through these ports, so it imports nothing from this module.
+setSessionInputPorts({
+  write: (sessionId, data) => writePty(sessionId, data),
+  run: (sessionId) => ptySessions.get(sessionId)?.ptyProcess,
+  tmuxWrapped: (sessionId) => sshTmuxWrappedBySession.has(sessionId),
+  isCodexSession: isCodexPtySession,
+  isCodexAskSession: (sessionId) => codexAskSessions.has(sessionId),
+})
 
 export function writePty(sessionId: string, data: string): void {
   // Focus-report chunks (RC8): xterm emits the DECSET-1004 focus events

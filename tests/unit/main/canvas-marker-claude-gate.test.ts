@@ -10,14 +10,15 @@
 //
 // Driven end to end: the REAL spawnPty (a local Claude session; the rest of
 // main mocked, as canvas-worktree-spawn.test.ts does), the REAL marker queue
-// and its wiring, the REAL writeCanvasMarkerLine and the module that holds a
+// and its wiring, the REAL session input module's submitMarker (which
+// writeCanvasMarkerLine became, 2.1.3-beta.9 A1) and the module that holds a
 // Claude marker (canvas/claude-marker-typing.ts), and the REAL renderer half
 // (answerClaudeMarkerAsk in src/renderer/lib/claudePrompt.ts reading
 // src/shared/claude-screen.ts) over a fake IPC hop. What reaches the session's
 // process is what the mocked node-pty records.
 //
-// Mutant this must catch: writeCanvasMarkerLine's Claude branch calling
-// writeSubmittedLine(sessionId, line) in place of queueClaudeMarkerLine.
+// Mutant this must catch: submitMarker's Claude branch calling
+// submitLine(sessionId, line) in place of queueClaudeMarkerLine.
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -98,7 +99,9 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
 vi.mock('../../../src/renderer/components/terminal/screenRegistry', () => ({ readSessionScreen: () => null }))
 vi.mock('../../../src/renderer/components/terminal/tmuxWheelScroll', () => ({ writeSessionInput: () => {} }))
 
-const { spawnPty, killPty, writePty, writeCanvasMarkerLine } = await import('../../../src/main/pty-manager')
+const { spawnPty, killPty, writePty } = await import('../../../src/main/pty-manager')
+// The session input module's submitMarker, which writeCanvasMarkerLine became (2.1.3-beta.9 A1).
+const { submitMarker: writeCanvasMarkerLine } = await import('../../../src/main/session-input')
 const delivery = await import('../../../src/main/canvas/canvas-marker-delivery')
 const { MARKER_FALLBACK_FLUSH_MS } = await import('../../../src/main/canvas/canvas-marker-queue')
 const typing = await import('../../../src/main/canvas/claude-marker-typing')
@@ -300,9 +303,9 @@ describe('a canvas marker into a Claude Code session waits for its ready, empty 
     expect(typedMarkers()).toHaveLength(3)
   })
 
-  it("the app's wiring hands each marker's canvas on to writeCanvasMarkerLine", () => {
+  it("the app's wiring hands each marker's canvas on to the session input module's submitMarker", () => {
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
-    expect(src).toMatch(/write:\s*\(sessionId,\s*line,\s*canvasId\)\s*=>\s*writeCanvasMarkerLine\(sessionId,\s*line,\s*canvasId\)/)
+    expect(src).toMatch(/write:\s*\(sessionId,\s*line,\s*canvasId\)\s*=>\s*submitMarker\(sessionId,\s*line,\s*canvasId\)/)
   })
 
   it('a session with no run takes nothing', async () => {

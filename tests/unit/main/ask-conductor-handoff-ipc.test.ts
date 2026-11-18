@@ -2,7 +2,7 @@
 //  - `askConductor:handOff`: a question for a live Ask session on Codex,
 //    answered only to the app's own window (its top frame), with a strict
 //    payload, and handed to main's submit-primitive door
-//    (pty-manager handOffAskQuestion), never written raw;
+//    (session-input handOffAskQuestion), never written raw;
 //  - the help folder rebuilt in main before EVERY Ask spawn of either
 //    assistant (a first launch, a revive, a Restart, Past discussions, an
 //    account switch's remount, a restored tab all come through pty:spawn),
@@ -45,6 +45,8 @@ vi.mock('../../../src/main/pty-manager', () => ({
     h.order.push('ended')
     return h.endAnswer
   }),
+}))
+vi.mock('../../../src/main/session-input', () => ({
   handOffAskQuestion: vi.fn(async (_win: unknown, sessionId: string, question: string) => { h.handOffs.push({ sessionId, question }); return { delivered: true } }),
 }))
 vi.mock('../../../src/main/help-workspace', () => ({
@@ -77,7 +79,7 @@ vi.mock('../../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal
 
 const { IPC } = await import('../../../src/shared/ipc-channels')
 const { registerPtyHandlers } = await import('../../../src/main/ipc/pty-handlers')
-const ptyManager = await import('../../../src/main/pty-manager')
+const sessionInput = await import('../../../src/main/session-input')
 const { ASK_HELP_FOLDER_FAILED } = await import('../../../src/shared/ask-conductor-provider')
 
 const mainFrame = { id: 'top' }
@@ -98,7 +100,7 @@ beforeEach(() => {
   h.endGate = null
   h.prepCurrent = true
   h.prepared = []
-  vi.mocked(ptyManager.handOffAskQuestion).mockClear()
+  vi.mocked(sessionInput.handOffAskQuestion).mockClear()
 })
 
 /** What pty:spawn hands pty-manager to end before the rebuild: the help folder
