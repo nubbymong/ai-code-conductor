@@ -1014,6 +1014,7 @@ impl Serve {
             }
             // No hook event after either last word: later ones wait for the
             // next attach.
+            serve.stop_hooks(&conn);
             match holder.exit_code() {
                 Some(code) => conn.send_exit(code),
                 None => {

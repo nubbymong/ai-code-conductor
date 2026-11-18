@@ -109,7 +109,6 @@ fn usage(msg: &str) -> ExitCode {
 fn main() -> ExitCode {
     // The hook mode first, from the raw arguments: `args()` panics on one
     // that is not Unicode, and the hook mode must never print or fail.
-    let _ = std::env::args().skip(1).collect::<Vec<String>>();
     let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
     if raw.first().map_or(false, |c| c.as_os_str() == "hook") {
         return cmd_hook(&raw[1..]);
