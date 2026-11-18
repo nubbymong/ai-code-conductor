@@ -2,12 +2,14 @@
  * The session helper's place in the app: made once from the saved setting,
  * plugged into the Machines page (setMachinesSource), switched by Settings,
  * told which tabs are saved, and ended at a normal quit. index.ts calls these
- * and nothing else of the helper.
+ * and nothing else of the helper; update-handlers.ts calls the two for an app
+ * update on Windows.
  */
 import { app } from 'electron'
 import { readConfig } from '../config-manager'
 import { logInfo } from '../debug-logger'
 import { setMachinesSource } from '../ipc/machines-handlers'
+import { peekSessionState } from '../session-state'
 import { bundledHelperPath, helperRootDir } from './install'
 import { SessionHelperManager, agentRecordsIn, crashMarkIn, getSessionHelper, setSessionHelper, type HelperRouting, type SessionHelperServiceState } from './manager'
 
@@ -89,6 +91,34 @@ export function applySessionHelperSettings(): void {
 /** The tabs the app saved (ids and names), for the Machines page. */
 export function noteSessionHelperTabs(state: { sessions?: ReadonlyArray<{ id: string; label?: string; customName?: string }> } | null | undefined): void {
   getSessionHelper()?.noteSavedTabs(Array.isArray(state?.sessions) ? state!.sessions : [])
+}
+
+/**
+ * An app update on Windows, just before every PTY is killed (update-handlers.ts):
+ * the held plain and partner terminals whose tabs the next start restores are
+ * let go of instead of ended, for the new version to show again. Those tabs
+ * are read from the saved file itself, because "Close without saving" clears
+ * it without a save the manager hears of. A file that cannot be read lets go
+ * of nothing, and every terminal ends as before. Nothing is done when the
+ * helper was never switched on this run. Answers how many were let go of.
+ */
+export function releaseHeldTerminalsForUpdate(): number {
+  const m = getSessionHelper()
+  if (!m) return 0
+  let restorable = new Set<string>()
+  try {
+    const sessions = peekSessionState()?.sessions ?? []
+    restorable = new Set(sessions.map((s) => s?.id).filter((id): id is string => typeof id === 'string'))
+  } catch {
+    /* unreadable: nothing is let go of */
+  }
+  return m.releaseForUpdate(restorable)
+}
+
+/** The update's installer could not be started: what was let go of is kept
+ *  for its tab, and listed on the Machines page. */
+export function reclaimReleasedTerminals(): void {
+  getSessionHelper()?.reclaim()
 }
 
 /** How long a quit waits for the holders to say they ended. */

@@ -16,14 +16,16 @@ import { EventEmitter } from 'events'
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const shownErrorBoxes: Array<[string, string]> = []
 const exitCalls: number[] = []
+/** The install path's steps, in the order they ran (plan section B2). */
+const steps = vi.hoisted(() => ({ order: [] as string[], releaseThrows: false }))
 
 vi.mock('electron', () => ({
   ipcMain: { handle: (ch: string, fn: (...a: unknown[]) => unknown) => { handlers.set(ch, fn) } },
   dialog: {
-    showErrorBox: (title: string, body: string) => { shownErrorBoxes.push([title, body]) },
+    showErrorBox: (title: string, body: string) => { steps.order.push('error box'); shownErrorBoxes.push([title, body]) },
     showOpenDialog: vi.fn(),
   },
-  app: { exit: (code: number) => { exitCalls.push(code) }, getVersion: () => '2.1.0', getPath: () => '/mock/userData' },
+  app: { exit: (code: number) => { steps.order.push('exit'); exitCalls.push(code) }, getVersion: () => '2.1.0', getPath: () => '/mock/userData' },
   BrowserWindow: { getAllWindows: () => [] },
 }))
 
@@ -37,6 +39,7 @@ const spawnState = vi.hoisted(() => ({
 
 vi.mock('child_process', () => ({
   spawn: (cmd: string, args: string[]) => {
+    steps.order.push('launch')
     spawnState.calls.push({ cmd, args })
     if (spawnState.script.throwSync) throw spawnState.script.throwSync
     const child = new EventEmitter() as EventEmitter & { unref: () => void }
@@ -118,7 +121,16 @@ vi.mock('../../../src/main/update-watcher', () => ({
   isStoreBuild: () => storeState.isStoreBuild,
 }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logError: vi.fn() }))
-vi.mock('../../../src/main/pty-manager', () => ({ killAllPty: vi.fn() }))
+vi.mock('../../../src/main/pty-manager', () => ({ killAllPty: vi.fn(() => { steps.order.push('kill every PTY') }) }))
+// The session helper's two update calls (plan section B2), as steps.
+vi.mock('../../../src/main/session-helper/app-wiring', () => ({
+  releaseHeldTerminalsForUpdate: vi.fn(() => {
+    steps.order.push('release held terminals')
+    if (steps.releaseThrows) throw new Error('the release failed')
+    return 2
+  }),
+  reclaimReleasedTerminals: vi.fn(() => { steps.order.push('reclaim released terminals') }),
+}))
 vi.mock('../../../src/main/registry', () => ({ readRegistry: () => null, writeRegistry: () => true }))
 vi.mock('../../../src/main/data-paths', () => ({ getDataDirectory: () => '/mock/dataDir' }))
 
@@ -148,6 +160,8 @@ beforeEach(() => {
   gh.appImageVerifiers = []
   fsState.accessThrows = false
   storeState.isStoreBuild = false
+  steps.order.length = 0
+  steps.releaseThrows = false
   registerUpdateHandlers()
 })
 
@@ -365,6 +379,80 @@ describe('update:installAndRestart — verification', () => {
     expect(shownErrorBoxes).toHaveLength(1)
     expect(shownErrorBoxes[0][0]).toMatch(/integrity check failed/i)
     expect(spawnState.calls).toHaveLength(0)
+  })
+})
+
+describe('update:installAndRestart — held terminals keep running through an update on Windows (plan section B2)', () => {
+  async function on(platform: NodeJS.Platform, run: () => Promise<void>): Promise<void> {
+    const original = process.platform
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+    try {
+      await run()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: original, configurable: true })
+    }
+  }
+
+  it('on Windows: the held terminals are let go of before every PTY is killed, and the app exits after the launch', async () => {
+    await on('win32', async () => {
+      await expect(invoke()).resolves.toBe(true)
+      expect(steps.order).toEqual(['release held terminals', 'kill every PTY', 'launch', 'exit'])
+    })
+  })
+
+  it('on macOS and Linux: they are never let go of, and end with the kill as before', async () => {
+    await on('darwin', async () => {
+      gh.verified = { path: '/mock/dataDir/updates/ccc-upd-XYZ/CCC-2.1.1-mac.dmg', sha256: 'a'.repeat(64) }
+      await expect(invoke()).resolves.toBe(true)
+      expect(steps.order).toEqual(['kill every PTY', 'launch', 'exit'])
+    })
+    steps.order.length = 0
+    await on('linux', async () => {
+      gh.verified = { path: '/mock/dataDir/updates/ccc-upd-XYZ/CCC-2.1.1.AppImage', sha256: 'a'.repeat(64) }
+      await expect(invoke()).resolves.toBe(true)
+      expect(steps.order).toEqual(['kill every PTY', 'launch', 'exit'])
+    })
+  })
+
+  it('a launch that fails on Windows: what was let go of is kept for its tab, then the error box, and the app stays', async () => {
+    await on('win32', async () => {
+      spawnState.script = { emit: 'error', error: new Error('spawn EACCES') }
+      await expect(invoke()).rejects.toThrow(/EACCES/)
+      expect(steps.order).toEqual(['release held terminals', 'kill every PTY', 'launch', 'reclaim released terminals', 'error box'])
+      expect(exitCalls).toEqual([])
+      expect(shownErrorBoxes).toHaveLength(1)
+      expect(shownErrorBoxes[0][0]).toMatch(/could not be launched/i)
+    })
+  })
+
+  it('a launch that fails on macOS or Linux keeps nothing: nothing was let go of', async () => {
+    for (const [platform, file] of [['darwin', 'CCC-2.1.1-mac.dmg'], ['linux', 'CCC-2.1.1.AppImage']] as const) {
+      steps.order.length = 0
+      shownErrorBoxes.length = 0
+      await on(platform, async () => {
+        gh.verified = { path: `/mock/dataDir/updates/ccc-upd-XYZ/${file}`, sha256: 'a'.repeat(64) }
+        spawnState.script = { emit: 'error', error: new Error('spawn EACCES') }
+        await expect(invoke()).rejects.toThrow(/EACCES/)
+        expect(steps.order).toEqual(['kill every PTY', 'launch', 'error box'])
+      })
+    }
+  })
+
+  it('a release that throws stops nothing: the update goes ahead, and what it did not let go of ends with the kill', async () => {
+    await on('win32', async () => {
+      steps.releaseThrows = true
+      await expect(invoke()).resolves.toBe(true)
+      expect(steps.order).toEqual(['release held terminals', 'kill every PTY', 'launch', 'exit'])
+      expect(shownErrorBoxes).toHaveLength(0)
+    })
+  })
+
+  it('a download or verification that fails lets go of nothing: no PTY is touched', async () => {
+    await on('win32', async () => {
+      gh.stillMatches = [false]
+      await expect(invoke()).rejects.toThrow(/changed on disk/)
+      expect(steps.order).toEqual(['error box'])
+    })
   })
 })
 

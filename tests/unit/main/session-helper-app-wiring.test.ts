@@ -7,7 +7,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const h = vi.hoisted(() => ({
   settings: {} as Record<string, unknown> | null,
-  made: [] as Array<{ deps: Record<string, unknown>; start: ReturnType<typeof vi.fn>; setRouting: ReturnType<typeof vi.fn>; stopRouting: ReturnType<typeof vi.fn>; shutdown: ReturnType<typeof vi.fn>; noteSavedTabs: ReturnType<typeof vi.fn>; enabled: boolean }>,
+  made: [] as Array<{ deps: Record<string, unknown>; start: ReturnType<typeof vi.fn>; setRouting: ReturnType<typeof vi.fn>; stopRouting: ReturnType<typeof vi.fn>; shutdown: ReturnType<typeof vi.fn>; noteSavedTabs: ReturnType<typeof vi.fn>; releaseForUpdate: ReturnType<typeof vi.fn>; reclaim: ReturnType<typeof vi.fn>; enabled: boolean }>,
+  /** The saved session file as peekSessionState reads it; an Error: it does not read. */
+  savedState: null as { sessions: unknown[] } | null | Error,
+  savedStateReads: 0,
   machinesSource: vi.fn(),
   current: null as unknown,
   quitAnswer: null as Promise<void> | null,
@@ -24,6 +27,13 @@ vi.mock('../../../src/main/config-manager', () => ({ readConfig: () => { if (h.s
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {} }))
 vi.mock('../../../src/main/ipc/machines-handlers', () => ({ setMachinesSource: h.machinesSource }))
 vi.mock('../../../src/main/session-helper/install', () => ({ helperRootDir: () => 'C:\\user\\helper', bundledHelperPath: () => 'C:\\app\\helper\\aicc-helper.exe' }))
+vi.mock('../../../src/main/session-state', () => ({
+  peekSessionState: () => {
+    h.savedStateReads++
+    if (h.savedState instanceof Error) throw h.savedState
+    return h.savedState
+  },
+}))
 vi.mock('../../../src/main/session-helper/manager', () => {
   class SessionHelperManager {
     enabled = false
@@ -32,7 +42,9 @@ vi.mock('../../../src/main/session-helper/manager', () => {
     stopRouting = vi.fn(() => { this.enabled = false })
     shutdown = vi.fn((): Promise<void> | null => h.quitAnswer)
     noteSavedTabs = vi.fn()
-    serviceState = () => ({ state: this.enabled ? 'ready' : 'off', held: 0, lastError: null })
+    releaseForUpdate = vi.fn((tabs: ReadonlySet<string>) => tabs.size)
+    reclaim = vi.fn(() => 0)
+    serviceState =() => ({ state: this.enabled ? 'ready' : 'off', held: 0, lastError: null })
     constructor(readonly deps: Record<string, unknown>) { h.made.push(this as never) }
     onChange() {}
     isEnabled() { return this.enabled }
@@ -48,7 +60,7 @@ vi.mock('../../../src/main/session-helper/manager', () => {
 
 import {
   QUIT_WAIT_MS, agentSessionsThroughHelperIn, applySessionHelperSettings, holdQuitForSessionHelper, initSessionHelper, noteSessionHelperTabs, plainTerminalsThroughHelperIn,
-  sessionHelperServiceState, shutdownSessionHelper,
+  reclaimReleasedTerminals, releaseHeldTerminalsForUpdate, sessionHelperServiceState, shutdownSessionHelper,
 } from '../../../src/main/session-helper/app-wiring'
 
 beforeEach(() => {
@@ -61,6 +73,8 @@ beforeEach(() => {
   h.made.length = 0
   h.current = null
   h.machinesSource.mockReset()
+  h.savedState = null
+  h.savedStateReads = 0
 })
 
 describe('session helper wiring', () => {
@@ -167,6 +181,42 @@ describe('session helper wiring', () => {
     expect(h.made[0].noteSavedTabs).toHaveBeenLastCalledWith([])
     shutdownSessionHelper()
     expect(h.made[0].shutdown).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('an app update on Windows (plan section B2)', () => {
+  it('with no helper this run (both switches off, no crash mark): the release and the reclaim do nothing, and nothing is made or read', () => {
+    initSessionHelper(() => {})
+    expect(h.made).toHaveLength(0)
+    h.savedState = { sessions: [{ id: 'abcdef0123456789abcdef01' }] }
+    expect(releaseHeldTerminalsForUpdate()).toBe(0)
+    expect(() => reclaimReleasedTerminals()).not.toThrow()
+    expect(h.made).toHaveLength(0)
+    expect(h.current).toBeNull()
+    expect(h.savedStateReads).toBe(0)
+  })
+
+  it('with the helper on: the manager is told the tabs in the saved file, and the reclaim reaches it', () => {
+    h.settings = { plainTerminalsThroughHelper: true }
+    initSessionHelper(() => {})
+    const m = h.made[0]
+    // Ids as the file holds them; anything that is not an id is no tab.
+    h.savedState = { sessions: [{ id: 'abcdef0123456789abcdef01' }, { id: 'abcdef0123456789abcdef02' }, null, { id: 7 }, 'x'] }
+    expect(releaseHeldTerminalsForUpdate()).toBe(2)
+    expect([...m.releaseForUpdate.mock.calls[0][0]]).toEqual(['abcdef0123456789abcdef01', 'abcdef0123456789abcdef02'])
+    reclaimReleasedTerminals()
+    expect(m.reclaim).toHaveBeenCalledTimes(1)
+  })
+
+  it('a saved file "Close without saving" cleared, or one that does not read: the manager is told no tab, so it lets go of none', () => {
+    h.settings = { plainTerminalsThroughHelper: true }
+    initSessionHelper(() => {})
+    const m = h.made[0]
+    h.savedState = null
+    expect(releaseHeldTerminalsForUpdate()).toBe(0)
+    h.savedState = new Error('session-state.json did not parse')
+    expect(releaseHeldTerminalsForUpdate()).toBe(0)
+    expect(m.releaseForUpdate.mock.calls.map((c) => [...c[0]])).toEqual([[], []])
   })
 })
 

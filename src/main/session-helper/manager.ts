@@ -28,6 +28,13 @@
  * (plan s11, Q1). Either setting brings the helper up; after a crash, or
  * with an agent session a quit could not end in time, it comes up with both
  * off too, to end what was left held.
+ *
+ * 2.1.3-beta.8 (plan section B2): an app update on Windows lets go of each
+ * held plain or partner terminal whose tab was saved, instead of ending it
+ * (releaseForUpdate). Its holder's away clock starts, the running mark stays
+ * (saying "update"), and the new version's start takes the crash path: the
+ * restored tab shows the terminal again. Agent sessions still end at an
+ * update, and macOS and Linux keep ending every one.
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -216,6 +223,11 @@ export class SessionHelperManager implements MachinesSource {
   private afterCrash = false
   /** A normal quit has begun: nothing new is held or kept. */
   private quitting = false
+  /** An app update let go of the held terminals (releaseForUpdate): nothing
+   *  new is held until reclaim() says the update did not go ahead. */
+  private updating = false
+  /** The terminals releaseForUpdate let go of, by session id. */
+  private readonly released = new Map<string, { record: HolderRecord; pty: HelperPty }>()
   private state: HelperState = 'off'
   private detail: string | undefined
   private version: string | undefined
@@ -286,12 +298,12 @@ export class SessionHelperManager implements MachinesSource {
 
   /** True while a new plain terminal goes through the helper. */
   routesPlain(): boolean {
-    return this.plainOn && !this.quitting
+    return this.plainOn && !this.quitting && !this.updating
   }
 
   /** True while a new agent session goes through the helper. */
   routesAgents(): boolean {
-    return this.agentsOn && !this.quitting
+    return this.agentsOn && !this.quitting && !this.updating
   }
 
   /** True when a held terminal waits for the tab with this app id. */
@@ -348,11 +360,14 @@ export class SessionHelperManager implements MachinesSource {
     this.started = true
     this.state = 'starting'
     let crashed = false
+    let updated = false
     try {
       fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
       const marker = path.join(this.root, MARKER)
       crashed = opts.atStartup && fs.existsSync(marker)
-      fs.writeFileSync(marker, JSON.stringify({ v: 1, pid: process.pid, at: this.deps.now() }))
+      // An update's mark takes the same path; only the log line differs.
+      if (crashed) updated = markReason(marker) === 'update'
+      this.writeMarker()
     } catch (err) {
       this.deps.log(`[session-helper] the helper folder could not be prepared: ${message(err)}`)
     }
@@ -369,7 +384,7 @@ export class SessionHelperManager implements MachinesSource {
         this.adoptable.set(r.session, r)
         this.keep(r)
       }
-      this.deps.log(`[session-helper] the app did not quit normally; ${this.adoptable.size} held terminal(s) may be shown again, and ${agents} agent session(s) it held are ended`)
+      this.deps.log(`[session-helper] ${updated ? 'the app was updated' : 'the app did not quit normally'}; ${this.adoptable.size} held terminal(s) may be shown again, and ${agents} agent session(s) it held are ended`)
     } else {
       this.saveBindings()
       // An agent session a normal quit could not end in time (its end was
@@ -676,7 +691,9 @@ export class SessionHelperManager implements MachinesSource {
     this.live.set(sid, wrapper)
     void wrapper.ended.then(() => {
       if (this.live.get(sid) === wrapper) this.live.delete(sid)
-      for (const [bound, s] of [...this.bindings]) if (s === sid && bound === appId) this.bindings.delete(bound)
+      // One let go of for an update keeps its binding: the tab Re-attach
+      // opened for it shows it again at the next start.
+      if (!wrapper.isReleased) for (const [bound, s] of [...this.bindings]) if (s === sid && bound === appId) this.bindings.delete(bound)
       this.saveBindings()
       this.changed()
     })
@@ -946,6 +963,77 @@ export class SessionHelperManager implements MachinesSource {
     const held = new Set<string>([...this.adoptable.keys(), ...this.keepers.keys()])
     for (const [sid, w] of this.live) if (w.throughHelper) held.add(sid)
     return held
+  }
+
+  /**
+   * An app update on Windows (update-handlers.ts, just before every PTY is
+   * killed and the installer starts): each plain or partner terminal through
+   * a holder is let go of instead of ended, when its tab (a partner's is its
+   * session's) is saved twice over: in the app's last save (noteSavedTabs)
+   * and in `restorable`, the tabs in the saved file the next start restores
+   * from. "Close without saving" clears that file, so then none is. Its
+   * holder's away clock starts (two minutes) and the next start, finding the
+   * running mark, shows it again in its tab. An agent session, a terminal
+   * still starting and one whose tab was not saved are left to the kill that
+   * follows, which ends them as before. The mark is written again saying
+   * "update" and stays. Nothing new goes through the helper until reclaim().
+   * Off Windows nothing is let go of. Answers how many were.
+   */
+  releaseForUpdate(restorable: ReadonlySet<string>): number {
+    if (this.os !== 'windows' || this.quitting) return 0
+    this.updating = true
+    let n = 0
+    for (const [sid, w] of this.live) {
+      if (heldIdKind(sid) !== 'plain' || !w.throughHelper) continue
+      const record = w.heldRecord
+      const tab = parentOfPartnerPtyId(w.label) ?? w.label
+      if (!record || !this.savedTabs.has(tab) || !restorable.has(tab)) continue
+      if (!w.release()) continue
+      this.released.set(sid, { record, pty: w })
+      n++
+    }
+    try {
+      this.writeMarker('update')
+    } catch (err) {
+      this.deps.log(`[session-helper] the running mark could not be written for the update: ${message(err)}`)
+    }
+    this.deps.log(`[session-helper] an app update: ${n} held terminal(s) are let go of, for the new version to show again`)
+    this.changed()
+    return n
+  }
+
+  /**
+   * The update did not go ahead (its installer could not be started): what
+   * releaseForUpdate let go of is kept for its tab, as after a crash, and
+   * listed on the Machines page with Re-attach. A terminal of it not yet
+   * killed is ended here in this app alone; its holder runs on. The running
+   * mark is the usual one again, and new terminals go through the helper
+   * again. Answers how many are kept.
+   */
+  reclaim(): number {
+    if (!this.updating) return 0
+    this.updating = false
+    const kept = [...this.released.values()]
+    this.released.clear()
+    for (const { record, pty: w } of kept) {
+      try { w.kill() } catch { /* over already */ }
+      if (this.quitting) continue
+      this.adoptable.set(record.session, record)
+      this.keep(record)
+    }
+    try {
+      if (!this.quitting) this.writeMarker()
+    } catch (err) {
+      this.deps.log(`[session-helper] the running mark could not be written again: ${message(err)}`)
+    }
+    this.deps.log(`[session-helper] the update did not start; ${kept.length} held terminal(s) are kept for their tabs`)
+    this.changed()
+    return kept.length
+  }
+
+  /** The app's running mark: there while the app runs, gone after a normal quit. */
+  private writeMarker(reason?: 'update'): void {
+    fs.writeFileSync(path.join(this.root, MARKER), JSON.stringify({ v: 1, pid: process.pid, at: this.deps.now(), ...(reason ? { reason } : {}) }))
   }
 
   /**
@@ -1235,6 +1323,18 @@ export function crashMarkIn(root: string): boolean {
     return fs.existsSync(path.join(root, MARKER))
   } catch {
     return false
+  }
+}
+
+/** Why the running mark was left: "update" when an app update let go of the
+ *  held terminals (releaseForUpdate); null for a crash, or a mark that does
+ *  not read. */
+function markReason(marker: string): 'update' | null {
+  try {
+    const v = JSON.parse(fs.readFileSync(marker, 'utf8')) as { reason?: unknown } | null
+    return v && typeof v === 'object' && v.reason === 'update' ? 'update' : null
+  } catch {
+    return null
   }
 }
 

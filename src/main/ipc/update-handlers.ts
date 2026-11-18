@@ -5,6 +5,7 @@ import * as fs from 'fs'
 import { checkForUpdatesOnDemand, markUpdateInstalled, getProjectRootPath, setSourcePathInRegistry, hasSourcePath, isPackagedApp, isStoreBuild } from '../update-watcher'
 import { checkGitHubRelease, downloadGitHubRelease, prepareLinuxAppImageUpdate, isPathOnNoexecMount, InstallerIntegrityError, stillMatchesDigest, createInstallerDir } from '../github-update'
 import { killAllPty } from '../pty-manager'
+import { releaseHeldTerminalsForUpdate, reclaimReleasedTerminals } from '../session-helper/app-wiring'
 import { expandArtifactName } from '../artifact-name'
 import { logInfo, logError } from '../debug-logger'
 
@@ -315,7 +316,15 @@ export function registerUpdateHandlers(): void {
       }
     }
 
+    // Windows only (plan section B2): the held plain and partner terminals
+    // whose tabs were saved are let go of first, so the kill below does not
+    // end them; the new version shows them again. macOS and Linux end them.
+    // A release that fails stops nothing: what it did not let go of ends.
+    const releasing = process.platform === 'win32'
     try {
+      if (releasing) {
+        try { releaseHeldTerminalsForUpdate() } catch (e) { logError('[update] The held terminals could not be let go of:', e) }
+      }
       logInfo('[update] Killing all PTYs...')
       killAllPty()
 
@@ -357,6 +366,11 @@ export function registerUpdateHandlers(): void {
       return true
     } catch (err) {
       logError('[update] Failed:', err)
+      // The app stays: what was let go of is kept for its tab, and listed on
+      // the Machines page with Re-attach.
+      if (releasing) {
+        try { reclaimReleasedTerminals() } catch (e) { logError('[update] The held terminals could not be kept:', e) }
+      }
       // Every PTY is already dead by the time we get here, and the renderer
       // swallows this rejection at all four call sites -- so showErrorBox is the
       // only channel that reaches the user. Name the staged path: since #174 the

@@ -126,6 +126,9 @@ export class HelperPty implements IPty {
   private endStarted = false
   /** Another connection took this terminal (`replaced`): it is theirs now. */
   private replaced = false
+  /** Let go of for an app update (release): the holder runs on, and this
+   *  object asks nothing of it again. */
+  private released = false
   /** Ring offset of the next output byte, for an attach again. */
   private offset = 0
   private reattachTimes: number[] = []
@@ -180,6 +183,8 @@ export class HelperPty implements IPty {
   get isAttached(): boolean { return this.attached && !this.exited }
   /** The holder's record, once there is one. */
   get heldRecord(): HolderRecord | undefined { return this.inner ? undefined : this.record }
+  /** True once release() let go of the holder for an app update. */
+  get isReleased(): boolean { return this.released }
 
   write(data: string | Buffer): void {
     if (this.exited) return
@@ -208,14 +213,44 @@ export class HelperPty implements IPty {
   pause(): void { this.inner?.pause() }
   resume(): void { this.inner?.resume() }
 
-  /** Ends the terminal: the holder ends the program's whole tree and exits. */
+  /** Ends the terminal: the holder ends the program's whole tree and exits.
+   *  Once released, nothing goes to the holder: the exit is this object's
+   *  alone, so the PTY manager drops it as it drops any ended terminal. */
   kill(signal?: string): void {
     if (this.inner) { this.inner.kill(signal); return }
+    if (this.released) {
+      if (this.exited) return
+      this.conn?.close()
+      this.conn = undefined
+      this.finish(0)
+      this.resolveEnded()
+      return
+    }
     if (this.ending || this.exited) return
     this.markEnding()
     // Up: ended now. Still starting, or attaching again: the step that brings
     // the holder up sees `ending` and ends it.
     if (this.conn && !this.conn.isClosed) void this.endHolder(null)
+  }
+
+  /**
+   * An app update (Windows, plan section B2): let go of the holder without
+   * ending it. The connection closes with no term.end, so the holder's away
+   * clock starts (two minutes), and the new version's start shows the
+   * terminal again, as it does after a crash. Only a terminal through a
+   * holder that has been attached is let go of; any other (still starting,
+   * ending, over, or the usual way) answers false and is left to kill() as
+   * before.
+   */
+  release(): boolean {
+    if (this.inner || this.exited || this.ending || this.released || !this.record || !this.everAttached) return false
+    this.released = true
+    const conn = this.conn
+    // Cleared first, so the connection's own close finds nothing to do here.
+    this.conn = undefined
+    this.setDetached()
+    conn?.close()
+    return true
   }
 
   // ── the ways in ────────────────────────────────────────────────────────────
@@ -297,7 +332,7 @@ export class HelperPty implements IPty {
     } catch (err) {
       this.attaching = false
       const why = (err as Error).message
-      if (this.exited) return
+      if (this.exited || this.released) return
       if (this.ending) { if (!this.endStarted) void this.endHolder(null); return }
       if (mode === 'adopt') { this.fallBack(`the held terminal could not be attached: ${why}`, undefined, conn); return }
       // The connection dropped under the attach: tried again (within the budget).
@@ -307,6 +342,7 @@ export class HelperPty implements IPty {
     }
     this.attaching = false
     if (this.exited) return
+    if (this.released) { conn.close(); return }
     if (this.ending) { if (!this.endStarted) void this.endHolder(null); return }
     if (conn.isClosed) {
       // It closed right after its reply: what the close found waiting is decided here.
@@ -403,7 +439,7 @@ export class HelperPty implements IPty {
       return
     }
     this.reconnecting = false
-    if (this.exited) { conn.close(); return }
+    if (this.exited || this.released) { conn.close(); return }
     this.useConnection(conn)
     if (this.ending) { void this.endHolder(null); return }
     await this.attach(conn, this.offset, 'again')
@@ -446,6 +482,8 @@ export class HelperPty implements IPty {
 
   /** End the holder (its program's whole tree), then report the exit. */
   private async endHolder(code: number | null): Promise<void> {
+    // Let go of for an update: its holder is not ended from here.
+    if (this.released) return
     this.markEnding()
     if (this.endStarted) return
     this.endStarted = true
@@ -493,7 +531,7 @@ export class HelperPty implements IPty {
    * outlives its tab, and `ended` settles once that is done.
    */
   private giveUp(why: string, endIt = true): void {
-    if (this.exited) return
+    if (this.exited || this.released) return
     this.driver.log(`[session-helper] ${this.sid}: ${why}`)
     this.markEnding()
     this.endStarted = true

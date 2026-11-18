@@ -1378,3 +1378,173 @@ describe('agent sessions: the switches, the marks and the waits (PR review)', ()
     expect(ptySpawn).not.toHaveBeenCalled()
   })
 })
+
+describe('an app update on Windows: held plain and partner terminals are let go of, not ended (plan section B2)', () => {
+  const PLAIN = 'abcdef0123456789abcdefc1'
+  const PARENT = 'abcdef0123456789abcdefc2'
+  const PARTNER = `${PARENT}-partner`
+  const UNSAVED = 'abcdef0123456789abcdefc3'
+  const AGENT = 'abcdef0123456789abcdefc4'
+  /** The tabs in the saved file the next start restores from. */
+  const SAVED = new Set([PLAIN, PARENT, AGENT])
+  const sids = () => ({ plain: heldSessionId(PLAIN), partner: heldSessionId(PARTNER), unsaved: heldSessionId(UNSAVED), agent: heldAgentSessionId(AGENT, 'claude') })
+  const mark = () => JSON.parse(readFileSync(join(root, 'app-running.json'), 'utf8')) as Record<string, unknown>
+  const liveOf = (m: SessionHelperManager) => (m as unknown as { live: Map<string, HelperPty> }).live
+
+  /** A plain terminal, a partner terminal, a plain terminal whose tab is not
+   *  saved, and a Claude Code session, each through a holder and attached;
+   *  the app saved the other three tabs. */
+  async function fourHeld(m: SessionHelperManager): Promise<Record<'plain' | 'partner' | 'unsaved' | 'agent', IPty>> {
+    setSessionHelper(m)
+    const ptys = {
+      plain: spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts()),
+      partner: spawnPlainPty({ plain: true, sessionId: PARTNER }, SHELL, [], opts()),
+      unsaved: spawnPlainPty({ plain: true, sessionId: UNSAVED }, SHELL, [], opts()),
+      agent: spawnAgentPty(claudeTab(AGENT), SHELL, [], agentOpts()),
+    }
+    const s = sids()
+    await until(() => Object.values(s).every((sid) => !!helper.holders.get(sid)?.attached), 'all four to attach')
+    m.noteSavedTabs([{ id: PLAIN, label: 'Build' }, { id: PARENT, label: 'API' }, { id: AGENT, label: 'Claude' }])
+    return ptys
+  }
+
+  /** What update-handlers.ts does next: killAllPty. */
+  const killAll = (ptys: Record<string, IPty>) => { for (const p of Object.values(ptys)) p.kill() }
+
+  it('after the release and a kill of every PTY: the saved plain and partner terminals get no end, still run, and their connections are closed; the unsaved one and the Claude session are ended; the mark says update', async () => {
+    const m = await startedWith(makeManager(), ON_BOTH)
+    const ptys = await fourHeld(m)
+    const exits: string[] = []
+    for (const [k, p] of Object.entries(ptys)) p.onExit(() => exits.push(k))
+    expect(m.releaseForUpdate(SAVED)).toBe(2)
+    killAll(ptys)
+    const s = sids()
+    const [plain, partner, unsaved, agent] = [s.plain, s.partner, s.unsaved, s.agent].map((sid) => helper.holders.get(sid)!)
+    await until(() => unsaved.ended && agent.ended, 'the unsaved terminal and the Claude session to end')
+    await until(() => plain.conns.size === 0 && partner.conns.size === 0, 'the released connections to close')
+    // Every tab reads its terminal as ended, so the PTY manager drops each one.
+    await until(() => exits.length === 4, 'four exits')
+    for (const h of [plain, partner]) {
+      expect(h.endsAsked).toBe(0)
+      expect(h.ended).toBe(false)
+      expect(h.child).toBe('running')
+      expect(h.attached).toBeNull()
+    }
+    expect(unsaved.endsAsked).toBe(1)
+    expect(agent.endsAsked).toBe(1)
+    expect(mark()).toMatchObject({ v: 1, reason: 'update' })
+    // While the update goes on nothing new is held, and a tab started again
+    // meanwhile does not touch the holder it let go of.
+    expect(spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdefc5' }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+    expect(spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())).not.toBeInstanceOf(HelperPty)
+    await tick(30)
+    expect(plain.endsAsked).toBe(0)
+    expect(liveOf(m).size).toBe(0)
+    crash(m)
+  })
+
+  it('the installer could not start: reclaim keeps them for their tabs, listed on the Machines page with Re-attach, and the mark is the usual one again', async () => {
+    const m = await startedWith(makeManager(), ON_BOTH)
+    const ptys = await fourHeld(m)
+    const s = sids()
+    helper.holders.get(s.plain)!.output('before the update\r\n')
+    expect(m.releaseForUpdate(SAVED)).toBe(2)
+    killAll(ptys)
+    expect(m.reclaim()).toBe(2)
+    expect(m.holdsFor(PLAIN)).toBe(true)
+    expect(m.holdsFor(PARTNER)).toBe(true)
+    expect(m.holdsFor(UNSAVED)).toBe(false)
+    await until(() => helper.holders.get(s.plain)!.attaches === 2 && helper.holders.get(s.partner)!.attaches === 2, 'the keepers')
+    const status = await m.status()
+    expect(status.sessions.find((x) => x.id === s.plain)).toMatchObject({ kind: 'plain', label: 'Build', attached: false, tabOpen: true })
+    expect(status.sessions.find((x) => x.id === s.partner)).toMatchObject({ kind: 'partner', label: 'API, partner terminal', attached: false, tabOpen: true })
+    expect(await m.reattach(s.plain)).toEqual({ ok: true, tab: { id: PLAIN, label: 'Build', open: false, partner: false } })
+    expect(await m.reattach(s.partner)).toEqual({ ok: true, tab: { id: PARENT, label: 'API, partner terminal', open: false, partner: true } })
+    expect(mark().reason).toBeUndefined()
+    expect(m.routesPlain()).toBe(true)
+    // Its tab, started again, takes it over with what it wrote before.
+    const again = spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    const seen: string[] = []
+    again.onData((d) => seen.push(d))
+    expect(await (again as HelperPty).adoption).toBe(true)
+    await until(() => seen.join('').includes('before the update'), 'the replay')
+    expect(helper.holders.get(s.plain)!.endsAsked).toBe(0)
+  })
+
+  it('a tab in the app\'s last save but not in the saved file (Close without saving cleared it), or the other way round: not let go of, and ended as before', async () => {
+    const m = await started(makeManager())
+    setSessionHelper(m)
+    const p = spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    const sid = heldSessionId(PLAIN)
+    await until(() => !!helper.holders.get(sid)?.attached, 'attached')
+    m.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
+    expect(m.releaseForUpdate(new Set())).toBe(0)
+    p.kill()
+    await until(() => helper.holders.get(sid)!.ended, 'the end')
+    expect(m.reclaim()).toBe(0)
+    const q = spawnPlainPty({ plain: true, sessionId: UNSAVED }, SHELL, [], opts())
+    const sid2 = heldSessionId(UNSAVED)
+    await until(() => !!helper.holders.get(sid2)?.attached, 'attached')
+    m.noteSavedTabs([])
+    expect(m.releaseForUpdate(new Set([UNSAVED]))).toBe(0)
+    q.kill()
+    await until(() => helper.holders.get(sid2)!.ended, 'the end')
+  })
+
+  it('a terminal still starting at the update is not let go of: the kill ends it once its holder is up', async () => {
+    const m = await started(makeManager())
+    setSessionHelper(m)
+    let open!: () => void
+    helper.holdGate = new Promise<void>((r) => { open = r })
+    const p = spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    m.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
+    await until(() => helper.holds() === 1, 'the hold under way')
+    expect(m.releaseForUpdate(new Set([PLAIN]))).toBe(0)
+    p.kill()
+    helper.holdGate = null
+    open()
+    await until(() => helper.holders.get(heldSessionId(PLAIN))?.ended === true, 'the late holder to end')
+  })
+
+  it('off Windows nothing is let go of: new terminals still go through the helper, and the mark is left as it was', async () => {
+    const m = await started(makeManager({ platform: 'linux', checkEndpointFolder: () => null }))
+    const before = readFileSync(join(root, 'app-running.json'), 'utf8')
+    m.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
+    expect(m.releaseForUpdate(new Set([PLAIN]))).toBe(0)
+    expect(m.routesPlain()).toBe(true)
+    expect(readFileSync(join(root, 'app-running.json'), 'utf8')).toBe(before)
+  })
+
+  it('a tab Re-attach opened keeps its terminal through the update: its binding stays, and the next start shows the terminal in that tab', async () => {
+    const first = await started(makeManager())
+    setSessionHelper(first)
+    spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    const sid = heldSessionId(PLAIN)
+    await until(() => !!helper.holders.get(sid)?.attached, 'attached')
+    helper.holders.get(sid)!.output('kept output\r\n')
+    crash(first)
+    const second = await started(makeManager())
+    setSessionHelper(second)
+    second.noteSavedTabs([])
+    const NEW = 'newtab0123456789abcdef01'
+    expect(await second.reattach(sid)).toMatchObject({ ok: true, tab: { id: NEW, open: true } })
+    const p = spawnPlainPty({ plain: true, sessionId: NEW }, SHELL, [], opts())
+    expect(await (p as HelperPty).adoption).toBe(true)
+    await until(() => liveOf(second).get(sid)?.isAttached === true, 'attached in the new tab')
+    second.noteSavedTabs([{ id: NEW, label: 'Terminal' }])
+    expect(second.releaseForUpdate(new Set([NEW]))).toBe(1)
+    p.kill()
+    await until(() => !liveOf(second).has(sid), 'the tab\'s terminal to drop')
+    expect(JSON.parse(readFileSync(join(root, 'bindings.json'), 'utf8')).bindings).toEqual({ [NEW]: sid })
+    crash(second)
+    const third = makeManager()
+    setSessionHelper(third)
+    void third.start({ atStartup: true })
+    const q = spawnPlainPty({ plain: true, sessionId: NEW }, SHELL, [], opts())
+    const seen: string[] = []
+    q.onData((d) => seen.push(d))
+    expect(await (q as HelperPty).adoption).toBe(true)
+    await until(() => seen.join('').includes('kept output'), 'the replay in that tab')
+    expect(helper.holders.get(sid)!.endsAsked).toBe(0)
+  })
+})

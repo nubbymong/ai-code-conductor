@@ -8,6 +8,10 @@
  *
  * PURE: the real HelperPty and HolderConnection against the fake holder, in
  * memory; the clock for the attach-again budget is the test's own.
+ *
+ * 2.1.3-beta.8 (plan section B2): the whole round of an app update on
+ * Windows, through two managers and the fake helper's away clock (the
+ * test's own clock too).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, rmdirSync, writeFileSync } from 'fs'
@@ -19,7 +23,11 @@ import { EventEmitter } from 'events'
 import { HelperPty, LOST_EXIT_CODE, NothingStartedError, type HelperPtyDriver } from '../../../src/main/session-helper/helper-pty'
 import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT } from '../../../src/main/pty-input-guard'
 import { RAW_MAX, heldSessionId, type HolderRecord, type LaunchSpec } from '../../../src/main/session-helper/protocol'
-import { FakeHolder, duplexPair, type ConnEvent } from './session-helper-fake-holder'
+import { SessionHelperManager } from '../../../src/main/session-helper/manager'
+import { FakeHelper, FakeHolder, duplexPair, type ConnEvent } from './session-helper-fake-holder'
+
+// The managers below are given their own usual-way spawn; node-pty itself is never loaded.
+vi.mock('node-pty', () => ({ spawn: () => { throw new Error('node-pty is not used in this file') } }))
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 async function until(cond: () => boolean, what: string, ms = 4000): Promise<void> {
@@ -477,5 +485,144 @@ describe('a connection checks the holder before it writes anything', () => {
         try { rmdirSync(base) } catch { /* something else is in it now */ }
       }
     }
+  })
+})
+
+describe('an app update on Windows, the whole round (plan section B2)', () => {
+  const TAB = 'abcdef0123456789abcdefd1'
+  const SID = heldSessionId(TAB)
+  const SHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+  const spawnOpts = () => ({ name: 'xterm-256color', cols: 120, rows: 30, cwd: 'C:\\Users\\someone', env: { Path: 'C:\\Windows' }, useConpty: true })
+
+  /** The managers each test made, and the starts they began, for the teardown. */
+  const made: SessionHelperManager[] = []
+  const starts: Promise<unknown>[] = []
+  let fake: FakeHelper | null = null
+
+  afterEach(async () => {
+    const quits = made.splice(0).map((m) => { try { return m.shutdown() } catch { return null } })
+    let timer: NodeJS.Timeout | undefined
+    await Promise.race([
+      Promise.allSettled([...quits, ...starts.splice(0)]),
+      new Promise<void>((r) => { timer = setTimeout(r, 3000) }),
+    ]).finally(() => clearTimeout(timer))
+    for (const h of fake?.holders.values() ?? []) h.vanish()
+    fake = null
+  })
+
+  /** One computer: the installed helper, its per-user folder, the fake helper
+   *  with an away clock on the test's own clock, and the app run by run. */
+  function computer() {
+    const dir = mkdtempSync(join(tmpdir(), 'aicc-helper-update-'))
+    folders.push(dir)
+    mkdirSync(join(dir, 'install'), { recursive: true })
+    const bundled = join(dir, 'install', 'aicc-helper.exe')
+    writeFileSync(bundled, 'MZ the installed helper')
+    const root = join(dir, 'user', 'helper')
+    const helper = new FakeHelper()
+    fake = helper
+    const clock = { now: 5_000_000 }
+    helper.awayClock = () => clock.now
+    const logs: string[] = []
+    const gone = new Set<SessionHelperManager>()
+    /** A run of the app: its manager, with the plain terminals' setting on. */
+    const run = (): SessionHelperManager => {
+      let self: SessionHelperManager | undefined
+      const alive = () => { if (self && gone.has(self)) throw new Error('this app is gone') }
+      const m = new SessionHelperManager({
+        platform: 'win32', root, bundled,
+        exec: async (file, args) => { alive(); return helper.exec(file, args) },
+        openStream: async (endpoint) => { alive(); return helper.openStream(endpoint) },
+        spawnDirect: () => fakeDirect(),
+        conptySource: () => null,
+        log: (line) => logs.push(line),
+      })
+      self = m
+      made.push(m)
+      starts.push(m.start({ atStartup: true, plain: true }))
+      return m
+    }
+    /** The app exits for the installer (app.exit): no quit, so nothing more
+     *  reaches a holder from it, and every connection it had drops. */
+    const exit = (m: SessionHelperManager) => {
+      made.splice(made.indexOf(m), 1)
+      gone.add(m)
+      for (const h of helper.holders.values()) h.dropAll()
+    }
+    return { helper, clock, logs, run, exit }
+  }
+
+  /** Run 1: a Terminal only tab through a holder, its output, then the update
+   *  lets go of it, every PTY is killed, and the app exits. */
+  async function updateWithOneHeld(c: ReturnType<typeof computer>): Promise<FakeHolder> {
+    const m1 = c.run()
+    await until(() => m1.serviceState().state === 'ready', 'the helper to be ready')
+    const p1 = m1.spawn({ plain: true, sessionId: TAB }, SHELL, [], spawnOpts())
+    await until(() => !!c.helper.holders.get(SID)?.attached, 'the terminal to attach')
+    const h = c.helper.holders.get(SID)!
+    const seen1: string[] = []
+    p1.onData((d) => seen1.push(d))
+    h.output('before the update\r\n')
+    await until(() => seen1.join('') === 'before the update\r\n', 'the output in run 1')
+    m1.noteSavedTabs([{ id: TAB, label: 'Build' }])
+    expect(m1.releaseForUpdate(new Set([TAB]))).toBe(1)
+    p1.kill()
+    c.exit(m1)
+    await until(() => h.conns.size === 0 && h.awaySince !== null, 'the app to let go')
+    expect(h.endsAsked).toBe(0)
+    return h
+  }
+
+  it('within two minutes: the new version\'s restored tab shows the terminal again, with what it wrote before the update and while the app was away, once each, from the start of its output', async () => {
+    const c = computer()
+    const h = await updateWithOneHeld(c)
+    // The installer runs for a minute, and the program writes on.
+    c.clock.now += 60_000
+    h.output('while the app was away\r\n')
+    c.helper.tick()
+    expect(h.ended).toBe(false)
+
+    const m2 = c.run()
+    expect(m2.holdsFor(TAB)).toBe(true)
+    expect(c.logs).toContain('[session-helper] the app was updated; 1 held terminal(s) may be shown again, and 0 agent session(s) it held are ended')
+    const p2 = m2.spawn({ plain: true, sessionId: TAB }, SHELL, [], spawnOpts())
+    const seen2: string[] = []
+    p2.onData((d) => seen2.push(d))
+    expect(await (p2 as HelperPty).adoption).toBe(true)
+    await until(() => seen2.join('') === 'before the update\r\nwhile the app was away\r\n', `the replay (${JSON.stringify(seen2.join(''))})`)
+    // The tab's own attach asked for the output from its start: run 1's
+    // attach, run 2's keeper, then the tab.
+    await until(() => h.attaches === 3, 'the tab to replace the keeper')
+    expect(h.requests.filter((r) => r.t === 'term.attach').map((r) => r.from)).toEqual([0, 0, 0])
+    h.output('after\r\n')
+    await until(() => seen2.join('').endsWith('after\r\n'), 'new output')
+    expect(seen2.join('')).toBe('before the update\r\nwhile the app was away\r\nafter\r\n')
+    // The same holder throughout: one hold, one launch, never an end.
+    expect(c.helper.made).toEqual([h])
+    expect(h.requests.filter((r) => r.t === 'term.launch')).toHaveLength(1)
+    expect(h.endsAsked).toBe(0)
+  })
+
+  it('more than two minutes: the holder ended by its away clock, nothing is kept, and the restored tab starts a fresh terminal', async () => {
+    const c = computer()
+    const h = await updateWithOneHeld(c)
+    c.clock.now += 120_001
+    c.helper.tick()
+    expect(h.endedAway).toBe(true)
+
+    const m2 = c.run()
+    expect(m2.holdsFor(TAB)).toBe(false)
+    expect(c.logs).toContain('[session-helper] the app was updated; 0 held terminal(s) may be shown again, and 0 agent session(s) it held are ended')
+    const p2 = m2.spawn({ plain: true, sessionId: TAB }, SHELL, [], spawnOpts())
+    const seen2: string[] = []
+    p2.onData((d) => seen2.push(d))
+    expect(await (p2 as HelperPty).adoption).toBe(false)
+    await until(() => c.helper.made.length === 2 && !!c.helper.holders.get(SID)?.attached, 'a fresh terminal')
+    const fresh = c.helper.holders.get(SID)!
+    expect(fresh).not.toBe(h)
+    expect(fresh.launch).toMatchObject({ t: 'term.launch', argv: [SHELL] })
+    fresh.output('a new shell\r\n')
+    await until(() => seen2.join('') === 'a new shell\r\n', 'the fresh terminal\'s output')
+    expect(seen2.join('')).not.toContain('before the update')
   })
 })
