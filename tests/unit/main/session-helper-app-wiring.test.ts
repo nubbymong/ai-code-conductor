@@ -7,7 +7,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const h = vi.hoisted(() => ({
   settings: {} as Record<string, unknown> | null,
-  made: [] as Array<{ deps: Record<string, unknown>; start: ReturnType<typeof vi.fn>; setRouting: ReturnType<typeof vi.fn>; stopRouting: ReturnType<typeof vi.fn>; shutdown: ReturnType<typeof vi.fn>; noteSavedTabs: ReturnType<typeof vi.fn>; enabled: boolean }>,
+  made: [] as Array<{ deps: Record<string, unknown>; start: ReturnType<typeof vi.fn>; setRouting: ReturnType<typeof vi.fn>; stopRouting: ReturnType<typeof vi.fn>; shutdown: ReturnType<typeof vi.fn>; noteSavedTabs: ReturnType<typeof vi.fn>; releaseForUpdate: ReturnType<typeof vi.fn>; reclaim: ReturnType<typeof vi.fn>; enabled: boolean }>,
+  /** The saved session file as peekSessionState reads it; an Error: it does not read. */
+  savedState: null as { sessions: unknown[] } | null | Error,
+  savedStateReads: 0,
+  /** What the manager's endsForUpdate answers. */
+  updateEnds: Promise.resolve() as Promise<void>,
   machinesSource: vi.fn(),
   current: null as unknown,
   quitAnswer: null as Promise<void> | null,
@@ -24,6 +29,13 @@ vi.mock('../../../src/main/config-manager', () => ({ readConfig: () => { if (h.s
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {} }))
 vi.mock('../../../src/main/ipc/machines-handlers', () => ({ setMachinesSource: h.machinesSource }))
 vi.mock('../../../src/main/session-helper/install', () => ({ helperRootDir: () => 'C:\\user\\helper', bundledHelperPath: () => 'C:\\app\\helper\\aicc-helper.exe' }))
+vi.mock('../../../src/main/session-state', () => ({
+  peekSessionState: () => {
+    h.savedStateReads++
+    if (h.savedState instanceof Error) throw h.savedState
+    return h.savedState
+  },
+}))
 vi.mock('../../../src/main/session-helper/manager', () => {
   class SessionHelperManager {
     enabled = false
@@ -32,6 +44,9 @@ vi.mock('../../../src/main/session-helper/manager', () => {
     stopRouting = vi.fn(() => { this.enabled = false })
     shutdown = vi.fn((): Promise<void> | null => h.quitAnswer)
     noteSavedTabs = vi.fn()
+    releaseForUpdate = vi.fn((tabs: ReadonlySet<string>) => tabs.size)
+    endsForUpdate = vi.fn(() => h.updateEnds)
+    reclaim = vi.fn(() => 0)
     serviceState = () => ({ state: this.enabled ? 'ready' : 'off', held: 0, lastError: null })
     constructor(readonly deps: Record<string, unknown>) { h.made.push(this as never) }
     onChange() {}
@@ -48,7 +63,7 @@ vi.mock('../../../src/main/session-helper/manager', () => {
 
 import {
   QUIT_WAIT_MS, agentSessionsThroughHelperIn, applySessionHelperSettings, holdQuitForSessionHelper, initSessionHelper, noteSessionHelperTabs, plainTerminalsThroughHelperIn,
-  sessionHelperServiceState, shutdownSessionHelper,
+  UPDATE_END_WAIT_MS, reclaimReleasedTerminals, releaseHeldTerminalsForUpdate, sessionHelperServiceState, shutdownSessionHelper,
 } from '../../../src/main/session-helper/app-wiring'
 
 beforeEach(() => {
@@ -61,6 +76,9 @@ beforeEach(() => {
   h.made.length = 0
   h.current = null
   h.machinesSource.mockReset()
+  h.savedState = null
+  h.savedStateReads = 0
+  h.updateEnds = Promise.resolve()
 })
 
 describe('session helper wiring', () => {
@@ -167,6 +185,71 @@ describe('session helper wiring', () => {
     expect(h.made[0].noteSavedTabs).toHaveBeenLastCalledWith([])
     shutdownSessionHelper()
     expect(h.made[0].shutdown).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('an app update on Windows (plan section B2)', () => {
+  it('with no helper this run (both switches off, no crash mark): the release and the reclaim do nothing, and nothing is made or read', async () => {
+    initSessionHelper(() => {})
+    expect(h.made).toHaveLength(0)
+    h.savedState = { sessions: [{ id: 'abcdef0123456789abcdef01' }] }
+    expect(await releaseHeldTerminalsForUpdate()).toBe(0)
+    expect(() => reclaimReleasedTerminals()).not.toThrow()
+    expect(h.made).toHaveLength(0)
+    expect(h.current).toBeNull()
+    expect(h.savedStateReads).toBe(0)
+  })
+
+  it('with the helper on: the manager is told the tabs in the saved file, and the reclaim reaches it', async () => {
+    h.settings = { plainTerminalsThroughHelper: true }
+    initSessionHelper(() => {})
+    const m = h.made[0]
+    // Ids as the file holds them; anything that is not an id is no tab.
+    h.savedState = { sessions: [{ id: 'abcdef0123456789abcdef01' }, { id: 'abcdef0123456789abcdef02' }, null, { id: 7 }, 'x'] }
+    expect(await releaseHeldTerminalsForUpdate()).toBe(2)
+    expect([...m.releaseForUpdate.mock.calls[0][0]]).toEqual(['abcdef0123456789abcdef01', 'abcdef0123456789abcdef02'])
+    reclaimReleasedTerminals()
+    expect(m.reclaim).toHaveBeenCalledTimes(1)
+  })
+
+  it('a saved file "Close without saving" cleared, or one that does not read: the manager is told no tab, so it lets go of none', async () => {
+    h.settings = { plainTerminalsThroughHelper: true }
+    initSessionHelper(() => {})
+    const m = h.made[0]
+    h.savedState = null
+    expect(await releaseHeldTerminalsForUpdate()).toBe(0)
+    h.savedState = new Error('session-state.json did not parse')
+    expect(await releaseHeldTerminalsForUpdate()).toBe(0)
+    expect(m.releaseForUpdate.mock.calls.map((c) => [...c[0]])).toEqual([[], []])
+  })
+
+  it('the ends the manager sent are waited for before the update goes on, UPDATE_END_WAIT_MS at most (PR review)', async () => {
+    vi.useFakeTimers()
+    try {
+      h.settings = { plainTerminalsThroughHelper: true }
+      initSessionHelper(() => {})
+      h.savedState = { sessions: [] }
+      let answered!: () => void
+      h.updateEnds = new Promise<void>((r) => { answered = r })
+      let done = false
+      void releaseHeldTerminalsForUpdate().then(() => { done = true })
+      await vi.advanceTimersByTimeAsync(UPDATE_END_WAIT_MS - 1)
+      expect(done).toBe(false)
+      answered()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(done).toBe(true)
+      // One that never answers holds it UPDATE_END_WAIT_MS at most.
+      h.updateEnds = new Promise<void>(() => { /* never */ })
+      done = false
+      void releaseHeldTerminalsForUpdate().then(() => { done = true })
+      await vi.advanceTimersByTimeAsync(UPDATE_END_WAIT_MS - 1)
+      expect(done).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(done).toBe(true)
+      expect(UPDATE_END_WAIT_MS).toBeLessThanOrEqual(1500)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

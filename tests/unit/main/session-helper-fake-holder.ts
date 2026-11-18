@@ -9,6 +9,12 @@
  * the program is not reading, at most that many frames wait, and once one is
  * refused (`busy`) every later frame on that connection is refused too, until
  * the app's next ping.
+ *
+ * The away clock (section 15) runs only when a test gives the helper one
+ * (`awayClock`): then a holder with no connection attached ends itself `away`
+ * seconds after its start or after the last attached connection let go,
+ * checked at each list, each connection and each tick(), as the holder's own
+ * timer would. Without one, no holder ends by itself.
  */
 import { randomBytes } from 'crypto'
 import * as fs from 'fs'
@@ -57,7 +63,7 @@ export class FakeConn {
     this.closed = true
     this.end.end()
     this.holder.conns.delete(this)
-    if (this.holder.attached === this) this.holder.attached = null
+    if (this.holder.attached === this) this.holder.detached()
   }
 }
 
@@ -105,9 +111,35 @@ export class FakeHolder {
   endGate: Promise<void> | null = null
   /** term.end requests that arrived, carried out or not yet. */
   endsAsked = 0
+  /** The away clock's time in ms; null: this holder never ends by itself. */
+  awayClock: (() => number) | null = null
+  /** When the away clock started (no connection attached since); null while one is. */
+  awaySince: number | null = null
+  /** It ended by its away clock. */
+  endedAway = false
 
   constructor(readonly sid: string, readonly label: string, readonly store: string) {
     this.endpoint = `\\\\.\\pipe\\aicc-helper-${sid}-${hex(16)}`
+  }
+
+  /** The attached connection let go: the away clock starts. */
+  detached(): void {
+    this.attached = null
+    this.awaySince = this.awayClock ? this.awayClock() : null
+  }
+
+  /** The away clock ran out with nothing attached: the holder ends its session, as term.end does. */
+  checkAway(): void {
+    if (!this.awayClock || this.awaySince === null || this.attached || this.ended || this.gone) return
+    if (this.awayClock() - this.awaySince < this.away * 1000) return
+    this.endedAway = true
+    this.endSelf()
+  }
+
+  private endSelf(): void {
+    this.ended = true
+    this.child = 'exited'
+    try { fs.rmSync(path.join(this.store, `${this.sid}.json`), { force: true }) } catch { /* gone */ }
   }
 
   record(): HolderRecord {
@@ -201,6 +233,7 @@ export class FakeHolder {
           old.close()
         }
         this.attached = conn
+        this.awaySince = null
         this.attaches++
         conn.sendJson({ t: 'term.attached', re, from, ring_start: 0, ring_end: this.ring.length, truncated: false, running: this.child !== 'exited', ...(this.child === 'exited' ? { code: this.code } : {}) })
         conn.sendRaw(this.ring.subarray(from))
@@ -214,10 +247,8 @@ export class FakeHolder {
       case 'term.end': {
         this.endsAsked++
         const end = () => {
-          this.ended = true
-          this.child = 'exited'
           conn.sendJson({ t: 'term.ended', re })
-          try { fs.rmSync(path.join(this.store, `${this.sid}.json`), { force: true }) } catch { /* gone */ }
+          this.endSelf()
           setTimeout(() => { for (const c of [...this.conns]) c.close() }, 5)
         }
         if (this.endGate) void this.endGate.then(end)
@@ -281,11 +312,21 @@ export class FakeHelper {
   insideJob = false
   /** Set: a `hold` that arrives waits for it before its holder starts (a slow start). */
   holdGate: Promise<void> | null = null
+  /** Set: a `list` that arrives waits for it, then lists the holders as they are then (a slow listing). */
+  listGate: Promise<void> | null = null
   /** Every holder `hold` started, in order (the map keeps only the last of a session). */
   readonly made: FakeHolder[] = []
+  /** The holders' away clock in ms, for the holders `hold` starts from now on; null: none. */
+  awayClock: (() => number) | null = null
+
+  /** Every holder whose away clock ran out ends, as its own timer would end it. */
+  tick(): void {
+    for (const h of this.holders.values()) h.checkAway()
+  }
 
   exec = async (file: string, args: string[]): Promise<ExecResult> => {
     this.calls.push({ file, args })
+    this.tick()
     const [cmd] = args
     const opt = (name: string) => args[args.indexOf(name) + 1]
     if (cmd === 'version') return { code: 0, stdout: `${this.version}\n`, stderr: '' }
@@ -295,6 +336,10 @@ export class FakeHelper {
       const existing = this.holders.get(sid)
       if (existing && !existing.ended && !existing.gone) return { code: 3, stdout: '', stderr: 'aicc-helper: a holder for this session is already running\n' }
       const h = new FakeHolder(sid, opt('--label'), opt('--store'))
+      if (this.awayClock) {
+        h.awayClock = this.awayClock
+        h.awaySince = this.awayClock()
+      }
       if (this.holdBusy) h.launch = { t: 'term.launch' }
       h.writeRecord()
       this.holders.set(sid, h)
@@ -303,6 +348,7 @@ export class FakeHelper {
       return { code: 0, stdout: `${JSON.stringify(h.record())}\n`, stderr: note }
     }
     if (cmd === 'list') {
+      if (this.listGate) await this.listGate
       if (this.listFails) return { code: null, stdout: '', stderr: 'timed out' }
       const sessions = [...this.holders.values()].filter((h) => !h.ended && !h.gone).map((h) => h.record())
       return { code: 0, stdout: `${JSON.stringify({ v: 1, sessions, removed: 0, skipped: 0 })}\n`, stderr: '' }
@@ -319,6 +365,7 @@ export class FakeHelper {
   }
 
   openStream = async (endpoint: string): Promise<Duplex> => {
+    this.tick()
     const h = [...this.holders.values()].find((x) => x.endpoint === endpoint && !x.ended && !x.gone && !x.unreachable)
     if (!h) throw new Error('no holder at that endpoint')
     return h.connect()

@@ -28,6 +28,13 @@
  * (plan s11, Q1). Either setting brings the helper up; after a crash, or
  * with an agent session a quit could not end in time, it comes up with both
  * off too, to end what was left held.
+ *
+ * 2.1.3-beta.8 (plan section B2): an app update on Windows lets go of each
+ * held plain or partner terminal whose tab was saved, instead of ending it
+ * (releaseForUpdate). Its holder's away clock starts, the running mark stays
+ * (saying "update"), and the new version's start takes the crash path: the
+ * restored tab shows the terminal again. Agent sessions still end at an
+ * update, and macOS and Linux keep ending every one.
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -139,6 +146,7 @@ export const HELPER_SENTENCES = {
   offNothingToEnd: 'The session helper is off, so it holds no terminal to end.',
   offNothingToReattach: 'The session helper is off, so it holds no terminal to re-attach.',
   agentNotReattached: 'An agent session cannot be re-attached. Its own tab resumes the conversation.',
+  updating: 'The app is being updated. Re-attach the terminal once the new version has opened.',
   agentNotCleared: '[The session helper still runs the session this tab had before, and could not end it, so a second one was not started. Restart this tab in a few minutes.]',
 } as const
 
@@ -216,6 +224,16 @@ export class SessionHelperManager implements MachinesSource {
   private afterCrash = false
   /** A normal quit has begun: nothing new is held or kept. */
   private quitting = false
+  /** An app update let go of the held terminals (releaseForUpdate): nothing
+   *  new is held until reclaim() says the update did not go ahead. */
+  private updating = false
+  /** The terminals releaseForUpdate let go of, by session id. */
+  private readonly released = new Map<string, { record: HolderRecord; pty: HelperPty }>()
+  /** What reclaim() kept after an update that did not start, while no tab
+   *  has taken it over again: its tab's terminal read as ended. */
+  private readonly reclaimed = new Map<string, HolderRecord>()
+  /** Settles once the ends the last releaseForUpdate sent were answered. */
+  private updateEnds: Promise<void> = Promise.resolve()
   private state: HelperState = 'off'
   private detail: string | undefined
   private version: string | undefined
@@ -286,12 +304,12 @@ export class SessionHelperManager implements MachinesSource {
 
   /** True while a new plain terminal goes through the helper. */
   routesPlain(): boolean {
-    return this.plainOn && !this.quitting
+    return this.plainOn && !this.quitting && !this.updating
   }
 
   /** True while a new agent session goes through the helper. */
   routesAgents(): boolean {
-    return this.agentsOn && !this.quitting
+    return this.agentsOn && !this.quitting && !this.updating
   }
 
   /** True when a held terminal waits for the tab with this app id. */
@@ -348,11 +366,14 @@ export class SessionHelperManager implements MachinesSource {
     this.started = true
     this.state = 'starting'
     let crashed = false
+    let updated = false
     try {
       fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
       const marker = path.join(this.root, MARKER)
       crashed = opts.atStartup && fs.existsSync(marker)
-      fs.writeFileSync(marker, JSON.stringify({ v: 1, pid: process.pid, at: this.deps.now() }))
+      // An update's mark takes the same path; only the log line differs.
+      if (crashed) updated = markReason(marker) === 'update'
+      this.writeMarker()
     } catch (err) {
       this.deps.log(`[session-helper] the helper folder could not be prepared: ${message(err)}`)
     }
@@ -369,7 +390,7 @@ export class SessionHelperManager implements MachinesSource {
         this.adoptable.set(r.session, r)
         this.keep(r)
       }
-      this.deps.log(`[session-helper] the app did not quit normally; ${this.adoptable.size} held terminal(s) may be shown again, and ${agents} agent session(s) it held are ended`)
+      this.deps.log(`[session-helper] ${updated ? 'the app was updated' : 'the app did not quit normally'}; ${this.adoptable.size} held terminal(s) may be shown again, and ${agents} agent session(s) it held are ended`)
     } else {
       this.saveBindings()
       // An agent session a normal quit could not end in time (its end was
@@ -418,7 +439,8 @@ export class SessionHelperManager implements MachinesSource {
       // agent session the store read missed is ended, as at the start; one a
       // tab of this run holds by now is that tab's.
       for (const r of records) {
-        if (this.live.has(r.session) || this.keepers.has(r.session) || this.endings.has(r.session) || this.agentClears.has(r.session)) continue
+        // One an update let go of meanwhile is the next version's to keep.
+        if (this.live.has(r.session) || this.keepers.has(r.session) || this.endings.has(r.session) || this.agentClears.has(r.session) || this.released.has(r.session)) continue
         if (heldIdKind(r.session) === 'agent') { void this.clearAgent(r.session, r); continue }
         this.adoptable.set(r.session, r)
         this.keep(r)
@@ -433,8 +455,9 @@ export class SessionHelperManager implements MachinesSource {
       // this run holds or keeps for a tab is not one of those.
       // An agent session's goes through clearAgent, not waited for here, so
       // its tab's next start waits for it: start() began that for each one
-      // the store read found, and the listing adds any it missed.
-      const left = records.filter((r) => !this.live.has(r.session) && !this.keepers.has(r.session) && !this.adoptable.has(r.session))
+      // the store read found, and the listing adds any it missed. One an
+      // update let go of while the listing ran is not one of those either.
+      const left = records.filter((r) => !this.live.has(r.session) && !this.keepers.has(r.session) && !this.adoptable.has(r.session) && !this.released.has(r.session))
       for (const r of left) if (heldIdKind(r.session) === 'agent' && !this.agentClears.has(r.session)) void this.clearAgent(r.session, r)
       await Promise.allSettled(left.filter((r) => heldIdKind(r.session) !== 'agent').map((r) => this.endRecord(r)))
     }
@@ -540,13 +563,29 @@ export class SessionHelperManager implements MachinesSource {
   // ── terminals ──────────────────────────────────────────────────────────────
 
   /** The held session id for an app PTY id. A terminal Re-attach moved to a
-   *  new tab stays with that tab: its first tab then gets a session of its own. */
+   *  new tab stays with that tab: its first tab then gets a session of its own,
+   *  derived from where that one went, and derived again while the one it
+   *  derives is bound to another tab too (a terminal moved, then its
+   *  replacement moved as well). Never an id another tab is bound to: a
+   *  terminal started under one would end that tab's held terminal. */
   sidFor(appPtyId: string): string {
     const bound = this.bindings.get(appPtyId)
     if (bound) return bound
-    const own = heldSessionId(appPtyId)
-    for (const [other, sid] of this.bindings) if (sid === own && other !== appPtyId) return heldSessionId(`${appPtyId}/after/${other}`)
-    return own
+    let seed = appPtyId
+    let sid = heldSessionId(seed)
+    // Each seed is new, so each id tried is new, and each one found taken is
+    // the id of a different binding: one try more than there are bindings
+    // always finds a free one.
+    for (let i = 0; i <= this.bindings.size; i++) {
+      let other: string | undefined
+      for (const [o, s] of this.bindings) if (s === sid && o !== appPtyId) { other = o; break }
+      if (other === undefined) return sid
+      seed = `${seed}/after/${other}`
+      sid = heldSessionId(seed)
+    }
+    // Only when two seeds hash alike: an id no binding has.
+    this.deps.log(`[session-helper] ${appPtyId}: every id derived for this tab is bound to another tab; it gets a new one`)
+    return heldSessionId(`${seed}/after/${randomId()}`)
   }
 
   /**
@@ -560,9 +599,13 @@ export class SessionHelperManager implements MachinesSource {
     const direct = () => this.deps.spawnDirect(file, args, opts)
     if (ctx.plain !== true || typeof args === 'string' || !APP_PTY_ID_RE.test(ctx.sessionId)) return direct()
     const sid = this.sidFor(ctx.sessionId)
-    const adopt = this.quitting || this.live.has(sid) ? undefined : this.adoptable.get(sid)
+    // While an update goes on nothing is taken over either: the kill that
+    // follows would end it, and the next version shows it again.
+    const adopt = this.quitting || this.updating || this.live.has(sid) ? undefined : this.adoptable.get(sid)
     if (adopt) {
       this.adoptable.delete(sid)
+      this.reclaimed.delete(sid)
+      this.pinOwnId(ctx.sessionId, sid)
       return this.track(new HelperPty({ sid, label: ctx.sessionId, spec: this.launchSpec(file, args, opts), adopt, driver: this.driver(direct, false) }), ctx.sessionId)
     }
     if (!this.routesPlain()) return direct()
@@ -578,7 +621,23 @@ export class SessionHelperManager implements MachinesSource {
       this.deps.log(`[session-helper] ${ctx.sessionId}: started the usual way, because the helper would refuse ${refused.why}`)
       return direct()
     }
+    this.pinOwnId(ctx.sessionId, sid)
     return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver: this.driver(direct, true) }), ctx.sessionId)
+  }
+
+  /**
+   * A tab whose first terminal Re-attach moved to another tab runs under an
+   * id of its own, derived from that other tab (sidFor). It is kept as this
+   * tab's binding once a terminal runs under it, so moving that first
+   * terminal again later does not change it, and the tab still finds its
+   * own held terminal. The binding goes when the terminal ends (track),
+   * unless an update let it go or a newer terminal of this tab runs under
+   * the id.
+   */
+  private pinOwnId(appPtyId: string, sid: string): void {
+    if (sid === heldSessionId(appPtyId) || this.bindings.get(appPtyId) === sid) return
+    this.bindings.set(appPtyId, sid)
+    this.saveBindings()
   }
 
   /**
@@ -675,8 +734,14 @@ export class SessionHelperManager implements MachinesSource {
     const sid = wrapper.sid
     this.live.set(sid, wrapper)
     void wrapper.ended.then(() => {
-      if (this.live.get(sid) === wrapper) this.live.delete(sid)
-      for (const [bound, s] of [...this.bindings]) if (s === sid && bound === appId) this.bindings.delete(bound)
+      // Only the terminal that still holds this id lets go of it: a tab
+      // started again before this one finished ending runs under the same
+      // id and keeps its binding. One let go of for an update keeps its
+      // binding too: the tab Re-attach opened for it shows it again at the
+      // next start.
+      if (this.live.get(sid) !== wrapper) return this.changed()
+      this.live.delete(sid)
+      if (!wrapper.isReleased) for (const [bound, s] of [...this.bindings]) if (s === sid && bound === appId) this.bindings.delete(bound)
       this.saveBindings()
       this.changed()
     })
@@ -912,6 +977,7 @@ export class SessionHelperManager implements MachinesSource {
       conn?.close()
       this.keepers.delete(record.session)
       this.adoptable.delete(record.session)
+      this.reclaimed.delete(record.session)
     }
   }
 
@@ -949,6 +1015,103 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   /**
+   * An app update on Windows (update-handlers.ts, just before every PTY is
+   * killed and the installer starts): each plain or partner terminal through
+   * a holder is let go of instead of ended, when its tab (a partner's is its
+   * session's) is saved twice over: in the app's last save (noteSavedTabs)
+   * and in `restorable`, the tabs in the saved file the next start restores
+   * from. "Close without saving" clears that file, so then none is. Its
+   * holder's away clock starts (two minutes) and the next start, finding the
+   * running mark, shows it again in its tab. An agent session, a terminal
+   * still starting and one whose tab was not saved are left to the kill that
+   * follows, which ends them as before. A held terminal kept for a tab that
+   * no tab took over (one a crash left, one Re-attach opened a tab for, one
+   * an earlier reclaim() kept) is ended now unless its tab is saved the same
+   * way: the kill does not reach it, so "Close sessions" would otherwise
+   * leave it running past the exit.
+   * The mark is written again saying "update" and stays. Nothing new goes
+   * through the helper until reclaim(). Off Windows nothing is let go of.
+   * Answers how many were.
+   */
+  releaseForUpdate(restorable: ReadonlySet<string>): number {
+    if (this.os !== 'windows' || this.quitting) return 0
+    this.updating = true
+    const saved = (tab: string) => this.savedTabs.has(tab) && restorable.has(tab)
+    let n = 0
+    for (const [sid, w] of this.live) {
+      if (heldIdKind(sid) !== 'plain' || !w.throughHelper) continue
+      const record = w.heldRecord
+      const tab = parentOfPartnerPtyId(w.label) ?? w.label
+      if (!record || !saved(tab)) continue
+      if (!w.release()) continue
+      this.released.set(sid, { record, pty: w })
+      n++
+    }
+    // Kept and no tab took it over (a crash's, Re-attach's or reclaim()'s):
+    // its holder runs on past the app's exit unless it is ended here.
+    const ends: Promise<unknown>[] = []
+    for (const [sid, r] of new Map([...this.reclaimed, ...this.adoptable])) {
+      if (this.live.has(sid) || heldIdKind(sid) !== 'plain') continue
+      const appId = this.appIdOf(r)
+      if (saved(parentOfPartnerPtyId(appId) ?? appId)) continue
+      this.reclaimed.delete(sid)
+      ends.push(this.endRecord(r).catch((err) => this.deps.log(`[session-helper] ${sid}: could not be ended at the update: ${message(err)}`)))
+    }
+    this.updateEnds = Promise.allSettled(ends).then(() => undefined)
+    try {
+      this.writeMarker('update')
+    } catch (err) {
+      this.deps.log(`[session-helper] the running mark could not be written for the update: ${message(err)}`)
+    }
+    this.deps.log(`[session-helper] an app update: ${n} held terminal(s) are let go of, for the new version to show again`)
+    this.changed()
+    return n
+  }
+
+  /** Settles once every end the last releaseForUpdate sent was answered (or
+   *  failed): the held terminals kept for a tab no longer saved. The caller
+   *  bounds the wait; the app exits next. */
+  endsForUpdate(): Promise<void> {
+    return this.updateEnds
+  }
+
+  /**
+   * The update did not go ahead (its installer could not be started): what
+   * releaseForUpdate let go of is kept for its tab, as after a crash, and
+   * listed on the Machines page, where Re-attach opens a new Terminal only
+   * tab on it (its own tab's terminal read as ended); its tab started again
+   * takes it over too. A terminal of it not yet killed is ended here in this
+   * app alone; its holder runs on. The running mark is the usual one again,
+   * and new terminals go through the helper again. Answers how many are kept.
+   */
+  reclaim(): number {
+    if (!this.updating) return 0
+    this.updating = false
+    const kept = [...this.released.values()]
+    this.released.clear()
+    for (const { record, pty: w } of kept) {
+      try { w.kill() } catch { /* over already */ }
+      if (this.quitting) continue
+      this.adoptable.set(record.session, record)
+      this.reclaimed.set(record.session, record)
+      this.keep(record)
+    }
+    try {
+      if (!this.quitting) this.writeMarker()
+    } catch (err) {
+      this.deps.log(`[session-helper] the running mark could not be written again: ${message(err)}`)
+    }
+    this.deps.log(`[session-helper] the update did not start; ${kept.length} held terminal(s) are kept for their tabs`)
+    this.changed()
+    return kept.length
+  }
+
+  /** The app's running mark: there while the app runs, gone after a normal quit. */
+  private writeMarker(reason?: 'update'): void {
+    fs.writeFileSync(path.join(this.root, MARKER), JSON.stringify({ v: 1, pid: process.pid, at: this.deps.now(), ...(reason ? { reason } : {}) }))
+  }
+
+  /**
    * At a normal quit: every terminal through the helper is ended. The end
    * messages go now; the answer settles once each holder said it ended (a
    * terminal still starting, or a keeper still connecting, is ended as soon
@@ -976,6 +1139,11 @@ export class SessionHelperManager implements MachinesSource {
       }))
       this.keepers.delete(sid)
     }
+    // Let go of for an update that this quit overtook: ended too (one that
+    // does not answer ends by its away clock, and the next start ends it).
+    for (const { record } of this.released.values()) waits.push(this.endRecord(record).catch(() => { /* above */ }))
+    this.released.clear()
+    this.reclaimed.clear()
     this.adoptable.clear()
     try { fs.rmSync(path.join(this.root, MARKER), { force: true }) } catch { /* the next start ends what is left */ }
     return waits.length === 0 ? null : Promise.allSettled(waits).then(() => undefined)
@@ -1148,7 +1316,11 @@ export class SessionHelperManager implements MachinesSource {
 
   async reattach(id: string): Promise<MachineActionResult> {
     if (!this.enabled && !this.heldIds().has(id)) return { ok: false, message: HELPER_SENTENCES.offNothingToReattach }
+    // Nothing moves while an update goes on (also when one began while the
+    // listing ran): the next version shows each kept terminal in its own tab.
+    if (this.updating) return { ok: false, message: HELPER_SENTENCES.updating }
     const record = (await this.heldListing()).find((r) => r.session === id)
+    if (this.updating) return { ok: false, message: HELPER_SENTENCES.updating }
     if (!record) return { ok: false, message: HELPER_SENTENCES.notHeld }
     // An agent session is never taken over by another tab: its hooks and
     // tools belong to its own (plan s11). End is what the page offers.
@@ -1159,12 +1331,19 @@ export class SessionHelperManager implements MachinesSource {
     const appId = this.appIdOf(record)
     const partner = isPartnerPtyId(appId)
     const base = parentOfPartnerPtyId(appId) ?? appId
-    if (held.tabOpen) {
+    // Kept by reclaim() after an update that did not start: its tab's
+    // terminal read as ended, so bringing that tab forward shows nothing. It
+    // goes to a new tab, as one no tab shows does.
+    if (held.tabOpen && !(this.reclaimed.has(id) && !this.live.has(id))) {
       // Its tab is open: brought forward, and showing it attaches it.
       return { ok: true, tab: { id: base, label: held.label, open: false, partner } }
     }
-    // No tab shows it: a new Terminal only tab, bound to it.
+    // No tab shows it: a new Terminal only tab, bound to it. The binding
+    // moves: a tab an earlier Re-attach bound to it (one whose terminal read
+    // as ended after an update that did not start) gets a terminal of its
+    // own if it starts again, and never claims or ends this one.
     const tabId = this.deps.newTabId()
+    for (const [bound, sid] of [...this.bindings]) if (sid === id) this.bindings.delete(bound)
     this.bindings.set(tabId, id)
     this.adoptable.set(id, record)
     this.saveBindings()
@@ -1235,6 +1414,18 @@ export function crashMarkIn(root: string): boolean {
     return fs.existsSync(path.join(root, MARKER))
   } catch {
     return false
+  }
+}
+
+/** Why the running mark was left: "update" when an app update let go of the
+ *  held terminals (releaseForUpdate); null for a crash, or a mark that does
+ *  not read. */
+function markReason(marker: string): 'update' | null {
+  try {
+    const v = JSON.parse(fs.readFileSync(marker, 'utf8')) as { reason?: unknown } | null
+    return v && typeof v === 'object' && v.reason === 'update' ? 'update' : null
+  } catch {
+    return null
   }
 }
 
