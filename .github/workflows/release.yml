@@ -241,6 +241,14 @@ jobs:
           rustup show active-toolchain || rustup toolchain install
           cargo build --release --locked
 
+      # The helper must start on a PC without Microsoft's Visual C++ runtime, so
+      # it carries its own C runtime (helper/.cargo/config.toml, +crt-static;
+      # cargo reads it because the build above runs in helper/). This reads the
+      # built program's import table and fails, before anything is signed or
+      # packaged, if it still imports a C runtime DLL. It only reads the file.
+      - name: Check the session helper carries its own C runtime
+        run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
+
       # ── Windows code signing: SSL.com eSigner CKA (cloud HSM) ──
       # The signing key lives in SSL.com's cloud HSM and never exists as a file
       # on the runner. CKA registers a Windows KSP so the key appears in the

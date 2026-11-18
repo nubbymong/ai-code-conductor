@@ -520,6 +520,11 @@ jobs:
           rustup show active-toolchain || rustup toolchain install
           cargo build --release --locked
 
+      # It carries its own C runtime, as in release.yml (see the Helper job).
+      - name: Check the session helper carries its own C runtime (release/* branches only)
+        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
+        run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
+
       - name: Package Windows installer (release/* branches only)
         if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         # --config.npmRebuild=false: Windows uses the prebuilds as-is (see above
@@ -981,6 +986,15 @@ jobs:
           mkdir -p target/helper-windows
           cp target/release/aicc-helper.exe target/release/aicc-fake-cli.exe target/helper-windows/
           cp probes/p7-windows-survival.ps1 probes/README.md target/helper-windows/
+
+      # The helper must start on a PC without Microsoft's Visual C++ runtime, so
+      # it carries its own C runtime (helper/.cargo/config.toml, +crt-static).
+      # This reads the built program's import table and fails if it still
+      # imports a C runtime DLL (VCRUNTIME140.dll, api-ms-win-crt-*, ...). It
+      # only reads the file. release.yml runs the same check before packaging.
+      - name: Check the Windows helper carries its own C runtime
+        if: steps.scope.outputs.helper != 'false' && steps.lock.outputs.present == 'true' && runner.os == 'Windows'
+        run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
 
       - name: Upload the Windows helper
         if: steps.scope.outputs.helper != 'false' && steps.lock.outputs.present == 'true' && runner.os == 'Windows'
