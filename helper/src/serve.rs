@@ -945,7 +945,7 @@ impl Serve {
             }
             // The hook events waiting go right after the reply and its
             // replay, before any live output.
-            if !self.take_hooks(conn, gen) {
+            if takes_hooks && !self.take_hooks(conn, gen) {
                 return Flow::Close;
             }
         }

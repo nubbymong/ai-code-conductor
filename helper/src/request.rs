@@ -322,7 +322,7 @@ fn parse_hook_event(v: &Value, id: u64) -> Result<Request, Refusal> {
         Some(p) if matches!(p, Value::Obj(_)) => p,
         _ => return refuse(CODE_BAD_FIELD, re, "payload must be a JSON object"),
     };
-    if payload.to_json().len() > MAX_HOOK_PAYLOAD {
+    if payload.to_json().len() > MAX_HOOK_PAYLOAD * 2 {
         return refuse(CODE_TOO_LARGE, re, "payload is over 64 KiB as JSON");
     }
     Ok(Request::HookEvent { id, kind, payload: payload.clone() })

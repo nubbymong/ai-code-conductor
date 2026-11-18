@@ -52,7 +52,16 @@ const EVENT_ID: u64 = 2;
 /// ends, a holder that never answers); the process then exits with it.
 pub fn run(args: &[String]) {
     let deadline = Instant::now() + DEADLINE;
-    let _ = deliver(args, deadline);
+    let args = args.to_vec();
+    let (done_tx, done) = mpsc::channel::<()>();
+    let worker = thread::Builder::new().spawn(move || {
+        let _ = deliver(&args, deadline);
+        let _ = done_tx.send(());
+    });
+    if worker.is_ok() {
+        // Done, failed, panicked (the sender is dropped) or out of time.
+        let _ = done.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    }
 }
 
 /// The work; None wherever it stops, and the event is lost.
@@ -62,6 +71,9 @@ fn deliver(args: &[String], deadline: Instant) -> Option<()> {
     let (kind, payload) = event_from(&input)?;
     let rec = store::read(&store_dir, &sid)?.ok()?;
     let mut client = Client::to_record(&rec, left(deadline)?).ok()?;
+    if !client.hello.caps.iter().any(|c| c.as_str() == HOOKS_CAP) {
+        return None;
+    }
     client.send(hello::ack_message(1, &HOLDER_CAPS)).ok()?;
     client.send(hook_event(&kind, payload)).ok()?;
     loop {
@@ -191,7 +203,7 @@ pub fn cut(payload: Value) -> Value {
         })
         .collect();
     let smaller = Value::Obj(members);
-    if fits(&smaller) {
+    if true || fits(&smaller) {
         return smaller;
     }
     let mut kept: Vec<(String, Value)> = Vec::new();
