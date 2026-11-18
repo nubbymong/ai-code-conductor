@@ -29,10 +29,21 @@
 //      OS (P4.10, CI run 37134624406) are accepted by name and nothing else
 //      (REVIEWED_HELP_DIFFERENCES in codex-conformance-lib.ts). Asserted
 //      when CCC_CODEX_HELP_ASSERT=1.
+//   6. (2.1.3-beta.8) each background run's settings load in the real CLI:
+//      the `-c` overrides and `--disable` names of the review, analysis and
+//      Insights runs, put in front of `codex features list` (which loads the
+//      config with them, with no sign-in), exit 0, and every feature the run
+//      turns off reads off. A value of the wrong type for a key the CLI
+//      defines is refused there; an unknown top-level key is ignored, not
+//      refused, so the keys' spelling is pinned by the unit tests
+//      (tests/unit/providers/codex/analysis-features.test.ts).
 //
 // CCC_CODEX_CONFORMANCE_PROVE_RED=1 (a dispatch input) runs every check above
 // against a deliberately wrong expectation, so the job goes red once with
-// each check named (P4.8: each new check shown red, then green).
+// each check named (P4.8: each new check shown red, then green). For check 6
+// the input is wrong instead: the review run gets agents.enabled=notabool,
+// which the CLI must refuse, and the analysis run loses its --disable
+// sleep_tool (on by default), which must then read on.
 import { describe, it, expect, beforeAll } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -101,6 +112,19 @@ const argvOf = (op: CodexCliOperation): string[] => {
 
 /** The command lines the app runs, with no sign-in needed to read their help. */
 const OPERATIONS: readonly CodexCliOperation[] = ['version', 'status', 'logout', 'login-browser', 'login-device', 'login-api-key', 'review', 'app-server', 'models', 'analysis']
+
+/** The background runs, whose settings check 6 loads. */
+const BACKGROUND: readonly CodexCliOperation[] = ['review', 'analysis', 'insights']
+
+/** The `-c` and `--disable` pairs of a constant argv, in its order, less any
+ *  pair `drop` names (the prove-red run drops one). */
+const settingsOf = (argv: readonly string[], drop?: { flag: string; value: string }): string[] =>
+  argv.flatMap((a, i) => {
+    const flag = argv[i - 1]
+    if (flag !== '-c' && flag !== '--disable') return []
+    if (drop && drop.flag === flag && drop.value === a) return []
+    return [flag, a]
+  })
 
 /** The model ids each recorded version's own picker lists (P3.1 fixture for
  *  the minimum; P3.8 addendum 13 for the pinned: the same five, no gpt-5.2). */
@@ -211,6 +235,25 @@ describe.skipIf(!LIVE)(`the real Codex CLI, no sign-in (${OS_TAG}, ${KIND || '?'
     const unknown = disabled.filter((f) => !list.has(f))
     note(`features: ${list.size} listed; the analysis turns off ${disabled.length}; unknown ${unknown.join(', ') || 'none'}`)
     expect(unknown, PROVE_RED ? WRONG : unknown.join(', ')).toEqual([])
+  }, CASE_MS)
+
+  it("each background run's settings load: `codex features list` with its -c overrides and --disable names exits 0 and reads every feature it turns off as off", async () => {
+    const problems: string[] = []
+    for (const op of BACKGROUND) {
+      const argv = argvOf(op)
+      let settings = settingsOf(argv, PROVE_RED && op === 'analysis' ? { flag: '--disable', value: 'sleep_tool' } : undefined)
+      if (PROVE_RED && op === 'review') settings = [...settings, '-c', 'agents.enabled=notabool']
+      const r = await run([...settings, 'features', 'list'])
+      if (r.exitCode !== 0) { problems.push(`${op}: exited ${r.exitCode}: ${r.stderr.trim().slice(0, 400)}`); continue }
+      const list = parseFeaturesList(r.stdout)
+      for (const f of disabledFeatures(argv)) {
+        const state = list.get(f)
+        if (!state) problems.push(`${op}: ${f} is not listed`)
+        else if (state.on) problems.push(`${op}: ${f} reads on`)
+      }
+    }
+    note(`background runs' settings: ${problems.length === 0 ? `${BACKGROUND.join(', ')} each load, every feature they turn off reads off` : problems.join('; ')}`)
+    expect(problems, PROVE_RED ? `${WRONG}\n${problems.join('\n')}` : problems.join('\n')).toEqual([])
   }, CASE_MS)
 
   it('help: every P3.1 capture made again, written to the run artifacts and compared with the normalised fixture as this OS reads it', async () => {
