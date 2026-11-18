@@ -60,11 +60,15 @@ Step 2  The stand-in for one hook event, behind the launcher from step 0:
         alone or step 2 and the 20 seconds after it, whichever is larger.
 Step 3  Reference only: today's HTTP hook is a loopback POST from inside the
         CLI's own process. One node process times -HttpPosts POSTs to a local
-        HTTP server in a second node process, at -PerSecond. It runs twice in a
-        job on the same schedule, once without sending and once with all the
-        POSTs, and the difference in the two processes' CPU cycles, divided by
-        the POSTs, is the CPU per POST (client and server). A failure here is
-        recorded and does not change the verdict.
+        HTTP server in a second node process, at -PerSecond, taken the way the
+        hooks gateway takes them: a new connection for each (the gateway
+        answers every POST with Connection: close), a per-session token header
+        checked in constant time before the body is read, and the body parsed
+        as JSON. What the gateway does with the event after that is not in it.
+        It runs twice in a job on the same schedule, once without sending and
+        once with all the POSTs, and the difference in the two processes' CPU
+        cycles, divided by the POSTs, is the CPU per POST (client and server).
+        A failure here is recorded and does not change the verdict.
 
 Pass line (ADR-030 sets none; the beta 8 plan set this before any measuring):
 with Defender real-time protection on, over all step 2 runs, p95 wall time at
@@ -904,17 +908,36 @@ $json = [pscustomobject]@{ chain = $rows; children = $kids; stdinBytes = $stdin.
 Move-Item -LiteralPath ($Out + '.tmp') -Destination $Out
 '@
 
-# Step 3's two node processes: a server like the hooks gateway, and a client
-# like the CLI's HTTP hook, which prints one line per POST. With "idle" the
-# client keeps the same schedule and sends nothing: the baseline.
+# Step 3's two node processes: a server that takes a POST the way the hooks
+# gateway does (Connection: close on every response, the token header checked
+# in constant time before the body is read, the body parsed as JSON; not what
+# the gateway then does with the event), and a client like the CLI's HTTP
+# hook, on a new connection for each POST, which prints one line per POST.
+# With "idle" the client keeps the same schedule and sends nothing: the
+# baseline.
 $HttpReference = @'
 'use strict';
 const http = require('http');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 if (process.argv[2] === 'server') {
+  const expected = Buffer.from(process.argv[3]);
   const srv = http.createServer((req, res) => {
-    req.on('data', () => {});
-    req.on('end', () => { res.setHeader('content-type', 'application/json'); res.end('{}'); });
+    res.setHeader('Connection', 'close');
+    const presented = Buffer.from(String(req.headers['x-ccc-hook-token'] || ''));
+    if (presented.length !== expected.length || !crypto.timingSafeEqual(presented, expected)) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end('{}');
+      return;
+    }
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      let status = 200;
+      try { JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { status = 400; }
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end('{}');
+    });
   });
   srv.listen(0, '127.0.0.1', () => process.stdout.write(srv.address().port + '\n'));
   process.stdin.on('end', () => process.exit(0));
@@ -923,10 +946,11 @@ if (process.argv[2] === 'server') {
   const count = Number(process.argv[3]);
   const perSecond = Number(process.argv[4]);
   const send = process.argv[5] !== 'idle';
-  const agent = new http.Agent({ keepAlive: true });
+  const token = crypto.randomBytes(16).toString('hex');
+  const agent = new http.Agent({ keepAlive: false });
   const body = JSON.stringify({ session_id: 'p16-probe-http', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'echo p16' }, tool_response: { stdout: 'p16', stderr: '' }, cwd: 'C:/work', transcript_path: 'C:/work/t.jsonl' });
   const request = (port, data) => new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: '/hook/p16-probe-http', method: 'POST', agent, headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+    const req = http.request({ host: '127.0.0.1', port, path: '/hook/p16-probe-http', method: 'POST', agent, headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), 'x-ccc-hook-token': token } }, (res) => {
       res.on('data', () => {});
       res.on('end', () => resolve(res.statusCode));
     });
@@ -934,7 +958,7 @@ if (process.argv[2] === 'server') {
     req.end(data);
   });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const server = spawn(process.execPath, [__filename, 'server'], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const server = spawn(process.execPath, [__filename, 'server', token], { stdio: ['pipe', 'pipe', 'inherit'] });
   let portText = '';
   const onData = (c) => {
     portText += c;
@@ -1430,6 +1454,7 @@ try {
             [IO.File]::WriteAllLines((Join-Path $outFull 'p16-http.csv'), [string[]](@('post,wall_ms,status') + $lines))
             $pw = [double[]]@($postRows | ForEach-Object { $_.wall })
             $result.httpReference = [ordered]@{
+                takenAs = 'a new connection for each POST, the token header checked and the body parsed, as the hooks gateway does; not what the gateway then does with the event'
                 posts = $postRows.Count
                 failed = @($postRows | Where-Object { $_.status -ne 200 }).Count
                 p95WallMs = [math]::Round((Get-P95 $pw), 2)
