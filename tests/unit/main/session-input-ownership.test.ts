@@ -703,10 +703,19 @@ describe('the session input module is the one door for the app\'s own typing int
     }
     expect(where.map((w) => w.split(':')[0]), where.join('\n')).toEqual(['src/main/pty-manager.ts'])
   })
+
+  it('codexRunScreen, the Codex run screen itself, is reached from the PTY manager only (it resizes and closes each pane through it)', () => {
+    const where: string[] = []
+    for (const p of sources) {
+      if (p.startsWith(MODULE_DIR)) continue
+      for (const r of doorReads(read(p), p)) if (r.name === 'codexRunScreen' || r.name === '*') where.push(`${p}:${r.line} (${r.name})`)
+    }
+    expect(where.map((w) => w.split(':')[0]), where.join('\n')).toEqual(['src/main/pty-manager.ts'])
+  })
 })
 
 describe('the check sees each way of typing into a session (verify the verifier)', () => {
-  const flagged: Array<[string, string]> = [
+  const flagged: Array<[string, string, string?]> = [
     ['a writePty call', `import { writePty } from './pty-manager'\nwritePty(id, 'x\\r')`],
     ['a writePty call under another name', `import { writePty as w } from './pty-manager'\nw(id, 'x')`],
     ['a call through a namespace import', `import * as pm from './pty-manager'\npm.writeSubmittedLine(id, 'continue')`],
@@ -806,9 +815,23 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['by name: codexRun', `const f = (codexRun) => codexRun.write(bytes)`],
     ['by name: the run screen\'s pane', `const pane = panes.get(id)\npane.write(data)`],
     ['by name: a field of another object', `deps.ptyProcess.write('x')`],
+    // The door's own copy of the Codex run screen (codexRunScreen): its submit
+    // is still a run screen's submit, however the function is reached.
+    ['a submit on the door\'s run screen', `import { codexRunScreen } from './session-input'\ncodexRunScreen()?.submit(id, t, o)`],
+    ['a submit on the door\'s run screen in the PTY manager, as its marker writer once did', `import { setSessionInputPorts, codexRunScreen } from './session-input'\nexport function writeCanvasMarkerLine(sessionId: string, line: string) {\n  const screen = codexRunScreen()\n  if (!screen) return\n  return screen.submit(sessionId, line, { readyWaitMs: 1 })\n}`, 'src/main/pty-manager.ts'],
+    ['a submit on the door\'s run screen read into a name', `import { codexRunScreen } from './session-input'\nconst s = codexRunScreen()\ns!.submit(id, t, o)`],
+    ['a submit on the door\'s run screen through a namespace of the module', `import * as input from './session-input'\ninput.codexRunScreen()!.submit(id, t, o)`],
+    ['a submit on the door\'s run screen imported under another name', `import { codexRunScreen as cs } from '../session-input'\ncs()?.submit(id, t, o)`, 'src/main/ipc/feature.ts'],
+    ['a submit destructured from the door\'s run screen', `import { codexRunScreen } from './session-input'\nconst { submit } = codexRunScreen()!\nsubmit(id, t, o)`],
+    ['a submit on the door\'s run screen destructured from require under another name', `const { codexRunScreen: cs } = require('./session-input')\ncs()!.submit(id, t, o)`],
+    ['a submit on the door\'s run screen destructured from a dynamic import', `async function go() {\n  const { codexRunScreen } = await import('../session-input')\n  await codexRunScreen()?.submit(id, t, o)\n}`, 'src/main/ipc/feature.ts'],
+    ['a submit on the door\'s run screen read from a required namespace into a name', `const input = require('./session-input')\nconst cs = input.codexRunScreen\ncs()?.submit(id, t, o)`],
+    ['a submit on the door\'s run screen read with a string key', `import * as input from './session-input'\ninput['codexRunScreen']()!.submit(id, t, o)`],
+    ['a submit on the door\'s run screen required and called at once', `require('./session-input').codexRunScreen()?.submit(id, t, o)`],
+    ['a submit destructured under another name from the door\'s run screen in a name', `import { codexRunScreen as cs } from './session-input'\nconst screen = cs()\nconst { submit: send } = screen!\nsend(id, t, o)`],
   ]
-  for (const [what, code] of flagged) {
-    it(`flags ${what}`, () => { expect(typingSites(code).length).toBeGreaterThan(0) })
+  for (const [what, code, file] of flagged) {
+    it(`flags ${what}`, () => { expect(typingSites(code, file).length).toBeGreaterThan(0) })
   }
 
   const clean: Array<[string, string, string?]> = [
@@ -827,6 +850,8 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['a PTY handle\'s other fields destructured', `const { cols, rows, pid } = s.ptyProcess\nconst { kill } = s.ptyProcess\nkill()`],
     ['a run screen\'s other calls', `provider.runScreen?.open(id, o)\ncodexRunScreen()?.close(id)`],
     ['a run screen\'s other calls destructured', `const { open, close } = getProvider('codex').runScreen!\nopen(id, o)`],
+    ['the door\'s run screen\'s other calls, as the PTY manager makes them', `import { setSessionInputPorts, codexRunScreen } from './session-input'\ncodexRunScreen()?.close(id)\ncodexRunScreen()?.resize(id, 80, 24)\nconst s = codexRunScreen()\nif (s?.has(id)) s.close(id)\nconst { close } = codexRunScreen()!\nclose(id)`, 'src/main/pty-manager.ts'],
+    ['the door\'s run screen\'s other calls, through a namespace or under another name', `import * as input from './session-input'\nimport { codexRunScreen as cs } from './session-input'\ninput.codexRunScreen()?.close(id)\ncs()?.resize(id, 80, 24)`],
     ['another submit', `form.submit()\nqueue.submit(job)`],
     ['another module\'s namespace spread', `import * as fs from 'fs'\nstart({ ...fs })`],
     ['a map of other things', `const m = new Map<string, number>()\nm.get(id)\nconst w = new Map<string, NodeJS.WritableStream>()\nw.get(id)!.write('x')`],
@@ -918,5 +943,6 @@ describe('the check sees each way of typing into a session (verify the verifier)
     expect(names(`async function go() { const { askQuestion: a } = await import('./session-input'); a(w, id, q) }`)).toEqual(['askQuestion'])
     expect(names(`export { askQuestion } from './session-input'\nexport * from './session-input'`)).toEqual(['askQuestion', '*'])
     expect(names(`import { askQuestion } from './pty-manager'\nconst { askQuestion: b } = other`)).toEqual([])
+    expect(names(`import { codexRunScreen as cs } from '../session-input'\nconst { codexRunScreen: again } = require('../session-input')`, 'src/main/ipc/feature.ts')).toEqual(['codexRunScreen', 'codexRunScreen'])
   })
 })
