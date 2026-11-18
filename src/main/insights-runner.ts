@@ -44,6 +44,7 @@ import { getAccountsService } from './provider-accounts'
 import { ownerOnlyThroughHandle, sweepStaleFolders } from './stale-folder-sweep'
 import { withFullyQualifiedProgramLookup } from './windows-programs'
 import { warmFirstStart } from './first-start-warmup'
+import { spawnRunPty } from './session-helper/manager'
 import { quitHold } from './quit-hold'
 import { awaitClaudeLaunchWalk } from './claude-launch-walk'
 import { timedStart } from './main-thread-ops'
@@ -485,8 +486,17 @@ export function insightsTerminalEnv(env: Record<string, string>, platform: NodeJ
 
 /** The /insights terminals running now (one per account whose report is at
  *  step 1), each with what ends it at quit. They are main's own, outside
- *  pty-manager, so killAllPty never reaches them (#317). */
+ *  pty-manager, so killAllPty never reaches them (#317). With the agent
+ *  sessions' setting on, each runs through the session helper (spawnRunPty),
+ *  and its kill ends its holder. */
 const insightsPtys = new Map<pty.IPty, () => void>()
+
+/** The id an account's report terminal runs under (spawnRunPty): the same
+ *  for every report of the account, so a start after a crash finds and ends
+ *  what an earlier report left held. */
+export function insightsRunId(profileId: string | undefined): string {
+  return `insights-${profileId ?? 'default'}`
+}
 
 /** #317: sends a kill to every /insights terminal still running. The app's
  *  quit teardown calls it (index.ts, beside killCliSetupPty): a report in
@@ -508,10 +518,11 @@ export function killInsightsPty(): void {
 }
 
 /**
- * Spawn Claude interactively via node-pty, type /insights, wait for report.html to update, then /exit.
+ * Spawn Claude interactively in a terminal (spawnRunPty: node-pty, or the session helper with the
+ * agent sessions' setting on), type /insights, wait for report.html to update, then /exit.
  * This is needed because /insights is a TUI slash command, not a CLI argument.
  */
-async function spawnClaudeInsights(home: string | null, timeoutMs = 600000): Promise<{ code: number; output: string }> {
+async function spawnClaudeInsights(home: string | null, runId: string, timeoutMs = 600000): Promise<{ code: number; output: string }> {
   // Windows, when no Claude Code is known for this PATH right now: PATH is
   // walked first, off the event loop, the walk a session's launch waits for
   // and for as long (claude-launch-walk.ts), and the resolution below reads
@@ -551,7 +562,9 @@ async function spawnClaudeInsights(home: string | null, timeoutMs = 600000): Pro
     logInfo(`[insights] Spawning Claude PTY for /insights: ${cmd} in ${cwd} (home=${home ?? 'default'})`)
 
     // The start holds the main thread: timed, a slow one logged by name only.
-    const proc = timedStart(cmd, () => pty.spawn(cmd, [], {
+    // Through the session helper only while the agent sessions' setting is on
+    // (2.1.3-beta.9, plan section B1); otherwise node-pty's spawn, as before.
+    const proc = timedStart(cmd, () => spawnRunPty({ runId, kind: 'claude' }, cmd, [], {
       name: 'xterm-256color',
       cols: 120,
       rows: 30,
@@ -1343,7 +1356,7 @@ export async function runInsights(getWindow: () => BrowserWindow | null, opts?: 
     upsertRun(run)
     notifyRenderer(getWindow, run)
     logInfo('[insights] Running /insights via PTY...')
-    const result = await spawnClaudeInsights(account.home)
+    const result = await spawnClaudeInsights(account.home, insightsRunId(account.profileId))
 
     if (result.code !== 0) {
       run.status = 'failed'

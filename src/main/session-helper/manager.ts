@@ -44,6 +44,13 @@
  * but PreToolUse once the holder launched it and before its launch line is
  * typed, and each event the holder passes on reaches the session signals
  * module under the tab's id.
+ *
+ * 2.1.3-beta.9 (plan section B1): with the agent sessions' setting on,
+ * Insights' Claude Code report runs through the helper too (spawnRunPty): a
+ * terminal of the app's own, not a tab's, under the run's own id. It takes the
+ * agent sessions' path: a crash's start ends it, Re-attach refuses it, and the
+ * Machines page lists it with End. It has no per-session settings file, so its
+ * hooks never go through its holder.
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -100,6 +107,17 @@ export interface PlainSpawnContext {
  *  id, and which provider's CLI runs in it. */
 export interface AgentSpawnContext {
   sessionId: string
+  kind: ProviderId
+  /** A run of the app's own (spawnRunPty), not a tab: `sessionId` is the
+   *  run's id. It has no per-session settings file, so no hook route. */
+  run?: boolean
+}
+
+/** What a run of the app's own says of the terminal it starts (2.1.3-beta.9):
+ *  the run's id, the same for every run of the same kind and account, and
+ *  which provider's CLI runs in it. */
+export interface RunSpawnContext {
+  runId: string
   kind: ProviderId
 }
 
@@ -193,7 +211,18 @@ export const HELPER_SENTENCES = {
   agentNotReattached: 'An agent session cannot be re-attached. Its own tab resumes the conversation.',
   updating: 'The app is being updated. Re-attach the terminal once the new version has opened.',
   agentNotCleared: '[The session helper still runs the session this tab had before, and could not end it, so a second one was not started. Restart this tab in a few minutes.]',
+  runNotCleared: '[The session helper still runs the terminal this report started before, and could not end it, so a second one was not started. Try again in a few minutes.]',
 } as const
+
+/** What the Machines page calls the terminal of a run of the app's own, by
+ *  the first part of the run's id (spawnRunPty). An agent session's tab id
+ *  never starts that way: the app makes those of letters and digits alone. */
+const RUN_NAMES: Readonly<Record<string, string>> = { insights: 'Insights report' }
+
+function runName(label: string): string | null {
+  const first = /^([a-z]+)-/.exec(label)?.[1]
+  return first !== undefined && Object.prototype.hasOwnProperty.call(RUN_NAMES, first) ? RUN_NAMES[first] : null
+}
 
 /** The Machines page's line while the switch is off and terminals are still held. */
 export function offStillHoldingSentence(n: number): string {
@@ -701,9 +730,9 @@ export class SessionHelperManager implements MachinesSource {
     const spec = this.agentSpec(file, args, opts)
     const usual = this.usualStart(file, args, opts, ctx.sessionId)
     // Set when the earlier holder could not be ended: then the usual way
-    // starts nothing either, and the tab reads why.
+    // starts nothing either, and the tab (or the run) reads why.
     let notCleared = false
-    const direct = (): IPty => (notCleared ? notStartedPty(HELPER_SENTENCES.agentNotCleared, opts) : usual())
+    const direct = (): IPty => (notCleared ? notStartedPty(ctx.run ? HELPER_SENTENCES.runNotCleared : HELPER_SENTENCES.agentNotCleared, opts) : usual())
     const cleared = async (): Promise<void> => {
       if (await this.clearAgent(sid)) return
       notCleared = true
@@ -729,7 +758,8 @@ export class SessionHelperManager implements MachinesSource {
     }
     if (!this.routesAgents()) return usualWay('agent sessions do not go through the session helper now', false)
     this.retryInstallIfDue()
-    if (this.state !== 'starting' && this.state !== 'ready') return usualWay(`the session helper is ${this.state}`, false)
+    // A run says so in the log; a tab's session does not (as before).
+    if (this.state !== 'starting' && this.state !== 'ready') return usualWay(`the session helper is ${this.state}`, ctx.run === true)
     const refused = checkLaunch(spec, this.os)
     if (refused) return usualWay(`the helper would refuse ${refused.why}`, true)
     const hooks = this.hookRoute(ctx, sid)
@@ -737,6 +767,24 @@ export class SessionHelperManager implements MachinesSource {
     const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver }), ctx.sessionId)
     if (hooks) void wrapper.ended.then(() => hooks.ended())
     return wrapper
+  }
+
+  /**
+   * A terminal of a run of the app's own (2.1.3-beta.9, plan section B1:
+   * Insights' Claude Code report): an agent session under the run's own id
+   * (heldAgentSessionId of the run id), so everything spawnAgent does holds
+   * for it. A crash's start ends it and never shows it again, Re-attach
+   * refuses it, and while an earlier holder of the same run may still run, it
+   * starts only once that one is gone. No hook route: a run has no per-session
+   * settings file. A run id no holder can carry as its label starts the usual
+   * way, with one log line.
+   */
+  spawnRun(ctx: RunSpawnContext, file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
+    if (!APP_PTY_ID_RE.test(ctx.runId)) {
+      this.deps.log('[session-helper] a run started the usual way, because its id cannot be the label of a holder')
+      return this.deps.spawnDirect(file, args, opts)
+    }
+    return this.spawnAgent({ sessionId: ctx.runId, kind: ctx.kind, run: true }, file, args, opts)
   }
 
   /**
@@ -756,8 +804,10 @@ export class SessionHelperManager implements MachinesSource {
    * under the tab's id, once (a `seq` seen already is dropped, section 15,
    * on this connection or an earlier one), and never a PreToolUse: that one
    * is the gateway's. Nothing a holder sends is taken before the switch.
+   * None for a run of the app's own (spawnRun): it has no such file.
    */
   private hookRoute(ctx: AgentSpawnContext, sid: string): HookRoute | undefined {
+    if (ctx.run) return undefined
     const deps = this.deps.hooks?.[ctx.kind]
     if (!deps) return undefined
     const appId = ctx.sessionId
@@ -1313,11 +1363,12 @@ export class SessionHelperManager implements MachinesSource {
       // to start a new one: no tab shows it.
       const w = this.live.get(r.session)
       const own = w && w.heldRecord?.pid === r.pid ? w : undefined
-      // Its kind names the provider; End only, never Re-attach (the page).
+      // Its kind names the provider; End only, never Re-attach (the page). A
+      // run of the app's own goes by what it is (an Insights report).
       return {
         id: r.session,
         kind: provider,
-        label: this.savedTabs.get(r.label) || 'Session',
+        label: runName(r.label) ?? (this.savedTabs.get(r.label) || 'Session'),
         startedAt: r.started,
         attached: !!own && own.isAttached,
         tabOpen: !!own,
@@ -1529,6 +1580,19 @@ export function spawnAgentPty(ctx: AgentSpawnContext, file: string, args: SpawnA
   const m = current
   if (!m || (!m.routesAgents() && !m.endingFor(ctx))) return pty.spawn(file, args, opts)
   return m.spawnAgent(ctx, file, args, opts)
+}
+
+/**
+ * The spawn for a terminal of a run of the app's own (2.1.3-beta.9, plan
+ * section B1): Insights' Claude Code report. Exactly node-pty's spawn with
+ * these arguments unless the agent sessions' setting is on, or an earlier
+ * holder of the same run is still being ended (then it starts after that
+ * end); otherwise the agent sessions' path under the run's id (spawnRun).
+ */
+export function spawnRunPty(ctx: RunSpawnContext, file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
+  const m = current
+  if (!m || (!m.routesAgents() && !m.endingFor({ sessionId: ctx.runId, kind: ctx.kind }))) return pty.spawn(file, args, opts)
+  return m.spawnRun(ctx, file, args, opts)
 }
 
 /** True when the app's running mark is in the helper's folder: the last run

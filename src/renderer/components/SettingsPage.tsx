@@ -636,7 +636,7 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
                   />
                   <span>
                     Claude Code and Codex sessions through the session helper
-                    <span className="block text-[10px] text-[var(--text-muted)]">Preview, off by default. A Claude Code or Codex session on this computer starts inside the session helper, launched exactly as before. It does not survive a crash yet: when you open the app again, the session is ended and its tab resumes the conversation as before. Quitting normally ends it. On Windows, ending a session also ends every program it started, even one it opened in a window of its own. SSH sessions are not affected. Applies to sessions started after the change. The Machines page lists them.</span>
+                    <span className="block text-[10px] text-[var(--text-muted)]">Preview, off by default. A Claude Code or Codex session on this computer starts inside the session helper, launched exactly as before. It does not survive a crash yet: when you open the app again, the session is ended and its tab resumes the conversation as before. Quitting normally ends it. On Windows, ending a session also ends every program it started, even one it opened in a window of its own. SSH sessions are not affected. Applies to sessions started after the change. The Machines page lists them. Insights' Claude Code report runs this way too.</span>
                   </span>
                 </label>
                 <p className="text-[11px] text-[var(--text-muted)] mt-2 leading-relaxed">

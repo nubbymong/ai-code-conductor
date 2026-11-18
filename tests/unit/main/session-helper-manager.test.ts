@@ -23,7 +23,7 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => {
 })
 
 import { createRequire } from 'module'
-import { HELPER_SENTENCES, SessionHelperManager, agentRecordsIn, crashMarkIn, nodePtyCommandLine, offStillHoldingSentence, setSessionHelper, spawnAgentPty, spawnPlainPty, whenHeldKnown } from '../../../src/main/session-helper/manager'
+import { HELPER_SENTENCES, SessionHelperManager, agentRecordsIn, crashMarkIn, nodePtyCommandLine, offStillHoldingSentence, setSessionHelper, spawnAgentPty, spawnPlainPty, spawnRunPty, whenHeldKnown } from '../../../src/main/session-helper/manager'
 import { HolderConnection } from '../../../src/main/session-helper/connection'
 import { HelperPty } from '../../../src/main/session-helper/helper-pty'
 import { heldAgentSessionId, heldIdKind, heldSessionId } from '../../../src/main/session-helper/protocol'
@@ -2279,5 +2279,234 @@ describe('Claude Code sessions: hooks through the holder (2.1.3-beta.8, plan sec
     const sid = heldAgentSessionId(id, 'claude')
     await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
     expect(helper.holders.get(sid)!.attached!.ackedCaps).toEqual(['core', 'local'])
+  })
+})
+
+// ── 2.1.3-beta.9, plan section B1: Insights' report terminal ─────────────────
+
+describe('a run of the app\'s own: Insights\' Claude Code report through the helper (2.1.3-beta.9, plan section B1)', () => {
+  const RUN = 'insights-work'
+  const RUN_SID = heldAgentSessionId(RUN, 'claude')
+  const CLAUDE = 'C:\\Users\\someone\\.local\\bin\\claude.exe'
+  const RUN_CWD = 'C:\\Program Files\\AI Code Conductor'
+  /** What insights-runner.ts hands its start: the account's environment, the trusted folder, 120 by 30. */
+  const RUN_ENV = { Path: 'C:\\Windows', USERPROFILE: 'C:\\Users\\someone', CLAUDE_CONFIG_DIR: 'C:\\Users\\someone\\.claude-profiles\\work', NoDefaultCurrentDirectoryInExePath: '1' }
+  const runOpts = () => ({ name: 'xterm-256color', cols: 120, rows: 30, cwd: RUN_CWD, env: { ...RUN_ENV } })
+  const run = (runId = RUN) => ({ runId, kind: 'claude' as const })
+  const logs: string[] = []
+  const switched: string[] = []
+  const hookEvents: string[] = []
+
+  /** A manager with the app's hooks wiring for Claude Code, taking events: a
+   *  tab's Claude Code session would send its hooks through its holder. */
+  function runManager(over: Partial<ConstructorParameters<typeof SessionHelperManager>[0]> = {}): SessionHelperManager {
+    return makeManager({
+      log: (m) => logs.push(m),
+      hooks: {
+        claude: {
+          taking: () => true,
+          useHelperHooks: (id) => { switched.push(id); return 'switched' },
+          event: (id) => { hookEvents.push(id) },
+          ended: () => {},
+        },
+      },
+      ...over,
+    })
+  }
+  const runLogs = () => logs.filter((l) => l.includes(RUN) || l.includes(RUN_SID))
+
+  beforeEach(() => {
+    logs.length = 0
+    switched.length = 0
+    hookEvents.length = 0
+  })
+
+  it('with the agent sessions\' switch on: a holder under the run\'s own agent id, with exactly the spawn\'s program, folder, environment and size, and no hooks acked; output and typed input pass; kill sends term.end', async () => {
+    const m = await startedWith(runManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const p = spawnRunPty(run(), CLAUDE, [], runOpts())
+    expect(p).toBeInstanceOf(HelperPty)
+    expect(ptySpawn).not.toHaveBeenCalled()
+    expect(heldIdKind(RUN_SID)).toBe('agent')
+    await until(() => !!helper.holders.get(RUN_SID)?.attached, 'the run to attach')
+    const h = helper.holders.get(RUN_SID)!
+    expect(h.label).toBe(RUN)
+    expect(h.launch).toEqual({ t: 'term.launch', id: expect.anything(), argv: [CLAUDE], cwd: RUN_CWD, env: RUN_ENV, cols: 120, rows: 30 })
+    // The holder offers hook events and the app's wiring would take them, but
+    // a run has no per-session settings file: nothing is switched or acked.
+    expect(h.caps).toContain('hooks')
+    expect(h.attached!.ackedCaps).toEqual(['core', 'local'])
+    expect(switched).toEqual([])
+    // What Claude Code writes reaches the run, and what the run types reaches Claude Code.
+    const seen: string[] = []
+    p.onData((d) => seen.push(d))
+    h.output('Do you trust the files in this folder?\r\n')
+    await until(() => seen.join('').includes('trust the files'), 'the output')
+    p.write('\r')
+    p.write('/insights\r')
+    await until(() => Buffer.concat(h.input).toString() === '\r/insights\r', 'the typed input')
+    h.hookEvent('Stop', { hook_event_name: 'Stop' })
+    // A new terminal, never a take-over, and counted on the Services row.
+    expect(heldNow(p)).toBe(false)
+    expect(m.serviceState().held).toBe(1)
+    const exits: number[] = []
+    p.onExit((e) => exits.push(e.exitCode))
+    p.kill()
+    await until(() => h.ended && exits.length === 1, 'the end')
+    expect(h.requests.map((r) => r.t).filter((t) => t !== 'ping')).toEqual(['term.launch', 'term.attach', 'term.end'])
+    expect(hookEvents).toEqual([])
+  })
+
+  it('with the switch off, with no manager, or for a launch the helper would refuse: node-pty\'s spawn with the same arguments, each refusal with one log line', async () => {
+    // No helper this run.
+    setSessionHelper(null)
+    const o1 = runOpts()
+    const a1: string[] = []
+    spawnRunPty(run(), CLAUDE, a1, o1)
+    expect(ptySpawn.mock.calls[0]).toEqual([CLAUDE, a1, o1])
+    expect(ptySpawn.mock.calls[0][1]).toBe(a1)
+    expect(ptySpawn.mock.calls[0][2]).toBe(o1)
+    // The helper on for plain terminals only: the agent sessions' switch is
+    // off, so the manager is not even asked.
+    const m = await startedWith(runManager(), { atStartup: true, plain: true, agents: false })
+    setSessionHelper(m)
+    const asked = vi.spyOn(m, 'spawnRun')
+    const o2 = runOpts()
+    expect(spawnRunPty(run(), CLAUDE, [], o2)).not.toBeInstanceOf(HelperPty)
+    expect(ptySpawn.mock.calls[1]).toEqual([CLAUDE, [], o2])
+    expect(ptySpawn.mock.calls[1][2]).toBe(o2)
+    expect(asked).not.toHaveBeenCalled()
+    // Switched off during the run, after being on.
+    m.setRouting({ plain: true, agents: true })
+    m.setRouting({ plain: true, agents: false })
+    const o3 = runOpts()
+    expect(spawnRunPty(run(), CLAUDE, [], o3)).not.toBeInstanceOf(HelperPty)
+    expect(ptySpawn.mock.calls[2][2]).toBe(o3)
+    expect(asked).not.toHaveBeenCalled()
+    expect(helper.holds()).toBe(0)
+    expect(runLogs()).toEqual([])
+    // On, but the launch is one the helper refuses: a program named by a
+    // relative path, and a batch file given an exact command line.
+    m.setRouting({ plain: true, agents: true })
+    const o4 = runOpts()
+    expect(spawnRunPty(run(), 'claude.exe', [], o4)).not.toBeInstanceOf(HelperPty)
+    expect(ptySpawn.mock.calls[3]).toEqual(['claude.exe', [], o4])
+    expect(ptySpawn.mock.calls[3][2]).toBe(o4)
+    const npmClaude = 'C:\\Users\\someone\\AppData\\Roaming\\npm\\claude.cmd'
+    const o5 = runOpts()
+    expect(spawnRunPty(run(), npmClaude, '--version', o5)).not.toBeInstanceOf(HelperPty)
+    expect(ptySpawn.mock.calls[4]).toEqual([npmClaude, '--version', o5])
+    expect(ptySpawn.mock.calls[4][2]).toBe(o5)
+    expect(helper.holds()).toBe(0)
+    expect(runLogs()).toEqual([
+      `[session-helper] ${RUN}: started the usual way, because the helper would refuse the program is not named by an absolute path`,
+      `[session-helper] ${RUN}: started the usual way, because the helper would refuse a command line for a batch file, which Windows runs through cmd.exe`,
+    ])
+    // A run id the helper cannot carry as a holder's label (over 128 characters).
+    logs.length = 0
+    const o6 = runOpts()
+    expect(spawnRunPty(run(`insights-${'a'.repeat(128)}`), CLAUDE, [], o6)).not.toBeInstanceOf(HelperPty)
+    expect(ptySpawn.mock.calls[5]).toEqual([CLAUDE, [], o6])
+    expect(ptySpawn.mock.calls[5][2]).toBe(o6)
+    expect(logs).toEqual(['[session-helper] a run started the usual way, because its id cannot be the label of a holder'])
+    expect(helper.holds()).toBe(0)
+  })
+
+  it('with the helper not part of the installation: the switch on still starts node-pty\'s own way, with one log line', async () => {
+    rmSync(bundled)
+    const m = runManager()
+    await m.start(ON_AGENTS)
+    await until(() => m.serviceState().state === 'not-installed', 'the helper to read not installed')
+    setSessionHelper(m)
+    expect(m.routesAgents()).toBe(true)
+    const o = runOpts()
+    expect(spawnRunPty(run(), CLAUDE, [], o)).not.toBeInstanceOf(HelperPty)
+    expect(ptySpawn.mock.calls[0]).toEqual([CLAUDE, [], o])
+    expect(ptySpawn.mock.calls[0][2]).toBe(o)
+    expect(helper.holds()).toBe(0)
+    expect(runLogs()).toEqual([`[session-helper] ${RUN}: started the usual way, because the session helper is not-installed`])
+  })
+
+  it('the Machines page lists a running report as an Insights report with End; Re-attach is refused', async () => {
+    const m = await startedWith(runManager(), ON_AGENTS)
+    setSessionHelper(m)
+    spawnRunPty(run(), CLAUDE, [], runOpts())
+    await until(() => !!helper.holders.get(RUN_SID)?.attached, 'the run to attach')
+    const s = await m.status()
+    expect(s.sessions).toEqual([{ id: RUN_SID, kind: 'claude', label: 'Insights report', startedAt: helper.holders.get(RUN_SID)!.started, attached: true, tabOpen: true }])
+    expect(await m.reattach(RUN_SID)).toEqual({ ok: false, message: HELPER_SENTENCES.agentNotReattached })
+    expect(helper.holders.get(RUN_SID)!.ended).toBe(false)
+    expect(await m.endSession(RUN_SID)).toEqual({ ok: true })
+    expect(helper.holders.get(RUN_SID)!.ended).toBe(true)
+  })
+
+  /** A report running through the helper when the app went without a quit. */
+  async function crashedDuringRun(): Promise<FakeHolder> {
+    const first = await startedWith(runManager(), ON_AGENTS)
+    setSessionHelper(first)
+    spawnRunPty(run(), CLAUDE, [], runOpts())
+    await until(() => !!helper.holders.get(RUN_SID)?.attached, 'the run to attach')
+    crash(first)
+    return helper.holders.get(RUN_SID)!
+  }
+
+  it('after a crash: the next start ends the run\'s holder and never keeps or adopts it, and the next report starts a holder of its own', async () => {
+    const old = await crashedDuringRun()
+    const second = runManager()
+    setSessionHelper(second)
+    void second.start(ON_AGENTS)
+    await until(() => old.ended, 'the end of the run\'s holder')
+    // Never kept (one attach: the first run's), never waiting for a tab.
+    expect(old.attaches).toBe(1)
+    expect(second.holdsFor(RUN)).toBe(false)
+    expect(logs).toContain(`[session-helper] ${RUN_SID}: ended the agent session's earlier holder`)
+    await until(() => second.serviceState().state === 'ready', 'the helper to be ready')
+    expect((await second.status()).sessions).toEqual([])
+    const p = spawnRunPty(run(), CLAUDE, [], runOpts())
+    expect(heldNow(p)).toBe(false)
+    await until(() => helper.holders.get(RUN_SID) !== old && !!helper.holders.get(RUN_SID)?.attached, 'a new holder')
+    expect(helper.holders.get(RUN_SID)!.requests.filter((r) => r.t === 'term.launch')).toHaveLength(1)
+    expect(ptySpawn).not.toHaveBeenCalled()
+  })
+
+  it('after a crash with the switch off: the run\'s holder is still ended, and a report started meanwhile waits for that end, then starts node-pty\'s own way', async () => {
+    const old = await crashedDuringRun()
+    let release!: () => void
+    old.endGate = new Promise<void>((r) => { release = r })
+    const second = runManager()
+    setSessionHelper(second)
+    void second.start({ atStartup: true, plain: false, agents: false })
+    await until(() => old.endsAsked === 1, 'the end to be asked')
+    const o = runOpts()
+    const p = spawnRunPty(run(), CLAUDE, [], o)
+    await tick(150)
+    expect(ptySpawn).not.toHaveBeenCalled()
+    release()
+    await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
+    expect(old.ended).toBe(true)
+    expect(ptySpawn.mock.calls[0]).toEqual([CLAUDE, [], o])
+    expect(ptySpawn.mock.calls[0][2]).toBe(o)
+    expect((p as HelperPty).throughHelper).toBe(false)
+    // Once that end is over, the next report is node-pty's own at once.
+    expect(spawnRunPty(run(), CLAUDE, [], runOpts())).not.toBeInstanceOf(HelperPty)
+  })
+
+  it('an earlier holder of the run that cannot be ended: nothing is started, and the run reads why', async () => {
+    const old = await crashedDuringRun()
+    old.unreachable = true
+    let clock = Date.now()
+    const second = runManager({ now: () => clock, sleep: async () => { clock += 30_000 } })
+    setSessionHelper(second)
+    void second.start(ON_AGENTS)
+    const p = spawnRunPty(run(), CLAUDE, [], runOpts())
+    const seen: string[] = []
+    const exits: number[] = []
+    p.onData((d) => seen.push(d))
+    p.onExit((e) => exits.push(e.exitCode))
+    await until(() => exits.length === 1, 'the run to end with nothing started')
+    expect(exits).toEqual([1])
+    expect(seen.join('')).toContain(HELPER_SENTENCES.runNotCleared)
+    expect(seen.join('')).not.toContain(HELPER_SENTENCES.agentNotCleared)
+    expect(ptySpawn).not.toHaveBeenCalled()
   })
 })

@@ -128,11 +128,6 @@
    ],
    "reason": "ping by name (ping.exe on Windows) for an SSH host's reachability check, argv only, no shell. A system program, not one of those the Windows lookup promise names (the Feature Guide's, which the inventory test reads)."
   },
-  "src/main/insights-runner.ts :: pty.spawn(cmd": {
-   "count": 1,
-   "how": "full-path",
-   "reason": "Claude Code for /insights by the full path resolveClaudeForPty finds (PATH's fully qualified folders on Windows); the terminal's environment keeps the lookup of what it starts to PATH's folders."
-  },
   "src/main/ipc/cli-handlers.ts :: execFile handed to promisify(": {
    "count": 1,
    "how": "not-a-process",
@@ -299,9 +294,9 @@
    "reason": "The session helper manager's own spawn: it starts a holder through execFile(file (the app-path site above) or the usual pty.spawn(file; no program is named here."
   },
   "src/main/session-helper/manager.ts :: pty.spawn(file": {
-   "count": 3,
+   "count": 4,
    "how": "full-path",
-   "reason": "The terminal the usual way, with the very program, arguments and options pty-manager handed it, when the session helper is off or cannot carry it. Through spawnPlainPty, a Terminal only tab or a partner terminal (on Windows PowerShell by its full path in the system folder, gsudo by the full path found in PATH's folders for an elevated tab, and the install or update tab's program lookup kept to PATH's fully qualified folders). Through spawnAgentPty (2.1.3-beta.7), a local agent session as its provider builds it: on Windows PowerShell by its full path in the system folder for a Claude session, Codex or its cmd.exe line by full paths, and the Codex resume list's node by the full path found in PATH's fully qualified folders (none found: nothing starts). The agent sessions' usual start after a failed hold (usualStart) calls the same injected spawn, spawnDirect, whose default is this site."
+   "reason": "The terminal the usual way, with the very program, arguments and options pty-manager handed it, when the session helper is off or cannot carry it. Through spawnPlainPty, a Terminal only tab or a partner terminal (on Windows PowerShell by its full path in the system folder, gsudo by the full path found in PATH's folders for an elevated tab, and the install or update tab's program lookup kept to PATH's fully qualified folders). Through spawnAgentPty (2.1.3-beta.7), a local agent session as its provider builds it: on Windows PowerShell by its full path in the system folder for a Claude session, Codex or its cmd.exe line by full paths, and the Codex resume list's node by the full path found in PATH's fully qualified folders (none found: nothing starts). Through spawnRunPty (2.1.3-beta.9), Insights' report terminal as insights-runner.ts builds it: Claude Code for /insights by the full path resolveClaudeForPty finds (PATH's fully qualified folders on Windows), with an environment that keeps the lookup of what it starts to PATH's folders. The agent sessions' usual start after a failed hold (usualStart) calls the same injected spawn, spawnDirect, whose default is this site."
   },
   "src/main/tokenomics/fork-tokenomics-worker.ts :: utilityProcess.fork(entry": {
    "count": 1,
