@@ -380,7 +380,7 @@ describe('nothing started, and the usual way after all (PR review)', () => {
     const said = fakeDirect()
     const { p, logs } = bare(async () => { throw new NothingStartedError('the holder this tab had before is still running and could not be ended') }, () => said)
     await until(() => !p.throughHelper, 'the hand-over')
-    expect(logs).toEqual([`[session-helper] ${p.sid}: nothing is started for this tab, because the holder this tab had before is still running and could not be ended`])
+    expect(logs).toEqual([`[session-helper] ${p.sid}: nothing is started for this terminal, because the holder this tab had before is still running and could not be ended`])
   })
 
   it('a terminal ended while its hold waited: nothing is asked of the usual way, and the log says nothing was started', async () => {
@@ -394,7 +394,7 @@ describe('nothing started, and the usual way after all (PR review)', () => {
     fail(new NothingStartedError('it was ended before its holder started'))
     await until(() => exits.length === 1, 'the exit')
     expect(direct).not.toHaveBeenCalled()
-    expect(logs).toEqual([`[session-helper] ${p.sid}: nothing is started for this tab, because it was ended before its holder started`])
+    expect(logs).toEqual([`[session-helper] ${p.sid}: nothing is started for this terminal, because it was ended before its holder started`])
   })
 
   it('the usual-way terminal\'s input and output never throw (P3.15): each side is logged once, and one that does not end is ended after the grace, saying why', async () => {

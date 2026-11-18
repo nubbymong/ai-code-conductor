@@ -92,5 +92,7 @@ describe('the setting', () => {
     // Q1: ended after a crash, the tab resumes; Q2: the whole tree ends on Windows.
     expect(block).toContain('when you open the app again, the session is ended and its tab resumes the conversation as before.')
     expect(block).toContain('On Windows, ending a session also ends every program it started, even one it opened in a window of its own.')
+    // 2.1.3-beta.9, plan section B1: the same switch carries Insights' report terminal.
+    expect(block).toContain("Insights' Claude Code report runs this way too.")
   })
 })

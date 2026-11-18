@@ -48,6 +48,13 @@ export interface HelperPtyDriver {
   log(message: string): void
   /** The clock for the attach-again budget. */
   now?: () => number
+  /** False: a failed input or output of the usual-way terminal (fallBack) is
+   *  logged and nothing more, and the terminal is not ended PTY_IO_FAILED_GRACE_MS
+   *  later. For a terminal whose owner settles it its own way and was never
+   *  ended for such a failure (a run of the app's own: Insights' report ends
+   *  when report.html is written or at its time limit, and an output failure
+   *  alone did not stop it on node-pty). Absent or true: ended, as a tab's is. */
+  endsOnIoFailure?: boolean
 }
 
 /**
@@ -563,7 +570,7 @@ export class HelperPty implements IPty {
   private fallBack(why: string, record?: HolderRecord, conn?: HolderConnection, nothing = false): void {
     if (this.exited) return
     this.driver.log(nothing || this.ending
-      ? `[session-helper] ${this.sid}: nothing is started for this tab, because ${why}`
+      ? `[session-helper] ${this.sid}: nothing is started for this terminal, because ${why}`
       : `[session-helper] ${this.sid}: starting it the usual way, because ${why}`)
     if (conn) {
       conn.request({ t: 'term.end' }).catch(() => { /* gone */ }).finally(() => conn.close())
@@ -603,7 +610,8 @@ export class HelperPty implements IPty {
    * node-pty's own sockets, under the one made here, are guarded here. The
    * first failure of each side goes in the log; a terminal that has not
    * ended by itself PTY_IO_FAILED_GRACE_MS later is ended, with a line saying
-   * why, as the PTY manager ends its own.
+   * why, as the PTY manager ends its own (unless the driver says its owner
+   * ends it its own way: endsOnIoFailure).
    */
   private guardInner(inner: IPty): void {
     let ending = false
@@ -612,7 +620,7 @@ export class HelperPty implements IPty {
       this.driver.log(side === 'input'
         ? `[session-helper] ${this.sid}: input to the usual-way terminal failed (${what}); it takes no more input`
         : `[session-helper] ${this.sid}: output of the usual-way terminal failed (${what})`)
-      if (ending) return
+      if (ending || this.driver.endsOnIoFailure === false) return
       ending = true
       const timer = setTimeout(() => {
         if (this.exited || this.inner !== inner) return
