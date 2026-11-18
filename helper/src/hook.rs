@@ -72,7 +72,15 @@ fn deliver(args: &[String], deadline: Instant) -> Option<()> {
     let input = read_stdin()?;
     let (kind, payload) = event_from(&input)?;
     let rec = store::read(&store_dir, &sid)?.ok()?;
-    let mut client = Client::to_record(&rec, left(deadline)?).ok()?;
+    // MUTANT round D (reverted next): a record whose holder does not answer
+    // is removed, as list mode removes it.
+    let mut client = match Client::to_record(&rec, left(deadline)?) {
+        Ok(client) => client,
+        Err(_) => {
+            let _ = std::fs::remove_file(store::record_path(&store_dir, &sid));
+            return None;
+        }
+    };
     if !client.hello.caps.iter().any(|c| c.as_str() == HOOKS_CAP) {
         return None;
     }
@@ -123,7 +131,8 @@ fn parse_args(args: &[String]) -> Option<(PathBuf, String)> {
 
 /// Standard input to its end, at most `MAX_STDIN` bytes of it kept.
 fn read_stdin() -> Option<Vec<u8>> {
-    read_capped(std::io::stdin().lock(), MAX_STDIN)
+    // MUTANT round D (reverted next): no cap on standard input.
+    read_capped(std::io::stdin().lock(), usize::MAX)
 }
 
 /// `r` to its end. None when it could not be read, or held more than `max`
