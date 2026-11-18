@@ -10,8 +10,11 @@ import { readConfig } from '../config-manager'
 import { logInfo } from '../debug-logger'
 import { setMachinesSource } from '../ipc/machines-handlers'
 import { peekSessionState } from '../session-state'
+import { getLocalSessionSettingsPath } from '../hooks/per-session-settings'
+import { switchHooksToHelper } from '../hooks/session-hooks-writer'
+import { endHelperHooks, helperHookEvent, helperHooksTaken } from '../session-signals/hooks'
 import { bundledHelperPath, helperRootDir } from './install'
-import { SessionHelperManager, agentRecordsIn, crashMarkIn, getSessionHelper, setSessionHelper, type HelperRouting, type SessionHelperServiceState } from './manager'
+import { SessionHelperManager, agentRecordsIn, crashMarkIn, getSessionHelper, setSessionHelper, type HelperHookDeps, type HelperRouting, type SessionHelperServiceState } from './manager'
 
 /** The settings (Settings, General, Terminal): each off unless saved as true. */
 export const PLAIN_TERMINALS_SETTING = 'plainTerminalsThroughHelper'
@@ -43,6 +46,21 @@ let notify: (() => void) | null = null
 
 const rootDir = (): string => helperRootDir({ isPackaged: app.isPackaged })
 
+/**
+ * A Claude Code session's hooks through its holder (2.1.3-beta.8, plan
+ * section A4): while the hooks gateway takes hook events (the signals
+ * module's live answer), the tab's per-session settings file (the one the PTY
+ * manager wrote just after the spawn call) is switched to the helper's hook
+ * mode, and each event the holder passes on goes to the session signals module
+ * under the tab's id.
+ */
+const helperHookDeps: HelperHookDeps = {
+  taking: () => helperHooksTaken(),
+  useHelperHooks: (appPtyId, target) => switchHooksToHelper({ settingsPath: getLocalSessionSettingsPath(appPtyId), sessionId: appPtyId, target }),
+  event: (appPtyId, e) => helperHookEvent(appPtyId, e),
+  ended: (appPtyId) => endHelperHooks(appPtyId),
+}
+
 function ensureManager(): SessionHelperManager {
   const existing = getSessionHelper()
   if (existing) return existing
@@ -50,6 +68,8 @@ function ensureManager(): SessionHelperManager {
     root: rootDir(),
     bundled: bundledHelperPath({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),
     log: (message) => logInfo(message),
+    // Claude Code's sessions only: another provider's session keeps its hooks as they are.
+    hooks: { claude: helperHookDeps },
   })
   m.onChange(() => notify?.())
   setSessionHelper(m)

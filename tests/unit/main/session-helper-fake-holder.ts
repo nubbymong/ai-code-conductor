@@ -10,6 +10,11 @@
  * refused (`busy`) every later frame on that connection is refused too, until
  * the app's next ping.
  *
+ * Hook events (section 15, capability `hooks`, 2.1.3-beta.8): a holder offers
+ * `hooks` unless its `caps` say otherwise; `hookEvent` posts one as the hook
+ * mode would, and the holder sends it as an `event` to the attached connection
+ * when that connection acked `hooks`, else keeps it for the next such attach.
+ *
  * The away clock (section 15) runs only when a test gives the helper one
  * (`awayClock`): then a holder with no connection attached ends itself `away`
  * seconds after its start or after the last attached connection let go,
@@ -47,6 +52,8 @@ export type ConnEvent = { raw: number } | { t: string } | { pong: true }
 
 export class FakeConn {
   acked = false
+  /** The caps its hello.ack named. */
+  ackedCaps: string[] = []
   closed = false
   /** Typed input is refused on this connection until the app's next ping. */
   refusing = false
@@ -117,6 +124,17 @@ export class FakeHolder {
   awaySince: number | null = null
   /** It ended by its away clock. */
   endedAway = false
+  /** What its hello offers. */
+  caps: string[] = ['core', 'local', 'hooks']
+  /** The last `seq` a hook event took. */
+  seq = 0
+  /** Hook events waiting for an attach that acked `hooks`. */
+  readonly waitingEvents: Json[] = []
+  /** A holder that breaks section 15: it sends hook events to the attached
+   *  connection even when that connection did not ack `hooks`. */
+  forceEvents = false
+  /** Each frame of typed input, as it reaches the program. */
+  onTyped: ((bytes: Buffer) => void) | null = null
 
   constructor(readonly sid: string, readonly label: string, readonly store: string) {
     this.endpoint = `\\\\.\\pipe\\aicc-helper-${sid}-${hex(16)}`
@@ -159,7 +177,7 @@ export class FakeHolder {
     const [app, mine] = duplexPair()
     const conn = new FakeConn(this, mine)
     this.conns.add(conn)
-    const hello = { proto: [1], helper: { version: this.helperVersion }, os: 'windows', arch: 'x86_64', caps: ['core', 'local'], session: { sid: this.sid, state: this.launch ? 'live' : 'new' } }
+    const hello = { proto: [1], helper: { version: this.helperVersion }, os: 'windows', arch: 'x86_64', caps: this.caps, session: { sid: this.sid, state: this.launch ? 'live' : 'new' } }
     mine.write(`AICC-HELLO ${this.nonce} ${JSON.stringify(hello)}\n`)
     const reader = new FrameReader('app_to_helper')
     mine.on('data', (chunk: Buffer) => {
@@ -175,6 +193,7 @@ export class FakeHolder {
         if (!conn.acked) {
           if (m.t !== 'hello.ack') { conn.close(); return }
           conn.acked = true
+          conn.ackedCaps = Array.isArray(m.caps) ? (m.caps as string[]) : []
           continue
         }
         this.requests.push(m)
@@ -187,6 +206,7 @@ export class FakeHolder {
 
   /** One frame of typed input, offered to the program as the holder does. */
   private typed(conn: FakeConn, bytes: Buffer): void {
+    this.onTyped?.(bytes)
     if (this.inputCapacity === null) { this.input.push(bytes); return }
     if (!conn.refusing && this.reading) { this.input.push(bytes); return }
     if (!conn.refusing && this.waitingInput.length < this.inputCapacity) { this.waitingInput.push(bytes); return }
@@ -237,6 +257,8 @@ export class FakeHolder {
         this.attaches++
         conn.sendJson({ t: 'term.attached', re, from, ring_start: 0, ring_end: this.ring.length, truncated: false, running: this.child !== 'exited', ...(this.child === 'exited' ? { code: this.code } : {}) })
         conn.sendRaw(this.ring.subarray(from))
+        // Waiting hook events go after the reply and its replay.
+        if (conn.ackedCaps.includes('hooks')) for (const e of this.waitingEvents.splice(0)) conn.sendJson(e)
         return
       }
       case 'term.resize':
@@ -258,6 +280,24 @@ export class FakeHolder {
       default:
         err('unknown-type', String(m.t))
     }
+  }
+
+  /**
+   * The hook mode posts one event: it takes the next `seq` and goes to the
+   * attached connection if that one acked `hooks`, else it waits. Answers
+   * the event as sent.
+   */
+  hookEvent(kind: string, payload: Json): Json {
+    const e = { t: 'event', seq: ++this.seq, kind, payload }
+    this.sendEvent(e)
+    return e
+  }
+
+  /** An `event` message exactly as given (the same rule for where it goes). */
+  sendEvent(e: Json): void {
+    const to = this.attached
+    if (to && (this.forceEvents || to.ackedCaps.includes('hooks'))) to.sendJson(e)
+    else this.waitingEvents.push(e)
   }
 
   /** The program writes. */
@@ -318,6 +358,10 @@ export class FakeHelper {
   readonly made: FakeHolder[] = []
   /** The holders' away clock in ms, for the holders `hold` starts from now on; null: none. */
   awayClock: (() => number) | null = null
+  /** What the hello of each holder `hold` starts from now on offers. */
+  holderCaps: string[] = ['core', 'local', 'hooks']
+  /** Each frame of typed input any holder's program gets, with its holder. */
+  onTyped: ((h: FakeHolder, bytes: Buffer) => void) | null = null
 
   /** Every holder whose away clock ran out ends, as its own timer would end it. */
   tick(): void {
@@ -341,6 +385,8 @@ export class FakeHelper {
         h.awaySince = this.awayClock()
       }
       if (this.holdBusy) h.launch = { t: 'term.launch' }
+      h.caps = [...this.holderCaps]
+      h.onTyped = (b) => this.onTyped?.(h, b)
       h.writeRecord()
       this.holders.set(sid, h)
       this.made.push(h)

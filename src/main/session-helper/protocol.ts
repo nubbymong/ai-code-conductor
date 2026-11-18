@@ -19,8 +19,13 @@ export const helperOs = (platform: NodeJS.Platform = process.platform): HelperOs
 export const PROTO_VERSION = 1
 /** What the app acks: the frozen core and the local terminal messages. */
 export const LOCAL_CAPS: readonly string[] = ['core', 'local']
+/** Hook events through the holder (section 15, from 2.1.3-beta.8): acked only
+ *  by a connection that wants them, and only when the holder offers it. */
+export const HOOKS_CAP = 'hooks'
 /** Terminal bytes travel on this channel both ways; control messages on 0. */
 export const TERMINAL_CHANNEL = 1
+/** Control messages (JSON) travel on this channel, both ways. */
+export const CONTROL_CHANNEL = 0
 
 // Section 6: a frame is 4 bytes of length (of the rest), 1 kind byte, 4 bytes
 // of channel id, then the payload.
@@ -72,7 +77,8 @@ const chars = (s: string): number => [...s].length
 export type Flow = 'app_to_helper' | 'helper_to_app'
 
 export type Frame =
-  | { kind: 0; channel: number; json: unknown }
+  /** `size`: the JSON's length in bytes, as it came. */
+  | { kind: 0; channel: number; json: unknown; size: number }
   | { kind: 1; channel: number; bytes: Buffer }
 
 /** A frame the reader refuses: the connection is closed (`bad-frame`). */
@@ -174,7 +180,7 @@ export class FrameReader {
       } catch {
         throw new FrameError('JSON that does not read')
       }
-      out.push({ kind: 0, channel, json })
+      out.push({ kind: 0, channel, json, size: n })
     }
     return out
   }
@@ -285,9 +291,57 @@ export function chooseProto(app: readonly number[], helper: readonly number[]): 
   return both.length === 0 ? null : Math.max(...both)
 }
 
-/** The app's answer to a holder's hello. */
-export function helloAck(): { t: 'hello.ack'; proto: number; caps: string[] } {
-  return { t: 'hello.ack', proto: PROTO_VERSION, caps: [...LOCAL_CAPS] }
+/** The app's answer to a holder's hello: `core` and `local`, and `hooks`
+ *  when this connection takes hook events (only ever when the hello offered it). */
+export function helloAck(hooks = false): { t: 'hello.ack'; proto: number; caps: string[] } {
+  return { t: 'hello.ack', proto: PROTO_VERSION, caps: hooks ? [...LOCAL_CAPS, HOOKS_CAP] : [...LOCAL_CAPS] }
+}
+
+// ── hook events (section 15, capability `hooks`) ──────────────────────────────
+
+/** The nine hook events the app injects, the only kinds a holder passes on
+ *  (src/main/hooks/session-hooks-writer.ts MVP_EVENTS). */
+export const HELPER_HOOK_KINDS = [
+  'PreToolUse', 'PostToolUse', 'Notification', 'SessionStart', 'Stop', 'UserPromptSubmit', 'SubagentStart', 'SubagentStop', 'StopFailure',
+] as const
+export type HelperHookKind = (typeof HELPER_HOOK_KINDS)[number]
+/** A hook event's payload as compact JSON, at most: 64 KiB less the room the
+ *  `event` around it needs. */
+export const HOOK_PAYLOAD_MAX = 65_280
+/** An `event` message's JSON, at most: the frame limit once a session is launched. */
+export const HOOK_EVENT_JSON_MAX = 64 * 1024
+
+/** One hook event a holder passed on. */
+export interface HookEventFrame {
+  /** The session's number for it, from 1. */
+  seq: number
+  kind: HelperHookKind
+  /** The event as Claude Code wrote it, cut by the hook mode when it was large
+   *  (a top-level `"cut": true` says so). Untrusted text. */
+  payload: Record<string, unknown>
+  /** How many events the holder dropped just before this one. */
+  lost?: number
+}
+
+const EVENT_FIELDS = new Set(['t', 'seq', 'kind', 'payload', 'lost'])
+
+/**
+ * An `event` message from a holder, read strictly: exactly its fields, `seq`
+ * a whole number from 1, `kind` one of the nine, `payload` an object of at
+ * most HOOK_PAYLOAD_MAX bytes whose `hook_event_name` is `kind`, `lost` a
+ * whole number when given, and the message (`size` bytes as it came) within
+ * HOOK_EVENT_JSON_MAX. Null otherwise.
+ */
+export function readEventFrame(m: unknown, size: number): HookEventFrame | null {
+  if (!isObject(m) || m.t !== 'event' || !isWhole(size) || size > HOOK_EVENT_JSON_MAX) return null
+  for (const k of Object.keys(m)) if (!EVENT_FIELDS.has(k)) return null
+  if (!isWhole(m.seq) || m.seq < 1) return null
+  if (typeof m.kind !== 'string' || !(HELPER_HOOK_KINDS as readonly string[]).includes(m.kind)) return null
+  const payload = m.payload
+  if (!isObject(payload) || payload.hook_event_name !== m.kind) return null
+  if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > HOOK_PAYLOAD_MAX) return null
+  if (m.lost !== undefined && !isWhole(m.lost)) return null
+  return { seq: m.seq, kind: m.kind as HelperHookKind, payload, ...(m.lost !== undefined ? { lost: m.lost } : {}) }
 }
 
 // ── endpoints, records and the listing ────────────────────────────────────────
