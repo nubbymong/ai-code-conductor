@@ -475,11 +475,13 @@ if (!gotTheLock) {
     // (adversarial-review round-2). Flush, then exit HARD: app.quit() would be
     // vetoed by that same dialog, so a signal must not route through it. The
     // hard-exit teardown (hard-exit.ts) runs before the exit, as on an update.
-    process.on('SIGTERM', () => exitOnSigterm({
-      flushSessions: () => sessionDurability.flushOnExit('SIGTERM'),
-      flushIndexingGaps: () => flushIndexingGaps(),
-      exit: (code) => app.exit(code),
-    }))
+    process.on('SIGTERM', () => {
+      exitOnSigterm({
+        flushSessions: () => sessionDurability.flushOnExit('SIGTERM'),
+        flushIndexingGaps: () => flushIndexingGaps(),
+        exit: (code) => app.exit(code),
+      })
+    })
 
     // Expose dev/prod build mode to the renderer for DEV labeling (title + badge
     // + accent). Registered early so the renderer can read it on first paint.

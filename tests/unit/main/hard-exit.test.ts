@@ -71,8 +71,10 @@ describe('the SIGTERM exit', () => {
     const at = src.indexOf("process.on('SIGTERM'")
     expect(at).toBeGreaterThan(-1)
     expect(src.indexOf("process.on('SIGTERM'", at + 1), 'one SIGTERM handler').toBe(-1)
-    const handler = src.slice(at, src.indexOf('}))', at) + 3)
-    expect(handler).toMatch(/^process\.on\('SIGTERM', \(\) => exitOnSigterm\(\{/)
+    const handler = src.slice(at, src.indexOf('\n    })\n', at))
+    // The handler's whole body is the one call (logging-switch-wiring.test.ts
+    // reads the same handler for its indexing-gaps flush).
+    expect(handler).toMatch(/^process\.on\('SIGTERM', \(\) => \{\n\s*exitOnSigterm\(\{\n[^]*\n\s*\}\)$/)
     expect(handler).toContain("flushSessions: () => sessionDurability.flushOnExit('SIGTERM')")
     expect(handler).toContain('flushIndexingGaps: () => flushIndexingGaps()')
     expect(handler).toContain('exit: (code) => app.exit(code)')
