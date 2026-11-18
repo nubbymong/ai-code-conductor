@@ -65,6 +65,7 @@ const PROBE_MACROS = [
   'CccProcessIsMine',
   'CccProcessStart',
   'CccInList',
+  'CccNextPair',
   'CccScanAppCopies',
   'CccCloseAppCopies',
   'customCheckAppRunning',
@@ -204,7 +205,8 @@ function probeScript(mode: 'sweep' | 'e2e' | 'apps', out: string, cfg: string, l
   const body = mode === 'apps'
     ? `
   ; installSection.nsh: CHECK_APP_RUNNING, in the installer pass, with $INSTDIR
-  ; and the replaced install's uninstaller as customInit leaves them.
+  ; and customInit's capture of a recorded uninstaller as customInit leaves
+  ; them. The replaced install's record is the case's, in the probe key.
   StrCpy $INSTDIR $cccProbeInstDir
   StrCpy $cccLegacyUninstaller $cccProbeLegacyUninst
   !insertmacro customCheckAppRunning
@@ -1501,9 +1503,10 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
  * for real against running stand-ins. It must ask only this user's copies of
  * the app from this install's folder to close, end only those that do not,
  * and leave everything else running: a same-named copy in another folder, the
- * session helper, and, in the uninstaller pass, which does not know it, the
- * install this run replaces. Another user's copy cannot be made on a CI
- * runner; that case is the VM's (the release smoke).
+ * session helper, an install that only another hive records, and, in the
+ * uninstaller pass, which does not know it, the install this run replaces.
+ * Another user's copy cannot be made on a CI runner; that case is the VM's
+ * (the release smoke).
  *
  * Two probes. The installer pass is the 'apps' mode of the probe above, with
  * everything the hook inserts there (the commit point too), compiled as that
@@ -1521,6 +1524,7 @@ const APP_CHECK_UN_MACROS = [
   'CccProcessIsMine',
   'CccProcessStart',
   'CccInList',
+  'CccNextPair',
   'CccScanAppCopies',
   'CccCloseAppCopies',
   'customCheckAppRunning',
@@ -1661,7 +1665,8 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
       }
     }
     regClear()
-    if (awork) rmSync(awork, { recursive: true, force: true, maxRetries: 5 })
+    // A stand-in's program file stays locked for a moment after it ends.
+    if (awork) rmSync(awork, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
   }, 60_000)
 
   /** A copy of the stand-in as `folder\name`, started as this user, with an environment of its own. */
@@ -1684,9 +1689,16 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     return { pid: proc.pid!, exe }
   }
 
-  /** One app check, in the installer or the uninstaller pass. Returns the log, the details list and how long it took. */
-  function runAppCheck(pass: 'installer' | 'uninstaller', cfg: { instdir: string; legacyUninstaller: string }) {
+  /**
+   * One app check, in the installer or the uninstaller pass. `record` is the
+   * replaced install's uninstaller as its uninstall record names it in the
+   * hive this run installs to (the probe key; SHELL_CONTEXT is the user's
+   * here); `legacyUninstaller` is customInit's capture, which can come from
+   * another hive. Returns the log, the details list and how long it took.
+   */
+  function runAppCheck(pass: 'installer' | 'uninstaller', cfg: { instdir: string; legacyUninstaller: string; record?: string }) {
     regClear()
+    if (cfg.record) regSet('Uninstall', 'UninstallString', `"${cfg.record}" /currentuser`)
     writeFileSync(acfg(), [
       '[probe]',
       `instdir=${cfg.instdir}`,
@@ -1729,10 +1741,11 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
       const outside = await startCopy(elsewhere, PROBE_APP_EXE, true)
       const helper = await startCopy(install, 'aicc-helper.exe', false)
       // The install this run replaces (a pre-rename one): only the installer
-      // pass knows its folder, from the uninstaller customInit recorded.
+      // pass knows its folder, from its uninstall record in this run's hive.
       const old = await startCopy(replaced, legacy1, false)
 
-      const { log, ms, details } = runAppCheck(pass, { instdir: install, legacyUninstaller: join(replaced, 'Uninstall Claude Command Center.exe') })
+      const uninstaller = join(replaced, 'Uninstall Claude Command Center.exe')
+      const { log, ms, details } = runAppCheck(pass, { instdir: install, legacyUninstaller: uninstaller, record: uninstaller })
       const all = details.join('\n')
 
       expect(log, all).toContain('passed=1')
@@ -1769,6 +1782,31 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
       }
     }, 90_000)
   }
+
+  it('installer pass: an install recorded only in another hive is not this run\'s, so its copy keeps running', async () => {
+    // customInit's capture falls back to the other hives for the sweep's
+    // proof of ownership. On a per-user run it can name an all-users install
+    // that this run neither uninstalls nor sweeps: no record of it in this
+    // run's hive, so its copy is not this install's.
+    const root = join(awork, 'apps-other-hive')
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+    const install = join(root, 'Programs', 'AI Code Conductor')
+    dir(install)
+    const machineWide = join(root, 'Program Files', 'AI Code Conductor')
+    const other = await startCopy(machineWide, PROBE_APP_EXE, true)
+
+    const { log, ms, details } = runAppCheck('installer', { instdir: install, legacyUninstaller: join(machineWide, 'Uninstall AI Code Conductor.exe') })
+    const all = details.join('\n')
+
+    expect(log, all).toContain('passed=1')
+    expect(ms, 'no wait').toBeLessThan(4000)
+    expect(isAlive(other.pid), 'the other install\'s copy keeps running').toBe(true)
+    expect(existsSync(`${other.exe}-closed`), 'and is not asked to close').toBe(false)
+    expect(details.some((d) => leftFrom(PROBE_APP_EXE, other.pid).test(d)), all).toBe(true)
+
+    process.kill(other.pid)
+    await waitGone(other.pid)
+  }, 60_000)
 
   it('goes straight on when none of this install\'s copies runs, and leaves the others running', async () => {
     const root = join(awork, 'apps-none')

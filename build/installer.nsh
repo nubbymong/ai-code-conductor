@@ -722,6 +722,16 @@
 ; and closed nothing there; and an elevated run's `taskkill /im` asked every
 ; signed-in user's copy to close.
 ;
+; The folder of the install this run replaces is the one its uninstall record
+; names in SHELL_CONTEXT, the hive this run installs to: the record
+; uninstallOldVersion runs next, or, for a legacy tree beside $INSTDIR, the
+; one the commit point drops before customInstall's sweep removes that tree.
+; Not $cccLegacyUninstaller: customInit falls back to the other hives for it,
+; as the sweep's proof of ownership, so on a per-user run it can name an
+; all-users install that this run neither uninstalls nor sweeps. An all-users
+; run also runs the HKCU record's uninstaller (installSection.nsh); a copy
+; running from that per-user folder is left to that uninstaller's own check.
+;
 ; If a copy is still running after that (one started as administrator, say,
 ; which this copy may not end), the box lets the user close it and Retry,
 ; which runs the whole check again, or Cancel. A silent run answers Cancel, as
@@ -731,9 +741,14 @@
   DetailPrint "=== customCheckAppRunning: this user's copies from this install's folder ==="
 
   Push $R0
+  !ifndef BUILD_UNINSTALLER
+    ReadRegStr $R0 SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+    !insertmacro CccGetInQuotes "$R0" $cccRecordUninstaller
+    ClearErrors
+  !endif
   cccAppStillRunning:
   !ifndef BUILD_UNINSTALLER
-    !insertmacro CccCloseAppCopies "$cccLegacyUninstaller"
+    !insertmacro CccCloseAppCopies "$cccRecordUninstaller"
   !else
     !insertmacro CccCloseAppCopies ""
   !endif
@@ -1756,10 +1771,34 @@ FunctionEnd
 !macroend
 
 ; ------------------------------------------------------------
-; The app-running check's own two (customCheckAppRunning, both passes). They
-; use the process macros above, and declare no Var and no Function, so
+; The app-running check's own macros (customCheckAppRunning, both passes).
+; They use the process macros above, and declare no Var and no Function, so
 ; neither pass has anything new for -WX to warn about.
 ; ------------------------------------------------------------
+
+; Reads the next "a:b," entry of ${LIST}, a list like ",12:34,56:78,", from
+; position ${POS}, which it moves past the entry, into ${A} and ${B}. ${A} is
+; "" at the end of the list. Scratch: $R7 $R8.
+!macro CccNextPair LIST POS A B
+  StrCpy ${A} ""
+  StrCpy ${B} ""
+  StrCpy $R8 0
+  ${Do}
+    StrCpy $R7 "${LIST}" 1 ${POS}
+    IntOp ${POS} ${POS} + 1
+    ${If} $R7 == ","
+    ${OrIf} $R7 == ""
+      ${ExitDo}
+    ${EndIf}
+    ${If} $R7 == ":"
+      StrCpy $R8 1
+    ${ElseIf} $R8 == 0
+      StrCpy ${A} "${A}$R7"
+    ${Else}
+      StrCpy ${B} "${B}$R7"
+    ${EndIf}
+  ${Loop}
+!macroend
 
 ; One Toolhelp pass for this install's running copies of the app. A copy is
 ; a process with one of the app's own image names (${APP_EXECUTABLE_FILENAME},
@@ -1768,15 +1807,18 @@ FunctionEnd
 ; reports it (QueryFullProcessImageNameW), is $INSTDIR\<name>, or, when
 ; ${OLD_UNINSTALLER} names the uninstaller of the install this run replaces,
 ; <that folder>\<name>. Paths are compared through CanonPathPair, so case, a
-; forward slash or an 8.3 short name makes no difference. Each copy goes into
-; $R1 as "pid,", and, when ${STARTS} names a register, into it as
-; "pid:start," (CccProcessStart). With ${REPORT} 1 each copy found, and each
-; same-named process left alone, goes to the details log with the reason.
-; No other image name is looked at: the session helper and the terminals it
-; holds keep running through an install. $R2 is the snapshot, $R3 a
-; PROCESSENTRY32W (556 bytes, 32-bit), $R5 and $R6 as CccProcessIsMine needs
-; them. Scratch: $3 $4 $5 $6 $7 $8, $cccCanon*, and CccProcessIsMine's and
-; CccProcessStart's ($0 $1 $2).
+; forward slash or an 8.3 short name makes no difference. Each candidate is
+; held open (PROCESS_QUERY_LIMITED_INFORMATION) from before its user is
+; checked until its start time is read, so its pid cannot pass to another
+; process in between: the user, the program file and the start time are all
+; the same process's. Each copy goes into $R1 as "pid,", and, when ${STARTS}
+; names a register, into it as "pid:start," (CccProcessStart). With
+; ${REPORT} 1 each copy found, and each same-named process left alone, goes to
+; the details log with the reason. No other image name is looked at: the
+; session helper and the terminals it holds keep running through an install.
+; $R2 is the snapshot, $R3 a PROCESSENTRY32W (556 bytes, 32-bit), $R5 and $R6
+; as CccProcessIsMine needs them. Scratch: $3 $4 $5 $6 $7 $8 $R8, $cccCanon*,
+; and CccProcessIsMine's and CccProcessStart's ($0 $1 $2).
 !macro CccScanAppCopies REPORT STARTS OLD_UNINSTALLER
   System::Call 'kernel32::CreateToolhelp32Snapshot(i 2, i 0) p .R2'
   ${If} $R2 != 0
@@ -1789,21 +1831,21 @@ FunctionEnd
       ${If} $5 == "${APP_EXECUTABLE_FILENAME}"
       ${OrIf} $5 == "Claude Command Center.exe"
       ${OrIf} $5 == "Claude Conductor.exe"
-        !insertmacro CccProcessIsMine "$3" $6
+        System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i $3) p .R8'
+        StrCpy $6 0
+        ${If} $R8 != 0
+          !insertmacro CccProcessIsMine "$3" $6
+        ${EndIf}
         ${If} $6 != 1
           !if ${REPORT} == 1
             DetailPrint "Left $5 (process $3) running: it is not this user's."
           !endif
         ${Else}
-          ; Its program file. PROCESS_QUERY_LIMITED_INFORMATION.
+          ; Its program file.
           StrCpy $8 ""
-          System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i $3) p .r0'
-          ${If} $0 != 0
-            System::Call 'kernel32::QueryFullProcessImageNameW(p r0, i 0, w .r1, *i ${NSIS_MAX_STRLEN}) i .r2'
-            ${If} $2 != 0
-              StrCpy $8 "$1"
-            ${EndIf}
-            System::Call 'kernel32::CloseHandle(p r0)'
+          System::Call 'kernel32::QueryFullProcessImageNameW(p R8, i 0, w .r1, *i ${NSIS_MAX_STRLEN}) i .r2'
+          ${If} $2 != 0
+            StrCpy $8 "$1"
           ${EndIf}
           StrCpy $6 0
           ${If} $8 != ""
@@ -1842,6 +1884,9 @@ FunctionEnd
             ${EndIf}
           !endif
         ${EndIf}
+        ${If} $R8 != 0
+          System::Call 'kernel32::CloseHandle(p R8)'
+        ${EndIf}
       ${EndIf}
       System::Call 'kernel32::Process32NextW(p R2, p R3) i .r7'
     ${Loop}
@@ -1852,8 +1897,12 @@ FunctionEnd
 ; Asks this install's running copies of the app (CccScanAppCopies) to close,
 ; and ends the ones that do not:
 ;   1. WM_CLOSE to each top-level window those processes own, as closing the
-;      window by hand would. The windows are listed first and closed after: a
-;      window gone while the list is walked would end the walk early.
+;      window by hand would. The windows are listed first, as "window:pid",
+;      and closed after: a window gone while the list is walked would end the
+;      walk early. Just before each WM_CLOSE the window must still be that
+;      pid's, and the pid, held open, must still have the start time the
+;      first look recorded, so a pid or a window handle that passed to
+;      another program in between gets nothing.
 ;   2. Up to 5 seconds for them to go, looking every 250 ms.
 ;   3. TerminateProcess for each copy the first look found that is still
 ;      running, still this user's and has the same start time. A handle to it
@@ -1862,9 +1911,10 @@ FunctionEnd
 ;   4. Up to about 2 more seconds for Windows to finish ending them.
 ; ${OLD_UNINSTALLER} is as for CccScanAppCopies. Leaves 1 in $R0 when a copy
 ; is still running at the end, else 0. Saves and restores every other
-; register. $9 holds the first look's "pid:start," list, $R4 the round, $R9
-; this copy's TOKEN_USER (its SID at $R6), $R5 and $R3 CccScanAppCopies's
-; buffers, $7 the windows to close, $8 a window or a process handle.
+; register. $9 holds the first look's "pid:start," list, $R4 the round or the
+; place in a list, $R9 this copy's TOKEN_USER (its SID at $R6), $R5 and $R3
+; CccScanAppCopies's buffers, $7 the windows to close, $8 a window or a
+; process handle, $5 a process handle.
 !macro CccCloseAppCopies OLD_UNINSTALLER
   Push $0
   Push $1
@@ -1911,7 +1961,7 @@ FunctionEnd
     StrCpy $9 ","
     !insertmacro CccScanAppCopies 1 $9 "${OLD_UNINSTALLER}"
     ${If} $R1 != ","
-      ; 1. Their top-level windows, then WM_CLOSE to each.
+      ; 1. Their top-level windows, as "window:pid,"; then WM_CLOSE to each.
       StrCpy $7 ","
       StrCpy $8 0
       StrCpy $R4 0
@@ -1925,7 +1975,7 @@ FunctionEnd
         ${If} $3 != 0
           !insertmacro CccInList "$3" $6
           ${If} $6 == 1
-            StrCpy $7 "$7$8,"
+            StrCpy $7 "$7$8:$3,"
           ${EndIf}
         ${EndIf}
         IntOp $R4 $R4 + 1
@@ -1935,21 +1985,31 @@ FunctionEnd
       ${Loop}
       StrCpy $R4 1
       ${Do}
-        StrCpy $8 ""
-        ${Do}
-          StrCpy $R7 "$7" 1 $R4
-          IntOp $R4 $R4 + 1
-          ${If} $R7 == ","
-          ${OrIf} $R7 == ""
-            ${ExitDo}
-          ${EndIf}
-          StrCpy $8 "$8$R7"
-        ${Loop}
+        !insertmacro CccNextPair "$7" $R4 $8 $3
         ${If} $8 == ""
           ${ExitDo}
         ${EndIf}
-        ; WM_CLOSE
-        System::Call 'user32::PostMessageW(p r8, i 0x10, p 0, p 0)'
+        ; Still that pid's window, and that pid, held open, still the process
+        ; the first look found ("pid:start" in $9).
+        StrCpy $4 0
+        System::Call 'user32::GetWindowThreadProcessId(p r8, *i .r4)'
+        ${If} $4 == $3
+          System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i $3) p .r5'
+          ${If} $5 != 0
+            !insertmacro CccProcessStart "$3" $4
+            ${If} $4 != ""
+              Push $R1
+              StrCpy $R1 "$9"
+              !insertmacro CccInList "$3:$4" $6
+              Pop $R1
+              ${If} $6 == 1
+                ; WM_CLOSE
+                System::Call 'user32::PostMessageW(p r8, i 0x10, p 0, p 0)'
+              ${EndIf}
+            ${EndIf}
+            System::Call 'kernel32::CloseHandle(p r5)'
+          ${EndIf}
+        ${EndIf}
       ${Loop}
       DetailPrint "Asked AI Code Conductor to close."
 
@@ -1970,24 +2030,7 @@ FunctionEnd
         ; 3. Each copy the first look found: $3 its pid, $4 its start.
         StrCpy $R4 1
         ${Do}
-          StrCpy $3 ""
-          StrCpy $4 ""
-          StrCpy $5 0
-          ${Do}
-            StrCpy $R7 "$9" 1 $R4
-            IntOp $R4 $R4 + 1
-            ${If} $R7 == ","
-            ${OrIf} $R7 == ""
-              ${ExitDo}
-            ${EndIf}
-            ${If} $R7 == ":"
-              StrCpy $5 1
-            ${ElseIf} $5 == 0
-              StrCpy $3 "$3$R7"
-            ${Else}
-              StrCpy $4 "$4$R7"
-            ${EndIf}
-          ${Loop}
+          !insertmacro CccNextPair "$9" $R4 $3 $4
           ${If} $3 == ""
             ${ExitDo}
           ${EndIf}
