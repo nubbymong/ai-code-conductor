@@ -21,6 +21,7 @@ pub mod request;
 pub mod ring;
 pub mod selftest;
 pub mod serve;
+pub mod start;
 pub mod store;
 pub mod transport;
 #[cfg(windows)]

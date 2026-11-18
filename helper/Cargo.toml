@@ -44,8 +44,10 @@ libc = "=0.2.172"
 # Cargo.lock. Authorization builds and reads the pipe's security descriptor,
 # Cryptography gives random endpoint names, FileSystem and IO carry the
 # overlapped named pipe, JobObjects ends a session's whole process tree,
-# LibraryLoader loads the bundled conpty.dll and Diagnostics_Debug keeps a
-# load that fails from showing a dialog.
+# LibraryLoader loads the bundled conpty.dll, Diagnostics_Debug keeps a
+# load that fails from showing a dialog, Diagnostics_ToolHelp lists the
+# processes under one that `end` ends (start.rs), and SystemInformation
+# reads the time just before that list is read (start.rs).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.59.0", default-features = false, features = [
   "Win32_Foundation",
@@ -55,16 +57,18 @@ windows-sys = { version = "=0.59.0", default-features = false, features = [
   "Win32_Storage_FileSystem",
   "Win32_System_Console",
   "Win32_System_Diagnostics_Debug",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_IO",
   "Win32_System_JobObjects",
   "Win32_System_LibraryLoader",
   "Win32_System_Pipes",
+  "Win32_System_SystemInformation",
   "Win32_System_Threading",
 ] }
 
-# The tests only: the same pinned crate, one more feature. Diagnostics_ToolHelp
-# lists processes and threads (tests/windows_orphans.rs). Cargo adds it to the
-# build that runs the tests; the release build of the helper never has it.
+# The tests: the same pinned crate and feature. Diagnostics_ToolHelp lists
+# processes and threads (tests/windows_orphans.rs, tests/start.rs). Since
+# 2.1.3-beta.8 the release build has it too, for `end` (above).
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "=0.59.0", default-features = false, features = ["Win32_System_Diagnostics_ToolHelp"] }
 

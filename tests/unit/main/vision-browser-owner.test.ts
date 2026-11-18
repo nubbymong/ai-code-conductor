@@ -57,6 +57,7 @@ import {
   isAppVisionBrowser, splitWindowsCommandLine, parseWindowsFacts, parsePsPidArgs, findAppVisionBrowsers,
   scanAppVisionBrowsers, profileLockOf,
   factsOfPid, endVerified, endOwnChild, endOwnChildSync, ownChildRunning, runAwait, defaultOwnerPorts,
+  endVerifiedSync, endStartedBrowserSync, endStartedBrowser, windowsEndScript, HELPER_END_TIMEOUT_MS,
   VisionPortHeldError, WINDOWS_BROWSERS_SCRIPT, OWNER_QUERY_TIMEOUT_MS, OWNER_SYNC_KILL_TIMEOUT_MS,
   POSIX_TERM_GRACE_MS, OWN_QUIT_GRACE_MS,
   type OwnerPorts, type ProcessFacts, type OwnChild,
@@ -475,6 +476,123 @@ describe('ending a verified process on Windows', () => {
       const { ports, calls } = fakePorts('win32', () => 'ended')
       expect(await endVerified(bad, ports)).toBe(false)
       expect(calls).toHaveLength(0)
+    }
+  })
+})
+
+// The fallback sync end of a browser the session helper started (quit, SIGTERM,
+// an update install) when the helper is not there to end it.
+describe('endVerifiedSync: the PowerShell end, synchronous and bounded', () => {
+  const target = { pid: 4242, created: CREATED }
+  const BAD_TARGETS = [
+    { pid: 0, created: CREATED }, { pid: -1, created: CREATED }, { pid: 1.5, created: CREATED }, { pid: 4294967296, created: CREATED },
+    { pid: 4242, created: '' }, { pid: 4242, created: 'not-a-number' }, { pid: 4242, created: '12 34' }, { pid: 4242, created: '1'.repeat(21) },
+  ]
+
+  it('ends the tree only while the pid has the creation time: the same script as endVerified, through runSync, bounded by OWNER_SYNC_KILL_TIMEOUT_MS', () => {
+    const { ports, calls } = fakePorts('win32', () => 'ended\r\n')
+    expect(endVerifiedSync(target, ports)).toBe('ended')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ file: PS, sync: true, timeoutMs: OWNER_SYNC_KILL_TIMEOUT_MS })
+    expect(scriptOf(calls[0])).toBe(windowsEndScript(4242, CREATED))
+  })
+
+  it("answers 'left' for a process the script left, and 'unknown' for any other answer", () => {
+    expect(endVerifiedSync(target, fakePorts('win32', () => 'left\r\n').ports)).toBe('left')
+    for (const other of ['', 'ENDED', 'ended left', 'yes']) {
+      expect(endVerifiedSync(target, fakePorts('win32', () => other).ports), other).toBe('unknown')
+    }
+  })
+
+  it("never throws: a run that fails or times out is 'unknown'", () => {
+    for (const err of [new Error('timed out'), new Error('exited with status 1')]) {
+      let answer: unknown
+      expect(() => { answer = endVerifiedSync(target, fakePorts('win32', () => err).ports) }).not.toThrow()
+      expect(answer, err.message).toBe('unknown')
+    }
+  })
+
+  it('runs nothing off Windows, for a target that is not a pid and a creation time of digits, or with no PowerShell to run', () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const { ports, calls } = fakePorts(platform, () => 'ended')
+      expect(endVerifiedSync(target, ports), platform).toBe('unknown')
+      expect(calls, platform).toHaveLength(0)
+    }
+    for (const bad of BAD_TARGETS) {
+      const { ports, calls } = fakePorts('win32', () => 'ended')
+      expect(endVerifiedSync(bad, ports), JSON.stringify(bad)).toBe('unknown')
+      expect(calls).toHaveLength(0)
+    }
+    for (const systemRoot of [undefined, '', 'Windows', '\\Windows']) {
+      const { ports, calls } = fakePorts('win32', () => 'ended', { systemRoot })
+      expect(endVerifiedSync(target, ports), String(systemRoot)).toBe('unknown')
+      expect(calls).toHaveLength(0)
+    }
+  })
+})
+
+describe('ending a browser the session helper started: by its pid and creation time, through the helper', () => {
+  const HELPER = 'C:\\Program Files\\AI Code Conductor\\resources\\helper\\aicc-helper.exe'
+  const target = { pid: 4242, created: CREATED }
+  const END_ARGS = ['end', '--pid', '4242', '--created', CREATED]
+
+  it("the sync end runs the helper's end mode with exactly the pid and the creation time, bounded, and no PowerShell", () => {
+    const { ports, calls } = fakePorts('win32', () => 'ended\r\n', { pidGone: () => false })
+    expect(endStartedBrowserSync(target, HELPER, ports)).toBe('ended')
+    expect(calls).toEqual([{ file: HELPER, args: END_ARGS, timeoutMs: HELPER_END_TIMEOUT_MS, sync: true }])
+  })
+
+  it("the awaited end does the same through run", async () => {
+    const { ports, calls } = fakePorts('win32', () => 'ended\r\n', { pidGone: () => false })
+    expect(await endStartedBrowser(target, HELPER, ports)).toBe('ended')
+    expect(calls).toEqual([{ file: HELPER, args: END_ARGS, timeoutMs: HELPER_END_TIMEOUT_MS, sync: false }])
+  })
+
+  it("answers 'left' and 'unknown' as the helper does; a failure or a timeout is 'unknown', never a throw", async () => {
+    const cases: Array<[string | Error, string]> = [
+      ['left\n', 'left'], ['', 'unknown'], ['ended\nleft', 'unknown'], [new Error('timed out'), 'unknown'], [new Error('exited with status 1'), 'unknown'],
+    ]
+    for (const [reply, want] of cases) {
+      const label = reply instanceof Error ? reply.message : JSON.stringify(reply)
+      expect(endStartedBrowserSync(target, HELPER, fakePorts('win32', () => reply, { pidGone: () => false }).ports), label).toBe(want)
+      expect(await endStartedBrowser(target, HELPER, fakePorts('win32', () => reply, { pidGone: () => false }).ports), label).toBe(want)
+    }
+  })
+
+  it("a pid no process has is 'left' at once, with nothing run", async () => {
+    const sync = fakePorts('win32', () => 'ended', { pidGone: () => true })
+    expect(endStartedBrowserSync(target, HELPER, sync.ports)).toBe('left')
+    expect(sync.calls).toHaveLength(0)
+    const awaited = fakePorts('win32', () => 'ended', { pidGone: () => true })
+    expect(await endStartedBrowser(target, HELPER, awaited.ports)).toBe('left')
+    expect(awaited.calls).toHaveLength(0)
+  })
+
+  it('with no helper (or one not named by a drive-absolute path), the PowerShell end checks the same pid and creation time', async () => {
+    for (const helper of [null, '', 'aicc-helper.exe', '\\\\server\\share\\aicc-helper.exe']) {
+      const sync = fakePorts('win32', () => 'ended', { pidGone: () => false })
+      expect(endStartedBrowserSync(target, helper, sync.ports), String(helper)).toBe('ended')
+      expect(sync.calls).toEqual([{ file: PS, args: expect.any(Array), timeoutMs: OWNER_SYNC_KILL_TIMEOUT_MS, sync: true }])
+      expect(scriptOf(sync.calls[0])).toBe(windowsEndScript(4242, CREATED))
+      const awaited = fakePorts('win32', () => 'left', { pidGone: () => false })
+      expect(await endStartedBrowser(target, helper, awaited.ports), String(helper)).toBe('left')
+      expect(awaited.calls).toEqual([{ file: PS, args: expect.any(Array), timeoutMs: OWNER_QUERY_TIMEOUT_MS, sync: false }])
+      expect(scriptOf(awaited.calls[0])).toBe(windowsEndScript(4242, CREATED))
+    }
+  })
+
+  it('runs nothing off Windows or for a target that is not a pid and a creation time of digits', async () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const { ports, calls } = fakePorts(platform, () => 'ended', { pidGone: () => false })
+      expect(endStartedBrowserSync(target, HELPER, ports)).toBe('unknown')
+      expect(await endStartedBrowser(target, HELPER, ports)).toBe('unknown')
+      expect(calls, platform).toHaveLength(0)
+    }
+    for (const bad of [{ pid: 0, created: CREATED }, { pid: 4242, created: '12a' }, { pid: 4242, created: '' }]) {
+      const { ports, calls } = fakePorts('win32', () => 'ended', { pidGone: () => false })
+      expect(endStartedBrowserSync(bad, HELPER, ports)).toBe('unknown')
+      expect(await endStartedBrowser(bad, HELPER, ports)).toBe('unknown')
+      expect(calls, JSON.stringify(bad)).toHaveLength(0)
     }
   })
 })

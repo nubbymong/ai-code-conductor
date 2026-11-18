@@ -18,7 +18,9 @@
 //! ```
 //!
 //! Run as `aicc-fake-cli --sleep <seconds>` it prints nothing and sleeps: the
-//! grandchild, so a test can show that ending a session ends it too.
+//! grandchild, so a test can show that ending a session ends it too. With
+//! `--child` after the seconds it first starts a sleeping copy of itself, so a
+//! test can show that `aicc-helper end` ends the processes under a program.
 //!
 //! It is plain `std`, so the same binary builds on every OS. It never talks to
 //! a network or a real provider.
@@ -32,6 +34,10 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("--sleep") {
         let secs = args.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(600);
+        if args.get(2).map(String::as_str) == Some("--child") {
+            // Not waited for: it is meant to run under this one.
+            let _ = sleeping_copy(secs);
+        }
         std::thread::sleep(Duration::from_secs(secs));
         return;
     }
@@ -110,6 +116,21 @@ fn main() {
         }
         let _ = out.flush();
     }
+}
+
+/// A copy of this program that sleeps for `secs`, with no console of its own on
+/// Windows (a program started with none would otherwise be given a new one).
+fn sleeping_copy(secs: u64) -> io::Result<std::process::Child> {
+    let secs = secs.to_string();
+    let mut copy = Command::new(std::env::current_exe()?);
+    copy.args(["--sleep", secs.as_str()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // DETACHED_PROCESS.
+        copy.creation_flags(0x0000_0008);
+    }
+    copy.spawn()
 }
 
 /// A sleeping copy of this program in a process group of its own that ignores
