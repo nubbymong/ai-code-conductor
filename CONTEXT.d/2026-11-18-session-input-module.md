@@ -87,14 +87,15 @@ leave key added to a session that is not wrapped, a Claude Code marker bound
 to any later run, and an Ask question written raw with Enter. Each turned a
 test red. The review fixes added: a second registration throws (red before
 the fix); each door throws before any registration, in a fresh copy of the
-module (a silent no-op port turned it red); and 40 self-test cases of the
-ownership check written before the checker change (37 shapes it must flag,
-2 it must not, 1 count), each red against the old checker in one run. Six
-more shapes and one more clean case were written with the new checker and
-never ran against the old one. Its new
-module-shape checks were each turned red by a mutant: the registration
-moved into a function, a file the module loads importing pty-manager, and
-index.ts importing askQuestion.
+module (a silent no-op port turned it red); and, in one run against the
+old checker, 40 red ownership self-tests (37 shapes it must flag, 2 it
+wrongly flagged, 1 count), with 4 more clean cases already clean there.
+Six more shapes and one more clean case were written with the new checker
+and never ran against the old one, and three cases from that run were
+reworded after it (two wrapped in an async function, one given a call).
+The check's new module-shape tests were each turned red by a mutant: the
+registration moved into a function, a file the module loads importing
+pty-manager, and index.ts importing askQuestion.
 
 **Owed.** The leave key moved out of pty-manager.ts (an SSH blast-radius
 file), so the live SSH matrix runs once, at the release PR. An ADR-009 pass
