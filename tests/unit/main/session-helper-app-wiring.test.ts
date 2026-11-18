@@ -241,7 +241,10 @@ describe('an app update on Windows (plan section B2)', () => {
     expect(await releaseHeldTerminalsForUpdate({ discarded: true })).toBe(0)
     h.savedState = { sessions: [{ id: 'abcdef0123456789abcdef01' }] }
     expect(await releaseHeldTerminalsForUpdate({ discarded: true })).toBe(0)
-    expect(toldOf(m)).toEqual([null, null, null])
+    // An unreadable file: the user's explicit choice still wins.
+    h.savedState = new Error('session-state.json did not parse')
+    expect(await releaseHeldTerminalsForUpdate({ discarded: true })).toBe(0)
+    expect(toldOf(m)).toEqual([null, null, null, null])
   })
 
   it('the ends the manager sent are waited for before the update goes on, UPDATE_END_WAIT_MS at most (PR review)', async () => {
