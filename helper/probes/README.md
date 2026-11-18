@@ -88,12 +88,12 @@ reads the CPU of Defender's own process, the holder and the whole machine,
 times one first start of a fresh copy of the helper, and times a loopback
 HTTP POST for reference, taken the way the hooks gateway takes it (a new
 connection each time, the token checked, the body parsed). The pass line is
-in the script's header and was
-fixed before measuring; only the plan's schedule gives a verdict, and any
-other is a check run. It refuses a helper that is not the installed app's
-signed per-user copy, a store folder that already exists (or whose parent
-does not), an output folder inside the store, a schedule that would outlast
-the holder's 600-second away clock, and a missing node. It cleans up its
+in the script's header and was fixed before measuring; only the plan's
+schedule gives a verdict, and any other is a check run. It refuses a helper
+that is not the installed app's signed per-user copy, a store folder that
+already exists (or whose parent does not), an output folder inside the
+store, a path the launcher's shell would change, a schedule that would
+outlast the holder's 600-second away clock, and a missing node. It cleans up its
 holder and the store it made in a `finally` block, then looks for anything
 of its own still running. The last line is `P16 RESULT: PASS`, `FAIL -
 <reasons>`, `CHECK RUN - <...>` or `COULD NOT RUN - <reason>` (exit 0, 1, 3

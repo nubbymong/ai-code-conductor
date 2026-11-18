@@ -91,8 +91,10 @@ the installed app's helper (in %LOCALAPPDATA%\AI Code Conductor\helper\
 the installed app's resources\helper\aicc-helper.exe, and signed by the same
 signer as the app's own program); when node is needed for step 3 and not
 found; when the store folder already exists, its parent folder does not, or
-the output folder is inside it; and when step 2 could outlast the holder's
-600-second away clock. It makes the store folder itself, in one step that fails
+the output folder is inside it; when the helper, store or temporary path holds
+a character the launcher's shell would change (" $ ` % ^ & | < >); and when
+step 2 could outlast the holder's 600-second away clock. It makes the store
+folder itself, in one step that fails
 if the folder exists, after those checks and before anything else; only a store
 it made is removed, and results are written only to an output folder that
 passed its checks. Each chain's output is read while it runs. In a finally
@@ -1092,6 +1094,16 @@ try {
         if (-not $Claude) { throw 'could not run: -Launcher observe needs -Claude; or name the launcher with -Launcher and the result says "documented, not observed"' }
         if (-not (Test-Path -LiteralPath $Claude -PathType Leaf)) { throw "could not run: no claude.exe at $Claude" }
         $claudeFull = (Resolve-Path -LiteralPath $Claude).ProviderPath
+    }
+    # The helper, store and temporary paths go into the launcher's command
+    # line inside double quotes, where Git Bash expands $ and ` and cmd reads
+    # % ^ & | < >. A path holding one would be changed on the way, and the
+    # runs would then fail for that, not for what they cost: refused here.
+    $shellChars = [char[]]@('"', '$', '`', '%', '^', '&', '|', '<', '>')
+    foreach ($named in @(@('the helper', $helperFull), @('the store', $storeFull), @('the temporary folder', [IO.Path]::GetTempPath()))) {
+        if (([string]$named[1]).IndexOfAny($shellChars) -ge 0) {
+            throw ('could not run: the path of ' + $named[0] + ' holds a character the launcher''s shell would change (one of " $ ` % ^ & | < >); use a path without them')
+        }
     }
     # P16 measures the signed per-user copy of the installed app's helper:
     # in the app's per-user helper folder, in a folder named for this file,
