@@ -102,6 +102,7 @@ import { startAttentionSource } from './attention-source'
 import { startJankDetector } from './jank-detector'
 import { HooksGateway } from './hooks/hooks-gateway'
 import { setGateway, getGateway } from './hooks'
+import { startSessionSignals, onHookEvent, transcriptPath } from './session-signals'
 import { ServiceSupervisor } from './services/service-supervisor'
 import { forkHooksChild } from './services/fork-hooks-child'
 import { start as startLoopStallMonitor, stop as stopLoopStallMonitor } from './services/loop-stall-monitor'
@@ -969,10 +970,16 @@ if (!gotTheLock) {
         bind: (sid, p) => { getTranscriptBinder()?.notifyTranscriptPath(sid, p) },
       })
     }
+    // ADR-030 row 13 (2.1.3-beta.8, A2): the session signals module is the one
+    // subscriber to the Hooks gateway (whichever is set below, and any set after
+    // it); every consumer (the rules engine started above, the rest below) takes
+    // events from it, in the order they start. A transcript path the gateway
+    // reports reaches the route through it.
+    startSessionSignals({ onTranscriptPath: routeTranscriptPath })
     if (hooksEnabled) {
       // Supervised out-of-process gateway: a utilityProcess child runs the HooksGateway,
       // crash-isolated from the main thread, with restart/backoff + fail-open-to-in-process.
-      const hooksSupervisor = new ServiceSupervisor({ forkChild: forkHooksChild, defaultPort: hooksPort, emit: emitWithMerge, onTranscriptPath: routeTranscriptPath })
+      const hooksSupervisor = new ServiceSupervisor({ forkChild: forkHooksChild, defaultPort: hooksPort, emit: emitWithMerge, onTranscriptPath: (sessionId, path) => transcriptPath(sessionId, path, 'gateway') })
       const hooksProxy = hooksSupervisor.start()   // forks the child + posts start (S1 replay-before-listen inside)
       setGateway(hooksProxy)                        // B1: consumers + handlers all use the proxy
       setHooksSupervisor(hooksSupervisor)           // module-scope ref for before-quit (S5)
@@ -1036,9 +1043,7 @@ if (!gotTheLock) {
         if (w && !w.isDestroyed()) w.webContents.send(IPC.CANVAS_AGENT_MARKER_UNDELIVERED, u)
       },
       subscribe: (cb) => {
-        const gw = getGateway()
-        if (!gw) return
-        gw.subscribe((e) => { if (e.sessionId) cb(e.sessionId, e.event) })
+        onHookEvent((e) => { if (e.sessionId) cb(e.sessionId, e.event) })
       },
     })
     // P3.10 (row 47): Codex sessions' own hook events map to attention too.
@@ -1046,7 +1051,7 @@ if (!gotTheLock) {
     // P3.10 round 1 (B4): a conversation a Codex session's own Codex started
     // (its SessionStart hook) proves another session's inferred claim of it
     // wrong; the gateway hands the transcript path over before the event.
-    getGateway()?.subscribe((e) => { try { noteCodexHookEvent(e) } catch { /* a claim never breaks the feed */ } })
+    onHookEvent((e) => { try { noteCodexHookEvent(e) } catch { /* a claim never breaks the feed */ } })
     startJankDetector()
     // Main-process event-loop jank monitor: feeds the "Jank m/c" main half on the
     // Conductor services pill (the service registry stamps stallsLastMin() onto

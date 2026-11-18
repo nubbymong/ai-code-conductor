@@ -18,7 +18,7 @@ import { CLAUDE_DETECTORS, CODEX_DETECTORS } from './detectors'
 import type { WatchdogAdapter, WatchdogChecks, WatchdogPublicState } from './session-watchdog'
 import { readXtermScreen, readCodexScreen, codexCommandTyped, codexComposerText } from '../../shared/codex-screen'
 import { hasActiveMonitors } from './patterns'
-import { getGateway } from '../hooks/index'
+import { onHookEvent } from '../session-signals/hooks'
 import { readConfig } from '../config-manager'
 import { logInfo, logWarn, logError } from '../debug-logger'
 import { IPC } from '../../shared/ipc-channels'
@@ -468,9 +468,8 @@ export class WatchdogManager {
 
   private ensureHookSubscription(): void {
     if (this.hookUnsub) return
-    const gw = getGateway()
-    if (!gw) return
-    this.hookUnsub = gw.subscribe((e: HookEvent) => {
+    // The gateway's events, from the session signals module (ADR-030 row 13).
+    this.hookUnsub = onHookEvent((e: HookEvent) => {
       if (e.event !== 'StopFailure') return
       const entry = this.entries.get(e.sessionId)
       if (!entry) return

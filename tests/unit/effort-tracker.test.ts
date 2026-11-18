@@ -7,7 +7,8 @@ vi.mock('electron', () => ({
     getAllWindows: () => [{ webContents: { send: (channel: string, payload: unknown) => sent.push({ channel, payload }) } }],
   },
 }))
-vi.mock('../../src/main/hooks/index', () => ({ getGateway: () => null }))
+// 2.1.3-beta.8 A2: the hook feed comes from the session signals module.
+vi.mock('../../src/main/session-signals/hooks', () => ({ onHookEvent: () => () => {} }))
 vi.mock('../../src/main/model-registry-service', () => ({
   getRegistry: () => ({
     effortLevels: [

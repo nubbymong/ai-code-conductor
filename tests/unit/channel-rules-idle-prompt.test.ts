@@ -37,10 +37,14 @@ vi.mock('../../src/main/hooks/index', () => ({
 }))
 
 const { startRulesEngine, notificationRuleContext } = await import('../../src/main/channel-rules')
+// 2.1.3-beta.8 A2: the engine takes its events from the session signals module,
+// which binds to the mocked gateway through onGateway.
+const { startHookSignals } = await import('../../src/main/session-signals/hooks')
 const { BUILTIN_RULES } = await vi.importActual<typeof import('../../src/main/channel-rules-store')>('../../src/main/channel-rules-store')
 const pulse = BUILTIN_RULES.find((r) => r.id === 'attention-pulse')!
 
 startRulesEngine()
+startHookSignals()
 const hook = (sessionId: string, event: string, ts: number, payload: Record<string, unknown> = {}) => {
   for (const cb of h.gwSubscribers) cb({ sessionId, event, payload: { hook_event_name: event, ...payload }, ts })
 }

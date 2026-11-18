@@ -65,8 +65,10 @@ let gatewayUnsub = vi.fn()
 let gatewayReturn: any = {
   subscribe: (cb: (e: any) => void) => { gatewaySubscribeImpl = cb; return gatewayUnsub },
 }
-vi.mock('../../../../src/main/hooks/index', () => ({
-  getGateway: () => gatewayReturn,
+// 2.1.3-beta.8 A2: the Watchdog takes hook events from the session signals
+// module (onHookEvent); the stand-in hands that subscription to the fake gateway.
+vi.mock('../../../../src/main/session-signals/hooks', () => ({
+  onHookEvent: (cb: (e: any) => void) => gatewayReturn.subscribe(cb),
 }))
 
 const { WatchdogManager, clampAnsiChunk } = await import('../../../../src/main/watchdog/watchdog-manager')
