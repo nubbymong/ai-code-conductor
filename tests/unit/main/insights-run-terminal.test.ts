@@ -1,7 +1,7 @@
 // 2.1.3-beta.9, plan section B1: Insights' report terminal starts through
 // spawnRunPty (session-helper/manager.ts) instead of node-pty's spawn, under
 // the run's own id ('insights-' and the account's profile id, or
-// 'insights-default'). With the agent sessions' switch off, and with no
+// 'insights--default' for the global sign-in). With the agent sessions' switch off, and with no
 // session helper this run (these cases), spawnRunPty is node-pty's spawn with
 // the very same arguments, so everything the report does with its terminal is
 // as before: the same command, arguments and options, the Enter on the
@@ -89,6 +89,8 @@ vi.mock('../../../src/main/first-start-warmup', () => ({
 
 import * as insights from '../../../src/main/insights-runner'
 import { spawnRunPty, setSessionHelper } from '../../../src/main/session-helper/manager'
+import { APP_PTY_ID_RE, heldAgentSessionId } from '../../../src/main/session-helper/protocol'
+import { isValidProfileId } from '../../../src/shared/profile-id'
 import { _resetQuitHoldForTest } from '../../../src/main/quit-hold'
 import { composeProviders } from '../../../src/main/providers/compose'
 import { _resetProfileConsumersForTest } from '../../../src/main/profile-consumers'
@@ -168,9 +170,19 @@ describe('the report terminal starts as before', () => {
     expect(opts).toBe(pty.opts)
   })
 
-  it('the run id: the account\'s profile id, or default for the global sign-in', () => {
+  it('the run id: the account\'s profile id, or one no profile id makes for the global sign-in (PR review)', () => {
     expect(insights.insightsRunId('work-1')).toBe('insights-work-1')
-    expect(insights.insightsRunId(undefined)).toBe('insights-default')
+    expect(insights.insightsRunId(undefined)).toBe('insights--default')
+    // A profile may be called `default` (a valid profile id), and its report
+    // may run beside the global sign-in's (each account has its own lock): the
+    // two never share a run id, so neither start ends the other's holder.
+    expect(isValidProfileId('default')).toBe(true)
+    expect(insights.insightsRunId('default')).not.toBe(insights.insightsRunId(undefined))
+    expect(heldAgentSessionId(insights.insightsRunId('default'), 'claude')).not.toBe(heldAgentSessionId(insights.insightsRunId(undefined), 'claude'))
+    // No valid profile id makes the global one: each starts with a letter or digit.
+    expect(isValidProfileId('-default')).toBe(false)
+    // Each is an id a holder can carry as its label.
+    for (const id of [insights.insightsRunId(undefined), insights.insightsRunId('default'), insights.insightsRunId('a'.repeat(119))]) expect(APP_PTY_ID_RE.test(id)).toBe(true)
   })
 })
 

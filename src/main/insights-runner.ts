@@ -493,9 +493,13 @@ const insightsPtys = new Map<pty.IPty, () => void>()
 
 /** The id an account's report terminal runs under (spawnRunPty): the same
  *  for every report of the account, so a start after a crash finds and ends
- *  what an earlier report left held. */
+ *  what an earlier report left held, and never another account's, since two
+ *  accounts' reports may run at once (accountKey). The global sign-in's is
+ *  `insights--default`: a profile id starts with a letter or digit
+ *  (isValidProfileId), so no profile's id makes it, a profile named
+ *  `default` included. */
 export function insightsRunId(profileId: string | undefined): string {
-  return `insights-${profileId ?? 'default'}`
+  return profileId ? `insights-${profileId}` : 'insights--default'
 }
 
 /** #317: sends a kill to every /insights terminal still running. The app's

@@ -28,7 +28,11 @@ session helper" (agentSessionsThroughHelper) is on; no new setting.
 - `insights-runner.ts`: the start is `spawnRunPty({ runId:
   insightsRunId(profileId), kind: 'claude' }, cmd, [], <the same options>)`,
   where the id is `insights-` and the account's profile id, or
-  `insights-default`. The program, arguments, environment, folder, timings,
+  `insights--default` for the global sign-in. The plan's `insights-default`
+  would be the id of a profile named `default` too (a valid profile id), whose
+  report may run beside the global one, and either start would then end the
+  other's holder (PR review); no profile id starts with a hyphen, so
+  `insights--default` is no profile's. The program, arguments, environment, folder, timings,
   the three writes, the KPI step and killInsightsPty are unchanged. The Codex
   Insights run and every headless run are untouched.
 - Settings, the agent switch's note: "Insights' Claude Code report runs this
