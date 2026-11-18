@@ -1,0 +1,19 @@
+# The session helper carries its own C runtime on Windows (2.1.3-beta.8 section
+# C4). Rust's Windows MSVC target links the C runtime dynamically by default, so
+# the program would import VCRUNTIME140.dll, which a PC without Microsoft's
+# Visual C++ runtime does not have: Windows then stops it before main
+# (0xC0000135) and every helper feature stays off there. +crt-static links the
+# C runtime into the program instead. scripts/check-pe-imports.mjs fails CI and
+# the release build if a built aicc-helper.exe still imports a C runtime DLL.
+#
+# cargo reads this file only when it runs in helper/ or below: it looks for
+# .cargo/config.toml from the CURRENT folder upwards, not from Cargo.toml's
+# folder. Every helper build in .github/workflows/ci.yml and release.yml runs
+# with `working-directory: helper`, and tests/unit/scripts/check-pe-imports.test.ts
+# keeps that true. A RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS environment variable
+# replaces this setting, so no workflow sets one.
+#
+# The cfg matches Windows MSVC targets only: the macOS and Linux builds do not
+# change.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

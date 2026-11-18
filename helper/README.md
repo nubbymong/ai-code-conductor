@@ -78,6 +78,26 @@ cargo test --locked
 CI job generates one, uploads it as the `helper-cargo-lock` artifact and fails
 with a message to commit it.
 
+On Windows the helper carries its own C runtime (since 2.1.3-beta.8), so it
+starts on a PC without Microsoft's Visual C++ runtime. `.cargo/config.toml` in
+this folder adds `-C target-feature=+crt-static` to Windows MSVC builds only.
+cargo reads that file only when it runs in this folder or below, so run every
+cargo command from `helper/`, as CI and the release workflow do. A `RUSTFLAGS`
+or `CARGO_ENCODED_RUSTFLAGS` variable replaces the setting, so do not set one.
+To check a built program, from the repository root (it only reads the file, so
+it works on any OS):
+
+```text
+node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
+```
+
+It fails if the program imports a C runtime DLL (`VCRUNTIME140.dll`,
+`api-ms-win-crt-*` and the like), names no DLL at all, or is not x64. CI runs it
+after the Windows release build in the Helper job, before the release/* test
+installer is packaged, and `release.yml` runs it before the Windows installer is
+signed and packaged. `npm run verify:helper`, which every package script and
+packaging job runs, applies the same rules to the packaged, signed copy.
+
 ## Dependencies
 
 Every one is pinned with an exact `=x.y.z`. `libc` on Unix, `windows-sys` on

@@ -3,15 +3,20 @@
 // helper/ by the release workflow before packaging, and nothing else of
 // helper/. This fails the package when the helper is missing, is not a
 // program for this OS, says another version than helper/Cargo.toml, or has
-// other files beside it.
+// other files beside it. On Windows it also fails when the packaged helper
+// does not carry its own C runtime, is not x64, or names no imported DLL
+// (2.1.3-beta.8 section C4, the rules of scripts/check-pe-imports.mjs): this is
+// the packaged, signed copy that ships, whatever built it.
 //
-// Run after `npm run verify:package` in every release packaging job
-// (`npm run verify:helper`). The check itself (bundledHelperProblems) is pure
-// apart from what it is handed, so the unit test drives it.
+// Run after `npm run verify:package` in every release packaging job, and at
+// the end of every package script (`npm run verify:helper`). The check itself
+// (bundledHelperProblems) is pure apart from what it is handed, so the unit
+// test drives it.
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { importProblems, isEntryPoint, readImports } from './check-pe-imports.mjs'
 
 export const helperExeName = (platform = process.platform) => (platform === 'win32' ? 'aicc-helper.exe' : 'aicc-helper')
 
@@ -32,8 +37,9 @@ export function cargoVersion(cargoToml) {
 
 /**
  * What is wrong with the helper in one packaged resources folder: an empty
- * list when it is right. `fs` gives the folder's entries and a file's first
- * bytes and size; `version` runs the packaged helper's `version` command.
+ * list when it is right. `fs` gives the folder's entries, a file's first
+ * bytes and size, and (Windows) its whole bytes; `version` runs the packaged
+ * helper's `version` command, only once everything else is right.
  */
 export function bundledHelperProblems(resourcesDir, opts) {
   const { platform, expectedVersion, fs, version } = opts
@@ -52,6 +58,16 @@ export function bundledHelperProblems(resourcesDir, opts) {
   const magic = MAGIC[platform] ?? []
   if (!magic.some((m) => head.subarray(0, m.length).equals(m))) problems.push(`${file} is not a program for ${platform}`)
   if (problems.length > 0) return problems
+  if (platform === 'win32') {
+    let found
+    try {
+      found = readImports(fs.read(file))
+    } catch (err) {
+      return [`${file} cannot be read as a Windows program: ${err?.message ?? err}`]
+    }
+    const wrong = importProblems(found)
+    if (wrong.length > 0) return wrong.map((p) => `${file} ${p}`)
+  }
   let said = ''
   try {
     said = String(version(file)).trim()
@@ -88,6 +104,7 @@ const diskFs = {
     try { const st = statSync(file); return st.isFile() ? st.size : 0 } catch { return 0 }
   },
   head: (file, n) => readFileSync(file).subarray(0, n),
+  read: (file) => readFileSync(file),
 }
 
 function main() {
@@ -118,10 +135,11 @@ function main() {
     }
   }
   if (!ok) {
-    console.error('[verify-bundled-helper] FAIL: the installer must ship the session helper. Build it first: cargo build --release --locked in helper/.')
+    console.error('[verify-bundled-helper] FAIL: the installer must ship the session helper, and on Windows one that carries its own C runtime. Build it first: cargo build --release --locked, run in helper/ (so it reads helper/.cargo/config.toml).')
     process.exit(1)
   }
   console.log('[verify-bundled-helper] PASS: the session helper is packaged.')
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()
+// Through a junction or symlink too: a missed run would exit 0 having checked nothing.
+if (isEntryPoint(process.argv[1], import.meta.url)) main()

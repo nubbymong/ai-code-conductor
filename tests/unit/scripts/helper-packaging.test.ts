@@ -315,8 +315,11 @@ describe('the installer ships the release session helper and nothing else of hel
     }
   })
 
-  it('every packaging script checks the helper it packaged', () => {
-    for (const name of ['package', 'package:win', 'package:mac', 'package:linux']) {
+  it('every packaging script checks the helper it packaged, the Store package included', () => {
+    // Any script that runs electron-builder packages the helper, so a new one is held to this too.
+    const packaging = Object.keys(pkg.scripts).filter((name) => /\belectron-builder\b/.test(pkg.scripts[name]))
+    expect(packaging.sort()).toEqual(['package', 'package:linux', 'package:mac', 'package:store', 'package:win'])
+    for (const name of packaging) {
       expect(pkg.scripts[name], name).toMatch(/&& npm run verify:helper$/)
     }
   })
