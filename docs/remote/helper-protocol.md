@@ -548,11 +548,14 @@ aicc-helper end --pid <n> --created <t>
 taken. The helper opens that process and holds it open from its check to its
 end, so the pid cannot pass to another process in between. When the pid still
 has that creation time and the process still runs, the helper ends it and
-every process under it (a process counts as under its parent only when it was
-made no earlier than the parent; one made earlier names a parent id that has
-since passed to another process), prints `ended` and exits 0. When no process
-has that pid, the one that has it was made at another time, or it has already
-exited, it ends nothing, prints `left` and exits 0. When it cannot tell (the
+every process under it, prints `ended` and exits 0. The processes under it come
+from one read of the process list, and the helper reads the system time right
+after that read. A process counts as under its parent only when it was made no
+earlier than the parent and no later than that time: one made earlier names a
+parent id that has since passed to another process, and one made later took a
+listed pid after the list was read. When no process has that pid, the one that
+has it was made at another time, or it has already exited, it ends nothing,
+prints `left` and exits 0. When it cannot tell (the
 process cannot be opened or read), it ends nothing and exits 1 with a message
 on stderr; a command line it cannot read exits 2. It reads the process list
 and each process's times itself, with no PowerShell and no WMI, so it answers

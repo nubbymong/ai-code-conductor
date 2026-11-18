@@ -40,9 +40,12 @@
 //! `end` ends the process `--pid` names and every process under it, only
 //! while that pid still has the creation time `--created` gives, in the form
 //! `start` prints. It holds the process open from that check to the end, so
-//! the pid cannot pass to another process in between. A process counts as
-//! under its parent only when it was made no earlier than the parent: one
-//! made earlier names a parent id that has since passed to another process.
+//! the pid cannot pass to another process in between. The processes under it
+//! come from one read of the process list, and the system time is read right
+//! after that read. A process counts as under its parent only when it was
+//! made no earlier than the parent and no later than that time: one made
+//! earlier names a parent id that has since passed to another process, and
+//! one made later took a listed pid after the list was read (`made_under`).
 //! It prints `ended`, or `left` when no process has that pid, the one that
 //! has it was made at another time, or it has already exited; both exit 0.
 //! When it cannot tell, it exits 1 with a message on stderr, and the process
@@ -106,6 +109,16 @@ impl Started {
 /// microseconds, so the last step of 100 ns is dropped.
 pub fn app_created(filetime: u64) -> u64 {
     filetime / 10 * 10
+}
+
+/// Whether a process listed under a parent counts as under it, for `end`:
+/// made no earlier than the parent (`parent_made`) and no later than
+/// `listed_at`, the system time read right after the process list was read.
+/// One made earlier names a parent id that has since passed to another
+/// process; one made later took a listed pid after the list was read. All
+/// three are in steps of 100 ns since 1601 (UTC).
+pub fn made_under(child_made: u64, parent_made: u64, listed_at: u64) -> bool {
+    parent_made <= child_made && child_made <= listed_at
 }
 
 /// A path that starts with a drive letter, a colon and a separator, such as
@@ -328,12 +341,13 @@ pub use self::win::{end, start};
 
 #[cfg(windows)]
 mod win {
-    use super::{app_created, EndRequest, StartRequest, Started};
+    use super::{app_created, made_under, EndRequest, StartRequest, Started};
     use crate::cmdline::build_command_line;
     use crate::winproc::{close, create_process, creation_time, exit_code, os_error, wide, STARTF_USESTDHANDLES};
     use std::io;
-    use windows_sys::Win32::Foundation::{GetLastError, ERROR_INVALID_PARAMETER, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_INVALID_PARAMETER, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
+    use windows_sys::Win32::System::SystemInformation::GetSystemTimePreciseAsFileTime;
     use windows_sys::Win32::System::Threading::{
         OpenProcess, ResumeThread, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, STARTUPINFOEXW, STARTUPINFOW,
     };
@@ -441,11 +455,12 @@ mod win {
 
     /// The processes under `pid` (made at `made`), each open to be ended,
     /// from one read of the process list. A process counts as under its
-    /// parent only when it was made no earlier than the parent: one made
-    /// earlier names a parent id that has since passed to another process.
-    /// One that cannot be opened or read is left out, with what is under it.
+    /// parent only when it was made between the parent and the read of the
+    /// list (`made_under`): each is opened by its pid after that read, and
+    /// the pid may have passed to another process by then. One that cannot
+    /// be opened or read is left out, with what is under it.
     unsafe fn processes_under(pid: u32, made: u64) -> Vec<usize> {
-        let list = process_list();
+        let (list, listed_at) = process_list();
         let mut found: Vec<usize> = Vec::new();
         let mut seen: Vec<u32> = vec![pid];
         let mut parents: Vec<(u32, u64)> = vec![(pid, made)];
@@ -459,7 +474,7 @@ mod win {
                     continue;
                 }
                 match creation_time(h) {
-                    Ok(child_made) if child_made >= parent_made => {
+                    Ok(child_made) if made_under(child_made, parent_made, listed_at) => {
                         seen.push(child);
                         found.push(h);
                         parents.push((child, child_made));
@@ -471,14 +486,18 @@ mod win {
         found
     }
 
-    /// Every process now, as (pid, parent pid). Empty when the list cannot
-    /// be read.
-    unsafe fn process_list() -> Vec<(u32, u32)> {
+    /// Every process now, as (pid, parent pid), with the system time read
+    /// right after the list was: every process in the list was made no
+    /// later than that. Empty (and a time of 0) when the list cannot be read.
+    unsafe fn process_list() -> (Vec<(u32, u32)>, u64) {
         let mut list = Vec::new();
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snap == INVALID_HANDLE_VALUE {
-            return list;
+            return (list, 0);
         }
+        let mut now = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        GetSystemTimePreciseAsFileTime(&mut now);
+        let listed_at = (u64::from(now.dwHighDateTime) << 32) | u64::from(now.dwLowDateTime);
         let mut entry: PROCESSENTRY32W = std::mem::zeroed();
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
         let mut more = Process32FirstW(snap, &mut entry) != 0;
@@ -487,7 +506,7 @@ mod win {
             more = Process32NextW(snap, &mut entry) != 0;
         }
         close(snap as usize);
-        list
+        (list, listed_at)
     }
 }
 
@@ -582,6 +601,17 @@ mod tests {
         assert_eq!(s.created, 134_078_123_456_789_010);
         assert_eq!(s.to_json(), "{\"pid\":4242,\"created\":\"134078123456789010\"}");
         assert_eq!(app_created(134_078_123_456_789_010), 134_078_123_456_789_010);
+    }
+
+    #[test]
+    fn a_process_is_under_its_parent_only_when_made_between_the_parent_and_the_read_of_the_list() {
+        let (parent, listed) = (134_078_000_000_000_000, 134_078_000_010_000_000);
+        assert!(made_under(parent, parent, listed), "made as its parent was");
+        assert!(made_under(parent + 5_000_000, parent, listed), "made in between");
+        assert!(made_under(listed, parent, listed), "made as the list was read");
+        assert!(!made_under(parent - 1, parent, listed), "made before its parent: the parent id has passed to another process");
+        assert!(!made_under(listed + 1, parent, listed), "made after the list was read: it took a listed pid");
+        assert!(!made_under(u64::MAX, parent, listed), "made long after the list was read");
     }
 
     #[test]
