@@ -153,6 +153,18 @@ describe('readImports: anything that is not a well-formed PE image fails with th
     expect(() => readImports(b)).toThrow('unknown optional header magic 0x107')
   })
 
+  it('an optional header too short to hold the fields the check reads', () => {
+    const b = good().bytes
+    // SizeOfOptionalHeader (the u16 at 0x54) says 100; a PE32+ image needs at least 112.
+    new DataView(b.buffer).setUint16(0x54, 100, true)
+    expect(() => readImports(b)).toThrow('the optional header is too short (100 bytes)')
+  })
+
+  it('an optional header cut off by the end of the file', () => {
+    // The file ends at 0x100, inside the 240-byte optional header that starts at 88.
+    expect(() => readImports(good().bytes.subarray(0, 0x100))).toThrow('the optional header is outside the file (offset 88, 240 bytes, file 256 bytes)')
+  })
+
   it('a DLL name whose address is in no section', () => {
     const b = good()
     new DataView(b.bytes.buffer).setUint32(b.importAt + 12, 0x9000, true)
