@@ -1922,8 +1922,10 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     const { log, details, status, restored } = runAppCheck('installer', { instdir: install, legacyUninstaller: '', savedInstallLocation: saved })
     const all = details.join('\n')
 
-    expect(await waitFor(() => existsSync(`${respawner.exe}-respawned`), 5000), 'the fresh copy started').toBe(true)
-    const again = Number(readFileSync(`${respawner.exe}-respawned`, 'utf-8').trim())
+    const pidFile = `${respawner.exe}-respawned`
+    expect(await waitFor(() => existsSync(pidFile) && /^\d+$/.test(readFileSync(pidFile, 'utf-8').trim()), 5000), 'the fresh copy started').toBe(true)
+    const again = Number(readFileSync(pidFile, 'utf-8').trim())
+    expect(again, 'its pid').toBeGreaterThan(0)
     started.push(again)
     expect(await waitGone(respawner.pid), 'the first copy closed itself').toBe(true)
     expect(existsSync(`${respawner.exe}-closed`)).toBe(true)
