@@ -610,6 +610,9 @@ obligations fall on later slices:
   runner, in the project, with the request on stdin (argv is constant). A
   Windows shim runs through the absolute cmd.exe with the same verbatim line
   as a session, and `NoDefaultCurrentDirectoryInExePath=1` is set.
+  (Superseded, 2026-11-18: the current argv is `ARGS.review` in
+  src/main/providers/codex/cli-runner.ts. Since 2.1.3-beta.8 it passes no
+  `-m` and runs on the reviewer account's default Codex model.)
 - **Depth one:** the reviewer inherits no Conductor variable (every
   `CCC_`, `CONDUCTOR_` and `CLAUDE_MULTI_` name, in any spelling on
   Windows), no per-spawn MCP flags are passed to it, and a session runs one

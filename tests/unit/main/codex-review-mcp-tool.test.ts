@@ -653,18 +653,31 @@ describe('codex_review: the tool description names no model (2.1.3-beta.8)', () 
     return seen[0].description
   }
 
-  it('starts "Get a Codex code review on a change." and holds no model id, label or pattern the app knows', () => {
+  // A name counts only as a whole word, so a registry name that occurs inside
+  // an ordinary word of the description (say "fable" in "affable") is not one.
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const namesWord = (text: string, name: string) => new RegExp(`(^|[^a-z0-9])${esc(name)}([^a-z0-9]|$)`, 'i').test(text)
+
+  it('the whole-word match finds a model name and ignores one inside a longer word', () => {
+    expect(namesWord('Runs on Opus 4.8 today.', 'Opus 4.8')).toBe(true)
+    expect(namesWord('Runs on gpt-5.5.', 'gpt-5.5')).toBe(true)
+    expect(namesWord('(sonnet)', 'sonnet')).toBe(true)
+    expect(namesWord('An affable, fabled reviewer.', 'fable')).toBe(false)
+    expect(namesWord('gpt-5.56', 'gpt-5.5')).toBe(false)
+  })
+
+  it('starts "Get a Codex code review on a change." and holds no model id, label, pattern or alias the app knows', () => {
     const d = describeTool()
     expect(d.startsWith('Get a Codex code review on a change. ')).toBe(true)
     expect(d).not.toMatch(/gpt/i)
     // A family's catch-all entry (codex-family: label "Codex") names the
     // provider, not a model; its gpt- pattern is the check above.
-    const names = (registryJson as { models: { id: string; label?: string; patterns?: string[] }[] }).models
+    const names = (registryJson as { models: { id: string; label?: string; patterns?: string[]; aliases?: string[] }[] }).models
       .filter((m) => !m.id.endsWith('-family'))
-      .flatMap((m) => [m.id, m.label ?? '', ...(m.patterns ?? [])])
+      .flatMap((m) => [m.id, m.label ?? '', ...(m.patterns ?? []), ...(m.aliases ?? [])])
       .filter((n) => n.length >= 4)
     expect(names.length).toBeGreaterThan(10)
-    for (const n of names) expect(d.toLowerCase(), n).not.toContain(n.toLowerCase())
+    for (const n of names) expect(namesWord(d, n), n).toBe(false)
   })
 })
 

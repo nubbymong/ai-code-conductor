@@ -107,9 +107,13 @@ const ARGS: Readonly<Record<CodexCliOperation, readonly string[]>> = {
   // request_user_input, which does nothing in exec; round 2); web search
   // off; no project instructions (AGENTS.md) loaded at all; and the working
   // folder is the project root (no search of the folders above it for a
-  // project's files). Every key is in both supported CLIs (their feature
-  // lists and config keys); an unknown one makes the run fail, which fails
-  // closed. No -m (round 2): Codex runs its own default model for the
+  // project's files). Every feature name is one both supported CLIs list,
+  // and an unknown one makes the run fail, which fails closed. The -c keys
+  // were checked against both CLIs' config source, and CI's real-CLI
+  // conformance job loads them, where a value of the wrong type is refused.
+  // An unknown top-level key is ignored, not refused, so their spelling is
+  // pinned by tests/unit/providers/codex/analysis-features.test.ts.
+  // No -m (round 2): Codex runs its own default model for the
   // account, as the list that CLI offers names it. Round 3: code_mode and
   // code_mode_host too (both CLIs' feature lists name them; code_mode_host is
   // on by default); js_repl and apply_patch_freeform are listed as removed

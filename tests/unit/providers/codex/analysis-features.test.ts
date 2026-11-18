@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { codexCommandLine } from '../../../../src/main/providers/codex'
+import registryJson from '../../../../resources/model-registry.json'
 
 const features = (version: string) => {
   const text = readFileSync(join(__dirname, `../../../fixtures/codex/cli/${version}/help/features-list.txt`), 'utf8')
@@ -105,4 +106,47 @@ describe('more agent features off in the review, analysis and Insights runs (2.1
       expect(overridesIn(argvOf(op))).toContain('agents.enabled=false')
     })
   }
+})
+
+// The config keys' spelling is pinned here: Codex ignores an unknown
+// top-level -c key rather than refusing it, so a misspelt key would quietly
+// fall back to Codex's default. The review's are pinned above.
+describe('the analysis and Insights runs pass exactly their config overrides', () => {
+  for (const op of ['analysis', 'insights'] as const) {
+    it(`the ${op} run`, () => {
+      expect([...overridesIn(argvOf(op))].sort()).toEqual(['agents.enabled=false', 'project_doc_max_bytes=0', 'project_root_markers=[]', 'web_search=disabled'])
+    })
+  }
+})
+
+// 2.1.3-beta.8: the review runs on the account's default Codex model, so its
+// reasoning effort must be one that every model it can land on offers: each
+// model the recorded CLI list shows (0.153.4, visibility "list"), and each
+// Codex model in the app's registry.
+describe("the review's reasoning effort is one every listed Codex model offers (2.1.3-beta.8)", () => {
+  const effort = overridesIn(argvOf('review')).find((o) => o.startsWith('model_reasoning_effort='))?.slice('model_reasoning_effort='.length)
+
+  it('the review sets medium', () => {
+    expect(effort).toBe('medium')
+  })
+
+  it('every model the recorded CLI list shows offers it', () => {
+    const cat = JSON.parse(readFileSync(join(__dirname, '../../../fixtures/codex/cli/0.153.4/debug-models-bundled.trimmed.json'), 'utf8')) as {
+      models: { slug: string; visibility: string; supported_reasoning_levels?: { effort: string }[] }[]
+    }
+    const listed = cat.models.filter((m) => m.visibility === 'list')
+    expect(listed.length).toBeGreaterThan(3)
+    for (const m of listed) expect((m.supported_reasoning_levels ?? []).map((l) => l.effort), m.slug).toContain(effort)
+  })
+
+  it("every Codex model in the app's registry offers it", () => {
+    // The Codex models: those in the family of the registry's Codex catch-all
+    // entry, less that entry itself.
+    const all = (registryJson as { models: { id: string; family?: string; efforts?: string[] }[] }).models
+    const family = all.find((m) => m.id === 'codex-family')?.family
+    expect(family).toBeTruthy()
+    const models = all.filter((m) => m.family === family && m.id !== 'codex-family')
+    expect(models.length).toBeGreaterThan(3)
+    for (const m of models) expect(m.efforts ?? [], m.id).toContain(effort)
+  })
 })
