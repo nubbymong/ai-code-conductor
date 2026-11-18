@@ -15,19 +15,23 @@ Plan 2.1.3-beta.8, section C2.
   (`create_process`) so both share it. A handle list is for a start that passes a handle on;
   this one passes none, so inheritance is simply off.
 - **An end mode beside it (Windows).** `aicc-helper end --pid <n> --created <t>` (protocol 15,
-  "Ending a program it started") ends that process and the processes under it only while the
-  pid has that creation time, holding the process open from the check to the end, and prints
-  `ended` or `left`. A process counts as under its parent only when it was made between the
-  parent and the read of the process list (the system time is read just before that read, and a
-  listed pid can pass to a new process only after it), so a listed pid that passes to a new
-  process before it is opened is not ended. A process list it cannot read in full ends nothing
-  and exits 1 (only `ERROR_NO_MORE_FILES` ends the list). The processes under it are ended once
-  it is gone, also when it exits by itself after the check, and it prints `ended` only when none
-  of the processes it checked still runs; otherwise it exits 1 and the app keeps the browser
-  tracked. It reads the process list itself (no PowerShell, no WMI), so it answers in
-  milliseconds. The review found the first design's quit-time end (a PowerShell CIM query on the
-  main thread, bounded at 5 s) too slow for an exit, and able to time out and leave the browser
-  running on a busy machine; this replaces it.
+  "Ending a program it started") ends that process and the processes under it only while the pid
+  has that creation time, holding the process open from the check to the end, and prints `ended`
+  or `left`. A process counts as under its parent only when it was made between the parent and
+  the read of the process list (the system time is read just before that read, and a listed pid
+  can pass to a new process only after it), so a listed pid that passes to a new process before
+  it is opened is not ended. A process list it cannot read in full ends nothing and exits 1
+  (only `ERROR_NO_MORE_FILES` ends the list). The processes under it are ended once it is gone,
+  also when it exits by itself after the check, and it prints `ended` only when none of the
+  processes it checked still runs; otherwise it exits 1 and the app keeps the browser tracked.
+  An end that fails waits for the process to exit before it counts: Windows refuses to end a
+  process whose own exit is under way, and marks it exited only once that exit is done. The wait
+  is one bound for the whole end, a second in all however many ends fail, and an end that
+  succeeds waits for nothing. It reads the process list itself (no PowerShell, no WMI), so it
+  answers in milliseconds, a second more at most when an end fails. The review found the first
+  design's quit-time end (a PowerShell CIM query on the main thread, bounded at 5 s) too slow
+  for an exit, and able to time out and leave the browser running on a busy machine; this
+  replaces it.
 - **The vision browser through them.** On Windows, when the installed helper is there
   (resources/helper) and the browser was found at a full path, vision-manager.ts starts the
   browser through the start mode (execFile, hidden, 10 s), in the browser's own folder, with its
@@ -61,7 +65,10 @@ Plan 2.1.3-beta.8, section C2.
   refusals). Unit tests in helper/src/start.rs, Windows: a process exited by itself after the
   check still has what was found under it ended; one that still runs and cannot be ended ends
   nothing; one under it that cannot be ended is named and the rest are ended; one under it that
-  exited by itself counts as gone; a process list that cannot be read ends nothing. New
+  exited by itself counts as gone; a process list that cannot be read ends nothing; an end that
+  fails while the process exits by itself counts as exited, and for the program itself the
+  processes found under it are then ended; one whose end fails and that does not exit still runs
+  once the wait is over; two ends that fail wait one shared bound together, not one each. New
   tests/unit/main/vision-manager-start-mode.test.ts and tests/unit/main/hard-exit.test.ts;
   tests/unit/main/vision-browser-owner.test.ts covers `endVerifiedSync` and the helper-backed
   ends directly; tests/unit/main/update-handlers.test.ts checks the end comes just before

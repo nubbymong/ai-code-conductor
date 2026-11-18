@@ -598,7 +598,8 @@ export async function endVerified(target: VerifiedTarget, ports: OwnerPorts = de
 export type EndAnswer = 'ended' | 'left' | 'unknown'
 
 /** The session helper's end mode (`aicc-helper end`): it answers in
- *  milliseconds, with no PowerShell and no WMI; this bounds it. */
+ *  milliseconds, a second more at most when an end fails (protocol 15),
+ *  with no PowerShell and no WMI; this bounds it. */
 export const HELPER_END_TIMEOUT_MS = 5000
 
 /** An end's output as an answer: exactly `ended` or `left`, or 'unknown'. */

@@ -48,7 +48,13 @@ pub(crate) unsafe fn close(handle: usize) {
 /// The exit code of `process` once it has exited, `None` while it runs. A
 /// wait that fails is an error, never "still running".
 pub(crate) fn exit_code(process: usize) -> io::Result<Option<u32>> {
-    match unsafe { WaitForSingleObject(process as HANDLE, 0) } {
+    exit_code_within(process, 0)
+}
+
+/// `exit_code`, after waiting up to `ms` milliseconds for `process` to exit:
+/// `None` when it still runs then.
+pub(crate) fn exit_code_within(process: usize, ms: u32) -> io::Result<Option<u32>> {
+    match unsafe { WaitForSingleObject(process as HANDLE, ms) } {
         WAIT_OBJECT_0 => {}
         WAIT_TIMEOUT => return Ok(None),
         _ => return Err(os_error("WaitForSingleObject")),

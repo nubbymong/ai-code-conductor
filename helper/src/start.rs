@@ -47,21 +47,27 @@
 //! earlier names a parent id that has since passed to another process, and
 //! one made later may have taken a listed pid after the list was read
 //! (`made_under`). A pid is freed and passed on only after the list is read,
-//! so a process that takes one is always made after that time; one made
-//! while the list is read is left out too, and keeps running. A list that
-//! cannot be read ends nothing: a list read in part would leave processes
-//! under it running once it is gone (`list_step`). Once it is gone, ended or
-//! exited by itself after the check, the processes found under it are ended.
-//! It prints `ended` when none of the processes it checked still runs, or
-//! `left` when no process has that pid, the one that has it was made at
-//! another time, or it had already exited when it was checked; both exit 0.
-//! It exits 1 with a message on stderr when it cannot tell (it ends nothing),
-//! when the process still runs and cannot be ended (it ends nothing), or when
-//! a process under it cannot be ended and may still run (it ends the rest;
-//! `still_running`). A command line it cannot read exits 2. It reads the
-//! process list and each process's times itself (no PowerShell, no WMI), so
-//! it answers in milliseconds, which the app needs on the exits that cannot
-//! wait.
+//! so a process that takes one is always made after that time; one made while
+//! the list is read is left out too, and keeps running. A list that cannot be
+//! read ends nothing: a list read in part would leave processes under it
+//! running once it is gone (`list_step`). Once it is gone, ended or exited by
+//! itself after the check, the processes found under it are ended. An end
+//! that fails waits for the process to exit before it counts: Windows refuses
+//! to end a process whose own exit is under way, but marks it exited only
+//! once that exit is done. One that exits within the wait exited by itself;
+//! one that runs past it still runs. The wait is one bound for the whole end,
+//! a second in all however many ends fail (`FAILED_END_WAIT`), and an end
+//! that succeeds waits for nothing. It prints `ended` when none of the
+//! processes it checked still runs, or `left` when no process has that pid,
+//! the one that has it was made at another time, or it had already exited
+//! when it was checked; both exit 0. It exits 1 with a message on stderr when
+//! it cannot tell (it ends nothing), when the process still runs and cannot
+//! be ended (it ends nothing), or when a process under it cannot be ended and
+//! may still run (it ends the rest; `still_running`). A command line it
+//! cannot read exits 2. It reads the process list and each process's times
+//! itself (no PowerShell, no WMI), so it answers in milliseconds, a second
+//! more at most when an end fails, which the app needs on the exits that
+//! cannot wait.
 #![allow(unsafe_code)]
 
 use crate::pty::{is_batch_file, is_renamed_by_windows};
@@ -164,16 +170,17 @@ pub fn list_step(got: bool, error: u32) -> ListStep {
 pub enum Fate {
     /// It was ended.
     Ended,
-    /// It could not be ended, and its exit code says it had exited by itself.
+    /// It could not be ended, and it had exited by itself, or did within the
+    /// end's wait.
     Exited,
-    /// It could not be ended, and it still runs, or its exit code could not be
-    /// read.
+    /// It could not be ended, and it still ran when the end's wait was over,
+    /// or its exit code could not be read.
     Runs,
 }
 
 impl Fate {
-    /// `terminated`: the end succeeded. `exited`: it failed, and the exit code
-    /// read just after says the process has exited.
+    /// `terminated`: the end succeeded. `exited`: it failed, and the process
+    /// had exited, or did within the end's wait (`FAILED_END_WAIT`).
     pub fn of(terminated: bool, exited: bool) -> Fate {
         if terminated {
             Fate::Ended
@@ -424,8 +431,9 @@ pub use self::win::{end, start};
 mod win {
     use super::{app_created, list_step, made_under, still_running, EndRequest, Fate, ListStep, StartRequest, Started, NO_MORE_FILES};
     use crate::cmdline::build_command_line;
-    use crate::winproc::{close, create_process, creation_time, exit_code, os_error, wide, STARTF_USESTDHANDLES};
+    use crate::winproc::{close, create_process, creation_time, exit_code, exit_code_within, os_error, wide, STARTF_USESTDHANDLES};
     use std::io;
+    use std::time::{Duration, Instant};
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
     use windows_sys::Win32::System::SystemInformation::GetSystemTimePreciseAsFileTime;
@@ -491,8 +499,27 @@ mod win {
     /// What `end` opens a process with: read its times, wait on it, end it.
     const END_RIGHTS: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE;
     /// What it opens a process under it with: the same. Waiting on it is how
-    /// an end that fails tells a process that exited by itself (`exit_code`).
+    /// an end that fails tells a process that exited by itself
+    /// (`exit_code_within`).
     const UNDER_RIGHTS: u32 = END_RIGHTS;
+
+    /// How long one end waits, in all, for the processes it could not end to
+    /// exit. Windows refuses to end a process whose own exit is under way,
+    /// but marks it exited only when that exit is done, tens of milliseconds
+    /// later for a browser. So a process whose end fails counts as one that
+    /// still runs only when it has not exited by then. It is one deadline for
+    /// the whole end, so however many ends fail the end waits at most this
+    /// long: the app gives the whole end 5 s (`HELPER_END_TIMEOUT_MS`). An
+    /// end that succeeds waits for nothing.
+    const FAILED_END_WAIT: Duration = Duration::from_secs(1);
+
+    /// What is left until `until`, in milliseconds rounded up, as a wait
+    /// takes it: 0 once it has passed.
+    fn ms_until(until: Instant) -> u32 {
+        let left = until.saturating_duration_since(Instant::now()).as_micros().div_ceil(1000);
+        // u32::MAX would be a wait with no end.
+        u32::try_from(left).unwrap_or(u32::MAX - 1).min(u32::MAX - 1)
+    }
 
     /// The process list: every process as (pid, parent pid), and the system
     /// time read just before the list was.
@@ -540,13 +567,15 @@ mod win {
     /// open handle, closed here): `Ok` when none of them still runs
     /// (`still_running`). A root that exited by itself after the check is
     /// gone too, so the processes under it are still ended. A root that still
-    /// runs and cannot be ended ends nothing.
+    /// runs and cannot be ended ends nothing. Every end that fails waits
+    /// against one deadline, set here (`FAILED_END_WAIT`).
     unsafe fn end_checked(root: usize, pid: u32, under: Vec<(u32, usize)>) -> io::Result<()> {
-        let (root_fate, why) = end_one(root);
+        let until = Instant::now() + FAILED_END_WAIT;
+        let (root_fate, why) = end_one(root, until);
         let mut fates: Vec<(u32, Fate)> = Vec::new();
         for (child, h) in under {
             if root_fate.gone() {
-                fates.push((child, end_one(h).0));
+                fates.push((child, end_one(h, until).0));
             }
             close(h);
         }
@@ -562,13 +591,16 @@ mod win {
     }
 
     /// Try to end `process`: what became of it, and why the end failed when
-    /// it did.
-    unsafe fn end_one(process: usize) -> (Fate, Option<io::Error>) {
+    /// it did. An end that fails waits for it to exit until `until`, the
+    /// end's one deadline (`FAILED_END_WAIT`): it exited by itself when it
+    /// has by then, and still runs when it has not or the wait fails. An end
+    /// that succeeds waits for nothing.
+    unsafe fn end_one(process: usize, until: Instant) -> (Fate, Option<io::Error>) {
         if TerminateProcess(process as HANDLE, 1) != 0 {
             return (Fate::Ended, None);
         }
         let why = os_error("TerminateProcess");
-        (Fate::of(false, matches!(exit_code(process), Ok(Some(_)))), Some(why))
+        (Fate::of(false, matches!(exit_code_within(process, ms_until(until)), Ok(Some(_)))), Some(why))
     }
 
     /// The processes under `pid` (made at `made`), each a pid and a handle
@@ -717,7 +749,7 @@ mod win {
             assert_eq!(root.wait().expect("wait for cmd.exe").code(), Some(7));
             // The handle stays open until `root` is dropped, so its pid stays its own.
             let root_handle = root.as_raw_handle() as usize;
-            assert_eq!(unsafe { end_one(root_handle).0 }, Fate::Exited, "an end of a process that has exited did not fail: this test cannot reach the rule");
+            assert_eq!(unsafe { end_one(root_handle, Instant::now() + FAILED_END_WAIT).0 }, Fate::Exited, "an end of a process that has exited did not fail: this test cannot reach the rule");
             let mut under = Held::new();
             let opened = under.opened(UNDER_RIGHTS);
             let got = unsafe { end_checked(root_handle, root.id(), vec![(under.pid(), opened)]) };
@@ -766,10 +798,86 @@ mod win {
             // `exited` holds its handle, so the process can still be opened by its pid.
             let h = unsafe { OpenProcess(UNDER_RIGHTS, 0, exited.id()) } as usize;
             assert_ne!(h, 0, "open process {}: {}", exited.id(), io::Error::last_os_error());
-            assert_eq!(unsafe { end_one(h).0 }, Fate::Exited, "a process under it that exited by itself was read as one that may still run");
+            assert_eq!(unsafe { end_one(h, Instant::now() + FAILED_END_WAIT).0 }, Fate::Exited, "a process under it that exited by itself was read as one that may still run");
             let got = unsafe { end_checked(root_handle, root.pid(), vec![(exited.id(), h)]) };
             unsafe { close(root_handle) };
             assert!(got.is_ok(), "{got:?}");
+            assert!(root.gone_soon(), "the process itself still ran 2 s after the end");
+        }
+
+        /// What a wait may come back early by: one tick of the system clock,
+        /// with room to spare.
+        const SLACK: Duration = Duration::from_millis(100);
+
+        /// `cmd.exe` told to exit at once, started and not waited for: it
+        /// exits by itself a few milliseconds on.
+        fn exits_soon() -> Child {
+            cmd().args(["/d", "/c", "exit", "7"]).creation_flags(NO_WINDOW).spawn().expect("start cmd.exe")
+        }
+
+        /// Process `pid`, opened without the right to end it, so its end
+        /// fails as Windows fails one while the process's own exit is under
+        /// way.
+        fn opened_without_end(pid: u32) -> usize {
+            let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE, 0, pid) } as usize;
+            assert_ne!(h, 0, "open process {pid}: {}", io::Error::last_os_error());
+            h
+        }
+
+        #[test]
+        fn a_process_whose_end_fails_while_it_exits_by_itself_counts_as_exited() {
+            let mut quick = exits_soon();
+            let h = opened_without_end(quick.id());
+            let before = exit_code(h);
+            let fate = unsafe { end_one(h, Instant::now() + FAILED_END_WAIT).0 };
+            unsafe { close(h) };
+            let _ = quick.wait();
+            assert!(matches!(before, Ok(None)), "it had exited before its end: this test cannot reach the rule ({before:?})");
+            assert_eq!(fate, Fate::Exited, "a process that exited by itself within the end's wait was read as one that may still run");
+        }
+
+        #[test]
+        fn a_root_whose_end_fails_while_it_exits_by_itself_still_has_what_was_found_under_it_ended() {
+            let mut quick = exits_soon();
+            let h = opened_without_end(quick.id());
+            let mut under = Held::new();
+            let opened = under.opened(UNDER_RIGHTS);
+            let got = unsafe { end_checked(h, quick.id(), vec![(under.pid(), opened)]) };
+            unsafe { close(h) };
+            let _ = quick.wait();
+            assert!(got.is_ok(), "{got:?}");
+            assert!(under.gone_soon(), "the process found under it (process {}) still ran 2 s after the end", under.pid());
+        }
+
+        #[test]
+        fn a_process_whose_end_fails_and_that_does_not_exit_still_runs_once_the_wait_is_over() {
+            let mut stuck = Held::new();
+            let h = opened_without_end(stuck.pid());
+            let began = Instant::now();
+            let fate = unsafe { end_one(h, began + FAILED_END_WAIT).0 };
+            let took = began.elapsed();
+            unsafe { close(h) };
+            assert_eq!(fate, Fate::Runs, "a process that did not exit was read as gone");
+            assert!(took >= FAILED_END_WAIT - SLACK, "it was read as one that still runs after {took:?}, before the wait was over");
+            assert!(stuck.still_runs(), "the process was ended");
+        }
+
+        #[test]
+        fn ends_that_fail_wait_one_bound_together_not_one_each() {
+            let mut root = Held::new();
+            let root_handle = root.opened(END_RIGHTS);
+            let first = Held::new();
+            let first_handle = opened_without_end(first.pid());
+            let second = Held::new();
+            let second_handle = opened_without_end(second.pid());
+            let began = Instant::now();
+            let got = unsafe { end_checked(root_handle, root.pid(), vec![(first.pid(), first_handle), (second.pid(), second_handle)]) };
+            let took = began.elapsed();
+            unsafe { close(root_handle) };
+            let why = got.expect_err("it answered `ended` while two processes under it still ran").to_string();
+            assert!(why.contains(&first.pid().to_string()) && why.contains(&second.pid().to_string()), "{why}");
+            assert!(took >= FAILED_END_WAIT - SLACK, "the ends that failed did not wait: {took:?}");
+            assert!(took < FAILED_END_WAIT + Duration::from_millis(500), "two ends that failed waited {took:?}, more than the one bound of {FAILED_END_WAIT:?} for the whole end");
             assert!(root.gone_soon(), "the process itself still ran 2 s after the end");
         }
 
