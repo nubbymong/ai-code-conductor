@@ -152,8 +152,7 @@ pub enum ListStep {
 pub fn list_step(got: bool, error: u32) -> ListStep {
     if got {
         ListStep::Entry
-    } else if error == NO_MORE_FILES || error != NO_MORE_FILES {
-        // MUTANT M26: any failure ends the list (the rule before round 4).
+    } else if error == NO_MORE_FILES {
         ListStep::End
     } else {
         ListStep::Failed
@@ -200,9 +199,7 @@ pub fn still_running(root: (u32, Fate), under: &[(u32, Fate)]) -> Vec<u32> {
     if !root.1.gone() {
         return vec![root.0];
     }
-    // MUTANT M29: the processes under it are not looked at.
-    let _ = under;
-    Vec::new()
+    under.iter().filter(|(_, fate)| !fate.gone()).map(|(pid, _)| *pid).collect()
 }
 
 /// A path that starts with a drive letter, a colon and a separator, such as
@@ -495,8 +492,7 @@ mod win {
     const END_RIGHTS: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE;
     /// What it opens a process under it with: the same. Waiting on it is how
     /// an end that fails tells a process that exited by itself (`exit_code`).
-    // MUTANT M31: no right to wait on a process under it.
-    const UNDER_RIGHTS: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE;
+    const UNDER_RIGHTS: u32 = END_RIGHTS;
 
     /// The process list: every process as (pid, parent pid), and the system
     /// time read just before the list was.
@@ -549,8 +545,7 @@ mod win {
         let (root_fate, why) = end_one(root);
         let mut fates: Vec<(u32, Fate)> = Vec::new();
         for (child, h) in under {
-            // MUTANT M28: only a root that was ended has what is under it ended.
-            if root_fate == Fate::Ended {
+            if root_fate.gone() {
                 fates.push((child, end_one(h).0));
             }
             close(h);
@@ -586,8 +581,7 @@ mod win {
     /// cannot be opened or read is left out, with what is under it: it has
     /// exited, or its pid has passed to a process this user may not open.
     unsafe fn processes_under(pid: u32, made: u64, read_list: impl FnOnce() -> io::Result<Listing>) -> io::Result<Vec<(u32, usize)>> {
-        // MUTANT M27: a list that cannot be read is an empty one.
-        let (list, listed_at) = read_list().unwrap_or_default();
+        let (list, listed_at) = read_list()?;
         let mut found: Vec<(u32, usize)> = Vec::new();
         let mut seen: Vec<u32> = vec![pid];
         let mut parents: Vec<(u32, u64)> = vec![(pid, made)];
