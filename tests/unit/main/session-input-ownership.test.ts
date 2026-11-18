@@ -859,6 +859,15 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['a submit on the door\'s run screen read with a string key', `import * as input from './session-input'\ninput['codexRunScreen']()!.submit(id, t, o)`],
     ['a submit on the door\'s run screen required and called at once', `require('./session-input').codexRunScreen()?.submit(id, t, o)`],
     ['a submit destructured under another name from the door\'s run screen in a name', `import { codexRunScreen as cs } from './session-input'\nconst screen = cs()\nconst { submit: send } = screen!\nsend(id, t, o)`],
+    // A run screen typed from the door's function: the type is what codexRunScreen returns.
+    ['a parameter typed NonNullable of the door\'s run screen', `import { codexRunScreen } from './session-input'\nfunction deliver(s: NonNullable<ReturnType<typeof codexRunScreen>>) { s.submit(id, t, o) }`, 'src/main/pty-manager.ts'],
+    ['a parameter typed as what the door\'s run screen returns', `import { codexRunScreen } from './session-input'\nfunction deliver(s: ReturnType<typeof codexRunScreen>) { s?.submit(id, t, o) }`],
+    ['a parameter typed by a type alias of the door\'s run screen', `import { codexRunScreen } from './session-input'\ntype Screen = NonNullable<ReturnType<typeof codexRunScreen>>\nfunction deliver(s: Screen) { s.submit(id, t, o) }`],
+    ['a name typed as what the door\'s run screen returns, imported under another name', `import { codexRunScreen as cs } from './session-input'\nlet s: ReturnType<typeof cs> = undefined\ns?.submit(id, t, o)`],
+    ['a name typed as what the door\'s run screen returns, read from a namespace of the module', `import * as input from './session-input'\nconst go = (s: NonNullable<ReturnType<typeof input.codexRunScreen>>) => s.submit(id, t, o)`],
+    // The door's function held by a class, from where the class declares it.
+    ['the door\'s run screen held by a class field', `import { codexRunScreen } from './session-input'\nclass X {\n  cs = codexRunScreen\n  go() { this.cs()?.submit(id, t, o) }\n}`],
+    ['the door\'s run screen held by a constructor parameter property with a default', `import { codexRunScreen } from './session-input'\nclass X {\n  constructor(private cs = codexRunScreen) {}\n  go() { this.cs()?.submit(id, t, o) }\n}`],
   ]
   for (const [what, code, file] of flagged) {
     it(`flags ${what}`, () => { expect(typingSites(code, file).length).toBeGreaterThan(0) })
@@ -882,6 +891,8 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['a run screen\'s other calls destructured', `const { open, close } = getProvider('codex').runScreen!\nopen(id, o)`],
     ['the door\'s run screen\'s other calls, as the PTY manager makes them', `import { setSessionInputPorts, codexRunScreen } from './session-input'\ncodexRunScreen()?.close(id)\ncodexRunScreen()?.resize(id, 80, 24)\nconst s = codexRunScreen()\nif (s?.has(id)) s.close(id)\nconst { close } = codexRunScreen()!\nclose(id)`, 'src/main/pty-manager.ts'],
     ['the door\'s run screen\'s other calls, through a namespace or under another name', `import * as input from './session-input'\nimport { codexRunScreen as cs } from './session-input'\ninput.codexRunScreen()?.close(id)\ncs()?.resize(id, 80, 24)`],
+    ['the door\'s run screen\'s other calls, through its type', `import { codexRunScreen } from './session-input'\ntype Screen = NonNullable<ReturnType<typeof codexRunScreen>>\nfunction f(s: Screen, t: ReturnType<typeof codexRunScreen>) { s.close(id); t?.resize(id, 80, 24) }`],
+    ['the door\'s run screen\'s other calls, through a class that holds it', `import { codexRunScreen } from './session-input'\nclass X {\n  cs = codexRunScreen\n  constructor(private other = codexRunScreen) {}\n  go() { this.cs()?.close(id); this.other()?.resize(id, 80, 24) }\n}`],
     ['another submit', `form.submit()\nqueue.submit(job)`],
     ['another module\'s namespace spread', `import * as fs from 'fs'\nstart({ ...fs })`],
     ['a map of other things', `const m = new Map<string, number>()\nm.get(id)\nconst w = new Map<string, NodeJS.WritableStream>()\nw.get(id)!.write('x')`],
