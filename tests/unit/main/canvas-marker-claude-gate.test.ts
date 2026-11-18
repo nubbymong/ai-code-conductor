@@ -10,14 +10,15 @@
 //
 // Driven end to end: the REAL spawnPty (a local Claude session; the rest of
 // main mocked, as canvas-worktree-spawn.test.ts does), the REAL marker queue
-// and its wiring, the REAL writeCanvasMarkerLine and the module that holds a
+// and its wiring, the REAL session input module's submitMarker (which
+// writeCanvasMarkerLine became, 2.1.3-beta.9 A1) and the module that holds a
 // Claude marker (canvas/claude-marker-typing.ts), and the REAL renderer half
 // (answerClaudeMarkerAsk in src/renderer/lib/claudePrompt.ts reading
 // src/shared/claude-screen.ts) over a fake IPC hop. What reaches the session's
 // process is what the mocked node-pty records.
 //
-// Mutant this must catch: writeCanvasMarkerLine's Claude branch calling
-// writeSubmittedLine(sessionId, line) in place of queueClaudeMarkerLine.
+// Mutant this must catch: submitMarker's Claude branch calling
+// submitLine(sessionId, line) in place of queueClaudeMarkerLine.
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'

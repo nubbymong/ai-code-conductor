@@ -22,9 +22,13 @@
 //    never as the raw question and Enter; the characters Codex's prompt drops
 //    are removed first and the dock told; the log names a question by its
 //    length only.
+//  - the ports: the PTY manager registers them once, when it loads; a second
+//    registration throws and changes nothing, and before any registration
+//    each door that types through a port throws instead of dropping the input.
 //
 // Mutants this must catch: a marker typed into a run started after its own;
-// an Ask question written raw with Enter.
+// an Ask question written raw with Enter; a second registration taking over
+// the doors; a door that types nothing, silently, before the registration.
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -170,7 +174,7 @@ function codexProvider(): Record<string, unknown> {
 }
 
 const { spawnPty, killPty } = await import('../../../src/main/pty-manager')
-const { submitLine, typeKeys, submitMarker, askQuestion, handOffAskQuestion, ASK_READY_WAIT_MS } = await import('../../../src/main/session-input')
+const { submitLine, typeKeys, submitMarker, askQuestion, handOffAskQuestion, ASK_READY_WAIT_MS, setSessionInputPorts } = await import('../../../src/main/session-input')
 const { MARKER_FALLBACK_FLUSH_MS } = await import('../../../src/main/canvas/canvas-marker-queue')
 const { IPC } = await import('../../../src/shared/ipc-channels')
 type SpawnOpts = NonNullable<Parameters<typeof spawnPty>[2]>
@@ -390,5 +394,35 @@ describe('Ask Conductor on Codex: askQuestion and handOffAskQuestion', () => {
     expect(await askQuestion(fakeWin, SID, 'hello')).toEqual({ delivered: false, reason: 'session-gone' })
     expect(h.notices).toEqual([{ sessionId: SID, kind: 'not-delivered', reason: 'session-gone' }])
     expect(term.writes).toEqual([])
+  })
+})
+
+describe('the ports: registered once, by the PTY manager, when it loads', () => {
+  it('a second registration throws, and every door still types through the first ports', async () => {
+    const term = await claudeSession()
+    const redirected: string[] = []
+    const other = {
+      write: (sessionId: string, data: string) => { redirected.push(`${sessionId}:${data}`) },
+      run: () => undefined, tmuxWrapped: () => true, isCodexSession: () => true, isCodexAskSession: () => true,
+    }
+    expect(() => setSessionInputPorts(other)).toThrow(/already registered/)
+    submitLine(SID, 'continue')
+    expect(term.writes).toEqual(['continue\r'])
+    expect(redirected).toEqual([])
+  })
+
+  it('before the PTY manager loads, each door that types through a port throws, naming the missing registration, and types nothing', async () => {
+    // A fresh copy of the module and what it imports, the PTY manager not
+    // among them: nothing it loads registers the ports.
+    vi.resetModules()
+    const fresh = await import('../../../src/main/session-input')
+    const before = allWrites()
+    expect(() => fresh.submitLine(SID, 'continue')).toThrow(/has not registered its ports/)
+    expect(() => fresh.typeKeys(SID, 'continue')).toThrow(/has not registered its ports/)
+    expect(() => fresh.submitMarker(SID, MARKER)).toThrow(/has not registered its ports/)
+    expect(() => fresh.handOffAskQuestion(fakeWin, SID, 'type this')).toThrow(/has not registered its ports/)
+    expect(allWrites()).toBe(before)
+    expect(h.submits).toEqual([])
+    expect(h.queued).toEqual([])
   })
 })

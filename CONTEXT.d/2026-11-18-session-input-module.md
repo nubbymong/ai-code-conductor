@@ -19,13 +19,17 @@ through which main types into a session on its own initiative:
   dock notices, are the old `deliverAskQuestion` and `handOffAskQuestion`.
 
 The module imports nothing from pty-manager.ts. pty-manager registers five
-ports with it when it loads (`setSessionInputPorts`): write (writePty), run
-(the session's current PTY), tmuxWrapped, isCodexSession and
-isCodexAskSession. The Codex run screen is reached through the provider
-registry, as pty-manager reaches it. index.ts wires the Watchdog's send and
-write and the canvas queue's write to the module; pty-handlers.ts takes
-`handOffAskQuestion` from it; pty-manager's Ask launch calls `askQuestion`.
-pty-manager.ts lost 99 lines and its cap is now 8,253.
+ports with it when it loads (`setSessionInputPorts`, once: a second call
+throws): write (writePty), run (the session's current PTY), tmuxWrapped,
+isCodexSession and isCodexAskSession. The Codex run screen is reached through
+the provider registry, by one `codexRunScreen` the module exports and
+pty-manager now imports for its pane's open, feed, resize and close.
+index.ts wires the Watchdog's send and write and the canvas queue's write to
+the module; pty-handlers.ts takes `handOffAskQuestion` from it; pty-manager's
+Ask launch calls `askQuestion`, which skips the Ask check and so is held to
+pty-manager by the ratchet. A Claude Code marker is the one the module does
+not type: claude-marker-typing.ts holds it and the renderer types it at
+main's request. pty-manager.ts lost 107 lines and its cap is now 8,245.
 
 **The ratchet.** session-input-ownership.test.ts reads every src/main file
 and finds each place that types into a session's terminal: the old typing
@@ -37,6 +41,19 @@ function, with its reason and the slice that removes it; the list can only
 shrink. It was red on the unchanged source at index.ts (the three wiring
 lines), pty-handlers.ts (the Ask hand-off) and pty-manager.ts (the two run
 screen submits and writeSubmittedLine's write).
+
+The review of 3e36f4f8 showed new typing could still come in unseen, so the
+check now also follows destructuring (renamed, nested, with a default, in a
+parameter, from a require or a dynamic import, `ptyProcess`, `runScreen`,
+`write` and `submit` included), constructor parameter properties, template
+literal keys, node-pty required or imported at run time, lists and maps of
+PTY handles, indexed types (`X['runScreen']`), a PTY manager namespace handed
+on whole, and writeCliSetupPty (pty-manager's writePty hands it the
+first-run terminal's keys). It also holds the module's own shape: no file it
+loads, at any depth, is pty-manager; the registration is one statement of
+pty-manager itself; and askQuestion is reached from pty-manager only. No live
+site used the new shapes, so the allow-list changed only by writePty's
+second site.
 
 **Where the plan's premise did not hold.**
 - The ports are named isCodexSession and isCodexAskSession, not isCodex and
@@ -55,9 +72,12 @@ screen submits and writeSubmittedLine's write).
 - The tmux leave key's test is in session-input-ssh.test.ts, not
   session-input.test.ts: the SSH flow needs the real Claude Code provider and
   its own mocks, which the local test's stand-in provider cannot share.
-- Comments in canvas-marker-queue.ts and claude-marker-typing.ts still name
-  pty-manager's writeCanvasMarkerLine; those files were out of this section's
-  scope.
+- Comments in canvas-marker-queue.ts and claude-marker-typing.ts named
+  pty-manager's writeCanvasMarkerLine, and the perf harness's service map
+  (scripts/perf/service-map.json) named writeSubmittedLine. The review fixes
+  reword the comments (comment-only; neither file's rules changed) and give
+  the map submitLine and typeKeys, though all three files are outside the
+  plan's file list.
 
 **Tests.** New: session-input.test.ts and session-input-ssh.test.ts, written
 against pty-manager's functions first and green there (15 tests and 3; the
@@ -65,7 +85,16 @@ against pty-manager's functions first and green there (15 tests and 3; the
 the module and kept green. Mutants run: the leave key dropped, the
 leave key added to a session that is not wrapped, a Claude Code marker bound
 to any later run, and an Ask question written raw with Enter. Each turned a
-test red.
+test red. The review fixes added: a second registration throws (red before
+the fix); each door throws before any registration, in a fresh copy of the
+module (a silent no-op port turned it red); and 40 self-test cases of the
+ownership check written before the checker change (37 shapes it must flag,
+2 it must not, 1 count), each red against the old checker in one run. Six
+more shapes and one more clean case were written with the new checker and
+never ran against the old one. Its new
+module-shape checks were each turned red by a mutant: the registration
+moved into a function, a file the module loads importing pty-manager, and
+index.ts importing askQuestion.
 
 **Owed.** The leave key moved out of pty-manager.ts (an SSH blast-radius
 file), so the live SSH matrix runs once, at the release PR. An ADR-009 pass

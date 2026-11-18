@@ -106,8 +106,8 @@ export const CLAUDE_MARKER_ANSWER_MS = 5_000
  *  empty, from when its turn in the session's chain begins. After it the
  *  marker is dropped, never typed, and its canvas is told it was not sent.
  *  The marker queue's own fallback bound, reused on purpose: it is also the
- *  bound the other provider's marker submit waits (pty-manager's
- *  writeCanvasMarkerLine), so the canvas notice's "for two minutes" holds for
+ *  bound the other provider's marker submit waits (session-input's
+ *  submitMarker), so the canvas notice's "for two minutes" holds for
  *  every session. */
 export const CLAUDE_MARKER_HOLD_MS = MARKER_FALLBACK_FLUSH_MS
 

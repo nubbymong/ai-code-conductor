@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-18T20:08:20.116Z",
-  "head": "f6ac25374c41c604ab61f6b2e1526dc81737b401",
-  "tree": "450312f370be27278ff591b909d97ba49d3d52da",
+  "generatedAt": "2026-11-18T21:15:06.107Z",
+  "head": "3e36f4f8ca4646bc994bbb1d8016f212eba23240",
+  "tree": "675c6ac62c2bf3743655fd124319d28fed05af5f",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -1431,7 +1431,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 432,
+      "lineCount": 429,
       "truncated": true
     },
     {
@@ -5090,7 +5090,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 15
+      "lineCount": 20
     },
     {
       "path": "tests/unit/main/session-input.test.ts",
@@ -5099,7 +5099,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 34
+      "lineCount": 35
     },
     {
       "path": "tests/unit/main/session-resume-enrich.test.ts",

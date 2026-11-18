@@ -22,7 +22,7 @@ import { SSH_ENTRY, type SshEntryFailureReason } from '../shared/ssh-entry'
 import type { SshRuntime, DetachedRemoteLiveness, SshEndRemoteOutcome, SshEndRemoteResult } from '../shared/types'
 import { isProviderId, type RealmOwnership, type ProviderId } from '../shared/providers'
 import { spawnAgentPty, spawnPlainPty, whenHeldKnown } from './session-helper/manager'
-import { setSessionInputPorts, askQuestion as typeAskQuestion } from './session-input'
+import { setSessionInputPorts, askQuestion as typeAskQuestion, codexRunScreen } from './session-input'
 import { IPC } from '../shared/ipc-channels'
 import { askConductorProjectDocMaxBytes } from './help-workspace'
 import { resolveRunningClaudeInfo } from '../shared/ssh-tmux-persistence'
@@ -56,7 +56,7 @@ import { partnerFolderLine, partnerPromptTail, isPartnerShellPrompt, partnerRece
 import { resolveHostColorScheme, colorFgBgEnvToken } from './providers/host-color-scheme'
 import { getProvider, providerCapability } from './providers'
 import { isSshCapable } from './providers/types'
-import type { TelemetrySource, SessionRunScreen, SpawnOptions, SshCapableProvider, SessionProvider } from './providers/types'
+import type { TelemetrySource, SpawnOptions, SshCapableProvider, SessionProvider } from './providers/types'
 import { resolveCwd, isHomeOrAncestor } from './path-utils'
 import { AGENTS_ENV, agentsEnvValue, agentsRef, buildTerminalLaunchLine } from './terminal-launch-line'
 import { findOnWindowsPath, findOnWindowsPathAsync } from './windows-programs'
@@ -977,14 +977,6 @@ export function routeHookTranscriptPath(sessionId: string, transcriptPath: strin
  *  session). The attention source maps Codex's own hook events with it. */
 export function isCodexPtySession(sessionId: string): boolean {
   return ptySessions.get(sessionId)?.agent === 'codex'
-}
-
-/** WP2 PR 4, P4.1: the Codex package's pane of each run and its submit
- *  primitive (providers/codex/session-screen.ts), from the registered
- *  provider: this module reaches a provider package only through the
- *  registry, never by importing it. Undefined when none is registered. */
-function codexRunScreen(): SessionRunScreen | undefined {
-  try { return getProvider('codex').runScreen } catch { return undefined }
 }
 
 /** WP2 PR 4, P4.3: the Codex sessions running as Ask Conductor (launched with

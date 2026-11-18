@@ -25,7 +25,7 @@
 // FAIL-OPEN BY CONSTRUCTION. The queue only ever engages on POSITIVE evidence
 // that a turn is open. With hooks disabled (or a gateway that never binds) no
 // turn-opening event arrives, `turnOpen` is false, and every marker is handed
-// on immediately. What it is handed to (pty-manager's writeCanvasMarkerLine)
+// on immediately. What it is handed to (session-input's submitMarker)
 // still types it only at the agent's ready prompt: for Claude Code, held
 // until then for at most CLAUDE_MARKER_HOLD_MS (claude-marker-typing.ts,
 // which names the one exception: a type request that went unanswered), after
@@ -52,8 +52,8 @@ import { logInfo, logWarn } from '../debug-logger'
  *  minutes with no tool starting or finishing (a long build or test run, or
  *  the agent thinking or writing at length) count as silence, and the held
  *  marker is handed on while the turn may still be running. What it is
- *  handed to still types it only at the agent's ready prompt (pty-manager's
- *  writeCanvasMarkerLine), waiting for it within this same bound for every
+ *  handed to still types it only at the agent's ready prompt (session-input's
+ *  submitMarker), waiting for it within this same bound for every
  *  assistant (for Claude Code, CLAUDE_MARKER_HOLD_MS in
  *  claude-marker-typing.ts), after which the canvas is told the marker was
  *  not sent. The known-issues entry for canvas verdicts describes both;

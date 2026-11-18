@@ -1,10 +1,12 @@
 // The session input module (2.1.3-beta.9 section A1; ADR-030 component row
 // 3's submit): the one door through which main types into a session on its
-// own initiative. The Watchdog's retry (submitLine, typeKeys), an Agent Canvas
-// marker (submitMarker) and Ask Conductor's question on Codex (askQuestion,
-// handOffAskQuestion) are typed here and nowhere else in main;
-// tests/unit/main/session-input-ownership.test.ts holds every other place to a
-// shrinking allow-list.
+// own initiative. Main decides here what goes in for the Watchdog's retry
+// (submitLine, typeKeys), an Agent Canvas marker (submitMarker) and Ask
+// Conductor's question on Codex (askQuestion, handOffAskQuestion), and nowhere
+// else. A Claude Code marker is the one this module does not type itself: it
+// is held by canvas/claude-marker-typing.ts and typed by the renderer at main's
+// request. tests/unit/main/session-input-ownership.test.ts holds every other
+// place in main that types into a session to a shrinking allow-list.
 //
 // Each function's body moved here from the PTY manager as it was: nothing
 // typed, its order or its timing changed, and no queue, delay or check added.
@@ -50,8 +52,11 @@ export interface SessionInputPorts {
 
 let ports: SessionInputPorts | null = null
 
-/** The PTY manager's registration, once, when it loads. */
+/** The PTY manager's registration, once, when it loads. A second one throws
+ *  and leaves the first in place: nothing else may redirect what the doors
+ *  type. */
 export function setSessionInputPorts(p: SessionInputPorts): void {
+  if (ports) throw new Error('session input: the ports are already registered')
   ports = p
 }
 
@@ -62,16 +67,16 @@ function port(): SessionInputPorts {
 
 /** WP2 PR 4, P4.1: the Codex package's pane of each run and its submit
  *  primitive (providers/codex/session-screen.ts), from the registered
- *  provider: this module reaches a provider package only through the
- *  registry, never by importing it. Undefined when none is registered. */
-function codexRunScreen(): SessionRunScreen | undefined {
+ *  provider: main reaches a provider package only through the registry,
+ *  never by importing it. Undefined when none is registered. The PTY manager
+ *  opens, feeds, resizes and closes each run's pane through this one copy. */
+export function codexRunScreen(): SessionRunScreen | undefined {
   try { return getProvider('codex').runScreen } catch { return undefined }
 }
 
 /**
- * #85 — submit a programmatic LINE into a session (the watchdog's retry, the
- * canvas marker queue), leaving tmux copy-mode first when the session is
- * tmux-wrapped.
+ * #85 — submit a programmatic LINE into a session (the watchdog's retry),
+ * leaving tmux copy-mode first when the session is tmux-wrapped.
  *
  * The wheel now opens tmux's scrollback view on an SSH Persistent session, and
  * copy-mode SWALLOWS input: a user who scrolled up to read something and then
@@ -152,6 +157,11 @@ function sendAskNotice(win: BrowserWindow, notice: AskConductorNotice): void {
  * question 6, default A); a question that is not sent is said, with why, and
  * the dock keeps it. The log names the question by its length only. Never
  * rejects.
+ *
+ * It does NOT check that the session launched as Ask Conductor: it is for the
+ * PTY manager's Ask launch only, which has just put the session among the Ask
+ * sessions. Every other caller goes through handOffAskQuestion, which checks.
+ * session-input-ownership.test.ts holds it to the PTY manager.
  */
 export async function askQuestion(win: BrowserWindow, sessionId: string, question: string): Promise<SubmitTextResult> {
   let result: SubmitTextResult
