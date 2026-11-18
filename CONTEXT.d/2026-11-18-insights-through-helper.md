@@ -60,9 +60,11 @@ session helper" (agentSessionsThroughHelper) is on; no new setting.
 - Settings, the agent switch's note: "Insights' Claude Code report runs this
   way too."
 
-**On the fallback paths.** These apply when the switch is on and the helper
-hands the report back to node-pty (the fallback after a failed hold, and the
-wait after a crash with the switch off):
+**On the fallback paths.** These apply whenever a report's HelperPty hands it
+back to node-pty: with the switch on, when the hold fails, or the holder cannot
+be reached, refuses the launch or cannot be attached; and, with the switch off
+or the helper not ready, when it first waits for an earlier holder of the run
+(a crash's) to end:
 - The node-pty terminal HelperPty starts there is guarded by helper-pty.ts
   guardInner, not by Insights' own guardPtyIo (which only logs; a HelperPty
   has nothing for it to guard). For a tab's terminal guardInner ends it 3 s
