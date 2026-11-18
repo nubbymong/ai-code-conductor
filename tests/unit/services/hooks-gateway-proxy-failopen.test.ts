@@ -172,6 +172,9 @@ describe('HooksGatewayProxy fail-open + permission bridge', () => {
     expect(later).toEqual(['Stop'])
   })
 
+  // Characterisation (planning #323): the next three cases pin behaviour the
+  // fix keeps, and were green before it too. Only the two cases above cover
+  // the fix itself (they were red before it).
   it('an unsubscribe called BEFORE failOpen still removes the callback: it is not copied', () => {
     const t = new FakeChildTransport()
     p = new HooksGatewayProxy({ transport: t, defaultPort: 0 })
