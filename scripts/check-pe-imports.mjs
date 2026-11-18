@@ -10,30 +10,52 @@
 //
 // It reads the file's PE headers, its import table and its delay-load import
 // table, and fails on any C runtime DLL. The Visual C++ runtime ones
-// (vcruntime*, msvcp*, msvcr*, concrt*, vccorlib*, vcomp*, debug builds
-// included) are what a fresh Windows lacks. The Universal C runtime ones
-// (ucrtbase.dll, api-ms-win-crt-*) are part of Windows 10 and later, but a
-// static build imports none of them either, so seeing one means the build was
-// not static. It only reads the file; it never runs it, so it is safe on any
-// OS and on any copy.
+// (vcruntime*, msvcp*, msvcr*, concrt*, vccorlib*, vcomp*, debug builds and
+// their suffixed names included) are what a fresh Windows lacks. The Universal
+// C runtime ones (ucrtbase.dll, api-ms-win-crt-*) are part of Windows 10 and
+// later, but a static build imports none of them either, so seeing one means
+// the build was not static. A name without `.dll` counts too: Windows adds the
+// extension to a module name that has none. It also fails a program that is
+// not x64, the only Windows build the installer ships (package.json
+// build.win.target). It only reads the file; it never runs it, so it is safe
+// on any OS and on any copy.
+//
+// scripts/verify-bundled-helper.mjs applies the same rules (importProblems) to
+// the packaged, signed copy of the helper.
 //
 //   node scripts/check-pe-imports.mjs <program.exe> [<program.exe> ...]
 //
-// Exit 0: every file is a PE image that names at least one imported DLL and no
-//         C runtime DLL.
+// Exit 0: every file is an x64 PE image that names at least one imported DLL
+//         and no C runtime DLL.
 // Exit 1: a file imports a C runtime DLL, names no DLL at all (the check would
-//         prove nothing), or cannot be read as a PE image.
+//         prove nothing), is not x64, or cannot be read as a PE image.
 // Exit 2: no file was given.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 /** A C runtime DLL: shipped by the Visual C++ runtime, or the Universal C runtime. */
-export const CRT_DLL = /^(?:(?:vcruntime|msvcp|msvcr|concrt|vccorlib|vcomp)\d+(?:_\w+)?d?|ucrtbased?|api-ms-win-crt-[\w-]+)\.dll$/i
+export const CRT_DLL = /^(?:(?:vcruntime|msvcp|msvcr|concrt|vccorlib|vcomp)\d+\w*|ucrtbased?|api-ms-win-crt-[\w-]+)(?:\.dll)?$/i
+/** The Universal C runtime part of CRT_DLL: part of Windows 10 and later. */
+const UNIVERSAL_CRT = /^(?:ucrtbase|api-ms-win-crt-)/i
 
 export function isCrtDll(name) {
   return typeof name === 'string' && CRT_DLL.test(name)
+}
+
+/** A Visual C++ runtime DLL: the kind a fresh Windows does not have. */
+export function isVcRuntimeDll(name) {
+  return isCrtDll(name) && !UNIVERSAL_CRT.test(name)
+}
+
+/** The only machine type the Windows installer ships (package.json build.win.target arch x64). */
+const X64 = 0x8664
+const MACHINES = { 0x8664: 'x64', 0x14c: 'x86', 0xaa64: 'arm64', 0x1c4: 'arm' }
+
+/** A COFF machine type, as a name. */
+export function machineName(machine) {
+  return MACHINES[machine] ?? `machine 0x${Number(machine).toString(16)}`
 }
 
 /** At most this many entries in one import table: a table with no end marker fails instead of running on. */
@@ -143,6 +165,32 @@ export function readImports(bytes) {
 
 const HINT = 'Link the C runtime into the program: helper/.cargo/config.toml sets "-C target-feature=+crt-static" for Windows MSVC, and cargo must run from helper/ to read it. A RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS environment variable replaces that setting.'
 
+/** Every DLL a program imports, each delay-loaded one marked. */
+const allImports = (found) => [...found.imports, ...found.delayImports.map((d) => `${d} (delay-load)`)]
+
+/**
+ * What is wrong with one program's imports, as sentences that follow its name;
+ * an empty list when it passes: an x64 program that names at least one
+ * imported DLL and no C runtime DLL.
+ * @param {{ machine: number, imports: string[], delayImports: string[] }} found what readImports returned
+ * @returns {string[]}
+ */
+export function importProblems(found) {
+  const names = [...found.imports, ...found.delayImports]
+  const all = allImports(found)
+  const problems = []
+  const crt = names.filter(isCrtDll)
+  if (crt.length > 0) {
+    const why = crt.some(isVcRuntimeDll)
+      ? "Windows cannot start it on a PC without Microsoft's Visual C++ runtime."
+      : 'Those are the Universal C runtime, part of Windows 10 and later, but a program that carries its own C runtime imports none of them.'
+    problems.push(`does not carry its own C runtime: it imports ${crt.join(', ')}. ${why} All its imports: ${all.join(', ')}.`)
+  }
+  if (names.length === 0) problems.push('names no imported DLL, so this check would prove nothing about it.')
+  if (found.machine !== X64) problems.push(`is built for ${machineName(found.machine)}, not x64: the Windows installer ships an x64 helper only (package.json build.win.target).`)
+  return problems
+}
+
 /**
  * @param {string[]} argv the files to check
  * @param {{ readFile?: (file: string) => Uint8Array, log?: (s: string) => void, error?: (s: string) => void }} io
@@ -166,23 +214,40 @@ export function main(argv = process.argv.slice(2), io = {}) {
       failed++
       continue
     }
-    const all = [...found.imports, ...found.delayImports.map((d) => `${d} (delay-load)`)]
-    if (all.length === 0) {
-      error(`[check-pe-imports] FAIL: ${file} names no imported DLL, so this check would prove nothing about it.`)
+    const named = `${file} (${found.format}, ${machineName(found.machine)})`
+    const problems = importProblems(found)
+    if (problems.length > 0) {
+      for (const p of problems) error(`[check-pe-imports] FAIL: ${named} ${p}`)
+      if ([...found.imports, ...found.delayImports].some(isCrtDll)) error(`[check-pe-imports] ${HINT}`)
       failed++
       continue
     }
-    const crt = [...found.imports, ...found.delayImports].filter(isCrtDll)
-    if (crt.length > 0) {
-      error(`[check-pe-imports] FAIL: ${file} (${found.format}) does not carry its own C runtime: it imports ${crt.join(', ')}. A PC without Microsoft's Visual C++ runtime cannot start a program that imports VCRUNTIME140.dll. All its imports: ${all.join(', ')}.`)
-      error(`[check-pe-imports] ${HINT}`)
-      failed++
-      continue
-    }
-    log(`[check-pe-imports] ${file} (${found.format}): OK, no C runtime DLL. It imports: ${all.join(', ')}.`)
+    log(`[check-pe-imports] ${named}: OK, no C runtime DLL. It imports: ${allImports(found).join(', ')}.`)
   }
   return failed > 0 ? 1 : 0
 }
 
-const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-if (invokedDirectly) process.exitCode = main()
+/**
+ * True when `metaUrl` is the script node was started with (`argv1`, as typed).
+ * node makes the main module's import.meta.url from its REAL path, junctions
+ * and symlinks resolved, while argv[1] keeps the path as typed, so the two are
+ * compared as given and then after realpath. A plain comparison misses a run
+ * through a junction: main() never runs and the check exits 0 having checked
+ * nothing. When realpath throws, the comparison as typed is the answer.
+ * @param {string | undefined} argv1 process.argv[1]
+ * @param {string} metaUrl import.meta.url of the script
+ * @param {(p: string) => string} [realpath]
+ */
+export function isEntryPoint(argv1, metaUrl, realpath = realpathSync) {
+  if (typeof argv1 !== 'string' || argv1 === '') return false
+  const typed = path.resolve(argv1)
+  const self = fileURLToPath(metaUrl)
+  if (typed === self) return true
+  try {
+    return realpath(typed) === realpath(self)
+  } catch {
+    return false
+  }
+}
+
+if (isEntryPoint(process.argv[1], import.meta.url)) process.exitCode = main()

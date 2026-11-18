@@ -520,7 +520,7 @@ jobs:
           rustup show active-toolchain || rustup toolchain install
           cargo build --release --locked
 
-      # It carries its own C runtime, as in release.yml (see the Helper job).
+      # Check the helper carries its own C runtime, as the Helper job and release.yml do (helper/.cargo/config.toml, scripts/check-pe-imports.mjs).
       - name: Check the session helper carries its own C runtime (release/* branches only)
         if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
@@ -838,7 +838,8 @@ jobs:
   # steps above), and the app runs plain terminals through it only when the
   # setting is on. This job is NOT a required check and nothing waits on it.
   # It builds and tests the helper on the three OSes it runs on, and uploads
-  # the Windows build. Probe P7
+  # the Windows build. On Windows it also fails if the release build imports a
+  # C runtime DLL (scripts/check-pe-imports.mjs). Probe P7
   # (helper/probes/p7-windows-survival.ps1) is answered (2026-11-15, ADR-030);
   # its script rides in the artifact as the record of how, and it drives
   # commands this build no longer has, so running it again needs a

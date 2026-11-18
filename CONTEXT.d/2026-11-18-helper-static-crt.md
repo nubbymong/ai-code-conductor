@@ -26,15 +26,26 @@ one a fresh Windows lacks. It dates from the first shipped helper
   `.cargo/config.toml` from the current folder upwards, and a file under
   `helper/` makes the Helper job build (scripts/ci/helper-scope.mjs).
 - `scripts/check-pe-imports.mjs` reads a program's import and delay-load
-  tables (it never runs the program) and fails on any C runtime DLL. It runs
-  after the Windows release build in the Helper job, after the release/* test
-  installer's helper build in ci.yml, and in release.yml's `build-windows`
-  before signing and packaging.
+  tables (it never runs the program) and fails on any C runtime DLL, on a
+  program that names no DLL, and on one that is not x64 (the only Windows
+  build the installer ships). It runs after the Windows release build in the
+  Helper job, after the release/* test installer's helper build in ci.yml, and
+  in release.yml's `build-windows` before signing and packaging. It runs
+  whenever node is started with it, through a junction or symlink too: its
+  entry check compares real paths, so a missed run cannot exit 0 unchecked.
+- `scripts/verify-bundled-helper.mjs` (`npm run verify:helper`) applies the
+  same rules to the packaged, signed copy on Windows, so every package script
+  (`package:store` now included) and packaging job checks what actually ships,
+  whatever built it. Its entry check got the same fix.
+- `scripts/ci/helper-scope.mjs` lists `scripts/check-pe-imports.mjs`, so a
+  change to the check alone still runs it on a real built helper.
 - `tests/unit/scripts/check-pe-imports.test.ts` covers the parser on in-memory
-  PE32 and PE32+ images and pins the wiring: each Windows build is followed by
-  the check, every cargo command runs in `helper/`, and no workflow sets
-  `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` (either would replace the config's
-  flags).
+  PE32 and PE32+ images (`pe-image.ts`), every error branch with its exact
+  message, and pins the wiring across every workflow file: each Windows build
+  is followed by the check, every cargo command runs in `helper/`, no workflow
+  sets `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` or uses a toolchain action that
+  does (either would replace the config's flags), and the config file's exact
+  settings.
 
 **Seen along the way.** The bundled `conpty.dll` and `OpenConsole.exe` from
 node-pty import only the Universal C runtime (`api-ms-win-crt-*`), not

@@ -10,6 +10,8 @@
 //   - anything under helper/ (the code, the fixtures, the probes, the lock file)
 //   - the workflow that runs the job (.github/workflows/ci.yml)
 //   - this script
+//   - the import check the job's Windows leg runs on the built helper
+//     (scripts/check-pe-imports.mjs), so a change to it meets a real program
 //
 // Anything this cannot read for certain (not a pull request, not a merge
 // commit, git failing, an empty list) answers helper=true: the job builds.
@@ -23,7 +25,7 @@ import { pathToFileURL } from 'node:url'
 import { changedPaths } from './change-scope.mjs'
 
 /** The paths that make the helper job build. */
-export const HELPER_PATHS = [/^helper\//, /^\.github\/workflows\/ci\.yml$/, /^scripts\/ci\/helper-scope\.mjs$/]
+export const HELPER_PATHS = [/^helper\//, /^\.github\/workflows\/ci\.yml$/, /^scripts\/ci\/helper-scope\.mjs$/, /^scripts\/check-pe-imports\.mjs$/]
 
 export function touchesHelper(p) {
   return typeof p === 'string' && p.length > 0 && HELPER_PATHS.some((re) => re.test(p))

@@ -19,8 +19,8 @@ function git(paths: string[], parents = `${MERGE} ${BASE} ${HEAD}\n`) {
 }
 
 describe('helper-scope: what makes the Helper job build', () => {
-  it('anything under helper/, the workflow that runs the job and this script; nothing else', () => {
-    expect(HELPER_PATHS.map(String)).toEqual(['/^helper\\//', '/^\\.github\\/workflows\\/ci\\.yml$/', '/^scripts\\/ci\\/helper-scope\\.mjs$/'])
+  it('anything under helper/, the workflow that runs the job, this script and the import check the job runs; nothing else', () => {
+    expect(HELPER_PATHS.map(String)).toEqual(['/^helper\\//', '/^\\.github\\/workflows\\/ci\\.yml$/', '/^scripts\\/ci\\/helper-scope\\.mjs$/', '/^scripts\\/check-pe-imports\\.mjs$/'])
     for (const p of [
       'helper/Cargo.toml',
       'helper/Cargo.lock',
@@ -28,8 +28,12 @@ describe('helper-scope: what makes the Helper job build', () => {
       'helper/fixtures/frames.json',
       'helper/probes/p7-windows-survival.ps1',
       'helper/rust-toolchain.toml',
+      'helper/.cargo/config.toml',
       '.github/workflows/ci.yml',
       'scripts/ci/helper-scope.mjs',
+      // The job's Windows leg runs it on the built helper, so a change to it is
+      // checked against a real program, not only the unit test's in-memory ones.
+      'scripts/check-pe-imports.mjs',
     ]) {
       expect(touchesHelper(p), p).toBe(true)
     }
@@ -40,6 +44,9 @@ describe('helper-scope: what makes the Helper job build', () => {
       'tests/unit/scripts/helper-fixtures.test.ts',
       '.github/workflows/release.yml',
       'scripts/ci/change-scope.mjs',
+      'scripts/verify-bundled-helper.mjs',
+      'tests/unit/scripts/check-pe-imports.test.ts',
+      'scripts/check-pe-imports.mjs.bak',
       'helper',
       'xhelper/a.rs',
       'src/helper/a.rs',

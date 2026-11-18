@@ -86,9 +86,11 @@ node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
 ```
 
 It fails if the program imports a C runtime DLL (`VCRUNTIME140.dll`,
-`api-ms-win-crt-*` and the like). CI runs it after the Windows release build in
-the `Helper (windows-2025)` job, and `release.yml` runs it before the Windows
-installer is signed and packaged.
+`api-ms-win-crt-*` and the like), names no DLL at all, or is not x64. CI runs it
+after the Windows release build in the Helper job, before the release/* test
+installer is packaged, and `release.yml` runs it before the Windows installer is
+signed and packaged. `npm run verify:helper`, which every package script and
+packaging job runs, applies the same rules to the packaged, signed copy.
 
 ## Dependencies
 
