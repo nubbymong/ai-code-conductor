@@ -48,13 +48,20 @@
 //! one made later may have taken a listed pid after the list was read
 //! (`made_under`). A pid is freed and passed on only after the list is read,
 //! so a process that takes one is always made after that time; one made
-//! while the list is read is left out too, and keeps running.
-//! It prints `ended`, or `left` when no process has that pid, the one that
-//! has it was made at another time, or it has already exited; both exit 0.
-//! When it cannot tell, it exits 1 with a message on stderr, and the process
-//! is not ended. A command line it cannot read exits 2. It reads the process
-//! list and each process's times itself (no PowerShell, no WMI), so it
-//! answers in milliseconds, which the app needs on the exits that cannot wait.
+//! while the list is read is left out too, and keeps running. A list that
+//! cannot be read ends nothing: a list read in part would leave processes
+//! under it running once it is gone (`list_step`). Once it is gone, ended or
+//! exited by itself after the check, the processes found under it are ended.
+//! It prints `ended` when none of the processes it checked still runs, or
+//! `left` when no process has that pid, the one that has it was made at
+//! another time, or it had already exited when it was checked; both exit 0.
+//! It exits 1 with a message on stderr when it cannot tell (it ends nothing),
+//! when the process still runs and cannot be ended (it ends nothing), or when
+//! a process under it cannot be ended and may still run (it ends the rest;
+//! `still_running`). A command line it cannot read exits 2. It reads the
+//! process list and each process's times itself (no PowerShell, no WMI), so
+//! it answers in milliseconds, which the app needs on the exits that cannot
+//! wait.
 #![allow(unsafe_code)]
 
 use crate::pty::{is_batch_file, is_renamed_by_windows};
@@ -122,6 +129,77 @@ pub fn app_created(filetime: u64) -> u64 {
 /// read. All three are in steps of 100 ns since 1601 (UTC).
 pub fn made_under(child_made: u64, parent_made: u64, listed_at: u64) -> bool {
     parent_made <= child_made && child_made <= listed_at
+}
+
+/// `ERROR_NO_MORE_FILES`: the process list has no more entries.
+pub const NO_MORE_FILES: u32 = 18;
+
+/// What one read of an entry of the process list gave, for `end`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListStep {
+    /// An entry.
+    Entry,
+    /// The end of the list.
+    End,
+    /// An error: the list cannot be read.
+    Failed,
+}
+
+/// What one `Process32FirstW` or `Process32NextW` gave: an entry when it
+/// returned one (`got`), else the end of the list only when the error it left
+/// (`error`) is `ERROR_NO_MORE_FILES`. Any other error means the list cannot
+/// be read, never that it is shorter, and `end` then ends nothing.
+pub fn list_step(got: bool, error: u32) -> ListStep {
+    if got {
+        ListStep::Entry
+    } else if error == NO_MORE_FILES {
+        ListStep::End
+    } else {
+        ListStep::Failed
+    }
+}
+
+/// What became of a process `end` checked, once it tried to end it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fate {
+    /// It was ended.
+    Ended,
+    /// It could not be ended, and its exit code says it had exited by itself.
+    Exited,
+    /// It could not be ended, and it still runs, or its exit code could not be
+    /// read.
+    Runs,
+}
+
+impl Fate {
+    /// `terminated`: the end succeeded. `exited`: it failed, and the exit code
+    /// read just after says the process has exited.
+    pub fn of(terminated: bool, exited: bool) -> Fate {
+        if terminated {
+            Fate::Ended
+        } else if exited {
+            Fate::Exited
+        } else {
+            Fate::Runs
+        }
+    }
+
+    /// Ended, or exited by itself: it no longer runs.
+    pub fn gone(self) -> bool {
+        self != Fate::Runs
+    }
+}
+
+/// The processes `end` checked that may still run, by pid, once it has tried
+/// to end the one it was named (`root`) and, only when that one is gone, each
+/// one under it (`under`). Empty: it prints `ended`. Otherwise it exits 1. A
+/// root that may still run is named alone: nothing under it was ended then,
+/// so nothing was.
+pub fn still_running(root: (u32, Fate), under: &[(u32, Fate)]) -> Vec<u32> {
+    if !root.1.gone() {
+        return vec![root.0];
+    }
+    under.iter().filter(|(_, fate)| !fate.gone()).map(|(pid, _)| *pid).collect()
 }
 
 /// A path that starts with a drive letter, a colon and a separator, such as
@@ -320,7 +398,7 @@ pub fn end_command(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("aicc-helper: could not tell whether to end process {}: {e}", req.pid);
+            eprintln!("aicc-helper: could not end process {}: {e}", req.pid);
             ExitCode::from(1)
         }
     }
@@ -344,11 +422,11 @@ pub use self::win::{end, start};
 
 #[cfg(windows)]
 mod win {
-    use super::{app_created, made_under, EndRequest, StartRequest, Started};
+    use super::{app_created, list_step, made_under, still_running, EndRequest, Fate, ListStep, StartRequest, Started, NO_MORE_FILES};
     use crate::cmdline::build_command_line;
     use crate::winproc::{close, create_process, creation_time, exit_code, os_error, wide, STARTF_USESTDHANDLES};
     use std::io;
-    use windows_sys::Win32::Foundation::{GetLastError, ERROR_INVALID_PARAMETER, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
     use windows_sys::Win32::System::SystemInformation::GetSystemTimePreciseAsFileTime;
     use windows_sys::Win32::System::Threading::{
@@ -407,10 +485,18 @@ mod win {
         }
     }
 
+    // The one value `list_step` takes as the end of the process list.
+    const _: () = assert!(NO_MORE_FILES == ERROR_NO_MORE_FILES);
+
     /// What `end` opens a process with: read its times, wait on it, end it.
     const END_RIGHTS: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE;
-    /// What it opens a process under it with: read its times, end it.
-    const UNDER_RIGHTS: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE;
+    /// What it opens a process under it with: the same. Waiting on it is how
+    /// an end that fails tells a process that exited by itself (`exit_code`).
+    const UNDER_RIGHTS: u32 = END_RIGHTS;
+
+    /// The process list: every process as (pid, parent pid), and the system
+    /// time read just before the list was.
+    type Listing = (Vec<(u32, u32)>, u64);
 
     /// End the process tree `req` names, only while its pid still has its
     /// creation time (see the module comment).
@@ -433,39 +519,70 @@ mod win {
     /// `end` with the process open: while this handle is open its pid cannot
     /// pass to another process, so the check and the end are of one process.
     unsafe fn end_open(root: usize, req: &EndRequest) -> io::Result<bool> {
+        end_open_from(root, req, process_list)
+    }
+
+    /// `end_open`, with the process list read by `read_list` (a test gives
+    /// one that cannot be read). A list that cannot be read is an error
+    /// before anything is ended.
+    unsafe fn end_open_from(root: usize, req: &EndRequest, read_list: impl FnOnce() -> io::Result<Listing>) -> io::Result<bool> {
         let made = creation_time(root)?;
         if app_created(made) != req.created || exit_code(root)?.is_some() {
             return Ok(false);
         }
-        let under = processes_under(req.pid, made);
-        if TerminateProcess(root as HANDLE, 1) == 0 {
-            let e = os_error("TerminateProcess");
-            for p in under {
-                close(p);
-            }
-            // It exited on its own in between: there was nothing to end.
-            return match exit_code(root) {
-                Ok(Some(_)) => Ok(false),
-                _ => Err(e),
-            };
-        }
-        for p in under {
-            TerminateProcess(p as HANDLE, 1);
-            close(p);
-        }
+        let under = processes_under(req.pid, made, read_list)?;
+        end_checked(root, req.pid, under)?;
         Ok(true)
     }
 
-    /// The processes under `pid` (made at `made`), each open to be ended,
-    /// from one read of the process list. A process counts as under its
-    /// parent only when it was made between the parent and the system time
-    /// read just before the list (`made_under`): each is opened by its pid
-    /// after the list is read, and the pid may have passed by then to
-    /// another process, which was made after that time. One that cannot be
-    /// opened or read is left out, with what is under it.
-    unsafe fn processes_under(pid: u32, made: u64) -> Vec<usize> {
-        let (list, listed_at) = process_list();
-        let mut found: Vec<usize> = Vec::new();
+    /// End the process `end` checked (`root`, whose pid is `pid`) and, once
+    /// it is gone, each process found under it (`under`, each a pid and an
+    /// open handle, closed here): `Ok` when none of them still runs
+    /// (`still_running`). A root that exited by itself after the check is
+    /// gone too, so the processes under it are still ended. A root that still
+    /// runs and cannot be ended ends nothing.
+    unsafe fn end_checked(root: usize, pid: u32, under: Vec<(u32, usize)>) -> io::Result<()> {
+        let (root_fate, why) = end_one(root);
+        let mut fates: Vec<(u32, Fate)> = Vec::new();
+        for (child, h) in under {
+            if root_fate.gone() {
+                fates.push((child, end_one(h).0));
+            }
+            close(h);
+        }
+        let running = still_running((pid, root_fate), &fates);
+        if running.is_empty() {
+            return Ok(());
+        }
+        if let (false, Some(why)) = (root_fate.gone(), why) {
+            return Err(io::Error::new(why.kind(), format!("it could not be ended and may still run, so nothing was ended: {why}")));
+        }
+        let pids: Vec<String> = running.iter().map(u32::to_string).collect();
+        Err(io::Error::other(format!("it is gone, but these processes under it could not be ended and may still run: {}", pids.join(", "))))
+    }
+
+    /// Try to end `process`: what became of it, and why the end failed when
+    /// it did.
+    unsafe fn end_one(process: usize) -> (Fate, Option<io::Error>) {
+        if TerminateProcess(process as HANDLE, 1) != 0 {
+            return (Fate::Ended, None);
+        }
+        let why = os_error("TerminateProcess");
+        (Fate::of(false, matches!(exit_code(process), Ok(Some(_)))), Some(why))
+    }
+
+    /// The processes under `pid` (made at `made`), each a pid and a handle
+    /// open to end it, from one read of the process list (`read_list`). A
+    /// list that cannot be read is an error, and nothing is opened. A process
+    /// counts as under its parent only when it was made between the parent
+    /// and the system time read just before the list (`made_under`): each is
+    /// opened by its pid after the list is read, and the pid may have passed
+    /// by then to another process, which was made after that time. One that
+    /// cannot be opened or read is left out, with what is under it: it has
+    /// exited, or its pid has passed to a process this user may not open.
+    unsafe fn processes_under(pid: u32, made: u64, read_list: impl FnOnce() -> io::Result<Listing>) -> io::Result<Vec<(u32, usize)>> {
+        let (list, listed_at) = read_list()?;
+        let mut found: Vec<(u32, usize)> = Vec::new();
         let mut seen: Vec<u32> = vec![pid];
         let mut parents: Vec<(u32, u64)> = vec![(pid, made)];
         while let Some((parent, parent_made)) = parents.pop() {
@@ -480,40 +597,205 @@ mod win {
                 match creation_time(h) {
                     Ok(child_made) if made_under(child_made, parent_made, listed_at) => {
                         seen.push(child);
-                        found.push(h);
+                        found.push((child, h));
                         parents.push((child, child_made));
                     }
                     _ => close(h),
                 }
             }
         }
-        found
+        Ok(found)
     }
 
     /// Every process now, as (pid, parent pid), with the system time read
     /// just before the list is. A pid in the list can be freed and passed to
     /// a new process only after the list is read, so that process is made
     /// after this time; one made while the list is read is after it too, and
-    /// is left out (it keeps running). Empty (and a time of 0) when the list
-    /// cannot be read.
-    unsafe fn process_list() -> (Vec<(u32, u32)>, u64) {
-        let mut list = Vec::new();
-        let mut now = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
-        GetSystemTimePreciseAsFileTime(&mut now);
-        let listed_at = (u64::from(now.dwHighDateTime) << 32) | u64::from(now.dwLowDateTime);
-        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snap == INVALID_HANDLE_VALUE {
-            return (list, 0);
+    /// is left out (it keeps running). An error when the list cannot be read:
+    /// the snapshot fails, or reading an entry fails with any error but
+    /// `ERROR_NO_MORE_FILES`, the end of the list (`list_step`).
+    fn process_list() -> io::Result<Listing> {
+        unsafe {
+            let mut now = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+            GetSystemTimePreciseAsFileTime(&mut now);
+            let listed_at = (u64::from(now.dwHighDateTime) << 32) | u64::from(now.dwLowDateTime);
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE_VALUE {
+                return Err(os_error("CreateToolhelp32Snapshot"));
+            }
+            let mut list = Vec::new();
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut call = "Process32FirstW";
+            let mut got = Process32FirstW(snap, &mut entry) != 0;
+            let read = loop {
+                let error = if got { 0 } else { GetLastError() };
+                match list_step(got, error) {
+                    ListStep::Entry => list.push((entry.th32ProcessID, entry.th32ParentProcessID)),
+                    ListStep::End => break Ok(list),
+                    ListStep::Failed => {
+                        let e = io::Error::from_raw_os_error(error as i32);
+                        break Err(io::Error::new(e.kind(), format!("{call}: {e}")));
+                    }
+                }
+                call = "Process32NextW";
+                got = Process32NextW(snap, &mut entry) != 0;
+            };
+            close(snap as usize);
+            read.map(|list| (list, listed_at))
         }
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-        let mut more = Process32FirstW(snap, &mut entry) != 0;
-        while more {
-            list.push((entry.th32ProcessID, entry.th32ParentProcessID));
-            more = Process32NextW(snap, &mut entry) != 0;
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::windows::io::AsRawHandle;
+        use std::os::windows::process::CommandExt;
+        use std::process::{Child, Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        /// `CREATE_NO_WINDOW`.
+        const NO_WINDOW: u32 = 0x0800_0000;
+
+        /// `cmd.exe` from System32, by its full path, with no standard handles.
+        fn cmd() -> Command {
+            let root = std::env::var("SystemRoot").expect("SystemRoot is set");
+            let mut c = Command::new(std::path::Path::new(&root).join("System32").join("cmd.exe"));
+            c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            c
         }
-        close(snap as usize);
-        (list, listed_at)
+
+        /// A process that runs until it is ended and does nothing: `cmd.exe`
+        /// created suspended. Ended and waited for when dropped.
+        struct Held(Child);
+
+        impl Held {
+            fn new() -> Held {
+                Held(cmd().creation_flags(CREATE_SUSPENDED | NO_WINDOW).spawn().expect("start a suspended cmd.exe"))
+            }
+
+            fn pid(&self) -> u32 {
+                self.0.id()
+            }
+
+            /// It, opened again with `rights`, as `end` opens a process.
+            fn opened(&self, rights: u32) -> usize {
+                let h = unsafe { OpenProcess(rights, 0, self.pid()) } as usize;
+                assert_ne!(h, 0, "open process {}: {}", self.pid(), io::Error::last_os_error());
+                h
+            }
+
+            /// Whether it has exited within 2 s.
+            fn gone_soon(&mut self) -> bool {
+                let until = Instant::now() + Duration::from_secs(2);
+                while matches!(self.0.try_wait(), Ok(None)) {
+                    if Instant::now() >= until {
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                true
+            }
+
+            /// Whether it still runs 300 ms on: nothing else ends it.
+            fn still_runs(&mut self) -> bool {
+                std::thread::sleep(Duration::from_millis(300));
+                matches!(self.0.try_wait(), Ok(None))
+            }
+        }
+
+        impl Drop for Held {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        #[test]
+        fn a_root_that_exited_by_itself_after_the_check_still_has_what_was_found_under_it_ended() {
+            let mut root = cmd().args(["/d", "/c", "exit", "7"]).creation_flags(NO_WINDOW).spawn().expect("start cmd.exe");
+            assert_eq!(root.wait().expect("wait for cmd.exe").code(), Some(7));
+            // The handle stays open until `root` is dropped, so its pid stays its own.
+            let root_handle = root.as_raw_handle() as usize;
+            assert_eq!(unsafe { end_one(root_handle).0 }, Fate::Exited, "an end of a process that has exited did not fail: this test cannot reach the rule");
+            let mut under = Held::new();
+            let opened = under.opened(UNDER_RIGHTS);
+            let got = unsafe { end_checked(root_handle, root.id(), vec![(under.pid(), opened)]) };
+            assert!(got.is_ok(), "{got:?}");
+            assert!(under.gone_soon(), "the process found under it (process {}) still ran 2 s after the end", under.pid());
+        }
+
+        #[test]
+        fn a_root_that_still_runs_and_cannot_be_ended_ends_nothing() {
+            let mut root = Held::new();
+            // Opened without the right to end it, so the end fails while it runs.
+            let weak = root.opened(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE);
+            let mut under = Held::new();
+            let opened = under.opened(UNDER_RIGHTS);
+            let got = unsafe { end_checked(weak, root.pid(), vec![(under.pid(), opened)]) };
+            unsafe { close(weak) };
+            assert!(got.is_err(), "{got:?}");
+            assert!(root.still_runs(), "the process itself was ended");
+            assert!(under.still_runs(), "the process under it was ended while the process itself still ran");
+        }
+
+        #[test]
+        fn a_process_under_it_that_cannot_be_ended_is_named_and_the_rest_are_ended() {
+            let mut root = Held::new();
+            let root_handle = root.opened(END_RIGHTS);
+            let mut stuck = Held::new();
+            // Opened without the right to end it, so its end fails while it runs.
+            let stuck_handle = stuck.opened(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE);
+            let mut under = Held::new();
+            let under_handle = under.opened(UNDER_RIGHTS);
+            let got = unsafe { end_checked(root_handle, root.pid(), vec![(stuck.pid(), stuck_handle), (under.pid(), under_handle)]) };
+            unsafe { close(root_handle) };
+            let why = got.expect_err("it answered `ended` while a process under it still ran").to_string();
+            assert!(why.contains(&stuck.pid().to_string()), "{why}");
+            assert!(root.gone_soon(), "the process itself still ran 2 s after the end");
+            assert!(under.gone_soon(), "the process under it that could be ended still ran 2 s after the end");
+            assert!(stuck.still_runs(), "the process under it that could not be ended did not run");
+        }
+
+        #[test]
+        fn a_process_under_it_that_exited_by_itself_counts_as_gone() {
+            let mut root = Held::new();
+            let root_handle = root.opened(END_RIGHTS);
+            let mut exited = cmd().args(["/d", "/c", "exit", "7"]).creation_flags(NO_WINDOW).spawn().expect("start cmd.exe");
+            assert_eq!(exited.wait().expect("wait for cmd.exe").code(), Some(7));
+            // `exited` holds its handle, so the process can still be opened by its pid.
+            let h = unsafe { OpenProcess(UNDER_RIGHTS, 0, exited.id()) } as usize;
+            assert_ne!(h, 0, "open process {}: {}", exited.id(), io::Error::last_os_error());
+            assert_eq!(unsafe { end_one(h).0 }, Fate::Exited, "a process under it that exited by itself was read as one that may still run");
+            let got = unsafe { end_checked(root_handle, root.pid(), vec![(exited.id(), h)]) };
+            unsafe { close(root_handle) };
+            assert!(got.is_ok(), "{got:?}");
+            assert!(root.gone_soon(), "the process itself still ran 2 s after the end");
+        }
+
+        #[test]
+        fn a_process_list_that_cannot_be_read_ends_nothing() {
+            let mut root = Held::new();
+            let h = root.opened(END_RIGHTS);
+            let made = creation_time(h).expect("its creation time");
+            let req = EndRequest { pid: root.pid(), created: app_created(made) };
+            let got = unsafe { end_open_from(h, &req, || Err(io::Error::other("a list made to fail by a test"))) };
+            assert!(got.is_err(), "{got:?}");
+            assert!(root.still_runs(), "the process was ended although the processes under it could not be listed");
+            // The control: with the list read, the same process is ended.
+            let got = unsafe { end_open_from(h, &req, process_list) };
+            unsafe { close(h) };
+            assert_eq!(got.ok(), Some(true));
+            assert!(root.gone_soon(), "the process still ran 2 s after the end");
+        }
+
+        #[test]
+        fn the_process_list_has_a_process_this_test_started_under_it() {
+            let held = Held::new();
+            let (list, listed_at) = process_list().expect("the process list");
+            assert!(listed_at > 0);
+            assert!(list.iter().any(|&(pid, parent)| pid == held.pid() && parent == std::process::id()), "process {} is not listed under this test", held.pid());
+        }
     }
 }
 
@@ -619,6 +901,39 @@ mod tests {
         assert!(!made_under(parent - 1, parent, listed), "made before its parent: the parent id has passed to another process");
         assert!(!made_under(listed + 1, parent, listed), "made after the list was read: it took a listed pid");
         assert!(!made_under(u64::MAX, parent, listed), "made long after the list was read");
+    }
+
+    #[test]
+    fn only_no_more_files_ends_the_process_list_and_any_other_error_means_it_cannot_be_read() {
+        assert_eq!(list_step(true, 0), ListStep::Entry);
+        assert_eq!(list_step(true, NO_MORE_FILES), ListStep::Entry, "an entry is an entry, whatever error was left before");
+        assert_eq!(list_step(false, NO_MORE_FILES), ListStep::End);
+        // ERROR_SUCCESS, ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
+        // ERROR_BAD_LENGTH, ERROR_INVALID_PARAMETER, ERROR_PARTIAL_COPY.
+        for error in [0, 5, 6, 8, 24, 87, 299] {
+            assert_eq!(list_step(false, error), ListStep::Failed, "error {error} was read as the end of the list");
+        }
+    }
+
+    #[test]
+    fn a_failed_end_is_a_process_gone_only_when_its_exit_code_says_it_exited() {
+        assert_eq!(Fate::of(true, false), Fate::Ended);
+        assert_eq!(Fate::of(true, true), Fate::Ended);
+        assert_eq!(Fate::of(false, true), Fate::Exited);
+        assert_eq!(Fate::of(false, false), Fate::Runs);
+        assert!(Fate::Ended.gone() && Fate::Exited.gone() && !Fate::Runs.gone());
+    }
+
+    #[test]
+    fn it_answers_ended_only_when_none_of_the_processes_it_checked_still_runs() {
+        let none: Vec<u32> = Vec::new();
+        assert_eq!(still_running((10, Fate::Ended), &[]), none, "the process alone, ended");
+        assert_eq!(still_running((10, Fate::Ended), &[(11, Fate::Ended), (12, Fate::Exited)]), none, "every process under it gone");
+        assert_eq!(still_running((10, Fate::Exited), &[]), none, "it exited by itself after the check");
+        assert_eq!(still_running((10, Fate::Exited), &[(11, Fate::Ended)]), none, "it exited by itself, and the process under it was ended");
+        assert_eq!(still_running((10, Fate::Exited), &[(11, Fate::Runs), (12, Fate::Ended), (13, Fate::Runs)]), vec![11, 13], "processes under it still run");
+        assert_eq!(still_running((10, Fate::Ended), &[(11, Fate::Runs)]), vec![11], "a process under it still runs");
+        assert_eq!(still_running((10, Fate::Runs), &[]), vec![10], "it still runs");
     }
 
     #[test]

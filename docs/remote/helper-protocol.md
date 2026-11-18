@@ -555,15 +555,23 @@ earlier than the parent and no later than that time: one made earlier names a
 parent id that has since passed to another process, and one made later may have
 taken a listed pid after the list was read. A pid is freed and passed on only
 after the list is read, so a process that takes one is always made after that
-time; one made while the list is read is left out too, and keeps running. When
-no process has that pid, the one that has it was made at another time, or it
-has already exited, it ends nothing, prints `left` and exits 0. When it cannot
-tell (the process cannot be opened or read), it ends nothing and exits 1 with a
-message on stderr; a command line it cannot read exits 2. It reads the process
-list and each process's times itself, with no PowerShell and no WMI, so it
-answers in milliseconds: the app uses it on the exits that cannot wait (quit,
-an update install, SIGTERM) as well as at a stop and a relaunch. On macOS and
-Linux the mode exits 1.
+time; one made while the list is read is left out too, and keeps running. A
+list it cannot read in full (the snapshot fails, or reading an entry fails with
+any error but the end of the list) ends nothing: a list read in part would
+leave processes under it running once it is gone. The processes under it are
+ended once it is gone, also when it exits by itself after the check, and it
+prints `ended` only when none of the processes it checked still runs. When no
+process has that pid, the one that has it was made at another time, or it had
+already exited when it was checked, it ends nothing, prints `left` and exits 0.
+It exits 1 with a message on stderr in three cases, and the app then keeps the
+program tracked. When it cannot tell (the process cannot be opened or read, or
+the process list cannot be read), it ends nothing. When the process still runs
+and cannot be ended, it ends nothing. When a process under it cannot be ended
+and may still run, it ends the rest. A command line it cannot read exits 2. It
+reads the process list and each process's times itself, with no PowerShell and
+no WMI, so it answers in milliseconds: the app uses it on the exits that cannot
+wait (quit, an update install, SIGTERM) as well as at a stop and a relaunch. On
+macOS and Linux the mode exits 1.
 
 **Endpoint: only this user can connect.** No network socket is opened.
 
