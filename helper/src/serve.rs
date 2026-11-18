@@ -17,17 +17,28 @@
 //! that comes while another thread ends the session is answered by that
 //! thread, with the rest.
 //!
-//! Locks: a connection's stream gate (`Conn::live`) first, then the record,
-//! then the serve state, then the holder's own (never the other way), and
-//! nothing is written to a connection while the record or the serve state is
-//! held.
+//! Hook events (capability `hooks`): any connection that acked `hooks` may
+//! post one (`hook.event`). Each takes the session's next `seq` and goes at
+//! once, as `event`, to the attached connection if that connection acked
+//! `hooks` too; otherwise it waits in the hook queue (`HookQueue`), which the
+//! next such attach gets right after its `term.attached` reply and replay. A
+//! hook event is only numbered and passed on: nothing is run, opened or
+//! written for it.
+//!
+//! Locks: a connection's stream gate (`Conn::live`) first, then the hook
+//! events (`Serve::hooks`), then the record, then the serve state, then the
+//! holder's own (never the other way), and nothing is written to a connection
+//! while the record or the serve state is held. Hook events are written to a
+//! connection under its gate and the hook lock, so they go out in `seq` order
+//! and never inside an attach's reply and replay or after its last word; the
+//! hook lock is held for at most `WRITE_TIMEOUT` of writing at a time.
 
 use crate::frame::{self, Body, Direction, Frame, FrameError};
-use crate::hello::{self, Hello, LOCAL_CAPS, PROTO_VERSIONS};
-use crate::holder::{lock, Holder};
+use crate::hello::{self, Hello, PROTO_VERSIONS};
+use crate::holder::{lock, HookEvent, HookQueue, Holder};
 use crate::json::Value;
 use crate::pty::SpawnOptions;
-use crate::request::{self, Launch, Refusal, Request};
+use crate::request::{self, Allowed, Launch, Refusal, Request};
 use crate::ring::RingError;
 use crate::store::{self, Record};
 use crate::transport::{self, Listener, Stream};
@@ -39,6 +50,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// The capability that allows hook events.
+pub const HOOKS_CAP: &str = "hooks";
+/// What a holder offers in its hello: the frozen core, `local` for the
+/// terminal messages and `hooks` for hook events (from 2.1.3-beta.8). The
+/// app acks `core` and `local` (`hello::LOCAL_CAPS`); the hook mode acks all
+/// three.
+pub const HOLDER_CAPS: [&str; 3] = ["core", "local", HOOKS_CAP];
 /// Connections served at once; the next one gets `busy` and is closed.
 pub const MAX_CONNECTIONS: usize = 16;
 /// The app must ack the hello in this time.
@@ -107,14 +125,30 @@ struct Conn {
 
 impl Conn {
     fn send_bytes(&self, bytes: &[u8]) -> io::Result<()> {
-        let mut w = lock(&self.writer);
         // The limit is for the whole message, however slowly the app reads.
-        let result = w.write_all_within(bytes, transport::WRITE_TIMEOUT);
+        self.send_bytes_within(bytes, transport::WRITE_TIMEOUT)
+    }
+
+    fn send_bytes_within(&self, bytes: &[u8], limit: Duration) -> io::Result<()> {
+        let mut w = lock(&self.writer);
+        let result = w.write_all_within(bytes, limit);
         if result.is_err() {
             // A write that failed or timed out ends the connection.
             self.closer.shutdown();
         }
         result
+    }
+
+    /// A control message whose write must be done by `deadline`; one that
+    /// is not ends the connection.
+    fn send_json_by(&self, v: Value, deadline: Instant) -> io::Result<()> {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            self.closer.shutdown();
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the app did not take the hook events in time"));
+        }
+        let bytes = frame::encode(&Frame::json(0, v), Direction::HelperToApp).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        self.send_bytes_within(&bytes, left)
     }
 
     fn send_frame(&self, frame: &Frame) -> io::Result<()> {
@@ -233,11 +267,20 @@ fn mark_running(rec: &mut Record) {
     }
 }
 
+/// The session's hook events, and where new ones go.
+struct Hooks {
+    queue: HookQueue,
+    /// The attached connection that takes hook events, and its attach, once
+    /// every waiting event has been sent to it. None: events wait.
+    to: Option<(Arc<Conn>, u64)>,
+}
+
 struct Serve {
     opts: Options,
     nonce: String,
     listener: Listener,
     state: Mutex<State>,
+    hooks: Mutex<Hooks>,
     record: Mutex<Record>,
     /// `State::ending`, for threads that only look.
     ending: AtomicBool,
@@ -274,6 +317,40 @@ fn code_value(code: i32) -> Value {
     Value::Num(code.to_string())
 }
 
+/// `event`: one hook event, to the attached connection that takes them.
+/// `lost`, when not 0, is how many were dropped from the queue before it.
+pub fn event_message(ev: &HookEvent, lost: u64) -> Value {
+    let mut members = vec![("t", Value::str("event")), ("seq", Value::uint(ev.seq)), ("kind", Value::str(&ev.kind)), ("payload", ev.payload.clone())];
+    if lost > 0 {
+        members.push(("lost", Value::uint(lost)));
+    }
+    Value::obj(members)
+}
+
+/// `hook.taken`: the reply to `hook.event` `re`, with the `seq` it took.
+pub fn hook_taken(re: u64, seq: u64) -> Value {
+    reply("hook.taken", re, vec![("seq", Value::uint(seq))])
+}
+
+/// Send `conn` every hook event waiting, oldest first; each leaves the queue
+/// once it is sent. The whole queue goes within `WRITE_TIMEOUT`, however
+/// many events it holds, so the hook lock is never held longer: a connection
+/// that does not take them in time is closed. False when a send failed or
+/// the time ran out: that event and those after it wait on (the app drops a
+/// `seq` it has already seen). An event always encodes: its payload came in
+/// a frame of at most 32 levels and is at most `MAX_HOOK_PAYLOAD`, so the
+/// event is at most 64 KiB of JSON.
+fn send_waiting(queue: &mut HookQueue, conn: &Conn) -> bool {
+    let deadline = Instant::now() + transport::WRITE_TIMEOUT;
+    while let Some(message) = queue.front().map(|(ev, lost)| event_message(ev, lost)) {
+        if conn.send_json_by(message, deadline).is_err() {
+            return false;
+        }
+        queue.sent();
+    }
+    true
+}
+
 /// `term.ended` for request `re`, the last thing on `conn`.
 fn say_ended(conn: &Conn, re: u64, code: Option<i32>) {
     let more = match code {
@@ -290,8 +367,8 @@ fn say_ended(conn: &Conn, re: u64, code: Option<i32>) {
 
 /// Check the first frame: a `hello.ack` with exactly `t`, `proto` and `caps`,
 /// a version this holder speaks, and capabilities it offered, `core` among
-/// them. Returns whether `local` was acked.
-fn check_ack(v: &Value) -> Result<bool, Refusal> {
+/// them. Returns what the ack allowed: `local`, `hooks`.
+fn check_ack(v: &Value) -> Result<Allowed, Refusal> {
     let bad = |code: &'static str, text: &str| Err(Refusal { code, re: None, text: text.to_string() });
     match v.get("t").and_then(Value::as_str) {
         Some("hello.ack") => {}
@@ -311,7 +388,7 @@ fn check_ack(v: &Value) -> Result<bool, Refusal> {
     }
     let mut seen: Vec<&str> = Vec::new();
     for c in &caps {
-        if !LOCAL_CAPS.contains(&c.as_str()) || seen.contains(&c.as_str()) {
+        if !HOLDER_CAPS.contains(&c.as_str()) || seen.contains(&c.as_str()) {
             return bad(request::CODE_BAD_FIELD, "caps holds one this holder did not offer, or one twice");
         }
         seen.push(c.as_str());
@@ -319,7 +396,7 @@ fn check_ack(v: &Value) -> Result<bool, Refusal> {
     if !seen.contains(&"core") {
         return bad(request::CODE_BAD_FIELD, "caps must hold core");
     }
-    Ok(seen.contains(&"local"))
+    Ok(Allowed { local: seen.contains(&"local"), hooks: seen.contains(&HOOKS_CAP) })
 }
 
 impl Serve {
@@ -335,6 +412,66 @@ impl Serve {
     fn is_current(&self, conn: &Conn, gen: u64) -> bool {
         let st = lock(&self.state);
         st.attach_gen == gen && st.attached.as_ref().map(|a| a.id) == Some(conn.id)
+    }
+
+    /// Number one hook event (its payload `bytes` long as JSON) and send it,
+    /// with any still waiting, to the attached connection that takes them;
+    /// with none, it waits in the queue. Its `seq`; None while the session
+    /// is ending.
+    fn post_hook(&self, kind: String, payload: Value, bytes: usize) -> Option<u64> {
+        let (seq, to) = {
+            let mut hooks = lock(&self.hooks);
+            if self.ending.load(Ordering::SeqCst) {
+                return None;
+            }
+            let seq = hooks.queue.push(kind, payload, bytes);
+            (seq, hooks.to.clone())
+        };
+        if let Some((conn, gen)) = to {
+            // That connection's gate first, as an attach takes it, so no
+            // event comes between an attach's reply and its replay, or after
+            // `term.exit` or `term.detached`. Then the hook lock again: the
+            // queue goes out in `seq` order, whichever poster sends it, and
+            // only while that attach still holds the terminal. Otherwise the
+            // event waits for the next attach, which takes the queue itself.
+            let _live = lock(&conn.live);
+            let mut hooks = lock(&self.hooks);
+            let still = hooks.to.as_ref().map_or(false, |(c, g)| c.id == conn.id && *g == gen);
+            if still && (!self.is_current(&conn, gen) || !send_waiting(&mut hooks.queue, &conn)) {
+                hooks.to = None;
+            }
+        }
+        Some(seq)
+    }
+
+    /// `conn`, attached by attach `gen`, takes hook events: every one
+    /// waiting goes to it now, and each new one at once. The caller holds
+    /// `conn.live` and has sent the `term.attached` reply and its replay.
+    /// False when a send failed (the events not sent wait on).
+    fn take_hooks(&self, conn: &Arc<Conn>, gen: u64) -> bool {
+        let mut hooks = lock(&self.hooks);
+        if !self.is_current(conn, gen) {
+            // A newer attach holds the terminal and takes them.
+            return true;
+        }
+        if !send_waiting(&mut hooks.queue, conn) {
+            hooks.to = None;
+            return false;
+        }
+        hooks.to = Some((Arc::clone(conn), gen));
+        true
+    }
+
+    /// `conn` takes no more hook events; they wait for the next attach.
+    /// Called under `conn.live` before the last message it gets as the
+    /// attached connection (`term.detached`, `replaced`, `term.exit`, or
+    /// `busy` when it fell behind or no thread could carry its output), so
+    /// no event follows that message; and when the connection goes.
+    fn stop_hooks(&self, conn: &Conn) {
+        let mut hooks = lock(&self.hooks);
+        if hooks.to.as_ref().map(|(c, _)| c.id) == Some(conn.id) {
+            hooks.to = None;
+        }
     }
 
     /// The most JSON the next frame may hold: a launch may be large; once
@@ -436,6 +573,10 @@ impl Serve {
             st.ended = Some(code);
             (std::mem::take(&mut st.enders), st.attached.clone())
         };
+        // No hook event goes out after what the connections are told below:
+        // one being sent finishes first, and later ones are refused
+        // (`ending`) or wait in a queue that ends with the process.
+        lock(&self.hooks).to = None;
         let mut told: Vec<Arc<Conn>> = Vec::new();
         for (conn, re) in requester.map(|(c, re)| (Arc::clone(c), re)).into_iter().chain(enders) {
             say_ended(&conn, re, code);
@@ -537,7 +678,7 @@ impl Serve {
             sha256: None,
             os: std::env::consts::OS,
             arch: std::env::consts::ARCH,
-            caps: &LOCAL_CAPS,
+            caps: &HOLDER_CAPS,
             sid: &self.opts.sid,
             state,
         })
@@ -575,9 +716,9 @@ impl Serve {
             Some(f) => f,
             None => return,
         };
-        let local = match &first.body {
+        let allowed = match &first.body {
             Body::Json(v) if first.channel == 0 => match check_ack(v) {
-                Ok(local) => local,
+                Ok(allowed) => allowed,
                 Err(r) => {
                     let _ = conn.refuse(&r);
                     return;
@@ -615,12 +756,12 @@ impl Serve {
                         let _ = conn.send_error(None, frame::CODE_BAD_FRAME, "a control message off channel 0");
                         return;
                     }
-                    match request::parse(&v, local) {
+                    match request::parse_allowed(&v, allowed) {
                         Ok(req) => {
                             if matches!(req, Request::Ping { .. }) {
                                 input.ping();
                             }
-                            if self.handle(conn, req) == Flow::Close {
+                            if self.handle(conn, req, allowed) == Flow::Close {
                                 return;
                             }
                         }
@@ -644,7 +785,7 @@ impl Serve {
         }
     }
 
-    fn handle(self: &Arc<Self>, conn: &Arc<Conn>, req: Request) -> Flow {
+    fn handle(self: &Arc<Self>, conn: &Arc<Conn>, req: Request, allowed: Allowed) -> Flow {
         match req {
             Request::Error => Flow::Continue,
             Request::Ping { id } => {
@@ -655,7 +796,18 @@ impl Serve {
                 self.launch(conn, l);
                 Flow::Continue
             }
-            Request::Attach { id, from } => self.attach(conn, id, from),
+            Request::Attach { id, from } => self.attach(conn, id, from, allowed.hooks),
+            Request::HookEvent { id, kind, payload, bytes } => {
+                match self.post_hook(kind, payload, bytes) {
+                    Some(seq) => {
+                        let _ = conn.send_json(hook_taken(id, seq));
+                    }
+                    None => {
+                        let _ = conn.send_error(Some(id), request::CODE_NOT_FOUND, "the session is ending");
+                    }
+                }
+                Flow::Continue
+            }
             Request::Resize { id, size } => {
                 let holder = {
                     let st = lock(&self.state);
@@ -699,9 +851,10 @@ impl Serve {
                     return Flow::Continue;
                 }
                 self.update_record(|_| {});
-                // No live output after the reply.
+                // No live output, and no hook event, after the reply.
                 let mut live = lock(&conn.live);
                 *live = 0;
+                self.stop_hooks(conn);
                 let _ = conn.send_json(reply("term.detached", id, vec![]));
                 drop(live);
                 Flow::Close
@@ -756,7 +909,9 @@ impl Serve {
         }
     }
 
-    fn attach(self: &Arc<Self>, conn: &Arc<Conn>, id: u64, from: u64) -> Flow {
+    /// `takes_hooks`: the connection acked `hooks`, so the hook events go to
+    /// it once it is attached.
+    fn attach(self: &Arc<Self>, conn: &Arc<Conn>, id: u64, from: u64, takes_hooks: bool) -> Flow {
         let taken = {
             let mut st = lock(&self.state);
             if st.ending {
@@ -794,6 +949,7 @@ impl Serve {
         if let Some(old) = old {
             let mut live = lock(&old.live);
             *live = 0;
+            self.stop_hooks(&old);
             let _ = old.send_error(None, request::CODE_REPLACED, "a newer connection attached to this terminal");
             old.closer.close_after_writes();
             drop(live);
@@ -821,6 +977,11 @@ impl Serve {
             }
             *live = gen;
             if conn.send_json(reply("term.attached", id, more)).is_err() || conn.send_terminal(&attachment.replay.bytes).is_err() {
+                return Flow::Close;
+            }
+            // The hook events waiting go right after the reply and its
+            // replay, before any live output.
+            if takes_hooks && !self.take_hooks(conn, gen) {
                 return Flow::Close;
             }
         }
@@ -852,6 +1013,9 @@ impl Serve {
             if *live != gen || serve.ending.load(Ordering::SeqCst) || !serve.is_current(&conn, gen) {
                 return;
             }
+            // No hook event after either last word: later ones wait for the
+            // next attach.
+            serve.stop_hooks(&conn);
             match holder.exit_code() {
                 Some(code) => conn.send_exit(code),
                 None => {
@@ -863,9 +1027,11 @@ impl Serve {
         });
         if started.is_err() {
             // No thread to carry the live output (the count went down with
-            // the closure): the app is told and attaches again.
+            // the closure): the app is told and attaches again. No hook
+            // event follows that last word.
             let mut live = lock(&conn.live);
             *live = 0;
+            self.stop_hooks(conn);
             let _ = conn.send_error(None, request::CODE_BUSY, "the holder could not carry live output; attach again from the last offset seen");
             drop(live);
             return Flow::Close;
@@ -888,6 +1054,7 @@ impl Serve {
                 false
             }
         };
+        self.stop_hooks(conn);
         if was_attached {
             self.update_record(|_| {});
         }
@@ -953,6 +1120,7 @@ pub fn run(opts: Options) -> io::Result<()> {
             enders: Vec::new(),
             ended: None,
         }),
+        hooks: Mutex::new(Hooks { queue: HookQueue::new(), to: None }),
         record: Mutex::new(record),
         ending: AtomicBool::new(false),
         next_id: AtomicU64::new(1),
@@ -989,8 +1157,57 @@ mod tests {
     use super::*;
     use crate::json;
 
-    fn ack(text: &str) -> Result<bool, &'static str> {
+    fn acked(text: &str) -> Result<Allowed, &'static str> {
         check_ack(&json::parse(text.as_bytes()).unwrap()).map_err(|r| r.code)
+    }
+
+    fn ack(text: &str) -> Result<bool, &'static str> {
+        acked(text).map(|a| a.local)
+    }
+
+    #[test]
+    fn hooks_is_offered_and_an_ack_of_it_allows_hook_events() {
+        assert_eq!(HOLDER_CAPS, ["core", "local", "hooks"]);
+        let both = Allowed { local: true, hooks: true };
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\"]}"), Ok(both));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\"]}"), Ok(Allowed { local: false, hooks: true }));
+        // The app's own ack: no hook event will ever be sent to it.
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\"]}"), Ok(Allowed { local: true, hooks: false }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"hooks\"]}"), Err(request::CODE_BAD_FIELD));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\",\"hooks\"]}"), Err(request::CODE_BAD_FIELD));
+    }
+
+    fn event(seq: u64) -> HookEvent {
+        HookEvent { seq, kind: "Stop".to_string(), payload: Value::obj(vec![("hook_event_name", Value::str("Stop"))]), bytes: 26 }
+    }
+
+    #[test]
+    fn an_event_says_how_many_were_lost_only_when_some_were() {
+        assert_eq!(event_message(&event(7), 0).to_json(), "{\"t\":\"event\",\"seq\":7,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\"}}");
+        assert_eq!(event_message(&event(45), 44).to_json(), "{\"t\":\"event\",\"seq\":45,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\"},\"lost\":44}");
+        assert_eq!(hook_taken(2, 7).to_json(), "{\"t\":\"hook.taken\",\"re\":2,\"seq\":7}");
+    }
+
+    #[test]
+    fn the_largest_event_fits_a_frame_once_launched_and_one_byte_more_is_too_large() {
+        let kind = *request::HOOK_KINDS.iter().max_by_key(|k| k.len()).expect("a kind");
+        let head = format!("{{\"hook_event_name\":\"{kind}\",\"prompt\":\"");
+        let payload_of = |bytes: usize| format!("{head}{}\"}}", "x".repeat(bytes - head.len() - 2));
+        // The most a hook.event may carry, sent on with the longest seq and
+        // lost there are.
+        let most = payload_of(request::MAX_HOOK_PAYLOAD);
+        assert_eq!(most.len(), request::MAX_HOOK_PAYLOAD);
+        let ev = HookEvent { seq: u64::MAX, kind: kind.to_string(), payload: json::parse(most.as_bytes()).unwrap(), bytes: most.len() };
+        let event = event_message(&ev, u64::MAX).to_json();
+        assert!(event.len() <= MAX_JSON_AFTER_LAUNCH, "the largest event is {} bytes", event.len());
+        // One byte more of payload is `too-large`, not a frame over the
+        // limit: the hook.event carrying it, with the longest id, still fits.
+        let over = payload_of(request::MAX_HOOK_PAYLOAD + 1);
+        let id = request::MAX_SAFE_INTEGER - 1;
+        let message = format!("{{\"t\":\"hook.event\",\"id\":{id},\"kind\":\"{kind}\",\"payload\":{over}}}");
+        assert!(message.len() <= MAX_JSON_AFTER_LAUNCH, "a hook.event one byte over is {} bytes", message.len());
+        let refused = request::parse_allowed(&json::parse(message.as_bytes()).unwrap(), Allowed { local: true, hooks: true }).unwrap_err();
+        assert_eq!(refused.code, request::CODE_TOO_LARGE);
     }
 
     #[test]

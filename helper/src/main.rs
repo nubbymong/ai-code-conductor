@@ -8,6 +8,7 @@
 //! aicc-helper selftest [--nonce <32 hex>]
 //! aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes N] [--detach]
 //! aicc-helper list --store <folder>
+//! aicc-helper hook --store <folder> --session <sid>
 //! ```
 //!
 //! `hold` runs one holder (protocol section 15). With `--detach` it starts the
@@ -15,21 +16,24 @@
 //! written its record, prints that record as one JSON line and exits. `hold`
 //! exits 3 when a holder for the session is already running, with or without
 //! `--detach`. `list` prints every session in the store as one JSON line,
-//! removing the records of holders that are gone.
+//! removing the records of holders that are gone. `hook` passes one hook
+//! event, read from standard input, to the session's holder; it always exits
+//! 0 and prints nothing (`hook.rs`).
 #![deny(unsafe_code)]
 
 use aicc_helper::hello::{self, Hello, CAPS};
 use aicc_helper::ring::DEFAULT_RING_BYTES;
 use aicc_helper::serve::{self, Options};
 use aicc_helper::store::{self, DEFAULT_AWAY_SECS, MAX_AWAY_SECS};
-use aicc_helper::{client, detach, selftest, VERSION};
+use aicc_helper::{client, detach, hook, selftest, VERSION};
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list> [options]";
+const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | hook> [options]";
 /// The ring is 1 KiB to 64 MiB; the protocol's default is 2 MiB.
 const MIN_RING_BYTES: usize = 1024;
 const MAX_RING_BYTES: usize = 64 * 1024 * 1024;
@@ -103,6 +107,12 @@ fn usage(msg: &str) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // The hook mode first, from the raw arguments: `args()` panics on one
+    // that is not Unicode, and the hook mode must never print or fail.
+    let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if raw.first().map_or(false, |c| c.as_os_str() == "hook") {
+        return cmd_hook(&raw[1..]);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = match args.first() {
         Some(c) => c.as_str(),
@@ -350,6 +360,18 @@ fn cmd_close_check(args: &[String]) -> ExitCode {
     println!("closed");
     let _ = std::io::Write::flush(&mut std::io::stdout());
     let _ = std::io::stdin().read_to_end(&mut Vec::new());
+    ExitCode::SUCCESS
+}
+
+/// Claude Code's command hook: whatever happens, exit 0 and print nothing,
+/// a panic included (Claude Code reads a hook's output and exit code). An
+/// argument that is not Unicode loses the event, as any other bad argument.
+fn cmd_hook(raw: &[OsString]) -> ExitCode {
+    std::panic::set_hook(Box::new(|_| {}));
+    let args: Option<Vec<String>> = raw.iter().map(|a| a.to_str().map(str::to_string)).collect();
+    if let Some(args) = args {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook::run(&args)));
+    }
     ExitCode::SUCCESS
 }
 

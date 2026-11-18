@@ -24,8 +24,12 @@ pub const MAX_ERROR_TEXT_CHARS: usize = 512;
 pub const PROTO_VERSIONS: [u64; 1] = [1];
 /// The capabilities of the one-shot `hello` command: the frozen core only.
 pub const CAPS: [&str; 1] = ["core"];
-/// The capabilities a holder offers on its local pipe or socket: the frozen
-/// core, and `local` for the terminal messages of protocol section 15.
+/// What the app acks on a holder's local pipe or socket: the frozen core,
+/// and `local` for the terminal messages of protocol section 15. The
+/// helper's own client acks it too (`client::Client::ack`), and the
+/// self-test's stand-in holder offers it, as a holder from before
+/// 2.1.3-beta.8 did. A holder now offers `serve::HOLDER_CAPS`, which adds
+/// `hooks`.
 pub const LOCAL_CAPS: [&str; 2] = ["core", "local"];
 
 /// What a session can be when the helper answers (section 7).

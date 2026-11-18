@@ -48,12 +48,15 @@ aicc-helper hello --nonce <32 hex> --session <sid> [--state new] [--sha256 <64 h
 aicc-helper selftest [--nonce <32 hex>]
 aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes <n>] [--detach]
 aicc-helper list --store <folder>
+aicc-helper hook --store <folder> --session <sid>
 ```
 
 `hold --detach` prints the holder's record as one JSON line once the holder
 listens; the app then connects to the record's endpoint, launches the program
 with `term.launch` and attaches with `term.attach`. `list` prints every session
-in the store, as protocol section 15 describes.
+in the store, as protocol section 15 describes. `hook` is a Claude Code command
+hook: it passes the event on its standard input to the session's holder,
+always exits 0 and prints nothing (nothing in the app uses it yet).
 
 ## Building and testing
 

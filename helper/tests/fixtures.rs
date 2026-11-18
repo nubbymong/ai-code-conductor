@@ -5,9 +5,11 @@
 
 use aicc_helper::frame::{self, Body, Direction};
 use aicc_helper::hello;
+use aicc_helper::holder::{self, HookEvent};
+use aicc_helper::hook;
 use aicc_helper::json::{self, Value};
 use aicc_helper::pty::Conpty;
-use aicc_helper::request::{self, Request};
+use aicc_helper::request::{self, Allowed, Request};
 use aicc_helper::ring::DEFAULT_RING_BYTES;
 use aicc_helper::store::{self, Listing, Record};
 use aicc_helper::{serve, transport};
@@ -212,7 +214,131 @@ fn described(req: &Request) -> Value {
         }
         Request::Detach { id } => Value::obj(head("term.detach", *id)),
         Request::End { id } => Value::obj(head("term.end", *id)),
+        Request::HookEvent { id, kind, payload, .. } => {
+            let mut m = head("hook.event", *id);
+            m.push(("kind", Value::Str(kind.clone())));
+            m.push(("payload", payload.clone()));
+            Value::obj(m)
+        }
     }
+}
+
+/// A message read on a connection that acked `local` or not, and not
+/// `hooks`: the app's own ack.
+fn local_only(v: &Value, local: bool) -> Result<Request, request::Refusal> {
+    request::parse_allowed(v, Allowed { local, hooks: false })
+}
+
+// ── local.json `hooks`: hook events (capability `hooks`) ────────────────────
+
+/// What a vector's `acked` says the connection acked; by default core,
+/// local and hooks.
+fn acked(case: &Value) -> Allowed {
+    match case.get("acked").and_then(Value::as_array) {
+        None => Allowed { local: true, hooks: true },
+        Some(caps) => {
+            let has = |cap: &str| caps.iter().any(|c| c.as_str() == Some(cap));
+            Allowed { local: has("local"), hooks: has(serve::HOOKS_CAP) }
+        }
+    }
+}
+
+#[test]
+fn hook_events_read_as_the_fixtures_say() {
+    let doc = load("local.json");
+    let hooks = doc.get("hooks").expect("hooks");
+    let requests = hooks.get("requests").expect("requests");
+    let mut ran = 0;
+    for case in items(requests, "valid") {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let req = request::parse_allowed(&value, acked(case)).unwrap_or_else(|r| panic!("{name}: refused with {}: {}", r.code, r.text));
+        assert_eq!(described(&req).to_json(), case.get("expect").expect("expect").to_json(), "{name}");
+        ran += 1;
+    }
+    let mut codes: Vec<&str> = Vec::new();
+    for case in items(requests, "invalid") {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let refusal = request::parse_allowed(&value, acked(case)).expect_err(name);
+        assert_eq!(refusal.code, text(case, "error"), "{name}: {}", refusal.text);
+        codes.push(refusal.code);
+        ran += 1;
+    }
+    assert!(ran >= 15, "only {ran} hook vectors");
+    // The cases the protocol names: a kind not of the nine, a payload over
+    // 64 KiB, a missing field, and a connection that did not ack hooks.
+    for code in [request::CODE_BAD_FIELD, request::CODE_TOO_LARGE, request::CODE_UNKNOWN_TYPE] {
+        assert!(codes.contains(&code), "no vector refused with {code}");
+    }
+    // Without hooks acked a hook event is never read, whatever else was acked.
+    let event = json::parse(b"{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{}}").expect("JSON");
+    assert_eq!(local_only(&event, true).expect_err("a hook event without hooks").code, request::CODE_UNKNOWN_TYPE);
+}
+
+#[test]
+fn hook_messages_are_the_documented_bytes() {
+    let doc = load("local.json");
+    let hooks = doc.get("hooks").expect("hooks");
+    let n = |v: &Value, k: &str| v.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    for case in items(hooks, "messages") {
+        let name = text(case, "name");
+        let payload = case.get("payload").expect("payload").clone();
+        let bytes = payload.to_json().len();
+        let ev = HookEvent { seq: n(case, "seq"), kind: text(case, "kind").to_string(), payload, bytes };
+        let message = serve::event_message(&ev, n(case, "lost"));
+        assert_eq!(message.to_json(), text(case, "json"), "{name}");
+        // What the holder sends, the app reads: under the frame limit.
+        assert!(frame::encode(&frame::Frame::json(0, message), Direction::HelperToApp).is_ok(), "{name}");
+    }
+    let taken = hooks.get("taken").expect("taken");
+    assert_eq!(serve::hook_taken(n(taken, "re"), n(taken, "seq")).to_json(), text(taken, "json"));
+}
+
+#[test]
+fn the_hook_limits_match_the_constants() {
+    let doc = load("local.json");
+    let hooks = doc.get("hooks").expect("hooks");
+    let caps: Vec<&str> = items(hooks, "caps").iter().map(|c| c.as_str().expect("cap")).collect();
+    assert_eq!(caps, serve::HOLDER_CAPS.to_vec());
+    // The app's own ack stays core and local.
+    let local: Vec<&str> = items(&doc, "caps").iter().map(|c| c.as_str().expect("cap")).collect();
+    assert_eq!(local, hello::LOCAL_CAPS.to_vec());
+    let kinds: Vec<&str> = items(hooks, "kinds").iter().map(|c| c.as_str().expect("kind")).collect();
+    assert_eq!(kinds, request::HOOK_KINDS.to_vec());
+    let l = hooks.get("limits").expect("limits");
+    let n = |k: &str| l.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    assert_eq!(n("payload_bytes"), request::MAX_HOOK_PAYLOAD as u64);
+    assert_eq!(n("queue_events"), holder::HOOK_QUEUE_EVENTS as u64);
+    assert_eq!(n("queue_bytes"), holder::HOOK_QUEUE_BYTES as u64);
+    assert_eq!(n("stdin_bytes"), hook::MAX_STDIN as u64);
+    assert_eq!(n("cut_over_bytes"), hook::CUT_OVER as u64);
+    assert_eq!(n("cut_string_bytes"), hook::MAX_STRING as u64);
+    assert_eq!(n("deadline_ms"), hook::DEADLINE.as_millis() as u64);
+}
+
+#[test]
+fn the_largest_hook_event_fits_a_frame_once_launched() {
+    let doc = load("local.json");
+    let hooks = doc.get("hooks").expect("hooks");
+    let largest = hooks.get("largest").expect("largest");
+    let n = |v: &Value, k: &str| v.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    let most = n(hooks.get("limits").expect("limits"), "payload_bytes") as usize;
+    let kind = text(largest, "kind");
+    assert_eq!(Some(kind), request::HOOK_KINDS.iter().copied().max_by_key(|k| k.len()), "not the longest kind");
+    let head = format!("{{\"hook_event_name\":\"{kind}\",\"prompt\":\"");
+    let payload_of = |bytes: usize| format!("{head}{}\"}}", "x".repeat(bytes - head.len() - 2));
+    let payload = payload_of(most);
+    let ev = HookEvent { seq: n(largest, "seq"), kind: kind.to_string(), payload: json::parse(payload.as_bytes()).expect("JSON"), bytes: most };
+    let event = serve::event_message(&ev, n(largest, "lost")).to_json();
+    assert_eq!(event.len() as u64, n(largest, "event_bytes"));
+    assert!(event.len() <= serve::MAX_JSON_AFTER_LAUNCH, "the largest event is {} bytes", event.len());
+    // As a hook.event: the most is taken, one byte more is too large.
+    let both = Allowed { local: true, hooks: true };
+    let message = |p: &str| json::parse(format!("{{\"t\":\"hook.event\",\"id\":2,\"kind\":\"{kind}\",\"payload\":{p}}}").as_bytes()).expect("JSON");
+    assert!(request::parse_allowed(&message(&payload), both).is_ok(), "the largest payload is refused");
+    let refused = request::parse_allowed(&message(&payload_of(most + 1)), both).expect_err("a payload one byte larger");
+    assert_eq!(refused.code, request::CODE_TOO_LARGE);
 }
 
 #[test]
@@ -223,21 +349,21 @@ fn local_requests_read_as_the_fixtures_say() {
     for case in items(requests, "valid").iter().filter(|c| applies(c)) {
         let name = text(case, "name");
         let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
-        let req = request::parse(&value, true).unwrap_or_else(|r| panic!("{name}: refused with {}: {}", r.code, r.text));
+        let req = local_only(&value, true).unwrap_or_else(|r| panic!("{name}: refused with {}: {}", r.code, r.text));
         assert_eq!(described(&req).to_json(), case.get("expect").expect("expect").to_json(), "{name}");
         ran += 1;
     }
     for case in items(requests, "invalid").iter().filter(|c| applies(c)) {
         let name = text(case, "name");
         let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
-        let refusal = request::parse(&value, true).expect_err(name);
+        let refusal = local_only(&value, true).expect_err(name);
         assert_eq!(refusal.code, text(case, "error"), "{name}: {}", refusal.text);
         ran += 1;
     }
     assert!(ran >= 25, "only {ran} vectors apply here");
     // Without `local` acked, only the core is allowed.
     let attach = json::parse(b"{\"t\":\"term.attach\",\"id\":2,\"from\":0}").expect("JSON");
-    assert_eq!(request::parse(&attach, false).expect_err("an attach without local").code, request::CODE_UNKNOWN_TYPE);
+    assert_eq!(local_only(&attach, false).expect_err("an attach without local").code, request::CODE_UNKNOWN_TYPE);
 }
 
 #[test]
@@ -254,7 +380,7 @@ fn the_launch_frame_is_the_documented_bytes() {
     assert_eq!(value.to_json(), text(lf, "payload_text"));
     assert_eq!(frame::encode(&decoded, flow(lf)).expect("encodes"), bytes);
     if cfg!(unix) {
-        assert!(matches!(request::parse(&value, true), Ok(Request::Launch(_))));
+        assert!(matches!(local_only(&value, true), Ok(Request::Launch(_))));
     }
 }
 
