@@ -28,8 +28,9 @@ write and the canvas queue's write to the module; pty-handlers.ts takes
 pty-manager.ts lost 99 lines and its cap is now 8,253.
 
 **The ratchet.** session-input-ownership.test.ts reads every src/main file
-and finds each place that types into a session's terminal: a call of the old
-typing functions under any name, a run screen's submit, a write on a PTY
+and finds each place that types into a session's terminal: the old typing
+functions under any name, called or handed on, directly or read from any
+object (a namespace import included), a run screen's submit, a write on a PTY
 handle (traced by type, by start, by `.ptyProcess`, and by name as a
 backstop). Each place outside the module is held to an allow-list by file and
 function, with its reason and the slice that removes it; the list can only

@@ -8,11 +8,14 @@
 //
 // This reads every src/main/**/*.ts file and finds, in each file outside the
 // module, every place that types into a session's terminal:
-//  - a call of writePty, writeSubmittedLine, pastePty, writeCanvasMarkerLine,
-//    handOffAskQuestion or submitCodexText, under any import name or through
-//    a namespace import, or one of them handed on as a value (an argument, a
-//    property, a variable). The module's own exports are the door: a name
-//    imported from src/main/session-input is not counted, whatever it is;
+//  - writePty, writeSubmittedLine, pastePty, writeCanvasMarkerLine,
+//    handOffAskQuestion or submitCodexText named in code, under any import
+//    name: called, or handed on as a value (an argument, a property, a name,
+//    an array element, a return, a bind); and the same read from any object,
+//    a namespace import included, called or handed on. A call counts once.
+//    The module's own exports are the door: a name imported from
+//    src/main/session-input, or read from a namespace import of it, is not
+//    counted, whatever it is;
 //  - `.submit` read from a provider's run screen: anything traced to a
 //    `.runScreen` read or typed SessionRunScreen;
 //  - `.write` read from a PTY handle: anything typed IPty or HelperPty, the
@@ -304,22 +307,39 @@ export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] 
     if (!sites.has(n.start)) sites.set(n.start, { line: n.loc!.start.line, what, in: enclosing(ancestors) })
   }
   walk(ast, (n, ancestors) => {
-    if (isCall(n)) {
-      const c = unwrap(n.callee)
-      if (c?.type === 'Identifier' && typingName(c.name)) add(n, ancestors, `${typingImports.get(c.name) ?? c.name}()`)
-      if (c && isMember(c) && TYPING_FUNCTIONS.has(propName(c) ?? '') && !(c.object?.type === 'Identifier' && doorNamespaces.has(c.object.name))) add(n, ancestors, `.${propName(c)}()`)
-      for (const a of n.arguments as N[]) if (a.type === 'Identifier' && typingName(a.name)) add(a, ancestors, `${a.name} handed on`)
+    const parent = ancestors[ancestors.length - 1]
+    // A typing function named in code: called, or handed on as a value
+    // (an argument, a property, a name, an array element, a return, a bind).
+    // A call and its callee start at the same place, so a call counts once.
+    if (n.type === 'Identifier' && typingName(n.name) && isReference(n, parent, ancestors)) {
+      const called = parent && isCall(parent) && parent.callee === n
+      add(n, ancestors, called ? `${typingImports.get(n.name) ?? n.name}()` : `${n.name} handed on`)
     }
     if (isMember(n)) {
       const prop = propName(n)
+      // The same through a namespace import or any other object, called or handed on.
+      if (prop && TYPING_FUNCTIONS.has(prop) && !(n.object?.type === 'Identifier' && doorNamespaces.has(n.object.name))) add(n, ancestors, `.${prop}`)
       if (prop === 'write' && (isHandle(n.object) || byName(n.object))) add(n, ancestors, '.write on a PTY')
       if (prop === 'submit' && isScreen(n.object)) add(n, ancestors, '.submit on a run screen')
     }
-    if (n.type === 'ObjectProperty' && n.value?.type === 'Identifier' && typingName(n.value.name)) add(n.value, ancestors, `${n.value.name} handed on`)
-    if (n.type === 'VariableDeclarator' && n.init?.type === 'Identifier' && typingName(n.init.name)) add(n.init, ancestors, `${n.init.name} handed on`)
-    if (n.type === 'AssignmentExpression' && n.right?.type === 'Identifier' && typingName(n.right.name)) add(n.right, ancestors, `${n.right.name} handed on`)
   })
   return [...sites.values()].sort((a, b) => a.line - b.line)
+}
+
+const TYPE_ONLY = new Set(['TSTypeAnnotation', 'TSTypeQuery', 'TSTypeReference', 'TSInterfaceDeclaration', 'TSTypeAliasDeclaration'])
+/** Whether an identifier is a value read, not a declaration, an import, a
+ *  property's name or a type. */
+function isReference(n: N, parent: N | undefined, ancestors: N[]): boolean {
+  if (!parent) return true
+  if (ancestors.some((a) => TYPE_ONLY.has(a.type))) return false
+  if (['ImportSpecifier', 'ImportDefaultSpecifier', 'ImportNamespaceSpecifier', 'LabeledStatement', 'BreakStatement', 'ContinueStatement'].includes(parent.type)) return false
+  if (parent.type === 'ExportSpecifier') return parent.local === n
+  if (parent.type === 'VariableDeclarator' && parent.id === n) return false
+  if (FUNCTION_TYPES.has(parent.type) && (parent.id === n || (parent.params as N[]).includes(n))) return false
+  if ((parent.type === 'ClassDeclaration' || parent.type === 'ClassExpression') && parent.id === n) return false
+  if ((parent.type === 'MemberExpression' || parent.type === 'OptionalMemberExpression') && parent.property === n && !parent.computed) return false
+  if (['ObjectProperty', 'ObjectMethod', 'ClassProperty', 'ClassMethod', 'ClassPrivateProperty'].includes(parent.type) && parent.key === n && !parent.computed && !parent.shorthand) return false
+  return true
 }
 
 /** What is wrong with `found` (file -> sites) against the allow-list. */
@@ -418,6 +438,15 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['a typing function handed on as a shorthand property', `import { writePty } from './pty-manager'\nstart({ writePty })`],
     ['a typing function set to a name', `import { writePty } from './pty-manager'\nconst w = writePty`],
     ['a typing function assigned', `import { writePty } from './pty-manager'\nlet w\nw = writePty`],
+    ['a typing function in a list', `import { pastePty } from './pty-manager'\nconst writers = [pastePty]`],
+    ['a typing function returned', `import { writePty } from './pty-manager'\nfunction pick() { return writePty }`],
+    ['a typing function bound', `import { writePty } from './pty-manager'\nconst w = writePty.bind(null)`],
+    ['a typing function re-exported', `export { writePty } from './pty-manager'`],
+    ['a typing function destructured from a module object', `const { writePty } = require('./pty-manager')`],
+    ['a namespace member handed on as a property', `import * as pm from './pty-manager'\nstart({ write: pm.writePty })`],
+    ['a namespace member handed on as an argument', `import * as pm from './pty-manager'\ninitWatchdog(pm.writeSubmittedLine)`],
+    ['a namespace member set to a name', `import * as pm from './pty-manager'\nconst w = pm.writePty`],
+    ['a typing function read from another object', `deps.pastePty(id, envelope)`],
     ['a run screen\'s submit', `getProvider('codex').runScreen.submit(id, t, { readyWaitMs: 1 })`],
     ['a run screen read into a name', `const s = provider.runScreen\ns?.submit(id, t, o)`],
     ['a run screen from a function in the file', `function screen() { try { return getProvider('codex').runScreen } catch { return undefined } }\nconst x = screen()\nx!.submit(id, t, o)`],
@@ -457,6 +486,8 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['the module\'s own handOffAskQuestion, from a folder below', `import { handOffAskQuestion } from '../session-input'\nhandOffAskQuestion(win, id, q)`, 'src/main/ipc/feature.ts'],
     ['the module through a namespace import', `import * as input from './session-input'\ninput.submitMarker(id, line)\ninput.handOffAskQuestion(win, id, q)`],
     ['the module named by its index file', `import { typeKeys } from './session-input/index'\nstart({ write: (s, d) => typeKeys(s, d) })`],
+    ['the module\'s own exports handed on through its namespace', `import * as input from './session-input'\nstart({ write: input.typeKeys, ask: input.handOffAskQuestion })\nconst h = input.handOffAskQuestion`],
+    ['a declaration, a property name and a type that only share a name', `export function writePty(id: string, d: string): void {}\nconst ports = { pastePty: () => 0 }\ntype W = typeof writePty\nlet f: typeof pastePty`],
     ['a stream write', `stream.write(line)\nres.write(': ping')`],
     ['a headless terminal\'s write', `entry.term.write(data)\npane.term.write('', cb)`],
     ['child_process\'s spawn', `import { spawn } from 'child_process'\nconst c = spawn('git', [])\nc.stdin.write('x')`],
@@ -468,6 +499,12 @@ describe('the check sees each way of typing into a session (verify the verifier)
   for (const [what, code, file] of clean) {
     it(`does not flag ${what}`, () => { expect(typingSites(code, file ?? 'src/main/feature.ts')).toEqual([]) })
   }
+
+  it('counts a call once, however the function is reached', () => {
+    expect(typingSites(`import * as pm from './pty-manager'\npm.writePty(id, 'x')`)).toHaveLength(1)
+    expect(typingSites(`import { writePty as w } from './pty-manager'\nw(id, 'x')`)).toHaveLength(1)
+    expect(typingSites(`writeSubmittedLine(id, 'x')`)).toEqual([{ line: 1, what: 'writeSubmittedLine()', in: '(top level)' }])
+  })
 
   it('groups each site by the named function it is in', () => {
     const code = `function outer() {\n  const inner = () => {\n    sessions.get(id)?.ptyProcess.write('a')\n  }\n  ptyProcess.write('b')\n}\nclass C { send() { cliSetupPty.write('c') } }\nstart({ write: (d) => codexRun.write(d) })`
