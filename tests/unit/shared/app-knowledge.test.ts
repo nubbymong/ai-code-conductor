@@ -2086,7 +2086,7 @@ describe('the 2.1.3-beta.7 sweep', () => {
 
   it('the installer paragraph says the uninstaller removes the helper folder and the pages share one look', () => {
     const p = APP_KNOWLEDGE_SECTIONS.map((s) => s.body).find((b) => b.includes('On Windows the installer opens with a Welcome page'))!
-    expect(p).toContain("removes the session helper's own folder, with its copies and records; an update keeps them")
+    expect(p).toContain("removes the session helper's own folder, with its copies and records; an update leaves that folder in place")
     expect(p).toContain('Every page of the installer and the uninstaller has the same light look')
   })
 
@@ -2147,7 +2147,7 @@ describe('the 2.1.3-beta.7 sweep', () => {
   })
 })
 
-// 2.1.3-beta.8 user-facing sweep: on Windows an update with Save keeps the
+// 2.1.3-beta.8 user-facing sweep: on Windows an update with Save sessions keeps the
 // terminals the session helper holds (#713, #717), held Claude Code sessions
 // send their hooks through the helper (#718, off by default), the helper's
 // wait for its program (#710) and its own C runtime (#719), the Codex review's
@@ -2161,9 +2161,9 @@ describe('the 2.1.3-beta.8 sweep', () => {
   const entry = changelog.find((e) => e.version === '2.1.3-beta.8')!
   const readme = () => fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'README.md'), 'utf8')
 
-  it('the Machines section says an update with Save keeps held terminals on Windows, and what still ends them', () => {
+  it('the Machines section says an update with Save sessions keeps held terminals on Windows, and what still ends them', () => {
     const m = body('machines')
-    expect(m).toContain('On Windows an app update keeps them when you choose Save on the update dialog')
+    expect(m).toContain('On Windows an app update keeps them when you choose Save sessions on the update dialog')
     expect(m).toContain('or lists it on this page if no tab shows it, as after a crash. Close sessions ends them.')
     expect(m).toContain('The new version has the same two minutes, counted from when the old one closed')
     expect(m).toContain('Re-attach is refused and says the app is being updated')
@@ -2177,17 +2177,21 @@ describe('the 2.1.3-beta.8 sweep', () => {
     expect(m).toContain('a Claude Code session the helper holds sends its hook events to the app through the session helper')
     expect(m).toContain('Only the check before each tool runs (PreToolUse) still goes to the HTTP Hooks Gateway')
     expect(m).toContain('a Codex session sends its hooks as it did')
-    expect(m).toContain('With the setting off, which is the default, every session sends its hooks to the gateway as before')
+    // It names its own setting: the HTTP Hooks Gateway just before it is on by default.
+    expect(m).toContain('With Claude Code and Codex sessions through the session helper off, which is the default, every session sends its hooks to the gateway as before')
+    expect(m).not.toContain('With the setting off, which is the default')
   })
 
   it('a known issue says the two minutes run through the installer, with its workaround', () => {
     const k = body('known-issues')
     expect(k).toContain("The installer's pages count toward those two minutes, so a held terminal ends if the installer is left open longer")
-    expect(k).toContain("Workaround: after you choose Save, finish the installer's pages promptly, within two minutes")
-    expect(k).toContain("An update from 2.1.3-beta.7 or earlier runs that version's own update, which still ends every held terminal")
+    expect(k).toContain("Workaround: after you choose Save sessions, finish the installer's pages promptly, within two minutes")
+    // An older version's update ended only the terminals the app was attached to (#717).
+    expect(k).toContain("An update from 2.1.3-beta.7 or earlier runs that version's own update, which still ends the held terminals open in tabs, as before")
+    expect(k).not.toContain('which still ends every held terminal')
   })
 
-  it('no surface says the helper needs the Visual C++ runtime, or that Save at an update ends a terminal a crash kept', () => {
+  it('no surface says the helper needs the Visual C++ runtime, or that Save sessions at an update ends a terminal a crash kept', () => {
     const all = [
       ...APP_KNOWLEDGE_SECTIONS.map((s) => s.body),
       ...TIPS_LIBRARY.map((t) => t.variants.primary.body),
@@ -2196,25 +2200,37 @@ describe('the 2.1.3-beta.8 sweep', () => {
     ].join('\n')
     expect(all).not.toMatch(/Visual C\+\+|VCRUNTIME/i)
     expect(all).not.toMatch(/Re-attach it first to keep it/i)
+    // The update dialog's button is "Save sessions", so no surface calls it "Save".
+    const notes = [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)].join('\n')
+    expect(`${all}\n${notes}`).not.toMatch(/\bchoos(?:e|ing) (?:\*\*)?Save\b(?! sessions)/)
   })
 
-  it('a Windows tip for Save at an update, and the cards and the README say it', () => {
+  it('a Windows tip for Save sessions at an update, and the cards, the Settings note and the README say it', () => {
     const t = tipOf('tip.update-keeps-terminals')
     expect(t.platforms).toEqual(['win32'])
     expect(t.provider).toBeUndefined()
     expect(t.variants.primary.shortText.length).toBeLessThan(60)
     expect(t.variants.primary.actionTarget).toBe('settings')
     expect(t.variants.primary.body).toContain(`**${PLAIN_SWITCH}**`)
-    expect(t.variants.primary.body).toContain('choose **Save** when the app asks before an update')
+    expect(t.variants.primary.shortText).toContain('Save sessions')
+    expect(t.variants.primary.body).toContain('choose **Save sessions** when the app asks before an update')
     expect(t.variants.primary.body).toContain('Finish the installer within **two minutes**')
     expect(t.variants.primary.body).toContain('**Close sessions** ends them instead')
     expect(`${t.variants.primary.title} ${t.variants.primary.body}`).not.toMatch(/—/)
-    expect(step('machines').highlights.join('\n')).toContain('On Windows, choose **Save** when you update the app and each held terminal keeps running')
-    expect(step('settings').highlights.join('\n')).toContain('or through an update when you choose **Save**')
+    const machines = step('machines').highlights.join('\n')
+    expect(machines).toContain('On Windows, choose **Save sessions** when you update the app and each held Terminal or Partner terminal keeps running')
+    // Agent sessions the helper holds still end at an update (#713).
+    expect(machines).toContain('A Claude Code or Codex session has **End** only. An update ends it, and after a crash it is ended')
+    expect(step('settings').highlights.join('\n')).toContain('or through an update when you choose **Save sessions**')
     // Combined Mode reads the same for either assistant, so it names no provider.
-    expect(step('combined-mode').highlights.join('\n')).toContain('On Windows it also keeps running through an app update when you choose **Save**')
+    expect(step('combined-mode').highlights.join('\n')).toContain('On Windows it also keeps running through an app update when you choose **Save sessions**')
     const line = readme().split('\n').find((l) => l.startsWith('- **Machines and the session helper**'))!
-    expect(line).toContain('On Windows they also keep running through an app update when you choose Save')
+    expect(line).toContain('On Windows they also keep running through an app update when you choose Save sessions')
+    const settingsPage = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'components', 'SettingsPage.tsx'), 'utf8')
+    expect(settingsPage).toContain('On Windows they also keep running through an app update when you choose Save sessions, for up to two minutes until the new version opens.')
+    // The update dialog's button is named exactly, as every other surface names it.
+    const dialog = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'components', 'CloseDialog.tsx'), 'utf8')
+    expect(dialog).toContain('>Save sessions</DialogButton>')
   })
 
   it('the release notes carry the update warning, the way back and every change line', () => {
@@ -2225,7 +2241,8 @@ describe('the 2.1.3-beta.8 sweep', () => {
     expect(w).toContain('To go back to 2.1.3-beta.7')
     const all = entry.changes.map((c) => c.description).join('\n')
     for (const said of [
-      'choosing Save on the update dialog now keeps the terminals the helper holds running through an app update',
+      'choosing Save sessions on the update dialog now keeps the terminals the helper holds running through an app update',
+      'on a PC without it the helper could not start, and terminals started the usual way',
       'A held terminal that no tab shows, such as one a crash left, keeps running too',
       'Close sessions ends them, as before',
       'a Claude Code session the helper holds now sends its hook events to the app through the session helper',

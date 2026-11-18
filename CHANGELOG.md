@@ -13,13 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Warnings
 - This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
-- On Windows, the update to this version still ends the terminals the session helper holds, as before, because the version you update from decides what an update does. From this version on, choosing Save at an update keeps them running, if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
+- On Windows, the update to this version still ends the terminals the session helper holds, as before, because the version you update from decides what an update does. From this version on, choosing Save sessions at an update keeps them running, if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
 - To go back to 2.1.3-beta.7, download its installer from the GitHub releases page and run it over this version.
 
-> On Windows, an app update can now keep the terminals the session helper holds running: choose Save, and the new version shows them again. The session helper no longer needs the Visual C++ runtime on Windows, a Codex review runs on your reviewer account's default Codex model, and the vision browser is closed on every way the app exits.
+> On Windows, an app update can now keep the terminals the session helper holds running: choose Save sessions, and the new version shows them again. The session helper no longer needs the Visual C++ runtime on Windows, a Codex review runs on your reviewer account's default Codex model, and the vision browser is closed on every way the app exits.
 
 ### Added
-- On Windows, with Plain terminals through the session helper on, choosing Save on the update dialog now keeps the terminals the helper holds running through an app update. The new version shows each Terminal only tab and partner terminal again in its tab, with what it printed meanwhile. A held terminal that no tab shows, such as one a crash left, keeps running too, and the Machines page lists it again. Close sessions ends them, as before. The new version must open within two minutes of the old one closing. On macOS and Linux an update still ends them, and Claude Code and Codex sessions still resume their conversation instead.
+- On Windows, with Plain terminals through the session helper on, choosing Save sessions on the update dialog now keeps the terminals the helper holds running through an app update. The new version shows each Terminal only tab and partner terminal again in its tab, with what it printed meanwhile. A held terminal that no tab shows, such as one a crash left, keeps running too, and the Machines page lists it again. Close sessions ends them, as before. The new version must open within two minutes of the old one closing. On macOS and Linux an update still ends them, and Claude Code and Codex sessions still resume their conversation instead.
 
 ### Changed
 - With Claude Code and Codex sessions through the session helper on (a preview, off by default) and the HTTP Hooks Gateway on, a Claude Code session the helper holds now sends its hook events to the app through the session helper. The check before each tool runs (PreToolUse) still goes to the HTTP Hooks Gateway. The attention dot, the Watchdog and canvas notes work as before, and Codex sessions are unchanged.
@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codex reviews, Sentinel's analysis on Codex and Codex Insights reports now also run with three more Codex agent features switched off (multi_agent_v2, sleep_tool and the agents setting), which these runs do not need.
 
 ### Fixed
-- On Windows, the session helper no longer needs Microsoft's Visual C++ runtime. Before, on a PC without it the helper could not start, and the app ran without it.
+- On Windows, the session helper no longer needs Microsoft's Visual C++ runtime. Before, on a PC without it the helper could not start, and terminals started the usual way.
 - A Codex review now runs on your reviewer account's default Codex model, at the same medium reasoning effort. Before, it always asked for GPT-5.5, which OpenAI retired from Codex with ChatGPT sign-in on October 14, 2026.
 - On Windows, the vision browser no longer keeps the app's files open after the app ends.
 - The vision browser is now closed on every way the app exits, including an update install.
