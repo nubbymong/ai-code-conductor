@@ -76,7 +76,8 @@ vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
   return { ...real, findOnWindowsPath }
 })
 
-const { spawnPty, endSshRemote, probeTmuxLive, sshProgram, SSH_NOT_ON_PATH } = await import('../../../src/main/pty-manager')
+const { spawnPty, endSshRemote, probeTmuxLive } = await import('../../../src/main/pty-manager')
+const { sshProgram, SSH_NOT_ON_PATH } = await import('../../../src/main/ssh-program')
 const { registerProvider } = await import('../../../src/main/providers')
 const { ClaudeProvider } = await import('../../../src/main/providers/claude')
 registerProvider(new ClaudeProvider())
