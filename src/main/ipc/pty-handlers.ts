@@ -727,9 +727,10 @@ const askHandOffSchema = z.object({
 
 export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void {
   // 2.1.3-beta.9 (planning #310, item 5): on Windows, ssh.exe is looked for
-  // once off the event loop now, and again after each PATH refresh; an SSH
-  // start reads that answer instead of walking PATH on this thread, and
-  // walks in place as before only while there is none (ssh-program.ts).
+  // off the event loop from here on: now, every SSH_PROGRAM_RECHECK_MS, after
+  // each PATH refresh, and when a start finds no answer kept. An SSH start
+  // runs that answer while it is under SSH_PROGRAM_KEEP_MS old, and walks
+  // PATH in place as before otherwise (ssh-program.ts).
   startSshProgramLookup()
 
   // WP2 PR 4, P4.1 (row 51): whether a Codex session's launch carried the
