@@ -978,8 +978,8 @@ export function parseHelperStart(stdout: string): { pid: number; created: string
  * open either. Resolves the pid and creation time the helper reports, or null
  * after one log line saying why the helper was not used: no helper in this
  * install, a browser named by a bare name (found on PATH, which the helper
- * never searches), or a start that started nothing (helperStartedNothing).
- * On null the launch is the plain spawn, as before. A start that may have
+ * never searches), or a start that started nothing (helperStartedNothing; a
+ * helper Windows could not load is logged by its status, in hex). On null the launch is the plain spawn, as before. A start that may have
  * started the browser without saying so (a timeout, a crash, an answer that
  * cannot be read) is not followed by a second one: a second browser on the
  * same profile would hand off to the first and exit, and the first would run
@@ -1004,6 +1004,12 @@ async function startThroughHelper(executable: string, args: string[], headless: 
       logInfo(`[vision] The session helper could not start the vision browser (${why.slice(0, 300)}); it is started directly`)
       resolve(null)
     }
+    // The helper never ran, so Node's message ("Command failed: <helper> start
+    // ...") says nothing about why; the status Windows gave does.
+    const notLoaded = (status: number) => {
+      logInfo(`[vision] Windows could not load the session helper (status ${'0x' + status.toString(16).toUpperCase()}); the vision browser is started directly`)
+      resolve(null)
+    }
     const noAnswer = (why: string) => {
       logInfo(`[vision] The session helper did not say whether it started the vision browser (${why.slice(0, 300)}); it is not started again, and the next launch ends it if it runs`)
       reject(new Error('the session helper did not say whether it started the vision browser; vision was not started'))
@@ -1011,6 +1017,8 @@ async function startThroughHelper(executable: string, args: string[], headless: 
     try {
       execFile(helper, helperArgs, { windowsHide: true, timeout: HELPER_START_TIMEOUT_MS, maxBuffer: HELPER_START_MAX_OUTPUT, encoding: 'utf8' }, (err, stdout, stderr) => {
         if (err) {
+          const status = (err as { code?: unknown }).code
+          if (helperStartedNothing(err) && typeof status === 'number' && HELPER_NOT_LOADED.has(status)) return notLoaded(status)
           const why = String(stderr ?? '').trim()
             || ((err as { killed?: unknown }).killed === true ? `no answer within ${HELPER_START_TIMEOUT_MS / 1000} s` : '')
             || (err instanceof Error ? err.message : String(err))

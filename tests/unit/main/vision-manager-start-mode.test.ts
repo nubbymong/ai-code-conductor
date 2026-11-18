@@ -53,7 +53,8 @@ vi.mock('child_process', async () => {
       sys.execFiles.push({ file, args, opts })
       const a = sys.answer
       setImmediate(() => {
-        if (a.kind === 'exit') return cb(Object.assign(new Error('Command failed'), { code: a.code, killed: false, signal: null }), '', a.stderr)
+        // Node's own message for a failed execFile: the command line, then stderr.
+        if (a.kind === 'exit') return cb(Object.assign(new Error(`Command failed: ${[file, ...args].join(' ')}${a.stderr ? `\n${a.stderr}` : ''}`), { code: a.code, killed: false, signal: null }), '', a.stderr)
         if (a.kind === 'print') return cb(null, a.stdout, '')
         if (a.kind === 'spawnError') {
           return cb(Object.assign(new Error(`spawn ${file} ENOENT`), { code: 'ENOENT', errno: -4058, syscall: `spawn ${file}`, path: file }), '', '')
@@ -427,14 +428,26 @@ describe('Windows: a start that started nothing is the plain spawn, as before', 
     expect(logged(/could not start the vision browser \(spawn .*ENOENT\)/)).toHaveLength(1)
   })
 
-  it('Windows could not load the helper (a DLL it needs is missing: 0xC0000135, which Node reports as 3221225781): spawned, with one line in the log', async () => {
-    sys.answer = { kind: 'exit', code: 3221225781, stderr: '' }
-    await launchBrowser('chrome', 9222, undefined, true)
-    expect(sys.execFiles).toHaveLength(1)
-    expectPlainSpawn(CHROME)
-    expect(logged(/could not start the vision browser \(Command failed\)/)).toHaveLength(1)
-    expect(logged(/did not say whether/)).toEqual([])
-  })
+  for (const [what, code, hex] of [
+    ['a DLL it needs is missing, such as the Visual C++ runtime', 3221225781, '0xC0000135'],
+    ['a DLL lacks a function it needs', 3221225785, '0xC0000139'],
+    ['it is not a program this Windows can run', 3221225595, '0xC000007B'],
+    ['a DLL it needs failed to start', 3221225794, '0xC0000142'],
+  ] as Array<[string, number, string]>) {
+    it(`Windows could not load the helper (${what}: ${hex}, which Node reports as ${code}): spawned, with one line in the log that names the status`, async () => {
+      sys.answer = { kind: 'exit', code, stderr: '' }
+      await launchBrowser('chrome', 9222, undefined, true)
+      expect(sys.execFiles).toHaveLength(1)
+      expectPlainSpawn(CHROME)
+      // The helper never ran, so Node's "Command failed: <helper> start ..."
+      // says nothing about why; the status does.
+      expect(logged(/session helper/).map(([m]) => m)).toEqual([
+        `[vision] Windows could not load the session helper (status ${hex}); the vision browser is started directly`,
+      ])
+      expect(logged(/could not start the vision browser \(Command failed/)).toEqual([])
+      expect(logged(/did not say whether/)).toEqual([])
+    })
+  }
 
   it('a browser named by a bare name (found on PATH): spawned, and the helper is never asked', async () => {
     sys.present = new Set([HELPER])
