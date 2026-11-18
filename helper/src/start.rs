@@ -372,7 +372,7 @@ mod win {
                 startup.StartupInfo.wShowWindow = SW_HIDE;
             }
             let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED;
-            let info = create_process(&app, &cmdline, &cwd, &startup, flags, true)?; // MUTANT M7: inheritance on
+            let info = create_process(&app, &cmdline, &cwd, &startup, flags, false)?;
             let process = info.hProcess as usize;
             let thread = info.hThread as usize;
             let started = match creation_time(process) {
