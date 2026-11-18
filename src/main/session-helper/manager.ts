@@ -231,6 +231,8 @@ export class SessionHelperManager implements MachinesSource {
   /** What reclaim() kept after an update that did not start, while no tab
    *  has taken it over again: its tab's terminal read as ended. */
   private readonly reclaimed = new Map<string, HolderRecord>()
+  /** Settles once the ends the last releaseForUpdate sent were answered. */
+  private updateEnds: Promise<void> = Promise.resolve()
   private state: HelperState = 'off'
   private detail: string | undefined
   private version: string | undefined
@@ -1003,13 +1005,15 @@ export class SessionHelperManager implements MachinesSource {
       this.released.set(sid, { record, pty: w })
       n++
     }
+    const ends: Promise<unknown>[] = []
     for (const [sid, r] of [...this.reclaimed]) {
       if (this.live.has(sid)) continue
       const appId = this.appIdOf(r)
       if (saved(parentOfPartnerPtyId(appId) ?? appId)) continue
       this.reclaimed.delete(sid)
-      void this.endRecord(r).catch((err) => this.deps.log(`[session-helper] ${sid}: could not be ended at the update: ${message(err)}`))
+      ends.push(this.endRecord(r).catch((err) => this.deps.log(`[session-helper] ${sid}: could not be ended at the update: ${message(err)}`)))
     }
+    this.updateEnds = Promise.allSettled(ends).then(() => undefined)
     try {
       this.writeMarker('update')
     } catch (err) {
@@ -1018,6 +1022,13 @@ export class SessionHelperManager implements MachinesSource {
     this.deps.log(`[session-helper] an app update: ${n} held terminal(s) are let go of, for the new version to show again`)
     this.changed()
     return n
+  }
+
+  /** Settles once every end the last releaseForUpdate sent was answered (or
+   *  failed): what an earlier reclaim() kept for a tab no longer saved. The
+   *  caller bounds the wait; the app exits next. */
+  endsForUpdate(): Promise<void> {
+    return this.updateEnds
   }
 
   /**
@@ -1279,8 +1290,12 @@ export class SessionHelperManager implements MachinesSource {
       // Its tab is open: brought forward, and showing it attaches it.
       return { ok: true, tab: { id: base, label: held.label, open: false, partner } }
     }
-    // No tab shows it: a new Terminal only tab, bound to it.
+    // No tab shows it: a new Terminal only tab, bound to it. The binding
+    // moves: a tab an earlier Re-attach bound to it (one whose terminal read
+    // as ended after an update that did not start) gets a terminal of its
+    // own if it starts again, and never claims or ends this one.
     const tabId = this.deps.newTabId()
+    for (const [bound, sid] of [...this.bindings]) if (sid === id) this.bindings.delete(bound)
     this.bindings.set(tabId, id)
     this.adoptable.set(id, record)
     this.saveBindings()

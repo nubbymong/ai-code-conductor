@@ -323,7 +323,7 @@ export function registerUpdateHandlers(): void {
     const releasing = process.platform === 'win32'
     try {
       if (releasing) {
-        try { releaseHeldTerminalsForUpdate() } catch (e) { logError('[update] The held terminals could not be let go of:', e) }
+        try { await releaseHeldTerminalsForUpdate() } catch (e) { logError('[update] The held terminals could not be let go of:', e) }
       }
       logInfo('[update] Killing all PTYs...')
       killAllPty()

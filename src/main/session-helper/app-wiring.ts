@@ -99,10 +99,13 @@ export function noteSessionHelperTabs(state: { sessions?: ReadonlyArray<{ id: st
  * let go of instead of ended, for the new version to show again. Those tabs
  * are read from the saved file itself, because "Close without saving" clears
  * it without a save the manager hears of. A file that cannot be read lets go
- * of nothing, and every terminal ends as before. Nothing is done when the
- * helper was never switched on this run. Answers how many were let go of.
+ * of nothing, and every terminal ends as before. What the manager ends instead
+ * (kept after an earlier update that did not start, for a tab no longer
+ * saved) is waited for, UPDATE_END_WAIT_MS at most, since the app exits next.
+ * Nothing is done when the helper was never switched on this run. Answers how
+ * many were let go of.
  */
-export function releaseHeldTerminalsForUpdate(): number {
+export async function releaseHeldTerminalsForUpdate(): Promise<number> {
   const m = getSessionHelper()
   if (!m) return 0
   let restorable = new Set<string>()
@@ -112,8 +115,14 @@ export function releaseHeldTerminalsForUpdate(): number {
   } catch {
     /* unreadable: nothing is let go of */
   }
-  return m.releaseForUpdate(restorable)
+  const n = m.releaseForUpdate(restorable)
+  let timer: NodeJS.Timeout | undefined
+  await Promise.race([m.endsForUpdate(), new Promise<void>((r) => { timer = setTimeout(r, UPDATE_END_WAIT_MS) })]).finally(() => clearTimeout(timer))
+  return n
 }
+
+/** How long an update waits for the ends releaseHeldTerminalsForUpdate sent (a quit's own bound). */
+export const UPDATE_END_WAIT_MS = 1500
 
 /** The update's installer could not be started: what was let go of is kept
  *  for its tab, and listed on the Machines page. */

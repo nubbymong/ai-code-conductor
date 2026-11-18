@@ -17,7 +17,7 @@ const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const shownErrorBoxes: Array<[string, string]> = []
 const exitCalls: number[] = []
 /** The install path's steps, in the order they ran (plan section B2). */
-const steps = vi.hoisted(() => ({ order: [] as string[], releaseThrows: false }))
+const steps = vi.hoisted(() => ({ order: [] as string[], releaseThrows: false, releaseDelayMs: 0 }))
 
 vi.mock('electron', () => ({
   ipcMain: { handle: (ch: string, fn: (...a: unknown[]) => unknown) => { handlers.set(ch, fn) } },
@@ -124,9 +124,13 @@ vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logError: v
 vi.mock('../../../src/main/pty-manager', () => ({ killAllPty: vi.fn(() => { steps.order.push('kill every PTY') }) }))
 // The session helper's two update calls (plan section B2), as steps.
 vi.mock('../../../src/main/session-helper/app-wiring', () => ({
-  releaseHeldTerminalsForUpdate: vi.fn(() => {
+  // Async, as the real one is (it waits briefly for the ends it sent): the
+  // kill must come only once it has settled.
+  releaseHeldTerminalsForUpdate: vi.fn(async () => {
     steps.order.push('release held terminals')
     if (steps.releaseThrows) throw new Error('the release failed')
+    if (steps.releaseDelayMs > 0) await new Promise((r) => setTimeout(r, steps.releaseDelayMs))
+    steps.order.push('released')
     return 2
   }),
   reclaimReleasedTerminals: vi.fn(() => { steps.order.push('reclaim released terminals') }),
@@ -162,6 +166,7 @@ beforeEach(() => {
   storeState.isStoreBuild = false
   steps.order.length = 0
   steps.releaseThrows = false
+  steps.releaseDelayMs = 0
   registerUpdateHandlers()
 })
 
@@ -395,8 +400,9 @@ describe('update:installAndRestart — held terminals keep running through an up
 
   it('on Windows: the held terminals are let go of before every PTY is killed, and the app exits after the launch', async () => {
     await on('win32', async () => {
+      steps.releaseDelayMs = 20 // a release that takes a while: the kill still waits for it
       await expect(invoke()).resolves.toBe(true)
-      expect(steps.order).toEqual(['release held terminals', 'kill every PTY', 'launch', 'exit'])
+      expect(steps.order).toEqual(['release held terminals', 'released', 'kill every PTY', 'launch', 'exit'])
     })
   })
 
@@ -416,9 +422,10 @@ describe('update:installAndRestart — held terminals keep running through an up
 
   it('a launch that fails on Windows: what was let go of is kept for its tab, then the error box, and the app stays', async () => {
     await on('win32', async () => {
+      steps.releaseDelayMs = 20 // a release that takes a while: the kill still waits for it
       spawnState.script = { emit: 'error', error: new Error('spawn EACCES') }
       await expect(invoke()).rejects.toThrow(/EACCES/)
-      expect(steps.order).toEqual(['release held terminals', 'kill every PTY', 'launch', 'reclaim released terminals', 'error box'])
+      expect(steps.order).toEqual(['release held terminals', 'released', 'kill every PTY', 'launch', 'reclaim released terminals', 'error box'])
       expect(exitCalls).toEqual([])
       expect(shownErrorBoxes).toHaveLength(1)
       expect(shownErrorBoxes[0][0]).toMatch(/could not be launched/i)
