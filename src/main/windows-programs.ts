@@ -570,15 +570,17 @@ export function findOnWindowsPath(
  *  With no `stat` of the caller's own, the file tests are the shared ones
  *  (folderFileTest): one at a time in each folder, across every walk that
  *  asks this way. That is each of the app's walks for a program (git, the
- *  GitHub CLI, npm, the Node.js tools check, the Claude Code version probe)
- *  and, through the same file test, the walk for Claude Code and the look
- *  for node.exe. So a folder on a share that is down holds one of the few
- *  threads file tests share, not one for each walk; a walk that asks for a
- *  file another walk is asking for takes that answer; and a walk that waited
- *  there for another file passes the folder without a test of its own once
- *  the first one says the folder cannot be reached. Before, only the last
- *  two walks kept to that, and each other walk held a thread of its own
- *  there (planning #310, item 5).
+ *  GitHub CLI, npm, the Node.js tools check, the Claude Code version probe,
+ *  and the look for ssh.exe an SSH start reads, ssh-program.ts) and, through
+ *  the same file test, the walk for Claude Code and the looks for node.exe
+ *  and gsudo.exe (gsudo-lookup.ts). So a folder on a share that is down
+ *  holds one of the few threads file tests share, not one for each walk; a
+ *  walk that asks for a file another walk is asking for takes that answer;
+ *  and a walk that waited there for another file passes the folder without
+ *  a test of its own once the first one says the folder cannot be reached.
+ *  Before, the walks for git, the GitHub CLI, npm, the Node.js tools check
+ *  and the version probe each held a thread of their own there (planning
+ *  #310, item 5).
  *
  *  PATH's order holds as before: the walk waits for each folder's answer,
  *  however long it takes, and never goes past a folder that has not

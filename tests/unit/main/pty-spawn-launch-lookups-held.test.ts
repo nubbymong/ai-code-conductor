@@ -13,7 +13,9 @@
  *    launch that opens no resume list does not ask it.
  *
  * 3. (2.1.3-beta.9) The look for ssh.exe made off the event loop is started
- *    once where the handlers are registered; no SSH start waits for it.
+ *    once, where the handlers are registered. That no SSH start waits for it
+ *    is shown in ssh-program-lookup.test.ts ("with the look still under way,
+ *    every start walks in place as before and none waits for it").
  *
  * The look itself and the warm-up are covered where they live
  * (launch-lookups-off-main-thread.test.ts); here they are stand-ins the test
@@ -238,10 +240,7 @@ describe('a Codex launch that opens the resume list, on macOS and Linux, waits f
 describe('the look for ssh.exe (planning #310, item 5)', () => {
   // Mutation to prove this can fail: drop the startSshProgramLookup call
   // from registerPtyHandlers.
-  it('registering the handlers starts it once, at start; a launch starts no other', async () => {
-    expect(sshLook.starts).toBe(1)
-    asPlatform('win32')
-    expect(await outcome(spawn({}, S, { cwd: 'C:/w', shellOnly: true }))).toBe('started')
+  it('registering the handlers starts it once, at start', () => {
     expect(sshLook.starts).toBe(1)
   })
 })
