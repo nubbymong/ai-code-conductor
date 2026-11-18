@@ -11,7 +11,28 @@ import { decorateStatuslineWithColour } from '../account-color'
 import { tryGetProvider } from '../providers'
 import { sentinelObserve } from '../sentinel/index'
 import { isBackgroundContext } from '../background-context'
+import { logWarn } from '../debug-logger'
 import type { StatuslineData } from '../../shared/types'
+
+/** The two steps before the sinks, whose throw is logged once per run, not
+ *  on every tick (planning #324). */
+type GuardedStep = 'window send' | 'provider step'
+const throwLogged = new Set<GuardedStep>()
+
+/** One log line the first time `step` throws in this run; none after it. */
+function noteStepThrew(step: GuardedStep, error: unknown): void {
+  if (throwLogged.has(step)) return
+  throwLogged.add(step)
+  try {
+    const why = error instanceof Error ? error.message : String(error)
+    logWarn(`[status-fan-out] The ${step} threw; the rest of the fan-out still ran (logged once per run): ${why.slice(0, 200)}`)
+  } catch { /* the log must not break fan-out */ }
+}
+
+/** Test seam: log the next throw of each step again. */
+export function _resetStatusThrowLogForTest(): void {
+  throwLogged.clear()
+}
 
 // Logs v2 (Task 8): the transcript binder sink. The statusline JSON carries
 // Claude Code's live `transcript_path` (continuous, exact discovery source);
@@ -64,16 +85,18 @@ export function deliverStatus(data: StatuslineData, getWindow: (() => BrowserWin
   // The window send and the provider's step are guarded as the three sinks
   // below are, each on its own (planning #324): a window torn down between
   // the check and the send, or a provider that throws, must not stop the
-  // transcript binder, the usage figure or Sentinel.
+  // transcript binder, the usage figure or Sentinel. Each one's first throw
+  // in a run is logged; later ones are not, so a step that throws on every
+  // tick leaves one line.
   if (getWindow) {
     try {
       const win = getWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('statusline:update', forDisplay)
       }
-    } catch { /* the window must not break fan-out */ }
+    } catch (error) { noteStepThrew('window send', error) }
   }
-  try { tryGetProvider('claude')?.deliverStatusline?.(forDisplay) } catch { /* the provider must not break fan-out */ }
+  try { tryGetProvider('claude')?.deliverStatusline?.(forDisplay) } catch (error) { noteStepThrew('provider step', error) }
   // Logs v2 (Task 8): forward the live transcript path to the binder (continuous,
   // exact discovery source). Guarded — the sink may not be registered yet (and
   // isn't in unit tests). A throw here must not break the statusline pipeline.
