@@ -449,6 +449,26 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   by `it_ends_what_it_started_only_while_the_pid_has_that_start_time` (another
   creation time leaves the process running) and
   `it_ends_the_processes_under_it_too` (`helper/tests/start.rs`).
+- **At the app's start, the helper ends only the console hosts the run before
+  left (from 2.1.3-beta.9, Windows).** `aicc-helper console-hosts` (protocol
+  15, "Console hosts a run left") is given the pid and creation time the app
+  recorded for its run before, both plain digits from a file in the user's own
+  data folder. It ends a process only when it is a console host by name and by
+  program file, runs as the helper's own user, is listed with that pid as its
+  parent, and was made after that creation time and before both the helper's
+  own and that of whatever process has the pid now; it holds each open from
+  its check to its end. It ends nothing while that pid still has that creation
+  time. It gives the app no new power: the app can already end any process of
+  its user. What it rests on is the identity of the run before, and two limits
+  of it are owed to the security round before 2.1 stable (aicc_planning #320):
+  only the process that has the pid now bounds what counts, so a process that
+  took the pid and has exited too is not seen; and the record is a file any
+  program of the same user can write, as that program could end the user's
+  processes itself. Tested by
+  `it_ends_the_console_host_a_run_ended_from_outside_left_and_nothing_else`
+  (a run that still runs, and a record of another start, end nothing; a run's
+  own host is ended and another run's is not, `helper/tests/console_hosts.rs`),
+  and the bounds by the unit tests in `helper/src/consoles.rs`.
 
 ## 4 Review
 

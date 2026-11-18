@@ -933,6 +933,55 @@
       ${EndIf}
     ${EndIf}
   ${EndIf}
+
+  ; ---- 5. The elevated inner instance runs the app check here -------------
+  ; installSection.nsh:34-37 skips CHECK_APP_RUNNING (customCheckAppRunning)
+  ; in the elevated inner instance of an all-users install that asked for
+  ; administrator approval, so nothing there closed a running copy: with no
+  ; uninstall record to run (one suspended above, a missing or broken one)
+  ; the files it holds failed the install, and with one, its uninstaller's
+  ; own check stopped the install with a bare "uninstall failed" box. So the
+  ; same check and box run here, after the retarget and the suspend and
+  ; before anything is installed, and a stop puts both back
+  ; (CccRestoreInstallLocation). The commit point does not move: it stays
+  ; in customCheckAppRunning, which this instance never runs.
+  ; This instance installs for all users, so the install it replaces is the
+  ; one the all-users record names, read here or as suspended above. $INSTDIR
+  ; is where initMultiUser put it (the all-users install's folder when only
+  ; that one is recorded); the folder page that follows can still change it.
+  ; The installer is elevated, so the check's elevated rules apply: another
+  ; user's copy keeps running.
+  ${If} ${UAC_IsInnerInstance}
+    DetailPrint "=== The elevated copy of Setup: this user's copies from this install's folder ==="
+    Push $R0
+    ReadRegStr $R0 HKLM "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+    ${If} $R0 == ""
+      StrCpy $R0 "$cccSavedPerMachineUninstallString"
+    ${EndIf}
+    !insertmacro CccGetInQuotes "$R0" $cccRecordUninstaller
+    ClearErrors
+    cccInnerAppStillRunning:
+    !insertmacro CccCloseAppCopies "$cccRecordUninstaller"
+    ${If} $R0 == 1
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "AI Code Conductor is still running.$\n$\nIf it is asking whether to save your sessions, answer it first. Otherwise close it yourself.$\n$\nThen click Retry." /SD IDCANCEL IDRETRY cccInnerAppStillRunning
+      DetailPrint "AI Code Conductor is still running, so nothing was installed."
+    ${ElseIf} $R0 == 2
+      MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "Could not check whether AI Code Conductor is running.$\n$\nClose it if it is open, then click OK to carry on." /SD IDCANCEL IDOK cccInnerAppCheckCarryOn
+      DetailPrint "Could not check whether AI Code Conductor is running, so nothing was installed."
+    ${EndIf}
+    ${If} $R0 != 0
+      Call CccRestoreInstallLocation
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
+    cccInnerAppCheckCarryOn:
+    ${If} $R0 == 0
+      DetailPrint "No copy of AI Code Conductor is running from this install's folder. Proceeding."
+    ${Else}
+      DetailPrint "Carrying on without the check, as chosen in the box."
+    ${EndIf}
+    Pop $R0
+  ${EndIf}
   ; The uninstall RECORD is otherwise deliberately NOT touched here — see the
   ; commit point in customCheckAppRunning for why it can only be cleared once the
   ; install is actually going ahead.
@@ -1842,6 +1891,38 @@ FunctionEnd
   ${Loop}
 !macroend
 
+; Why an end of process ${PID}, through the handle ${HANDLE} (opened with at
+; least PROCESS_QUERY_LIMITED_INFORMATION), failed, as one details line.
+; ${ERROR} is the error Windows gave, taken with the TerminateProcess call
+; (?e). Windows refuses to end a process whose own exit is under way, and
+; marks it exited only once that exit is done, so the exit code is read for
+; up to about half a second: anything but STILL_ACTIVE (259) means it had
+; already exited. That is the usual case: the app's own helper processes end
+; by themselves once its main process has been ended. Otherwise access was
+; denied (5), or the error number is given. ${PID}, ${HANDLE} and ${ERROR}
+; must not be $0 $1 $2. Scratch: $0 $1 $2.
+!macro CccWhyNotEnded PID HANDLE ERROR
+  StrCpy $0 0
+  ${Do}
+    System::Call 'kernel32::GetExitCodeProcess(p ${HANDLE}, *i .r1) i .r2'
+    ${If} $2 == 0
+    ${OrIf} $1 != 259
+    ${OrIf} $0 >= 10
+      ${ExitDo}
+    ${EndIf}
+    Sleep 50
+    IntOp $0 $0 + 1
+  ${Loop}
+  ${If} $2 != 0
+  ${AndIf} $1 != 259
+    DetailPrint "Could not end process ${PID}: it had already exited."
+  ${ElseIf} ${ERROR} == 5
+    DetailPrint "Could not end process ${PID}: access was denied."
+  ${Else}
+    DetailPrint "Could not end process ${PID}: Windows error ${ERROR}."
+  ${EndIf}
+!macroend
+
 ; One Toolhelp pass for this install's running copies of the app. A copy is
 ; a process with one of the app's own image names (${APP_EXECUTABLE_FILENAME},
 ; or one of the two names it had before its rename), that runs as this
@@ -1994,7 +2075,9 @@ FunctionEnd
 ;      Otherwise, TerminateProcess for each copy the first look found that is
 ;      still running, still this user's and has the same start time. A handle
 ;      to it is held open across those checks, so its pid cannot pass to
-;      another process in between, and the handle is what ends it.
+;      another process in between, and the handle is what ends it. An end
+;      that fails says why: the process had already exited, access was
+;      denied, or the error number Windows gave.
 ;   4. Up to about 2 more seconds for Windows to finish ending them.
 ;   5. A last look, which writes to the details log what is still running.
 ; ${OLD_UNINSTALLER} is as for CccScanAppCopies. Leaves in $R0: 0 when no copy
@@ -2004,9 +2087,9 @@ FunctionEnd
 ; installer is not elevated. Saves and restores every other
 ; register. $9 holds the first look's "pid:start," list, $R4 the round or the
 ; place in a list, $R9 this copy's TOKEN_USER (its SID at $R6), $R5 and $R3
-; CccScanAppCopies's buffers, $7 the windows to close, $8 a window or a
-; process handle, $5 a process handle or a flag, $R2 between looks the number
-; of windows asked to close.
+; CccScanAppCopies's buffers, $7 the windows to close, then in step 3 why an
+; end failed, $8 a window or a process handle, $5 a process handle or a flag,
+; $R2 between looks the number of windows asked to close.
 !macro CccCloseAppCopies OLD_UNINSTALLER
   Push $0
   Push $1
@@ -2169,11 +2252,12 @@ FunctionEnd
                   ${If} $6 == 1
                   ${AndIf} $4 != ""
                   ${AndIf} $R8 == $4
-                    System::Call 'kernel32::TerminateProcess(p r8, i 1) i .r6'
+                    System::Call 'kernel32::TerminateProcess(p r8, i 1) i .r6 ?e'
+                    Pop $7
                     ${If} $6 != 0
                       DetailPrint "Ended process $3, which did not close within 5 seconds."
                     ${Else}
-                      DetailPrint "Could not end process $3."
+                      !insertmacro CccWhyNotEnded "$3" $8 $7
                     ${EndIf}
                   ${Else}
                     DetailPrint "Did not end process $3: it could not be confirmed as the copy found first."
@@ -2698,3 +2782,189 @@ FunctionEnd
     !insertmacro RemoveUserHelperFolder
   ${EndIf}
 !macroend
+
+; ============================================================
+; UNINSTALLER: removing the program files, and saying what is left
+; ============================================================
+; electron-builder's uninstall section inserts customRemoveFiles, when it is
+; defined, in place of its own removal of the install folder (uninstaller.nsh,
+; "!ifmacrodef customRemoveFiles"). customRemoveFiles runs that removal
+; unchanged: the lines of its !else branch at the pinned app-builder-lib
+; (26.15.3), which installer-branding-guard.test.ts holds this copy to, so a
+; newer electron-builder that changes them fails there instead of drifting.
+; Then CccReportLeftFiles says what the removal could not take. Before, a file
+; another program still had open (another user's running copy of the app, on
+; an all-users uninstall) stayed with no word in the details list.
+; Uninstaller pass only: the installer pass never inserts either.
+!ifdef BUILD_UNINSTALLER
+!macro customRemoveFiles
+  ${if} ${isUpdated}
+    CreateDirectory "$PLUGINSDIR\old-install"
+
+    Push ""
+    Call un.atomicRMDir
+    Pop $R0
+
+    ${if} $R0 != 0
+      DetailPrint "File is busy, aborting: $R0"
+
+      # Attempt to restore previous directory
+      Push ""
+      Call un.restoreFiles
+      Pop $R0
+
+      Abort `Can't rename "$INSTDIR" to "$PLUGINSDIR\old-install".`
+    ${endif}
+
+  ${endif}
+
+  # Move out of $INSTDIR so it can be removed
+  SetOutPath $TEMP
+  # Remove all files (or remaining shallow directories from the block above)
+  RMDir /r $INSTDIR
+
+  !insertmacro CccReportLeftFiles
+!macroend
+
+; When $INSTDIR is still there after the removal, one details line for each
+; file left in it, at most 50, then how many more. The walk is depth first
+; over the stack and bounded (1000 folders looked in, 256 waiting), and never
+; enters a link: a link is named as left, like a file.
+; Then, on an uninstall for all users that is not an update, with $INSTDIR
+; inside Program Files, what is left is set to go when Windows next restarts
+; (RMDir /r /REBOOTOK). Only administrators can write there, so nobody can put
+; a link in its place before that restart: a delete set for the next start
+; runs before anything can check the path again (the rule beside
+; RemoveUserHelperFolder). So nothing is set to go at the next start on a
+; per-user uninstall, from an all-users install outside Program Files, or on
+; an update, whose new files go into this same folder. Nobody is asked to
+; restart now: another user may be signed in and using the app, so the
+; reboot flag is cleared again. Saves and restores every register it uses:
+; $0 the files found, $1 the folders looked in, $2 the folders waiting, $3
+; the folder, $4 the search, $5 the name found, $6 the folders not looked in,
+; $R0 an answer; $R5 $R6 $R7 and $cccCanon* are IsSameOrInsideCanon's.
+!macro CccReportLeftFiles
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $R0
+  Push $R5
+  Push $R6
+  Push $R7
+  ClearErrors
+  ${If} ${FileExists} "$INSTDIR\*.*"
+    DetailPrint "Could not remove everything in $INSTDIR. A program may still have these open:"
+    StrCpy $0 0
+    StrCpy $1 0
+    StrCpy $2 1
+    StrCpy $6 0
+    Push "$INSTDIR"
+    ${Do}
+      ${If} $2 < 1
+        ${ExitDo}
+      ${EndIf}
+      Pop $3
+      IntOp $2 $2 - 1
+      IntOp $1 $1 + 1
+      ClearErrors
+      FindFirst $4 $5 "$3\*.*"
+      ${Do}
+        ${If} $5 == ""
+          ${ExitDo}
+        ${EndIf}
+        ${If} $5 != "."
+        ${AndIf} $5 != ".."
+          StrCpy $R0 0
+          ${If} ${FileExists} "$3\$5\*.*"
+            ; A folder. Fail closed: only a hard "0" (no reparse attribute)
+            ; is looked into; a link is named as left.
+            ${GetFileAttributes} "$3\$5" "REPARSE_POINT" $R0
+            ${If} $R0 == 0
+              ${If} $2 < 256
+              ${AndIf} $1 < 1000
+                Push "$3\$5"
+                IntOp $2 $2 + 1
+              ${Else}
+                IntOp $6 $6 + 1
+              ${EndIf}
+            ${Else}
+              StrCpy $R0 1
+            ${EndIf}
+          ${Else}
+            StrCpy $R0 1
+          ${EndIf}
+          ${If} $R0 == 1
+            IntOp $0 $0 + 1
+            ${If} $0 <= 50
+              DetailPrint "Left: $3\$5"
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+        FindNext $4 $5
+      ${Loop}
+      FindClose $4
+    ${Loop}
+    ClearErrors
+    ${If} $0 > 50
+      IntOp $R0 $0 - 50
+      DetailPrint "And $R0 more files."
+    ${EndIf}
+    ${If} $6 > 0
+      DetailPrint "And $6 more folders, which were not looked in."
+    ${EndIf}
+    ${If} $0 == 0
+    ${AndIf} $6 == 0
+      DetailPrint "No file is left in it, but the folder itself could not be removed."
+    ${EndIf}
+
+    ${If} $installMode == "all"
+    ${AndIfNot} ${isUpdated}
+      StrCpy $R0 0
+      !insertmacro IsSameOrInsideCanon "$PROGRAMFILES64" "$INSTDIR" $R0
+      ${If} $R0 != 1
+        !insertmacro IsSameOrInsideCanon "$PROGRAMFILES" "$INSTDIR" $R0
+      ${EndIf}
+      ; Inside it, never Program Files itself.
+      ${If} $cccCanonA == $cccCanonB
+      ${OrIf} $cccCanonAS == $cccCanonBS
+        StrCpy $R0 0
+      ${EndIf}
+      ${If} $R0 == 1
+        SetRebootFlag false
+        ClearErrors
+        RMDir /r /REBOOTOK "$INSTDIR"
+        ${IfNot} ${FileExists} "$INSTDIR\*.*"
+          DetailPrint "They were removed on a second try."
+        ${ElseIf} ${Errors}
+          DetailPrint "Windows could not set them all to be removed at the next restart, so some stay until they are removed by hand."
+        ${ElseIf} ${RebootFlag}
+          DetailPrint "They are removed when Windows next restarts. Restart before you install AI Code Conductor in this folder again."
+        ${Else}
+          DetailPrint "Windows could not set them to be removed at the next restart, so they stay until they are removed by hand."
+        ${EndIf}
+        SetRebootFlag false
+      ${Else}
+        DetailPrint "They stay until they are removed by hand: this folder is not inside Program Files, so they are not set to be removed at the next restart."
+      ${EndIf}
+    ${ElseIfNot} ${isUpdated}
+      DetailPrint "They stay until they are removed by hand, once the program that has them open has closed."
+    ${EndIf}
+  ${EndIf}
+  ClearErrors
+  Pop $R7
+  Pop $R6
+  Pop $R5
+  Pop $R0
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+!macroend
+!endif

@@ -84,6 +84,7 @@ import { registerHooksHandlers } from './ipc/hooks-handlers'
 import { registerServiceHealthHandlers } from './ipc/service-health-handlers'
 import { registerMachinesHandlers, getMachinesSource } from './ipc/machines-handlers'
 import { initSessionHelper, applySessionHelperSettings, noteSessionHelperTabs, shutdownSessionHelper, holdQuitForSessionHelper, sessionHelperServiceState } from './session-helper/app-wiring'
+import { endLeftoverConsoleHostsAtStart } from './console-host-leftovers'
 import { createServiceRegistry } from './services/service-registry'
 import { PtyIntegrityMonitor, setPtyIntegrityMonitor, getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
 import { registerProviderAccountsHandlers } from './ipc/provider-accounts-handlers'
@@ -1100,6 +1101,9 @@ if (!gotTheLock) {
     // U4: sweep leaked per-session mcp-<sid>.json sidecars (removed on normal
     // dispose; a crash leaves them). Independent of hooks.
     cleanupStaleMcpConfigs(new Set())
+    // #330: end the console hosts the run before left when it was ended from
+    // outside, and record this run for the next start (Windows, background).
+    endLeftoverConsoleHostsAtStart()
 
     // Shell — open URLs in system browser
     ipcMain.handle('shell:openExternal', async (_event, url: unknown) => {
