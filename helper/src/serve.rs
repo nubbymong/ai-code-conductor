@@ -427,8 +427,6 @@ impl Serve {
             let seq = hooks.queue.push(kind, payload, bytes);
             (seq, hooks.to.clone())
         };
-        // MUTANT round D (reverted next): each event writes the record again.
-        self.update_record(|_| {});
         if let Some((conn, gen)) = to {
             // That connection's gate first, as an attach takes it, so no
             // event comes between an attach's reply and its replay, or after
