@@ -337,9 +337,13 @@ impl ExitWatch {
         if self.fail {
             return Err(io::Error::other("a wait made to fail by a test"));
         }
-        match self.wait_once(INFINITE) {
-            WAIT_OBJECT_0 => Ok(()),
-            _ => Err(os_error("WaitForSingleObject")),
+        // MUTANT M12: the wait asks every 25 ms instead of blocking
+        loop {
+            match self.wait_once(25) {
+                WAIT_OBJECT_0 => return Ok(()),
+                0x0000_0102 => continue,
+                _ => return Err(os_error("WaitForSingleObject")),
+            }
         }
     }
 
