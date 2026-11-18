@@ -13,7 +13,10 @@
 //    unsubscribe stops its delivery;
 //  - a transcript path the gateway child reports reaches the route once,
 //    through the real supervisor and proxy, and an event still reaches the
-//    renderer's feed after the consumers.
+//    renderer's feed after the consumers;
+//  - after a fall-back to the in-process gateway, the Watchdog's unsubscribe
+//    and its next subscribe leave it hearing each StopFailure once (the one
+//    delivery this change does alter: see the case).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -32,6 +35,7 @@ const { setGateway } = await import('../../../src/main/hooks/index')
 const signals = await import('../../../src/main/session-signals/hooks')
 const { startSessionSignals } = await import('../../../src/main/session-signals')
 const { ServiceSupervisor } = await import('../../../src/main/services/service-supervisor')
+const { HooksGatewayProxy } = await import('../../../src/main/services/hooks-gateway-proxy')
 const { FakeChildTransport } = await import('../../../src/main/services/service-transport')
 
 const SRC = join(__dirname, '../../../src/main')
@@ -224,6 +228,33 @@ describe('the production gateway half: the real supervisor and proxy, a fake gat
     transport.emitToParent({ type: 'event', entry: ev('UserPromptSubmit') })
     expect(order).toEqual([...TODAY.map((n) => `${n}:UserPromptSubmit`), 'renderer:hooks:event'])
     expect(emitted.filter(([c]) => c === 'hooks:event')).toHaveLength(1)
+  })
+})
+
+describe('after the hooks child fails open to the in-process gateway', () => {
+  let p: InstanceType<typeof HooksGatewayProxy> | undefined
+  afterEach(async () => { await p?.stop(); p = undefined })
+
+  // Before the module, the Watchdog subscribed to the proxy itself. Once the
+  // proxy had failed open, that first subscription's unsubscribe removed it
+  // only from the proxy's own list, while failOpen had already copied it into
+  // the in-process gateway. So after unticking the Watchdog (or its services
+  // Restart) and starting a session, the old handler and the new one were both
+  // live, and each StopFailure reached the Watchdog twice. Now the Watchdog's
+  // subscription is the module's, and its unsubscribe takes effect.
+  it('the Watchdog unsubscribing and subscribing again hears each StopFailure once', () => {
+    p = new HooksGatewayProxy({ transport: new FakeChildTransport(), defaultPort: 0 })
+    startSessionSignals({ onTranscriptPath: () => {} })
+    setGateway(p)                                                      // the module subscribes to the proxy
+    const first: string[] = []
+    const unsub = signals.onHookEvent((e) => { first.push(e.event) })  // the Watchdog's first session
+    p.failOpen()                                                       // the proxy copies its subscribers over
+    unsub()                                                            // disposeAll: unticked, or Restart
+    const again: string[] = []
+    signals.onHookEvent((e) => { again.push(e.event) })                // the next session subscribes again
+    p.dispatchForTest(ev('StopFailure') as never)
+    expect(first).toEqual([])
+    expect(again).toEqual(['StopFailure'])
   })
 })
 

@@ -63,7 +63,6 @@ function getStatusDir(): string {
 // OSC sentinel parser and feeds it through the same pipeline as the file watcher.
 let sshDispatchWindow: (() => BrowserWindow | null) | null = null
 
-
 /** Sessions a refused update has been logged for: one line per session, so
  *  a stream of them cannot fill the log. Bounded; cleared when full. */
 const otherSessionLogged = new Set<string>()

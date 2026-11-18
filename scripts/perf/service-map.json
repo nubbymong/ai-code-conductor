@@ -15,7 +15,7 @@
     {
       "id": "statusline",
       "label": "Statusline (status files to the session cards)",
-      "within": ["^(?:startStatuslineWatcher|fanOutStatusline|sweepStaleStatusFiles|isOwnSession|sanitiseUsageBuckets|sanitiseRateLimitExtra|sanitiseSentinelPayload|sanitiseRemoteAccountEmail|dispatchSSHStatuslineUpdate|healGlobalStatusline|cleanupStatusFile|getStatusDir)(?:\\$\\d+)?$"]
+      "within": ["^(?:startStatuslineWatcher|deliverStatus|sweepStaleStatusFiles|isOwnSession|sanitiseUsageBuckets|sanitiseRateLimitExtra|sanitiseSentinelPayload|sanitiseRemoteAccountEmail|dispatchSSHStatuslineUpdate|healGlobalStatusline|cleanupStatusFile|getStatusDir)(?:\\$\\d+)?$"]
     },
     {
       "id": "tokenomics",

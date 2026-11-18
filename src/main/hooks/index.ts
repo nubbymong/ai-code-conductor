@@ -45,7 +45,8 @@ export function setGateway(gw: HooksGatewayLike): void {
  * later setGateway. What `bind` returns (the gateway's unsubscribe) is called when
  * another gateway is set or this binding ends, so a consumer hears the gateway set
  * now and no other. A consumer started before src/main/index.ts sets the gateway
- * (the rules engine) hears it all the same. Returns a function that ends the binding.
+ * (the session signals module, src/main/session-signals/hooks.ts) hears it all the
+ * same. Returns a function that ends the binding.
  */
 export function onGateway(bind: (gw: HooksGatewayLike) => (() => void) | void): () => void {
   const b: GatewayBinding = { bind, release: null }

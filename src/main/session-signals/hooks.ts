@@ -26,7 +26,8 @@ export type HookConsumer = (e: HookEvent, source: HookSignalSource) => void
 const consumers = new Set<HookConsumer>()
 
 /** Hear every hook event, after the consumers registered before this one.
- *  Returns the unsubscribe; a consumer registered again goes to the end. */
+ *  Returns the unsubscribe. Registering a consumer already registered changes
+ *  nothing; one that unsubscribed and registers again goes to the end. */
 export function onHookEvent(cb: HookConsumer): () => void {
   consumers.add(cb)
   return () => { consumers.delete(cb) }
@@ -68,9 +69,4 @@ export function _resetHookSignalsForTest(): void {
   consumers.clear()
   if (unbind) { unbind(); unbind = null }
   transcriptPathSink = null
-}
-
-/** Test seam: how many consumers are registered. */
-export function _hookConsumerCountForTest(): number {
-  return consumers.size
 }

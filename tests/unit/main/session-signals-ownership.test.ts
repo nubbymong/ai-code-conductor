@@ -6,24 +6,32 @@
 //
 // This reads every src/main/**/*.ts file and fails when a file outside
 // the module subscribes to the gateway or still defines the old status
-// fan-out (fanOutStatusline). A subscription is found by what it is called
-// on, not by a variable's name: anything that holds the gateway counts,
-// whatever it is called (see the self-test at the end, which proves each way
-// of reaching the gateway is seen).
+// fan-out (fanOutStatusline). Two checks find a subscription:
+//  - by what it is called on: anything traced to the gateway counts, whatever
+//    it is named (the shapes below);
+//  - as a backstop, by name: `gw.subscribe(` or `gateway.subscribe(` in code
+//    (with `?.` or `!.` too), whatever `gw` holds. These are the spellings the
+//    plan names, and they catch an untyped parameter or field so named.
+// The self-test at the end proves each shape and spelling is seen.
 //
-// What holds the gateway, per file: a getGateway() call (under any import
-// name, or through a namespace import); a function handed to onGateway (its
-// first parameter); anything typed HooksGatewayLike, HooksGateway or
-// HooksGatewayProxy; a new HooksGateway or HooksGatewayProxy; what a
-// ServiceSupervisor's start() returns; anything handed to setGateway; and any
-// name or `this` field set from one of those, through casts, `!`, `?.`, `??`
-// and aliases. A subscription is reading `subscribe` from one of them: a
-// call, a bracket read, a `.bind`, or a destructuring.
+// What is traced to the gateway, per file: a getGateway() call (under any
+// import name, or through a namespace import); any getProxy() call (the
+// supervisor's proxy); a call to a function in the same file that returns one
+// of these; a function handed to onGateway (its first parameter); anything
+// typed HooksGatewayLike, HooksGateway or HooksGatewayProxy; a new HooksGateway
+// or HooksGatewayProxy; what a ServiceSupervisor's start() returns; anything
+// handed to setGateway; and any name or `this` field set from one of those,
+// through casts, `!`, `?.`, `??` and aliases. A subscription is reading
+// `subscribe` from one of them: a call, a bracket read, a `.bind`, or an
+// object destructuring.
 //
-// Not checked here: the gateway's own implementation (src/main/hooks/, and
-// the proxy, which hands its own subscribers to the in-process gateway when it
-// falls back to it), and a gateway passed to an untyped helper defined in
-// another file.
+// Not checked here, unless the name backstop catches it: the gateway's own
+// implementation (src/main/hooks/hooks-gateway.ts, and the proxy, which hands
+// its own subscribers to the in-process gateway when it falls back to it); a
+// gateway held in an object property (`deps.feed`); a gateway passed to an
+// untyped parameter of a helper, in the same file or another; a gateway typed
+// only by its shape (`{ subscribe(...) }`) or as `ReturnType<typeof getGateway>`;
+// a class method that returns the gateway; and an array destructuring.
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
@@ -31,18 +39,22 @@ import { parse } from '@babel/parser'
 
 const ROOT = resolve(__dirname, '..', '..', '..')
 const MODULE_DIR = 'src/main/session-signals/'
-/** The gateway's own implementation, which subscribes to itself. */
-const GATEWAY_IMPLEMENTATION = (p: string) => p.startsWith('src/main/hooks/') || p === 'src/main/services/hooks-gateway-proxy.ts'
+/** The gateway's own implementation: the gateway itself, and the proxy, which
+ *  hands its own subscribers to the in-process gateway when it falls back. */
+const GATEWAY_IMPLEMENTATION = new Set(['src/main/hooks/hooks-gateway.ts', 'src/main/services/hooks-gateway-proxy.ts'])
 
 const GATEWAY_TYPES = new Set(['HooksGatewayLike', 'HooksGateway', 'HooksGatewayProxy'])
 const GATEWAY_CLASSES = new Set(['HooksGateway', 'HooksGatewayProxy'])
 const TRACKED_NAMES = new Set(['getGateway', 'onGateway', 'setGateway', 'ServiceSupervisor', ...GATEWAY_TYPES])
+const FUNCTION_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'ObjectMethod', 'ClassMethod', 'ClassPrivateMethod'])
 
 type N = { type: string; loc?: { start: { line: number } }; [k: string]: any }
+type Parsed = { program: N; comments: Array<{ start: number; end: number }> }
 const SKIP_KEYS = new Set(['loc', 'start', 'end', 'extra', 'leadingComments', 'trailingComments', 'innerComments', 'range'])
 
-function walk(node: N, visit: (n: N) => void): void {
-  visit(node)
+/** Visit every node; a visitor that returns false skips that node's children. */
+function walk(node: N, visit: (n: N) => void | false): void {
+  if (visit(node) === false) return
   for (const key of Object.keys(node)) {
     if (SKIP_KEYS.has(key)) continue
     const v = node[key]
@@ -51,10 +63,22 @@ function walk(node: N, visit: (n: N) => void): void {
   }
 }
 
-/** The lines of `code` where `subscribe` is read from the hooks gateway. */
-export function gatewaySubscriptions(code: string): number[] {
-  const ast = parse(code, { sourceType: 'module', plugins: ['typescript'], errorRecovery: true }).program as unknown as N
+/** Parse TypeScript. Anything the parser could not read fails loudly, naming
+ *  the file: a partial tree could hide a subscription. */
+function parseTs(code: string, label: string): Parsed {
+  let file: { program: N; comments?: Parsed['comments']; errors?: Array<{ message?: string }> }
+  try {
+    file = parse(code, { sourceType: 'module', plugins: ['typescript'], errorRecovery: true }) as unknown as typeof file
+  } catch (err) {
+    throw new Error(`${label}: the parser could not read it: ${(err as Error).message}`)
+  }
+  const errors = file.errors ?? []
+  if (errors.length > 0) throw new Error(`${label}: the parser could not read it: ${errors.map((e) => e.message).join('; ')}`)
+  return { program: file.program, comments: file.comments ?? [] }
+}
 
+/** The lines where `subscribe` is read from something traced to the hooks gateway. */
+function subscriptionsIn(ast: N): number[] {
   // Import names: `import { getGateway as g }` makes `g` mean getGateway.
   const alias = new Map<string, string>()
   walk(ast, (n) => {
@@ -78,6 +102,29 @@ export function gatewaySubscriptions(code: string): number[] {
     return found
   }
 
+  // The functions this file names, and what each returns (its own returns, not
+  // those of a function nested in it).
+  const functionsByName = new Map<string, N>()
+  walk(ast, (n) => {
+    if (n.type === 'FunctionDeclaration' && n.id) functionsByName.set(n.id.name, n)
+    if (n.type === 'VariableDeclarator' && n.id?.type === 'Identifier' && ['ArrowFunctionExpression', 'FunctionExpression'].includes(n.init?.type)) functionsByName.set(n.id.name, n.init)
+  })
+  const returnsOf = (fn: N): N[] => {
+    if (fn.body?.type !== 'BlockStatement') return fn.body ? [fn.body] : []
+    const out: N[] = []
+    walk(fn.body, (n) => {
+      if (FUNCTION_TYPES.has(n.type)) return false
+      if (n.type === 'ReturnStatement' && n.argument) out.push(n.argument)
+    })
+    return out
+  }
+  const firstParam = (fn: N | undefined): string | null => {
+    const p = fn?.params?.[0]
+    if (p?.type === 'Identifier') return p.name
+    if (p?.type === 'AssignmentPattern' && p.left?.type === 'Identifier') return p.left.name
+    return null
+  }
+
   const gateways = new Set<string>()      // names (and `this.x` fields) that hold the gateway
   const supervisors = new Set<string>()
   const keyOf = (e: N | undefined): string | null => {
@@ -90,6 +137,7 @@ export function gatewaySubscriptions(code: string): number[] {
     while (e && ['TSNonNullExpression', 'TSAsExpression', 'TSSatisfiesExpression', 'TSTypeAssertion', 'ParenthesizedExpression', 'AwaitExpression'].includes(e.type)) e = e.expression ?? e.argument
     return e
   }
+  const following = new Set<string>()     // local functions being followed (a function that returns its own call)
   const isGateway = (raw: N | undefined): boolean => {
     const e = unwrap(raw)
     if (!e) return false
@@ -97,8 +145,14 @@ export function gatewaySubscriptions(code: string): number[] {
     if (e.type === 'ConditionalExpression') return isGateway(e.consequent) || isGateway(e.alternate)
     if (e.type === 'SequenceExpression') return isGateway(e.expressions[e.expressions.length - 1])
     if (e.type === 'CallExpression' || e.type === 'OptionalCallExpression') {
-      if (nameOf(e.callee) === 'getGateway') return true
+      const callee = nameOf(e.callee)
+      if (callee === 'getGateway' || callee === 'getProxy') return true
       const c = unwrap(e.callee)
+      // A call to a function in this file that returns the gateway.
+      if (c?.type === 'Identifier' && functionsByName.has(c.name) && !following.has(c.name)) {
+        following.add(c.name)
+        try { if (returnsOf(functionsByName.get(c.name)!).some((r) => isGateway(r))) return true } finally { following.delete(c.name) }
+      }
       if ((c?.type === 'MemberExpression' || c?.type === 'OptionalMemberExpression') && !c.computed && c.property?.name === 'start') {
         const o = unwrap(c.object)
         const k = keyOf(o)
@@ -109,18 +163,6 @@ export function gatewaySubscriptions(code: string): number[] {
     if (e.type === 'NewExpression') return GATEWAY_CLASSES.has(nameOf(e.callee) ?? '')
     const k = keyOf(e)
     return k !== null && gateways.has(k)
-  }
-
-  const functionsByName = new Map<string, N>()
-  walk(ast, (n) => {
-    if (n.type === 'FunctionDeclaration' && n.id) functionsByName.set(n.id.name, n)
-    if (n.type === 'VariableDeclarator' && n.id?.type === 'Identifier' && ['ArrowFunctionExpression', 'FunctionExpression'].includes(n.init?.type)) functionsByName.set(n.id.name, n.init)
-  })
-  const firstParam = (fn: N | undefined): string | null => {
-    const p = fn?.params?.[0]
-    if (p?.type === 'Identifier') return p.name
-    if (p?.type === 'AssignmentPattern' && p.left?.type === 'Identifier') return p.left.name
-    return null
   }
 
   // Grow the set of gateway holders until nothing new is found (aliases of aliases).
@@ -167,11 +209,30 @@ export function gatewaySubscriptions(code: string): number[] {
   return [...lines].sort((a, b) => a - b)
 }
 
-/** The lines of `code` that name the old status fan-out. */
-export function statusFanOutNames(code: string): number[] {
-  const ast = parse(code, { sourceType: 'module', plugins: ['typescript'], errorRecovery: true }).program as unknown as N
+/** The lines, comments left out, that spell a subscription on a name `gw` or
+ *  `gateway` (also with `?.` or `!.`), whatever that name holds. */
+function namedIn(code: string, comments: Parsed['comments']): number[] {
+  let bare = code
+  for (const c of comments) bare = bare.slice(0, c.start) + bare.slice(c.start, c.end).replace(/[^\n]/g, ' ') + bare.slice(c.end)
   const lines: number[] = []
-  walk(ast, (n) => { if (n.type === 'Identifier' && n.name === 'fanOutStatusline') lines.push(n.loc!.start.line) })
+  for (const m of bare.matchAll(/\b(?:gw|gateway)[?!]?\.subscribe\(/g)) lines.push(bare.slice(0, m.index).split('\n').length)
+  return lines
+}
+
+/** The lines of `code` where `subscribe` is read from the hooks gateway. */
+export function gatewaySubscriptions(code: string, label = 'snippet'): number[] {
+  return subscriptionsIn(parseTs(code, label).program)
+}
+
+/** The lines of `code` that spell `gw.subscribe(` or `gateway.subscribe(`. */
+export function namedGatewaySubscriptions(code: string, label = 'snippet'): number[] {
+  return namedIn(code, parseTs(code, label).comments)
+}
+
+/** The lines of `code` that name the old status fan-out. */
+export function statusFanOutNames(code: string, label = 'snippet'): number[] {
+  const lines: number[] = []
+  walk(parseTs(code, label).program, (n) => { if (n.type === 'Identifier' && n.name === 'fanOutStatusline') lines.push(n.loc!.start.line) })
   return lines
 }
 
@@ -185,38 +246,43 @@ function mainSources(dir = join(ROOT, 'src', 'main'), out: string[] = []): strin
   }
   return out
 }
-const tracked = mainSources().sort()
+const sources = mainSources().sort()
 const read = (p: string) => readFileSync(resolve(ROOT, p), 'utf8')
 
 describe('the session signals module is the one owner of what a hook event or status line means (A2)', () => {
   it('reads the main process source', () => {
-    expect(tracked.length).toBeGreaterThan(100)
-    expect(tracked).toContain('src/main/session-signals/hooks.ts')
-    expect(tracked).toContain('src/main/session-signals/status.ts')
+    expect(sources.length).toBeGreaterThan(100)
+    expect(sources).toContain('src/main/session-signals/hooks.ts')
+    expect(sources).toContain('src/main/session-signals/status.ts')
+    // The files left out as the gateway's own implementation still exist under these names.
+    for (const p of GATEWAY_IMPLEMENTATION) expect(sources).toContain(p)
   })
 
   it('no file outside the module subscribes to the hooks gateway', () => {
     const found: string[] = []
-    for (const p of tracked) {
-      if (p.startsWith(MODULE_DIR) || GATEWAY_IMPLEMENTATION(p)) continue
-      for (const line of gatewaySubscriptions(read(p))) found.push(`${p}:${line}`)
+    for (const p of sources) {
+      if (p.startsWith(MODULE_DIR) || GATEWAY_IMPLEMENTATION.has(p)) continue
+      const code = read(p)
+      const parsed = parseTs(code, p)
+      for (const line of subscriptionsIn(parsed.program)) found.push(`${p}:${line}`)
+      for (const line of namedIn(code, parsed.comments)) found.push(`${p}:${line} (by name)`)
     }
     expect(found, `subscribe to the gateway through onHookEvent (src/main/session-signals/hooks.ts) instead:\n${found.join('\n')}`).toEqual([])
   })
 
   it('no file outside the module defines or calls the old status fan-out', () => {
     const found: string[] = []
-    for (const p of tracked) {
+    for (const p of sources) {
       if (p.startsWith(MODULE_DIR)) continue
-      for (const line of statusFanOutNames(read(p))) found.push(`${p}:${line}`)
+      for (const line of statusFanOutNames(read(p), p)) found.push(`${p}:${line}`)
     }
     expect(found, `the status fan-out is deliverStatus (src/main/session-signals/status.ts):\n${found.join('\n')}`).toEqual([])
   })
 
   it('inside the module, exactly one subscription to the gateway, in hooks.ts', () => {
     const found: string[] = []
-    for (const p of tracked.filter((q) => q.startsWith(MODULE_DIR))) {
-      for (const line of gatewaySubscriptions(read(p))) found.push(`${p}:${line}`)
+    for (const p of sources.filter((q) => q.startsWith(MODULE_DIR))) {
+      for (const line of gatewaySubscriptions(read(p), p)) found.push(`${p}:${line}`)
     }
     expect(found).toHaveLength(1)
     expect(found[0]).toMatch(/^src\/main\/session-signals\/hooks\.ts:\d+$/)
@@ -244,6 +310,11 @@ describe('the check sees a gateway subscription however the gateway is named or 
     ['a gateway built here', `const p = new HooksGateway({ defaultPort: 0 })\np.subscribe(cb)`],
     ['a supervisor\'s proxy', `const sup = new ServiceSupervisor({})\nconst proxy = sup.start()\nproxy.subscribe(cb)`],
     ['what is handed to setGateway', `setGateway(made)\nmade.subscribe(cb)`],
+    ['the supervisor accessor\'s proxy', `getHooksSupervisor()?.getProxy()?.subscribe(cb)`],
+    ['a proxy read into a name', `const p = sup.getProxy()\np!.subscribe(cb)`],
+    ['a wrapper function', `const g = () => getGateway()\ng()?.subscribe(cb)`],
+    ['a wrapper function with a body', `function current() {\n  if (off) return null\n  return getGateway()\n}\ncurrent()!.subscribe(cb)`],
+    ['a wrapper of a wrapper', `const a = () => getGateway()\nfunction b() { return a() }\nconst x = b()\nx?.subscribe(cb)`],
   ]
   for (const [what, code] of flagged) {
     it(`flags ${what}`, () => { expect(gatewaySubscriptions(code).length).toBeGreaterThan(0) })
@@ -255,10 +326,37 @@ describe('the check sees a gateway subscription however the gateway is named or 
     ['a state store', `const s = getSentinelState()\ns?.subscribe(cb)`],
     ['the module\'s own entry', `onHookEvent((e) => use(e))`],
     ['a gateway used for something else', `const gw = getGateway()\ngw?.registerSession(id)`],
+    ['a function that returns something else', `const store = () => getStore()\nstore().subscribe(cb)`],
+    ['a function that only calls the gateway inside a nested function', `function outer() { const inner = () => getGateway(); return other }\nouter().subscribe(cb)`],
+    ['a function that returns its own call', `function loop() { return loop() }\nloop().subscribe(cb)`],
   ]
   for (const [what, code] of clean) {
     it(`does not flag ${what}`, () => { expect(gatewaySubscriptions(code)).toEqual([]) })
   }
+
+  // The name backstop: the spellings the plan names, on a name nothing traces.
+  const byName: Array<[string, string, number[]]> = [
+    ['an untyped parameter named gateway', `function f(gateway) {\n  gateway.subscribe(cb)\n}`, [2]],
+    ['an untyped parameter named gw, with ?.', `const f = (gw) => gw?.subscribe(cb)`, [1]],
+    ['a field named gw on another object', `deps.gw.subscribe(cb)`, [1]],
+    ['a non-null gateway', `x = 1\ngateway!.subscribe(cb)`, [2]],
+  ]
+  for (const [what, code, lines] of byName) {
+    it(`flags by name ${what}`, () => { expect(namedGatewaySubscriptions(code)).toEqual(lines) })
+  }
+  const notByName: Array<[string, string]> = [
+    ['a comment', `// was gw.subscribe(cb)\n/* and gateway.subscribe(cb) */\nonHookEvent(cb)`],
+    ['a longer name', `mygw.subscribe(cb)\ngatewayStatus.subscribe(cb)`],
+    ['the module\'s own entry', `onHookEvent((e) => use(e))`],
+  ]
+  for (const [what, code] of notByName) {
+    it(`does not flag by name ${what}`, () => { expect(namedGatewaySubscriptions(code)).toEqual([]) })
+  }
+
+  it('a file the parser cannot read fails loudly, naming the file', () => {
+    expect(() => gatewaySubscriptions('const = (;', 'src/main/broken.ts')).toThrow(/src\/main\/broken\.ts: the parser could not read it/)
+    expect(() => statusFanOutNames('function (', 'src/main/broken.ts')).toThrow(/src\/main\/broken\.ts/)
+  })
 
   it('finds the old status fan-out by name in code, not in a comment', () => {
     expect(statusFanOutNames(`function fanOutStatusline(d) {}\nfanOutStatusline(x)`)).toEqual([1, 2])

@@ -1,8 +1,8 @@
 ## 2026-11-18 -- One session signals module decides what a hook event or status line means
 
 Section A2 of the 2.1.3-beta.8 plan (ADR-030 component row 13, slice S12). A
-refactor with no behaviour change: it moves meaning, not transport. It ships
-whether or not the helper hook work (A3, A4) follows.
+refactor that moves meaning, not transport, and changes one delivery, a fix
+(below). It ships whether or not the helper hook work (A3, A4) follows.
 
 **What moved.** A new folder, `src/main/session-signals/`:
 - `hooks.ts` is now the only subscriber to the hooks gateway in the main
@@ -46,22 +46,32 @@ the redaction stay in the gateway.
   two expectations are unchanged, and one was added (the engine calls
   `onHookEvent(`).
 
-**Edge cases that differ, none reachable in today's start-up.** A consumer
-started before any gateway is set now hears one set later (before, only the
-rules engine did); a gateway set a second time is now followed by every
-consumer (index.ts sets it once); and after a fall-back to the in-process
-gateway, the Watchdog's unsubscribe at quit now takes effect (before, it
-removed the callback only from the proxy's unused list).
+**What now differs.** One change can happen while the app runs, and it is a
+fix. After the hooks child fails open to the in-process gateway, unticking
+the Watchdog in Settings or using its services Restart, then starting a
+session, used to leave the old StopFailure handler live: its unsubscribe
+removed it only from the proxy's own list, after failOpen had copied it into
+the live gateway. Each StopFailure then reached the Watchdog twice, so it
+could count one failure as two. It now reaches it once
+(session-signals-hooks.test.ts pins it). Two other edges cannot happen in
+today's start-up: a consumer started before any gateway is set now hears one
+set later (before, only the rules engine did; index.ts sets the gateway
+before every other consumer starts), and a gateway set a second time is now
+followed by every consumer (index.ts sets it once).
 
 **Tests.** New: session-signals-ownership.test.ts (red on the unchanged
 source at the six subscribe sites and the three fan-out lines; a self-test
-shows it sees renamed, aliased, typed and destructured gateway handles),
+shows it sees renamed, aliased, typed and destructured gateway handles, the
+supervisor's proxy, wrapper functions, and `gw.subscribe(` or
+`gateway.subscribe(` by name),
 session-signals-hooks.test.ts and session-signals-status.test.ts (written
 against statusline-watcher.ts first and green there, then kept green after
 the move). Mutants run: two consumers swapped (in index.ts, and in the
 module), one consumer dropped (the effort tracker, the claim, the module
-skipping one), the subagent strip applied to the raw data. Each turned a test
-red.
+skipping one), the subagent strip applied to the raw data (deleted in place
+on the raw data, and the display copy no longer copied first), a status sink
+or Sentinel guard removed, and the module's unsubscribe made a no-op. Each
+turned a test red.
 
 **Owed.** statusline-watcher.ts is in the SSH blast radius, so the live SSH
 matrix runs once at the release PR, as beta.7's A3 did. The status lines a

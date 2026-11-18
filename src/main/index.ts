@@ -972,8 +972,9 @@ if (!gotTheLock) {
     }
     // ADR-030 row 13 (2.1.3-beta.8, A2): the session signals module is the one
     // subscriber to the Hooks gateway (whichever is set below, and any set after
-    // it); every consumer below takes events from it, in the order they start.
-    // A transcript path the gateway reports reaches the route through it.
+    // it); every consumer (the rules engine started above, the rest below) takes
+    // events from it, in the order they start. A transcript path the gateway
+    // reports reaches the route through it.
     startSessionSignals({ onTranscriptPath: routeTranscriptPath })
     if (hooksEnabled) {
       // Supervised out-of-process gateway: a utilityProcess child runs the HooksGateway,

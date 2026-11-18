@@ -7,7 +7,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('../../../src/main/ipc/channel-handlers', () => ({ pushAttention: vi.fn() }))
-vi.mock('../../../src/main/hooks/index', () => ({ getGateway: () => null }))
+// 2.1.3-beta.8 A2: the hook feed comes from the session signals module.
+vi.mock('../../../src/main/session-signals/hooks', () => ({ onHookEvent: () => () => {} }))
 
 import { routeAttentionEvent, codexAttentionForEvent, CODEX_IDLE_ATTENTION_MS, CODEX_OWN_PRE_WINDOW_MS, _resetAttentionSourceForTest, clearCodexIdleAttention } from '../../../src/main/attention-source'
 import { onInternal } from '../../../src/main/internal-events'

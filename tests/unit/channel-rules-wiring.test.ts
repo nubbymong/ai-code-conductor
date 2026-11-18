@@ -14,7 +14,8 @@ vi.mock('../../src/main/session-registry', () => ({
 }))
 const internal: Record<string, (p: any) => void> = {}
 vi.mock('../../src/main/internal-events', () => ({ onInternal: (e: string, cb: any) => { internal[e] = cb; return () => {} } }))
-vi.mock('../../src/main/hooks/index', () => ({ onGateway: (bind: (gw: any) => unknown) => { bind({ subscribe: () => () => {} }); return () => {} } }))
+// 2.1.3-beta.8 A2: the hook feed comes from the session signals module.
+vi.mock('../../src/main/session-signals/hooks', () => ({ onHookEvent: () => () => {} }))
 const { startRulesEngine } = await import('../../src/main/channel-rules')
 
 describe('channel-rules wiring', () => {

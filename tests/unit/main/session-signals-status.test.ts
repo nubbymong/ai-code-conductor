@@ -1,14 +1,23 @@
 // What a status line means, once it has been parsed and sanitised: the
 // fan-out that decides it. Written against src/main/statusline-watcher.ts
 // BEFORE the fan-out moved into the session signals module (2.1.3-beta.8,
-// section A2), and kept unchanged after the move, so the move is shown to
-// change nothing. Every case drives the real fan-out through the watcher's
+// section A2), and green after the move too, so the move is shown to change
+// nothing. Every case but three drives the real fan-out through the watcher's
 // own string entry (dispatchSSHStatuslineUpdate), the path the MCP /status
-// ingest and the SSH sentinel take; only the colour decorator, the subagent
-// check, Sentinel, the provider registry and the logger are stand-ins.
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+// ingest and the SSH sentinel take. The three "a throwing ..." cases call
+// deliverStatus itself: the watcher's entry catches any throw, so only a
+// direct call shows that the fan-out's own guards hold. Only the colour
+// decorator, the subagent check, Sentinel, the provider registry and the
+// logger are stand-ins.
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
+  // A real temp resources folder: startStatuslineWatcher makes <resources>/status
+  // in it. Removed in afterAll.
+  dir: (() => {
+    const os = require('node:os'); const fs = require('node:fs'); const path = require('node:path')
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-signals-status-')) as string
+  })(),
   log: [] as string[],
   background: false,
   backgroundAsked: [] as Array<[unknown, unknown]>,
@@ -19,16 +28,14 @@ const h = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({ BrowserWindow: class {} }))
-// A real temp resources folder: startStatuslineWatcher makes <resources>/status.
-vi.mock('../../../src/main/ipc/setup-handlers', () => {
-  const os = require('node:os'); const fs = require('node:fs'); const path = require('node:path')
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-signals-status-'))
-  return { getResourcesDirectory: () => dir, registerSetupHandlers: () => {} }
-})
-// The decorator always returns a NEW object carrying a colour, so a test can
-// tell the decorated payload from the raw one.
+vi.mock('../../../src/main/ipc/setup-handlers', () => ({ getResourcesDirectory: () => h.dir, registerSetupHandlers: () => {} }))
+// As the real decorator (src/main/account-color.ts): a NEW object carrying a
+// colour when the payload names an account, and the SAME object when it does
+// not. So a test can tell the decorated payload from the raw one, and a strip
+// that deleted in place would reach the raw data here, as it would in the app.
 vi.mock('../../../src/main/account-color', () => ({
-  decorateStatuslineWithColour: (d: Record<string, unknown>) => ({ ...d, accountColour: 'mock-colour' }),
+  decorateStatuslineWithColour: (d: Record<string, unknown>) =>
+    typeof d.accountEmail === 'string' && d.accountEmail.trim() ? { ...d, accountColour: 'mock-colour' } : d,
 }))
 vi.mock('../../../src/main/background-context', () => ({
   isBackgroundContext: (sid: unknown, tp: unknown) => { h.backgroundAsked.push([sid, tp]); return h.background },
@@ -54,6 +61,7 @@ vi.mock('../../../src/main/debug-logger', () => ({ logWarn: () => {}, logInfo: (
 
 const { dispatchSSHStatuslineUpdate, setTranscriptPathSink, setStatuslineUsageSink, startStatuslineWatcher } =
   await import('../../../src/main/statusline-watcher')
+const { deliverStatus } = await import('../../../src/main/session-signals/status')
 
 const TP = '/profiles/p1/projects/x/00000000-0000-4000-8000-000000000000.jsonl'
 const BUCKETS = [{ key: 'session:', label: '5h', group: 'session', percent: 33, resetsAt: '', severity: 'normal' }]
@@ -78,9 +86,16 @@ beforeEach(() => {
   })
 })
 afterEach(() => { stopWatcher?.(); stopWatcher = null })
+afterAll(() => {
+  if (!h.dir) return
+  try { require('node:fs').rmSync(h.dir, { recursive: true, force: true }) } catch { /* best effort */ }
+})
 
 const dispatch = (payload: Record<string, unknown>) =>
   dispatchSSHStatuslineUpdate(JSON.stringify({ sessionId: 'sess-1', ...payload }))
+/** The fan-out itself, on a payload as the watcher hands it over. */
+const deliver = (payload: Record<string, unknown>) =>
+  deliverStatus({ sessionId: 'sess-1', ...payload } as never, () => fakeWin as never)
 
 /** A full status line: model fields, a transcript, usage and an account. */
 const full = (extra: Record<string, unknown> = {}) => ({
@@ -125,10 +140,20 @@ describe('the status line fan-out (characterisation, kept across the move into t
   })
 
   it('a background context with no account colour still strips only the display copy', () => {
+    // No account, so the decorator hands back the raw object itself: the strip
+    // must copy before it deletes, or the raw data loses its model fields.
     h.background = true
     dispatch(full({ accountEmail: undefined }))
-    expect(sent[0].payload).not.toHaveProperty('modelId')
+    const shown = sent[0].payload
+    expect(shown).not.toHaveProperty('model')
+    expect(shown).not.toHaveProperty('modelId')
+    expect(shown).not.toHaveProperty('effortLevel')
+    expect(shown).not.toHaveProperty('accountColour')
+    expect(h.delivered[0]).toBe(shown)
+    // Sentinel still reads the raw model id, and the sinks the raw data.
     expect(h.observed).toEqual([{ kind: 'model', value: 'model-id-raw', source: 'statusline' }])
+    expect(transcripts).toEqual([['sess-1', TP]])
+    expect(usage).toEqual([{ sessionId: 'sess-1', buckets: BUCKETS, hasCredits: false, transcriptPath: TP }])
   })
 
   it('the transcript path and usage sinks get the raw data', () => {
@@ -168,7 +193,7 @@ describe('the status line fan-out (characterisation, kept across the move into t
 
   it('a throwing transcript sink does not stop the usage sink or Sentinel', () => {
     setTranscriptPathSink(() => { h.log.push('transcript'); throw new Error('transcript boom') })
-    expect(() => dispatch(full())).not.toThrow()
+    expect(() => deliver(full())).not.toThrow()
     expect(h.log).toEqual(['window', 'provider', 'transcript', 'usage', 'sentinel'])
     expect(usage).toHaveLength(1)
     expect(h.observed).toHaveLength(1)
@@ -176,14 +201,14 @@ describe('the status line fan-out (characterisation, kept across the move into t
 
   it('a throwing usage sink does not stop Sentinel', () => {
     setStatuslineUsageSink(() => { h.log.push('usage'); throw new Error('usage boom') })
-    expect(() => dispatch(full())).not.toThrow()
+    expect(() => deliver(full())).not.toThrow()
     expect(h.log).toEqual(['window', 'provider', 'transcript', 'usage', 'sentinel'])
     expect(h.observed).toHaveLength(1)
   })
 
   it('a throwing Sentinel observer does not break the fan-out', () => {
     h.observeThrows = true
-    expect(() => dispatch(full())).not.toThrow()
+    expect(() => deliver(full())).not.toThrow()
     expect(h.log).toEqual(['window', 'provider', 'transcript', 'usage', 'sentinel'])
   })
 })

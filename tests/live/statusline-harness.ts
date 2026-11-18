@@ -4,7 +4,7 @@
 // config-manager mocked, against the hosts in tests/live/hosts.local.json
 // (gitignored; see hosts.example.json), and asserts the REAL statusline
 // pipeline (shim → OSC sentinel → extractSshOscSentinels →
-// dispatchSSHStatuslineUpdate → fanOutStatusline) delivers
+// dispatchSSHStatuslineUpdate → deliverStatus) delivers
 // `statusline:update` events for the session's own id — the exact signal the
 // renderer's statusline row waits on ("pending" until the first one lands).
 // Lanes assert claudeRan: an update carrying claude's own fields, not just the

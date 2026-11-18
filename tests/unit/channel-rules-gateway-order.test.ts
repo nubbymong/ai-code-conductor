@@ -1,8 +1,10 @@
 // P3.16a (N6): the rules engine hears the Hooks gateway whichever of the two
 // starts first. src/main/index.ts starts the rules engine (startRulesEngine)
 // before it sets the gateway (setGateway), and a gateway set later replaces the
-// one before it. The engine binds through onGateway (src/main/hooks/index.ts),
-// which hands it the gateway when one is set and each gateway set after it, so
+// one before it. The engine takes its events from the session signals module
+// (src/main/session-signals/hooks.ts, 2.1.3-beta.8 A2), which binds through
+// onGateway (src/main/hooks/index.ts): that hands the module the gateway when
+// one is set and each gateway set after it, so
 // the built-in Attention Pulse sees the turn (UserPromptSubmit to Stop) and the
 // Notification idle_prompt of a Claude session, and the turn under a Codex
 // session's idle mark. This file runs that startup order against the real hooks
@@ -120,7 +122,7 @@ describe('onGateway: a consumer is handed each gateway as it is set (P3.16a, N6)
     const seen: unknown[] = []
     const unbind = onGateway((gw) => { seen.push(gw); return gw.subscribe(() => {}) })
     expect(seen).toEqual([one])
-    expect(one.subscribers()).toBe(2) // the rules engine's and this one's
+    expect(one.subscribers()).toBe(2) // the session signals module's and this one's
 
     setGateway(asGateway(two))
     expect(seen).toEqual([one, two])
@@ -128,7 +130,7 @@ describe('onGateway: a consumer is handed each gateway as it is set (P3.16a, N6)
     expect(two.subscribers()).toBe(2)
 
     unbind()
-    expect(two.subscribers()).toBe(1) // the rules engine's alone
+    expect(two.subscribers()).toBe(1) // the session signals module's alone
     setGateway(asGateway(one))
     expect(seen).toEqual([one, two])
   })
@@ -146,8 +148,8 @@ describe('onGateway: a consumer is handed each gateway as it is set (P3.16a, N6)
   })
 })
 
-describe('the rules engine binds to the gateway through onGateway (P3.16a, N6)', () => {
-  it('src/main/channel-rules.ts reads the gateway through onGateway, never a one-time getGateway', () => {
+describe('the rules engine reaches the gateway through the session signals module, which binds through onGateway (P3.16a, N6)', () => {
+  it('the rules engine takes events through onHookEvent, the module binds through onGateway, never a one-time getGateway', () => {
     // 2.1.3-beta.8 A2: through the session signals module, so the engine's path
     // to the gateway is the engine and that module together.
     const code = (file: string) => readFileSync(join(__dirname, file), 'utf8')
