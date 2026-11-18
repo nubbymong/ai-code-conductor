@@ -5,7 +5,18 @@ import type { HooksToggleRequest, HooksGetBufferRequest, HooksGatewayStatus } fr
 import { getActivePtySessionIds } from '../pty-manager'
 import { removeHooks } from '../hooks/session-hooks-writer'
 import { getLocalSessionSettingsPath } from '../hooks/per-session-settings'
-import { hookFeedBuffer } from '../session-signals'
+import { dropHelperRings, hookFeedBuffer } from '../session-signals'
+import { HooksGateway } from '../hooks/hooks-gateway'
+import { HooksGatewayProxy } from '../services/hooks-gateway-proxy'
+
+/** Whether a stop of this gateway clears its per-session rings: the
+ *  in-process HooksGateway does (hooks-gateway.ts stop), and so does the proxy
+ *  while it runs one (fail-open); the proxy with its child out of process does
+ *  not. Any other gateway has none to clear. */
+function gatewayClearsRingsAtStop(gateway: HooksGatewayLike): boolean {
+  if (gateway instanceof HooksGateway) return true
+  return gateway instanceof HooksGatewayProxy && gateway.isInProcessFallback()
+}
 
 function broadcastStatus(status: HooksGatewayStatus): void {
   for (const w of BrowserWindow.getAllWindows()) {
@@ -36,6 +47,14 @@ export function registerHooksHandlers(gateway: HooksGatewayLike): void {
         } catch { /* file may not exist; next call handles missing path */ }
       }
       await gateway.stop()
+      // The gateway cleared its own per-session rings at its stop (the
+      // in-process HooksGateway always does, and so does the proxy running
+      // one after its fail-open): the helper's go with them, so the history
+      // read does not return a held session's helper events without the
+      // PreToolUse entries that went. The proxy with its child out of
+      // process keeps its rings at a stop, so the helper's stay with them.
+      // Read after the stop: it is the state the history read will see.
+      if (gatewayClearsRingsAtStop(gateway)) dropHelperRings()
       status = gateway.status()
     }
     broadcastStatus(status)

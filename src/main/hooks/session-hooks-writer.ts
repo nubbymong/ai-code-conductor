@@ -211,9 +211,8 @@ function gatewayHooksIn(hooks: Record<string, unknown[]>, sessionId: string): { 
  * session's holder has launched it and before the launch line reaches it,
  * this swaps the app's own entries of the eight events for the hook mode and
  * keeps PreToolUse, and every hook the session inherited, as they were. The
- * gateway token stays
- * (PreToolUse uses it). FAIL-SAFE: on anything but 'switched' the file is as
- * it was, and the session keeps its gateway hooks.
+ * gateway token stays (PreToolUse uses it). FAIL-SAFE: on anything but
+ * 'switched' the file is as it was, and the session keeps its gateway hooks.
  */
 export function switchHooksToHelper(a: { settingsPath: string; sessionId: string; target: HelperHookTarget }): HelperHooksResult {
   const settings = readJsonSafe(a.settingsPath)

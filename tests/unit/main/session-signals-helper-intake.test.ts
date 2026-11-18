@@ -256,8 +256,9 @@ describe('the transcript path, the lost count, and the master switch', () => {
       // One of the session's own gateway events (its PreToolUse), as the child forwards it.
       proxy.handleChildMessage({ type: 'event', entry: { sessionId: SID, event: 'PreToolUse', toolName: 'Bash', summary: 'Bash', payload: {}, ts: 1 } })
       expect(hookFeedBuffer(SID, proxy.getBuffer(SID)).map((e) => e.event)).toEqual(['Notification', 'PreToolUse'])
-      // Off: none taken. Both rings stay, as the proxy keeps its own at a
-      // stop, so the history read still agrees; the session's end drops them.
+      // Off: none taken. Both rings stay, as the proxy with its child out of
+      // process keeps its own at a stop, so the history read still agrees; the
+      // session's end drops them.
       await toggle(null, { enabled: false })
       expect(taken()).toBe(false)
       expect(hookFeedBuffer(SID, proxy.getBuffer(SID)).map((e) => e.event)).toEqual(['Notification', 'PreToolUse'])
@@ -277,6 +278,54 @@ describe('the transcript path, the lost count, and the master switch', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  /** The switch's handler, as registered for `gateway`, and the history read. */
+  function handlersOf(gateway: Parameters<typeof registerHooksHandlers>[0]) {
+    Object.assign(BrowserWindow, { getAllWindows: () => [] })
+    registerHooksHandlers(gateway)
+    const calls = vi.mocked(ipcMain.handle).mock.calls
+    const toggle = calls.find((c) => c[0] === IPC.HOOKS_TOGGLE)![1] as (e: unknown, req: { enabled: boolean }) => Promise<unknown>
+    const read = calls.find((c) => c[0] === IPC.HOOKS_GET_BUFFER)![1] as (e: unknown, req: { sessionId: string }) => Promise<HookEvent[]>
+    return { toggle, read }
+  }
+  const droppedSays = () => emit.mock.calls.filter((c) => c[0] === IPC.HOOKS_DROPPED).length
+
+  it("the switch going off with the in-process HooksGateway (a boot with it saved off, then turned on): the gateway clears its rings at its stop, so the helper's go too; no split history", async () => {
+    const { toggle, read } = handlersOf(gw)
+    const now = vi.spyOn(Date, 'now')
+    now.mockReturnValue(1000)
+    await viaGateway({ session_id: 'c', hook_event_name: 'PreToolUse', tool_name: 'Bash' })
+    now.mockReturnValue(2000)
+    helperHookEvent(SID, { kind: 'PostToolUse', payload: { session_id: 'c', hook_event_name: 'PostToolUse', tool_name: 'Bash' } })
+    expect((await read(null, { sessionId: SID })).map((e) => e.event)).toEqual(['PreToolUse', 'PostToolUse'])
+    // A helper ring over its cap says so once.
+    for (let i = 0; i < 1000; i++) helperHookEvent(SID, { kind: 'Stop', payload: { hook_event_name: 'Stop', n: i } })
+    expect(droppedSays()).toBe(1)
+    await toggle(null, { enabled: false })
+    // The gateway's ring is gone, so the helper's is: not eight kinds without their PreToolUse.
+    expect(gw.getBuffer(SID)).toEqual([])
+    expect(await read(null, { sessionId: SID })).toEqual([])
+    // The overflow mark went with the ring, as the gateway's latch does: a ring
+    // that overflows again says so again.
+    for (let i = 0; i < 1001; i++) helperHookEvent(SID, { kind: 'Stop', payload: { hook_event_name: 'Stop', n: i } })
+    expect(droppedSays()).toBe(2)
+  })
+
+  it('the switch going off with the proxy in its in-process fallback (after its fail-open): its stop stops that gateway, which clears its rings, so the helper rings go too', async () => {
+    // The fallback gateway is a real HooksGateway; its bind is the test's.
+    vi.spyOn(HooksGateway.prototype, 'start').mockResolvedValue({ enabled: true, listening: true, port: 19334 })
+    vi.spyOn(HooksGateway.prototype, 'status').mockReturnValue({ enabled: true, listening: true, port: 19334 })
+    const proxy = new HooksGatewayProxy({ transport: { post: () => {}, onMessage: () => {}, kill: () => {} }, defaultPort: 19334, emit })
+    setGateway(proxy)
+    proxy.failOpen()
+    expect(proxy.isInProcessFallback()).toBe(true)
+    const { toggle, read } = handlersOf(proxy)
+    helperHookEvent(SID, { kind: 'PostToolUse', payload: { session_id: 'c', hook_event_name: 'PostToolUse', tool_name: 'Bash' } })
+    expect((await read(null, { sessionId: SID })).map((e) => e.event)).toEqual(['PostToolUse'])
+    await toggle(null, { enabled: false })
+    expect(proxy.getBuffer(SID)).toEqual([])
+    expect(await read(null, { sessionId: SID })).toEqual([])
   })
 
   it('at boot with the hooks switch saved off (a gateway that was never started, so never listening), nothing is taken', () => {

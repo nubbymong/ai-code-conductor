@@ -180,12 +180,29 @@ export function helperHookEvent(sessionId: string, e: HelperHookEvent): void {
 
 /** The session's run through the helper is over: its ring and marks go, as
  *  the gateway's go when the session is unregistered. The hooks switch going
- *  off drops none of them: the gateway the app runs (the proxy in main) keeps
- *  its rings at a stop too, so the history read keeps both or neither. */
+ *  off is not this: see dropHelperRings. */
 export function endHelperHooks(sessionId: string): void {
   helperRings.delete(sessionId)
   helperOverflowed.delete(sessionId)
   helperLostLogged.delete(sessionId)
+}
+
+/**
+ * The hooks switch went off and the gateway the app runs cleared its own
+ * rings at its stop: every session's helper ring goes with them, and so do
+ * the overflow marks (the gateway clears its latches there too). Without
+ * this the history read would return a held session's helper events without
+ * the PreToolUse entries that went. The history read keeps both rings or
+ * neither, so this is called for exactly the gateways that clear theirs at a
+ * stop: the in-process HooksGateway (a boot with the switch saved off and
+ * then turned on in Settings), and the proxy after its fail-open, whose stop
+ * stops that one. The proxy with its child out of process keeps its rings at
+ * a stop, so it does not call this (ipc/hooks-handlers.ts HOOKS_TOGGLE). The
+ * lost-event marks stay: they belong to a session's run, not to a ring.
+ */
+export function dropHelperRings(): void {
+  helperRings.clear()
+  helperOverflowed.clear()
 }
 
 /**

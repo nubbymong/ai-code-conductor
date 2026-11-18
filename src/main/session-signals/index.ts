@@ -15,7 +15,7 @@
 // where it was.
 import { setHookFeedEmit, setHookTranscriptPathSink, startHookSignals } from './hooks'
 
-export { onHookEvent, hookEvent, transcriptPath, helperHookEvent, endHelperHooks, hookFeedBuffer, helperHooksTaken } from './hooks'
+export { onHookEvent, hookEvent, transcriptPath, helperHookEvent, endHelperHooks, dropHelperRings, hookFeedBuffer, helperHooksTaken } from './hooks'
 export type { HookConsumer, HookSignalSource, HelperHookEvent } from './hooks'
 export { deliverStatus } from './status'
 

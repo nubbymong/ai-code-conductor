@@ -49,9 +49,15 @@ Claude Code session whose holder offers the `hooks` capability (A3).
   the gateway's real state: a toggle whose start gave up waiting for the
   child's bind (4 s) is followed by the bind later, with no toggle, and the
   never-started gateway of a boot with the hooks switch saved off takes
-  none. The switch going off drops no ring: the gateway the app runs (the
-  proxy in main) keeps its own at a stop, so the history read keeps both;
-  a session's end drops both.
+  none. The history read keeps both rings or neither at the hooks switch
+  going off, so what the helper's rings do follows what the gateway's do at
+  its stop. The proxy with its child out of process keeps its rings at a
+  stop, so the helper's stay too. The in-process HooksGateway (a boot with
+  the switch saved off and then turned on in Settings) clears its buffers at
+  a stop, and so does the proxy after its fail-open, whose stop stops that
+  one; there the toggle handler calls `dropHelperRings` after the stop, so
+  the history is empty and not a held session's eight helper kinds without
+  its PreToolUse entries. A session's end drops its own ring in every case.
 - The feed history read (HOOKS_GET_BUFFER) returns the gateway's ring as
   before, unless the session has helper events: then both rings, in the order
   the events reached main (an arrival count the module keeps for both
