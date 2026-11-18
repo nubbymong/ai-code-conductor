@@ -417,8 +417,7 @@ mod win {
     /// pass to another process, so the check and the end are of one process.
     unsafe fn end_open(root: usize, req: &EndRequest) -> io::Result<bool> {
         let made = creation_time(root)?;
-        // MUTANT M8: the creation time is not compared.
-        if exit_code(root)?.is_some() {
+        if app_created(made) != req.created || exit_code(root)?.is_some() {
             return Ok(false);
         }
         let under = processes_under(req.pid, made);
@@ -446,8 +445,7 @@ mod win {
     /// earlier names a parent id that has since passed to another process.
     /// One that cannot be opened or read is left out, with what is under it.
     unsafe fn processes_under(pid: u32, made: u64) -> Vec<usize> {
-        // MUTANT M9: nothing is found under it.
-        let list: Vec<(u32, u32)> = Vec::new();
+        let list = process_list();
         let mut found: Vec<usize> = Vec::new();
         let mut seen: Vec<u32> = vec![pid];
         let mut parents: Vec<(u32, u64)> = vec![(pid, made)];
