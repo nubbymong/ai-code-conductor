@@ -2168,7 +2168,8 @@ function removeProbeScript(out: string, cfg: string, log: string): string {
     .replace(/^([ \t]*)RMDir \/r \/REBOOTOK "\$INSTDIR"[ \t\r]*$/gm, '$1FileWrite $cccProbeLog "rebootok=$INSTDIR$\\r$\\n"\n$1SetRebootFlag true')
     .replace(/^(\s*)DetailPrint\b/gm, '$1!insertmacro CccProbeDetail')
   for (const [what, re] of [
-    ['a delete set for the next restart', /REBOOTOK/i],
+    // The switch itself, not the "rebootok=" line that stands in for it.
+    ['a delete set for the next restart', /\/REBOOTOK/i],
     ['the real Program Files', /\$PROGRAMFILES/],
     ['a Function an installer cannot call', /Call un\./],
     ['a detail line the probe cannot read', /\bDetailPrint\b/],
