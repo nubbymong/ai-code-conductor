@@ -16,14 +16,19 @@ function broadcastStatus(status: HooksGatewayStatus): void {
 }
 
 export function registerHooksHandlers(gateway: HooksGatewayLike): void {
+  // The hook events a session's holder passes on (2.1.3-beta.8, A4) follow the
+  // switch too, as the gateway does: none is taken from an off at once, and
+  // they are taken again only once a start has the gateway listening. A later
+  // toggle wins over an earlier start that finishes after it.
+  let toggles = 0
   ipcMain.handle(IPC.HOOKS_TOGGLE, async (_e, req: HooksToggleRequest) => {
     let status: HooksGatewayStatus
-    // The hook events a session's holder passes on (2.1.3-beta.8, A4) follow
-    // the switch too: none is taken while it is off, as the gateway takes none.
-    setHelperHooksTaken(req.enabled === true)
+    const toggle = ++toggles
     if (req.enabled) {
       status = await gateway.start()
+      if (toggle === toggles) setHelperHooksTaken(status.enabled === true && status.listening === true)
     } else {
+      setHelperHooksTaken(false)
       // Master-toggle off: strip hook entries from every active session's
       // per-session settings file before stopping the gateway, so live
       // Claude processes stop POSTing to a dying endpoint on their next

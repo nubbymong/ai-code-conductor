@@ -137,6 +137,27 @@ describe('a helper event gets what the gateway gives its own', () => {
     expect((await handler(null, { sessionId: SID })).map((e) => e.ts)).toEqual([1000, 3000])
   })
 
+  it('the history keeps the order the events reached main, not their clocks: the same millisecond, or a clock set back', async () => {
+    const now = vi.spyOn(Date, 'now')
+    now.mockReturnValue(5000)
+    helperHookEvent(SID, { kind: 'UserPromptSubmit', payload: { session_id: 'c', hook_event_name: 'UserPromptSubmit' } })
+    await viaGateway({ session_id: 'c', hook_event_name: 'PreToolUse', tool_name: 'Bash' })
+    now.mockReturnValue(4000) // the clock went back
+    helperHookEvent(SID, { kind: 'PostToolUse', payload: { session_id: 'c', hook_event_name: 'PostToolUse', tool_name: 'Bash' } })
+    await viaGateway({ session_id: 'c', hook_event_name: 'PreToolUse', tool_name: 'Read' })
+    const read = hookFeedBuffer(SID, gw.getBuffer(SID))
+    expect(read.map((e) => [e.event, e.toolName ?? null, e.ts])).toEqual([
+      ['UserPromptSubmit', null, 5000], ['PreToolUse', 'Bash', 5000], ['PostToolUse', 'Bash', 4000], ['PreToolUse', 'Read', 4000],
+    ])
+    // And the newest are the last to come, so the cap keeps them.
+    for (let i = 0; i < 999; i++) helperHookEvent(SID, { kind: 'Stop', payload: { hook_event_name: 'Stop', n: i } })
+    now.mockReturnValue(1)
+    helperHookEvent(SID, { kind: 'Notification', payload: { hook_event_name: 'Notification' } })
+    const capped = hookFeedBuffer(SID, gw.getBuffer(SID))
+    expect(capped).toHaveLength(1000)
+    expect(capped[capped.length - 1].event).toBe('Notification')
+  })
+
   it('a ring over its cap drops the oldest and says so once, as the gateway does', () => {
     for (let i = 0; i < 1001; i++) helperHookEvent(SID, { kind: 'Stop', payload: { hook_event_name: 'Stop', n: i } })
     const ring = hookFeedBuffer(SID, [])
@@ -182,23 +203,56 @@ describe('the transcript path, the lost count, and the master switch', () => {
     expect(lostLines()).toHaveLength(2)
   })
 
-  it('with the hooks master switch off, nothing is taken and the helper rings go; back on, events are taken again', async () => {
+  it('with the hooks master switch off, nothing is taken and the helper rings go; back on, only once a start has the gateway listening, and a later toggle wins', async () => {
     // The switch's status goes to every window; there is none here.
     Object.assign(BrowserWindow, { getAllWindows: () => [] })
-    registerHooksHandlers(gw)
+    // A gateway whose starts the test answers (no port is bound).
+    const starts: Array<{ resolve: (s: unknown) => void; reject: (e: Error) => void }> = []
+    const stopped = { enabled: false, listening: false, port: null }
+    const fake = {
+      start: vi.fn(() => new Promise((resolve, reject) => { starts.push({ resolve, reject }) })),
+      stop: vi.fn(async () => {}),
+      status: () => stopped,
+      getBuffer: () => [],
+    }
+    registerHooksHandlers(fake as never)
     const toggle = vi.mocked(ipcMain.handle).mock.calls.find((c) => c[0] === IPC.HOOKS_TOGGLE)![1] as (e: unknown, req: { enabled: boolean }) => Promise<unknown>
+    const taken = () => {
+      seen.length = 0
+      helperHookEvent(SID, { kind: 'Notification', payload: { hook_event_name: 'Notification', transcript_path: TRANSCRIPT } })
+      return seen.length === 1
+    }
     helperHookEvent(SID, { kind: 'Stop', payload: { hook_event_name: 'Stop' } })
     expect(hookFeedBuffer(SID, [])).toHaveLength(1)
+    // Off: none taken at once, the rings gone, nothing routed or sent.
     await toggle(null, { enabled: false })
     expect(hookFeedBuffer(SID, [])).toEqual([])
     emit.mockClear()
-    seen.length = 0
-    helperHookEvent(SID, { kind: 'Notification', payload: { hook_event_name: 'Notification', transcript_path: TRANSCRIPT } })
-    expect(seen).toEqual([])
+    routed.length = 0
+    expect(taken()).toBe(false)
     expect(feedEvents()).toEqual([])
     expect(routed).toEqual([])
-    signals.setHelperHooksTaken(true)
-    helperHookEvent(SID, { kind: 'Notification', payload: { hook_event_name: 'Notification' } })
-    expect(seen).toHaveLength(1)
+    // On, but the gateway did not come up listening: still none.
+    let on = toggle(null, { enabled: true })
+    expect(taken()).toBe(false)
+    starts.shift()!.resolve({ enabled: true, listening: false, port: null, error: 'bind-failed after 5 attempts' })
+    await on
+    expect(taken()).toBe(false)
+    // On, and the start threw: still none.
+    on = toggle(null, { enabled: true })
+    starts.shift()!.reject(new Error('the child could not be started'))
+    await expect(on).rejects.toThrow()
+    expect(taken()).toBe(false)
+    // On, then off before that start finished: the off wins.
+    on = toggle(null, { enabled: true })
+    await toggle(null, { enabled: false })
+    starts.shift()!.resolve({ enabled: true, listening: true, port: 19334 })
+    await on
+    expect(taken()).toBe(false)
+    // On, listening: taken again.
+    on = toggle(null, { enabled: true })
+    starts.shift()!.resolve({ enabled: true, listening: true, port: 19334 })
+    await on
+    expect(taken()).toBe(true)
   })
 })

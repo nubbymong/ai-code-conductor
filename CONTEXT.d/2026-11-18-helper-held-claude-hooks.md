@@ -35,10 +35,13 @@ Claude Code session whose holder offers the `hooks` capability (A3).
   bounding and the summary, a per-session ring of 1000, HOOKS_EVENT (and
   HOOKS_DROPPED once) to the window, then the same consumers. `lost` is
   logged once per session. The hooks master switch off takes none, as the
-  gateway takes none.
+  gateway takes none, and on takes them again only once a start has the
+  gateway listening; a later toggle wins over an earlier start (first
+  Copilot review).
 - The feed history read (HOOKS_GET_BUFFER) returns the gateway's ring as
   before, unless the session has helper events: then both rings, in the order
-  the events came, the newest 1000.
+  the events reached main (an arrival count the module keeps for both
+  transports, not their timestamps: first Copilot review), the newest 1000.
 
 **Decisions taken while building.**
 - The history read merges the two rings instead of returning the helper ring

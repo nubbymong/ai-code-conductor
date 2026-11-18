@@ -49,8 +49,15 @@ export function onHookEvent(cb: HookConsumer): () => void {
   return () => { consumers.delete(cb) }
 }
 
+/** The order hook events reached main, across both transports: the feed
+ *  history read (hookFeedBuffer) lists a session's events from the two rings
+ *  in this order. Keyed by the event itself, the very object each ring keeps. */
+const arrival = new WeakMap<object, number>()
+let arrivals = 0
+
 /** The entry for any transport: hand one hook event to every consumer. */
 export function hookEvent(e: HookEvent, source: HookSignalSource): void {
+  if (e && typeof e === 'object') arrival.set(e, ++arrivals)
   for (const cb of [...consumers]) {
     try { cb(e, source) } catch { /* a consumer that throws must not stop the others */ }
   }
@@ -204,13 +211,16 @@ export function endHelperHooks(sessionId: string): void {
 /**
  * The feed history of a session (ipc/hooks-handlers.ts HOOKS_GET_BUFFER):
  * the gateway's ring as it is, unless some of the session's events came
- * through the helper; then both rings in the order the events came (the
- * gateway still takes the session's PreToolUse), the newest RING_BUFFER_CAP.
+ * through the helper; then both rings in the order the events reached main
+ * (the gateway still takes the session's PreToolUse), whatever their clocks
+ * say, the newest RING_BUFFER_CAP. An event this module never saw (none, as
+ * the module hears every gateway event from the start) goes first, by time.
  */
 export function hookFeedBuffer(sessionId: string, gatewayRing: RingBufferEntry[]): RingBufferEntry[] {
   const mine = helperRings.get(sessionId)
   if (!mine || mine.length === 0) return gatewayRing
-  const merged = [...gatewayRing, ...mine].sort((a, b) => a.ts - b.ts)
+  const order = (e: RingBufferEntry) => arrival.get(e) ?? 0
+  const merged = [...gatewayRing, ...mine].sort((a, b) => order(a) - order(b) || a.ts - b.ts)
   return merged.length > RING_BUFFER_CAP ? merged.slice(merged.length - RING_BUFFER_CAP) : merged
 }
 
