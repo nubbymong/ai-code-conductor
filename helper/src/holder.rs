@@ -367,11 +367,13 @@ mod tests {
 
     /// A held terminal waits for its child's exit: it does not ask for the
     /// child's status on a clock. It asks twice: one wait that blocks until
-    /// the exit, then one read of the code. The count is kept by the
-    /// terminal where the system is asked (each wait call in
-    /// `ExitWatch::wait`, each check in `Pty::try_wait`), so a clock anywhere
-    /// in those would count every time it fired. The 25 ms loop asked about
-    /// 80 times while this child ran.
+    /// the exit, then one read of the code. The terminal counts each ask
+    /// right beside the system call that makes it: the `waitid` in each turn
+    /// of `ExitWatch::wait`'s loop (macOS, Linux), each call of
+    /// `ExitWatch::wait_once` (Windows), and each check in `Pty::try_wait`.
+    /// An exit watch that waits at most 25 ms and asks again, through that
+    /// loop or that call, counts every ask. The 25 ms loop asked about 80
+    /// times while this child ran.
     #[test]
     fn the_holder_waits_for_its_childs_exit_instead_of_asking_on_a_clock() {
         let h = Holder::start(&two_seconds(), PtySize::default(), 64 * 1024).expect("a program starts on a terminal");

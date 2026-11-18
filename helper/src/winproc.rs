@@ -12,7 +12,7 @@ use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Console::HPCON;
 use windows_sys::Win32::System::Threading::{
-    DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList, UpdateProcThreadAttribute, WaitForSingleObject, INFINITE,
+    DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 /// `EXTENDED_STARTUPINFO_PRESENT`: the start-up block carries an attribute list.
@@ -24,7 +24,7 @@ const ATTR_HANDLE_LIST: usize = 0x0002_0002;
 /// `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`: attribute 22, input only.
 const ATTR_PSEUDOCONSOLE: usize = 0x0002_0016;
 /// `WAIT_OBJECT_0`: the process has exited.
-const WAIT_OBJECT_0: u32 = 0;
+pub(crate) const WAIT_OBJECT_0: u32 = 0;
 /// `WAIT_TIMEOUT`: it is still running.
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
@@ -56,15 +56,6 @@ pub(crate) fn exit_code(process: usize) -> io::Result<Option<u32>> {
         return Err(os_error("GetExitCodeProcess"));
     }
     Ok(Some(code))
-}
-
-/// Block until `process` has exited, with no time limit. A wait that fails
-/// is an error. The handle needs only the right to wait (`SYNCHRONIZE`).
-pub(crate) fn wait_for_exit(process: usize) -> io::Result<()> {
-    match unsafe { WaitForSingleObject(process as HANDLE, INFINITE) } {
-        WAIT_OBJECT_0 => Ok(()),
-        _ => Err(os_error("WaitForSingleObject")),
-    }
 }
 
 /// A process and thread attribute list with one attribute, deleted when it

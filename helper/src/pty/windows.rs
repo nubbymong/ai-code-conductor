@@ -53,7 +53,7 @@
 
 use super::{check_argv, check_cwd, check_env, check_windows_fields, is_batch_file, is_renamed_by_windows, Conpty, PtySize, SpawnOptions};
 use crate::cmdline::build_command_line;
-use crate::winproc::{self, close, os_error, wide, AttrList, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES};
+use crate::winproc::{self, close, os_error, wide, AttrList, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES, WAIT_OBJECT_0};
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::{self, Read};
@@ -78,7 +78,7 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, GetCurrentProcess, ResumeThread, TerminateProcess, WaitForSingleObject, PROCESS_INFORMATION, PROCESS_SYNCHRONIZE, STARTUPINFOEXW,
+    CreateProcessW, GetCurrentProcess, ResumeThread, TerminateProcess, WaitForSingleObject, INFINITE, PROCESS_INFORMATION, PROCESS_SYNCHRONIZE, STARTUPINFOEXW,
 };
 
 /// `CREATE_SUSPENDED`: the child runs only once it is in the job.
@@ -337,9 +337,20 @@ impl ExitWatch {
         if self.fail {
             return Err(io::Error::other("a wait made to fail by a test"));
         }
+        match self.wait_once(INFINITE) {
+            WAIT_OBJECT_0 => Ok(()),
+            _ => Err(os_error("WaitForSingleObject")),
+        }
+    }
+
+    /// One wait of the system's for the child's exit, for at most `ms`
+    /// milliseconds, and what it returned. The watch asks the system only
+    /// through here, and test builds count each ask right beside the call
+    /// (`Pty::status_checks`).
+    fn wait_once(&self, ms: u32) -> u32 {
         #[cfg(test)]
         self.checks.fetch_add(1, Ordering::SeqCst);
-        winproc::wait_for_exit(self.process)
+        unsafe { WaitForSingleObject(self.process as HANDLE, ms) }
     }
 
     /// This watch with a wait that fails at once, for a test of what the
@@ -368,8 +379,8 @@ pub struct Pty {
     input: File,
     exit: Option<i32>,
     /// How many times the child's status was asked of the system: each
-    /// check in `try_wait` and each wait in this terminal's exit watches
-    /// (test builds only).
+    /// check in `try_wait` and each wait call in this terminal's exit
+    /// watches (`ExitWatch::wait_once`) (test builds only).
     #[cfg(test)]
     checks: Arc<AtomicUsize>,
 }
