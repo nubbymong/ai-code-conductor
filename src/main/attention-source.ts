@@ -3,7 +3,7 @@
 // events instead of PTY-output scraping. Replaces the re-fire-prone pulse:
 // detection is now discrete hook events, so leaving/returning to a session does
 // nothing on its own.
-import { getGateway } from './hooks/index'
+import { onHookEvent } from './session-signals/hooks'
 import { setRemoteAttentionSink, REMOTE_ATTENTION_NOTIFICATIONS, REMOTE_ATTENTION_CLEAR_EVENTS } from './ssh-attention'
 import { pushAttention } from './ipc/channel-handlers'
 import { emitInternal } from './internal-events'
@@ -234,7 +234,6 @@ export function startAttentionSource(opts: AttentionSourceOptions = {}): void {
   // terminal, not through the gateway (ssh-attention.ts), and are routed
   // exactly as the gateway's are. Registered whether or not a gateway exists.
   setRemoteAttentionSink((e) => routeAttentionEvent(e, opts))
-  const gw = getGateway()
-  if (!gw) return
-  gw.subscribe((e) => routeAttentionEvent(e, opts))
+  // The gateway's events, from the session signals module (ADR-030 row 13).
+  onHookEvent((e) => routeAttentionEvent(e, opts))
 }

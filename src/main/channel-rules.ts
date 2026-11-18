@@ -1,7 +1,7 @@
 // src/main/channel-rules.ts
 import { send } from './channel-bus'
 import { loadRules, saveRule } from './channel-rules-store'
-import { onGateway } from './hooks/index'
+import { onHookEvent } from './session-signals/hooks'
 import { onInternal, type InternalEventMap } from './internal-events'
 import { getSessionsForDependentBranches, getSessionsForProject, getSessionMeta, type SessionMeta } from './session-registry'
 import { shouldFire, renderTemplate, type RuleEventContext } from './channel-rules-core'
@@ -88,16 +88,17 @@ export function startRulesEngine(): void {
   )
 
   // Attention Pulse rule consumes the CC-side Notification(idle_prompt) hook (filter-only).
-  // P3.16a (N6): bound through onGateway, which hands the engine the Hooks gateway
-  // when src/main/index.ts sets it (after this engine starts) and each gateway set
+  // P3.16a (N6): the Hooks gateway's events, from the session signals module
+  // (ADR-030 row 13), which binds through onGateway: to the gateway
+  // src/main/index.ts sets (after this engine starts) and each gateway set
   // after it, so the turns and notifications are heard whichever starts first.
-  onGateway((gw) => gw.subscribe((e) => {
+  onHookEvent((e) => {
     noteTurnEvent(e)
     if (e.event === 'Notification') {
       const p = e.payload as { notification_type?: unknown }
       fireMatching(notificationRuleContext(p.notification_type, turnMsAt(e.sessionId, e.ts)))
     }
-  }))
+  })
 
   // P3.10 round 1 (S5): a Codex session has no Notification hook; its 60 s
   // idle mark (attention-source) feeds the rules exactly what Claude Code's

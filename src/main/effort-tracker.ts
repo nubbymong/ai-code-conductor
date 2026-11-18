@@ -5,7 +5,7 @@
 // reads the live value, dedupes per session, and pushes it to the renderer.
 // Mirrors channel-permissions.ts (subscribe once at boot; push via webContents).
 import { BrowserWindow } from 'electron'
-import { getGateway } from './hooks/index'
+import { onHookEvent } from './session-signals/hooks'
 import { IPC } from '../shared/ipc-channels'
 import type { HookEvent } from '../shared/hook-types'
 import { getRegistry } from './model-registry-service'
@@ -116,6 +116,6 @@ export function startEffortTracker(): void {
   // Wire Sentinel Trigger A: unknown effort levels are reported for registry
   // proposals. sentinelObserve is a no-op before initSentinel (fail-open).
   setEffortObserver((v) => { try { sentinelObserve({ kind: 'effort', value: v, source: 'hooks' }) } catch { /* must not break tracking */ } })
-  const gw = getGateway()
-  if (gw) gw.subscribe(track)
+  // The gateway's events, from the session signals module (ADR-030 row 13).
+  onHookEvent(track)
 }

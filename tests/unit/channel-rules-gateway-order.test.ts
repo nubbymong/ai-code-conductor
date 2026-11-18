@@ -30,6 +30,7 @@ vi.mock('../../src/main/channel-rules-store', async (importActual) => {
 const { setGateway, onGateway } = await import('../../src/main/hooks/index')
 const { emitInternal } = await import('../../src/main/internal-events')
 const { startRulesEngine } = await import('../../src/main/channel-rules')
+const { startHookSignals } = await import('../../src/main/session-signals/hooks')
 
 /** A gateway as the rules engine uses it: subscribe, and the events it delivers. */
 function fakeGateway() {
@@ -58,7 +59,10 @@ const claudeIdle = (g: FakeGateway, sid: string, ts: number) =>
 const codexIdle = (sid: string) => emitInternal('attention:idle-prompt', { sessionId: sid })
 
 // The startup order of src/main/index.ts: the rules engine first, the gateway after it.
+// 2.1.3-beta.8 A2: the engine takes its events from the session signals module,
+// started (startSessionSignals) between the two.
 startRulesEngine()
+startHookSignals()
 const gwA = fakeGateway()
 setGateway(asGateway(gwA))
 
@@ -144,9 +148,14 @@ describe('onGateway: a consumer is handed each gateway as it is set (P3.16a, N6)
 
 describe('the rules engine binds to the gateway through onGateway (P3.16a, N6)', () => {
   it('src/main/channel-rules.ts reads the gateway through onGateway, never a one-time getGateway', () => {
-    const src = readFileSync(join(__dirname, '../../src/main/channel-rules.ts'), 'utf8')
+    // 2.1.3-beta.8 A2: through the session signals module, so the engine's path
+    // to the gateway is the engine and that module together.
+    const code = (file: string) => readFileSync(join(__dirname, file), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/[^\n]*/g, '')
+    const engine = code('../../src/main/channel-rules.ts')
+    expect(engine).toMatch(/\bonHookEvent\(/)
+    const src = engine + code('../../src/main/session-signals/hooks.ts')
     expect(src).toMatch(/\bonGateway\(/)
     expect(src).not.toMatch(/\bgetGateway\b/)
   })
