@@ -28,8 +28,17 @@ Claude sessions to it, behind the agent-sessions switch.
 **Decisions taken while building.**
 - A string is cut to 4 KiB measured as JSON (quotes and escapes counted), not
   as raw bytes. Measured raw, the kept fields, filled with control
-  characters, could still come to about 100 KiB and break the 64 KiB frame. Measured as JSON,
-  the last step is at most about 21 KiB, so a `hook.event` always fits.
+  characters, could still come to about 100 KiB and break the 64 KiB frame.
+  Measured as JSON, the last step is at most about 21 KiB, so a `hook.event`
+  always fits.
+- The payload is cut, not kept whole. ADR-030 (its "Hook event stream" row,
+  and protocol change 4) says a local hook payload is kept whole, but a
+  local frame holds at most 64 KiB once launched. The plan's default for
+  that conflict decides it: cut, and say so in the protocol text.
+- Waiting events go after the `term.attached` reply and its replay, not
+  right after the reply as the plan words it. An event between the two
+  would land inside the replay the app is painting (the fourth thread of
+  the first Copilot review).
 - The payload is also kept to 31 levels deep, so the message carrying it
   stays within the protocol's 32. Input deeper than 32 does not read and the
   event is lost.
@@ -48,7 +57,25 @@ Claude sessions to it, behind the agent-sessions switch.
   tests/unit/scripts/helper-fixtures.test.ts pins.
 - Outside the plan's file list, each forced by the change: helper/src/lib.rs
   (the new module), the one holder-caps assertion in
-  helper/tests/probe_transport.rs, and the command list in helper/README.md.
+  helper/tests/probe_transport.rs, the command list in helper/README.md, and
+  the doc comment of `hello::LOCAL_CAPS` (now the app's ack, no longer what a
+  holder offers).
+
+**Changed after review (one fix batch).**
+- A payload holds at most 65,280 bytes (64 KiB less 256), so every `event`
+  the holder sends, with the longest kind, `seq` and `lost`, fits 64 KiB,
+  and an over-large payload is `too-large` after a launch as well.
+- A payload that names one of its own members twice is refused, by the
+  hook mode and by the holder, and the holder takes a payload only when its
+  `hook_event_name` is the event's kind: json.rs reads the first of two
+  names and the app's JSON.parse the last, so the two could read one event
+  apart.
+- An escaped lone surrogate on standard input reads as U+FFFD instead of
+  losing the event: Node writes one when it cuts a string inside a pair.
+- A payload cut at the second step gains `"cut": true`, so a cut string
+  does not pass for whole.
+- The busy reply sent when no thread can carry an attach's output now stops
+  hook delivery first, as every other last word does.
 
 **Owed.** ADR-009 pass before stable (aicc_planning #320 list): a new message
 type into the holder, and a new mode that reads untrusted standard input.

@@ -413,7 +413,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   and writes nothing for it, and keeps at most 256 events and 2 MiB while no
   connection takes them. The app treats every hook payload as untrusted
   text, and a transcript path from one passes `sanitiseTranscriptPath` before
-  it is used (plan 2.1.3-beta.8, section A4). The hook mode reads untrusted
+  it is used, in the app-side change that sends hooks through the helper
+  (ADR-030 slice S12). The hook mode reads untrusted
   input on its standard input, keeps at most 4 MiB of it, and never prints
   or exits other than 0, so nothing it reads reaches the CLI's conversation
   through it.

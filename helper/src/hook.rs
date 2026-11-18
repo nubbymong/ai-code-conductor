@@ -4,8 +4,10 @@
 //!
 //! Claude Code runs it as a command hook and writes the event as JSON on its
 //! standard input. The hook mode reads that to the end, keeping at most 4 MiB,
-//! takes `hook_event_name` (one of the nine kinds the app injects), cuts the
-//! payload to fit (`cut`), reads the session's record with the store's own
+//! takes `hook_event_name` (one of the nine kinds the app injects; a payload
+//! that names a member twice is not an event, and an escaped lone surrogate
+//! reads as U+FFFD), cuts the payload to fit (`cut`), reads the session's
+//! record with the store's own
 //! strict reader, connects to the holder with the client list mode uses (the
 //! endpoint's checks, then the hello's nonce and session), acks `core`,
 //! `local` and `hooks`, sends one `hook.event` and waits for its reply. All of
@@ -22,7 +24,7 @@ use crate::client::Client;
 use crate::frame::Body;
 use crate::hello::{self, valid_sid};
 use crate::json::{self, Value};
-use crate::request::HOOK_KINDS;
+use crate::request::{repeats_a_name, HOOK_KINDS};
 use crate::serve::{HOLDER_CAPS, HOOKS_CAP};
 use crate::store;
 use std::io::Read;
@@ -119,22 +121,26 @@ fn parse_args(args: &[String]) -> Option<(PathBuf, String)> {
     Some((PathBuf::from(store_dir), sid.to_string()))
 }
 
-/// Standard input to its end. None when it could not be read, or held more
-/// than `MAX_STDIN` bytes: the rest is still read, so the writer is not cut
-/// off, and nothing of it is kept.
+/// Standard input to its end, at most `MAX_STDIN` bytes of it kept.
 fn read_stdin() -> Option<Vec<u8>> {
-    let mut stdin = std::io::stdin().lock();
+    read_capped(std::io::stdin().lock(), MAX_STDIN)
+}
+
+/// `r` to its end. None when it could not be read, or held more than `max`
+/// bytes: the rest is still read, so the writer is not cut off, and nothing
+/// of it is kept.
+fn read_capped<R: Read>(mut r: R, max: usize) -> Option<Vec<u8>> {
     let mut kept: Vec<u8> = Vec::new();
     let mut over = false;
     let mut chunk = vec![0u8; 64 * 1024];
     loop {
-        match stdin.read(&mut chunk) {
+        match r.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {
                 if over {
                     continue;
                 }
-                if kept.len() + n > MAX_STDIN {
+                if kept.len() + n > max {
                     over = true;
                     kept = Vec::new();
                 } else {
@@ -152,11 +158,84 @@ fn read_stdin() -> Option<Vec<u8>> {
     }
 }
 
+/// The code unit of a `\u` escape of four hex digits at `at`, if one is there.
+fn escaped_unit(input: &[u8], at: usize) -> Option<u32> {
+    let esc = input.get(at..at + 6)?;
+    if esc[0] != b'\\' || esc[1] != b'u' {
+        return None;
+    }
+    let mut unit = 0;
+    for &digit in &esc[2..] {
+        unit = unit * 16 + char::from(digit).to_digit(16)?;
+    }
+    Some(unit)
+}
+
+/// `input` with every escaped lone surrogate (a `\u` escape of a code unit
+/// from D800 to DFFF that is not half of a pair) written as U+FFFD, the
+/// replacement character, in UTF-8. Node writes one when a string was cut
+/// inside a pair, as a tool's output cut in the middle of an emoji: the
+/// app's JSON.parse reads it, json.rs does not, and the event would be lost.
+/// Only escapes inside strings change; json.rs judges everything else.
+fn mend_surrogates(input: &[u8]) -> Vec<u8> {
+    const HIGH: std::ops::RangeInclusive<u32> = 0xD800..=0xDBFF;
+    const LOW: std::ops::RangeInclusive<u32> = 0xDC00..=0xDFFF;
+    let replacement = "\u{fffd}".as_bytes();
+    let mut out = Vec::with_capacity(input.len());
+    let mut in_string = false;
+    let mut i = 0;
+    while i < input.len() {
+        let b = input[i];
+        if !in_string || b != b'\\' {
+            // UTF-8 puts no quote or backslash inside a character, so a
+            // byte is enough to see where a string starts and ends.
+            if b == b'"' {
+                in_string = !in_string;
+            }
+            out.push(b);
+            i += 1;
+            continue;
+        }
+        match escaped_unit(input, i) {
+            Some(unit) if HIGH.contains(&unit) => {
+                if escaped_unit(input, i + 6).map_or(false, |next| LOW.contains(&next)) {
+                    out.extend_from_slice(&input[i..i + 12]);
+                    i += 12;
+                } else {
+                    out.extend_from_slice(replacement);
+                    i += 6;
+                }
+            }
+            Some(unit) if LOW.contains(&unit) => {
+                out.extend_from_slice(replacement);
+                i += 6;
+            }
+            Some(_) => {
+                out.extend_from_slice(&input[i..i + 6]);
+                i += 6;
+            }
+            None => {
+                // Another escape: the backslash and what it escapes, so an
+                // escaped quote does not end the string.
+                let end = (i + 2).min(input.len());
+                out.extend_from_slice(&input[i..end]);
+                i = end;
+            }
+        }
+    }
+    out
+}
+
 /// The event's kind and its payload, cut to fit. None when the input is not
 /// a JSON object (of at most 32 levels) whose `hook_event_name` is one of the
-/// nine kinds.
+/// nine kinds, or when it names one of its members twice: json.rs finds the
+/// first and the app's JSON.parse the last, so the two would read it apart.
+/// An escaped lone surrogate reads as U+FFFD (`mend_surrogates`).
 pub fn event_from(input: &[u8]) -> Option<(String, Value)> {
-    let payload = json::parse(input).ok()?;
+    let payload = json::parse(&mend_surrogates(input)).ok()?;
+    if repeats_a_name(&payload) {
+        return None;
+    }
     let kind = match payload.get("hook_event_name").and_then(Value::as_str) {
         Some(k) if HOOK_KINDS.contains(&k) => k.to_string(),
         _ => return None,
@@ -178,10 +257,12 @@ fn fits(v: &Value) -> bool {
 
 /// The payload rule. A payload that fits (`fits`) is kept as it is.
 /// Otherwise `tool_input` and `tool_response` become `{"cut": <bytes>}`, the
-/// size of what they held as JSON, and every other string longer than
-/// `MAX_STRING` as JSON is cut to its longest beginning that is not. If that
-/// still does not fit, only `KEPT_FIELDS` stay, those that are strings, with
-/// `"cut": true`: five strings of at most 4 KiB as JSON, about 21 KiB in all.
+/// size of what they held as JSON, every other string longer than
+/// `MAX_STRING` as JSON is cut to its longest beginning that is not, and the
+/// payload gains `"cut": true` (in place of a `cut` member of its own), so a
+/// string cut here does not pass for whole. If that still does not fit,
+/// only `KEPT_FIELDS` stay, those that are strings, with `"cut": true`: five
+/// strings of at most 4 KiB as JSON, about 21 KiB in all.
 pub fn cut(payload: Value) -> Value {
     if fits(&payload) {
         return payload;
@@ -190,8 +271,9 @@ pub fn cut(payload: Value) -> Value {
         Value::Obj(members) => members,
         _ => return Value::obj(vec![("cut", Value::Bool(true))]),
     };
-    let members: Vec<(String, Value)> = members
+    let mut members: Vec<(String, Value)> = members
         .into_iter()
+        .filter(|(name, _)| name != "cut")
         .map(|(name, mut value)| {
             if name == "tool_input" || name == "tool_response" {
                 let bytes = value.to_json().len() as u64;
@@ -202,6 +284,7 @@ pub fn cut(payload: Value) -> Value {
             }
         })
         .collect();
+    members.push(("cut".to_string(), Value::Bool(true)));
     let smaller = Value::Obj(members);
     if fits(&smaller) {
         return smaller;
@@ -283,6 +366,51 @@ mod tests {
         ] {
             assert_eq!(parse_args(&strings(bad)), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn standard_input_is_read_to_its_end_and_kept_only_up_to_the_cap() {
+        // How much was kept, once the reader was read to its end.
+        let read = |len: usize, max: usize| {
+            let bytes: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+            let mut input = std::io::Cursor::new(bytes.clone());
+            let kept = read_capped(&mut input, max);
+            assert_eq!(input.position(), len as u64, "{len} bytes, cap {max}: not read to its end");
+            if let Some(k) = &kept {
+                assert_eq!(k, &bytes, "{len} bytes, cap {max}: kept other bytes");
+            }
+            kept.map(|k| k.len())
+        };
+        assert_eq!(read(0, 10), Some(0));
+        assert_eq!(read(10, 10), Some(10));
+        assert_eq!(read(11, 10), None);
+        // Several reads of 64 KiB: kept whole up to the cap, and past it read
+        // on to the end and kept not at all.
+        assert_eq!(read(200_000, 200_000), Some(200_000));
+        assert_eq!(read(200_001, 200_000), None);
+        assert_eq!(read(200_000, 70_000), None);
+        assert_eq!(read(MAX_STDIN, MAX_STDIN), Some(MAX_STDIN));
+        assert_eq!(read(MAX_STDIN + 1, MAX_STDIN), None);
+        // A read that fails loses the event; one interrupted goes on.
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "broken"))
+            }
+        }
+        assert_eq!(read_capped(Broken, 10), None);
+        struct Interrupted(bool);
+        impl Read for Interrupted {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.0 {
+                    return Ok(0);
+                }
+                self.0 = true;
+                buf[0] = b'x';
+                Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "again"))
+            }
+        }
+        assert_eq!(read_capped(Interrupted(false), 10), Some(Vec::new()));
     }
 
     #[test]
@@ -504,7 +632,10 @@ mod tests {
             assert!(bytes.len() - 9 <= MAX_JSON_AFTER_LAUNCH, "message {n} is {} bytes", bytes.len() - 9);
             let parsed = request::parse_allowed(&message, Allowed { local: true, hooks: true });
             match parsed {
-                Ok(Request::HookEvent { payload, .. }) => assert!(payload.to_json().len() <= MAX_HOOK_PAYLOAD),
+                Ok(Request::HookEvent { payload, bytes, .. }) => {
+                    assert_eq!(bytes, payload.to_json().len(), "payload {n}");
+                    assert!(bytes <= MAX_HOOK_PAYLOAD, "payload {n}");
+                }
                 other => panic!("payload {n}: {other:?}"),
             }
         }

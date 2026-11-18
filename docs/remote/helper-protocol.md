@@ -241,7 +241,7 @@ Every control message is a JSON object with a type `t`. Requests carry an
 | `session.attach` | app | `session.attached` | `{id, since_seq}`; reply `{re, ring_start, ring_end}` | core, R6 |
 | `session.end` | app | `session.ended` | stop this session (TERM, KILL after 5 s); its folder goes only once the CLI's stopped state is shown (section 7) | core, R6 |
 | `session.list` | app | `session.list.result` | up to 256 `{sid, state, helper, mode, started}`, this `did` only | core, R6 |
-| `status`; `event` | helper | event | `{seq, payload}`, one statusline update; `{seq, kind, payload}`, one hook event | `status`, R6; `hooks`, R7 |
+| `status`; `event` | helper | event | `{seq, payload}`, one statusline update; `{seq, kind, payload}`, one hook event | `status`, R6; `hooks`, R7 (not the local `hooks` of section 15) |
 | `session.prepare` | app | `session.prepared` | `{id, files, edits, env, argv, cwd, mode}`; one result per file and edit | `hooks`, R7 |
 | `file.put` | app | `file.stored` | upload one file (below) | `files`, R7 |
 | `mcp.open`, `mcp`, `mcp.close` | helper (`mcp` either) | none | `{stream}`; `mcp` adds one JSON-RPC `message` | `mcp`, R8 |
@@ -771,9 +771,11 @@ its fields; `code` is present only once the program has exited.
   then the end. A holder that ends this way removes its record and its
   endpoint, as `term.end` does.
 
-**Hook events (capability `hooks`, from 2.1.3-beta.8).** A Claude Code
-session's hooks can reach the app through its holder instead of the hooks
-gateway. A holder from 2.1.3-beta.8 offers `hooks` in its hello. Nothing in
+**Hook events (capability `hooks`, from 2.1.3-beta.8).** This local `hooks`
+is only `hook.event` and `event` on a holder's own endpoint; the remote
+`hooks` of section 8 (R7) is a separate capability that also carries
+`session.prepare`. A Claude Code session's hooks can reach the app through
+its holder instead of the hooks gateway. A holder from 2.1.3-beta.8 offers `hooks` in its hello. Nothing in
 the app uses it yet: the app's own ack stays `["core","local"]`, so it is
 never sent a hook event. Fixtures: the `hooks` part of
 `helper/fixtures/local.json`.
@@ -790,7 +792,12 @@ never sent a hook event. Fixtures: the `hooks` part of
   one of the nine kinds the app injects: `PreToolUse`, `PostToolUse`,
   `Notification`, `SessionStart`, `Stop`, `UserPromptSubmit`,
   `SubagentStart`, `SubagentStop` and `StopFailure` (`PermissionRequest` is
-  not one). It reads the session's record with the store's strict reader and
+  not one), and that names none of its own members twice (the helper would
+  read the first, the app's `JSON.parse` the last). A `\u` escape of a code
+  unit from D800 to DFFF that is not half of a pair, which Node writes when a
+  string is cut inside a pair (a tool's output cut in the middle of an
+  emoji), reads as U+FFFD, the replacement character, rather than losing the
+  event. It reads the session's record with the store's strict reader and
   connects with the helper's own client, as list mode does: the endpoint's
   checks above, then the hello's `nonce` and `session`. A holder whose hello
   does not offer `hooks` (one from before 2.1.3-beta.8) is sent nothing, not
@@ -802,33 +809,43 @@ never sent a hook event. Fixtures: the `hooks` part of
   exit other than 0 (2 above all) changes what the CLI does. Whatever fails
   (no store, a session id that breaks its pattern, an argument that is not
   Unicode, a record whose holder is gone, `busy`, input that is not an event
-  of the nine, no reply in time)
-  loses that one event, silently. The hook mode writes no file and starts no
-  process.
+  of the nine or names a member twice, input over 32 levels deep, no reply
+  in time) loses that one event, silently. The hook mode writes no file (a
+  stale record is left as it is, not removed as list mode removes it) and
+  starts no process.
 - **The payload** is the event as Claude Code wrote it, sent as compact JSON.
   It is kept as it is when it is at most 48 KiB and at most 31 levels deep
   (the message that carries it is then at most 32). Otherwise `tool_input`
   and `tool_response` become `{"cut": <bytes>}`, the size of what they held
-  as JSON, and every other string whose JSON (quotes and escapes counted) is
+  as JSON, every other string whose JSON (quotes and escapes counted) is
   over 4 KiB is cut, at a character boundary, to its longest beginning that
-  is not. If that is still too large or too deep, only `hook_event_name`,
-  `session_id`, `transcript_path`, `cwd` and `tool_name` stay, those that are
-  strings, with `"cut": true`: about 21 KiB at most. So a `hook.event` always
-  fits the 64 KiB a frame may hold once the session is launched.
+  is not, and the payload gains `"cut": true` (in place of a `cut` member of
+  its own), so a string cut here does not pass for whole. If that is still
+  too large or too deep, only `hook_event_name`, `session_id`,
+  `transcript_path`, `cwd` and `tool_name` stay, those that are strings,
+  with `"cut": true`: about 21 KiB at most. So a `hook.event` from the hook
+  mode always fits the 64 KiB a frame may hold once the session is launched.
 - **`hook.event`** `{id, kind, payload}`: `kind` one of the nine, `payload` a
-  JSON object of at most 64 KiB as compact JSON. Any connection whose
-  `hello.ack` named `hooks` may send it, attached to the terminal or not,
-  within the limits above (16 connections, the budget of 20 `bad-field` or
-  `too-large` replies in 60 s, the frame's JSON limit). A kind not of the
-  nine, a payload that is not an object, or a field missing, unknown or
-  given twice is `bad-field`; a larger payload is `too-large`; on a
-  connection that did not ack `hooks` it is `unknown-type` and a close. The
-  reply is `hook.taken` `{re, seq}`. The holder only numbers the event and
-  passes it on: it runs, opens and writes nothing for it.
-- **`event`** `{seq, kind, payload, lost?}`, from the holder, on channel 0.
-  Each `hook.event` takes the session's next `seq`, from 1. It goes at once
-  to the attached connection if that connection acked `hooks`; a connection
-  that did not is never sent one. With no such connection attached, events
+  JSON object of at most 65,280 bytes as compact JSON (64 KiB less 256, the
+  room the `event` around it needs) that names none of its own members twice
+  and whose `hook_event_name` is `kind`. Any connection whose `hello.ack`
+  named `hooks` may send it, attached to the terminal or not, within the
+  limits above (16 connections, the budget of 20 `bad-field` or `too-large`
+  replies in 60 s, the frame's JSON limit). A kind not of the nine; a
+  payload that is not an object, names a member twice or whose
+  `hook_event_name` is not `kind`; or a field missing, unknown or given
+  twice is `bad-field`. A larger payload is `too-large`, before a launch and
+  after it, while the frame carrying it is within the frame's JSON limit; a
+  frame over that limit (64 KiB once the session is launched) is `bad-frame`
+  and a close, as above, whatever it carries. On a connection that did not
+  ack `hooks` it is `unknown-type` and a close. The reply is `hook.taken`
+  `{re, seq}`. The holder only numbers the event and passes it on: it runs,
+  opens and writes nothing for it.
+- **`event`** `{seq, kind, payload, lost?}`, from the holder, on channel 0,
+  at most 64 KiB of JSON: its payload is at most 65,280 bytes and the rest
+  at most 105. Each `hook.event` takes the session's next `seq`, from 1. It
+  goes at once to the attached connection if that connection acked `hooks`;
+  a connection that did not is never sent one. With no such connection attached, events
   wait in a queue of at most 256 events and 2 MiB of payload, the oldest
   dropped first; the next event sent carries `lost`, the number dropped
   before it, and an event with nothing dropped before it has no `lost`. A

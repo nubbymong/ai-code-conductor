@@ -19,7 +19,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{mpsc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const HELPER: &str = env!("CARGO_BIN_EXE_aicc-helper");
 const FAKE: &str = env!("CARGO_BIN_EXE_aicc-fake-cli");
@@ -59,13 +59,16 @@ impl Drop for Folder {
     }
 }
 
-/// Every entry of `dir` by name, with the bytes of each file, in name order.
-fn files(dir: &Folder) -> Vec<(String, Vec<u8>)> {
-    let mut out: Vec<(String, Vec<u8>)> = fs::read_dir(&dir.0)
+/// Every entry of `dir` by name, with the bytes of each file and when it was
+/// last written (a file written again with the same bytes shows there), in
+/// name order.
+fn files(dir: &Folder) -> Vec<(String, Vec<u8>, Option<SystemTime>)> {
+    let mut out: Vec<(String, Vec<u8>, Option<SystemTime>)> = fs::read_dir(&dir.0)
         .expect("read the folder")
         .map(|entry| {
             let entry = entry.expect("an entry");
-            (entry.file_name().to_string_lossy().into_owned(), fs::read(entry.path()).unwrap_or_default())
+            let modified = entry.metadata().and_then(|m| m.modified()).ok();
+            (entry.file_name().to_string_lossy().into_owned(), fs::read(entry.path()).unwrap_or_default(), modified)
         })
         .collect();
     out.sort();
@@ -461,7 +464,6 @@ fn hook_runs_reach_the_attached_app_in_order_and_whole() {
 fn a_hook_run_that_cannot_pass_its_event_on_exits_0_and_says_nothing() {
     let _serial = one_at_a_time();
     let store_dir = Folder::new("store-quiet");
-    let stale_dir = Folder::new("store-stale");
     let work = Folder::new("work-quiet");
     let sid = "hooks-quiet-01";
     let held = Held(hold(&store_dir, sid));
@@ -486,18 +488,6 @@ fn a_hook_run_that_cannot_pass_its_event_on_exits_0_and_says_nothing() {
         assert!(ran.quiet(), "{args:?}: {}", ran.say());
     }
     assert!(!missing.exists(), "the hook mode made the store");
-
-    // A record whose holder is gone: nothing listens on its endpoint. The
-    // hook mode writes no file: unlike list mode, it leaves the record be.
-    let stale_sid = "hooks-stale-01";
-    let gone = transport::endpoint_name(stale_sid, &"0".repeat(transport::ENDPOINT_RANDOM_HEX));
-    store::prepare(&stale_dir.0).expect("a store");
-    store::write(&stale_dir.0, &record(stale_sid, &gone)).expect("a record");
-    let stale_path = store::record_path(&stale_dir.0, stale_sid);
-    let stale_bytes = fs::read(&stale_path).expect("the record");
-    let ran = hook_to(&stale_dir, stale_sid, good.as_bytes());
-    assert!(ran.quiet(), "a stale record: {}", ran.say());
-    assert_eq!(fs::read(&stale_path).ok(), Some(stale_bytes), "the hook mode removed or changed a stale record");
 
     // What came on standard input is not an event of the nine: nothing, not
     // JSON, not an object, another kind, a name given twice, or over 4 MiB.
@@ -548,6 +538,24 @@ fn a_hook_run_that_cannot_pass_its_event_on_exits_0_and_says_nothing() {
     assert_eq!(num(&first, "seq"), Some(1), "a run that should have sent nothing took a seq: {}", first.to_json());
     assert_eq!(first.get("payload"), Some(&json::parse(good.as_bytes()).expect("JSON")), "{}", first.to_json());
     end(&held.0);
+}
+
+#[test]
+fn a_hook_run_against_a_stale_record_exits_0_and_leaves_the_record_as_it_is() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-stale");
+    // A record whose holder is gone: nothing listens on its endpoint. The
+    // hook mode writes no file: unlike list mode, it does not remove it.
+    let sid = "hooks-stale-01";
+    let gone = transport::endpoint_name(sid, &"0".repeat(transport::ENDPOINT_RANDOM_HEX));
+    store::prepare(&store_dir.0).expect("a store");
+    store::write(&store_dir.0, &record(sid, &gone)).expect("a record");
+    let before = files(&store_dir);
+    assert!(before.iter().any(|(name, _, _)| name == &format!("{sid}.json")), "no record: {before:?}");
+    let ran = hook_to(&store_dir, sid, event_input("Stop", "").as_bytes());
+    assert!(ran.quiet(), "a stale record: {}", ran.say());
+    assert!(ran.took < HOOK_BOUND, "a stale record: {}", ran.say());
+    assert_eq!(files(&store_dir), before, "the hook mode removed or changed a stale record");
 }
 
 #[test]

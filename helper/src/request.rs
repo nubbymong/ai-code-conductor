@@ -8,7 +8,9 @@
 //!
 //! `hook.event` is allowed only once `hooks` is acked: one hook event of the
 //! session, of one of the nine kinds the app injects, its payload a JSON
-//! object of at most 64 KiB. The holder only numbers it and passes it on.
+//! object of at most 65,280 bytes that names none of its members twice and
+//! whose `hook_event_name` is that kind. The holder only numbers it and
+//! passes it on.
 
 use crate::json::Value;
 use crate::pty::{is_batch_file, is_renamed_by_windows, Conpty, PtySize};
@@ -30,8 +32,12 @@ pub const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 /// The hook events a holder takes: the nine the app injects into a Claude
 /// Code session (src/main/hooks/session-hooks-writer.ts, MVP_EVENTS).
 pub const HOOK_KINDS: [&str; 9] = ["PreToolUse", "PostToolUse", "Notification", "SessionStart", "Stop", "UserPromptSubmit", "SubagentStart", "SubagentStop", "StopFailure"];
-/// The most a hook event's payload may be, as compact JSON: 64 KiB.
-pub const MAX_HOOK_PAYLOAD: usize = 65_536;
+/// The most a hook event's payload may be, as compact JSON: 64 KiB less 256
+/// bytes, the room the `event` around it needs (at most 105 bytes, with the
+/// longest kind, `seq` and `lost`). So every `event` a holder sends fits the
+/// 64 KiB a frame holds once launched, and a `hook.event` over the limit is
+/// `too-large`, not a frame over it, after a launch as before.
+pub const MAX_HOOK_PAYLOAD: usize = 65_280;
 
 pub const CODE_UNKNOWN_TYPE: &str = "unknown-type";
 pub const CODE_BAD_FIELD: &str = "bad-field";
@@ -78,8 +84,9 @@ pub enum Request {
     Resize { id: u64, size: PtySize },
     Detach { id: u64 },
     End { id: u64 },
-    /// One hook event: its kind, and its payload, a JSON object.
-    HookEvent { id: u64, kind: String, payload: Value },
+    /// One hook event: its kind, and its payload, a JSON object of `bytes`
+    /// as compact JSON (measured once, here).
+    HookEvent { id: u64, kind: String, payload: Value, bytes: usize },
 }
 
 /// What a connection's `hello.ack` allowed beyond the core: `local`, the
@@ -309,9 +316,24 @@ fn parse_conpty(v: &Value, re: Option<u64>) -> Result<Conpty, Refusal> {
     Ok(Conpty::Bundled)
 }
 
+/// True when an object names one of its own members twice (members further
+/// in are not looked at). json.rs keeps both and `get` finds the first;
+/// JavaScript's JSON.parse keeps the last; so the helper and the app would
+/// read such a value apart.
+pub fn repeats_a_name(v: &Value) -> bool {
+    match v {
+        Value::Obj(members) => {
+            let mut seen = std::collections::HashSet::with_capacity(members.len());
+            members.iter().any(|(name, _)| !seen.insert(name.as_str()))
+        }
+        _ => false,
+    }
+}
+
 /// Check a `hook.event` (its keys already checked): `kind` one of
 /// `HOOK_KINDS`, `payload` an object of at most `MAX_HOOK_PAYLOAD` bytes as
-/// compact JSON.
+/// compact JSON, naming none of its members twice, whose `hook_event_name`
+/// is `kind`.
 fn parse_hook_event(v: &Value, id: u64) -> Result<Request, Refusal> {
     let re = Some(id);
     let kind = match v.get("kind").and_then(Value::as_str) {
@@ -322,16 +344,17 @@ fn parse_hook_event(v: &Value, id: u64) -> Result<Request, Refusal> {
         Some(p) if matches!(p, Value::Obj(_)) => p,
         _ => return refuse(CODE_BAD_FIELD, re, "payload must be a JSON object"),
     };
-    if payload.to_json().len() > MAX_HOOK_PAYLOAD {
-        return refuse(CODE_TOO_LARGE, re, "payload is over 64 KiB as JSON");
+    let bytes = payload.to_json().len();
+    if bytes > MAX_HOOK_PAYLOAD {
+        return refuse(CODE_TOO_LARGE, re, "payload is over 65280 bytes as JSON");
     }
-    Ok(Request::HookEvent { id, kind, payload: payload.clone() })
-}
-
-/// Check one control message. `local` is true when the app acked `local`;
-/// hook events are not allowed (see `parse_allowed`).
-pub fn parse(v: &Value, local: bool) -> Result<Request, Refusal> {
-    parse_allowed(v, Allowed { local, hooks: false })
+    if repeats_a_name(payload) {
+        return refuse(CODE_BAD_FIELD, re, "payload names a member twice");
+    }
+    if payload.get("hook_event_name").and_then(Value::as_str) != Some(kind.as_str()) {
+        return refuse(CODE_BAD_FIELD, re, "payload.hook_event_name must be the event's kind");
+    }
+    Ok(Request::HookEvent { id, kind, payload: payload.clone(), bytes })
 }
 
 /// Check one control message, allowed what the connection's ack allowed.
@@ -399,6 +422,12 @@ fn parse_error(v: &Value) -> Result<Request, Refusal> {
 mod tests {
     use super::*;
     use crate::json;
+
+    /// A message read on a connection that acked `local` or not, and not
+    /// `hooks`.
+    fn parse(v: &Value, local: bool) -> Result<Request, Refusal> {
+        parse_allowed(v, Allowed { local, hooks: false })
+    }
 
     fn parsed(text: &str) -> Result<Request, Refusal> {
         parse(&json::parse(text.as_bytes()).unwrap(), true)
@@ -596,9 +625,11 @@ mod tests {
         for kind in HOOK_KINDS {
             let text = format!("{{\"t\":\"hook.event\",\"id\":4,\"kind\":\"{kind}\",\"payload\":{{\"hook_event_name\":\"{kind}\",\"n\":1}}}}");
             match hook(&text).unwrap() {
-                Request::HookEvent { id, kind: k, payload } => {
+                Request::HookEvent { id, kind: k, payload, bytes } => {
                     assert_eq!((id, k.as_str()), (4, kind));
-                    assert_eq!(payload.to_json(), format!("{{\"hook_event_name\":\"{kind}\",\"n\":1}}"));
+                    let want = format!("{{\"hook_event_name\":\"{kind}\",\"n\":1}}");
+                    assert_eq!(payload.to_json(), want);
+                    assert_eq!(bytes, want.len());
                 }
                 other => panic!("{other:?}"),
             }

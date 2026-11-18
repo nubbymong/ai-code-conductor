@@ -113,25 +113,6 @@ impl HookQueue {
             self.lost = 0;
         }
     }
-
-    /// Events waiting.
-    pub fn len(&self) -> usize {
-        self.waiting.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.waiting.is_empty()
-    }
-
-    /// Payload waiting, as JSON.
-    pub fn bytes(&self) -> usize {
-        self.bytes
-    }
-
-    /// Events dropped since one was last sent.
-    pub fn lost(&self) -> u64 {
-        self.lost
-    }
 }
 
 /// Hand `chunk` to an attachment without ever waiting. False means the
@@ -450,20 +431,20 @@ mod tests {
     #[test]
     fn hook_events_are_numbered_from_1_and_sent_oldest_first() {
         let mut q = HookQueue::new();
-        assert!(q.front().is_none() && q.is_empty());
+        assert!(q.front().is_none() && q.waiting.is_empty());
         for n in 1..=3 {
             assert_eq!(q.push("Stop".to_string(), numbered(n), 10), n);
         }
-        assert_eq!((q.len(), q.bytes(), q.lost()), (3, 30, 0));
+        assert_eq!((q.waiting.len(), q.bytes, q.lost), (3, 30, 0));
         let (first, lost) = q.front().expect("an event");
         assert_eq!((first.seq, first.kind.as_str(), &first.payload, lost), (1, "Stop", &numbered(1), 0));
         q.sent();
         assert_eq!(seqs(&q), vec![2, 3]);
-        assert_eq!(q.bytes(), 20);
+        assert_eq!(q.bytes, 20);
         q.sent();
         q.sent();
         q.sent();
-        assert!(q.is_empty() && q.bytes() == 0);
+        assert!(q.waiting.is_empty() && q.bytes == 0);
         // The numbering goes on: a seq is never given twice.
         assert_eq!(q.push("Stop".to_string(), numbered(4), 10), 4);
     }
@@ -474,8 +455,8 @@ mod tests {
         for n in 1..=300 {
             q.push("Notification".to_string(), numbered(n), 40);
         }
-        assert_eq!(q.len(), HOOK_QUEUE_EVENTS);
-        assert_eq!(q.bytes(), 256 * 40);
+        assert_eq!(q.waiting.len(), HOOK_QUEUE_EVENTS);
+        assert_eq!(q.bytes, 256 * 40);
         assert_eq!(seqs(&q), (45..=300).collect::<Vec<u64>>());
         let (first, lost) = q.front().expect("an event");
         assert_eq!((first.seq, lost), (45, 44));
@@ -490,19 +471,19 @@ mod tests {
         let big = 60 * 1024;
         for n in 1..=40 {
             q.push("PostToolUse".to_string(), numbered(n), big);
-            assert!(q.bytes() <= HOOK_QUEUE_BYTES, "{} bytes wait after event {n}", q.bytes());
+            assert!(q.bytes <= HOOK_QUEUE_BYTES, "{} bytes wait after event {n}", q.bytes);
         }
         // 34 events of 60 KiB fit in 2 MiB; a 35th does not.
         let kept = HOOK_QUEUE_BYTES / big;
         assert_eq!(kept, 34);
-        assert_eq!(q.len(), kept);
-        assert_eq!(q.lost(), 40 - kept as u64);
+        assert_eq!(q.waiting.len(), kept);
+        assert_eq!(q.lost, 40 - kept as u64);
         assert_eq!(seqs(&q).first(), Some(&(40 - kept as u64 + 1)));
         // One more drops the oldest only until the bytes fit again: two here.
         q.push("Stop".to_string(), numbered(41), HOOK_QUEUE_BYTES - (kept - 1) * big + 1);
-        assert!(q.bytes() <= HOOK_QUEUE_BYTES);
-        assert_eq!(q.len(), kept - 1);
-        assert_eq!(q.lost(), 40 - kept as u64 + 2);
+        assert!(q.bytes <= HOOK_QUEUE_BYTES);
+        assert_eq!(q.waiting.len(), kept - 1);
+        assert_eq!(q.lost, 40 - kept as u64 + 2);
         assert_eq!(seqs(&q).last(), Some(&41));
     }
 
@@ -513,7 +494,7 @@ mod tests {
         // Larger than the whole queue: no event can be, but the newest stays.
         q.push("Stop".to_string(), numbered(2), HOOK_QUEUE_BYTES + 1);
         assert_eq!(seqs(&q), vec![2]);
-        assert_eq!(q.lost(), 1);
+        assert_eq!(q.lost, 1);
     }
 
     /// A program that runs for about 2 s, reads nothing and exits 0.

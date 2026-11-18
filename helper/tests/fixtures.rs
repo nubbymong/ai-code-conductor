@@ -214,13 +214,19 @@ fn described(req: &Request) -> Value {
         }
         Request::Detach { id } => Value::obj(head("term.detach", *id)),
         Request::End { id } => Value::obj(head("term.end", *id)),
-        Request::HookEvent { id, kind, payload } => {
+        Request::HookEvent { id, kind, payload, .. } => {
             let mut m = head("hook.event", *id);
             m.push(("kind", Value::Str(kind.clone())));
             m.push(("payload", payload.clone()));
             Value::obj(m)
         }
     }
+}
+
+/// A message read on a connection that acked `local` or not, and not
+/// `hooks`: the app's own ack.
+fn local_only(v: &Value, local: bool) -> Result<Request, request::Refusal> {
+    request::parse_allowed(v, Allowed { local, hooks: false })
 }
 
 // ── local.json `hooks`: hook events (capability `hooks`) ────────────────────
@@ -267,7 +273,7 @@ fn hook_events_read_as_the_fixtures_say() {
     }
     // Without hooks acked a hook event is never read, whatever else was acked.
     let event = json::parse(b"{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{}}").expect("JSON");
-    assert_eq!(request::parse(&event, true).expect_err("a hook event without hooks").code, request::CODE_UNKNOWN_TYPE);
+    assert_eq!(local_only(&event, true).expect_err("a hook event without hooks").code, request::CODE_UNKNOWN_TYPE);
 }
 
 #[test]
@@ -343,21 +349,21 @@ fn local_requests_read_as_the_fixtures_say() {
     for case in items(requests, "valid").iter().filter(|c| applies(c)) {
         let name = text(case, "name");
         let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
-        let req = request::parse(&value, true).unwrap_or_else(|r| panic!("{name}: refused with {}: {}", r.code, r.text));
+        let req = local_only(&value, true).unwrap_or_else(|r| panic!("{name}: refused with {}: {}", r.code, r.text));
         assert_eq!(described(&req).to_json(), case.get("expect").expect("expect").to_json(), "{name}");
         ran += 1;
     }
     for case in items(requests, "invalid").iter().filter(|c| applies(c)) {
         let name = text(case, "name");
         let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
-        let refusal = request::parse(&value, true).expect_err(name);
+        let refusal = local_only(&value, true).expect_err(name);
         assert_eq!(refusal.code, text(case, "error"), "{name}: {}", refusal.text);
         ran += 1;
     }
     assert!(ran >= 25, "only {ran} vectors apply here");
     // Without `local` acked, only the core is allowed.
     let attach = json::parse(b"{\"t\":\"term.attach\",\"id\":2,\"from\":0}").expect("JSON");
-    assert_eq!(request::parse(&attach, false).expect_err("an attach without local").code, request::CODE_UNKNOWN_TYPE);
+    assert_eq!(local_only(&attach, false).expect_err("an attach without local").code, request::CODE_UNKNOWN_TYPE);
 }
 
 #[test]
@@ -374,7 +380,7 @@ fn the_launch_frame_is_the_documented_bytes() {
     assert_eq!(value.to_json(), text(lf, "payload_text"));
     assert_eq!(frame::encode(&decoded, flow(lf)).expect("encodes"), bytes);
     if cfg!(unix) {
-        assert!(matches!(request::parse(&value, true), Ok(Request::Launch(_))));
+        assert!(matches!(local_only(&value, true), Ok(Request::Launch(_))));
     }
 }
 

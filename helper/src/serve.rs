@@ -338,7 +338,8 @@ pub fn hook_taken(re: u64, seq: u64) -> Value {
 /// that does not take them in time is closed. False when a send failed or
 /// the time ran out: that event and those after it wait on (the app drops a
 /// `seq` it has already seen). An event always encodes: its payload came in
-/// a frame of at most 32 levels and is at most 64 KiB.
+/// a frame of at most 32 levels and is at most `MAX_HOOK_PAYLOAD`, so the
+/// event is at most 64 KiB of JSON.
 fn send_waiting(queue: &mut HookQueue, conn: &Conn) -> bool {
     let deadline = Instant::now() + transport::WRITE_TIMEOUT;
     while let Some(message) = queue.front().map(|(ev, lost)| event_message(ev, lost)) {
@@ -413,11 +414,11 @@ impl Serve {
         st.attach_gen == gen && st.attached.as_ref().map(|a| a.id) == Some(conn.id)
     }
 
-    /// Number one hook event and send it, with any still waiting, to the
-    /// attached connection that takes them; with none, it waits in the
-    /// queue. Its `seq`; None while the session is ending.
-    fn post_hook(&self, kind: String, payload: Value) -> Option<u64> {
-        let bytes = payload.to_json().len();
+    /// Number one hook event (its payload `bytes` long as JSON) and send it,
+    /// with any still waiting, to the attached connection that takes them;
+    /// with none, it waits in the queue. Its `seq`; None while the session
+    /// is ending.
+    fn post_hook(&self, kind: String, payload: Value, bytes: usize) -> Option<u64> {
         let (seq, to) = {
             let mut hooks = lock(&self.hooks);
             if self.ending.load(Ordering::SeqCst) {
@@ -464,8 +465,8 @@ impl Serve {
     /// `conn` takes no more hook events; they wait for the next attach.
     /// Called under `conn.live` before the last message it gets as the
     /// attached connection (`term.detached`, `replaced`, `term.exit`, or
-    /// `busy` when it fell behind), so no event follows that message; and
-    /// when the connection goes.
+    /// `busy` when it fell behind or no thread could carry its output), so
+    /// no event follows that message; and when the connection goes.
     fn stop_hooks(&self, conn: &Conn) {
         let mut hooks = lock(&self.hooks);
         if hooks.to.as_ref().map(|(c, _)| c.id) == Some(conn.id) {
@@ -796,8 +797,8 @@ impl Serve {
                 Flow::Continue
             }
             Request::Attach { id, from } => self.attach(conn, id, from, allowed.hooks),
-            Request::HookEvent { id, kind, payload } => {
-                match self.post_hook(kind, payload) {
+            Request::HookEvent { id, kind, payload, bytes } => {
+                match self.post_hook(kind, payload, bytes) {
                     Some(seq) => {
                         let _ = conn.send_json(hook_taken(id, seq));
                     }
@@ -1026,9 +1027,11 @@ impl Serve {
         });
         if started.is_err() {
             // No thread to carry the live output (the count went down with
-            // the closure): the app is told and attaches again.
+            // the closure): the app is told and attaches again. No hook
+            // event follows that last word.
             let mut live = lock(&conn.live);
             *live = 0;
+            self.stop_hooks(conn);
             let _ = conn.send_error(None, request::CODE_BUSY, "the holder could not carry live output; attach again from the last offset seen");
             drop(live);
             return Flow::Close;
