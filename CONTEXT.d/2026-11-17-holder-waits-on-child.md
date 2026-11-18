@@ -46,8 +46,8 @@ about 40 wake-ups a second per held terminal while nothing happened.
   `serve.rs`'s 250 ms clock (which still writes the record's `code`), the
   self-test, and no crate was added.
 
-**Tests.** The terminal counts, in test builds only, each time the child's
-status is asked of the system. The exit watch is counted right beside the
+**Tests.** The terminal counts, in test builds only, each check in
+`try_wait` and each wait the exit watch makes. The exit watch is counted right beside the
 system call (the `waitid` in each turn of the macOS and Linux
 `ExitWatch::wait` loop, each call of the Windows `ExitWatch::wait_once`).
 Each check in `try_wait` is counted too: beside its `waitpid` on macOS and
