@@ -650,9 +650,10 @@ const helperEndArgs = (t: VerifiedTarget): string[] => ['end', '--pid', String(t
  * at once, with nothing run. Otherwise the helper's own end mode
  * (`aicc-helper end`, protocol 15) when `helper` names it: it holds the
  * process from its check to its end, reads no WMI and answers in
- * milliseconds, bounded by HELPER_END_TIMEOUT_MS. With no helper, the
- * PowerShell end (endVerifiedSync). Never throws; elsewhere than Windows it
- * runs nothing and answers 'unknown'.
+ * milliseconds, a second more at most when an end fails (protocol 15),
+ * bounded by HELPER_END_TIMEOUT_MS. With no helper, the PowerShell end
+ * (endVerifiedSync). Never throws; elsewhere than Windows it runs nothing
+ * and answers 'unknown'.
  */
 export function endStartedBrowserSync(target: VerifiedTarget, helper: string | null, ports: OwnerPorts = defaultOwnerPorts()): EndAnswer {
   if (ports.platform !== 'win32' || !targetOk(target, ports.platform)) return 'unknown'

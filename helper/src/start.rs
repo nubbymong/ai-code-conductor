@@ -838,13 +838,15 @@ mod win {
 
         #[test]
         fn a_root_whose_end_fails_while_it_exits_by_itself_still_has_what_was_found_under_it_ended() {
-            let mut quick = exits_soon();
-            let h = opened_without_end(quick.id());
             let mut under = Held::new();
             let opened = under.opened(UNDER_RIGHTS);
+            let mut quick = exits_soon();
+            let h = opened_without_end(quick.id());
+            let before = exit_code(h);
             let got = unsafe { end_checked(h, quick.id(), vec![(under.pid(), opened)]) };
             unsafe { close(h) };
             let _ = quick.wait();
+            assert!(matches!(before, Ok(None)), "it had exited before its end: this test cannot reach the rule ({before:?})");
             assert!(got.is_ok(), "{got:?}");
             assert!(under.gone_soon(), "the process found under it (process {}) still ran 2 s after the end", under.pid());
         }

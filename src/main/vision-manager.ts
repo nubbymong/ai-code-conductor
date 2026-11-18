@@ -892,8 +892,9 @@ async function endSpawnedBrowserAtStop(): Promise<void> {
  *   while its pid still has the creation time the helper reported, checked
  *   at that moment, never by its pid alone (endStartedBrowserSync: nothing
  *   run when no process has the pid; else the helper's end mode, a few
- *   milliseconds, bounded by HELPER_END_TIMEOUT_MS; the PowerShell end only
- *   when the helper is gone). An end that cannot tell is logged.
+ *   milliseconds, a second more at most when an end fails (protocol 15),
+ *   bounded by HELPER_END_TIMEOUT_MS; the PowerShell end only when the
+ *   helper is gone). An end that cannot tell is logged.
  * Safe to call repeatedly; clears the tracked browser.
  */
 export function killSpawnedBrowser(): void {
