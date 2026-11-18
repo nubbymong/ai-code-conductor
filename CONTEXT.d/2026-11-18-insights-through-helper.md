@@ -50,29 +50,32 @@ session helper" (agentSessionsThroughHelper) is on; no new setting.
   not from the start call. The start can wait for an earlier holder of the
   run to end (up to about 130 s) and for the hold (up to 20 s), and what is
   typed meanwhile waits and reaches Claude Code the moment it starts, before
-  its prompt. With node-pty the fallback counts from the start call, as
-  before. A holder lost during the report (LOST_EXIT_CODE) fails the run with
+  its prompt. The report's 10-minute limit counts from that first output
+  too, so a long wait never shortens the report's own time (a start that
+  shows no output at all ends at the limit counted from the start call).
+  With node-pty both count from the start call, as before. A holder lost during the report (LOST_EXIT_CODE) fails the run with
   `HELPER_SENTENCES.runLost` ("The session helper lost this report's
   terminal. Run the report again.") at the end of its output, so the run's
   error says why.
 - Settings, the agent switch's note: "Insights' Claude Code report runs this
   way too."
 
-**Two differences on the fallback paths, accepted.** Both apply when the
-switch is on and the helper hands the report back to node-pty (the
-switch-on fallback after a failed hold, and the wait after a crash with the
-switch off):
+**On the fallback paths.** These apply when the switch is on and the helper
+hands the report back to node-pty (the fallback after a failed hold, and the
+wait after a crash with the switch off):
 - The node-pty terminal HelperPty starts there is guarded by helper-pty.ts
   guardInner, not by Insights' own guardPtyIo (which only logs; a HelperPty
-  has nothing for it to guard). After an input or output failure it is ended
-  3 s later and `[This session stopped taking input, so it was ended.]` goes
-  into the report's output, so the run fails then. Before, after an input
-  failure (no /insights or /exit can reach Claude Code) the run failed at its
-  10-minute limit; after an output failure alone it could still finish,
-  since the report's end is seen in report.html, not in the output. It now
-  fails in both cases, as every other terminal of the app is ended.
-- `timedStart` (main-thread-ops.ts) times only the HelperPty's construction;
-  the node-pty start it makes later is not timed or logged as slow.
+  has nothing for it to guard). For a tab's terminal guardInner ends it 3 s
+  after an input or output failure. A run's is not: spawnAgent gives a run's
+  driver `endsOnIoFailure: false` (HelperPtyDriver), so a failure is logged
+  and nothing more, as Insights' own guard logged it on node-pty, and the
+  report ends its own way (report.html written, its time limit, or the
+  terminal's exit). The first version of this section accepted the
+  difference; it failed a report that could still have finished after an
+  output failure alone, so it is removed, not accepted.
+- Accepted: `timedStart` (main-thread-ops.ts) times only the HelperPty's
+  construction; the node-pty start it makes later is not timed or logged as
+  slow.
 
 **Premise note.** The plan lists "a batch file" among the launches the helper
 refuses. The helper refuses a batch file only with an exact command line
@@ -80,12 +83,15 @@ refuses. The helper refuses a batch file only with an exact command line
 through the holder as node-pty would start it. The test covers the refused
 form (a string argument line).
 
-**Tests.** `tests/unit/main/session-helper-manager.test.ts` (nine cases),
+**Tests.** `tests/unit/main/session-helper-manager.test.ts` (ten cases for a
+run, one more for a tab's wait that is still ended after an output failure),
 the new `tests/unit/main/insights-run-terminal.test.ts` (characterisation of
-the start, the run id, the writes and their delays on a fake clock, the kill
-at quit, a helper on for plain terminals only, and on Windows the report
-through a fake holder: the same writes, the quit's kill, a start held past
-20 s, a lost holder), a case in `tests/unit/renderer/machines-page.test.tsx`,
+the start, the run id, the writes and their delays on a fake clock, the
+node-pty time limit, the kill at quit, a helper on for plain terminals only,
+and on Windows the report through a fake holder: the same writes, the quit's
+kill, a start held past 20 s, a start held 120 s that still gets its 10
+minutes, a start with no output, the fallback path's output failure, a lost
+holder), a case in `tests/unit/renderer/machines-page.test.tsx`,
 two log lines in `tests/unit/main/session-helper-flow.test.ts`, one line in
 `tests/unit/renderer/held-terminal-tab.test.ts`, and
 `tests/unit/main/spawn-site-inventory.json` (insights-runner's node-pty site

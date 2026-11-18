@@ -745,6 +745,10 @@ export class SessionHelperManager implements MachinesSource {
     const direct = (): IPty => (notCleared ? notStartedPty(ctx.run ? HELPER_SENTENCES.runNotCleared : HELPER_SENTENCES.agentNotCleared, opts) : usual())
     // What the log calls the one that starts: a tab, or a run of the app's own.
     const whose = ctx.run ? 'this report' : 'this tab'
+    // A run ends its own way (Insights' report: report.html written, or its
+    // time limit), and node-pty never ended it for a failing output: on a
+    // fallback path its terminal is not ended for one either (helper-pty.ts).
+    const own: Partial<HelperPtyDriver> = ctx.run ? { endsOnIoFailure: false } : {}
     const cleared = async (): Promise<void> => {
       if (await this.clearAgent(sid)) return
       notCleared = true
@@ -760,6 +764,7 @@ export class SessionHelperManager implements MachinesSource {
       // when the tab ended it meanwhile).
       const driver: HelperPtyDriver = {
         ...this.driver(direct, false, false),
+        ...own,
         hold: async (_sid, _label, abandoned) => {
           await cleared()
           if (abandoned()) throw new NothingStartedError('it was ended before it started')
@@ -775,7 +780,7 @@ export class SessionHelperManager implements MachinesSource {
     const refused = checkLaunch(spec, this.os)
     if (refused) return usualWay(`the helper would refuse ${refused.why}`, true)
     const hooks = this.hookRoute(ctx, sid)
-    const driver = this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks)
+    const driver: HelperPtyDriver = { ...this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks), ...own }
     const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver }), ctx.sessionId)
     if (hooks) void wrapper.ended.then(() => hooks.ended())
     return wrapper

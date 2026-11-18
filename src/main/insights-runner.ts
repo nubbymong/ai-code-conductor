@@ -643,7 +643,12 @@ async function spawnClaudeInsights(home: string | null, runId: string, timeoutMs
       }
     }
 
-    const timeout = setTimeout(() => {
+    // The report's time limit. node-pty's terminal starts Claude Code at
+    // once: the limit counts from now, as before. Through the session helper
+    // (a HelperPty) it counts from Claude Code's first output (below), so a
+    // long wait for an earlier holder never shortens the report's own time;
+    // a start that never shows output ends at the limit counted from now.
+    const onLimit = () => {
       if (!resolved) {
         resolved = true
         cleanup()
@@ -653,7 +658,8 @@ async function spawnClaudeInsights(home: string | null, runId: string, timeoutMs
         try { proc.kill() } catch { /* ignore */ }
         resolve({ code: 1, output: output + '\n' + reason })
       }
-    }, timeoutMs)
+    }
+    let timeout = setTimeout(onLimit, timeoutMs)
 
     // Fallback: if prompt not detected within 20 seconds, send /insights anyway.
     // node-pty's terminal starts Claude Code at once: the 20 s count from now,
@@ -663,6 +669,7 @@ async function spawnClaudeInsights(home: string | null, runId: string, timeoutMs
     // reaches it the moment it starts: there the 20 s count from the
     // terminal's first output, so nothing is typed before Claude Code is up.
     const fallbackFromOutput = proc instanceof HelperPty
+    let claudeStarted = false
     let startupFallback: ReturnType<typeof setTimeout> | undefined
     const armStartupFallback = () => {
       startupFallback = setTimeout(() => {
@@ -719,7 +726,14 @@ async function spawnClaudeInsights(home: string | null, runId: string, timeoutMs
     const chunkLines = createLineRedactor((text) => shownClaudeFailure(text.replace(/\s+/g, ' ').trim()))
 
     proc.onData((data) => {
-      if (fallbackFromOutput && startupFallback === undefined && !commandSent && !resolved) armStartupFallback()
+      if (fallbackFromOutput && !claudeStarted && !resolved) {
+        // Claude Code is up (through the helper): its 20 s start-up fallback
+        // and its 10-minute limit both count from here.
+        claudeStarted = true
+        clearTimeout(timeout)
+        timeout = setTimeout(onLimit, timeoutMs)
+        if (!commandSent) armStartupFallback()
+      }
       output += data
       dataChunks++
       const clean = stripAnsiCodes(data)

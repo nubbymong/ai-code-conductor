@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { EventEmitter } from 'events'
 import type { IPty } from 'node-pty'
 
 // node-pty is the usual way: the spy shows every terminal that did NOT go
@@ -28,6 +29,7 @@ import { HolderConnection } from '../../../src/main/session-helper/connection'
 import { HelperPty } from '../../../src/main/session-helper/helper-pty'
 import { heldAgentSessionId, heldIdKind, heldSessionId } from '../../../src/main/session-helper/protocol'
 import { versionFolderName } from '../../../src/main/session-helper/install'
+import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT } from '../../../src/main/pty-input-guard'
 import { _resetBundledConptyForTest, bundledConptyChoice } from '../../../src/main/bundled-conpty'
 import { sessionHelperRow } from '../../../src/main/services/service-registry'
 import { FakeHelper, FakeHolder } from './session-helper-fake-holder'
@@ -78,6 +80,21 @@ async function stepUntil(cond: () => boolean, what: string, realMs = 10_000): Pr
 /** A stand-in for node-pty's terminal, for the usual-way spawns. */
 function fakeDirect(): IPty {
   return { pid: 1, cols: 80, rows: 24, process: 'x', handleFlowControl: false, onData: () => ({ dispose() {} }), onExit: () => ({ dispose() {} }), resize() {}, clear() {}, write() {}, kill() {}, pause() {}, resume() {} } as unknown as IPty
+}
+
+/** node-pty's Windows terminal as the app guards it (pty-input-guard.ts): an
+ *  input socket, and an `on` for errors on its output. */
+function guardableDirect() {
+  const inSocket = new EventEmitter()
+  const output = new EventEmitter()
+  const kill = vi.fn()
+  const inner = { ...fakeDirect(), _agent: { inSocket }, on: (event: string, l: (...a: unknown[]) => void) => { output.on(event, l) }, kill } as unknown as IPty
+  return {
+    inner,
+    kill,
+    failInput: () => { inSocket.emit('error', Object.assign(new Error('write EAGAIN'), { code: 'EAGAIN' })) },
+    failOutput: () => { output.emit('error', Object.assign(new Error('read EPIPE'), { code: 'EPIPE' })) },
+  }
 }
 
 let dir: string
@@ -1161,6 +1178,36 @@ describe('agent sessions after a crash (plan s11, Q1): ended, never shown again'
     expect(spawnAgentPty(claudeTab('abcdef0123456789abcdef72'), SHELL, [], o)).not.toBeInstanceOf(HelperPty)
     // And the page lists no agent session left.
     expect((await second.status()).sessions.map((s) => s.id)).toEqual([plainSid])
+  })
+
+  it('the same wait for a tab\'s agent session: node-pty\'s failing output is ended after the grace, saying why (a run\'s is not: see the run cases)', async () => {
+    const { claudeSid } = await crashedWith()
+    const oldClaude = helper.holders.get(claudeSid)!
+    let release!: () => void
+    oldClaude.endGate = new Promise<void>((r) => { release = r })
+    const g = guardableDirect()
+    ptySpawn.mockImplementation(() => g.inner)
+    const second = makeManager()
+    setSessionHelper(second)
+    void second.start({ atStartup: true, plain: false, agents: false })
+    await until(() => oldClaude.endsAsked === 1, 'the end to be asked')
+    const p = spawnAgentPty(claudeTab('abcdef0123456789abcdef71'), SHELL, [], agentOpts())
+    const seen: string[] = []
+    p.onData((d) => seen.push(d))
+    release()
+    await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
+    expect((p as HelperPty).throughHelper).toBe(false)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      g.failOutput()
+      await vi.advanceTimersByTimeAsync(PTY_IO_FAILED_GRACE_MS - 1)
+      expect(g.kill).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(g.kill).toHaveBeenCalledTimes(1)
+      expect(seen.join('')).toBe(PTY_IO_FAILED_TEXT)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -2551,6 +2598,37 @@ describe('a run of the app\'s own: Insights\' Claude Code report through the hel
     expect(logs).toContain(`[session-helper] ${RUN_SID}: starting it the usual way, because the helper could not hold it: agent sessions do not go through the session helper now; it waited for the end of this report's earlier holder first`)
     // Once that end is over, the next report is node-pty's own at once.
     expect(spawnRunPty(run(), CLAUDE, [], runOpts())).not.toBeInstanceOf(HelperPty)
+  })
+
+  it('on the fallback path, node-pty\'s failing output or input is logged and never ends the report: the report ends its own way, as it did on node-pty (review)', async () => {
+    const old = await crashedDuringRun()
+    let release!: () => void
+    old.endGate = new Promise<void>((r) => { release = r })
+    const g = guardableDirect()
+    ptySpawn.mockImplementation(() => g.inner)
+    const second = runManager()
+    setSessionHelper(second)
+    void second.start({ atStartup: true, plain: false, agents: false })
+    await until(() => old.endsAsked === 1, 'the end to be asked')
+    const p = spawnRunPty(run(), CLAUDE, [], runOpts())
+    const seen: string[] = []
+    p.onData((d) => seen.push(d))
+    release()
+    await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
+    expect((p as HelperPty).throughHelper).toBe(false)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      g.failOutput()
+      g.failInput()
+      expect(logs.filter((l) => l.includes(RUN_SID) && l.includes('output of the usual-way terminal failed (EPIPE)'))).toHaveLength(1)
+      expect(logs.filter((l) => l.includes(RUN_SID) && l.includes('input to the usual-way terminal failed (EAGAIN)'))).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(PTY_IO_FAILED_GRACE_MS * 3)
+      expect(g.kill).not.toHaveBeenCalled()
+      expect(seen.join('')).not.toContain(PTY_IO_FAILED_TEXT)
+      expect(logs.some((l) => l.includes('did not end within'))).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('an earlier holder of the run that cannot be ended: nothing is started, and the run reads why', async () => {

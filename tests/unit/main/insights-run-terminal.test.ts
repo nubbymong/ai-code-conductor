@@ -39,6 +39,10 @@ type FakePty = {
   /** Each write, with the fake clock when it came. */
   writes: Array<{ at: number; data: string }>
   kills: number[]
+  /** node-pty's own `on`, for the 'error' events the app guards (pty-input-guard.ts). */
+  on: (event: string, cb: (err: Error) => void) => void
+  /** An error on the terminal's output, as node-pty emits it. */
+  fail: (err: Error) => void
   onData: (cb: (d: string) => void) => { dispose(): void }
   onExit: (cb: (e: { exitCode: number }) => void) => { dispose(): void }
   write: (d: string) => void
@@ -73,8 +77,11 @@ vi.mock('../../../src/main/pty-manager', async () => ({
 // A terminal that runs until it is killed; what it shows is the test's to say.
 vi.mock('node-pty', () => ({
   spawn: (file: string, args: unknown, opts: Record<string, unknown>) => {
+    const errors: Array<(err: Error) => void> = []
     const p: FakePty = {
       file, args, opts, at: Date.now(), data: null, exit: null, writes: [], kills: [],
+      on: (event, cb) => { if (event === 'error') errors.push(cb) },
+      fail: (err) => { for (const cb of errors) cb(err) },
       onData: (cb) => { p.data = cb; return { dispose() {} } },
       onExit: (cb) => { p.exit = cb; return { dispose() {} } },
       write: (d) => { p.writes.push({ at: Date.now(), data: d }) },
@@ -99,9 +106,11 @@ vi.mock('../../../src/main/first-start-warmup', () => ({
 }))
 
 import type { IPty } from 'node-pty'
+import { logError } from '../../../src/main/debug-logger'
 import * as insights from '../../../src/main/insights-runner'
 import { HELPER_SENTENCES, SessionHelperManager, spawnRunPty, setSessionHelper } from '../../../src/main/session-helper/manager'
 import { HelperPty } from '../../../src/main/session-helper/helper-pty'
+import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT } from '../../../src/main/pty-input-guard'
 import { APP_PTY_ID_RE, heldAgentSessionId } from '../../../src/main/session-helper/protocol'
 import { FakeHelper, type FakeHolder } from './session-helper-fake-holder'
 import { isValidProfileId } from '../../../src/shared/profile-id'
@@ -161,6 +170,16 @@ async function stepFor(ms: number): Promise<void> {
     await realWait(2)
   }
 }
+
+/** The fake clock moves on `ms` in 5 s steps (under the holder connection's 15 s ping), with real time between them. */
+async function stepCoarse(ms: number): Promise<void> {
+  for (let left = ms; left > 0; left -= 5000) {
+    await vi.advanceTimersByTimeAsync(Math.min(5000, left))
+    await realWait(2)
+  }
+}
+/** The report's time limit has been logged: the run was ended for it. */
+const timedOut = (): boolean => vi.mocked(logError).mock.calls.some(([m]) => String(m).includes('[insights] PTY timed out'))
 
 const helpers: Array<{ m: SessionHelperManager; helper: FakeHelper }> = []
 const helperLogs: string[] = []
@@ -247,6 +266,7 @@ beforeEach(() => {
   h.profiles = []
   h.ptys.length = 0
   vi.mocked(spawnRunPty).mockClear()
+  vi.mocked(logError).mockClear()
   helperLogs.length = 0
   setSessionHelper(null)
   _resetQuitHoldForTest()
@@ -340,6 +360,23 @@ describe('what the report types into its terminal, and when (fake clock)', () =>
     vi.useRealTimers()
     await run
     expect(insights.getCatalogue().runs.find((r) => r.profileId === profileId)?.status).toBe('complete')
+  })
+
+  it('node-pty: the report\'s 10-minute limit counts from the start call, as before (characterisation)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const { run, pty, profileId } = await reportRunning()
+    // The first output comes late (node-pty's start is not waited for): the limit still counts from the call.
+    await vi.advanceTimersByTimeAsync(100_000)
+    shows(pty, '\x1b[1mWelcome to Claude Code\x1b[0m\r\n\r\n> ')
+    await vi.advanceTimersByTimeAsync(pty.at + 599_999 - Date.now())
+    expect(timedOut()).toBe(false)
+    expect(pty.kills).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(timedOut()).toBe(true)
+    expect(pty.kills).toEqual([pty.at + 600_000])
+    vi.useRealTimers()
+    await run
+    expect(insights.getCatalogue().runs.find((r) => r.profileId === profileId)?.status).toBe('failed')
   })
 
   it('a normal quit: killInsightsPty ends the report\'s terminal through its kill()', async () => {
@@ -465,6 +502,84 @@ describe.runIf(onWindows)('with the agent sessions\' switch on: the report\'s te
     await stepFor(50)
     expect(w.writes).toEqual([{ at: F + 20_000, data: '/insights\r' }])
     await realUntil(() => Buffer.concat(holder.input).toString() === '/insights\r', 'the write to reach Claude Code')
+  })
+
+  it('a start held 120 s: the report\'s 10 minutes count from Claude Code\'s first output, not from the start call (review)', async () => {
+    const helper = await helperOn(true)
+    const open = heldHold(helper)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const { run, w, sid, profileId } = await reportThroughHelper()
+    await vi.waitFor(() => expect(helper.holds()).toBe(1))
+    await vi.advanceTimersByTimeAsync(120_000)
+    open()
+    await realUntil(() => !!helper.holders.get(sid)?.attached, 'the report to attach')
+    const holder = helper.holders.get(sid)!
+    await holderShows(holder, w, '\x1b[1mClaude Code\x1b[0m v2.1.0\r\n')
+    const F = Date.now()
+    // 7.5 minutes after Claude Code started (10 minutes after the start call
+    // minus the wait): where the limit counted from the call, the run was ended.
+    await stepCoarse(480_000)
+    expect(timedOut()).toBe(false)
+    expect(holder.ended).toBe(false)
+    // The full 10 minutes after Claude Code started, less a moment: still running.
+    await stepCoarse(F + 599_999 - Date.now())
+    expect(Date.now()).toBe(F + 599_999)
+    expect(timedOut()).toBe(false)
+    expect(holder.ended).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(timedOut()).toBe(true)
+    await realUntil(() => holder.ended, 'the holder\'s end')
+    vi.useRealTimers()
+    await run
+    expect(insights.getCatalogue().runs.find((r) => r.profileId === profileId)?.status).toBe('failed')
+  })
+
+  it('a start that never shows any output: the limit counts from the start call, so the run still ends (review)', async () => {
+    const helper = await helperOn(true)
+    const open = heldHold(helper)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const { run, w, profileId } = await reportThroughHelper()
+    await vi.waitFor(() => expect(helper.holds()).toBe(1))
+    await vi.advanceTimersByTimeAsync(w.at + 599_999 - Date.now())
+    expect(timedOut()).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(timedOut()).toBe(true)
+    open()
+    vi.useRealTimers()
+    await run
+    expect(insights.getCatalogue().runs.find((r) => r.profileId === profileId)?.status).toBe('failed')
+  })
+
+  it('on the fallback path (the holder refuses the launch): node-pty\'s output failing alone never ends the report, which still completes when report.html is written (review)', async () => {
+    const helper = await helperOn(true)
+    // A holder that launched already refuses the launch: the report starts node-pty's own way.
+    helper.holdBusy = true
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const { run, w, profileId } = await reportThroughHelper()
+    await realUntil(() => h.ptys.length === 1, 'the usual start')
+    const pty = h.ptys[0]
+    await realUntil(() => !(w.term as HelperPty).throughHelper, 'the hand-over')
+    shows(pty, '\x1b[1mWelcome to Claude Code\x1b[0m\r\n\r\n> ')
+    const P = Date.now()
+    // node-pty's output socket fails (an error that is not the program's end).
+    pty.fail(Object.assign(new Error('read EPIPE'), { code: 'EPIPE' }))
+    expect(helperLogs.filter((l) => l.includes('output of the usual-way terminal failed (EPIPE)'))).toHaveLength(1)
+    // Past the grace in which a tab's terminal is ended: the report is not.
+    await vi.advanceTimersByTimeAsync(PTY_IO_FAILED_GRACE_MS + 1000)
+    expect(pty.kills).toEqual([])
+    expect(w.seen.join('')).not.toContain(PTY_IO_FAILED_TEXT)
+    // The prompt was seen: /insights goes 1 s after it. The report is written,
+    // /exit follows, Claude Code exits: the run completes.
+    expect(pty.writes).toEqual([{ at: P + 1000, data: '/insights\r' }])
+    const later = new Date(statSync(reportOf(profileId)).mtimeMs + 60_000)
+    utimesSync(reportOf(profileId), later, later)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(pty.writes.map((x) => x.data)).toEqual(['/insights\r', '/exit\r'])
+    pty.exit?.({ exitCode: 0 })
+    vi.useRealTimers()
+    await run
+    expect(insights.getCatalogue().runs.find((r) => r.profileId === profileId)?.status).toBe('complete')
+    expect(pty.kills).toEqual([])
   })
 
   it('its holder vanishes during the report: the run fails, and its error says the session helper lost the report\'s terminal', async () => {
