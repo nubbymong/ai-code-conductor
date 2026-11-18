@@ -1131,10 +1131,13 @@ describe('installer: the uninstaller removes the session helper folder, and noth
     // No taskkill or tasklist: over a non-interactive sign-in both answer
     // "Access denied" (WMI), measured on the VM. No other program is run at all.
     expect(all.filter((l) => /taskkill|tasklist|tskill|wmic|Stop-Process|KillProc|nsExec::|ExecWait|ExecShell|\bExec\b/i.test(l.code))).toEqual([])
-    // TerminateProcess appears once in the file, in CccEndListed, and only for a
-    // process checked to be this copy's own user's just before.
+    // TerminateProcess appears twice in the file: here, in CccEndListed, only
+    // for a process checked to be this copy's own user's just before; and in
+    // the app-running check's CccCloseAppCopies (its own tests, below), which
+    // the clean-up never reaches.
     const kills = lines.filter((l) => /TerminateProcess/.test(l.code))
-    expect(kills.map((l) => l.macro)).toEqual(['CccEndListed'])
+    expect(kills.map((l) => l.macro)).toEqual(['CccEndListed', 'CccCloseAppCopies'])
+    expect(all.filter((l) => /TerminateProcess/.test(l.code)).map((l) => l.macro)).toEqual(['CccEndListed'])
     const listed = bodyCode(lines, 'CccEndListed')
     const mine = listed.indexOf('!insertmacro CccProcessIsMine "$3" $6')
     expect(listed.slice(mine, mine + 5)).toEqual([
@@ -1370,5 +1373,237 @@ describe('installer: the uninstaller removes the session helper folder, and noth
     }
     expect(unused(['customUnInstall'], 'un'), 'unused in the uninstaller pass').toEqual([])
     expect(unused(['customInit', 'customInstall'], 'inst'), 'unused in the installer pass').toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The app-running check (aicc_planning #319)
+// ---------------------------------------------------------------------------
+
+describe('installer: the app-running check closes only this user\'s copies from this install\'s folder (static)', () => {
+  // installer-nsis-behaviour.test.ts runs these macros for real with makensis,
+  // on CI's Windows parts and the VM, against running stand-ins. These hold,
+  // everywhere, what the file alone can prove.
+
+  /** The registers CccCloseAppCopies saves and restores: all but $R0, its answer. */
+  const SAVED = ['$0', '$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8', '$9', '$R1', '$R2', '$R3', '$R4', '$R5', '$R6', '$R7', '$R8', '$R9']
+
+  it('no line of installer.nsh runs tasklist, taskkill, WMI or PowerShell, and the check starts no program at all', () => {
+    // Over a non-interactive sign-in (SSH, a scheduled task) tasklist and
+    // taskkill answer "Access denied" (measured on the VM), so the old check
+    // found and closed nothing there; and an elevated `taskkill /im` asked
+    // every signed-in user's copy to close. Comments may name them; code may not.
+    const lines = analyse(readNsh())
+    const named = lines.filter((l) => /\b(tasklist|taskkill|tskill|wmic|powershell|pwsh|Get-CimInstance|Get-WmiObject|Win32_Process|Stop-Process)\b/i.test(l.code))
+    expect(named.map((l) => `line ${l.n}: ${l.code}`)).toEqual([])
+    const all = reachableCode(lines, 'customCheckAppRunning')
+    expect(all.filter((l) => /nsExec::|nsProcess::|ExecWait|ExecShell|ExecDos|\bExec\b/i.test(l.code)).map((l) => `${l.macro}: ${l.code}`)).toEqual([])
+    expect(lines.some((l) => /^!macro\s+KillIfRunning\b/.test(l.code)), 'the tasklist macro is gone').toBe(false)
+  })
+
+  it('keeps the hook electron-builder calls, closes copies through CccCloseAppCopies, and keeps the Retry and Cancel box and the commit point', () => {
+    const lines = analyse(readNsh())
+    expect(bodyCode(lines, 'customCheckAppRunning').map(quiet)).toEqual([
+      'DetailPrint "..."',
+      'Push $R0',
+      'cccAppStillRunning:',
+      '!ifndef BUILD_UNINSTALLER',
+      '!insertmacro CccCloseAppCopies "$cccLegacyUninstaller"',
+      '!else',
+      '!insertmacro CccCloseAppCopies ""',
+      '!endif',
+      '${If} $R0 == 1',
+      // Retry runs the whole check again; a silent run cannot answer, so it cancels.
+      'MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "AI Code Conductor is still running.$\\n$\\nProcess: ${APP_EXECUTABLE_FILENAME}$\\n$\\nPlease close it manually and click Retry." /SD IDCANCEL IDRETRY cccAppStillRunning',
+      '!ifndef BUILD_UNINSTALLER',
+      'Call CccRestoreInstallLocation',
+      '!endif',
+      'Quit',
+      '${EndIf}',
+      'Pop $R0',
+      'DetailPrint "..."',
+      '!ifndef BUILD_UNINSTALLER',
+      '!insertmacro ForgetBrokenPreviousInstall',
+      '!endif',
+    ])
+    // The folder of the install this run replaces, the cancel restore and the
+    // commit point are the installer pass's; the uninstaller pass knows only $INSTDIR.
+    const passesOf = (code: string) => lines.filter((l) => l.macro === 'customCheckAppRunning' && l.code === code).map((l) => l.passes)
+    expect(passesOf('!insertmacro CccCloseAppCopies "$cccLegacyUninstaller"')).toEqual([['inst']])
+    expect(passesOf('!insertmacro CccCloseAppCopies ""')).toEqual([['un']])
+    expect(passesOf('Call CccRestoreInstallLocation')).toEqual([['inst']])
+    expect(passesOf('!insertmacro ForgetBrokenPreviousInstall')).toEqual([['inst']])
+  })
+
+  it('a copy is one of the app\'s own image names, of this user, whose program file is in this install\'s folder or the replaced install\'s, compared canonically', () => {
+    const lines = analyse(readNsh())
+    const scan = bodyCode(lines, 'CccScanAppCopies')
+    const byName = scan.indexOf('${If} $5 == "${APP_EXECUTABLE_FILENAME}"')
+    expect(byName).toBeGreaterThan(-1)
+    expect(scan.slice(byName, byName + 5)).toEqual([
+      '${If} $5 == "${APP_EXECUTABLE_FILENAME}"',
+      '${OrIf} $5 == "Claude Command Center.exe"',
+      '${OrIf} $5 == "Claude Conductor.exe"',
+      '!insertmacro CccProcessIsMine "$3" $6',
+      '${If} $6 != 1',
+    ])
+    // Those three names only: never the session helper, whose held terminals
+    // live through an install.
+    expect(scan.filter((c) => /\$5\s*S?==/.test(c))).toHaveLength(3)
+    expect(reachableCode(lines, 'customCheckAppRunning').filter((l) => /aicc-helper/i.test(l.code))).toEqual([])
+    // The program file as Windows reports it, read with the least access.
+    const read = scan.indexOf("System::Call 'kernel32::QueryFullProcessImageNameW(p r0, i 0, w .r1, *i ${NSIS_MAX_STRLEN}) i .r2'")
+    expect(scan.slice(read - 3, read)).toEqual(['StrCpy $8 ""', "System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i $3) p .r0'", '${If} $0 != 0'])
+    // $INSTDIR\<name>, then the replaced install's folder\<name>, both
+    // spellings through CanonPathPair; only a match is listed.
+    const cmp = scan.indexOf('StrCpy $6 0')
+    expect(scan.slice(cmp, cmp + 22)).toEqual([
+      'StrCpy $6 0',
+      '${If} $8 != ""',
+      '!insertmacro CanonPathPair "$8" $cccCanonA $cccCanonAS',
+      '!insertmacro CanonPathPair "$INSTDIR\\$5" $cccCanonB $cccCanonBS',
+      '${If} $cccCanonA == $cccCanonB',
+      '${OrIf} $cccCanonAS == $cccCanonBS',
+      'StrCpy $6 1',
+      '${EndIf}',
+      '!if "${OLD_UNINSTALLER}" != ""',
+      '${If} $6 != 1',
+      '${AndIf} "${OLD_UNINSTALLER}" != ""',
+      '${GetParent} "${OLD_UNINSTALLER}" $4',
+      '!insertmacro CanonPathPair "$4\\$5" $cccCanonB $cccCanonBS',
+      '${If} $cccCanonA == $cccCanonB',
+      '${OrIf} $cccCanonAS == $cccCanonBS',
+      'StrCpy $6 1',
+      '${EndIf}',
+      '${EndIf}',
+      '!endif',
+      '${EndIf}',
+      '${If} $6 == 1',
+      'StrCpy $R1 "$R1$3,"',
+    ])
+    expect(scan.filter((c) => /^StrCpy \$R1\b/.test(c))).toEqual(['StrCpy $R1 "$R1$3,"'])
+    // The match is in the "this user's" branch: after the user check's ${Else}.
+    expect(cmp).toBeGreaterThan(scan.indexOf('${Else}'))
+    expect(scan.indexOf('${Else}')).toBeGreaterThan(byName)
+  })
+
+  it('WM_CLOSE goes only to the top-level windows of the copies found, then it waits 5 seconds at most, looking every 250 ms', () => {
+    const lines = analyse(readNsh())
+    const close = bodyCode(lines, 'CccCloseAppCopies')
+    const find = close.indexOf("System::Call 'user32::FindWindowExW(p 0, p r8, p 0, p 0) p .r8'")
+    expect(find).toBeGreaterThan(close.indexOf('!insertmacro CccScanAppCopies 1 $9 "${OLD_UNINSTALLER}"'))
+    expect(close.slice(find, find + 15)).toEqual([
+      "System::Call 'user32::FindWindowExW(p 0, p r8, p 0, p 0) p .r8'",
+      '${If} $8 == 0',
+      '${ExitDo}',
+      '${EndIf}',
+      'StrCpy $3 0',
+      "System::Call 'user32::GetWindowThreadProcessId(p r8, *i .r3)'",
+      '${If} $3 != 0',
+      '!insertmacro CccInList "$3" $6',
+      '${If} $6 == 1',
+      'StrCpy $7 "$7$8,"',
+      '${EndIf}',
+      '${EndIf}',
+      'IntOp $R4 $R4 + 1',
+      '${If} $R4 >= 20000',
+      '${ExitDo}',
+    ])
+    // One message, to the listed windows only, and nothing sent and waited on.
+    const all = reachableCode(lines, 'customCheckAppRunning')
+    expect(all.filter((l) => /PostMessage|SendMessage|SendNotifyMessage|BroadcastSystemMessage/i.test(l.code)).map((l) => `${l.macro}: ${l.code}`)).toEqual([
+      "CccCloseAppCopies: System::Call 'user32::PostMessageW(p r8, i 0x10, p 0, p 0)'",
+    ])
+    // The first look reports and records start times; the later ones only count.
+    expect(close.filter((c) => /^!insertmacro CccScanAppCopies\b/.test(c))).toEqual([
+      '!insertmacro CccScanAppCopies 1 $9 "${OLD_UNINSTALLER}"',
+      '!insertmacro CccScanAppCopies 0 "" "${OLD_UNINSTALLER}"',
+      '!insertmacro CccScanAppCopies 0 "" "${OLD_UNINSTALLER}"',
+    ])
+    // Every loop is bounded: 20 looks of 250 ms (5 s), then 8 more after the ends.
+    expect(close.filter((c) => /^Sleep\b/.test(c))).toEqual(['Sleep 250', 'Sleep 250'])
+    expect(close.filter((c) => /^\$\{OrIf\} \$R4 >= /.test(c))).toEqual(['${OrIf} $R4 >= 20', '${OrIf} $R4 >= 8'])
+  })
+
+  it('it ends a copy only through a handle it holds, after checking that process is still this user\'s with the same start time', () => {
+    const lines = analyse(readNsh())
+    const close = bodyCode(lines, 'CccCloseAppCopies')
+    const open = close.indexOf("System::Call 'kernel32::OpenProcess(i 0x1001, i 0, i $3) p .r8'")
+    // Only after the wait, and only when a copy is still running.
+    expect(open).toBeGreaterThan(close.indexOf('${OrIf} $R4 >= 20'))
+    expect(close.slice(open - 3, open)).toEqual(['${If} $3 == ""', '${ExitDo}', '${EndIf}'])
+    expect(close.slice(open, open + 13)).toEqual([
+      "System::Call 'kernel32::OpenProcess(i 0x1001, i 0, i $3) p .r8'",
+      '${If} $8 != 0',
+      '!insertmacro CccProcessIsMine "$3" $6',
+      '!insertmacro CccProcessStart "$3" $R8',
+      '${If} $6 == 1',
+      '${AndIf} $4 != ""',
+      '${AndIf} $R8 == $4',
+      "System::Call 'kernel32::TerminateProcess(p r8, i 1) i .r6'",
+      '${If} $6 != 0',
+      'DetailPrint "Ended process $3, which did not close within 5 seconds."',
+      '${EndIf}',
+      '${EndIf}',
+      "System::Call 'kernel32::CloseHandle(p r8)'",
+    ])
+    // $3 and $4 are the pid and start the first look recorded, read back from $9.
+    expect(close.slice(close.indexOf('${If} $R7 == ":"'), close.indexOf('${If} $R7 == ":"') + 6)).toEqual([
+      '${If} $R7 == ":"', 'StrCpy $5 1', '${ElseIf} $5 == 0', 'StrCpy $3 "$3$R7"', '${Else}', 'StrCpy $4 "$4$R7"',
+    ])
+    const scan = bodyCode(lines, 'CccScanAppCopies')
+    const start = scan.indexOf('!insertmacro CccProcessStart "$3" $4')
+    expect(scan.slice(start - 1, start + 2)).toEqual(['!if "${STARTS}" != ""', '!insertmacro CccProcessStart "$3" $4', 'StrCpy ${STARTS} "${STARTS}$3:$4,"'])
+    // This copy's own user, read as CccEndUserHelpers reads it; with none, nothing is looked at or ended.
+    const own = close.indexOf("System::Call 'kernel32::GetCurrentProcess() p .r0'")
+    expect(close.slice(own, own + 6)).toEqual([
+      "System::Call 'kernel32::GetCurrentProcess() p .r0'",
+      "System::Call 'advapi32::OpenProcessToken(p r0, i 8, *p .r1) i .r2'",
+      '${If} $2 != 0',
+      "System::Call 'advapi32::GetTokenInformation(p r1, i 1, p R9, i 256, *i .r2) i .r2'",
+      '${If} $2 != 0',
+      "System::Call '*$R9(p .R6)'",
+    ])
+    const none = close.indexOf('${If} $R6 == 0')
+    expect(none).toBeGreaterThan(own)
+    expect(close.slice(none, none + 3).map(quiet)).toEqual(['${If} $R6 == 0', 'DetailPrint "..."', '${Else}'])
+    expect(close.findIndex((c) => /^!insertmacro CccScanAppCopies\b/.test(c))).toBeGreaterThan(none)
+    // The buffers it takes are given back.
+    expect(close.filter((c) => /^System::(Alloc|Free)\b/.test(c))).toEqual([
+      'System::Alloc 256', 'System::Alloc 256', 'System::Alloc 556', 'System::Free $R3', 'System::Free $R5', 'System::Free $R9',
+    ])
+  })
+
+  it('it saves and restores every register but $R0, its answer, and customCheckAppRunning gives $R0 back to its caller', () => {
+    const lines = analyse(readNsh())
+    const close = bodyCode(lines, 'CccCloseAppCopies')
+    expect(close.slice(0, SAVED.length)).toEqual(SAVED.map((r) => `Push ${r}`))
+    expect(close.slice(-SAVED.length)).toEqual([...SAVED].reverse().map((r) => `Pop ${r}`))
+    // $R0 is written once, at the end, and nothing it inserts touches it.
+    expect(reachableCode(lines, 'CccCloseAppCopies').filter((l) => /\$R0\b/.test(l.code)).map((l) => `${l.macro}: ${l.code}`)).toEqual([
+      'CccCloseAppCopies: StrCpy $R0 0',
+      'CccCloseAppCopies: StrCpy $R0 1',
+    ])
+    const check = bodyCode(lines, 'customCheckAppRunning')
+    expect(check.filter((c) => /^(Push|Pop|Exch)\b/.test(c))).toEqual(['Push $R0', 'Pop $R0'])
+    // The Retry label sits after the Push, so a Retry leaves the stack as it was.
+    expect(check.indexOf('cccAppStillRunning:')).toBe(check.indexOf('Push $R0') + 1)
+  })
+
+  it('-WX in both passes: the check declares no Var or Function, and what only the installer pass has is used only there', () => {
+    // customCheckAppRunning is inserted in both passes (installSection.nsh and
+    // uninstaller.nsh's un.checkAppRunning). A Var or Function one pass never
+    // uses fails that pass's build under -WX.
+    const lines = analyse(readNsh())
+    const names = reachableMacros('customCheckAppRunning', lines)
+    for (const n of ['CccCloseAppCopies', 'CccScanAppCopies', 'CccProcessIsMine', 'CccProcessStart', 'CccInList', 'CanonPathPair']) expect(names.has(n), n).toBe(true)
+    const own = lines.filter((l) => l.macro !== null && ['customCheckAppRunning', 'CccCloseAppCopies', 'CccScanAppCopies'].includes(l.macro))
+    expect(own.filter((l) => /^(Var|Function)\b/.test(l.code)).map((l) => l.code)).toEqual([])
+    // Compiled in both passes, they use only CanonPathPair's scratch, which
+    // customHeader declares in both.
+    const bothPass = new Set(own.filter((l) => l.passes.length === 2).flatMap((l) => [...l.code.matchAll(/\$(ccc\w+)/g)].map((m) => m[1])))
+    expect([...bothPass].sort()).toEqual(['cccCanonA', 'cccCanonAS', 'cccCanonB', 'cccCanonBS'])
+    // The replaced install's uninstaller and the cancel restore: installer pass only.
+    expect(own.filter((l) => /\$cccLegacyUninstaller|CccRestoreInstallLocation/.test(l.code)).map((l) => l.passes)).toEqual([['inst'], ['inst']])
   })
 })
