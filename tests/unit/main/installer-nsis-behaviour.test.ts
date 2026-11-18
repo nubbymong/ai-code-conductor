@@ -1,6 +1,6 @@
 // HOST QUARANTINE: plants junctions; writes a probe registry key; starts real processes. [CI] [VM] only -- never run on the owner's machine.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -94,15 +94,28 @@ function liftMacros(names: string[]): string {
 }
 
 /**
+ * CccCloseAppCopies's one "is this run silent?" gate. The probes are silent
+ * (so the box answers itself), and a case that needs a run someone can see
+ * sets `seen=1` in the probe's ini, which this gate then reads instead.
+ */
+const SEEN_GATE = '${IfNot} ${Silent}'
+
+/**
  * The app check's sandbox: the old image names become stand-ins, and with
  * `details` every DetailPrint is logged too (CccProbeDetail), so a case can
- * read the details list. Fails closed on any real image name left.
+ * read the details list. Fails closed on any real image name left, and on a
+ * gate that is not there exactly once.
  */
 function sandboxAppCheck(text: string, details: boolean): string {
   let out = text.replace(/"(Claude Command Center|Claude Conductor)\.exe"/g, (_m, name: string) => `"${PROBE_LEGACY_EXES[`${name}.exe`]}"`)
   if (details) out = out.replace(/^(\s*)DetailPrint\b/gm, '$1!insertmacro CccProbeDetail')
   const real = out.match(/(AI Code Conductor|Claude Command Center|Claude Conductor)\.exe"/)
   if (real) throw new Error(`the probe would reach a real copy of the app: ${real[0]}`)
+  if (/^!macro CccCloseAppCopies\b/m.test(out)) {
+    const gates = out.split(SEEN_GATE).length - 1
+    if (gates !== 1) throw new Error(`expected CccCloseAppCopies's ${SEEN_GATE} gate once, found ${gates}`)
+    out = out.replace(SEEN_GATE, () => '${If} $cccProbeSeen == "1"')
+  }
   return out
 }
 
@@ -206,9 +219,11 @@ function probeScript(mode: 'sweep' | 'e2e' | 'apps', out: string, cfg: string, l
     ? `
   ; installSection.nsh: CHECK_APP_RUNNING, in the installer pass, with $INSTDIR
   ; and customInit's capture of a recorded uninstaller as customInit leaves
-  ; them. The replaced install's record is the case's, in the probe key.
+  ; them. The replaced install's record is the case's, in the probe key, and
+  ; so is the install location customInit saved for a Cancel to put back.
   StrCpy $INSTDIR $cccProbeInstDir
   StrCpy $cccLegacyUninstaller $cccProbeLegacyUninst
+  StrCpy $cccSavedPerUserInstallLocation $cccProbeSavedLoc
   !insertmacro customCheckAppRunning
   FileWrite $cccProbeLog "passed=1$\\r$\\n"
 `
@@ -340,6 +355,8 @@ Var cccProbeRes
 Var cccProbeLegacyUninst
 Var cccProbeLinkRoot
 Var cccProbeD
+Var cccProbeSeen
+Var cccProbeSavedLoc
 
 ; multiUser.nsh's UAC predicate, driven by the ini instead of a real elevation.
 !define UAC_IsInnerInstance \`$cccProbeInner == "1"\`
@@ -376,6 +393,8 @@ ${readCfg('$cccProbeShorten', 'shortenInstdir')}
 ${readCfg('$cccProbeAbort', 'abort')}
 ${readCfg('$cccProbeSeedReg', 'seedFromRegistry')}
 ${readCfg('$installMode', 'installMode')}
+${readCfg('$cccProbeSeen', 'seen')}
+${readCfg('$cccProbeSavedLoc', 'savedInstallLocation')}
   ClearErrors
   FileOpen $cccProbeLog "${log}" w
 ${body}
@@ -1505,8 +1524,13 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
  * and leave everything else running: a same-named copy in another folder, the
  * session helper, an install that only another hive records, and, in the
  * uninstaller pass, which does not know it, the install this run replaces.
- * Another user's copy cannot be made on a CI runner; that case is the VM's
- * (the release smoke).
+ * In a run someone can see, a copy that was asked to close and stays open
+ * (the app asking whether to save its sessions) is not ended. A copy still
+ * running at the end stops the run: the box answers Cancel, the installer
+ * pass puts back the install location customInit saved, and the run exits
+ * with code 2. Another user's copy, and this user's copy started as
+ * administrator, cannot be made on a CI runner; those are the VM's (the
+ * release smoke).
  *
  * Two probes. The installer pass is the 'apps' mode of the probe above, with
  * everything the hook inserts there (the commit point too), compiled as that
@@ -1514,9 +1538,11 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
  * compiles that pass: BUILD_UNINSTALLER defined, the real customHeader lifted
  * for the variables both passes declare, and /WX, so a variable or label the
  * uninstaller pass would warn about fails here too. Both are silent, so the
- * Retry and Cancel box answers Cancel and the probe ends without "passed".
- * The app's image names are stand-ins in both (PROBE_APP_EXE,
- * PROBE_LEGACY_EXES), so a real copy of the app is never reached.
+ * boxes answer Cancel and a run that stops ends without "passed". A case that
+ * needs a run someone can see sets `seen`, which CccCloseAppCopies's one
+ * silent-run gate reads instead (SEEN_GATE). The app's image names are
+ * stand-ins in both (PROBE_APP_EXE, PROBE_LEGACY_EXES), so a real copy of the
+ * app is never reached.
  */
 const APP_CHECK_UN_MACROS = [
   'customHeader',
@@ -1548,6 +1574,7 @@ InstallDir "$TEMP\\ccc-nsis-probe-unused"
 
 Var cccProbeLog
 Var cccProbeInstDir
+Var cccProbeSeen
 
 !macro CccProbeDetail TEXT
   FileWrite $cccProbeLog "detail=\${TEXT}$\\r$\\n"
@@ -1562,6 +1589,7 @@ Page instfiles
 
 Section "probe"
   ReadINIStr $cccProbeInstDir "${cfg}" "probe" "instdir"
+  ReadINIStr $cccProbeSeen "${cfg}" "probe" "seen"
   ClearErrors
   FileOpen $cccProbeLog "${log}" w
   ; uninstaller.nsh: un.checkAppRunning, $INSTDIR the uninstaller's folder.
@@ -1576,12 +1604,18 @@ SectionEnd
 
 /**
  * The stand-in for a running copy: one small NSIS program, copied under each
- * name a case needs. Started with /window, it shows a wizard page and waits;
- * a WM_CLOSE cancels it the way the window's close button does, which runs
- * .onUserAbort, so "<exe>-closed" says it closed itself and was not ended.
- * "<exe>-ready" says its window is up. Started without /window, it has no
- * window at all and idles for up to 5 minutes, so only TerminateProcess ends
- * it sooner.
+ * name a case needs. "<exe>-ready" says its window is up.
+ * - /window: a wizard page that waits; a WM_CLOSE cancels it the way the
+ *   window's close button does, which runs .onUserAbort, so "<exe>-closed"
+ *   says it closed itself and was not ended.
+ * - /window-stay: the same page, but a WM_CLOSE leaves it open, as the app's
+ *   window stays open while it asks whether to save its sessions;
+ *   "<exe>-asked" says one arrived.
+ * - /window-respawn: on a WM_CLOSE it first starts a fresh copy of itself
+ *   (/respawned, no window), which writes its pid to "<exe>-respawned", and
+ *   then closes: a pid the check's first look never saw.
+ * - anything else: no window at all; it idles for up to 5 minutes, so only
+ *   TerminateProcess ends it sooner.
  */
 function standInScript(out: string): string {
   return `Unicode true
@@ -1600,7 +1634,15 @@ Page instfiles
 Function .onInit
   \${GetParameters} $0
   \${If} $0 != "/window"
+  \${AndIf} $0 != "/window-stay"
+  \${AndIf} $0 != "/window-respawn"
     SetSilent silent
+  \${EndIf}
+  \${If} $0 == "/respawned"
+    System::Call 'kernel32::GetCurrentProcessId() i .r1'
+    FileOpen $2 "$EXEPATH-respawned" w
+    FileWrite $2 "$1"
+    FileClose $2
   \${EndIf}
 FunctionEnd
 
@@ -1610,8 +1652,17 @@ Function .onGUIInit
 FunctionEnd
 
 Function .onUserAbort
-  FileOpen $0 "$EXEPATH-closed" w
-  FileClose $0
+  \${GetParameters} $0
+  \${If} $0 == "/window-stay"
+    FileOpen $1 "$EXEPATH-asked" w
+    FileClose $1
+    Abort
+  \${EndIf}
+  \${If} $0 == "/window-respawn"
+    Exec '"$EXEPATH" /respawned'
+  \${EndIf}
+  FileOpen $1 "$EXEPATH-closed" w
+  FileClose $1
 FunctionEnd
 
 Section "stand-in"
@@ -1622,6 +1673,17 @@ Section "stand-in"
   \${LoopUntil} $1 >= 300
 SectionEnd
 `
+}
+
+/** One value under the probe key, or null when it is not there. */
+function regGet(sub: string, name: string): string | null {
+  try {
+    const out = execFileSync('reg', ['query', `${PROBE_REG_KEY}\\${sub}`, '/v', name], { encoding: 'utf-8', stdio: 'pipe' })
+    const m = out.match(new RegExp(`^\\s*${name}\\s+REG_\\w+\\s+(.*)$`, 'm'))
+    return m ? m[1].trim() : null
+  } catch {
+    return null
+  }
 }
 
 describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check closes only this user\'s copies from this install\'s folder', () => {
@@ -1669,12 +1731,15 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     if (awork) rmSync(awork, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
   }, 60_000)
 
+  type Window = boolean | 'stay' | 'respawn'
+  const WINDOW_ARGS: Record<string, string[]> = { true: ['/window'], false: [], stay: ['/window-stay'], respawn: ['/window-respawn'] }
+
   /** A copy of the stand-in as `folder\name`, started as this user, with an environment of its own. */
-  async function startCopy(folder: string, name: string, window: boolean): Promise<{ pid: number; exe: string }> {
+  async function startCopy(folder: string, name: string, window: Window): Promise<{ pid: number; exe: string }> {
     dir(folder)
     const exe = join(folder, name)
     copyFileSync(standIn(), exe)
-    const proc = spawn(exe, window ? ['/window'] : [], {
+    const proc = spawn(exe, WINDOW_ARGS[String(window)], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
@@ -1683,10 +1748,20 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     proc.unref()
     expect(proc.pid, `${name} started`).toBeDefined()
     started.push(proc.pid!)
-    if (window) expect(await waitFor(() => existsSync(`${exe}-ready`), 10_000), `${name}'s window is up`).toBe(true)
+    if (window !== false) expect(await waitFor(() => existsSync(`${exe}-ready`), 10_000), `${name}'s window is up`).toBe(true)
     else await pause(500)
     expect(isAlive(proc.pid!), `${name} is running before the check`).toBe(true)
     return { pid: proc.pid!, exe }
+  }
+
+  /** Ends the stand-ins a case left running. */
+  async function endAll(pids: number[]) {
+    for (const pid of pids) {
+      if (isAlive(pid)) {
+        process.kill(pid)
+        await waitGone(pid)
+      }
+    }
   }
 
   /**
@@ -1694,33 +1769,45 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
    * replaced install's uninstaller as its uninstall record names it in the
    * hive this run installs to (the probe key; SHELL_CONTEXT is the user's
    * here); `legacyUninstaller` is customInit's capture, which can come from
-   * another hive. Returns the log, the details list and how long it took.
+   * another hive. `seen` runs CccCloseAppCopies as in a run someone can see;
+   * `savedInstallLocation` is what customInit saved for a Cancel to put back
+   * (installer pass). Returns the log, the details list, how long it took,
+   * the exit code, and the install location in the probe key afterwards.
    */
-  function runAppCheck(pass: 'installer' | 'uninstaller', cfg: { instdir: string; legacyUninstaller: string; record?: string }) {
+  function runAppCheck(pass: 'installer' | 'uninstaller', cfg: { instdir: string; legacyUninstaller: string; record?: string; seen?: boolean; savedInstallLocation?: string }) {
     regClear()
     if (cfg.record) regSet('Uninstall', 'UninstallString', `"${cfg.record}" /currentuser`)
     writeFileSync(acfg(), [
       '[probe]',
       `instdir=${cfg.instdir}`,
       `legacyUninstaller=${cfg.legacyUninstaller}`,
+      `seen=${cfg.seen ? 1 : 0}`,
+      `savedInstallLocation=${cfg.savedInstallLocation ?? ''}`,
       'installMode=CurrentUser',
       '',
     ].join('\r\n'))
     rmSync(alog(), { force: true })
     const t0 = Date.now()
+    let status: number | null = null
+    let restored: string | null = null
     try {
-      execFileSync(pass === 'installer' ? instProbe() : unProbe(), [], { encoding: 'utf-8', stdio: 'pipe', timeout: 60_000 })
+      const run = spawnSync(pass === 'installer' ? instProbe() : unProbe(), [], { encoding: 'utf-8', stdio: 'pipe', timeout: 60_000 })
+      if (run.error) throw run.error
+      status = run.status
+      restored = regGet('Install', 'InstallLocation')
     } finally {
       regClear()
     }
     const ms = Date.now() - t0
     const log = readFileSync(alog(), 'utf-8')
     const details = log.split(/\r?\n/).filter((l) => l.startsWith('detail=')).map((l) => l.slice('detail='.length))
-    return { log, ms, details }
+    return { log, ms, details, status, restored }
   }
 
   const leftFrom = (name: string, pid: number) =>
     new RegExp(`^Left ${name.replace(/[.]/g, '\\.')} \\(process ${pid}\\) running from .+\\\\${name.replace(/[.]/g, '\\.')}, which is not this install's folder\\.$`, 'i')
+  const ASKED = /^Windows of AI Code Conductor asked to close: [1-9]\d*\.$/
+  const ENDS = /^(Ended process|Could not end process|Did not end process)/
 
   for (const pass of ['installer', 'uninstaller'] as const) {
     it(`${pass} pass: closes this user's copies from this install's folder, ends the one that will not close, and leaves the rest running`, async () => {
@@ -1745,10 +1832,14 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
       const old = await startCopy(replaced, legacy1, false)
 
       const uninstaller = join(replaced, 'Uninstall Claude Command Center.exe')
-      const { log, ms, details } = runAppCheck(pass, { instdir: install, legacyUninstaller: uninstaller, record: uninstaller })
+      const { log, ms, details, status, restored } = runAppCheck(pass, { instdir: install, legacyUninstaller: uninstaller, record: uninstaller })
       const all = details.join('\n')
 
       expect(log, all).toContain('passed=1')
+      expect(status, all).toBe(0)
+      expect(restored, 'nothing is put back when the check passes').toBe(null)
+      expect(details.filter((d) => ASKED.test(d)), all).toHaveLength(1)
+      expect(details, all).toContain('No copy of AI Code Conductor is running from this install\'s folder. Proceeding.')
       // Closed itself on WM_CLOSE, so it was not ended.
       expect(await waitGone(windowed.pid), 'the copy with a window closed').toBe(true)
       expect(existsSync(`${windowed.exe}-closed`), 'it closed through its own close, not TerminateProcess').toBe(true)
@@ -1774,14 +1865,81 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
         expect(details.some((d) => leftFrom(legacy1, old.pid).test(d)), all).toBe(true)
       }
 
-      for (const pid of [outside.pid, helper.pid, old.pid]) {
-        if (isAlive(pid)) {
-          process.kill(pid)
-          await waitGone(pid)
-        }
-      }
+      await endAll([outside.pid, helper.pid, old.pid])
     }, 90_000)
   }
+
+  for (const pass of ['installer', 'uninstaller'] as const) {
+    it(`${pass} pass, in a run someone can see: a copy that stays open when asked to close is not ended, nor is any other, and the box stops the run`, async () => {
+      // The app, asked to close with sessions open, asks whether to save them
+      // and stays open meanwhile. Ending it 5 seconds later would cut that
+      // answer off, so nothing is ended: the box asks the user to answer it
+      // and Retry. Here the box answers Cancel, as a silent run's does.
+      const root = join(awork, `apps-seen-${pass}`)
+      rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+      const install = join(root, 'Programs', 'AI Code Conductor')
+      const stays = await startCopy(install, PROBE_APP_EXE, 'stay')
+      const windowless = await startCopy(install, PROBE_LEGACY_EXES['Claude Command Center.exe'], false)
+      const saved = join(root, 'Programs', 'Saved Install Location')
+
+      const { log, ms, details, status, restored } = runAppCheck(pass, { instdir: install, legacyUninstaller: '', seen: true, savedInstallLocation: saved })
+      const all = details.join('\n')
+
+      expect(existsSync(`${stays.exe}-asked`), 'it was asked to close').toBe(true)
+      expect(isAlive(stays.pid), 'and was not ended while it asks').toBe(true)
+      expect(isAlive(windowless.pid), 'nothing else is ended either').toBe(true)
+      expect(details.filter((d) => ENDS.test(d)), all).toEqual([])
+      expect(details.filter((d) => ASKED.test(d)), all).toHaveLength(1)
+      expect(details, all).toContain('AI Code Conductor was asked to close and is still open. It may be asking whether to save your sessions, so it was not ended.')
+      expect(ms, 'it waited 5 seconds first').toBeGreaterThanOrEqual(4500)
+      // What is still running, then the stop.
+      expect(details, all).toContain(`Still running from this install's folder: ${PROBE_APP_EXE} (process ${stays.pid}).`)
+      expect(log, all).not.toContain('passed=1')
+      expect(status, all).toBe(2)
+      expect(details.some((d) => d.startsWith('No copy of AI Code Conductor is running')), all).toBe(false)
+      if (pass === 'installer') {
+        expect(details, all).toContain('AI Code Conductor is still running, so nothing was installed.')
+        expect(restored, 'Cancel put back the install location customInit saved').toBe(saved)
+      } else {
+        expect(details, all).toContain('AI Code Conductor is still running, so nothing was removed.')
+      }
+
+      await endAll([stays.pid, windowless.pid])
+    }, 90_000)
+  }
+
+  it('installer pass, silent: a copy that stays open is ended, and a copy that starts again after the first look stops the run, so Cancel puts the saved install location back', async () => {
+    const root = join(awork, 'apps-cancel')
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+    const install = join(root, 'Programs', 'AI Code Conductor')
+    // Closes on WM_CLOSE, but first starts a fresh copy of itself: a pid the
+    // first look never saw, so the check cannot end it.
+    const respawner = await startCopy(install, PROBE_APP_EXE, 'respawn')
+    // Stays open on WM_CLOSE. A silent run has nobody to answer, so it is ended.
+    const stays = await startCopy(install, PROBE_LEGACY_EXES['Claude Command Center.exe'], 'stay')
+    const saved = join(root, 'Programs', 'Saved Install Location')
+
+    const { log, details, status, restored } = runAppCheck('installer', { instdir: install, legacyUninstaller: '', savedInstallLocation: saved })
+    const all = details.join('\n')
+
+    expect(await waitFor(() => existsSync(`${respawner.exe}-respawned`), 5000), 'the fresh copy started').toBe(true)
+    const again = Number(readFileSync(`${respawner.exe}-respawned`, 'utf-8').trim())
+    started.push(again)
+    expect(await waitGone(respawner.pid), 'the first copy closed itself').toBe(true)
+    expect(existsSync(`${respawner.exe}-closed`)).toBe(true)
+    expect(isAlive(again), 'the fresh copy is still running').toBe(true)
+    expect(existsSync(`${stays.exe}-asked`)).toBe(true)
+    expect(await waitGone(stays.pid), 'the copy that stayed open was ended').toBe(true)
+    expect(details, all).toContain(`Ended process ${stays.pid}, which did not close within 5 seconds.`)
+    expect(details, all).toContain(`Still running from this install's folder: ${PROBE_APP_EXE} (process ${again}).`)
+    expect(details, all).toContain('AI Code Conductor is still running, so nothing was installed.')
+    expect(details.some((d) => d.startsWith('No copy of AI Code Conductor is running')), all).toBe(false)
+    expect(log, all).not.toContain('passed=1')
+    expect(status, all).toBe(2)
+    expect(restored, 'Cancel put back the install location customInit saved').toBe(saved)
+
+    await endAll([again])
+  }, 90_000)
 
   it('installer pass: an install recorded only in another hive is not this run\'s, so its copy keeps running', async () => {
     // customInit's capture falls back to the other hives for the sweep's
@@ -1795,17 +1953,17 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     const machineWide = join(root, 'Program Files', 'AI Code Conductor')
     const other = await startCopy(machineWide, PROBE_APP_EXE, true)
 
-    const { log, ms, details } = runAppCheck('installer', { instdir: install, legacyUninstaller: join(machineWide, 'Uninstall AI Code Conductor.exe') })
+    const { log, ms, details, status } = runAppCheck('installer', { instdir: install, legacyUninstaller: join(machineWide, 'Uninstall AI Code Conductor.exe') })
     const all = details.join('\n')
 
     expect(log, all).toContain('passed=1')
+    expect(status, all).toBe(0)
     expect(ms, 'no wait').toBeLessThan(4000)
     expect(isAlive(other.pid), 'the other install\'s copy keeps running').toBe(true)
     expect(existsSync(`${other.exe}-closed`), 'and is not asked to close').toBe(false)
     expect(details.some((d) => leftFrom(PROBE_APP_EXE, other.pid).test(d)), all).toBe(true)
 
-    process.kill(other.pid)
-    await waitGone(other.pid)
+    await endAll([other.pid])
   }, 60_000)
 
   it('goes straight on when none of this install\'s copies runs, and leaves the others running', async () => {
@@ -1816,20 +1974,19 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     const outside = await startCopy(join(root, 'Elsewhere'), PROBE_APP_EXE, true)
     const helper = await startCopy(install, 'aicc-helper.exe', false)
 
-    const { log, ms, details } = runAppCheck('uninstaller', { instdir: install, legacyUninstaller: '' })
+    const { log, ms, details, status } = runAppCheck('uninstaller', { instdir: install, legacyUninstaller: '' })
     const all = details.join('\n')
 
     expect(log, all).toContain('passed=1')
+    expect(status, all).toBe(0)
     expect(ms, 'no wait').toBeLessThan(4000)
     expect(isAlive(outside.pid)).toBe(true)
     expect(existsSync(`${outside.exe}-closed`), 'no WM_CLOSE reached a window of another folder\'s copy').toBe(false)
     expect(isAlive(helper.pid)).toBe(true)
     expect(details.some((d) => leftFrom(PROBE_APP_EXE, outside.pid).test(d)), all).toBe(true)
-    expect(details.filter((d) => d.startsWith('Ended process')), all).toEqual([])
+    expect(details.filter((d) => ENDS.test(d) || ASKED.test(d)), all).toEqual([])
+    expect(details, all).toContain('No copy of AI Code Conductor is running from this install\'s folder. Proceeding.')
 
-    for (const pid of [outside.pid, helper.pid]) {
-      process.kill(pid)
-      await waitGone(pid)
-    }
+    await endAll([outside.pid, helper.pid])
   }, 60_000)
 })
