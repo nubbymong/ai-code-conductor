@@ -67,8 +67,9 @@ Step 3  Reference only: today's HTTP hook is a loopback POST from inside the
         as JSON. What the gateway does with the event after that is not in it.
         It runs twice in a job on the same schedule, once without sending and
         once with all the POSTs, and the difference in the two processes' CPU
-        cycles, divided by the POSTs, is the CPU per POST (client and server).
-        A failure here is recorded and does not change the verdict.
+        cycles, divided by the POSTs, is the CPU per POST (client and server);
+        each run must count both node processes. A failure here is recorded
+        and does not change the verdict.
 
 Pass line (ADR-030 sets none; the beta 8 plan set this before any measuring):
 with Defender real-time protection on, over all step 2 runs, p95 wall time at
@@ -1280,6 +1281,8 @@ try {
         note = 'reference only, not in the verdict: the first start of a fresh copy of the same signed file in a new folder (Defender had seen these bytes at the per-user path; a first start of bytes it has never seen was not measured)'
         wallMs = [math]::Round($rc.WallMs, 2)
         cpuMs = [math]::Round($rc.CpuMs, 2)
+        processes = $rc.Processes
+        withoutACpuCount = $rc.Missed
         exit = $rc.ExitCode
         listed = (Test-Listed $rc.Output)
         defenderMsFromCopyToEnd = $(if ($mpCold0 -ge 0 -and $mpCold1 -ge 0) { [math]::Round($mpCold1 - $mpCold0, 2) } else { 'not readable' })
@@ -1448,6 +1451,12 @@ try {
             $h0 = [P16Runner]::Run($nodeBase + ' idle', $freshBlock, $work, $false, $null, $httpTimeout, $null)
             $hr = [P16Runner]::Run($nodeBase + ' send', $freshBlock, $work, $false, $null, $httpTimeout, $null)
             if ($h0.ExitCode -ne 0 -or $hr.ExitCode -ne 0) { throw "the HTTP reference exited $($h0.ExitCode) and $($hr.ExitCode): $($hr.Output.Trim())" }
+            # The CPU per POST is a difference of two sums, so each must count
+            # both node processes (the client and its server), as step 2's
+            # runs must count every process.
+            if ($h0.Processes -ne 2 -or $hr.Processes -ne 2 -or $h0.Missed -gt 0 -or $hr.Missed -gt 0) {
+                throw "the HTTP reference's runs held $($h0.Processes) and $($hr.Processes) processes, $($h0.Missed) and $($hr.Missed) of them without a CPU count, not 2 and 2 with none missed, so its CPU per POST would be wrong"
+            }
             $lines = @($hr.Output -split "`r?`n" | Where-Object { $_ -match '^\d+,' })
             $postRows = @($lines | ForEach-Object { $f = $_ -split ','; [pscustomobject]@{ wall = [double]::Parse($f[1], $Inv); status = [int]$f[2] } })
             if ($postRows.Count -eq 0) { throw "the HTTP reference printed no POSTs: $($hr.Output.Trim())" }
@@ -1460,8 +1469,8 @@ try {
                 p95WallMs = [math]::Round((Get-P95 $pw), 2)
                 maxWallMs = [math]::Round(($pw | Measure-Object -Maximum).Maximum, 2)
                 meanWallMs = [math]::Round(($pw | Measure-Object -Average).Average, 2)
-                baselineRun = [ordered]@{ wallMs = [math]::Round($h0.WallMs, 0); cpuMsFromCycles = [math]::Round($h0.CpuMs, 2); processes = $h0.Processes }
-                postsRun = [ordered]@{ wallMs = [math]::Round($hr.WallMs, 0); cpuMsFromCycles = [math]::Round($hr.CpuMs, 2); processes = $hr.Processes }
+                baselineRun = [ordered]@{ wallMs = [math]::Round($h0.WallMs, 0); cpuMsFromCycles = [math]::Round($h0.CpuMs, 2); processes = $h0.Processes; withoutACpuCount = $h0.Missed }
+                postsRun = [ordered]@{ wallMs = [math]::Round($hr.WallMs, 0); cpuMsFromCycles = [math]::Round($hr.CpuMs, 2); processes = $hr.Processes; withoutACpuCount = $hr.Missed }
                 cpuMsPerPostFromCycles = [math]::Round(($hr.CpuMs - $h0.CpuMs) / $postRows.Count, 3)
             }
         } catch {
