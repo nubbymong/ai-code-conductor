@@ -1040,9 +1040,10 @@ async function startThroughHelper(executable: string, args: string[], headless: 
 /**
  * The exit statuses Windows ends a program with when it cannot load it, before
  * any of the program's own code runs, as Node reports them (unsigned): a DLL
- * it needs is missing (0xC0000135, the helper needs the Visual C++ runtime),
- * a DLL lacks a function it needs (0xC0000139), a file is not a program this
- * Windows can run (0xC000007B), or a DLL failed to start (0xC0000142).
+ * it needs is missing (0xC0000135, as for a helper built before 2.1.3-beta.8
+ * on a PC without the Visual C++ runtime), a DLL lacks a function it needs
+ * (0xC0000139), a file is not a program this Windows can run (0xC000007B), or
+ * a DLL failed to start (0xC0000142).
  */
 const HELPER_NOT_LOADED = new Set([3221225781, 3221225785, 3221225595, 3221225794])
 

@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.8] - 2026-11-18
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- On Windows, the update to this version still ends the held terminals open in tabs, as before, because the version you update from decides what an update does. From this version on, choosing Save sessions at an update keeps them running, if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
+- To go back to 2.1.3-beta.7, download its installer from the GitHub releases page and run it over this version.
+
+> On Windows, an app update can now keep the terminals the session helper holds running: choose Save sessions, and the new version shows them again. The session helper no longer needs the Visual C++ runtime on Windows, a Codex review runs on your reviewer account's default Codex model, and the vision browser is closed on every way the app exits.
+
+### Added
+- On Windows, with Plain terminals through the session helper on, choosing Save sessions on the update dialog now keeps the terminals the helper holds running through an app update. The new version shows each Terminal only tab and partner terminal again in its tab, with what it printed meanwhile. A held terminal that no tab shows, such as one a crash left, keeps running too, and the Machines page lists it again. Close sessions ends them, as before. The new version must open within two minutes of the old one closing. On macOS and Linux an update still ends them, and Claude Code and Codex sessions still resume their conversation instead.
+
+### Changed
+- With Claude Code and Codex sessions through the session helper on (a preview, off by default) and the HTTP Hooks Gateway on, a Claude Code session the helper holds now sends its hook events to the app through the session helper. The check before each tool runs (PreToolUse) still goes to the HTTP Hooks Gateway. The attention dot, the Watchdog and canvas notes work as before, and Codex sessions are unchanged.
+- The session helper no longer wakes about 40 times a second for each terminal it holds, to check whether the program in it has ended. It now waits for that program to end instead.
+- Codex reviews, Sentinel's analysis on Codex and Codex Insights reports now also run with three more Codex agent features switched off (multi_agent_v2, sleep_tool and the agents setting), which these runs do not need.
+
+### Fixed
+- On Windows, the session helper no longer needs Microsoft's Visual C++ runtime. Before, on a PC without it the helper could not start, and terminals started the usual way.
+- A Codex review now runs on your reviewer account's default Codex model, at the same medium reasoning effort. Before, it always asked for GPT-5.5, which OpenAI retired from Codex with ChatGPT sign-in on October 14, 2026.
+- On Windows, the vision browser no longer keeps the app's files open after the app ends.
+- The vision browser is now closed on every way the app exits, including an update install.
+- On Windows, the installer now closes only your own copy of AI Code Conductor that runs from the folder being installed. Other users' copies and the session helper are left alone. In a normal install it asks the app to close first, and while the app shows its save dialog the installer waits for you instead of ending it. A silent install over a remote or scheduled sign-in no longer waits forever on a box nobody can see.
+
 ## [2.1.3-beta.7] - 2026-11-17
 
 ### Warnings
@@ -2002,6 +2026,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.8]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.8
 [2.1.3-beta.7]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.7
 [2.1.3-beta.6]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.6
 [2.1.3-beta.5]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.5

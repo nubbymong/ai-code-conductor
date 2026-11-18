@@ -68,19 +68,18 @@ raised by the orchestrator. The whole-machine figure comes from the script's
 arithmetic over idle-cycle readings that were not recorded, so it cannot be
 recomputed from posted data; the total that can be (chain 29.11 + Defender
 20.10 + starter 0.69 + holder 0.14) is 50.04 ms. Run 6's "chain plus
-Defender, about 50 ms" left
-out the starting program, the holder, csrss and the kernel. Reference:
-today's HTTP hook POST, taken as the gateway takes it (a new connection each
-time, the token checked, the body parsed), took 1.02 ms mean, 1.34 ms p95,
-and 1.5 ms of CPU, client and server, against a baseline on the same
-150-second schedule (runs 8 and 9: 1.02 and 1.03 ms, 1.5 and 1.6 ms). Run
-7's 0.70 ms and 1.0 ms reused one connection and skipped the token check and
-the parse, and run 6's 1.1 ms CPU was an upper estimate (its baseline lasted
-under a second). A fresh copy of the helper in a new folder took 112 ms on
-its first start (105 to 111 ms in runs 7 to 9), against about 34 ms warm.
-The figures crept up by about 2 ms of CPU from run 1 to run 6, over an hour
-and a half on a host that was also running other work; every run is far
-inside the line.
+Defender, about 50 ms" left out the starting program, the holder, csrss and
+the kernel. Reference: today's HTTP hook POST, taken as the gateway takes it
+(a new connection each time, the token checked, the body parsed), took
+1.02 ms mean, 1.34 ms p95, and 1.5 ms of CPU, client and server, against a
+baseline on the same 150-second schedule (runs 8 and 9: 1.02 and 1.03 ms,
+1.5 and 1.6 ms). Run 7's 0.70 ms and 1.0 ms reused one connection and
+skipped the token check and the parse, and run 6's 1.1 ms CPU was an upper
+estimate (its baseline lasted under a second). A fresh copy of the helper in
+a new folder took 112 ms on its first start (105 to 111 ms in runs 7 to 9),
+against about 34 ms warm. The figures crept up by about 2 ms of CPU from
+run 1 to run 6, over an hour and a half on a host that was also running
+other work; every run is far inside the line.
 
 Runs 2 to 10 exist because review found gaps in the script's own checks, not
 in what it measures: a store folder made by someone else, or an output folder
