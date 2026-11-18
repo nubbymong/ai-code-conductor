@@ -98,7 +98,9 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
 vi.mock('../../../src/renderer/components/terminal/screenRegistry', () => ({ readSessionScreen: () => null }))
 vi.mock('../../../src/renderer/components/terminal/tmuxWheelScroll', () => ({ writeSessionInput: () => {} }))
 
-const { spawnPty, killPty, writePty, writeCanvasMarkerLine } = await import('../../../src/main/pty-manager')
+const { spawnPty, killPty, writePty } = await import('../../../src/main/pty-manager')
+// The session input module's submitMarker, which writeCanvasMarkerLine became (2.1.3-beta.9 A1).
+const { submitMarker: writeCanvasMarkerLine } = await import('../../../src/main/session-input')
 const delivery = await import('../../../src/main/canvas/canvas-marker-delivery')
 const { MARKER_FALLBACK_FLUSH_MS } = await import('../../../src/main/canvas/canvas-marker-queue')
 const typing = await import('../../../src/main/canvas/claude-marker-typing')
@@ -300,9 +302,9 @@ describe('a canvas marker into a Claude Code session waits for its ready, empty 
     expect(typedMarkers()).toHaveLength(3)
   })
 
-  it("the app's wiring hands each marker's canvas on to writeCanvasMarkerLine", () => {
+  it("the app's wiring hands each marker's canvas on to the session input module's submitMarker", () => {
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
-    expect(src).toMatch(/write:\s*\(sessionId,\s*line,\s*canvasId\)\s*=>\s*writeCanvasMarkerLine\(sessionId,\s*line,\s*canvasId\)/)
+    expect(src).toMatch(/write:\s*\(sessionId,\s*line,\s*canvasId\)\s*=>\s*submitMarker\(sessionId,\s*line,\s*canvasId\)/)
   })
 
   it('a session with no run takes nothing', async () => {

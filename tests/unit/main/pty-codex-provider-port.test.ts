@@ -75,7 +75,9 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
   setupProfileLinks: () => {}, syncPrimaryCredentialsWithGlobal: () => {}, backupProfileHomeToCanonical: () => {},
 }))
 
-const { spawnPty, killPty, resizePty, writeCanvasMarkerLine } = await import('../../../src/main/pty-manager')
+const { spawnPty, killPty, resizePty } = await import('../../../src/main/pty-manager')
+// The session input module's submitMarker, which writeCanvasMarkerLine became (2.1.3-beta.9 A1).
+const { submitMarker: writeCanvasMarkerLine } = await import('../../../src/main/session-input')
 const { clampAnsiChunk } = await import('../../../src/main/watchdog/watchdog-manager')
 type SpawnOpts = NonNullable<Parameters<typeof spawnPty>[2]>
 

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "bbd36c7620388dba99b637c3d1af293b6c8d286bd7e22c2079b2cc869d884236",
-  "manifestHead": "982ae4afbaa2e70be6bf6e6a70130f05c1ab6bb6",
+  "manifestPathDigest": "36e83d947ebe48dc7d19aefd6f66000926c8182fcec4e6b36e3bcc59e4627fc2",
+  "manifestHead": "f6ac25374c41c604ab61f6b2e1526dc81737b401",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -2207,6 +2207,16 @@
       "disposition": "replace",
       "evidence": "WP2 PR 3 P3.4 (parity rows 14 and 45; OD27 M1 D5, docs/wp1/owner-decisions-2026-09-27.md: a provider that is off makes no calls): each provider's public status page is read only while that provider is on, Codex's from OpenAI's status page (its Codex CLI and Codex API components), an off provider's reading leaves the payload, a settings save that turns one on or off is acted on at once, and a reply is read defensively (WP1.2, WP1.60); tests/unit/main/service-status-providers.test.ts; WP2 PR 3 P3.4 fix round 1 (reviews and the ADR-009 thesis check): each read has an overall deadline that destroys it, each provider's page settles and publishes on its own, a switch-off or stop aborts a read in flight and a late reply is ignored, a second start is ignored, a settings save reads only a provider switched on, the renderer's pull answers the app's own window only (trusted-sender.ts), and no remote text is sent (WP1.2, WP1.60); tests/unit/main/service-status-providers.test.ts; WP2 PR 3 P3.4 ADR-009 pass (lens G, lens N): the poller subscribes to the accounts service so a switch made there aborts that provider's read at once; two failed polls in a row drop a reading to status unknown (read time kept); a send to a torn-down window never throws out of a poll (WP1.2, WP1.60); tests/unit/main/service-status-providers.test.ts, tests/unit/main/provider-on-now.test.ts; WP2 PR 3 P3.4 follow-up (the quality review minor and fix round 1): the accounts-service changes of one turn of the event loop are one refresh, in the next turn (a settings save in the same turn is that refresh, a stop drops it), a synchronous throw in it never escapes, and a switch-off made in the service drops a reading that had landed and pushes the payload (WP1.2, WP1.60); tests/unit/main/service-status-providers.test.ts",
       "note": "the P14 hits are the OpenAI status source for Codex and its payload fields; no legacy Codex code path"
+    },
+    {
+      "path": "src/main/session-input/index.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.9 section A1 module (src/main/session-input/index.ts): the one door through which main types into a session for the app, its bodies moved unchanged from pty-manager.ts: the Watchdog retry, an Agent Canvas marker (a Codex session's through the Codex run screen's submit, reached through getProvider) and Ask Conductor's question on Codex (WP1.68); tests/unit/main/session-input.test.ts, tests/unit/main/session-input-ownership.test.ts, tests/unit/main/codex-ask-carrier.test.ts",
+      "note": "created by 2.1.3-beta.9 section A1; the P14 hits are the Codex run screen and Ask Conductor on Codex, moved from pty-manager.ts"
     },
     {
       "path": "src/main/session-resume-enrich.ts",
@@ -7262,6 +7272,28 @@
       "disposition": "added",
       "evidence": "2.1.3-beta.7 case in a 2.1.3-beta.6 test (tests/unit/main/session-helper-pty-site.test.ts): the two local agent spawns in pty-manager.ts, the Codex one included, go through spawnAgentPty with the arguments they had, and the SSH start stays node-pty's own (WP1.68)",
       "note": "created by 2.1.3-beta.6 (plan section B); reads source files only"
+    },
+    {
+      "path": "tests/unit/main/session-input-ownership.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.9 section A1 test (tests/unit/main/session-input-ownership.test.ts): no main file outside src/main/session-input types into a session beyond a shrinking allow-list; the Codex run screen's submit and the Codex package's pane writer are among the shapes it finds (WP1.68)",
+      "note": "created by 2.1.3-beta.9 section A1; reads source files only"
+    },
+    {
+      "path": "tests/unit/main/session-input.test.ts",
+      "predicates": [
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.9 section A1 test (tests/unit/main/session-input.test.ts): through the real spawnPty, the session input module types what pty-manager typed: the Watchdog retry, a Codex marker through the run screen's submit, a Claude Code marker held for its own run, and Ask Conductor's question only into a Codex Ask session, never raw (WP1.68)",
+      "note": "created by 2.1.3-beta.9 section A1; a stand-in Codex launch with its home in the temp folder, nothing started"
     },
     {
       "path": "tests/unit/main/session-resume-enrich.test.ts",

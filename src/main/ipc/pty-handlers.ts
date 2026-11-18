@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow, app } from 'electron'
 import { z } from 'zod'
 import { spawnPty, writePty, resizePty, killPty, getSshFlow, endSshRemoteDetailed, probeTmuxLive, holdsCodexLaunchLease, codexLaunchLeaseTaken, beginSpawnPreparation, isSessionWritable, isSessionLiveOrStarting, SSHOptions, SshEndTarget, getKeptCodexConversation, getKeptCodexConversationSource, codexRunEnded, codexConversationHeldElsewhere, endAgentRunsInFolder } from '../pty-manager'
 import type { CodexLaunch } from '../pty-manager'
-import { handOffAskQuestion } from '../pty-manager'
+import { handOffAskQuestion } from '../session-input'
 import { ensureHelpWorkspace, helpWorkspaceDir } from '../help-workspace'
 import { ASK_HELP_FOLDER_FAILED } from '../../shared/ask-conductor-provider'
 import { getResourcesDirectory } from './setup-handlers'
@@ -737,7 +737,7 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
   })
 
   // WP2 PR 4, P4.3 (row 53): a question for a LIVE Ask session on Codex,
-  // typed through the run's pane and its submit primitive (pty-manager
+  // typed through the run's pane and its submit primitive (session-input
   // handOffAskQuestion), never the raw question and Enter. Only a running
   // Codex session that launched as Ask takes one; the app's window only.
   ipcMain.handle(IPC.ASK_CONDUCTOR_HAND_OFF, async (e, args: unknown): Promise<SubmitTextResult> => {
