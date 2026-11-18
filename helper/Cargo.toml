@@ -47,7 +47,7 @@ libc = "=0.2.172"
 # LibraryLoader loads the bundled conpty.dll, Diagnostics_Debug keeps a
 # load that fails from showing a dialog, Diagnostics_ToolHelp lists the
 # processes under one that `end` ends (start.rs), and SystemInformation
-# reads the time that list was read at (start.rs).
+# reads the time just before that list is read (start.rs).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.59.0", default-features = false, features = [
   "Win32_Foundation",

@@ -41,11 +41,14 @@
 //! while that pid still has the creation time `--created` gives, in the form
 //! `start` prints. It holds the process open from that check to the end, so
 //! the pid cannot pass to another process in between. The processes under it
-//! come from one read of the process list, and the system time is read right
-//! after that read. A process counts as under its parent only when it was
+//! come from one read of the process list, and the system time is read just
+//! before that read. A process counts as under its parent only when it was
 //! made no earlier than the parent and no later than that time: one made
 //! earlier names a parent id that has since passed to another process, and
-//! one made later took a listed pid after the list was read (`made_under`).
+//! one made later may have taken a listed pid after the list was read
+//! (`made_under`). A pid is freed and passed on only after the list is read,
+//! so a process that takes one is always made after that time; one made
+//! while the list is read is left out too, and keeps running.
 //! It prints `ended`, or `left` when no process has that pid, the one that
 //! has it was made at another time, or it has already exited; both exit 0.
 //! When it cannot tell, it exits 1 with a message on stderr, and the process
@@ -113,9 +116,10 @@ pub fn app_created(filetime: u64) -> u64 {
 
 /// Whether a process listed under a parent counts as under it, for `end`:
 /// made no earlier than the parent (`parent_made`) and no later than
-/// `listed_at`, the system time read right after the process list was read.
+/// `listed_at`, the system time read just before the process list was read.
 /// One made earlier names a parent id that has since passed to another
-/// process; one made later took a listed pid after the list was read. All
+/// process; one made later may have taken a listed pid after the list was
+/// read. All
 /// three are in steps of 100 ns since 1601 (UTC).
 pub fn made_under(child_made: u64, parent_made: u64, listed_at: u64) -> bool {
     parent_made <= child_made && child_made <= listed_at
@@ -455,10 +459,11 @@ mod win {
 
     /// The processes under `pid` (made at `made`), each open to be ended,
     /// from one read of the process list. A process counts as under its
-    /// parent only when it was made between the parent and the read of the
-    /// list (`made_under`): each is opened by its pid after that read, and
-    /// the pid may have passed to another process by then. One that cannot
-    /// be opened or read is left out, with what is under it.
+    /// parent only when it was made between the parent and the system time
+    /// read just before the list (`made_under`): each is opened by its pid
+    /// after the list is read, and the pid may have passed by then to
+    /// another process, which was made after that time. One that cannot be
+    /// opened or read is left out, with what is under it.
     unsafe fn processes_under(pid: u32, made: u64) -> Vec<usize> {
         let (list, listed_at) = process_list();
         let mut found: Vec<usize> = Vec::new();
@@ -487,17 +492,20 @@ mod win {
     }
 
     /// Every process now, as (pid, parent pid), with the system time read
-    /// right after the list was: every process in the list was made no
-    /// later than that. Empty (and a time of 0) when the list cannot be read.
+    /// just before the list is. A pid in the list can be freed and passed to
+    /// a new process only after the list is read, so that process is made
+    /// after this time; one made while the list is read is after it too, and
+    /// is left out (it keeps running). Empty (and a time of 0) when the list
+    /// cannot be read.
     unsafe fn process_list() -> (Vec<(u32, u32)>, u64) {
         let mut list = Vec::new();
+        let mut now = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        GetSystemTimePreciseAsFileTime(&mut now);
+        let listed_at = (u64::from(now.dwHighDateTime) << 32) | u64::from(now.dwLowDateTime);
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snap == INVALID_HANDLE_VALUE {
             return (list, 0);
         }
-        let mut now = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
-        GetSystemTimePreciseAsFileTime(&mut now);
-        let listed_at = (u64::from(now.dwHighDateTime) << 32) | u64::from(now.dwLowDateTime);
         let mut entry: PROCESSENTRY32W = std::mem::zeroed();
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
         let mut more = Process32FirstW(snap, &mut entry) != 0;

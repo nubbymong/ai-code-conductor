@@ -438,8 +438,10 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   time, both plain digits. It opens that process and holds it open from the
   check to the end, so the pid cannot pass to another process in between, and
   ends it and the processes under it only while the pid has that creation
-  time; a process made earlier than its parent, or later than the read of the
-  process list, is not taken to be under it.
+  time; a process made earlier than its parent, or after the system time the
+  helper reads just before it reads the process list, is not taken to be
+  under it. A listed pid can pass to a new process only after the list is
+  read, so that process is never taken to be under it.
   It gives the app no new power: the app can already end any process of its
   user (`taskkill`). It reads the process list itself, with no PowerShell and
   no WMI, so an exit that cannot wait gets an answer in milliseconds. Tested
