@@ -6,6 +6,7 @@ import { checkForUpdatesOnDemand, markUpdateInstalled, getProjectRootPath, setSo
 import { checkGitHubRelease, downloadGitHubRelease, prepareLinuxAppImageUpdate, isPathOnNoexecMount, InstallerIntegrityError, stillMatchesDigest, createInstallerDir } from '../github-update'
 import { killAllPty } from '../pty-manager'
 import { releaseHeldTerminalsForUpdate, reclaimReleasedTerminals } from '../session-helper/app-wiring'
+import { hardExitTeardown } from '../hard-exit'
 import { expandArtifactName } from '../artifact-name'
 import { logInfo, logError } from '../debug-logger'
 
@@ -364,6 +365,7 @@ export function registerUpdateHandlers(): void {
       markUpdateInstalled()
 
       logInfo('[update] Exiting app for installer...')
+      hardExitTeardown()
       app.exit(0)
 
       return true

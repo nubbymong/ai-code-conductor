@@ -1,5 +1,6 @@
 //! What every Windows process start in the helper shares: the holder's own
-//! start (`detach.rs`) and a terminal's child (`pty/windows.rs`).
+//! start (`detach.rs`), a terminal's child (`pty/windows.rs`) and a program
+//! started for the app (`start.rs`).
 //!
 //! Handle types differ between `windows-sys` versions (an integer or a
 //! pointer), so handles are held as `usize` and converted with `as` at each
@@ -9,10 +10,11 @@
 use std::ffi::{c_void, OsStr};
 use std::io;
 use std::os::windows::ffi::OsStrExt;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
 use windows_sys::Win32::System::Console::HPCON;
 use windows_sys::Win32::System::Threading::{
-    DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList, UpdateProcThreadAttribute, WaitForSingleObject,
+    CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, GetProcessTimes, InitializeProcThreadAttributeList, UpdateProcThreadAttribute,
+    WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOEXW,
 };
 
 /// `EXTENDED_STARTUPINFO_PRESENT`: the start-up block carries an attribute list.
@@ -46,7 +48,13 @@ pub(crate) unsafe fn close(handle: usize) {
 /// The exit code of `process` once it has exited, `None` while it runs. A
 /// wait that fails is an error, never "still running".
 pub(crate) fn exit_code(process: usize) -> io::Result<Option<u32>> {
-    match unsafe { WaitForSingleObject(process as HANDLE, 0) } {
+    exit_code_within(process, 0)
+}
+
+/// `exit_code`, after waiting up to `ms` milliseconds for `process` to exit:
+/// `None` when it still runs then.
+pub(crate) fn exit_code_within(process: usize, ms: u32) -> io::Result<Option<u32>> {
+    match unsafe { WaitForSingleObject(process as HANDLE, ms) } {
         WAIT_OBJECT_0 => {}
         WAIT_TIMEOUT => return Ok(None),
         _ => return Err(os_error("WaitForSingleObject")),
@@ -56,6 +64,44 @@ pub(crate) fn exit_code(process: usize) -> io::Result<Option<u32>> {
         return Err(os_error("GetExitCodeProcess"));
     }
     Ok(Some(code))
+}
+
+/// One `CreateProcessW` of `app`, by that exact path (no search), with the
+/// command line `cmdline`, in the folder `cwd`. `inherit` says whether the
+/// child may inherit any handle: with a handle list in `startup`
+/// (`AttrList::handle_list`) only the ones it names, and with `false` none
+/// at all. The caller closes both handles it returns.
+pub(crate) unsafe fn create_process(app: &[u16], cmdline: &str, cwd: &[u16], startup: &STARTUPINFOEXW, flags: u32, inherit: bool) -> io::Result<PROCESS_INFORMATION> {
+    // CreateProcessW may write to the command line, so each try gets a fresh copy.
+    let mut line = wide(OsStr::new(cmdline));
+    let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+    let ok = CreateProcessW(
+        app.as_ptr(),
+        line.as_mut_ptr(),
+        std::ptr::null(),
+        std::ptr::null(),
+        i32::from(inherit),
+        flags,
+        std::ptr::null(),
+        cwd.as_ptr(),
+        &startup.StartupInfo,
+        &mut info,
+    );
+    if ok == 0 {
+        return Err(os_error("CreateProcessW"));
+    }
+    Ok(info)
+}
+
+/// When `process` was made: its creation time, in steps of 100 ns since
+/// 1601 (UTC).
+pub(crate) fn creation_time(process: usize) -> io::Result<u64> {
+    let zero = || FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut made, mut exited, mut kernel, mut user) = (zero(), zero(), zero(), zero());
+    if unsafe { GetProcessTimes(process as HANDLE, &mut made, &mut exited, &mut kernel, &mut user) } == 0 {
+        return Err(os_error("GetProcessTimes"));
+    }
+    Ok((u64::from(made.dwHighDateTime) << 32) | u64::from(made.dwLowDateTime))
 }
 
 /// A process and thread attribute list with one attribute, deleted when it
@@ -132,5 +178,12 @@ mod tests {
         // A null handle: the wait fails at once.
         let waited = exit_code(0);
         assert!(waited.is_err(), "a wait that failed read as {waited:?}");
+    }
+
+    #[test]
+    fn a_creation_time_that_cannot_be_read_is_an_error() {
+        // A null handle: the read fails at once.
+        let read = creation_time(0);
+        assert!(read.is_err(), "a creation time that could not be read came back as {read:?}");
     }
 }
