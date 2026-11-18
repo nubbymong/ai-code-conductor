@@ -1022,19 +1022,19 @@ export class SessionHelperManager implements MachinesSource {
    * a holder is let go of instead of ended, when its tab (a partner's is its
    * session's) is saved twice over: in the app's last save (noteSavedTabs)
    * and in `restorable`, the tabs in the saved file the next start restores
-   * from. `restorable` is null when the user discarded the saved sessions
-   * ("Close sessions" / "Close without saving" cleared that file), so then
-   * none is. Its holder's away clock starts (two minutes) and the next start,
-   * finding the running mark, shows it again in its tab. An agent session, a
-   * terminal still starting and one whose tab was not saved are left to the
-   * kill that follows, which ends them as before.
+   * from. `restorable` is null when the user chose "Close sessions" on the
+   * update dialog (the renderer says so with the install call; app-wiring
+   * passes it on), so then none is. Its holder's away clock starts (two
+   * minutes) and the next start, finding the running mark, shows it again in
+   * its tab. An agent session, a terminal still starting and one whose tab was
+   * not saved are left to the kill that follows, which ends them as before.
    * A held terminal kept for a tab that no tab took over (one a crash left,
    * one Re-attach opened a tab for, one an earlier reclaim() kept) is not
-   * reached by that kill. When the user kept the sessions (`restorable` is a
-   * set, even an empty one, or the saved file did not read), it is neither
-   * let go of nor ended: it runs on past the exit, and the next start, taking
-   * the crash path, keeps it again (section B3). When the user discarded
-   * them, it is ended now, so none is left held.
+   * reached by that kill. When `restorable` is a set (Save, even with no tab
+   * saved; an update with no tab open, which shows no dialog; a saved file
+   * that did not read), it is neither let go of nor ended: it runs on past
+   * the exit, and the next start, taking the crash path, keeps it again
+   * (section B3). When it is null, it is ended now, so none is left held.
    * The mark is written again saying "update" and stays. Nothing new goes
    * through the helper until reclaim(). Off Windows nothing is let go of.
    * Answers how many were.
@@ -1055,13 +1055,13 @@ export class SessionHelperManager implements MachinesSource {
     }
     // Kept and no tab took it over (a crash's, Re-attach's or reclaim()'s):
     // the kill does not reach it, so its holder runs on past the app's exit.
-    // That is what the user chose with Save; only a discard ends it here.
+    // That is what the user chose with Save; only "Close sessions" ends it here.
     const ends: Promise<unknown>[] = []
-    let left = 0
+    let leftRunning = 0
     for (const [sid, r] of new Map([...this.reclaimed, ...this.adoptable])) {
       if (this.live.has(sid) || heldIdKind(sid) !== 'plain') continue
       if (restorable !== null) {
-        left++
+        leftRunning++
         this.deps.log(`[session-helper] ${sid}: kept with no tab showing it; left running through the update, for the next start to keep again`)
         continue
       }
@@ -1074,7 +1074,10 @@ export class SessionHelperManager implements MachinesSource {
     } catch (err) {
       this.deps.log(`[session-helper] the running mark could not be written for the update: ${message(err)}`)
     }
-    this.deps.log(`[session-helper] an app update: ${n} held terminal(s) are let go of, for the new version to show again; ${restorable === null ? `the sessions were discarded, so ${ends.length} kept terminal(s) are ended` : `${left} kept terminal(s) are left running`}`)
+    const tail = restorable === null
+      ? `the sessions were discarded, so ${ends.length} kept terminal(s) are ended`
+      : `${leftRunning} kept terminal(s) are left running`
+    this.deps.log(`[session-helper] an app update: ${n} held terminal(s) are let go of, for the new version to show again; ${tail}`)
     this.changed()
     return n
   }

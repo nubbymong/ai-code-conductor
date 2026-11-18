@@ -55,12 +55,13 @@ The orchestrator accepts them or has the last group split out:
    (the quit's own bound), so the app does not exit first. It also reads
    the saved file itself (premise 1 below), so the export is not thin.
 5. Kept and not taken over (a crash's, Re-attach's or an earlier
-   `reclaim()`'s): an update ends it only when the user discarded the
-   sessions ("Close sessions" cleared the saved file), since the kill does
-   not reach it and "Close sessions" must leave nothing held (acceptance
-   case 6b). With Save it runs on past the update and the next start keeps
-   it again, as before B2. As first merged, B2 ended it with Save too unless
-   its tab was saved; section B3 narrowed that back (see
+   `reclaim()`'s): an update ends it only when the user chose "Close
+   sessions" on the update dialog (the renderer says so with the install
+   call), since the kill does not reach it and "Close sessions" must leave
+   nothing held (acceptance case 6b). With Save, or an update with no tab
+   open, it runs on past the update and the next start keeps it again, as
+   before B2. As first merged, B2 ended it with Save too unless its tab was
+   saved; section B3 narrowed that back (see
    2026-11-18-update-save-keeps-kept-terminals.md).
 6. Re-attach, on every platform (macOS and Linux too, where nothing is
    released): Re-attach of a reclaimed terminal opens a new Terminal only
@@ -99,7 +100,8 @@ sessions still end at an update and resume their conversation (scope OUT).
 **Tests.** `update-handlers.test.ts` (order on Windows, none on macOS and
 Linux, the reclaim on a failed launch), `session-helper-manager.test.ts`
 (the fake holder: release, kill, reclaim, Machines, Re-attach, the quit and
-the listings after a release, kept terminals ended at an update, the id
+the listings after a release, kept terminals left running with Save and
+ended with a discard, the id
 rules), `session-helper-flow.test.ts` (the whole round over two managers
 with the fake helper's away clock, within and past 2 minutes; release while
 a terminal attaches again, four races), `session-helper-app-wiring.test.ts`
@@ -122,11 +124,12 @@ old ended handler: the Restart test. M15 no second updating check: the
 Re-attach-during-update test. M16 quit misses released: the quit test. M17
 normal listing ends released: its listing test. M18 crash listing keeps
 released: its listing test. M19 reclaimed Re-attach to its own tab: 2
-manager. M20 only reclaimed ended at an update: the crash-kept test.
+manager. M20 only reclaimed ended at an update: the crash-kept test (as
+merged in B2; see B3).
 M21 to M24 the four HelperPty race guards (reconnect, giveUp, attach's
 catch, after attach's reply): one flow test each. M25 no "update" reason:
 3 (manager and flow).
 
 **Owed before stable.** ADR-009 pass (aicc_planning #320 list): the release
 ordering, a launch failure, a discarded state, a holder pid reused while
-released, and the update's ends of kept terminals.
+released, and the update's ends of kept terminals on a discard.

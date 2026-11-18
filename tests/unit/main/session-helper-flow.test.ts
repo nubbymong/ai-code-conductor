@@ -626,7 +626,18 @@ describe('an app update on Windows, the whole round (plan section B2)', () => {
     expect(seen2.join('')).not.toContain('before the update')
   })
 
-  it('kept after a crash and shown in no tab, then an update with Save: it runs on, the same holder, and the next start keeps it again and lists it on the Machines page (section B3)', async () => {
+  // The resume prompt was declined, so no tab shows the kept terminal. Then
+  // the update: Save of another tab only; or no tab open at all, so no close
+  // dialog and no choice ("Don't open" cleared the saved file, and app-wiring
+  // passes an empty set, since no discard came with the install call).
+  const updates: Array<[string, (m: SessionHelperManager) => number]> = [
+    ['an update with Save', (m) => {
+      m.noteSavedTabs([{ id: 'abcdef0123456789abcdefd2', label: 'Other' }])
+      return m.releaseForUpdate(new Set(['abcdef0123456789abcdefd2']))
+    }],
+    ['an update with no tab open after "Don\'t open" (no dialog, no choice)', (m) => m.releaseForUpdate(new Set())],
+  ]
+  for (const [what, update] of updates) it(`kept after a crash and shown in no tab, then ${what}: it runs on, the same holder, and the next start keeps it again and lists it on the Machines page (section B3)`, async () => {
     const c = computer()
     // Run 1: a Terminal only tab through a holder, then the app crashes.
     const m1 = c.run()
@@ -636,13 +647,11 @@ describe('an app update on Windows, the whole round (plan section B2)', () => {
     const h = c.helper.holders.get(SID)!
     h.output('before the crash\r\n')
     c.exit(m1)
-    // Run 2: the crash path keeps it; the resume prompt was declined, so no
-    // tab shows it. The update, with Save of another tab only.
+    // Run 2: the crash path keeps it; no tab shows it. Then the update.
     const m2 = c.run()
     expect(m2.holdsFor(TAB)).toBe(true)
     await until(() => m2.serviceState().state === 'ready' && h.attaches === 2, 'run 2 ready, with the keeper')
-    m2.noteSavedTabs([{ id: 'abcdef0123456789abcdefd2', label: 'Other' }])
-    expect(m2.releaseForUpdate(new Set(['abcdef0123456789abcdefd2']))).toBe(0)
+    expect(update(m2)).toBe(0)
     await m2.endsForUpdate()
     c.exit(m2)
     await until(() => h.conns.size === 0 && h.awaySince !== null, 'the app to let go')

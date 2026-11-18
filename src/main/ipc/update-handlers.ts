@@ -79,7 +79,7 @@ export function registerUpdateHandlers(): void {
     return { path: selectedPath }
   })
 
-  ipcMain.handle('update:installAndRestart', async () => {
+  ipcMain.handle('update:installAndRestart', async (_event, choice?: unknown) => {
     // Belt and braces with the update:check gate above: nothing should be able to
     // reach here in a Store build, but a scripted invoke bypasses the UI, and
     // running an NSIS installer from inside the package container would fail in a
@@ -99,13 +99,16 @@ export function registerUpdateHandlers(): void {
     }
     updateInProgress = true
     try {
-      return await runInstallAndRestart()
+      // Section B3: only "Close sessions" on the update dialog sends
+      // { discarded: true }; anything else sent, or nothing, is Save.
+      const discarded = typeof choice === 'object' && choice !== null && (choice as { discarded?: unknown }).discarded === true
+      return await runInstallAndRestart(discarded)
     } finally {
       updateInProgress = false
     }
   })
 
-  async function runInstallAndRestart(): Promise<boolean> {
+  async function runInstallAndRestart(discarded: boolean): Promise<boolean> {
     logInfo('[update] Starting update...')
 
     let installerPath: string | null = null
@@ -323,7 +326,7 @@ export function registerUpdateHandlers(): void {
     const releasing = process.platform === 'win32'
     try {
       if (releasing) {
-        try { await releaseHeldTerminalsForUpdate() } catch (e) { logError('[update] The held terminals could not be let go of:', e) }
+        try { await releaseHeldTerminalsForUpdate({ discarded }) } catch (e) { logError('[update] The held terminals could not be let go of:', e) }
       }
       logInfo('[update] Killing all PTYs...')
       killAllPty()

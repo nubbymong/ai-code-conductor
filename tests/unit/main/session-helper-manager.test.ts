@@ -1888,6 +1888,46 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     expect(second.holdsFor(UNSAVED)).toBe(true)
   })
 
+  /** After a crash: the terminal kept for UNSAVED, which no tab shows, and a
+   *  live terminal of this run for PLAIN, through a holder and in its last save. */
+  async function keptAndLive(logs: string[]): Promise<{ m: SessionHelperManager; p: IPty; kept: string; live: string }> {
+    const m = await keptAfterCrash([UNSAVED], { log: (l) => logs.push(l) })
+    const p = spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    const live = heldSessionId(PLAIN)
+    await until(() => !!helper.holders.get(live)?.attached, 'attached')
+    m.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
+    return { m, p, kept: heldSessionId(UNSAVED), live }
+  }
+
+  it('Save with a live saved tab and a kept terminal no tab shows, in the same update: the live one is let go of, the kept one is left running, and the log says both (section B3, PR review)', async () => {
+    const logs: string[] = []
+    const { m, p, kept, live } = await keptAndLive(logs)
+    expect(m.releaseForUpdate(new Set([PLAIN]))).toBe(1)
+    p.kill()
+    await until(() => helper.holders.get(live)!.conns.size === 0, 'the released connection to close')
+    await m.endsForUpdate()
+    await tick(30)
+    for (const sid of [live, kept]) {
+      expect(helper.holders.get(sid)!.endsAsked).toBe(0)
+      expect(helper.holders.get(sid)!.ended).toBe(false)
+    }
+    expect(logs).toContain('[session-helper] an app update: 1 held terminal(s) are let go of, for the new version to show again; 1 kept terminal(s) are left running')
+    crash(m)
+  })
+
+  it('"Close sessions" with a live saved tab and a kept terminal no tab shows: nothing is let go of, the kill ends the live one and the discard ends the kept one (section B3, PR review)', async () => {
+    const logs: string[] = []
+    const { m, p, kept, live } = await keptAndLive(logs)
+    expect(m.releaseForUpdate(null)).toBe(0)
+    p.kill()
+    await until(() => helper.holders.get(live)!.ended, 'the live terminal to end with the kill')
+    await m.endsForUpdate()
+    expect(helper.holders.get(kept)!.endsAsked).toBe(1)
+    expect(helper.holders.get(kept)!.ended).toBe(true)
+    expect(m.holdsFor(UNSAVED)).toBe(false)
+    expect(logs).toContain('[session-helper] an app update: 0 held terminal(s) are let go of, for the new version to show again; the sessions were discarded, so 1 kept terminal(s) are ended')
+  })
+
   it('after a crash, a start-up listing that answers after the release neither keeps what was let go of nor ends it (PR review)', async () => {
     // The last run did not quit normally, so this start takes the crash path.
     mkdirSync(root, { recursive: true })

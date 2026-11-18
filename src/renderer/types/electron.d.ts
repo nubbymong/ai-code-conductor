@@ -644,7 +644,8 @@ export interface ElectronAPI {
   update: {
     check: () => Promise<boolean>
     getVersion: () => Promise<string | null>
-    installAndRestart: () => Promise<boolean>
+    /** `discarded`: the user chose "Close sessions" on the update dialog. */
+    installAndRestart: (choice?: { discarded?: boolean }) => Promise<boolean>
     hasSourcePath: () => Promise<boolean>
     getSourcePath: () => Promise<string>
     setSourcePath: (path: string) => Promise<boolean>

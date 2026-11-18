@@ -98,30 +98,44 @@ export function noteSessionHelperTabs(state: { sessions?: ReadonlyArray<{ id: st
  * the held plain and partner terminals whose tabs the next start restores are
  * let go of instead of ended, for the new version to show again. Those tabs
  * are read from the saved file itself, because "Close without saving" clears
- * it without a save the manager hears of. The user's choice is passed on as
- * it is: a cleared file (peekSessionState answers null) means the sessions
- * were discarded, and the manager is told so with no set at all, so it also
- * ends the kept terminals no tab shows. A file that is there, even with no
- * tab in it, means Save: those kept terminals run on. A file that cannot be
- * read lets go of nothing (its tabs end as before) and is taken as Save for
- * the kept ones (section B3). What the manager ends is waited for,
+ * it without a save the manager hears of; a cleared file, or one that cannot
+ * be read, lets go of nothing (those tabs end as before).
+ * `choice` is what the user chose at the update, passed on from the install
+ * call: `discarded` only when they chose "Close sessions" on the update
+ * dialog. Then the manager is told no set at all, so it lets go of nothing
+ * and also ends the kept terminals no tab shows. Without it (Save, or an
+ * update with no tab open, which shows no dialog) those kept terminals run
+ * on. The choice is never read from the saved file: "Close sessions" with a
+ * remote left running writes a file with no tab in it instead of clearing
+ * it, and "Don't open" on the resume prompt clears it with no choice made at
+ * the update (section B3). What the manager ends is waited for,
  * UPDATE_END_WAIT_MS at most, since the app exits next. Nothing is done when
  * the helper was never switched on this run. Answers how many were let go of.
  */
-export async function releaseHeldTerminalsForUpdate(): Promise<number> {
+export async function releaseHeldTerminalsForUpdate(choice: UpdateChoice = {}): Promise<number> {
   const m = getSessionHelper()
   if (!m) return 0
-  let restorable: Set<string> | null = new Set<string>()
-  try {
-    const state = peekSessionState()
-    restorable = state ? new Set((state.sessions ?? []).map((s) => s?.id).filter((id): id is string => typeof id === 'string')) : null
-  } catch {
-    /* unreadable: nothing is let go of, and the kept terminals run on */
-  }
-  const n = m.releaseForUpdate(restorable)
+  const n = m.releaseForUpdate(choice.discarded === true ? null : savedTabIds())
   let timer: NodeJS.Timeout | undefined
   await Promise.race([m.endsForUpdate(), new Promise<void>((r) => { timer = setTimeout(r, UPDATE_END_WAIT_MS) })]).finally(() => clearTimeout(timer))
   return n
+}
+
+/** What the user chose at an app update: `discarded` only for "Close sessions"
+ *  on the update dialog. Nothing passed is Save. */
+export interface UpdateChoice {
+  discarded?: boolean
+}
+
+/** The tab ids in the saved file the next start restores from: none when the
+ *  file is cleared, and none when it cannot be read. */
+function savedTabIds(): Set<string> {
+  try {
+    const ids = (peekSessionState()?.sessions ?? []).map((s) => s?.id).filter((id): id is string => typeof id === 'string')
+    return new Set(ids)
+  } catch {
+    return new Set()
+  }
 }
 
 /** How long an update waits for the ends releaseHeldTerminalsForUpdate sent (a quit's own bound). */

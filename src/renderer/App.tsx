@@ -925,7 +925,9 @@ export default function App() {
       flush: flushPendingConfigSaves,
       cancelAutosave: cancelSessionAutosave,
       gracefulExit: () => window.electronAPI.session.gracefulExit(),
-      installAndRestart: () => window.electronAPI.update.installAndRestart(),
+      // Section B3: main is told the sessions were discarded, so it also ends
+      // the held terminals kept after a crash that no tab shows.
+      installAndRestart: () => window.electronAPI.update.installAndRestart({ discarded: true }),
       allowClose: () => window.electronAPI.window.allowClose(),
     })
     if (!ok) setIsClosing(false)
