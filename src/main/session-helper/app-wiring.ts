@@ -98,22 +98,25 @@ export function noteSessionHelperTabs(state: { sessions?: ReadonlyArray<{ id: st
  * the held plain and partner terminals whose tabs the next start restores are
  * let go of instead of ended, for the new version to show again. Those tabs
  * are read from the saved file itself, because "Close without saving" clears
- * it without a save the manager hears of. A file that cannot be read lets go
- * of nothing, and every terminal ends as before. What the manager ends instead
- * (kept after an earlier update that did not start, for a tab no longer
- * saved) is waited for, UPDATE_END_WAIT_MS at most, since the app exits next.
- * Nothing is done when the helper was never switched on this run. Answers how
- * many were let go of.
+ * it without a save the manager hears of. The user's choice is passed on as
+ * it is: a cleared file (peekSessionState answers null) means the sessions
+ * were discarded, and the manager is told so with no set at all, so it also
+ * ends the kept terminals no tab shows. A file that is there, even with no
+ * tab in it, means Save: those kept terminals run on. A file that cannot be
+ * read lets go of nothing (its tabs end as before) and is taken as Save for
+ * the kept ones (section B3). What the manager ends is waited for,
+ * UPDATE_END_WAIT_MS at most, since the app exits next. Nothing is done when
+ * the helper was never switched on this run. Answers how many were let go of.
  */
 export async function releaseHeldTerminalsForUpdate(): Promise<number> {
   const m = getSessionHelper()
   if (!m) return 0
-  let restorable = new Set<string>()
+  let restorable: Set<string> | null = new Set<string>()
   try {
-    const sessions = peekSessionState()?.sessions ?? []
-    restorable = new Set(sessions.map((s) => s?.id).filter((id): id is string => typeof id === 'string'))
+    const state = peekSessionState()
+    restorable = state ? new Set((state.sessions ?? []).map((s) => s?.id).filter((id): id is string => typeof id === 'string')) : null
   } catch {
-    /* unreadable: nothing is let go of */
+    /* unreadable: nothing is let go of, and the kept terminals run on */
   }
   const n = m.releaseForUpdate(restorable)
   let timer: NodeJS.Timeout | undefined

@@ -55,9 +55,13 @@ The orchestrator accepts them or has the last group split out:
    (the quit's own bound), so the app does not exit first. It also reads
    the saved file itself (premise 1 below), so the export is not thin.
 5. Kept and not taken over (a crash's, Re-attach's or an earlier
-   `reclaim()`'s): an update ends it unless its tab is saved, since the
-   kill does not reach it and "Close sessions" must leave nothing held
-   (acceptance case 6b). Before B2 such a terminal ran on past every update.
+   `reclaim()`'s): an update ends it only when the user discarded the
+   sessions ("Close sessions" cleared the saved file), since the kill does
+   not reach it and "Close sessions" must leave nothing held (acceptance
+   case 6b). With Save it runs on past the update and the next start keeps
+   it again, as before B2. As first merged, B2 ended it with Save too unless
+   its tab was saved; section B3 narrowed that back (see
+   2026-11-18-update-save-keeps-kept-terminals.md).
 6. Re-attach, on every platform (macOS and Linux too, where nothing is
    released): Re-attach of a reclaimed terminal opens a new Terminal only
    tab (its own tab's terminal read as ended) and moves the binding; a tab

@@ -44,7 +44,7 @@ vi.mock('../../../src/main/session-helper/manager', () => {
     stopRouting = vi.fn(() => { this.enabled = false })
     shutdown = vi.fn((): Promise<void> | null => h.quitAnswer)
     noteSavedTabs = vi.fn()
-    releaseForUpdate = vi.fn((tabs: ReadonlySet<string>) => tabs.size)
+    releaseForUpdate = vi.fn((tabs: ReadonlySet<string> | null) => tabs?.size ?? 0)
     endsForUpdate = vi.fn(() => h.updateEnds)
     reclaim = vi.fn(() => 0)
     serviceState = () => ({ state: this.enabled ? 'ready' : 'off', held: 0, lastError: null })
@@ -212,7 +212,7 @@ describe('an app update on Windows (plan section B2)', () => {
     expect(m.reclaim).toHaveBeenCalledTimes(1)
   })
 
-  it('a saved file "Close without saving" cleared, or one that does not read: the manager is told no tab, so it lets go of none', async () => {
+  it('the user\'s choice reaches the manager as it is: a file "Close without saving" cleared is no set at all (discarded); one that does not read, and one with no tab in it, are an empty set (Save), never a discard (section B3)', async () => {
     h.settings = { plainTerminalsThroughHelper: true }
     initSessionHelper(() => {})
     const m = h.made[0]
@@ -220,7 +220,10 @@ describe('an app update on Windows (plan section B2)', () => {
     expect(await releaseHeldTerminalsForUpdate()).toBe(0)
     h.savedState = new Error('session-state.json did not parse')
     expect(await releaseHeldTerminalsForUpdate()).toBe(0)
-    expect(m.releaseForUpdate.mock.calls.map((c) => [...c[0]])).toEqual([[], []])
+    h.savedState = { sessions: [] }
+    expect(await releaseHeldTerminalsForUpdate()).toBe(0)
+    const told = m.releaseForUpdate.mock.calls.map((c) => (c[0] === null ? null : [...(c[0] as ReadonlySet<string>)]))
+    expect(told).toEqual([null, [], []])
   })
 
   it('the ends the manager sent are waited for before the update goes on, UPDATE_END_WAIT_MS at most (PR review)', async () => {
