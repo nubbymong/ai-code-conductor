@@ -34,7 +34,15 @@ the app's exit and a silent install.
   start shows it in that tab.
 - `reclaim()`: what was let go of is kept for its tab, exactly as the crash
   path keeps it (adoptable, and a keeper attached), listed on the Machines
-  page with Re-attach; the mark loses its reason.
+  page; the mark loses its reason. Its tab's terminal already read as ended,
+  so Re-attach opens a new Terminal only tab on it rather than bringing that
+  tab forward (the tab started again takes it over too). A later update
+  attempt ends what reclaim kept unless its tab is saved (a retry with
+  "Close sessions").
+- PR review: a normal quit that overtakes the update (after the release)
+  ends what was let go of, inside the quit's bounded wait; the start-up
+  listing never treats a released terminal as one a quit left (it would have
+  ended it) or as one a crash left (it would have kept it).
 - At the next start a mark with reason "update" takes the crash path
   unchanged; only the log line says the app was updated.
 - Settings: one sentence in the plain-terminal switch's note.

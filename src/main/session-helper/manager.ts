@@ -228,6 +228,9 @@ export class SessionHelperManager implements MachinesSource {
   private updating = false
   /** The terminals releaseForUpdate let go of, by session id. */
   private readonly released = new Map<string, { record: HolderRecord; pty: HelperPty }>()
+  /** What reclaim() kept after an update that did not start, while no tab
+   *  has taken it over again: its tab's terminal read as ended. */
+  private readonly reclaimed = new Map<string, HolderRecord>()
   private state: HelperState = 'off'
   private detail: string | undefined
   private version: string | undefined
@@ -433,7 +436,8 @@ export class SessionHelperManager implements MachinesSource {
       // agent session the store read missed is ended, as at the start; one a
       // tab of this run holds by now is that tab's.
       for (const r of records) {
-        if (this.live.has(r.session) || this.keepers.has(r.session) || this.endings.has(r.session) || this.agentClears.has(r.session)) continue
+        // One an update let go of meanwhile is the next version's to keep.
+        if (this.live.has(r.session) || this.keepers.has(r.session) || this.endings.has(r.session) || this.agentClears.has(r.session) || this.released.has(r.session)) continue
         if (heldIdKind(r.session) === 'agent') { void this.clearAgent(r.session, r); continue }
         this.adoptable.set(r.session, r)
         this.keep(r)
@@ -448,8 +452,9 @@ export class SessionHelperManager implements MachinesSource {
       // this run holds or keeps for a tab is not one of those.
       // An agent session's goes through clearAgent, not waited for here, so
       // its tab's next start waits for it: start() began that for each one
-      // the store read found, and the listing adds any it missed.
-      const left = records.filter((r) => !this.live.has(r.session) && !this.keepers.has(r.session) && !this.adoptable.has(r.session))
+      // the store read found, and the listing adds any it missed. One an
+      // update let go of while the listing ran is not one of those either.
+      const left = records.filter((r) => !this.live.has(r.session) && !this.keepers.has(r.session) && !this.adoptable.has(r.session) && !this.released.has(r.session))
       for (const r of left) if (heldIdKind(r.session) === 'agent' && !this.agentClears.has(r.session)) void this.clearAgent(r.session, r)
       await Promise.allSettled(left.filter((r) => heldIdKind(r.session) !== 'agent').map((r) => this.endRecord(r)))
     }
@@ -578,6 +583,7 @@ export class SessionHelperManager implements MachinesSource {
     const adopt = this.quitting || this.live.has(sid) ? undefined : this.adoptable.get(sid)
     if (adopt) {
       this.adoptable.delete(sid)
+      this.reclaimed.delete(sid)
       return this.track(new HelperPty({ sid, label: ctx.sessionId, spec: this.launchSpec(file, args, opts), adopt, driver: this.driver(direct, false) }), ctx.sessionId)
     }
     if (!this.routesPlain()) return direct()
@@ -929,6 +935,7 @@ export class SessionHelperManager implements MachinesSource {
       conn?.close()
       this.keepers.delete(record.session)
       this.adoptable.delete(record.session)
+      this.reclaimed.delete(record.session)
     }
   }
 
@@ -975,22 +982,33 @@ export class SessionHelperManager implements MachinesSource {
    * holder's away clock starts (two minutes) and the next start, finding the
    * running mark, shows it again in its tab. An agent session, a terminal
    * still starting and one whose tab was not saved are left to the kill that
-   * follows, which ends them as before. The mark is written again saying
-   * "update" and stays. Nothing new goes through the helper until reclaim().
-   * Off Windows nothing is let go of. Answers how many were.
+   * follows, which ends them as before. What an earlier reclaim() kept, and
+   * no tab took over since, is ended now unless its tab is saved the same
+   * way (a retry with "Close sessions" after an update that did not start).
+   * The mark is written again saying "update" and stays. Nothing new goes
+   * through the helper until reclaim(). Off Windows nothing is let go of.
+   * Answers how many were.
    */
   releaseForUpdate(restorable: ReadonlySet<string>): number {
     if (this.os !== 'windows' || this.quitting) return 0
     this.updating = true
+    const saved = (tab: string) => this.savedTabs.has(tab) && restorable.has(tab)
     let n = 0
     for (const [sid, w] of this.live) {
       if (heldIdKind(sid) !== 'plain' || !w.throughHelper) continue
       const record = w.heldRecord
       const tab = parentOfPartnerPtyId(w.label) ?? w.label
-      if (!record || !this.savedTabs.has(tab) || !restorable.has(tab)) continue
+      if (!record || !saved(tab)) continue
       if (!w.release()) continue
       this.released.set(sid, { record, pty: w })
       n++
+    }
+    for (const [sid, r] of [...this.reclaimed]) {
+      if (this.live.has(sid)) continue
+      const appId = this.appIdOf(r)
+      if (saved(parentOfPartnerPtyId(appId) ?? appId)) continue
+      this.reclaimed.delete(sid)
+      void this.endRecord(r).catch((err) => this.deps.log(`[session-helper] ${sid}: could not be ended at the update: ${message(err)}`))
     }
     try {
       this.writeMarker('update')
@@ -1005,10 +1023,11 @@ export class SessionHelperManager implements MachinesSource {
   /**
    * The update did not go ahead (its installer could not be started): what
    * releaseForUpdate let go of is kept for its tab, as after a crash, and
-   * listed on the Machines page with Re-attach. A terminal of it not yet
-   * killed is ended here in this app alone; its holder runs on. The running
-   * mark is the usual one again, and new terminals go through the helper
-   * again. Answers how many are kept.
+   * listed on the Machines page, where Re-attach opens a new Terminal only
+   * tab on it (its own tab's terminal read as ended); its tab started again
+   * takes it over too. A terminal of it not yet killed is ended here in this
+   * app alone; its holder runs on. The running mark is the usual one again,
+   * and new terminals go through the helper again. Answers how many are kept.
    */
   reclaim(): number {
     if (!this.updating) return 0
@@ -1019,6 +1038,7 @@ export class SessionHelperManager implements MachinesSource {
       try { w.kill() } catch { /* over already */ }
       if (this.quitting) continue
       this.adoptable.set(record.session, record)
+      this.reclaimed.set(record.session, record)
       this.keep(record)
     }
     try {
@@ -1064,6 +1084,11 @@ export class SessionHelperManager implements MachinesSource {
       }))
       this.keepers.delete(sid)
     }
+    // Let go of for an update that this quit overtook: ended too (one that
+    // does not answer ends by its away clock, and the next start ends it).
+    for (const { record } of this.released.values()) waits.push(this.endRecord(record).catch(() => { /* above */ }))
+    this.released.clear()
+    this.reclaimed.clear()
     this.adoptable.clear()
     try { fs.rmSync(path.join(this.root, MARKER), { force: true }) } catch { /* the next start ends what is left */ }
     return waits.length === 0 ? null : Promise.allSettled(waits).then(() => undefined)
@@ -1247,7 +1272,10 @@ export class SessionHelperManager implements MachinesSource {
     const appId = this.appIdOf(record)
     const partner = isPartnerPtyId(appId)
     const base = parentOfPartnerPtyId(appId) ?? appId
-    if (held.tabOpen) {
+    // Kept by reclaim() after an update that did not start: its tab's
+    // terminal read as ended, so bringing that tab forward shows nothing. It
+    // goes to a new tab, as one no tab shows does.
+    if (held.tabOpen && !(this.reclaimed.has(id) && !this.live.has(id))) {
       // Its tab is open: brought forward, and showing it attaches it.
       return { ok: true, tab: { id: base, label: held.label, open: false, partner } }
     }

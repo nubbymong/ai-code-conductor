@@ -1443,7 +1443,7 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     crash(m)
   })
 
-  it('the installer could not start: reclaim keeps them for their tabs, listed on the Machines page with Re-attach, and the mark is the usual one again', async () => {
+  it('the installer could not start: reclaim keeps them for their tabs and lists them on the Machines page; the mark is the usual one again, and a tab started again takes its terminal over', async () => {
     const m = await startedWith(makeManager(), ON_BOTH)
     const ptys = await fourHeld(m)
     const s = sids()
@@ -1458,8 +1458,6 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     const status = await m.status()
     expect(status.sessions.find((x) => x.id === s.plain)).toMatchObject({ kind: 'plain', label: 'Build', attached: false, tabOpen: true })
     expect(status.sessions.find((x) => x.id === s.partner)).toMatchObject({ kind: 'partner', label: 'API, partner terminal', attached: false, tabOpen: true })
-    expect(await m.reattach(s.plain)).toEqual({ ok: true, tab: { id: PLAIN, label: 'Build', open: false, partner: false } })
-    expect(await m.reattach(s.partner)).toEqual({ ok: true, tab: { id: PARENT, label: 'API, partner terminal', open: false, partner: true } })
     expect(mark().reason).toBeUndefined()
     expect(m.routesPlain()).toBe(true)
     // Its tab, started again, takes it over with what it wrote before.
@@ -1469,6 +1467,87 @@ describe('an app update on Windows: held plain and partner terminals are let go 
     expect(await (again as HelperPty).adoption).toBe(true)
     await until(() => seen.join('').includes('before the update'), 'the replay')
     expect(helper.holders.get(s.plain)!.endsAsked).toBe(0)
+  })
+
+  it('after reclaim, Re-attach opens a new Terminal only tab on it (its own tab\'s terminal read as ended, so bringing that tab forward would show nothing), and that tab shows it with its output (PR review)', async () => {
+    let k = 0
+    const m = await startedWith(makeManager({ newTabId: () => `newtab0123456789abcdef${String(k++).padStart(2, '0')}` }), ON_BOTH)
+    const ptys = await fourHeld(m)
+    const s = sids()
+    helper.holders.get(s.partner)!.output('partner before the update\r\n')
+    m.releaseForUpdate(SAVED)
+    killAll(ptys)
+    m.reclaim()
+    await until(() => helper.holders.get(s.plain)!.attaches === 2 && helper.holders.get(s.partner)!.attaches === 2, 'the keepers')
+    expect(await m.reattach(s.plain)).toEqual({ ok: true, tab: { id: 'newtab0123456789abcdef00', label: 'Build', open: true, partner: false } })
+    expect(await m.reattach(s.partner)).toEqual({ ok: true, tab: { id: 'newtab0123456789abcdef01', label: 'API, partner terminal', open: true, partner: false } })
+    const p = spawnPlainPty({ plain: true, sessionId: 'newtab0123456789abcdef01' }, SHELL, [], opts())
+    const seen: string[] = []
+    p.onData((d) => seen.push(d))
+    expect(await (p as HelperPty).adoption).toBe(true)
+    await until(() => seen.join('').includes('partner before the update'), 'the replay in the new tab')
+    // Shown again: Re-attach now says so, as for any terminal a tab shows.
+    await until(() => liveOf(m).get(s.partner)?.isAttached === true, 'attached')
+    expect(await m.reattach(s.partner)).toEqual({ ok: false, message: 'That terminal is already showing in a tab.' })
+    expect(helper.holders.get(s.partner)!.endsAsked).toBe(0)
+  })
+
+  it('a retry with "Close sessions" after an update that did not start ends what reclaim kept, unless its tab is saved (PR review)', async () => {
+    const m = await startedWith(makeManager(), ON_BOTH)
+    const ptys = await fourHeld(m)
+    const s = sids()
+    m.releaseForUpdate(SAVED)
+    killAll(ptys)
+    m.reclaim()
+    await until(() => helper.holders.get(s.plain)!.attaches === 2 && helper.holders.get(s.partner)!.attaches === 2, 'the keepers')
+    // The retry: only the plain terminal's tab is still saved.
+    m.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
+    expect(m.releaseForUpdate(new Set([PLAIN]))).toBe(0)
+    await until(() => helper.holders.get(s.partner)!.ended, 'the partner terminal to end')
+    await tick(30)
+    expect(helper.holders.get(s.plain)!.endsAsked).toBe(0)
+    expect(helper.holders.get(s.plain)!.ended).toBe(false)
+    expect(m.holdsFor(PARTNER)).toBe(false)
+    expect(m.holdsFor(PLAIN)).toBe(true)
+  })
+
+  it('a normal quit that overtakes the update ends what was let go of too (PR review)', async () => {
+    const m = await startedWith(makeManager(), ON_BOTH)
+    const ptys = await fourHeld(m)
+    const s = sids()
+    expect(m.releaseForUpdate(SAVED)).toBe(2)
+    killAll(ptys)
+    const done = m.shutdown()
+    expect(done).not.toBeNull()
+    await done
+    expect(helper.holders.get(s.plain)!.ended).toBe(true)
+    expect(helper.holders.get(s.partner)!.ended).toBe(true)
+    expect(existsSync(join(root, 'app-running.json'))).toBe(false)
+  })
+
+  it('a start-up listing that answers after the release neither ends what was let go of nor keeps it (PR review)', async () => {
+    let open!: () => void
+    helper.listGate = new Promise<void>((r) => { open = r })
+    const m = makeManager()
+    setSessionHelper(m)
+    void m.start({ atStartup: true })
+    await until(() => helper.calls.some((c) => c.args[0] === 'list'), 'the start-up listing under way')
+    const p = spawnPlainPty({ plain: true, sessionId: PLAIN }, SHELL, [], opts())
+    const sid = heldSessionId(PLAIN)
+    await until(() => !!helper.holders.get(sid)?.attached, 'attached')
+    m.noteSavedTabs([{ id: PLAIN, label: 'Build' }])
+    expect(m.releaseForUpdate(new Set([PLAIN]))).toBe(1)
+    p.kill()
+    await until(() => !liveOf(m).has(sid), 'the tab\'s terminal to drop')
+    helper.listGate = null
+    open()
+    await until(() => m.serviceState().state === 'ready', 'the listing to answer')
+    await tick(50)
+    const h = helper.holders.get(sid)!
+    expect(h.endsAsked).toBe(0)
+    expect(h.ended).toBe(false)
+    expect(h.attaches).toBe(1)
+    expect(m.holdsFor(PLAIN)).toBe(false)
   })
 
   it('a tab in the app\'s last save but not in the saved file (Close without saving cleared it), or the other way round: not let go of, and ended as before', async () => {

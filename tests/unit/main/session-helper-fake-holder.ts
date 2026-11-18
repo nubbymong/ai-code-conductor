@@ -312,6 +312,8 @@ export class FakeHelper {
   insideJob = false
   /** Set: a `hold` that arrives waits for it before its holder starts (a slow start). */
   holdGate: Promise<void> | null = null
+  /** Set: a `list` that arrives waits for it, then lists the holders as they are then (a slow listing). */
+  listGate: Promise<void> | null = null
   /** Every holder `hold` started, in order (the map keeps only the last of a session). */
   readonly made: FakeHolder[] = []
   /** The holders' away clock in ms, for the holders `hold` starts from now on; null: none. */
@@ -346,6 +348,7 @@ export class FakeHelper {
       return { code: 0, stdout: `${JSON.stringify(h.record())}\n`, stderr: note }
     }
     if (cmd === 'list') {
+      if (this.listGate) await this.listGate
       if (this.listFails) return { code: null, stdout: '', stderr: 'timed out' }
       const sessions = [...this.holders.values()].filter((h) => !h.ended && !h.gone).map((h) => h.record())
       return { code: 0, stdout: `${JSON.stringify({ v: 1, sessions, removed: 0, skipped: 0 })}\n`, stderr: '' }
