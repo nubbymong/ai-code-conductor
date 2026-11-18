@@ -571,14 +571,11 @@ mod win {
     /// against one deadline, set here (`FAILED_END_WAIT`).
     unsafe fn end_checked(root: usize, pid: u32, under: Vec<(u32, usize)>) -> io::Result<()> {
         let until = Instant::now() + FAILED_END_WAIT;
-        let _ = until;
-        // MUTANT M32: the program's own failed end waits for nothing (the zero-timeout wait before round 5).
-        let (root_fate, why) = end_one(root, Instant::now());
+        let (root_fate, why) = end_one(root, until);
         let mut fates: Vec<(u32, Fate)> = Vec::new();
         for (child, h) in under {
             if root_fate.gone() {
-                // MUTANT M33: each process under it gets a bound of its own.
-                fates.push((child, end_one(h, Instant::now() + FAILED_END_WAIT).0));
+                fates.push((child, end_one(h, until).0));
             }
             close(h);
         }
