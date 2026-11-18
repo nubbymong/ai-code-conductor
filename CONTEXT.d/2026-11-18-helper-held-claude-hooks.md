@@ -58,6 +58,15 @@ Claude Code session whose holder offers the `hooks` capability (A3).
   one; there the toggle handler calls `dropHelperRings` after the stop, so
   the history is empty and not a held session's eight helper kinds without
   its PreToolUse entries. A session's end drops its own ring in every case.
+- The proxy's fail-open keeps both rings too. Its in-process gateway starts
+  with empty rings, so the history read after a fail-open would have had a
+  held session's helper events without the PreToolUse entries from before
+  it: the split history the switch-off path above removes. `failOpen` now
+  hands the proxy's mirror of the child's rings to the gateway it starts, as
+  it already hands it the secrets and the subscribers
+  (`HooksGateway.seedBuffers`: the very entry objects, because the history
+  read orders by the object; in order; within the ring's 1000). No new IPC,
+  and what a stop clears is unchanged.
 - The feed history read (HOOKS_GET_BUFFER) returns the gateway's ring as
   before, unless the session has helper events: then both rings, in the order
   the events reached main (an arrival count the module keeps for both

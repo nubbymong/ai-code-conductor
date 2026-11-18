@@ -18,6 +18,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { BrowserWindow, ipcMain } from 'electron'
 import type { HookEvent } from '../../../src/shared/hook-types'
+import type { RingBufferEntry } from '../../../src/main/hooks/hooks-types'
 import { IPC } from '../../../src/shared/ipc-channels'
 import { logWarn } from '../../../src/main/debug-logger'
 
@@ -326,6 +327,92 @@ describe('the transcript path, the lost count, and the master switch', () => {
     await toggle(null, { enabled: false })
     expect(proxy.getBuffer(SID)).toEqual([])
     expect(await read(null, { sessionId: SID })).toEqual([])
+  })
+
+  /** The proxy as production runs it before a fail-open (its child out of
+   *  process, bound), and the in-process gateway it falls back to, which the
+   *  test binds for (no socket). `secret` is the held session's gateway token,
+   *  minted by the proxy as pty-manager's spawn path does. */
+  function proxyBeforeFailOpen() {
+    vi.spyOn(HooksGateway.prototype, 'start').mockResolvedValue({ enabled: true, listening: true, port: 19334 })
+    vi.spyOn(HooksGateway.prototype, 'status').mockReturnValue({ enabled: true, listening: true, port: 19334 })
+    const proxy = new HooksGatewayProxy({ transport: { post: () => {}, onMessage: () => {}, kill: () => {} }, defaultPort: 19334, emit })
+    setGateway(proxy)
+    const token = proxy.registerSession(SID)
+    proxy.handleChildMessage({ type: 'bound', port: 19334, pid: 4242 })
+    /** A gateway event of a session, as the child forwards it. */
+    const fromChild = (sessionId: string, event: RingBufferEntry['event'], toolName: string, ts: number) =>
+      proxy.handleChildMessage({ type: 'event', entry: { sessionId, event, toolName, summary: toolName, payload: {}, ts } })
+    /** A hook POST taken by the in-process gateway the fail-open started. */
+    const viaFallback = async (payload: Record<string, unknown>) => {
+      const inProcess = (proxy as unknown as { inProcess: InstanceType<typeof HooksGateway> }).inProcess
+      const r = await inProcess._handleRequestForTest({ remoteAddress: '127.0.0.1', url: `/hook/${SID}`, headers: { 'x-ccc-hook-token': token }, body: JSON.stringify(payload) })
+      expect(r.status).toBe(200)
+    }
+    return { proxy, fromChild, viaFallback }
+  }
+
+  it("the proxy's fail-open keeps the history it held: a held session's read has both rings, in the order the events came (not their clocks), before and after it", async () => {
+    const { proxy, fromChild, viaFallback } = proxyBeforeFailOpen()
+    const { read } = handlersOf(proxy)
+    const now = vi.spyOn(Date, 'now')
+    const shape = async () => (await read(null, { sessionId: SID })).map((e) => [e.event, e.toolName ?? null, e.ts])
+    // A helper event, then the session's PreToolUse as the child forwards it
+    // (its clock is behind the helper event's, as two clocks may be).
+    now.mockReturnValue(9000)
+    helperHookEvent(SID, { kind: 'PostToolUse', payload: { session_id: 'c', hook_event_name: 'PostToolUse', tool_name: 'Bash' } })
+    fromChild(SID, 'PreToolUse', 'Read', 1000)
+    const both = [['PostToolUse', 'Bash', 9000], ['PreToolUse', 'Read', 1000]]
+    expect(await shape()).toEqual(both)
+    proxy.failOpen()
+    expect(proxy.isInProcessFallback()).toBe(true)
+    // The fallback's ring holds the PreToolUse from before it, not an empty one,
+    // and the read still has both, not the helper's alone.
+    expect(proxy.getBuffer(SID).map((e) => e.event)).toEqual(['PreToolUse'])
+    expect(await shape()).toEqual(both)
+    // And after it: a helper event, and a PreToolUse the fallback takes itself.
+    now.mockReturnValue(2000)
+    helperHookEvent(SID, { kind: 'Stop', payload: { session_id: 'c', hook_event_name: 'Stop' } })
+    now.mockReturnValue(3000)
+    await viaFallback({ session_id: 'c', hook_event_name: 'PreToolUse', tool_name: 'Grep' })
+    expect(await shape()).toEqual([...both, ['Stop', null, 2000], ['PreToolUse', 'Grep', 3000]])
+  })
+
+  it("the proxy's fail-open keeps the PreToolUse history of a session with no helper ring too, and a session's end still drops it", async () => {
+    const { proxy, fromChild } = proxyBeforeFailOpen()
+    const { read } = handlersOf(proxy)
+    fromChild(SID, 'PreToolUse', 'Bash', 1000)
+    fromChild(SID, 'PostToolUse', 'Bash', 2000)
+    const before = proxy.getBuffer(SID)
+    expect(before.map((e) => e.event)).toEqual(['PreToolUse', 'PostToolUse'])
+    proxy.failOpen()
+    expect(proxy.getBuffer(SID)).toEqual(before)
+    expect(await read(null, { sessionId: SID })).toEqual(before)
+    // Another session of the app had none.
+    expect(await read(null, { sessionId: 'abcdef0123456789abcdef02' })).toEqual([])
+    proxy.unregisterSession(SID)
+    expect(await read(null, { sessionId: SID })).toEqual([])
+  })
+
+  it("HooksGateway.seedBuffers keeps the entries it is given as they are, in order and in front of any it holds, within the ring's bound", async () => {
+    const mk = (n: number): RingBufferEntry => ({ sessionId: SID, event: 'Stop', summary: 'Stop', payload: {}, ts: n }) as RingBufferEntry
+    const seeded = Array.from({ length: 1003 }, (_, i) => mk(i))
+    const g = new HooksGateway({ defaultPort: 0, emit })
+    g.seedBuffers(new Map([[SID, seeded], ['abcdef0123456789abcdef02', []]]))
+    // The newest 1000, the very objects (the history read ranks them by object).
+    const ring = g.getBuffer(SID)
+    expect(ring).toHaveLength(1000)
+    expect(ring[0]).toBe(seeded[3])
+    expect(ring[999]).toBe(seeded[1002])
+    expect(g.getBuffer('abcdef0123456789abcdef02')).toEqual([])
+    // In front of what the gateway took itself.
+    await viaGateway({ session_id: 'c', hook_event_name: 'PreToolUse', tool_name: 'Bash' })
+    const older = mk(-1)
+    gw.seedBuffers(new Map([[SID, [older]]]))
+    const own = gw.getBuffer(SID)
+    expect(own).toHaveLength(2)
+    expect(own[0]).toBe(older)
+    expect(own[1].event).toBe('PreToolUse')
   })
 
   it('at boot with the hooks switch saved off (a gateway that was never started, so never listening), nothing is taken', () => {

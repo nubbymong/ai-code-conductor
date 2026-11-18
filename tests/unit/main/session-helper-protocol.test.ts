@@ -284,6 +284,14 @@ describe('session helper protocol: hook events (capability hooks, section 15)', 
     return readEventFrame(f.json, f.size)
   }
 
+  it('the kinds a holder passes on are the kinds the app injects: HELPER_HOOK_KINDS and MVP_EVENTS are the same set', () => {
+    // Direct, not through the fixture: a kind injected into the settings that the
+    // reader refuses is a hook event dropped silently, and one the reader takes
+    // that is never injected is dead.
+    expect(new Set<string>(HELPER_HOOK_KINDS)).toEqual(new Set<string>(MVP_EVENTS))
+    expect(HELPER_HOOK_KINDS).toHaveLength(MVP_EVENTS.length)
+  })
+
   it("the caps, the nine kinds and the payload limit are the helper's", () => {
     expect(HOOKS_CAP).toBe('hooks')
     expect(H.caps).toEqual(['core', 'local', HOOKS_CAP])

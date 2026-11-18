@@ -285,6 +285,27 @@ export class HooksGateway {
     return [...(this.buffers.get(sessionId) ?? [])]
   }
 
+  /**
+   * Take over per-session feed history another gateway kept: the proxy's fail-open
+   * (services/hooks-gateway-proxy.ts failOpen) hands its mirror of the child's
+   * rings to the in-process gateway it starts, so getBuffer still answers what
+   * came before the fail-open. Each session's entries go in front of any it
+   * holds already (they are the older ones), in the order given, and the ring
+   * keeps the newest RING_BUFFER_CAP. The entries are kept as the very objects
+   * given, not copies: the history read orders a session's events by the order
+   * they reached main, keyed by the object itself (session-signals/hooks.ts
+   * hookFeedBuffer). Nothing is emitted, fanned out or counted: these events
+   * were taken already.
+   */
+  seedBuffers(rings: ReadonlyMap<string, readonly RingBufferEntry[]>): void {
+    for (const [sessionId, entries] of rings) {
+      if (entries.length === 0) continue
+      const ring = [...entries, ...(this.buffers.get(sessionId) ?? [])]
+      if (ring.length > RING_BUFFER_CAP) ring.splice(0, ring.length - RING_BUFFER_CAP)
+      this.buffers.set(sessionId, ring)
+    }
+  }
+
   private async bindWithRetry(startPort: number): Promise<number | null> {
     for (let i = 0; i < PORT_RETRY_COUNT; i++) {
       const candidate =

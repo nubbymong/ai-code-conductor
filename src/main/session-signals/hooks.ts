@@ -198,6 +198,10 @@ export function endHelperHooks(sessionId: string): void {
  * then turned on in Settings), and the proxy after its fail-open, whose stop
  * stops that one. The proxy with its child out of process keeps its rings at
  * a stop, so it does not call this (ipc/hooks-handlers.ts HOOKS_TOGGLE). The
+ * fail-open itself keeps both as well: the proxy hands its mirror of the
+ * child's rings to the in-process gateway it starts (hooks-gateway-proxy.ts
+ * failOpen, HooksGateway.seedBuffers), so after it the gateway's ring still
+ * holds the PreToolUse entries from before it, next to the helper's ring. The
  * lost-event marks stay: they belong to a session's run, not to a ring.
  */
 export function dropHelperRings(): void {
