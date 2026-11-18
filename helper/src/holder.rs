@@ -367,10 +367,13 @@ mod tests {
 
     /// A held terminal waits for its child's exit: it does not ask for the
     /// child's status on a clock. It asks twice: one wait that blocks until
-    /// the exit, then one read of the code. The terminal counts each ask
-    /// right beside the system call that makes it: the `waitid` in each turn
-    /// of `ExitWatch::wait`'s loop (macOS, Linux), each call of
-    /// `ExitWatch::wait_once` (Windows), and each check in `Pty::try_wait`.
+    /// the exit, then one read of the code. The terminal counts each ask the
+    /// exit watch makes right beside the system call that makes it: the
+    /// `waitid` in each turn of `ExitWatch::wait`'s loop (macOS, Linux) and
+    /// each call of `ExitWatch::wait_once` (Windows). It also counts each
+    /// check in `Pty::try_wait`: beside its `waitpid` on macOS and Linux, and
+    /// on Windows once in `try_wait`, one call above the single zero-time
+    /// wait in `winproc::exit_code` (which `detach.rs` shares).
     /// An exit watch that waits at most 25 ms and asks again, through that
     /// loop or that call, counts every ask. The 25 ms loop asked about 80
     /// times while this child ran.

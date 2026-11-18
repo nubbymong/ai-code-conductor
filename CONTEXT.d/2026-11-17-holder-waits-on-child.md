@@ -47,9 +47,12 @@ about 40 wake-ups a second per held terminal while nothing happened.
   self-test, and no crate was added.
 
 **Tests.** The terminal counts, in test builds only, each time the child's
-status is asked of the system, right beside the system call (the `waitid`
-in each turn of the macOS and Linux `ExitWatch::wait` loop, each call of the
-Windows `ExitWatch::wait_once`, each check in `try_wait`): `the_holder_waits_for_its_childs_exit_instead_of_asking_on_a_clock`
+status is asked of the system. The exit watch is counted right beside the
+system call (the `waitid` in each turn of the macOS and Linux
+`ExitWatch::wait` loop, each call of the Windows `ExitWatch::wait_once`).
+Each check in `try_wait` is counted too: beside its `waitpid` on macOS and
+Linux, and on Windows once in `try_wait`, one call above the single
+zero-time wait in `winproc::exit_code`, which `detach.rs` shares. `the_holder_waits_for_its_childs_exit_instead_of_asking_on_a_clock`
 expects 1 or 2 while a child runs about 2 s (now: the wait, then one read
 of the code). Against the 25 ms loop it failed in CI (PR #710, first commit)
 with 82 checks on Windows, 35 on macOS and 81 on Linux.
