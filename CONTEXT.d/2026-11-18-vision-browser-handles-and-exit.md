@@ -18,13 +18,12 @@ Plan 2.1.3-beta.8, section C2.
   "Ending a program it started") ends that process and the processes under it only while the
   pid has that creation time, holding the process open from the check to the end, and prints
   `ended` or `left`. A process counts as under its parent only when it was made between the
-  parent and the read of the process list (the system time is read just before that read, and
-  a listed pid can pass to a new process only after it), so a listed pid that passes to a new
-  process before it is opened is not ended. It reads the
-  process list itself (no PowerShell, no WMI), so it answers in milliseconds. The review found
-  the first design's quit-time end (a PowerShell CIM query on the
-  main thread, bounded at 5 s) too slow for an exit, and able to time out and leave the browser
-  running on a busy machine; this replaces it.
+  parent and the read of the process list (the system time is read just before that read, and a
+  listed pid can pass to a new process only after it), so a listed pid that passes to a new
+  process before it is opened is not ended. It reads the process list itself (no PowerShell, no
+  WMI), so it answers in milliseconds. The review found the first design's quit-time end (a
+  PowerShell CIM query on the main thread, bounded at 5 s) too slow for an exit, and able to
+  time out and leave the browser running on a busy machine; this replaces it.
 - **The vision browser through them.** On Windows, when the installed helper is there
   (resources/helper) and the browser was found at a full path, vision-manager.ts starts the
   browser through the start mode (execFile, hidden, 10 s), in the browser's own folder, with its

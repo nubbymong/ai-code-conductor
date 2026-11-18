@@ -974,18 +974,19 @@ export function parseHelperStart(stdout: string): { pid: number; created: string
  * the app spawns itself inherits every handle the app lets a child inherit,
  * and keeps each for as long as it runs, after the app has ended too. The
  * helper is given the browser by its full path, its arguments unchanged, and
- * the browser's own folder to run in, so it keeps no folder of the app's
- * open either. Resolves the pid and creation time the helper reports, or null
+ * the browser's own folder to run in, so it keeps no folder of the app's open
+ * either. Resolves the pid and creation time the helper reports, or null
  * after one log line saying why the helper was not used: no helper in this
  * install, a browser named by a bare name (found on PATH, which the helper
  * never searches), or a start that started nothing (helperStartedNothing; a
- * helper Windows could not load is logged by its status, in hex). On null the launch is the plain spawn, as before. A start that may have
- * started the browser without saying so (a timeout, a crash, an answer that
- * cannot be read) is not followed by a second one: a second browser on the
- * same profile would hand off to the first and exit, and the first would run
- * untracked. That rejects, after one log line; the next launch's scan by
- * profile (freeDebugPort) ends the browser if it runs. Elsewhere than
- * Windows: null, with nothing logged.
+ * helper Windows could not load is logged by its status, in hex). On null the
+ * launch is the plain spawn, as before. A start that may have started the
+ * browser without saying so (a timeout, a crash, an answer that cannot be
+ * read) is not followed by a second one: a second browser on the same profile
+ * would hand off to the first and exit, and the first would run untracked.
+ * That rejects, after one log line; the next launch's scan by profile
+ * (freeDebugPort) ends the browser if it runs. Elsewhere than Windows: null,
+ * with nothing logged.
  */
 async function startThroughHelper(executable: string, args: string[], headless: boolean): Promise<{ pid: number; created: string } | null> {
   if (ownerPorts().platform !== 'win32') return null

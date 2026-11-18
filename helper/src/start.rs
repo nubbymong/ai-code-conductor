@@ -119,8 +119,7 @@ pub fn app_created(filetime: u64) -> u64 {
 /// `listed_at`, the system time read just before the process list was read.
 /// One made earlier names a parent id that has since passed to another
 /// process; one made later may have taken a listed pid after the list was
-/// read. All
-/// three are in steps of 100 ns since 1601 (UTC).
+/// read. All three are in steps of 100 ns since 1601 (UTC).
 pub fn made_under(child_made: u64, parent_made: u64, listed_at: u64) -> bool {
     parent_made <= child_made && child_made <= listed_at
 }

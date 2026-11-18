@@ -547,24 +547,23 @@ aicc-helper end --pid <n> --created <t>
 20 digits in the form `start` prints; each is given once and nothing else is
 taken. The helper opens that process and holds it open from its check to its
 end, so the pid cannot pass to another process in between. When the pid still
-has that creation time and the process still runs, the helper ends it and
-every process under it, prints `ended` and exits 0. The processes under it come
-from one read of the process list, and the helper reads the system time just
-before that read. A process counts as under its parent only when it was made no
+has that creation time and the process still runs, the helper ends it and every
+process under it, prints `ended` and exits 0. The processes under it come from
+one read of the process list, and the helper reads the system time just before
+that read. A process counts as under its parent only when it was made no
 earlier than the parent and no later than that time: one made earlier names a
 parent id that has since passed to another process, and one made later may have
 taken a listed pid after the list was read. A pid is freed and passed on only
 after the list is read, so a process that takes one is always made after that
 time; one made while the list is read is left out too, and keeps running. When
-no process has that pid, the one that
-has it was made at another time, or it has already exited, it ends nothing,
-prints `left` and exits 0. When it cannot tell (the
-process cannot be opened or read), it ends nothing and exits 1 with a message
-on stderr; a command line it cannot read exits 2. It reads the process list
-and each process's times itself, with no PowerShell and no WMI, so it answers
-in milliseconds: the app uses it on the exits that cannot wait (quit, an update
-install, SIGTERM) as well as at a stop and a relaunch. On macOS and Linux the
-mode exits 1.
+no process has that pid, the one that has it was made at another time, or it
+has already exited, it ends nothing, prints `left` and exits 0. When it cannot
+tell (the process cannot be opened or read), it ends nothing and exits 1 with a
+message on stderr; a command line it cannot read exits 2. It reads the process
+list and each process's times itself, with no PowerShell and no WMI, so it
+answers in milliseconds: the app uses it on the exits that cannot wait (quit,
+an update install, SIGTERM) as well as at a stop and a relaunch. On macOS and
+Linux the mode exits 1.
 
 **Endpoint: only this user can connect.** No network socket is opened.
 
