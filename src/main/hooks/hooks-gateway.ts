@@ -85,16 +85,14 @@ export function tokensMatch(presented: string, expected: string): boolean {
 const MAX_SCALAR_LENGTH = 128
 const MAX_SUMMARY_LENGTH = 256
 
-/** Truncate a scalar lifted from a hook body. Undefined passes through.
- *  Exported for the session helper's hook events, which the session signals
- *  module bounds the same way (src/main/session-signals/hooks.ts). */
-export function boundScalar(v: string | undefined): string | undefined {
+/** Truncate a scalar lifted from a hook body. Undefined passes through. */
+function boundScalar(v: string | undefined): string | undefined {
   if (v === undefined) return undefined
   return v.length > MAX_SCALAR_LENGTH ? v.slice(0, MAX_SCALAR_LENGTH) : v
 }
 
-/** Truncate the derived feed summary. Exported with boundScalar. */
-export function boundSummary(v: string): string {
+/** Truncate the derived feed summary. */
+function boundSummary(v: string): string {
   return v.length > MAX_SUMMARY_LENGTH ? `${v.slice(0, MAX_SUMMARY_LENGTH - 1)}…` : v
 }
 
@@ -668,44 +666,7 @@ export class HooksGateway {
       ? (parsed.hook_event_name as string)
       : typeof parsed.event === 'string' ? (parsed.event as string) : undefined
     if (eventName === undefined) return
-    const event = boundScalar(eventName) as HookEventKind
-    const toolName = boundScalar(
-      typeof parsed.tool_name === 'string'
-        ? (parsed.tool_name as string)
-        : typeof parsed.toolName === 'string'
-          ? (parsed.toolName as string)
-          : undefined,
-    )
-    const rawPayload =
-      parsed.payload && typeof parsed.payload === 'object'
-        ? (parsed.payload as Record<string, unknown>)
-        : (parsed as Record<string, unknown>)
-
-    let redacted: Record<string, unknown>
-    try {
-      redacted = redactHookPayload(rawPayload)
-    } catch {
-      redacted = { error: 'redaction-failed' }
-    }
-
-    const entry: RingBufferEntry = {
-      sessionId: sid,
-      event,
-      toolName,
-      // Summary is built from the FULL redacted payload (so it stays accurate),
-      // THEN the stored/emitted payload is bounded to ~8 KiB so feed history can't
-      // grow unbounded (RING_BUFFER_CAP entries * ~8 KiB = hard memory ceiling).
-      //
-      // The summary itself is bounded too (#180). It is derived from the UNbounded
-      // payload -- `${toolName} ${file_path}` -- so it sat OUTSIDE that ceiling: a
-      // 1 MiB body produced a 1 MiB summary and a 2 MB ring entry, times
-      // RING_BUFFER_CAP. Every entry is also structured-cloned across the
-      // utilityProcess transport, so this was main-process serialisation cost per
-      // event, not only memory.
-      summary: boundSummary(buildSummary(event, toolName, redacted)),
-      payload: boundPayloadForFeed(redacted),
-      ts: Date.now(),
-    }
+    const entry = feedEntryOf(sid, eventName, parsed)
     this._eventsTotal++
 
     const buf = this.buffers.get(sid) ?? []
@@ -770,8 +731,7 @@ function headerValue(
   return raw
 }
 
-/** The feed summary of an event. Exported with boundScalar. */
-export function buildSummary(
+function buildSummary(
   event: string,
   toolName: string | undefined,
   payload: Record<string, unknown>,
@@ -786,4 +746,54 @@ export function buildSummary(
     return file ? `${toolName} ${file}` : toolName
   }
   return event
+}
+
+/**
+ * The feed entry of one hook event: the event name and the tool name bounded,
+ * the payload envelope chosen, the redaction (with its failure fallback), the
+ * summary and the payload bounded. The gateway's ingest builds every entry
+ * here, and so do the hook events a Claude Code session sends through the
+ * session helper (2.1.3-beta.8, plan section A4; src/main/session-signals/
+ * hooks.ts helperHookEvent): one builder, so the two transports cannot drift.
+ * `eventName` is the event's own name (`hook_event_name`, or `event`).
+ */
+export function feedEntryOf(sessionId: string, eventName: string, parsed: Record<string, unknown>): RingBufferEntry {
+  const event = boundScalar(eventName) as HookEventKind
+  const toolName = boundScalar(
+    typeof parsed.tool_name === 'string'
+      ? (parsed.tool_name as string)
+      : typeof parsed.toolName === 'string'
+        ? (parsed.toolName as string)
+        : undefined,
+  )
+  const rawPayload =
+    parsed.payload && typeof parsed.payload === 'object'
+      ? (parsed.payload as Record<string, unknown>)
+      : (parsed as Record<string, unknown>)
+
+  let redacted: Record<string, unknown>
+  try {
+    redacted = redactHookPayload(rawPayload)
+  } catch {
+    redacted = { error: 'redaction-failed' }
+  }
+
+  return {
+    sessionId,
+    event,
+    toolName,
+    // Summary is built from the FULL redacted payload (so it stays accurate),
+    // THEN the stored/emitted payload is bounded to ~8 KiB so feed history can't
+    // grow unbounded (RING_BUFFER_CAP entries * ~8 KiB = hard memory ceiling).
+    //
+    // The summary itself is bounded too (#180). It is derived from the UNbounded
+    // payload -- `${toolName} ${file_path}` -- so it sat OUTSIDE that ceiling: a
+    // 1 MiB body produced a 1 MiB summary and a 2 MB ring entry, times
+    // RING_BUFFER_CAP. Every entry is also structured-cloned across the
+    // utilityProcess transport, so this was main-process serialisation cost per
+    // event, not only memory.
+    summary: boundSummary(buildSummary(event, toolName, redacted)),
+    payload: boundPayloadForFeed(redacted),
+    ts: Date.now(),
+  }
 }

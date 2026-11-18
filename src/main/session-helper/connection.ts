@@ -22,6 +22,7 @@ import * as path from 'path'
 import { EventEmitter } from 'events'
 import type { Duplex } from 'stream'
 import {
+  CONTROL_CHANNEL,
   FrameReader,
   HELLO_LINE_MAX,
   HOOKS_CAP,
@@ -362,8 +363,21 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         if (f.channel === TERMINAL_CHANNEL) this.emit('output', f.bytes)
         continue
       }
+      // Every control message travels on channel 0 (section 6; a holder sends
+      // all its JSON there): one on another channel is dropped, whatever it
+      // carries, and answers no request.
+      if (f.channel !== CONTROL_CHANNEL) continue
       const m = f.json as Json
       if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.t !== 'string') continue
+      if (m.t === 'event') {
+        // A hook event, read as one before any reply lookup (an `event` that
+        // carries a `re` is refused by its exact fields, and answers no
+        // request): strictly, and reported only on a connection that acked
+        // hooks. One that does not read is dropped (a holder sends none).
+        const e = this.hooks ? readEventFrame(m, f.size) : null
+        if (e) this.emit('event', e)
+        continue
+      }
       const re = typeof m.re === 'number' ? m.re : undefined
       if (re !== undefined && this.ping && re === this.ping.id) {
         this.onPong()
@@ -383,11 +397,6 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
       }
       if (m.t === 'term.exit') {
         this.emit('exit', typeof m.code === 'number' ? m.code : null)
-      } else if (m.t === 'event') {
-        // A hook event: read strictly, and only on a connection that acked
-        // hooks. One that does not read is dropped (a holder sends none).
-        const e = this.hooks ? readEventFrame(m, f.size) : null
-        if (e) this.emit('event', e)
       } else if (m.t === 'error') {
         const code = String(m.code ?? 'internal')
         if (code === 'busy' && re === undefined) {

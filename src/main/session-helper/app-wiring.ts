@@ -12,7 +12,7 @@ import { setMachinesSource } from '../ipc/machines-handlers'
 import { peekSessionState } from '../session-state'
 import { getLocalSessionSettingsPath } from '../hooks/per-session-settings'
 import { switchHooksToHelper } from '../hooks/session-hooks-writer'
-import { endHelperHooks, helperHookEvent } from '../session-signals/hooks'
+import { endHelperHooks, helperHookEvent, helperHooksTaken } from '../session-signals/hooks'
 import { bundledHelperPath, helperRootDir } from './install'
 import { SessionHelperManager, agentRecordsIn, crashMarkIn, getSessionHelper, setSessionHelper, type HelperHookDeps, type HelperRouting, type SessionHelperServiceState } from './manager'
 
@@ -48,11 +48,14 @@ const rootDir = (): string => helperRootDir({ isPackaged: app.isPackaged })
 
 /**
  * A Claude Code session's hooks through its holder (2.1.3-beta.8, plan
- * section A4): the tab's per-session settings file (the one the PTY manager
- * wrote for the spawn) is switched to the helper's hook mode, and each event
- * the holder passes on goes to the session signals module under the tab's id.
+ * section A4): while the hooks gateway takes hook events (the signals
+ * module's live answer), the tab's per-session settings file (the one the PTY
+ * manager wrote just after the spawn call) is switched to the helper's hook
+ * mode, and each event the holder passes on goes to the session signals module
+ * under the tab's id.
  */
-export const helperHookDeps: HelperHookDeps = {
+const helperHookDeps: HelperHookDeps = {
+  taking: () => helperHooksTaken(),
   useHelperHooks: (appPtyId, target) => switchHooksToHelper({ settingsPath: getLocalSessionSettingsPath(appPtyId), sessionId: appPtyId, target }),
   event: (appPtyId, e) => helperHookEvent(appPtyId, e),
   ended: (appPtyId) => endHelperHooks(appPtyId),

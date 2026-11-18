@@ -24,6 +24,8 @@ export const LOCAL_CAPS: readonly string[] = ['core', 'local']
 export const HOOKS_CAP = 'hooks'
 /** Terminal bytes travel on this channel both ways; control messages on 0. */
 export const TERMINAL_CHANNEL = 1
+/** Control messages (JSON) travel on this channel, both ways. */
+export const CONTROL_CHANNEL = 0
 
 // Section 6: a frame is 4 bytes of length (of the rest), 1 kind byte, 4 bytes
 // of channel id, then the payload.

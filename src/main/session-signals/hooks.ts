@@ -21,15 +21,15 @@
 // holder, and the session helper manager hands each one here
 // (helperHookEvent). Such an event gets what the gateway gives its own before
 // the same fan-out: the transcript path through the same shape filter, the
-// same redaction and bounding, a ring of its own per session, and HOOKS_EVENT
-// to the renderer in the same shape.
+// feed entry from the gateway's own builder (feedEntryOf: the redaction and
+// the bounding), a ring of its own per session, and HOOKS_EVENT to the
+// renderer in the same shape. It is taken only while the gateway would take
+// its own, read from the gateway at each event.
 import type { HookEvent } from '../../shared/hook-types'
 import { IPC } from '../../shared/ipc-channels'
-import { onGateway } from '../hooks/index'
+import { onGateway, type HooksGatewayLike } from '../hooks/index'
 import { RING_BUFFER_CAP, type RingBufferEntry } from '../hooks/hooks-types'
-import { redactHookPayload } from '../hooks/hook-payload-redactor'
-import { boundPayloadForFeed } from '../hooks/bound-feed-payload'
-import { boundScalar, boundSummary, buildSummary } from '../hooks/hooks-gateway'
+import { feedEntryOf } from '../hooks/hooks-gateway'
 import { sanitiseTranscriptPath } from '../logging/transcript-discovery'
 import { logWarn } from '../debug-logger'
 
@@ -79,13 +79,22 @@ export function transcriptPath(sessionId: string, path: string, _source: HookSig
 }
 
 let unbind: (() => void) | null = null
+/** The gateway this module is subscribed to now (the one onGateway bound). */
+let bound: HooksGatewayLike | null = null
 
 /** Subscribe to the hooks gateway, once: to the gateway set now, or when one
  *  is set, and to each gateway set after it (onGateway drops the earlier
  *  subscription). Called once, at boot, by startSessionSignals. */
 export function startHookSignals(): void {
   if (unbind) return
-  unbind = onGateway((gw) => gw.subscribe((e) => hookEvent(e, 'gateway')))
+  unbind = onGateway((gw) => {
+    bound = gw
+    const off = gw.subscribe((e) => hookEvent(e, 'gateway'))
+    return () => {
+      off()
+      if (bound === gw) bound = null
+    }
+  })
 }
 
 // ── hook events through the session helper (section A4) ──────────────────────
@@ -110,70 +119,39 @@ const helperRings = new Map<string, RingBufferEntry[]>()
  *  events were logged (once). */
 const helperOverflowed = new Set<string>()
 const helperLostLogged = new Set<string>()
-/** False while the hooks master switch is off (Settings): the gateway takes
- *  nothing then, so neither does this. */
-let helperTaken = true
 
 export function setHookFeedEmit(emit: ((channel: string, payload: unknown) => void) | null): void {
   feedEmit = emit
 }
 
-/** The hooks master switch (ipc/hooks-handlers.ts HOOKS_TOGGLE). Off drops
- *  every helper ring, as the gateway's stop drops its buffers. */
-export function setHelperHooksTaken(on: boolean): void {
-  helperTaken = on
-  if (!on) {
-    helperRings.clear()
-    helperOverflowed.clear()
-    helperLostLogged.clear()
-  }
-}
-
 /**
- * The feed entry of a helper event: what the gateway's ingest makes of the
- * same body (hooks-gateway.ts), with the same functions. The kind is the
- * payload's own `hook_event_name` (the holder and readEventFrame both check
- * the two are the same).
+ * Whether the app takes hook events now: the gateway this module is bound to
+ * is on and listening, so it would take its own (a gateway that is off, one
+ * whose child has not bound yet or is restarting, and the never-started one
+ * of a boot with the hooks switch saved off, take none). Read live at each
+ * helper event and at each switch to the helper (app-wiring.ts), never
+ * mirrored from what a toggle once answered: a start that gave up waiting
+ * for its child's bind is followed by a bind later, with no toggle.
  */
-function helperFeedEntry(sessionId: string, kind: string, parsed: Record<string, unknown>): RingBufferEntry {
-  const event = boundScalar(kind) as string
-  const toolName = boundScalar(
-    typeof parsed.tool_name === 'string'
-      ? (parsed.tool_name as string)
-      : typeof parsed.toolName === 'string'
-        ? (parsed.toolName as string)
-        : undefined,
-  )
-  const rawPayload =
-    parsed.payload && typeof parsed.payload === 'object'
-      ? (parsed.payload as Record<string, unknown>)
-      : (parsed as Record<string, unknown>)
-  let redacted: Record<string, unknown>
-  try {
-    redacted = redactHookPayload(rawPayload)
-  } catch {
-    redacted = { error: 'redaction-failed' }
-  }
-  return {
-    sessionId,
-    event,
-    toolName,
-    summary: boundSummary(buildSummary(event, toolName, redacted)),
-    payload: boundPayloadForFeed(redacted),
-    ts: Date.now(),
-  }
+export function helperHooksTaken(): boolean {
+  const s = bound?.status()
+  return s?.enabled === true && s.listening === true
 }
 
 /**
  * One hook event of `sessionId` (the app's id for the tab) that its holder
  * passed on. In the gateway's order: the transcript path first (lifted before
  * redaction, through sanitiseTranscriptPath; a value that does not pass is
- * dropped and logged by its length only), then the entry into the session's
- * ring, the consumers, and the renderer. Events the holder dropped while no
- * app was attached (`lost`) are logged once per session.
+ * dropped and logged by its length only), then the feed entry (the gateway's
+ * own feedEntryOf, so the redaction and the bounding cannot drift from it;
+ * the kind is the payload's own `hook_event_name`, which readEventFrame
+ * checks), the entry into the session's ring, the consumers, and the
+ * renderer. Events the holder dropped while no app was attached (`lost`) are
+ * logged once per session. None is taken while the gateway would take none
+ * (helperHooksTaken).
  */
 export function helperHookEvent(sessionId: string, e: HelperHookEvent): void {
-  if (!helperTaken) return
+  if (!helperHooksTaken()) return
   if (typeof e.lost === 'number' && e.lost > 0 && !helperLostLogged.has(sessionId)) {
     helperLostLogged.add(sessionId)
     logWarn(`[hooks] the session helper dropped ${e.lost} hook event(s) of ${sessionId} while the app was not attached`)
@@ -185,7 +163,7 @@ export function helperHookEvent(sessionId: string, e: HelperHookEvent): void {
   } else if (parsed.transcript_path !== undefined) {
     logWarn(`[hooks] dropped an unusable transcript_path from the session helper sid=${sessionId} type=${typeof parsed.transcript_path} length=${typeof parsed.transcript_path === 'string' ? parsed.transcript_path.length : 'n/a'}`)
   }
-  const entry = helperFeedEntry(sessionId, e.kind, parsed)
+  const entry = feedEntryOf(sessionId, e.kind, parsed)
   const ring = helperRings.get(sessionId) ?? []
   ring.push(entry)
   if (ring.length > RING_BUFFER_CAP) {
@@ -201,7 +179,9 @@ export function helperHookEvent(sessionId: string, e: HelperHookEvent): void {
 }
 
 /** The session's run through the helper is over: its ring and marks go, as
- *  the gateway's go when the session is unregistered. */
+ *  the gateway's go when the session is unregistered. The hooks switch going
+ *  off drops none of them: the gateway the app runs (the proxy in main) keeps
+ *  its rings at a stop too, so the history read keeps both or neither. */
 export function endHelperHooks(sessionId: string): void {
   helperRings.delete(sessionId)
   helperOverflowed.delete(sessionId)
@@ -229,9 +209,9 @@ export function hookFeedBuffer(sessionId: string, gatewayRing: RingBufferEntry[]
 export function _resetHookSignalsForTest(): void {
   consumers.clear()
   if (unbind) { unbind(); unbind = null }
+  bound = null
   transcriptPathSink = null
   feedEmit = null
-  helperTaken = true
   helperRings.clear()
   helperOverflowed.clear()
   helperLostLogged.clear()

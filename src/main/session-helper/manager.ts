@@ -142,6 +142,10 @@ export interface SessionHelperDeps {
 /** What a Claude Code session's hooks through its holder need of the app
  *  (2.1.3-beta.8, plan section A4). */
 export interface HelperHookDeps {
+  /** Whether the app takes hook events now: the hooks gateway is on and
+   *  listening (session-signals/hooks.ts helperHooksTaken). A session is
+   *  switched to the helper only then. */
+  taking(): boolean
   /** Point the tab's per-session settings file at the helper's hook mode, all
    *  but PreToolUse (session-hooks-writer.ts switchHooksToHelper). */
   useHelperHooks(appPtyId: string, target: HelperHookTarget): HelperHooksResult
@@ -160,7 +164,7 @@ interface HookRoute {
 
 /** Why a session's hooks stay on the gateway, for its one log line. */
 const HOOKS_STAY_BECAUSE: Record<Exclude<HelperHooksResult, 'switched'>, string> = {
-  'no-gateway-hooks': 'its settings file holds no hooks of the hooks gateway (the gateway was off or not listening when it started)',
+  'no-gateway-hooks': 'its settings file holds no hooks of the hooks gateway (the gateway was off or not listening when it started, or the file was not written)',
   'unsafe-path': 'the helper\'s path cannot be given to Claude Code\'s hook launcher safely',
   'not-written': 'its settings file could not be written',
 }
@@ -739,15 +743,19 @@ export class SessionHelperManager implements MachinesSource {
    * A Claude Code session's hooks through its holder (2.1.3-beta.8, plan
    * section A4), when the app wires them for its provider (deps.hooks: Claude
    * Code's only, so none for another provider's session). Its connections
-   * ack `hooks` when the holder offers it. Once the holder launched it, and
-   * before the attach sends its launch line, its per-session settings file
-   * (written for the hooks gateway before the spawn) is switched to the
-   * helper's hook mode for all but PreToolUse; a holder without `hooks`, or
-   * a file that cannot be switched, leaves the session on the gateway, with
-   * one log line. Then each event the holder passes on reaches the signals
-   * module under the tab's id, once (a `seq` seen already is dropped,
-   * section 15), and never a PreToolUse: that one is the gateway's. Nothing
-   * a holder sends is taken before the switch.
+   * ack `hooks` when the holder offers it. Its per-session settings file is
+   * written for the hooks gateway by the PTY manager in the same synchronous
+   * run as the spawn call (pty-manager.ts: spawnAgentPty, then
+   * writeLocalSessionSettings and injectHooks), so always before the holder
+   * answers term.launched. Once the holder launched it, and before the
+   * attach sends its launch line, that file is switched to the helper's hook
+   * mode for all but PreToolUse, if the gateway is taking hook events then; a
+   * holder without `hooks`, a gateway that is off or not listening, or a file
+   * that cannot be switched, leaves the session on the gateway, with one log
+   * line. Then each event the holder passes on reaches the signals module
+   * under the tab's id, once (a `seq` seen already is dropped, section 15,
+   * on this connection or an earlier one), and never a PreToolUse: that one
+   * is the gateway's. Nothing a holder sends is taken before the switch.
    */
   private hookRoute(ctx: AgentSpawnContext, sid: string): HookRoute | undefined {
     const deps = this.deps.hooks?.[ctx.kind]
@@ -757,9 +765,15 @@ export class SessionHelperManager implements MachinesSource {
     let lastSeq = 0
     return {
       launched: (conn) => {
+        // Relies on the PTY manager having written the file already: it does,
+        // with no await between the spawn call and the write (see above).
         const exe = this.info?.exe
         if (!conn.hooks || !exe) {
           this.deps.log(`[session-helper] ${appId}: its hooks stay on the hooks gateway, because ${conn.hooks ? 'the helper copy is not known' : 'its holder does not offer hook events'}`)
+          return
+        }
+        if (!deps.taking()) {
+          this.deps.log(`[session-helper] ${appId}: its hooks stay on the hooks gateway, because the hooks gateway is off or not listening, so no hook event would be taken`)
           return
         }
         const r = deps.useHelperHooks(appId, { helperPath: exe, store: this.store, sid, launcher: this.os === 'windows' ? 'git-bash' : 'sh' })
@@ -883,7 +897,9 @@ export class SessionHelperManager implements MachinesSource {
       replyTimeoutMs: this.deps.replyTimeoutMs,
       ...(hooks ? { hooks: true } : {}),
     })
-    if (hooks && conn.hooks) conn.on('event', (e) => hooks.event(e))
+    // The connection reports an event only when it acked `hooks` (connection.ts;
+    // tests/unit/main/session-helper-connection.test.ts): that is the one guard.
+    if (hooks) conn.on('event', (e) => hooks.event(e))
     return conn
   }
 

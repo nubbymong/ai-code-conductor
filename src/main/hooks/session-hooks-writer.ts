@@ -7,6 +7,7 @@ import { logWarn } from '../debug-logger'
 import { posixCanonicalLocalSettingsRootSync, GitPointerChangedError } from '../git-local-settings-root'
 import { decodeSettingsText } from '../settings-text'
 import { stripSpoofableText } from '../../shared/safe-text'
+import { SID_RE } from '../session-helper/protocol'
 
 // Injected hook events. SubagentStart/SubagentStop bracket subagent and
 // dynamic-workflow-agent execution so the status strip can pin its model +
@@ -97,8 +98,6 @@ export interface HelperHookTarget {
   launcher: HookLauncher
 }
 
-/** The helper's session id pattern (protocol section 15). */
-const HELPER_SID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$/
 /** A control character anywhere. */
 const HOOK_CONTROL_RE = /[\x00-\x1f\x7f-\x9f]/
 /** A Windows path from a drive's root (no network path, no relative path). */
@@ -137,7 +136,8 @@ function launcherPath(p: string, launcher: HookLauncher): string | null {
 export function helperHookCommand(target: HelperHookTarget): string | null {
   const exe = launcherPath(target.helperPath, target.launcher)
   const store = launcherPath(target.store, target.launcher)
-  if (exe === null || store === null || !HELPER_SID_RE.test(target.sid)) return null
+  // The session id: the helper's own pattern (protocol section 15).
+  if (exe === null || store === null || !SID_RE.test(target.sid)) return null
   return `${shellWord(exe)} hook --store ${shellWord(store)} --session ${target.sid}`
 }
 
@@ -176,7 +176,8 @@ export type HelperHooksResult =
   /** The settings file now sends all but PreToolUse through the helper. */
   | 'switched'
   /** The file holds no gateway hooks of this session (the gateway was down
-   *  or switched off at the spawn): nothing to switch. */
+   *  or switched off at the spawn, or the file was not written): nothing to
+   *  switch. */
   | 'no-gateway-hooks'
   /** A path the launcher cannot take safely (helperHookCommand). */
   | 'unsafe-path'
@@ -203,11 +204,14 @@ function gatewayHooksIn(hooks: Record<string, unknown[]>, sessionId: string): { 
 
 /**
  * Point a session's per-session settings file at the helper's hook mode, in
- * place (2.1.3-beta.8, plan section A4). The file was written as usual before
- * the spawn (injectHooks, the gateway's hooks); once the session's holder has
- * launched it and before the launch line reaches it, this swaps the app's own
- * entries of the eight events for the hook mode and keeps PreToolUse, and
- * every hook the session inherited, as they were. The gateway token stays
+ * place (2.1.3-beta.8, plan section A4). The file was written as usual for
+ * the hooks gateway (injectHooks) in the same synchronous run as the spawn
+ * call (pty-manager.ts: spawnAgentPty, then writeLocalSessionSettings and
+ * injectHooks), so always before the holder answers term.launched. Once the
+ * session's holder has launched it and before the launch line reaches it,
+ * this swaps the app's own entries of the eight events for the hook mode and
+ * keeps PreToolUse, and every hook the session inherited, as they were. The
+ * gateway token stays
  * (PreToolUse uses it). FAIL-SAFE: on anything but 'switched' the file is as
  * it was, and the session keeps its gateway hooks.
  */

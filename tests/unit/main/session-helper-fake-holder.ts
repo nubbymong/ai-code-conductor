@@ -130,6 +130,9 @@ export class FakeHolder {
   seq = 0
   /** Hook events waiting for an attach that acked `hooks`. */
   readonly waitingEvents: Json[] = []
+  /** A holder that breaks section 15: it sends hook events to the attached
+   *  connection even when that connection did not ack `hooks`. */
+  forceEvents = false
   /** Each frame of typed input, as it reaches the program. */
   onTyped: ((bytes: Buffer) => void) | null = null
 
@@ -293,7 +296,7 @@ export class FakeHolder {
   /** An `event` message exactly as given (the same rule for where it goes). */
   sendEvent(e: Json): void {
     const to = this.attached
-    if (to && to.ackedCaps.includes('hooks')) to.sendJson(e)
+    if (to && (this.forceEvents || to.ackedCaps.includes('hooks'))) to.sendJson(e)
     else this.waitingEvents.push(e)
   }
 

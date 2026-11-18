@@ -12,7 +12,9 @@
 //  - a crafted transcript_path is refused by sanitiseTranscriptPath and logged
 //    by its length only; a usable one reaches the transcript route;
 //  - events the holder dropped (`lost`) are logged once per session;
-//  - nothing is taken while the hooks master switch is off.
+//  - an event is taken only while the gateway would take its own (on and
+//    listening), read at each event, so intake follows the gateway's real
+//    state and not what a toggle once answered.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { BrowserWindow, ipcMain } from 'electron'
 import type { HookEvent } from '../../../src/shared/hook-types'
@@ -24,6 +26,7 @@ vi.mock('../../../src/main/config-manager', () => ({ readConfig: () => null }))
 vi.mock('../../../src/main/pty-manager', () => ({ getActivePtySessionIds: () => [] }))
 
 const { HooksGateway } = await import('../../../src/main/hooks/hooks-gateway')
+const { HooksGatewayProxy } = await import('../../../src/main/services/hooks-gateway-proxy')
 const { setGateway } = await import('../../../src/main/hooks/index')
 const signals = await import('../../../src/main/session-signals/hooks')
 const { startSessionSignals, onHookEvent, helperHookEvent, endHelperHooks, hookFeedBuffer } = await import('../../../src/main/session-signals')
@@ -51,6 +54,9 @@ const RECORDED: Array<Record<string, unknown>> = [
   { session_id: '8f0c', transcript_path: TRANSCRIPT, cwd: 'C:\\work\\app', hook_event_name: 'Stop', stop_hook_active: false },
   { session_id: '8f0c', transcript_path: TRANSCRIPT, hook_event_name: 'SubagentStop', agent_type: 'reviewer' },
   { session_id: '8f0c', transcript_path: TRANSCRIPT, hook_event_name: 'StopFailure', error: 'overloaded_error' },
+  // A tool name over the 128-character limit, and a top-level file path long
+  // enough that the summary (`<tool> <file>`) is cut at 256.
+  { session_id: '8f0c', transcript_path: TRANSCRIPT, hook_event_name: 'PostToolUse', tool_name: `mcp__${'t'.repeat(295)}`, file_path: `C:\\work\\app\\${'d'.repeat(1000)}.ts` },
   { session_id: '8f0c', transcript_path: TRANSCRIPT, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { cut: 26 }, tool_response: { cut: 102402 }, cut: true },
 ]
 
@@ -71,6 +77,9 @@ beforeEach(() => {
   // and the gateway's transcript path through the module.
   gw = new HooksGateway({ defaultPort: 0, emit, onTranscriptPath: (sid, p) => signals.transcriptPath(sid, p, 'gateway') })
   secret = gw.registerSession(SID)
+  // On and listening, as the gateway is whenever a session's hooks were
+  // switched to the helper (no port is bound here).
+  vi.spyOn(gw, 'status').mockReturnValue({ enabled: true, listening: true, port: 19334 })
   setGateway(gw)
   startSessionSignals({ onTranscriptPath: (sid, p) => routed.push([sid, p]), emit })
   onHookEvent((e, source) => { seen.push([e, source]) })
@@ -106,6 +115,14 @@ describe('a helper event gets what the gateway gives its own', () => {
       expect(sent, what).not.toContain(SK)
       expect(sent, what).not.toContain(GHP)
       expect(sent, what).not.toContain('hunter2hunter2')
+      // The scalars lifted from the body are bounded on the helper path too.
+      expect(fromHelper.toolName?.length ?? 0, what).toBeLessThanOrEqual(128)
+      expect(fromHelper.summary!.length, what).toBeLessThanOrEqual(256)
+      if (typeof payload.file_path === 'string') {
+        expect(fromHelper.toolName).toBe(`mcp__${'t'.repeat(123)}`)
+        expect(fromHelper.summary).toHaveLength(256)
+        expect(fromHelper.summary!.endsWith('…')).toBe(true)
+      }
     }
     // The large body was bounded for the feed, as the gateway bounds it.
     const big = feedEvents()
@@ -203,56 +220,72 @@ describe('the transcript path, the lost count, and the master switch', () => {
     expect(lostLines()).toHaveLength(2)
   })
 
-  it('with the hooks master switch off, nothing is taken and the helper rings go; back on, only once a start has the gateway listening, and a later toggle wins', async () => {
+  it("taken only while the gateway is on and listening, read at each event: a start that gave up waiting, then a late bind, an off, and a child's restart", async () => {
     // The switch's status goes to every window; there is none here.
     Object.assign(BrowserWindow, { getAllWindows: () => [] })
-    // A gateway whose starts the test answers (no port is bound).
-    const starts: Array<{ resolve: (s: unknown) => void; reject: (e: Error) => void }> = []
-    const stopped = { enabled: false, listening: false, port: null }
-    const fake = {
-      start: vi.fn(() => new Promise((resolve, reject) => { starts.push({ resolve, reject }) })),
-      stop: vi.fn(async () => {}),
-      status: () => stopped,
-      getBuffer: () => [],
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      // The gateway as production runs it: the proxy in main, its child out of
+      // process (a transport the test answers for; no child is forked).
+      const proxy = new HooksGatewayProxy({ transport: { post: () => {}, onMessage: () => {}, kill: () => {} }, defaultPort: 19334, emit })
+      setGateway(proxy)
+      registerHooksHandlers(proxy)
+      const toggle = vi.mocked(ipcMain.handle).mock.calls.find((c) => c[0] === IPC.HOOKS_TOGGLE)![1] as (e: unknown, req: { enabled: boolean }) => Promise<{ enabled: boolean; listening: boolean }>
+      const taken = () => {
+        seen.length = 0
+        emit.mockClear()
+        routed.length = 0
+        helperHookEvent(SID, { kind: 'Notification', payload: { hook_event_name: 'Notification', transcript_path: TRANSCRIPT } })
+        const n = seen.length
+        // Taken means all of it; not taken means none of it.
+        expect(feedEvents()).toHaveLength(n)
+        expect(routed).toHaveLength(n)
+        return n === 1
+      }
+      // Wanted on, its child not bound yet: none.
+      expect(taken()).toBe(false)
+      // A toggle on whose child does not bind within the proxy's 4 s wait
+      // answers not listening: still none.
+      const on = toggle(null, { enabled: true })
+      await vi.advanceTimersByTimeAsync(4000)
+      expect(await on).toMatchObject({ enabled: true, listening: false })
+      expect(taken()).toBe(false)
+      // The child binds later (a slow fork under load): taken, with no toggle.
+      proxy.handleChildMessage({ type: 'bound', port: 19334, pid: 4242 })
+      expect(taken()).toBe(true)
+      // One of the session's own gateway events (its PreToolUse), as the child forwards it.
+      proxy.handleChildMessage({ type: 'event', entry: { sessionId: SID, event: 'PreToolUse', toolName: 'Bash', summary: 'Bash', payload: {}, ts: 1 } })
+      expect(hookFeedBuffer(SID, proxy.getBuffer(SID)).map((e) => e.event)).toEqual(['Notification', 'PreToolUse'])
+      // Off: none taken. Both rings stay, as the proxy keeps its own at a
+      // stop, so the history read still agrees; the session's end drops them.
+      await toggle(null, { enabled: false })
+      expect(taken()).toBe(false)
+      expect(hookFeedBuffer(SID, proxy.getBuffer(SID)).map((e) => e.event)).toEqual(['Notification', 'PreToolUse'])
+      // On again, and bound at once: taken.
+      const again = toggle(null, { enabled: true })
+      proxy.handleChildMessage({ type: 'bound', port: 19334, pid: 4243 })
+      expect(await again).toMatchObject({ enabled: true, listening: true })
+      expect(taken()).toBe(true)
+      // The child died and is restarted (not listening until it binds again): none, then taken.
+      proxy.rebindTransport({ post: () => {}, onMessage: () => {}, kill: () => {} })
+      expect(taken()).toBe(false)
+      proxy.handleChildMessage({ type: 'bound', port: 19334, pid: 4244 })
+      expect(taken()).toBe(true)
+      endHelperHooks(SID)
+      proxy.unregisterSession(SID)
+      expect(hookFeedBuffer(SID, proxy.getBuffer(SID))).toEqual([])
+    } finally {
+      vi.useRealTimers()
     }
-    registerHooksHandlers(fake as never)
-    const toggle = vi.mocked(ipcMain.handle).mock.calls.find((c) => c[0] === IPC.HOOKS_TOGGLE)![1] as (e: unknown, req: { enabled: boolean }) => Promise<unknown>
-    const taken = () => {
-      seen.length = 0
-      helperHookEvent(SID, { kind: 'Notification', payload: { hook_event_name: 'Notification', transcript_path: TRANSCRIPT } })
-      return seen.length === 1
-    }
-    helperHookEvent(SID, { kind: 'Stop', payload: { hook_event_name: 'Stop' } })
-    expect(hookFeedBuffer(SID, [])).toHaveLength(1)
-    // Off: none taken at once, the rings gone, nothing routed or sent.
-    await toggle(null, { enabled: false })
-    expect(hookFeedBuffer(SID, [])).toEqual([])
+  })
+
+  it('at boot with the hooks switch saved off (a gateway that was never started, so never listening), nothing is taken', () => {
+    setGateway(new HooksGateway({ defaultPort: 0, emit }))
     emit.mockClear()
-    routed.length = 0
-    expect(taken()).toBe(false)
+    helperHookEvent(SID, { kind: 'Stop', payload: { hook_event_name: 'Stop', transcript_path: TRANSCRIPT } })
+    expect(seen).toEqual([])
     expect(feedEvents()).toEqual([])
     expect(routed).toEqual([])
-    // On, but the gateway did not come up listening: still none.
-    let on = toggle(null, { enabled: true })
-    expect(taken()).toBe(false)
-    starts.shift()!.resolve({ enabled: true, listening: false, port: null, error: 'bind-failed after 5 attempts' })
-    await on
-    expect(taken()).toBe(false)
-    // On, and the start threw: still none.
-    on = toggle(null, { enabled: true })
-    starts.shift()!.reject(new Error('the child could not be started'))
-    await expect(on).rejects.toThrow()
-    expect(taken()).toBe(false)
-    // On, then off before that start finished: the off wins.
-    on = toggle(null, { enabled: true })
-    await toggle(null, { enabled: false })
-    starts.shift()!.resolve({ enabled: true, listening: true, port: 19334 })
-    await on
-    expect(taken()).toBe(false)
-    // On, listening: taken again.
-    on = toggle(null, { enabled: true })
-    starts.shift()!.resolve({ enabled: true, listening: true, port: 19334 })
-    await on
-    expect(taken()).toBe(true)
+    expect(hookFeedBuffer(SID, [])).toEqual([])
   })
 })

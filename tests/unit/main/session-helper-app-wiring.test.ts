@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   switchHooks: vi.fn((_a: unknown) => 'switched'),
   helperEvent: vi.fn(),
   helperEnded: vi.fn(),
+  helperTaking: vi.fn(() => true),
 }))
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => 'C:\\app' } }))
@@ -34,7 +35,7 @@ vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {} }))
 vi.mock('../../../src/main/ipc/machines-handlers', () => ({ setMachinesSource: h.machinesSource }))
 vi.mock('../../../src/main/hooks/per-session-settings', () => ({ getLocalSessionSettingsPath: (id: string) => `C:/Users/u/.claude/settings-${id}.json` }))
 vi.mock('../../../src/main/hooks/session-hooks-writer', () => ({ switchHooksToHelper: h.switchHooks }))
-vi.mock('../../../src/main/session-signals/hooks', () => ({ helperHookEvent: h.helperEvent, endHelperHooks: h.helperEnded }))
+vi.mock('../../../src/main/session-signals/hooks', () => ({ helperHookEvent: h.helperEvent, endHelperHooks: h.helperEnded, helperHooksTaken: h.helperTaking }))
 vi.mock('../../../src/main/session-helper/install', () => ({ helperRootDir: () => 'C:\\user\\helper', bundledHelperPath: () => 'C:\\app\\helper\\aicc-helper.exe' }))
 vi.mock('../../../src/main/session-state', () => ({
   peekSessionState: () => {
@@ -369,8 +370,13 @@ describe("Claude Code sessions' hooks through the holder (2.1.3-beta.8, plan sec
   it('the manager gets hooks for Claude Code sessions only, wired to the settings writer and the session signals module', () => {
     h.settings = { agentSessionsThroughHelper: true }
     initSessionHelper(() => {})
-    const hooks = h.made[0].deps.hooks as Record<string, { useHelperHooks: (id: string, t: unknown) => unknown; event: (id: string, e: unknown) => void; ended: (id: string) => void }>
+    const hooks = h.made[0].deps.hooks as Record<string, { taking: () => boolean; useHelperHooks: (id: string, t: unknown) => unknown; event: (id: string, e: unknown) => void; ended: (id: string) => void }>
     expect(Object.keys(hooks)).toEqual(['claude'])
+    // Whether hook events are taken now is the session signals module's live answer.
+    h.helperTaking.mockReturnValueOnce(false)
+    expect(hooks.claude.taking()).toBe(false)
+    expect(hooks.claude.taking()).toBe(true)
+    expect(h.helperTaking).toHaveBeenCalledTimes(2)
     const target = { helperPath: 'C:/h/aicc-helper.exe', store: 'C:/h/store', sid: 'ag0123456789abcdef0123456789abcd', launcher: 'git-bash' }
     expect(hooks.claude.useHelperHooks('abcdef0123456789abcdef01', target)).toBe('switched')
     expect(h.switchHooks).toHaveBeenCalledWith({ settingsPath: 'C:/Users/u/.claude/settings-abcdef0123456789abcdef01.json', sessionId: 'abcdef0123456789abcdef01', target })
