@@ -20,14 +20,15 @@ import * as net from 'net'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import { spawn } from 'child_process'
-import { BrowserWindow, nativeImage } from 'electron'
+import { spawn, execFile } from 'child_process'
+import { app, BrowserWindow, nativeImage } from 'electron'
 import { getResourcesDirectory } from './ipc/setup-handlers'
 import { logInfo, logError } from './debug-logger'
 import { getConductorMcpPort } from './conductor-mcp-server'
 import { getBrowserPaths } from './browser-paths'
+import { bundledHelperPath } from './session-helper/install'
 import {
-  VisionPortHeldError, scanAppVisionBrowsers, factsOfPid, endVerified, endOwnChild, endOwnChildSync,
+  VisionPortHeldError, scanAppVisionBrowsers, factsOfPid, endVerified, endVerifiedSync, endOwnChild, endOwnChildSync,
   defaultOwnerPorts, type OwnerPorts, type OwnChild, type ProcessFacts, type ProfileLockState,
 } from './vision-browser-owner'
 import type { GlobalVisionConfig } from '../shared/types'
@@ -582,7 +583,7 @@ export async function stopGlobalVision(): Promise<void> {
   globalConfig = null
   // Deterministic teardown of the headless browser CCC spawned, so it never
   // survives stop/app-quit (called from before-quit's stopGlobalVision()).
-  killSpawnedBrowser()
+  await endSpawnedBrowserAtStop()
 }
 
 /** Tear down a session's pinned browser target/context (called on PTY exit). */
@@ -621,18 +622,36 @@ export function tryReconnectGlobalVision(): void { if (globalManager) globalMana
  *  which a bare `export ... from` would not do. */
 export { getBrowserPaths }
 
-// Any browser the app spawns is detached + unref'd, so the app ends it itself:
-// at stop/quit (killSpawnedBrowser) and before any relaunch. It is tracked by
-// its ChildProcess. While the child's exit has not been observed (exitCode and
-// signalCode both null) libuv still holds the process, so its pid is still the
-// browser's: it is ended by that pid, with no read-back (vision-browser-owner
-// endOwnChild / endOwnChildSync). Once its exit was observed nothing is done
-// with that pid. Browsers left by an earlier run are a separate case: found by
-// profile and ended only once identified (freeDebugPort).
-interface TrackedBrowser {
+// Any browser the app starts outlives the app unless the app ends it, so the
+// app ends it itself: at stop/quit (killSpawnedBrowser) and before any
+// relaunch. Two kinds:
+// - 'child': the app spawned it (detached + unref'd; macOS and Linux, and
+//   Windows when the session helper cannot start it). It is tracked by its
+//   ChildProcess. While the child's exit has not been observed (exitCode and
+//   signalCode both null) libuv still holds the process, so its pid is still
+//   the browser's: it is ended by that pid, with no read-back
+//   (vision-browser-owner endOwnChild / endOwnChildSync). Once its exit was
+//   observed nothing is done with that pid.
+// - 'started' (Windows): the session helper's start mode started it, so it
+//   keeps none of the app's handles (startThroughHelper). It is not the app's
+//   child, so once it exits its pid can name another process: it is tracked
+//   by the pid and creation time the helper reported, and ended only while
+//   that pid still has that creation time (endVerified, endVerifiedSync),
+//   never by its pid alone.
+// Browsers left by an earlier run are a separate case: found by profile and
+// ended only once identified (freeDebugPort).
+interface ChildBrowser {
+  kind: 'child'
   child: OwnChild
   pid: number
 }
+interface StartedBrowser {
+  kind: 'started'
+  pid: number
+  /** Its creation time as vision-browser-owner reads one (ProcessFacts.created). */
+  created: string
+}
+type TrackedBrowser = ChildBrowser | StartedBrowser
 let spawnedBrowser: TrackedBrowser | null = null
 
 /** How the owner checks reach the OS. Test seam: _setVisionOwnerPortsForTest. */
@@ -806,29 +825,140 @@ async function anyStillRunning(ended: ProcessFacts[], ports: OwnerPorts): Promis
  *  observed, nothing. */
 async function killSpawnedBrowserForRelaunch(): Promise<void> {
   const t = spawnedBrowser
-  spawnedBrowser = null
   if (!t) return
+  if (t.kind === 'started') {
+    if (await endStartedBrowser(t)) logInfo(`[vision] Ended the previous app-started browser (pid ${t.pid}) before relaunch`)
+    return
+  }
+  spawnedBrowser = null
   if (await endOwnChild(t.child, ownerPorts())) {
     logInfo(`[vision] Ended the previous app-started browser (pid ${t.pid}) before relaunch`)
   }
 }
 
+/** End a browser the session helper started through the awaited verified
+ *  path (endVerified: its pid, only while it still has its creation time).
+ *  It stays tracked until that has answered, so an exit that comes first
+ *  (killSpawnedBrowser, synchronous) still ends it. Resolves whether it was
+ *  ended. */
+async function endStartedBrowser(t: StartedBrowser): Promise<boolean> {
+  try {
+    return await endVerified({ pid: t.pid, created: t.created }, ownerPorts())
+  } finally {
+    if (spawnedBrowser === t) spawnedBrowser = null
+  }
+}
+
+/** Stop (stopGlobalVision): the app's own child is ended as at quit
+ *  (killSpawnedBrowser, today's synchronous end); a browser the helper
+ *  started through the awaited verified path, so that check does not hold
+ *  up the main process. */
+async function endSpawnedBrowserAtStop(): Promise<void> {
+  const t = spawnedBrowser
+  if (!t) return
+  if (t.kind === 'child') {
+    killSpawnedBrowser()
+    return
+  }
+  if (await endStartedBrowser(t)) logInfo(`[vision] Ended the app-started browser (pid ${t.pid})`)
+}
+
 /**
- * End the browser tree the app spawned, if any, synchronously (stop and quit:
- * the process may exit before an awaited kill runs). It is the app's own
- * child: while its exit has not been observed it is ended by its pid
- * (Windows: taskkill /T /F, bounded; Linux and macOS: its process group,
- * SIGTERM then SIGKILL after a short bounded wait), with no read-back. Once
- * its exit was observed nothing is done with that pid. Safe to call
- * repeatedly; clears the tracked browser.
+ * End the browser tree the app started, if any, synchronously (quit and every
+ * hard exit, hard-exit.ts: the process may exit before an awaited kill runs).
+ * The app's own child: while its exit has not been observed it is ended by
+ * its pid (Windows: taskkill /T /F, bounded; Linux and macOS: its process
+ * group, SIGTERM then SIGKILL after a short bounded wait), with no read-back.
+ * Once its exit was observed nothing is done with that pid. A browser the
+ * session helper started (Windows): its tree is ended only while its pid
+ * still has the creation time the helper reported, checked at that moment
+ * (endVerifiedSync, bounded by OWNER_SYNC_KILL_TIMEOUT_MS), never by its pid
+ * alone. Safe to call repeatedly; clears the tracked browser.
  */
 export function killSpawnedBrowser(): void {
   const t = spawnedBrowser
   spawnedBrowser = null
   if (!t) return
-  if (endOwnChildSync(t.child, ownerPorts())) {
-    logInfo(`[vision] Ended the app-started browser (pid ${t.pid})`)
+  const ports = ownerPorts()
+  const ended = t.kind === 'started'
+    ? endVerifiedSync({ pid: t.pid, created: t.created }, ports)
+    : endOwnChildSync(t.child, ports)
+  if (ended) logInfo(`[vision] Ended the app-started browser (pid ${t.pid})`)
+}
+
+/** How long the session helper's start mode may take. */
+const HELPER_START_TIMEOUT_MS = 10_000
+/** The most of the helper's answer that is read. */
+const HELPER_START_MAX_OUTPUT = 64 * 1024
+
+/** The session helper the installer put beside the app, when it is there.
+ *  A start is short-lived, so it runs from there: only a holder, which
+ *  outlives the app, needs the per-user copy (session-helper/install.ts). */
+function visionHelperPath(): string | null {
+  try {
+    const p = bundledHelperPath({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), platform: 'win32' })
+    return fs.existsSync(p) ? p : null
+  } catch { return null }
+}
+
+/** The one line the helper's start mode prints, read strictly: exactly a pid
+ *  and a creation time of digits. Anything else is null. Exported for tests. */
+export function parseHelperStart(stdout: string): { pid: number; created: string } | null {
+  const line = String(stdout ?? '').trim()
+  if (line === '' || /[\r\n]/.test(line)) return null
+  let v: unknown
+  try { v = JSON.parse(line) } catch { return null }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const o = v as Record<string, unknown>
+  if (Object.keys(o).join(',') !== 'pid,created') return null
+  const { pid, created } = o
+  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff) return null
+  if (typeof created !== 'string' || !/^\d{1,20}$/.test(created)) return null
+  return { pid, created }
+}
+
+/**
+ * Windows: start the browser through the session helper's start mode
+ * (`aicc-helper start`), which passes on none of the app's handles. A browser
+ * the app spawns itself inherits every handle the app lets a child inherit,
+ * and keeps each for as long as it runs, after the app has ended too. The
+ * helper is given the browser by its full path, its arguments unchanged, and
+ * the browser's own folder to run in, so it keeps no folder of the app's
+ * open either. Resolves the pid and creation time the helper reports, or null
+ * after one log line saying why the helper was not used: no helper in this
+ * install, a browser named by a bare name (found on PATH, which the helper
+ * never searches), or a start that failed, timed out or gave an answer that
+ * is not one. On null the launch is the plain spawn, as before. Elsewhere
+ * than Windows: null, with nothing logged.
+ */
+async function startThroughHelper(executable: string, args: string[], headless: boolean): Promise<{ pid: number; created: string } | null> {
+  if (ownerPorts().platform !== 'win32') return null
+  const helper = visionHelperPath()
+  if (!helper) {
+    logInfo('[vision] The session helper is not in this install; the vision browser is started directly')
+    return null
   }
+  if (!/^[A-Za-z]:[\\/]/.test(executable)) {
+    logInfo(`[vision] The browser is named without a full path (${executable}); it is started directly`)
+    return null
+  }
+  const helperArgs = ['start', ...(headless ? ['--hide'] : []), '--cwd', path.win32.dirname(executable), '--', executable, ...args]
+  return new Promise((resolve) => {
+    const failed = (why: string) => {
+      logInfo(`[vision] The session helper could not start the vision browser (${why.slice(0, 300)}); it is started directly`)
+      resolve(null)
+    }
+    try {
+      execFile(helper, helperArgs, { windowsHide: true, timeout: HELPER_START_TIMEOUT_MS, maxBuffer: HELPER_START_MAX_OUTPUT, encoding: 'utf8' }, (err, stdout, stderr) => {
+        if (err) return failed(String(stderr ?? '').trim() || (err instanceof Error ? err.message : String(err)))
+        const started = parseHelperStart(String(stdout ?? ''))
+        if (!started) return failed('its answer could not be read')
+        resolve(started)
+      })
+    } catch (err) {
+      failed(err instanceof Error ? err.message : String(err))
+    }
+  })
 }
 
 /**
@@ -895,6 +1025,14 @@ export async function launchBrowser(browser: 'chrome' | 'edge', debugPort: numbe
 
   const command = `"${executable}" ${args.join(' ')}`
   logInfo(`[vision] Launching browser: ${command}`)
+  // Windows: through the session helper when it can, so the browser keeps
+  // none of the app's handles; it is then tracked by pid and creation time.
+  const started = await startThroughHelper(executable, args, headless)
+  if (started) {
+    spawnedBrowser = { kind: 'started', pid: started.pid, created: started.created }
+    logInfo(`[vision] The session helper started the vision browser (pid ${started.pid})`)
+    return { pid: started.pid, command }
+  }
   const child = spawn(executable, args, { detached: true, stdio: 'ignore', windowsHide: headless })
   child.on('error', (err) => {
     logInfo(`[vision] Browser launch failed; vision disabled (non-fatal): ${err instanceof Error ? err.message : String(err)}`)
@@ -910,6 +1048,6 @@ export async function launchBrowser(browser: 'chrome' | 'edge', debugPort: numbe
   // the app's own detached child, so the app ends it at stop/quit and before a
   // relaunch, by its pid while its exit has not been observed. (A browser the
   // USER opened themselves never comes through here, so it is never tracked.)
-  if (spawnedPid) spawnedBrowser = { child, pid: spawnedPid }
+  if (spawnedPid) spawnedBrowser = { kind: 'child', child, pid: spawnedPid }
   return { pid: child.pid || 0, command }
 }

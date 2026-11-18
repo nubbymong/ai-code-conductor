@@ -138,6 +138,9 @@ vi.mock('../../../src/main/session-helper/app-wiring', () => ({
 }))
 vi.mock('../../../src/main/registry', () => ({ readRegistry: () => null, writeRegistry: () => true }))
 vi.mock('../../../src/main/data-paths', () => ({ getDataDirectory: () => '/mock/dataDir' }))
+// The vision browser's end (hard-exit.ts runs it before app.exit, plan
+// section C2), as a step. hard-exit.ts itself is the real one.
+vi.mock('../../../src/main/vision-manager', () => ({ killSpawnedBrowser: vi.fn(() => { steps.order.push('end the vision browser') }) }))
 
 import { registerUpdateHandlers } from '../../../src/main/ipc/update-handlers'
 
@@ -404,7 +407,7 @@ describe('update:installAndRestart — held terminals keep running through an up
     await on('win32', async () => {
       steps.releaseDelayMs = 20 // a release that takes a while: the kill still waits for it
       await expect(invoke()).resolves.toBe(true)
-      expect(steps.order).toEqual(['release held terminals', 'released', 'kill every PTY', 'launch', 'exit'])
+      expect(steps.order).toEqual(['release held terminals', 'released', 'kill every PTY', 'launch', 'end the vision browser', 'exit'])
     })
   })
 
@@ -412,13 +415,13 @@ describe('update:installAndRestart — held terminals keep running through an up
     await on('darwin', async () => {
       gh.verified = { path: '/mock/dataDir/updates/ccc-upd-XYZ/CCC-2.1.1-mac.dmg', sha256: 'a'.repeat(64) }
       await expect(invoke()).resolves.toBe(true)
-      expect(steps.order).toEqual(['kill every PTY', 'launch', 'exit'])
+      expect(steps.order).toEqual(['kill every PTY', 'launch', 'end the vision browser', 'exit'])
     })
     steps.order.length = 0
     await on('linux', async () => {
       gh.verified = { path: '/mock/dataDir/updates/ccc-upd-XYZ/CCC-2.1.1.AppImage', sha256: 'a'.repeat(64) }
       await expect(invoke()).resolves.toBe(true)
-      expect(steps.order).toEqual(['kill every PTY', 'launch', 'exit'])
+      expect(steps.order).toEqual(['kill every PTY', 'launch', 'end the vision browser', 'exit'])
     })
   })
 
@@ -451,7 +454,7 @@ describe('update:installAndRestart — held terminals keep running through an up
     await on('win32', async () => {
       steps.releaseThrows = true
       await expect(invoke()).resolves.toBe(true)
-      expect(steps.order).toEqual(['release held terminals', 'kill every PTY', 'launch', 'exit'])
+      expect(steps.order).toEqual(['release held terminals', 'kill every PTY', 'launch', 'end the vision browser', 'exit'])
       expect(shownErrorBoxes).toHaveLength(0)
     })
   })
@@ -482,6 +485,43 @@ describe('update:installAndRestart — held terminals keep running through an up
       await expect(invoke()).rejects.toThrow(/changed on disk/)
       expect(steps.order).toEqual(['error box'])
     })
+  })
+})
+
+describe('update:installAndRestart — the vision browser ends with the app (plan section C2)', () => {
+  async function on(platform: NodeJS.Platform, run: () => Promise<void>): Promise<void> {
+    const original = process.platform
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+    try {
+      await run()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: original, configurable: true })
+    }
+  }
+
+  it('the browser is ended once the installer has started, just before app.exit, on every OS', async () => {
+    const cases: Array<[NodeJS.Platform, string]> = [['win32', 'CCC-2.1.1.exe'], ['darwin', 'CCC-2.1.1-mac.dmg'], ['linux', 'CCC-2.1.1.AppImage']]
+    for (const [platform, file] of cases) {
+      steps.order.length = 0
+      exitCalls.length = 0
+      await on(platform, async () => {
+        gh.verified = { path: `/mock/dataDir/updates/ccc-upd-XYZ/${file}`, sha256: 'a'.repeat(64) }
+        await expect(invoke()).resolves.toBe(true)
+      })
+      const order = steps.order
+      expect(order.filter((s) => s === 'end the vision browser'), platform).toHaveLength(1)
+      expect(order.slice(-3), platform).toEqual(['launch', 'end the vision browser', 'exit'])
+      expect(exitCalls, platform).toEqual([0])
+    }
+  })
+
+  it('a launch that fails leaves the browser running: the app stays, and so does vision', async () => {
+    await on('win32', async () => {
+      spawnState.script = { emit: 'error', error: new Error('spawn EACCES') }
+      await expect(invoke()).rejects.toThrow(/EACCES/)
+    })
+    expect(steps.order).not.toContain('end the vision browser')
+    expect(exitCalls).toEqual([])
   })
 })
 

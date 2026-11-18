@@ -9,6 +9,7 @@
 //! aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes N] [--detach]
 //! aicc-helper list --store <folder>
 //! aicc-helper hook --store <folder> --session <sid>
+//! aicc-helper start [--hide] --cwd <folder> -- <program> [args...]   (Windows only)
 //! ```
 //!
 //! `hold` runs one holder (protocol section 15). With `--detach` it starts the
@@ -33,7 +34,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | hook> [options]";
+const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | hook | start> [options]";
 /// The ring is 1 KiB to 64 MiB; the protocol's default is 2 MiB.
 const MIN_RING_BYTES: usize = 1024;
 const MAX_RING_BYTES: usize = 64 * 1024 * 1024;
@@ -128,6 +129,8 @@ fn main() -> ExitCode {
         "selftest" => cmd_selftest(rest),
         "hold" => cmd_hold(rest),
         "list" => cmd_list(rest),
+        // Start one program that keeps none of this process's handles (Windows).
+        "start" => aicc_helper::start::command(rest),
         // The child the self-test holds on a terminal; not a public command.
         "__echo" => match selftest::echo_child() {
             Ok(()) => ExitCode::SUCCESS,

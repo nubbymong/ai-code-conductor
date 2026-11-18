@@ -318,6 +318,11 @@
    "how": "system-folder",
    "reason": "The browser-ownership checks: Windows PowerShell by its full path under an absolute SystemRoot (powershellPath); elsewhere ps by its full path (posixTool)."
   },
+  "src/main/vision-manager.ts :: execFile(helper": {
+   "count": 1,
+   "how": "app-path",
+   "reason": "Windows only: the session helper the installer put beside the app (resources/helper, bundledHelperPath), by its full path and only when that file exists, arguments as a list, no shell, a 10 s bound. Its start mode starts the vision browser, named by the full path of an install that exists (a bare browser name is never handed to it), with no handle passed on; the helper exits at once and searches nothing."
+  },
   "src/main/vision-manager.ts :: spawn(executable": {
    "count": 1,
    "how": "by-name",

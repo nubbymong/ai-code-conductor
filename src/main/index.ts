@@ -120,6 +120,7 @@ import { peekSessionState, hasSavedSessionState, SessionState } from './session-
 import { createAppSessionDurability } from './app-session-durability'
 import { getConfigDir, snapshotConfig, readConfig, readConfigChecked } from './config-manager'
 import { stopGlobalVision, killSpawnedBrowser, cleanupLegacyVisionMarkers } from './vision-manager'
+import { exitOnSigterm } from './hard-exit'
 import { startConductorMcpServer, stopConductorMcpServer, startBrowserAtBoot, isMcpServerRunning, getMcpPort } from './conductor-mcp-server'
 import { loadWindowState, clampToVisibleDisplay, saveWindowStateFor } from './window-state'
 import { registerCredentialHandlers } from './ipc/credentials-handlers'
@@ -472,12 +473,13 @@ if (!gotTheLock) {
     // Ctrl+C on a dev run still terminates in one press — a SIGINT handler here
     // re-entered the vetoable graceful-close dialog and left the app alive
     // (adversarial-review round-2). Flush, then exit HARD: app.quit() would be
-    // vetoed by that same dialog, so a signal must not route through it.
-    process.on('SIGTERM', () => {
-      sessionDurability.flushOnExit('SIGTERM')
-      try { flushIndexingGaps() } catch { /* best-effort */ }
-      app.exit(0)
-    })
+    // vetoed by that same dialog, so a signal must not route through it. The
+    // hard-exit teardown (hard-exit.ts) runs before the exit, as on an update.
+    process.on('SIGTERM', () => exitOnSigterm({
+      flushSessions: () => sessionDurability.flushOnExit('SIGTERM'),
+      flushIndexingGaps: () => flushIndexingGaps(),
+      exit: (code) => app.exit(code),
+    }))
 
     // Expose dev/prod build mode to the renderer for DEV labeling (title + badge
     // + accent). Registered early so the renderer can read it on first paint.

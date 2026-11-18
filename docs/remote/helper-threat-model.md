@@ -417,6 +417,21 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   slice S12). The hook mode reads untrusted input on its standard input, keeps
   at most 4 MiB of it, and never prints or exits other than 0, so nothing it
   reads reaches the CLI's conversation through it.
+- **A program the helper starts for the app keeps none of the app's handles
+  (from 2.1.3-beta.8, Windows).** `aicc-helper start` (protocol 15, "Starting
+  a program") starts the program the app names, by the absolute path it is
+  given, with inheritance off and no standard handles, so nothing the app had
+  open reaches it; the helper itself exits at once. The mode gives the app no
+  new power: the app can already start any program it names, and this only
+  starts one holding fewer handles. It never searches PATH, and it refuses a
+  batch file and a name Windows would open as another, so the file it starts
+  is the file named. It prints the program's pid and creation time, and the
+  app ends the program only while that pid still has that creation time. The
+  app starts only the vision browser through it, from the browser's own
+  folder. Tested by `the_program_it_starts_keeps_none_of_the_starters_handles`
+  (with a control that inherits the same pipe end, so the test can fail) and
+  `it_says_which_process_it_started_in_the_form_the_app_checks`
+  (`helper/tests/start.rs`).
 
 ## 4 Review
 

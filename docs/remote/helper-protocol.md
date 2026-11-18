@@ -505,6 +505,35 @@ a job that does not keeps the holder inside it, and the holder then ends when
 the job does (`--detach` says so in a note on stderr). Nothing else tells the
 app whether a holder outlived it: list mode at start-up is the check.
 
+**Starting a program (Windows only).** The app starts the vision browser with
+
+```
+aicc-helper start [--hide] --cwd <folder> -- <program> [args...]
+```
+
+The program is started by the exact path given, which `CreateProcessW` is
+handed as the program, so nothing is searched for; the arguments after it are
+quoted as the holder quotes a launch's `argv`. It runs as a detached process
+in a process group of its own, in `<folder>`, with its window hidden under
+`--hide`, and it inherits no handle: inheritance is off and its standard
+input, output and error are nothing. The helper is given every handle the app
+lets a child inherit, as any child of the app is, but it exits at once. The
+program must be named by a drive-absolute path (`C:\...`), must not be a batch
+file, and must not be a name Windows opens as another (a part of dots alone, a
+trailing separator, a trailing dot or space). It takes at most 256 arguments
+of at most 8192 characters, the folder is an absolute path of at most 4096
+characters, and none of them may hold a NUL character. On success the helper
+prints one line, `{"pid":<n>,"created":"<t>"}`, and exits 0 without waiting
+for the program. `created` is the program's creation time as
+`Win32_Process.CreationDate.ToFileTimeUtc()` gives it (steps of 100 ns since
+1601, UTC, to the microsecond), read from the process handle the start
+returned, so the app ends that process later only while its pid still has that
+creation time. A program it refuses, or one that cannot be started, exits 1
+with a message on stderr, and nothing is left running; a command line it
+cannot read exits 2. On macOS and Linux the mode exits 1. The app runs it from
+the install folder (`resources/helper`): it does not outlive the app, so it
+needs no per-user copy.
+
 **Endpoint: only this user can connect.** No network socket is opened.
 
 - **Windows:** the named pipe `\\.\pipe\aicc-helper-<sid>-<32 hex>`. Its

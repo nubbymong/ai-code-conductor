@@ -12,6 +12,13 @@
  *   (SIGTERM, then SIGKILL after a grace). Once its exit was observed, nothing
  *   is done with that pid.
  *
+ * - On Windows the app starts the browser through the session helper's start
+ *   mode when it can (vision-manager.ts), so the browser keeps none of the
+ *   app's handles. That browser is not the app's child: the helper reports its
+ *   pid and creation time, and it is ended only while that pid still has that
+ *   creation time (endVerified, and endVerifiedSync on the exits that cannot
+ *   wait), never by its pid alone.
+ *
  * - A browser left by an earlier run of the app is found by its profile,
  *   whether or not it listens on the debug port, and ended only once it is
  *   identified as the app's vision browser by its NAME (a browser executable
@@ -25,8 +32,9 @@
  * identify", which ends nothing (and, round 2, Q4: the launch then tells it
  * from "none found", scanAppVisionBrowsers, and does not start a browser on a
  * profile folder that is locked, profileLockOf). The queries run
- * asynchronously; the only synchronous call is the quit-time taskkill of the
- * app's own browser. Nothing is put into a PowerShell script except a pid and
+ * asynchronously; the only synchronous calls are the quit-time ends of the
+ * app's own browser (its taskkill, or endVerifiedSync for one the helper
+ * started). Nothing is put into a PowerShell script except a pid and
  * a creation time, both checked as plain digits first; command lines are
  * matched here in TypeScript.
  *
@@ -67,8 +75,8 @@ export interface OwnerPorts {
   /** Run a program by absolute path, no shell. Resolves its standard output;
    *  rejects on a non-zero exit, an error or the timeout. */
   run(file: string, args: string[], timeoutMs: number): Promise<string>
-  /** The synchronous counterpart, used only for the taskkill of the app's own
-   *  browser. Throws on failure. */
+  /** The synchronous counterpart, used only for the quit-time end of the
+   *  app's own browser (its taskkill, or endVerifiedSync). Throws on failure. */
   runSync(file: string, args: string[], timeoutMs: number): string
   /** process.kill. */
   signal(pid: number, sig: NodeJS.Signals): void
@@ -95,7 +103,8 @@ export type ProfileLockState = 'free' | 'held' | 'unknown'
 /** Every async query and the awaited verified kill: a cold PowerShell on a
  *  busy machine can take well over 4 s to answer. */
 export const OWNER_QUERY_TIMEOUT_MS = 20000
-/** The synchronous taskkill of the app's own browser. */
+/** The synchronous end of the app's own browser at quit: its taskkill, or
+ *  endVerifiedSync's script. */
 export const OWNER_SYNC_KILL_TIMEOUT_MS = 5000
 /** POSIX: how long a browser gets after SIGTERM before SIGKILL (async paths). */
 export const POSIX_TERM_GRACE_MS = 3000
@@ -573,6 +582,24 @@ export async function endVerified(target: VerifiedTarget, ports: OwnerPorts = de
     // The same process after the grace, re-read just above.
     signalTree(target.pid, 'SIGKILL', ports)
     return true
+  } catch { return false }
+}
+
+/**
+ * endVerified's synchronous counterpart, Windows only, for the exits that
+ * cannot wait for a promise (quit, SIGTERM, an update install): the same
+ * script (windowsEndScript, which ends the tree only while the pid still has
+ * the creation time), run with runSync and bounded by
+ * OWNER_SYNC_KILL_TIMEOUT_MS. Returns whether it was ended. Never throws;
+ * elsewhere it does nothing and returns false.
+ */
+export function endVerifiedSync(target: VerifiedTarget, ports: OwnerPorts = defaultOwnerPorts()): boolean {
+  if (ports.platform !== 'win32' || !targetOk(target, ports.platform)) return false
+  const ps = powershellPath(ports)
+  if (!ps) return false
+  try {
+    const out = ports.runSync(ps, [...POWERSHELL_ARGS, windowsEndScript(target.pid, target.created)], OWNER_SYNC_KILL_TIMEOUT_MS)
+    return String(out).trim() === 'ended'
   } catch { return false }
 }
 
