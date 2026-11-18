@@ -67,3 +67,37 @@ replaced the file-based one, and the `hold --dir`, `attach` and `end` commands
 this script drives are gone. To run it again, use the `helper-windows` artifact
 of a 2.1.3-beta.5 build. Survival over the new transport is covered by
 `tests/probe_transport.rs` in CI, short of the installer step.
+
+# Probe P16: what does one helper process per hook event cost on Windows?
+
+`p16-windows-hook-cost.ps1` (ADR-030, probe table; it gates hooks through the
+holder, and a FAIL means declared exception 11). Run it on the Windows test
+machine, not in CI, from an administrator session (it reads Defender's
+exclusions to confirm Defender is as shipped), with the signed per-user copy
+of the installed app's helper:
+
+```powershell
+.\p16-windows-hook-cost.ps1 -Helper "$env:LOCALAPPDATA\AI Code Conductor\helper\<version>-<12 hex>\aicc-helper.exe" -Store "$env:TEMP\p16-store" -Claude <path to claude.exe>
+```
+
+It watches how `claude.exe` starts a command hook (step 0), holds one empty
+session in a throwaway store, then starts `aicc-helper list` behind that same
+launcher 300 times at 2 a second and 50 times back to back, counting the wall
+time and the CPU time of every process in each chain. Beside the verdict it
+reads the CPU of Defender's own process, the holder and the whole machine,
+times one first start of a fresh copy of the helper, and times a loopback
+HTTP POST for reference, taken the way the hooks gateway takes it (a new
+connection each time, the token checked, the body parsed). The pass line is
+in the script's header and was fixed before measuring; only the plan's
+schedule gives a verdict, and any other is a check run. It refuses a helper
+that is not the installed app's signed per-user copy, a store folder that
+already exists (or whose parent does not), an output folder inside the
+store, a path the launcher's shell would change, a schedule that would
+outlast the holder's 600-second away clock, and a missing node. It cleans up its
+holder and the store it made in a `finally` block, then looks for anything
+of its own still running. The last line is `P16 RESULT: PASS`, `FAIL -
+<reasons>`, `CHECK RUN - <...>` or `COULD NOT RUN - <reason>` (exit 0, 1, 3
+or 2), with `; clean-up incomplete: <what>` added (and exit 2) when
+something was left or could not be checked. The raw runs are
+`p16-runs.csv`, and the result files write personal paths as placeholders.
+The answer is in ADR-030 after the P7 result.

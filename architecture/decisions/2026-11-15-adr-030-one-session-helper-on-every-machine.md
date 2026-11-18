@@ -403,6 +403,34 @@ removes the install folder's files (run from there, the holder survived but its 
 file was gone, so nothing could attach again). Local sessions through the holder (S6)
 are unblocked on Windows on that condition.
 
+P16 result (2026-11-18, Windows test machine, Defender real-time protection on as
+shipped, the signed helper of 2.1.3-beta.7 from its per-user copy, the same file as in
+the published installer): pass, on the pass line as the plan wrote it, which counts the
+CPU of the hook chain's own processes. Claude Code 2.1.296 starts a command hook through
+Git for Windows: `bin\bash.exe -c "<command>"` starts `usr\bin\bash.exe`, which starts
+the command, and the launcher gets a console of its own, so one event is four
+processes. `aicc-helper list` behind that launcher, standing in for one hook event (all
+a hook mode does but send one frame), ran 350 times (300 at 2 a second, 50 back to back)
+with no failure: p95 wall time 36.4 ms, longest 41.8 ms, mean CPU 29.1 ms per event,
+against a pass line of 150 ms, 750 ms and 50 ms set before measuring (nine earlier full
+runs gave the same picture). The helper is about 3 ms of that CPU; Git Bash and its
+console host are the rest. Outside the chain, per event and net of idle, Defender's own
+process used 20.1 ms, the program starting the launcher 0.7 ms and the holder 0.1 ms,
+which with the chain is already 50.0 ms; counted from the processors' idle cycles, the
+whole machine spent 57.2 ms per event (55.2 to 55.9 ms in the three runs before), the
+probe's own process (3.2 ms, the starter's 0.7 ms among it) included. So the chain
+passes the CPU line, and an event costs this machine about 53 to 57 ms of CPU in all.
+Defender had already scanned the helper before the measured runs (here, as for a held
+session, the holder started from the same file first); a fresh copy in a new folder took
+112 ms on its first start, and a first start of a new version's bytes, which every
+update brings, was not measured. The stand-in is `list`, not the hook mode. Today's HTTP
+hook, for reference, taken as the gateway takes it (a new connection for each POST, the
+token checked, the body parsed; not what the gateway then does with the event), takes
+about 1.0 ms of wall time and 1.5 ms of CPU per POST, client and server. One fast
+desktop CPU was measured (`helper/probes/p16-windows-hook-cost.ps1`). Hooks through the
+holder (S12) are unblocked on the machine measured; the hook command must be written for
+Git Bash (forward slashes, quoted paths).
+
 ## Parked questions
 
 None blocks beta 4. Each default stands until the owner is asked, before the
