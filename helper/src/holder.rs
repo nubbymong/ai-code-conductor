@@ -14,9 +14,16 @@
 //! the live channel. So a client that sees the channel close with
 //! `exit_code()` set has had every byte the terminal gave up within `DRAIN`
 //! (2 s) of the exit; output still coming after that is not waited for.
+//!
+//! The hook queue (`HookQueue`, capability `hooks`) is the holder's too: the
+//! hook events of the session, numbered, waiting while no connection that
+//! takes them is attached. It belongs to the holder process, not to a
+//! launch: an event may come before anything is launched.
 
+use crate::json::Value;
 use crate::pty::{Conpty, Pty, PtySize, SpawnOptions};
 use crate::ring::{Replay, Ring, RingError};
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -40,6 +47,92 @@ pub const END_GRACE: Duration = Duration::from_secs(2);
 
 /// How long the last output may take to drain once the first process exited.
 pub const DRAIN: Duration = Duration::from_secs(2);
+
+/// The most hook events that wait for a connection that takes them.
+pub const HOOK_QUEUE_EVENTS: usize = 256;
+
+/// The most payload, as JSON, that waits for a connection that takes hook
+/// events: 2 MiB.
+pub const HOOK_QUEUE_BYTES: usize = 2 * 1024 * 1024;
+
+/// One hook event, numbered with its session's `seq`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HookEvent {
+    pub seq: u64,
+    pub kind: String,
+    pub payload: Value,
+    /// The payload's size as JSON, counted against `HOOK_QUEUE_BYTES`.
+    pub bytes: usize,
+}
+
+/// A session's hook events: each takes the next `seq` (from 1), then waits
+/// here until it is sent. While no connection takes them the queue keeps at
+/// most `HOOK_QUEUE_EVENTS` events and `HOOK_QUEUE_BYTES` of payload, the
+/// oldest dropped first; the event sent next carries how many were dropped
+/// (`lost`). One event is at most 64 KiB, so the newest is always kept.
+#[derive(Debug, Default)]
+pub struct HookQueue {
+    last_seq: u64,
+    waiting: VecDeque<HookEvent>,
+    bytes: usize,
+    lost: u64,
+}
+
+impl HookQueue {
+    pub fn new() -> HookQueue {
+        HookQueue::default()
+    }
+
+    /// Number an event and keep it; its `seq`. An event over a bound drops
+    /// the oldest waiting until both bounds hold again.
+    pub fn push(&mut self, kind: String, payload: Value, bytes: usize) -> u64 {
+        self.last_seq += 1;
+        let seq = self.last_seq;
+        self.bytes += bytes;
+        self.waiting.push_back(HookEvent { seq, kind, payload, bytes });
+        while self.waiting.len() > 1 && (self.waiting.len() > HOOK_QUEUE_EVENTS || self.bytes > HOOK_QUEUE_BYTES) {
+            if let Some(old) = self.waiting.pop_front() {
+                self.bytes -= old.bytes;
+                self.lost += 1;
+            }
+        }
+        seq
+    }
+
+    /// The oldest waiting event, and how many were dropped before it: what
+    /// its `event` message carries as `lost` (0: nothing to say).
+    pub fn front(&self) -> Option<(&HookEvent, u64)> {
+        self.waiting.front().map(|ev| (ev, self.lost))
+    }
+
+    /// The oldest waiting event was sent: it goes, and the count it carried
+    /// starts again from 0.
+    pub fn sent(&mut self) {
+        if let Some(ev) = self.waiting.pop_front() {
+            self.bytes -= ev.bytes;
+            self.lost = 0;
+        }
+    }
+
+    /// Events waiting.
+    pub fn len(&self) -> usize {
+        self.waiting.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.waiting.is_empty()
+    }
+
+    /// Payload waiting, as JSON.
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// Events dropped since one was last sent.
+    pub fn lost(&self) -> u64 {
+        self.lost
+    }
+}
 
 /// Hand `chunk` to an attachment without ever waiting. False means the
 /// attachment is gone or too far behind and should be let go.
@@ -342,6 +435,85 @@ mod tests {
     fn the_queue_and_the_waits_are_bounded() {
         assert!(LIVE_QUEUE_CHUNKS > 0 && LIVE_QUEUE_CHUNKS <= 1024);
         assert!(END_GRACE <= Duration::from_secs(5) && DRAIN <= Duration::from_secs(5));
+        assert_eq!((HOOK_QUEUE_EVENTS, HOOK_QUEUE_BYTES), (256, 2 * 1024 * 1024));
+    }
+
+    fn numbered(n: u64) -> Value {
+        Value::obj(vec![("hook_event_name", Value::str("Stop")), ("n", Value::uint(n))])
+    }
+
+    /// Every seq the queue holds, oldest first.
+    fn seqs(q: &HookQueue) -> Vec<u64> {
+        q.waiting.iter().map(|e| e.seq).collect()
+    }
+
+    #[test]
+    fn hook_events_are_numbered_from_1_and_sent_oldest_first() {
+        let mut q = HookQueue::new();
+        assert!(q.front().is_none() && q.is_empty());
+        for n in 1..=3 {
+            assert_eq!(q.push("Stop".to_string(), numbered(n), 10), n);
+        }
+        assert_eq!((q.len(), q.bytes(), q.lost()), (3, 30, 0));
+        let (first, lost) = q.front().expect("an event");
+        assert_eq!((first.seq, first.kind.as_str(), &first.payload, lost), (1, "Stop", &numbered(1), 0));
+        q.sent();
+        assert_eq!(seqs(&q), vec![2, 3]);
+        assert_eq!(q.bytes(), 20);
+        q.sent();
+        q.sent();
+        q.sent();
+        assert!(q.is_empty() && q.bytes() == 0);
+        // The numbering goes on: a seq is never given twice.
+        assert_eq!(q.push("Stop".to_string(), numbered(4), 10), 4);
+    }
+
+    #[test]
+    fn past_256_events_the_oldest_go_and_the_next_one_sent_carries_how_many() {
+        let mut q = HookQueue::new();
+        for n in 1..=300 {
+            q.push("Notification".to_string(), numbered(n), 40);
+        }
+        assert_eq!(q.len(), HOOK_QUEUE_EVENTS);
+        assert_eq!(q.bytes(), 256 * 40);
+        assert_eq!(seqs(&q), (45..=300).collect::<Vec<u64>>());
+        let (first, lost) = q.front().expect("an event");
+        assert_eq!((first.seq, lost), (45, 44));
+        q.sent();
+        // Only the first sent after the drop carries it.
+        assert_eq!(q.front().map(|(e, lost)| (e.seq, lost)), Some((46, 0)));
+    }
+
+    #[test]
+    fn past_2_mib_of_payload_the_oldest_go_whatever_their_number() {
+        let mut q = HookQueue::new();
+        let big = 60 * 1024;
+        for n in 1..=40 {
+            q.push("PostToolUse".to_string(), numbered(n), big);
+            assert!(q.bytes() <= HOOK_QUEUE_BYTES, "{} bytes wait after event {n}", q.bytes());
+        }
+        // 34 events of 60 KiB fit in 2 MiB; a 35th does not.
+        let kept = HOOK_QUEUE_BYTES / big;
+        assert_eq!(kept, 34);
+        assert_eq!(q.len(), kept);
+        assert_eq!(q.lost(), 40 - kept as u64);
+        assert_eq!(seqs(&q).first(), Some(&(40 - kept as u64 + 1)));
+        // One more drops the oldest only until the bytes fit again: two here.
+        q.push("Stop".to_string(), numbered(41), HOOK_QUEUE_BYTES - (kept - 1) * big + 1);
+        assert!(q.bytes() <= HOOK_QUEUE_BYTES);
+        assert_eq!(q.len(), kept - 1);
+        assert_eq!(q.lost(), 40 - kept as u64 + 2);
+        assert_eq!(seqs(&q).last(), Some(&41));
+    }
+
+    #[test]
+    fn the_newest_event_is_always_kept() {
+        let mut q = HookQueue::new();
+        q.push("Stop".to_string(), numbered(1), 10);
+        // Larger than the whole queue: no event can be, but the newest stays.
+        q.push("Stop".to_string(), numbered(2), HOOK_QUEUE_BYTES + 1);
+        assert_eq!(seqs(&q), vec![2]);
+        assert_eq!(q.lost(), 1);
     }
 
     /// A program that runs for about 2 s, reads nothing and exits 0.

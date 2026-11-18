@@ -404,6 +404,19 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   own test, and a test of each way of closing.
 - The holder also runs in the store folder, never the app's, so it keeps no
   folder of the app's open (protocol 15).
+- **Hook events through a holder (capability `hooks`, from 2.1.3-beta.8).**
+  Any process of the same user can post a hook event to a holder
+  (`aicc-helper hook`, or a `hook.event` of its own on the endpoint). That is
+  the same boundary as today, where any process of the same user can read a
+  session's gateway token from its settings file and post to the hooks
+  gateway. The holder only numbers an event and passes it on: it runs, opens
+  and writes nothing for it, and keeps at most 256 events and 2 MiB while no
+  connection takes them. The app treats every hook payload as untrusted
+  text, and a transcript path from one passes `sanitiseTranscriptPath` before
+  it is used (plan 2.1.3-beta.8, section A4). The hook mode reads untrusted
+  input on its standard input, keeps at most 4 MiB of it, and never prints
+  or exits other than 0, so nothing it reads reaches the CLI's conversation
+  through it.
 
 ## 4 Review
 

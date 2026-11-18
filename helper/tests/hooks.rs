@@ -1,0 +1,627 @@
+//! Hook events through a holder (protocol section 15, capability `hooks`):
+//! the hook mode run as Claude Code runs a command hook (`aicc-helper hook`,
+//! the event on its standard input), a holder started with `hold --detach`,
+//! and test connections standing in for the app. Stand-in holders on a real
+//! endpoint cover what a real holder of this version never does: a hello
+//! without `hooks`, no answer, no hello at all.
+
+use aicc_helper::client::Client;
+use aicc_helper::frame::{Body, Frame};
+use aicc_helper::hello::{self, Hello, LOCAL_CAPS};
+use aicc_helper::json::{self, Value};
+use aicc_helper::pids;
+use aicc_helper::serve::HOLDER_CAPS;
+use aicc_helper::store::{self, Record};
+use aicc_helper::transport::{self, Listener};
+use std::fs;
+use std::io::{Read, Write};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::{mpsc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+const HELPER: &str = env!("CARGO_BIN_EXE_aicc-helper");
+const FAKE: &str = env!("CARGO_BIN_EXE_aicc-fake-cli");
+const NONCE: &str = "0123456789abcdef0123456789abcdef";
+const WAIT: Duration = Duration::from_secs(20);
+/// The hook mode's 2 s, and time to start and end its process.
+const HOOK_BOUND: Duration = Duration::from_millis(2500);
+
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+/// Every test here starts processes, one at a time: on Windows a child
+/// inherits every inheritable handle of its parent, so a spawn on one test
+/// thread could carry another thread's pipe ends (as in probe_transport.rs).
+fn one_at_a_time() -> MutexGuard<'static, ()> {
+    ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A new, empty folder of this test, removed when dropped.
+struct Folder(PathBuf);
+
+impl Folder {
+    fn new(name: &str) -> Folder {
+        let dir = std::env::temp_dir().join(format!("aicc-hooks-test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("a folder");
+        Folder(dir)
+    }
+
+    fn arg(&self) -> String {
+        self.0.to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for Folder {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn t_of(v: &Value) -> &str {
+    v.get("t").and_then(Value::as_str).unwrap_or("")
+}
+
+fn num(v: &Value, key: &str) -> Option<u64> {
+    v.get(key).and_then(Value::as_u64)
+}
+
+fn texts(messages: &[Value]) -> Vec<String> {
+    messages.iter().map(Value::to_json).collect()
+}
+
+fn msg(t: &str, id: u64, more: Vec<(&str, Value)>) -> Value {
+    let mut members = vec![("t", Value::str(t)), ("id", Value::uint(id))];
+    members.extend(more);
+    Value::obj(members)
+}
+
+/// A hook event as Claude Code writes it, with `more` (members, each after
+/// a comma) at the end.
+fn event_input(kind: &str, more: &str) -> String {
+    format!("{{\"session_id\":\"0b7c5f1e-6a3d-4c8e-9f21-5d4e3c2b1a00\",\"transcript_path\":\"/home/u/.claude/projects/p/s.jsonl\",\"cwd\":\"/home/u/p\",\"hook_event_name\":\"{kind}\"{more}}}")
+}
+
+/// A record of this test's process for `sid`, naming `endpoint`.
+fn record(sid: &str, endpoint: &str) -> Record {
+    Record {
+        session: sid.to_string(),
+        label: String::new(),
+        pid: std::process::id(),
+        endpoint: endpoint.to_string(),
+        nonce: NONCE.to_string(),
+        helper: "0.1.0".to_string(),
+        started: store::now_ms(),
+        away: 120,
+        attached: false,
+        child: "running".to_string(),
+        code: None,
+    }
+}
+
+/// Run `aicc-helper` with `args`, its output going to files: a holder it
+/// starts outlives it, and would hold a pipe open.
+fn detaching(args: &[&str], tag: &str) -> (bool, String, String) {
+    let base = std::env::temp_dir().join(format!("aicc-hooks-detach-{tag}-{}", std::process::id()));
+    let out_path = base.with_extension("out");
+    let err_path = base.with_extension("err");
+    let status = Command::new(HELPER)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(fs::File::create(&out_path).expect("a file for stdout"))
+        .stderr(fs::File::create(&err_path).expect("a file for stderr"))
+        .status()
+        .expect("run the helper");
+    let stdout = fs::read_to_string(&out_path).unwrap_or_default();
+    let stderr = fs::read_to_string(&err_path).unwrap_or_default();
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_file(&err_path);
+    (status.success(), stdout, stderr)
+}
+
+/// Start a detached holder; the record it printed.
+fn hold(store_dir: &Folder, sid: &str) -> Record {
+    let (ok, stdout, stderr) = detaching(&["hold", "--detach", "--store", &store_dir.arg(), "--session", sid, "--away", "60"], sid);
+    assert!(ok, "hold --detach failed: {stdout} / {stderr}");
+    let v = json::parse(stdout.trim().as_bytes()).unwrap_or_else(|e| panic!("hold printed {stdout:?} ({e:?})"));
+    Record::from_value(&v).unwrap_or_else(|e| panic!("hold printed a record that does not read ({e}): {stdout}"))
+}
+
+/// End a holder that still runs, from a fresh connection; quiet, as a
+/// test's clean-up may run while it is failing.
+fn end(rec: &Record) {
+    if !pids::alive(rec.pid) {
+        return;
+    }
+    if let Ok(mut client) = Client::to_record(rec, WAIT) {
+        if client.ack().is_ok() && client.send(msg("term.end", 2, vec![])).is_ok() {
+            let deadline = Instant::now() + WAIT;
+            while pids::alive(rec.pid) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+/// A holder this test started, ended when dropped. Declared after its
+/// folders, so it is dropped before them.
+struct Held(Record);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        end(&self.0);
+    }
+}
+
+/// One run of the hook mode.
+struct Ran {
+    code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    took: Duration,
+}
+
+impl Ran {
+    /// Exit 0, and not a byte on standard output or standard error.
+    fn quiet(&self) -> bool {
+        self.code == Some(0) && self.stdout.is_empty() && self.stderr.is_empty()
+    }
+
+    fn say(&self) -> String {
+        format!("exit {:?} after {:?}; stdout {:?}; stderr {:?}", self.code, self.took, String::from_utf8_lossy(&self.stdout), String::from_utf8_lossy(&self.stderr))
+    }
+}
+
+/// Run `aicc-helper hook` with `args`, `input` on its standard input, the way
+/// Claude Code runs a command hook.
+fn hook_run(args: &[&str], input: &[u8]) -> Ran {
+    let started = Instant::now();
+    let mut child = Command::new(HELPER)
+        .arg("hook")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start the hook mode");
+    let mut stdin = child.stdin.take().expect("its standard input");
+    let input = input.to_vec();
+    // The hook mode may stop reading at its deadline: a write it does not
+    // take is not a failure here. The input ends when the writer is done.
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+    let out = child.wait_with_output().expect("wait for the hook mode");
+    let _ = writer.join();
+    Ran { code: out.status.code(), stdout: out.stdout, stderr: out.stderr, took: started.elapsed() }
+}
+
+fn hook_to(store_dir: &Folder, sid: &str, input: &[u8]) -> Ran {
+    hook_run(&["--store", &store_dir.arg(), "--session", sid], input)
+}
+
+/// A connection standing in for the app: the JSON messages it read and has
+/// not yet looked at, in the order they came. Terminal output is not kept.
+struct App {
+    client: Client,
+    got: Vec<Value>,
+    next_id: u64,
+}
+
+impl App {
+    /// Connect, read the hello and ack it with `caps`.
+    fn connect(rec: &Record, caps: &[&str]) -> App {
+        let mut client = Client::to_record(rec, WAIT).expect("connect to the holder and read its hello");
+        client.send(hello::ack_message(1, caps)).expect("ack the hello");
+        App { client, got: Vec::new(), next_id: 2 }
+    }
+
+    fn id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 2;
+        id
+    }
+
+    /// The next JSON message from the stream, before `until`; None at the
+    /// end of the stream or when none came.
+    fn read(&mut self, until: Instant) -> Option<Value> {
+        loop {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return None;
+            }
+            match self.client.recv(left) {
+                Ok(Some(Frame { channel: 0, body: Body::Json(v) })) => return Some(v),
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => return None,
+            }
+        }
+    }
+
+    /// The next JSON message, one already read first, within `wait`.
+    fn next(&mut self, wait: Duration) -> Option<Value> {
+        if !self.got.is_empty() {
+            return Some(self.got.remove(0));
+        }
+        self.read(Instant::now() + wait)
+    }
+
+    /// Send `v` and wait for its answer; what came before it is kept.
+    fn call(&mut self, v: Value) -> Value {
+        let id = v.get("id").and_then(Value::as_u64).expect("a request id");
+        self.client.send(v).expect("send a request");
+        let until = Instant::now() + WAIT;
+        loop {
+            let m = match self.read(until) {
+                Some(m) => m,
+                None => panic!("no answer to request {id}; got {:?}", texts(&self.got)),
+            };
+            if num(&m, "re") == Some(id) {
+                return m;
+            }
+            self.got.push(m);
+        }
+    }
+
+    /// The next `n` messages, each of them a hook event.
+    fn events(&mut self, n: usize) -> Vec<Value> {
+        let mut out = Vec::new();
+        for i in 0..n {
+            let m = self.next(WAIT).unwrap_or_else(|| panic!("hook event {} of {n} never came", i + 1));
+            assert_eq!(t_of(&m), "event", "expected a hook event, got {}", m.to_json());
+            out.push(m);
+        }
+        out
+    }
+
+    /// True once the holder has closed this connection; what came before
+    /// the end is kept.
+    fn closed(&mut self) -> bool {
+        let until = Instant::now() + WAIT;
+        loop {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            match self.client.recv(left) {
+                Ok(Some(Frame { body: Body::Json(v), .. })) => self.got.push(v),
+                Ok(Some(_)) => {}
+                Ok(None) => return true,
+                Err(e) if transport::is_timeout(&e) => return false,
+                Err(_) => return true,
+            }
+        }
+    }
+}
+
+/// What a launch hands the fake CLI: this test's environment, as much of it
+/// as a launch allows.
+fn launch_env() -> Vec<(String, String)> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut env: Vec<(String, String)> = Vec::new();
+    for (k, v) in std::env::vars() {
+        let folded = k.to_uppercase();
+        if k.is_empty() || k.contains('=') || k.chars().count() > 255 || v.chars().count() > 32767 || seen.contains(&folded) {
+            continue;
+        }
+        seen.push(folded);
+        env.push((k, v));
+    }
+    env.truncate(1000);
+    env
+}
+
+/// Launch the fake CLI from `app`'s connection.
+fn launch(app: &mut App, cwd: &Folder) {
+    let id = app.id();
+    let env = Value::Obj(launch_env().into_iter().map(|(k, v)| (k, Value::Str(v))).collect());
+    let launched = app.call(msg(
+        "term.launch",
+        id,
+        vec![("argv", Value::strs(&[FAKE])), ("cwd", Value::Str(cwd.arg())), ("env", env), ("cols", Value::uint(120)), ("rows", Value::uint(30))],
+    ));
+    assert_eq!(t_of(&launched), "term.launched", "{}", launched.to_json());
+}
+
+/// Attach `app` from offset 0. Nothing may come before the reply.
+fn attach(app: &mut App) {
+    let id = app.id();
+    let attached = app.call(msg("term.attach", id, vec![("from", Value::uint(0))]));
+    assert_eq!(t_of(&attached), "term.attached", "{}", attached.to_json());
+    assert!(app.got.is_empty(), "before term.attached came {:?}", texts(&app.got));
+}
+
+/// Post one hook event from `app`'s connection; the seq it took.
+fn post(app: &mut App, n: u64) -> u64 {
+    let id = app.id();
+    let payload = Value::obj(vec![("hook_event_name", Value::str("Notification")), ("n", Value::uint(n))]);
+    let taken = app.call(msg("hook.event", id, vec![("kind", Value::str("Notification")), ("payload", payload)]));
+    assert_eq!(t_of(&taken), "hook.taken", "{}", taken.to_json());
+    num(&taken, "seq").expect("a seq")
+}
+
+/// A stand-in holder on a real endpoint, with a record in `store_dir`: it
+/// writes a hello offering `caps` (no hello at all for None), then reads
+/// until the client goes, and never answers. It says how many bytes it read.
+fn stand_in(store_dir: &Folder, sid: &str, caps: Option<&[&str]>) -> mpsc::Receiver<usize> {
+    let listener = Listener::bind(sid).expect("listen");
+    store::prepare(&store_dir.0).expect("a store");
+    store::write(&store_dir.0, &record(sid, listener.endpoint())).expect("a record");
+    let line = caps.map(|caps| {
+        let h = Hello { nonce: NONCE, helper_version: "0.1.0", sha256: None, os: std::env::consts::OS, arch: std::env::consts::ARCH, caps, sid, state: "live" };
+        hello::hello_line(&h).expect("a hello line")
+    });
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut read: usize = 0;
+        if let Ok(mut s) = listener.accept() {
+            if let Some(line) = line {
+                let _ = s.write_all(format!("{line}\n").as_bytes());
+                let _ = s.flush();
+            }
+            let _ = s.set_read_timeout(Some(WAIT));
+            let mut buf = [0u8; 4096];
+            loop {
+                match s.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => read += n,
+                }
+            }
+        }
+        let _ = tx.send(read);
+    });
+    rx
+}
+
+#[test]
+fn hook_runs_reach_the_attached_app_in_order_and_whole() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-order");
+    let work = Folder::new("work-order");
+    let sid = "hooks-order-01";
+    let held = Held(hold(&store_dir, sid));
+    let mut app = App::connect(&held.0, &HOLDER_CAPS);
+    assert_eq!(app.client.hello.caps, vec!["core".to_string(), "local".to_string(), "hooks".to_string()]);
+    launch(&mut app, &work);
+    attach(&mut app);
+
+    // Three runs, three events: in order, seq rising by one, the payload as
+    // Claude Code wrote it.
+    let inputs = [
+        event_input("Stop", ",\"stop_hook_active\":false"),
+        event_input("Notification", ",\"message\":\"Claude needs your permission to use Bash\""),
+        event_input("UserPromptSubmit", ",\"prompt\":\"caf\\u00e9 \\ud83d\\ude00 and a \\\"quote\\\"\""),
+    ];
+    for input in &inputs {
+        let ran = hook_to(&store_dir, sid, input.as_bytes());
+        assert!(ran.quiet(), "{}", ran.say());
+    }
+    let events = app.events(3);
+    for (n, (event, input)) in events.iter().zip(&inputs).enumerate() {
+        let sent = json::parse(input.as_bytes()).expect("the input is JSON");
+        assert_eq!(num(event, "seq"), Some(n as u64 + 1), "{}", event.to_json());
+        assert_eq!(event.get("kind"), sent.get("hook_event_name"), "{}", event.to_json());
+        assert_eq!(event.get("payload"), Some(&sent), "the payload changed on the way: {}", event.to_json());
+        assert!(event.get("lost").is_none(), "{}", event.to_json());
+    }
+
+    // A 100 KiB tool output: the tool's input and output become their
+    // sizes, the rest is whole.
+    let big = event_input("PostToolUse", &format!(",\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":\"cat big.txt\"}},\"tool_response\":\"{}\"", "x".repeat(100 * 1024)));
+    let ran = hook_to(&store_dir, sid, big.as_bytes());
+    assert!(ran.quiet(), "{}", ran.say());
+    let event = app.events(1).remove(0);
+    assert_eq!(num(&event, "seq"), Some(4), "{}", event.to_json());
+    let want = json::parse(event_input("PostToolUse", ",\"tool_name\":\"Bash\",\"tool_input\":{\"cut\":25},\"tool_response\":{\"cut\":102402}").as_bytes()).expect("JSON");
+    assert_eq!(event.get("payload"), Some(&want), "{}", event.to_json());
+    end(&held.0);
+}
+
+#[test]
+fn a_hook_run_that_cannot_pass_its_event_on_exits_0_and_says_nothing() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-quiet");
+    let stale_dir = Folder::new("store-stale");
+    let work = Folder::new("work-quiet");
+    let sid = "hooks-quiet-01";
+    let held = Held(hold(&store_dir, sid));
+    let mut app = App::connect(&held.0, &HOLDER_CAPS);
+    launch(&mut app, &work);
+    attach(&mut app);
+    let good = event_input("Stop", "");
+
+    // The command line: none, no session, a session id that breaks its
+    // pattern, an unknown option, a store that is not there.
+    let store_arg = store_dir.arg();
+    let missing = store_dir.0.join("missing");
+    let missing_arg = missing.to_string_lossy().into_owned();
+    for args in [
+        &[][..],
+        &["--store", store_arg.as_str()][..],
+        &["--store", store_arg.as_str(), "--session", "bad id"][..],
+        &["--store", store_arg.as_str(), "--session", sid, "--verbose", "1"][..],
+        &["--store", missing_arg.as_str(), "--session", sid][..],
+    ] {
+        let ran = hook_run(args, good.as_bytes());
+        assert!(ran.quiet(), "{args:?}: {}", ran.say());
+    }
+    assert!(!missing.exists(), "the hook mode made the store");
+
+    // A record whose holder is gone: nothing listens on its endpoint.
+    let stale_sid = "hooks-stale-01";
+    let gone = transport::endpoint_name(stale_sid, &"0".repeat(transport::ENDPOINT_RANDOM_HEX));
+    store::prepare(&stale_dir.0).expect("a store");
+    store::write(&stale_dir.0, &record(stale_sid, &gone)).expect("a record");
+    let ran = hook_to(&stale_dir, stale_sid, good.as_bytes());
+    assert!(ran.quiet(), "a stale record: {}", ran.say());
+
+    // What came on standard input is not an event of the nine: nothing, not
+    // JSON, not an object, another kind, or over 4 MiB.
+    let over = format!("{{\"hook_event_name\":\"Stop\",\"x\":\"{}\"}}", "x".repeat(4 * 1024 * 1024));
+    for (what, input) in [
+        ("nothing", Vec::new()),
+        ("not JSON", b"not json".to_vec()),
+        ("not an object", b"[\"Stop\"]".to_vec()),
+        ("another kind", event_input("PermissionRequest", "").into_bytes()),
+        ("over 4 MiB", over.into_bytes()),
+    ] {
+        let ran = hook_to(&store_dir, sid, &input);
+        assert!(ran.quiet(), "{what}: {}", ran.say());
+    }
+
+    // A holder that serves 16 connections already (the app and 15 more)
+    // answers busy.
+    let idle: Vec<Client> = (0..15).map(|_| Client::to_record(&held.0, WAIT).expect("an idle connection")).collect();
+    let ran = hook_to(&store_dir, sid, good.as_bytes());
+    assert!(ran.quiet(), "busy: {}", ran.say());
+    assert!(ran.took < HOOK_BOUND, "busy: {}", ran.say());
+    drop(idle);
+
+    // None of those reached the holder: the next event is the session's
+    // first. (A run made while the holder still counts the idle connections
+    // is busy too, and is made again.)
+    let mut first = None;
+    for _ in 0..10 {
+        let ran = hook_to(&store_dir, sid, good.as_bytes());
+        assert!(ran.quiet(), "{}", ran.say());
+        first = app.next(Duration::from_secs(3));
+        if first.is_some() {
+            break;
+        }
+    }
+    let first = first.expect("no hook event came once the idle connections had gone");
+    assert_eq!(t_of(&first), "event", "{}", first.to_json());
+    assert_eq!(num(&first, "seq"), Some(1), "a run that should have sent nothing took a seq: {}", first.to_json());
+    end(&held.0);
+}
+
+#[test]
+fn events_wait_while_no_connection_takes_them_and_the_last_256_come_with_the_count_lost() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-queue");
+    let work = Folder::new("work-queue");
+    let sid = "hooks-queue-01";
+    let held = Held(hold(&store_dir, sid));
+
+    // A connection that posts hook events and holds no terminal.
+    let mut poster = App::connect(&held.0, &HOLDER_CAPS);
+    launch(&mut poster, &work);
+    for n in 1..=300 {
+        assert_eq!(post(&mut poster, n), n);
+    }
+
+    // The app's own ack (core and local) takes the terminal and is never
+    // sent a hook event; it may not post one either.
+    let mut plain = App::connect(&held.0, &LOCAL_CAPS);
+    attach(&mut plain);
+    if let Some(m) = plain.next(Duration::from_secs(1)) {
+        panic!("a connection that did not ack hooks got {}", m.to_json());
+    }
+    plain.client.send(msg("hook.event", 100, vec![("kind", Value::str("Stop")), ("payload", Value::obj(Vec::new()))])).expect("send");
+    let refused = plain.next(WAIT).expect("an answer");
+    assert_eq!((t_of(&refused), refused.get("code").and_then(Value::as_str)), ("error", Some("unknown-type")), "{}", refused.to_json());
+    assert!(plain.closed(), "the holder kept a connection that sent a type it does not allow");
+
+    // A connection that acks hooks and attaches gets the newest 256 right
+    // after its reply, the first saying 44 were lost.
+    let mut app = App::connect(&held.0, &HOLDER_CAPS);
+    attach(&mut app);
+    let events = app.events(256);
+    for (i, event) in events.iter().enumerate() {
+        let seq = 45 + i as u64;
+        assert_eq!(num(event, "seq"), Some(seq), "{}", event.to_json());
+        assert_eq!(event.get("payload").and_then(|p| num(p, "n")), Some(seq), "{}", event.to_json());
+        let lost = if i == 0 { Some(44) } else { None };
+        assert_eq!(num(event, "lost"), lost, "{}", event.to_json());
+    }
+    // The poster holds no terminal: it got none of them.
+    if let Some(m) = poster.next(Duration::from_millis(500)) {
+        panic!("the poster got {}", m.to_json());
+    }
+
+    // Detached, the app gets no more; the next attach gets what came
+    // meanwhile, with nothing lost.
+    let id = app.id();
+    let detached = app.call(msg("term.detach", id, vec![]));
+    assert_eq!(t_of(&detached), "term.detached", "{}", detached.to_json());
+    assert_eq!(post(&mut poster, 301), 301);
+    assert_eq!(post(&mut poster, 302), 302);
+    assert!(app.closed(), "the holder kept a detached connection open");
+    assert!(app.got.iter().all(|m| t_of(m) != "event"), "a hook event after term.detached: {:?}", texts(&app.got));
+    let mut again = App::connect(&held.0, &HOLDER_CAPS);
+    attach(&mut again);
+    let events = again.events(2);
+    assert_eq!(events.iter().map(|e| num(e, "seq")).collect::<Vec<_>>(), vec![Some(301), Some(302)]);
+    assert!(events.iter().all(|e| e.get("lost").is_none()), "{:?}", texts(&events));
+    end(&held.0);
+}
+
+#[test]
+fn a_holder_whose_hello_does_not_offer_hooks_is_sent_nothing() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-older");
+    let sid = "hooks-older-01";
+    let read = stand_in(&store_dir, sid, Some(&LOCAL_CAPS[..]));
+    let ran = hook_to(&store_dir, sid, event_input("Stop", "").as_bytes());
+    assert!(ran.quiet(), "{}", ran.say());
+    assert!(ran.took < HOOK_BOUND, "{}", ran.say());
+    let bytes = read.recv_timeout(WAIT).expect("the stand-in saw the hook mode go");
+    assert_eq!(bytes, 0, "the hook mode wrote to a holder that does not offer hooks");
+}
+
+#[test]
+fn a_hook_run_against_a_holder_that_never_answers_ends_by_its_deadline() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-mute");
+    let input = event_input("Stop", "");
+
+    // A hello that offers hooks, then nothing: the hook mode acks, sends its
+    // event, and waits for a reply that never comes.
+    let sid = "hooks-mute-0001";
+    let read = stand_in(&store_dir, sid, Some(&HOLDER_CAPS[..]));
+    let ran = hook_to(&store_dir, sid, input.as_bytes());
+    assert!(ran.quiet(), "{}", ran.say());
+    assert!(ran.took < HOOK_BOUND, "{}", ran.say());
+    let bytes = read.recv_timeout(WAIT).expect("the stand-in saw the hook mode go");
+    assert!(bytes > 0, "the hook mode sent nothing to a holder that offers hooks");
+
+    // No hello at all.
+    let sid = "hooks-mute-0002";
+    let _read = stand_in(&store_dir, sid, None);
+    let ran = hook_to(&store_dir, sid, input.as_bytes());
+    assert!(ran.quiet(), "{}", ran.say());
+    assert!(ran.took < HOOK_BOUND, "{}", ran.say());
+}
+
+#[test]
+fn a_hook_run_whose_standard_input_never_ends_ends_by_its_deadline() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-open");
+    let store_arg = store_dir.arg();
+    let started = Instant::now();
+    let mut child = Command::new(HELPER)
+        .args(["hook", "--store", store_arg.as_str(), "--session", "hooks-open-0001"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start the hook mode");
+    // Part of an event, and the input left open, as a writer that hangs.
+    let mut stdin = child.stdin.take().expect("its standard input");
+    let _ = stdin.write_all(b"{\"hook_event_name\":\"Stop\",");
+    let _ = stdin.flush();
+    let mut ended = None;
+    while ended.is_none() && started.elapsed() < WAIT {
+        ended = child.try_wait().expect("look at the hook mode");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let took = started.elapsed();
+    if ended.is_none() {
+        let _ = child.kill();
+    }
+    let out = child.wait_with_output().expect("the hook mode's output");
+    drop(stdin);
+    let ran = Ran { code: out.status.code(), stdout: out.stdout, stderr: out.stderr, took };
+    assert!(ran.quiet(), "{}", ran.say());
+    assert!(ran.took < HOOK_BOUND, "{}", ran.say());
+}

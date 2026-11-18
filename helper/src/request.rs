@@ -5,6 +5,10 @@
 //!
 //! A `term.launch` may also carry `line` and `conpty` (the launch fields for
 //! Windows), on Windows only: on macOS and Linux either is `bad-field`.
+//!
+//! `hook.event` is allowed only once `hooks` is acked: one hook event of the
+//! session, of one of the nine kinds the app injects, its payload a JSON
+//! object of at most 64 KiB. The holder only numbers it and passes it on.
 
 use crate::json::Value;
 use crate::pty::{is_batch_file, is_renamed_by_windows, Conpty, PtySize};
@@ -23,6 +27,11 @@ pub const MAX_LINE_UNITS: usize = 32766;
 pub const MAX_TERM_CELLS: u64 = 1000;
 /// The largest integer a JavaScript number holds exactly: request ids and offsets.
 pub const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+/// The hook events a holder takes: the nine the app injects into a Claude
+/// Code session (src/main/hooks/session-hooks-writer.ts, MVP_EVENTS).
+pub const HOOK_KINDS: [&str; 9] = ["PreToolUse", "PostToolUse", "Notification", "SessionStart", "Stop", "UserPromptSubmit", "SubagentStart", "SubagentStop", "StopFailure"];
+/// The most a hook event's payload may be, as compact JSON: 64 KiB.
+pub const MAX_HOOK_PAYLOAD: usize = 65_536;
 
 pub const CODE_UNKNOWN_TYPE: &str = "unknown-type";
 pub const CODE_BAD_FIELD: &str = "bad-field";
@@ -59,7 +68,7 @@ pub struct Launch {
     pub conpty: Conpty,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     Ping { id: u64 },
     /// An `error` from the app: nothing to answer.
@@ -69,6 +78,16 @@ pub enum Request {
     Resize { id: u64, size: PtySize },
     Detach { id: u64 },
     End { id: u64 },
+    /// One hook event: its kind, and its payload, a JSON object.
+    HookEvent { id: u64, kind: String, payload: Value },
+}
+
+/// What a connection's `hello.ack` allowed beyond the core: `local`, the
+/// terminal messages; `hooks`, hook events.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Allowed {
+    pub local: bool,
+    pub hooks: bool,
 }
 
 /// The fields of one type: those it must have, and those it may also have.
@@ -85,6 +104,9 @@ const LOCAL_TYPES: [(&str, Fields); 5] = [
 
 /// The types of the frozen core an app may send after the ack.
 const CORE_TYPES: [(&str, Fields); 1] = [("ping", (&["t", "id"], &[]))];
+
+/// The types a connection may send once `hooks` is acked.
+const HOOK_TYPES: [(&str, Fields); 1] = [("hook.event", (&["t", "id", "kind", "payload"], &[]))];
 
 /// A request id: an even integer (app ids are even, section 9) a JavaScript
 /// number holds exactly.
@@ -287,8 +309,33 @@ fn parse_conpty(v: &Value, re: Option<u64>) -> Result<Conpty, Refusal> {
     Ok(Conpty::Bundled)
 }
 
-/// Check one control message. `local` is true when the app acked `local`.
+/// Check a `hook.event` (its keys already checked): `kind` one of
+/// `HOOK_KINDS`, `payload` an object of at most `MAX_HOOK_PAYLOAD` bytes as
+/// compact JSON.
+fn parse_hook_event(v: &Value, id: u64) -> Result<Request, Refusal> {
+    let re = Some(id);
+    let kind = match v.get("kind").and_then(Value::as_str) {
+        Some(k) if HOOK_KINDS.contains(&k) => k.to_string(),
+        _ => return refuse(CODE_BAD_FIELD, re, "kind must be one of the nine hook events the app injects"),
+    };
+    let payload = match v.get("payload") {
+        Some(p) if matches!(p, Value::Obj(_)) => p,
+        _ => return refuse(CODE_BAD_FIELD, re, "payload must be a JSON object"),
+    };
+    if payload.to_json().len() > MAX_HOOK_PAYLOAD {
+        return refuse(CODE_TOO_LARGE, re, "payload is over 64 KiB as JSON");
+    }
+    Ok(Request::HookEvent { id, kind, payload: payload.clone() })
+}
+
+/// Check one control message. `local` is true when the app acked `local`;
+/// hook events are not allowed (see `parse_allowed`).
 pub fn parse(v: &Value, local: bool) -> Result<Request, Refusal> {
+    parse_allowed(v, Allowed { local, hooks: false })
+}
+
+/// Check one control message, allowed what the connection's ack allowed.
+pub fn parse_allowed(v: &Value, allowed: Allowed) -> Result<Request, Refusal> {
     if v.keys().is_none() {
         return refuse(CODE_BAD_FIELD, None, "a control message must be a JSON object");
     }
@@ -300,8 +347,11 @@ pub fn parse(v: &Value, local: bool) -> Result<Request, Refusal> {
         return parse_error(v);
     }
     let mut fields: Option<Fields> = CORE_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
-    if fields.is_none() && local {
+    if fields.is_none() && allowed.local {
         fields = LOCAL_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
+    }
+    if fields.is_none() && allowed.hooks {
+        fields = HOOK_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
     }
     let (required, optional) = match fields {
         Some(f) => f,
@@ -325,6 +375,7 @@ pub fn parse(v: &Value, local: bool) -> Result<Request, Refusal> {
         "term.resize" => Ok(Request::Resize { id, size: size(v, re)? }),
         "term.detach" => Ok(Request::Detach { id }),
         "term.end" => Ok(Request::End { id }),
+        "hook.event" => parse_hook_event(v, id),
         _ => refuse(CODE_UNKNOWN_TYPE, None, "a type this connection does not allow"),
     }
 }
@@ -523,5 +574,63 @@ mod tests {
         // Without `local` acked, the terminal messages are not allowed at all.
         let v = json::parse(b"{\"t\":\"term.end\",\"id\":10}").unwrap();
         assert_eq!(parse(&v, false).unwrap_err().code, CODE_UNKNOWN_TYPE);
+    }
+
+    const HOOKS: Allowed = Allowed { local: true, hooks: true };
+
+    fn hook(text: &str) -> Result<Request, Refusal> {
+        parse_allowed(&json::parse(text.as_bytes()).unwrap(), HOOKS)
+    }
+
+    /// A hook.event of `kind` whose payload is exactly `bytes` long as JSON.
+    fn hook_of_size(kind: &str, bytes: usize) -> String {
+        let head = format!("{{\"hook_event_name\":\"{kind}\",\"tool_response\":\"");
+        let pad = bytes - head.len() - 2;
+        let payload = format!("{head}{}\"}}", "x".repeat(pad));
+        assert_eq!(payload.len(), bytes);
+        format!("{{\"t\":\"hook.event\",\"id\":2,\"kind\":\"{kind}\",\"payload\":{payload}}}")
+    }
+
+    #[test]
+    fn a_hook_event_reads_with_its_kind_and_payload_once_hooks_is_acked() {
+        for kind in HOOK_KINDS {
+            let text = format!("{{\"t\":\"hook.event\",\"id\":4,\"kind\":\"{kind}\",\"payload\":{{\"hook_event_name\":\"{kind}\",\"n\":1}}}}");
+            match hook(&text).unwrap() {
+                Request::HookEvent { id, kind: k, payload } => {
+                    assert_eq!((id, k.as_str()), (4, kind));
+                    assert_eq!(payload.to_json(), format!("{{\"hook_event_name\":\"{kind}\",\"n\":1}}"));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        // Not without hooks acked, whatever else was: the connection is closed.
+        let v = json::parse(b"{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{}}").unwrap();
+        assert_eq!(parse(&v, true).unwrap_err().code, CODE_UNKNOWN_TYPE);
+        assert_eq!(parse_allowed(&v, Allowed { local: true, hooks: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
+        // Hooks alone allow it, and the terminal messages still need local.
+        assert!(parse_allowed(&v, Allowed { local: false, hooks: true }).is_ok());
+        let end = json::parse(b"{\"t\":\"term.end\",\"id\":10}").unwrap();
+        assert_eq!(parse_allowed(&end, Allowed { local: false, hooks: true }).unwrap_err().code, CODE_UNKNOWN_TYPE);
+    }
+
+    #[test]
+    fn a_hook_event_that_breaks_its_schema_is_refused_with_the_right_code() {
+        let code = |text: &str| hook(text).unwrap_err().code;
+        for bad_kind in ["\"PermissionRequest\"", "\"stop\"", "\"\"", "1", "null"] {
+            assert_eq!(code(&format!("{{\"t\":\"hook.event\",\"id\":2,\"kind\":{bad_kind},\"payload\":{{}}}}")), CODE_BAD_FIELD, "kind {bad_kind}");
+        }
+        for bad_payload in ["[]", "\"x\"", "null", "1"] {
+            assert_eq!(code(&format!("{{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{bad_payload}}}")), CODE_BAD_FIELD, "payload {bad_payload}");
+        }
+        assert_eq!(code("{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\"}"), CODE_BAD_FIELD, "no payload");
+        assert_eq!(code("{\"t\":\"hook.event\",\"id\":2,\"payload\":{}}"), CODE_BAD_FIELD, "no kind");
+        assert_eq!(code("{\"t\":\"hook.event\",\"kind\":\"Stop\",\"payload\":{}}"), CODE_BAD_FIELD, "no id");
+        assert_eq!(code("{\"t\":\"hook.event\",\"id\":3,\"kind\":\"Stop\",\"payload\":{}}"), CODE_BAD_FIELD, "an odd id");
+        assert_eq!(code("{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{},\"seq\":1}"), CODE_BAD_FIELD, "an extra field");
+        assert_eq!(code("{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"kind\":\"Stop\",\"payload\":{}}"), CODE_BAD_FIELD, "a field twice");
+        // 64 KiB of payload as JSON is the most: one byte more is too large.
+        assert!(hook(&hook_of_size("PostToolUse", MAX_HOOK_PAYLOAD)).is_ok());
+        assert_eq!(code(&hook_of_size("PostToolUse", MAX_HOOK_PAYLOAD + 1)), CODE_TOO_LARGE);
+        assert_eq!(MAX_HOOK_PAYLOAD, 64 * 1024);
     }
 }

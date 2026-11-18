@@ -5,9 +5,11 @@
 
 use aicc_helper::frame::{self, Body, Direction};
 use aicc_helper::hello;
+use aicc_helper::holder::{self, HookEvent};
+use aicc_helper::hook;
 use aicc_helper::json::{self, Value};
 use aicc_helper::pty::Conpty;
-use aicc_helper::request::{self, Request};
+use aicc_helper::request::{self, Allowed, Request};
 use aicc_helper::ring::DEFAULT_RING_BYTES;
 use aicc_helper::store::{self, Listing, Record};
 use aicc_helper::{serve, transport};
@@ -212,7 +214,101 @@ fn described(req: &Request) -> Value {
         }
         Request::Detach { id } => Value::obj(head("term.detach", *id)),
         Request::End { id } => Value::obj(head("term.end", *id)),
+        Request::HookEvent { id, kind, payload } => {
+            let mut m = head("hook.event", *id);
+            m.push(("kind", Value::Str(kind.clone())));
+            m.push(("payload", payload.clone()));
+            Value::obj(m)
+        }
     }
+}
+
+// ── local.json `hooks`: hook events (capability `hooks`) ────────────────────
+
+/// What a vector's `acked` says the connection acked; by default core,
+/// local and hooks.
+fn acked(case: &Value) -> Allowed {
+    match case.get("acked").and_then(Value::as_array) {
+        None => Allowed { local: true, hooks: true },
+        Some(caps) => {
+            let has = |cap: &str| caps.iter().any(|c| c.as_str() == Some(cap));
+            Allowed { local: has("local"), hooks: has(serve::HOOKS_CAP) }
+        }
+    }
+}
+
+#[test]
+fn hook_events_read_as_the_fixtures_say() {
+    let doc = load("local.json");
+    let hooks = doc.get("hooks").expect("hooks");
+    let requests = hooks.get("requests").expect("requests");
+    let mut ran = 0;
+    for case in items(requests, "valid") {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let req = request::parse_allowed(&value, acked(case)).unwrap_or_else(|r| panic!("{name}: refused with {}: {}", r.code, r.text));
+        assert_eq!(described(&req).to_json(), case.get("expect").expect("expect").to_json(), "{name}");
+        ran += 1;
+    }
+    let mut codes: Vec<&str> = Vec::new();
+    for case in items(requests, "invalid") {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let refusal = request::parse_allowed(&value, acked(case)).expect_err(name);
+        assert_eq!(refusal.code, text(case, "error"), "{name}: {}", refusal.text);
+        codes.push(refusal.code);
+        ran += 1;
+    }
+    assert!(ran >= 15, "only {ran} hook vectors");
+    // The cases the protocol names: a kind not of the nine, a payload over
+    // 64 KiB, a missing field, and a connection that did not ack hooks.
+    for code in [request::CODE_BAD_FIELD, request::CODE_TOO_LARGE, request::CODE_UNKNOWN_TYPE] {
+        assert!(codes.contains(&code), "no vector refused with {code}");
+    }
+    // Without hooks acked a hook event is never read, whatever else was acked.
+    let event = json::parse(b"{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{}}").expect("JSON");
+    assert_eq!(request::parse(&event, true).expect_err("a hook event without hooks").code, request::CODE_UNKNOWN_TYPE);
+}
+
+#[test]
+fn hook_messages_are_the_documented_bytes() {
+    let doc = load("local.json");
+    let hooks = doc.get("hooks").expect("hooks");
+    let n = |v: &Value, k: &str| v.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    for case in items(hooks, "messages") {
+        let name = text(case, "name");
+        let payload = case.get("payload").expect("payload").clone();
+        let bytes = payload.to_json().len();
+        let ev = HookEvent { seq: n(case, "seq"), kind: text(case, "kind").to_string(), payload, bytes };
+        let message = serve::event_message(&ev, n(case, "lost"));
+        assert_eq!(message.to_json(), text(case, "json"), "{name}");
+        // What the holder sends, the app reads: under the frame limit.
+        assert!(frame::encode(&frame::Frame::json(0, message), Direction::HelperToApp).is_ok(), "{name}");
+    }
+    let taken = hooks.get("taken").expect("taken");
+    assert_eq!(serve::hook_taken(n(taken, "re"), n(taken, "seq")).to_json(), text(taken, "json"));
+}
+
+#[test]
+fn the_hook_limits_match_the_constants() {
+    let doc = load("local.json");
+    let hooks = doc.get("hooks").expect("hooks");
+    let caps: Vec<&str> = items(hooks, "caps").iter().map(|c| c.as_str().expect("cap")).collect();
+    assert_eq!(caps, serve::HOLDER_CAPS.to_vec());
+    // The app's own ack stays core and local.
+    let local: Vec<&str> = items(&doc, "caps").iter().map(|c| c.as_str().expect("cap")).collect();
+    assert_eq!(local, hello::LOCAL_CAPS.to_vec());
+    let kinds: Vec<&str> = items(hooks, "kinds").iter().map(|c| c.as_str().expect("kind")).collect();
+    assert_eq!(kinds, request::HOOK_KINDS.to_vec());
+    let l = hooks.get("limits").expect("limits");
+    let n = |k: &str| l.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    assert_eq!(n("payload_bytes"), request::MAX_HOOK_PAYLOAD as u64);
+    assert_eq!(n("queue_events"), holder::HOOK_QUEUE_EVENTS as u64);
+    assert_eq!(n("queue_bytes"), holder::HOOK_QUEUE_BYTES as u64);
+    assert_eq!(n("stdin_bytes"), hook::MAX_STDIN as u64);
+    assert_eq!(n("cut_over_bytes"), hook::CUT_OVER as u64);
+    assert_eq!(n("cut_string_bytes"), hook::MAX_STRING as u64);
+    assert_eq!(n("deadline_ms"), hook::DEADLINE.as_millis() as u64);
 }
 
 #[test]
