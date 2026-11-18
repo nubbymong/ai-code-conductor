@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { execFileSync } from 'child_process'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 // js-yaml comes in with electron-builder and is pinned in package.json's
@@ -367,22 +366,13 @@ describe('every Windows build of the shipped helper is checked right after it is
 })
 
 describe('helper/.cargo/config.toml links the C runtime in, for Windows MSVC builds only', () => {
+  // CI reads the committed tree, so a file that was never committed fails here too.
   it('says exactly that and nothing else', () => {
     const settings = read('helper/.cargo/config.toml')
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l !== '' && !l.startsWith('#'))
     expect(settings).toEqual([`[target.'cfg(all(windows, target_env = "msvc"))']`, 'rustflags = ["-C", "target-feature=+crt-static"]'])
-  })
-
-  it('is tracked, not caught by an ignore rule', () => {
-    let ignored = true
-    try {
-      execFileSync('git', ['-C', ROOT, 'check-ignore', '-q', '--', 'helper/.cargo/config.toml'], { stdio: 'ignore' })
-    } catch {
-      ignored = false // exit 1: no rule ignores it
-    }
-    expect(ignored).toBe(false)
   })
 })
 
