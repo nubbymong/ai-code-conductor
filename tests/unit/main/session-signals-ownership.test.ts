@@ -4,7 +4,7 @@
 // subscribes to the hooks gateway, and it holds the status line fan-out.
 // Every other consumer takes hook events from the module (onHookEvent).
 //
-// This reads every tracked src/main/**/*.ts file and fails when a file outside
+// This reads every src/main/**/*.ts file and fails when a file outside
 // the module subscribes to the gateway or still defines the old status
 // fan-out (fanOutStatusline). A subscription is found by what it is called
 // on, not by a variable's name: anything that holds the gateway counts,
@@ -25,9 +25,8 @@
 // falls back to it), and a gateway passed to an untyped helper defined in
 // another file.
 import { describe, it, expect } from 'vitest'
-import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join, relative, resolve, sep } from 'node:path'
 import { parse } from '@babel/parser'
 
 const ROOT = resolve(__dirname, '..', '..', '..')
@@ -176,8 +175,17 @@ export function statusFanOutNames(code: string): number[] {
   return lines
 }
 
-const tracked = execFileSync('git', ['ls-files', '-z', '--', 'src/main/*.ts'], { cwd: ROOT, encoding: 'utf8' })
-  .split('\0').filter((p) => p.endsWith('.ts'))
+/** Every .ts file under src/main, as a repo-relative path. Read from the folder
+ *  itself (no git process), so the suite starts nothing on the host. */
+function mainSources(dir = join(ROOT, 'src', 'main'), out: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name)
+    if (entry.isDirectory()) { if (entry.name !== 'node_modules') mainSources(p, out) }
+    else if (entry.name.endsWith('.ts')) out.push(relative(ROOT, p).split(sep).join('/'))
+  }
+  return out
+}
+const tracked = mainSources().sort()
 const read = (p: string) => readFileSync(resolve(ROOT, p), 'utf8')
 
 describe('the session signals module is the one owner of what a hook event or status line means (A2)', () => {
