@@ -39,8 +39,9 @@
 //    constructor parameter property whose default is one);
 //  - `.write` read from a PTY handle, or destructured from one: anything typed
 //    IPty or HelperPty or `X['ptyProcess']` (or a type alias of this file that
-//    names one), the result of node-pty's spawn (imported, required or imported at run time), spawnPlainPty,
-//    spawnAgentPty or spawnRunPty (under any name), a `new HelperPty`, a
+//    names one), the result of node-pty's spawn (imported, required or
+//    imported at run time), spawnPlainPty, spawnAgentPty or spawnRunPty
+//    (under any name), a `new HelperPty`, a
 //    `.ptyProcess` read (destructured included), a function in the same file
 //    that returns one, a call handed a function that returns one (a start
 //    wrapped in a timing helper), an element of a collection of them (a list
@@ -74,8 +75,10 @@
 // Watchdog's own writers, handed in by the PTY manager and by this module);
 // the module's codexRunScreen handed on as a value and called elsewhere (only
 // the PTY manager may import it, above); a run screen's type written
-// `typeof import('...')`; a computed key that is not a literal, except on a namespace of a module that
-// exports a typing function, which then counts whole; a reach through
+// `typeof import('...')`; a `#` private class field (`this.#name`) holding
+// a handle, a screen or the module's codexRunScreen; a computed key that is
+// not a literal, except on a namespace of a module that exports a typing
+// function, which then counts whole; a reach through
 // `Reflect`, `eval` or a require whose name is built at run time; and a local
 // name that shadows a typing function's (counted as one, which only
 // over-counts).
