@@ -518,21 +518,47 @@ in a process group of its own, in `<folder>`, with its window hidden under
 `--hide`, and it inherits no handle: inheritance is off and its standard
 input, output and error are nothing. The helper is given every handle the app
 lets a child inherit, as any child of the app is, but it exits at once. The
-program must be named by a drive-absolute path (`C:\...`), must not be a batch
-file, and must not be a name Windows opens as another (a part of dots alone, a
-trailing separator, a trailing dot or space). It takes at most 256 arguments
-of at most 8192 characters, the folder is an absolute path of at most 4096
-characters, and none of them may hold a NUL character. On success the helper
-prints one line, `{"pid":<n>,"created":"<t>"}`, and exits 0 without waiting
-for the program. `created` is the program's creation time as
+program and the folder must each be a drive-absolute path (`C:\...` or
+`C:/...`; a share, a rooted path such as `\x` and a name with only a drive are
+refused). The program must not be a batch file, and must not be a name Windows
+opens as another (a part of dots alone, a trailing separator, a trailing dot
+or space). It takes at most 256 arguments of at most 8192 characters, the
+folder is at most 4096 characters, and none of them may hold a NUL character.
+The program is created suspended; its creation time is read from the process
+handle the start returned, and only then does it run. On success the helper
+prints one line, `{"pid":<n>,"created":"<t>"}`, and exits 0 without waiting for
+the program. `created` is the program's creation time as
 `Win32_Process.CreationDate.ToFileTimeUtc()` gives it (steps of 100 ns since
-1601, UTC, to the microsecond), read from the process handle the start
-returned, so the app ends that process later only while its pid still has that
-creation time. A program it refuses, or one that cannot be started, exits 1
-with a message on stderr, and nothing is left running; a command line it
-cannot read exits 2. On macOS and Linux the mode exits 1. The app runs it from
-the install folder (`resources/helper`): it does not outlive the app, so it
-needs no per-user copy.
+1601, UTC, to the microsecond), so the app ends that process later only while
+its pid still has that creation time. A program it refuses, or one that cannot
+be started, exits 1 with a message on stderr, and nothing has run: a creation
+time that cannot be read ends a program that has not run yet. A command line
+it cannot read exits 2. On macOS and Linux the mode exits 1. The app runs it
+from the install folder (`resources/helper`): it does not outlive the app, so
+it needs no per-user copy.
+
+**Ending a program it started (Windows only).** The app ends that program with
+
+```
+aicc-helper end --pid <n> --created <t>
+```
+
+`<n>` is a pid of up to 10 digits, above 0, and `<t>` a creation time of 1 to
+20 digits in the form `start` prints; each is given once and nothing else is
+taken. The helper opens that process and holds it open from its check to its
+end, so the pid cannot pass to another process in between. When the pid still
+has that creation time and the process still runs, the helper ends it and
+every process under it (a process counts as under its parent only when it was
+made no earlier than the parent; one made earlier names a parent id that has
+since passed to another process), prints `ended` and exits 0. When no process
+has that pid, the one that has it was made at another time, or it has already
+exited, it ends nothing, prints `left` and exits 0. When it cannot tell (the
+process cannot be opened or read), it ends nothing and exits 1 with a message
+on stderr; a command line it cannot read exits 2. It reads the process list
+and each process's times itself, with no PowerShell and no WMI, so it answers
+in milliseconds: the app uses it on the exits that cannot wait (quit, an update
+install, SIGTERM) as well as at a stop and a relaunch. On macOS and Linux the
+mode exits 1.
 
 **Endpoint: only this user can connect.** No network socket is opened.
 

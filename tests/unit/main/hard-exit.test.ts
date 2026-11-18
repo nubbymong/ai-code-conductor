@@ -1,21 +1,29 @@
 /**
- * What every app.exit path runs first (src/main/hard-exit.ts, plan
- * 2.1.3-beta.8 section C2). app.exit skips before-quit, so the quit teardown
- * does not run on an update install or on SIGTERM: the vision browser the app
- * started is ended here instead, and the SIGTERM handler flushes the sessions,
- * flushes the indexing gaps, ends the browser and exits, in that order.
- * Nothing here starts a program: the browser's end is a fake step.
+ * What the app.exit paths that skip the quit teardown run first
+ * (src/main/hard-exit.ts, plan 2.1.3-beta.8 section C2). app.exit skips
+ * before-quit, so the quit teardown does not run on an update install or on
+ * SIGTERM: the vision browser the app started is ended here instead, and the
+ * SIGTERM handler flushes the sessions, flushes the indexing gaps, ends the
+ * browser and exits, in that order. Nothing here starts a program: the
+ * browser's end is a fake step.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const steps = vi.hoisted(() => ({ order: [] as string[], endThrows: false }))
+const steps = vi.hoisted(() => ({ order: [] as string[], endThrows: false, logThrows: false }))
+const log = vi.hoisted(() => ({ error: [] as unknown[][] }))
 
 vi.mock('../../../src/main/vision-manager', () => ({
   killSpawnedBrowser: vi.fn(() => {
     steps.order.push('end the vision browser')
     if (steps.endThrows) throw new Error('the end failed')
+  }),
+}))
+vi.mock('../../../src/main/debug-logger', () => ({
+  logError: vi.fn((...args: unknown[]) => {
+    log.error.push(args)
+    if (steps.logThrows) throw new Error('the log failed')
   }),
 }))
 
@@ -36,6 +44,8 @@ function deps(throwing: string[] = []) {
 beforeEach(() => {
   steps.order.length = 0
   steps.endThrows = false
+  steps.logThrows = false
+  log.error.length = 0
 })
 
 describe('hardExitTeardown', () => {
@@ -63,6 +73,23 @@ describe('the SIGTERM exit', () => {
     steps.order.length = 0
     steps.endThrows = true
     exitOnSigterm(deps())
+    expect(steps.order).toEqual(['flush the sessions', 'flush the indexing gaps', 'end the vision browser', 'exit 0'])
+  })
+
+  it('a flush that throws is written to the debug log, one line each, and nothing else is', () => {
+    exitOnSigterm(deps())
+    expect(log.error).toEqual([])
+    exitOnSigterm(deps(['flush the sessions', 'flush the indexing gaps']))
+    expect(log.error).toHaveLength(2)
+    expect(String(log.error[0][0])).toMatch(/session flush at SIGTERM failed/)
+    expect(String(log.error[0][1])).toMatch(/flush the sessions failed/)
+    expect(String(log.error[1][0])).toMatch(/indexing-gap flush at SIGTERM failed/)
+    expect(String(log.error[1][1])).toMatch(/flush the indexing gaps failed/)
+  })
+
+  it('a log that throws as well still skips nothing: the exit comes', () => {
+    steps.logThrows = true
+    expect(() => exitOnSigterm(deps(['flush the sessions', 'flush the indexing gaps']))).not.toThrow()
     expect(steps.order).toEqual(['flush the sessions', 'flush the indexing gaps', 'end the vision browser', 'exit 0'])
   })
 

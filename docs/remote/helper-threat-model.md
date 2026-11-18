@@ -419,8 +419,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   reads reaches the CLI's conversation through it.
 - **A program the helper starts for the app keeps none of the app's handles
   (from 2.1.3-beta.8, Windows).** `aicc-helper start` (protocol 15, "Starting
-  a program") starts the program the app names, by the absolute path it is
-  given, with inheritance off and no standard handles, so nothing the app had
+  a program") starts the program the app names, by the drive-absolute path it
+  is given, with inheritance off and no standard handles, so nothing the app had
   open reaches it; the helper itself exits at once. The mode gives the app no
   new power: the app can already start any program it names, and this only
   starts one holding fewer handles. It never searches PATH, and it refuses a
@@ -432,6 +432,19 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   (with a control that inherits the same pipe end, so the test can fail) and
   `it_says_which_process_it_started_in_the_form_the_app_checks`
   (`helper/tests/start.rs`).
+- **The helper ends only the program it started, and only while its pid has
+  its creation time (from 2.1.3-beta.8, Windows).** `aicc-helper end`
+  (protocol 15, "Ending a program it started") is given a pid and a creation
+  time, both plain digits. It opens that process and holds it open from the
+  check to the end, so the pid cannot pass to another process in between, and
+  ends it and the processes under it only while the pid has that creation
+  time; a process made earlier than its parent is not taken to be under it.
+  It gives the app no new power: the app can already end any process of its
+  user (`taskkill`). It reads the process list itself, with no PowerShell and
+  no WMI, so an exit that cannot wait gets an answer in milliseconds. Tested
+  by `it_ends_what_it_started_only_while_the_pid_has_that_start_time` (another
+  creation time leaves the process running) and
+  `it_ends_the_processes_under_it_too` (`helper/tests/start.rs`).
 
 ## 4 Review
 

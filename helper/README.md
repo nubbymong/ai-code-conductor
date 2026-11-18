@@ -30,6 +30,7 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | Local transport | `src/transport/` | One endpoint per holder that only this user can reach: a named pipe on Windows, a Unix socket in a private folder elsewhere |
 | Holder process | `src/serve.rs`, `src/request.rs`, `src/detach.rs` | `hold`: the hello, the `term.*` messages, the away clock; started detached so it outlives the app |
 | Records and list | `src/store.rs`, `src/client.rs`, `src/pids.rs` | Each holder's record in the store folder; `list` finds every session and removes stale records |
+| Start and end mode | `src/start.rs`, `src/winproc.rs` | Windows only. `start`: one program, by a drive-absolute path (never searched for, never a batch file), with no inherited handles, created suspended until its creation time is read; prints its pid and creation time and exits. `end`: ends that program and the processes under it, only while its pid still has that creation time, holding it open from the check to the end; prints `ended` or `left`. The app starts and ends the vision browser this way |
 | Self-test | `src/selftest.rs` | Codec, hello, ring, a terminal round trip and a round trip over the local transport, one `AICC-RESULT` line; it closes its terminal before it moves on, and on Windows it runs in a job object when one can be made, so nothing it starts (its terminal's `conhost.exe` included) outlives it |
 | Fake CLI | `src/bin/aicc-fake-cli.rs` | A stand-in provider CLI for tests and probes |
 | Fixtures | `fixtures/*.json` | Frame, hello, limit and local transport vectors read by the Rust tests and by `tests/unit/scripts/helper-fixtures.test.ts` |
@@ -49,6 +50,8 @@ aicc-helper selftest [--nonce <32 hex>]
 aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes <n>] [--detach]
 aicc-helper list --store <folder>
 aicc-helper hook --store <folder> --session <sid>
+aicc-helper start [--hide] --cwd <folder> -- <program> [args...]   (Windows only)
+aicc-helper end --pid <n> --created <t>                            (Windows only)
 ```
 
 `hold --detach` prints the holder's record as one JSON line once the holder
@@ -56,7 +59,10 @@ listens; the app then connects to the record's endpoint, launches the program
 with `term.launch` and attaches with `term.attach`. `list` prints every session
 in the store, as protocol section 15 describes. `hook` is a Claude Code command
 hook: it passes the event on its standard input to the session's holder,
-always exits 0 and prints nothing (nothing in the app uses it yet).
+always exits 0 and prints nothing (nothing in the app uses it yet). `start` prints
+`{"pid":<n>,"created":"<t>"}` and exits without waiting for the program; `end`
+prints `ended` or `left` (protocol section 15, "Starting a program" and "Ending
+a program it started").
 
 ## Building and testing
 

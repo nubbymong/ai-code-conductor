@@ -1,14 +1,28 @@
-//! `aicc-helper start` (protocol section 15, "Starting a program"): on
-//! Windows the program it starts keeps none of the starter's handles, it says
-//! which process it started in the form the app checks, and it starts only a
-//! program named by an absolute path that is not a batch file and that
-//! Windows opens as named. On macOS and Linux the mode refuses.
+//! `aicc-helper start` and `aicc-helper end` (protocol section 15, "Starting
+//! a program"): on Windows the program `start` starts keeps none of the
+//! starter's handles, it says which process it started in the form the app
+//! checks, and it starts only a program named by an absolute path that is not
+//! a batch file and that Windows opens as named. `end` ends that program and
+//! the processes under it only while its pid has the creation time `start`
+//! printed. On macOS and Linux both modes refuse.
 
 #[cfg(unix)]
 #[test]
 fn the_start_mode_refuses_on_macos_and_linux() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_aicc-helper"))
         .args(["start", "--cwd", "/tmp", "--", "/bin/sleep", "1"])
+        .output()
+        .expect("run the helper");
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.stdout.is_empty(), "it printed {}", String::from_utf8_lossy(&out.stdout));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Windows only"));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_end_mode_refuses_on_macos_and_linux() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_aicc-helper"))
+        .args(["end", "--pid", "1", "--created", "1"])
         .output()
         .expect("run the helper");
     assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
@@ -25,7 +39,8 @@ mod windows {
     use std::process::{Command, Stdio};
     use std::sync::{mpsc, Mutex, MutexGuard};
     use std::time::{Duration, Instant};
-    use windows_sys::Win32::Foundation::{CloseHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::Foundation::{CloseHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
     use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 
     const HELPER: &str = env!("CARGO_BIN_EXE_aicc-helper");
@@ -170,14 +185,115 @@ mod windows {
     fn it_says_which_process_it_started_in_the_form_the_app_checks() {
         let _serial = one_at_a_time();
         // More than one start: a creation time the app reads another way
-        // (rounded rather than cut to the microsecond) would differ for some.
-        for _ in 0..4 {
+        // (rounded rather than cut to the microsecond) would differ for about
+        // half of them, so eight starts all agreeing by chance is 1 in 256.
+        for _ in 0..8 {
             let ran = start(FAKE, &["--sleep", "10"]);
             let (pid, created) = started(&ran);
             let _child = Started(pid);
             let (exe, app_created) = as_the_app_reads_it(pid);
             assert_eq!(exe.to_lowercase(), FAKE.to_lowercase(), "process {pid} is not the program that was started");
             assert_eq!(created, app_created, "the start time printed for process {pid} is not the one the app reads");
+        }
+    }
+
+    /// `aicc-helper end --pid <pid> --created <created>`.
+    fn end(pid: u32, created: &str) -> Ran {
+        let pid = pid.to_string();
+        helper(&["end", "--pid", pid.as_str(), "--created", created])
+    }
+
+    /// What `end` printed and how it exited, for one comparison.
+    fn answer(ran: &Ran) -> (Option<i32>, String) {
+        (ran.code, ran.stdout.trim().to_string())
+    }
+
+    /// Whether process `pid` is gone within 2 s.
+    fn gone_soon(pid: u32) -> bool {
+        let until = Instant::now() + Duration::from_secs(2);
+        while pids::alive(pid) {
+            if Instant::now() >= until {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        true
+    }
+
+    /// The pid of the fake CLI that `parent` started, once it is there (at most 5 s).
+    fn fake_under(parent: u32) -> u32 {
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(pid) = first_fake_under(parent) {
+                return pid;
+            }
+            assert!(Instant::now() < until, "process {parent} started no copy of the fake CLI");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn first_fake_under(parent: u32) -> Option<u32> {
+        let mut found = None;
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE_VALUE {
+                return None;
+            }
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut more = Process32FirstW(snap, &mut entry) != 0;
+            while more {
+                let len = entry.szExeFile.iter().position(|c| *c == 0).unwrap_or(entry.szExeFile.len());
+                if entry.th32ParentProcessID == parent && String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case("aicc-fake-cli.exe") {
+                    found = Some(entry.th32ProcessID);
+                    break;
+                }
+                more = Process32NextW(snap, &mut entry) != 0;
+            }
+            CloseHandle(snap);
+        }
+        found
+    }
+
+    #[test]
+    fn it_ends_what_it_started_only_while_the_pid_has_that_start_time() {
+        let _serial = one_at_a_time();
+        let (pid, created) = started(&start(FAKE, &["--sleep", "10"]));
+        let _child = Started(pid);
+        // Another start time (a microsecond later): the process is left running.
+        let other = (created.parse::<u64>().expect("digits") + 10).to_string();
+        let ran = end(pid, &other);
+        assert_eq!(answer(&ran), (Some(0), "left".to_string()), "{}", ran.stderr);
+        assert!(pids::alive(pid), "process {pid} was ended under a start time that is not its own");
+        // Its own start time: ended.
+        let ran = end(pid, &created);
+        assert_eq!(answer(&ran), (Some(0), "ended".to_string()), "{}", ran.stderr);
+        assert!(gone_soon(pid), "process {pid} still ran 2 s after it was ended");
+        // Once it is gone there is nothing to end.
+        let ran = end(pid, &created);
+        assert_eq!(answer(&ran), (Some(0), "left".to_string()), "{}", ran.stderr);
+    }
+
+    #[test]
+    fn it_ends_the_processes_under_it_too() {
+        let _serial = one_at_a_time();
+        let (pid, created) = started(&start(FAKE, &["--sleep", "10", "--child"]));
+        let _root = Started(pid);
+        let under = fake_under(pid);
+        let _under = Started(under);
+        let ran = end(pid, &created);
+        assert_eq!(answer(&ran), (Some(0), "ended".to_string()), "{}", ran.stderr);
+        assert!(gone_soon(pid), "process {pid} still ran 2 s after it was ended");
+        assert!(gone_soon(under), "the process under it (process {under}) still ran 2 s after the end");
+    }
+
+    #[test]
+    fn an_end_it_cannot_read_says_how_to_use_it() {
+        let _serial = one_at_a_time();
+        for args in [&["end"][..], &["end", "--pid", "0", "--created", "1"][..], &["end", "--pid", "1", "--created", "x"][..], &["end", "--pid", "1"][..]] {
+            let ran = helper(args);
+            assert_eq!(ran.code, Some(2), "{args:?}: {}", ran.stderr);
+            assert!(ran.stdout.is_empty(), "{args:?}: end printed {:?}", ran.stdout);
         }
     }
 
