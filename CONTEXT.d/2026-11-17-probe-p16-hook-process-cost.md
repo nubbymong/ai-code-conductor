@@ -26,8 +26,10 @@ machine over SSH):
   store. Each run was started suspended in a job object, so every process in
   the chain (four: Git's launcher, the console host, Git's bash, the helper)
   was counted. From run 7 the probe also reads, beside the verdict, the CPU of
-  Defender's own process, the holder, the probe's own process and the whole
-  machine (from the processors' idle cycles), each per event and net of idle.
+  the holder, the probe's own process and the whole machine (from the
+  processors' idle cycles), each per event and net of idle, and takes
+  Defender's idle rate from both idle windows; runs 1 to 6 read Defender with
+  its idle rate before step 2 only and its use over step 2 alone.
 - The helper was the signed per-user copy of 2.1.3-beta.7 installed on the
   test machine (sha256 7a099cd8..., Authenticode valid). The beta.7 release
   was published at 23:13Z on 2026-11-17, during the session: runs 1 to 3 came
@@ -62,7 +64,11 @@ starter's 0.7 ms among it). Runs 7 to 9 gave 19.3 to 20.1 ms for Defender
 and 55.2 to 55.9 ms for the whole machine. So the chain passes the CPU line,
 and an event costs this machine about 53 to 57 ms of CPU in all, over 50 ms
 if all of it were counted; whether it should be is a question for the owner,
-raised by the orchestrator. Run 6's "chain plus Defender, about 50 ms" left
+raised by the orchestrator. The whole-machine figure comes from the script's
+arithmetic over idle-cycle readings that were not recorded, so it cannot be
+recomputed from posted data; the total that can be (chain 29.11 + Defender
+20.10 + starter 0.69 + holder 0.14) is 50.04 ms. Run 6's "chain plus
+Defender, about 50 ms" left
 out the starting program, the holder, csrss and the kernel. Reference:
 today's HTTP hook POST, taken as the gateway takes it (a new connection each
 time, the token checked, the body parsed), took 1.02 ms mean, 1.34 ms p95,
