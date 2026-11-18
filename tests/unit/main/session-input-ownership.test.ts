@@ -30,13 +30,16 @@
 //    is a run screen, below);
 //  - `.submit` read from a provider's run screen, or destructured from one:
 //    anything traced to a `.runScreen` read (destructured included), typed
-//    SessionRunScreen or `X['runScreen']`, or a call of the module's
-//    codexRunScreen under any name (imported, renamed or not, read from a
-//    namespace, a require or an import() of the module, destructured from
-//    one, or set to a name from one of those);
+//    SessionRunScreen or `X['runScreen']`, typed as what the module's
+//    codexRunScreen returns (`ReturnType<typeof codexRunScreen>`, wrapped in
+//    NonNullable, or through a type alias of the same file), or a call of the
+//    module's codexRunScreen under any name (imported, renamed or not, read
+//    from a namespace, a require or an import() of the module, destructured
+//    from one, set to a name or a class field from one of those, or a
+//    constructor parameter property whose default is one);
 //  - `.write` read from a PTY handle, or destructured from one: anything typed
-//    IPty or HelperPty or `X['ptyProcess']`, the result of node-pty's spawn
-//    (imported, required or imported at run time), spawnPlainPty,
+//    IPty or HelperPty or `X['ptyProcess']` (or a type alias of this file that
+//    names one), the result of node-pty's spawn (imported, required or imported at run time), spawnPlainPty,
 //    spawnAgentPty or spawnRunPty (under any name), a `new HelperPty`, a
 //    `.ptyProcess` read (destructured included), a function in the same file
 //    that returns one, a call handed a function that returns one (a start
@@ -70,8 +73,8 @@
 // injected dependency object (`deps.write`: the composer rule's and the
 // Watchdog's own writers, handed in by the PTY manager and by this module);
 // the module's codexRunScreen handed on as a value and called elsewhere (only
-// the PTY manager may import it, above); a
-// computed key that is not a literal, except on a namespace of a module that
+// the PTY manager may import it, above); a run screen's type written
+// `typeof import('...')`; a computed key that is not a literal, except on a namespace of a module that
 // exports a typing function, which then counts whole; a reach through
 // `Reflect`, `eval` or a require whose name is built at run time; and a local
 // name that shadows a typing function's (counted as one, which only
@@ -265,16 +268,31 @@ export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] 
     }
   })
   const typeName = (name: string): string => typeAlias.get(name) ?? name
-  /** Whether a type names a PTY handle or a run screen anywhere in it (a union, a list, a map, `X['ptyProcess']`). */
+  const localTypes = new Map<string, N>()     // type X = ..., declared in this file
+  walk(ast, (n) => { if (n.type === 'TSTypeAliasDeclaration' && n.id?.name) localTypes.set(n.id.name, n.typeAnnotation) })
+  const resolving = new Set<string>()
+  /** Whether `exprName`, the name a `typeof` reads, is the module's codexRunScreen: a name bound to it, or read from a namespace of the module. */
+  const isDoorScreenQuery = (exprName: N | undefined): boolean => {
+    if (exprName?.type === 'Identifier') return doorScreens.has(exprName.name)
+    return exprName?.type === 'TSQualifiedName' && exprName.right?.name === DOOR_SCREEN && exprName.left?.type === 'Identifier' && namespaces.get(exprName.left.name) === 'door'
+  }
+  /** Whether a type names a PTY handle or a run screen anywhere in it (a union,
+   *  a list, a map, `X['ptyProcess']`, a type alias of this file, and, for a run
+   *  screen, `typeof codexRunScreen`, as `ReturnType<typeof codexRunScreen>`). */
   const namesType = (t: N | undefined, kind: keyof typeof INDEXED): boolean => {
     const set = kind === 'pty' ? PTY_TYPES : SCREEN_TYPES
     let found = false
     if (t) walk(t, (n) => {
       if (n.type === 'TSIndexedAccessType' && n.indexType?.type === 'TSLiteralType' && n.indexType.literal?.value === INDEXED[kind]) found = true
+      if (kind === 'screen' && n.type === 'TSTypeQuery' && isDoorScreenQuery(n.exprName)) found = true
       if (n.type !== 'TSTypeReference') return
       const tn = n.typeName
       const name = tn?.type === 'Identifier' ? typeName(tn.name) : tn?.type === 'TSQualifiedName' ? tn.right?.name : null
       if (name && set.has(name)) found = true
+      if (tn?.type === 'Identifier' && localTypes.has(tn.name) && !resolving.has(tn.name)) {
+        resolving.add(tn.name)
+        try { if (namesType(localTypes.get(tn.name), kind)) found = true } finally { resolving.delete(tn.name) }
+      }
     })
     return found
   }
@@ -454,6 +472,7 @@ export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] 
         const name = n.key?.name ?? n.key?.id?.name
         if (name && (namesType(n.typeAnnotation, 'pty') || isHandle(n.value))) handles.add(`this.${name}`)
         if (name && (namesType(n.typeAnnotation, 'screen') || isScreen(n.value))) screens.add(`this.${name}`)
+        if (name && isDoorScreen(n.value)) doorScreens.add(`this.${name}`)     // cs = codexRunScreen
       } else if (n.type === 'TSParameterProperty') {
         // constructor(private pty: IPty): a `this` field.
         const p = n.parameter?.type === 'AssignmentPattern' ? n.parameter.left : n.parameter
@@ -461,6 +480,7 @@ export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] 
         if (p?.type === 'Identifier') {
           if (namesType(p.typeAnnotation, 'pty') || isHandle(fallback)) handles.add(`this.${p.name}`)
           if (namesType(p.typeAnnotation, 'screen') || isScreen(fallback)) screens.add(`this.${p.name}`)
+          if (isDoorScreen(fallback)) doorScreens.add(`this.${p.name}`)     // constructor(private cs = codexRunScreen)
         }
       } else if (n.type === 'Identifier' && n.typeAnnotation) {
         if (namesType(n.typeAnnotation, 'pty')) handles.add(n.name)     // a parameter or a field typed as a PTY
@@ -865,6 +885,7 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['a parameter typed by a type alias of the door\'s run screen', `import { codexRunScreen } from './session-input'\ntype Screen = NonNullable<ReturnType<typeof codexRunScreen>>\nfunction deliver(s: Screen) { s.submit(id, t, o) }`],
     ['a name typed as what the door\'s run screen returns, imported under another name', `import { codexRunScreen as cs } from './session-input'\nlet s: ReturnType<typeof cs> = undefined\ns?.submit(id, t, o)`],
     ['a name typed as what the door\'s run screen returns, read from a namespace of the module', `import * as input from './session-input'\nconst go = (s: NonNullable<ReturnType<typeof input.codexRunScreen>>) => s.submit(id, t, o)`],
+    ['a parameter typed by a type alias of IPty', `import type { IPty } from 'node-pty'\ntype Term = IPty | null\nfunction f(t: Term) { t!.write('x') }`],
     // The door's function held by a class, from where the class declares it.
     ['the door\'s run screen held by a class field', `import { codexRunScreen } from './session-input'\nclass X {\n  cs = codexRunScreen\n  go() { this.cs()?.submit(id, t, o) }\n}`],
     ['the door\'s run screen held by a constructor parameter property with a default', `import { codexRunScreen } from './session-input'\nclass X {\n  constructor(private cs = codexRunScreen) {}\n  go() { this.cs()?.submit(id, t, o) }\n}`],

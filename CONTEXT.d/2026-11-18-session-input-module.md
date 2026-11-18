@@ -98,8 +98,8 @@ The check's new module-shape tests were each turned red by a mutant: the
 registration moved into a function, a file the module loads importing
 pty-manager, and index.ts importing askQuestion.
 
-The re-review of 9bd59927 found that making `codexRunScreen` a door export
-hid it: the check counted nothing reached through the module, so a submit on
+The re-review of the first ownership fix found that making `codexRunScreen` a
+door export hid it: the check counted nothing reached through the module, so a submit on
 the run screen it returns was unseen in every main file, pty-manager
 included. The check now treats a call of the module's `codexRunScreen` as a
 run screen, under any name (imported, renamed, read from a namespace, a
@@ -107,9 +107,24 @@ require or an import() of the module, destructured from one, or set to a
 name from one), so a submit on it counts directly, through a name, `!`, `?.`
 or destructuring, while its close and resize stay clean. `codexRunScreen` is
 also held to pty-manager, as askQuestion is. In one run against the old
-checker (dc9cbf80), the 12 new shapes it must flag were each red, and the
+checker, the 12 new shapes it must flag were each red, and the
 new pin was red under a mutant (pty-handlers.ts importing codexRunScreen);
 the 2 new clean cases and the new door-check line were already green there.
+
+The last re-review found two more ways to hold that run screen unseen. A
+parameter or name typed as what `codexRunScreen` returns
+(`ReturnType<typeof codexRunScreen>`, wrapped in `NonNullable`, or through a
+type alias of the same file) gave no site on its `.submit`; nor did a class
+field set to the function (`cs = codexRunScreen`) or a constructor parameter
+property with it as its default. The check now counts both (a type alias of
+the file counts as the type it names, for a PTY handle too). In one run
+against the checker before that change, the 7 new flagged cases were each red
+(5 by type: NonNullable, plain ReturnType, a type alias, a renamed import, a
+read from a namespace; 2 in a class: a field, a constructor parameter
+property) and the 2 new clean cases were already green. One more flagged
+case, a type alias of IPty, was written with the change and never ran against
+the old checker. A type written `typeof import('...')` stays unchecked, and
+the header says so.
 
 **Owed.** The leave key moved out of pty-manager.ts (an SSH blast-radius
 file), so the live SSH matrix runs once, at the release PR. An ADR-009 pass
