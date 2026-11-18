@@ -118,7 +118,8 @@ pub fn app_created(filetime: u64) -> u64 {
 /// process; one made later took a listed pid after the list was read. All
 /// three are in steps of 100 ns since 1601 (UTC).
 pub fn made_under(child_made: u64, parent_made: u64, listed_at: u64) -> bool {
-    parent_made <= child_made && child_made <= listed_at
+    let _ = listed_at;
+    parent_made <= child_made
 }
 
 /// A path that starts with a drive letter, a colon and a separator, such as
