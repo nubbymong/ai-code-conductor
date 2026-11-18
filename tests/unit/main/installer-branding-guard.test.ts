@@ -1714,6 +1714,9 @@ describe('installer: the app-running check closes only this user\'s copies from 
     // Every loop is bounded: 20 looks of 250 ms (5 s), then 8 more after the ends.
     expect(close.filter((c) => /^Sleep\b/.test(c))).toEqual(['Sleep 250', 'Sleep 250'])
     expect(close.filter((c) => /^\$\{OrIf\} \$R4 >= /.test(c))).toEqual(['${OrIf} $R4 >= 20', '${OrIf} $R4 >= 8'])
+    // An end that failed reads the exit code 10 more times at most, 50 ms apart.
+    const why = bodyCode(lines, 'CccWhyNotEnded')
+    expect(why.filter((c) => /^Sleep\b|^\$\{OrIf\} \$0 >= /.test(c))).toEqual(['${OrIf} $0 >= 10', 'Sleep 50'])
   })
 
   it('in a run someone can see, nothing is ended while a copy that was asked to close is still open (it may be asking whether to save)', () => {
@@ -1749,7 +1752,7 @@ describe('installer: the app-running check closes only this user\'s copies from 
     ])
     // Everything that ends a copy is in that ${Else}.
     const otherwise = gate + 15
-    expect(close.indexOf("System::Call 'kernel32::TerminateProcess(p r8, i 1) i .r6'")).toBeGreaterThan(otherwise)
+    expect(close.indexOf("System::Call 'kernel32::TerminateProcess(p r8, i 1) i .r6 ?e'")).toBeGreaterThan(otherwise)
   })
 
   it('it ends a copy only through a handle it holds, after checking that process is still this user\'s with the same start time, and logs every outcome', () => {
@@ -1760,7 +1763,7 @@ describe('installer: the app-running check closes only this user\'s copies from 
     // last wait still saw ($R1).
     expect(open).toBeGreaterThan(close.indexOf('${OrIf} $R4 >= 20'))
     expect(close.slice(open - 6, open)).toEqual(['!insertmacro CccNextPair "$9" $R4 $3 $4', '${If} $3 == ""', '${ExitDo}', '${EndIf}', '!insertmacro CccInList "$3" $6', '${If} $6 == 1'])
-    expect(close.slice(open, open + 20)).toEqual([
+    expect(close.slice(open, open + 21)).toEqual([
       "System::Call 'kernel32::OpenProcess(i 0x1001, i 0, i $3) p .r8'",
       '${If} $8 != 0',
       '!insertmacro CccProcessIsMine "$3" $6',
@@ -1768,11 +1771,15 @@ describe('installer: the app-running check closes only this user\'s copies from 
       '${If} $6 == 1',
       '${AndIf} $4 != ""',
       '${AndIf} $R8 == $4',
-      "System::Call 'kernel32::TerminateProcess(p r8, i 1) i .r6'",
+      // Windows' error is taken with the call (?e) and off the stack at once.
+      "System::Call 'kernel32::TerminateProcess(p r8, i 1) i .r6 ?e'",
+      'Pop $7',
       '${If} $6 != 0',
       'DetailPrint "Ended process $3, which did not close within 5 seconds."',
       '${Else}',
-      'DetailPrint "Could not end process $3."',
+      // An end that failed says why (aicc_planning #328), through the handle
+      // it was tried with, from the error the call left.
+      '!insertmacro CccWhyNotEnded "$3" $8 $7',
       '${EndIf}',
       '${Else}',
       'DetailPrint "Did not end process $3: it could not be confirmed as the copy found first."',
@@ -1806,6 +1813,37 @@ describe('installer: the app-running check closes only this user\'s copies from 
     expect(close.filter((c) => /^System::(Alloc|Free)\b/.test(c))).toEqual([
       'System::Alloc 256', 'System::Alloc 256', 'System::Alloc 556', 'System::Free $R3', 'System::Free $R5', 'System::Free $R9',
     ])
+  })
+
+  it('an end that failed says why: it had already exited, access was denied, or the error number (aicc_planning #328)', () => {
+    // installer-nsis-behaviour.test.ts runs CccWhyNotEnded for real on each of the three.
+    const lines = analyse(readNsh())
+    expect(bodyCode(lines, 'CccWhyNotEnded')).toEqual([
+      'StrCpy $0 0',
+      '${Do}',
+      // The handle the end was tried with, so the pid cannot have passed on.
+      "System::Call 'kernel32::GetExitCodeProcess(p ${HANDLE}, *i .r1) i .r2'",
+      '${If} $2 == 0',
+      '${OrIf} $1 != 259',
+      '${OrIf} $0 >= 10',
+      '${ExitDo}',
+      '${EndIf}',
+      'Sleep 50',
+      'IntOp $0 $0 + 1',
+      '${Loop}',
+      '${If} $2 != 0',
+      '${AndIf} $1 != 259',
+      'DetailPrint "Could not end process ${PID}: it had already exited."',
+      '${ElseIf} ${ERROR} == 5',
+      'DetailPrint "Could not end process ${PID}: access was denied."',
+      '${Else}',
+      'DetailPrint "Could not end process ${PID}: Windows error ${ERROR}."',
+      '${EndIf}',
+    ])
+    // Its one caller passes the pid, the handle and the error the end left.
+    expect(lines.filter((l) => /^!insertmacro CccWhyNotEnded\b/.test(l.code)).map((l) => `${l.macro}: ${l.code}`)).toEqual(['CccCloseAppCopies: !insertmacro CccWhyNotEnded "$3" $8 $7'])
+    // No line says "Could not end process" with no reason any more.
+    expect(lines.filter((l) => /"Could not end process [^:"]*\."/.test(l.code)).map((l) => l.code)).toEqual([])
   })
 
   it('the last look counts a copy whose user is not known only when this installer is not elevated, and the answer is 0, 1 or 2', () => {
@@ -1891,5 +1929,225 @@ describe('installer: the app-running check closes only this user\'s copies from 
       const jumps = check.filter((l) => new RegExp(`\\b(IDRETRY|IDOK)\\s+${label}$`).test(l.code))
       expect(jumps.map((l) => l.passes), label).toEqual([['inst', 'un']])
     }
+  })
+
+  it('the elevated inner instance runs the same check and box from customInit, after the retarget and the suspend, and the commit point stays where it was (aicc_planning #327)', () => {
+    // installSection.nsh skips CHECK_APP_RUNNING in the elevated inner
+    // instance (${ifNot} ${UAC_IsInnerInstance}), so before this nothing there
+    // closed a running copy before the files.
+    const lines = analyse(readNsh())
+    const init = bodyCode(lines, 'customInit')
+    const check = init.indexOf('!insertmacro CccCloseAppCopies "$cccRecordUninstaller"')
+    expect(check, 'customInit runs CccCloseAppCopies').toBeGreaterThan(-1)
+    expect(init.filter((c) => /^!insertmacro CccCloseAppCopies\b/.test(c)), 'once').toHaveLength(1)
+    // After the retarget and the suspend, so a stop can put both back.
+    for (const before of [
+      '!insertmacro RetargetRecordedInstallLocation HKCU "$R9" $cccSavedPerUserInstallLocation',
+      '!insertmacro RetargetRecordedInstallLocation HKLM "$R9" $cccSavedPerMachineInstallLocation',
+      '!insertmacro SuspendUninstallRecordIn HKCU $cccSavedPerUserUninstallString',
+      '!insertmacro SuspendUninstallRecordIn HKLM $cccSavedPerMachineUninstallString',
+    ]) {
+      expect(init.indexOf(before), before).toBeGreaterThan(-1)
+      expect(init.indexOf(before), before).toBeLessThan(check)
+    }
+    // Its own ${If} ${UAC_IsInnerInstance}, at the top level of customInit:
+    // not inside the legacy relocation or the /D= branch, so every elevated
+    // inner instance runs it.
+    const open = init.lastIndexOf('${If} ${UAC_IsInnerInstance}', check)
+    expect(open).toBeGreaterThan(init.indexOf('!insertmacro SuspendUninstallRecordIn HKLM $cccSavedPerMachineUninstallString'))
+    expect(enclosingBlocks(init, open)).toEqual([])
+    expect(init.slice(open)).toEqual([
+      '${If} ${UAC_IsInnerInstance}',
+      'DetailPrint "=== The elevated copy of Setup: this user\'s copies from this install\'s folder ==="',
+      'Push $R0',
+      // The install this run replaces: the all-users record, as it is or as
+      // the suspend above saved it.
+      'ReadRegStr $R0 HKLM "${UNINSTALL_REGISTRY_KEY}" "UninstallString"',
+      '${If} $R0 == ""',
+      'StrCpy $R0 "$cccSavedPerMachineUninstallString"',
+      '${EndIf}',
+      '!insertmacro CccGetInQuotes "$R0" $cccRecordUninstaller',
+      'ClearErrors',
+      'cccInnerAppStillRunning:',
+      '!insertmacro CccCloseAppCopies "$cccRecordUninstaller"',
+      '${If} $R0 == 1',
+      'MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "AI Code Conductor is still running.$\\n$\\nIf it is asking whether to save your sessions, answer it first. Otherwise close it yourself.$\\n$\\nThen click Retry." /SD IDCANCEL IDRETRY cccInnerAppStillRunning',
+      'DetailPrint "AI Code Conductor is still running, so nothing was installed."',
+      '${ElseIf} $R0 == 2',
+      'MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "Could not check whether AI Code Conductor is running.$\\n$\\nClose it if it is open, then click OK to carry on." /SD IDCANCEL IDOK cccInnerAppCheckCarryOn',
+      'DetailPrint "Could not check whether AI Code Conductor is running, so nothing was installed."',
+      '${EndIf}',
+      // A stop puts back what customInit changed and does not exit 0.
+      '${If} $R0 != 0',
+      'Call CccRestoreInstallLocation',
+      'SetErrorLevel 2',
+      'Quit',
+      '${EndIf}',
+      'cccInnerAppCheckCarryOn:',
+      '${If} $R0 == 0',
+      'DetailPrint "No copy of AI Code Conductor is running from this install\'s folder. Proceeding."',
+      '${Else}',
+      'DetailPrint "Carrying on without the check, as chosen in the box."',
+      '${EndIf}',
+      'Pop $R0',
+      '${EndIf}',
+      'ClearErrors',
+    ])
+    // The same two boxes customCheckAppRunning shows, word for word.
+    const boxes = (body: string[]) => body.filter((c) => /^MessageBox\b/.test(c)).map((c) => c.replace(/\s+(IDRETRY|IDOK)\s+\w+$/, ''))
+    expect(boxes(init.slice(open))).toEqual(boxes(bodyCode(lines, 'customCheckAppRunning')))
+    // The commit point does not move: customInit drops no record.
+    expect(reachableCode(lines, 'customInit').filter((l) => /ForgetBrokenPreviousInstall|ForgetPreviousInstallIn/.test(l.code))).toEqual([])
+    expect(bodyCode(lines, 'customCheckAppRunning').slice(-3)).toEqual(['!ifndef BUILD_UNINSTALLER', '!insertmacro ForgetBrokenPreviousInstall', '!endif'])
+  })
+})
+
+/**
+ * The blocks enclosing body[at], innermost first: each block's opening line
+ * with the ${AndIf} / ${OrIf} lines that join it, and any ${Else} or
+ * ${ElseIf} passed on the way (so a line in an else branch says so).
+ */
+function enclosingBlocks(body: string[], at: number): { open: string[]; via: string[] }[] {
+  const out: { open: string[]; via: string[] }[] = []
+  let depth = 0
+  let via: string[] = []
+  for (let i = at - 1; i >= 0; i--) {
+    const c = body[i]
+    if (/^\$\{(EndIf|EndUnless)\}$/i.test(c)) {
+      depth++
+    } else if (/^\$\{(Else|ElseIf|ElseIfNot|ElseUnless)\}/i.test(c)) {
+      if (depth === 0) via.push(c)
+    } else if (/^\$\{(If|IfNot|Unless)\}/i.test(c)) {
+      if (depth > 0) {
+        depth--
+      } else {
+        const open = [c]
+        for (let j = i + 1; j < body.length && /^\$\{(AndIf|AndIfNot|AndUnless|OrIf|OrIfNot|OrUnless)\}/i.test(body[j]); j++) open.push(body[j])
+        out.push({ open, via })
+        via = []
+      }
+    }
+  }
+  return out
+}
+
+describe('installer: the uninstaller removes the program files as electron-builder does, then says what is left (static, aicc_planning #328)', () => {
+  // installer-nsis-behaviour.test.ts runs CccReportLeftFiles for real with
+  // makensis, on CI's Windows parts, over a folder with a running program in it.
+
+  /** The app-builder-lib whose uninstaller.nsh customRemoveFiles copies. */
+  const PINNED_APP_BUILDER_LIB = '26.15.3'
+  const TEMPLATE = join(ROOT, 'node_modules', 'app-builder-lib', 'templates', 'nsis', 'uninstaller.nsh')
+
+  /** The code lines of the template's own removal: the !else branch of its !ifmacrodef customRemoveFiles. */
+  function templateRemoval(): string[] {
+    const src = readFileSync(TEMPLATE, 'utf-8').replace(/\r\n/g, '\n').split('\n').map((l) => stripComment(l).trim())
+    const at = src.indexOf('!ifmacrodef customRemoveFiles')
+    expect(at, 'uninstaller.nsh asks for customRemoveFiles').toBeGreaterThan(-1)
+    expect(src.slice(at, at + 3)).toEqual(['!ifmacrodef customRemoveFiles', '!insertmacro customRemoveFiles', '!else'])
+    const out: string[] = []
+    let depth = 0
+    for (const c of src.slice(at + 3)) {
+      if (/^!if/.test(c)) depth++
+      if (/^!endif\b/.test(c)) {
+        if (depth === 0) return out
+        depth--
+      }
+      if (c !== '') out.push(c)
+    }
+    throw new Error('no !endif closes the template\'s !ifmacrodef customRemoveFiles')
+  }
+
+  it('customRemoveFiles is electron-builder\'s own removal, line for line, at the pinned app-builder-lib, then the report', () => {
+    // A newer electron-builder that changes its removal fails here, so the
+    // copy cannot drift silently: compare the new template's block with
+    // customRemoveFiles, carry the change over, then move the pin.
+    const pkgVersion = JSON.parse(readFileSync(join(ROOT, 'node_modules', 'app-builder-lib', 'package.json'), 'utf-8')).version
+    expect(pkgVersion, 'app-builder-lib moved: compare customRemoveFiles with its uninstaller.nsh, then update the pin').toBe(PINNED_APP_BUILDER_LIB)
+    const tpl = templateRemoval()
+    expect(tpl).toContain('RMDir /r $INSTDIR')
+    expect(tpl).toContain('Call un.atomicRMDir')
+    const lines = analyse(readNsh())
+    const body = bodyCode(lines, 'customRemoveFiles')
+    expect(body.slice(0, tpl.length)).toEqual(tpl)
+    expect(body.slice(tpl.length)).toEqual(['!insertmacro CccReportLeftFiles'])
+  })
+
+  it('both macros are the uninstaller pass\'s only, declare no Var or Function, and the installer pass never inserts them', () => {
+    const lines = analyse(readNsh())
+    for (const name of ['customRemoveFiles', 'CccReportLeftFiles']) {
+      const own = lines.filter((l) => l.macro === name)
+      expect(own.length, name).toBeGreaterThan(0)
+      expect([...new Set(own.map((l) => l.passes.join(',')))], name).toEqual(['un'])
+      expect(own.filter((l) => /^(Var|Function)\b/.test(l.code)).map((l) => l.code), name).toEqual([])
+    }
+    expect(lines.filter((l) => /^!insertmacro\s+"?customRemoveFiles\b/.test(l.code))).toEqual([])
+    expect(lines.filter((l) => /^!insertmacro\s+"?CccReportLeftFiles\b/.test(l.code)).map((l) => l.macro)).toEqual(['customRemoveFiles'])
+  })
+
+  it('/REBOOTOK appears once, only on an all-users uninstall that is not an update, inside Program Files; nobody is asked to restart', () => {
+    const lines = analyse(readNsh())
+    const reboot = lines.filter((l) => /REBOOTOK/i.test(l.code))
+    expect(reboot.map((l) => `${l.macro}: ${l.code}`)).toEqual(['CccReportLeftFiles: RMDir /r /REBOOTOK "$INSTDIR"'])
+    expect(reboot[0].passes).toEqual(['un'])
+    const body = bodyCode(lines, 'CccReportLeftFiles')
+    const at = body.indexOf('RMDir /r /REBOOTOK "$INSTDIR"')
+    const blocks = enclosingBlocks(body, at)
+    expect(blocks).toEqual([
+      { open: ['${If} $R0 == 1'], via: [] },
+      { open: ['${If} $installMode == "all"', '${AndIfNot} ${isUpdated}'], via: [] },
+      { open: ['${If} ${FileExists} "$INSTDIR\\*.*"'], via: [] },
+    ])
+    // $R0 is 1 only when $INSTDIR is inside one of the Program Files folders,
+    // and never Program Files itself.
+    const allUsers = body.indexOf('${If} $installMode == "all"')
+    expect(body.slice(allUsers + 2, at - 2)).toEqual([
+      'StrCpy $R0 0',
+      '!insertmacro IsSameOrInsideCanon "$PROGRAMFILES64" "$INSTDIR" $R0',
+      '${If} $R0 != 1',
+      '!insertmacro IsSameOrInsideCanon "$PROGRAMFILES" "$INSTDIR" $R0',
+      '${EndIf}',
+      '${If} $cccCanonA == $cccCanonB',
+      '${OrIf} $cccCanonAS == $cccCanonBS',
+      'StrCpy $R0 0',
+      '${EndIf}',
+      '${If} $R0 == 1',
+    ])
+    expect(body.slice(at - 2, at)).toEqual(['SetRebootFlag false', 'ClearErrors'])
+    // The reboot flag is cleared again before the branch ends, so the finish
+    // page offers no restart; outside Program Files nothing is set.
+    const again = body.indexOf('SetRebootFlag false', at)
+    expect(body.slice(again - 1, again + 3).map(quiet)).toEqual(['${EndIf}', 'SetRebootFlag false', '${Else}', 'DetailPrint "..."'])
+    expect(body[again + 2]).toMatch(/not inside Program Files/)
+    // A per-user uninstall says the files stay, and sets nothing.
+    expect(body).toContain('${ElseIfNot} ${isUpdated}')
+  })
+
+  it('it names each file left, at most 50 and then how many more, never enters a link, is bounded, and gives back every register', () => {
+    const lines = analyse(readNsh())
+    const body = bodyCode(lines, 'CccReportLeftFiles')
+    const left = body.indexOf('DetailPrint "Left: $3\\$5"')
+    expect(left).toBeGreaterThan(-1)
+    expect(body.slice(left - 3, left)).toEqual(['${If} $R0 == 1', 'IntOp $0 $0 + 1', '${If} $0 <= 50'])
+    expect(body).toContain('DetailPrint "And $R0 more files."')
+    // A folder is looked into only when it is not a link, and only within the bounds.
+    const attr = body.indexOf('${GetFileAttributes} "$3\\$5" "REPARSE_POINT" $R0')
+    expect(attr).toBeGreaterThan(-1)
+    expect(body.slice(attr, attr + 6)).toEqual([
+      '${GetFileAttributes} "$3\\$5" "REPARSE_POINT" $R0',
+      '${If} $R0 == 0',
+      '${If} $2 < 256',
+      '${AndIf} $1 < 1000',
+      'Push "$3\\$5"',
+      'IntOp $2 $2 + 1',
+    ])
+    expect(body.filter((c) => /^Push "/.test(c))).toEqual(['Push "$INSTDIR"', 'Push "$3\\$5"'])
+    // The walk pops exactly what it pushed ($2 counts them), inside the saved registers.
+    const saved = ['$0', '$1', '$2', '$3', '$4', '$5', '$6', '$R0', '$R5', '$R6', '$R7']
+    expect(body.slice(0, saved.length)).toEqual(saved.map((r) => `Push ${r}`))
+    expect(body.slice(-saved.length)).toEqual([...saved].reverse().map((r) => `Pop ${r}`))
+    expect(body.filter((c) => /^Pop \$3$/.test(c))).toHaveLength(2)
+    // It only reads and reports: the one removal is the /REBOOTOK one.
+    expect(body.filter((c) => /^(RMDir|Delete)\b/i.test(c))).toEqual(['RMDir /r /REBOOTOK "$INSTDIR"'])
   })
 })
