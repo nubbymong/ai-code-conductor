@@ -72,8 +72,9 @@ of a 2.1.3-beta.5 build. Survival over the new transport is covered by
 
 `p16-windows-hook-cost.ps1` (ADR-030, probe table; it gates hooks through the
 holder, and a FAIL means declared exception 11). Run it on the Windows test
-machine, not in CI, with the signed per-user copy of an installed beta and
-Defender as shipped:
+machine, not in CI, from an administrator session (it reads Defender's
+exclusions to confirm Defender is as shipped), with the signed per-user copy
+of an installed beta:
 
 ```powershell
 .\p16-windows-hook-cost.ps1 -Helper "$env:LOCALAPPDATA\AI Code Conductor\helper\<version>-<12 hex>\aicc-helper.exe" -Store "$env:TEMP\p16-store" -Claude <path to claude.exe>

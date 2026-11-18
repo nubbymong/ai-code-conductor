@@ -58,7 +58,8 @@ no failed run. Anything else is FAIL. p95 is the nearest-rank value: the
 ceil(0.95 * n)-th smallest. The mean CPU judged is the larger of the mean of
 cpu_ms and the mean of cpu_tick_ms. A Defender exclusion that covers the
 helper, the store or a program of the chain also makes it a FAIL, since
-Defender is then not as shipped.
+Defender is then not as shipped; so does an exclusion list that cannot be
+read, since that is then not verified (run from an administrator session).
 
 The script refuses to run when the store folder already exists, its parent
 folder does not, or the output folder is inside it; when step 2 could outlast
@@ -1067,6 +1068,7 @@ try {
     $why = @()
     if (-not $result.defenderBefore.realTimeProtection -or -not $result.defenderAfter.realTimeProtection) { $why += 'Defender real-time protection was not on throughout' }
     if ($result.defenderExcludesProbe -eq 'yes') { $why += 'a Defender exclusion covers the helper, the store or a program of the chain, so Defender was not as shipped' }
+    if ($result.defenderExcludesProbe -eq 'unknown') { $why += 'Defender''s exclusions could not be read (run from an administrator session), so Defender as shipped is not verified' }
     if ($summary.p95WallMs -gt $PassP95Ms) { $why += "p95 wall $($summary.p95WallMs) ms is over $PassP95Ms ms" }
     if ($summary.maxWallMs -gt $PassMaxMs) { $why += "longest wall $($summary.maxWallMs) ms is over $PassMaxMs ms" }
     if ($summary.meanCpuMs -gt $PassMeanCpuMs) { $why += "mean CPU $($summary.meanCpuMs) ms is over $PassMeanCpuMs ms" }

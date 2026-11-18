@@ -403,17 +403,18 @@ removes the install folder's files (run from there, the holder survived but its 
 file was gone, so nothing could attach again). Local sessions through the holder (S6)
 are unblocked on Windows on that condition.
 
-P16 result (2026-11-17, Windows test machine, the signed helper of 2.1.3-beta.7 from its
+P16 result (2026-11-18, Windows test machine, the signed helper of 2.1.3-beta.7 from its
 per-user copy, Defender real-time protection on): pass. Claude Code 2.1.296 starts a
 command hook through Git for Windows: `bin\bash.exe -c "<command>"` starts
 `usr\bin\bash.exe`, which starts the command, and the launcher gets a console of its
 own, so one event is four processes. `aicc-helper list` behind that launcher, standing
 in for one hook event, ran 350 times (300 at 2 a second, 50 back to back) with no
-failure: p95 wall time 38.2 ms, longest 50.8 ms, mean CPU 29.6 ms per event, against a
-pass line of 150 ms, 750 ms and 50 ms set before measuring (four earlier full runs, before
-review fixes to the script's checks, gave the same picture). The helper is about 3 ms of
-that CPU; Git Bash and its console host are the rest. Defender's own process adds about
-20 ms of CPU per event outside the chain. Today's HTTP hook, for reference, takes about
+failure: p95 wall time 38.6 ms, longest 41.3 ms, mean CPU 29.9 ms per event, against a
+pass line of 150 ms, 750 ms and 50 ms set before measuring (five earlier full runs on
+2026-11-17, before review fixes to the script's checks, gave the same picture). The helper
+is about 3 ms of that CPU; Git Bash and its console host are the rest. Defender's own
+process adds about 20 ms of CPU per event outside the chain, so with it an event costs
+about 50 ms of CPU. Today's HTTP hook, for reference, takes about
 0.7 ms and 1.1 ms of CPU per POST. Measured on one fast machine (`helper/probes/p16-windows-hook-cost.ps1`).
 Hooks through the holder (S12) are unblocked on Windows; the hook command must be
 written for Git Bash (forward slashes, quoted paths).
