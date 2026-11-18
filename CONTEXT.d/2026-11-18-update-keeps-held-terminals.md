@@ -50,7 +50,12 @@ the app's exit and a silent install.
   no longer take it over or end it. A tab whose shell runs under an id
   derived from where its first terminal went keeps that id as a binding, so
   a later move does not cost it its shell. While an update goes on, nothing
-  is taken over either: the kill would end it.
+  is taken over either: the kill would end it. sidFor derives again while
+  the id it derived is bound to another tab (a moved terminal whose
+  replacement was moved too). Only the terminal that still holds an id lets
+  go of its binding when it ends (a quick Restart keeps the new one's).
+  Re-attach is refused while an update goes on, also when one began while
+  its listing ran.
 - At the next start a mark with reason "update" takes the crash path
   unchanged; only the log line says the app was updated.
 - Settings: one sentence in the plain-terminal switch's note.

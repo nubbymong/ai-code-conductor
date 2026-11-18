@@ -146,6 +146,7 @@ export const HELPER_SENTENCES = {
   offNothingToEnd: 'The session helper is off, so it holds no terminal to end.',
   offNothingToReattach: 'The session helper is off, so it holds no terminal to re-attach.',
   agentNotReattached: 'An agent session cannot be re-attached. Its own tab resumes the conversation.',
+  updating: 'The app is being updated. Re-attach the terminal once the new version has opened.',
   agentNotCleared: '[The session helper still runs the session this tab had before, and could not end it, so a second one was not started. Restart this tab in a few minutes.]',
 } as const
 
@@ -174,6 +175,8 @@ const INSTALL_RETRY_AFTER_MS = 60_000
 /** `hold`'s exit status when a holder for the session runs already (protocol 15). */
 const EXIT_ALREADY_RUNNING = 3
 const MARKER = 'app-running.json'
+/** How many moves deep sidFor derives a tab's own id (each one a Re-attach). */
+const SID_DERIVE_MAX = 16
 const BINDINGS = 'bindings.json'
 
 /** The variables a helper command gets: what the system itself needs to run
@@ -562,13 +565,23 @@ export class SessionHelperManager implements MachinesSource {
   // ── terminals ──────────────────────────────────────────────────────────────
 
   /** The held session id for an app PTY id. A terminal Re-attach moved to a
-   *  new tab stays with that tab: its first tab then gets a session of its own. */
+   *  new tab stays with that tab: its first tab then gets a session of its own,
+   *  derived from where that one went, and derived again while the one it
+   *  derives is bound to another tab too (a terminal moved, then its
+   *  replacement moved as well). */
   sidFor(appPtyId: string): string {
     const bound = this.bindings.get(appPtyId)
     if (bound) return bound
-    const own = heldSessionId(appPtyId)
-    for (const [other, sid] of this.bindings) if (sid === own && other !== appPtyId) return heldSessionId(`${appPtyId}/after/${other}`)
-    return own
+    let seed = appPtyId
+    let sid = heldSessionId(seed)
+    for (let i = 0; i < SID_DERIVE_MAX; i++) {
+      let other: string | undefined
+      for (const [o, s] of this.bindings) if (s === sid && o !== appPtyId) { other = o; break }
+      if (other === undefined) return sid
+      seed = `${seed}/after/${other}`
+      sid = heldSessionId(seed)
+    }
+    return sid
   }
 
   /**
@@ -715,9 +728,13 @@ export class SessionHelperManager implements MachinesSource {
     const sid = wrapper.sid
     this.live.set(sid, wrapper)
     void wrapper.ended.then(() => {
-      if (this.live.get(sid) === wrapper) this.live.delete(sid)
-      // One let go of for an update keeps its binding: the tab Re-attach
-      // opened for it shows it again at the next start.
+      // Only the terminal that still holds this id lets go of it: a tab
+      // started again before this one finished ending runs under the same
+      // id and keeps its binding. One let go of for an update keeps its
+      // binding too: the tab Re-attach opened for it shows it again at the
+      // next start.
+      if (this.live.get(sid) !== wrapper) return this.changed()
+      this.live.delete(sid)
       if (!wrapper.isReleased) for (const [bound, s] of [...this.bindings]) if (s === sid && bound === appId) this.bindings.delete(bound)
       this.saveBindings()
       this.changed()
@@ -1289,7 +1306,11 @@ export class SessionHelperManager implements MachinesSource {
 
   async reattach(id: string): Promise<MachineActionResult> {
     if (!this.enabled && !this.heldIds().has(id)) return { ok: false, message: HELPER_SENTENCES.offNothingToReattach }
+    // Nothing moves while an update goes on (also when one began while the
+    // listing ran): the next version shows each kept terminal in its own tab.
+    if (this.updating) return { ok: false, message: HELPER_SENTENCES.updating }
     const record = (await this.heldListing()).find((r) => r.session === id)
+    if (this.updating) return { ok: false, message: HELPER_SENTENCES.updating }
     if (!record) return { ok: false, message: HELPER_SENTENCES.notHeld }
     // An agent session is never taken over by another tab: its hooks and
     // tools belong to its own (plan s11). End is what the page offers.
