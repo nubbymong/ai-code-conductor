@@ -74,7 +74,7 @@ of a 2.1.3-beta.5 build. Survival over the new transport is covered by
 holder, and a FAIL means declared exception 11). Run it on the Windows test
 machine, not in CI, from an administrator session (it reads Defender's
 exclusions to confirm Defender is as shipped), with the signed per-user copy
-of an installed beta:
+of the installed app's helper:
 
 ```powershell
 .\p16-windows-hook-cost.ps1 -Helper "$env:LOCALAPPDATA\AI Code Conductor\helper\<version>-<12 hex>\aicc-helper.exe" -Store "$env:TEMP\p16-store" -Claude <path to claude.exe>
@@ -83,12 +83,19 @@ of an installed beta:
 It watches how `claude.exe` starts a command hook (step 0), holds one empty
 session in a throwaway store, then starts `aicc-helper list` behind that same
 launcher 300 times at 2 a second and 50 times back to back, counting the wall
-time and the CPU time of every process in each chain; a loopback HTTP POST is
-timed beside it for reference. The pass line is in the script's header and was
-fixed before measuring. It refuses a store folder that already exists (or
-whose parent does not), an output folder inside the store, a schedule that
-would outlast the holder's 600-second away clock, and a helper that is not
-validly signed, and cleans up its holder and the store it made in a `finally`
-block. The last line is `P16 RESULT: PASS` or `P16 RESULT: FAIL -
-<reasons>`; the raw runs are `p16-runs.csv`. The answer is in ADR-030 after
-the P7 result.
+time and the CPU time of every process in each chain. Beside the verdict it
+reads the CPU of Defender's own process, the holder and the whole machine,
+times one first start of a fresh copy of the helper, and times a loopback
+HTTP POST for reference. The pass line is in the script's header and was
+fixed before measuring; only the plan's schedule gives a verdict, and any
+other is a check run. It refuses a helper that is not the installed app's
+signed per-user copy, a store folder that already exists (or whose parent
+does not), an output folder inside the store, a schedule that would outlast
+the holder's 600-second away clock, and a missing node. It cleans up its
+holder and the store it made in a `finally` block, then looks for anything
+of its own still running. The last line is `P16 RESULT: PASS`, `FAIL -
+<reasons>`, `CHECK RUN - <...>` or `COULD NOT RUN - <reason>` (exit 0, 1, 3
+or 2), with `; clean-up incomplete: <what>` added (and exit 2) when
+something was left or could not be checked. The raw runs are
+`p16-runs.csv`, and the result files write personal paths as placeholders.
+The answer is in ADR-030 after the P7 result.
