@@ -282,6 +282,26 @@ describe('Machines page: what it shows for each helper state', () => {
     expect(byLabel('End terminal build watcher')).toBeTruthy()
   })
 
+  it('ending an Insights report asks about the report, which has no tab, and a tab\'s session beside it still asks as before (2.1.3-beta.9, review)', async () => {
+    install(status({}, [
+      held({ id: 'r', label: 'Insights report', kind: 'claude', run: true }),
+      held({ id: 'c', label: 'Payments', kind: 'claude' }),
+    ]))
+    await open()
+    expect(byLabel('Re-attach Insights report')).toBeNull()
+    await click(byLabel('End Insights report'))
+    const ask = byTestId('machines-end-confirm')?.textContent ?? ''
+    expect(ask).toContain('End this Insights report? Claude Code stops and the report fails.')
+    expect(ask).not.toContain('tab')
+    expect(ask).not.toContain('conversation')
+    expect(byLabel('End session Insights report')).toBeNull()
+    await click(byLabel('End report Insights report'))
+    expect(bridge.endSession).toHaveBeenCalledWith('r')
+    await click(byLabel('End Payments'))
+    expect(byTestId('machines-end-confirm')?.textContent).toContain('End this Claude Code session? Its CLI stops. Its tab can resume the conversation.')
+    expect(byLabel('End session Payments')).toBeTruthy()
+  })
+
   it('failed: says it failed, gives the reason, and still lets you run the self-test', async () => {
     install(status({ state: 'failed', detail: 'It stopped answering after the last update.', selfTest: { ok: false, at: Date.now(), detail: 'No reply.' } }))
     await open()
