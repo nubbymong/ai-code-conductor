@@ -2146,3 +2146,99 @@ describe('the 2.1.3-beta.7 sweep', () => {
     expect(`${entry.highlights}\n${all}`).not.toMatch(/less work/i)
   })
 })
+
+// 2.1.3-beta.8 user-facing sweep: on Windows an update with Save keeps the
+// terminals the session helper holds (#713, #717), held Claude Code sessions
+// send their hooks through the helper (#718, off by default), the helper's
+// wait for its program (#710) and its own C runtime (#719), the Codex review's
+// model (#712) and the vision browser's two fixes (#715), so a later edit
+// cannot drop them silently.
+describe('the 2.1.3-beta.8 sweep', () => {
+  const PLAIN_SWITCH = 'Plain terminals through the session helper'
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const tipOf = (id: string) => TIPS_LIBRARY.find((t) => t.id === id)!
+  const step = (id: string) => trainingSteps.find((s) => s.id === id)!
+  const entry = changelog.find((e) => e.version === '2.1.3-beta.8')!
+  const readme = () => fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'README.md'), 'utf8')
+
+  it('the Machines section says an update with Save keeps held terminals on Windows, and what still ends them', () => {
+    const m = body('machines')
+    expect(m).toContain('On Windows an app update keeps them when you choose Save on the update dialog')
+    expect(m).toContain('or lists it on this page if no tab shows it, as after a crash. Close sessions ends them.')
+    expect(m).toContain('The new version has the same two minutes, counted from when the old one closed')
+    expect(m).toContain('Re-attach is refused and says the app is being updated')
+    expect(m).toContain('On a Mac or Linux an update still ends them')
+    expect(m).toContain('Claude Code and Codex sessions are not kept through an update: their tabs resume the conversation')
+    expect(m).toContain('why a held terminal can still end during an update')
+  })
+
+  it('the Machines section says a held Claude Code session sends its hooks through the helper, PreToolUse still to the gateway, off by default', () => {
+    const m = body('machines')
+    expect(m).toContain('a Claude Code session the helper holds sends its hook events to the app through the session helper')
+    expect(m).toContain('Only the check before each tool runs (PreToolUse) still goes to the HTTP Hooks Gateway')
+    expect(m).toContain('a Codex session sends its hooks as it did')
+    expect(m).toContain('With the setting off, which is the default, every session sends its hooks to the gateway as before')
+  })
+
+  it('a known issue says the two minutes run through the installer, with its workaround', () => {
+    const k = body('known-issues')
+    expect(k).toContain("The installer's pages count toward those two minutes, so a held terminal ends if the installer is left open longer")
+    expect(k).toContain("Workaround: after you choose Save, finish the installer's pages promptly, within two minutes")
+    expect(k).toContain("An update from 2.1.3-beta.7 or earlier runs that version's own update, which still ends every held terminal")
+  })
+
+  it('no surface says the helper needs the Visual C++ runtime, or that Save at an update ends a terminal a crash kept', () => {
+    const all = [
+      ...APP_KNOWLEDGE_SECTIONS.map((s) => s.body),
+      ...TIPS_LIBRARY.map((t) => t.variants.primary.body),
+      JSON.stringify(trainingSteps),
+      readme(),
+    ].join('\n')
+    expect(all).not.toMatch(/Visual C\+\+|VCRUNTIME/i)
+    expect(all).not.toMatch(/Re-attach it first to keep it/i)
+  })
+
+  it('a Windows tip for Save at an update, and the cards and the README say it', () => {
+    const t = tipOf('tip.update-keeps-terminals')
+    expect(t.platforms).toEqual(['win32'])
+    expect(t.provider).toBeUndefined()
+    expect(t.variants.primary.shortText.length).toBeLessThan(60)
+    expect(t.variants.primary.actionTarget).toBe('settings')
+    expect(t.variants.primary.body).toContain(`**${PLAIN_SWITCH}**`)
+    expect(t.variants.primary.body).toContain('choose **Save** when the app asks before an update')
+    expect(t.variants.primary.body).toContain('Finish the installer within **two minutes**')
+    expect(t.variants.primary.body).toContain('**Close sessions** ends them instead')
+    expect(`${t.variants.primary.title} ${t.variants.primary.body}`).not.toMatch(/—/)
+    expect(step('machines').highlights.join('\n')).toContain('On Windows, choose **Save** when you update the app and each held terminal keeps running')
+    expect(step('settings').highlights.join('\n')).toContain('or through an update when you choose **Save**')
+    // Combined Mode reads the same for either assistant, so it names no provider.
+    expect(step('combined-mode').highlights.join('\n')).toContain('On Windows it also keeps running through an app update when you choose **Save**')
+    const line = readme().split('\n').find((l) => l.startsWith('- **Machines and the session helper**'))!
+    expect(line).toContain('On Windows they also keep running through an app update when you choose Save')
+  })
+
+  it('the release notes carry the update warning, the way back and every change line', () => {
+    const w = entry.warnings!.join('\n')
+    expect(w).toContain("This beta series begins moving the app's background services")
+    expect(w).toContain('the update to this version still ends the terminals the session helper holds')
+    expect(w).toContain('the version you update from decides what an update does')
+    expect(w).toContain('To go back to 2.1.3-beta.7')
+    const all = entry.changes.map((c) => c.description).join('\n')
+    for (const said of [
+      'choosing Save on the update dialog now keeps the terminals the helper holds running through an app update',
+      'A held terminal that no tab shows, such as one a crash left, keeps running too',
+      'Close sessions ends them, as before',
+      'a Claude Code session the helper holds now sends its hook events to the app through the session helper',
+      'a preview, off by default',
+      'no longer wakes about 40 times a second',
+      "no longer needs Microsoft's Visual C++ runtime",
+      "runs on your reviewer account's default Codex model",
+      'multi_agent_v2, sleep_tool and the agents setting',
+      "the vision browser no longer keeps the app's files open after the app ends",
+      'closed on every way the app exits, including an update install',
+    ]) expect(all).toContain(said)
+    for (const text of [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)]) expect(text, text.slice(0, 40)).not.toMatch(/—/)
+    // #710 measured no CPU figure, so no line claims one.
+    expect(`${entry.highlights}\n${all}`).not.toMatch(/less work|faster|% CPU/i)
+  })
+})

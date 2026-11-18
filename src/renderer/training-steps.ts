@@ -576,7 +576,7 @@ export const trainingSteps: TrainingStep[] = [
       'Opens in the working directory locally; on an SSH session it runs on the host, in the config\'s remote folder once it recognises the host\'s shell prompt, if you have not typed in it first',
       'Quick command buttons can target the assistant or the partner explicitly',
       'Resize the split bar to favour whichever pane is active',
-      'With **Plain terminals through the session helper** on (Settings, General; a preview, off by default), a local session\'s partner terminal keeps running if the app crashes on Windows, and shows again in its session when you open the app again within two minutes and resume your sessions. The assistant\'s own session has a switch of its own, just below it in Settings, General, and after a crash it resumes its conversation instead',
+      'With **Plain terminals through the session helper** on (Settings, General; a preview, off by default), a local session\'s partner terminal keeps running if the app crashes on Windows, and shows again in its session when you open the app again within two minutes and resume your sessions. On Windows it also keeps running through an app update when you choose **Save**. The assistant\'s own session has a switch of its own, just below it in Settings, General, and after a crash it resumes its conversation instead',
     ],
     howToTrigger: [
       { label: 'Toggle', value: 'Partner button in the command bar' },
@@ -674,6 +674,7 @@ export const trainingSteps: TrainingStep[] = [
       'Each held terminal: its name, whether it is a Terminal, a Partner terminal, or a Claude Code or Codex session, when it started, and whether the app is attached or it is **waiting for the app**',
       '**Re-attach** connects a waiting terminal again, and opens a Terminal only tab for one no tab shows; **End** stops one after you confirm',
       'After a crash on Windows, open the app within two minutes and resume your sessions: each held terminal shows again in its tab, with what it printed meanwhile. Quitting normally ends them',
+      'On Windows, choose **Save** when you update the app and each held terminal keeps running. If the new version opens within two minutes, it shows them again. **Close sessions** ends them',
       'A Claude Code or Codex session has **End** only. After a crash it is ended, reading **Being ended** until it is gone, and its tab resumes the conversation',
       'SSH tabs and their partner terminals, a terminal run as administrator, and the tabs the app opens for a sign-in or to install or update a program start as before',
       'The page reads when you open it, when you come back to its tab and on **Refresh**',
@@ -792,7 +793,7 @@ export const trainingSteps: TrainingStep[] = [
       'Every preference you can set lives here, organised in a left rail. Sandboxed renderer + signed updates + zod-validated IPC keep the app safe; the visible knobs let you tune everything else.',
     highlights: [
       'General -- default working dir, machine name, update channel, security toggles, and the Tokenomics switch (the usage index can be switched off)',
-      'General, under Terminal -- two previews, both off by default. **Plain terminals through the session helper** keeps local Terminal only tabs and local partner terminals running if the app crashes on Windows. **Claude Code and Codex sessions through the session helper** runs local Claude Code and Codex sessions inside the helper. The **Machines** page shows the helper and what it holds',
+      'General, under Terminal -- two previews, both off by default. **Plain terminals through the session helper** keeps local Terminal only tabs and local partner terminals running on Windows if the app crashes, or through an update when you choose **Save**. **Claude Code and Codex sessions through the session helper** runs local Claude Code and Codex sessions inside the helper. The **Machines** page shows the helper and what it holds',
       'Accounts -- the Providers card (Claude Code and Codex on or off) and every Claude and Codex account',
       'Status Line -- toggle each element of the in-terminal status bar + font + size',
       'Shortcuts -- rebind every keyboard shortcut',

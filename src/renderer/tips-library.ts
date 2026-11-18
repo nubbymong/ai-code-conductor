@@ -1540,4 +1540,22 @@ export const TIPS_LIBRARY: Tip[] = [
       },
     },
   },
+
+  {
+    id: 'tip.update-keeps-terminals',
+    category: 'advanced',
+    complexity: 'intermediate',
+    priority: 22,
+    platforms: ['win32'],
+    variants: {
+      primary: {
+        shortText: 'Save at an update keeps held terminals running',
+        title: 'Terminals That Live Through an Update',
+        body: 'With **Plain terminals through the session helper** on (**Settings, General, Terminal**; a preview, off by default), choose **Save** when the app asks before an update. The terminals the session helper holds keep running, and the new version shows each one again in its tab, with what it printed meanwhile.\n\nFinish the installer within **two minutes**: a held terminal waits that long for the new version, counted from when the old one closed. **Close sessions** ends them instead. Claude Code and Codex sessions are not kept: their tabs resume the conversation.',
+        actionLabel: 'Open Settings',
+        actionTarget: 'settings',
+        focusHint: 'Settings -- General, under Terminal',
+      },
+    },
+  },
 ]
