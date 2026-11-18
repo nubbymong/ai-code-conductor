@@ -32,10 +32,12 @@
 //   6. (2.1.3-beta.8) each background run's settings load in the real CLI:
 //      the `-c` overrides and `--disable` names of the review, analysis and
 //      Insights runs, put in front of `codex features list` (which loads the
-//      config with them, with no sign-in), exit 0, and every feature the run
-//      turns off reads off. A value of the wrong type for a key the CLI
-//      defines is refused there; an unknown top-level key is ignored, not
-//      refused, so the keys' spelling is pinned by the unit tests
+//      config with them, with no sign-in), exit 0, and the two features
+//      2.1.3-beta.8 turned off (multi_agent_v2, sleep_tool) read off (check 4
+//      is the one that every name is one the CLI lists). A value of the
+//      wrong type for a key the CLI defines is refused there; an unknown
+//      top-level key is ignored, not refused, so the keys' spelling is
+//      pinned by the unit tests
 //      (tests/unit/providers/codex/analysis-features.test.ts).
 //
 // CCC_CODEX_CONFORMANCE_PROVE_RED=1 (a dispatch input) runs every check above
@@ -115,6 +117,9 @@ const OPERATIONS: readonly CodexCliOperation[] = ['version', 'status', 'logout',
 
 /** The background runs, whose settings check 6 loads. */
 const BACKGROUND: readonly CodexCliOperation[] = ['review', 'analysis', 'insights']
+
+/** The features 2.1.3-beta.8 turned off in each background run. */
+const NEWLY_OFF = ['multi_agent_v2', 'sleep_tool']
 
 /** The `-c` and `--disable` pairs of a constant argv, in its order, less any
  *  pair `drop` names (the prove-red run drops one). */
@@ -237,7 +242,7 @@ describe.skipIf(!LIVE)(`the real Codex CLI, no sign-in (${OS_TAG}, ${KIND || '?'
     expect(unknown, PROVE_RED ? WRONG : unknown.join(', ')).toEqual([])
   }, CASE_MS)
 
-  it("each background run's settings load: `codex features list` with its -c overrides and --disable names exits 0 and reads every feature it turns off as off", async () => {
+  it("each background run's settings load: `codex features list` with its -c overrides and --disable names exits 0, and multi_agent_v2 and sleep_tool read off", async () => {
     const problems: string[] = []
     for (const op of BACKGROUND) {
       const argv = argvOf(op)
@@ -246,13 +251,13 @@ describe.skipIf(!LIVE)(`the real Codex CLI, no sign-in (${OS_TAG}, ${KIND || '?'
       const r = await run([...settings, 'features', 'list'])
       if (r.exitCode !== 0) { problems.push(`${op}: exited ${r.exitCode}: ${r.stderr.trim().slice(0, 400)}`); continue }
       const list = parseFeaturesList(r.stdout)
-      for (const f of disabledFeatures(argv)) {
+      for (const f of NEWLY_OFF) {
         const state = list.get(f)
         if (!state) problems.push(`${op}: ${f} is not listed`)
         else if (state.on) problems.push(`${op}: ${f} reads on`)
       }
     }
-    note(`background runs' settings: ${problems.length === 0 ? `${BACKGROUND.join(', ')} each load, every feature they turn off reads off` : problems.join('; ')}`)
+    note(`background runs' settings: ${problems.length === 0 ? `${BACKGROUND.join(', ')} each load; ${NEWLY_OFF.join(' and ')} read off` : problems.join('; ')}`)
     expect(problems, PROVE_RED ? `${WRONG}\n${problems.join('\n')}` : problems.join('\n')).toEqual([])
   }, CASE_MS)
 
