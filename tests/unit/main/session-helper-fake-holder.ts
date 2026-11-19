@@ -30,7 +30,9 @@
  * The ring (2.1.3-beta.12, plan section A1) may no longer hold the start of
  * the output (`ringStart`, `forget`): an attach that asks for an offset older
  * than it holds is answered from the ring's start with `truncated` true, as a
- * real holder answers one once 2 MiB have gone past.
+ * real holder answers one once 2 MiB have gone past. A replay can be cut
+ * short by a close (`cutReplay`), as a holder closes a connection that fell
+ * behind in the middle of one.
  *
  * The away clock (section 15) runs only when a test gives the helper one
  * (`awayClock`): then a holder with no connection attached ends itself `away`
@@ -128,6 +130,10 @@ export class FakeHolder {
   busies = 0
   /** Answers term.attach; false leaves it unanswered. */
   answerAttach = true
+  /** Set: the next attach's replay stops after `at` bytes and its connection
+   *  is closed there (`busy`), as one that fell behind is; `then` runs after
+   *  the close. Once. */
+  cutReplay: { at: number; then?: () => void } | null = null
   /** Answers ping; false leaves it unanswered. */
   answerPing = true
   /** How long a pong waits. */
@@ -311,7 +317,17 @@ export class FakeHolder {
         this.awaySince = null
         this.attaches++
         conn.sendJson({ t: 'term.attached', re, from: start, ring_start: this.ringStart, ring_end: ringEnd, truncated: start > from, running: this.child !== 'exited', ...(this.child === 'exited' ? { code: this.code } : {}) })
-        conn.sendRaw(this.ring.subarray(start - this.ringStart))
+        const replay = this.ring.subarray(start - this.ringStart)
+        const cut = this.cutReplay
+        if (cut && cut.at < replay.length) {
+          this.cutReplay = null
+          conn.sendRaw(replay.subarray(0, cut.at))
+          conn.sendJson({ t: 'error', code: 'busy', text: 'this connection fell 256 chunks behind the output' })
+          conn.close()
+          cut.then?.()
+          return
+        }
+        conn.sendRaw(replay)
         // Waiting hook events go after the reply and its replay.
         if (conn.ackedCaps.includes('hooks')) for (const e of this.waitingEvents.splice(0)) conn.sendJson(e)
         return

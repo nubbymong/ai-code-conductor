@@ -106,14 +106,14 @@ const END_WAIT_MS = 3_000
 /** The line a terminal shown again from the middle of its output starts
  *  with, in the shape of the app's other words in a terminal
  *  (PTY_IO_FAILED_TEXT). */
-export const EARLIER_OUTPUT_NOT_SHOWN = '[Earlier output of this terminal is no longer held, so it is not shown.]'
+const EARLIER_OUTPUT_NOT_SHOWN = '[Earlier output of this terminal is no longer held, so it is not shown.]'
 /** Before that line: the cancel character ends a sequence the old stream left
  *  half read, and the attribute reset drops a colour it left set. */
 const CANCEL = '\x18'
 const ATTRIBUTE_RESET = '\x1b[0m'
 /** The redraw: the size one row shorter goes back to the tab's after this
  *  long (probe P19's 300 ms). */
-export const REDRAW_BACK_MS = 300
+const REDRAW_BACK_MS = 300
 /** At most this many bytes at the replay's start continue a character cut in half. */
 const CUT_CHARACTER_MAX = 3
 
@@ -172,6 +172,9 @@ export class HelperPty implements IPty {
   /** Shown from the middle of its output (`truncated`): the redraw that waits
    *  for the replay's end on `conn`, and how many bytes were no longer held. */
   private redraw: { conn: HolderConnection; end: number; lost: number } | undefined
+  /** The terminal detached before that replay was shown: the bytes no longer
+   *  held, for the attach again, whose replay the redraw then waits for. */
+  private redrawOwed: number | undefined
   /** The redraw's second half (the tab's size again), while it waits. */
   private redrawTimer: ReturnType<typeof setTimeout> | undefined
   /** Bytes at the replay's very start that continue a character cut in half
@@ -297,6 +300,7 @@ export class HelperPty implements IPty {
     // Cleared first, so the connection's own close finds nothing to do here.
     this.conn = undefined
     this.setDetached()
+    this.stopRedraw()
     conn?.close()
     return true
   }
@@ -384,13 +388,14 @@ export class HelperPty implements IPty {
       reply = await conn.request({ t: 'term.attach', from }, (m) => {
         // Before the replay that follows the reply: the offset starts where
         // the holder starts, and a cut (the ring no longer holds `from`) ends
-        // a character split there.
+        // a character split there. With no new gap, a cut character still
+        // waiting for its bytes (cutBytes) still has them dropped.
         const start = typeof m.from === 'number' ? m.from : from
         const gap = m.truncated === true || start > from
         if (start !== from || gap) this.flushDecoder()
         this.offset = start
-        this.cutBytes = 0
         if (gap) this.fromTheMiddle(conn, Math.max(0, start - from), m)
+        else if (this.redrawOwed !== undefined) this.redrawStillOwed(conn, m)
       })
     } catch (err) {
       this.attaching = false
@@ -445,15 +450,35 @@ export class HelperPty implements IPty {
    * program set, and a reset would throw them away.
    */
   private fromTheMiddle(conn: HolderConnection, lost: number, reply: Record<string, unknown>): void {
-    const start = this.offset
-    const end = typeof reply.ring_end === 'number' && reply.ring_end >= start ? reply.ring_end : start
+    // A redraw still owed for an earlier gap: one redraw, and the log counts both.
+    const all = lost + (this.redrawOwed ?? 0)
+    this.redrawOwed = undefined
     this.cutBytes = CUT_CHARACTER_MAX
     // Its own line: after output already shown, from the start of the next one.
     this.show(`${CANCEL}${ATTRIBUTE_RESET}${this.shownAny ? '\r\n' : ''}${EARLIER_OUTPUT_NOT_SHOWN}\r\n`)
+    this.awaitReplayEnd(conn, all, reply)
+  }
+
+  /**
+   * An attach again with no new gap, after the terminal detached before the
+   * replay of a gap was shown (a connection that fell behind is closed in the
+   * middle of one too): its notice is shown already, and the redraw now waits
+   * for this replay's end.
+   */
+  private redrawStillOwed(conn: HolderConnection, reply: Record<string, unknown>): void {
+    const lost = this.redrawOwed ?? 0
+    this.redrawOwed = undefined
+    this.awaitReplayEnd(conn, lost, reply)
+  }
+
+  /** The redraw waits for the end of the replay that follows `reply`; none for a program that is over. */
+  private awaitReplayEnd(conn: HolderConnection, lost: number, reply: Record<string, unknown>): void {
     if (reply.running === false) {
       this.driver.log(`[session-helper] ${this.sid}: ${lost} bytes of earlier output are no longer held, so they are not shown; its program is over, so no redraw is asked for`)
       return
     }
+    const start = this.offset
+    const end = typeof reply.ring_end === 'number' && reply.ring_end >= start ? reply.ring_end : start
     this.redraw = { conn, end, lost }
   }
 
@@ -469,24 +494,36 @@ export class HelperPty implements IPty {
     const r = this.redraw
     if (!r || r.conn !== conn || this.conn !== conn || !this.attached || this.ending || this.exited || this.offset < r.end) return
     this.redraw = undefined
+    this.redrawOwed = undefined
     const { cols, rows } = this.size
     // The holder's size differs from the tab's until the second half: an
     // attach again before it sends the tab's.
     this.sizeChanged = true
-    conn.request({ t: 'term.resize', cols, rows: rows > 1 ? rows - 1 : rows + 1 }).catch(() => { /* the second half tries again */ })
+    conn.request({ t: 'term.resize', cols, rows: rows > 1 ? rows - 1 : rows + 1 }).catch(() => { /* gone or refused: the second half still sends the tab's size */ })
     this.driver.log(`[session-helper] ${this.sid}: ${r.lost} bytes of earlier output are no longer held, so they are not shown; asked its program to redraw`)
     this.redrawTimer = setTimeout(() => {
       this.redrawTimer = undefined
       if (this.conn !== conn || conn.isClosed || !this.attached || this.ending || this.exited || this.replaced) return
-      this.sendResize()
+      // As sendResize, but a connection that closes with this frame unread
+      // leaves the holder at the shorter size, so the attach again sends the
+      // tab's (the request fails before the close attaches again).
+      this.sizeChanged = false
+      conn.request({ t: 'term.resize', cols: this.size.cols, rows: this.size.rows }).catch(() => { if (conn.isClosed) this.sizeChanged = true })
     }, REDRAW_BACK_MS)
   }
 
-  /** The terminal detached, ended, was let go of or replaced: no redraw is sent after this. */
-  private stopRedraw(): void {
+  /** No redraw goes out now: one still waiting for its replay's end is owed
+   *  to the attach again (setDetached), or dropped (stopRedraw). */
+  private pauseRedraw(): void {
     this.redraw = undefined
     if (this.redrawTimer !== undefined) clearTimeout(this.redrawTimer)
     this.redrawTimer = undefined
+  }
+
+  /** The terminal ended, was let go of or was replaced: no redraw is sent after this. */
+  private stopRedraw(): void {
+    this.redrawOwed = undefined
+    this.pauseRedraw()
   }
 
   // ── the connection ─────────────────────────────────────────────────────────
@@ -576,7 +613,9 @@ export class HelperPty implements IPty {
   }
 
   private setDetached(): void {
-    this.stopRedraw()
+    // A redraw that still waits for its replay's end is owed to the attach again.
+    if (this.redraw) this.redrawOwed = this.redraw.lost
+    this.pauseRedraw()
     if (!this.attached) return
     this.attached = false
     this.driver.attachedChanged(this.sid, false)
@@ -769,6 +808,7 @@ export class HelperPty implements IPty {
     this.exited = true
     this.resolveAdoption(true)
     this.setDetached()
+    this.stopRedraw()
     this.flushDecoder()
     this.exitEmitter.fire(signal === undefined ? { exitCode } : { exitCode, signal })
   }
