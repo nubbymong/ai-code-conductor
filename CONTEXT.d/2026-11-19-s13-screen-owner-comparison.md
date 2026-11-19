@@ -121,13 +121,13 @@ choose. Source to review under the exact-pin rule (crates.io line counts):
 Commands, for a re-count: `grep -c '^\[\[package\]\]' helper/Cargo.lock`
 (12); `git ls-files 'helper/src/*.rs' | xargs cat | wc -l` (12,344 in 27
 files); `wc -l helper/src/json.rs` (477);
-`wc -c tests/fixtures/codex/tui-trace.txt` (699); the trace's sequence kinds:
-`grep -a -o -E $'\x1b(\\[[?0-9;]*[A-Za-z]|\\][0-9]+)' tests/fixtures/codex/tui-trace.txt | sed -E 's/[0-9]+/n/g' | sort | uniq -c`;
+`wc -c tests/fixtures/codex/tui-trace.txt` (699); the trace's sequences, with only the CUP and CUF numbers folded (18 lines, which read as the 11 kinds above):
+`grep -a -o -E $'\x1b(\\[[?0-9;]*[A-Za-z]|\\][0-9]+)' tests/fixtures/codex/tui-trace.txt | sed -E 's/^(.\[)[0-9;]+([HC])$/\1n\2/' | sort | uniq -c`;
 a crate's versions, features and dependencies:
 `curl -s https://index.crates.io/vt/10/vt100` (a three-letter name is under
 `3/a/avt`); its line counts and downloads:
-`curl -s https://crates.io/api/v1/crates/vt100/0.18.1` (`linecounts`) and
-`curl -s https://crates.io/api/v1/crates/vt100` (`downloads`).
+`curl -s -A 's13-recount' https://crates.io/api/v1/crates/vt100/0.18.1` (`linecounts`) and
+`curl -s -A 's13-recount' https://crates.io/api/v1/crates/vt100` (`downloads`); the crates.io API answers curl's default user agent with 403 and no body, so `-A` is needed (the index needs none).
 
 Costs: that review; a memory and parse cost in every holder, not measured here
 (no cargo on this PC; the Helper CI job can measure it beside way 3's
@@ -297,4 +297,6 @@ before then), as a paragraph after the SDLC targets table:
 > recorded corpus and a check against xterm.js 6.0.0, which uses Unicode 6
 > widths. In main: one pane per agent session at about 210 KiB, the
 > parser the user sees, no helper change, and one headless terminal left in
-> main after the remote deletion. The owner chose way N on DATE.
+> main after the remote deletion; it gives up the exact repaint on attach,
+> after the output ring wraps, that a holder screen keeps. The owner chose
+> way N on DATE.
