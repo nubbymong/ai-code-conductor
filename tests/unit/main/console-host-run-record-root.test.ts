@@ -1,13 +1,14 @@
 /**
- * Where the app keeps the record of its run, app-run.json (aicc_planning#330,
- * #334). At start-up the app hands the session helper's console-hosts mode the
- * record of the run before, and the helper ends the console hosts that run
- * left. The record follows the rule vision-started.json follows (#727): the
- * user data folder for an installed app, and an E2E or dev run's own data root
- * otherwise. A dev run shares the user data folder with an installed app on
- * the same computer (docs/dev-alongside-prod.md), so before this it read the
- * installed app's record, handed its pid to the helper, and wrote its own
- * record over it. A data root that is not absolute gives no record at all.
+ * Where the app keeps the record of its run, app-run.json (aicc_planning#330
+ * and aicc_planning#334). At start-up the app hands the session helper's
+ * console-hosts mode the record of the run before, and the helper ends the
+ * console hosts that run left. The record follows the rule vision-started.json
+ * follows (#727): the user data folder for an installed app, and an E2E or dev
+ * run's own data root otherwise. A dev run shares the user data folder with an
+ * installed app on the same computer (docs/dev-alongside-prod.md), so before
+ * this it read the installed app's record, handed its pid to the helper, and
+ * wrote its own record over it. A data root that is not absolute gives no
+ * record at all.
  *
  * This drives the real start-up call, endLeftoverConsoleHostsAtStart, with
  * real files in a temp folder. child_process and Electron are replaced, and

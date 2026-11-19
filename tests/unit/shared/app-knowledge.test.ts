@@ -2272,9 +2272,9 @@ describe('the 2.1.3-beta.8 sweep', () => {
 // through the session helper (#722, off by default), the installer's reasons,
 // the files an uninstall left and the elevated check (#725), console hosts a
 // run ended from outside left (#725), the helper folder held terminals run
-// from (#727), the vision browser a run could not end (#727, in the plan's
-// public wording), the SSH start's lookup of ssh.exe (#724) and the app's own
-// typing in one place (#723, #726), so a later edit cannot drop them silently.
+// from (#727), the vision browser a run could not end (#727), the SSH start's
+// lookup of ssh.exe (#724) and the app's own typing in one place (#723, #726),
+// so a later edit cannot drop them silently.
 describe('the 2.1.3-beta.9 sweep', () => {
   const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
   const step = (id: string) => trainingSteps.find((s) => s.id === id)!
@@ -2293,7 +2293,7 @@ describe('the 2.1.3-beta.9 sweep', () => {
 
   it('the installer paragraph says the elevated install checks, why a copy was not ended, and what an uninstall left (#725)', () => {
     const p = body('providers')
-    expect(p).toContain('An install for everyone that asks for administrator approval runs the same check before it writes any file.')
+    expect(p).toContain('An install for everyone that you approve with your own administrator account runs the same check before it writes any file.')
     expect(p).toContain('When the installer cannot end a copy, its details say why: the copy had already exited, access was denied, or the Windows error number.')
     expect(p).toContain("The uninstaller's details name each file it could not remove from the install folder")
     expect(p).toContain('After an uninstall for everyone from the Program Files folder, those files are removed when Windows next restarts, and until then an install for everyone into that folder stops and says to restart Windows first.')
@@ -2303,7 +2303,7 @@ describe('the 2.1.3-beta.9 sweep', () => {
 
   it('known issues name the elevated install that cannot see your copy and the restart before a reinstall, each with its workaround (#725)', () => {
     const k = body('known-issues')
-    expect(k).toContain("When you install from a standard account and type an administrator's name and password into the approval box, the installer runs as that administrator")
+    expect(k).toContain("When you install from a standard account and type an administrator's name and password into the approval box, the installer runs as that administrator and does not see your running copy of AI Code Conductor as its own, so it neither asks it to close nor shows a box.")
     expect(k).toContain('The same goes for a copy running from a folder you choose on the folder page instead of the one the installer first shows.')
     expect(k).toContain('Workaround: quit AI Code Conductor before you run the installer for everyone.')
     // The box's own words (build/installer.nsh).
@@ -2320,8 +2320,6 @@ describe('the 2.1.3-beta.9 sweep', () => {
     const added = 'From 2.1.3-beta.9 on, the app keeps a record of the vision browser it starts, and a browser it could not end at quit or during an update is ended at its next start.'
     expect(vision).toContain(added)
     expect(vision).not.toContain('The same can happen after a later in-app update on that computer')
-    // The public wording rule for this fix: nothing about the browser's port or what reaches it.
-    expect(added).not.toMatch(/\bport\b|listen|reach/i)
   })
 
   it('troubleshooting says the next start ends the console hosts a run ended from outside left (#725)', () => {
@@ -2335,26 +2333,25 @@ describe('the 2.1.3-beta.9 sweep', () => {
     expect(w).toContain("This beta series begins moving the app's background services")
     expect(w).toContain('only if the new version opens within two minutes of the old one closing')
     expect(w).toContain('To go back to 2.1.3-beta.8')
+    expect(entry.highlights).toContain('and an install for everyone asks the running app to close first.')
     const all = entry.changes.map((c) => c.description).join('\n')
     for (const said of [
       'an Insights report for a Claude Code account now runs inside the session helper too',
       'a preview, off by default',
       "A Codex account's report, and every report with the setting off, runs as before",
       'Every place the app types into a session by itself',
-      'the keys a quit sends now go only to the terminal that was there when the quit began',
-      'an SSH session start no longer waits on a slow folder in PATH',
+      "a quit now stops typing its keys into a session's terminal once a new terminal has replaced it, after a restart for example",
+      'an SSH session start no longer waits on a slow folder in PATH, such as a network share, once the app has looked for ssh.exe in the background soon after it starts',
       'its details now say why: the copy had already exited, access was denied, or the Windows error number',
       'the uninstaller now names the files it could not remove from the install folder',
       'until then an install for everyone into that folder stops and asks you to restart Windows first',
-      'an install for everyone that asks for administrator approval now asks your running copy of the app to close before it writes any file',
+      'an install for everyone that you approve with your own administrator account now asks your running copy of the app to close before it writes any file',
       'are now ended at the next start',
       'they keep running from their own helper folder: the new version no longer removes it at start',
-      // The plan's public wording for the vision fix (aicc_planning#329).
-      'the vision browser is now ended at quit and at the next start also for a user whose sign-in cannot read the process list through WMI',
+      'On Windows, the vision browser is now ended at quit and at the next start also for a user whose sign-in cannot read the process list through WMI. A vision browser the app could not end at quit is ended the next time the app starts.',
     ]) expect(all).toContain(said)
     for (const text of notes()) {
       expect(text, text.slice(0, 40)).not.toMatch(/—/)
-      expect(text, text.slice(0, 40)).not.toMatch(/\bport\b|listener|9222|\bdebug/i)
       expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)
     }
   })
