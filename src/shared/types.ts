@@ -433,6 +433,11 @@ export interface StatuslineData {
   /** Sent once when nothing will report this session's allowance: 'no-reading'
    *  (Codex: no rollout was claimed within 30 s). D3 of the usage UX. */
   usageUnavailable?: 'no-reading'
+  /** aicc_planning#305: Claude Code's own session name (statusline
+   *  `session_name`): the name from `--name` or `/rename`, else its AI title;
+   *  absent when it has neither. Control characters removed, at most 200
+   *  characters (the bridge script). Shown as text in the session header. */
+  sessionName?: string
   /** Active-account email surfaced by the bridge script. Renderer displays it left of the model name. */
   accountEmail?: string
   /** Pre-computed by main process via `colourForEmail()` as an identity-palette KEY;

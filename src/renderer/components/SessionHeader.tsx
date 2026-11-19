@@ -409,6 +409,36 @@ function WatchdogPill({ session }: { session: Session }) {
 }
 
 /**
+ * aicc_planning#305: the name Claude Code itself gives this session -- set by
+ * `--name` or `/rename`, else its AI title -- from the statusline. Read live,
+ * as the watchdog pill is. Not shown when there is none, or when it is the
+ * same as this app's own work name for the session (that name is already in
+ * the header). Plain text: the bridge script already dropped control
+ * characters and capped it.
+ */
+function ClaudeSessionNamePill({ session }: { session: Session }) {
+  const live = useSessionStore((s) => s.sessions.find((x) => x.id === session.id))
+  const name = (live ?? session).claudeSessionName?.trim()
+  const workName = ((live ?? session).customName ?? '').trim()
+  if (!name || name === workName) return null
+  return (
+    <HeaderPill
+      label={<span className="max-w-[220px] truncate">{name}</span>}
+      tone="var(--text-muted)"
+      dotOnly
+      title={`Claude Code's name for this session: ${name}`}
+      testId="session-pill-claude-name"
+    />
+  )
+}
+
+/** The pills that follow the account pill: the watchdog, then Claude Code's
+ *  own session name (#305). */
+function SessionStatePills({ session }: { session: Session }) {
+  return <><WatchdogPill session={session} /><ClaudeSessionNamePill session={session} /></>
+}
+
+/**
  * The account · claude.ai · Claude Code (with refresh) pill trio plus the
  * trailing GitHub group. Shared by a LOCAL Claude session and an SSH session
  * whose remote account maps to a local profile: the claude.ai / Claude Code
@@ -630,7 +660,7 @@ function SessionAuthPills({ session }: { session: Session }) {
           profileId={sshProfileId}
           refresh={refresh}
           gitHubTail={gitHubTail}
-          watchdogPill={<WatchdogPill session={session} />}
+          watchdogPill={<SessionStatePills session={session} />}
         />
       )
     }
@@ -643,7 +673,7 @@ function SessionAuthPills({ session }: { session: Session }) {
           title={accountTitle}
           testId="session-pill-account"
         />
-        <WatchdogPill session={session} />
+        <SessionStatePills session={session} />
         {gitHubTail}
       </>
     )
@@ -655,7 +685,7 @@ function SessionAuthPills({ session }: { session: Session }) {
     // Codex session shows its Watchdog pill as a Claude one does (nothing
     // when no watcher is armed for it).
     const codexWatchdog = (session.provider ?? 'claude') === 'codex' && !session.shellOnly
-      ? <WatchdogPill session={session} />
+      ? <SessionStatePills session={session} />
       : null
     const gitHubPart = !isAsk && session.githubIntegration?.repoSlug
       ? (<><div className="w-px h-4 bg-surface1 shrink-0" />{gitHub}</>)
@@ -714,7 +744,7 @@ function SessionAuthPills({ session }: { session: Session }) {
       profileId={profileId}
       refresh={refresh}
       gitHubTail={<><div className="w-px h-4 bg-surface1 shrink-0" />{gitHub}</>}
-      watchdogPill={<WatchdogPill session={session} />}
+      watchdogPill={<SessionStatePills session={session} />}
     />
   )
 }
