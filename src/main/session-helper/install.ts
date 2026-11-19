@@ -24,6 +24,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { findNodePtyLibDir, nodePtyConptyDir } from '../bundled-conpty'
+import { devDataRoot } from '../dev-data-root'
 import { HELPER_FOLDER_RE } from './protocol'
 
 export const HELPER_EXE_NAME = (platform: NodeJS.Platform = process.platform): string => (platform === 'win32' ? 'aicc-helper.exe' : 'aicc-helper')
@@ -31,17 +32,20 @@ export const HELPER_EXE_NAME = (platform: NodeJS.Platform = process.platform): s
 /**
  * The per-user folder the helper lives in: never roaming, never the install
  * folder. A dev or test run never touches the installed app's holders: it
- * uses its own data folder when it has one, and otherwise a `dev` folder of
- * its own inside the installed app's (which the installed app's clean-up of
- * old version folders leaves alone).
+ * uses its own data root when it has one (dev-data-root.ts devDataRoot), and
+ * otherwise a `dev` folder of its own inside the installed app's (which the
+ * installed app's clean-up of old version folders leaves alone). A root that
+ * is not a full path, by the rules of `platform`, is ignored: the run uses
+ * the folder it would use with no override, and never writes under the
+ * folder it started in.
  */
 export function helperRootDir(opts: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; home?: string; isPackaged: boolean }): string {
   const platform = opts.platform ?? process.platform
   const env = opts.env ?? process.env
   const home = opts.home ?? os.homedir()
   const join = platform === 'win32' ? path.win32.join : path.posix.join
-  if (env.CCC_E2E_DATA_DIR) return join(env.CCC_E2E_DATA_DIR, 'helper')
-  if (!opts.isPackaged && env.CCC_DEV_DATA_DIR) return join(env.CCC_DEV_DATA_DIR, 'helper')
+  const root = devDataRoot(env, opts.isPackaged, platform)
+  if (root) return join(root, 'helper')
   const installed = platform === 'win32'
     ? join(env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'AI Code Conductor', 'helper')
     : platform === 'darwin'
@@ -54,17 +58,16 @@ export function helperRootDir(opts: { platform?: NodeJS.Platform; env?: NodeJS.P
  * Where a run of the app keeps a small record of its own, such as the vision
  * browser the helper started (vision-started.json) or the run's own pid and
  * creation time (app-run.json): the user data folder for an installed app,
- * and an E2E or dev run's own data root otherwise, by the rule helperRootDir
- * follows. A dev run shares the user data folder with an installed app on the
- * same computer (docs/dev-alongside-prod.md), and must never read or act on
- * that app's records. A root that is not absolute gives no record at all
- * (null). `userData` is asked only when it is the folder used.
+ * and an E2E or dev run's own data root otherwise (dev-data-root.ts
+ * devDataRoot). A dev run shares the user data folder with an installed app
+ * on the same computer (docs/dev-alongside-prod.md), and must never read or
+ * act on that app's records. A root that is not absolute gives no record at
+ * all (null). `userData` is asked only when it is the folder used.
  */
 export function instanceRecordPath(name: string, opts: { isPackaged: boolean; userData: () => string; env?: NodeJS.ProcessEnv }): string | null {
-  const env = opts.env ?? process.env
-  const root = env.CCC_E2E_DATA_DIR || (opts.isPackaged ? undefined : env.CCC_DEV_DATA_DIR)
-  if (root) return path.isAbsolute(root) ? path.join(root, name) : null
-  return path.join(opts.userData(), name)
+  const root = devDataRoot(opts.env ?? process.env, opts.isPackaged)
+  if (root === null) return null
+  return path.join(root ?? opts.userData(), name)
 }
 
 /** The codes Windows gives while another program (real-time scanning, an

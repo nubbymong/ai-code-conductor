@@ -1,6 +1,7 @@
 import * as path from 'path'
 import * as fs from 'fs'
 import { homedir } from 'os'
+import { devDataRoot } from './dev-data-root'
 import { readRegistry, writeRegistry } from './registry'
 import { logInfo } from './debug-logger'
 
@@ -129,19 +130,19 @@ export function devSessionDataDir(
   env: NodeJS.ProcessEnv = process.env,
   isPackaged = true,
 ): string | null {
-  // E2E FIRST AND UNCONDITIONALLY, matching getDataDirectory's own ordering
-  // above. Its whole point is a disposable data root, and a partition outside it
-  // would survive the teardown that is supposed to remove it. An explicit E2E
-  // override is never a real user's install, so `isPackaged` is not the question.
-  const root = env.CCC_E2E_DATA_DIR || (isPackaged ? undefined : env.CCC_DEV_DATA_DIR)
+  // The root follows devDataRoot (dev-data-root.ts): E2E FIRST AND
+  // UNCONDITIONALLY, matching getDataDirectory's own ordering above. Its whole
+  // point is a disposable data root, and a partition outside it would survive
+  // the teardown that is supposed to remove it.
+  //
+  // ABSOLUTE ONLY (devDataRoot gives null otherwise). `app.setPath` rejects a
+  // relative path, and the caller creates the directory BEFORE calling it — so a
+  // relative root meant `mkdirSync` quietly made `<cwd>/<root>/session` (inside
+  // the repo, in one observed run) and then `setPath` threw into a catch, leaving
+  // dev writing claude.ai sessionKeys to prod's location exactly as before.
+  // Refusing here turns a swallowed throw into a decision with a test.
+  const root = devDataRoot(env, isPackaged)
   if (!root) return null
-  // ABSOLUTE ONLY. `app.setPath` rejects a relative path, and the caller creates
-  // the directory BEFORE calling it — so a relative root meant `mkdirSync` quietly
-  // made `<cwd>/<root>/session` (inside the repo, in one observed run) and then
-  // `setPath` threw into a catch, leaving dev writing claude.ai sessionKeys to
-  // prod's location exactly as before. Refusing here turns a swallowed throw into
-  // a decision with a test.
-  if (!path.isAbsolute(root)) return null
   return path.join(root, 'session')
 }
 
