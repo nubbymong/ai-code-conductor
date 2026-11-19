@@ -2076,7 +2076,35 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     await endAll([copy.pid])
   }, 60_000)
 
-  it('installer pass: removals waiting elsewhere, a rename into another folder, a folder whose name only starts the same, or a per-user install, do not stop it', async () => {
+  // Windows 11 (build 22621) was seen to write every entry of the list with a
+  // "*1" before its "\??\" ("*1\??\C:\Program Files\..."), in both registry
+  // views. Where a rename's "!" goes in that form was not seen, so a "!" is
+  // tried on either side of the "*1"; a longer number after the "*" is tried too.
+  it('installer pass, all users: a removal written as "*1\\??\\<path>", for a file in this install\'s folder, for the folder itself, or a rename into it, stops the run too', async () => {
+    const root = join(awork, 'apps-pending-star')
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+    const install = join(root, 'Program Files', 'AI Code Conductor')
+    dir(install)
+    const saved = join(root, 'Program Files', 'Saved Install Location')
+    const elsewhere = (name: string) => `*1\\??\\${join(root, 'Elsewhere', name)}`
+    const cases: Array<[string, string[]]> = [
+      ['a file inside it', [elsewhere('x.dll'), '', `*1\\??\\${join(install, 'resources', 'app.asar')}`, '']],
+      ['the folder itself', [elsewhere('x.dll'), '', `*1\\??\\${install}`, '']],
+      ['the folder itself, a longer number after the "*"', [`*12\\??\\${install}`, '']],
+      ['a rename into it, its "!" before the "*1"', [elsewhere('old.dll'), `!*1\\??\\${join(install, 'new.dll')}`]],
+      ['a rename into it, its "!" after the "*1"', [elsewhere('old.dll'), `*1!\\??\\${join(install, 'new.dll')}`]],
+    ]
+    for (const [what, pending] of cases) {
+      const { log, details, status, restored } = runAppCheck('installer', { instdir: install, legacyUninstaller: '', savedInstallLocation: saved, installMode: 'all', pending })
+      const all = `${what}: ${details.join('\n')}`
+      expect(details, all).toContain(STOPPED_FOR_RESTART(install))
+      expect(log, all).not.toContain('passed=1')
+      expect(status, all).toBe(2)
+      expect(restored, all).toBe(saved)
+    }
+  }, 60_000)
+
+  it('installer pass: removals waiting elsewhere, a rename into another folder, a folder whose name only starts the same (plain or written as "*1\\??\\<path>"), or a per-user install, do not stop it', async () => {
     const root = join(awork, 'apps-pending-elsewhere')
     rmSync(root, { recursive: true, force: true, maxRetries: 5 })
     const install = join(root, 'Program Files', 'AI Code Conductor')
@@ -2085,6 +2113,10 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
       `\\??\\${join(root, 'Elsewhere', 'x.dll')}`, '',
       `\\??\\${join(root, 'Elsewhere', 'old.dll')}`, `!\\??\\${join(root, 'Elsewhere', 'new.dll')}`,
       `\\??\\${install} Beta\\app.asar`, '',
+      // The same, as Windows 11 was seen to write them.
+      `*1\\??\\${join(root, 'Elsewhere', 'y.dll')}`, '',
+      `*1\\??\\${join(root, 'Elsewhere', 'old2.dll')}`, `!*1\\??\\${join(root, 'Elsewhere', 'new2.dll')}`,
+      `*1\\??\\${install} Beta`, '',
     ]
     for (const installMode of ['all', 'CurrentUser'] as const) {
       const { log, details, status } = runAppCheck('installer', { instdir: install, legacyUninstaller: '', installMode, pending })
@@ -2095,7 +2127,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
       expect(details.some((d) => d.startsWith('Could not read what Windows will remove')), all).toBe(false)
     }
     // A per-user install is never checked: even a removal in its own folder does not stop it.
-    const own = runAppCheck('installer', { instdir: install, legacyUninstaller: '', installMode: 'CurrentUser', pending: [`\\??\\${install}\\app.asar`, ''] })
+    const own = runAppCheck('installer', { instdir: install, legacyUninstaller: '', installMode: 'CurrentUser', pending: [`\\??\\${install}\\app.asar`, '', `*1\\??\\${install}\\app.asar`, ''] })
     expect(own.log, own.details.join('\n')).toContain('passed=1')
     // With nothing waiting at all (no value), it goes straight on too.
     const none = runAppCheck('installer', { instdir: install, legacyUninstaller: '', installMode: 'all' })
