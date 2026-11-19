@@ -364,7 +364,9 @@ async function consoleHostCounts(exitAt, list, waitUntil) {
     const from = now() - exitAt;
     const procs = await list(exitAt + s * 1000);
     const hosts = procs.filter(isConsoleHost);
-    return { s, n: hosts.length, hosts: hosts.map((p) => ({ name: p.name, pid: p.pid })), listedMs: [from, now() - exitAt] };
+    // The parent says whose console it is: the probe's own child is the pseudo
+    // console's host; one under another process is that process's console.
+    return { s, n: hosts.length, hosts: hosts.map((p) => ({ name: p.name, pid: p.pid, start: p.start, ppid: p.ppid, probeChild: p.ppid === process.pid })), listedMs: [from, now() - exitAt] };
   }));
 }
 

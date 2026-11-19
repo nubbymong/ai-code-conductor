@@ -11,7 +11,7 @@
 // The turn, and only the turn, gets one of two fixed replies, streamed one
 // line every `lineMs`: about 300 lines of text (the `reply` section of
 // p19-scenarios.json) for a turn that names its marker, and the short one
-// (`shortReply`, about 40 lines in about 2 s; the second probe run) for a turn
+// (`shortReply`, 40 lines in under a second; the second probe run) for a turn
 // that names the short marker. The turn is a request that carries tools and
 // names one of the two markers (for Claude Code, a streamed one); any other
 // request a CLI makes on its own (a check, a title; Codex 0.157.1 sends a

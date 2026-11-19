@@ -22,7 +22,7 @@
   },
   "shortReply": {
     "lines": 40,
-    "lineMs": 50,
+    "lineMs": 20,
     "marker": "p19 short",
     "line": "p19 short line {n} of {total}: the quick brown fox jumps over the lazy dog",
     "after": "\n\n",
@@ -181,7 +181,7 @@
             },
             { "do": "settle", "quietMs": 1500, "minBytes": 0, "timeoutMs": 3000 },
             { "do": "keys", "keys": "{shortPrompt}", "afterMs": 700 },
-            { "do": "keys", "keys": "\r", "afterMs": 300 },
+            { "do": "keys", "keys": "\r", "afterMs": 100 },
             { "do": "keys", "keys": "p19 queued draft", "afterMs": 0 },
             { "do": "until", "label": "the queue hint (a draft typed while the short turn runs)", "screen": "to queue", "timeoutMs": 5000, "rules": [] },
             { "do": "mark", "state": "queue-hint", "recordOnly": true }
