@@ -2876,9 +2876,10 @@ describe('agent sessions: a held session keeps its tools when its link to its ho
   // The fake holder keeps a stream whose relay acked `away` when the attached
   // connection lets go, and gives it back to the connection that attaches
   // again, as plan section B1's holder does (session-helper-fake-holder.ts).
-  // Not checked here: the relay's hold, its bounds and its fixed answer (B1's
-  // Rust tests); a stream given back to a new run of the app (an agent session
-  // is not shown again after a restart).
+  // Not checked here: the relay's hold, its bounds, its fixed answer and the
+  // notifications it drops while away (B1's Rust tests); a stream given back
+  // to a new run of the app (an agent session is not shown again after a
+  // restart).
   /** Each link the stand-in tool host was handed, with the id it came under. */
   const served: Array<{ id: string; link: HelperToolLink }> = []
   /** What reached the tool host from the CLI: the id and the link it came under. */
@@ -2912,11 +2913,12 @@ describe('agent sessions: a held session keeps its tools when its link to its ho
     setSessionHelper(m)
     return m
   }
-  async function attachedTab(tab: { sessionId: string; kind: 'claude' | 'codex' }): Promise<FakeHolder> {
-    spawnAgentPty(tab, SHELL, [], agentOpts())
+  /** The tab's holder, once its terminal (`p`) has attached. */
+  async function attachedTab(tab: { sessionId: string; kind: 'claude' | 'codex' }): Promise<{ h: FakeHolder; p: IPty }> {
+    const p = spawnAgentPty(tab, SHELL, [], agentOpts())
     const sid = heldAgentSessionId(tab.sessionId, tab.kind)
     await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
-    return helper.holders.get(sid)!
+    return { h: helper.holders.get(sid)!, p }
   }
   const call = (id: number) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'vision_status', arguments: {} } })
   const answer = (id: number) => ({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: `answer ${id}` }] } })
@@ -2943,7 +2945,7 @@ describe('agent sessions: a held session keeps its tools when its link to its ho
       const id = tab.sessionId
       const of = <T extends { id: string }>(list: T[]): T[] => list.filter((s) => s.id === id)
       const base = served.length
-      const h = await attachedTab(tab)
+      const { h } = await attachedTab(tab)
       const n = h.openToolStream({ away: true })!
       await until(() => served.length === base + 1, `the stream of ${id}`)
       const before = served[base]
@@ -2986,7 +2988,7 @@ describe('agent sessions: a held session keeps its tools when its link to its ho
   it('a session that was not switched: a stream its holder gives back is not served either', async () => {
     await toolsManager()
     const id = 'abcdef0123456789abcdef62'
-    const h = await attachedTab(claudeTab(id))
+    const { h } = await attachedTab(claudeTab(id))
     // A relay its CLI was not pointed at, started all the same.
     const n = h.openToolStream({ away: true })!
     await until(() => logs.includes(notSwitchedLine(id)), 'the refusal')
@@ -3002,11 +3004,11 @@ describe('agent sessions: a held session keeps its tools when its link to its ho
     expect(logs).not.toContain(givenBackLine(id))
   })
 
-  it('a tab closed meanwhile (its record released): the stream given back is refused as a new one is; its held call is answered with an error, and nothing reaches the tool host', async () => {
+  it('a tab closed meanwhile (its record released): the stream given back is refused as a new one is; its held call is answered with an error, and nothing reaches the tool host; when the tab ends, its stream ends and nothing is kept', async () => {
     await toolsManager()
     const id = 'abcdef0123456789abcdef63'
     switching.add(id)
-    const h = await attachedTab(claudeTab(id))
+    const { h, p } = await attachedTab(claudeTab(id))
     const n = h.openToolStream({ away: true })!
     await until(() => served.length === 1, 'the stream')
     released.add(id)
@@ -3018,6 +3020,66 @@ describe('agent sessions: a held session keeps its tools when its link to its ho
     expect(h.toolSent).toEqual([{ stream: n, message: toolError(4, TOOL_STREAM_SENTENCES.ended) }])
     expect(received).toEqual([])
     expect(logs).toContain(`[session-helper] ${id}: a tool stream its holder opened was not served`)
+    expect(logs).not.toContain(givenBackLine(id))
+    // The tab ends: the holder ends its session, and a session that ended
+    // keeps nothing, so its relay is told mcp.close, not mcp.away.
+    p.kill()
+    await until(() => h.ended && !h.attached, 'the tab to end')
+    expect(h.relayTold).toEqual([{ stream: n, t: 'mcp.away' }, { stream: n, t: 'mcp.back' }, { stream: n, t: 'mcp.close' }])
+    expect(h.keptStreams.size).toBe(0)
+  })
+
+  it('two streams through one dropped link, one of them opened by its relay while the link was down: each is given back and served under the tab\'s id on a link of its own, with one log line each; a stream opened new on the connection that attached again has its line too', async () => {
+    await toolsManager()
+    const id = 'abcdef0123456789abcdef64'
+    switching.add(id)
+    const { h } = await attachedTab(claudeTab(id))
+    const a = h.openToolStream({ away: true })!
+    await until(() => served.length === 1, 'the first stream')
+    const first = h.attached!
+    h.fallBehind()
+    // A relay that starts while the link is down: its stream is kept too.
+    const b = h.openToolStream({ away: true })!
+    expect([...h.keptStreams.keys()]).toEqual([a, b])
+    expect(h.relayTold).toEqual([{ stream: a, t: 'mcp.away' }, { stream: b, t: 'mcp.away' }])
+    await until(() => served.length === 3, 'both streams given back')
+    expect(h.attached).not.toBe(first)
+    expect(served.map((s) => s.id)).toEqual([id, id, id])
+    expect(logs.filter((l) => l === givenBackLine(id))).toHaveLength(2)
+    // One call on each reaches the tool host once, on that stream's own new link.
+    h.relay(a, call(6))
+    h.relay(b, call(7))
+    await until(() => received.length === 2, 'the two calls')
+    await tick(30)
+    expect(received.map((r) => [served.findIndex((s) => s.link === r.link), r.message])).toEqual([[1, call(6)], [2, call(7)]])
+    // A stream its holder opens new on that connection has its line as well.
+    h.openToolStream()
+    await until(() => served.length === 4, 'the new stream')
+    expect(served[3].id).toBe(id)
+    expect(logs.filter((l) => l === givenBackLine(id))).toHaveLength(3)
+  })
+
+  it('while the link is down one relay ends its kept stream, then the program exits: the attach again is given nothing back, and the other kept stream\'s relay is told mcp.close', async () => {
+    await toolsManager()
+    const id = 'abcdef0123456789abcdef65'
+    switching.add(id)
+    const { h, p } = await attachedTab(claudeTab(id))
+    const exits: number[] = []
+    p.onExit((e) => exits.push(e.exitCode))
+    const a = h.openToolStream({ away: true })!
+    const b = h.openToolStream({ away: true })!
+    await until(() => served.length === 2, 'the two streams')
+    h.fallBehind()
+    // One relay ends its kept stream (its CLI closed it): it is kept no longer.
+    h.endToolStream(a)
+    expect([...h.keptStreams.keys()]).toEqual([b])
+    // The program exits before the app attaches again.
+    h.exitChild(0)
+    await until(() => exits.length === 1 && h.ended && !h.attached, 'the exit and the holder\'s end')
+    expect(h.attaches).toBe(2)
+    expect(h.relayTold).toEqual([{ stream: a, t: 'mcp.away' }, { stream: b, t: 'mcp.away' }, { stream: b, t: 'mcp.close' }])
+    expect(h.keptStreams.size).toBe(0)
+    expect(served).toHaveLength(2)
     expect(logs).not.toContain(givenBackLine(id))
   })
 })

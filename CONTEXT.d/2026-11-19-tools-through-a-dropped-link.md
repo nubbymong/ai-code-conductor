@@ -26,13 +26,19 @@ it off nothing changes.
   as B1's holder does: a stream opened with `away` is kept when the attached connection lets go (its
   relay told `mcp.away`), what the relay sends meanwhile is held, and the next connection that
   attaches with `mcp` and a running program gets `mcp.open` on the same number, then `mcp.back` goes
-  to the relay and the held messages follow in order. The give-back runs after an attach from the
-  connection's frame loop, so the attach answer (plan section A1's part of the file) is not edited.
-  Not modelled: the relay's 30 s hold, its bounds and its fixed answer (B1's Rust tests).
-- **Tests:** three new manager cases: a Claude Code and a Codex tab keep their stream through a
+  to the relay and the held messages follow in order. A stream of a session that ended, or of a
+  program that has exited, is not kept: its relay is told `mcp.close`. The give-back runs after an
+  attach from the connection's frame loop, so the attach answer (plan section A1's part of the file)
+  is not edited. Not modelled: the relay's 30 s hold, its bounds, its fixed answer and the
+  notifications it drops while away (B1's Rust tests).
+- **Tests:** five new manager cases: a Claude Code and a Codex tab keep their stream through a
   dropped link (the call held meanwhile is answered once; the answer to a call that was with the app
   when the link dropped goes nowhere); a session not switched is served nothing; a tab whose record
-  was released meanwhile refuses the stream. Every existing hooks and tools case is unchanged.
+  was released meanwhile refuses the stream, and when the tab ends nothing is kept; two streams
+  through one drop, one of them opened while the link was down, are each served on a link of their
+  own with one log line each, and a new stream on that connection has its line too; a kept stream
+  its relay ended, and one of a program that exited during the gap, are not given back. Every
+  existing hooks and tools case is unchanged.
 - **Not touched:** the tool host's request handler, routes and tools; helper-pty.ts; pty-manager.ts;
   helper/; the SSH radius files. No live SSH matrix is owed by path.
 - **Owed:** an ADR-009 pass before stable (aicc_planning #320 list), recorded although the stream

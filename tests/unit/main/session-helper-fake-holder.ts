@@ -52,8 +52,10 @@
  * that ended keeps nothing; one whose program has exited gives nothing back
  * (its kept streams end at the next attach here, at the exit in a real
  * holder). Each thing a relay was told is in `relayTold`. Not modelled: the
- * relay's 30 s hold, its bounds and its fixed answer, and the 8 streams a
- * session may have (B1's Rust tests own those).
+ * relay's 30 s hold, its bounds and its fixed answer, the notifications it
+ * drops while away (here every message `relay` is given while a stream is
+ * kept is held and sent after `mcp.back`), and the 8 streams a session may
+ * have (B1's Rust tests own those).
  */
 import { randomBytes } from 'crypto'
 import * as fs from 'fs'
@@ -200,8 +202,8 @@ export class FakeHolder {
     for (const [n, c] of [...this.toolStreams]) {
       if (c !== this.attached) continue
       this.toolStreams.delete(n)
-      if (this.awayStreams.has(n)) this.keep(n)
-      else this.relayTold.push({ stream: n, t: 'mcp.close' })
+      if (this.awayStreams.has(n) && this.child !== 'exited') this.keep(n)
+      else { this.awayStreams.delete(n); this.relayTold.push({ stream: n, t: 'mcp.close' }) }
     }
     this.attached = null
     this.awaySince = this.awayClock ? this.awayClock() : null

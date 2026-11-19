@@ -1029,8 +1029,8 @@ export class SessionHelperManager implements MachinesSource {
    *
    * The switch is kept per launch, not per connection: a stream the holder
    * gives back on the connection that attached again (one it kept while the
-   * link was down) is served as any other, by a link of that connection, and
-   * logged once.
+   * link was down) is served as any other, by a link of that connection, with
+   * one log line for each such stream.
    */
   private toolRoute(ctx: AgentSpawnContext, sid: string, launch: { file: string; args: SpawnArgs; opts: SpawnOptions }): ToolRoute | undefined {
     if (ctx.run) return undefined
