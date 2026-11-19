@@ -348,9 +348,9 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   not answer (section 3), a host-key question or change, `hash-mismatch`,
   `proto-mismatch`, `replaced`, `bad-frame`, `unknown-type` or malformed
   input, nor for a one-time-code device. It is never a user-started launch.
-- **Terminal reattach (R9).** The holder keeps the last 2 MiB of output in a
-  ring, and the app attaches from the offset of the last byte it showed (0
-  for a terminal it takes over). A ring that no longer holds that offset
+- **Terminal reattach (R9).** From a 2 MiB output ring the holder replays
+  what follows the offset the app attaches from: the last byte it showed, or
+  0 for a terminal it takes over. A ring that no longer holds that offset
   answers from `ring_start` with `truncated` true (section 15, Attach). What
   the app on This computer does then (2.1.3-beta.12): it does not clear the
   view or reset the terminal. It writes the cancel character, the attribute
