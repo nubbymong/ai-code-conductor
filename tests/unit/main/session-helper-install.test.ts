@@ -77,6 +77,24 @@ describe('helperRootDir', () => {
     expect(helperRootDir({ ...win, env, isPackaged: true })).toBe('C:\\Users\\someone\\AppData\\Local\\AI Code Conductor\\helper')
     expect(helperRootDir({ ...win, env: { ...env, CCC_E2E_DATA_DIR: 'E:\\e2e' }, isPackaged: true })).toBe('E:\\e2e\\helper')
   })
+
+  it('a data root that is not a full path is ignored: the folder used with no override, never one under the working folder (aicc_planning#335)', () => {
+    // Before #335 a relative root was joined as it was, so the helper went under
+    // whatever folder the run started in (the config-dot-cwd failure class).
+    const env = { LOCALAPPDATA: 'C:\\Users\\someone\\AppData\\Local' }
+    const installed = 'C:\\Users\\someone\\AppData\\Local\\AI Code Conductor\\helper'
+    expect(helperRootDir({ ...win, env: { ...env, CCC_DEV_DATA_DIR: 'rel\\dev' }, isPackaged: false })).toBe(`${installed}\\dev`)
+    expect(helperRootDir({ ...win, env: { ...env, CCC_E2E_DATA_DIR: 'e2e' }, isPackaged: true })).toBe(installed)
+    expect(helperRootDir({ ...win, env: { ...env, CCC_E2E_DATA_DIR: 'e2e' }, isPackaged: false })).toBe(`${installed}\\dev`)
+    // The end-to-end root is the one chosen when set; when it is not a full
+    // path, the dev root is not used in its place.
+    expect(helperRootDir({ ...win, env: { ...env, CCC_E2E_DATA_DIR: 'e2e', CCC_DEV_DATA_DIR: 'D:\\dev-data' }, isPackaged: false })).toBe(`${installed}\\dev`)
+    // Full by the rules of the platform named: a drive-letter root is one on
+    // Windows and is not one on macOS or Linux.
+    expect(helperRootDir({ platform: 'linux', home: '/home/someone', env: { CCC_DEV_DATA_DIR: 'C:\\dev-data' }, isPackaged: false })).toBe('/home/someone/.ai-code-conductor/helper/dev')
+    expect(helperRootDir({ platform: 'linux', home: '/home/someone', env: { CCC_DEV_DATA_DIR: '/srv/dev-data' }, isPackaged: false })).toBe('/srv/dev-data/helper')
+    expect(helperRootDir({ platform: 'darwin', home: '/Users/someone', env: { CCC_E2E_DATA_DIR: 'rel/e2e' }, isPackaged: true })).toBe('/Users/someone/Library/Application Support/AI Code Conductor/helper')
+  })
 })
 
 describe('removeOldVersionFolders', () => {
