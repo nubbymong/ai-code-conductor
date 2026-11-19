@@ -86,6 +86,8 @@ const SCRATCH = mkdtempSync(path.join(os.tmpdir(), 'ccc-iso-guard-'))
 const NOSRC = path.join(SCRATCH, 'no-such-source')
 const NOPARENT = path.join(SCRATCH, 'no-such-folder')
 const MIN_ENV = { PATH: process.env.PATH ?? '', SystemRoot: process.env.SystemRoot ?? '' }
+/** This Node offers process.execve (22.15 and later; on Windows it is offered but not available). */
+const HAS_EXECVE = typeof (process as unknown as { execve?: unknown }).execve === 'function'
 const noop = (): void => {}
 
 afterAll(() => {
@@ -375,8 +377,55 @@ describe('reads with a write flag, and the other entry points, aimed at a real h
     expectRefused(() => new Ctor('0', { eval: true }), 'worker_threads.Worker')
   })
 
-  it.runIf(typeof (process as unknown as { execve?: unknown }).execve === 'function')('process.execve is refused (it would replace the process)', () => {
+  it.runIf(HAS_EXECVE)('process.execve is refused in a test worker (it would replace the worker)', () => {
     expectRefused(() => (process as unknown as { execve: (f: string, a: string[], e: object) => void }).execve(process.execPath, [process.execPath, '-e', '0'], {}), 'process.execve')
+  })
+
+  // aicc_planning#347: Codex 0.170.0's npm launcher (bin/codex.js) replaces
+  // itself with the native program through process.execve when Node offers it
+  // (on macOS and Linux). In a probe the guard checks that call as it checks a
+  // spawn of the same program, then hands it to Node. On Windows Node offers
+  // the function but answers that it is not available there, which is what
+  // the first case sees on this PC. Not checked here: the replacement itself,
+  // which needs a POSIX Node with process.execve (CI's test jobs run Node 20,
+  // which has none; the conformance job's macOS leg runs the real launcher
+  // through it). The probe gets homes and a temp folder of its own, in a
+  // folder named like a temp folder: a child trusts its parent's temp folder
+  // only when it is named like one, and this case does not depend on what a
+  // test runner calls it.
+  it.runIf(HAS_EXECVE)('in a probe, process.execve of a program whose folder, arguments and environment name no real home is handed to Node', () => {
+    const tmp = path.join(mkdtempSync(path.join(SCRATCH, 'execve-own-')), 'tmp')
+    const home = path.join(tmp, 'home')
+    mkdirSync(home, { recursive: true })
+    const env: Record<string, string> = { ...MIN_ENV, TEMP: tmp, TMP: tmp, TMPDIR: tmp }
+    for (const name of [...HOME_VARS, ...XDG_VARS]) env[name] = home
+    if (WIN) Object.assign(env, { HOMEDRIVE: home.slice(0, 2), HOMEPATH: home.slice(2) })
+    const replacement = 'process.stdout.write(JSON.stringify({ execve: "replaced", guarded: !!process[Symbol.for("ccc.test-home-guard.state")] }))'
+    const body = [ATTEMPT, 'await attempt("execve", () => process.execve(process.execPath, [process.execPath, "-e", t.replacement], { ...process.env }))', 'process.stdout.write(JSON.stringify(out))'].join('\n')
+    const r = runChild(childScript('execve-clean', body, { replacement }), { preload: false, env })
+    expect(r.out, r.stderr).toEqual(WIN ? { execve: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' } : { execve: 'replaced', guarded: true })
+    expect(r.status, r.stderr).toBe(0)
+  })
+
+  it.runIf(HAS_EXECVE)('in a probe, process.execve is refused when its environment or arguments name a real home, and the probe exits non-zero', () => {
+    for (const [name, call] of [
+      ['env', 'process.execve(process.execPath, [process.execPath, "-e", "0"], { ...process.env, CODEX_HOME: t.home })'],
+      ['argv', 'process.execve(process.execPath, [process.execPath, "-e", "0", t.home], { ...process.env })'],
+    ]) {
+      const body = [ATTEMPT, `await attempt("execve", () => ${call})`, 'process.stdout.write(JSON.stringify(out))'].join('\n')
+      const r = runChild(childScript(`execve-${name}`, body, { home: missing() }), { preload: false })
+      expect(r.out, r.stderr).toEqual({ execve: VIOLATION_CODE })
+      expect(r.stderr).toContain(`process.execve ${name}`)
+      expect(r.status).toBe(1)
+    }
+  })
+
+  it.runIf(HAS_EXECVE)('a probe holding a refusal it swallowed is not replaced (the replaced process could not exit non-zero for it)', () => {
+    const body = [ATTEMPT, 'await attempt("rmSync", () => fs.rmSync(t.del))', 'await attempt("execve", () => process.execve(process.execPath, [process.execPath, "-e", "0"], { ...process.env }))', 'process.stdout.write(JSON.stringify(out))'].join('\n')
+    const r = runChild(childScript('execve-pending', body, { del: missing() }), { preload: false })
+    expect(r.out, r.stderr).toEqual({ rmSync: VIOLATION_CODE, execve: VIOLATION_CODE })
+    expect(r.stderr).toContain('would replace this probe before its refused operations are reported')
+    expect(r.status).toBe(1)
   })
 })
 
