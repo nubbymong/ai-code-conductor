@@ -2,7 +2,7 @@
 // submit; 2.1.3-beta.9 section A1). The session input module
 // (src/main/session-input/) is where the main process decides, on its own
 // initiative, what goes into a session's terminal: the Watchdog's retry, an
-// Agent Canvas marker, Ask Conductor's question. (A Claude Code marker it
+// Agent Canvas marker, Ask Conductor's question, a channel message and the quit keys. (A Claude Code marker it
 // hands to canvas/claude-marker-typing.ts, which has the renderer type it.)
 // Every other caller asks the module (submitLine, typeKeys, submitMarker,
 // handOffAskQuestion, pasteEnvelope); sendExitKeys, which skips the quit's
@@ -67,7 +67,7 @@
 // through any file it loads, is the PTY manager (so the ports cannot be
 // registered before the module is ready, and imports run one way); the PTY
 // manager registers the ports in one statement of its own, when it loads; and
-// askQuestion and codexRunScreen are reached from the PTY manager only.
+// askQuestion, sendExitKeys and codexRunScreen are reached from the PTY manager only.
 //
 // Not checked here: the renderer (its typing moves with S13); a PTY handle
 // held in an object property other than `ptyProcess` (or a backstop name) of
@@ -83,7 +83,7 @@
 // function, which then counts whole; a reach through
 // `Reflect`, `eval` or a require whose name is built at run time; a namespace
 // of this module handed on whole (passed to a function, spread or stored), so
-// that a door only the PTY manager may reach (askQuestion, sendExitKeys) is
+// that a door only the PTY manager may reach (askQuestion, sendExitKeys, codexRunScreen) is
 // read from it elsewhere; and a local name that shadows a typing function's
 // (counted as one, which only over-counts).
 import { describe, it, expect } from 'vitest'

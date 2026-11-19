@@ -4809,7 +4809,7 @@ function spawnPtyResolved(
           let lastPct = -1
           runChunkedWrite(pushCmd, {
             write: (slice) => ptyProcess.write(slice),
-            // Same identity-guarded liveness check writeChunked/writeEnvelopeChunked
+            // Same identity-guarded liveness check writeChunked/session-input's writeEnvelopeChunked
             // use -- a respawn replaces ptyProcess under the same sessionId --
             // PLUS `!pushDone`, so the sentinel timer (armed below, once
             // every byte has landed) or any other path that resolves this
@@ -7534,7 +7534,7 @@ function spawnPtyResolved(
       unregisterCodexReviewSession(sessionId)
       disposeCodexReviewUsage(sessionId)
       // Locality fix: stop the Codex telemetry tail poller + drop the four
-      // per-session write buffers (pasteQueues / pendingWrites / recentWrites /
+      // per-session write buffers (the channel paste queue (session-input) / pendingWrites / recentWrites /
       // sshOscBuffers) and the SSH flow on NATURAL exit too — previously only
       // killPty did this, so a session whose process exited on its own (Codex
       // exit/quit, crash) leaked the 2Hz full-file telemetry read + its maps
@@ -7612,7 +7612,7 @@ function writeChunked(sessionId: string, ptyProcess: pty.IPty, data: string): vo
   // R-010: re-check liveness each chunk (a respawn replaces the PTY under the
   // same sessionId) and try/catch the write inside the helper, so a write to a
   // killed/replaced PTY from the timer can never throw an uncaught exception in
-  // main. Mirrors writeEnvelopeChunked.
+  // main. Mirrors session-input's writeEnvelopeChunked.
   runChunkedWrite(data, {
     write: (slice) => ptyProcess.write(slice),
     isAlive: () => ptySessions.get(sessionId)?.ptyProcess === ptyProcess,
@@ -7755,7 +7755,7 @@ export function resizePty(sessionId: string, cols: number, rows: number): void {
  * killPty AND later the async onExit with weAreCurrent, and a natural exit fires
  * only onExit). Consolidating here is what fixes the locality minors: codex
  * telemetry + the four per-session buffers (pendingWrites / recentWrites /
- * sshOscBuffers / pasteQueues) used to be cleaned only by killPty, leaking on
+ * sshOscBuffers / the channel paste queue) used to be cleaned only by killPty, leaking on
  * naturally-exiting sessions.
  */
 function cleanupSessionResources(sessionId: string): void {

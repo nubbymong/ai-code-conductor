@@ -13,7 +13,11 @@
 // manager's gracefulExitPty only, which decides which sessions get them).
 //
 // Each function's body moved here from the PTY manager as it was: nothing
-// typed, its order or its timing changed, and no queue, delay or check added.
+// typed, its order or its timing changed, and no queue, delay or check added,
+// but for what A2 changed in sendExitKeys, described at that function: it
+// writes each quit key only while the terminal it was handed is still the
+// session's, and a key whose write fails is dropped rather than thrown. (Like
+// every door here, pasteEnvelope also throws before the ports are registered.)
 // The rules of WHEN to type stay where they were (the Watchdog's Codex rule in
 // watchdog-manager.ts, the Claude Code marker's in canvas/claude-marker-typing.ts,
 // the Codex composer's in the Codex package); they type only through what this
@@ -28,8 +32,8 @@
 // manager reaches it (WP1 rule R4: no deep import into a provider package).
 // The two A2 doors are the exceptions, as they were in the PTY manager: a
 // channel envelope and the quit keys are written to the session's terminal
-// process itself, each only while it is still the session's, and never
-// through writePty's duplicate guard.
+// process itself, never through writePty's duplicate guard, and each only
+// while that process is still the session's (for the quit keys, new in A2).
 import type { BrowserWindow } from 'electron'
 import type { IPty } from 'node-pty'
 import { getProvider } from '../providers'
@@ -46,7 +50,7 @@ import { runChunkedWrite } from '../pty-chunked-write'
 
 /** What the PTY manager lends this module, registered when it loads. */
 export interface SessionInputPorts {
-  /** writePty, unchanged: every byte this module types into a terminal. */
+  /** writePty, unchanged: every byte this module types into a terminal, but a channel envelope's and the quit keys, which go to the run itself (pasteEnvelope, sendExitKeys). */
   write: (sessionId: string, data: string) => void
   /** The session's current terminal process (its ptyProcess), or none. A
    *  restart is a new one. */
@@ -261,14 +265,18 @@ export function cancelPastes(sessionId: string): void {
  * `proc` is still the session's terminal process: one that ended, or was
  * replaced by a new run, gets none of the rest. (The PTY manager asked only
  * whether the session still had a terminal, so a replaced one got the rest.)
+ * A key whose write fails (a process that has died, its exit not yet told) is
+ * dropped, as the envelope writer's slices are (R-010): it never throws out
+ * of a timer or out of gracefulExitPty, whose exit listener or timeout then
+ * ends the quit. The next key is still tried, at its time.
  */
 export function sendExitKeys(sessionId: string, proc: IPty): void {
   const live = (): boolean => port().run(sessionId) === proc
-  if (live()) proc.write('\x1b') // Escape
-  setTimeout(() => {
-    if (live()) proc.write('\x03') // Ctrl+C to interrupt anything
-  }, 100)
-  setTimeout(() => {
-    if (live()) proc.write('/exit\r')
-  }, 300)
+  const key = (data: string): void => {
+    if (!live()) return
+    try { proc.write(data) } catch { /* already gone */ }
+  }
+  key('\x1b') // Escape
+  setTimeout(() => key('\x03'), 100) // Ctrl+C to interrupt anything
+  setTimeout(() => key('/exit\r'), 300)
 }

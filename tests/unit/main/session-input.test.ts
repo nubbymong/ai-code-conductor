@@ -31,10 +31,14 @@
 //    gracefulExitPty: Escape at once, Ctrl-C at 100 ms, /exit and Enter at
 //    300 ms, also through the session helper's terminal; nothing more once the
 //    terminal ended or was replaced, and nothing into a terminal that is not
-//    the session's. The pasteEnvelope tests and the gracefulExitPty ones were
-//    run first on beta, against pastePty and gracefulExitPty, and all held but
-//    one: there a terminal replaced during the quit still got Ctrl-C and /exit
-//    (beta asked only whether the session had a terminal).
+//    the session's. A key whose write fails (a process that died before its
+//    exit was told) is dropped, never thrown out of its timer or the quit; the
+//    next key is still tried at its time, and the quit ends at its timeout.
+//    The pasteEnvelope tests and the other gracefulExitPty ones were run first
+//    on beta, against pastePty and gracefulExitPty, and all held but one:
+//    there a terminal replaced during the quit still got Ctrl-C and /exit
+//    (beta asked only whether the session had a terminal). The two failed-write
+//    tests came in review and were red on the code before that fix.
 //  - the ports: the PTY manager registers them once, when it loads; a second
 //    registration throws and changes nothing, and before any registration
 //    each door that types through a port throws instead of dropping the input.
@@ -43,7 +47,7 @@
 // an Ask question written raw with Enter; a second registration taking over
 // the doors; a door that types nothing, silently, before the registration;
 // an envelope deduped; the paste queue's bound changed; an envelope's tail
-// written after its terminal was replaced.
+// written after its terminal was replaced; a quit key's failed write thrown.
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -598,6 +602,39 @@ describe('the quit keys into a CLI the app started', () => {
     vi.advanceTimersByTime(1000)
     expect(b.writes).toEqual(['\x1b'])
   })
+
+  /** A write as node-pty's fails into a process that has died. */
+  const pipeGone = (): Error => Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
+
+  it('sendExitKeys: a key whose write fails is dropped, never thrown out of its timer, and the next is still tried at its time', async () => {
+    const term = await claudeSession()
+    const proc = term.proc as { write: (d: string) => void }
+    const tried: string[] = []
+    // The process died after the Escape and its exit is not told yet, so it
+    // is still the session's terminal.
+    proc.write = (d: string) => { tried.push(d); if (tried.length > 1) throw pipeGone() }
+    vi.useFakeTimers()
+    expect(() => sendExitKeys(SID, proc as unknown as Run)).not.toThrow()
+    expect(() => vi.advanceTimersByTime(100)).not.toThrow()
+    expect(tried).toEqual(['\x1b', '\x03'])
+    expect(() => vi.advanceTimersByTime(200)).not.toThrow()
+    expect(tried).toEqual(EXIT_KEYS)
+  })
+
+  it('through gracefulExitPty: an Escape whose write fails does not end the quit in an error; the quit ends at its timeout', async () => {
+    const term = await claudeSession()
+    const proc = term.proc as { write: (d: string) => void }
+    const tried: string[] = []
+    proc.write = (d: string) => { tried.push(d); throw pipeGone() }
+    vi.useFakeTimers()
+    let outcome = 'waiting'
+    gracefulExitPty(SID, 5000).then(() => { outcome = 'ended' }, () => { outcome = 'failed' })
+    await vi.advanceTimersByTimeAsync(4999)
+    expect(outcome).toBe('waiting')
+    expect(tried).toEqual(EXIT_KEYS)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(outcome).toBe('ended')
+  })
 })
 
 describe('the ports: registered once, by the PTY manager, when it loads', () => {
@@ -625,9 +662,11 @@ describe('the ports: registered once, by the PTY manager, when it loads', () => 
     expect(() => fresh.submitMarker(SID, MARKER)).toThrow(/has not registered its ports/)
     expect(() => fresh.handOffAskQuestion(fakeWin, SID, 'type this')).toThrow(/has not registered its ports/)
     expect(() => fresh.pasteEnvelope(SID, envelope('type this'))).toThrow(/has not registered its ports/)
+    // The fake clock first, so a key the door schedules before it throws is
+    // on the clock moved on below.
+    vi.useFakeTimers()
     const stub = { write: vi.fn() }
     expect(() => fresh.sendExitKeys(SID, stub as unknown as Run)).toThrow(/has not registered its ports/)
-    vi.useFakeTimers()
     vi.advanceTimersByTime(1000)
     expect(stub.write).not.toHaveBeenCalled()
     expect(allWrites()).toBe(before)
