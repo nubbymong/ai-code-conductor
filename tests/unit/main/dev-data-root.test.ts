@@ -5,11 +5,17 @@
  * when the app is not packaged; a full (absolute) path only, by the rules of
  * the platform named, or of this computer when none is.
  *
- * PURE: fixed inputs, no files, no Electron.
+ * The same leaf reads "packaged" for code that cannot ask Electron
+ * (runsFromAppArchive), and holds the one check on LOCALAPPDATA
+ * (fullLocalAppData; aicc_planning#345).
+ *
+ * PURE: fixed inputs, no Electron. Only the last block reads files: three
+ * source files, as text.
  */
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'fs'
 import * as path from 'path'
-import { devDataRoot } from '../../../src/main/dev-data-root'
+import { devDataRoot, fullLocalAppData, runsFromAppArchive } from '../../../src/main/dev-data-root'
 
 /** A full path on this computer, whichever it is. */
 const hostAbs = path.join(process.platform === 'win32' ? 'C:\\' : '/', 'data', 'dev')
@@ -74,5 +80,60 @@ describe('devDataRoot', () => {
     expect(devDataRoot({ CCC_DEV_DATA_DIR: 'rel/x' }, false)).toBeNull()
     const driveLetter = devDataRoot({ CCC_DEV_DATA_DIR: 'C:\\x' }, false)
     expect(driveLetter).toBe(process.platform === 'win32' ? 'C:\\x' : null)
+  })
+})
+
+describe('runsFromAppArchive', () => {
+  it('a folder inside the app archive reads as packaged, on Windows and elsewhere', () => {
+    expect(runsFromAppArchive('C:\\Program Files\\AI Code Conductor\\resources\\app.asar\\out\\main')).toBe(true)
+    expect(runsFromAppArchive('C:\\Users\\u\\AppData\\Local\\Programs\\AI Code Conductor\\resources\\app.asar\\out\\main\\chunks')).toBe(true)
+    expect(runsFromAppArchive('/Applications/AI Code Conductor.app/Contents/Resources/app.asar/out/main')).toBe(true)
+    expect(runsFromAppArchive('/opt/AI Code Conductor/resources/app.asar')).toBe(true)
+  })
+
+  it('a plain folder (npm run dev, ccc, an end-to-end run, the tests) does not', () => {
+    expect(runsFromAppArchive('F:\\repo\\out\\main')).toBe(false)
+    expect(runsFromAppArchive('/home/u/repo/src/main')).toBe(false)
+    // The unpacked side folder holds native modules, never the app's own code.
+    expect(runsFromAppArchive('C:\\x\\resources\\app.asar.unpacked\\node_modules')).toBe(false)
+    // A name that only contains the word is not the archive.
+    expect(runsFromAppArchive('/home/u/myapp.asar/out')).toBe(false)
+    expect(runsFromAppArchive('/home/u/app.asar-notes/out')).toBe(false)
+  })
+
+  it('the tests themselves read as not packaged', () => {
+    expect(runsFromAppArchive(__dirname)).toBe(false)
+  })
+})
+
+describe('fullLocalAppData', () => {
+  it('a full Windows path is used as it is', () => {
+    expect(fullLocalAppData({ LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' })).toBe('C:\\Users\\u\\AppData\\Local')
+    expect(fullLocalAppData({ LOCALAPPDATA: '\\\\server\\share\\local' })).toBe('\\\\server\\share\\local')
+  })
+
+  it('unset, empty or not a full path: undefined, so the caller uses its own fallback', () => {
+    expect(fullLocalAppData({})).toBeUndefined()
+    expect(fullLocalAppData({ LOCALAPPDATA: '' })).toBeUndefined()
+    expect(fullLocalAppData({ LOCALAPPDATA: 'rel\\local' })).toBeUndefined()
+    expect(fullLocalAppData({ LOCALAPPDATA: 'rel/local' })).toBeUndefined()
+    expect(fullLocalAppData({ LOCALAPPDATA: '.' })).toBeUndefined()
+    // A drive letter with no separator after it is relative to that drive's
+    // current folder.
+    expect(fullLocalAppData({ LOCALAPPDATA: 'C:local' })).toBeUndefined()
+  })
+})
+
+// The data folder (data-paths.ts), the dev root (index.ts) and the helper
+// folder (session-helper/install.ts) read LOCALAPPDATA through
+// fullLocalAppData only. A name-level check of those three files.
+// Not checked here: a read through a renamed or destructured env object, a
+// computed key, and any other file.
+describe('the folders built on LOCALAPPDATA read it through fullLocalAppData', () => {
+  const ROOT = path.resolve(__dirname, '..', '..', '..')
+  it.each(['src/main/data-paths.ts', 'src/main/index.ts', 'src/main/session-helper/install.ts'])('%s', (file) => {
+    const src = readFileSync(path.join(ROOT, file), 'utf8')
+    expect(src).not.toMatch(/\benv\.LOCALAPPDATA\b|\benv\[\s*['"]LOCALAPPDATA['"]\s*\]/)
+    expect(src).toMatch(/\bfullLocalAppData\(/)
   })
 })

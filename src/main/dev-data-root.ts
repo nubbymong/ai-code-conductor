@@ -9,10 +9,15 @@
  * own files there, away from an installed app on the same computer
  * (docs/dev-alongside-prod.md).
  *
- * Its callers: devSessionDataDir (data-paths.ts), and helperRootDir and
- * instanceRecordPath (session-helper/install.ts). Each decides what it does
- * when there is no root, or when the root is not a full path; none keeps its
- * own copy of the rule.
+ * Its callers: getDataDirectory, getResourcesDirectory and devSessionDataDir
+ * (data-paths.ts), and helperRootDir and instanceRecordPath
+ * (session-helper/install.ts). Each decides what it does when there is no
+ * root, or when the root is not a full path; none keeps its own copy of the
+ * rule (aicc_planning#345 moved the first two here).
+ *
+ * The same file holds the one check on `LOCALAPPDATA` that the folders built
+ * without such a root share (fullLocalAppData), for the same reason: a
+ * relative value would put them under the folder the run started in.
  *
  * A LEAF: it imports `path` and nothing else. No Electron, registry or logger
  * import, because install.ts is loaded by helper tests that mock little, and
@@ -37,4 +42,30 @@ export function devDataRoot(env: NodeJS.ProcessEnv, isPackaged: boolean, platfor
   if (!root) return undefined
   const rules = platform === undefined ? path : platform === 'win32' ? path.win32 : path.posix
   return rules.isAbsolute(root) ? root : null
+}
+
+/**
+ * Whether code whose own folder is `dir` runs from inside the app's archive
+ * (`resources/app.asar`), which is how an installed build runs it
+ * (package.json build.asar). npm run dev, ccc, an end-to-end run and the
+ * tests run the same code from plain folders.
+ *
+ * For code that cannot ask Electron's `app.isPackaged`: data-paths.ts is
+ * loaded by the hooks worker too (through the logger), where there is no
+ * `app`. A build this reads wrongly reads as not packaged, which is how
+ * getDataDirectory read the dev root before it had a packaged check.
+ */
+export function runsFromAppArchive(dir: string): boolean {
+  return /[\\/]app\.asar(?:[\\/]|$)/.test(dir)
+}
+
+/**
+ * `LOCALAPPDATA` when it is a full Windows path; `undefined` when it is unset,
+ * empty or not a full path. Each caller then uses its own fallback,
+ * `<home>\AppData\Local`. A folder built on a relative value would land under
+ * the folder the run started in (the config-dot-cwd failure class).
+ */
+export function fullLocalAppData(env: NodeJS.ProcessEnv): string | undefined {
+  const local = env.LOCALAPPDATA
+  return local && path.win32.isAbsolute(local) ? local : undefined
 }
