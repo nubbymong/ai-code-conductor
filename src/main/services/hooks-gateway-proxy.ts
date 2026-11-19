@@ -35,6 +35,10 @@ export class HooksGatewayProxy implements HooksGatewayLike {
   private secrets = new Map<string, string>()
   private buffers = new Map<string, RingBufferEntry[]>()
   private subscribers = new Set<(e: HookEvent) => void>()
+  // The unsubscribe the in-process gateway returned for each callback
+  // failOpen() copied into it, so an unsubscribe taken before the fall-back
+  // reaches that copy too (planning #323).
+  private copiedUnsubscribes = new Map<(e: HookEvent) => void, () => void>()
   private _status: HooksGatewayStatus = { enabled: true, listening: false, port: null }
   // Fail-open: when set, the gateway runs IN-PROCESS (today's exact HooksGateway)
   // and every consumer method delegates to it so the proxy stays a faithful drop-in.
@@ -70,7 +74,13 @@ export class HooksGatewayProxy implements HooksGatewayLike {
     // pre-failOpen subscribers were already copied into the gateway by failOpen()).
     if (this.inProcess) return this.inProcess.subscribe(cb)
     this.subscribers.add(cb)
-    return () => { this.subscribers.delete(cb) }
+    return () => {
+      this.subscribers.delete(cb)
+      // Taken before the fall-back, called after it: the copy failOpen()
+      // gave the in-process gateway goes too.
+      const copied = this.copiedUnsubscribes.get(cb)
+      if (copied) { this.copiedUnsubscribes.delete(cb); copied() }
+    }
   }
 
   /** SYNCHRONOUS: secret minted in main (keeps pty-manager's spawn path sync),
@@ -197,8 +207,9 @@ export class HooksGatewayProxy implements HooksGatewayLike {
   isInProcessFallback(): boolean { return this.inProcess !== null }
 
   /** Tear down the child path and run the gateway in-process (today's exact code).
-   *  Replays known secrets + current subscribers so live sessions keep working,
-   *  and hands over the mirror of the child's per-session rings, so getBuffer
+   *  Replays known secrets + current subscribers so live sessions keep working
+   *  (keeping each copied subscriber's unsubscribe, so one taken earlier still
+   *  works), and hands over the mirror of the child's per-session rings, so getBuffer
    *  still answers what came before the fail-open (the history read of a session
    *  held by the session helper merges these with its own ring: both or neither,
    *  session-signals/hooks.ts dropHelperRings).
@@ -208,7 +219,7 @@ export class HooksGatewayProxy implements HooksGatewayLike {
     const gw = new HooksGateway({ defaultPort: this.port, emit: this.emit, onTranscriptPath: this.onTranscriptPath })
     for (const [sid, secret] of this.secrets) gw.registerSessionWithSecret(sid, secret)
     gw.seedBuffers(this.buffers)
-    for (const cb of this.subscribers) gw.subscribe(cb)
+    for (const cb of this.subscribers) this.copiedUnsubscribes.set(cb, gw.subscribe(cb))
     this.inProcess = gw
     // Tracked so stop() can await it (no socket leak / race). Draining the bound
     // waiters only AFTER the in-process gateway binds lets a start() awaited across

@@ -139,6 +139,76 @@ describe('HooksGatewayProxy fail-open + permission bridge', () => {
     expect(seen).toEqual(['Stop'])
   })
 
+  // planning #323: failOpen copies each subscriber into the in-process
+  // gateway; an unsubscribe taken before the fall-back reaches that copy too.
+  const STOP = { sessionId: 's1', event: 'Stop', summary: 'Stop', payload: {}, ts: 1 } as never
+
+  it('an unsubscribe taken BEFORE failOpen and called after it: the callback hears nothing', () => {
+    const t = new FakeChildTransport()
+    p = new HooksGatewayProxy({ transport: t, defaultPort: 0 })
+    const seen: string[] = []
+    const unsubscribe = p.subscribe((e) => seen.push(e.event))
+    p.failOpen()
+    unsubscribe()
+    p.dispatchForTest(STOP)
+    expect(seen).toEqual([])
+  })
+
+  it('that unsubscribe leaves every other subscriber hearing the event once', () => {
+    const t = new FakeChildTransport()
+    p = new HooksGatewayProxy({ transport: t, defaultPort: 0 })
+    const gone: string[] = []
+    const kept: string[] = []
+    const later: string[] = []
+    const unsubscribe = p.subscribe((e) => gone.push(e.event))
+    p.subscribe((e) => kept.push(e.event))
+    p.failOpen()
+    p.subscribe((e) => later.push(e.event))
+    unsubscribe()
+    unsubscribe() // a second call changes nothing
+    p.dispatchForTest(STOP)
+    expect(gone).toEqual([])
+    expect(kept).toEqual(['Stop'])
+    expect(later).toEqual(['Stop'])
+  })
+
+  // Characterisation (planning #323): the next three cases pin behaviour the
+  // fix keeps, and were green before it too. Only the two cases above cover
+  // the fix itself (they were red before it).
+  it('an unsubscribe called BEFORE failOpen still removes the callback: it is not copied', () => {
+    const t = new FakeChildTransport()
+    p = new HooksGatewayProxy({ transport: t, defaultPort: 0 })
+    const seen: string[] = []
+    const unsubscribe = p.subscribe((e) => seen.push(e.event))
+    unsubscribe()
+    p.failOpen()
+    p.dispatchForTest(STOP)
+    expect(seen).toEqual([])
+  })
+
+  it('before any failOpen, the unsubscribe removes the callback from the proxy\'s own fan-out', () => {
+    const t = new FakeChildTransport()
+    p = new HooksGatewayProxy({ transport: t, defaultPort: 0 })
+    const seen: string[] = []
+    const unsubscribe = p.subscribe((e) => seen.push(e.event))
+    p.dispatchForTest(STOP)
+    unsubscribe()
+    p.dispatchForTest(STOP)
+    expect(seen).toEqual(['Stop'])
+  })
+
+  it('a subscriber added AFTER failOpen unsubscribes as before', () => {
+    const t = new FakeChildTransport()
+    p = new HooksGatewayProxy({ transport: t, defaultPort: 0 })
+    p.failOpen()
+    const seen: string[] = []
+    const unsubscribe = p.subscribe((e) => seen.push(e.event))
+    p.dispatchForTest(STOP)
+    unsubscribe()
+    p.dispatchForTest(STOP)
+    expect(seen).toEqual(['Stop'])
+  })
+
   it('a child permission-open lets resolvePermission route the decision back to the child', () => {
     const t = new FakeChildTransport(); const sent: unknown[] = []
     t.onChild((m) => sent.push(m))

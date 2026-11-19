@@ -75,7 +75,8 @@ vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
   }
 })
 
-const { spawnPty, killPty, SSH_NOT_ON_PATH } = await import('../../../src/main/pty-manager')
+const { spawnPty, killPty } = await import('../../../src/main/pty-manager')
+const { SSH_NOT_ON_PATH } = await import('../../../src/main/ssh-program')
 const { mcpSessionProvider } = await import('../../../src/main/conductor-mcp-server')
 const { registerProvider } = await import('../../../src/main/providers')
 const { ClaudeProvider } = await import('../../../src/main/providers/claude')

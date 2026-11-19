@@ -2,11 +2,13 @@
 // fan-out that decides it. Written against src/main/statusline-watcher.ts
 // BEFORE the fan-out moved into the session signals module (2.1.3-beta.8,
 // section A2), and green after the move too, so the move is shown to change
-// nothing. Every case but three drives the real fan-out through the watcher's
-// own string entry (dispatchSSHStatuslineUpdate), the path the MCP /status
-// ingest and the SSH sentinel take. The three "a throwing ..." cases call
-// deliverStatus itself: the watcher's entry catches any throw, so only a
-// direct call shows that the fan-out's own guards hold. Only the colour
+// nothing. Every case but the last eight drives the real fan-out through the
+// watcher's own string entry (dispatchSSHStatuslineUpdate), the path the MCP
+// /status ingest and the SSH sentinel take. The cases where a part throws
+// call deliverStatus itself: the watcher's entry catches any throw, so only a
+// direct call shows that the fan-out's own guards hold (the window send and
+// the provider's step joined the three sinks in 2.1.3-beta.9, planning #324,
+// and each one's first throw in a run is logged once). Only the colour
 // decorator, the subagent check, Sentinel, the provider registry and the
 // logger are stand-ins.
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
@@ -25,6 +27,8 @@ const h = vi.hoisted(() => ({
   observeThrows: false,
   delivered: [] as Array<Record<string, unknown>>,
   providerAsked: [] as unknown[],
+  providerThrows: false,
+  warns: [] as string[],
 }))
 
 vi.mock('electron', () => ({ BrowserWindow: class {} }))
@@ -49,7 +53,11 @@ vi.mock('../../../src/main/sentinel/index', () => ({
 }))
 vi.mock('../../../src/main/providers', () => {
   const provider = {
-    deliverStatusline: (d: Record<string, unknown>) => { h.log.push('provider'); h.delivered.push(d) },
+    deliverStatusline: (d: Record<string, unknown>) => {
+      h.log.push('provider')
+      if (h.providerThrows) throw new Error('provider boom')
+      h.delivered.push(d)
+    },
     healGlobalStatusline: () => {},
   }
   return {
@@ -57,28 +65,40 @@ vi.mock('../../../src/main/providers', () => {
     tryGetProvider: (id: unknown) => { h.providerAsked.push(id); return provider },
   }
 })
-vi.mock('../../../src/main/debug-logger', () => ({ logWarn: () => {}, logInfo: () => {}, logError: () => {}, logDebug: () => {} }))
+// The logger's warnings are kept, so a case can count the fan-out's own lines.
+vi.mock('../../../src/main/debug-logger', () => ({
+  logWarn: (...a: unknown[]) => { h.warns.push(a.map(String).join(' ')) },
+  logInfo: () => {}, logError: () => {}, logDebug: () => {},
+}))
 
 const { dispatchSSHStatuslineUpdate, setTranscriptPathSink, setStatuslineUsageSink, startStatuslineWatcher } =
   await import('../../../src/main/statusline-watcher')
-const { deliverStatus } = await import('../../../src/main/session-signals/status')
+const { deliverStatus, _resetStatusThrowLogForTest } = await import('../../../src/main/session-signals/status')
 
 const TP = '/profiles/p1/projects/x/00000000-0000-4000-8000-000000000000.jsonl'
 const BUCKETS = [{ key: 'session:', label: '5h', group: 'session', percent: 33, resetsAt: '', severity: 'normal' }]
 
 let sent: Array<{ channel: string; payload: Record<string, unknown> }> = []
 let destroyed = false
+let sendThrows = false
 const fakeWin = {
   isDestroyed: () => destroyed,
-  webContents: { send: (channel: string, payload: Record<string, unknown>) => { h.log.push('window'); sent.push({ channel, payload }) } },
+  webContents: {
+    send: (channel: string, payload: Record<string, unknown>) => {
+      h.log.push('window')
+      if (sendThrows) throw new Error('send boom')
+      sent.push({ channel, payload })
+    },
+  },
 }
 let transcripts: Array<[string, string]> = []
 let usage: Array<{ sessionId: string; buckets: unknown; hasCredits: boolean; transcriptPath?: string }> = []
 let stopWatcher: (() => void) | null = null
 
 beforeEach(() => {
-  h.log = []; h.background = false; h.backgroundAsked = []; h.observed = []; h.observeThrows = false; h.delivered = []; h.providerAsked = []
-  sent = []; destroyed = false; transcripts = []; usage = []
+  h.log = []; h.background = false; h.backgroundAsked = []; h.observed = []; h.observeThrows = false; h.delivered = []; h.providerAsked = []; h.providerThrows = false; h.warns = []
+  _resetStatusThrowLogForTest()
+  sent = []; destroyed = false; sendThrows = false; transcripts = []; usage = []
   stopWatcher = startStatuslineWatcher(() => fakeWin as never)
   setTranscriptPathSink((sid, p) => { h.log.push('transcript'); transcripts.push([sid, p]) })
   setStatuslineUsageSink((sessionId, buckets, hasCredits, transcriptPath) => {
@@ -191,6 +211,12 @@ describe('the status line fan-out (characterisation, kept across the move into t
     expect(h.log).toEqual(['provider', 'transcript', 'usage', 'sentinel'])
   })
 
+  it('the fan-out logs nothing of its own when nothing throws', () => {
+    dispatch(full())
+    dispatch(full({ accountEmail: undefined }))
+    expect(h.warns.filter((l) => l.startsWith('[status-fan-out]'))).toEqual([])
+  })
+
   it('a throwing transcript sink does not stop the usage sink or Sentinel', () => {
     setTranscriptPathSink(() => { h.log.push('transcript'); throw new Error('transcript boom') })
     expect(() => deliver(full())).not.toThrow()
@@ -210,5 +236,64 @@ describe('the status line fan-out (characterisation, kept across the move into t
     h.observeThrows = true
     expect(() => deliver(full())).not.toThrow()
     expect(h.log).toEqual(['window', 'provider', 'transcript', 'usage', 'sentinel'])
+  })
+
+  // planning #324: the window send and the provider's deliverStatusline are
+  // guarded as the three sinks are, each on its own.
+  it('a window whose send throws does not stop the provider, the transcript sink, the usage sink or Sentinel, in order', () => {
+    sendThrows = true
+    expect(() => deliver(full())).not.toThrow()
+    expect(h.log).toEqual(['window', 'provider', 'transcript', 'usage', 'sentinel'])
+    expect(sent).toEqual([])
+    expect(h.delivered).toHaveLength(1)
+    expect(h.delivered[0]).toMatchObject({ sessionId: 'sess-1', accountColour: 'mock-colour' })
+    expect(transcripts).toEqual([['sess-1', TP]])
+    expect(usage).toEqual([{ sessionId: 'sess-1', buckets: BUCKETS, hasCredits: false, transcriptPath: TP }])
+    expect(h.observed).toEqual([{ kind: 'model', value: 'model-id-raw', source: 'statusline' }])
+  })
+
+  it('a provider whose deliverStatusline throws does not stop the transcript sink, the usage sink or Sentinel, in order', () => {
+    h.providerThrows = true
+    expect(() => deliver(full())).not.toThrow()
+    expect(h.log).toEqual(['window', 'provider', 'transcript', 'usage', 'sentinel'])
+    expect(sent).toHaveLength(1)
+    expect(transcripts).toEqual([['sess-1', TP]])
+    expect(usage).toEqual([{ sessionId: 'sess-1', buckets: BUCKETS, hasCredits: false, transcriptPath: TP }])
+    expect(h.observed).toEqual([{ kind: 'model', value: 'model-id-raw', source: 'statusline' }])
+  })
+
+  it('with both throwing, the transcript sink, the usage sink and Sentinel still run, in order', () => {
+    sendThrows = true
+    h.providerThrows = true
+    expect(() => deliver(full())).not.toThrow()
+    expect(h.log).toEqual(['window', 'provider', 'transcript', 'usage', 'sentinel'])
+    expect(transcripts).toHaveLength(1)
+    expect(usage).toHaveLength(1)
+    expect(h.observed).toHaveLength(1)
+  })
+
+  it('a window lookup that throws is guarded with the send, and the rest still runs', () => {
+    const lookupThrows = () => { throw new Error('window lookup boom') }
+    expect(() => deliverStatus({ sessionId: 'sess-1', ...full() } as never, lookupThrows as never)).not.toThrow()
+    expect(h.log).toEqual(['provider', 'transcript', 'usage', 'sentinel'])
+  })
+
+  // Mutations to prove this can fail: drop the log line from either catch,
+  // or log on every throw (no once-per-run latch).
+  it('two ticks where both steps throw: one log line per step, and every part still runs both times, in order', () => {
+    sendThrows = true
+    h.providerThrows = true
+    deliver(full())
+    deliver(full())
+    const lines = h.warns.filter((l) => l.startsWith('[status-fan-out]'))
+    expect(lines).toEqual([
+      '[status-fan-out] The window send threw; the rest of the fan-out still ran (logged once per run): send boom',
+      '[status-fan-out] The provider step threw; the rest of the fan-out still ran (logged once per run): provider boom',
+    ])
+    const once = ['window', 'provider', 'transcript', 'usage', 'sentinel']
+    expect(h.log).toEqual([...once, ...once])
+    expect(transcripts).toHaveLength(2)
+    expect(usage).toHaveLength(2)
+    expect(h.observed).toHaveLength(2)
   })
 })

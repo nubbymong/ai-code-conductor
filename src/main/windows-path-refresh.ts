@@ -36,9 +36,14 @@
 // resolves to that claude.exe instead. That is the program a restart of the
 // app would pick from the same PATH. Off Windows nothing is done: the CLI
 // checks there read the login shell's PATH each time.
+//
+// When a refresh ends, it also starts the look for ssh.exe again, off the
+// event loop, on the PATH there is now (ssh-program.ts): the answer an SSH
+// start reads was kept for the refresh count from before.
 import { readRegistryPaths, registryPathFolders, windowsFolderKey, PATH_VALUE_KINDS, type RegistryPaths } from './windows-registry-path'
 import { windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
 import { noteWindowsPathRefresh } from './windows-programs'
+import { lookForSshProgramAfterPathRefresh } from './ssh-program'
 import { logInfo } from './debug-logger'
 
 export { expandWindowsVariables } from './windows-registry-path'
@@ -131,7 +136,10 @@ let inFlight: Promise<string[]> | null = null
  *  counted (noteWindowsPathRefresh), so a lookup that keeps its answer for
  *  the run (claude-cli-probe.ts, the PowerShell profile's) asks again after
  *  it. A refresh that added folders is counted once more when it ends: an
- *  answer of a question asked while it ran is for the PATH from before. */
+ *  answer of a question asked while it ran is for the PATH from before.
+ *  When it ends, the ssh.exe look is made again on the new PATH, off the
+ *  event loop (ssh-program.ts lookForSshProgramAfterPathRefresh), once the
+ *  app has started it. */
 export function refreshWindowsPath(): Promise<string[]> {
   noteWindowsPathRefresh()
   if (process.platform !== 'win32') return Promise.resolve([])
@@ -144,7 +152,12 @@ export function refreshWindowsPath(): Promise<string[]> {
       }
       return added
     }, () => [] as string[])
-    .finally(() => { inFlight = null })
+    .finally(() => {
+      inFlight = null
+      // The kept ssh.exe went with the count: looked for again, off the
+      // event loop, on the PATH there is now (ssh-program.ts).
+      try { lookForSshProgramAfterPathRefresh() } catch { /* the next SSH start walks in place */ }
+    })
   inFlight = run
   return run
 }
