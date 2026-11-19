@@ -361,6 +361,19 @@ describe('release-gate Codex models', () => {
     expect(r.lines.join('\n')).toMatch(/OK\s+Codex models: the registry covers all 1 models Codex 0\.155\.1 lists \(list read 2026-09-29\)/)
   })
 
+  // aicc_planning#346: several versions are named as a list, commas and "and"
+  // before the last, not "and" between each pair.
+  it('the OK line names several CLI versions as a list', async () => {
+    for (const [cliVersions, named] of [
+      [['0.153.4', '0.155.1', '0.156.1', '0.157.1'], 'Codex 0.153.4, 0.155.1, 0.156.1 and 0.157.1 lists'],
+      [['0.153.4', '0.155.1'], 'Codex 0.153.4 and 0.155.1 lists'],
+    ] as const) {
+      const r = await runGate({ version: '2.1.0-beta.17', repo: 'o/r', listAll: clean().listAll, registry: REGISTRY_OK, expected: EXPECTED, codexExpected: { ...CODEX_EXPECTED, cliVersions: [...cliVersions] }, ...MAC_OK, log: silent })
+      expect(r.exitCode).toBe(EXIT_OK)
+      expect(r.lines.join('\n')).toContain(`OK    Codex models: the registry covers all 1 models ${named} (list read 2026-09-29)`)
+    }
+  })
+
   it('FAILS CLOSED when the Codex list is missing or empty: a caller that forgets it cannot pass', async () => {
     for (const codexExpected of [undefined, null, { models: [] }, { models: [{ id: '' }] }]) {
       const r = await runGate({ version: '2.1.0-beta.17', repo: 'o/r', listAll: clean().listAll, registry: REGISTRY_OK, expected: EXPECTED, codexExpected, ...MAC_OK, log: silent })

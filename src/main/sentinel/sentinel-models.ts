@@ -207,6 +207,12 @@ function usableCodexLiveList(live: CodexLiveModelList | null | undefined): Codex
  * case, and neither is a model with no versions of its own or a version that
  * does not parse: the notice is said, as before.
  */
+/** Versions as a sentence names them: "a", "a and b", "a, b and c"
+ *  (aicc_planning#346). */
+function versionList(versions: readonly string[]): string {
+  return versions.length > 1 ? `${versions.slice(0, -1).join(', ')} and ${versions[versions.length - 1]}` : versions.join('')
+}
+
 function listedOnlyAfter(expected: ExpectedModelSet | null | undefined, id: string, version: string): boolean {
   if (finalRelease(version) === null) return false
   const entry = (Array.isArray(expected?.models) ? expected!.models : []).find((m) => m?.id === id) as { cliVersions?: unknown } | undefined
@@ -243,7 +249,7 @@ export function codexModelCoverageFindings(
     })
     return out
   }
-  const versions = Array.isArray(expected?.cliVersions) && expected!.cliVersions.length ? `Codex ${expected!.cliVersions.join(' and ')}, ` : ''
+  const versions = Array.isArray(expected?.cliVersions) && expected!.cliVersions.length ? `Codex ${versionList(expected!.cliVersions)}, ` : ''
   const shipped = liveList
     ? `the model list read from the installed Codex ${liveList.version} itself`
     : `the Codex model list shipped with this build (${versions}${expected?.fetchedAt ?? 'undated'})`

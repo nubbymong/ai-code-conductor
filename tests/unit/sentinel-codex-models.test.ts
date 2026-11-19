@@ -39,6 +39,14 @@ describe('Sentinel Codex model coverage (row 39)', () => {
     expect(f[0].evidence).toContain('the Codex model list shipped with this build (Codex 0.153.4, 2026-09-29)')
   })
 
+  // aicc_planning#346: the versions the shipped list was read from are named
+  // as a list, commas and "and" before the last, not "and" between each pair.
+  it('names the versions the shipped list was read from as a list', () => {
+    const four = { ...listOf([...CODEX_IDS, 'gpt-6-nova']), cliVersions: ['0.153.4', '0.155.1', '0.156.1', '0.157.1'] }
+    expect(codexModelCoverageFindings(reg, four, NOW)[0].evidence).toContain('the Codex model list shipped with this build (Codex 0.153.4, 0.155.1, 0.156.1 and 0.157.1, 2026-09-29)')
+    expect(codexModelCoverageFindings(reg, { ...four, cliVersions: ['0.153.4', '0.155.1'] }, NOW)[0].evidence).toContain('(Codex 0.153.4 and 0.155.1, 2026-09-29)')
+  })
+
   it('reports a Codex model the picker still offers that the list no longer names', () => {
     const f = codexModelCoverageFindings(reg, listOf(CODEX_IDS.filter((id) => id !== 'gpt-5.2')), NOW)
     expect(f).toHaveLength(1)
