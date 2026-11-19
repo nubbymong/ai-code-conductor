@@ -7,6 +7,8 @@
 // touched for 24 hours AND whose run's owner is gone (a killed run's litter, so it
 // cannot pile up, while a long watch run's folders stay); and a stray drive-root
 // `\mock` from any hardcoded mock path, so a test run never leaves litter on the drive.
+// In CI (or with CCC_TEMP_REPORT set) the teardown then prints one line naming what
+// the run left at the top of the temp folder besides its own folders (#332).
 import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs'
@@ -59,12 +61,50 @@ export function sweepAfterRun(
   }
 }
 
+/** The names at the top of `dir`, or none when it cannot be read. */
+function namesIn(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * What a run left at the top of the machine temp folder (#332): the names there now
+ * that were not there when it started, other than its own `ccc-vitest-<tag>-*` folders
+ * and owner record. Names only, sorted; nothing is read or removed.
+ * @param tmp the machine temp folder
+ * @param before the names in it when the run started
+ * @param tag this run's tag
+ */
+export function addedTempEntries(tmp: string, before: ReadonlySet<string>, tag: string): string[] {
+  const own = [`ccc-vitest-${tag}-`, `ccc-vitest-owner-${tag}`]
+  return namesIn(tmp)
+    .filter((name) => !before.has(name) && !own.some((p) => name.startsWith(p)))
+    .sort()
+}
+
+/** One line in a CI log (or with CCC_TEMP_REPORT set): what the run left in the temp folder. */
+function reportTempEntries(tmp: string, before: ReadonlySet<string>, tag: string): void {
+  if (!process.env.CI && !process.env.CCC_TEMP_REPORT) return
+  const added = addedTempEntries(tmp, before, tag)
+  const shown = added.slice(0, 100).join(', ')
+  const more = added.length > 100 ? `, and ${added.length - 100} more` : ''
+  console.log(`[temp check] this run left ${added.length} entries at the top of ${tmp}${added.length ? `: ${shown}${more}` : ''}`)
+}
+
 export default function () {
   // Before any worker starts, so the workers inherit it.
   const tag = newRunTag()
   process.env[RUN_TAG_ENV] = tag
+  const tmp = os.tmpdir()
+  const before = new Set(namesIn(tmp))
   // This process is the run's owner: another run's teardown keeps this run's folders
   // for as long as it is alive, however old they are (a watch run can last for days).
-  writeRunOwner(os.tmpdir(), tag)
-  return () => sweepAfterRun(tag)
+  writeRunOwner(tmp, tag)
+  return () => {
+    sweepAfterRun(tag)
+    reportTempEntries(tmp, before, tag)
+  }
 }
