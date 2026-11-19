@@ -104,9 +104,9 @@ needed and stop.** Unsure -> treat as required (fail closed).
 lives on these paths: `src/main/pty-manager.ts` (SSH branch / sentinel parsers / statusline
 routing), `src/main/providers/claude/ssh-shim.ts`, `src/main/providers/claude/ui-detection.ts`,
 `src/main/ssh-tmux.ts`, `src/main/ssh-tmux-stage.ts`, `src/main/ssh-tmux-push.ts`,
-`src/main/ansi-strip.ts`, `src/main/statusline-watcher.ts`. A change touching any of them must run
-`npm run test:live:ssh` against real hosts and report the matrix in the PR before merge (see
-AGENTS.md "Release Process"). It is manual by construction (real hosts + credentials -- never CI)
+`src/main/ansi-strip.ts`, `src/main/statusline-watcher.ts`, `src/main/ssh-program.ts` (which ssh.exe
+an SSH session runs). A change touching any of them must run `npm run test:live:ssh` against real
+hosts and report the matrix in the PR before merge (see AGENTS.md "Release Process"). It is manual by construction (real hosts + credentials -- never CI)
 and independent of this skill's verdict: a Phase 0 match on `src/main/pty*` can require BOTH the
 adversarial pass and the live matrix. When your scoped target touches these paths, say so in the
 Phase 4 verdict so the caller does not treat an adversarial PASS alone as merge-ready.

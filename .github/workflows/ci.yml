@@ -1007,7 +1007,7 @@ jobs:
           retention-days: 14
 
   # PR numbers (ADR-030, SDLC table): on every pull request, a short table in the
-  # job summary - does the PR touch the eight files of the live SSH blast radius,
+  # job summary - does the PR touch the nine files of the live SSH blast radius,
   # how long is src/main/pty-manager.ts against its cap, and is the live SSH
   # matrix owed. It FAILS only when pty-manager.ts grows past the cap, and the
   # `cap-override` label lets that pass (the summary says so).
