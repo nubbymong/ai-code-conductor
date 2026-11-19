@@ -7,8 +7,9 @@
 // touched for 24 hours AND whose run's owner is gone (a killed run's litter, so it
 // cannot pile up, while a long watch run's folders stay); and a stray drive-root
 // `\mock` from any hardcoded mock path, so a test run never leaves litter on the drive.
-// In CI (or with CCC_TEMP_REPORT set) the teardown then prints one line naming what
-// the run left at the top of the temp folder besides its own folders (#332).
+// In CI (or with CCC_TEMP_REPORT set) the teardown then prints one line naming the
+// entries that appeared at the top of the temp folder while the run went on, besides
+// its own folders (#332).
 import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs'
@@ -71,10 +72,12 @@ function namesIn(dir: string): string[] {
 }
 
 /**
- * What a run left at the top of the machine temp folder (#332): the names there now
- * that were not there when it started, other than its own `ccc-vitest-<tag>-*` folders
- * and owner record, and vitest's own folder for module copies (`vitestTmp`, its
- * project.tmpDir), which vitest removes as it closes, right after this teardown. Names
+ * The entries that appeared at the top of the machine temp folder while a run went on
+ * (#332): the names there now that were not there when it started, other than its own
+ * `ccc-vitest-<tag>-*` folders and owner record, and vitest's own folder for module
+ * copies (`vitestTmp`, its project.tmpDir), which vitest removes as it closes, right
+ * after this teardown. A name says nothing about who made the entry: another run or
+ * program that started meanwhile adds to the list too (none does in a CI job). Names
  * only, sorted; nothing is read or removed.
  * @param tmp the machine temp folder
  * @param before the names in it when the run started
@@ -89,13 +92,13 @@ export function addedTempEntries(tmp: string, before: ReadonlySet<string>, tag: 
     .sort()
 }
 
-/** One line in a CI log (or with CCC_TEMP_REPORT set): what the run left in the temp folder. */
+/** One line in a CI log (or with CCC_TEMP_REPORT set): the entries new in the temp folder since the run started. */
 function reportTempEntries(tmp: string, before: ReadonlySet<string>, tag: string, vitestTmp?: string): void {
   if (!process.env.CI && !process.env.CCC_TEMP_REPORT) return
   const added = addedTempEntries(tmp, before, tag, vitestTmp)
   const shown = added.slice(0, 100).join(', ')
   const more = added.length > 100 ? `, and ${added.length - 100} more` : ''
-  console.log(`[temp check] this run left ${added.length} entries at the top of ${tmp}${added.length ? `: ${shown}${more}` : ''}`)
+  console.log(`[temp check] ${added.length} new entries at the top of ${tmp} since this run started${added.length ? `: ${shown}${more}` : ''}`)
 }
 
 /** @param project the project vitest hands a global setup (only its tmpDir is read) */

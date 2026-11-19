@@ -513,7 +513,7 @@ describe('global setup', () => {
   })
 })
 
-describe('addedTempEntries (what a run left at the top of the temp folder, #332)', () => {
+describe('addedTempEntries (the entries new at the top of the temp folder since a run started, #332)', () => {
   it('lists the new names, sorted, and leaves out the names already there, this run\'s own and vitest\'s own folder', () => {
     const tmp = fresh()
     const tag = newRunTag()
