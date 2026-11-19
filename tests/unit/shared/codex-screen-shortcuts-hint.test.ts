@@ -102,6 +102,15 @@ describe("Codex 0.157.1's shortcuts hint under the footer (C5, #349)", () => {
     expect(readCodexScreen(withUnder(HINT, blank(), HINT)).screen).toBe('unrecognised')
   })
 
+  // The footer is read at any indent from 0 to 8 (footerRe), so the hint is
+  // matched at the footer row's own indent, not at a fixed two spaces.
+  it("the hint row is matched at the footer row's own indent", () => {
+    const footer4 = plain(`    p19-probe default ${DOT} /tmp/p19-TFBZJN/codex-pty-turn-1/work`)
+    const base = LINUX.slice(0, -2)
+    expect(readCodexScreen([...base, footer4, plain('    ? for shortcuts')]).screen).toBe('ready')
+    expect(readCodexScreen([...base, footer4, HINT]).screen).toBe('unrecognised')
+  })
+
   it('a wrapped footer reads unrecognised, with or without the hint row under it', () => {
     const wrapped = [plain(`  p19-probe default ${DOT} C:\\Users\\alex\\projects\\a-very-long`), plain('-folder-name')]
     const base = LINUX.slice(0, -2)
