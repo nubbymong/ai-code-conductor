@@ -172,6 +172,30 @@ describe('normaliseCodexRateLimits from the app-server read (camelCase)', () => 
       else expect(planLabelFor(p)).toEqual(expect.any(String))
     }
   })
+
+  // CLI 0.170.0's PlanType list, as the schema bundle its repository commits
+  // at tag rust-v0.170.0 has it (app-server-protocol/schema/typescript/
+  // PlanType.ts, read on GitHub; no CLI was run). Against the recorded 0.157.1
+  // schema it adds promax, sci and sci_plus, which carry the names that
+  // version's own display names give them (protocol/src/auth.rs,
+  // KnownPlan::display_name). aicc_planning#348.
+  it('names every plan the 0.170.0 schema lists, and the three it adds as that CLI names them', () => {
+    const planTypes = [
+      'free', 'go', 'plus', 'pro', 'prolite', 'promax', 'team', 'self_serve_business_prolite',
+      'self_serve_business_usage_based', 'business', 'ent26', 'enterprise_cbp_automation',
+      'enterprise_cbp_usage_based', 'enterprise', 'edu', 'edu_plus', 'edu_pro', 'sci', 'sci_plus', 'unknown',
+    ]
+    const recorded = schema('0.157.1').rateLimitsReadResponse.definitions.PlanType.enum as string[]
+    expect(planTypes.filter((p) => !recorded.includes(p))).toEqual(['promax', 'sci', 'sci_plus'])
+    expect(recorded.filter((p) => !planTypes.includes(p))).toEqual([])
+    for (const p of planTypes) {
+      if (p === 'unknown') expect(planLabelFor(p)).toBeNull()
+      else expect(planLabelFor(p), p).toEqual(expect.any(String))
+    }
+    expect(planLabelFor('promax')).toBe('Pro (Max)')
+    expect(planLabelFor('sci')).toBe('Academic Researchers')
+    expect(planLabelFor('sci_plus')).toBe('Academic Researchers Plus')
+  })
 })
 
 describe('normaliseCodexRateLimits rejects hostile or broken input', () => {
