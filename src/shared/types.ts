@@ -641,6 +641,23 @@ export type SubmitNotDeliveredReason = 'busy-timeout' | 'prompt-on-screen' | 'to
  *  or not delivered and why. */
 export type SubmitTextResult = { delivered: true } | { delivered: false; reason: SubmitNotDeliveredReason }
 
+/** What a command bar prompt button's press did (pty:submitPrompt, #333):
+ *  - `sent`: typed and submitted (on Codex, confirmed on screen first);
+ *  - `typed`: typed with no Enter. With no reason, because the setting says
+ *    so (Settings, Custom Commands, "Type it only"); with `refused-text`, a
+ *    text Codex's prompt cannot take, typed for the user to check and send;
+ *  - `dropped`: the same text pressed again for the session within 300 ms,
+ *    so nothing was typed for the second press;
+ *  - `not-sent`: not submitted, and why: on Codex the submit primitive's own
+ *    reasons; `session-gone` also when the session's terminal ended or was
+ *    replaced before the Enter; `refused-text` when main refused the message
+ *    before typing anything. */
+export type PromptButtonResult =
+  | { outcome: 'sent' }
+  | { outcome: 'typed'; reason?: 'refused-text' }
+  | { outcome: 'dropped' }
+  | { outcome: 'not-sent'; reason: SubmitNotDeliveredReason }
+
 /** Ask Conductor's one-line notices from main, drawn in the dock (P4.3):
  *  `removed` counts the characters taken out of a question before it was
  *  typed, because the prompt would have dropped them (question 6, default

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "36e83d947ebe48dc7d19aefd6f66000926c8182fcec4e6b36e3bcc59e4627fc2",
-  "manifestHead": "3e36f4f8ca4646bc994bbb1d8016f212eba23240",
+  "manifestPathDigest": "25b2edf33acb7d7e9cc5a5f13e84d723bf20e1adf5a316b6fb3b1a3f1c530010",
+  "manifestHead": "32fb8b36ea5d35bf35cf1c3ab97d9f2b24527436",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -6807,6 +6807,16 @@
       "note": ""
     },
     {
+      "path": "tests/unit/main/prompt-button-ipc.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.10 section A1 test (#333; tests/unit/main/prompt-button-ipc.test.ts): pty:submitPrompt answers the app window's top frame only, with a strict payload and a text cap, refuses a partner terminal's id, hands the text to the session input module's submitPrompt and reads the Send or Type it only setting itself, failing toward send (WP1.68)",
+      "note": "created by 2.1.3-beta.10 section A1; the Codex word is the mocked provider accounts and the session input door's Codex rule it names"
+    },
+    {
       "path": "tests/unit/main/provider-account-usage.test.ts",
       "predicates": [
         "P04",
@@ -7282,6 +7292,17 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.9 section A1 test (tests/unit/main/session-input-ownership.test.ts): no main file outside src/main/session-input types into a session beyond a shrinking allow-list; the Codex run screen's submit and the Codex package's pane writer are among the shapes it finds (WP1.68)",
       "note": "created by 2.1.3-beta.9 section A1; reads source files only"
+    },
+    {
+      "path": "tests/unit/main/session-input-prompt.test.ts",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.10 section A1 test (#333; tests/unit/main/session-input-prompt.test.ts): a command bar prompt button through the session input module's submitPrompt, against fake ports and a fake clock: on a session that is not Codex the text, then its Enter as its own write 300 ms after the last slice, only into the terminal process the text went to; a Codex session's through the Codex run screen's submit with a 5 s ready wait, never raw, and a refused text typed with no Enter (WP1.68)",
+      "note": "created by 2.1.3-beta.10 section A1; fake ports and a fake run screen, nothing started"
     },
     {
       "path": "tests/unit/main/session-input.test.ts",
@@ -8928,6 +8949,16 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: adapted in place for WP2 PR 3 P3.8 (row 39): the model dropdown case now asserts the registry's Codex list, and cases for a saved unlisted model, Default and the effort a model change drops were added; the other cases are unchanged; tests/unit/renderer/commandbar-codex-toolbar.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 1 (rows 41, 69) added the live-session model pill cases and the hint and Plan mode cases; tests/unit/renderer/commandbar-codex-toolbar.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 2 added the Plan mode pill case; tests/unit/renderer/commandbar-codex-toolbar.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 3 added the launched-preset pill case; tests/unit/renderer/commandbar-codex-toolbar.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 (was retain)"
+    },
+    {
+      "path": "tests/unit/renderer/commandbar-focus-handoff.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "replace",
+      "evidence": "existing test retained; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: 2.1.3-beta.10 section A1 (#333) adapted one case (a prompt button calls pty.submitPrompt with the text and no Enter) and added the prompt button cases, whose not-sent notes name Codex's submit rule reasons; the other cases are unchanged; tests/unit/renderer/commandbar-focus-handoff.test.tsx",
+      "note": "matched since 2.1.3-beta.10 section A1 (was not matched)"
     },
     {
       "path": "tests/unit/renderer/commandbar-one-row.test.tsx",

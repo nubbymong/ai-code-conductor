@@ -36,6 +36,7 @@ import type {
   CloudAgent,
   ProviderId,
   SubmitTextResult,
+  PromptButtonResult,
   AskConductorNotice,
   CanvasMarkerUndelivered,
   ClaudeMarkerAsk,
@@ -294,6 +295,11 @@ export interface ElectronAPI {
        *  with (`launched`). */
     }) => Promise<void | { started: false } | ({ started: false } & import('../../shared/providers').SpawnRefused) | { started: true; carry?: import('../../shared/providers').ConversationCarryNotice; launched?: { codexPreset: 'read-only' | 'standard' | 'auto' | 'unrestricted' | 'plan' } }>
     write: (sessionId: string, data: string) => void
+    /** 2.1.3-beta.10 (#333): a command bar prompt button's text for the agent
+     *  in a session's main pane. Main types it by one rule for every session
+     *  and reads the Send or Type it only setting itself; never pass the Enter.
+     *  Shell line buttons keep `write`. */
+    submitPrompt: (args: { sessionId: string; text: string }) => Promise<PromptButtonResult>
     resize: (sessionId: string, cols: number, rows: number) => void
     /** P3.16a round 2 (Q5): `'restart'` when a Restart ends the process (its
      *  next one follows), so its exit is not the session's end. */

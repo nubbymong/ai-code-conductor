@@ -4,8 +4,10 @@
 // initiative, what goes into a session's terminal: the Watchdog's retry, an
 // Agent Canvas marker, Ask Conductor's question, a channel message and the quit keys. (A Claude Code marker it
 // hands to canvas/claude-marker-typing.ts, which has the renderer type it.)
+// Since 2.1.3-beta.10 (#333) it also types a command bar prompt button's
+// text, which the renderer asks for over pty:submitPrompt.
 // Every other caller asks the module (submitLine, typeKeys, submitMarker,
-// handOffAskQuestion, pasteEnvelope); sendExitKeys, which skips the quit's
+// handOffAskQuestion, pasteEnvelope, submitPrompt); sendExitKeys, which skips the quit's
 // own checks (a CLI the app started, no tmux-persistent remote), is the PTY
 // manager's quit's only (A2); askQuestion, which skips the Ask check, is the PTY
 // manager's Ask launch's only, and codexRunScreen, the Codex run screen
@@ -908,6 +910,7 @@ describe('the check sees each way of typing into a session (verify the verifier)
   const clean: Array<[string, string, string?]> = [
     ['the module\'s submitLine', `import { submitLine } from './session-input'\nsubmitLine(id, 'continue')`],
     ['the module\'s own handOffAskQuestion, from a folder below', `import { handOffAskQuestion } from '../session-input'\nhandOffAskQuestion(win, id, q)`, 'src/main/ipc/feature.ts'],
+    ['the module\'s own submitPrompt, from a folder below, as pty:submitPrompt calls it', `import { submitPrompt } from '../session-input'\nipcMain.handle(ch, async () => submitPrompt(id, text, mode))`, 'src/main/ipc/feature.ts'],
     ['the module through a namespace import', `import * as input from './session-input'\ninput.submitMarker(id, line)\ninput.handOffAskQuestion(win, id, q)`],
     ['the module named by its index file', `import { typeKeys } from './session-input/index'\nstart({ write: (s, d) => typeKeys(s, d) })`],
     ['the module\'s own exports handed on through its namespace', `import * as input from './session-input'\nstart({ write: input.typeKeys, ask: input.handOffAskQuestion })\nconst h = input.handOffAskQuestion`],

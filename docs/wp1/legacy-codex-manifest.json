@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-18T21:15:06.107Z",
-  "head": "3e36f4f8ca4646bc994bbb1d8016f212eba23240",
-  "tree": "675c6ac62c2bf3743655fd124319d28fed05af5f",
+  "generatedAt": "2026-11-19T04:57:26.010Z",
+  "head": "32fb8b36ea5d35bf35cf1c3ab97d9f2b24527436",
+  "tree": "d84ec544fe25a15988d753efe6755b9d321fd132",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,10 +116,10 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3436,
-  "excludedFileCount": 515,
-  "scannedFileCount": 2921,
-  "unscopedFileCount": 60,
+  "trackedFileCount": 3449,
+  "excludedFileCount": 520,
+  "scannedFileCount": 2929,
+  "unscopedFileCount": 62,
   "unscoped": [
     ".claude/settings.json",
     ".claude/skills/LoopReady/SKILL.md",
@@ -148,6 +148,7 @@
     "helper/src/bin/aicc-fake-cli.rs",
     "helper/src/client.rs",
     "helper/src/cmdline.rs",
+    "helper/src/consoles.rs",
     "helper/src/detach.rs",
     "helper/src/frame.rs",
     "helper/src/hello.rs",
@@ -171,6 +172,7 @@
     "helper/src/transport/unix.rs",
     "helper/src/transport/windows.rs",
     "helper/src/winproc.rs",
+    "helper/tests/console_hosts.rs",
     "helper/tests/fixtures.rs",
     "helper/tests/hold.rs",
     "helper/tests/holder_wait.rs",
@@ -184,8 +186,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 923,
-  "pathDigest": "36e83d947ebe48dc7d19aefd6f66000926c8182fcec4e6b36e3bcc59e4627fc2",
+  "matchedPathCount": 926,
+  "pathDigest": "25b2edf33acb7d7e9cc5a5f13e84d723bf20e1adf5a316b6fb3b1a3f1c530010",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1514,7 +1516,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 30
+      "lineCount": 44
     },
     {
       "path": "src/main/session-resume-enrich.ts",
@@ -1728,7 +1730,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 56
+      "lineCount": 64
     },
     {
       "path": "src/renderer/components/ConductorMcpPage.tsx",
@@ -2653,7 +2655,7 @@
         "P11",
         "P12"
       ],
-      "lineCount": 231
+      "lineCount": 233
     },
     {
       "path": "src/renderer/training-steps.ts",
@@ -2895,7 +2897,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 50
+      "lineCount": 53
     },
     {
       "path": "tests/e2e/cloud-agents.spec.ts",
@@ -4745,6 +4747,13 @@
       "lineCount": 2
     },
     {
+      "path": "tests/unit/main/prompt-button-ipc.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 3
+    },
+    {
       "path": "tests/unit/main/provider-account-usage.test.ts",
       "predicates": [
         "P04",
@@ -5090,7 +5099,15 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 20
+      "lineCount": 65
+    },
+    {
+      "path": "tests/unit/main/session-input-prompt.test.ts",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "lineCount": 19
     },
     {
       "path": "tests/unit/main/session-input.test.ts",
@@ -6278,6 +6295,13 @@
       "lineCount": 67
     },
     {
+      "path": "tests/unit/renderer/commandbar-focus-handoff.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 4
+    },
+    {
       "path": "tests/unit/renderer/commandbar-one-row.test.tsx",
       "predicates": [
         "P07",
@@ -7361,7 +7385,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 354
+      "lineCount": 360
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",

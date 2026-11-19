@@ -409,6 +409,12 @@ export interface AppSettings {
    *  (absent/false). After a crash it is ended and its tab resumes the
    *  conversation. Applies to sessions started after the change. */
   agentSessionsThroughHelper?: boolean
+  /** 2.1.3-beta.10 (#333): what a command bar prompt button does, in every
+   *  session, on this computer and over SSH: 'send' types the prompt and sends
+   *  it (the default, and anything not saved as exactly 'type'); 'type' types
+   *  it only. Main reads it from the saved settings at each press. Shell line
+   *  buttons always run. Settings, Custom Commands. */
+  commandPromptButtons?: 'send' | 'type'
   /** v2.0.0-beta.3: disable Claude Code's background tasks/agents so a stray
    *  Ctrl+B (or /bg) can't detach and strand a session. Default-on (absent/true
    *  = disabled); set false to allow background agents. New sessions only. */
@@ -504,6 +510,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   clickableQuestions: false,
   plainTerminalsThroughHelper: false,
   agentSessionsThroughHelper: false,
+  commandPromptButtons: 'send',
   sentinelEnabled: false,
   sentinelAutoOpen: true,
   githubAiUsageEnabled: false,

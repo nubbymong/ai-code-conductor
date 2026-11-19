@@ -3,7 +3,7 @@ import { IPC, ptyDataChannel, ptyExitChannel } from '../shared/ipc-channels'
 import { randomId } from '../shared/id'
 import { isIpcStreamEnd, IPC_STREAM_END_WAIT_MS } from '../shared/ipc-stream'
 import type { HookEvent, HooksGatewayStatus } from '../shared/hook-types'
-import type { StatuslineData, SubmitTextResult, AskConductorNotice, CanvasMarkerUndelivered, ClaudeMarkerAsk, ClaudeMarkerAnswer, CanvasSessionGuidance, AccountLogFolders, AccountLogFolderKind, AccountLogFolderOpenResult } from '../shared/types'
+import type { StatuslineData, SubmitTextResult, PromptButtonResult, AskConductorNotice, CanvasMarkerUndelivered, ClaudeMarkerAsk, ClaudeMarkerAnswer, CanvasSessionGuidance, AccountLogFolders, AccountLogFolderKind, AccountLogFolderOpenResult } from '../shared/types'
 import type { WebviewNavState } from '../shared/browser-url'
 import type { AccountPaneStateView, CodexWebSessionView, CodexWebSignInState } from '../shared/account-web-session'
 import type { ModelRegistry } from '../shared/model-registry'
@@ -247,6 +247,10 @@ export interface ElectronAPI {
       acknowledgeRealmOnly?: boolean
     }) => Promise<{ started: false } | ({ started: false } & import('../shared/providers').SpawnRefused) | { started: true; carry?: import('../shared/providers').ConversationCarryNotice; launched?: { codexPreset: 'read-only' | 'standard' | 'auto' | 'unrestricted' | 'plan' } } | void>
     write: (sessionId: string, data: string) => void
+    /** #333: a command bar prompt button's text for the agent in the main
+     *  pane; main types it by one rule and reads the Send or Type it only
+     *  setting itself (never pass the Enter). */
+    submitPrompt: (args: { sessionId: string; text: string }) => Promise<PromptButtonResult>
     resize: (sessionId: string, cols: number, rows: number) => void
     /** P3.16a round 2 (Q5): `'restart'` when a Restart ends the process (its
      *  next one follows), so its exit is not the session's end. */
@@ -1052,6 +1056,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(IPC.PTY_SPAWN, sessionId, options),
     write: (sessionId, data) =>
       ipcRenderer.send(IPC.PTY_WRITE, sessionId, data),
+    submitPrompt: (args: { sessionId: string; text: string }) => ipcRenderer.invoke(IPC.PTY_SUBMIT_PROMPT, args),
     resize: (sessionId, cols, rows) =>
       ipcRenderer.send(IPC.PTY_RESIZE, sessionId, cols, rows),
     kill: (sessionId, reason) => (reason === 'restart' ? ipcRenderer.send(IPC.PTY_KILL, sessionId, 'restart') : ipcRenderer.send(IPC.PTY_KILL, sessionId)),

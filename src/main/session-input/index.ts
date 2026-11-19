@@ -12,6 +12,11 @@
 // the quit keys into a CLI the app started (sendExitKeys, for the PTY
 // manager's gracefulExitPty only, which decides which sessions get them).
 //
+// Since 2.1.3-beta.10 section A1 (#333) it also types a command bar prompt
+// button's text (submitPrompt), asked by the renderer over pty:submitPrompt.
+// That door is new, not moved: it has its own rule, order and delay, written
+// at it. Everything said below about the moved bodies is about the others.
+//
 // Each function's body moved here from the PTY manager as it was: nothing
 // typed, its order or its timing changed, and no queue, delay or check added,
 // but for what A2 changed in sendExitKeys, described at that function: it
@@ -42,12 +47,12 @@ import type { SessionRunScreen } from '../providers/types'
 import { IPC } from '../../shared/ipc-channels'
 import { codexPromptKeeps } from '../../shared/codex-screen'
 import { TMUX_WHEEL_EXIT_KEY } from '../../shared/tmux-wheel'
-import type { SubmitTextResult, AskConductorNotice } from '../../shared/types'
+import type { SubmitTextResult, AskConductorNotice, PromptButtonResult } from '../../shared/types'
 import { MARKER_FALLBACK_FLUSH_MS } from '../canvas/canvas-marker-queue'
 import { queueClaudeMarkerLine } from '../canvas/claude-marker-typing'
 import { logInfo } from '../debug-logger'
 import { PasteQueue } from '../paste-queue'
-import { runChunkedWrite } from '../pty-chunked-write'
+import { runChunkedWrite, WRITE_CHUNK_SIZE, WRITE_CHUNK_DELAY } from '../pty-chunked-write'
 
 /** What the PTY manager lends this module, registered when it loads. */
 export interface SessionInputPorts {
@@ -116,6 +121,141 @@ export function submitLine(sessionId: string, line: string): void {
  *  it is handed, through writePty. */
 export function typeKeys(sessionId: string, data: string): void {
   port().write(sessionId, data)
+}
+
+/** #333: how long a prompt button's Enter follows the last slice of its text
+ *  (the delay the renderer's Codex rule uses, codexComposer.ts). */
+export const PROMPT_ENTER_DELAY_MS = 300
+/** #333: the same text pressed again for a session within this long is
+ *  dropped (the window of writePty's duplicate guard, which a write that does
+ *  not end in Enter no longer reaches). */
+export const PROMPT_REPEAT_WINDOW_MS = 300
+/** #333: how long a Codex session's prompt button waits for Codex's ready,
+ *  empty composer before it answers busy. */
+export const PROMPT_CODEX_READY_WAIT_MS = 5_000
+
+/** Send the prompt (the default), or type it only (Settings, Custom
+ *  Commands): main reads which from the saved settings at each press. */
+export type PromptButtonMode = 'send' | 'type'
+
+/** Each session's prompt presses, one at a time in the order pressed: the
+ *  tail of its chain, kept only while one is in hand. */
+const promptChains = new Map<string, Promise<PromptButtonResult>>()
+/** Each session's last prompt press, for the repeat window, kept for that long. */
+const lastPromptPress = new Map<string, { text: string; at: number }>()
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
+
+/** Resolves once writePty has sent every slice it cuts `data` into (a write
+ *  over WRITE_CHUNK_SIZE units goes in slices WRITE_CHUNK_DELAY ms apart,
+ *  pty-chunked-write.ts). One WRITE_CHUNK_DELAY wait per slice after the
+ *  first, each set only after the timer of the slice it stands for was set:
+ *  timers of one length run in the order they were set, so each wait ends
+ *  only after its slice went. Counted from the slices, not from the call: a
+ *  main process held up between two slices holds this up as well. */
+async function slicesSent(data: string): Promise<void> {
+  const slices = data.length > WRITE_CHUNK_SIZE ? Math.ceil(data.length / WRITE_CHUNK_SIZE) : 1
+  for (let i = 1; i < slices; i++) await wait(WRITE_CHUNK_DELAY)
+}
+
+/** One press, typed. Never rejects: a write that throws is the session gone. */
+async function typePrompt(sessionId: string, text: string, mode: PromptButtonMode): Promise<PromptButtonResult> {
+  try {
+    const p = port()
+    const prefix = p.tmuxWrapped(sessionId) ? TMUX_WHEEL_EXIT_KEY : ''
+    if (mode === 'send' && p.isCodexSession(sessionId)) {
+      // The primitive answers a session with no pane itself.
+      const screen = codexRunScreen()
+      const result: SubmitTextResult = screen
+        ? await screen.submit(sessionId, text, { readyWaitMs: PROMPT_CODEX_READY_WAIT_MS })
+        : { delivered: false, reason: 'session-gone' }
+      if (result.delivered) return { outcome: 'sent' }
+      if (result.reason !== 'refused-text') return { outcome: 'not-sent', reason: result.reason }
+      // Refused before anything was typed (a control character, a line
+      // break, a character Codex's composer drops): typed with no Enter, as a
+      // press always left it on Codex, for the user to check and send.
+      if (!p.run(sessionId)) return { outcome: 'not-sent', reason: 'session-gone' }
+      p.write(sessionId, `${prefix}${text}`)
+      return { outcome: 'typed', reason: 'refused-text' }
+    }
+    // Only into a terminal the session has now: writePty would hold a write
+    // for a session with none and hand it to a later start.
+    const run = p.run(sessionId)
+    if (!run) return { outcome: 'not-sent', reason: 'session-gone' }
+    const data = `${prefix}${text}`
+    p.write(sessionId, data)
+    if (mode === 'type') return { outcome: 'typed' }
+    await slicesSent(data)
+    await wait(PROMPT_ENTER_DELAY_MS)
+    if (p.run(sessionId) !== run) return { outcome: 'not-sent', reason: 'session-gone' }
+    p.write(sessionId, '\r')
+    return { outcome: 'sent' }
+  } catch {
+    return { outcome: 'not-sent', reason: 'session-gone' }
+  }
+}
+
+function promptOutcomeWords(result: PromptButtonResult): string {
+  switch (result.outcome) {
+    case 'sent': return 'sent'
+    case 'typed': return result.reason ? `typed and not sent (${result.reason})` : 'typed only, as the setting says'
+    case 'dropped': return 'pressed again within the repeat window, so dropped'
+    default: return `not sent (${result.reason})`
+  }
+}
+
+/**
+ * #333 (2.1.3-beta.10 section A1): a command bar prompt button's text for the
+ * agent in a session's main pane, by one rule for every session, on this
+ * computer and over SSH. `mode` is the user's setting, which main reads.
+ *
+ * - Type: the text through the write port (writePty: its 256-byte slices and
+ *   its launch-pending buffer still apply), after the tmux leave key for an
+ *   SSH Persistent session as submitLine does, and no Enter.
+ * - Send, a session that is not Codex (Claude Code, on this computer, held by
+ *   the session helper or over SSH): the text as above, then Enter as its own
+ *   write PROMPT_ENTER_DELAY_MS after the text's last slice went (slicesSent),
+ *   and only while the session's terminal process is still the one the text
+ *   went to. The Enter never rides in the text's write: Codex takes one
+ *   write of both as a paste and never submits it, and #333 reports a session
+ *   on this computer where such a write was typed and not sent.
+ * - Send, a Codex session: the Codex package's submit primitive, as canvas
+ *   notes and Ask Conductor use it, with PROMPT_CODEX_READY_WAIT_MS to wait
+ *   for the ready, empty composer; its answer is the answer. A text it refuses
+ *   before typing is typed with no Enter, and the answer says so.
+ *
+ * A session with no terminal process takes nothing (`session-gone`). The same
+ * text pressed again for the session within PROMPT_REPEAT_WINDOW_MS is
+ * dropped. A session's presses go one at a time in the order pressed: a
+ * second waits for the first one's Enter (or its answer, on Codex). The log
+ * names a prompt by its length only. Throws before the PTY manager registers
+ * its ports, as every door does; otherwise never rejects.
+ *
+ * The rule for a session that is not Codex lives here, beside submitLine,
+ * until main can read a Claude Code screen (S13); it then belongs in the
+ * Claude Code package.
+ */
+export function submitPrompt(sessionId: string, text: string, mode: PromptButtonMode): Promise<PromptButtonResult> {
+  port()
+  const chars = [...text].length
+  const now = Date.now()
+  const last = lastPromptPress.get(sessionId)
+  if (last && last.text === text && now - last.at < PROMPT_REPEAT_WINDOW_MS) {
+    logInfo(`[prompt-button] ${sessionId}: a prompt of ${chars} characters ${promptOutcomeWords({ outcome: 'dropped' })}`)
+    return Promise.resolve({ outcome: 'dropped' })
+  }
+  const press = { text, at: now }
+  lastPromptPress.set(sessionId, press)
+  setTimeout(() => { if (lastPromptPress.get(sessionId) === press) lastPromptPress.delete(sessionId) }, PROMPT_REPEAT_WINDOW_MS)
+  const before = promptChains.get(sessionId)
+  const go = (): Promise<PromptButtonResult> => typePrompt(sessionId, text, mode)
+  const next = (before ? before.then(go, go) : go()).then((result) => {
+    logInfo(`[prompt-button] ${sessionId}: a prompt of ${chars} characters ${promptOutcomeWords(result)}`)
+    return result
+  })
+  promptChains.set(sessionId, next)
+  void next.then(() => { if (promptChains.get(sessionId) === next) promptChains.delete(sessionId) })
+  return next
 }
 
 /**
