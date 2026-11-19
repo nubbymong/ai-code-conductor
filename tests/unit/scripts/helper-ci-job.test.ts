@@ -103,7 +103,7 @@ describe('ci.yml: the Helper job exists, on the three OSes, and is not a require
 
   it('a dispatch runs it only when it names the helper input (a yes or no, default no), given as GitHub gives it', () => {
     expect(ci.on.workflow_dispatch.inputs.helper, 'ci.yml has no `helper` dispatch input').toMatchObject({ type: 'boolean', required: false, default: false })
-    expect(ci.on.workflow_dispatch.inputs.helper.description).toMatch(/S/)
+    expect(ci.on.workflow_dispatch.inputs.helper.description).toMatch(/\S/)
     expect(evalIf(job.if, dispatch({ helper: 'true' }))).toBe(true)
     // Left out, the input is its default, 'false'; a string 'false' is not a yes.
     expect(evalIf(job.if, dispatch({}))).toBe(false)
