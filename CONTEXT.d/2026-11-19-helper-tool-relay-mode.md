@@ -50,6 +50,9 @@ changes.
 - **Tests**: helper/tests/relay.rs (CI only: no cargo on the owner's PC), the relay's and the
   holder's unit tests, the shared vectors (local.json `mcp`, hello.json); on the app side the
   protocol and connection tests, with two mutants run locally (the ack taken whatever the caller
-  asked; the reader's size check removed), each caught by its test. The Rust mutants were not
-  run; the PR body says which test each is aimed at. ADR-009 pass owed before stable
-  (aicc_planning#320).
+  asked; the reader's size check removed), each caught by its test. The plan's three Rust
+  mutants (an attach taking tool streams without the `mcp` ack; admit's too-large check removed;
+  admit's terminal check removed), with the hook mode acking `HOLDER_CAPS` and a relay that hangs
+  on a lost holder, ran together once in CI on a commit the next one reverts (run 44503142737,
+  Windows, macOS and Linux): each failed the test aimed at it, and no other test failed. ADR-009
+  pass owed before stable (aicc_planning#320).

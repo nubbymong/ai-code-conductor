@@ -80,7 +80,7 @@ fn deliver(args: &[String], deadline: Instant) -> Option<()> {
     if !client.hello.caps.iter().any(|c| c.as_str() == HOOKS_CAP) {
         return None;
     }
-    client.send(hello::ack_message(1, &crate::serve::HOLDER_CAPS)).ok()?;
+    client.send(hello::ack_message(1, &ACK_CAPS)).ok()?;
     client.send(hook_event(&kind, payload)).ok()?;
     loop {
         match client.recv(left(deadline)?) {

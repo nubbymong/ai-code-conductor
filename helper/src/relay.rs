@@ -210,7 +210,7 @@ fn pass_to_cli(mut stream: Stream, opened: &mpsc::Sender<()>, out: mpsc::Sender<
         let v = match frame::read_frame(&mut stream, Direction::AppToHelper) {
             Ok(Some(Frame { channel: 0, body: Body::Json(v) })) => v,
             Ok(Some(_)) => continue,
-            Ok(None) | Err(_) => loop { thread::sleep(Duration::from_secs(1)) },
+            Ok(None) | Err(_) => return,
         };
         let on_stream = v.get("stream").and_then(Value::as_u64) == Some(STREAM);
         match v.get("t").and_then(Value::as_str) {
