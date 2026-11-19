@@ -237,6 +237,14 @@ fn console_hosts(pid: u32, created: u64) -> (bool, String, String) {
     (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
+/// The tests here run one at a time: each starts runs with terminals, suspends
+/// and ends processes, and has the mode read the whole process list.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The count after `"ended":` in the mode's answer.
 fn ended_in(out: &str) -> Option<u32> {
     let at = out.find("\"ended\":")? + "\"ended\":".len();
@@ -245,6 +253,7 @@ fn ended_in(out: &str) -> Option<u32> {
 
 #[test]
 fn it_ends_the_console_host_a_run_ended_from_outside_left_and_nothing_else() {
+    let _serial = one_at_a_time();
     let mut old = start_run();
     let old_pid = old.0.id();
     // The run's creation time in the form the app records: steps of 100 ns
@@ -299,7 +308,10 @@ fn ended_run_with_host() -> (Run, u32, u64, Held) {
     let pid = run.0.id();
     let created = made_at(run.0.as_raw_handle() as HANDLE).expect("the run's start time") / 10 * 10;
     let host = host_of(&run);
-    assert!(host.freeze(), "the run's host could not be suspended");
+    // A moment for the host to finish starting, as the first test's looks give it.
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(host.running(), "the run's host (process {}) ended by itself before it was suspended", host.pid);
+    assert!(host.freeze(), "the run's host (process {}) could not be suspended (still running: {})", host.pid, host.running());
     run.0.kill().expect("end the run from outside");
     let _ = run.0.wait();
     assert!(host.running(), "the suspended host ended with its run");
@@ -321,6 +333,7 @@ fn a_record_whose_pid_another_process_took_after_its_run_had_gone_ends_nothing()
     // pid now (the ended run, still held here). So that process took the pid
     // after the record's run had gone, and the host was made after it: it is
     // not the record's run's host, and nothing is ended.
+    let _serial = one_at_a_time();
     let (_run, pid, created, host) = ended_run_with_host();
     let (ok, out, err) = console_hosts(pid, created - 10_000_000);
     assert!(ok, "{out}{err}");
@@ -332,6 +345,7 @@ fn a_record_whose_pid_another_process_took_after_its_run_had_gone_ends_nothing()
 #[test]
 fn a_record_from_before_windows_last_started_ends_nothing() {
     // Nothing of a run from before the last start of Windows runs now.
+    let _serial = one_at_a_time();
     let (_run, pid, created, host) = ended_run_with_host();
     let (ok, out, err) = console_hosts(pid, 1);
     assert!(ok, "{out}{err}");
@@ -343,6 +357,7 @@ fn a_record_from_before_windows_last_started_ends_nothing() {
 
 #[test]
 fn with_no_record_it_only_says_which_process_started_it() {
+    let _serial = one_at_a_time();
     let out = Command::new(HELPER).arg("console-hosts").stdin(Stdio::null()).output().expect("run aicc-helper console-hosts");
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
