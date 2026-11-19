@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-18T21:15:06.107Z",
-  "head": "3e36f4f8ca4646bc994bbb1d8016f212eba23240",
-  "tree": "675c6ac62c2bf3743655fd124319d28fed05af5f",
+  "generatedAt": "2026-11-19T16:33:49.836Z",
+  "head": "32fb8b36ea5d35bf35cf1c3ab97d9f2b24527436",
+  "tree": "d84ec544fe25a15988d753efe6755b9d321fd132",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,10 +116,10 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3436,
-  "excludedFileCount": 515,
-  "scannedFileCount": 2921,
-  "unscopedFileCount": 60,
+  "trackedFileCount": 3448,
+  "excludedFileCount": 520,
+  "scannedFileCount": 2928,
+  "unscopedFileCount": 62,
   "unscoped": [
     ".claude/settings.json",
     ".claude/skills/LoopReady/SKILL.md",
@@ -148,6 +148,7 @@
     "helper/src/bin/aicc-fake-cli.rs",
     "helper/src/client.rs",
     "helper/src/cmdline.rs",
+    "helper/src/consoles.rs",
     "helper/src/detach.rs",
     "helper/src/frame.rs",
     "helper/src/hello.rs",
@@ -171,6 +172,7 @@
     "helper/src/transport/unix.rs",
     "helper/src/transport/windows.rs",
     "helper/src/winproc.rs",
+    "helper/tests/console_hosts.rs",
     "helper/tests/fixtures.rs",
     "helper/tests/hold.rs",
     "helper/tests/holder_wait.rs",
@@ -184,8 +186,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 923,
-  "pathDigest": "36e83d947ebe48dc7d19aefd6f66000926c8182fcec4e6b36e3bcc59e4627fc2",
+  "matchedPathCount": 924,
+  "pathDigest": "73dddb229f850d891e5e63535d55b2511a034c99f09e40d608752f7e30fa0e02",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -2653,7 +2655,7 @@
         "P11",
         "P12"
       ],
-      "lineCount": 231
+      "lineCount": 233
     },
     {
       "path": "src/renderer/training-steps.ts",
@@ -2776,7 +2778,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 47
+      "lineCount": 51
     },
     {
       "path": "src/shared/container-command.ts",
@@ -5090,7 +5092,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 20
+      "lineCount": 65
     },
     {
       "path": "tests/unit/main/session-input.test.ts",
@@ -7361,7 +7363,15 @@
         "P04",
         "P13"
       ],
-      "lineCount": 354
+      "lineCount": 360
+    },
+    {
+      "path": "tests/unit/shared/codex-screen-shortcuts-hint.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 33
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",
