@@ -33,8 +33,9 @@ terminal through a holder changes, and both session helper switches are off by d
   again the tab's terminal still holds the modes the program set. No screen is switched and no mode
   is set; the modes come back from the holder's screen in a later step (the plan's orchestrator
   decision). Until then, a full-screen program in a plain terminal taken over again from the middle
-  is drawn on the normal screen until it is started again. An attach that is not truncated is as
-  before. Nothing under helper/ changed, and no pane is resized (the redraw goes to the holder).
+  is drawn on the normal screen until it is started again. An attach that is not truncated, and
+  follows no gap whose replay a close cut short, is as before. Nothing under helper/ changed, and
+  no pane is resized (the redraw goes to the holder).
 - **Tests.** tests/unit/main/session-helper-flow.test.ts, on vitest's clock, against the fake
   holder, whose ring now has a start (`ringStart`, `forget`) so it can answer `truncated`, and
   whose replay a close can cut short (`cutReplay`). Two cases feed the stream to @xterm/headless
