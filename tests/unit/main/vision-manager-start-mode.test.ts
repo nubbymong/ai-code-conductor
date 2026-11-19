@@ -4,8 +4,10 @@
  * of the app's handles. It is then not the app's child: it is tracked by the
  * pid and creation time the helper printed, and ended only while that pid
  * still has that creation time, never by its pid alone: through the helper's
- * end mode (`aicc-helper end`, a few milliseconds, no PowerShell), or the
- * PowerShell end when the helper is gone. Without the helper, when the start
+ * end mode (`aicc-helper end`, a few milliseconds, no PowerShell), the one
+ * beside the app or else the copy the session helper checked this run. A
+ * record of its pid and creation time in the user data folder lets the next
+ * start end one this run could not (#329). Without the helper, when the start
  * started nothing, for a browser named by a bare name, and on macOS and
  * Linux, the launch is the plain spawn it always was. A start that may have
  * started the browser without saying so is not followed by a second one.
@@ -16,6 +18,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import * as path from 'path'
 import * as nodeOs from 'os'
+import { createHash } from 'crypto'
 import type { OwnerPorts } from '../../../src/main/vision-browser-owner'
 
 type HelperAnswer =
@@ -36,8 +39,12 @@ const sys = vi.hoisted(() => ({
   answer: { kind: 'ok' } as HelperAnswer,
   /** Every awaited OS call fails, as a check that timed out does. */
   failAsync: false,
-  /** The helper's end mode fails with this message (a timeout, an exit 1). */
-  helperEndFails: null as string | null,
+  /** The helper's end mode fails with this error (a timeout, an exit 1). */
+  helperEndFails: null as Error | null,
+  /** The user data folder: a real temp folder of this test, where the record goes. */
+  userData: '',
+  /** The per-user copy of the helper the session helper checked, once a test makes one. */
+  copyExe: '',
   execFiles: [] as Array<{ file: string; args: string[]; opts: Record<string, unknown> }>,
   spawns: [] as Array<{ executable: string; args: string[]; opts: Record<string, unknown> }>,
   runs: [] as Array<{ file: string; args: string[]; sync: boolean; timeoutMs: number; answer?: string }>,
@@ -79,7 +86,14 @@ vi.mock('child_process', async () => {
     execFileSync: () => { throw new Error('test: execFileSync must not run') },
   }
 })
-vi.mock('fs', () => ({ existsSync: (p: string) => sys.present.has(p) }))
+// existsSync answers from the fake OS (the helper beside the app, the
+// browser). Everything else is the real fs, used only in this test's own temp
+// folder: the user data folder with the record, and a helper copy.
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>()
+  const existsSync = (p: string) => sys.present.has(p)
+  return { ...actual, existsSync, default: { ...actual, existsSync } }
+})
 // Nothing is found listening, so a launch has nothing to free first.
 vi.mock('net', () => ({
   Socket: class {
@@ -91,7 +105,14 @@ vi.mock('net', () => ({
   },
 }))
 vi.mock('electron', () => ({
-  app: { isPackaged: true, getAppPath: () => 'C:\\AICC\\resources\\app.asar' },
+  app: {
+    isPackaged: true,
+    getAppPath: () => 'C:\\AICC\\resources\\app.asar',
+    getPath: (name: string) => {
+      if (name !== 'userData' || sys.userData === '') throw new Error(`test: no ${name} folder`)
+      return sys.userData
+    },
+  },
   BrowserWindow: class {},
   nativeImage: {},
 }))
@@ -100,9 +121,11 @@ vi.mock('../../../src/main/ipc/setup-handlers', () => ({ getResourcesDirectory: 
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: log.info, logError: log.error, logWarn: vi.fn() }))
 
 const {
-  launchBrowser, killSpawnedBrowser, stopGlobalVision, buildBrowserLaunchArgs, parseHelperStart, _setVisionOwnerPortsForTest,
+  launchBrowser, killSpawnedBrowser, stopGlobalVision, buildBrowserLaunchArgs, parseHelperStart, endRecordedVisionBrowser, _setVisionOwnerPortsForTest,
 } = await import('../../../src/main/vision-manager')
-const { windowsEndScript, OWNER_SYNC_KILL_TIMEOUT_MS, HELPER_END_TIMEOUT_MS } = await import('../../../src/main/vision-browser-owner')
+const { HELPER_END_TIMEOUT_MS } = await import('../../../src/main/vision-browser-owner')
+const { installHelperCopy, _forgetCheckedHelperCopyForTest } = await import('../../../src/main/session-helper/install')
+const realFs = await vi.importActual<typeof import('fs')>('fs')
 
 const RESOURCES = 'C:\\AICC\\resources'
 // As session-helper/install.ts bundledHelperPath joins it for a packaged app.
@@ -126,12 +149,12 @@ function answer(file: string, args: string[]): string {
     if (!sys.procs.delete(pid)) throw new Error('exited with status 128')
     return 'SUCCESS\r\n'
   }
-  if (file === HELPER) {
+  if (file === HELPER || (sys.copyExe !== '' && file === sys.copyExe)) {
     expect(args[0], 'only the end mode is run synchronously or awaited').toBe('end')
     const pid = Number(args[args.indexOf('--pid') + 1])
     const want = args[args.indexOf('--created') + 1]
     sys.events.push(`helper-end:${pid}`)
-    if (sys.helperEndFails) throw new Error(sys.helperEndFails)
+    if (sys.helperEndFails) throw sys.helperEndFails
     if (sys.procs.get(pid) === want) { sys.procs.delete(pid); return 'ended\r\n' }
     return 'left\r\n'
   }
@@ -197,6 +220,9 @@ beforeEach(() => {
   sys.helperEndFails = null
   sys.failAsync = false
   killSpawnedBrowser() // drop anything tracked by an earlier test
+  _forgetCheckedHelperCopyForTest()
+  sys.copyExe = ''
+  sys.userData = realFs.mkdtempSync(path.join(nodeOs.tmpdir(), 'aicc-vision-record-'))
   sys.present = new Set([HELPER, CHROME])
   sys.procs.clear()
   sys.answer = { kind: 'ok' }
@@ -212,7 +238,26 @@ afterEach(() => {
   vi.useRealTimers()
   Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true })
   _setVisionOwnerPortsForTest(null)
+  // Only this test's own temp folder.
+  const made = sys.userData
+  sys.userData = ''
+  if (made !== '' && path.basename(made).startsWith('aicc-vision-record-')) realFs.rmSync(made, { recursive: true, force: true })
 })
+
+/** The record of the browser the helper started, as written in the user data folder. */
+const recordFile = () => path.join(sys.userData, 'vision-started.json')
+/** The record's text, or null when there is none. */
+const recordText = (): string | null => {
+  try { return realFs.readFileSync(recordFile(), 'utf8') } catch { return null }
+}
+const writeRecord = (text: string) => realFs.writeFileSync(recordFile(), text)
+/** The record a start through the helper writes for this pid and creation time. */
+const recordOf = (pid: number, created: string) => `{"pid":${pid},"created":"${created}"}\n`
+/** A failure of the end mode as execFileSync and runAwait report one. */
+const endTimedOut = () => Object.assign(new Error('timed out'), { timedOut: true })
+const endExit1 = () => Object.assign(new Error('Command failed'), { status: 1, signal: null, stderr: 'aicc-helper: could not end process: Access is denied. (os error 5)\r\n' })
+/** Every run of Windows PowerShell. */
+const powershellRuns = () => sys.runs.filter((r) => POWERSHELL.test(r.file))
 
 describe('Windows: the vision browser starts through the session helper', () => {
   it('runs the start mode with exactly the browser, its folder and its arguments, and never spawns it', async () => {
@@ -269,30 +314,78 @@ describe('Windows: a browser the helper started is ended only by its pid and sta
     expect(logged(/app-started browser/)).toEqual([])
   })
 
-  it('a quit end that fails or times out is logged, as distinct from a browser that was left, and nothing is ended by its pid alone', async () => {
-    for (const why of ['timed out', 'exited with status 1']) {
+  it('a quit end that fails or times out is logged with its reason, as distinct from a browser that was left, and nothing is ended by its pid alone', async () => {
+    for (const [what, fails, reason] of [
+      ['a timeout', endTimedOut, 'no answer within 5 s'],
+      ['an exit 1', endExit1, 'it exited with status 1: aicc-helper: could not end process: Access is denied. (os error 5)'],
+    ] as const) {
       log.info.mockClear()
       sys.helperEndFails = null
       const { pid } = await launchBrowser('chrome', 9222, undefined, true)
-      sys.helperEndFails = why
+      sys.helperEndFails = fails()
       killSpawnedBrowser()
-      expect(sys.procs.has(pid), why).toBe(true)
-      expect(logged(new RegExp(`Could not check the app-started browser \\(pid ${pid}\\) at exit, so it was not ended`)), why).toHaveLength(1)
-      expect(logged(/Ended the app-started browser/), why).toEqual([])
-      expect(pidOnlyKills(), why).toEqual([])
+      expect(sys.procs.has(pid), what).toBe(true)
+      expect(logged(/Could not check the app-started browser/).map(([m]) => m), what).toEqual([
+        `[vision] Could not check the app-started browser (pid ${pid}) at exit, so it was not ended (${reason}); the next start ends it if it still runs`,
+      ])
+      expect(logged(/Ended the app-started browser/), what).toEqual([])
+      expect(pidOnlyKills(), what).toEqual([])
     }
   })
 
-  it('with the helper gone by the quit, the PowerShell end checks the same pid and start time, bounded', async () => {
+  // #329, the cause (C1): an uninstall for all users removed the helper
+  // beside the app while this user's copy of the app ran. The quit then ran
+  // the PowerShell end, which asks WMI: for a sign-in that may not read it,
+  // that held the main process for 5 s and ended nothing.
+  it('with the helper beside the app gone and no checked copy, the quit runs nothing, answers at once, and keeps the record for the next start', async () => {
+    const { pid } = await launchBrowser('chrome', 9222, undefined, true)
+    const created = sys.procs.get(pid) as string
+    sys.present.delete(HELPER)
+    killSpawnedBrowser()
+    expect(sys.runs).toEqual([])
+    expect(sys.procs.get(pid)).toBe(created)
+    expect(recordText()).toBe(recordOf(pid, created))
+    expect(logged(/Could not check the app-started browser/).map(([m]) => m)).toEqual([
+      `[vision] Could not check the app-started browser (pid ${pid}) at exit, so it was not ended (there is no session helper to end it with); the next start ends it if it still runs`,
+    ])
+    expect(pidOnlyKills()).toEqual([])
+    // The next start, with the helper installed again: ended through it, by pid and start time.
+    sys.present.add(HELPER)
+    await endRecordedVisionBrowser()
+    expect(sys.runs).toHaveLength(1)
+    expect(sys.runs[0]).toMatchObject({ file: HELPER, args: helperEnd(pid, created), sync: false, timeoutMs: HELPER_END_TIMEOUT_MS, answer: 'ended\r\n' })
+    expect(sys.procs.has(pid)).toBe(false)
+    expect(recordText()).toBeNull()
+    expect(powershellRuns()).toEqual([])
+  })
+
+  it('with the helper beside the app gone, the quit ends the browser through the copy the session helper checked this run', async () => {
+    // The session helper's copy, put in place and checked as a holder start does.
+    const bundled = path.join(sys.userData, 'install', 'aicc-helper.exe')
+    realFs.mkdirSync(path.dirname(bundled), { recursive: true })
+    realFs.writeFileSync(bundled, 'MZ the installed helper')
+    const sha256 = createHash('sha256').update('MZ the installed helper').digest('hex')
+    const copy = await installHelperCopy({ bundled, root: path.join(sys.userData, 'helper'), version: '0.1.0', sha256, platform: 'win32' })
+    sys.copyExe = copy.exe
     const { pid } = await launchBrowser('chrome', 9222, undefined, true)
     const created = sys.procs.get(pid) as string
     sys.present.delete(HELPER)
     killSpawnedBrowser()
     expect(sys.runs).toHaveLength(1)
-    expect(sys.runs[0].file).toMatch(POWERSHELL)
-    expect(sys.runs[0]).toMatchObject({ sync: true, timeoutMs: OWNER_SYNC_KILL_TIMEOUT_MS, answer: 'ended\r\n' })
-    expect(sys.runs[0].args[sys.runs[0].args.length - 1]).toBe(windowsEndScript(pid, created))
+    expect(sys.runs[0]).toMatchObject({ file: copy.exe, args: helperEnd(pid, created), sync: true, timeoutMs: HELPER_END_TIMEOUT_MS, answer: 'ended\r\n' })
+    expect(sys.procs.has(pid)).toBe(false)
+    expect(recordText()).toBeNull()
     expect(pidOnlyKills()).toEqual([])
+    // A copy that no longer matches is not run: the quit answers at once and keeps the record.
+    sys.present.add(HELPER)
+    const second = await launchBrowser('chrome', 9222, undefined, true)
+    sys.present.delete(HELPER)
+    realFs.writeFileSync(copy.exe, 'MZ something else')
+    sys.runs.length = 0
+    killSpawnedBrowser()
+    expect(sys.runs).toEqual([])
+    expect(sys.procs.has(second.pid)).toBe(true)
+    expect(recordText()).toBe(recordOf(second.pid, sys.procs.get(second.pid) as string))
   })
 
   it('a relaunch ends the one before through the awaited end, before the next start', async () => {
@@ -355,6 +448,132 @@ describe('Windows: a browser the helper started is ended only by its pid and sta
     expect(sys.runs.find((r) => r.sync)?.answer).toBe('ended\r\n')
     await stopping
     expect(pidOnlyKills()).toEqual([])
+  })
+})
+
+// #329: a browser the app could not end (an end that could not tell, or an
+// app ended from outside) is ended at the next start, for every user: by the
+// pid and creation time recorded at its start, through the helper's end mode
+// alone, with no PowerShell and no WMI.
+describe('Windows: the record of the browser the helper started', () => {
+  it('a start through the helper writes its pid and creation time; an end that answers ended or left removes it; one that cannot tell keeps it', async () => {
+    const first = await launchBrowser('chrome', 9222, undefined, true)
+    expect(recordText()).toBe(recordOf(first.pid, sys.procs.get(first.pid) as string))
+    killSpawnedBrowser() // ended
+    expect(recordText()).toBeNull()
+
+    const second = await launchBrowser('chrome', 9222, undefined, true)
+    sys.procs.set(second.pid, '134078999999999990') // another process has its pid now
+    killSpawnedBrowser() // left
+    expect(recordText()).toBeNull()
+
+    const third = await launchBrowser('chrome', 9222, undefined, true)
+    const created = sys.procs.get(third.pid) as string
+    sys.helperEndFails = endExit1()
+    killSpawnedBrowser() // could not tell
+    expect(recordText()).toBe(recordOf(third.pid, created))
+
+    // The awaited end at a stop keeps it the same way, and removes it once it answers.
+    // The next launch ends that one first, by its record.
+    sys.helperEndFails = null
+    const fourth = await launchBrowser('chrome', 9222, undefined, true)
+    expect(sys.procs.has(third.pid)).toBe(false)
+    expect(recordText()).toBe(recordOf(fourth.pid, sys.procs.get(fourth.pid) as string))
+    sys.failAsync = true
+    await stopGlobalVision()
+    expect(recordText()).toBe(recordOf(fourth.pid, sys.procs.get(fourth.pid) as string))
+    sys.failAsync = false
+    await stopGlobalVision()
+    expect(recordText()).toBeNull()
+    expect(pidOnlyKills()).toEqual([])
+  })
+
+  it('at start-up a recorded browser is ended through the helper\'s end mode by its pid and creation time, with no PowerShell, and the record removed', async () => {
+    sys.procs.set(7000, '134078000000000500')
+    writeRecord(recordOf(7000, '134078000000000500'))
+    await endRecordedVisionBrowser()
+    expect(sys.runs).toEqual([{ file: HELPER, args: helperEnd(7000, '134078000000000500'), sync: false, timeoutMs: HELPER_END_TIMEOUT_MS, answer: 'ended\r\n' }])
+    expect(sys.procs.has(7000)).toBe(false)
+    expect(recordText()).toBeNull()
+    expect(logged(/an earlier start recorded/).map(([m]) => m)).toEqual([
+      '[vision] Ended the vision browser an earlier start recorded (pid 7000), by its pid and start time',
+    ])
+    expect(pidOnlyKills()).toEqual([])
+    expect(powershellRuns()).toEqual([])
+  })
+
+  it('a recorded pid that another process has now is left running, and the record removed: never by its pid alone', async () => {
+    sys.procs.set(7001, '134078999999999990')
+    writeRecord(recordOf(7001, '134078000000000500'))
+    await endRecordedVisionBrowser()
+    expect(sys.runs.map((r) => r.answer)).toEqual(['left\r\n'])
+    expect(sys.procs.get(7001)).toBe('134078999999999990')
+    expect(recordText()).toBeNull()
+    // A pid no process has: nothing is run at all.
+    writeRecord(recordOf(7002, '134078000000000500'))
+    sys.runs.length = 0
+    await endRecordedVisionBrowser()
+    expect(sys.runs).toEqual([])
+    expect(recordText()).toBeNull()
+    expect(pidOnlyKills()).toEqual([])
+  })
+
+  it('an end that cannot tell, or no helper to end it with, keeps the record and runs no PowerShell', async () => {
+    sys.procs.set(7003, '134078000000000500')
+    writeRecord(recordOf(7003, '134078000000000500'))
+    sys.helperEndFails = endTimedOut()
+    await endRecordedVisionBrowser()
+    expect(sys.procs.has(7003)).toBe(true)
+    expect(recordText()).toBe(recordOf(7003, '134078000000000500'))
+    expect(logged(/Could not check the vision browser an earlier start recorded/).map(([m]) => m)).toEqual([
+      '[vision] Could not check the vision browser an earlier start recorded (pid 7003), so it was not ended (no answer within 5 s); its record is kept for the next try',
+    ])
+    sys.helperEndFails = null
+    sys.present.delete(HELPER)
+    sys.runs.length = 0
+    await endRecordedVisionBrowser()
+    expect(sys.runs).toEqual([])
+    expect(sys.procs.has(7003)).toBe(true)
+    expect(recordText()).toBe(recordOf(7003, '134078000000000500'))
+    expect(logged(/there is no session helper to end it with/)).toHaveLength(1)
+    expect(powershellRuns()).toEqual([])
+  })
+
+  it('a record that does not read, or is too large, is removed and ends nothing', async () => {
+    sys.procs.set(7004, '134078000000000500')
+    for (const text of [
+      'not json', '', '{}', '{"pid":7004}', '{"pid":"7004","created":"134078000000000500"}', '{"pid":7004,"created":"13407800000000050a"}',
+      '{"created":"134078000000000500","pid":7004}', '{"pid":7004,"created":"134078000000000500","extra":1}',
+      `${recordOf(7004, '134078000000000500')}${' '.repeat(300)}`,
+    ]) {
+      log.info.mockClear()
+      writeRecord(text)
+      await endRecordedVisionBrowser()
+      expect(sys.runs, JSON.stringify(text)).toEqual([])
+      expect(recordText(), JSON.stringify(text)).toBeNull()
+      expect(logged(/could not be read; it was removed and nothing was ended/), JSON.stringify(text)).toHaveLength(1)
+    }
+    expect(sys.procs.has(7004)).toBe(true)
+  })
+
+  it('a launch ends a recorded browser before its scan by profile and its start', async () => {
+    sys.procs.set(7005, '134078000000000500')
+    writeRecord(recordOf(7005, '134078000000000500'))
+    const { pid } = await launchBrowser('chrome', 9222, undefined, true)
+    expect(sys.events).toEqual(['helper-end:7005', `helper-start:${pid}`])
+    expect(sys.procs.has(7005)).toBe(false)
+    // The record names the new browser now.
+    expect(recordText()).toBe(recordOf(pid, sys.procs.get(pid) as string))
+  })
+
+  it('off Windows nothing is recorded, and a record is left as it is', async () => {
+    setPlatform('linux')
+    sys.present = new Set([HELPER, POSIX_CHROME.linux])
+    writeRecord(recordOf(7006, '134078000000000500'))
+    await launchBrowser('chrome', 9222, undefined, true)
+    await endRecordedVisionBrowser()
+    expect(sys.runs).toEqual([])
+    expect(recordText()).toBe(recordOf(7006, '134078000000000500'))
   })
 })
 

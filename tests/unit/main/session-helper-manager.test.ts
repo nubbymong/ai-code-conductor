@@ -394,14 +394,42 @@ describe('the helper copy: checked before every holder start', () => {
     expect(logs).toContain('[session-helper] self-test: passed: All 2 checks passed.')
   })
 
-  it('old version folders no holder runs from are removed', async () => {
+  it('old version folders no holder runs from are removed, another build of the current version too', async () => {
     mkdirSync(join(root, '0.0.9-aaaaaaaaaaaa'), { recursive: true })
     writeFileSync(join(root, '0.0.9-aaaaaaaaaaaa', 'aicc-helper.exe'), 'old')
+    mkdirSync(join(root, '0.1.0-bbbbbbbbbbbb'), { recursive: true })
     mkdirSync(join(root, 'store'), { recursive: true })
     const m = await started(makeManager())
-    await until(() => !existsSync(join(root, '0.0.9-aaaaaaaaaaaa')), 'the old folder to go')
+    await until(() => !existsSync(join(root, '0.0.9-aaaaaaaaaaaa')) && !existsSync(join(root, '0.1.0-bbbbbbbbbbbb')), 'both old folders to go')
     expect(existsSync(join(root, 'store'))).toBe(true)
     expect(m.serviceState().state).toBe('ready')
+  })
+
+  // #322: an update kept a held terminal, and the app it opens runs the same
+  // helper version from another build (another hash). The terminal's holder
+  // runs from the old build's folder, so that folder stays while the holder
+  // is listed; it goes at a later start, once no holder reports that version.
+  it('start-up with a listed holder of the current version keeps that version\'s other build folder', async () => {
+    const first = await started(makeManager())
+    setSessionHelper(first)
+    spawnPlainPty({ plain: true, sessionId: 'abcdef0123456789abcdef30' }, SHELL, [], opts())
+    const sid = heldSessionId('abcdef0123456789abcdef30')
+    await until(() => !!helper.holders.get(sid)?.attached, 'attached')
+    expect(helper.holders.get(sid)!.helperVersion).toBe('0.1.0')
+    crash(first)
+    // The build the held terminal runs from, and one no holder can run from.
+    mkdirSync(join(root, '0.1.0-bbbbbbbbbbbb'), { recursive: true })
+    writeFileSync(join(root, '0.1.0-bbbbbbbbbbbb', 'aicc-helper.exe'), 'the build the holder runs')
+    mkdirSync(join(root, '0.0.9-aaaaaaaaaaaa'), { recursive: true })
+    const logs: string[] = []
+    const second = makeManager({ log: (s) => logs.push(s) })
+    setSessionHelper(second)
+    await started(second)
+    // The line comes once the whole clean-up has run.
+    await until(() => logs.some((l) => l.startsWith('[session-helper] removed old helper folder(s):')), 'the clean-up')
+    expect(logs.filter((l) => l.startsWith('[session-helper] removed old helper folder(s):'))).toEqual(['[session-helper] removed old helper folder(s): 0.0.9-aaaaaaaaaaaa'])
+    expect(existsSync(join(root, '0.0.9-aaaaaaaaaaaa'))).toBe(false)
+    expect(existsSync(join(root, '0.1.0-bbbbbbbbbbbb')), 'the folder a listed holder\'s version names').toBe(true)
   })
 })
 

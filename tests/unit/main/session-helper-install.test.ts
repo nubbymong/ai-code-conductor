@@ -13,7 +13,8 @@ import { tmpdir } from 'os'
 import { join, sep } from 'path'
 import { chooseConpty } from '../../../src/main/bundled-conpty'
 import {
-  BUSY_WAIT_MS, CONPTY_FILES, CONPTY_FOLDER, bundledConptySource, checkedConpty, copyMatches, helperRootDir, installHelperCopy, removeOldVersionFolders, retryWhileBusy,
+  BUSY_WAIT_MS, CONPTY_FILES, CONPTY_FOLDER, bundledConptySource, checkedConpty, checkedHelperCopySync, copyMatches, helperRootDir, installHelperCopy, removeOldVersionFolders, retryWhileBusy,
+  _forgetCheckedHelperCopyForTest,
 } from '../../../src/main/session-helper/install'
 
 const failure = (code: string) => Object.assign(new Error(`${code}: the file is in use`), { code })
@@ -105,6 +106,23 @@ describe('removeOldVersionFolders', () => {
     const removed = await removeOldVersionFolders(root, current, new Set(['0.0.9', '0.3.0-rc.2']))
     expect([...removed].sort()).toEqual(['.new-0123456789ab', '0.0.8-cccccccccccc', '0.1.0-aaaaaaaaaaaa', '0.2.0-beta.1-dddddddddddd'])
     expect(readdirSync(root).sort()).toEqual(['0.0.7-eeeeeeeeeeee', '0.0.9-bbbbbbbbbbbb', '0.1.0-ffffffffffff', '0.1.0-not-a-hash', '0.3.0-rc.2-999999999999', 'dev', 'store'])
+  })
+
+  // #322: a holder's record names its version, not its folder. An update that
+  // keeps a held terminal can leave it running from another build of the
+  // version the new app runs (the helper version is not bumped with every
+  // change), so every folder of a version a holder reports is kept.
+  it('keeps every folder of a version a holder reports, the current version\'s other builds included; with none of that version they go; staging folders always go', async () => {
+    root = mkdtempSync(join(tmpdir(), 'aicc-helper-folders-'))
+    const current = join(root, `0.1.0-${'f'.repeat(12)}`)
+    for (const f of [`0.1.0-${'f'.repeat(12)}`, '0.1.0-aaaaaaaaaaaa', '0.0.9-bbbbbbbbbbbb', '.new-0123456789ab']) mkdirSync(join(root, f))
+    // A holder of 0.1.0 is listed: the other build of 0.1.0 stays.
+    expect((await removeOldVersionFolders(root, current, new Set(['0.1.0']))).sort()).toEqual(['.new-0123456789ab', '0.0.9-bbbbbbbbbbbb'])
+    expect(readdirSync(root).sort()).toEqual(['0.1.0-aaaaaaaaaaaa', '0.1.0-ffffffffffff'])
+    // At a later start no holder reports 0.1.0: that build goes, the current folder stays.
+    mkdirSync(join(root, '.new-ba9876543210'))
+    expect((await removeOldVersionFolders(root, current, new Set())).sort()).toEqual(['.new-ba9876543210', '0.1.0-aaaaaaaaaaaa'])
+    expect(readdirSync(root)).toEqual(['0.1.0-ffffffffffff'])
   })
 
   it('a root that is not there yet removes nothing', async () => {
@@ -303,6 +321,40 @@ describe('the bundled ConPTY beside the helper copy', () => {
       expect(info.conpty.available, platform).toBe(false)
       expect(existsSync(join(info.folder, 'conpty')), platform).toBe(false)
     }
+  })
+})
+
+// #329: vision ends a browser the helper started with the helper beside the
+// app; when an uninstall for all users removed that one while the app ran, it
+// uses the copy the session helper put in place this run, checked again first.
+describe('checkedHelperCopySync: this run\'s checked copy of the helper', () => {
+  let dir: string | undefined
+  afterEach(() => {
+    _forgetCheckedHelperCopyForTest()
+    if (dir) rmSync(dir, { recursive: true, force: true })
+    dir = undefined
+  })
+
+  it('answers the copy installHelperCopy put in place while it still has that SHA-256, read again each time; null when none was made, or it changed or went', async () => {
+    _forgetCheckedHelperCopyForTest()
+    expect(checkedHelperCopySync()).toBeNull()
+    dir = mkdtempSync(join(tmpdir(), 'aicc-helper-checked-'))
+    const bundled = join(dir, 'aicc-helper.exe')
+    writeFileSync(bundled, 'MZ the installed helper')
+    const sha256 = createHash('sha256').update('MZ the installed helper').digest('hex')
+    const info = await installHelperCopy({ bundled, root: join(dir, 'helper'), version: '0.1.0', sha256, platform: 'win32' })
+    expect(checkedHelperCopySync()).toBe(info.exe)
+    // Gone from beside the app: the copy is still answered.
+    rmSync(bundled)
+    expect(checkedHelperCopySync()).toBe(info.exe)
+    writeFileSync(info.exe, 'MZ something else')
+    expect(checkedHelperCopySync()).toBeNull()
+    writeFileSync(info.exe, 'MZ the installed helper')
+    expect(checkedHelperCopySync()).toBe(info.exe)
+    rmSync(info.exe)
+    expect(checkedHelperCopySync()).toBeNull()
+    mkdirSync(info.exe)
+    expect(checkedHelperCopySync(), 'a folder in its place').toBeNull()
   })
 })
 

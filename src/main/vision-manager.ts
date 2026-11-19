@@ -26,11 +26,12 @@ import { getResourcesDirectory } from './ipc/setup-handlers'
 import { logInfo, logError } from './debug-logger'
 import { getConductorMcpPort } from './conductor-mcp-server'
 import { getBrowserPaths } from './browser-paths'
-import { bundledHelperPath } from './session-helper/install'
+import { bundledHelperPath, checkedHelperCopySync } from './session-helper/install'
+import { atomicWriteFileSync } from './atomic-write'
 import {
   VisionPortHeldError, scanAppVisionBrowsers, factsOfPid, endVerified, endOwnChild, endOwnChildSync,
-  endStartedBrowser, endStartedBrowserSync,
-  defaultOwnerPorts, type EndAnswer, type OwnerPorts, type OwnChild, type ProcessFacts, type ProfileLockState,
+  endStartedBrowser, endStartedBrowserSync, endThroughHelper,
+  defaultOwnerPorts, type EndResult, type OwnerPorts, type OwnChild, type ProcessFacts, type ProfileLockState,
 } from './vision-browser-owner'
 import type { GlobalVisionConfig } from '../shared/types'
 
@@ -638,12 +639,15 @@ export { getBrowserPaths }
 //   child, so once it exits its pid can name another process: it is tracked
 //   by the pid and creation time the helper reported, and ended only while
 //   that pid still has that creation time, never by its pid alone: through
-//   the helper's end mode, or the PowerShell end when the helper is gone
-//   (vision-browser-owner endStartedBrowser / endStartedBrowserSync). It
-//   stays tracked until an end has a definite answer ('ended', or 'left':
-//   nothing of it runs).
-// Browsers left by an earlier run are a separate case: found by profile and
-// ended only once identified (freeDebugPort).
+//   the helper's end mode (endHelperPath), or at a stop or a relaunch the
+//   awaited PowerShell end when no helper can be used (vision-browser-owner
+//   endStartedBrowser / endStartedBrowserSync). It stays tracked until an end
+//   has a definite answer ('ended', or 'left': nothing of it runs). Its pid
+//   and creation time are also kept in a record in the user data folder
+//   until then (recordStartedBrowser), so a browser this run could not end
+//   is ended at the next start (endRecordedVisionBrowser).
+// Browsers left by an earlier run are otherwise found by profile and ended
+// only once identified (freeDebugPort).
 interface ChildBrowser {
   kind: 'child'
   child: OwnChild
@@ -772,8 +776,14 @@ function isPortListening(port: number, timeoutMs = 300): Promise<boolean> {
  *  nothing, so nothing is ended; then, as while ended leftovers wind down, a
  *  profile folder still locked (with no answer, or a lock that cannot be read)
  *  stops the launch, since a new browser on a locked profile would hand off to
- *  whatever holds it. */
+ *  whatever holds it.
+ *
+ *  First of all, a browser the session helper started that the record names
+ *  is ended by its recorded pid and creation time, through the helper's end
+ *  mode alone (endRecordedVisionBrowser); the scan by profile is the second
+ *  step, for what was not recorded. */
 async function freeDebugPort(debugPort: number, tmpDir: string): Promise<void> {
+  await endRecordedVisionBrowser()
   const ports = ownerPorts()
   const profileDirs = (['chrome', 'edge'] as const).map((b) => path.join(tmpDir, `${b}-debug-${debugPort}`))
   const locks = (): ProfileLockState[] => profileDirs.map((d) => profileLockState(d, ports))
@@ -831,13 +841,14 @@ async function anyStillRunning(ended: ProcessFacts[], ports: OwnerPorts): Promis
  *  - a browser the session helper started: ended through the awaited end
  *    that checks its pid and creation time (endTrackedStartedBrowser), with
  *    no wait for an exit. When that end cannot tell, the start that follows
- *    replaces it as the tracked browser, and the scan by profile just before
- *    that start (freeDebugPort) ends it if it still runs. */
+ *    replaces it as the tracked browser, and the steps just before that start
+ *    (freeDebugPort: its record, then the scan by profile) end it if it still
+ *    runs. */
 async function killSpawnedBrowserForRelaunch(): Promise<void> {
   const t = spawnedBrowser
   if (!t) return
   if (t.kind === 'started') {
-    if (await endTrackedStartedBrowser(t) === 'ended') logInfo(`[vision] Ended the previous app-started browser (pid ${t.pid}) before relaunch`)
+    if ((await endTrackedStartedBrowser(t)).answer === 'ended') logInfo(`[vision] Ended the previous app-started browser (pid ${t.pid}) before relaunch`)
     return
   }
   spawnedBrowser = null
@@ -849,21 +860,23 @@ async function killSpawnedBrowserForRelaunch(): Promise<void> {
 /** End a browser the session helper started, awaited (a stop and a
  *  relaunch), so the check holds up nothing: only while its pid still has
  *  its creation time (vision-browser-owner endStartedBrowser, through the
- *  helper's end mode, or the PowerShell end when the helper is gone). It
+ *  helper's end mode, or the PowerShell end when no helper can be used). It
  *  stays tracked until that has answered, so an exit that comes first
  *  (killSpawnedBrowser, synchronous) still ends it. A definite answer
- *  ('ended', or 'left': nothing of it runs) stops tracking it. One that
- *  cannot tell keeps it tracked, with one line in the log: after a stop
- *  until the next end, at quit at the latest; at a relaunch the next start
- *  replaces it (see killSpawnedBrowserForRelaunch). Never throws. */
-async function endTrackedStartedBrowser(t: StartedBrowser): Promise<EndAnswer> {
-  const answer = await endStartedBrowser({ pid: t.pid, created: t.created }, visionHelperPath(), ownerPorts())
-  if (answer === 'unknown') {
-    logInfo(`[vision] Could not check the app-started browser (pid ${t.pid}), so it was not ended; it is checked again at the next end`)
-  } else if (spawnedBrowser === t) {
-    spawnedBrowser = null
+ *  ('ended', or 'left': nothing of it runs) stops tracking it and removes
+ *  its record. One that cannot tell keeps it tracked and recorded, with one
+ *  line in the log that says why: after a stop until the next end, at quit
+ *  at the latest; at a relaunch the next start replaces it (see
+ *  killSpawnedBrowserForRelaunch). Never throws. */
+async function endTrackedStartedBrowser(t: StartedBrowser): Promise<EndResult> {
+  const result = await endStartedBrowser({ pid: t.pid, created: t.created }, endHelperPath(), ownerPorts())
+  if (result.answer === 'unknown') {
+    logInfo(`[vision] Could not check the app-started browser (pid ${t.pid}), so it was not ended (${result.reason}); it is checked again at the next end`)
+    return result
   }
-  return answer
+  if (spawnedBrowser === t) spawnedBrowser = null
+  forgetStartedBrowser(t)
+  return result
 }
 
 /** Stop (stopGlobalVision): the app's own child is ended as at quit
@@ -877,7 +890,7 @@ async function endSpawnedBrowserAtStop(): Promise<void> {
     killSpawnedBrowser()
     return
   }
-  if (await endTrackedStartedBrowser(t) === 'ended') logInfo(`[vision] Ended the app-started browser (pid ${t.pid})`)
+  if ((await endTrackedStartedBrowser(t)).answer === 'ended') logInfo(`[vision] Ended the app-started browser (pid ${t.pid})`)
 }
 
 /**
@@ -893,8 +906,12 @@ async function endSpawnedBrowserAtStop(): Promise<void> {
  *   at that moment, never by its pid alone (endStartedBrowserSync: nothing
  *   run when no process has the pid; else the helper's end mode, a few
  *   milliseconds, a second more at most when an end fails (protocol 15),
- *   bounded by HELPER_END_TIMEOUT_MS; the PowerShell end only when the
- *   helper is gone). An end that cannot tell is logged.
+ *   bounded by HELPER_END_TIMEOUT_MS). With no helper that can be used
+ *   (endHelperPath) nothing is run and nothing waits: the PowerShell end
+ *   would wait on WMI, which a sign-in that may not read it does until its
+ *   bound, and then end nothing (#329). A definite answer removes its
+ *   record; one that cannot tell is logged with its reason and keeps the
+ *   record, so the next start ends it (endRecordedVisionBrowser).
  * Safe to call repeatedly; clears the tracked browser.
  */
 export function killSpawnedBrowser(): void {
@@ -906,11 +923,13 @@ export function killSpawnedBrowser(): void {
     if (endOwnChildSync(t.child, ports)) logInfo(`[vision] Ended the app-started browser (pid ${t.pid})`)
     return
   }
-  const answer = endStartedBrowserSync({ pid: t.pid, created: t.created }, visionHelperPath(), ports)
-  if (answer === 'ended') logInfo(`[vision] Ended the app-started browser (pid ${t.pid})`)
-  if (answer === 'unknown') {
-    logInfo(`[vision] Could not check the app-started browser (pid ${t.pid}) at exit, so it was not ended; the next start ends it if it still runs`)
+  const result = endStartedBrowserSync({ pid: t.pid, created: t.created }, endHelperPath(), ports)
+  if (result.answer === 'unknown') {
+    logInfo(`[vision] Could not check the app-started browser (pid ${t.pid}) at exit, so it was not ended (${result.reason}); the next start ends it if it still runs`)
+    return
   }
+  if (result.answer === 'ended') logInfo(`[vision] Ended the app-started browser (pid ${t.pid})`)
+  forgetStartedBrowser(t)
 }
 
 /** How long after a start through the helper the app looks once whether the
@@ -923,8 +942,9 @@ const START_CHECK_MS = 2000
  * profile exits at once; the spawn path logs every exit of its child, and
  * this tells the same for a browser that is not the app's child. One that
  * has already exited (no process has its pid: a definite answer, read
- * without starting a program) is logged and no longer tracked. Nothing is
- * logged while it runs. The timer never holds the app open.
+ * without starting a program) is logged, no longer tracked, and its record
+ * removed. Nothing is logged while it runs. The timer never holds the app
+ * open.
  */
 function lookAtStartedBrowserSoon(t: StartedBrowser): void {
   const timer = setTimeout(() => {
@@ -933,6 +953,7 @@ function lookAtStartedBrowserSoon(t: StartedBrowser): void {
     try { gone = ownerPorts().pidGone?.(t.pid) === true } catch { /* it may still run */ }
     if (!gone) return
     spawnedBrowser = null
+    forgetStartedBrowser(t)
     logInfo(`[vision] The vision browser (pid ${t.pid}) exited within ${START_CHECK_MS / 1000} s of its start`)
   }, START_CHECK_MS)
   if (typeof timer.unref === 'function') timer.unref()
@@ -967,6 +988,118 @@ export function parseHelperStart(stdout: string): { pid: number; created: string
   if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff) return null
   if (typeof created !== 'string' || !/^\d{1,20}$/.test(created)) return null
   return { pid, created }
+}
+
+/**
+ * The helper that ends a browser it started (#329): the one beside the app,
+ * else the per-user copy the session helper put in place and checked this
+ * run, its SHA-256 read again now (session-helper/install.ts
+ * checkedHelperCopySync). An uninstall for all users can remove the one
+ * beside the app while the app still runs. Null when neither can be used.
+ */
+function endHelperPath(): string | null {
+  return visionHelperPath() ?? checkedHelperCopySync()
+}
+
+// ── The record of the browser the helper started (#329) ───────────────────
+// One file in the user data folder, `vision-started.json`, holds the pid and
+// creation time the helper reported, written when the browser starts and
+// removed once an end has a definite answer. A browser this run could not end
+// (an end that could not tell, or an app ended from outside) is then ended at
+// the next start, and before each launch, by that pid and creation time
+// through the helper's end mode alone: never by its pid alone, and with no
+// PowerShell and no WMI, which a sign-in that may not read WMI cannot use.
+
+const STARTED_RECORD = 'vision-started.json'
+/** A record is one short line; a larger file is not one. */
+const STARTED_RECORD_MAX_BYTES = 256
+
+type StartedRecord = { pid: number; created: string }
+
+function startedRecordPath(): string | null {
+  try { return path.join(app.getPath('userData'), STARTED_RECORD) } catch { return null }
+}
+
+/** Write the record of `t`: the whole file or none (atomic), owner-only where
+ *  the OS has file modes (the user data folder is the user's own on
+ *  Windows). A write that fails is logged; the launch goes on. */
+function recordStartedBrowser(t: StartedRecord): void {
+  const file = startedRecordPath()
+  if (!file) return
+  try {
+    atomicWriteFileSync(file, `${JSON.stringify({ pid: t.pid, created: t.created })}\n`, { mode: 0o600 })
+  } catch (err) {
+    logInfo(`[vision] The record of the vision browser (pid ${t.pid}) could not be written: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+/** The record as it is: none, one that does not read ('bad': not a plain
+ *  file, too large, or not exactly a pid and a creation time of digits), or
+ *  the browser it names. Reads only. */
+function readStartedRecord(file: string): StartedRecord | 'bad' | null {
+  let st: fs.Stats
+  try { st = fs.lstatSync(file) } catch { return null }
+  if (!st.isFile() || st.size > STARTED_RECORD_MAX_BYTES) return 'bad'
+  try { return parseHelperStart(fs.readFileSync(file, 'utf8')) ?? 'bad' } catch { return 'bad' }
+}
+
+function removeStartedRecord(file: string): void {
+  try { fs.unlinkSync(file) } catch { /* gone already, or tried again at the next start */ }
+}
+
+/** Remove the record once `t` has a definite end, unless it names another
+ *  browser by then (a later start writes its own). */
+function forgetStartedBrowser(t: StartedRecord): void {
+  const file = startedRecordPath()
+  if (!file) return
+  const now = readStartedRecord(file)
+  if (now === null) return
+  if (now !== 'bad' && (now.pid !== t.pid || now.created !== t.created)) return
+  removeStartedRecord(file)
+}
+
+/** One end of the recorded browser at a time: the start-up's and a launch's share it. */
+let recordedEnd: Promise<void> | null = null
+
+/**
+ * End the vision browser the record names (Windows): at start-up (index.ts)
+ * and before each launch's scan by profile (freeDebugPort). Only while its
+ * pid still has the recorded creation time, through the helper's end mode
+ * alone (endThroughHelper, with the helper endHelperPath picks): never by its
+ * pid alone, and with no PowerShell. A definite answer removes the record;
+ * one that cannot tell (no helper to use, or an end that failed) keeps it
+ * for the next try, with one line in the log that says why. A record that
+ * does not read is removed and ends nothing. Elsewhere than Windows, and with
+ * no record, nothing is done. Never throws.
+ */
+export function endRecordedVisionBrowser(): Promise<void> {
+  if (!recordedEnd) {
+    const run = endRecordedBrowser().catch(() => { /* never throws; nothing more to do */ })
+    recordedEnd = run
+    void run.finally(() => { if (recordedEnd === run) recordedEnd = null })
+  }
+  return recordedEnd
+}
+
+async function endRecordedBrowser(): Promise<void> {
+  const ports = ownerPorts()
+  if (ports.platform !== 'win32') return
+  const file = startedRecordPath()
+  if (!file) return
+  const rec = readStartedRecord(file)
+  if (rec === null) return
+  if (rec === 'bad') {
+    removeStartedRecord(file)
+    logInfo('[vision] The record of the vision browser an earlier start left could not be read; it was removed and nothing was ended')
+    return
+  }
+  const result = await endThroughHelper(rec, endHelperPath(), ports)
+  if (result.answer === 'unknown') {
+    logInfo(`[vision] Could not check the vision browser an earlier start recorded (pid ${rec.pid}), so it was not ended (${result.reason}); its record is kept for the next try`)
+    return
+  }
+  if (result.answer === 'ended') logInfo(`[vision] Ended the vision browser an earlier start recorded (pid ${rec.pid}), by its pid and start time`)
+  forgetStartedBrowser(rec)
 }
 
 /**
@@ -1136,6 +1269,7 @@ export async function launchBrowser(browser: 'chrome' | 'edge', debugPort: numbe
   if (started) {
     const tracked: StartedBrowser = { kind: 'started', pid: started.pid, created: started.created }
     spawnedBrowser = tracked
+    recordStartedBrowser(tracked)
     logInfo(`[vision] The session helper started the vision browser (pid ${started.pid})`)
     lookAtStartedBrowserSoon(tracked)
     return { pid: started.pid, command }

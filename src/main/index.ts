@@ -121,7 +121,7 @@ import { startUpdateServer, stopUpdateServer } from './update-server'
 import { peekSessionState, hasSavedSessionState, SessionState } from './session-state'
 import { createAppSessionDurability } from './app-session-durability'
 import { getConfigDir, snapshotConfig, readConfig, readConfigChecked } from './config-manager'
-import { stopGlobalVision, killSpawnedBrowser, cleanupLegacyVisionMarkers } from './vision-manager'
+import { stopGlobalVision, killSpawnedBrowser, cleanupLegacyVisionMarkers, endRecordedVisionBrowser } from './vision-manager'
 import { exitOnSigterm } from './hard-exit'
 import { startConductorMcpServer, stopConductorMcpServer, startBrowserAtBoot, isMcpServerRunning, getMcpPort } from './conductor-mcp-server'
 import { loadWindowState, clampToVisibleDisplay, saveWindowStateFor } from './window-state'
@@ -1118,6 +1118,8 @@ if (!gotTheLock) {
 
     // Clean up legacy CLAUDE.md vision markers
     cleanupLegacyVisionMarkers()
+    // End the vision browser an earlier run recorded and could not end (#329)
+    void endRecordedVisionBrowser()
 
     // Start the Conductor MCP server unconditionally so the fetch_host_screenshot
     // tool is available for image transfer (snap, storyboard, clipboard paste)

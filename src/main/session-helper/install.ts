@@ -152,16 +152,22 @@ export interface InstalledHelper {
  * Windows its two files are copied beside the helper too. Left out, nothing
  * of it is copied. That part never fails the helper: it only makes the
  * bundled ConPTY unavailable, with the reason.
+ *
+ * A copy that matches is also kept as this run's checked copy
+ * (checkedHelperCopySync).
  */
 export async function installHelperCopy(opts: { bundled: string; root: string; version: string; sha256: string; platform?: NodeJS.Platform; conptySource?: string | null }): Promise<InstalledHelper> {
   const platform = opts.platform ?? process.platform
   const folder = path.join(opts.root, versionFolderName(opts.version, opts.sha256))
   const exe = path.join(folder, HELPER_EXE_NAME(platform))
-  const placed = async (): Promise<InstalledHelper> => ({
-    exe, folder, sha256: opts.sha256, version: opts.version,
-    conpty: await installConptyCopy({ source: opts.conptySource, folder, platform }),
-    conptySource: opts.conptySource,
-  })
+  const placed = async (): Promise<InstalledHelper> => {
+    checkedCopy = { exe, sha256: opts.sha256 }
+    return {
+      exe, folder, sha256: opts.sha256, version: opts.version,
+      conpty: await installConptyCopy({ source: opts.conptySource, folder, platform }),
+      conptySource: opts.conptySource,
+    }
+  }
   if (await copyMatches(exe, opts.sha256)) return placed()
   await makeCopy(opts.bundled, opts.root, folder, exe, platform)
   if (await copyMatches(exe, opts.sha256)) return placed()
@@ -305,6 +311,38 @@ export async function copyMatches(exe: string, sha256: string): Promise<boolean>
   }
 }
 
+/** The copy installHelperCopy last put in place and checked in this run,
+ *  with the installed helper's SHA-256 it matched then. */
+let checkedCopy: { exe: string; sha256: string } | null = null
+
+/** The largest helper file checkedHelperCopySync reads. */
+const CHECKED_COPY_MAX_BYTES = 64 * 1024 * 1024
+
+/**
+ * This run's checked copy of the helper (installHelperCopy), for a
+ * short-lived use when the helper beside the app has gone: an uninstall for
+ * all users can remove it while the app still runs. Answered only while its
+ * file is still a plain file with the SHA-256 it matched, read again now,
+ * synchronously (the quit uses it). Null when the session helper made no copy
+ * this run, or the copy is missing or changed.
+ */
+export function checkedHelperCopySync(): string | null {
+  const copy = checkedCopy
+  if (!copy) return null
+  try {
+    const st = fs.lstatSync(copy.exe)
+    if (!st.isFile() || st.size > CHECKED_COPY_MAX_BYTES) return null
+    return createHash('sha256').update(fs.readFileSync(copy.exe)).digest('hex') === copy.sha256 ? copy.exe : null
+  } catch {
+    return null
+  }
+}
+
+/** Test seam: forget this run's checked copy. */
+export function _forgetCheckedHelperCopyForTest(): void {
+  checkedCopy = null
+}
+
 async function makeCopy(bundled: string, root: string, folder: string, exe: string, platform: NodeJS.Platform): Promise<void> {
   try {
     await fs.promises.mkdir(root, { recursive: true, mode: 0o700 })
@@ -332,12 +370,13 @@ async function removeFolder(folder: string): Promise<void> {
 
 /**
  * Remove the version folders no holder still runs from: every one but the
- * current folder, the staging folders a failed copy left, and the folders of
- * `keepVersions` (versions other than the current one that listed holders
- * report). A folder of the current version with another hash goes too: on
- * Windows one a holder still runs from cannot be removed and stays until the
- * next start; on macOS and Linux the program keeps running without its file.
- * Answers the folders removed.
+ * current folder and the folders of `keepVersions`, and the staging folders a
+ * failed copy left. `keepVersions` is every version a listed or live holder
+ * reports, the current one included. A holder's record names its version, not
+ * its folder, so every folder of such a version is kept, the current
+ * version's other builds (another hash) included: a holder an update kept may
+ * run from one of them. A spare folder of a kept version goes at a later
+ * start, once no holder reports that version. Answers the folders removed.
  */
 export async function removeOldVersionFolders(root: string, current: string, keepVersions: ReadonlySet<string>): Promise<string[]> {
   let names: string[]
