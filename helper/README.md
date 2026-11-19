@@ -79,7 +79,7 @@ CI job generates one, uploads it as the `helper-cargo-lock` artifact and fails
 with a message to commit it.
 
 A helper/ change that waits on another one not yet merged is built on a pushed
-branch cut from that change's reviewed head: `gh workflow run ci.yml --ref
+branch cut from the other change's reviewed head: `gh workflow run ci.yml --ref
 <branch> -f helper=true` runs the three Helper jobs there (and, as every
 dispatch does, the CLI conformance checks). Its pull request opens once, after
 the other change has merged and the branch has been moved onto beta.

@@ -53,7 +53,7 @@ const pr = (action: string, { labels = [], label, number = 12, runId = 5001, bas
 const retargeted = (from: string, opts: PrOpts = {}) => pr('edited', { ...opts, changes: { base: { ref: { from }, sha: { from: 'a'.repeat(40) } } } })
 const textEdited = (opts: PrOpts = {}) => pr('edited', { ...opts, changes: { title: { from: 'old title' }, body: { from: 'old text' } } })
 const push = (runId = 7001, ref = 'refs/heads/main', attempt: number | string = 1): GhaContext => ({ github: { event_name: 'push', run_id: runId, run_attempt: attempt, workflow: 'CI', ref, head_ref: '', event: {} }, inputs: {} })
-const dispatch = (runId = 9001, attempt: number | string = 1): GhaContext => ({ github: { event_name: 'workflow_dispatch', run_id: runId, run_attempt: attempt, workflow: 'CI', ref: 'refs/heads/beta', head_ref: '', event: {} }, inputs: { codex_rc_version: '', conformance_prove_red: false } })
+const dispatch = (runId = 9001, attempt: number | string = 1): GhaContext => ({ github: { event_name: 'workflow_dispatch', run_id: runId, run_attempt: attempt, workflow: 'CI', ref: 'refs/heads/beta', head_ref: '', event: {} }, inputs: { helper: false, codex_rc_version: '', conformance_prove_red: false } })
 
 const group = (ctx: GhaContext) => String(evalValue(ci.concurrency!.group, ctx))
 const cancels = (ctx: GhaContext) => evalIf(ci.concurrency!['cancel-in-progress'], ctx)
@@ -211,6 +211,11 @@ describe('ci.yml: a label change does not restart the tests', () => {
       expect(runs(job, retargeted('beta', { labels: [], base: 'main' })), `${job}: base changed, no ci-run`).toBe(false)
     }
     for (const job of ['test', 'test-windows-part', 'test-windows-build', 'test-windows']) expect(runs(job, dispatch()), job).toBe(false)
+    // A dispatch that names `helper` runs the Helper job (helper-ci-job.test.ts)
+    // and still none of the Test jobs. GitHub gives the inputs as strings in
+    // github.event.inputs, and with their declared types in `inputs`.
+    const helperDispatch: GhaContext = { ...dispatch(), github: { ...(dispatch().github as Record<string, unknown>), event: { inputs: { helper: 'true', codex_rc_version: '', conformance_prove_red: 'false' } } }, inputs: { helper: true, codex_rc_version: '', conformance_prove_red: false } }
+    for (const job of ['test', 'test-windows-part', 'test-windows-build', 'test-windows']) expect(runs(job, helperDispatch), `${job} on a helper dispatch`).toBe(false)
     expect(runs('codex-conformance', dispatch())).toBe(true)
   })
 

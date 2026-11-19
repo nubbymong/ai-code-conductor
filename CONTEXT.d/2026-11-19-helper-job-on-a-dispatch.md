@@ -24,10 +24,12 @@ Plan 2.1.3-beta.12, section C1 (aicc_planning#351). CI only; nothing in the app 
   GitHub gives it: the strings in `github.event.inputs` and the typed values in `inputs`, every
   declared input at its default unless the case sets it. True with `helper` set; false when it is
   left out, set to 'false', or when only another input is set. The pull request and push cases are
-  unchanged. Run on this PC under four planted conditions, each restored, and red under each: every
+  unchanged. That one file, run locally through the host runner on f07f04ac's tree under four planted conditions, each restored, was red under each: every
   dispatch runs the job; the input is ignored (the old condition); `inputs.helper == 'true'`; a bare
-  `github.event.inputs.helper`.
+  `github.event.inputs.helper`. tests/unit/scripts/ci-cadence.test.ts adds that a dispatch naming
+  `helper` still starts none of the Test jobs.
 - **Left as it is.** The comment above `workflow_dispatch` (ci.yml) still says every job other than
   the conformance one skips a dispatch; #737 rewrites that sentence, so this change keeps clear of
-  it and the input carries its own comment. Once both are on beta, that sentence can name the
-  Helper job too.
+  it and the input carries its own comment. Once both are on beta, the next change that edits
+  ci.yml names the Helper job in that sentence: beta.12's A2 (its probe-version hunk), or this
+  change if it gets a code push after #737 lands.
