@@ -15,13 +15,15 @@ sessions through the session helper" on, which is off by default; with it off no
   entry for that session is switched; every other key keeps its place and text. It writes through
   the same owner-only writer and answers `switched`, `no-conductor`, `unsafe-path` or
   `not-written`, as `switchHooksToHelper` does. The hooks' switch and the tools' switch run each
-  on their own: one that fails or throws does not stop the other.
+  on their own: one that fails or throws does not stop the other, and each throw has its own log
+  line naming the session.
 - **Codex** (providers/codex/held-tool-launch.ts, new): the builder's three loopback entries (the
   address, the switch, the credential variable) are replaced in place by `command` and `args` as
   TOML strings; the timeout, the approvals, the user's own arguments and the environment stay. The
   manager asks only for the launch the holder runs, between the holder's hello and `term.launch`,
-  through one new optional driver hook in helper-pty.ts (`launchArgs`); the usual start it falls
-  back to keeps the spawn's own arguments. Launch shapes: Claude Code, Codex started directly, and
+  through one new optional driver hook in helper-pty.ts (`launchArgs`). It counts as switched only
+  once the holder took that launch; the usual start it falls back to keeps the spawn's own
+  arguments. Launch shapes: Claude Code, Codex started directly, and
   the resume list handing its flags to codex.exe are switched; an npm launcher's cmd.exe line, and
   the resume list handing its flags to one, are switched only when cmd.exe's existing quoting rule
   (`codexCmdExeTarget`) carries the relay's arguments, and that rule refuses a space. The installed

@@ -420,8 +420,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 - **Tool streams through a holder (capability `mcp`, from 2.1.3-beta.10).**
   The relay (`aicc-helper mcp`, protocol 15, "Tool streams") carries a
   session's tool calls between its CLI and the connection attached to the
-  session's terminal. From 2.1.3-beta.11 the app starts it for a held
-  session behind a switch (the next item). What a relay may do: open one stream
+  session's terminal. From 2.1.3-beta.11 the app names it to a held
+  session's CLI, which starts it, behind a switch (the next item). What a relay may do: open one stream
   at a time, at most 8 in a session, and pass JSON-RPC messages on it to the
   attached connection that acked `mcp`, at most 1,048,320 bytes each, and get
   that connection's answers. What it may not: use the terminal (a launch,

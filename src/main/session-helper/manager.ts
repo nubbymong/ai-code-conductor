@@ -215,7 +215,8 @@ export interface HelperToolLink {
 /** One tab's tool streams through its holder (toolRoute). */
 interface ToolRoute {
   connected(conn: HolderConnection): void
-  /** Claude Code: its holder launched it; its launch line is not typed yet. */
+  /** Its holder took the launch; its launch line is not typed yet. Claude
+   *  Code: its config file is switched. Codex: a relay form sent counts. */
   launched?(conn: HolderConnection): void
   /** Codex: what its holder launches, the connection's hello read. */
   launchArgs?(conn: HolderConnection): Pick<LaunchSpec, 'argv' | 'line'> | undefined
@@ -1006,8 +1007,9 @@ export class SessionHelperManager implements MachinesSource {
    * the session and before that line is typed (`launched`), as its hooks are.
    * Codex names its tool server in the launch itself, built before the holder
    * existed, so the launch the holder runs gets the relay form, its hello
-   * read (`launchArgs`); the usual start it falls back to keeps the spawn's
-   * own arguments. A session that cannot be switched keeps the loopback
+   * read (`launchArgs`), and counts as switched once the holder took it
+   * (`launched`); the usual start it falls back to keeps the spawn's own
+   * arguments. A session that cannot be switched keeps the loopback
    * route, with one log line saying why. The paths go into the session's own
    * file or launch only, never into a log line.
    *
@@ -1076,14 +1078,27 @@ export class SessionHelperManager implements MachinesSource {
         // with no await between the spawn call and the write (hookRoute).
         const relay = relayFor(conn)
         if (!relay) return
-        const r = useRelayConfig(appId, relay)
+        let r: HelperMcpConfigResult
+        try {
+          r = useRelayConfig(appId, relay)
+        } catch {
+          // What it threw can name a path: the line says only what failed.
+          stays('its MCP config file could not be switched')
+          return
+        }
         if (r !== 'switched') { stays(MCP_CONFIG_STAYS_BECAUSE[r]); return }
         switched()
       }
     }
     const relayLaunch = deps.relayLaunch
     if (relayLaunch) {
+      /** The launch last asked for is the relay form. It counts once the
+       *  holder took it (`launched`): one it refused falls back to the usual
+       *  start, with the spawn's own arguments. */
+      let relayed = false
+      route.launched = () => { if (relayed) switched() }
       route.launchArgs = (conn) => {
+        relayed = false
         const relay = relayFor(conn)
         if (!relay) return undefined
         let answer: HeldToolLaunchAnswer
@@ -1099,7 +1114,7 @@ export class SessionHelperManager implements MachinesSource {
         const spec = this.agentSpec(launch.file, answer.args, launch.opts)
         const refused = checkLaunch(spec, this.os)
         if (refused) { stays(`the helper would refuse its relay form (${refused.why})`); return undefined }
-        switched()
+        relayed = true
         return { argv: spec.argv, ...(spec.line !== undefined ? { line: spec.line } : {}) }
       }
     }
@@ -1191,9 +1206,14 @@ export class SessionHelperManager implements MachinesSource {
       connect: (record) => this.connectFor(record, checkHash, hooks, tools),
       ...(atLaunch.length > 0 ? {
         launched: (conn: HolderConnection) => {
+          const errors: unknown[] = []
           for (const f of atLaunch) {
-            try { f(conn) } catch (err) { this.deps.log(`[session-helper] after the launch: ${message(err)}`) }
+            try { f(conn) } catch (err) { errors.push(err) }
           }
+          // Thrown once every switch has run: helper-pty logs it with the
+          // holder's id, as it did when the hooks' switch was the only one.
+          if (errors.length === 1 && errors[0] instanceof Error) throw errors[0]
+          if (errors.length > 0) throw new Error(errors.map(message).join('; '))
         },
       } : {}),
       ...(tools?.launchArgs ? { launchArgs: tools.launchArgs } : {}),

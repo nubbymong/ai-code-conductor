@@ -1096,9 +1096,11 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   tools a session is allowed and their approvals apply unchanged. The app
   serves a stream only for a session it switched, under the tab's id, and
   only while its tool server is started. A session that cannot be switched
-  (no `mcp` in its holder's hello, the tool server not started, the file
-  not written, a path that cannot be given exactly, or a launch through
-  cmd.exe whose quoting rule cannot carry the relay's arguments) keeps the
+  (no `mcp` in its holder's hello, the helper copy not known, the tool
+  server not started, no conductor entry of the app's in the file or the
+  launch, the file not written, a path that cannot be given exactly, a
+  launch through cmd.exe whose quoting rule cannot carry the relay's
+  arguments, or a relay form the helper would refuse) keeps the
   loopback route, with one log line. A run of the app's own is never
   switched.
 - **What is not here yet.** While no connection takes tool streams, as when
