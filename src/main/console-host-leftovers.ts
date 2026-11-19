@@ -11,10 +11,12 @@
  *
  * So, once at start-up, the app runs the session helper's console-hosts mode
  * with the record of the run before (its main process's pid and creation
- * time, in app-run.json in the user data folder). The helper ends each console
- * host whose parent is that pid, made after that run started and before the
- * helper did and before any process that has the pid now, of this user, and
- * ends nothing while that pid still has that creation time
+ * time, in app-run.json in this run's data folder: the user data folder for
+ * an installed app, a dev or E2E run's own data root otherwise, so a dev run
+ * never reads or replaces an installed app's record). The helper ends each
+ * console host whose parent is that pid, made after that run started and
+ * before the helper did and before any process that has the pid now, of this
+ * user, and ends nothing while that pid still has that creation time
  * (docs/remote/helper-protocol.md section 15, "Console hosts a run left").
  * The helper also names the process that started it, this one, by pid and
  * creation time, and that becomes the record for the next start. A clean quit
@@ -23,17 +25,17 @@
  * The record is read strictly (a pid and a creation time of digits, at most
  * 1 KiB); anything else is removed and ignored. No helper in this install (a
  * development run without a build, or a helper an uninstall removed) means
- * nothing is looked for and the record stays for a later start.
+ * nothing is looked for and the record stays for a later start. A data root
+ * that is not absolute gives no record, so nothing is looked for either.
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
-import * as path from 'path'
 import { app } from 'electron'
 import { atomicWriteFileSync } from './atomic-write'
-import { bundledHelperPath } from './session-helper/install'
+import { bundledHelperPath, instanceRecordPath } from './session-helper/install'
 import { logError, logInfo } from './debug-logger'
 
-/** The record of this run, in the user data folder. */
+/** The record of this run, in this run's data folder (runRecordPath). */
 export const RUN_RECORD_FILE = 'app-run.json'
 /** A record larger than this is not one the app wrote. */
 export const RUN_RECORD_MAX_BYTES = 1024
@@ -161,12 +163,26 @@ export async function endLeftoverConsoleHosts(ports: LeftoverPorts): Promise<voi
   }
 }
 
-/** The ports of the running app. */
-function appPorts(): LeftoverPorts {
+/**
+ * Where this run keeps its record: the user data folder for an installed app,
+ * an E2E or dev run's own data root otherwise, by the rule vision-started.json
+ * follows (session-helper/install.ts instanceRecordPath). A dev run shares the
+ * user data folder with an installed app on the same computer, and must never
+ * hand that app's run to the helper or write over its record. Null when there
+ * is no folder to use (a data root that is not absolute).
+ */
+function runRecordPath(): string | null {
+  try {
+    return instanceRecordPath(RUN_RECORD_FILE, { isPackaged: app.isPackaged, userData: () => app.getPath('userData') })
+  } catch { return null }
+}
+
+/** The ports of the running app, with its record at `recordFile`. */
+function appPorts(recordFile: string): LeftoverPorts {
   return {
     platform: process.platform,
     ownPid: process.pid,
-    recordFile: path.join(app.getPath('userData'), RUN_RECORD_FILE),
+    recordFile,
     helperPath: () => {
       try {
         const p = bundledHelperPath({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), platform: 'win32' })
@@ -200,5 +216,10 @@ function appPorts(): LeftoverPorts {
 /** The start-up call (index.ts): runs in the background, never throws. */
 export function endLeftoverConsoleHostsAtStart(): void {
   if (process.platform !== 'win32') return
-  void endLeftoverConsoleHosts(appPorts())
+  const recordFile = runRecordPath()
+  if (!recordFile) {
+    logInfo('[console-hosts] This run has no data folder for its record, so no console host of an earlier run is looked for')
+    return
+  }
+  void endLeftoverConsoleHosts(appPorts(recordFile))
 }
