@@ -30,18 +30,23 @@
 //! Each is held open from its check to its end, so its pid cannot pass to
 //! another process in between. Nothing is ended when the recorded pid still
 //! has the recorded creation time and that process still runs (the run before
-//! is still running), when the process that has the pid now cannot be read,
-//! or when the record is from before Windows last started.
+//! is still running), when the process that has the pid now cannot be opened
+//! or read (its creation time, or whether it still runs), or when the record
+//! is from before Windows last started (`bound_from_pid_owner`, `before_boot`).
+//! Each of those answers 0 ended, with a note, and exits 0, so the app still
+//! records this run.
 //!
 //! It also says which process started it, for the app to record: its parent
 //! in the same list, by pid and creation time, which must be earlier than this
 //! mode's own (an earlier one rules out a parent pid that has since passed on).
 //! It prints one line, `{"pid":<n>,"created":"<t>","ended":<k>}`, `<t>` in the
 //! form `start` prints (`start.rs`), and exits 0; a note for the app's log
-//! goes to stderr. It exits 1 with a message on stderr when it cannot read its
-//! own times, the process list or its parent, and 2 on a command line it cannot
-//! read. No PowerShell and no WMI: it answers in milliseconds, a second more at
-//! most when an end fails.
+//! goes to stderr. It exits 1 with a message on stderr, ending nothing, when
+//! it cannot read its own creation time or its own user, the process list,
+//! the process that started it, or the system folder (where Windows' own
+//! `conhost.exe` is); the app then does not record this run. It exits 2 on a
+//! command line it cannot read. No PowerShell and no WMI: it answers in
+//! milliseconds, a second more at most when an end fails.
 #![allow(unsafe_code)]
 
 use crate::start::{app_created, Refusal};
@@ -96,11 +101,45 @@ pub fn host_image_ok(name: &str, image: &str, system_conhost: &str) -> bool {
 
 /// Whether a console host made at `made` (steps of 100 ns since 1601, UTC)
 /// is one the run before left: made in a later microsecond than that run's
-/// creation time `old_created` (the app's form, in microseconds), so after it
-/// started, and before `before`: the earlier of this mode's own creation time
-/// and the creation time of a process that has the recorded pid now.
+/// creation time `old_created` (the app's form: steps of 100 ns since 1601,
+/// to the microsecond, `start.rs` `app_created`), so after it started, and
+/// before `before`: the earlier of this mode's own creation time and the
+/// creation time of a process that has the recorded pid now
+/// (`bound_from_pid_owner`).
 pub fn left_by_old_run(made: u64, old_created: u64, before: u64) -> bool {
     app_created(made) > old_created && made < before
+}
+
+/// Who has the recorded pid now, as this mode found when it opened that pid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PidOwner {
+    /// No process has it.
+    Nobody,
+    /// The run before itself, which has the recorded creation time:
+    /// `running` when it has not exited (otherwise something still holds a
+    /// handle to it, so the pid has not passed on).
+    RunBefore { running: bool },
+    /// Another process, made at `made` (steps of 100 ns since 1601).
+    Other { made: u64 },
+    /// A process has it, but it could not be opened, or its creation time or
+    /// whether it still runs could not be read: why.
+    Unreadable(String),
+}
+
+/// What follows from who has the recorded pid now: the bound on when a
+/// console host must have been made to count (`left_by_old_run`'s `before`),
+/// or, when nothing may be ended, the note that says why. `self_made` is this
+/// mode's own creation time. A pid passes on only once its process has gone,
+/// so a process made after the pid's new owner names that owner as its
+/// parent, not the run before: the bound is the earlier of the two times.
+pub fn bound_from_pid_owner(owner: &PidOwner, old_pid: u32, self_made: u64) -> Result<u64, String> {
+    match owner {
+        PidOwner::Nobody | PidOwner::RunBefore { running: false } => Ok(self_made),
+        PidOwner::RunBefore { running: true } => Err(format!("the run before (process {old_pid}) is still running, so nothing was ended")),
+        // MUTANT (round 1 of the #725 review fixes, reverted in the next commit): the pid-reuse bound removed.
+        PidOwner::Other { made: _ } => Ok(self_made),
+        PidOwner::Unreadable(why) => Err(format!("the process that has the pid of the run before ({old_pid}) cannot be read ({why}), so nothing was ended")),
+    }
 }
 
 /// How far a recorded creation time may lie before the time Windows started
@@ -216,7 +255,7 @@ pub use self::win::{console_parent, run};
 
 #[cfg(windows)]
 mod win {
-    use super::{before_boot, host_image_ok, is_host_name, left_by_old_run, Answer, ConsoleHostsRequest};
+    use super::{before_boot, bound_from_pid_owner, host_image_ok, is_host_name, left_by_old_run, Answer, ConsoleHostsRequest, PidOwner};
     use crate::start::{app_created, list_step, ListStep};
     use crate::winproc::{close, creation_time, exit_code, exit_code_within, os_error};
     use std::ffi::c_void;
@@ -391,34 +430,32 @@ mod win {
         let Some((old_pid, old_created)) = req.old else {
             return Ok((answer(0), notes));
         };
-        if before_boot(old_created, boot_time()) {
+        // MUTANT (round 1 of the #725 review fixes, reverted in the next commit): the boot rule removed.
+        if false && before_boot(old_created, boot_time()) {
             notes.push("the run before started before Windows last started, so nothing of it runs now".to_string());
             return Ok((answer(0), notes));
         }
-        // Who has the recorded pid now. The run before itself, still running:
-        // nothing is ended. The run before, gone but still held open by some
-        // process: the pid has not passed on. Another process: only what was
-        // made before it can name the run before as its parent.
-        let mut before = self_made;
-        match open(old_pid, READ_RIGHTS) {
-            Ok(p) => {
-                let made = creation_time(p.0)?;
-                if app_created(made) == old_created {
-                    if exit_code(p.0)?.is_none() {
-                        notes.push(format!("the run before (process {old_pid}) is still running, so nothing was ended"));
-                        return Ok((answer(0), notes));
-                    }
-                } else {
-                    before = before.min(made);
-                }
-            }
+        // Who has the recorded pid now, and what that allows (bound_from_pid_owner).
+        let owner = match open(old_pid, READ_RIGHTS) {
+            Ok(p) => match creation_time(p.0) {
+                Err(e) => PidOwner::Unreadable(e.to_string()),
+                Ok(made) if app_created(made) != old_created => PidOwner::Other { made },
+                Ok(_) => match exit_code(p.0) {
+                    Ok(code) => PidOwner::RunBefore { running: code.is_none() },
+                    Err(e) => PidOwner::Unreadable(e.to_string()),
+                },
+            },
             // ERROR_INVALID_PARAMETER: no process has the pid now.
-            Err(e) if e == ERROR_INVALID_PARAMETER => {}
-            Err(e) => {
-                notes.push(format!("the process that has the pid of the run before ({old_pid}) cannot be read ({}), so nothing was ended", io::Error::from_raw_os_error(e as i32)));
+            Err(e) if e == ERROR_INVALID_PARAMETER => PidOwner::Nobody,
+            Err(e) => PidOwner::Unreadable(io::Error::from_raw_os_error(e as i32).to_string()),
+        };
+        let before = match bound_from_pid_owner(&owner, old_pid, self_made) {
+            Ok(before) => before,
+            Err(note) => {
+                notes.push(note);
                 return Ok((answer(0), notes));
             }
-        }
+        };
 
         let conhost = system_conhost()?;
         let until = Instant::now() + FAILED_END_WAIT;
@@ -560,11 +597,29 @@ mod tests {
         // at t=3 s, and this mode started at t=9 s: a host made at t=4 s
         // names the new owner as its parent, not the run before.
         let run = app_created(10_000_000);
-        let new_owner: u64 = 30_000_000;
         let this_mode: u64 = 90_000_000;
-        let before = this_mode.min(new_owner);
+        let before = bound_from_pid_owner(&PidOwner::Other { made: 30_000_000 }, 42, this_mode).expect("a bound");
+        assert_eq!(before, 30_000_000);
         assert!(left_by_old_run(20_000_000, run, before));
         assert!(!left_by_old_run(40_000_000, run, before));
+        // A new owner made after this mode bounds nothing more than this mode does.
+        assert_eq!(bound_from_pid_owner(&PidOwner::Other { made: 95_000_000 }, 42, this_mode), Ok(this_mode));
+    }
+
+    #[test]
+    fn whoever_has_the_pid_now_decides_whether_anything_is_ended() {
+        let this_mode: u64 = 90_000_000;
+        // Nobody, or the run before gone but still held open: up to this mode's start.
+        assert_eq!(bound_from_pid_owner(&PidOwner::Nobody, 42, this_mode), Ok(this_mode));
+        assert_eq!(bound_from_pid_owner(&PidOwner::RunBefore { running: false }, 42, this_mode), Ok(this_mode));
+        // The run before, still running: nothing, with a note.
+        let still = bound_from_pid_owner(&PidOwner::RunBefore { running: true }, 42, this_mode).expect_err("nothing is ended");
+        assert!(still.contains("process 42") && still.contains("still running"), "{still}");
+        // A process that has the pid but cannot be opened or read: nothing,
+        // with a note saying why, never an error that would leave this run
+        // unrecorded.
+        let unread = bound_from_pid_owner(&PidOwner::Unreadable("Access is denied.".into()), 42, this_mode).expect_err("nothing is ended");
+        assert!(unread.contains("(42) cannot be read (Access is denied.)"), "{unread}");
     }
 
     #[test]

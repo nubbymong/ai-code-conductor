@@ -247,7 +247,8 @@ fn ended_in(out: &str) -> Option<u32> {
 fn it_ends_the_console_host_a_run_ended_from_outside_left_and_nothing_else() {
     let mut old = start_run();
     let old_pid = old.0.id();
-    // The run's creation time in the form the app records (microseconds).
+    // The run's creation time in the form the app records: steps of 100 ns
+    // since 1601, to the microsecond (start.rs app_created).
     let created = made_at(old.0.as_raw_handle() as HANDLE).expect("the run's start time") / 10 * 10;
     let host = host_of(&old);
     let mut other = start_run();
@@ -258,6 +259,15 @@ fn it_ends_the_console_host_a_run_ended_from_outside_left_and_nothing_else() {
     assert!(ok, "{out}{err}");
     assert_eq!(ended_in(&out), Some(0), "{out}{err}");
     assert!(host.running(), "the host of a run that still runs was ended");
+
+    // A record whose pid another process has now: here the other run, made
+    // after the record's start. Its host was made after that start and before
+    // this mode, but after the pid's owner too, so it names that owner as its
+    // parent, not the run the record is of: nothing is ended.
+    let (ok, out, err) = console_hosts(other.0.id(), created);
+    assert!(ok, "{out}{err}");
+    assert_eq!(ended_in(&out), Some(0), "{out}{err}");
+    assert!(other_host.running(), "a host made after the pid's owner was ended");
 
     // The host cannot end by itself from now on; then the run is ended from outside.
     assert!(host.freeze(), "the run's host could not be suspended");
@@ -279,6 +289,56 @@ fn it_ends_the_console_host_a_run_ended_from_outside_left_and_nothing_else() {
     assert!(host.gone_within(Duration::from_secs(5)), "the host the run left (process {}) still ran", host.pid);
     assert!(other_host.running(), "the host of a run that still runs was ended");
     assert!(matches!(other.0.try_wait(), Ok(None)), "the other run was ended");
+}
+
+/// A run ended from outside, its host suspended first so only an end from
+/// outside can end it: the run (its handle held, so its pid stays its own),
+/// its pid, its creation time in the app's form, and its host.
+fn ended_run_with_host() -> (Run, u32, u64, Held) {
+    let mut run = start_run();
+    let pid = run.0.id();
+    let created = made_at(run.0.as_raw_handle() as HANDLE).expect("the run's start time") / 10 * 10;
+    let host = host_of(&run);
+    assert!(host.freeze(), "the run's host could not be suspended");
+    run.0.kill().expect("end the run from outside");
+    let _ = run.0.wait();
+    assert!(host.running(), "the suspended host ended with its run");
+    (run, pid, created, host)
+}
+
+/// The run's own record ends its host: so a case that ended nothing before
+/// did so by its rule, not because the host could not be ended.
+fn its_own_record_ends_it(pid: u32, created: u64, host: &Held) {
+    let (ok, out, err) = console_hosts(pid, created);
+    assert!(ok, "{out}{err}");
+    assert_eq!(ended_in(&out), Some(1), "{out}{err}");
+    assert!(host.gone_within(Duration::from_secs(5)), "the host the run left (process {}) still ran", host.pid);
+}
+
+#[test]
+fn a_record_whose_pid_another_process_took_after_its_run_had_gone_ends_nothing() {
+    // The record is of a start one second before the process that has the
+    // pid now (the ended run, still held here). So that process took the pid
+    // after the record's run had gone, and the host was made after it: it is
+    // not the record's run's host, and nothing is ended.
+    let (_run, pid, created, host) = ended_run_with_host();
+    let (ok, out, err) = console_hosts(pid, created - 10_000_000);
+    assert!(ok, "{out}{err}");
+    assert_eq!(ended_in(&out), Some(0), "{out}{err}");
+    assert!(host.running(), "a host made after the pid's owner was ended");
+    its_own_record_ends_it(pid, created, &host);
+}
+
+#[test]
+fn a_record_from_before_windows_last_started_ends_nothing() {
+    // Nothing of a run from before the last start of Windows runs now.
+    let (_run, pid, created, host) = ended_run_with_host();
+    let (ok, out, err) = console_hosts(pid, 1);
+    assert!(ok, "{out}{err}");
+    assert_eq!(ended_in(&out), Some(0), "{out}{err}");
+    assert!(err.contains("before Windows last started"), "no note for a record from before the last start: {err}");
+    assert!(host.running(), "a host was ended for a record from before the last start");
+    its_own_record_ends_it(pid, created, &host);
 }
 
 #[test]

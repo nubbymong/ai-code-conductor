@@ -118,7 +118,7 @@ const SEEN_GATE = '${IfNot} ${Silent}'
  * gate that is not there exactly once.
  */
 function sandboxAppCheck(text: string, details: boolean): string {
-  let out = text.replace(/"(Claude Command Center|Claude Conductor)\.exe"/g, (_m, name: string) => `"${PROBE_LEGACY_EXES[`${name}.exe`]}"`)
+  let out = sandboxPendingRemovals(text).replace(/"(Claude Command Center|Claude Conductor)\.exe"/g, (_m, name: string) => `"${PROBE_LEGACY_EXES[`${name}.exe`]}"`)
   if (details) out = out.replace(/^(\s*)DetailPrint\b/gm, '$1!insertmacro CccProbeDetail')
   const real = out.match(/(AI Code Conductor|Claude Command Center|Claude Conductor)\.exe"/)
   if (real) throw new Error(`the probe would reach a real copy of the app: ${real[0]}`)
@@ -131,6 +131,34 @@ function sandboxAppCheck(text: string, details: boolean): string {
 }
 
 const PROBE_REG_KEY = 'HKCU\\Software\\CccProbe'
+
+/** Where the probes read the removals waiting for the next restart: a value under the probe key, never Windows' own. */
+const PROBE_PENDING_SUB = 'SessionManager'
+const REAL_PENDING_KEY = 'p 0x80000002, w "SYSTEM\\CurrentControlSet\\Control\\Session Manager"'
+
+/**
+ * CccPendingRemovalIn's one read of HKLM's Session Manager key becomes a read
+ * of the probe key in HKCU. Fails closed on the real key left anywhere.
+ */
+function sandboxPendingRemovals(text: string): string {
+  const out = text.split(REAL_PENDING_KEY).join(`p 0x80000001, w "Software\\CccProbe\\${PROBE_PENDING_SUB}"`)
+  if (/Session Manager/i.test(out)) throw new Error('the probe would read the removals Windows really has waiting for its next restart')
+  return out
+}
+
+/**
+ * Writes `entries` as the probe key's PendingFileRenameOperations, a
+ * REG_MULTI_SZ, through a .reg file, so empty strings (a removal's "no
+ * target") are kept exactly as MoveFileEx writes them.
+ */
+function regSetPending(work: string, entries: string[]) {
+  const bytes = Buffer.from(`${entries.join('\0')}\0\0`, 'utf16le')
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join(',')
+  const file = join(work, 'pending.reg')
+  // regedit's format 5: UTF-16 LE with its byte order mark.
+  writeFileSync(file, `﻿Windows Registry Editor Version 5.00\r\n\r\n[${PROBE_REG_KEY.replace(/^HKCU/, 'HKEY_CURRENT_USER')}\\${PROBE_PENDING_SUB}]\r\n"PendingFileRenameOperations"=hex(7):${hex}\r\n`, 'utf16le')
+  execFileSync('reg', ['import', file], { stdio: 'pipe' })
+}
 
 // electron-builder's cache folder in the LOCALAPPDATA the test home guard found: the guard
 // (tests/helpers/home-isolation.ts) points the variable at an isolated folder, and the
@@ -1788,19 +1816,23 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
    * here); `legacyUninstaller` is customInit's capture, which can come from
    * another hive. `seen` runs CccCloseAppCopies as in a run someone can see;
    * `savedInstallLocation` is what customInit saved for a Cancel to put back
-   * (installer pass). Returns the log, the details list, how long it took,
+   * (installer pass). `installMode` is the run's ("CurrentUser" unless the
+   * case says "all"), and `pending` the removals Windows has waiting for its
+   * next restart, as PendingFileRenameOperations holds them (the probe key's
+   * stand-in for it). Returns the log, the details list, how long it took,
    * the exit code, and the install location in the probe key afterwards.
    */
-  function runAppCheck(pass: 'installer' | 'uninstaller', cfg: { instdir: string; legacyUninstaller: string; record?: string; seen?: boolean; savedInstallLocation?: string }) {
+  function runAppCheck(pass: 'installer' | 'uninstaller', cfg: { instdir: string; legacyUninstaller: string; record?: string; seen?: boolean; savedInstallLocation?: string; installMode?: 'all' | 'CurrentUser'; pending?: string[] }) {
     regClear()
     if (cfg.record) regSet('Uninstall', 'UninstallString', `"${cfg.record}" /currentuser`)
+    if (cfg.pending) regSetPending(awork, cfg.pending)
     writeFileSync(acfg(), [
       '[probe]',
       `instdir=${cfg.instdir}`,
       `legacyUninstaller=${cfg.legacyUninstaller}`,
       `seen=${cfg.seen ? 1 : 0}`,
       `savedInstallLocation=${cfg.savedInstallLocation ?? ''}`,
-      'installMode=CurrentUser',
+      `installMode=${cfg.installMode ?? 'CurrentUser'}`,
       '',
     ].join('\r\n'))
     rmSync(alog(), { force: true })
@@ -2009,6 +2041,68 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     await endAll([outside.pid, helper.pid])
   }, 60_000)
 
+  // ---- A removal waiting for the next restart (aicc_planning #328) ----------
+  // An all-users uninstall sets what another user's running copy held to go at
+  // the next restart (CccReportLeftFiles). An install into the same folder
+  // before that restart would lose the new files at those paths, so an
+  // all-users install stops first (CccStopOnPendingRemoval, CccPendingRemovalIn
+  // over the probe key's stand-in for PendingFileRenameOperations).
+  const STOPPED_FOR_RESTART = (instdir: string) =>
+    `An earlier uninstall set files in ${instdir} to be removed when Windows next restarts, so nothing was installed. Restart Windows, then run Setup again.`
+
+  it('installer pass, all users: a removal an earlier uninstall set for the next restart in this install\'s folder stops the run before anything else, and puts the saved install location back', async () => {
+    const root = join(awork, 'apps-pending')
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+    const install = join(root, 'Program Files', 'AI Code Conductor')
+    dir(install)
+    // A copy from this folder: the stop comes before the app check, so it is not asked to close.
+    const copy = await startCopy(install, PROBE_APP_EXE, true)
+    const saved = join(root, 'Program Files', 'Saved Install Location')
+    // As RMDir /REBOOTOK leaves it: each path, then "" (removed, not moved).
+    const pending = [`\\??\\${join(root, 'Elsewhere', 'x.dll')}`, '', `\\??\\${join(install, 'resources', 'app.asar')}`, '', `\\??\\${install}`, '']
+
+    const { log, details, status, restored } = runAppCheck('installer', { instdir: install, legacyUninstaller: '', savedInstallLocation: saved, installMode: 'all', pending })
+    const all = details.join('\n')
+
+    expect(details, all).toContain(STOPPED_FOR_RESTART(install))
+    expect(log, all).not.toContain('passed=1')
+    expect(status, all).toBe(2)
+    expect(restored, 'the stop put back the install location customInit saved').toBe(saved)
+    expect(details.filter((d) => ASKED.test(d) || ENDS.test(d)), all).toEqual([])
+    expect(details.some((d) => d.startsWith('No copy of AI Code Conductor is running')), all).toBe(false)
+    expect(isAlive(copy.pid), 'the app check never ran').toBe(true)
+    expect(existsSync(`${copy.exe}-closed`)).toBe(false)
+
+    await endAll([copy.pid])
+  }, 60_000)
+
+  it('installer pass: removals waiting elsewhere, a rename into another folder, a folder whose name only starts the same, or a per-user install, do not stop it', async () => {
+    const root = join(awork, 'apps-pending-elsewhere')
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+    const install = join(root, 'Program Files', 'AI Code Conductor')
+    dir(install)
+    const pending = [
+      `\\??\\${join(root, 'Elsewhere', 'x.dll')}`, '',
+      `\\??\\${join(root, 'Elsewhere', 'old.dll')}`, `!\\??\\${join(root, 'Elsewhere', 'new.dll')}`,
+      `\\??\\${install} Beta\\app.asar`, '',
+    ]
+    for (const installMode of ['all', 'CurrentUser'] as const) {
+      const { log, details, status } = runAppCheck('installer', { instdir: install, legacyUninstaller: '', installMode, pending })
+      const all = details.join('\n')
+      expect(log, `${installMode}: ${all}`).toContain('passed=1')
+      expect(status, all).toBe(0)
+      expect(details.some((d) => d.startsWith('An earlier uninstall set files')), all).toBe(false)
+      expect(details.some((d) => d.startsWith('Could not read what Windows will remove')), all).toBe(false)
+    }
+    // A per-user install is never checked: even a removal in its own folder does not stop it.
+    const own = runAppCheck('installer', { instdir: install, legacyUninstaller: '', installMode: 'CurrentUser', pending: [`\\??\\${install}\\app.asar`, ''] })
+    expect(own.log, own.details.join('\n')).toContain('passed=1')
+    // With nothing waiting at all (no value), it goes straight on too.
+    const none = runAppCheck('installer', { instdir: install, legacyUninstaller: '', installMode: 'all' })
+    expect(none.log, none.details.join('\n')).toContain('passed=1')
+    expect(none.details.some((d) => d.startsWith('Could not read what Windows will remove')), none.details.join('\n')).toBe(false)
+  }, 60_000)
+
   // ---- Why an end failed (aicc_planning #328): CccWhyNotEnded, for real ----
   // The app check's step 3 holds a copy open, checks it, then ends it through
   // that handle; when the end fails it inserts CccWhyNotEnded with the error
@@ -2158,15 +2252,22 @@ SectionEnd
  * on anything left real: Program Files is a fixture folder, the removal set
  * for the next restart is logged (and the reboot flag set, as RMDir /REBOOTOK
  * sets it) instead of made, every details line is logged, and the template's
- * two Functions, which an installer script cannot call, are stand-ins.
+ * two Functions, which an installer script cannot call, are stand-ins. So
+ * the real RMDir /r /REBOOTOK, its error and reboot flags, and the "removed
+ * when Windows next restarts" line after it, run first at the release smoke
+ * (the VM's route 2), not here. The walk's bound on the folders it looks in
+ * (1000) is the ini's `lookLimit`, so a case can reach it with a few.
  */
 function removeProbeScript(out: string, cfg: string, log: string): string {
+  let limits = 0
   const lifted = liftMacros(['customHeader', 'customRemoveFiles'])
     .replace(/Call un\.atomicRMDir/g, 'Call CccProbeAtomicRMDir')
     .replace(/Call un\.restoreFiles/g, 'Call CccProbeRestoreFiles')
     .replace(/\$PROGRAMFILES(64)?\b/g, '$cccProbeProgramFiles')
     .replace(/^([ \t]*)RMDir \/r \/REBOOTOK "\$INSTDIR"[ \t\r]*$/gm, '$1FileWrite $cccProbeLog "rebootok=$INSTDIR$\\r$\\n"\n$1SetRebootFlag true')
+    .replace(/\$1 (<|>=) 1000\b/g, (_m, op: string) => { limits++; return `$1 ${op} $cccProbeLookLimit` })
     .replace(/^(\s*)DetailPrint\b/gm, '$1!insertmacro CccProbeDetail')
+  if (limits === 0) throw new Error('the removal probe found no bound on the folders the walk looks in')
   for (const [what, re] of [
     // The switch itself, not the "rebootok=" line that stands in for it.
     ['a delete set for the next restart', /\/REBOOTOK/i],
@@ -2195,6 +2296,7 @@ Var installMode
 Var cccProbeLog
 Var cccProbeUpdated
 Var cccProbeProgramFiles
+Var cccProbeLookLimit
 
 ; electron-builder's --updated flag, driven by the ini.
 !define isUpdated \`$cccProbeUpdated == "1"\`
@@ -2228,6 +2330,7 @@ Section "probe"
   ReadINIStr $installMode "${cfg}" "remove" "installMode"
   ReadINIStr $cccProbeUpdated "${cfg}" "remove" "updated"
   ReadINIStr $cccProbeProgramFiles "${cfg}" "remove" "programFiles"
+  ReadINIStr $cccProbeLookLimit "${cfg}" "remove" "lookLimit"
   ClearErrors
   FileOpen $cccProbeLog "${log}" w
   InitPluginsDir
@@ -2250,11 +2353,11 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
   const started: number[] = []
   const HELD = 'ccc-probe-held.exe'
 
-  function compileTo(name: string, script: string) {
+  function compileTo(name: string, script: string, wx: boolean) {
     const nsi = join(rwork, `${name}.nsi`)
     writeFileSync(nsi, script)
     try {
-      execFileSync(MAKENSIS as string, ['/V2', nsi], { encoding: 'utf-8', stdio: 'pipe' })
+      execFileSync(MAKENSIS as string, wx ? ['/V2', '/WX', nsi] : ['/V2', nsi], { encoding: 'utf-8', stdio: 'pipe' })
     } catch (e) {
       const err = e as { stdout?: string; stderr?: string }
       throw new Error(`makensis failed for ${name}:\n${err.stdout ?? ''}${err.stderr ?? ''}`)
@@ -2263,8 +2366,10 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
 
   beforeAll(() => {
     rwork = mkdtempSync(join(tmpdir(), 'ccc-nsis-removeprobe-'))
-    compileTo('stand-in', standInScript(standIn()))
-    compileTo('probe-remove', removeProbeScript(probe(), rcfg(), rlog()))
+    compileTo('stand-in', standInScript(standIn()), false)
+    // /WX, as electron-builder compiles the uninstaller pass: a warning there
+    // (a variable these macros name but nothing declares, say) fails here too.
+    compileTo('probe-remove', removeProbeScript(probe(), rcfg(), rlog()), true)
   }, 120_000)
 
   afterAll(async () => {
@@ -2315,7 +2420,8 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
     return { root, programFiles, instdir, exe, pid }
   }
 
-  function runRemove(cfg: { instdir: string; installMode: 'all' | 'CurrentUser'; updated?: boolean; programFiles: string }) {
+  /** `args` is the uninstaller's command line (what ${GetParameters} reads); `lookLimit` the walk's bound on the folders it looks in. */
+  function runRemove(cfg: { instdir: string; installMode: 'all' | 'CurrentUser'; updated?: boolean; programFiles: string; args?: string[]; lookLimit?: number }) {
     // The removal is real (RMDir /r), so it only ever runs on a folder of its own.
     if (!cfg.instdir.startsWith(rwork + '\\')) throw new Error(`the removal probe refuses ${cfg.instdir}: not under ${rwork}`)
     writeFileSync(rcfg(), [
@@ -2324,10 +2430,11 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
       `installMode=${cfg.installMode}`,
       `updated=${cfg.updated ? 1 : 0}`,
       `programFiles=${cfg.programFiles}`,
+      `lookLimit=${cfg.lookLimit ?? 1000}`,
       '',
     ].join('\r\n'))
     rmSync(rlog(), { force: true })
-    const run = spawnSync(probe(), [], { encoding: 'utf-8', stdio: 'pipe', timeout: 60_000 })
+    const run = spawnSync(probe(), cfg.args ?? [], { encoding: 'utf-8', stdio: 'pipe', timeout: 60_000 })
     if (run.error) throw run.error
     const log = readFileSync(rlog(), 'utf-8')
     const lines = log.split(/\r?\n/)
@@ -2413,6 +2520,55 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
     expect(r.rebootok).toEqual([])
     expect(r.rebootflag).toBe(false)
     await endHeld(f.pid)
+  }, 60_000)
+
+  it('all users, inside Program Files, run by Setup with --delete-app-data in place of --updated: names the file and sets nothing for the next restart, as a new install goes into this folder next', async () => {
+    // installUtil.nsh uninstallOldVersion passes --delete-app-data INSTEAD of
+    // --updated when Setup itself was given it, so ${isUpdated} is false here.
+    const f = await fixture('delete-app-data', true)
+    const r = runRemove({ instdir: f.instdir, installMode: 'all', programFiles: f.programFiles, args: ['--delete-app-data'] })
+    expect(r.details, r.log).toEqual([
+      heading(f.instdir),
+      `Left: ${f.exe}`,
+      'They stay until they are removed by hand, once the program that has them open has closed.',
+    ])
+    onlyHeldLeft(f)
+    expect(r.rebootok, 'nothing is set for the next restart').toEqual([])
+    expect(r.rebootflag).toBe(false)
+    await endHeld(f.pid)
+  }, 60_000)
+
+  it('looks in no more folders than its bound, and counts the rest as not looked in', async () => {
+    // Three folders, each with a running program in it, so all three stay; a
+    // bound of 2 looks in the install folder and one of them. Before, the
+    // bound was tested only when a folder was put on the stack, so all three
+    // were looked in.
+    const root = join(rwork, 'bound')
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+    const instdir = join(root, 'Programs', 'AI Code Conductor')
+    const held: string[] = []
+    for (const sub of ['a', 'b', 'c']) {
+      const exe = join(instdir, sub, HELD)
+      dir(dirname(exe))
+      copyFileSync(standIn(), exe)
+      const proc = spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true, env: { SystemRoot: process.env.SystemRoot ?? 'C:\\Windows', TEMP: rwork, TMP: rwork } })
+      proc.unref()
+      expect(proc.pid, `the program in ${sub} started`).toBeDefined()
+      started.push(proc.pid!)
+      held.push(exe)
+    }
+    await pause(500)
+    const r = runRemove({ instdir, installMode: 'CurrentUser', programFiles: join(root, 'Program Files'), lookLimit: 2 })
+    expect(r.details[0], r.log).toBe(heading(instdir))
+    const left = r.details.filter((d) => d.startsWith('Left: '))
+    expect(left, r.log).toHaveLength(1)
+    expect(held.map((h) => `Left: ${h}`), r.log).toContain(left[0])
+    expect(r.details.slice(2), r.log).toEqual([
+      'And 2 more folders, which were not looked in.',
+      'They stay until they are removed by hand, once the program that has them open has closed.',
+    ])
+    for (const h of held) expect(existsSync(h), `${h} is still held`).toBe(true)
+    for (const pid of started.slice(-3)) await endHeld(pid)
   }, 60_000)
 
   it('with nothing held, the whole folder goes and nothing is said', async () => {
