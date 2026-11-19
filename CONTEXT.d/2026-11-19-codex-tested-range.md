@@ -31,11 +31,15 @@ by its sha256 to the WP1.30 evidence record taken at the 2.1.1 head
 (tests/wp1/traceability.json), and a row added there turns the traceability
 test red or re-signs that record at a head it was not taken at.
 
-Three places the plan's file list did not name had to move with the number:
+Four places the plan's file list did not name had to move with the number:
 - resources/codex-model-catalogue.json lists 0.157.1 among the versions it was
   read from (a test requires the newest tested version there since S18).
 - Two usage-read tests used 0.157.1 as their example of a too-new Codex; they
   now use 0.157.2, and a new case shows 0.157.1 is asked.
+- tests/unit/providers/codex/app-server-read.test.ts used 0.157.1 as a version
+  above the range that discovery calls supported, which the reader must still
+  refuse. With 0.157.1 in range it no longer proved that, and the PR's first CI
+  run was red on it on every system; it now uses 0.157.2.
 - The app-knowledge test tied the 2.1.1 What's New row, which is history, to
   the live constant; that row now pins its own 0.156.1, and the Feature Guide
   entry still follows the constant.
