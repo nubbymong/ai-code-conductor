@@ -437,41 +437,41 @@ with no account signed in and no API key, in a fresh environment whose home, app
 config folders were in the probe's own temporary folder): pass for both, on the line the
 beta 10 plan wrote before measuring, in two measured runs (the second with the script as of
 e7bcfcd6, after review fixes that change neither what it measures nor its verdict on these
-runs). Each CLI's own add command (`claude mcp add --scope user`, `codex mcp add`) stored
-the program's path as given, a path with a space included, and each CLI started the program
-as its own direct child: no shell between them, the path and arguments as given, its input,
-output and error output as pipes, and the CLI's working folder as its own. Each start also
-made a console host for the program (a console of its own; whether it has a window was not
+runs). Each CLI's own add command (`claude mcp add --scope user`, `codex mcp add`) stored
+the program's path as given, a path with a space included, and each CLI started the program
+as its own direct child: no shell between them, the path and arguments as given, its input,
+output and error output as pipes, and the CLI's working folder as its own. Each start also
+made a console host for the program (a console of its own; whether it has a window was not
 checked), as P16 found for a hook's launcher. In 8 of 8 runs per CLI (in each measured run,
 three from a folder with no space in its path and one with), the stand-in answered its
 first request 19 to 25 ms after node's clock started in it (its load before that is not
-counted; 185 to 198 ms after Claude Code started, 157 to 296 ms after Codex did), against a
-line of 5 s. Claude Code sends `server/discover` before `initialize` (the stand-in refused
-it as unknown, and Claude Code went on); Codex sends `initialize` first, and in the two
-check runs before the measured ones it began its turn within a second while `initialize`
-was still unanswered. The two end the program differently. At a normal end Claude Code
-closes the program's input and the program ends itself, 9 to 20 ms before the CLI exits; at
-Codex's end the program is ended without end of input (none seen in 8 of 8 runs; exit
-status 1, as a forced end gives, in the 7 whose end the process trace caught; which process
-ended it was not recorded). With the CLI ended from outside (Stop-Process on the CLI alone,
-while the stand-in held its first request), another process ended the program within 2 s
-for both (exit status 0, no end of input seen, in each measured run). That fits a job
+counted; 185 to 198 ms after Claude Code started, 157 to 296 ms after Codex did), against a
+line of 5 s. Claude Code sends `server/discover` before `initialize` (the stand-in refused
+it as unknown, and Claude Code went on); Codex sends `initialize` first, and in the two
+check runs before the measured ones it began its turn within a second while `initialize`
+was still unanswered. The two end the program differently. At a normal end Claude Code
+closes the program's input and the program ends itself, 9 to 20 ms before the CLI exits; at
+Codex's end the program is ended without end of input (none seen in 8 of 8 runs; exit
+status 1, as a forced end gives, in the 7 whose end the process trace caught; which process
+ended it was not recorded). With the CLI ended from outside (Stop-Process on the CLI alone,
+while the stand-in held its first request), another process ended the program within 2 s
+for both (exit status 0, no end of input seen, in each measured run). That fits a job
 object that ends its processes when the CLI goes, which was not checked directly, since the
 probe's own SSH session runs in a job. In 20 of 20 runs, nothing of the run (CLI, program
 or console host) was still running 2 s after the CLI's end. Claude Code passes the program
-its whole environment and adds its own variables; Codex passed only 17 of the variables it
+its whole environment and adds its own variables; Codex passed only 17 of the variables it
 was given (APPDATA, COMSPEC, LOCALAPPDATA, PATH, PATHEXT, PROGRAMDATA, PROGRAMFILES,
 PROGRAMFILES(X86), PROGRAMW6432, SYSTEMDRIVE, SYSTEMROOT, TEMP, TMP, USERDOMAIN, USERNAME,
 USERPROFILE, WINDIR), without HOME or CODEX_HOME, so the relay must take what it needs from
-its command line, as `--store` and `--session` do. For S15: the relay can be a plain
-program the CLI starts by its full path; it cannot count on end of input to send
-`mcp.close` (only Claude Code's normal end gives one), so the holder takes a relay
-connection that drops as a closed stream; and each relay has a console host of its own
-while it runs. Limits: the stand-in is a node script, not the helper; Claude Code was
-measured through its connection check (`claude mcp list`) and Codex through a `codex exec`
-whose turn a local model stand-in refused, not through an interactive session; one machine.
-The probe is `helper/probes/p18-windows-tool-server-start.ps1`. The check of a real tool
-call through the relay, with signed-in CLIs, is owed at the step that wires it.
+its command line, as `--store` and `--session` do. For S15: the relay can be a plain
+program the CLI starts by its full path; it cannot count on end of input to send
+`mcp.close` (only Claude Code's normal end gives one), so the holder takes a relay
+connection that drops as a closed stream; and each relay has a console host of its own
+while it runs. Limits: the stand-in is a node script, not the helper; Claude Code was
+measured through its connection check (`claude mcp list`) and Codex through a `codex exec`
+whose turn a local model stand-in refused, not through an interactive session; one machine.
+The probe is `helper/probes/p18-windows-tool-server-start.ps1`. The check of a real tool
+call through the relay, with signed-in CLIs, is owed at the step that wires it.
 
 ## Parked questions
 
