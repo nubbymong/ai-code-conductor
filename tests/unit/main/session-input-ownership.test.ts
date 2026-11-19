@@ -11,7 +11,7 @@
 // Every other caller asks the module (submitRetry, submitLine, submitMarker,
 // handOffAskQuestion, pasteEnvelope, submitPrompt); sendExitKeys, which skips the quit's
 // own checks (a CLI the app started, no tmux-persistent remote), is the PTY
-// manager's quit's only (A2); askQuestion, which skips the Ask check, is the PTY
+// manager's quit's only (beta.9 A2); askQuestion, which skips the Ask check, is the PTY
 // manager's Ask launch's only, and codexRunScreen, the Codex run screen
 // itself, is the PTY manager's only (it resizes and closes each pane through
 // it).

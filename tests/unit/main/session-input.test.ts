@@ -5,6 +5,10 @@
 // through the REAL spawnPty and the real writePty (the rest of main mocked, as
 // codex-ask-carrier.test.ts does), so the same assertions held on beta, against
 // the pty-manager functions the door took over, before anything moved.
+// submitRetry (2.1.3-beta.10 section A2) is the one change: a Codex retry now
+// goes through the Codex composer rule, so its Codex and SSH Persistent cases
+// are new (red on the base, bee1e075, which had no submitRetry); its other
+// Claude Code cases are the earlier submitLine assertions, re-pointed.
 //
 //  - submitRetry (the Watchdog's retry; 2.1.3-beta.10 section A2): a Claude
 //    Code session's is exactly what submitLine wrote for it before, and it
@@ -28,12 +32,12 @@
 //    never as the raw question and Enter; the characters Codex's prompt drops
 //    are removed first and the dock told; the log names a question by its
 //    length only.
-//  - pasteEnvelope (a channel message, section A2): each session's envelopes go
+//  - pasteEnvelope (a channel message, beta.9 section A2): each session's envelopes go
 //    out whole and in order, each through the 256-byte, 12 ms chunked writer
 //    with no duplicate guard; with one in flight and 16 waiting the next drops
 //    the oldest waiting and counts it; a terminal replaced mid-envelope gets
 //    none of the rest, nor does the new one; with no terminal nothing is kept.
-//  - sendExitKeys (the quit keys, section A2), directly and through
+//  - sendExitKeys (the quit keys, beta.9 section A2), directly and through
 //    gracefulExitPty: Escape at once, Ctrl-C at 100 ms, /exit and Enter at
 //    300 ms, also through the session helper's terminal; nothing more once the
 //    terminal ended or was replaced, and nothing into a terminal that is not

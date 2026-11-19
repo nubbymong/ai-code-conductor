@@ -17,9 +17,15 @@
 //    typed for it.
 //  - A session with no pane (the real run screen, no pane opened) answers
 //    session-gone, which is logged, and nothing is written.
+//  - main/index.ts itself wires the Watchdog's send to submitRetry and hands
+//    it no raw writer (read from its source: index.ts boots the app and
+//    cannot be imported here).
 //
-// Mutants this must catch: a Codex retry written raw with Enter; a retry that
-// was not delivered and is not logged.
+// Mutants this must catch: a Codex retry written raw with Enter, also at the
+// real wiring in index.ts (send: submitLine); a retry that was not delivered
+// and is not logged.
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const h = vi.hoisted(() => ({
@@ -126,6 +132,8 @@ describe('WatchdogManager: a Codex session\'s retry, by the Codex composer rule'
     await run(4_800)
     expect(h.submits).toEqual([{ sessionId: 'cx', text: 'continue', readyWaitMs: 5_000 }])
     expect(h.writes).toEqual([])
+    // The Watchdog's own decision to send is unchanged.
+    expect(h.infos).toContain('[watchdog:cx] Sending retry after rate limit reset (attempt 1).')
     // Nor later: no Enter, no Backspaces of the Watchdog's own.
     await run(10_000)
     expect(h.writes).toEqual([])
@@ -152,5 +160,18 @@ describe('WatchdogManager: a Codex session\'s retry, by the Codex composer rule'
     await untilSent()
     expect(h.warns).toContain('[watchdog:cx] the retry was not delivered (session-gone)')
     expect(h.writes).toEqual([])
+  })
+
+  it('main/index.ts wires the Watchdog\'s send to submitRetry and hands it no raw writer', () => {
+    const index = readFileSync(resolve(__dirname, '../../../../src/main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const at = index.indexOf('initWatchdogManager({')
+    expect(at).toBeGreaterThan(-1)
+    const end = index.indexOf('\n    })', at)
+    expect(end).toBeGreaterThan(at)
+    const block = index.slice(at, end)
+    expect(block).toContain('send: (sessionId, text) => submitRetry(sessionId, text)')
+    expect(block).not.toMatch(/^\s*write\s*:/m)
+    // Calls only: the comment in the block names submitLine's rule.
+    expect(block).not.toMatch(/\bsubmitLine\s*\(/)
   })
 })

@@ -38,23 +38,30 @@ in the 300 ms after the text went. The composer rule's checks are its run's,
 not the Watchdog's: a retry already handed to it is typed and submitted in
 the same run even if the Watchdog is switched off while it waits for the
 ready composer (up to 5 s). A new run never gets it (the pane belongs to the
-run).
+run). A retry message starting with / is no longer submitted while Codex
+shows its command list under it: the composer rule reads the list as part of
+the text and takes it back (the old rule's check allowed the list). The
+default, continue, is not affected.
 
 **Tests.** codex-watchdog-submit.test.ts is rewritten: the real
 SessionWatchdog and the real session input module over fake ports, wired as
 index.ts wires it; the retry reaches the run screen's submit with a 5 s ready
 wait and nothing is written raw; an answer of not delivered is logged with
 its reason and nothing more is typed; with the real run screen and no pane,
-session-gone is logged and nothing is written. session-input.test.ts points
+session-gone is logged and nothing is written; and index.ts's own source
+wires the Watchdog's send to submitRetry with no raw writer (index.ts boots
+the app, so the case reads its text). session-input.test.ts points
 the submitLine cases at submitRetry (local, held by the helper, the repeat
 guard, the 256-byte slices) and adds an SSH Persistent case over fake ports
 and the two Codex cases; the typeKeys case is gone. watchdog-manager.test.ts
 gains the Codex delegation and the not-delivered log. Seen red on the base
-(bee1e075): the rewritten file, also with its host wired as the base's
-index.ts wired it (the retry went raw), and the new session-input and
-watchdog-manager cases. Four mutants each turned a test red: a Codex retry
-written raw with Enter, a Claude Code retry routed to the Codex rule, the
-leave key dropped, and a not-delivered answer left unlogged.
+(bee1e075): the rewritten file's first three cases, also with their host
+wired as the base's index.ts wired it (the retry went raw), and the new
+session-input and watchdog-manager cases. Six mutants each turned a test
+red: a Codex retry written raw with Enter, a Claude Code retry routed to the
+Codex rule, the leave key dropped, a not-delivered answer left unlogged, and
+at index.ts's own wiring, send back to submitLine and a raw write handed in
+again (these two red the index.ts case).
 
 **Left.** The renderer's own Codex rule (codexComposer.ts) stays until the
 renderer's typing moves (S13). ADR-009: no path on the AGENTS.md list; on

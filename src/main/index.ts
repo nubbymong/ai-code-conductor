@@ -1066,9 +1066,10 @@ if (!gotTheLock) {
     startLoopStallMonitor()
     registerHooksHandlers(getGateway()!)   // B1: handlers get whatever gateway backs the singleton
     // Session Watchdog (#235): wired after the gateway singleton exists so its
-    // StopFailure subscription binds immediately. send() submits the retry the
-    // same way the command-button / launch paths do — writePty(text + '\r') —
-    // which is the proven way to submit into the Claude TUI. (The channel-bus
+    // StopFailure subscription binds immediately. send() submits a Claude Code
+    // session's retry the way the launch path does — writePty(text + '\r') —
+    // the proven way to submit into the Claude TUI, and a Codex session's by
+    // the Codex composer rule (session-input submitRetry). (The channel-bus
     // paste envelope does NOT submit: formatTier1 ends at the bracketed-paste
     // close with no trailing Enter, so it only drafts. A bracketed paste with a
     // fused Enter is also swallowed by the Ink/React TUI.) The retry text is

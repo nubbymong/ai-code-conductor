@@ -8,7 +8,7 @@
 // request. tests/unit/main/session-input-ownership.test.ts holds every other
 // place in main that types into a session to a shrinking allow-list.
 //
-// Since section A2 it also pastes a channel message (pasteEnvelope) and types
+// Since 2.1.3-beta.9 section A2 it also pastes a channel message (pasteEnvelope) and types
 // the quit keys into a CLI the app started (sendExitKeys, for the PTY
 // manager's gracefulExitPty only, which decides which sessions get them).
 //
@@ -26,7 +26,7 @@
 //
 // Each function's body moved here from the PTY manager as it was: nothing
 // typed, its order or its timing changed, and no queue, delay or check added,
-// but for what A2 changed in sendExitKeys, described at that function: it
+// but for what beta.9's A2 changed in sendExitKeys, described at that function: it
 // writes each quit key only while the terminal it was handed is still the
 // session's, and a key whose write fails is dropped rather than thrown. (Like
 // every door that types through a port, pasteEnvelope also throws before the
@@ -43,10 +43,10 @@
 // 256-byte chunking and its launch-pending buffer), or through the Codex
 // package's run screen, reached through the provider registry as the PTY
 // manager reaches it (WP1 rule R4: no deep import into a provider package).
-// The two A2 doors are the exceptions, as they were in the PTY manager: a
+// The two beta.9 A2 doors are the exceptions, as they were in the PTY manager: a
 // channel envelope and the quit keys are written to the session's terminal
 // process itself, never through writePty's duplicate guard, and each only
-// while that process is still the session's (for the quit keys, new in A2).
+// while that process is still the session's (for the quit keys, new in beta.9's A2).
 import type { BrowserWindow } from 'electron'
 import type { IPty } from 'node-pty'
 import { getProvider } from '../providers'
