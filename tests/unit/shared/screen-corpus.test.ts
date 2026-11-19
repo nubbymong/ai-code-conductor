@@ -27,18 +27,21 @@
 //
 // The cases:
 //  1. the rows made now equal the committed rows, for every recording, so an
-//     xterm.js bump that moves a row shows here first;
+//     xterm.js bump that moves a row shows here first, and each rows file
+//     names the @xterm/headless loaded now (a bump that moves no row still
+//     fails here until the rows files are written again);
 //  2. the reader of each recording's program reads the state in its name
 //     (readClaudeScreen, readCodexScreen; for the shell both read no prompt);
 //  3. the names come from the fixed sets, each recording has its rows file,
-//     each runs on from its first byte with no gap, and the size caps hold
-//     (256 KiB a recording, 3 MiB for all of them: a longer one needs a
-//     shorter scenario, never a cut);
+//     each runs on from its first byte with no gap, each known misread is a
+//     recording, and the size caps hold (256 KiB a recording, 3 MiB for all
+//     of them: a longer one needs a shorter scenario, never a cut);
 //  4. no recording or rows file holds a path under a home folder other than
 //     the generic ones (the test machine's own test user, GitHub's runner
 //     accounts), an e-mail shape, or anything shaped like a key.
 // A recording a reader misreads is a finding, not a fixture to bend: it is
-// listed in KNOWN_MISREADS with its ticket, and the reader is fixed.
+// listed in KNOWN_MISREADS with its ticket and the wrong answer the reader
+// gives, so a change in that answer fails case 2 too, and the reader is fixed.
 //
 // Not checked here:
 //  - colours, bold and every attribute but dim and inverse;
@@ -49,6 +52,10 @@
 //    recording already holds what the CLI drew after the probe answered);
 //  - a home path written with no drive letter and no root before it, and a
 //    key of a shape not in KEY_SHAPES;
+//  - the Codex pane's own settings (no scrollback, providers/codex/session-screen.ts):
+//    the rows, and the readers' answers in case 2, are the Watchdog pane's (200 lines);
+//  - a home path with an escape sequence inside it that is gone from the screen before a
+//    snapshot (the chunks are matched as written, the rows only at the snapshots);
 //  - the rows files' size (only the recordings have caps).
 import { describe, it, expect, vi } from 'vitest'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs'
@@ -101,18 +108,22 @@ const LEFT_OUT: Record<string, string> = {
   'codex after-reply': 'over 256 KiB: Codex wrote 0.9 MB to 1.7 MB before the end of this measurement in P19 (a shorter scenario is needed, not a cut)',
 }
 
-/** A recording a reader misreads: its name and the ticket that fixes the
- *  reader. Each stays listed until its reader is fixed; the test then fails
- *  until the line is removed.
+/** A recording a reader misreads: its name, the ticket that fixes the
+ *  reader, and the answer the reader gives on it now. Each stays listed until
+ *  its reader is fixed; the test then fails until the line is removed, and
+ *  fails too if the reader starts to give another wrong answer.
  *  Codex 0.157.1 at its ready composer draws "? for shortcuts" on the last
  *  row, under the footer, and Codex's reader takes a footer that is not the
  *  last row as unrecognised (codex-screen.ts, layout): the same on every
- *  system. */
-const KNOWN_MISREADS: Record<string, string> = {
-  'codex-windows-bundled-ready': 'TICKET-PENDING',
-  'codex-windows-system-ready': 'TICKET-PENDING',
-  'codex-macos-ready': 'TICKET-PENDING',
-  'codex-linux-ready': 'TICKET-PENDING',
+ *  system. The row stays for the whole session (P19's full recordings have it
+ *  at the mid-reply and after-reply marks too; those states are not in the
+ *  corpus). */
+interface Misread { ticket: string; reads: string }
+const KNOWN_MISREADS: Record<string, Misread> = {
+  'codex-windows-bundled-ready': { ticket: 'TICKET-PENDING', reads: 'unrecognised' },
+  'codex-windows-system-ready': { ticket: 'TICKET-PENDING', reads: 'unrecognised' },
+  'codex-macos-ready': { ticket: 'TICKET-PENDING', reads: 'unrecognised' },
+  'codex-linux-ready': { ticket: 'TICKET-PENDING', reads: 'unrecognised' },
 }
 
 const NAMES = PROGRAMS.flatMap((p) => SYSTEMS.flatMap((s) => STATES[p].map((st) => ({ name: `${p}-${s}-${st}`, program: p, system: s, state: st }))))
@@ -206,9 +217,11 @@ function rowsFileText(name: string, m: Made): string {
   return `${out.join('\n')}\n`
 }
 
-const readRows = (name: string): Made => {
-  const r = JSON.parse(readFileSync(resolve(DIR, `${name}.rows.json`), 'utf-8')) as Made
-  return { screens: r.screens, tail: r.tail }
+/** A committed rows file: the rows, and the @xterm/headless that made them. */
+interface RowsFile extends Made { xterm: unknown }
+const readRows = (name: string): RowsFile => {
+  const r = JSON.parse(readFileSync(resolve(DIR, `${name}.rows.json`), 'utf-8')) as RowsFile
+  return { xterm: r.xterm, screens: r.screens, tail: r.tail }
 }
 
 // ── the checks, as functions, so the planted cases below run the same code ──
@@ -230,6 +243,12 @@ function rowDifferences(want: Made, got: Made): string[] {
   return out
 }
 
+/** Whether a rows file names the @xterm/headless loaded now, so its "xterm"
+ *  field cannot go stale after a bump that moves no row. */
+function xtermProblem(name: string, committed: unknown, loaded: string = XTERM_VERSION): string | null {
+  return committed === loaded ? null : `${name}.rows.json was made by @xterm/headless ${JSON.stringify(committed)}, ${loaded} is loaded: rewrite it with SCREEN_CORPUS_WRITE=1`
+}
+
 /** What the program's reader reads on a screen; for the shell, both readers. */
 function readerAnswer(program: string, lines: ScreenLine[]): { screen: string; text: string } {
   if (program === 'claude') return readClaudeScreen(lines)
@@ -249,6 +268,21 @@ function readsAsNamed(name: string, lines: ScreenLine[]): string | null {
   if ((n.state === 'ready' || n.state === 'after-reply') && got.text !== '') return `${name}: the prompt holds ${JSON.stringify(got.text)}, not nothing`
   return null
 }
+
+/** Case 2's verdict on readsAsNamed's answer: null when the recording reads
+ *  the state in its name, or, for a known misread, when it gives exactly the
+ *  wrong answer listed for it. */
+function misreadProblem(name: string, problem: string | null, misreads: Record<string, Misread> = KNOWN_MISREADS): string | null {
+  const known = misreads[name]
+  if (!known) return problem
+  if (problem === null) return `${name} is listed as a known misread (${known.ticket}) but reads right: remove it from KNOWN_MISREADS`
+  if (!problem.includes(`: read ${known.reads},`)) return `${name} is listed as a known misread (${known.ticket}) that reads ${known.reads}, but now: ${problem}`
+  return null
+}
+
+/** The KNOWN_MISREADS names that are no recording (renamed or removed). */
+const unlistedMisreads = (misreads: Record<string, Misread>, recordings: readonly string[]): string[] =>
+  Object.keys(misreads).filter((n) => !recordings.includes(n))
 
 /** The home folders a recording may name: the test machine's test user and
  *  GitHub's runner accounts. */
@@ -321,19 +355,15 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
       const got = await rowsOf(name)
       if (WRITE) writeFileSync(resolve(DIR, `${name}.rows.json`), rowsFileText(name, got))
       expect(existsSync(resolve(DIR, `${name}.rows.json`)), `${name}.rows.json`).toBe(true)
-      expect(rowDifferences(readRows(name), got)).toEqual([])
+      const committed = readRows(name)
+      expect({ rows: rowDifferences(committed, got), xterm: xtermProblem(name, committed.xterm) }).toEqual({ rows: [], xterm: null })
     }, 30_000)
   })
 
   describe('2. each reader reads the state in the recording\'s name', () => {
     it.each(RECORDINGS)('%s', async (name) => {
       const { screens } = await rowsOf(name)
-      const problem = readsAsNamed(name, screens[screens.length - 1].lines)
-      if (KNOWN_MISREADS[name]) {
-        expect(problem, `${name} is listed as a known misread (${KNOWN_MISREADS[name]}) but reads right: remove it from KNOWN_MISREADS`).not.toBeNull()
-      } else {
-        expect(problem).toBeNull()
-      }
+      expect(misreadProblem(name, readsAsNamed(name, screens[screens.length - 1].lines))).toBeNull()
     }, 30_000)
   })
 
@@ -352,6 +382,10 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
       const missing = NAMES.filter((n) => !RECORDINGS.includes(n.name) && !LEFT_OUT[`${n.program} ${n.state}`]).map((n) => n.name)
       const both = NAMES.filter((n) => RECORDINGS.includes(n.name) && LEFT_OUT[`${n.program} ${n.state}`]).map((n) => n.name)
       expect({ missing, both }).toEqual({ missing: [], both: [] })
+    })
+
+    it('every known misread is a recording', () => {
+      expect(unlistedMisreads(KNOWN_MISREADS, RECORDINGS)).toEqual([])
     })
 
     it.each(RECORDINGS)('%s: its fields are its name\'s, and it runs on from its first byte', (name) => {
@@ -392,6 +426,33 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
       const last = screens[screens.length - 1].lines
       expect(readsAsNamed(ready, last)).toBeNull()
       expect(readsAsNamed(ready.replace(/-ready$/, '-mid-reply'), last)).not.toBeNull()
+    })
+
+    it('case 1: a rows file made by another @xterm/headless is caught', () => {
+      expect(xtermProblem('x', XTERM_VERSION)).toBeNull()
+      expect(xtermProblem('x', '5.5.0')).not.toBeNull()
+      expect(xtermProblem('x', undefined)).not.toBeNull()
+    })
+
+    it('case 2: a known misread is held to the wrong answer it lists', async () => {
+      // A Claude Code ready screen under the mid-reply name: readsAsNamed's own
+      // answer, "<name>: read ready, its name says mid-reply (busy)".
+      const ready = RECORDINGS.find((n) => n.startsWith('claude-') && n.endsWith('-ready')) as string
+      const { screens } = await rowsOf(ready)
+      const renamed = ready.replace(/-ready$/, '-mid-reply')
+      const problem = readsAsNamed(renamed, screens[screens.length - 1].lines)
+      const listed = (reads: string): Record<string, Misread> => ({ [renamed]: { ticket: 'T', reads } })
+      expect(misreadProblem(renamed, problem, listed('ready'))).toBeNull()
+      expect(misreadProblem(renamed, problem, listed('no-prompt'))).not.toBeNull()
+      expect(misreadProblem(renamed, null, listed('ready'))).not.toBeNull()
+      expect(misreadProblem(renamed, problem, {})).toBe(problem)
+      expect(misreadProblem(ready, null, {})).toBeNull()
+    })
+
+    it('case 3: a known misread that is no recording is caught', () => {
+      const listed = (name: string): Record<string, Misread> => ({ [name]: { ticket: 'T', reads: 'unrecognised' } })
+      expect(unlistedMisreads(listed(RECORDINGS[0]), RECORDINGS)).toEqual([])
+      expect(unlistedMisreads(listed('codex-linux-gone'), RECORDINGS)).toEqual(['codex-linux-gone'])
     })
 
     it('case 4: a home folder, an e-mail shape and a key shape are found; the generic homes are not', () => {

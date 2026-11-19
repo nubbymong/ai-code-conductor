@@ -32,16 +32,24 @@ Plan 2.1.3-beta.11, section A2 (aicc_planning #341). Tests and fixtures only; no
   ready composer Codex 0.157.1 draws "? for shortcuts" on the last row, under the footer row
   ("<model> <effort> . <folder>"). `readCodexScreen` takes a footer that is not the last row as
   `unrecognised`, so the app would type nothing into it. The four `codex-*-ready` recordings are
-  listed in the test as known misreads; the reader is fixed in beta 12. It is not a regression:
-  `src/shared/codex-screen.ts` has not changed since 2.1.1-beta.3, and the app's newest tested
-  Codex is 0.156.1. Not known: whether a signed-in Codex with a real model draws the row too.
+  listed in the test as known misreads; the reader is fixed in beta 12. The row stays for the
+  whole session: in P19's full recordings (codex-*-turn-1.jsonl) it is under the footer at the
+  mid-reply and after-reply marks too, on every system, so no Codex 0.157.1 composer screen P19
+  reached reads ready or busy (those two states are not in the corpus: over the cap). It is not
+  a regression from a code change: `src/shared/codex-screen.ts` has not changed since
+  2.1.1-beta.3. At this branch's base the app's newest tested Codex is 0.156.1; C1
+  (aicc_planning #185) may raise it in this beta. Not known: whether a signed-in Codex with a
+  real model draws the row too.
 - **Readers that read right.** Claude Code: no prompt at its first screen (the theme picker,
   drawn where the prompt box would be), ready at its prompt, busy in the middle of the reply,
   ready after it. Codex: blocked at its first screen (its sign-in choice). The shell: no prompt
   for both readers.
-- **Beside it.** Both CLIs draw on the alternate screen, which keeps no scrollback, so the
-  Watchdog's tail of a Claude Code or Codex session is its 40 rows and no more; only the shell
-  recordings fill the 200 lines.
+- **Beside it.** Both CLIs draw on the alternate screen on macOS, Linux and the bundled ConPTY.
+  Under the ConPTY built into Windows every Claude Code and Codex screen is on the normal buffer,
+  and Claude Code's first screen (the theme picker) is on the normal buffer on every system.
+  Either way neither CLI scrolls a line off in these recordings, so the Watchdog's tail of a
+  Claude Code or Codex session is at most its 40 rows; only the shell recordings fill the 200
+  lines.
 - **What the corpus lacks, and why.**
   - Codex in the middle of its reply and after it, on every system: over 256 KiB. Codex writes
     21 to 44 KiB a second for as long as a turn runs (its own redraws), so P19's 36-second reply
@@ -65,5 +73,13 @@ Plan 2.1.3-beta.11, section A2 (aicc_planning #341). Tests and fixtures only; no
   `shell-windows-bundled-after-output.json` turned to another name failed case 4 for that
   recording only. The test also runs the check functions of cases 1, 2 and 4 on planted
   inputs, so those three are shown able to fail in every run.
+- **Checks added at review.** Case 1 also fails when a rows file names another @xterm/headless
+  than the one loaded, so its "xterm" field cannot go stale after a bump that moves no row.
+  Each known misread lists the wrong answer its reader gives (`unrecognised` for the four
+  Codex ready recordings), so case 2 fails if that answer changes, and case 3 fails for a
+  listed name that is no recording. Seen red in two local runs: with the three checks turned
+  off, only their three planted cases failed; with them on, a stale "xterm" field in
+  `shell-linux-after-output.rows.json`, `codex-macos-ready` listed as reading busy, and a listed
+  `codex-linux-mid-reply` (no such recording) each failed its case, and nothing else did.
 - **WP1 legacy Codex gate.** The recordings and the test name Codex, so the manifest and the
   ledger are regenerated with `added` rows for them.
